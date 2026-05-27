@@ -321,6 +321,17 @@ code {
   }
 }
 
+@keyframes cursor-ripple {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.4);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.4);
+  }
+}
+
 @keyframes caret-blink {
   0%,
   50% {
@@ -332,9 +343,98 @@ code {
   }
 }
 
-.landing-home-page {
+html.landing-home-page,
+body.landing-home-page {
   background: #fbfbf9;
   color: #14201a;
+  color-scheme: light;
+  font-family: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+  --font-body: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+  --font-sans: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+  --background: #fbfbf9;
+  --foreground: #14201a;
+  --card: #fff;
+  --card-foreground: #14201a;
+  --popover: #fff;
+  --popover-foreground: #14201a;
+  --primary: #4ba97e;
+  --primary-foreground: #fbfbf9;
+  --secondary: #f1f3ef;
+  --secondary-foreground: #4ba97e;
+  --muted: #f1f3ef;
+  --muted-foreground: #5b6b62;
+  --accent: #eaf1ec;
+  --accent-foreground: #4ba97e;
+  --border: #e6e9e3;
+  --input: #e6e9e3;
+  --ring: #4ba97e;
+  --chart-1: #4ba97e;
+  --chart-2: #2e6b52;
+  --chart-3: #6fae93;
+  --chart-4: #c79a3e;
+  --chart-5: #a6745a;
+  --radius: 0.625rem;
+}
+
+html.landing-home-page *,
+body.landing-home-page * {
+  border-color: inherit;
+}
+
+html.landing-home-page--nexaxis,
+body.landing-home-page--nexaxis {
+  --font-kefaiii: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+  --font-kefaiii-bold: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+  --font-kefaiii-normal: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial,
+    Helvetica, 'Microsoft YaHei', sans-serif;
+}
+
+.landing-home-root {
+  background: #fbfbf9;
+  color: #14201a;
+  color-scheme: light;
+  font-family: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
+}
+
+.landing-home-shell {
+  isolation: isolate;
+  position: relative;
+  background: radial-gradient(
+      circle at top left,
+      rgb(75 169 126 / 0.08),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgb(111 174 147 / 0.08),
+      transparent 28%
+    ),
+    #fbfbf9;
+}
+
+.landing-home-content {
+  max-width: 72rem;
+}
+
+.landing-home-shell main {
+  position: relative;
+  z-index: 1;
+}
+
+.landing-home-shell :is(button, a, input, select, textarea) {
+  font: inherit;
+}
+
+.landing-home-heading,
+.font-kefaiii-bold {
+  font-family: 'Glow Sans SC', Lato, 'Helvetica Neue', Arial, Helvetica,
+    'Microsoft YaHei', sans-serif;
 }
 
 .hero-fade-in-up {
@@ -352,7 +452,9 @@ code {
 
 .fade-in-up-element.fade-in-up-fast {
   transform: translateY(2rem);
-  transition: opacity 0.45s ease-out, transform 0.45s ease-out;
+  transition:
+    opacity 0.45s ease-out,
+    transform 0.45s ease-out;
 }
 
 .fade-in-up-element.animate-fade-in-up {
@@ -371,6 +473,23 @@ code {
 
 .marquee-pause:hover .animate-marquee {
   animation-play-state: paused;
+}
+
+.fade-x {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 8%,
+    black 92%,
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    black 8%,
+    black 92%,
+    transparent
+  );
 }
 
 .features-mesh-bg {
@@ -396,6 +515,10 @@ code {
   animation: caret-blink 1s steps(1) infinite;
 }
 
+.cursor-ripple {
+  animation: cursor-ripple 0.7s ease-out forwards;
+}
+
 .wavy-text {
   display: grid;
   place-items: center;
@@ -413,7 +536,7 @@ code {
 .wavy-text .span-mother span,
 .wavy-text .span-mother2 span {
   transition: transform 0.4s ease-in-out;
-  transition-delay: calc(var(--i) * 0.05s);
+  transition-delay: calc(var(--i) * var(--stagger-delay, 0.05s));
 }
 
 .wavy-text:hover .span-mother span {
@@ -552,7 +675,9 @@ code {
   line-height: 1;
   background-color: var(--semi-color-fill-0);
   color: var(--semi-color-text-2);
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .sbg-badge-active {
@@ -1070,7 +1195,8 @@ html.dark .with-pastel-balls::before {
     max-width: 80px;
   }
 
-  .semi-input-prefix-text, .semi-input-suffix-text {
+  .semi-input-prefix-text,
+  .semi-input-suffix-text {
     margin: 0;
   }
 
@@ -1208,4 +1334,6 @@ html.dark .with-pastel-balls::before {
   }
 }
 
-.ec-dbcd0a3c01b55203 { forced-color-adjust: auto; }
+.ec-dbcd0a3c01b55203 {
+  forced-color-adjust: auto;
+}

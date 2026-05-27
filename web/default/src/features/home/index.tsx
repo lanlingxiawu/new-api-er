@@ -23,10 +23,16 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
+  INTERFACE_LANGUAGE_OPTIONS,
+  normalizeInterfaceLanguage,
+} from '@/i18n/languages'
+import {
+  Check,
   ChevronDown,
   ChevronRight,
   Code2,
@@ -42,15 +48,11 @@ import {
   Zap,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  INTERFACE_LANGUAGE_OPTIONS,
-  normalizeInterfaceLanguage,
-} from '@/i18n/languages'
-import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { Markdown } from '@/components/ui/markdown'
+import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { Markdown } from '@/components/ui/markdown'
 import { useHomePageContent } from './hooks'
 
 type TopLink = {
@@ -207,6 +209,7 @@ const SIDEBAR_GROUPS = [
       'home.dashboard.sidebar.dashboard',
       'home.dashboard.sidebar.usage',
       'home.dashboard.sidebar.routing',
+      'home.dashboard.sidebar.audit',
     ],
   },
   {
@@ -223,6 +226,7 @@ const SIDEBAR_GROUPS = [
       'home.dashboard.sidebar.latency',
       'home.dashboard.sidebar.caching',
       'home.dashboard.sidebar.costByModel',
+      'home.dashboard.sidebar.groups',
     ],
   },
 ]
@@ -232,7 +236,7 @@ const LATENCY_COLS = 24
 const COST_TABS = [
   'home.dashboard.cost.tabs.7days',
   'home.dashboard.cost.tabs.30days',
-  'home.dashboard.cost.tabs.90days',
+  'home.dashboard.cost.tabs.month',
 ]
 const COST_DAYS = [
   'home.dashboard.cost.days.mon',
@@ -260,13 +264,43 @@ const COST_SERIES = [
   [30, 24, 17, 10, 7],
 ]
 const LOGS = [
-  { t: '12:04:51', model: 'Claude Opus 4.7', ms: '412ms', cost: '$0.182', ok: true },
+  {
+    t: '12:04:51',
+    model: 'Claude Opus 4.7',
+    ms: '412ms',
+    cost: '$0.182',
+    ok: true,
+  },
   { t: '12:04:48', model: 'GPT 5.5', ms: '388ms', cost: '$0.094', ok: true },
-  { t: '12:04:45', model: 'Gemini 3.1 Pro', ms: '274ms', cost: '$0.041', ok: true },
-  { t: '12:04:43', model: 'Claude Opus 4.6', ms: '451ms', cost: '$0.157', ok: true },
-  { t: '12:04:41', model: 'DeepSeek V4', ms: '203ms', cost: '$0.008', ok: true },
+  {
+    t: '12:04:45',
+    model: 'Gemini 3.1 Pro',
+    ms: '274ms',
+    cost: '$0.041',
+    ok: true,
+  },
+  {
+    t: '12:04:43',
+    model: 'Claude Opus 4.6',
+    ms: '451ms',
+    cost: '$0.157',
+    ok: true,
+  },
+  {
+    t: '12:04:41',
+    model: 'DeepSeek V4',
+    ms: '203ms',
+    cost: '$0.008',
+    ok: true,
+  },
   { t: '12:04:38', model: 'GPT 5.5', ms: '—', cost: '$0.000', ok: false },
-  { t: '12:04:36', model: 'Gemini 3.5 Flash', ms: '121ms', cost: '$0.003', ok: true },
+  {
+    t: '12:04:36',
+    model: 'Gemini 3.5 Flash',
+    ms: '121ms',
+    cost: '$0.003',
+    ok: true,
+  },
 ]
 const MODELS = [
   { name: 'Claude Opus 4.7', pct: 34, calls: '48.9K', cost: '$426' },
@@ -278,9 +312,14 @@ const MODELS = [
 const VIEW_LABELS = [
   'home.dashboard.sidebar.dashboard',
   'home.dashboard.sidebar.usage',
-  'home.dashboard.sidebar.costByModel',
+  'home.dashboard.sidebar.channels',
 ] as const
-const WAYPOINTS: { left: number; top: number; view: number; click?: boolean }[] = [
+const WAYPOINTS: {
+  left: number
+  top: number
+  view: number
+  click?: boolean
+}[] = [
   { left: 15, top: 33, view: 0, click: true },
   { left: 62, top: 62, view: 0, click: true },
   { left: 15, top: 38, view: 1, click: true },
@@ -300,34 +339,34 @@ const LANGUAGE_SHORT_LABELS: Record<string, string> = {
   vi: 'VI',
 }
 
-const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
+const FOOTER_COLUMNS = (_docsUrl: string): FooterColumn[] => [
   {
     titleKey: 'home.footer.columns.product',
     links: [
-      { labelKey: 'home.footer.links.modelDirectory', to: '/pricing' },
-      { labelKey: 'home.footer.links.console', to: '/dashboard' },
-      { labelKey: 'home.footer.links.about', to: '/about' },
+      { labelKey: 'home.footer.links.modelMarket', href: '#' },
+      { labelKey: 'home.footer.links.smartRouting', href: '#' },
+      { labelKey: 'home.footer.links.console', href: '#' },
+      { labelKey: 'home.footer.links.pricing', href: '#' },
+      { labelKey: 'home.footer.links.statusPage', href: '#' },
     ],
   },
   {
     titleKey: 'home.footer.columns.developers',
     links: [
-      { labelKey: 'home.footer.links.getStarted', to: '/sign-up' },
-      { labelKey: 'home.footer.links.apiDocs', href: docsUrl, external: true },
-      {
-        labelKey: 'home.footer.links.deploymentGuide',
-        href: `${docsUrl.replace(/\/$/, '')}/installation/`,
-        external: true,
-      },
+      { labelKey: 'home.footer.links.getStarted', href: '#' },
+      { labelKey: 'home.footer.links.apiDocs', href: '#' },
+      { labelKey: 'home.footer.links.sdk', href: '#' },
+      { labelKey: 'home.footer.links.compatibilityGuide', href: '#' },
+      { labelKey: 'home.footer.links.changelog', href: '#' },
     ],
   },
   {
     titleKey: 'home.footer.columns.resources',
     links: [
-      { labelKey: 'home.footer.links.github', href: 'https://github.com/QuantumNous/new-api', external: true },
-      { labelKey: 'home.footer.links.documentation', href: docsUrl, external: true },
-      { labelKey: 'home.footer.links.privacyPolicy', to: '/privacy-policy' },
-      { labelKey: 'home.footer.links.userAgreement', to: '/user-agreement' },
+      { labelKey: 'home.footer.links.github', href: '#' },
+      { labelKey: 'home.footer.links.blog', href: '#' },
+      { labelKey: 'home.footer.links.cases', href: '#' },
+      { labelKey: 'home.footer.links.helpCenter', href: '#' },
     ],
   },
 ]
@@ -446,21 +485,36 @@ function ScrollProgress() {
   )
 }
 
-function WavyText({ text, staggerDelay = 0.05 }: { text: string; staggerDelay?: number }) {
+function WavyText({
+  text,
+  staggerDelay = 0.05,
+}: {
+  text: string
+  staggerDelay?: number
+}) {
   const chars = Array.from(text)
 
   return (
-    <span className='wavy-text' style={{ '--stagger-delay': `${staggerDelay}s` } as CSSProperties}>
+    <span
+      className='wavy-text'
+      style={{ '--stagger-delay': `${staggerDelay}s` } as CSSProperties}
+    >
       <span aria-hidden className='span-mother'>
         {chars.map((char, index) => (
-          <span key={`top-${index}`} style={{ ['--i' as string]: index } as CSSProperties}>
+          <span
+            key={`top-${index}`}
+            style={{ ['--i' as string]: index } as CSSProperties}
+          >
             {char === ' ' ? '\u00A0' : char}
           </span>
         ))}
       </span>
       <span aria-hidden className='span-mother2'>
         {chars.map((char, index) => (
-          <span key={`bottom-${index}`} style={{ ['--i' as string]: index } as CSSProperties}>
+          <span
+            key={`bottom-${index}`}
+            style={{ ['--i' as string]: index } as CSSProperties}
+          >
             {char === ' ' ? '\u00A0' : char}
           </span>
         ))}
@@ -473,7 +527,12 @@ function WavyText({ text, staggerDelay = 0.05 }: { text: string; staggerDelay?: 
 function brand(path: ReactNode) {
   return function BrandIcon(props: { className?: string }) {
     return (
-      <svg viewBox='0 0 24 24' fill='currentColor' fillRule='evenodd' className={props.className}>
+      <svg
+        viewBox='0 0 24 24'
+        fill='currentColor'
+        fillRule='evenodd'
+        className={props.className}
+      >
         {path}
       </svg>
     )
@@ -509,7 +568,13 @@ const MinimaxIcon = brand(
   <path d='M16.278 2c1.156 0 2.093.927 2.093 2.07v12.501a.74.74 0 00.744.709.74.74 0 00.743-.709V9.099a2.06 2.06 0 012.071-2.049A2.06 2.06 0 0124 9.1v6.561a.649.649 0 01-.652.645.649.649 0 01-.653-.645V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v7.472a2.037 2.037 0 01-2.048 2.026 2.037 2.037 0 01-2.048-2.026v-12.5a.785.785 0 00-.788-.753.785.785 0 00-.789.752l-.001 15.904A2.037 2.037 0 0113.441 22a2.037 2.037 0 01-2.048-2.026V18.04c0-.356.292-.645.652-.645.36 0 .652.289.652.645v1.934c0 .263.142.506.372.638.23.131.514.131.744 0a.734.734 0 00.372-.638V4.07c0-1.143.937-2.07 2.093-2.07zm-5.674 0c1.156 0 2.093.927 2.093 2.07v11.523a.648.648 0 01-.652.645.648.648 0 01-.652-.645V4.07a.785.785 0 00-.789-.78.785.785 0 00-.789.78v14.013a2.06 2.06 0 01-2.07 2.048 2.06 2.06 0 01-2.071-2.048V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v3.8a2.06 2.06 0 01-2.071 2.049A2.06 2.06 0 010 12.9v-1.378c0-.357.292-.646.652-.646.36 0 .653.29.653.646V12.9c0 .418.343.757.766.757s.766-.339.766-.757V9.099a2.06 2.06 0 012.07-2.048 2.06 2.06 0 012.071 2.048v8.984c0 .419.343.758.767.758.423 0 .766-.339.766-.758V4.07c0-1.143.937-2.07 2.093-2.07z' />
 )
 
-function ProviderIcon({ providerKey, name }: { providerKey: string; name: string }) {
+function ProviderIcon({
+  providerKey,
+  name,
+}: {
+  providerKey: string
+  name: string
+}) {
   const icons: Record<string, (props: { className?: string }) => ReactNode> = {
     openai: OpenAIIcon,
     anthropic: AnthropicIcon,
@@ -520,7 +585,11 @@ function ProviderIcon({ providerKey, name }: { providerKey: string; name: string
   }
   const Icon = icons[providerKey]
   if (Icon) return <Icon className='size-6 text-[#4ba97e]' />
-  return <span className='text-sm font-semibold text-[#4ba97e]'>{name.charAt(0)}</span>
+  return (
+    <span className='text-sm font-semibold text-[#4ba97e]'>
+      {name.charAt(0)}
+    </span>
+  )
 }
 
 function NavTarget({
@@ -549,7 +618,11 @@ function NavTarget({
   }
 
   return (
-    <Link to={(link.to || '/') as never} className={className} onClick={onClick}>
+    <Link
+      to={(link.to || '/') as never}
+      className={className}
+      onClick={onClick}
+    >
       {children}
     </Link>
   )
@@ -570,7 +643,8 @@ function MobileMenu({
   loginTarget: string
   primaryTarget: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const currentLanguage = normalizeInterfaceLanguage(i18n.language)
 
   return (
     <div
@@ -591,8 +665,8 @@ function MobileMenu({
           onClick={onClose}
           className='relative h-[24px] w-[24px]'
         >
-          <span className='absolute left-0 top-1/2 block h-[1.5px] w-full rotate-45 bg-[#14201a]' />
-          <span className='absolute left-0 top-1/2 block h-[1.5px] w-full -rotate-45 bg-[#14201a]' />
+          <span className='absolute top-1/2 left-0 block h-[1.5px] w-full rotate-45 bg-[#14201a]' />
+          <span className='absolute top-1/2 left-0 block h-[1.5px] w-full -rotate-45 bg-[#14201a]' />
         </button>
       </div>
 
@@ -606,13 +680,37 @@ function MobileMenu({
           >
             <>
               {t(link.labelKey)}
-              {link.hasDropdown && <ChevronDown className='h-[18px] w-[18px] opacity-50' />}
+              {link.hasDropdown && (
+                <ChevronDown className='h-[18px] w-[18px] opacity-50' />
+              )}
             </>
           </NavTarget>
         ))}
       </nav>
 
       <div className='mt-auto flex flex-col gap-[12px] p-[20px]'>
+        <div className='grid grid-cols-2 gap-2 rounded-[18px] border border-[#4ba97e]/15 bg-white/60 p-2'>
+          {INTERFACE_LANGUAGE_OPTIONS.map((language) => {
+            const active = language.code === currentLanguage
+            return (
+              <button
+                key={language.code}
+                type='button'
+                className={cn(
+                  'flex h-[40px] items-center justify-center rounded-[12px] text-[13px] font-medium transition-colors',
+                  active
+                    ? 'bg-[#4ba97e] text-white'
+                    : 'bg-white text-[#14201a]/75'
+                )}
+                onClick={() => {
+                  void i18n.changeLanguage(language.code)
+                }}
+              >
+                {language.label}
+              </button>
+            )
+          })}
+        </div>
         <Link
           to={loginTarget as never}
           onClick={onClose}
@@ -677,7 +775,7 @@ function LandingNavbar({
     <>
       <header
         className={cn(
-          'fixed left-0 right-0 top-0 z-50 px-[16px] py-4 transition-colors duration-300 md:px-[26px] md:py-5',
+          'fixed top-0 right-0 left-0 z-50 px-[16px] py-4 transition-colors duration-300 md:px-[26px] md:py-5',
           scrolled
             ? 'border-b border-[#e6e9e3]/70 bg-[#fbfbf9]/80 backdrop-blur-md'
             : 'bg-transparent'
@@ -685,9 +783,19 @@ function LandingNavbar({
       >
         <div className='mx-auto flex max-w-[1420px] items-center justify-between'>
           <div className='flex items-center gap-[36px]'>
-            <a href='#top' aria-label='N123' className='flex items-center gap-[8px]'>
-              <img src='/n123-logo.svg' alt='N123' className='h-[26px] w-auto' />
-              <span className='text-[19px] font-semibold tracking-tight text-[#14201a]'>N123</span>
+            <a
+              href='#top'
+              aria-label='N123'
+              className='flex items-center gap-[8px]'
+            >
+              <img
+                src='/n123-logo.svg'
+                alt='N123'
+                className='h-[26px] w-auto'
+              />
+              <span className='text-[19px] font-semibold tracking-tight text-[#14201a]'>
+                N123
+              </span>
             </a>
 
             <nav className='hidden items-center gap-[22px] lg:flex'>
@@ -695,13 +803,15 @@ function LandingNavbar({
                 <NavTarget
                   key={link.labelKey}
                   link={link}
-                  className='group flex items-center gap-[4px] whitespace-nowrap text-[15px] font-medium text-[#14201a]/85 transition-colors hover:text-[#14201a]'
+                  className='group flex items-center gap-[4px] text-[15px] font-medium whitespace-nowrap text-[#14201a]/85 transition-colors hover:text-[#14201a]'
                 >
                   <>
                     <span className='decoration-[#4ba97e] underline-offset-[5px] group-hover:underline'>
                       {t(link.labelKey)}
                     </span>
-                    {link.hasDropdown && <ChevronDown className='h-[14px] w-[14px] opacity-60' />}
+                    {link.hasDropdown && (
+                      <ChevronDown className='h-[14px] w-[14px] opacity-60' />
+                    )}
                   </>
                 </NavTarget>
               ))}
@@ -709,25 +819,46 @@ function LandingNavbar({
           </div>
 
           <div className='flex items-center gap-[12px] md:gap-[16px]'>
-            <label className='relative hidden cursor-pointer items-center gap-[4px] text-[15px] font-medium text-[#14201a]/85 transition-colors hover:text-[#14201a] sm:flex'>
-              <span>{currentLanguageLabel}</span>
-              <ChevronDown className='h-[14px] w-[14px] opacity-60' />
-              <span className='sr-only'>{t('Change language')}</span>
-              <select
+            <div className='group/language relative hidden sm:block'>
+              <button
+                type='button'
                 aria-label={t('Change language')}
-                className='absolute inset-0 cursor-pointer opacity-0'
-                value={currentLanguage}
-                onChange={(event) => {
-                  void i18n.changeLanguage(event.target.value)
-                }}
+                className='flex h-[34px] items-center gap-[6px] rounded-[10px] border border-transparent px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:border-[#4ba97e]/15 hover:bg-white/75 hover:text-[#14201a]'
               >
-                {INTERFACE_LANGUAGE_OPTIONS.map((language) => (
-                  <option key={language.code} value={language.code}>
-                    {language.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <span>{currentLanguageLabel}</span>
+                <ChevronDown className='h-[14px] w-[14px] opacity-60 transition-transform duration-200 group-hover/language:rotate-180' />
+              </button>
+
+              <div className='pointer-events-none absolute top-full right-0 z-50 translate-y-1 pt-3 opacity-0 transition-all duration-200 group-focus-within/language:pointer-events-auto group-focus-within/language:translate-y-0 group-focus-within/language:opacity-100 group-hover/language:pointer-events-auto group-hover/language:translate-y-0 group-hover/language:opacity-100'>
+                <div className='w-[184px] overflow-hidden rounded-[16px] border border-[#4ba97e]/15 bg-[#fbfbf9]/95 p-1.5 shadow-[0_18px_50px_-24px_rgba(16,46,36,0.45),0_0_0_1px_rgba(255,255,255,0.65)_inset] backdrop-blur-xl'>
+                  {INTERFACE_LANGUAGE_OPTIONS.map((language) => {
+                    const active = language.code === currentLanguage
+                    return (
+                      <button
+                        key={language.code}
+                        type='button'
+                        className={cn(
+                          'flex w-full items-center justify-between gap-3 rounded-[11px] px-3 py-2.5 text-left text-[14px] font-medium transition-colors',
+                          active
+                            ? 'bg-[#eaf1ec] text-[#102e24]'
+                            : 'text-[#14201a]/75 hover:bg-white hover:text-[#14201a]'
+                        )}
+                        onClick={() => {
+                          void i18n.changeLanguage(language.code)
+                        }}
+                      >
+                        <span>{language.label}</span>
+                        <span className='flex h-5 w-5 items-center justify-center rounded-full'>
+                          {active && (
+                            <Check className='h-[14px] w-[14px] text-[#4ba97e]' />
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
 
             <Link
               to={loginTarget as never}
@@ -742,7 +873,13 @@ function LandingNavbar({
               to={primaryTarget as never}
               className='inline-flex h-[34px] items-center rounded-[10px] bg-[#4ba97e] px-[16px] text-[14px] font-semibold text-white shadow-[0_4px_14px_rgba(75,169,126,0.3)] transition-colors hover:bg-[#143c2f]'
             >
-              <WavyText text={isAuthenticated ? t('home.actions.openConsole') : t('home.actions.freeStart')} />
+              <WavyText
+                text={
+                  isAuthenticated
+                    ? t('home.actions.openConsole')
+                    : t('home.actions.freeStart')
+                }
+              />
             </Link>
 
             <button
@@ -781,14 +918,16 @@ function ProviderMarquee() {
         {t('home.providers.title')}
       </p>
       <div className='marquee-pause fade-x mx-auto max-w-7xl overflow-hidden px-4'>
-        <div className='flex w-max animate-marquee items-center gap-12'>
+        <div className='animate-marquee flex w-max items-center gap-12'>
           {track.map((provider, index) => (
             <div
               key={`${provider.key}-${index}`}
               className='flex shrink-0 items-center gap-2 text-[#5b6b62]'
             >
               <ProviderIcon providerKey={provider.key} name={provider.name} />
-              <span className='text-base font-medium text-[#14201a]/80'>{provider.name}</span>
+              <span className='text-base font-medium text-[#14201a]/80'>
+                {provider.name}
+              </span>
             </div>
           ))}
         </div>
@@ -806,7 +945,9 @@ function DashboardShell({ children }: { children: ReactNode }) {
 }
 
 function useCountUpText(value: string, active: boolean) {
-  const [display, setDisplay] = useState(active ? value : value.replace(/[\d.]+/, '0'))
+  const [display, setDisplay] = useState(
+    active ? value : value.replace(/[\d.]+/, '0')
+  )
 
   useEffect(() => {
     if (!active) {
@@ -828,7 +969,9 @@ function useCountUpText(value: string, active: boolean) {
     }
 
     const hasDecimal = rawNumber.includes('.')
-    const decimalPlaces = hasDecimal ? rawNumber.split('.')[1]?.length ?? 0 : 0
+    const decimalPlaces = hasDecimal
+      ? (rawNumber.split('.')[1]?.length ?? 0)
+      : 0
     const duration = 900
     const startedAt = performance.now()
     let frame = 0
@@ -870,7 +1013,7 @@ function GlanceCard({
     <div className='h-full rounded-lg border border-[#e6e9e3] bg-white p-3'>
       <span className='text-[11px] text-[#5b6b62]'>{t(labelKey)}</span>
       <div className='mt-1 flex items-baseline gap-2'>
-        <span className='tabular-nums text-xl font-bold tracking-tight text-[#14201a]'>
+        <span className='text-xl font-bold tracking-tight text-[#14201a] tabular-nums'>
           {display}
         </span>
         {(delta || deltaKey) && (
@@ -903,7 +1046,10 @@ function heatmapRand(row: number, col: number) {
 function heatmapVolume(row: number, col: number) {
   const rowWeight = Math.max(0.1, 1 - row * 0.15)
   const colBump = 0.12 * Math.exp(-((col - 13) ** 2) / 110)
-  return Math.min(1, Math.max(0.05, rowWeight * 0.5 + heatmapRand(row, col) * 0.55 + colBump))
+  return Math.min(
+    1,
+    Math.max(0.05, rowWeight * 0.5 + heatmapRand(row, col) * 0.55 + colBump)
+  )
 }
 
 function heatmapColor(row: number, vol: number) {
@@ -911,10 +1057,38 @@ function heatmapColor(row: number, vol: number) {
   return `rgba(${r},${g},${b},${(0.4 + vol * 0.6).toFixed(2)})`
 }
 
+type HeatmapHover = {
+  left: number
+  top: number
+  rowLabel: string
+  hour: number
+  p50: number
+  p99: number
+  requests: number
+  success: string
+}
+
+type CostHover = {
+  left: number
+  top: number
+  model: string
+  color: string
+  day: string
+  cost: number
+  percent: string
+  requests: string
+}
+
 function GlanceDashboard({ active }: { active: boolean }) {
   const { t } = useTranslation()
-  const maxTotal = Math.max(...COST_SERIES.map((day) => day.reduce((sum, item) => sum + item, 0)))
+  const maxTotal = Math.max(
+    ...COST_SERIES.map((day) => day.reduce((sum, item) => sum + item, 0))
+  )
   const cacheRate = useCountUpText('90%', active)
+  const heatmapRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<HTMLDivElement | null>(null)
+  const [heatmapHover, setHeatmapHover] = useState<HeatmapHover | null>(null)
+  const [costHover, setCostHover] = useState<CostHover | null>(null)
 
   return (
     <div className='grid grid-cols-12 gap-2'>
@@ -928,7 +1102,9 @@ function GlanceDashboard({ active }: { active: boolean }) {
         <div className='flex items-center justify-between border-b border-[#e6e9e3] px-3 py-2'>
           <div className='flex items-center gap-2'>
             <Waypoints className='h-3.5 w-3.5 text-[#5b6b62]' />
-            <span className='text-xs font-semibold text-[#14201a]'>{t('home.dashboard.latency.title')}</span>
+            <span className='text-xs font-semibold text-[#14201a]'>
+              {t('home.dashboard.latency.title')}
+            </span>
           </div>
           <span className='inline-flex items-center gap-1 rounded-full bg-[#eaf1ec] px-2 py-0.5 text-[10px] font-semibold text-[#4ba97e]'>
             <span className='h-1.5 w-1.5 rounded-full bg-[#4ba97e]' />
@@ -942,31 +1118,73 @@ function GlanceDashboard({ active }: { active: boolean }) {
                 <span key={label}>{label}</span>
               ))}
             </div>
-            <div className='flex-1'>
+            <div ref={heatmapRef} className='relative flex-1'>
               <div className='flex flex-col gap-1'>
                 {LATENCY_ROWS.map((rowLabel, rowIndex) => (
                   <div key={rowLabel} className='flex gap-1'>
                     {Array.from({ length: LATENCY_COLS }).map((_, colIndex) => {
-                      if (rowIndex >= 3 && heatmapRand(colIndex, rowIndex) < (rowIndex - 2) * 0.22) {
+                      if (
+                        rowIndex >= 3 &&
+                        heatmapRand(colIndex, rowIndex) < (rowIndex - 2) * 0.22
+                      ) {
                         return (
                           <div
                             key={`${rowLabel}-${colIndex}`}
                             className='aspect-square flex-1 rounded-[2px] bg-[#f1f3ef]'
-                            style={{ opacity: active ? 1 : 0, transition: 'opacity 0.4s ease' }}
+                            style={{
+                              opacity: active ? 1 : 0,
+                              transition: 'opacity 0.4s ease',
+                            }}
                           />
                         )
                       }
 
                       const intensity = heatmapVolume(rowIndex, colIndex)
+                      const highlighted =
+                        heatmapHover?.hour === colIndex &&
+                        heatmapHover.rowLabel === rowLabel
                       return (
                         <div
                           key={`${rowLabel}-${colIndex}`}
-                          className='aspect-square flex-1 rounded-[2px]'
+                          className='aspect-square flex-1 cursor-pointer rounded-[2px]'
+                          onMouseEnter={(event) => {
+                            const cell =
+                              event.currentTarget.getBoundingClientRect()
+                            const wrap =
+                              heatmapRef.current?.getBoundingClientRect()
+                            if (!wrap) return
+                            const p50 = 12 + rowIndex * 9 + (colIndex % 6) * 4
+                            setHeatmapHover({
+                              left: cell.left - wrap.left + cell.width / 2,
+                              top: cell.top - wrap.top,
+                              rowLabel,
+                              hour: colIndex,
+                              p50,
+                              p99: p50 + 40 + ((colIndex * 7) % 60),
+                              requests:
+                                420 + ((rowIndex * 53 + colIndex * 29) % 1400),
+                              success: (
+                                99.9 -
+                                rowIndex * 0.18 -
+                                (colIndex % 5) * 0.05
+                              ).toFixed(2),
+                            })
+                          }}
+                          onMouseLeave={() => setHeatmapHover(null)}
                           style={{
                             backgroundColor: heatmapColor(rowIndex, intensity),
                             opacity: active ? 1 : 0,
-                            transform: active ? 'scale(1)' : 'scale(0.7)',
-                            transition: 'opacity 0.4s ease, transform 0.4s ease',
+                            transform: active
+                              ? highlighted
+                                ? 'scale(1.28)'
+                                : 'scale(1)'
+                              : 'scale(0.7)',
+                            boxShadow: highlighted
+                              ? '0 6px 16px rgba(16,46,36,0.28)'
+                              : 'none',
+                            zIndex: highlighted ? 20 : 1,
+                            transition:
+                              'opacity 0.4s ease, transform 0.16s ease, box-shadow 0.16s ease',
                           }}
                         />
                       )
@@ -979,6 +1197,33 @@ function GlanceDashboard({ active }: { active: boolean }) {
                   <span key={tick}>{tick}</span>
                 ))}
               </div>
+              {heatmapHover && (
+                <div
+                  className='pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full rounded-lg border border-[#4ba97e]/15 bg-[#102e24] px-3 py-2 text-left shadow-xl'
+                  style={{
+                    left: heatmapHover.left,
+                    top: heatmapHover.top - 8,
+                    minWidth: 168,
+                  }}
+                >
+                  <div className='flex items-center justify-between gap-3'>
+                    <span className='text-[11px] font-semibold text-white'>
+                      {heatmapHover.rowLabel}
+                    </span>
+                    <span className='text-[10px] text-white/55'>
+                      {String(heatmapHover.hour).padStart(2, '0')}:00
+                    </span>
+                  </div>
+                  <div className='mt-1 flex gap-3 text-[10px] text-[#9bccae]'>
+                    <span>p50 {heatmapHover.p50}ms</span>
+                    <span>p99 {heatmapHover.p99}ms</span>
+                  </div>
+                  <div className='mt-0.5 text-[10px] text-white/55'>
+                    {heatmapHover.requests.toLocaleString()} 次请求 · 成功率{' '}
+                    {heatmapHover.success}%
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -987,12 +1232,21 @@ function GlanceDashboard({ active }: { active: boolean }) {
       <div className='col-span-12 flex flex-col rounded-lg border border-[#e6e9e3] bg-white p-3 lg:col-span-5'>
         <div className='mb-2 flex items-center gap-2'>
           <Zap className='h-3.5 w-3.5 text-[#5b6b62]' />
-          <span className='text-xs font-semibold text-[#14201a]'>{t('home.dashboard.cache.title')}</span>
+          <span className='text-xs font-semibold text-[#14201a]'>
+            {t('home.dashboard.cache.title')}
+          </span>
         </div>
         <div className='flex flex-1 items-center justify-center'>
           <div className='relative h-[130px] w-[130px]'>
             <svg className='h-full w-full -rotate-90' viewBox='0 0 120 120'>
-              <circle cx='60' cy='60' r={52} fill='none' stroke='#eaf1ec' strokeWidth='10' />
+              <circle
+                cx='60'
+                cy='60'
+                r={52}
+                fill='none'
+                stroke='#eaf1ec'
+                strokeWidth='10'
+              />
               <circle
                 cx='60'
                 cy='60'
@@ -1003,12 +1257,19 @@ function GlanceDashboard({ active }: { active: boolean }) {
                 strokeLinecap='round'
                 strokeDasharray={`${(90 / 100) * (2 * Math.PI * 52)} ${2 * Math.PI * 52}`}
                 strokeDashoffset={active ? 0 : (90 / 100) * (2 * Math.PI * 52)}
-                style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(0.22,1,0.36,1)' }}
+                style={{
+                  transition:
+                    'stroke-dashoffset 1.2s cubic-bezier(0.22,1,0.36,1)',
+                }}
               />
             </svg>
             <div className='absolute inset-0 flex flex-col items-center justify-center'>
-              <span className='tabular-nums text-2xl font-bold text-[#4ba97e]'>{cacheRate}</span>
-              <span className='text-[10px] text-[#5b6b62]'>{t('home.dashboard.glance.cacheHitRate')}</span>
+              <span className='text-2xl font-bold text-[#4ba97e] tabular-nums'>
+                {cacheRate}
+              </span>
+              <span className='text-[10px] text-[#5b6b62]'>
+                {t('home.dashboard.glance.cacheHitRate')}
+              </span>
             </div>
           </div>
         </div>
@@ -1019,7 +1280,9 @@ function GlanceDashboard({ active }: { active: boolean }) {
             ['$1,180', 'home.dashboard.cache.saved'],
           ].map(([label, key]) => (
             <div key={key} className='text-center'>
-              <div className='text-sm font-semibold text-[#14201a]'>{label}</div>
+              <div className='text-sm font-semibold text-[#14201a]'>
+                {label}
+              </div>
               <div className='text-[10px] text-[#5b6b62]/80'>{t(key)}</div>
             </div>
           ))}
@@ -1030,7 +1293,9 @@ function GlanceDashboard({ active }: { active: boolean }) {
         <div className='flex items-center justify-between border-b border-[#e6e9e3] px-3 py-2'>
           <div className='flex items-center gap-2'>
             <Code2 className='h-3.5 w-3.5 text-[#5b6b62]' />
-            <span className='text-xs font-semibold text-[#14201a]'>{t('home.dashboard.dailyCost.title')}</span>
+            <span className='text-xs font-semibold text-[#14201a]'>
+              {t('home.dashboard.dailyCost.title')}
+            </span>
           </div>
           <div className='flex gap-1'>
             {COST_TABS.map((tab, index) => (
@@ -1038,7 +1303,9 @@ function GlanceDashboard({ active }: { active: boolean }) {
                 key={tab}
                 className={cn(
                   'rounded px-1.5 py-0.5 text-[10px]',
-                  index === 0 ? 'bg-[#eaf1ec] text-[#4ba97e]' : 'text-[#5b6b62]/70'
+                  index === 0
+                    ? 'bg-[#eaf1ec] text-[#4ba97e]'
+                    : 'text-[#5b6b62]/70'
                 )}
               >
                 {t(tab)}
@@ -1047,41 +1314,123 @@ function GlanceDashboard({ active }: { active: boolean }) {
           </div>
         </div>
         <div className='flex flex-1 flex-col p-3'>
-          <div className='flex min-h-[120px] flex-1 items-end justify-between gap-2'>
-            {COST_SERIES.map((day, dayIndex) => (
-              <div key={COST_DAYS[dayIndex]} className='flex flex-1 flex-col items-center gap-1.5'>
+          <div
+            ref={chartRef}
+            className='relative flex min-h-[120px] flex-1 items-end justify-between gap-2'
+          >
+            {COST_SERIES.map((day, dayIndex) => {
+              const total = day.reduce((sum, segment) => sum + segment, 0)
+              return (
                 <div
-                  className='flex w-full flex-col-reverse overflow-hidden rounded-t'
-                  style={{
-                    height: '120px',
-                    transform: active ? 'scaleY(1)' : 'scaleY(0)',
-                    transformOrigin: 'bottom',
-                    transition: 'transform 0.7s cubic-bezier(0.22,1,0.36,1)',
-                    transitionDelay: `${dayIndex * 70}ms`,
-                  }}
+                  key={COST_DAYS[dayIndex]}
+                  className='flex flex-1 flex-col items-center gap-1.5'
                 >
-                  {day.map((segment, segmentIndex) => {
-                    const model = COST_MODELS[segmentIndex]
-                    return (
-                      <div
-                        key={`${COST_DAYS[dayIndex]}-${model.name}`}
-                        style={{
-                          height: `${(segment / maxTotal) * 100}%`,
-                          backgroundColor: model.color,
-                          opacity: 0.92 - segmentIndex * 0.08,
-                        }}
-                      />
-                    )
-                  })}
+                  <div
+                    className='flex w-full flex-col-reverse overflow-hidden rounded-t'
+                    style={{
+                      height: '120px',
+                      transform: active ? 'scaleY(1)' : 'scaleY(0)',
+                      transformOrigin: 'bottom',
+                      transition: 'transform 0.7s cubic-bezier(0.22,1,0.36,1)',
+                      transitionDelay: `${dayIndex * 70}ms`,
+                    }}
+                  >
+                    {day.map((segment, segmentIndex) => {
+                      const model = COST_MODELS[segmentIndex]
+                      const dayLabel = t(COST_DAYS[dayIndex])
+                      const highlighted =
+                        costHover?.day === dayLabel &&
+                        costHover.model === model.name
+                      return (
+                        <div
+                          key={`${COST_DAYS[dayIndex]}-${model.name}`}
+                          className='cursor-pointer'
+                          onMouseEnter={(event) => {
+                            const segmentBounds =
+                              event.currentTarget.getBoundingClientRect()
+                            const wrap =
+                              chartRef.current?.getBoundingClientRect()
+                            if (!wrap) return
+                            setCostHover({
+                              left:
+                                segmentBounds.left -
+                                wrap.left +
+                                segmentBounds.width / 2,
+                              top: segmentBounds.top - wrap.top,
+                              model: model.name,
+                              color: model.color,
+                              day: dayLabel,
+                              cost: Math.round(segment * 86),
+                              percent: ((segment / total) * 100).toFixed(1),
+                              requests: (segment * 1.6).toFixed(1),
+                            })
+                          }}
+                          onMouseLeave={() => setCostHover(null)}
+                          style={{
+                            height: `${(segment / maxTotal) * 100}%`,
+                            backgroundColor: model.color,
+                            opacity:
+                              costHover && !highlighted
+                                ? 0.4
+                                : highlighted
+                                  ? 1
+                                  : 0.92 - segmentIndex * 0.08,
+                            boxShadow: highlighted
+                              ? 'inset 0 0 0 1.5px rgba(255,255,255,0.85)'
+                              : 'none',
+                            transition:
+                              'opacity 0.15s ease, box-shadow 0.15s ease',
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                  <span className='text-[9px] text-[#5b6b62]/70'>
+                    {t(COST_DAYS[dayIndex])}
+                  </span>
                 </div>
-                <span className='text-[9px] text-[#5b6b62]/70'>{t(COST_DAYS[dayIndex])}</span>
+              )
+            })}
+            {costHover && (
+              <div
+                className='pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full rounded-lg border border-[#4ba97e]/15 bg-[#102e24] px-3 py-2 text-left shadow-xl'
+                style={{
+                  left: costHover.left,
+                  top: costHover.top - 8,
+                  minWidth: 150,
+                }}
+              >
+                <div className='flex items-center gap-1.5'>
+                  <span
+                    className='h-2 w-2 rounded-full'
+                    style={{ backgroundColor: costHover.color }}
+                  />
+                  <span className='text-[11px] font-semibold text-white'>
+                    {costHover.model}
+                  </span>
+                  <span className='ml-auto text-[10px] text-white/55'>
+                    {costHover.day}
+                  </span>
+                </div>
+                <div className='mt-1 text-[13px] font-bold text-[#9bccae]'>
+                  ${costHover.cost.toLocaleString()}
+                </div>
+                <div className='mt-0.5 text-[10px] text-white/55'>
+                  占当日 {costHover.percent}% · {costHover.requests}K 次请求
+                </div>
               </div>
-            ))}
+            )}
           </div>
           <div className='mt-3 flex flex-wrap gap-x-3 gap-y-1'>
             {COST_MODELS.map((model) => (
-              <span key={model.name} className='flex items-center gap-1 text-[9px] text-[#5b6b62]'>
-                <span className='h-2 w-2 rounded-full' style={{ backgroundColor: model.color }} />
+              <span
+                key={model.name}
+                className='flex items-center gap-1 text-[9px] text-[#5b6b62]'
+              >
+                <span
+                  className='h-2 w-2 rounded-full'
+                  style={{ backgroundColor: model.color }}
+                />
                 {model.name}
               </span>
             ))}
@@ -1092,7 +1441,9 @@ function GlanceDashboard({ active }: { active: boolean }) {
       <div className='col-span-12 flex flex-col rounded-lg border border-[#e6e9e3] bg-white p-3 lg:col-span-5'>
         <div className='mb-3 flex items-center gap-2'>
           <Layers3 className='h-3.5 w-3.5 text-[#5b6b62]' />
-          <span className='text-xs font-semibold text-[#14201a]'>{t('home.dashboard.cost.title')}</span>
+          <span className='text-xs font-semibold text-[#14201a]'>
+            {t('home.dashboard.cost.title')}
+          </span>
         </div>
         <div className='flex-1 space-y-2.5'>
           {MODELS.map((model, index) => (
@@ -1100,7 +1451,8 @@ function GlanceDashboard({ active }: { active: boolean }) {
               <div className='flex items-center justify-between text-[11px]'>
                 <span className='text-[#14201a]/80'>{model.name}</span>
                 <span className='text-[#5b6b62]'>
-                  <span className='text-[#2e6b52]'>{model.cost}</span> · {model.pct}%
+                  <span className='text-[#2e6b52]'>{model.cost}</span> ·{' '}
+                  {model.pct}%
                 </span>
               </div>
               <div className='h-1.5 overflow-hidden rounded-full bg-[#eaf1ec]'>
@@ -1118,7 +1470,7 @@ function GlanceDashboard({ active }: { active: boolean }) {
           ))}
         </div>
         <div className='mt-3 flex items-center justify-between border-t border-[#e6e9e3] pt-2 text-[11px]'>
-          <span className='text-[#5b6b62]'>143.2K requests</span>
+          <span className='text-[#5b6b62]'>共 143.2K 次请求</span>
           <span className='font-semibold text-[#14201a]'>$1,247</span>
         </div>
       </div>
@@ -1160,17 +1512,19 @@ function HeroAura() {
     >
       <span
         aria-hidden
-        className='absolute left-[12%] top-[4%] h-[460px] w-[460px] rounded-full opacity-60 blur-[100px]'
+        className='absolute top-[4%] left-[12%] h-[460px] w-[460px] rounded-full opacity-60 blur-[100px]'
         style={{
-          background: 'radial-gradient(circle, rgba(75,169,126,0.34), transparent 70%)',
+          background:
+            'radial-gradient(circle, rgba(75,169,126,0.34), transparent 70%)',
           animation: 'aura-float 16s ease-in-out infinite',
         }}
       />
       <span
         aria-hidden
-        className='absolute right-[8%] top-0 h-[420px] w-[420px] rounded-full opacity-50 blur-[100px]'
+        className='absolute top-0 right-[8%] h-[420px] w-[420px] rounded-full opacity-50 blur-[100px]'
         style={{
-          background: 'radial-gradient(circle, rgba(111,174,147,0.30), transparent 70%)',
+          background:
+            'radial-gradient(circle, rgba(111,174,147,0.30), transparent 70%)',
           animation: 'aura-float-alt 20s ease-in-out infinite',
         }}
       />
@@ -1178,7 +1532,8 @@ function HeroAura() {
         aria-hidden
         className='absolute bottom-[2%] left-[38%] h-[520px] w-[520px] rounded-full opacity-50 blur-[100px]'
         style={{
-          background: 'radial-gradient(circle, rgba(46,107,82,0.26), transparent 70%)',
+          background:
+            'radial-gradient(circle, rgba(46,107,82,0.26), transparent 70%)',
           animation: 'aura-float 22s ease-in-out infinite',
         }}
       />
@@ -1193,7 +1548,10 @@ function HeroDashboard() {
   const [clicked, setClicked] = useState(false)
 
   useEffect(() => {
-    const interval = setInterval(() => setStep((value) => (value + 1) % WAYPOINTS.length), 2400)
+    const interval = setInterval(
+      () => setStep((value) => (value + 1) % WAYPOINTS.length),
+      2400
+    )
     return () => clearInterval(interval)
   }, [])
 
@@ -1227,14 +1585,16 @@ function HeroDashboard() {
           </div>
           <div className='rounded-xl border border-[#e6e9e3] bg-white px-2.5 py-2'>
             <div className='text-[9px] text-[#5b6b62]'>{t('Balance')}</div>
-            <div className='text-sm font-semibold text-[#14201a]'>$4,182.14</div>
+            <div className='text-sm font-semibold text-[#14201a]'>
+              $4,182.14
+            </div>
             <button className='mt-1 text-[10px] font-medium text-[#4ba97e]'>
               + {t('Recharge')}
             </button>
           </div>
           {SIDEBAR_GROUPS.map((group) => (
             <div key={group.titleKey} className='flex flex-col gap-0.5'>
-              <span className='mb-0.5 px-1 text-[9px] uppercase tracking-wider text-[#9aa39d]'>
+              <span className='mb-0.5 px-1 text-[9px] tracking-wider text-[#9aa39d] uppercase'>
                 {t(group.titleKey)}
               </span>
               {group.items.map((item) => {
@@ -1244,7 +1604,9 @@ function HeroDashboard() {
                     key={item}
                     className={cn(
                       'rounded px-2 py-1.5 text-[11px] transition-colors',
-                      isActive ? 'bg-[#eaf1ec] font-medium text-[#4ba97e]' : 'text-[#5b6b62]'
+                      isActive
+                        ? 'bg-[#eaf1ec] font-medium text-[#4ba97e]'
+                        : 'text-[#5b6b62]'
                     )}
                   >
                     {t(item)}
@@ -1255,7 +1617,11 @@ function HeroDashboard() {
           ))}
           <div className='mt-auto flex items-center gap-2 border-t border-[#e6e9e3] px-1 pt-2'>
             <span className='flex h-6 w-6 items-center justify-center rounded-full bg-[#2e6b52]'>
-              <img src='/n123-logo.svg' alt='N123' className='h-3 w-auto brightness-0 invert' />
+              <img
+                src='/n123-logo.svg'
+                alt='N123'
+                className='h-3 w-auto brightness-0 invert'
+              />
             </span>
             <span className='text-[11px] text-[#5b6b62]'>N123</span>
           </div>
@@ -1272,7 +1638,9 @@ function HeroDashboard() {
                   key={tab}
                   className={cn(
                     'rounded-md px-2 py-1 text-[10px]',
-                    index === 0 ? 'bg-[#4ba97e] text-white' : 'bg-[#f1f3ef] text-[#5b6b62]'
+                    index === 0
+                      ? 'bg-[#4ba97e] text-white'
+                      : 'bg-[#f1f3ef] text-[#5b6b62]'
                   )}
                 >
                   {t(tab)}
@@ -1286,9 +1654,16 @@ function HeroDashboard() {
               <div key='analytics' className='flex h-full flex-col gap-4'>
                 <div className='grid grid-cols-3 gap-3'>
                   {GLANCE_CARDS.map((card) => (
-                    <div key={card.labelKey} className={`${DASHBOARD_CARD} px-3 py-2.5`}>
-                      <div className='text-[10px] text-[#5b6b62]'>{t(card.labelKey)}</div>
-                      <div className='text-lg font-bold text-[#14201a]'>{card.value}</div>
+                    <div
+                      key={card.labelKey}
+                      className={`${DASHBOARD_CARD} px-3 py-2.5`}
+                    >
+                      <div className='text-[10px] text-[#5b6b62]'>
+                        {t(card.labelKey)}
+                      </div>
+                      <div className='text-lg font-bold text-[#14201a]'>
+                        {card.value}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1299,17 +1674,43 @@ function HeroDashboard() {
                       <span className='text-[11px] text-[#5b6b62]'>
                         {t('home.dashboard.cost.title')}
                       </span>
-                      <span className='text-sm font-semibold text-[#14201a]'>$445.95</span>
+                      <span className='text-sm font-semibold text-[#14201a]'>
+                        $445.95
+                      </span>
                     </div>
                     <div className='flex h-[132px] items-end gap-1.5'>
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '30%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '55%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '40%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '70%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '45%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '85%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '60%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]' style={{ height: '75%' }} />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '30%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '55%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '40%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '70%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '45%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '85%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '60%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#4ba97e] to-[#6fae93]'
+                        style={{ height: '75%' }}
+                      />
                     </div>
                   </div>
 
@@ -1318,17 +1719,43 @@ function HeroDashboard() {
                       <span className='text-[11px] text-[#5b6b62]'>
                         {t('home.dashboard.glance.totalRequests')}
                       </span>
-                      <span className='text-sm font-semibold text-[#14201a]'>123,200</span>
+                      <span className='text-sm font-semibold text-[#14201a]'>
+                        123,200
+                      </span>
                     </div>
                     <div className='flex h-[132px] items-end gap-1.5'>
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '50%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '35%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '65%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '45%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '80%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '55%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '70%' }} />
-                      <div className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]' style={{ height: '90%' }} />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '50%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '35%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '65%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '45%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '80%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '55%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '70%' }}
+                      />
+                      <div
+                        className='flex-1 rounded-sm bg-gradient-to-t from-[#2e6b52] to-[#8fd9b4]'
+                        style={{ height: '90%' }}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1346,32 +1773,46 @@ function HeroDashboard() {
                     <div className='grid h-[132px] grid-cols-[52px_1fr] gap-3'>
                       <div className='grid grid-rows-6 gap-1.5 text-right text-[9px] leading-none text-[#9aa39d]'>
                         {LATENCY_ROWS.map((rowLabel) => (
-                          <span key={rowLabel} className='flex items-center justify-end'>
+                          <span
+                            key={rowLabel}
+                            className='flex items-center justify-end'
+                          >
                             {rowLabel}
                           </span>
                         ))}
                       </div>
                       <div
                         className='grid h-full gap-1.5'
-                        style={{ gridTemplateColumns: `repeat(${LATENCY_COLS}, minmax(0, 1fr))` }}
+                        style={{
+                          gridTemplateColumns: `repeat(${LATENCY_COLS}, minmax(0, 1fr))`,
+                        }}
                       >
-                        {Array.from({ length: LATENCY_COLS }).map((_, colIndex) => (
-                          <div key={colIndex} className='flex h-full flex-col gap-1.5'>
-                            {LATENCY_ROWS.map((rowLabel, rowIndex) => {
-                              const opacity =
-                                0.12 + ((rowIndex + (colIndex % LATENCY_ROWS.length)) % 6) * 0.12
-                              return (
-                                <div
-                                  key={`${colIndex}-${rowLabel}`}
-                                  className='flex-1 rounded-[2px]'
-                                  style={{
-                                    backgroundColor: `rgba(75,169,126,${opacity.toFixed(2)})`,
-                                  }}
-                                />
-                              )
-                            })}
-                          </div>
-                        ))}
+                        {Array.from({ length: LATENCY_COLS }).map(
+                          (_, colIndex) => (
+                            <div
+                              key={colIndex}
+                              className='flex h-full flex-col gap-1.5'
+                            >
+                              {LATENCY_ROWS.map((rowLabel, rowIndex) => {
+                                const opacity =
+                                  0.12 +
+                                  ((rowIndex +
+                                    (colIndex % LATENCY_ROWS.length)) %
+                                    6) *
+                                    0.12
+                                return (
+                                  <div
+                                    key={`${colIndex}-${rowLabel}`}
+                                    className='flex-1 rounded-[2px]'
+                                    style={{
+                                      backgroundColor: `rgba(75,169,126,${opacity.toFixed(2)})`,
+                                    }}
+                                  />
+                                )
+                              })}
+                            </div>
+                          )
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1381,10 +1822,15 @@ function HeroDashboard() {
                       <span className='text-[11px] text-[#5b6b62]'>
                         {t('home.dashboard.cache.title')}
                       </span>
-                      <span className='text-sm font-semibold text-[#14201a]'>90%</span>
+                      <span className='text-sm font-semibold text-[#14201a]'>
+                        90%
+                      </span>
                     </div>
                     <div className='mb-4 h-2 overflow-hidden rounded-full bg-[#eaf1ec]'>
-                      <div className='h-full rounded-full bg-gradient-to-r from-[#4ba97e] to-[#6fae93]' style={{ width: '90%' }} />
+                      <div
+                        className='h-full rounded-full bg-gradient-to-r from-[#4ba97e] to-[#6fae93]'
+                        style={{ width: '90%' }}
+                      />
                     </div>
                     <div className='grid grid-cols-3 gap-3 text-center'>
                       {[
@@ -1392,9 +1838,16 @@ function HeroDashboard() {
                         ['14.2K', 'home.dashboard.cache.misses'],
                         ['$1,180', 'home.dashboard.cache.saved'],
                       ].map(([value, label]) => (
-                        <div key={label} className='rounded-[14px] bg-[#fbfbf9] px-3 py-3'>
-                          <div className='text-[15px] font-semibold text-[#14201a]'>{value}</div>
-                          <div className='mt-1 text-[11px] text-[#5b6b62]'>{t(label)}</div>
+                        <div
+                          key={label}
+                          className='rounded-[14px] bg-[#fbfbf9] px-3 py-3'
+                        >
+                          <div className='text-[15px] font-semibold text-[#14201a]'>
+                            {value}
+                          </div>
+                          <div className='mt-1 text-[11px] text-[#5b6b62]'>
+                            {t(label)}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1421,12 +1874,16 @@ function HeroDashboard() {
                       {COST_SERIES.map((group, index) => {
                         const total = group.reduce((sum, item) => sum + item, 0)
                         return (
-                          <div key={COST_DAYS[index]} className='flex h-[220px] flex-col justify-end gap-[6px]'>
+                          <div
+                            key={COST_DAYS[index]}
+                            className='flex h-[220px] flex-col justify-end gap-[6px]'
+                          >
                             {group
                               .slice()
                               .reverse()
                               .map((value, stackIndex) => {
-                                const model = COST_MODELS[group.length - stackIndex - 1]
+                                const model =
+                                  COST_MODELS[group.length - stackIndex - 1]
                                 return (
                                   <div
                                     key={`${COST_DAYS[index]}-${model.name}`}
@@ -1440,7 +1897,9 @@ function HeroDashboard() {
                                   />
                                 )
                               })}
-                            <div className='pt-1 text-center text-[11px] text-[#5b6b62]'>${total}</div>
+                            <div className='pt-1 text-center text-[11px] text-[#5b6b62]'>
+                              ${total}
+                            </div>
                           </div>
                         )
                       })}
@@ -1449,7 +1908,7 @@ function HeroDashboard() {
                 </div>
               </div>,
               <div key='logs' className='flex h-full flex-col'>
-                <div className='grid grid-cols-[80px_1fr_64px_56px] gap-2 border-b border-[#e6e9e3] pb-2 text-[10px] uppercase tracking-wider text-[#9aa39d]'>
+                <div className='grid grid-cols-[80px_1fr_64px_56px] gap-2 border-b border-[#e6e9e3] pb-2 text-[10px] tracking-wider text-[#9aa39d] uppercase'>
                   <span>{t('Time')}</span>
                   <span>{t('Model')}</span>
                   <span className='text-right'>{t('Latency')}</span>
@@ -1457,29 +1916,50 @@ function HeroDashboard() {
                 </div>
                 <div className='divide-y divide-[#eef0ec]'>
                   {LOGS.map((log) => (
-                    <div key={log.t} className='grid grid-cols-[80px_1fr_64px_56px] items-center gap-2 py-2.5 text-[11px]'>
+                    <div
+                      key={log.t}
+                      className='grid grid-cols-[80px_1fr_64px_56px] items-center gap-2 py-2.5 text-[11px]'
+                    >
                       <span className='font-mono text-[#5b6b62]'>{log.t}</span>
                       <span className='flex items-center gap-2 text-[#14201a]'>
-                        <span className={cn('h-1.5 w-1.5 rounded-full', log.ok ? 'bg-[#2e6b52]' : 'bg-rose-500')} />
+                        <span
+                          className={cn(
+                            'h-1.5 w-1.5 rounded-full',
+                            log.ok ? 'bg-[#2e6b52]' : 'bg-rose-500'
+                          )}
+                        />
                         {log.model}
                       </span>
-                      <span className='text-right font-mono text-[#5b6b62]'>{log.ms}</span>
-                      <span className='text-right font-mono text-[#4ba97e]'>{log.cost}</span>
+                      <span className='text-right font-mono text-[#5b6b62]'>
+                        {log.ms}
+                      </span>
+                      <span className='text-right font-mono text-[#4ba97e]'>
+                        {log.cost}
+                      </span>
                     </div>
                   ))}
                 </div>
               </div>,
               <div key='models' className='flex h-full flex-col gap-3'>
                 {MODELS.map((model) => (
-                  <div key={model.name} className={`${DASHBOARD_CARD} px-3.5 py-3`}>
+                  <div
+                    key={model.name}
+                    className={`${DASHBOARD_CARD} px-3.5 py-3`}
+                  >
                     <div className='flex items-center justify-between text-[12px]'>
-                      <span className='font-medium text-[#14201a]'>{model.name}</span>
+                      <span className='font-medium text-[#14201a]'>
+                        {model.name}
+                      </span>
                       <span className='text-[#5b6b62]'>
-                        <span className='text-[#4ba97e]'>{model.cost}</span> · {model.calls}
+                        <span className='text-[#4ba97e]'>{model.cost}</span> ·{' '}
+                        {model.calls}
                       </span>
                     </div>
                     <div className='mt-2 h-1.5 overflow-hidden rounded-full bg-[#eaf1ec]'>
-                      <div className='h-full rounded-full bg-gradient-to-r from-[#2e6b52] to-[#6fae93]' style={{ width: `${model.pct * 2.6}%` }} />
+                      <div
+                        className='h-full rounded-full bg-gradient-to-r from-[#2e6b52] to-[#6fae93]'
+                        style={{ width: `${model.pct * 2.6}%` }}
+                      />
                     </div>
                   </div>
                 ))}
@@ -1490,7 +1970,8 @@ function HeroDashboard() {
                 className='absolute inset-0 transition-all duration-500 ease-in-out'
                 style={{
                   opacity: index === view ? 1 : 0,
-                  transform: index === view ? 'translateX(0)' : 'translateX(24px)',
+                  transform:
+                    index === view ? 'translateX(0)' : 'translateX(24px)',
                   pointerEvents: index === view ? 'auto' : 'none',
                 }}
               >
@@ -1508,11 +1989,17 @@ function HeroDashboard() {
         {clicked && waypoint.click && (
           <span
             key={step}
-            className='absolute left-0 top-0 h-8 w-8 rounded-full bg-[#4ba97e]/25'
+            className='absolute top-0 left-0 h-8 w-8 rounded-full bg-[#4ba97e]/25'
             style={{ animation: 'cursor-ripple 0.7s ease-out forwards' }}
           />
         )}
-        <svg width='20' height='24' viewBox='0 0 20 24' fill='none' style={{ filter: 'drop-shadow(rgba(0,0,0,0.25) 0px 2px 6px)' }}>
+        <svg
+          width='20'
+          height='24'
+          viewBox='0 0 20 24'
+          fill='none'
+          style={{ filter: 'drop-shadow(rgba(0,0,0,0.25) 0px 2px 6px)' }}
+        >
           <path
             d='M1 1L1 18L5.5 13.5L9.5 22L12.5 20.5L8.5 12L14 11L1 1Z'
             fill='#14201a'
@@ -1540,7 +2027,7 @@ function HeroSection({
   return (
     <section className='relative flex flex-1 items-center overflow-hidden'>
       <HeroAura />
-      <div className='relative z-10 mx-auto w-full max-w-[1360px] px-[24px] pb-[64px] pt-[120px]'>
+      <div className='relative z-10 mx-auto w-full max-w-[1360px] px-[24px] pt-[120px] pb-[64px]'>
         <div className='grid items-center gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:gap-14'>
           <div className='flex flex-col items-center text-center lg:items-start lg:text-left'>
             <a
@@ -1548,14 +2035,16 @@ function HeroSection({
               className='hero-fade-in-up group mb-[24px] inline-flex items-center gap-[6px] rounded-full border border-[#4ba97e]/15 bg-[#eaf1ec] px-[16px] py-[8px] text-[12px] leading-normal text-[#4ba97e] transition-all duration-300 hover:border-[#4ba97e]/30 hover:shadow-sm md:text-[13px]'
             >
               <Gift className='h-[14px] w-[14px] opacity-70 transition-opacity group-hover:opacity-100' />
-              <span className='font-semibold text-[#102e24]'>{t('home.hero.badge.count')}</span>
+              <span className='font-semibold text-[#102e24]'>
+                {t('home.hero.badge.count')}
+              </span>
               <span>{t('home.hero.badge.connected')}</span>
               <span>·</span>
               <span>{t('home.hero.badge.modalities')}</span>
               <ChevronRight className='h-[14px] w-[14px] opacity-50 transition-transform group-hover:translate-x-[2px]' />
             </a>
 
-            <h1 className='hero-fade-in-up text-[38px] font-semibold leading-[1.08] tracking-tight text-[#14201a] md:text-[54px] lg:text-[58px] font-kefaiii-bold'>
+            <h1 className='hero-fade-in-up font-kefaiii-bold text-[38px] leading-[1.08] font-semibold tracking-tight text-[#14201a] md:text-[54px] lg:text-[58px]'>
               {t('home.hero.title')}
               <br />
               <span className='text-[#4ba97e]'>{t('home.hero.subtitle')}</span>
@@ -1570,7 +2059,9 @@ function HeroSection({
                 to={primaryTarget as never}
                 className='inline-flex h-[40px] items-center justify-center rounded-[10px] bg-[#4ba97e] px-[28px] text-[15px] font-semibold text-[#fbfbf9] shadow-[0_8px_24px_rgba(75,169,126,0.28)] transition-colors hover:bg-[#143c2f]'
               >
-                {isAuthenticated ? t('home.actions.openConsole') : t('home.actions.freeStart')}
+                {isAuthenticated
+                  ? t('home.actions.openConsole')
+                  : t('home.actions.freeStart')}
               </Link>
               <a
                 href={isAuthenticated ? secondaryTarget : docsUrl}
@@ -1578,7 +2069,9 @@ function HeroSection({
                 rel={isAuthenticated ? undefined : 'noreferrer'}
                 className='inline-flex h-[40px] items-center justify-center rounded-[10px] border border-[#4ba97e]/20 bg-white px-[28px] text-[15px] font-medium text-[#14201a] transition-colors hover:border-[#4ba97e]/40'
               >
-                {isAuthenticated ? t('home.actions.goToDashboard') : t('home.actions.readDocs')}
+                {isAuthenticated
+                  ? t('home.actions.goToDashboard')
+                  : t('home.actions.readDocs')}
               </a>
             </div>
 
@@ -1588,7 +2081,9 @@ function HeroSection({
                   <dd className='text-[22px] font-semibold text-[#4ba97e] md:text-[24px]'>
                     {stat.value}
                   </dd>
-                  <dt className='text-[12px] text-[#5b6b62]'>{t(stat.labelKey)}</dt>
+                  <dt className='text-[12px] text-[#5b6b62]'>
+                    {t(stat.labelKey)}
+                  </dt>
                 </div>
               ))}
             </dl>
@@ -1611,7 +2106,7 @@ function GlanceSection() {
     <section id='dashboard' className='bg-[#fbfbf9] py-16 sm:py-20 lg:py-24'>
       <div className='mx-auto max-w-7xl px-6 lg:px-8'>
         <div className='mb-8 text-center'>
-          <h2 className='text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl font-kefaiii-bold'>
+          <h2 className='font-kefaiii-bold text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl'>
             {t('home.glance.title')}
           </h2>
           <p className='mx-auto mt-3 max-w-xl text-[#5b6b62]'>
@@ -1628,7 +2123,44 @@ function GlanceSection() {
 
 function FeatureIcon({ icon }: { icon: FeatureCard['icon'] }) {
   const Icon = icon === 'api' ? Layers3 : icon === 'economy' ? Waypoints : Code2
-  return <Icon className='h-[60px] w-[60px] text-[#4ba97e] md:h-[64px] md:w-[64px]' strokeWidth={1.5} />
+  return (
+    <Icon
+      className='h-[60px] w-[60px] text-[#4ba97e] md:h-[64px] md:w-[64px]'
+      strokeWidth={1.5}
+    />
+  )
+}
+
+function TiltCard({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  const handleMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const node = ref.current
+    if (!node) return
+    const bounds = node.getBoundingClientRect()
+    const x = (event.clientX - bounds.left) / bounds.width - 0.5
+    const y = (event.clientY - bounds.top) / bounds.height - 0.5
+    node.style.transform = `perspective(900px) rotateX(${-y * 7}deg) rotateY(${x * 7}deg) translateY(-6px)`
+  }
+
+  const resetTilt = () => {
+    if (ref.current) ref.current.style.transform = ''
+  }
+
+  return (
+    <div
+      ref={ref}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={resetTilt}
+      className='flex flex-col'
+      style={{
+        transition: 'transform 0.3s cubic-bezier(0.22,1,0.36,1)',
+        willChange: 'transform',
+      }}
+    >
+      {children}
+    </div>
+  )
 }
 
 function FeaturesSection() {
@@ -1643,33 +2175,36 @@ function FeaturesSection() {
             <p className='mb-3 text-[13px] tracking-wide text-[#5b6b62]'>
               {t('home.features.kicker')}
             </p>
-            <h2 className='text-[28px] font-semibold leading-[1.1] text-[#14201a] md:text-[36px] lg:text-[44px] font-kefaiii-bold'>
+            <h2 className='font-kefaiii-bold text-[28px] leading-[1.1] font-semibold text-[#14201a] md:text-[36px] lg:text-[44px]'>
               {t('home.features.title')}
             </h2>
           </div>
 
-          <div className='mb-[64px] mt-6 hidden h-px w-full bg-[#4ba97e]/15 md:block min-[1600px]:mb-[100px]' />
+          <div className='mt-6 mb-[64px] hidden h-px w-full bg-[#4ba97e]/15 min-[1600px]:mb-[100px] md:block' />
 
           <div className='grid grid-cols-1 gap-10 md:flex md:items-stretch md:gap-0'>
             {FEATURE_CARDS.map((card, index) => (
               <div
                 key={card.titleKey}
-                className={cn('flex-1 md:px-6', index > 0 && 'md:border-l md:border-[#4ba97e]/15')}
+                className={cn(
+                  'flex-1 md:px-6',
+                  index > 0 && 'md:border-l md:border-[#4ba97e]/15'
+                )}
               >
-                <div className='transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-[6px]'>
+                <TiltCard>
                   <div
                     className='flex h-[174px] items-center justify-center rounded-[18px] shadow-[0_10px_30px_-12px_rgba(75,169,126,0.35)]'
                     style={{ backgroundColor: card.boxColor }}
                   >
                     <FeatureIcon icon={card.icon} />
                   </div>
-                  <h3 className='mt-[20px] text-[20px] font-semibold leading-[30px] text-[#14201a]'>
+                  <h3 className='mt-[20px] text-[20px] leading-[30px] font-semibold text-[#14201a]'>
                     {t(card.titleKey)}
                   </h3>
                   <p className='mt-[8px] text-[17px] leading-[27px] text-[#5b6b62]'>
                     {t(card.descriptionKey)}
                   </p>
-                </div>
+                </TiltCard>
               </div>
             ))}
           </div>
@@ -1685,8 +2220,10 @@ function MapCtaSection() {
   return (
     <section className='relative w-full bg-[#fbfbf9] py-16 sm:py-20 lg:py-24'>
       <div className='mx-auto max-w-3xl px-4 text-center'>
-        <p className='text-[13px] tracking-wide text-[#5b6b62]'>{t('home.map.kicker')}</p>
-        <h2 className='mt-2 text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl font-kefaiii-bold'>
+        <p className='text-[13px] tracking-wide text-[#5b6b62]'>
+          {t('home.map.kicker')}
+        </p>
+        <h2 className='font-kefaiii-bold mt-2 text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl'>
           {t('home.map.title')}
         </h2>
         <p className='mx-auto mt-3 max-w-xl text-[#5b6b62]'>
@@ -1699,7 +2236,7 @@ function MapCtaSection() {
           <img
             src='/images/world-map.svg'
             alt='world map'
-            className='pointer-events-none absolute inset-0 h-full w-full select-none object-cover object-top'
+            className='pointer-events-none absolute inset-0 h-full w-full object-cover object-top select-none'
           />
 
           <svg
@@ -1708,13 +2245,25 @@ function MapCtaSection() {
             className='pointer-events-none absolute inset-0 h-full w-full select-none'
           >
             <defs>
-              <linearGradient id='arc-gradient' x1='0%' y1='0%' x2='100%' y2='0%'>
+              <linearGradient
+                id='arc-gradient'
+                x1='0%'
+                y1='0%'
+                x2='100%'
+                y2='0%'
+              >
                 <stop offset='0%' stopColor='#4ba97e' stopOpacity='0' />
                 <stop offset='18%' stopColor='#4ba97e' stopOpacity='1' />
                 <stop offset='82%' stopColor='#2e6b52' stopOpacity='1' />
                 <stop offset='100%' stopColor='#2e6b52' stopOpacity='0' />
               </linearGradient>
-              <filter id='arc-glow' x='-80%' y='-80%' width='260%' height='260%'>
+              <filter
+                id='arc-glow'
+                x='-80%'
+                y='-80%'
+                width='260%'
+                height='260%'
+              >
                 <feGaussianBlur stdDeviation='2.6' result='b' />
                 <feMerge>
                   <feMergeNode in='b' />
@@ -1762,7 +2311,7 @@ function MapCtaSection() {
               />
             ))}
 
-            {[ 
+            {[
               [67.79, 57.33],
               [137.24, 124.33],
               [293.57, 235.11],
@@ -1812,7 +2361,7 @@ function MapCtaSection() {
             ))}
           </svg>
 
-          <div className='absolute left-1/2 top-[44%] hidden -translate-x-1/2 flex-col items-center md:flex'>
+          <div className='absolute top-[44%] left-1/2 hidden -translate-x-1/2 flex-col items-center md:flex'>
             <img src='/n123-logo.svg' alt='N123' className='h-[50px] w-auto' />
             <span className='h-[54px] w-px bg-[#4ba97e]/40' />
             <span className='-mt-[3px] h-[6px] w-[6px] rounded-full bg-[#4ba97e] shadow-[0_0_8px_2px_rgba(75,169,126,0.55)]' />
@@ -1830,7 +2379,7 @@ function WhyChooseSection() {
     <section className='bg-[#fbfbf9] py-16 sm:py-20 lg:py-24'>
       <div className='mx-auto max-w-7xl px-4 sm:px-6 lg:px-8'>
         <div className='text-center'>
-          <h2 className='text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl font-kefaiii-bold'>
+          <h2 className='font-kefaiii-bold text-3xl font-bold tracking-tight text-[#14201a] sm:text-4xl'>
             {t('home.why.title')}
           </h2>
           <p className='mx-auto mt-4 max-w-[640px] text-[#5b6b62]'>
@@ -1846,7 +2395,9 @@ function WhyChooseSection() {
                   {feature.icon}
                 </span>
                 <div>
-                  <h3 className='font-semibold text-[#14201a]'>{t(feature.titleKey)}</h3>
+                  <h3 className='font-semibold text-[#14201a]'>
+                    {t(feature.titleKey)}
+                  </h3>
                   <p className='mt-1 text-sm leading-relaxed text-[#5b6b62]'>
                     {t(feature.descriptionKey)}
                   </p>
@@ -1899,8 +2450,10 @@ function tokenizePython(code: string) {
 
   while ((match = re.exec(code))) {
     if (match[1]) tokens.push({ text: match[1], color: tokenColors.comment })
-    else if (match[2]) tokens.push({ text: match[2], color: tokenColors.string })
-    else if (match[3]) tokens.push({ text: match[3], color: tokenColors.number })
+    else if (match[2])
+      tokens.push({ text: match[2], color: tokenColors.string })
+    else if (match[3])
+      tokens.push({ text: match[3], color: tokenColors.number })
     else if (match[4]) {
       const next = code[re.lastIndex]
       const color = keywords.has(match[4])
@@ -1919,7 +2472,13 @@ function tokenizePython(code: string) {
   return tokens
 }
 
-function TypewriterCode({ code, speed = 42 }: { code: string; speed?: number }) {
+function TypewriterCode({
+  code,
+  speed = 42,
+}: {
+  code: string
+  speed?: number
+}) {
   const [count, setCount] = useState(0)
   const reducedMotion = useReducedMotion()
   const tokens = useMemo(() => tokenizePython(code), [code])
@@ -1992,14 +2551,15 @@ function CtaSection({
         />
         <div
           aria-hidden
-          className='pointer-events-none absolute left-1/2 top-[-33%] h-[420px] w-[420px] -translate-x-1/2 rounded-full opacity-50 blur-[90px]'
+          className='pointer-events-none absolute top-[-33%] left-1/2 h-[420px] w-[420px] -translate-x-1/2 rounded-full opacity-50 blur-[90px]'
           style={{
-            background: 'radial-gradient(circle, rgba(111,174,147,0.45), transparent 70%)',
+            background:
+              'radial-gradient(circle, rgba(111,174,147,0.45), transparent 70%)',
           }}
         />
 
         <div className='relative z-10'>
-          <h2 className='mx-auto max-w-[640px] text-3xl font-bold tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.35)] sm:text-4xl font-kefaiii-bold'>
+          <h2 className='font-kefaiii-bold mx-auto max-w-[640px] text-3xl font-bold tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.35)] sm:text-4xl'>
             {t('home.cta.title')}
           </h2>
           <p className='mt-4 text-white/80 drop-shadow-[0_1px_8px_rgba(0,0,0,0.3)]'>
@@ -2010,7 +2570,9 @@ function CtaSection({
               to={primaryTarget as never}
               className='inline-flex h-[40px] items-center justify-center rounded-[10px] bg-white px-7 text-[15px] font-semibold text-[#102e24] transition-colors hover:bg-[#eef2ee]'
             >
-              {isAuthenticated ? t('home.actions.openConsole') : t('home.actions.createAccount')}
+              {isAuthenticated
+                ? t('home.actions.openConsole')
+                : t('home.actions.createAccount')}
             </Link>
             {isAuthenticated ? (
               <Link
@@ -2049,12 +2611,18 @@ function LandingFooter({
 
   return (
     <footer className='mx-[10px] mb-[10px] rounded-[16px] bg-[#102e24] text-[#eef2ee]'>
-      <div className='mx-auto max-w-[1420px] px-[24px] pb-[30px] pt-[60px] md:px-[50px] md:pt-[80px]'>
+      <div className='mx-auto max-w-[1420px] px-[24px] pt-[60px] pb-[30px] md:px-[50px] md:pt-[80px]'>
         <div className='grid grid-cols-2 gap-x-[24px] gap-y-[40px] md:grid-cols-5'>
           <div className='col-span-2'>
             <div className='flex items-center gap-[10px]'>
-              <img src='/n123-logo.svg' alt='N123' className='h-[26px] w-auto' />
-              <span className='text-[19px] font-semibold font-kefaiii-bold'>N123</span>
+              <img
+                src='/n123-logo.svg'
+                alt='N123'
+                className='h-[26px] w-auto'
+              />
+              <span className='font-kefaiii-bold text-[19px] font-semibold'>
+                N123
+              </span>
             </div>
             <p className='mt-[16px] max-w-[280px] text-[14px] leading-[1.7] text-[#eef2ee]/65'>
               {t('home.footer.description')}
@@ -2063,7 +2631,9 @@ function LandingFooter({
 
           {footerColumns.map((column) => (
             <div key={column.titleKey}>
-              <p className='mb-[22px] text-[12px] font-medium text-[#eef2ee]/55'>{t(column.titleKey)}</p>
+              <p className='mb-[22px] text-[12px] font-medium text-[#eef2ee]/55'>
+                {t(column.titleKey)}
+              </p>
               <ul className='flex flex-col gap-[16px]'>
                 {column.links.map((link) => (
                   <li key={link.labelKey}>
@@ -2088,8 +2658,14 @@ function LandingFooter({
           </p>
           <div className='flex items-center gap-[12px]'>
             {[
-              { label: 'Telegram', icon: <Send className='h-[15px] w-[15px]' /> },
-              { label: 'X', icon: <span className='text-[15px] font-semibold'>X</span> },
+              {
+                label: 'Telegram',
+                icon: <Send className='h-[15px] w-[15px]' />,
+              },
+              {
+                label: 'X',
+                icon: <span className='text-[15px] font-semibold'>X</span>,
+              },
               { label: 'Email', icon: <Mail className='h-[15px] w-[15px]' /> },
             ].map(({ label, icon }) => (
               <a
@@ -2146,7 +2722,8 @@ export function Home() {
   const { content, isLoaded, isUrl } = useHomePageContent()
   const { t } = useTranslation()
 
-  const docsUrl = (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
+  const docsUrl =
+    (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
   const isAuthenticated = !!auth.user
 
   useLayoutEffect(() => {
@@ -2188,6 +2765,11 @@ export function Home() {
     )
   }
 
-  return <LandingPage docsUrl={docsUrl} isAuthenticated={isAuthenticated} siteName={systemName || 'N123'} />
+  return (
+    <LandingPage
+      docsUrl={docsUrl}
+      isAuthenticated={isAuthenticated}
+      siteName={systemName || 'N123'}
+    />
+  )
 }
-
