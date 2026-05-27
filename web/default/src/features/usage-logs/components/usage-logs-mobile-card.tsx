@@ -180,6 +180,9 @@ function CommonLogsCard<TData>({
   cells: Map<string, Cell<TData, unknown>>
 }) {
   const { t } = useTranslation()
+  const createdRow = cells.get('created_at')?.row.original as
+    | { created_at?: string; type?: number | string }
+    | undefined
 
   const modelCell = cells.get('model_name')
   const quotaCell = cells.get('quota')
@@ -200,8 +203,8 @@ function CommonLogsCard<TData>({
             {t('Time')}
           </div>
           <MobileLogTimeStatus
-            createdAt={cells.get('created_at')?.row.original?.created_at}
-            type={cells.get('created_at')?.row.original?.type}
+            createdAt={createdRow?.created_at}
+            type={createdRow?.type}
           />
         </div>
         <SummaryField

@@ -1,0 +1,23 @@
+
+Rsbuild v2.0.7
+
+  ➜  Network:  http://192.168.110.224:5176/
+  ➜  Local:    http://localhost:5176/
+
+info    port 5175 is in use, using port 5176.
+start   build started...
+ready   built in 2.04 s
+start   building removed E:/code/new-api-er/web/default/src/features/subscriptions/components/subscriptions-provider.tsx and 777 more
+ready   built in 2.13 s
+start   building features\home\index.tsx
+ready   built in 0.59 s
+Rspack persistent cache save failed: Rspack FS Error:IO error: 系统找不到指定的文件。 (os error 2)
+  Persistent cache has been disabled for this session. Restart the process to re-enable it.
+start   building features\home\index.tsx
+ready   built in 1.25 s
+start   building i18n\locales\zh.json
+ready   built in 0.43 s
+start   building features\home\index.tsx
+ready   built in 0.50 s
+start   building i18n\locales\zh.json
+ready   built in 0.99 s

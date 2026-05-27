@@ -32,6 +32,7 @@ import { getStatus } from '@/lib/api'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import '@/lib/dayjs'
 import { applyFaviconToDom } from '@/lib/dom-utils'
+import { isDebugEnabled } from '@/lib/debug'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
 import { handleServerError } from '@/lib/handle-server-error'
 import { DirectionProvider } from './context/direction-provider'
@@ -53,7 +54,7 @@ const queryClient = new QueryClient({
     queries: {
       retry: (failureCount, error) => {
         // eslint-disable-next-line no-console
-        if (import.meta.env.DEV) console.log({ failureCount, error })
+        if (isDebugEnabled) console.log({ failureCount, error })
 
         if (failureCount >= 0 && import.meta.env.DEV) return false
         if (failureCount > 3 && import.meta.env.PROD) return false

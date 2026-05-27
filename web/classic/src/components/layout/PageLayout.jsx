@@ -70,6 +70,7 @@ const PageLayout = () => {
     location.pathname !== '/console/playground';
 
   const isConsoleRoute = location.pathname.startsWith('/console');
+  const isHomeRoute = location.pathname === '/';
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
 
   useEffect(() => {
@@ -153,22 +154,24 @@ const PageLayout = () => {
         overflow: isMobile ? 'visible' : 'hidden',
       }}
     >
-      <Header
-        style={{
-          padding: 0,
-          height: 'auto',
-          lineHeight: 'normal',
-          position: 'fixed',
-          width: '100%',
-          top: 0,
-          zIndex: 100,
-        }}
-      >
-        <HeaderBar
-          onMobileMenuToggle={() => setDrawerOpen((prev) => !prev)}
-          drawerOpen={drawerOpen}
-        />
-      </Header>
+      {!isHomeRoute && (
+        <Header
+          style={{
+            padding: 0,
+            height: 'auto',
+            lineHeight: 'normal',
+            position: 'fixed',
+            width: '100%',
+            top: 0,
+            zIndex: 100,
+          }}
+        >
+          <HeaderBar
+            onMobileMenuToggle={() => setDrawerOpen((prev) => !prev)}
+            drawerOpen={drawerOpen}
+          />
+        </Header>
+      )}
       <Layout
         style={{
           overflow: isMobile ? 'visible' : 'auto',
@@ -215,13 +218,14 @@ const PageLayout = () => {
               WebkitOverflowScrolling: 'touch',
               padding: shouldInnerPadding ? (isMobile ? '5px' : '24px') : '0',
               position: 'relative',
+              marginTop: isHomeRoute ? '0' : '64px',
             }}
           >
             <ErrorBoundary>
               <App />
             </ErrorBoundary>
           </Content>
-          {!shouldHideFooter && (
+          {!shouldHideFooter && !isHomeRoute && (
             <Layout.Footer
               style={{
                 flex: '0 0 auto',

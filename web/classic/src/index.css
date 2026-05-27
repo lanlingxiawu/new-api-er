@@ -258,6 +258,191 @@ code {
   }
 }
 
+@font-face {
+  font-family: 'Glow Sans SC';
+  src: url('/font/GlowSansSC-Regular.woff') format('woff');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Glow Sans SC';
+  src: url('/font/GlowSansSC-Bold.woff') format('woff');
+  font-weight: 500 700;
+  font-display: swap;
+}
+
+@keyframes heroFadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(4rem);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aura-float {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(6%, -8%) scale(1.12);
+  }
+  66% {
+    transform: translate(-7%, 5%) scale(0.92);
+  }
+}
+
+@keyframes aura-float-alt {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-8%, 7%) scale(1.15);
+  }
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+@keyframes caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.landing-home-page {
+  background: #fbfbf9;
+  color: #14201a;
+}
+
+.hero-fade-in-up {
+  opacity: 0;
+  transform: translateY(4rem);
+  animation: heroFadeInUp 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.3s 1
+    normal forwards;
+}
+
+.fade-in-up-element {
+  opacity: 0;
+  transform: translateY(8rem);
+  transition: 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.3s;
+}
+
+.fade-in-up-element.fade-in-up-fast {
+  transform: translateY(2rem);
+  transition: opacity 0.45s ease-out, transform 0.45s ease-out;
+}
+
+.fade-in-up-element.animate-fade-in-up {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.arc-flow {
+  stroke-dasharray: 4 4;
+  animation: dash-flow 0.9s linear infinite;
+}
+
+.animate-marquee {
+  animation: marquee 40s linear infinite;
+}
+
+.marquee-pause:hover .animate-marquee {
+  animation-play-state: paused;
+}
+
+.features-mesh-bg {
+  background-image: radial-gradient(
+    circle,
+    rgb(75 169 126 / 0.12) 1.5px,
+    transparent 1.5px
+  );
+  background-size: 22px 22px;
+  mask-image: radial-gradient(
+    80% 50% at 0% 20%,
+    rgb(0 0 0 / 0.35) 0%,
+    transparent 65%
+  );
+  -webkit-mask-image: radial-gradient(
+    80% 50% at 0% 20%,
+    rgb(0 0 0 / 0.35) 0%,
+    transparent 65%
+  );
+}
+
+.caret-blink {
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+.wavy-text {
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  line-height: 1;
+}
+
+.wavy-text .span-mother,
+.wavy-text .span-mother2 {
+  grid-area: 1 / 1;
+  display: flex;
+}
+
+.wavy-text .span-mother span,
+.wavy-text .span-mother2 span {
+  transition: transform 0.4s ease-in-out;
+  transition-delay: calc(var(--i) * 0.05s);
+}
+
+.wavy-text:hover .span-mother span {
+  transform: translateY(1.2em);
+}
+
+.wavy-text .span-mother2 span {
+  transform: translateY(-1.2em);
+}
+
+.wavy-text:hover .span-mother2 span {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-fade-in-up,
+  .fade-in-up-element,
+  .animate-marquee,
+  .arc-flow,
+  .caret-blink,
+  .wavy-text .span-mother span,
+  .wavy-text .span-mother2 span {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
+
 /* ==================== 聊天界面样式 ==================== */
 .semi-chat {
   padding-top: 0 !important;

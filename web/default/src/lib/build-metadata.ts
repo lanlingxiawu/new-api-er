@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { isDebugEnabled } from '@/lib/debug'
+
 /**
  * Build metadata helper.
  *
@@ -154,11 +156,13 @@ export function installBuildMetadata(): void {
 
   // Single concise dev-console banner so the build is identifiable when
   // copying logs into a bug report.
-  try {
+  if (isDebugEnabled) {
+    try {
     // eslint-disable-next-line no-console
-    console.debug('[build] %s', rev)
-  } catch {
-    // console may be replaced by a noop shim.
+      console.debug('[build] %s', rev)
+    } catch {
+      // console may be replaced by a noop shim.
+    }
   }
 }
 
