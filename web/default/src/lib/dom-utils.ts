@@ -16,6 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+function getIconMimeType(url: string) {
+  try {
+    const pathname = new URL(url, window.location.href).pathname.toLowerCase()
+    if (pathname.endsWith('.svg')) return 'image/svg+xml'
+    if (pathname.endsWith('.png')) return 'image/png'
+  } catch {
+    // Ignore malformed URLs
+  }
+  return ''
+}
+
 export function applyFaviconToDom(url: string) {
   if (typeof document === 'undefined' || !url) return
   try {
@@ -25,7 +36,14 @@ export function applyFaviconToDom(url: string) {
     if (existing.length === 1 && existing[0].href === next) return
     const link = document.createElement('link')
     link.rel = 'icon'
-    link.href = url
+    link.href = next
+    const mimeType = getIconMimeType(next)
+    if (mimeType) {
+      link.type = mimeType
+      if (mimeType === 'image/svg+xml') {
+        link.sizes = 'any'
+      }
+    }
     existing.forEach((l) => l.remove())
     document.head.appendChild(link)
   } catch {

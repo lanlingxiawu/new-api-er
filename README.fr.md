@@ -2,7 +2,7 @@
 
 ![new-api](/web/default/public/logo.png)
 
-# New API
+# N123 Api
 
 🍥 **Passerelle de modèles étendus de nouvelle génération et système de gestion d'actifs d'IA**
 
@@ -38,7 +38,7 @@
     <img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=539ac4217e69431684ad4a0bab768811&claim_uid=tbFPfKIDHpc4TzR" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" />
   </a><!--
   --><a href="https://www.producthunt.com/products/new-api/launches/new-api?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-new-api" target="_blank" rel="noopener noreferrer">
-    <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1047693&theme=light&t=1769577875005" alt="New API - All-in-one AI asset management gateway. | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" />
+    <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1047693&theme=light&t=1769577875005" alt="N123 Api - All-in-one AI asset management gateway. | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" />
   </a>
 </p>
 
@@ -155,7 +155,7 @@ docker run --name new-api -d --restart always \
 > [!WARNING]
 > Lorsque vous exploitez ce projet en tant que service public d'IA générative ou service de revente d'API, les utilisateurs doivent d'abord remplir toutes les obligations requises en matière d'enregistrement, de licence, de sécurité du contenu, de vérification d'identité, de conservation des journaux, de fiscalité, de paiement et d'autorisation en amont.
 
-📖 Pour plus de méthodes de déploiement, veuillez vous référer à [Guide de déploiement](https://docs.newapi.pro/en/docs/installation)
+📖 Pour plus de méthodes de déploiement, veuillez vous référer à [Guide de déploiement](https://docs.n123.ai/en/docs/installation)
 
 ---
 
@@ -163,7 +163,7 @@ docker run --name new-api -d --restart always \
 
 <div align="center">
 
-### 📖 [Documentation officielle](https://docs.newapi.pro/en/docs) | [![Demander à DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+### 📖 [Documentation officielle](https://docs.n123.ai/en/docs) | [![Demander à DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
 
 </div>
 
@@ -171,17 +171,17 @@ docker run --name new-api -d --restart always \
 
 | Catégorie | Lien |
 |------|------|
-| 🚀 Guide de déploiement | [Documentation d'installation](https://docs.newapi.pro/en/docs/installation) |
-| ⚙️ Configuration de l'environnement | [Variables d'environnement](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables) |
-| 📡 Documentation de l'API | [Documentation de l'API](https://docs.newapi.pro/en/docs/api) |
-| ❓ FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
-| 💬 Interaction avec la communauté | [Canaux de communication](https://docs.newapi.pro/en/docs/support/community-interaction) |
+| 🚀 Guide de déploiement | [Documentation d'installation](https://docs.n123.ai/en/docs/installation) |
+| ⚙️ Configuration de l'environnement | [Variables d'environnement](https://docs.n123.ai/en/docs/installation/config-maintenance/environment-variables) |
+| 📡 Documentation de l'API | [Documentation de l'API](https://docs.n123.ai/en/docs/api) |
+| ❓ FAQ | [FAQ](https://docs.n123.ai/en/docs/support/faq) |
+| 💬 Interaction avec la communauté | [Canaux de communication](https://docs.n123.ai/en/docs/support/community-interaction) |
 
 ---
 
 ## ✨ Fonctionnalités clés
 
-> Pour les fonctionnalités détaillées, veuillez vous référer à [Présentation des fonctionnalités](https://docs.newapi.pro/en/docs/guide/wiki/basic-concepts/features-introduction) |
+> Pour les fonctionnalités détaillées, veuillez vous référer à [Présentation des fonctionnalités](https://docs.n123.ai/en/docs/guide/wiki/basic-concepts/features-introduction) |
 
 ### 🎨 Fonctions principales
 
@@ -211,11 +211,11 @@ docker run --name new-api -d --restart always \
 ### 🚀 Fonctionnalités avancées
 
 **Prise en charge des formats d'API:**
-- ⚡ [OpenAI Responses](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/create-response)
-- ⚡ [OpenAI Realtime API](https://docs.newapi.pro/en/docs/api/ai-model/realtime/create-realtime-session) (y compris Azure)
-- ⚡ [Claude Messages](https://docs.newapi.pro/en/docs/api/ai-model/chat/create-message)
+- ⚡ [OpenAI Responses](https://docs.n123.ai/en/docs/api/ai-model/chat/openai/create-response)
+- ⚡ [OpenAI Realtime API](https://docs.n123.ai/en/docs/api/ai-model/realtime/create-realtime-session) (y compris Azure)
+- ⚡ [Claude Messages](https://docs.n123.ai/en/docs/api/ai-model/chat/create-message)
 - ⚡ [Google Gemini](https://doc.newapi.pro/en/api/google-gemini-chat)
-- 🔄 [Modèles Rerank](https://docs.newapi.pro/en/docs/api/ai-model/rerank/create-rerank) (Cohere, Jina)
+- 🔄 [Modèles Rerank](https://docs.n123.ai/en/docs/api/ai-model/rerank/create-rerank) (Cohere, Jina)
 
 **Routage intelligent:**
 - ⚖️ Sélection aléatoire pondérée des canaux
@@ -258,17 +258,17 @@ docker run --name new-api -d --restart always \
 
 ## 🤖 Prise en charge des modèles
 
-> Pour les détails, veuillez vous référer à [Documentation de l'API - Interface de passerelle](https://docs.newapi.pro/en/docs/api)
+> Pour les détails, veuillez vous référer à [Documentation de l'API - Interface de passerelle](https://docs.n123.ai/en/docs/api)
 
 | Type de modèle | Description | Documentation |
 |---------|------|------|
-| 🤖 OpenAI-Compatible | Modèles compatibles OpenAI | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createchatcompletion) |
-| 🤖 OpenAI Responses | Format OpenAI Responses | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createresponse) |
+| 🤖 OpenAI-Compatible | Modèles compatibles OpenAI | [Documentation](https://docs.n123.ai/en/docs/api/ai-model/chat/openai/createchatcompletion) |
+| 🤖 OpenAI Responses | Format OpenAI Responses | [Documentation](https://docs.n123.ai/en/docs/api/ai-model/chat/openai/createresponse) |
 | 🎨 Midjourney-Proxy | [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) | [Documentation](https://doc.newapi.pro/api/midjourney-proxy-image) |
 | 🎵 Suno-API | [Suno API](https://github.com/Suno-API/Suno-API) | [Documentation](https://doc.newapi.pro/api/suno-music) |
-| 🔄 Rerank | Cohere, Jina | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/rerank/creatererank) |
-| 💬 Claude | Format Messages | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/createmessage) |
-| 🌐 Gemini | Format Google Gemini | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
+| 🔄 Rerank | Cohere, Jina | [Documentation](https://docs.n123.ai/en/docs/api/ai-model/rerank/creatererank) |
+| 💬 Claude | Format Messages | [Documentation](https://docs.n123.ai/en/docs/api/ai-model/chat/createmessage) |
+| 🌐 Gemini | Format Google Gemini | [Documentation](https://docs.n123.ai/en/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
 | 🔧 Dify | Mode ChatFlow | - |
 | 🎯 Amont personnalisé | Configuration des points d'accès amont légalement autorisés | - |
 
@@ -277,16 +277,16 @@ docker run --name new-api -d --restart always \
 <details>
 <summary>Voir la liste complète des interfaces</summary>
 
-- [Interface de discussion (Chat Completions)](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createchatcompletion)
-- [Interface de réponse (Responses)](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createresponse)
-- [Interface d'image (Image)](https://docs.newapi.pro/en/docs/api/ai-model/images/openai/post-v1-images-generations)
-- [Interface audio (Audio)](https://docs.newapi.pro/en/docs/api/ai-model/audio/openai/create-transcription)
-- [Interface vidéo (Video)](https://docs.newapi.pro/en/docs/api/ai-model/audio/openai/createspeech)
-- [Interface d'incorporation (Embeddings)](https://docs.newapi.pro/en/docs/api/ai-model/embeddings/createembedding)
-- [Interface de rerank (Rerank)](https://docs.newapi.pro/en/docs/api/ai-model/rerank/creatererank)
-- [Conversation en temps réel (Realtime)](https://docs.newapi.pro/en/docs/api/ai-model/realtime/createrealtimesession)
-- [Discussion Claude](https://docs.newapi.pro/en/docs/api/ai-model/chat/createmessage)
-- [Discussion Google Gemini](https://docs.newapi.pro/en/docs/api/ai-model/chat/gemini/geminirelayv1beta)
+- [Interface de discussion (Chat Completions)](https://docs.n123.ai/en/docs/api/ai-model/chat/openai/createchatcompletion)
+- [Interface de réponse (Responses)](https://docs.n123.ai/en/docs/api/ai-model/chat/openai/createresponse)
+- [Interface d'image (Image)](https://docs.n123.ai/en/docs/api/ai-model/images/openai/post-v1-images-generations)
+- [Interface audio (Audio)](https://docs.n123.ai/en/docs/api/ai-model/audio/openai/create-transcription)
+- [Interface vidéo (Video)](https://docs.n123.ai/en/docs/api/ai-model/audio/openai/createspeech)
+- [Interface d'incorporation (Embeddings)](https://docs.n123.ai/en/docs/api/ai-model/embeddings/createembedding)
+- [Interface de rerank (Rerank)](https://docs.n123.ai/en/docs/api/ai-model/rerank/creatererank)
+- [Conversation en temps réel (Realtime)](https://docs.n123.ai/en/docs/api/ai-model/realtime/createrealtimesession)
+- [Discussion Claude](https://docs.n123.ai/en/docs/api/ai-model/chat/createmessage)
+- [Discussion Google Gemini](https://docs.n123.ai/en/docs/api/ai-model/chat/gemini/geminirelayv1beta)
 
 </details>
 
@@ -329,7 +329,7 @@ docker run --name new-api -d --restart always \
 | `PYROSCOPE_BLOCK_RATE` | Taux d'échantillonnage block Pyroscope | `5` |
 | `HOSTNAME` | Nom d'hôte tagué pour Pyroscope | `new-api` |
 
-📖 **Configuration complète:** [Documentation des variables d'environnement](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables)
+📖 **Configuration complète:** [Documentation des variables d'environnement](https://docs.n123.ai/en/docs/installation/config-maintenance/environment-variables)
 
 </details>
 
@@ -421,7 +421,7 @@ docker run --name new-api -d --restart always \
 | Projet | Description |
 |------|------|
 | [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool) | Outil de recherche de quota d'utilisation avec une clé |
-| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | Version optimisée haute performance de New API |
+| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | Version optimisée haute performance de N123 Api |
 
 ---
 
@@ -431,10 +431,10 @@ docker run --name new-api -d --restart always \
 
 | Ressource | Lien |
 |------|------|
-| 📘 FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
-| 💬 Interaction avec la communauté | [Canaux de communication](https://docs.newapi.pro/en/docs/support/community-interaction) |
-| 🐛 Commentaires sur les problèmes | [Commentaires sur les problèmes](https://docs.newapi.pro/en/docs/support/feedback-issues) |
-| 📚 Documentation complète | [Documentation officielle](https://docs.newapi.pro/en/docs) |
+| 📘 FAQ | [FAQ](https://docs.n123.ai/en/docs/support/faq) |
+| 💬 Interaction avec la communauté | [Canaux de communication](https://docs.n123.ai/en/docs/support/community-interaction) |
+| 🐛 Commentaires sur les problèmes | [Commentaires sur les problèmes](https://docs.n123.ai/en/docs/support/feedback-issues) |
+| 📚 Documentation complète | [Documentation officielle](https://docs.n123.ai/en/docs) |
 
 ### 🤝 Guide de contribution
 
@@ -469,11 +469,11 @@ Si les politiques de votre organisation ne permettent pas l'utilisation de logic
 
 <div align="center">
 
-### 💖 Merci d'utiliser New API
+### 💖 Merci d'utiliser N123 Api
 
 Si ce projet vous est utile, bienvenue à nous donner une ⭐️ Étoile！
 
-**[Documentation officielle](https://docs.newapi.pro/en/docs)** • **[Commentaires sur les problèmes](https://github.com/Calcium-Ion/new-api/issues)** • **[Dernière version](https://github.com/Calcium-Ion/new-api/releases)**
+**[Documentation officielle](https://docs.n123.ai/en/docs)** • **[Commentaires sur les problèmes](https://github.com/Calcium-Ion/new-api/issues)** • **[Dernière version](https://github.com/Calcium-Ion/new-api/releases)**
 
 <sub>Construit avec ❤️ par QuantumNous</sub>
 

@@ -57,7 +57,7 @@ const _systemInfoSchema = z.object({
   }),
   SystemName: z.string().min(1),
   ServerAddress: z.string().optional(),
-  Logo: z.string().url().optional().or(z.literal('')),
+  Logo: z.string().refine(isValidLogoValue).optional().or(z.literal('')),
   Footer: z.string().optional(),
   About: z.string().optional(),
   HomePageContent: z.string().optional(),
@@ -76,6 +76,18 @@ type SystemInfoSectionProps = {
 function normalizeValue(value: unknown): string {
   if (value === undefined || value === null) return ''
   return typeof value === 'string' ? value : String(value)
+}
+
+function isValidLogoValue(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return true
+
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return /^\/.+\.(png|svg)(?:\?.*)?$/i.test(trimmed)
+  }
 }
 
 export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
@@ -107,7 +119,14 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       error: () => t('System name is required'),
     }),
     ServerAddress: z.string().optional(),
-    Logo: z.string().url().optional().or(z.literal('')),
+    Logo: z
+      .string()
+      .refine(isValidLogoValue, {
+        error: () =>
+          t('Please enter a valid logo URL or /path ending in .png or .svg'),
+      })
+      .optional()
+      .or(z.literal('')),
     Footer: z.string().optional(),
     About: z.string().optional(),
     HomePageContent: z.string().optional(),
@@ -207,7 +226,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                   <FormItem>
                     <FormLabel>{t('System Name')}</FormLabel>
                     <FormControl>
-                      <Input placeholder={t('New API')} {...field} />
+                      <Input placeholder={t('N123 Api')} {...field} />
                     </FormControl>
                     <FormDescription>
                       {t('The name displayed across the application')}
@@ -244,12 +263,16 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                     <FormLabel>{t('Logo URL')}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder={t('https://example.com/logo.png')}
+                        placeholder={t(
+                          'https://example.com/logo.png or /logo.svg'
+                        )}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('URL to your logo image (optional)')}
+                      {t(
+                        'Supports external URLs or local /path assets for .png and .svg logos (optional)'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -313,7 +336,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                       <FormLabel>{t('Home Page Content')}</FormLabel>
                       <FormControl>
                         <Textarea
-                          placeholder={t('Welcome to our New API...')}
+                          placeholder={t('Welcome to our N123 Api...')}
                           rows={6}
                           {...field}
                         />

@@ -3287,7 +3287,7 @@ function LandingFooter({ docsUrl, siteName }) {
           children: [
             /* @__PURE__ */ jsx('p', {
               className: 'text-[13px] text-[#eef2ee]/50',
-              children: t('home.footer.copyright', { year, siteName }),
+              children: 'Copyright © 2026 N123. All rights reserved.',
             }),
             /* @__PURE__ */ jsx('div', {
               className: 'flex items-center gap-[12px]',
@@ -3367,7 +3367,7 @@ function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isUrl, setIsUrl] = useState(false);
 
-  const docsUrl = statusState?.status?.docs_link || 'https://docs.newapi.pro';
+  const docsUrl = statusState?.status?.docs_link || 'https://docs.n123.ai';
   const isAuthenticated = !!localStorage.getItem('user');
   const siteName = getSystemName() || 'N123';
 

@@ -40,9 +40,7 @@ import {
   Headset,
   Layers3,
   Link2,
-  Mail,
   Percent,
-  Send,
   ShieldCheck,
   Waypoints,
   Zap,
@@ -97,11 +95,9 @@ type GlanceCard = {
 }
 
 const TOP_LINKS: TopLink[] = [
-  { labelKey: 'home.nav.models', hasDropdown: true },
-  { labelKey: 'home.nav.pricing' },
-  { labelKey: 'home.nav.docs', hasDropdown: true },
-  { labelKey: 'home.nav.console' },
-  { labelKey: 'home.nav.developers', hasDropdown: true },
+  { labelKey: 'home.nav.models', to: '/pricing' },
+  { labelKey: 'home.nav.docs' },
+  { labelKey: 'home.nav.console', to: '/dashboard' },
 ]
 
 const HERO_STATS = [
@@ -339,34 +335,19 @@ const LANGUAGE_SHORT_LABELS: Record<string, string> = {
   vi: 'VI',
 }
 
-const FOOTER_COLUMNS = (_docsUrl: string): FooterColumn[] => [
+const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
   {
     titleKey: 'home.footer.columns.product',
     links: [
       { labelKey: 'home.footer.links.modelMarket', href: '#' },
-      { labelKey: 'home.footer.links.smartRouting', href: '#' },
       { labelKey: 'home.footer.links.console', href: '#' },
-      { labelKey: 'home.footer.links.pricing', href: '#' },
-      { labelKey: 'home.footer.links.statusPage', href: '#' },
     ],
   },
   {
     titleKey: 'home.footer.columns.developers',
     links: [
-      { labelKey: 'home.footer.links.getStarted', href: '#' },
-      { labelKey: 'home.footer.links.apiDocs', href: '#' },
-      { labelKey: 'home.footer.links.sdk', href: '#' },
-      { labelKey: 'home.footer.links.compatibilityGuide', href: '#' },
-      { labelKey: 'home.footer.links.changelog', href: '#' },
-    ],
-  },
-  {
-    titleKey: 'home.footer.columns.resources',
-    links: [
-      { labelKey: 'home.footer.links.github', href: '#' },
-      { labelKey: 'home.footer.links.blog', href: '#' },
-      { labelKey: 'home.footer.links.cases', href: '#' },
-      { labelKey: 'home.footer.links.helpCenter', href: '#' },
+      { labelKey: 'home.footer.links.getStarted', to: '/dashboard' },
+      { labelKey: 'home.footer.links.apiDocs', href: docsUrl, external: true },
     ],
   },
 ]
@@ -628,6 +609,18 @@ function NavTarget({
   )
 }
 
+function BrandLogo({
+  logo,
+  className,
+  alt = 'N123',
+}: {
+  logo: string
+  className?: string
+  alt?: string
+}) {
+  return <img src={logo} alt={alt} className={className} />
+}
+
 function MobileMenu({
   links,
   open,
@@ -635,6 +628,7 @@ function MobileMenu({
   isAuthenticated,
   loginTarget,
   primaryTarget,
+  logo,
 }: {
   links: TopLink[]
   open: boolean
@@ -642,6 +636,7 @@ function MobileMenu({
   isAuthenticated: boolean
   loginTarget: string
   primaryTarget: string
+  logo: string
 }) {
   const { t, i18n } = useTranslation()
   const currentLanguage = normalizeInterfaceLanguage(i18n.language)
@@ -656,7 +651,7 @@ function MobileMenu({
     >
       <div className='flex items-center justify-between px-[16px] py-4'>
         <span className='flex items-center gap-[10px]'>
-          <img src='/n123-logo.svg' alt='N123' className='h-[26px] w-auto' />
+          <BrandLogo logo={logo} className='h-[26px] w-auto' />
           <span className='text-[18px] font-semibold text-[#14201a]'>N123</span>
         </span>
         <button
@@ -733,9 +728,11 @@ function MobileMenu({
 function LandingNavbar({
   docsUrl,
   isAuthenticated,
+  logo,
 }: {
   docsUrl: string
   isAuthenticated: boolean
+  logo: string
 }) {
   const { t, i18n } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -788,11 +785,7 @@ function LandingNavbar({
               aria-label='N123'
               className='flex items-center gap-[8px]'
             >
-              <img
-                src='/n123-logo.svg'
-                alt='N123'
-                className='h-[26px] w-auto'
-              />
+              <BrandLogo logo={logo} className='h-[26px] w-auto' />
               <span className='text-[19px] font-semibold tracking-tight text-[#14201a]'>
                 N123
               </span>
@@ -823,7 +816,7 @@ function LandingNavbar({
               <button
                 type='button'
                 aria-label={t('Change language')}
-                className='flex h-[34px] items-center gap-[6px] rounded-[10px] border border-transparent px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:border-[#4ba97e]/15 hover:bg-white/75 hover:text-[#14201a]'
+                className='flex h-[34px] items-center gap-[6px] rounded-[10px] px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:bg-white/75 hover:text-[#14201a]'
               >
                 <span>{currentLanguageLabel}</span>
                 <ChevronDown className='h-[14px] w-[14px] opacity-60 transition-transform duration-200 group-hover/language:rotate-180' />
@@ -1541,7 +1534,7 @@ function HeroAura() {
   )
 }
 
-function HeroDashboard() {
+function HeroDashboard({ logo }: { logo: string }) {
   const { t } = useTranslation()
   const [step, setStep] = useState(0)
   const [view, setView] = useState(0)
@@ -1580,7 +1573,7 @@ function HeroDashboard() {
       <div className='flex'>
         <aside className='hidden w-52 shrink-0 flex-col gap-3 border-r border-[#e6e9e3] bg-[#fbfbf9] p-3 md:flex'>
           <div className='flex items-center gap-2 px-1 py-1'>
-            <img src='/n123-logo.svg' alt='N123' className='h-5 w-auto' />
+            <BrandLogo logo={logo} className='h-5 w-auto' />
             <span className='text-xs font-semibold text-[#14201a]'>N123</span>
           </div>
           <div className='rounded-xl border border-[#e6e9e3] bg-white px-2.5 py-2'>
@@ -1617,9 +1610,8 @@ function HeroDashboard() {
           ))}
           <div className='mt-auto flex items-center gap-2 border-t border-[#e6e9e3] px-1 pt-2'>
             <span className='flex h-6 w-6 items-center justify-center rounded-full bg-[#2e6b52]'>
-              <img
-                src='/n123-logo.svg'
-                alt='N123'
+              <BrandLogo
+                logo={logo}
                 className='h-3 w-auto brightness-0 invert'
               />
             </span>
@@ -2016,9 +2008,11 @@ function HeroDashboard() {
 function HeroSection({
   docsUrl,
   isAuthenticated,
+  logo,
 }: {
   docsUrl: string
   isAuthenticated: boolean
+  logo: string
 }) {
   const { t } = useTranslation()
   const primaryTarget = isAuthenticated ? '/dashboard' : '/sign-up'
@@ -2090,7 +2084,7 @@ function HeroSection({
           </div>
 
           <div className='hero-fade-in-up w-full lg:-mr-[340px] xl:-mr-[560px]'>
-            <HeroDashboard />
+            <HeroDashboard logo={logo} />
           </div>
         </div>
       </div>
@@ -2214,7 +2208,7 @@ function FeaturesSection() {
   )
 }
 
-function MapCtaSection() {
+function MapCtaSection({ logo }: { logo: string }) {
   const { t } = useTranslation()
 
   return (
@@ -2362,7 +2356,7 @@ function MapCtaSection() {
           </svg>
 
           <div className='absolute top-[44%] left-1/2 hidden -translate-x-1/2 flex-col items-center md:flex'>
-            <img src='/n123-logo.svg' alt='N123' className='h-[50px] w-auto' />
+            <BrandLogo logo={logo} className='h-[50px] w-auto' />
             <span className='h-[54px] w-px bg-[#4ba97e]/40' />
             <span className='-mt-[3px] h-[6px] w-[6px] rounded-full bg-[#4ba97e] shadow-[0_0_8px_2px_rgba(75,169,126,0.55)]' />
           </div>
@@ -2601,9 +2595,11 @@ function CtaSection({
 function LandingFooter({
   docsUrl,
   siteName,
+  logo,
 }: {
   docsUrl: string
   siteName: string
+  logo: string
 }) {
   const { t } = useTranslation()
   const year = new Date().getFullYear()
@@ -2615,11 +2611,7 @@ function LandingFooter({
         <div className='grid grid-cols-2 gap-x-[24px] gap-y-[40px] md:grid-cols-5'>
           <div className='col-span-2'>
             <div className='flex items-center gap-[10px]'>
-              <img
-                src='/n123-logo.svg'
-                alt='N123'
-                className='h-[26px] w-auto'
-              />
+              <BrandLogo logo={logo} className='h-[26px] w-auto' />
               <span className='font-kefaiii-bold text-[19px] font-semibold'>
                 N123
               </span>
@@ -2654,30 +2646,8 @@ function LandingFooter({
 
         <div className='mt-[24px] flex flex-col items-center justify-between gap-[16px] md:flex-row'>
           <p className='text-[13px] text-[#eef2ee]/50'>
-            {t('home.footer.copyright', { year, siteName })}
+           Copyright © 2026 N123. All rights reserved.
           </p>
-          <div className='flex items-center gap-[12px]'>
-            {[
-              {
-                label: 'Telegram',
-                icon: <Send className='h-[15px] w-[15px]' />,
-              },
-              {
-                label: 'X',
-                icon: <span className='text-[15px] font-semibold'>X</span>,
-              },
-              { label: 'Email', icon: <Mail className='h-[15px] w-[15px]' /> },
-            ].map(({ label, icon }) => (
-              <a
-                key={label}
-                href='#'
-                aria-label={label}
-                className='flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#eef2ee]/10 text-[#eef2ee]/85 transition-colors hover:bg-[#eef2ee]/20 hover:text-white'
-              >
-                {icon}
-              </a>
-            ))}
-          </div>
         </div>
       </div>
     </footer>
@@ -2688,28 +2658,38 @@ function LandingPage({
   docsUrl,
   isAuthenticated,
   siteName,
+  logo,
 }: {
   docsUrl: string
   isAuthenticated: boolean
   siteName: string
+  logo: string
 }) {
   return (
     <>
       <div className='landing-home-root landing-home-shell'>
         <ScrollProgress />
-        <LandingNavbar docsUrl={docsUrl} isAuthenticated={isAuthenticated} />
+        <LandingNavbar
+          docsUrl={docsUrl}
+          isAuthenticated={isAuthenticated}
+          logo={logo}
+        />
         <main id='top'>
           <div className='flex min-h-svh flex-col'>
-            <HeroSection docsUrl={docsUrl} isAuthenticated={isAuthenticated} />
+            <HeroSection
+              docsUrl={docsUrl}
+              isAuthenticated={isAuthenticated}
+              logo={logo}
+            />
             <ProviderMarquee />
           </div>
           <GlanceSection />
           <FeaturesSection />
-          <MapCtaSection />
+          <MapCtaSection logo={logo} />
           <WhyChooseSection />
           <CtaSection docsUrl={docsUrl} isAuthenticated={isAuthenticated} />
         </main>
-        <LandingFooter docsUrl={docsUrl} siteName={siteName} />
+        <LandingFooter docsUrl={docsUrl} siteName={siteName} logo={logo} />
       </div>
     </>
   )
@@ -2718,12 +2698,12 @@ function LandingPage({
 export function Home() {
   const { auth } = useAuthStore()
   const { status } = useStatus()
-  const { systemName } = useSystemConfig()
+  const { systemName, logo } = useSystemConfig()
   const { content, isLoaded, isUrl } = useHomePageContent()
   const { t } = useTranslation()
 
   const docsUrl =
-    (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
+    (status?.docs_link as string | undefined) || 'https://docs.n123.ai'
   const isAuthenticated = !!auth.user
 
   useLayoutEffect(() => {
@@ -2770,6 +2750,7 @@ export function Home() {
       docsUrl={docsUrl}
       isAuthenticated={isAuthenticated}
       siteName={systemName || 'N123'}
+      logo={logo}
     />
   )
 }

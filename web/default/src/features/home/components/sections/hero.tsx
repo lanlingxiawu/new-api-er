@@ -47,7 +47,7 @@ export function Hero(props: HeroProps) {
   const { t } = useTranslation()
   const { status } = useStatus()
   const docsUrl =
-    (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
+    (status?.docs_link as string | undefined) || 'https://docs.n123.ai'
 
   const renderDocsButton = () => {
     const isExternal = docsUrl.startsWith('http')

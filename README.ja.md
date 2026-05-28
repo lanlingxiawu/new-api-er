@@ -2,7 +2,7 @@
 
 ![new-api](/web/default/public/logo.png)
 
-# New API
+# N123 Api
 
 🍥 **次世代大規模モデルゲートウェイとAI資産管理システム**
 
@@ -38,7 +38,7 @@
     <img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=539ac4217e69431684ad4a0bab768811&claim_uid=tbFPfKIDHpc4TzR" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" />
   </a><!--
   --><a href="https://www.producthunt.com/products/new-api/launches/new-api?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-new-api" target="_blank" rel="noopener noreferrer">
-    <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1047693&theme=light&t=1769577875005" alt="New API - All-in-one AI asset management gateway. | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" />
+    <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1047693&theme=light&t=1769577875005" alt="N123 Api - All-in-one AI asset management gateway. | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" />
   </a>
 </p>
 
@@ -155,7 +155,7 @@ docker run --name new-api -d --restart always \
 > [!WARNING]
 > 本プロジェクトを公衆向け生成 AI サービスまたは API 再販サービスとして運営する場合、ユーザーは届出、コンテンツセキュリティ、本人確認、ログ保持、税務、決済、上流認可などの必要なコンプライアンス義務を先に完了してください。
 
-📖 その他のデプロイ方法については[デプロイガイド](https://docs.newapi.pro/ja/docs/installation)を参照してください。
+📖 その他のデプロイ方法については[デプロイガイド](https://docs.n123.ai/ja/docs/installation)を参照してください。
 
 ---
 
@@ -163,7 +163,7 @@ docker run --name new-api -d --restart always \
 
 <div align="center">
 
-### 📖 [公式ドキュメント](https://docs.newapi.pro/ja/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+### 📖 [公式ドキュメント](https://docs.n123.ai/ja/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
 
 </div>
 
@@ -171,17 +171,17 @@ docker run --name new-api -d --restart always \
 
 | カテゴリ | リンク |
 |------|------|
-| 🚀 デプロイガイド | [インストールドキュメント](https://docs.newapi.pro/ja/docs/installation) |
-| ⚙️ 環境設定 | [環境変数](https://docs.newapi.pro/ja/docs/installation/config-maintenance/environment-variables) |
-| 📡 APIドキュメント | [APIドキュメント](https://docs.newapi.pro/ja/docs/api) |
-| ❓ よくある質問 | [FAQ](https://docs.newapi.pro/ja/docs/support/faq) |
-| 💬 コミュニティ交流 | [交流チャネル](https://docs.newapi.pro/ja/docs/support/community-interaction) |
+| 🚀 デプロイガイド | [インストールドキュメント](https://docs.n123.ai/ja/docs/installation) |
+| ⚙️ 環境設定 | [環境変数](https://docs.n123.ai/ja/docs/installation/config-maintenance/environment-variables) |
+| 📡 APIドキュメント | [APIドキュメント](https://docs.n123.ai/ja/docs/api) |
+| ❓ よくある質問 | [FAQ](https://docs.n123.ai/ja/docs/support/faq) |
+| 💬 コミュニティ交流 | [交流チャネル](https://docs.n123.ai/ja/docs/support/community-interaction) |
 
 ---
 
 ## ✨ 主な機能
 
-> 詳細な機能については[機能説明](https://docs.newapi.pro/ja/docs/guide/wiki/basic-concepts/features-introduction)を参照してください。
+> 詳細な機能については[機能説明](https://docs.n123.ai/ja/docs/guide/wiki/basic-concepts/features-introduction)を参照してください。
 
 ### 🎨 コア機能
 
@@ -213,11 +213,11 @@ docker run --name new-api -d --restart always \
 ### 🚀 高度な機能
 
 **APIフォーマットサポート:**
-- ⚡ [OpenAI Responses](https://docs.newapi.pro/ja/docs/api/ai-model/chat/openai/create-response)
-- ⚡ [OpenAI Realtime API](https://docs.newapi.pro/ja/docs/api/ai-model/realtime/create-realtime-session)（Azureを含む）
-- ⚡ [Claude Messages](https://docs.newapi.pro/ja/docs/api/ai-model/chat/create-message)
+- ⚡ [OpenAI Responses](https://docs.n123.ai/ja/docs/api/ai-model/chat/openai/create-response)
+- ⚡ [OpenAI Realtime API](https://docs.n123.ai/ja/docs/api/ai-model/realtime/create-realtime-session)（Azureを含む）
+- ⚡ [Claude Messages](https://docs.n123.ai/ja/docs/api/ai-model/chat/create-message)
 - ⚡ [Google Gemini](https://doc.newapi.pro/ja/api/google-gemini-chat)
-- 🔄 [Rerankモデル](https://docs.newapi.pro/ja/docs/api/ai-model/rerank/create-rerank)（Cohere、Jina）
+- 🔄 [Rerankモデル](https://docs.n123.ai/ja/docs/api/ai-model/rerank/create-rerank)（Cohere、Jina）
 
 **インテリジェントルーティング:**
 - ⚖️ チャネル重み付けランダム
@@ -260,17 +260,17 @@ docker run --name new-api -d --restart always \
 
 ## 🤖 モデルサポート
 
-> 詳細については[APIドキュメント - ゲートウェイインターフェース](https://docs.newapi.pro/ja/docs/api)
+> 詳細については[APIドキュメント - ゲートウェイインターフェース](https://docs.n123.ai/ja/docs/api)
 
 | モデルタイプ | 説明 | ドキュメント |
 |---------|------|------|
-| 🤖 OpenAI-Compatible | OpenAI互換モデル | [ドキュメント](https://docs.newapi.pro/ja/docs/api/ai-model/chat/openai/createchatcompletion) |
-| 🤖 OpenAI Responses | OpenAI Responsesフォーマット | [ドキュメント](https://docs.newapi.pro/ja/docs/api/ai-model/chat/openai/createresponse) |
+| 🤖 OpenAI-Compatible | OpenAI互換モデル | [ドキュメント](https://docs.n123.ai/ja/docs/api/ai-model/chat/openai/createchatcompletion) |
+| 🤖 OpenAI Responses | OpenAI Responsesフォーマット | [ドキュメント](https://docs.n123.ai/ja/docs/api/ai-model/chat/openai/createresponse) |
 | 🎨 Midjourney-Proxy | [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) | [ドキュメント](https://doc.newapi.pro/api/midjourney-proxy-image) |
 | 🎵 Suno-API | [Suno API](https://github.com/Suno-API/Suno-API) | [ドキュメント](https://doc.newapi.pro/api/suno-music) |
-| 🔄 Rerank | Cohere、Jina | [ドキュメント](https://docs.newapi.pro/ja/docs/api/ai-model/rerank/creatererank) |
-| 💬 Claude | Messagesフォーマット | [ドキュメント](https://docs.newapi.pro/ja/docs/api/ai-model/chat/createmessage) |
-| 🌐 Gemini | Google Geminiフォーマット | [ドキュメント](https://docs.newapi.pro/ja/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
+| 🔄 Rerank | Cohere、Jina | [ドキュメント](https://docs.n123.ai/ja/docs/api/ai-model/rerank/creatererank) |
+| 💬 Claude | Messagesフォーマット | [ドキュメント](https://docs.n123.ai/ja/docs/api/ai-model/chat/createmessage) |
+| 🌐 Gemini | Google Geminiフォーマット | [ドキュメント](https://docs.n123.ai/ja/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
 | 🔧 Dify | ChatFlowモード | - |
 | 🎯 カスタム上流 | 合法的に許可された上流エンドポイントの設定をサポート | - |
 
@@ -279,16 +279,16 @@ docker run --name new-api -d --restart always \
 <details>
 <summary>完全なインターフェースリストを表示</summary>
 
-- [チャットインターフェース (Chat Completions)](https://docs.newapi.pro/ja/docs/api/ai-model/chat/openai/createchatcompletion)
-- [レスポンスインターフェース (Responses)](https://docs.newapi.pro/ja/docs/api/ai-model/chat/openai/createresponse)
-- [イメージインターフェース (Image)](https://docs.newapi.pro/ja/docs/api/ai-model/images/openai/post-v1-images-generations)
-- [オーディオインターフェース (Audio)](https://docs.newapi.pro/ja/docs/api/ai-model/audio/openai/create-transcription)
-- [ビデオインターフェース (Video)](https://docs.newapi.pro/ja/docs/api/ai-model/audio/openai/createspeech)
-- [エンベッドインターフェース (Embeddings)](https://docs.newapi.pro/ja/docs/api/ai-model/embeddings/createembedding)
-- [再ランク付けインターフェース (Rerank)](https://docs.newapi.pro/ja/docs/api/ai-model/rerank/creatererank)
-- [リアルタイム対話インターフェース (Realtime)](https://docs.newapi.pro/ja/docs/api/ai-model/realtime/createrealtimesession)
-- [Claudeチャット](https://docs.newapi.pro/ja/docs/api/ai-model/chat/createmessage)
-- [Google Geminiチャット](https://docs.newapi.pro/ja/docs/api/ai-model/chat/gemini/geminirelayv1beta)
+- [チャットインターフェース (Chat Completions)](https://docs.n123.ai/ja/docs/api/ai-model/chat/openai/createchatcompletion)
+- [レスポンスインターフェース (Responses)](https://docs.n123.ai/ja/docs/api/ai-model/chat/openai/createresponse)
+- [イメージインターフェース (Image)](https://docs.n123.ai/ja/docs/api/ai-model/images/openai/post-v1-images-generations)
+- [オーディオインターフェース (Audio)](https://docs.n123.ai/ja/docs/api/ai-model/audio/openai/create-transcription)
+- [ビデオインターフェース (Video)](https://docs.n123.ai/ja/docs/api/ai-model/audio/openai/createspeech)
+- [エンベッドインターフェース (Embeddings)](https://docs.n123.ai/ja/docs/api/ai-model/embeddings/createembedding)
+- [再ランク付けインターフェース (Rerank)](https://docs.n123.ai/ja/docs/api/ai-model/rerank/creatererank)
+- [リアルタイム対話インターフェース (Realtime)](https://docs.n123.ai/ja/docs/api/ai-model/realtime/createrealtimesession)
+- [Claudeチャット](https://docs.n123.ai/ja/docs/api/ai-model/chat/createmessage)
+- [Google Geminiチャット](https://docs.n123.ai/ja/docs/api/ai-model/chat/gemini/geminirelayv1beta)
 
 </details>
 
@@ -331,7 +331,7 @@ docker run --name new-api -d --restart always \
 | `PYROSCOPE_BLOCK_RATE` | Pyroscope blockサンプリング率 | `5` |
 | `HOSTNAME` | Pyroscope用のホスト名タグ | `new-api` |
 
-📖 **完全な設定:** [環境変数ドキュメント](https://docs.newapi.pro/ja/docs/installation/config-maintenance/environment-variables)
+📖 **完全な設定:** [環境変数ドキュメント](https://docs.n123.ai/ja/docs/installation/config-maintenance/environment-variables)
 
 </details>
 
@@ -421,7 +421,7 @@ docker run --name new-api -d --restart always \
 | プロジェクト | 説明 |
 |------|------|
 | [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool) | キー使用量クォータ照会ツール |
-| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | New API高性能最適化版 |
+| [new-api-horizon](https://github.com/Calcium-Ion/new-api-horizon) | N123 Api高性能最適化版 |
 
 ---
 
@@ -431,10 +431,10 @@ docker run --name new-api -d --restart always \
 
 | リソース | リンク |
 |------|------|
-| 📘 よくある質問 | [FAQ](https://docs.newapi.pro/ja/docs/support/faq) |
-| 💬 コミュニティ交流 | [交流チャネル](https://docs.newapi.pro/ja/docs/support/community-interaction) |
-| 🐛 問題のフィードバック | [問題フィードバック](https://docs.newapi.pro/ja/docs/support/feedback-issues) |
-| 📚 完全なドキュメント | [公式ドキュメント](https://docs.newapi.pro/ja/docs) |
+| 📘 よくある質問 | [FAQ](https://docs.n123.ai/ja/docs/support/faq) |
+| 💬 コミュニティ交流 | [交流チャネル](https://docs.n123.ai/ja/docs/support/community-interaction) |
+| 🐛 問題のフィードバック | [問題フィードバック](https://docs.n123.ai/ja/docs/support/feedback-issues) |
+| 📚 完全なドキュメント | [公式ドキュメント](https://docs.n123.ai/ja/docs) |
 
 ### 🤝 貢献ガイド
 
@@ -469,11 +469,11 @@ docker run --name new-api -d --restart always \
 
 <div align="center">
 
-### 💖 New APIをご利用いただきありがとうございます
+### 💖 N123 Apiをご利用いただきありがとうございます
 
 このプロジェクトがあなたのお役に立てたなら、ぜひ ⭐️ スターをください！
 
-**[公式ドキュメント](https://docs.newapi.pro/ja/docs)** • **[問題フィードバック](https://github.com/Calcium-Ion/new-api/issues)** • **[最新リリース](https://github.com/Calcium-Ion/new-api/releases)**
+**[公式ドキュメント](https://docs.n123.ai/ja/docs)** • **[問題フィードバック](https://github.com/Calcium-Ion/new-api/issues)** • **[最新リリース](https://github.com/Calcium-Ion/new-api/releases)**
 
 <sub>❤️ で構築された QuantumNous</sub>
 

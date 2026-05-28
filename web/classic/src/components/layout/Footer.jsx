@@ -63,7 +63,7 @@ const FooterBar = () => {
                 </p>
                 <div className='flex flex-col gap-4'>
                   <a
-                    href='https://docs.newapi.pro/wiki/project-introduction/'
+                    href='https://docs.n123.ai/wiki/project-introduction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -71,7 +71,7 @@ const FooterBar = () => {
                     {t('关于项目')}
                   </a>
                   <a
-                    href='https://docs.newapi.pro/support/community-interaction/'
+                    href='https://docs.n123.ai/support/community-interaction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -79,7 +79,7 @@ const FooterBar = () => {
                     {t('联系我们')}
                   </a>
                   <a
-                    href='https://docs.newapi.pro/wiki/features-introduction/'
+                    href='https://docs.n123.ai/wiki/features-introduction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -95,7 +95,7 @@ const FooterBar = () => {
                 </p>
                 <div className='flex flex-col gap-4'>
                   <a
-                    href='https://docs.newapi.pro/getting-started/'
+                    href='https://docs.n123.ai/getting-started/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -103,7 +103,7 @@ const FooterBar = () => {
                     {t('快速开始')}
                   </a>
                   <a
-                    href='https://docs.newapi.pro/installation/'
+                    href='https://docs.n123.ai/installation/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -111,7 +111,7 @@ const FooterBar = () => {
                     {t('安装指南')}
                   </a>
                   <a
-                    href='https://docs.newapi.pro/api/'
+                    href='https://docs.n123.ai/api/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -205,7 +205,7 @@ const FooterBar = () => {
               rel='noopener noreferrer'
               className='!text-semi-color-primary font-medium'
             >
-              New API
+              N123 API
             </a>
           </div>
         </div>
@@ -237,7 +237,7 @@ const FooterBar = () => {
                 rel='noopener noreferrer'
                 className='!text-semi-color-primary font-medium'
               >
-                New API
+                N123 API
               </a>
             </div>
           </div>
