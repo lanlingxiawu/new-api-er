@@ -339,8 +339,8 @@ const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
   {
     titleKey: 'home.footer.columns.product',
     links: [
-      { labelKey: 'home.footer.links.modelMarket', href: '#' },
-      { labelKey: 'home.footer.links.console', href: '#' },
+      { labelKey: 'home.footer.links.modelMarket', to: '/pricing' },
+      { labelKey: 'home.footer.links.console', to: '/dashboard' },
     ],
   },
   {
