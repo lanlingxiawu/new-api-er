@@ -2604,6 +2604,8 @@ function LandingFooter({
   const { t } = useTranslation()
   const year = new Date().getFullYear()
   const footerColumns = useMemo(() => FOOTER_COLUMNS(docsUrl), [docsUrl])
+  const businessQrCodeSrc =
+    '/images/28ace230-6aa1-473f-99ee-b30d53a6cf0a.jpg'
 
   return (
     <footer className='mx-[10px] mb-[10px] rounded-[16px] bg-[#102e24] text-[#eef2ee]'>
@@ -2640,13 +2642,27 @@ function LandingFooter({
               </ul>
             </div>
           ))}
+
+          <div className='col-span-2 md:col-span-1'>
+            <div className='flex flex-col items-start gap-[12px] md:items-center'>
+              <p className='text-[12px] font-medium text-[#eef2ee]/55'>
+                企业合作咨询
+              </p>
+              <img
+                src={businessQrCodeSrc}
+                alt='企业合作咨询二维码'
+                className='h-[104px] w-[104px] rounded-[10px] object-cover'
+                loading='lazy'
+              />
+            </div>
+          </div>
         </div>
 
         <div className='mt-[50px] h-px w-full bg-[#eef2ee]/10 md:mt-[70px]' />
 
         <div className='mt-[24px] flex flex-col items-center justify-between gap-[16px] md:flex-row'>
           <p className='text-[13px] text-[#eef2ee]/50'>
-           Copyright © 2026 N123. All rights reserved.
+            Copyright © {year} N123. All rights reserved.
           </p>
         </div>
       </div>
