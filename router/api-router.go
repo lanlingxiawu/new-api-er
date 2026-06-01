@@ -121,6 +121,11 @@ func SetApiRouter(router *gin.Engine) {
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
+
+				// Employee self-query routes
+				selfRoute.GET("/employee/profile", controller.GetMyEmployeeProfile)
+				selfRoute.GET("/employee/commission", controller.GetMyCommissionLogs)
+				selfRoute.GET("/employee/commission/summary", controller.GetMyCommissionSummary)
 			}
 
 			adminRoute := userRoute.Group("/")
@@ -173,6 +178,27 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.POST("/users/:id/subscriptions", controller.AdminCreateUserSubscription)
 			subscriptionAdminRoute.POST("/user_subscriptions/:id/invalidate", controller.AdminInvalidateUserSubscription)
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
+		}
+
+		// Employee management (admin)
+		employeeAdminRoute := apiRouter.Group("/admin/employee")
+		employeeAdminRoute.Use(middleware.AdminAuth())
+		{
+			employeeAdminRoute.GET("", controller.AdminListEmployees)
+			employeeAdminRoute.POST("", controller.AdminCreateEmployee)
+			employeeAdminRoute.PUT("/:id", controller.AdminUpdateEmployee)
+			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
+			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
+			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
+		}
+
+		// Channel cost config (admin)
+		channelCostRoute := apiRouter.Group("/admin/channel/cost")
+		channelCostRoute.Use(middleware.AdminAuth())
+		{
+			channelCostRoute.GET("", controller.AdminListChannelCosts)
+			channelCostRoute.POST("", controller.AdminUpsertChannelCost)
+			channelCostRoute.DELETE("/:channel_id", controller.AdminDeleteChannelCost)
 		}
 
 		// Subscription payment callbacks (no auth)

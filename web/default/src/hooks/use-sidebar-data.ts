@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Activity,
+  BadgeDollarSign,
   Box,
   CreditCard,
   FileText,
@@ -30,6 +31,7 @@ import {
   Settings,
   Ticket,
   User,
+  UserCog,
   Users,
   Wallet,
 } from 'lucide-react'
@@ -110,6 +112,11 @@ export function useSidebarData(): SidebarData {
             url: '/profile',
             icon: User,
           },
+          {
+            title: t('My Commission'),
+            url: '/commission',
+            icon: BadgeDollarSign,
+          },
         ],
       },
       {
@@ -140,6 +147,11 @@ export function useSidebarData(): SidebarData {
             title: t('Subscription Management'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Employee Management'),
+            url: '/employees',
+            icon: UserCog,
           },
           {
             title: t('System Settings'),

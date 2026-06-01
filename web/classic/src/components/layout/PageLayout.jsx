@@ -22,6 +22,7 @@ import { Layout } from '@douyinfe/semi-ui';
 import SiderBar from './SiderBar';
 import App from '../../App';
 import FooterBar from './Footer';
+import MarketingFooter from './MarketingFooter';
 import { ToastContainer } from 'react-toastify';
 import ErrorBoundary from '../common/ErrorBoundary';
 import React, { useContext, useEffect, useState } from 'react';
@@ -70,6 +71,7 @@ const PageLayout = () => {
     location.pathname !== '/console/playground';
 
   const isConsoleRoute = location.pathname.startsWith('/console');
+  const useMarketingChrome = !isConsoleRoute;
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
 
   useEffect(() => {
@@ -228,7 +230,7 @@ const PageLayout = () => {
                 width: '100%',
               }}
             >
-              <FooterBar />
+              {useMarketingChrome ? <MarketingFooter /> : <FooterBar />}
             </Layout.Footer>
           )}
         </Layout>
