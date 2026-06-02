@@ -27,6 +27,9 @@ import {
   ListTodo,
   MessageSquare,
   Radio,
+  // xiugai 添加号池节点功能
+  Server,
+  // end
   Settings,
   Ticket,
   User,
@@ -141,6 +144,13 @@ export function useSidebarData(): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
+          // xiugai 添加号池节点功能
+          {
+            title: t('Node Pool'),
+            url: '/node-pool',
+            icon: Server,
+          },
+          // end
           {
             title: t('System Settings'),
             url: '/system-settings/site',

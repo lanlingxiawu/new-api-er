@@ -1,0 +1,433 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+// xiugai 添加号池节点功能
+import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  CircleDashed,
+  Cpu,
+  Database,
+  Loader2,
+  MemoryStick,
+  Network,
+  RefreshCw,
+  Server,
+  Wallet,
+  XCircle,
+} from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { SectionPageLayout } from '@/components/layout'
+import { getNodeAccounts, getNodes } from './api'
+import type { Node, NodeAccount, NodeStats } from './types'
+
+function formatNumber(n: number | undefined | null, decimals = 2): string {
+  if (n == null) return '–'
+  if (n === 0) return '0'
+  return n.toFixed(decimals)
+}
+
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  variant,
+}: {
+  label: string
+  value: string | number
+  icon: React.ElementType
+  variant?: 'default' | 'online' | 'offline'
+}) {
+  return (
+    <div
+      className={cn(
+        'flex min-w-0 flex-1 flex-col gap-1 rounded-lg border bg-card p-3 shadow-sm',
+        variant === 'online' && 'border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30',
+        variant === 'offline' && 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30'
+      )}
+    >
+      <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+        <Icon
+          className={cn(
+            'size-3.5',
+            variant === 'online' && 'text-green-600 dark:text-green-400',
+            variant === 'offline' && 'text-red-600 dark:text-red-400'
+          )}
+        />
+        <span>{label}</span>
+      </div>
+      <p
+        className={cn(
+          'text-xl font-bold tabular-nums',
+          variant === 'online' && 'text-green-700 dark:text-green-300',
+          variant === 'offline' && 'text-red-700 dark:text-red-300'
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function NodeStatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
+  if (status === 'online') {
+    return (
+      <Badge variant='default' className='gap-1 bg-green-600 text-white hover:bg-green-600'>
+        <CheckCircle2 className='size-3' />
+        {t('Online')}
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant='destructive' className='gap-1'>
+      <XCircle className='size-3' />
+      {t('Offline')}
+    </Badge>
+  )
+}
+
+function AccountStatusBadge({ status }: { status: string }) {
+  const cls =
+    status === 'online'
+      ? 'bg-green-600 text-white hover:bg-green-600'
+      : 'bg-gray-400 text-white hover:bg-gray-400'
+  return (
+    <Badge variant='default' className={cn('text-[10px]', cls)}>
+      {status}
+    </Badge>
+  )
+}
+
+type NodeListItemProps = {
+  node: Node
+  selected: boolean
+  onClick: () => void
+}
+
+function NodeListItem({ node, selected, onClick }: NodeListItemProps) {
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      className={cn(
+        'w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/60',
+        selected && 'border-primary bg-primary/5'
+      )}
+    >
+      <div className='flex items-start justify-between gap-2'>
+        <div className='min-w-0 flex-1'>
+          <p className='truncate text-sm font-medium'>{node.node_name}</p>
+          <p className='truncate text-xs text-muted-foreground'>
+            {node.public_ip}:{node.listen_port}
+          </p>
+        </div>
+        <NodeStatusBadge status={node.status} />
+      </div>
+      <div className='mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-xs text-muted-foreground'>
+        <span className='flex items-center gap-1'>
+          <Cpu className='size-3 shrink-0' />
+          {formatNumber(node.cpu_usage, 1)}%
+        </span>
+        <span className='flex items-center gap-1'>
+          <MemoryStick className='size-3 shrink-0' />
+          {formatNumber(node.mem_usage, 1)}%
+        </span>
+        <span className='flex items-center gap-1'>
+          <Network className='size-3 shrink-0' />
+          {formatNumber(node.upload_bandwidth, 0)}↑
+        </span>
+      </div>
+    </button>
+  )
+}
+
+type NodeDetailFieldProps = {
+  label: string
+  value: React.ReactNode
+}
+
+function NodeDetailField({ label, value }: NodeDetailFieldProps) {
+  return (
+    <div className='flex items-center justify-between gap-4 border-b py-1.5 last:border-b-0 text-sm'>
+      <span className='shrink-0 text-muted-foreground'>{label}</span>
+      <span className='min-w-0 break-all font-medium'>{value}</span>
+    </div>
+  )
+}
+
+function NodeDetailPanel({ node }: { node: Node }) {
+  const { t } = useTranslation()
+  return (
+    <div className='rounded-lg border bg-card p-4'>
+      <h3 className='mb-3 text-sm font-semibold'>{t('Node Details')}</h3>
+      <div>
+        <NodeDetailField label={t('Node Name')} value={node.node_name} />
+        <NodeDetailField label={t('Public IP')} value={node.public_ip} />
+        <NodeDetailField label={t('Internal IP')} value={node.internal_ip} />
+        <NodeDetailField label={t('Port')} value={node.listen_port} />
+        <NodeDetailField label={t('Status')} value={<NodeStatusBadge status={node.status} />} />
+        <NodeDetailField label={t('Last Seen')} value={node.last_seen ? new Date(node.last_seen).toLocaleString() : '–'} />
+        <NodeDetailField label={t('CPU Usage')} value={`${formatNumber(node.cpu_usage, 1)}%`} />
+        <NodeDetailField label={t('Memory Usage')} value={`${formatNumber(node.mem_usage, 1)}%`} />
+        <NodeDetailField label={t('Upload Bandwidth')} value={`${formatNumber(node.upload_bandwidth, 1)} Mbps`} />
+        <NodeDetailField label={t('Download Bandwidth')} value={`${formatNumber(node.download_bandwidth, 1)} Mbps`} />
+        <NodeDetailField label={t('Today Requests')} value={node.today_requests ?? '–'} />
+        <NodeDetailField label={t('Total Requests')} value={node.total_requests ?? '–'} />
+        <NodeDetailField label={t('Today Consumption')} value={`$${formatNumber(node.today_consumption)}`} />
+        <NodeDetailField label={t('Total Consumption')} value={`$${formatNumber(node.total_consumption)}`} />
+        <NodeDetailField label={t('Total RPM')} value={formatNumber(node.total_rpm, 1)} />
+        <NodeDetailField label={t('Current RPM')} value={formatNumber(node.current_rpm, 1)} />
+        <NodeDetailField label={t('Avg Response Time')} value={`${formatNumber(node.avg_response_time, 0)} ms`} />
+      </div>
+    </div>
+  )
+}
+
+function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading: boolean }) {
+  const { t } = useTranslation()
+  if (loading) {
+    return (
+      <div className='flex h-24 items-center justify-center text-muted-foreground'>
+        <Loader2 className='mr-2 size-4 animate-spin' />
+        {t('Loading accounts...')}
+      </div>
+    )
+  }
+  if (!accounts.length) {
+    return (
+      <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
+        {t('No accounts')}
+      </div>
+    )
+  }
+  return (
+    <div className='overflow-auto'>
+      <table className='w-full text-sm'>
+        <thead>
+          <tr className='border-b text-left text-xs text-muted-foreground'>
+            <th className='pb-2 pr-3 font-medium'>{t('ID')}</th>
+            <th className='pb-2 pr-3 font-medium'>{t('Name')}</th>
+            <th className='pb-2 pr-3 font-medium'>{t('Status')}</th>
+            <th className='pb-2 pr-3 font-medium text-right'>{t('Requests')}</th>
+            <th className='pb-2 pr-3 font-medium text-right'>{t('Tokens')}</th>
+            <th className='pb-2 pr-3 font-medium text-right'>{t('Account Cost')}</th>
+            <th className='pb-2 pr-3 font-medium text-right'>{t('User Cost')}</th>
+            <th className='pb-2 font-medium text-right'>{t('Capacity')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {accounts.map((acc) => (
+            <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
+              <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
+              <td className='py-2 pr-3'>{acc.name || '–'}</td>
+              <td className='py-2 pr-3'>
+                <AccountStatusBadge status={acc.status} />
+              </td>
+              <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
+              <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
+              <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
+              <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
+              <td className='py-2 text-right tabular-nums'>{acc.capacity ?? '–'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export function NodePool() {
+  const { t } = useTranslation()
+  const [nodes, setNodes] = useState<Node[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedNode, setSelectedNode] = useState<Node | null>(null)
+  const [accounts, setAccounts] = useState<NodeAccount[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(false)
+
+  const fetchNodes = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await getNodes()
+      const list = data.nodes ?? []
+      setNodes(list)
+      if (selectedNode) {
+        const updated = list.find(
+          (n) => n.public_ip === selectedNode.public_ip && n.node_name === selectedNode.node_name
+        )
+        if (updated) setSelectedNode(updated)
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : t('Failed to fetch nodes'))
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedNode, t])
+
+  useEffect(() => {
+    fetchNodes()
+  }, [])
+
+  const fetchAccounts = useCallback(async (node: Node) => {
+    setAccountsLoading(true)
+    setAccounts([])
+    try {
+      const data = await getNodeAccounts(node.public_ip, node.node_name)
+      setAccounts(data.accounts ?? [])
+    } catch {
+      setAccounts([])
+    } finally {
+      setAccountsLoading(false)
+    }
+  }, [])
+
+  const handleSelectNode = useCallback(
+    (node: Node) => {
+      setSelectedNode(node)
+      fetchAccounts(node)
+    },
+    [fetchAccounts]
+  )
+
+  const stats: NodeStats = {
+    total: nodes.length,
+    online: nodes.filter((n) => n.status === 'online').length,
+    offline: nodes.filter((n) => n.status === 'offline').length,
+    todayConsumption: nodes.reduce((s, n) => s + (n.today_consumption ?? 0), 0),
+    totalConsumption: nodes.reduce((s, n) => s + (n.total_consumption ?? 0), 0),
+    totalRpm: nodes.reduce((s, n) => s + (n.total_rpm ?? 0), 0),
+  }
+
+  return (
+    <SectionPageLayout>
+      <SectionPageLayout.Title>{t('Node Pool')}</SectionPageLayout.Title>
+      <SectionPageLayout.Actions>
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={fetchNodes}
+          disabled={loading}
+        >
+          {loading ? (
+            <Loader2 className='mr-1.5 size-3.5 animate-spin' />
+          ) : (
+            <RefreshCw className='mr-1.5 size-3.5' />
+          )}
+          {t('Refresh')}
+        </Button>
+      </SectionPageLayout.Actions>
+      <SectionPageLayout.Content>
+        {/* Summary stats */}
+        <div className='mb-4 flex flex-wrap gap-3'>
+          <StatCard label={t('Total Nodes')} value={stats.total} icon={Server} />
+          <StatCard label={t('Online')} value={stats.online} icon={CheckCircle2} variant='online' />
+          <StatCard label={t('Offline')} value={stats.offline} icon={XCircle} variant='offline' />
+          <StatCard
+            label={t('Today Consumption')}
+            value={`$${formatNumber(stats.todayConsumption)}`}
+            icon={Activity}
+          />
+          <StatCard
+            label={t('Total Consumption')}
+            value={`$${formatNumber(stats.totalConsumption)}`}
+            icon={Wallet}
+          />
+          <StatCard
+            label={t('Total RPM')}
+            value={formatNumber(stats.totalRpm, 1)}
+            icon={Database}
+          />
+        </div>
+
+        {error && (
+          <div className='mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive'>
+            <AlertCircle className='size-4 shrink-0' />
+            {error}
+          </div>
+        )}
+
+        {loading && !nodes.length ? (
+          <div className='flex h-40 items-center justify-center text-muted-foreground'>
+            <Loader2 className='mr-2 size-5 animate-spin' />
+            {t('Loading nodes...')}
+          </div>
+        ) : (
+          <div className='flex min-h-0 gap-4' style={{ height: 'calc(100vh - 340px)', minHeight: 400 }}>
+            {/* Left: Node list */}
+            <div className='flex w-72 shrink-0 flex-col gap-2 overflow-y-auto'>
+              {nodes.length === 0 ? (
+                <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
+                  <CircleDashed className='mr-2 size-4' />
+                  {t('No nodes found')}
+                </div>
+              ) : (
+                nodes.map((node) => (
+                  <NodeListItem
+                    key={`${node.public_ip}:${node.node_name}`}
+                    node={node}
+                    selected={
+                      selectedNode?.public_ip === node.public_ip &&
+                      selectedNode?.node_name === node.node_name
+                    }
+                    onClick={() => handleSelectNode(node)}
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Right: Details + Accounts */}
+            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto'>
+              {selectedNode ? (
+                <>
+                  {/* Node detail */}
+                  <NodeDetailPanel node={selectedNode} />
+
+                  {/* Account list */}
+                  <div className='rounded-lg border bg-card p-4'>
+                    <h3 className='mb-3 text-sm font-semibold'>
+                      {t('Accounts')}
+                      {!accountsLoading && (
+                        <span className='ml-2 text-xs font-normal text-muted-foreground'>
+                          ({accounts.length})
+                        </span>
+                      )}
+                    </h3>
+                    <AccountsTable accounts={accounts} loading={accountsLoading} />
+                  </div>
+                </>
+              ) : (
+                <div className='flex h-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-muted-foreground'>
+                  <Server className='size-10 opacity-30' />
+                  <p className='text-sm'>{t('Select a node to view details')}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
+  )
+}
+// end

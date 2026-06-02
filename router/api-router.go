@@ -180,6 +180,15 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", controller.SubscriptionEpayReturn)
+		// xiugai 添加号池节点功能
+		nodePoolRoute := apiRouter.Group("/node-pool")
+		nodePoolRoute.Use(middleware.RootAuth())
+		{
+			nodePoolRoute.GET("/nodes", controller.GetNodePoolNodes)
+			nodePoolRoute.GET("/nodes/:public_ip/:node_name/accounts", controller.GetNodePoolAccounts)
+			nodePoolRoute.DELETE("/nodes/:public_ip/:node_name", controller.DeleteNodePoolNode)
+		}
+		// end
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

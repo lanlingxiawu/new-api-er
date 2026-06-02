@@ -26,6 +26,9 @@ import {
 } from './section-registry.tsx'
 
 const defaultOperationsSettings: OperationsSettings = {
+  // xiugai 添加号池节点功能
+  NodeControlServiceUrl: '',
+  // end
   RetryTimes: 0,
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,

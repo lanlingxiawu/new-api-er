@@ -74,6 +74,9 @@ func InitOptionMap() {
 	common.OptionMap["WorkerUrl"] = system_setting.WorkerUrl
 	common.OptionMap["WorkerValidKey"] = system_setting.WorkerValidKey
 	common.OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.WorkerAllowHttpImageRequestEnabled)
+	// xiugai 添加号池节点功能
+	common.OptionMap["NodeControlServiceUrl"] = system_setting.NodeControlServiceUrl
+	// end
 	common.OptionMap["PayAddress"] = ""
 	common.OptionMap["CustomCallbackAddress"] = ""
 	common.OptionMap["EpayId"] = ""
@@ -380,6 +383,10 @@ func updateOptionMap(key string, value string) (err error) {
 		system_setting.WorkerUrl = value
 	case "WorkerValidKey":
 		system_setting.WorkerValidKey = value
+	// xiugai 添加号池节点功能
+	case "NodeControlServiceUrl":
+		system_setting.NodeControlServiceUrl = value
+	// end
 	case "PayAddress":
 		operation_setting.PayAddress = value
 	case "Chats":
