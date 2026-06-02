@@ -13,9 +13,17 @@ const (
 	CustomerStatusDisabled = 2
 )
 
+const (
+	QuotaAdjustModeAdd      = "add"
+	QuotaAdjustModeSubtract = "subtract"
+	QuotaAdjustModeOverride = "override"
+)
+
 var (
 	ErrCustomerQuotaMustBePositive = errors.New("quota must be greater than 0")
 	ErrEmployeeQuotaNotEnough      = errors.New("employee quota is not enough")
+	ErrCustomerQuotaNotEnough      = errors.New("customer quota is not enough")
+	ErrInvalidAdjustMode           = errors.New("invalid adjust mode")
 )
 
 // CustomerProfile records the ownership relation between an employee user and
@@ -116,20 +124,26 @@ func DeleteCustomerProfile(id int) error {
 	return DB.Delete(&CustomerProfile{}, "id = ?", id).Error
 }
 
-// TransferQuotaToCustomer atomically deducts quota from an employee and adds it
-// to a customer, then records a complete before/after audit log.
-func TransferQuotaToCustomer(employeeUserId, customerUserId, quota int, remark string) (*CustomerQuotaLog, error) {
-	if quota <= 0 {
+// AdjustCustomerQuota atomically adjusts a customer's quota with support for
+// three modes:
+//   - "add":      deduct `quota` from employee, add to customer
+//   - "subtract": deduct `quota` from customer, return to employee
+//   - "override": set customer quota to exactly `quota`, difference settled with employee
+func AdjustCustomerQuota(employeeUserId, customerUserId, quota int, mode, remark string) (*CustomerQuotaLog, error) {
+	if quota < 0 {
 		return nil, ErrCustomerQuotaMustBePositive
+	}
+	if mode != QuotaAdjustModeAdd && mode != QuotaAdjustModeSubtract && mode != QuotaAdjustModeOverride {
+		return nil, ErrInvalidAdjustMode
 	}
 
 	var logEntry CustomerQuotaLog
+	var effectiveDelta int
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var empUser User
 		if err := tx.Select("id", "quota").Where("id = ?", employeeUserId).First(&empUser).Error; err != nil {
 			return err
 		}
-
 		var custUser User
 		if err := tx.Select("id", "quota").Where("id = ?", customerUserId).First(&custUser).Error; err != nil {
 			return err
@@ -138,29 +152,58 @@ func TransferQuotaToCustomer(employeeUserId, customerUserId, quota int, remark s
 		empBefore := empUser.Quota
 		custBefore := custUser.Quota
 
-		result := tx.Model(&User{}).
-			Where("id = ? AND quota >= ?", employeeUserId, quota).
-			Update("quota", gorm.Expr("quota - ?", quota))
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrEmployeeQuotaNotEnough
+		// resolve effective delta: positive = customer gains, negative = customer loses
+		switch mode {
+		case QuotaAdjustModeAdd:
+			effectiveDelta = quota
+		case QuotaAdjustModeSubtract:
+			effectiveDelta = -quota
+		case QuotaAdjustModeOverride:
+			effectiveDelta = quota - custBefore
 		}
 
-		if err := tx.Model(&User{}).Where("id = ?", customerUserId).
-			Update("quota", gorm.Expr("quota + ?", quota)).Error; err != nil {
-			return err
+		if effectiveDelta > 0 {
+			// employee → customer
+			result := tx.Model(&User{}).
+				Where("id = ? AND quota >= ?", employeeUserId, effectiveDelta).
+				Update("quota", gorm.Expr("quota - ?", effectiveDelta))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrEmployeeQuotaNotEnough
+			}
+			if err := tx.Model(&User{}).Where("id = ?", customerUserId).
+				Update("quota", gorm.Expr("quota + ?", effectiveDelta)).Error; err != nil {
+				return err
+			}
+		} else if effectiveDelta < 0 {
+			// customer → employee
+			deduct := -effectiveDelta
+			result := tx.Model(&User{}).
+				Where("id = ? AND quota >= ?", customerUserId, deduct).
+				Update("quota", gorm.Expr("quota - ?", deduct))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrCustomerQuotaNotEnough
+			}
+			if err := tx.Model(&User{}).Where("id = ?", employeeUserId).
+				Update("quota", gorm.Expr("quota + ?", deduct)).Error; err != nil {
+				return err
+			}
 		}
+		// effectiveDelta == 0: override to same value, no-op for balances
 
 		logEntry = CustomerQuotaLog{
 			EmployeeUserId:      employeeUserId,
 			CustomerUserId:      customerUserId,
-			QuotaDelta:          quota,
+			QuotaDelta:          effectiveDelta,
 			CustomerBeforeQuota: custBefore,
-			CustomerAfterQuota:  custBefore + quota,
+			CustomerAfterQuota:  custBefore + effectiveDelta,
 			EmployeeBeforeQuota: empBefore,
-			EmployeeAfterQuota:  empBefore - quota,
+			EmployeeAfterQuota:  empBefore - effectiveDelta,
 			Remark:              remark,
 		}
 		return tx.Create(&logEntry).Error
@@ -169,12 +212,24 @@ func TransferQuotaToCustomer(employeeUserId, customerUserId, quota int, remark s
 		return nil, err
 	}
 
-	if common.RedisEnabled {
-		_ = cacheDecrUserQuota(employeeUserId, int64(quota))
-		_ = cacheIncrUserQuota(customerUserId, int64(quota))
+	if common.RedisEnabled && effectiveDelta != 0 {
+		if effectiveDelta > 0 {
+			_ = cacheDecrUserQuota(employeeUserId, int64(effectiveDelta))
+			_ = cacheIncrUserQuota(customerUserId, int64(effectiveDelta))
+		} else {
+			deduct := -effectiveDelta
+			_ = cacheIncrUserQuota(employeeUserId, int64(deduct))
+			_ = cacheDecrUserQuota(customerUserId, int64(deduct))
+		}
 	}
 
 	return &logEntry, nil
+}
+
+// TransferQuotaToCustomer is kept for backwards-compatibility.
+// New callers should use AdjustCustomerQuota with mode="add".
+func TransferQuotaToCustomer(employeeUserId, customerUserId, quota int, remark string) (*CustomerQuotaLog, error) {
+	return AdjustCustomerQuota(employeeUserId, customerUserId, quota, QuotaAdjustModeAdd, remark)
 }
 
 type CustomerQuotaLogFilter struct {

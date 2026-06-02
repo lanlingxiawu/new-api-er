@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Send, UserRoundPen } from 'lucide-react'
+import { Pencil, PlusIcon, Send, UserRoundPen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatQuota } from '@/lib/format'
@@ -32,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
 import { LogsTable, StatusBadge } from '@/features/customers'
 import {
+  createMyCustomer,
   getMyCustomerQuotaLogs,
   getMyCustomers,
   transferQuotaToCustomer,
@@ -39,6 +40,87 @@ import {
   updateMyCustomerUser,
 } from '@/features/customers/api'
 import type { CustomerProfile } from '@/features/customers/types'
+
+function CreateCustomerDialog({
+  open,
+  onOpenChange,
+  onSuccess,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSuccess: () => void
+}) {
+  const { t } = useTranslation()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [remark, setRemark] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) {
+      setUsername('')
+      setPassword('')
+      setDisplayName('')
+      setEmail('')
+      setRemark('')
+    }
+  }, [open])
+
+  const submit = async () => {
+    setSaving(true)
+    try {
+      const res = await createMyCustomer({ username, password, display_name: displayName, email, remark })
+      if (!res.success) throw new Error(res.message ?? 'Failed')
+      toast.success(t('Customer created'))
+      onOpenChange(false)
+      onSuccess()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('Operation failed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='sm:max-w-[420px]' initialFocus={false}>
+        <DialogHeader>
+          <DialogTitle>{t('Add Customer')}</DialogTitle>
+        </DialogHeader>
+        <div className='flex flex-col gap-4'>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Username')}</label>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+          </div>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Password')}</label>
+            <Input type='password' value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Display Name')}</label>
+            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </div>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Email')}</label>
+            <Input value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Remark')}</label>
+            <Input value={remark} onChange={(e) => setRemark(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>{t('Cancel')}</Button>
+          <Button disabled={saving || !username || !password} onClick={submit}>
+            {saving ? t('Saving...') : t('Save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function CustomerProfileDialog({
   open,
@@ -209,6 +291,17 @@ function CustomerUserDialog({
   )
 }
 
+const QUOTA_PER_DOLLAR = 500000
+
+type AdjustMode = 'add' | 'subtract' | 'override'
+
+function quotaToUsd(quota: number) {
+  return quota / QUOTA_PER_DOLLAR
+}
+function usdToQuota(usd: number) {
+  return Math.round(usd * QUOTA_PER_DOLLAR)
+}
+
 function TransferDialog({
   open,
   currentRow,
@@ -221,61 +314,104 @@ function TransferDialog({
   onSuccess: () => void
 }) {
   const { t } = useTranslation()
-  const [quota, setQuota] = useState(0)
+  const [mode, setMode] = useState<AdjustMode>('add')
+  const [usd, setUsd] = useState('')
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    setQuota(0)
+    setMode('add')
+    setUsd('')
     setRemark('')
   }, [currentRow, open])
+
+  const currentQuota = currentRow?.quota ?? 0
+  const currentUsd = quotaToUsd(currentQuota)
+  const inputUsd = parseFloat(usd) || 0
+
+  const previewUsd = (() => {
+    if (mode === 'add') return currentUsd + inputUsd
+    if (mode === 'subtract') return currentUsd - inputUsd
+    return inputUsd // override
+  })()
+
+  const deltaUsd = previewUsd - currentUsd
+  const deltaDisplay =
+    deltaUsd === 0
+      ? '+$0'
+      : deltaUsd > 0
+        ? `+$${deltaUsd.toFixed(4)}`
+        : `-$${Math.abs(deltaUsd).toFixed(4)}`
 
   const submit = async () => {
     if (!currentRow) return
     setSaving(true)
     try {
-      const res = await transferQuotaToCustomer(currentRow.id, {
-        quota,
-        remark,
-      })
+      const quota = usdToQuota(inputUsd)
+      const res = await transferQuotaToCustomer(currentRow.id, { quota, mode, remark })
       if (!res.success) throw new Error(res.message ?? 'Failed')
-      toast.success(t('Recharge completed'))
+      toast.success(t('Adjustment completed'))
       onOpenChange(false)
       onSuccess()
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
+      toast.error(error instanceof Error ? error.message : t('Operation failed'))
     } finally {
       setSaving(false)
     }
   }
 
+  const modeOptions: { value: AdjustMode; label: string }[] = [
+    { value: 'add', label: t('Add') },
+    { value: 'subtract', label: t('Subtract') },
+    { value: 'override', label: t('Override') },
+  ]
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='sm:max-w-[420px]'>
         <DialogHeader>
-          <DialogTitle>{t('Recharge Customer')}</DialogTitle>
+          <DialogTitle>{t('Adjust Quota')}</DialogTitle>
+          <p className='text-muted-foreground text-sm'>{t('Select mode and enter amount')}</p>
         </DialogHeader>
         <div className='flex flex-col gap-4'>
-          <div className='rounded-md border p-3 text-sm'>
-            {currentRow?.username || `#${currentRow?.customer_user_id}`} /{' '}
-            {t('Balance')}: {formatQuota(currentRow?.quota ?? 0)}
+          <div className='text-sm'>
+            <span className='text-muted-foreground'>{t('Current quota')}: </span>
+            <span className='font-medium'>${currentUsd.toFixed(4)}</span>
+            <span className='text-muted-foreground mx-1'>{deltaDisplay}</span>
+            <span className='font-medium'>= ${previewUsd.toFixed(4)}</span>
           </div>
           <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Amount')}</label>
+            <label className='text-sm font-medium'>{t('Mode')}</label>
+            <div className='flex gap-2'>
+              {modeOptions.map((opt) => (
+                <Button
+                  key={opt.value}
+                  size='sm'
+                  variant={mode === opt.value ? 'default' : 'outline'}
+                  onClick={() => setMode(opt.value)}
+                  type='button'
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className='flex flex-col gap-2'>
+            <label className='text-sm font-medium'>{t('Amount (USD)')}</label>
             <Input
               type='number'
-              min='1'
-              value={quota || ''}
-              onChange={(event) => setQuota(parseInt(event.target.value) || 0)}
+              min='0'
+              step='0.0001'
+              placeholder={t('Enter amount (USD)')}
+              value={usd}
+              onChange={(e) => setUsd(e.target.value)}
             />
           </div>
           <div className='flex flex-col gap-2'>
             <label className='text-sm font-medium'>{t('Remark')}</label>
             <Input
               value={remark}
-              onChange={(event) => setRemark(event.target.value)}
+              onChange={(e) => setRemark(e.target.value)}
             />
           </div>
         </div>
@@ -283,7 +419,7 @@ function TransferDialog({
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('Cancel')}
           </Button>
-          <Button disabled={saving || quota <= 0} onClick={submit}>
+          <Button disabled={saving || inputUsd <= 0} onClick={submit}>
             {saving ? t('Saving...') : t('Confirm')}
           </Button>
         </DialogFooter>
@@ -296,6 +432,7 @@ function MyCustomersTab() {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
+  const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
   const [editUserRow, setEditUserRow] = useState<CustomerProfile | undefined>()
   const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
@@ -314,12 +451,19 @@ function MyCustomersTab() {
 
   return (
     <div className='flex flex-col gap-4'>
+      <div className='flex justify-end'>
+        <Button size='sm' onClick={() => setCreateOpen(true)}>
+          <PlusIcon data-icon='inline-start' />
+          {t('Add Customer')}
+        </Button>
+      </div>
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>{t('Customer')}</TableHead>
             <TableHead>{t('Balance')}</TableHead>
             <TableHead>{t('Used Quota')}</TableHead>
+            <TableHead>{t('Commission')}</TableHead>
             <TableHead>{t('Status')}</TableHead>
             <TableHead>{t('Remark')}</TableHead>
             <TableHead>{t('Actions')}</TableHead>
@@ -329,7 +473,7 @@ function MyCustomersTab() {
           {isLoading && (
             <TableRow>
               <TableCell
-                colSpan={6}
+                colSpan={7}
                 className='text-muted-foreground text-center'
               >
                 {t('Loading...')}
@@ -339,7 +483,7 @@ function MyCustomersTab() {
           {!isLoading && customers.length === 0 && (
             <TableRow>
               <TableCell
-                colSpan={6}
+                colSpan={7}
                 className='text-muted-foreground text-center'
               >
                 {t('No customers yet')}
@@ -359,6 +503,9 @@ function MyCustomersTab() {
               </TableCell>
               <TableCell>{formatQuota(row.quota)}</TableCell>
               <TableCell>{formatQuota(row.used_quota)}</TableCell>
+              <TableCell className='font-medium text-green-600'>
+                {row.commission_quota ? formatQuota(row.commission_quota) : '-'}
+              </TableCell>
               <TableCell>
                 <StatusBadge status={row.status} />
               </TableCell>
@@ -417,6 +564,11 @@ function MyCustomersTab() {
           </Button>
         </div>
       </div>
+      <CreateCustomerDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onSuccess={refresh}
+      />
       <TransferDialog
         open={!!transferRow}
         currentRow={transferRow}

@@ -587,8 +587,10 @@ function LogsTable({
             <TableCell>
               {log.customer_username || `#${log.customer_user_id}`}
             </TableCell>
-            <TableCell className='font-medium text-green-600'>
-              +{formatQuota(log.quota_delta)}
+            <TableCell
+              className={`font-medium ${log.quota_delta < 0 ? 'text-red-500' : 'text-green-600'}`}
+            >
+              {log.quota_delta >= 0 ? '+' : ''}{formatQuota(log.quota_delta)}
             </TableCell>
             <TableCell>
               {formatQuota(log.employee_before_quota)}

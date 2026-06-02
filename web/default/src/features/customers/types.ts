@@ -30,6 +30,7 @@ export interface CustomerProfile {
   used_quota: number
   employee_username?: string
   employee_display_name?: string
+  commission_quota?: number
 }
 
 export interface CustomerQuotaLog {

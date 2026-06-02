@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -36,7 +37,8 @@ type UpdateCustomerUserRequest struct {
 }
 
 type TransferQuotaRequest struct {
-	Quota  int    `json:"quota" binding:"required,min=1"`
+	Quota  int    `json:"quota" binding:"required,min=0"`
+	Mode   string `json:"mode"`
 	Remark string `json:"remark"`
 }
 
@@ -49,6 +51,7 @@ type CustomerWithUser struct {
 	UsedQuota           int    `json:"used_quota"`
 	EmployeeUsername    string `json:"employee_username"`
 	EmployeeDisplayName string `json:"employee_display_name"`
+	CommissionQuota     int64  `json:"commission_quota"`
 }
 
 type CustomerQuotaLogWithUser struct {
@@ -84,6 +87,7 @@ func buildCustomerWithUser(cp *model.CustomerProfile) CustomerWithUser {
 		item.EmployeeUsername = eu.Username
 		item.EmployeeDisplayName = eu.DisplayName
 	}
+	item.CommissionQuota = model.GetCustomerCommissionTotal(cp.EmployeeUserId, cp.CustomerUserId)
 	return item
 }
 
@@ -149,6 +153,54 @@ func getOwnedCustomerProfile(c *gin.Context, employeeUserId int) (*model.Custome
 		return nil, false
 	}
 	return cp, true
+}
+
+func EmployeeCreateCustomer(c *gin.Context) {
+	employeeUserId := c.GetInt("id")
+	if !model.IsEmployee(employeeUserId) {
+		common.ApiError(c, errNotEmployee)
+		return
+	}
+
+	var req struct {
+		Username    string `json:"username" binding:"required"`
+		Password    string `json:"password" binding:"required"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Remark      string `json:"remark"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	newUser := &model.User{
+		Username:    strings.TrimSpace(req.Username),
+		Password:    req.Password,
+		DisplayName: req.DisplayName,
+		Email:       req.Email,
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+	}
+	if newUser.DisplayName == "" {
+		newUser.DisplayName = newUser.Username
+	}
+	if err := newUser.Insert(employeeUserId); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	cp := &model.CustomerProfile{
+		EmployeeUserId: employeeUserId,
+		CustomerUserId: newUser.Id,
+		Status:         model.CustomerStatusEnabled,
+		Remark:         req.Remark,
+	}
+	if err := model.CreateCustomerProfile(cp); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, buildCustomerWithUser(cp))
 }
 
 func EmployeeListCustomers(c *gin.Context) {
@@ -280,7 +332,11 @@ func EmployeeTransferQuota(c *gin.Context) {
 		return
 	}
 
-	logEntry, err := model.TransferQuotaToCustomer(employeeUserId, cp.CustomerUserId, req.Quota, req.Remark)
+	mode := req.Mode
+	if mode == "" {
+		mode = model.QuotaAdjustModeAdd
+	}
+	logEntry, err := model.AdjustCustomerQuota(employeeUserId, cp.CustomerUserId, req.Quota, mode, req.Remark)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -486,6 +486,16 @@ func GetCommissionStatsByDay(startTime, endTime int64) ([]*CommissionDailyStat, 
 //
 // 注意：log_id<=0 时无法依赖唯一索引去重（多条 0 会互相冲突），
 // 这类记录直接插入并视为已插入，正常消费链路 log_id 恒为正值。
+// GetCustomerCommissionTotal 返回指定员工从指定客户获得的累计提成额度。
+func GetCustomerCommissionTotal(employeeUserId, customerUserId int) int64 {
+	var total int64
+	DB.Model(&EmployeeCommissionLog{}).
+		Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).
+		Select("COALESCE(SUM(commission_quota), 0)").
+		Scan(&total)
+	return total
+}
+
 func CreateCommissionLog(log *EmployeeCommissionLog) (inserted bool, err error) {
 	if log.LogId <= 0 {
 		err = DB.Create(log).Error

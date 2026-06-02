@@ -168,11 +168,6 @@ export function useSidebarData(): SidebarData {
             icon: UserCog,
           },
           {
-            title: t('Customer Management'),
-            url: '/customers',
-            icon: UserRoundCheck,
-          },
-          {
             title: t('Business Overview'),
             url: '/commission-overview',
             icon: LineChart,

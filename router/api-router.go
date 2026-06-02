@@ -133,6 +133,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeCustomerRoute.Use(middleware.UserAuth())
 			{
 				employeeCustomerRoute.GET("", controller.EmployeeListCustomers)
+				employeeCustomerRoute.POST("", controller.EmployeeCreateCustomer)
 				employeeCustomerRoute.GET("/quota-logs", controller.EmployeeListQuotaLogs)
 				employeeCustomerRoute.GET("/:id", controller.EmployeeGetCustomer)
 				employeeCustomerRoute.PUT("/:id", controller.EmployeeUpdateCustomer)

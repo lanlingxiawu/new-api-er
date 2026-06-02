@@ -67,6 +67,17 @@ export async function getAdminCustomerQuotaLogs(params: {
   return res.data
 }
 
+export async function createMyCustomer(data: {
+  username: string
+  password: string
+  display_name?: string
+  email?: string
+  remark?: string
+}): Promise<ApiResponse<CustomerProfile>> {
+  const res = await api.post('/api/user/employee/customers', data)
+  return res.data
+}
+
 export async function getMyCustomers(params: {
   page?: number
   page_size?: number
@@ -95,7 +106,7 @@ export async function updateMyCustomerUser(
 
 export async function transferQuotaToCustomer(
   id: number,
-  data: { quota: number; remark?: string }
+  data: { quota: number; mode?: string; remark?: string }
 ): Promise<ApiResponse<CustomerQuotaLog>> {
   const res = await api.post(`/api/user/employee/customers/${id}/quota`, data)
   return res.data
