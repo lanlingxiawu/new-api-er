@@ -475,8 +475,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	})
 	relayInfoCopy := *relayInfo
 	quotaCopy := summary.Quota
+	// 固定价加付项（web/file search、图像生成等）不套用渠道 token 成本系数
+	surchargeCopy := int64(summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	gopool.Go(func() {
-		TrySettleEmployeeCommission(&relayInfoCopy, quotaCopy, logId)
+		TrySettleEmployeeCommission(&relayInfoCopy, quotaCopy, surchargeCopy, logId)
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))

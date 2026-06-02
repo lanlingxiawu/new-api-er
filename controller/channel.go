@@ -392,6 +392,9 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		// 回填成本系数，供前端编辑表单预填
+		ratio := model.GetChannelCostRatio(channel.Id)
+		channel.CostRatio = &ratio
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -584,6 +587,21 @@ func getVertexArrayKeys(keys string) ([]string, error) {
 	return cleanKeys, nil
 }
 
+// syncChannelCostRatio 根据透传的成本系数同步 ChannelCostConfig（成本配置独立存表）。
+//   - nil：请求未携带该字段，保持现状不动；
+//   - <=0 或 ==1.0（默认）：视为无需单独配置，删除已有记录（读取时回退默认 1.0）；
+//   - 其余值：写入/更新配置。
+func syncChannelCostRatio(channelId int, ratio *float64) {
+	if ratio == nil {
+		return
+	}
+	if *ratio <= 0 || *ratio == 1.0 {
+		_ = model.DeleteChannelCostConfig(channelId)
+		return
+	}
+	_ = model.UpsertChannelCostConfig(channelId, *ratio, "")
+}
+
 func AddChannel(c *gin.Context) {
 	addChannelRequest := AddChannelRequest{}
 	err := c.ShouldBindJSON(&addChannelRequest)
@@ -675,6 +693,12 @@ func AddChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 同步成本系数（透传字段，存于 ChannelCostConfig）
+	if addChannelRequest.Channel.CostRatio != nil {
+		for i := range channels {
+			syncChannelCostRatio(channels[i].Id, addChannelRequest.Channel.CostRatio)
+		}
 	}
 	service.ResetProxyClientCache()
 	c.JSON(http.StatusOK, gin.H{
@@ -979,6 +1003,8 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 同步成本系数（透传字段，存于 ChannelCostConfig）
+	syncChannelCostRatio(channel.Id, channel.CostRatio)
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
 	channel.Key = ""

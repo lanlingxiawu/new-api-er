@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { PlusIcon, Pencil, Trash2, Settings } from 'lucide-react'
+import { PlusIcon, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
@@ -26,16 +26,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { formatQuota } from '@/lib/format'
-import {
-  getEmployees,
-  getCommissionLogs,
-  getChannelCosts,
-  deleteEmployee,
-  deleteChannelCost,
-} from './api'
-import type { EmployeeProfile, CommissionLog, ChannelCostConfig } from './types'
+import { getEmployees, getCommissionLogs, deleteEmployee } from './api'
+import type { EmployeeProfile, CommissionLog } from './types'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
-import { ChannelCostFormDialog } from './components/channel-cost-form-dialog'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -286,140 +279,6 @@ function CommissionLogsTab() {
   )
 }
 
-// ── Channel Cost Tab ──────────────────────────────────────────────────────────
-
-function ChannelCostTab() {
-  const { t } = useTranslation()
-  const qc = useQueryClient()
-  const [upsertOpen, setUpsertOpen] = useState(false)
-  const [editRow, setEditRow] = useState<ChannelCostConfig | undefined>()
-  const [deleteChannelId, setDeleteChannelId] = useState<number | undefined>()
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['channel-costs'],
-    queryFn: getChannelCosts,
-  })
-
-  const configs = data?.data ?? []
-
-  const handleDelete = async () => {
-    if (!deleteChannelId) return
-    try {
-      const res = await deleteChannelCost(deleteChannelId)
-      if (!res.success) throw new Error(res.message)
-      toast.success(t('Channel cost config deleted'))
-      qc.invalidateQueries({ queryKey: ['channel-costs'] })
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : t('Operation failed'))
-    } finally {
-      setDeleteChannelId(undefined)
-    }
-  }
-
-  return (
-    <div className='space-y-4'>
-      <div className='flex justify-end'>
-        <Button
-          size='sm'
-          onClick={() => {
-            setEditRow(undefined)
-            setUpsertOpen(true)
-          }}
-        >
-          <PlusIcon className='mr-1 h-4 w-4' />
-          {t('Add Config')}
-        </Button>
-      </div>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('Channel ID')}</TableHead>
-            <TableHead>{t('Cost Ratio')}</TableHead>
-            <TableHead>{t('Remark')}</TableHead>
-            <TableHead>{t('Updated At')}</TableHead>
-            <TableHead>{t('Actions')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {isLoading && (
-            <TableRow>
-              <TableCell colSpan={5} className='text-center text-muted-foreground'>
-                {t('Loading...')}
-              </TableCell>
-            </TableRow>
-          )}
-          {!isLoading && configs.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={5} className='text-center text-muted-foreground'>
-                {t('No channel cost configs. Default ratio is 1.0.')}
-              </TableCell>
-            </TableRow>
-          )}
-          {configs.map((cfg) => (
-            <TableRow key={cfg.id}>
-              <TableCell>{cfg.channel_id}</TableCell>
-              <TableCell>{cfg.cost_ratio}</TableCell>
-              <TableCell>{cfg.remark || '-'}</TableCell>
-              <TableCell className='text-xs'>{formatTs(cfg.updated_at ?? 0)}</TableCell>
-              <TableCell>
-                <div className='flex gap-1'>
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    onClick={() => {
-                      setEditRow(cfg)
-                      setUpsertOpen(true)
-                    }}
-                  >
-                    <Settings className='h-4 w-4' />
-                  </Button>
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    onClick={() => setDeleteChannelId(cfg.channel_id)}
-                  >
-                    <Trash2 className='h-4 w-4 text-destructive' />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-
-      <ChannelCostFormDialog
-        open={upsertOpen}
-        onOpenChange={setUpsertOpen}
-        currentRow={editRow}
-        onSuccess={() => {
-          qc.invalidateQueries({ queryKey: ['channel-costs'] })
-          setEditRow(undefined)
-        }}
-      />
-      <AlertDialog
-        open={!!deleteChannelId}
-        onOpenChange={(o) => !o && setDeleteChannelId(undefined)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('Delete Channel Cost Config')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('This will reset the channel cost ratio to the default (1.0).')}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>
-              {t('Confirm')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  )
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function Employees() {
@@ -433,7 +292,6 @@ export function Employees() {
           <TabsList>
             <TabsTrigger value='employees'>{t('Employees')}</TabsTrigger>
             <TabsTrigger value='commission'>{t('Commission Logs')}</TabsTrigger>
-            <TabsTrigger value='channel-cost'>{t('Channel Cost')}</TabsTrigger>
           </TabsList>
           <TabsContent value='employees' className='mt-4'>
             <EmployeesTab />
@@ -441,11 +299,9 @@ export function Employees() {
           <TabsContent value='commission' className='mt-4'>
             <CommissionLogsTab />
           </TabsContent>
-          <TabsContent value='channel-cost' className='mt-4'>
-            <ChannelCostTab />
-          </TabsContent>
         </Tabs>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
 }
+                                                                                                                                                                                                                                                                                                                                                                

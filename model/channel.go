@@ -57,6 +57,11 @@ type Channel struct {
 
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
+
+	// CostRatio 渠道成本系数，不持久化到 channels 表（实际存于 ChannelCostConfig）。
+	// 仅用于在渠道增改接口中透传该值，由控制器同步到 ChannelCostConfig；
+	// GetChannel 读取时回填，供前端编辑表单预填。指针区分「未提供(nil)」与「显式设置」。
+	CostRatio *float64 `json:"cost_ratio,omitempty" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -437,13 +442,21 @@ func BatchInsertChannels(channels []Channel) error {
 		}
 	}()
 
-	for _, chunk := range lo.Chunk(channels, 50) {
+	// 使用原生切片分片（共享底层数组），确保 tx.Create 生成的自增 ID
+	// 回写到调用方传入的 channels，便于创建后按渠道 ID 同步成本配置等。
+	const chunkSize = 50
+	for start := 0; start < len(channels); start += chunkSize {
+		end := start + chunkSize
+		if end > len(channels) {
+			end = len(channels)
+		}
+		chunk := channels[start:end]
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
-		for _, channel_ := range chunk {
-			if err := channel_.AddAbilities(tx); err != nil {
+		for i := range chunk {
+			if err := chunk[i].AddAbilities(tx); err != nil {
 				tx.Rollback()
 				return err
 			}

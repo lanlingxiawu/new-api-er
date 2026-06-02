@@ -55,16 +55,16 @@ html.dark .figma-home-header {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: #4456ff;
-  border-radius: 10px;
+  background: transparent;
+  border-radius: 0;
 }
 
 .figma-home-logo img {
   display: block;
-  width: 18px;
-  height: 16px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-  filter: brightness(0) invert(1);
+  filter: none;
 }
 
 .figma-home-nav {
@@ -642,14 +642,13 @@ html.dark .figma-home-header {
 }
 
 .figma-home-search .figma-home-logo {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
+  width: 28px;
+  height: 28px;
 }
 
 .figma-home-search .figma-home-logo img {
-  width: 18px;
-  height: 16px;
+  width: 100%;
+  height: 100%;
 }
 
 .figma-home-feature-section {
@@ -1164,9 +1163,9 @@ html.dark .figma-home-header {
 }
 
 .figma-home-footer-logo img {
-  width: 18px;
-  height: 16px;
-  filter: brightness(0) invert(1);
+  width: 100%;
+  height: 100%;
+  filter: none;
 }
 
 .figma-home-footer-columns {
@@ -1729,4 +1728,3 @@ html.dark .figma-home-header {
     grid-template-columns: 1fr;
   }
 }
-

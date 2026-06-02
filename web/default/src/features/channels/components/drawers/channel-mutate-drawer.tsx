@@ -1120,6 +1120,42 @@ export function ChannelMutateDrawer({
 
                     <FormField
                       control={form.control}
+                      name='cost_ratio'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Cost Ratio')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              step='0.01'
+                              min='0'
+                              placeholder='1.0'
+                              {...field}
+                              value={field.value ?? 1}
+                              onChange={(e) =>
+                                field.onChange(Number(e.target.value))
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.'
+                            )}
+                            {!isEditing && (
+                              <span className='mt-1 block font-medium text-amber-600'>
+                                {t(
+                                  'Tip: configure the cost ratio now so employee commission profit is calculated correctly.'
+                                )}
+                              </span>
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
                       name='status'
                       render={({ field }) => (
                         <FormItem className={sideDrawerSwitchItemClassName()}>

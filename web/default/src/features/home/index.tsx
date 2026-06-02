@@ -34,7 +34,6 @@ import routeLineFour from '@/assets/home/Vector 4.png'
 import routeLineFive from '@/assets/home/Vector 5.png'
 import routeLineSix from '@/assets/home/Vector 6.png'
 import routeLineSeven from '@/assets/home/Vector 7.png'
-import brandMark from '@/assets/home/Vector_b.png'
 import homeSearchIcon from '@/assets/home/home_icon_search.png'
 import homeMapBg from '@/assets/home/home_mapbg.png'
 import statModelsIcon from '@/assets/home/home_page01_icon_01.png'
@@ -47,6 +46,8 @@ import { Markdown } from '@/components/ui/markdown'
 import { useHomePageContent } from './hooks'
 
 const EMBEDDED_INITIAL_PROMPT_KEY = '__NEW_API_NEXTCHAT_INITIAL_PROMPT__'
+const HOME_PRIMARY_LOGO = '/logo.png'
+const HOME_ACCENT_LOGO = '/logo1.png'
 
 const setEmbeddedInitialPrompt = (prompt: string) => {
   if (typeof window === 'undefined') return
@@ -127,6 +128,7 @@ const stats = [
 type FigmaHomeNavChild = {
   label?: string
   to?: string
+  target?: '_self' | '_blank'
   hidden?: boolean
   key?: string
   fullLabel?: string
@@ -136,6 +138,7 @@ type FigmaHomeNavChild = {
 type NavItem = {
   label: string
   to?: string
+  target?: '_self' | '_blank'
   dropdown?: boolean
   value?: string
   children?: FigmaHomeNavChild[]
@@ -144,7 +147,7 @@ type NavItem = {
 const figmaHomeNavItems: NavItem[] = [
   {
     label: 'LLM服务',
-    to: '/console/chat?tool=chat',
+    to: '/playground',
     dropdown: true,
     children: [
       { label: '聊天', to: '/console/chat?tool=chat' },
@@ -156,6 +159,49 @@ const figmaHomeNavItems: NavItem[] = [
   { label: '模型广场', to: '/pricing' },
   { label: '博客', to: '/articles' },
 ]
+
+const HOME_DASHBOARD_PATH = '/dashboard'
+const HOME_PLAYGROUND_PATH = '/playground'
+const HOME_BLOG_URL = 'https://github.com/QuantumNous/new-api'
+
+const resolvedFigmaHomeNavItems: NavItem[] = figmaHomeNavItems.map((item) => {
+  if (item.to === '/console/chat?tool=chat') {
+    return {
+      ...item,
+      to: HOME_PLAYGROUND_PATH,
+      children: item.children?.map((child) => {
+        if (
+          child.to === '/console/chat?tool=chat' ||
+          child.to === '/chat/image' ||
+          child.to === '/console/chat?tool=video'
+        ) {
+          return {
+            ...child,
+            to: HOME_PLAYGROUND_PATH,
+          }
+        }
+        return child
+      }),
+    }
+  }
+
+  if (item.to === '/console') {
+    return {
+      ...item,
+      to: HOME_DASHBOARD_PATH,
+    }
+  }
+
+  if (item.to === '/articles') {
+    return {
+      ...item,
+      to: HOME_BLOG_URL,
+      target: '_blank',
+    }
+  }
+
+  return item
+})
 
 const getVisibleChildren = (children: NavItem['children'] = []) =>
   children.filter((child) => !child.hidden)
@@ -350,14 +396,23 @@ function parseFigmaFooterConfig(rawValue: unknown): FigmaFooterConfig | null {
   }
 }
 
-const LogoMark = ({ className = '' }: { className?: string }) => (
+const LogoMark = ({
+  className = '',
+  src = HOME_PRIMARY_LOGO,
+}: {
+  className?: string
+  src?: string
+}) => (
   <span className={`figma-home-logo ${className}`} aria-hidden='true'>
-    <img src={brandMark} alt='' />
+    <img src={src} alt='' />
   </span>
 )
 
 const FigmaFooterLogo = ({ className = '' }: { className?: string }) => (
-  <LogoMark className={`figma-home-footer-logo ${className}`} />
+  <LogoMark
+    className={`figma-home-footer-logo ${className}`}
+    src={HOME_ACCENT_LOGO}
+  />
 )
 
 function FigmaFooter({
@@ -515,7 +570,7 @@ function FigmaHomeHeader() {
   const [mobileExpandedMenu, setMobileExpandedMenu] = useState<string | null>(
     null
   )
-  const getStartedPath = '/console'
+  const getStartedPath = HOME_DASHBOARD_PATH
 
   const languageOptions = useMemo(
     () =>
@@ -552,7 +607,7 @@ function FigmaHomeHeader() {
 
   const mobileMenuItems: NavItem[] = useMemo(
     () => [
-      ...figmaHomeNavItems,
+      ...resolvedFigmaHomeNavItems,
       {
         label: '语言',
         value: currentLanguage.shortLabel,
@@ -579,12 +634,12 @@ function FigmaHomeHeader() {
           <LogoMark />
         </a>
 
-        <a href='/console' className='figma-home-mobile-console'>
+        <a href={HOME_DASHBOARD_PATH} className='figma-home-mobile-console'>
           {t('控制台')}
         </a>
 
         <nav className='figma-home-nav' aria-label={t('主导航')}>
-          {figmaHomeNavItems.map((item) => {
+          {resolvedFigmaHomeNavItems.map((item) => {
             const visibleChildren = getVisibleChildren(item.children)
             const hasDesktopDropdown = item.dropdown || visibleChildren.length
 
@@ -605,14 +660,33 @@ function FigmaHomeHeader() {
                     </button>
                     <div className='figma-home-nav-menu'>
                       {visibleChildren.map((child) => (
-                        <a key={child.label} href={child.to}>
+                        <a
+                          key={child.label}
+                          href={child.to}
+                          target={child.target}
+                          rel={
+                            child.target === '_blank'
+                              ? 'noopener noreferrer'
+                              : undefined
+                          }
+                        >
                           {t(child.label || '')}
                         </a>
                       ))}
                     </div>
                   </>
                 ) : (
-                  <a href={item.to}>{t(item.label)}</a>
+                  <a
+                    href={item.to}
+                    target={item.target}
+                    rel={
+                      item.target === '_blank'
+                        ? 'noopener noreferrer'
+                        : undefined
+                    }
+                  >
+                    {t(item.label)}
+                  </a>
                 )}
               </div>
             )
@@ -658,7 +732,7 @@ function FigmaHomeHeader() {
         <div className='figma-home-mobile-panel-top'>
           <img
             className='figma-home-mobile-logo-image'
-            src={brandMark}
+            src={HOME_PRIMARY_LOGO}
             alt=''
           />
           <button
@@ -680,6 +754,12 @@ function FigmaHomeHeader() {
                 <div key={item.label} className='figma-home-mobile-menu-item'>
                   <a
                     href={item.to}
+                    target={item.target}
+                    rel={
+                      item.target === '_blank'
+                        ? 'noopener noreferrer'
+                        : undefined
+                    }
                     className='figma-home-mobile-link'
                     onClick={closeMobileMenu}
                   >
@@ -720,6 +800,12 @@ function FigmaHomeHeader() {
                         <a
                           key={child.label}
                           href={child.to}
+                          target={child.target}
+                          rel={
+                            child.target === '_blank'
+                              ? 'noopener noreferrer'
+                              : undefined
+                          }
                           onClick={closeMobileMenu}
                         >
                           {t(child.label || '')}
@@ -756,7 +842,7 @@ export function Home() {
   const heroSearchRef = useRef<HTMLDivElement | null>(null)
   const heroSearchInputRef = useRef<HTMLInputElement | null>(null)
 
-  const getStartedPath = '/console'
+  const getStartedPath = HOME_DASHBOARD_PATH
   const heroTitle = t('一个 API 接入所有 LLM')
 
   const promoEnabled = status?.home_promo_enabled !== false
@@ -910,7 +996,7 @@ export function Home() {
   ) => {
     event?.preventDefault()
     const prompt = heroPrompt.trim()
-    const chatPath = '/console/chat?tool=chat'
+    const chatPath = HOME_PLAYGROUND_PATH
 
     if (prompt) {
       setEmbeddedInitialPrompt(prompt)
@@ -1050,7 +1136,9 @@ export function Home() {
 
       <section
         ref={routingSectionRef}
-        className={`figma-home-routing${isRoutingActive ? 'is-route-active' : ''}`}
+        className={`figma-home-routing${
+          isRoutingActive ? ' is-route-active' : ''
+        }`}
       >
         <div className='figma-home-routing-header'>
           <h2>{t('智能路由，全球覆盖')}</h2>

@@ -190,6 +190,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
 			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
+			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
 		}
 
 		// Channel cost config (admin)

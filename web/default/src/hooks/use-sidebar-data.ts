@@ -25,6 +25,7 @@ import {
   FlaskConical,
   Key,
   LayoutDashboard,
+  LineChart,
   ListTodo,
   MessageSquare,
   Radio,
@@ -152,6 +153,11 @@ export function useSidebarData(): SidebarData {
             title: t('Employee Management'),
             url: '/employees',
             icon: UserCog,
+          },
+          {
+            title: t('Business Overview'),
+            url: '/commission-overview',
+            icon: LineChart,
           },
           {
             title: t('System Settings'),

@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ============================================================================
@@ -29,7 +30,9 @@ type UpdateEmployeeRequest struct {
 
 type UpsertChannelCostRequest struct {
 	ChannelId int     `json:"channel_id" binding:"required"`
-	CostRatio float64 `json:"cost_ratio" binding:"required,min=0,max=10"`
+	// cost_ratio = 模型基础价 × 上游倍率 的折扣系数，不设上限：
+	// 上游倍率可能很高，需允许配置 >1 的成本以覆盖真实采购价。
+	CostRatio float64 `json:"cost_ratio" binding:"required,min=0"`
 	Remark    string  `json:"remark"`
 }
 
@@ -135,6 +138,10 @@ func AdminUpdateEmployee(c *gin.Context) {
 		Remark:         req.Remark,
 	}
 	if err := model.UpdateEmployee(emp); err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "员工档案不存在"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -209,6 +216,99 @@ func AdminCommissionSummary(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+// AdminCommissionOverview GET /api/admin/employee/overview
+// 经营概览：平台总消耗 + 提成流量的成本/盈利/提成总计，及按员工/渠道/天的拆分。
+func AdminCommissionOverview(c *gin.Context) {
+	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
+	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+
+	// 平台总消耗（全平台所有用户的消费，不限于员工归属流量）
+	platformStat, err := model.SumUsedQuota(model.LogTypeConsume, startTime, endTime, "", "", "", 0, "")
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	// 提成流量总计（仅员工归属流量）
+	totals, err := model.GetCommissionTotals(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	byEmployee, err := model.GetCommissionStatsByEmployee(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	// 附加用户名
+	type EmployeeStatWithUser struct {
+		*model.CommissionEmployeeStat
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+	}
+	empItems := make([]EmployeeStatWithUser, 0, len(byEmployee))
+	for _, s := range byEmployee {
+		item := EmployeeStatWithUser{CommissionEmployeeStat: s}
+		if u, uerr := model.GetUserById(s.EmployeeUserId, false); uerr == nil && u != nil {
+			item.Username = u.Username
+			item.DisplayName = u.DisplayName
+		}
+		empItems = append(empItems, item)
+	}
+
+	byChannel, err := model.GetCommissionStatsByChannel(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	// 附加渠道名
+	for _, s := range byChannel {
+		if ch, cerr := model.CacheGetChannel(s.ChannelId); cerr == nil && ch != nil {
+			s.ChannelName = ch.Name
+		}
+	}
+
+	byDay, err := model.GetCommissionStatsByDay(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	// 毛利率：profit / revenue
+	var grossMargin float64
+	if totals.TotalRevenue != 0 {
+		grossMargin = float64(totals.TotalProfit) / float64(totals.TotalRevenue)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"platform": gin.H{
+				"total_consumption_quota": int64(platformStat.Quota),
+				"total_consumption_usd":   common.QuotaToUSD(int64(platformStat.Quota)),
+				"request_count":           platformStat.Rpm,
+				"token_count":             platformStat.Tpm,
+			},
+			"commission": gin.H{
+				"total_revenue_quota":    totals.TotalRevenue,
+				"total_cost_quota":       totals.TotalCost,
+				"total_profit_quota":     totals.TotalProfit,
+				"total_commission_quota": totals.TotalCommission,
+				"record_count":           totals.RecordCount,
+				"gross_margin":           grossMargin,
+				"total_revenue_usd":      common.QuotaToUSD(totals.TotalRevenue),
+				"total_cost_usd":         common.QuotaToUSD(totals.TotalCost),
+				"total_profit_usd":       common.QuotaToUSD(totals.TotalProfit),
+				"total_commission_usd":   common.QuotaToUSD(totals.TotalCommission),
+			},
+			"by_employee": empItems,
+			"by_channel":  byChannel,
+			"by_day":      byDay,
+		},
+	})
 }
 
 // ============================================================================
@@ -307,20 +407,20 @@ func GetMyCommissionLogs(c *gin.Context) {
 		return
 	}
 
-	// 脱敏：隐藏完整 customer_user_id，仅展示末四位哈希
+	// 脱敏：隐藏完整 customer_user_id，仅展示末四位掩码。
+	// 外层 CustomerUserId 字段（omitempty，零值）会遮蔽内嵌结构体的同名字段，
+	// 序列化后 customer_user_id 不会输出，无需再手动清空内嵌字段。
 	type SafeLog struct {
 		*model.EmployeeCommissionLog
 		CustomerUserIdMasked string `json:"customer_user_id_masked"`
-		CustomerUserId       int    `json:"customer_user_id,omitempty"` // 覆盖原字段，员工不可见
+		CustomerUserId       int    `json:"customer_user_id,omitempty"`
 	}
 	safeItems := make([]SafeLog, 0, len(logs))
 	for _, l := range logs {
-		safeLog := SafeLog{
+		safeItems = append(safeItems, SafeLog{
 			EmployeeCommissionLog: l,
 			CustomerUserIdMasked:  maskUserId(l.CustomerUserId),
-		}
-		safeLog.EmployeeCommissionLog.CustomerUserId = 0 // 清空原始字段
-		safeItems = append(safeItems, safeLog)
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
