@@ -1,4 +1,4 @@
-/*
+﻿/*
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
@@ -51,8 +51,8 @@ const HOME_ACCENT_LOGO = '/logo1.png'
 
 const setEmbeddedInitialPrompt = (prompt: string) => {
   if (typeof window === 'undefined') return
-  ;(window as unknown as Record<string, string>)[EMBEDDED_INITIAL_PROMPT_KEY] =
-    prompt.trim()
+    ; (window as unknown as Record<string, string>)[EMBEDDED_INITIAL_PROMPT_KEY] =
+      prompt.trim()
 }
 
 const routeLines = [
@@ -150,14 +150,13 @@ const figmaHomeNavItems: NavItem[] = [
     to: '/playground',
     dropdown: true,
     children: [
-      { label: '聊天', to: '/console/chat?tool=chat' },
+      { label: '聊天', to: '/playground' },
       { label: '绘图', to: '/chat/image' },
-      { label: '视频', to: '/console/chat?tool=video', hidden: true },
+      { label: '视频', to: '/console/chat?tool=video' },
     ],
   },
-  { label: '控制台', to: '/console' },
+  { label: '控制台', to: '/dashboard' },
   { label: '模型广场', to: '/pricing' },
-  { label: '博客', to: '/articles' },
 ]
 
 const HOME_DASHBOARD_PATH = '/dashboard'
@@ -228,28 +227,31 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
   version: 1,
   groups: [
     {
-      id: 'company',
-      titleKey: '公司',
+      id: 'about', titleKey: '关于', links: [
+        {
+          id: 'about-com',
+          labelKey: '关于项目',
+          url: 'https://docs.nexaxis.ai/docs',
+          target: '_blank',
+        },
+      ]
+    },
+    {
+      id: 'work',
+      titleKey: '文档',
       links: [
-        { id: 'about', labelKey: '关于', url: '/about', target: '_self' },
         {
           id: 'browse-models',
-          labelKey: '浏览模型',
-          url: '/pricing',
-          target: '_self',
+          labelKey: 'API 文档',
+          url: 'https://docs.nexaxis.ai/docs/models-list',
+          target: '_blank',
         },
         {
           id: 'how-it-works',
-          labelKey: '工作原理',
-          url: 'https://docs.newapi.pro/wiki/features-introduction/',
+          labelKey: '帮助',
+          url: 'https://docs.nexaxis.ai/docs/cc-switch',
           target: '_blank',
-        },
-        {
-          id: 'blog',
-          labelKey: '博客',
-          url: 'https://github.com/QuantumNous/new-api',
-          target: '_blank',
-        },
+        }
       ],
     },
     {
@@ -259,33 +261,21 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
         {
           id: 'twitter-x',
           labelKey: 'Twitter / X',
-          url: 'https://github.com/QuantumNous/new-api',
+          url: 'https://x.com/NexaxisAI',
           target: '_blank',
         },
         {
           id: 'telegram',
           labelKey: 'Telegram',
-          url: 'https://github.com/QuantumNous/new-api',
+          url: 'https://t.me/nexaxis',
           target: '_blank',
-        },
-        {
-          id: 'discord',
-          labelKey: 'Discord',
-          url: 'https://github.com/QuantumNous/new-api',
-          target: '_blank',
-        },
+        }
       ],
     },
     {
       id: 'legal',
       titleKey: '法律',
       links: [
-        {
-          id: 'whitepaper',
-          labelKey: '白皮书',
-          url: 'https://docs.newapi.pro/',
-          target: '_blank',
-        },
         {
           id: 'privacy-policy',
           labelKey: '隐私政策',
@@ -309,70 +299,70 @@ function normalizeFigmaFooterConfig(config: unknown): FigmaFooterConfig | null {
   }
   const groups = Array.isArray(input.groups)
     ? input.groups
-        .map((group, groupIndex) => {
-          if (!group || typeof group !== 'object' || Array.isArray(group)) {
-            return null
-          }
+      .map((group, groupIndex) => {
+        if (!group || typeof group !== 'object' || Array.isArray(group)) {
+          return null
+        }
 
-          const groupInput = group as {
-            id?: unknown
-            titleKey?: unknown
-            title?: unknown
-            links?: unknown
-          }
-          const titleKey = String(
-            groupInput.titleKey ?? groupInput.title ?? ''
-          ).trim()
-          if (!titleKey) return null
+        const groupInput = group as {
+          id?: unknown
+          titleKey?: unknown
+          title?: unknown
+          links?: unknown
+        }
+        const titleKey = String(
+          groupInput.titleKey ?? groupInput.title ?? ''
+        ).trim()
+        if (!titleKey) return null
 
-          const links = Array.isArray(groupInput.links)
-            ? groupInput.links
-                .map((link, linkIndex) => {
-                  if (
-                    !link ||
-                    typeof link !== 'object' ||
-                    Array.isArray(link)
-                  ) {
-                    return null
-                  }
+        const links = Array.isArray(groupInput.links)
+          ? groupInput.links
+            .map((link, linkIndex) => {
+              if (
+                !link ||
+                typeof link !== 'object' ||
+                Array.isArray(link)
+              ) {
+                return null
+              }
 
-                  const linkInput = link as {
-                    id?: unknown
-                    labelKey?: unknown
-                    label?: unknown
-                    url?: unknown
-                    target?: unknown
-                  }
-                  const labelKey = String(
-                    linkInput.labelKey ?? linkInput.label ?? ''
-                  ).trim()
-                  const url = String(linkInput.url ?? '').trim()
-                  if (!labelKey || !url) return null
+              const linkInput = link as {
+                id?: unknown
+                labelKey?: unknown
+                label?: unknown
+                url?: unknown
+                target?: unknown
+              }
+              const labelKey = String(
+                linkInput.labelKey ?? linkInput.label ?? ''
+              ).trim()
+              const url = String(linkInput.url ?? '').trim()
+              if (!labelKey || !url) return null
 
-                  const rawTarget = String(linkInput.target ?? '_blank').trim()
-                  const target = rawTarget === '_self' ? '_self' : '_blank'
+              const rawTarget = String(linkInput.target ?? '_blank').trim()
+              const target = rawTarget === '_self' ? '_self' : '_blank'
 
-                  return {
-                    id: String(
-                      linkInput.id ?? createFooterId('link', linkIndex)
-                    ).trim(),
-                    labelKey,
-                    url,
-                    target,
-                  } satisfies FigmaFooterLink
-                })
-                .filter(Boolean)
-            : []
+              return {
+                id: String(
+                  linkInput.id ?? createFooterId('link', linkIndex)
+                ).trim(),
+                labelKey,
+                url,
+                target,
+              } satisfies FigmaFooterLink
+            })
+            .filter(Boolean)
+          : []
 
-          return {
-            id: String(
-              groupInput.id ?? createFooterId('group', groupIndex)
-            ).trim(),
-            titleKey,
-            links,
-          } satisfies FigmaFooterGroup
-        })
-        .filter(Boolean)
+        return {
+          id: String(
+            groupInput.id ?? createFooterId('group', groupIndex)
+          ).trim(),
+          titleKey,
+          links,
+        } satisfies FigmaFooterGroup
+      })
+      .filter(Boolean)
     : []
 
   const groupIds = groups.map((group) => group.id).join(',')
@@ -772,9 +762,8 @@ function FigmaHomeHeader() {
             return (
               <div
                 key={item.label}
-                className={`figma-home-mobile-menu-item${
-                  isExpanded ? 'is-expanded' : ''
-                }`}
+                className={`figma-home-mobile-menu-item${isExpanded ? 'is-expanded' : ''
+                  }`}
               >
                 <button
                   type='button'
@@ -1136,9 +1125,8 @@ export function Home() {
 
       <section
         ref={routingSectionRef}
-        className={`figma-home-routing${
-          isRoutingActive ? ' is-route-active' : ''
-        }`}
+        className={`figma-home-routing${isRoutingActive ? ' is-route-active' : ''
+          }`}
       >
         <div className='figma-home-routing-header'>
           <h2>{t('智能路由，全球覆盖')}</h2>

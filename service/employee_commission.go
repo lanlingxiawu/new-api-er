@@ -99,6 +99,38 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 	}
 }
 
+// RecordTransactionCost 在每笔消费结算后异步调用，记录逐笔精确成本到 consumption_costs。
+// 覆盖全平台所有消费（不仅员工归属流量），用于平台级成本/利润精确统计。
+// 成本算法与提成一致：token 部分套用渠道成本系数，固定价加付项按 cost_ratio=1。
+func RecordTransactionCost(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int) {
+	if quota == 0 {
+		return
+	}
+	revenueQuota := int64(quota)
+	costRatio := model.GetChannelCostRatio(relayInfo.ChannelId)
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+
+	surcharge := clampSurcharge(surchargeQuota, revenueQuota)
+	tokenRevenue := revenueQuota - surcharge
+	costQuota := calcCostQuota(tokenRevenue, groupRatio, costRatio) +
+		calcCostQuota(surcharge, groupRatio, 1.0)
+
+	rec := &model.ConsumptionCost{
+		LogId:        logId,
+		UserId:       relayInfo.UserId,
+		ChannelId:    relayInfo.ChannelId,
+		GroupName:    relayInfo.UsingGroup,
+		ModelName:    relayInfo.OriginModelName,
+		RevenueQuota: revenueQuota,
+		CostQuota:    costQuota,
+		GroupRatio:   groupRatio,
+		CostRatio:    costRatio,
+	}
+	if err := model.CreateConsumptionCost(rec); err != nil {
+		common.SysError("consumption_cost: failed to create record: " + err.Error())
+	}
+}
+
 // clampSurcharge 约束加付项额度，保证 0 <= surcharge <= revenue（revenue>0 时）。
 // revenue<=0（退款等）时返回 0，因为此时利润必 <=0、不影响提成结果，
 // 同时避免 tokenRevenue 出现非预期负值。

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -30,9 +31,9 @@ type UpdateEmployeeRequest struct {
 
 type UpsertChannelCostRequest struct {
 	ChannelId int     `json:"channel_id" binding:"required"`
-	// cost_ratio = 模型基础价 × 上游倍率 的折扣系数，不设上限：
-	// 上游倍率可能很高，需允许配置 >1 的成本以覆盖真实采购价。
-	CostRatio float64 `json:"cost_ratio" binding:"required,min=0"`
+	// cost_ratio = 模型基础价 × 上游倍率 的折扣系数。不设上限（上游倍率可能很高，
+	// 需允许 >1 以覆盖真实采购价）；允许为 0（零成本/免费渠道），故用 gte 而非 required。
+	CostRatio float64 `json:"cost_ratio" binding:"gte=0"`
 	Remark    string  `json:"remark"`
 }
 
@@ -231,6 +232,56 @@ func AdminCommissionOverview(c *gin.Context) {
 		return
 	}
 
+	// 平台级成本/利润：从逐笔成本台账 consumption_costs 精确求和。
+	costTotals, err := model.GetConsumptionCostTotals(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	platformConsumption := int64(platformStat.Quota)
+	platformCostQuota := costTotals.TotalCost
+	platformProfitQuota := platformConsumption - platformCostQuota
+	var platformGrossMargin float64
+	if platformConsumption != 0 {
+		platformGrossMargin = float64(platformProfitQuota) / float64(platformConsumption)
+	}
+
+	// 按渠道的全平台精确盈利明细（收入与成本均来自逐笔台账）
+	type ChannelProfitItem struct {
+		ChannelId        int     `json:"channel_id"`
+		ChannelName      string  `json:"channel_name"`
+		ConsumptionQuota int64   `json:"consumption_quota"`
+		EstCostQuota     int64   `json:"est_cost_quota"`
+		EstProfitQuota   int64   `json:"est_profit_quota"`
+		EstGrossMargin   float64 `json:"est_gross_margin"`
+		CostRatio        float64 `json:"cost_ratio"`
+	}
+	channelStats, err := model.GetConsumptionCostByChannel(startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	channelProfit := make([]ChannelProfitItem, 0, len(channelStats))
+	for _, s := range channelStats {
+		item := ChannelProfitItem{
+			ChannelId:        s.ChannelId,
+			ConsumptionQuota: s.TotalRevenue,
+			EstCostQuota:     s.TotalCost,
+			EstProfitQuota:   s.TotalRevenue - s.TotalCost,
+			CostRatio:        model.GetChannelCostRatio(s.ChannelId),
+		}
+		if s.TotalRevenue != 0 {
+			item.EstGrossMargin = float64(item.EstProfitQuota) / float64(s.TotalRevenue)
+		}
+		if ch, e := model.CacheGetChannel(s.ChannelId); e == nil && ch != nil {
+			item.ChannelName = ch.Name
+		}
+		channelProfit = append(channelProfit, item)
+	}
+	sort.Slice(channelProfit, func(i, j int) bool {
+		return channelProfit[i].EstProfitQuota > channelProfit[j].EstProfitQuota
+	})
+
 	// 提成流量总计（仅员工归属流量）
 	totals, err := model.GetCommissionTotals(startTime, endTime)
 	if err != nil {
@@ -287,10 +338,16 @@ func AdminCommissionOverview(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"platform": gin.H{
-				"total_consumption_quota": int64(platformStat.Quota),
-				"total_consumption_usd":   common.QuotaToUSD(int64(platformStat.Quota)),
+				"total_consumption_quota": platformConsumption,
+				"total_consumption_usd":   common.QuotaToUSD(platformConsumption),
 				"request_count":           platformStat.Rpm,
 				"token_count":             platformStat.Tpm,
+				// 估算成本/利润（按分组倍率与渠道成本系数推算）
+				"est_cost_quota":     platformCostQuota,
+				"est_cost_usd":       common.QuotaToUSD(platformCostQuota),
+				"est_profit_quota":   platformProfitQuota,
+				"est_profit_usd":     common.QuotaToUSD(platformProfitQuota),
+				"est_gross_margin":   platformGrossMargin,
 			},
 			"commission": gin.H{
 				"total_revenue_quota":    totals.TotalRevenue,
@@ -304,9 +361,10 @@ func AdminCommissionOverview(c *gin.Context) {
 				"total_profit_usd":       common.QuotaToUSD(totals.TotalProfit),
 				"total_commission_usd":   common.QuotaToUSD(totals.TotalCommission),
 			},
-			"by_employee": empItems,
-			"by_channel":  byChannel,
-			"by_day":      byDay,
+			"by_employee":         empItems,
+			"by_channel":          byChannel,
+			"by_channel_platform": channelProfit,
+			"by_day":              byDay,
 		},
 	})
 }

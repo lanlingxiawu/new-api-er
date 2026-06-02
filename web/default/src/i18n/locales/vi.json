@@ -1786,7 +1786,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Buộc phản hồi JSON hợp lệ về cú pháp",
@@ -4602,6 +4602,23 @@
     "records": "records",
     "Requests ": "Requests ",
     "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
-    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly."
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+    "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.",
+    "Cost Ratio *": "Cost Ratio *",
+    "Cost ratio is required": "Cost ratio is required",
+    "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
+    "Employee self-service commission dashboard.": "Employee self-service commission dashboard.",
+    "Manage employees and commission rates.": "Manage employees and commission rates.",
+    "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
+    "Search username / display name / email": "Search username / display name / email",
+    "No users found": "No users found",
+    "Search and select the user to assign employee status": "Search and select the user to assign employee status",
+    "Est. Cost": "Est. Cost",
+    "Est. Profit": "Est. Profit",
+    "Est. Gross Margin": "Est. Gross Margin",
+    "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "Cost and profit are estimated from per-group ratios and per-channel cost ratios.",
+    "Channel Profit (platform-wide estimate)": "Channel Profit (platform-wide estimate)",
+    "Channel Profit (platform-wide)": "Channel Profit (platform-wide)",
+    "Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.": "Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record."
   }
 }

@@ -588,15 +588,15 @@ func getVertexArrayKeys(keys string) ([]string, error) {
 }
 
 // syncChannelCostRatio 根据透传的成本系数同步 ChannelCostConfig（成本配置独立存表）。
-//   - nil：请求未携带该字段，保持现状不动；
-//   - <=0 或 ==1.0（默认）：视为无需单独配置，删除已有记录（读取时回退默认 1.0）；
-//   - 其余值：写入/更新配置。
+// 成本系数为必填项，始终写入配置（不再因等于默认值而删除）：
+//   - nil：请求未携带该字段（非渠道表单的旧客户端），保持现状不动；
+//   - <0：非法值，忽略；
+//   - >=0（含 0=零成本/免费渠道，含 1.0=全额成本）：写入/更新配置。
 func syncChannelCostRatio(channelId int, ratio *float64) {
 	if ratio == nil {
 		return
 	}
-	if *ratio <= 0 || *ratio == 1.0 {
-		_ = model.DeleteChannelCostConfig(channelId)
+	if *ratio < 0 {
 		return
 	}
 	_ = model.UpsertChannelCostConfig(channelId, *ratio, "")

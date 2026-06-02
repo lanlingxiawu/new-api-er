@@ -124,6 +124,10 @@ export function SidebarModulesSection({
         title: t('Profile'),
         description: t('Personal settings and profile management.'),
       },
+      commission: {
+        title: t('My Commission'),
+        description: t('Employee self-service commission dashboard.'),
+      },
     },
     admin: {
       channel: {
@@ -149,6 +153,14 @@ export function SidebarModulesSection({
       subscription: {
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
+      },
+      employee: {
+        title: t('Employee Management'),
+        description: t('Manage employees and commission rates.'),
+      },
+      businessOverview: {
+        title: t('Business Overview'),
+        description: t('Consumption, cost, profit, and commission stats.'),
       },
     },
   }

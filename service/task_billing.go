@@ -64,7 +64,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
 	infoCopy := *info
 	quotaCopy := info.PriceData.Quota
-	go TrySettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
+	go func() {
+		RecordTransactionCost(&infoCopy, quotaCopy, 0, logId)
+		TrySettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
+	}()
 }
 
 // ---------------------------------------------------------------------------

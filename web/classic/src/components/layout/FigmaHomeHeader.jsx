@@ -41,7 +41,6 @@ export const figmaHomeNavItems = [
   },
   { label: '控制台', to: '/console' },
   { label: '模型广场', to: '/pricing' },
-  { label: '博客', to: '/articles' },
 ];
 
 const getVisibleChildren = (children = []) =>

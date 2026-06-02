@@ -137,13 +137,33 @@ export function CommissionOverview() {
                 <h3 className='mb-2 text-sm font-semibold text-muted-foreground'>
                   {t('Platform-wide (all users)')}
                 </h3>
-                <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
+                <div className='grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-3'>
                   <StatCard
                     title={t('Total Consumption')}
                     value={formatQuota(platform?.total_consumption_quota ?? 0)}
                     sub={`≈ $${(platform?.total_consumption_usd ?? 0).toFixed(4)}`}
                     icon={Wallet}
                     color='text-blue-600'
+                  />
+                  <StatCard
+                    title={t('Cost')}
+                    value={formatQuota(platform?.est_cost_quota ?? 0)}
+                    sub={`≈ $${(platform?.est_cost_usd ?? 0).toFixed(4)}`}
+                    icon={Wallet}
+                    color='text-orange-600'
+                  />
+                  <StatCard
+                    title={t('Profit')}
+                    value={formatQuota(platform?.est_profit_quota ?? 0)}
+                    sub={`≈ $${(platform?.est_profit_usd ?? 0).toFixed(4)}`}
+                    icon={PiggyBank}
+                    color='text-green-600'
+                  />
+                  <StatCard
+                    title={t('Gross Margin')}
+                    value={`${((platform?.est_gross_margin ?? 0) * 100).toFixed(1)}%`}
+                    icon={Percent}
+                    color='text-pink-600'
                   />
                   <StatCard
                     title={t('Requests')}
@@ -158,7 +178,119 @@ export function CommissionOverview() {
                     color='text-cyan-600'
                   />
                 </div>
+                <p className='text-muted-foreground mt-2 text-xs'>
+                  {t(
+                    'Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.'
+                  )}
+                </p>
               </div>
+
+              {/* Daily trend */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t('Daily Trend')}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {chartData.length === 0 ? (
+                    <p className='text-sm text-muted-foreground'>
+                      {t('No records')}
+                    </p>
+                  ) : (
+                    <div className='h-72 w-full'>
+                      <ResponsiveContainer width='100%' height='100%'>
+                        <LineChart data={chartData}>
+                          <CartesianGrid strokeDasharray='3 3' opacity={0.2} />
+                          <XAxis dataKey='date' fontSize={12} />
+                          <YAxis fontSize={12} />
+                          <Tooltip formatter={(v: number) => formatQuota(v)} />
+                          <Legend />
+                          <Line
+                            type='monotone'
+                            dataKey='revenue'
+                            name={t('Revenue')}
+                            stroke='#2563eb'
+                            dot={false}
+                          />
+                          <Line
+                            type='monotone'
+                            dataKey='cost'
+                            name={t('Cost')}
+                            stroke='#ea580c'
+                            dot={false}
+                          />
+                          <Line
+                            type='monotone'
+                            dataKey='profit'
+                            name={t('Profit')}
+                            stroke='#16a34a'
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Per-channel profit (platform-wide estimate) */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t('Channel Profit (platform-wide)')}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t('Channel')}</TableHead>
+                        <TableHead>{t('Cost Ratio')}</TableHead>
+                        <TableHead>{t('Total Consumption')}</TableHead>
+                        <TableHead>{t('Cost')}</TableHead>
+                        <TableHead>{t('Profit')}</TableHead>
+                        <TableHead>{t('Gross Margin')}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(d.by_channel_platform ?? []).length === 0 && (
+                        <TableRow>
+                          <TableCell
+                            colSpan={6}
+                            className='text-center text-muted-foreground'
+                          >
+                            {t('No records')}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {(d.by_channel_platform ?? []).map((ch) => (
+                        <TableRow key={ch.channel_id}>
+                          <TableCell>
+                            {ch.channel_name || `#${ch.channel_id}`}
+                          </TableCell>
+                          <TableCell>{ch.cost_ratio}</TableCell>
+                          <TableCell>
+                            {formatQuota(ch.consumption_quota)}
+                          </TableCell>
+                          <TableCell>{formatQuota(ch.est_cost_quota)}</TableCell>
+                          <TableCell
+                            className={
+                              ch.est_profit_quota < 0 ? 'text-destructive' : ''
+                            }
+                          >
+                            {formatQuota(ch.est_profit_quota)}
+                          </TableCell>
+                          <TableCell>
+                            {(ch.est_gross_margin * 100).toFixed(1)}%
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <p className='text-muted-foreground mt-2 text-xs'>
+                    {t(
+                      'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
+                    )}
+                  </p>
+                </CardContent>
+              </Card>
 
               {/* Commission-attributed financials */}
               <div>
@@ -203,55 +335,6 @@ export function CommissionOverview() {
                   />
                 </div>
               </div>
-
-              {/* Daily trend */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t('Daily Trend')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {chartData.length === 0 ? (
-                    <p className='text-sm text-muted-foreground'>
-                      {t('No records')}
-                    </p>
-                  ) : (
-                    <div className='h-72 w-full'>
-                      <ResponsiveContainer width='100%' height='100%'>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray='3 3' opacity={0.2} />
-                          <XAxis dataKey='date' fontSize={12} />
-                          <YAxis fontSize={12} />
-                          <Tooltip
-                            formatter={(v: number) => formatQuota(v)}
-                          />
-                          <Legend />
-                          <Line
-                            type='monotone'
-                            dataKey='revenue'
-                            name={t('Revenue')}
-                            stroke='#2563eb'
-                            dot={false}
-                          />
-                          <Line
-                            type='monotone'
-                            dataKey='cost'
-                            name={t('Cost')}
-                            stroke='#ea580c'
-                            dot={false}
-                          />
-                          <Line
-                            type='monotone'
-                            dataKey='profit'
-                            name={t('Profit')}
-                            stroke='#16a34a'
-                            dot={false}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
 
               {/* By employee */}
               <Card>

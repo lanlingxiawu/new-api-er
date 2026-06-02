@@ -630,7 +630,7 @@ export function ChannelMutateDrawer({
     const timer = setTimeout(() => {
       toast.warning(
         t(
-          'Warning: Base URL should not end with /v1. New API will handle it automatically. This may cause request failures.'
+          'Warning: Base URL should not end with /v1. NEXAXIS API will handle it automatically. This may cause request failures.'
         ),
         { duration: 5000 }
       )
@@ -1123,7 +1123,7 @@ export function ChannelMutateDrawer({
                       name='cost_ratio'
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>{t('Cost Ratio')}</FormLabel>
+                          <FormLabel>{t('Cost Ratio *')}</FormLabel>
                           <FormControl>
                             <Input
                               type='number'
@@ -1131,15 +1131,19 @@ export function ChannelMutateDrawer({
                               min='0'
                               placeholder='1.0'
                               {...field}
-                              value={field.value ?? 1}
+                              value={field.value ?? ''}
                               onChange={(e) =>
-                                field.onChange(Number(e.target.value))
+                                field.onChange(
+                                  e.target.value === ''
+                                    ? undefined
+                                    : Number(e.target.value)
+                                )
                               }
                             />
                           </FormControl>
                           <FormDescription>
                             {t(
-                              'Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.'
+                              'Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.'
                             )}
                             {!isEditing && (
                               <span className='mt-1 block font-medium text-amber-600'>
@@ -1777,7 +1781,7 @@ export function ChannelMutateDrawer({
                     {/* Coze (type 49) */}
                     {currentType === 49 && (
                       <FormField
-                        control={form.control}
+                        control={form.control}NEXAXIS API
                         name='other'
                         render={({ field }) => (
                           <FormItem>

@@ -256,6 +256,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	relayInfoCopy := *relayInfo
 	quotaCopy := quota
 	gopool.Go(func() {
+		RecordTransactionCost(&relayInfoCopy, quotaCopy, 0, logId)
 		TrySettleEmployeeCommission(&relayInfoCopy, quotaCopy, 0, logId)
 	})
 }
@@ -382,6 +383,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	relayInfoCopy2 := *relayInfo
 	quotaCopy2 := quota
 	gopool.Go(func() {
+		RecordTransactionCost(&relayInfoCopy2, quotaCopy2, 0, logId)
 		TrySettleEmployeeCommission(&relayInfoCopy2, quotaCopy2, 0, logId)
 	})
 	gopool.Go(func() {

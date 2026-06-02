@@ -1786,7 +1786,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -4602,6 +4602,23 @@
     "records": "records",
     "Requests ": "Requests ",
     "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
-    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly."
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+    "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.",
+    "Cost Ratio *": "Cost Ratio *",
+    "Cost ratio is required": "Cost ratio is required",
+    "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
+    "Employee self-service commission dashboard.": "Employee self-service commission dashboard.",
+    "Manage employees and commission rates.": "Manage employees and commission rates.",
+    "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
+    "Search username / display name / email": "Search username / display name / email",
+    "No users found": "No users found",
+    "Search and select the user to assign employee status": "Search and select the user to assign employee status",
+    "Est. Cost": "Est. Cost",
+    "Est. Profit": "Est. Profit",
+    "Est. Gross Margin": "Est. Gross Margin",
+    "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "Cost and profit are estimated from per-group ratios and per-channel cost ratios.",
+    "Channel Profit (platform-wide estimate)": "Channel Profit (platform-wide estimate)",
+    "Channel Profit (platform-wide)": "Channel Profit (platform-wide)",
+    "Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.": "Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record."
   }
 }

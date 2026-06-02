@@ -171,7 +171,10 @@ export const channelFormSchema = z
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     other: z.string().optional(),
     cost_ratio: z
-      .number()
+      .number({
+        required_error: 'Cost ratio is required',
+        invalid_type_error: 'Cost ratio is required',
+      })
       .min(0, 'Cost ratio must be greater than or equal to 0')
       .optional(),
     // Multi-key options (not sent to backend directly)
@@ -205,6 +208,10 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.cost_ratio === undefined || data.cost_ratio === null) {
+      addRequiredIssue(ctx, 'cost_ratio', 'Cost ratio is required')
+    }
+
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
       addRequiredIssue(
         ctx,
@@ -293,7 +300,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   header_override: '',
   settings: '{}',
   other: '',
-  cost_ratio: 1,
+  cost_ratio: undefined,
   multi_key_mode: 'single',
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,

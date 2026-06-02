@@ -457,6 +457,31 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
+// ChannelGroupConsumption 按「渠道 + 分组」聚合的消费额度，用于平台级成本/利润估算。
+type ChannelGroupConsumption struct {
+	ChannelId int    `json:"channel_id" gorm:"column:channel_id"`
+	GroupName string `json:"group_name" gorm:"column:group_name"`
+	Quota     int64  `json:"quota" gorm:"column:quota"`
+}
+
+// GetConsumptionByChannelGroup 返回时间范围内、按渠道与分组聚合的消费额度（仅消费类日志）。
+// 跨库安全：仅使用标准 SUM/GROUP BY，分组列通过 logGroupCol 处理保留字引号差异。
+func GetConsumptionByChannelGroup(startTimestamp, endTimestamp int64) ([]ChannelGroupConsumption, error) {
+	var rows []ChannelGroupConsumption
+	tx := LOG_DB.Table("logs").
+		Select("channel_id as channel_id, " + logGroupCol + " as group_name, COALESCE(SUM(quota),0) as quota").
+		Where("type = ?", LogTypeConsume)
+	if startTimestamp != 0 {
+		tx = tx.Where("created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("created_at <= ?", endTimestamp)
+	}
+	tx = tx.Group("channel_id, " + logGroupCol)
+	err := tx.Scan(&rows).Error
+	return rows, err
+}
+
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
 

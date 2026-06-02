@@ -478,6 +478,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// 固定价加付项（web/file search、图像生成等）不套用渠道 token 成本系数
 	surchargeCopy := int64(summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	gopool.Go(func() {
+		RecordTransactionCost(&relayInfoCopy, quotaCopy, surchargeCopy, logId)
 		TrySettleEmployeeCommission(&relayInfoCopy, quotaCopy, surchargeCopy, logId)
 	})
 	gopool.Go(func() {

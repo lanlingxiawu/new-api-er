@@ -29,34 +29,37 @@ import type { EmployeeExtension } from './api'
 
 // ── Summary Cards ─────────────────────────────────────────────────────────────
 
-function SummaryCards({ data }: { data: EmployeeExtension }) {
+function SummaryCards({ data }: { data: Partial<EmployeeExtension> }) {
   const { t } = useTranslation()
+
+  // 兜底：汇总接口未就绪时可能回退到 user_extension（不含 *_usd 字段），全部做空值保护
+  const num = (v: number | undefined) => v ?? 0
 
   const cards = [
     {
       title: t('Total Commission'),
-      value: formatQuota(data.commission_total_quota),
-      sub: `≈ $${data.commission_total_usd.toFixed(4)}`,
+      value: formatQuota(num(data.commission_total_quota)),
+      sub: `≈ $${num(data.commission_total_usd).toFixed(4)}`,
       icon: TrendingUp,
       color: 'text-green-600',
     },
     {
       title: t('Pending Settlement'),
-      value: formatQuota(data.commission_pending_quota),
-      sub: `≈ $${data.commission_pending_usd.toFixed(4)}`,
+      value: formatQuota(num(data.commission_pending_quota)),
+      sub: `≈ $${num(data.commission_pending_usd).toFixed(4)}`,
       icon: Clock,
       color: 'text-yellow-600',
     },
     {
       title: t('Total Customer Revenue'),
-      value: formatQuota(data.revenue_total_quota),
-      sub: `≈ $${data.revenue_total_usd.toFixed(4)}`,
+      value: formatQuota(num(data.revenue_total_quota)),
+      sub: `≈ $${num(data.revenue_total_usd).toFixed(4)}`,
       icon: DollarSign,
       color: 'text-blue-600',
     },
     {
       title: t('Active Customers'),
-      value: String(data.revenue_customer_count),
+      value: String(num(data.revenue_customer_count)),
       sub: t('customers with consumption'),
       icon: Users,
       color: 'text-purple-600',

@@ -5,6 +5,11 @@ export interface PlatformStat {
   total_consumption_usd: number
   request_count: number
   token_count: number
+  est_cost_quota: number
+  est_cost_usd: number
+  est_profit_quota: number
+  est_profit_usd: number
+  est_gross_margin: number
 }
 
 export interface CommissionTotals {
@@ -40,6 +45,16 @@ export interface ChannelStat {
   record_count: number
 }
 
+export interface ChannelProfitStat {
+  channel_id: number
+  channel_name?: string
+  consumption_quota: number
+  est_cost_quota: number
+  est_profit_quota: number
+  est_gross_margin: number
+  cost_ratio: number
+}
+
 export interface DailyStat {
   date: string
   total_revenue: number
@@ -53,6 +68,7 @@ export interface OverviewData {
   commission: CommissionTotals
   by_employee: EmployeeStat[]
   by_channel: ChannelStat[]
+  by_channel_platform: ChannelProfitStat[]
   by_day: DailyStat[]
 }
 

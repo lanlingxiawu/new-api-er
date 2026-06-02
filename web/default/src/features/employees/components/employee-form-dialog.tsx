@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useQuery } from '@tanstack/react-query'
+import { cn } from '@/lib/utils'
+import { searchUsers } from '@/features/users/api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -60,6 +63,111 @@ interface Props {
   onOpenChange: (open: boolean) => void
   currentRow?: EmployeeProfile
   onSuccess?: () => void
+}
+
+// 从用户列表搜索并选择用户（服务端搜索，避免手填 ID）
+function UserPicker({
+  value,
+  onSelect,
+}: {
+  value?: number
+  onSelect: (id: number) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [keyword, setKeyword] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [selectedLabel, setSelectedLabel] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['employee-user-search', debounced],
+    queryFn: () => searchUsers({ keyword: debounced, page_size: 20 }),
+    enabled: open,
+  })
+  const users = data?.data?.items ?? []
+
+  return (
+    <div ref={containerRef} className='relative'>
+      <Input
+        type='text'
+        autoComplete='off'
+        placeholder={t('Search username / display name / email')}
+        value={open ? keyword : selectedLabel}
+        onChange={(e) => {
+          setKeyword(e.target.value)
+          if (!open) setOpen(true)
+        }}
+        onFocus={() => {
+          setKeyword('')
+          setOpen(true)
+        }}
+      />
+      {open && (
+        <div className='bg-popover text-popover-foreground absolute top-full z-[100] mt-1 w-full rounded-md border shadow-md'>
+          {isFetching ? (
+            <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
+              {t('Loading...')}
+            </div>
+          ) : users.length === 0 ? (
+            <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
+              {t('No users found')}
+            </div>
+          ) : (
+            <ul className='max-h-[240px] overflow-y-auto p-1'>
+              {users.map((u) => (
+                <li
+                  key={u.id}
+                  role='option'
+                  aria-selected={value === u.id}
+                  className={cn(
+                    'hover:bg-accent hover:text-accent-foreground flex cursor-pointer flex-col gap-0.5 rounded-sm px-2 py-1.5 text-sm',
+                    value === u.id && 'bg-accent'
+                  )}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    setSelectedLabel(
+                      `${u.username}${u.display_name ? ` (${u.display_name})` : ''} #${u.id}`
+                    )
+                    onSelect(u.id)
+                    setOpen(false)
+                  }}
+                >
+                  <span className='font-medium'>
+                    {u.username}
+                    {u.display_name ? ` (${u.display_name})` : ''}
+                  </span>
+                  <span className='text-muted-foreground text-xs'>
+                    #{u.id}
+                    {u.email ? ` · ${u.email}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function EmployeeFormDialog({
@@ -131,7 +239,7 @@ export function EmployeeFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-[480px]'>
+      <DialogContent className='sm:max-w-[480px]' initialFocus={false}>
         <DialogHeader>
           <DialogTitle>
             {isUpdate ? t('Edit Employee') : t('Create Employee')}
@@ -149,19 +257,15 @@ export function EmployeeFormDialog({
                 name='user_id'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('User ID')}</FormLabel>
+                    <FormLabel>{t('User')}</FormLabel>
                     <FormControl>
-                      <Input
-                        type='number'
-                        placeholder='e.g. 42'
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
-                        }
+                      <UserPicker
+                        value={field.value}
+                        onSelect={(id) => field.onChange(id)}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('The user ID to assign employee status')}
+                      {t('Search and select the user to assign employee status')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -299,12 +403,14 @@ export function EmployeeFormDialog({
                   <FormItem>
                     <FormLabel>{t('Status')}</FormLabel>
                     <Select
+                      value={String(field.value)}
                       onValueChange={(v) => field.onChange(parseInt(v))}
-                      defaultValue={String(field.value)}
                     >
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue>
+                            {field.value === 2 ? t('Disabled') : t('Enabled')}
+                          </SelectValue>
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>

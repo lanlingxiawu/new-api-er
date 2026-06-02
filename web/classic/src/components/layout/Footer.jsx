@@ -52,7 +52,7 @@ const FooterBar = () => {
             target='_blank'
             rel='noopener noreferrer'
           >
-            New API
+            NEXAXIS API
           </a>
         </span>
       }

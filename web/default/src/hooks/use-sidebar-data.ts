@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { type SidebarData } from '@/components/layout/types'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -47,6 +48,7 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const isEmployee = useAuthStore((s) => Boolean(s.auth.user?.is_employee))
 
   return {
     navGroups: [
@@ -113,11 +115,16 @@ export function useSidebarData(): SidebarData {
             url: '/profile',
             icon: User,
           },
-          {
-            title: t('My Commission'),
-            url: '/commission',
-            icon: BadgeDollarSign,
-          },
+          // 仅员工可见
+          ...(isEmployee
+            ? [
+                {
+                  title: t('My Commission'),
+                  url: '/commission',
+                  icon: BadgeDollarSign,
+                },
+              ]
+            : []),
         ],
       },
       {

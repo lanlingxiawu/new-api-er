@@ -1786,7 +1786,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4602,6 +4602,23 @@
     "records": "条记录",
     "Requests ": "请求数",
     "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "上游真实成本相对标准价的系数。1.0 = 全额成本（渠道无毛利），0.6 = 标准价的 60%。用于员工提成的利润计算。",
-    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建议现在就配置成本系数，以便正确核算员工提成利润。"
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建议现在就配置成本系数，以便正确核算员工提成利润。",
+    "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "上游真实成本相对标准价的系数。1.0 = 全额成本，0.6 = 标准价的 60%，0 = 无成本（免费渠道）。用于员工提成的利润计算。",
+    "Cost Ratio *": "成本系数 *",
+    "Cost ratio is required": "成本系数为必填项",
+    "Cost ratio must be greater than or equal to 0": "成本系数必须大于或等于 0",
+    "Employee self-service commission dashboard.": "员工自助提成面板。",
+    "Manage employees and commission rates.": "管理员工及提成比例。",
+    "Consumption, cost, profit, and commission stats.": "消耗、成本、盈利与提成统计。",
+    "Search username / display name / email": "搜索用户名 / 昵称 / 邮箱",
+    "No users found": "未找到用户",
+    "Search and select the user to assign employee status": "搜索并选择要设为员工的用户",
+    "Est. Cost": "成本（估算）",
+    "Est. Profit": "利润（估算）",
+    "Est. Gross Margin": "毛利率（估算）",
+    "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "成本与利润根据各分组倍率和各渠道成本系数估算得出。",
+    "Channel Profit (platform-wide estimate)": "渠道盈利（全平台估算）",
+    "Channel Profit (platform-wide)": "渠道盈利（全平台）",
+    "Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.": "成本按每笔交易精确记录。本功能启用前产生的数据没有成本记录。"
   }
 }

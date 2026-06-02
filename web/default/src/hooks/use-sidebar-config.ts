@@ -64,6 +64,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
     employee: true,
+    businessOverview: true,
   },
 }
 
@@ -116,7 +117,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/employees': { section: 'admin', module: 'employee' },
-  '/commission-overview': { section: 'admin', module: 'employee' },
+  '/commission-overview': { section: 'admin', module: 'businessOverview' },
   '/system-settings': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
   '/commission': { section: 'personal', module: 'commission' },
