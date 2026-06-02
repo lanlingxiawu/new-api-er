@@ -151,8 +151,8 @@ const figmaHomeNavItems: NavItem[] = [
     dropdown: true,
     children: [
       { label: '聊天', to: '/playground' },
-      { label: '绘图', to: '/chat/image' },
-      { label: '视频', to: '/console/chat?tool=video' },
+      { label: '绘图', to: 'https://nano.nexaxis.ai/textCreate/' ,target: '_blank'},
+      // { label: '视频', to: '/console/chat?tool=video' },
     ],
   },
   { label: '控制台', to: '/dashboard' },
@@ -164,40 +164,40 @@ const HOME_PLAYGROUND_PATH = '/playground'
 const HOME_BLOG_URL = 'https://github.com/QuantumNous/new-api'
 
 const resolvedFigmaHomeNavItems: NavItem[] = figmaHomeNavItems.map((item) => {
-  if (item.to === '/console/chat?tool=chat') {
-    return {
-      ...item,
-      to: HOME_PLAYGROUND_PATH,
-      children: item.children?.map((child) => {
-        if (
-          child.to === '/console/chat?tool=chat' ||
-          child.to === '/chat/image' ||
-          child.to === '/console/chat?tool=video'
-        ) {
-          return {
-            ...child,
-            to: HOME_PLAYGROUND_PATH,
-          }
-        }
-        return child
-      }),
-    }
-  }
+  // if (item.to === '/console/chat?tool=chat') {
+  //   return {
+  //     ...item,
+  //     to: HOME_PLAYGROUND_PATH,
+  //     children: item.children?.map((child) => {
+  //       if (
+  //         child.to === '/console/chat?tool=chat' ||
+  //         child.to === '/chat/image' ||
+  //         child.to === '/console/chat?tool=video'
+  //       ) {
+  //         return {
+  //           ...child,
+  //           to: HOME_PLAYGROUND_PATH,
+  //         }
+  //       }
+  //       return child
+  //     }),
+  //   }
+  // }
 
-  if (item.to === '/console') {
-    return {
-      ...item,
-      to: HOME_DASHBOARD_PATH,
-    }
-  }
+  // if (item.to === '/console') {
+  //   return {
+  //     ...item,
+  //     to: HOME_DASHBOARD_PATH,
+  //   }
+  // }
 
-  if (item.to === '/articles') {
-    return {
-      ...item,
-      to: HOME_BLOG_URL,
-      target: '_blank',
-    }
-  }
+  // if (item.to === '/articles') {
+  //   return {
+  //     ...item,
+  //     to: HOME_BLOG_URL,
+  //     target: '_blank',
+  //   }
+  // }
 
   return item
 })
@@ -1133,7 +1133,7 @@ export function Home() {
       <section
         ref={routingSectionRef}
         className={`figma-home-routing${
-          isRoutingActive ? 'is-route-active' : ''
+          isRoutingActive ? ' is-route-active' : ''
         }`}
       >
         <div className='figma-home-routing-header'>

@@ -26,6 +26,11 @@
     sans-serif;
 }
 
+.figma-home,
+.figma-home * {
+  box-sizing: border-box;
+}
+
 html.dark .figma-home {
   background: var(--figma-home-bg);
   color: var(--figma-home-text);
@@ -663,7 +668,8 @@ html.dark .figma-home-header {
 }
 
 .figma-home-feature-section {
-  width: min(1128px, calc(100% - 48px));
+  width: min(1128px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
   margin: 0 auto;
 }
 
@@ -765,7 +771,8 @@ html.dark .figma-home-header {
 
 .figma-home-routing {
   position: relative;
-  width: min(1285px, calc(100% - 48px));
+  width: min(1285px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
   margin: 268px auto 0;
   text-align: center;
 }
@@ -790,6 +797,8 @@ html.dark .figma-home-header {
 
 .figma-home-map-wrap {
   position: relative;
+  width: 100%;
+  max-width: 100%;
   height: 492px;
   margin-top: 34px;
 }
@@ -1168,7 +1177,8 @@ html.dark .figma-home-header {
 
 .figma-home-footer-inner {
   position: relative;
-  width: min(1200px, calc(100% - 48px));
+  width: min(1200px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
   min-height: 420px;
   margin: 0 auto;
   padding: 36px 0 52px;
@@ -1565,7 +1575,8 @@ html.dark .figma-home-header {
   }
 
   .figma-home-feature-section {
-    width: min(100% - 32px, 720px);
+    width: min(720px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
   }
 
   .figma-home-feature-grid,
@@ -1578,7 +1589,8 @@ html.dark .figma-home-header {
   }
 
   .figma-home-routing {
-    width: min(100% - 32px, 720px);
+    width: min(720px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
     margin-top: 96px;
   }
 
@@ -1646,7 +1658,8 @@ html.dark .figma-home-header {
   }
 
   .figma-home-footer-inner {
-    width: min(100% - 32px, 720px);
+    width: min(720px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
     min-height: auto;
     padding: 36px 0 78px;
   }
