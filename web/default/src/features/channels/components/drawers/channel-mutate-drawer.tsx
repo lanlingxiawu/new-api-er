@@ -1781,7 +1781,7 @@ export function ChannelMutateDrawer({
                     {/* Coze (type 49) */}
                     {currentType === 49 && (
                       <FormField
-                        control={form.control}NEXAXIS API
+                        control={form.control}
                         name='other'
                         render={({ field }) => (
                           <FormItem>

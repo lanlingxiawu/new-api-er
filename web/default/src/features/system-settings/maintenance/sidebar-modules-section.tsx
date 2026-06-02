@@ -128,6 +128,10 @@ export function SidebarModulesSection({
         title: t('My Commission'),
         description: t('Employee self-service commission dashboard.'),
       },
+      customerConsole: {
+        title: t('My Customers'),
+        description: t('Employee customer list and recharge tools.'),
+      },
     },
     admin: {
       channel: {
@@ -157,6 +161,10 @@ export function SidebarModulesSection({
       employee: {
         title: t('Employee Management'),
         description: t('Manage employees and commission rates.'),
+      },
+      customer: {
+        title: t('Customer Management'),
+        description: t('Manage employee customer ownership and recharge logs.'),
       },
       businessOverview: {
         title: t('Business Overview'),

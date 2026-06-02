@@ -15,7 +15,7 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
-	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
+	apiRouter.Use(middleware.BodyStorageCleanup()) // Clean up request body storage
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -128,6 +128,18 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/employee/commission/summary", controller.GetMyCommissionSummary)
 			}
 
+			// Employee customer management (employee self)
+			employeeCustomerRoute := userRoute.Group("/employee/customers")
+			employeeCustomerRoute.Use(middleware.UserAuth())
+			{
+				employeeCustomerRoute.GET("", controller.EmployeeListCustomers)
+				employeeCustomerRoute.GET("/quota-logs", controller.EmployeeListQuotaLogs)
+				employeeCustomerRoute.GET("/:id", controller.EmployeeGetCustomer)
+				employeeCustomerRoute.PUT("/:id", controller.EmployeeUpdateCustomer)
+				employeeCustomerRoute.PUT("/:id/user", controller.EmployeeUpdateCustomerUser)
+				employeeCustomerRoute.POST("/:id/quota", controller.EmployeeTransferQuota)
+			}
+
 			adminRoute := userRoute.Group("/")
 			adminRoute.Use(middleware.AdminAuth())
 			{
@@ -193,6 +205,19 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
 		}
 
+		// Customer management (admin)
+		customerAdminRoute := apiRouter.Group("/admin/customer")
+		customerAdminRoute.Use(middleware.AdminAuth())
+		{
+			customerAdminRoute.GET("", controller.AdminListCustomers)
+			customerAdminRoute.POST("", controller.AdminCreateCustomer)
+			customerAdminRoute.GET("/quota-logs", controller.AdminListCustomerQuotaLogs)
+			customerAdminRoute.GET("/:id", controller.AdminGetCustomer)
+			customerAdminRoute.PUT("/:id", controller.AdminUpdateCustomer)
+			customerAdminRoute.PUT("/:id/user", controller.AdminUpdateCustomerUser)
+			customerAdminRoute.DELETE("/:id", controller.AdminDeleteCustomer)
+		}
+
 		// Channel cost config (admin)
 		channelCostRoute := apiRouter.Group("/admin/channel/cost")
 		channelCostRoute.Use(middleware.AdminAuth())
@@ -216,7 +241,7 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // 用于迁移检测的旧键，下个版本会删除
+			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // Legacy key for migration checks; remove in a later version.
 			optionRoute.POST("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
 			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
 			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
@@ -413,7 +438,6 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.POST("/price-estimation", controller.GetPriceEstimation)
 			deploymentsRoute.GET("/check-name", controller.CheckClusterNameAvailability)
 			deploymentsRoute.POST("/", controller.CreateDeployment)
-
 			deploymentsRoute.GET("/:id", controller.GetDeployment)
 			deploymentsRoute.GET("/:id/logs", controller.GetDeploymentLogs)
 			deploymentsRoute.GET("/:id/containers", controller.ListDeploymentContainers)
@@ -422,6 +446,35 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.PUT("/:id/name", controller.UpdateDeploymentName)
 			deploymentsRoute.POST("/:id/extend", controller.ExtendDeployment)
 			deploymentsRoute.DELETE("/:id", controller.DeleteDeployment)
+		}
+
+		// Monitor: scheduler admin APIs
+		monitorAdminRoute := apiRouter.Group("/admin/monitor")
+		monitorAdminRoute.Use(middleware.AdminAuth())
+		{
+			monitorAdminRoute.GET("/scheduler/status", controller.GetSchedulerStatus)
+			monitorAdminRoute.GET("/scheduler/locks", controller.GetSchedulerLocks)
+			monitorAdminRoute.PUT("/scheduler/config/:task", controller.UpdateSchedulerConfig)
+			monitorAdminRoute.POST("/scheduler/trigger/:task", controller.TriggerTask)
+		}
+
+		// Monitor: model status is public because pricing can display it.
+		apiRouter.GET("/monitor/model/status", controller.GetModelStatusList)
+		apiRouter.GET("/models/:id/status/history", controller.GetModelStatusHistoryHandler)
+		apiRouter.GET("/group/:group/status/history", middleware.UserAuth(), controller.GetGroupStatusHistoryHandler)
+
+		monitorUserRoute := apiRouter.Group("/monitor")
+		monitorUserRoute.Use(middleware.UserAuth())
+		{
+			monitorUserRoute.GET("/group/status", controller.GetGroupStatusList)
+			monitorUserRoute.GET("/group/:group/history", controller.GetGroupStatusHistoryHandler)
+		}
+
+		alertsRoute := apiRouter.Group("/alerts")
+		alertsRoute.Use(middleware.UserAuth())
+		{
+			alertsRoute.GET("", controller.GetAlerts)
+			alertsRoute.POST("/:id/read", controller.MarkAlertAsRead)
 		}
 	}
 }

@@ -72,6 +72,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     topup: true,
     personal: true,
     commission: true,
+    customerConsole: true,
   },
   admin: {
     enabled: true,
@@ -82,6 +83,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
     employee: true,
+    customer: true,
     businessOverview: true,
   },
 }

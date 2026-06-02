@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
@@ -32,10 +33,13 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
+import { getGroupStatuses } from '@/features/monitoring/api'
+import { buildGroupStatusMap } from '@/features/monitoring/status'
 import { API_KEY_STATUSES } from '../constants'
 import { type ApiKey } from '../types'
 import {
   ApiKeyCell,
+  GroupHealthCell,
   ModelLimitsCell,
   IpRestrictionsCell,
 } from './api-keys-cells'
@@ -67,9 +71,21 @@ function useGroupRatios(): Record<string, number> {
   return data ?? {}
 }
 
+function useGroupStatusesMap() {
+  const { data } = useQuery({
+    queryKey: ['monitor', 'group-statuses'],
+    queryFn: getGroupStatuses,
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+
+  return useMemo(() => buildGroupStatusMap(data?.data), [data?.data])
+}
+
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
   const groupRatios = useGroupRatios()
+  const groupStatusMap = useGroupStatusesMap()
   return [
     {
       id: 'select',
@@ -231,6 +247,21 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         return <GroupBadge group={group} ratio={ratio} />
       },
       meta: { label: t('Group'), mobileHidden: true },
+    },
+    {
+      id: 'group_health',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Health')} />
+      ),
+      cell: ({ row }) => (
+        <GroupHealthCell
+          group={row.original.group}
+          status={groupStatusMap.get(row.original.group ?? '')}
+          crossGroupRetry={row.original.cross_group_retry}
+        />
+      ),
+      enableSorting: false,
+      meta: { label: t('Health'), mobileHidden: true },
     },
     {
       id: 'model_limits',

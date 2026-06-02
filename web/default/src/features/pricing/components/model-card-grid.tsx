@@ -21,6 +21,8 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { getModelStatuses } from '@/features/monitoring/api'
+import { buildModelStatusMap } from '@/features/monitoring/status'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
@@ -51,6 +53,13 @@ export function ModelCardGrid(props: ModelCardGridProps) {
     retry: false,
   })
 
+  const statusQuery = useQuery({
+    queryKey: ['model-statuses'],
+    queryFn: getModelStatuses,
+    staleTime: 3 * 60 * 1000,
+    retry: false,
+  })
+
   const pagedModels = useMemo(() => {
     const start = (currentPage - 1) * pageSize
     return props.models.slice(start, start + pageSize)
@@ -63,6 +72,10 @@ export function ModelCardGrid(props: ModelCardGridProps) {
     }
     return map
   }, [perfQuery.data])
+
+  const statusMap = useMemo(() => {
+    return buildModelStatusMap(statusQuery.data?.data)
+  }, [statusQuery.data])
 
   if (props.models.length === 0) {
     return null
@@ -80,6 +93,7 @@ export function ModelCardGrid(props: ModelCardGridProps) {
             usdExchangeRate={props.usdExchangeRate}
             showRechargePrice={props.showRechargePrice}
             perf={perfMap.get(model.model_name || '')}
+            monitorStatus={statusMap.get(model.model_name || '')}
             onClick={() => props.onModelClick(model.model_name || '')}
           />
         ))}

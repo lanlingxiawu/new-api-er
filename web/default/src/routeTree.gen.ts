@@ -48,6 +48,8 @@ import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenti
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedEmployeesIndexRouteImport } from './routes/_authenticated/employees/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
+import { Route as AuthenticatedCustomersIndexRouteImport } from './routes/_authenticated/customers/index'
+import { Route as AuthenticatedCustomerConsoleIndexRouteImport } from './routes/_authenticated/customer-console/index'
 import { Route as AuthenticatedCommissionIndexRouteImport } from './routes/_authenticated/commission/index'
 import { Route as AuthenticatedCommissionOverviewIndexRouteImport } from './routes/_authenticated/commission-overview/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
@@ -276,6 +278,18 @@ const AuthenticatedDashboardIndexRoute =
     path: '/dashboard/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedCustomersIndexRoute =
+  AuthenticatedCustomersIndexRouteImport.update({
+    id: '/customers/',
+    path: '/customers/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCustomerConsoleIndexRoute =
+  AuthenticatedCustomerConsoleIndexRouteImport.update({
+    id: '/customer-console/',
+    path: '/customer-console/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedCommissionIndexRoute =
   AuthenticatedCommissionIndexRouteImport.update({
     id: '/commission/',
@@ -447,6 +461,8 @@ export interface FileRoutesByFullPath {
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/commission-overview/': typeof AuthenticatedCommissionOverviewIndexRoute
   '/commission/': typeof AuthenticatedCommissionIndexRoute
+  '/customer-console/': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/customers/': typeof AuthenticatedCustomersIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/employees/': typeof AuthenticatedEmployeesIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
@@ -508,6 +524,8 @@ export interface FileRoutesByTo {
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/commission-overview': typeof AuthenticatedCommissionOverviewIndexRoute
   '/commission': typeof AuthenticatedCommissionIndexRoute
+  '/customer-console': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/customers': typeof AuthenticatedCustomersIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/employees': typeof AuthenticatedEmployeesIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
@@ -573,6 +591,8 @@ export interface FileRoutesById {
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/commission-overview/': typeof AuthenticatedCommissionOverviewIndexRoute
   '/_authenticated/commission/': typeof AuthenticatedCommissionIndexRoute
+  '/_authenticated/customer-console/': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/_authenticated/customers/': typeof AuthenticatedCustomersIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/employees/': typeof AuthenticatedEmployeesIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
@@ -637,6 +657,8 @@ export interface FileRouteTypes {
     | '/channels/'
     | '/commission-overview/'
     | '/commission/'
+    | '/customer-console/'
+    | '/customers/'
     | '/dashboard/'
     | '/employees/'
     | '/keys/'
@@ -698,6 +720,8 @@ export interface FileRouteTypes {
     | '/channels'
     | '/commission-overview'
     | '/commission'
+    | '/customer-console'
+    | '/customers'
     | '/dashboard'
     | '/employees'
     | '/keys'
@@ -762,6 +786,8 @@ export interface FileRouteTypes {
     | '/_authenticated/channels/'
     | '/_authenticated/commission-overview/'
     | '/_authenticated/commission/'
+    | '/_authenticated/customer-console/'
+    | '/_authenticated/customers/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/employees/'
     | '/_authenticated/keys/'
@@ -1087,6 +1113,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/customers/': {
+      id: '/_authenticated/customers/'
+      path: '/customers'
+      fullPath: '/customers/'
+      preLoaderRoute: typeof AuthenticatedCustomersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/customer-console/': {
+      id: '/_authenticated/customer-console/'
+      path: '/customer-console'
+      fullPath: '/customer-console/'
+      preLoaderRoute: typeof AuthenticatedCustomerConsoleIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/commission/': {
       id: '/_authenticated/commission/'
       path: '/commission'
@@ -1345,6 +1385,8 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedCommissionOverviewIndexRoute: typeof AuthenticatedCommissionOverviewIndexRoute
   AuthenticatedCommissionIndexRoute: typeof AuthenticatedCommissionIndexRoute
+  AuthenticatedCustomerConsoleIndexRoute: typeof AuthenticatedCustomerConsoleIndexRoute
+  AuthenticatedCustomersIndexRoute: typeof AuthenticatedCustomersIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedEmployeesIndexRoute: typeof AuthenticatedEmployeesIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
@@ -1371,6 +1413,9 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedCommissionOverviewIndexRoute:
     AuthenticatedCommissionOverviewIndexRoute,
   AuthenticatedCommissionIndexRoute: AuthenticatedCommissionIndexRoute,
+  AuthenticatedCustomerConsoleIndexRoute:
+    AuthenticatedCustomerConsoleIndexRoute,
+  AuthenticatedCustomersIndexRoute: AuthenticatedCustomersIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedEmployeesIndexRoute: AuthenticatedEmployeesIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,

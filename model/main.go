@@ -260,6 +260,14 @@ func migrateDB() error {
 		&Token{},
 		&User{},
 		&PasskeyCredential{},
+		// Monitoring & scheduling tables
+		&DistributedLock{},
+		&SchedulerConfig{},
+		&GroupStatus{},
+		&GroupStatusHistory{},
+		&ModelStatus{},
+		&ModelStatusHistory{},
+		&AlertNotification{},
 		&Option{},
 		&Redemption{},
 		&Ability{},
@@ -286,6 +294,8 @@ func migrateDB() error {
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
 		&ConsumptionCost{},
+		&CustomerProfile{},
+		&CustomerQuotaLog{},
 	)
 	if err != nil {
 		return err
@@ -340,6 +350,14 @@ func migrateDBFast() error {
 		{&ChannelCostConfig{}, "ChannelCostConfig"},
 		{&EmployeeCommissionLog{}, "EmployeeCommissionLog"},
 		{&ConsumptionCost{}, "ConsumptionCost"},
+		// Monitoring & scheduling tables
+		{&DistributedLock{}, "DistributedLock"},
+		{&SchedulerConfig{}, "SchedulerConfig"},
+		{&GroupStatus{}, "GroupStatus"},
+		{&GroupStatusHistory{}, "GroupStatusHistory"},
+		{&ModelStatus{}, "ModelStatus"},
+		{&ModelStatusHistory{}, "ModelStatusHistory"},
+		{&AlertNotification{}, "AlertNotification"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1001,6 +1002,12 @@ func AutomaticallyTestChannels() {
 				common.SysLog("automatically testing all channels")
 				_ = testAllChannels(false)
 				common.SysLog("automatically channel test finished")
+				// Refresh group/model statuses from the last 24 h of logs.
+				go func() {
+					if err := service.UpdateGroupModelStatusFromChannelTest(context.Background()); err != nil {
+						common.SysLog("monitor status update after channel test failed: " + err.Error())
+					}
+				}()
 				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
 					break
 				}

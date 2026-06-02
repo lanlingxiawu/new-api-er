@@ -1,20 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useTranslation } from 'react-i18next'
 import { PlusIcon, Pencil, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { SectionPageLayout } from '@/components/layout'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { formatQuota } from '@/lib/format'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,10 +14,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { formatQuota } from '@/lib/format'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SectionPageLayout } from '@/components/layout'
 import { getEmployees, getCommissionLogs, deleteEmployee } from './api'
-import type { EmployeeProfile, CommissionLog } from './types'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
+import type { EmployeeProfile } from './types'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,14 +101,20 @@ function EmployeesTab() {
         <TableBody>
           {isLoading && (
             <TableRow>
-              <TableCell colSpan={8} className='text-center text-muted-foreground'>
+              <TableCell
+                colSpan={8}
+                className='text-muted-foreground text-center'
+              >
                 {t('Loading...')}
               </TableCell>
             </TableRow>
           )}
           {!isLoading && employees.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className='text-center text-muted-foreground'>
+              <TableCell
+                colSpan={8}
+                className='text-muted-foreground text-center'
+              >
                 {t('No employees yet')}
               </TableCell>
             </TableRow>
@@ -144,7 +150,7 @@ function EmployeesTab() {
                     variant='ghost'
                     onClick={() => setDeleteRow(emp)}
                   >
-                    <Trash2 className='h-4 w-4 text-destructive' />
+                    <Trash2 className='text-destructive h-4 w-4' />
                   </Button>
                 </div>
               </TableCell>
@@ -164,12 +170,17 @@ function EmployeesTab() {
         currentRow={editRow}
         onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
       />
-      <AlertDialog open={!!deleteRow} onOpenChange={(o) => !o && setDeleteRow(undefined)}>
+      <AlertDialog
+        open={!!deleteRow}
+        onOpenChange={(o) => !o && setDeleteRow(undefined)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('Disable Employee')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t('This will disable the employee. Historical commission logs are retained.')}
+              {t(
+                'This will disable the employee. Historical commission logs are retained.'
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -218,21 +229,32 @@ function CommissionLogsTab() {
         <TableBody>
           {isLoading && (
             <TableRow>
-              <TableCell colSpan={9} className='text-center text-muted-foreground'>
+              <TableCell
+                colSpan={9}
+                className='text-muted-foreground text-center'
+              >
                 {t('Loading...')}
               </TableCell>
             </TableRow>
           )}
           {!isLoading && logs.length === 0 && (
             <TableRow>
-              <TableCell colSpan={9} className='text-center text-muted-foreground'>
+              <TableCell
+                colSpan={9}
+                className='text-muted-foreground text-center'
+              >
                 {t('No records')}
               </TableCell>
             </TableRow>
           )}
           {logs.map((log) => (
-            <TableRow key={log.id} className={log.commission_quota < 0 ? 'opacity-60' : ''}>
-              <TableCell className='text-xs'>{formatTs(log.created_at)}</TableCell>
+            <TableRow
+              key={log.id}
+              className={log.commission_quota < 0 ? 'opacity-60' : ''}
+            >
+              <TableCell className='text-xs'>
+                {formatTs(log.created_at)}
+              </TableCell>
               <TableCell>{log.employee_user_id}</TableCell>
               <TableCell>{log.customer_user_id}</TableCell>
               <TableCell className='max-w-[120px] truncate text-xs'>
@@ -242,7 +264,11 @@ function CommissionLogsTab() {
               <TableCell>{formatQuota(log.cost_quota)}</TableCell>
               <TableCell>{formatQuota(log.profit_quota)}</TableCell>
               <TableCell
-                className={log.commission_quota < 0 ? 'text-destructive' : 'text-green-600'}
+                className={
+                  log.commission_quota < 0
+                    ? 'text-destructive'
+                    : 'text-green-600'
+                }
               >
                 {formatQuota(log.commission_quota)}
               </TableCell>
@@ -252,7 +278,7 @@ function CommissionLogsTab() {
         </TableBody>
       </Table>
 
-      <div className='flex items-center justify-between text-sm text-muted-foreground'>
+      <div className='text-muted-foreground flex items-center justify-between text-sm'>
         <span>
           {t('Total')}: {total}
         </span>
@@ -286,7 +312,9 @@ export function Employees() {
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Employee Management')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>
+        {t('Employee Management')}
+      </SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <Tabs defaultValue='employees'>
           <TabsList>

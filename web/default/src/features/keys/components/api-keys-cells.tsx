@@ -33,6 +33,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { StatusBadge } from '@/components/status-badge'
+import type { GroupStatusItem } from '@/features/monitoring/api'
+import { MonitorStatusBadge } from '@/features/monitoring/components/monitor-status-badge'
+import {
+  formatLatency,
+  formatUptimePct,
+} from '@/features/performance-metrics/lib/format'
 import { type ApiKey } from '../types'
 import { useApiKeys } from './api-keys-provider'
 
@@ -220,6 +226,58 @@ export function IpRestrictionsCell({ apiKey }: { apiKey: ApiKey }) {
               {ip}
             </div>
           ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+export function GroupHealthCell(props: {
+  group?: string | null
+  status?: GroupStatusItem
+  crossGroupRetry?: boolean
+}) {
+  const { t } = useTranslation()
+  const group = props.group?.trim()
+
+  if (!group) {
+    return <MonitorStatusBadge status={null} />
+  }
+
+  if (group === 'auto') {
+    return (
+      <StatusBadge
+        label={props.crossGroupRetry ? t('Cross-group') : t('Auto routing')}
+        variant='info'
+        copyable={false}
+      />
+    )
+  }
+
+  if (!props.status) {
+    return <MonitorStatusBadge status={null} />
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className='inline-flex' />}>
+        <MonitorStatusBadge status={props.status.status} />
+      </TooltipTrigger>
+      <TooltipContent side='top' className='max-w-xs'>
+        <div className='space-y-1 text-xs'>
+          <div>
+            {t('Success rate')}: {formatUptimePct(props.status.success_rate)}
+          </div>
+          <div>
+            {t('P95')}: {formatLatency(props.status.p95_response_time)}
+          </div>
+          <div>
+            {t('Channels')}: {props.status.available_channels}/
+            {props.status.total_channels}
+          </div>
+          <div>
+            {t('Errors')}: {props.status.error_count}
+          </div>
         </div>
       </TooltipContent>
     </Tooltip>

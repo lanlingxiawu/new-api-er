@@ -17,12 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { memo } from 'react'
-import { ChevronRight, Copy } from 'lucide-react'
+import { ChevronRight, Copy, WrenchIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { StatusBadge } from '@/components/status-badge'
+import type { ModelStatusItem } from '@/features/monitoring/api'
+import { MonitorStatusBadge } from '@/features/monitoring/components/monitor-status-badge'
+import { isMonitorStatusUnavailable } from '@/features/monitoring/status'
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import {
   getDynamicDisplayGroupRatio,
@@ -42,11 +45,13 @@ export interface ModelCardProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   perf?: ModelPerfBadgeData
+  monitorStatus?: ModelStatusItem
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
+  const isUnavailable = isMonitorStatusUnavailable(props.monitorStatus)
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
@@ -90,9 +95,19 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     <div
       className={cn(
         'group relative flex flex-col rounded-xl border p-3 transition-colors sm:p-5',
-        'hover:bg-muted/20'
+        'hover:bg-muted/20',
+        isUnavailable && 'opacity-75'
       )}
     >
+      {/* "修复中" overlay for unavailable models */}
+      {isUnavailable && (
+        <div className='bg-background/60 pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-xl backdrop-blur-[2px]'>
+          <WrenchIcon className='text-muted-foreground size-5' />
+          <span className='text-muted-foreground text-xs font-medium'>
+            {t('Under Maintenance')}
+          </span>
+        </div>
+      )}
       {/* Header: icon + name + price + actions */}
       <div className='flex items-start justify-between gap-2.5 sm:gap-3'>
         <div className='flex min-w-0 items-start gap-2.5 sm:gap-3'>
@@ -244,6 +259,9 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               copyable={false}
               size='sm'
             />
+          )}
+          {props.monitorStatus && (
+            <MonitorStatusBadge status={props.monitorStatus.status} size='sm' />
           )}
         </div>
         <ModelPerfBadge perf={props.perf} className='row-span-2 self-start' />

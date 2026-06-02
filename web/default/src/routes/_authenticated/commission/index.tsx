@@ -6,7 +6,7 @@ export const Route = createFileRoute('/_authenticated/commission/')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
     if (!auth.user) {
-      throw redirect({ to: '/login' })
+      throw redirect({ to: '/sign-in' })
     }
   },
   component: EmployeeConsole,

@@ -1,0 +1,216 @@
+package model
+
+import (
+	"errors"
+
+	"github.com/QuantumNous/new-api/common"
+
+	"gorm.io/gorm"
+)
+
+const (
+	CustomerStatusEnabled  = 1
+	CustomerStatusDisabled = 2
+)
+
+var (
+	ErrCustomerQuotaMustBePositive = errors.New("quota must be greater than 0")
+	ErrEmployeeQuotaNotEnough      = errors.New("employee quota is not enough")
+)
+
+// CustomerProfile records the ownership relation between an employee user and
+// a customer user. A customer can belong to only one employee.
+type CustomerProfile struct {
+	Id             int    `json:"id"`
+	EmployeeUserId int    `json:"employee_user_id" gorm:"index;not null"`
+	CustomerUserId int    `json:"customer_user_id" gorm:"uniqueIndex;not null"`
+	Status         int    `json:"status" gorm:"type:int;default:1"`
+	Remark         string `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
+	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      int64  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// CustomerQuotaLog records every quota transfer from an employee to a customer.
+type CustomerQuotaLog struct {
+	Id                  int    `json:"id"`
+	EmployeeUserId      int    `json:"employee_user_id" gorm:"index;not null"`
+	CustomerUserId      int    `json:"customer_user_id" gorm:"index;not null"`
+	QuotaDelta          int    `json:"quota_delta" gorm:"not null"`
+	CustomerBeforeQuota int    `json:"customer_before_quota" gorm:"default:0"`
+	CustomerAfterQuota  int    `json:"customer_after_quota" gorm:"default:0"`
+	EmployeeBeforeQuota int    `json:"employee_before_quota" gorm:"default:0"`
+	EmployeeAfterQuota  int    `json:"employee_after_quota" gorm:"default:0"`
+	Remark              string `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
+	CreatedAt           int64  `json:"created_at" gorm:"autoCreateTime;index"`
+}
+
+func GetCustomersByEmployee(employeeUserId, page, pageSize int) ([]*CustomerProfile, int64, error) {
+	var customers []*CustomerProfile
+	var total int64
+	offset := (page - 1) * pageSize
+	tx := DB.Model(&CustomerProfile{}).Where("employee_user_id = ?", employeeUserId)
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Order("id DESC").Offset(offset).Limit(pageSize).Find(&customers).Error; err != nil {
+		return nil, 0, err
+	}
+	return customers, total, nil
+}
+
+func GetAllCustomers(page, pageSize int, employeeUserId int) ([]*CustomerProfile, int64, error) {
+	var customers []*CustomerProfile
+	var total int64
+	offset := (page - 1) * pageSize
+	tx := DB.Model(&CustomerProfile{})
+	if employeeUserId != 0 {
+		tx = tx.Where("employee_user_id = ?", employeeUserId)
+	}
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Order("id DESC").Offset(offset).Limit(pageSize).Find(&customers).Error; err != nil {
+		return nil, 0, err
+	}
+	return customers, total, nil
+}
+
+func GetCustomerProfileById(id int) (*CustomerProfile, error) {
+	var cp CustomerProfile
+	if err := DB.Where("id = ?", id).First(&cp).Error; err != nil {
+		return nil, err
+	}
+	return &cp, nil
+}
+
+func GetCustomerProfileByCustomerUserId(customerUserId int) (*CustomerProfile, error) {
+	var cp CustomerProfile
+	if err := DB.Where("customer_user_id = ?", customerUserId).First(&cp).Error; err != nil {
+		return nil, err
+	}
+	return &cp, nil
+}
+
+func CreateCustomerProfile(cp *CustomerProfile) error {
+	if cp.Status == 0 {
+		cp.Status = CustomerStatusEnabled
+	}
+	return DB.Create(cp).Error
+}
+
+func UpdateCustomerProfile(cp *CustomerProfile) error {
+	var count int64
+	if err := DB.Model(&CustomerProfile{}).Where("id = ?", cp.Id).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return DB.Model(&CustomerProfile{}).Where("id = ?", cp.Id).Updates(map[string]interface{}{
+		"status": cp.Status,
+		"remark": cp.Remark,
+	}).Error
+}
+
+func DeleteCustomerProfile(id int) error {
+	return DB.Delete(&CustomerProfile{}, "id = ?", id).Error
+}
+
+// TransferQuotaToCustomer atomically deducts quota from an employee and adds it
+// to a customer, then records a complete before/after audit log.
+func TransferQuotaToCustomer(employeeUserId, customerUserId, quota int, remark string) (*CustomerQuotaLog, error) {
+	if quota <= 0 {
+		return nil, ErrCustomerQuotaMustBePositive
+	}
+
+	var logEntry CustomerQuotaLog
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var empUser User
+		if err := tx.Select("id", "quota").Where("id = ?", employeeUserId).First(&empUser).Error; err != nil {
+			return err
+		}
+
+		var custUser User
+		if err := tx.Select("id", "quota").Where("id = ?", customerUserId).First(&custUser).Error; err != nil {
+			return err
+		}
+
+		empBefore := empUser.Quota
+		custBefore := custUser.Quota
+
+		result := tx.Model(&User{}).
+			Where("id = ? AND quota >= ?", employeeUserId, quota).
+			Update("quota", gorm.Expr("quota - ?", quota))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrEmployeeQuotaNotEnough
+		}
+
+		if err := tx.Model(&User{}).Where("id = ?", customerUserId).
+			Update("quota", gorm.Expr("quota + ?", quota)).Error; err != nil {
+			return err
+		}
+
+		logEntry = CustomerQuotaLog{
+			EmployeeUserId:      employeeUserId,
+			CustomerUserId:      customerUserId,
+			QuotaDelta:          quota,
+			CustomerBeforeQuota: custBefore,
+			CustomerAfterQuota:  custBefore + quota,
+			EmployeeBeforeQuota: empBefore,
+			EmployeeAfterQuota:  empBefore - quota,
+			Remark:              remark,
+		}
+		return tx.Create(&logEntry).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if common.RedisEnabled {
+		_ = cacheDecrUserQuota(employeeUserId, int64(quota))
+		_ = cacheIncrUserQuota(customerUserId, int64(quota))
+	}
+
+	return &logEntry, nil
+}
+
+type CustomerQuotaLogFilter struct {
+	EmployeeUserId int
+	CustomerUserId int
+	StartTime      int64
+	EndTime        int64
+	Page           int
+	PageSize       int
+}
+
+func GetCustomerQuotaLogs(filter CustomerQuotaLogFilter) ([]*CustomerQuotaLog, int64, error) {
+	var logs []*CustomerQuotaLog
+	var total int64
+
+	tx := DB.Model(&CustomerQuotaLog{})
+	if filter.EmployeeUserId != 0 {
+		tx = tx.Where("employee_user_id = ?", filter.EmployeeUserId)
+	}
+	if filter.CustomerUserId != 0 {
+		tx = tx.Where("customer_user_id = ?", filter.CustomerUserId)
+	}
+	if filter.StartTime != 0 {
+		tx = tx.Where("created_at >= ?", filter.StartTime)
+	}
+	if filter.EndTime != 0 {
+		tx = tx.Where("created_at <= ?", filter.EndTime)
+	}
+
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := tx.Order("id DESC").Offset(offset).Limit(filter.PageSize).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+	return logs, total, nil
+}

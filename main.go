@@ -113,6 +113,15 @@ func main() {
 
 	go controller.AutomaticallyTestChannels()
 
+	// ── Monitoring & Task Scheduler ──────────────────────────────────────────
+	// Seed default scheduler configs (idempotent: FirstOrCreate).
+	service.SeedSchedulerConfigs()
+	// Register monitoring tasks and start the cluster-safe scheduler.
+	service.RegisterScheduledTask("MonitorStatusAggregation", true, service.RunStatusAggregation)
+	service.RegisterScheduledTask("MonitorAlertGeneration", true, service.RunAlertGeneration)
+	service.StartTaskScheduler()
+	// ────────────────────────────────────────────────────────────────────────
+
 	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
 	service.StartCodexCredentialAutoRefreshTask()
 

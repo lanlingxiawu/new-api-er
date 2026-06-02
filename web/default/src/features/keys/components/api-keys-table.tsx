@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
@@ -52,6 +52,8 @@ import {
   DataTablePage,
 } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
+import { getGroupStatuses } from '@/features/monitoring/api'
+import { buildGroupStatusMap } from '@/features/monitoring/status'
 import { getApiKeys, searchApiKeys } from '../api'
 import {
   API_KEY_STATUS,
@@ -60,7 +62,7 @@ import {
   ERROR_MESSAGES,
 } from '../constants'
 import { type ApiKey } from '../types'
-import { ApiKeyCell } from './api-keys-cells'
+import { ApiKeyCell, GroupHealthCell } from './api-keys-cells'
 import { useApiKeysColumns } from './api-keys-columns'
 import { useApiKeys } from './api-keys-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
@@ -104,6 +106,16 @@ function ApiKeysMobileList({
 }) {
   const { t } = useTranslation()
   const rows = table.getRowModel().rows
+  const groupStatusQuery = useQuery({
+    queryKey: ['monitor', 'group-statuses'],
+    queryFn: getGroupStatuses,
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+  const groupStatusMap = useMemo(
+    () => buildGroupStatusMap(groupStatusQuery.data?.data),
+    [groupStatusQuery.data?.data]
+  )
 
   if (isLoading) return <ApiKeysMobileSkeleton />
 
@@ -180,6 +192,15 @@ function ApiKeysMobileList({
                   </span>
                 </span>
               )}
+            </div>
+
+            <div className='flex items-center justify-between gap-2 text-xs'>
+              <span className='text-muted-foreground'>{t('Health')}</span>
+              <GroupHealthCell
+                group={apiKey.group}
+                status={groupStatusMap.get(apiKey.group ?? '')}
+                crossGroupRetry={apiKey.cross_group_retry}
+              />
             </div>
           </div>
         )

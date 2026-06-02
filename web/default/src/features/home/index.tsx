@@ -51,8 +51,8 @@ const HOME_ACCENT_LOGO = '/logo1.png'
 
 const setEmbeddedInitialPrompt = (prompt: string) => {
   if (typeof window === 'undefined') return
-    ; (window as unknown as Record<string, string>)[EMBEDDED_INITIAL_PROMPT_KEY] =
-      prompt.trim()
+  ;(window as unknown as Record<string, string>)[EMBEDDED_INITIAL_PROMPT_KEY] =
+    prompt.trim()
 }
 
 const routeLines = [
@@ -227,14 +227,16 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
   version: 1,
   groups: [
     {
-      id: 'about', titleKey: '关于', links: [
+      id: 'about',
+      titleKey: '关于',
+      links: [
         {
           id: 'about-com',
           labelKey: '关于项目',
           url: 'https://docs.nexaxis.ai/docs',
           target: '_blank',
         },
-      ]
+      ],
     },
     {
       id: 'work',
@@ -251,7 +253,7 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
           labelKey: '帮助',
           url: 'https://docs.nexaxis.ai/docs/cc-switch',
           target: '_blank',
-        }
+        },
       ],
     },
     {
@@ -269,7 +271,7 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
           labelKey: 'Telegram',
           url: 'https://t.me/nexaxis',
           target: '_blank',
-        }
+        },
       ],
     },
     {
@@ -290,6 +292,10 @@ const DEFAULT_FIGMA_FOOTER_CONFIG: FigmaFooterConfig = {
 const createFooterId = (prefix: string, index: number) =>
   `${prefix}-${index + 1}`
 
+function isPresent<T>(value: T | null | undefined): value is T {
+  return value != null
+}
+
 function normalizeFigmaFooterConfig(config: unknown): FigmaFooterConfig | null {
   if (!config || typeof config !== 'object' || Array.isArray(config))
     return null
@@ -299,70 +305,70 @@ function normalizeFigmaFooterConfig(config: unknown): FigmaFooterConfig | null {
   }
   const groups = Array.isArray(input.groups)
     ? input.groups
-      .map((group, groupIndex) => {
-        if (!group || typeof group !== 'object' || Array.isArray(group)) {
-          return null
-        }
+        .map((group, groupIndex) => {
+          if (!group || typeof group !== 'object' || Array.isArray(group)) {
+            return null
+          }
 
-        const groupInput = group as {
-          id?: unknown
-          titleKey?: unknown
-          title?: unknown
-          links?: unknown
-        }
-        const titleKey = String(
-          groupInput.titleKey ?? groupInput.title ?? ''
-        ).trim()
-        if (!titleKey) return null
+          const groupInput = group as {
+            id?: unknown
+            titleKey?: unknown
+            title?: unknown
+            links?: unknown
+          }
+          const titleKey = String(
+            groupInput.titleKey ?? groupInput.title ?? ''
+          ).trim()
+          if (!titleKey) return null
 
-        const links = Array.isArray(groupInput.links)
-          ? groupInput.links
-            .map((link, linkIndex) => {
-              if (
-                !link ||
-                typeof link !== 'object' ||
-                Array.isArray(link)
-              ) {
-                return null
-              }
+          const links = Array.isArray(groupInput.links)
+            ? groupInput.links
+                .map((link, linkIndex) => {
+                  if (
+                    !link ||
+                    typeof link !== 'object' ||
+                    Array.isArray(link)
+                  ) {
+                    return null
+                  }
 
-              const linkInput = link as {
-                id?: unknown
-                labelKey?: unknown
-                label?: unknown
-                url?: unknown
-                target?: unknown
-              }
-              const labelKey = String(
-                linkInput.labelKey ?? linkInput.label ?? ''
-              ).trim()
-              const url = String(linkInput.url ?? '').trim()
-              if (!labelKey || !url) return null
+                  const linkInput = link as {
+                    id?: unknown
+                    labelKey?: unknown
+                    label?: unknown
+                    url?: unknown
+                    target?: unknown
+                  }
+                  const labelKey = String(
+                    linkInput.labelKey ?? linkInput.label ?? ''
+                  ).trim()
+                  const url = String(linkInput.url ?? '').trim()
+                  if (!labelKey || !url) return null
 
-              const rawTarget = String(linkInput.target ?? '_blank').trim()
-              const target = rawTarget === '_self' ? '_self' : '_blank'
+                  const rawTarget = String(linkInput.target ?? '_blank').trim()
+                  const target = rawTarget === '_self' ? '_self' : '_blank'
 
-              return {
-                id: String(
-                  linkInput.id ?? createFooterId('link', linkIndex)
-                ).trim(),
-                labelKey,
-                url,
-                target,
-              } satisfies FigmaFooterLink
-            })
-            .filter(Boolean)
-          : []
+                  return {
+                    id: String(
+                      linkInput.id ?? createFooterId('link', linkIndex)
+                    ).trim(),
+                    labelKey,
+                    url,
+                    target,
+                  } satisfies FigmaFooterLink
+                })
+                .filter(isPresent)
+            : []
 
-        return {
-          id: String(
-            groupInput.id ?? createFooterId('group', groupIndex)
-          ).trim(),
-          titleKey,
-          links,
-        } satisfies FigmaFooterGroup
-      })
-      .filter(Boolean)
+          return {
+            id: String(
+              groupInput.id ?? createFooterId('group', groupIndex)
+            ).trim(),
+            titleKey,
+            links,
+          } satisfies FigmaFooterGroup
+        })
+        .filter(isPresent)
     : []
 
   const groupIds = groups.map((group) => group.id).join(',')
@@ -762,8 +768,9 @@ function FigmaHomeHeader() {
             return (
               <div
                 key={item.label}
-                className={`figma-home-mobile-menu-item${isExpanded ? 'is-expanded' : ''
-                  }`}
+                className={`figma-home-mobile-menu-item${
+                  isExpanded ? 'is-expanded' : ''
+                }`}
               >
                 <button
                   type='button'
@@ -1125,8 +1132,9 @@ export function Home() {
 
       <section
         ref={routingSectionRef}
-        className={`figma-home-routing${isRoutingActive ? ' is-route-active' : ''
-          }`}
+        className={`figma-home-routing${
+          isRoutingActive ? 'is-route-active' : ''
+        }`}
       >
         <div className='figma-home-routing-header'>
           <h2>{t('智能路由，全球覆盖')}</h2>

@@ -171,10 +171,7 @@ export const channelFormSchema = z
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     other: z.string().optional(),
     cost_ratio: z
-      .number({
-        required_error: 'Cost ratio is required',
-        invalid_type_error: 'Cost ratio is required',
-      })
+      .number({ error: 'Cost ratio is required' })
       .min(0, 'Cost ratio must be greater than or equal to 0')
       .optional(),
     // Multi-key options (not sent to backend directly)

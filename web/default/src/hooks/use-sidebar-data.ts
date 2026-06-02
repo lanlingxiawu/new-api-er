@@ -33,12 +33,13 @@ import {
   Ticket,
   User,
   UserCog,
+  UserRoundCheck,
   Users,
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { type SidebarData } from '@/components/layout/types'
 import { useAuthStore } from '@/stores/auth-store'
+import { type SidebarData } from '@/components/layout/types'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -123,6 +124,11 @@ export function useSidebarData(): SidebarData {
                   url: '/commission',
                   icon: BadgeDollarSign,
                 },
+                {
+                  title: t('My Customers'),
+                  url: '/customer-console',
+                  icon: UserRoundCheck,
+                },
               ]
             : []),
         ],
@@ -160,6 +166,11 @@ export function useSidebarData(): SidebarData {
             title: t('Employee Management'),
             url: '/employees',
             icon: UserCog,
+          },
+          {
+            title: t('Customer Management'),
+            url: '/customers',
+            icon: UserRoundCheck,
           },
           {
             title: t('Business Overview'),

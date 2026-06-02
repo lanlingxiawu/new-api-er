@@ -1,6 +1,5 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useTranslation } from 'react-i18next'
 import {
   TrendingUp,
   DollarSign,
@@ -9,6 +8,7 @@ import {
   BadgeDollarSign,
   Percent,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   ResponsiveContainer,
   LineChart,
@@ -19,9 +19,9 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts'
-import { SectionPageLayout } from '@/components/layout'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { formatQuota } from '@/lib/format'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatQuota } from '@/lib/format'
+import { SectionPageLayout } from '@/components/layout'
 import { getCommissionOverview } from './api'
 
 // ── Range options ──────────────────────────────────────────────────────────
@@ -62,14 +62,16 @@ function StatCard({
   return (
     <Card>
       <CardHeader className='flex flex-row items-center justify-between pb-2'>
-        <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardTitle className='text-muted-foreground text-sm font-medium'>
           {title}
         </CardTitle>
         <Icon className={`h-4 w-4 ${color}`} />
       </CardHeader>
       <CardContent>
         <div className='text-2xl font-bold'>{value}</div>
-        {sub ? <p className='mt-1 text-xs text-muted-foreground'>{sub}</p> : null}
+        {sub ? (
+          <p className='text-muted-foreground mt-1 text-xs'>{sub}</p>
+        ) : null}
       </CardContent>
     </Card>
   )
@@ -109,7 +111,9 @@ export function CommissionOverview() {
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Business Overview')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>
+        {t('Business Overview')}
+      </SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='space-y-6'>
           {/* Range selector */}
@@ -134,7 +138,7 @@ export function CommissionOverview() {
             <>
               {/* Platform consumption (whole platform) */}
               <div>
-                <h3 className='mb-2 text-sm font-semibold text-muted-foreground'>
+                <h3 className='text-muted-foreground mb-2 text-sm font-semibold'>
                   {t('Platform-wide (all users)')}
                 </h3>
                 <div className='grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-3'>
@@ -192,7 +196,7 @@ export function CommissionOverview() {
                 </CardHeader>
                 <CardContent>
                   {chartData.length === 0 ? (
-                    <p className='text-sm text-muted-foreground'>
+                    <p className='text-muted-foreground text-sm'>
                       {t('No records')}
                     </p>
                   ) : (
@@ -202,7 +206,11 @@ export function CommissionOverview() {
                           <CartesianGrid strokeDasharray='3 3' opacity={0.2} />
                           <XAxis dataKey='date' fontSize={12} />
                           <YAxis fontSize={12} />
-                          <Tooltip formatter={(v: number) => formatQuota(v)} />
+                          <Tooltip
+                            formatter={(value) =>
+                              formatQuota(Number(value ?? 0))
+                            }
+                          />
                           <Legend />
                           <Line
                             type='monotone'
@@ -254,7 +262,7 @@ export function CommissionOverview() {
                         <TableRow>
                           <TableCell
                             colSpan={6}
-                            className='text-center text-muted-foreground'
+                            className='text-muted-foreground text-center'
                           >
                             {t('No records')}
                           </TableCell>
@@ -269,7 +277,9 @@ export function CommissionOverview() {
                           <TableCell>
                             {formatQuota(ch.consumption_quota)}
                           </TableCell>
-                          <TableCell>{formatQuota(ch.est_cost_quota)}</TableCell>
+                          <TableCell>
+                            {formatQuota(ch.est_cost_quota)}
+                          </TableCell>
                           <TableCell
                             className={
                               ch.est_profit_quota < 0 ? 'text-destructive' : ''
@@ -294,7 +304,7 @@ export function CommissionOverview() {
 
               {/* Commission-attributed financials */}
               <div>
-                <h3 className='mb-2 text-sm font-semibold text-muted-foreground'>
+                <h3 className='text-muted-foreground mb-2 text-sm font-semibold'>
                   {t('Employee-attributed traffic')}
                 </h3>
                 <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5'>
@@ -358,7 +368,7 @@ export function CommissionOverview() {
                         <TableRow>
                           <TableCell
                             colSpan={6}
-                            className='text-center text-muted-foreground'
+                            className='text-muted-foreground text-center'
                           >
                             {t('No records')}
                           </TableCell>
@@ -367,7 +377,9 @@ export function CommissionOverview() {
                       {(d.by_employee ?? []).map((e) => (
                         <TableRow key={e.employee_user_id}>
                           <TableCell>
-                            {e.username || e.display_name || `#${e.employee_user_id}`}
+                            {e.username ||
+                              e.display_name ||
+                              `#${e.employee_user_id}`}
                           </TableCell>
                           <TableCell>{formatQuota(e.total_revenue)}</TableCell>
                           <TableCell>{formatQuota(e.total_cost)}</TableCell>
@@ -410,7 +422,7 @@ export function CommissionOverview() {
                         <TableRow>
                           <TableCell
                             colSpan={5}
-                            className='text-center text-muted-foreground'
+                            className='text-muted-foreground text-center'
                           >
                             {t('No records')}
                           </TableCell>

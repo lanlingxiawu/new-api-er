@@ -1,8 +1,14 @@
 {
+  "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
+  "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.",
+  "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
+  "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "Cost and profit are estimated from per-group ratios and per-channel cost ratios.",
+  "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
+  "customers with consumption": "customers with consumption",
+  "Manage employees and commission rates.": "Manage employees and commission rates.",
+  "Search and select the user to assign employee status": "Search and select the user to assign employee status",
   "The user ID to assign employee status": "The user ID to assign employee status",
   "This will disable the employee. Historical commission logs are retained.": "This will disable the employee. Historical commission logs are retained.",
   "This will reset the channel cost ratio to the default (1.0).": "This will reset the channel cost ratio to the default (1.0).",
-  "customers with consumption": "customers with consumption",
-  "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
   "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly."
 }

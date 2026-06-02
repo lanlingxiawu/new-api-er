@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
+import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
-import { searchUsers } from '@/features/users/api'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -32,24 +31,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { searchUsers } from '@/features/users/api'
 import { createEmployee, updateEmployee } from '../api'
 import type { EmployeeProfile } from '../types'
 
 const createSchema = z.object({
-  user_id: z.number({ required_error: 'Required' }).positive('Must be positive'),
-  commission_rate: z
-    .number()
-    .min(0, 'Min 0')
-    .max(1, 'Max 1 (100%)'),
+  user_id: z.number({ error: 'Required' }).positive('Must be positive'),
+  commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
   target_quota: z.number().min(0).optional(),
   remark: z.string().max(255).optional(),
 })
 
 const updateSchema = z.object({
-  commission_rate: z
-    .number()
-    .min(0, 'Min 0')
-    .max(1, 'Max 1 (100%)'),
+  commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
   target_quota: z.number().min(0),
   status: z.number().min(1).max(2),
   remark: z.string().max(255).optional(),
@@ -265,7 +259,9 @@ export function EmployeeFormDialog({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Search and select the user to assign employee status')}
+                      {t(
+                        'Search and select the user to assign employee status'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -404,7 +400,9 @@ export function EmployeeFormDialog({
                     <FormLabel>{t('Status')}</FormLabel>
                     <Select
                       value={String(field.value)}
-                      onValueChange={(v) => field.onChange(parseInt(v))}
+                      onValueChange={(v) => {
+                        if (v != null) field.onChange(Number.parseInt(v, 10))
+                      }}
                     >
                       <FormControl>
                         <SelectTrigger>
