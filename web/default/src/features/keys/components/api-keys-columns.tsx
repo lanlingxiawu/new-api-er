@@ -33,13 +33,11 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
-import { getGroupStatuses } from '@/features/monitoring/api'
-import { buildGroupStatusMap } from '@/features/monitoring/status'
+import { getGroupStatuses as getGroupAvailabilityStatuses } from '@/lib/api'
 import { API_KEY_STATUSES } from '../constants'
 import { type ApiKey } from '../types'
 import {
   ApiKeyCell,
-  GroupHealthCell,
   ModelLimitsCell,
   IpRestrictionsCell,
 } from './api-keys-cells'
@@ -71,21 +69,31 @@ function useGroupRatios(): Record<string, number> {
   return data ?? {}
 }
 
-function useGroupStatusesMap() {
+function useGroupAvailabilityMap(): Record<string, { available: number; total: number }> {
   const { data } = useQuery({
-    queryKey: ['monitor', 'group-statuses'],
-    queryFn: getGroupStatuses,
-    staleTime: 60 * 1000,
+    queryKey: ['api', 'group-statuses'],
+    queryFn: getGroupAvailabilityStatuses,
+    staleTime: 5 * 60 * 1000,
     retry: false,
   })
 
-  return useMemo(() => buildGroupStatusMap(data?.data), [data?.data])
+  return useMemo(() => {
+    if (!data?.success || !data?.data?.groups) return {}
+    const map: Record<string, { available: number; total: number }> = {}
+    for (const status of data.data.groups) {
+      map[status.user_group] = {
+        available: status.available_models,
+        total: status.total_models,
+      }
+    }
+    return map
+  }, [data?.data?.groups])
 }
 
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
   const groupRatios = useGroupRatios()
-  const groupStatusMap = useGroupStatusesMap()
+  const groupAvailabilityMap = useGroupAvailabilityMap()
   return [
     {
       id: 'select',
@@ -249,19 +257,68 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       meta: { label: t('Group'), mobileHidden: true },
     },
     {
-      id: 'group_health',
+      id: 'available_models',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Health')} />
+        <DataTableColumnHeader column={column} title={t('Available Models')} />
       ),
-      cell: ({ row }) => (
-        <GroupHealthCell
-          group={row.original.group}
-          status={groupStatusMap.get(row.original.group ?? '')}
-          crossGroupRetry={row.original.cross_group_retry}
-        />
-      ),
+      cell: ({ row }) => {
+        const group = row.original.group as string
+        const inlineStatus = row.original.group_status
+        const availability = inlineStatus
+          ? {
+              available: inlineStatus.available_models,
+              total: inlineStatus.total_models,
+            }
+          : groupAvailabilityMap[group]
+
+        if (!availability) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+
+        const { available, total } = availability
+
+        if (available === 0) {
+          return (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <StatusBadge
+                    label={`0/${total}`}
+                    variant='red'
+                    copyable={false}
+                  />
+                }
+              >
+              </TooltipTrigger>
+              <TooltipContent>
+                <span className='text-xs'>
+                  {t('No models available. Please switch to another group.')}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          )
+        }
+
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className='inline-flex items-center gap-1 text-xs font-medium'>
+                  {available}/{total}
+                </span>
+              }
+            >
+            </TooltipTrigger>
+            <TooltipContent>
+              <span className='text-xs'>
+                {t('Available models in this group')}
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
       enableSorting: false,
-      meta: { label: t('Health'), mobileHidden: true },
+      meta: { label: t('Available Models'), mobileHidden: true },
     },
     {
       id: 'model_limits',

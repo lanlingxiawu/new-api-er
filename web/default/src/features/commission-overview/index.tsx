@@ -31,17 +31,50 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
+import { getEndOfDay, getStartOfDay } from '@/lib/time'
+import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { getCommissionOverview } from './api'
 
 // ── Range options ──────────────────────────────────────────────────────────
 
-type RangeKey = '7d' | '30d' | '90d' | 'all'
+type RangeKey = '7d' | '30d' | '90d' | 'all' | 'custom'
 
-function rangeToTimes(range: RangeKey): { start?: number; end?: number } {
-  if (range === 'all') return {}
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90
-  const now = Math.floor(Date.now() / 1000)
-  return { start: now - days * 86400, end: now }
+interface OverviewRange {
+  start?: Date
+  end?: Date
+}
+
+function createTrailingDayRange(days: number): OverviewRange {
+  const end = getEndOfDay()
+  const start = new Date(end)
+  start.setDate(end.getDate() - (days - 1))
+  return { start: getStartOfDay(start), end }
+}
+
+function getPresetRange(range: Exclude<RangeKey, 'custom'>): OverviewRange {
+  if (range === '7d') return createTrailingDayRange(7)
+  if (range === '30d') return createTrailingDayRange(30)
+  if (range === '90d') return createTrailingDayRange(90)
+  return {}
+}
+
+function rangesMatch(a: OverviewRange, b: OverviewRange): boolean {
+  const startMatches = a.start?.getTime() === b.start?.getTime()
+  const endMatches = a.end?.getTime() === b.end?.getTime()
+  return startMatches && endMatches
+}
+
+function resolveRangeKey(range: OverviewRange): RangeKey {
+  if (!range.start && !range.end) return 'all'
+  if (rangesMatch(range, getPresetRange('7d'))) return '7d'
+  if (rangesMatch(range, getPresetRange('30d'))) return '30d'
+  if (rangesMatch(range, getPresetRange('90d'))) return '90d'
+  return 'custom'
+}
+
+function toUnixTimestamp(date?: Date): number | undefined {
+  if (!date) return undefined
+  return Math.floor(date.getTime() / 1000)
 }
 
 // ── Stat card ────────────────────────────────────────────────────────────────
@@ -81,26 +114,49 @@ function StatCard({
 
 export function CommissionOverview() {
   const { t } = useTranslation()
-  const [range, setRange] = useState<RangeKey>('30d')
+  const [range, setRange] = useState<RangeKey>('7d')
+  const [customRange, setCustomRange] = useState<OverviewRange>(() =>
+    getPresetRange('7d')
+  )
 
-  const times = useMemo(() => rangeToTimes(range), [range])
+  const selectedRange = useMemo(() => {
+    if (range === 'custom') return customRange
+    return getPresetRange(range)
+  }, [customRange, range])
+  const startTime = useMemo(
+    () => toUnixTimestamp(selectedRange.start),
+    [selectedRange.start]
+  )
+  const endTime = useMemo(
+    () => toUnixTimestamp(selectedRange.end),
+    [selectedRange.end]
+  )
 
   const { data, isLoading } = useQuery({
-    queryKey: ['commission-overview', range],
+    queryKey: ['commission-overview', range, startTime ?? null, endTime ?? null],
     queryFn: () =>
-      getCommissionOverview({ start_time: times.start, end_time: times.end }),
+      getCommissionOverview({ start_time: startTime, end_time: endTime }),
   })
 
   const d = data?.data
   const platform = d?.platform
   const comm = d?.commission
 
-  const rangeButtons: { key: RangeKey; label: string }[] = [
+  const rangeButtons: { key: Exclude<RangeKey, 'custom'>; label: string }[] = [
     { key: '7d', label: t('Last 7 days') },
     { key: '30d', label: t('Last 30 days') },
     { key: '90d', label: t('Last 90 days') },
     { key: 'all', label: t('All time') },
   ]
+
+  const handlePresetChange = (nextRange: Exclude<RangeKey, 'custom'>) => {
+    setRange(nextRange)
+  }
+
+  const handleCustomRangeChange = (nextRange: OverviewRange) => {
+    setCustomRange(nextRange)
+    setRange(resolveRangeKey(nextRange))
+  }
 
   const chartData = (d?.by_day ?? []).map((row) => ({
     date: row.date.slice(5),
@@ -117,17 +173,24 @@ export function CommissionOverview() {
       <SectionPageLayout.Content>
         <div className='space-y-6'>
           {/* Range selector */}
-          <div className='flex flex-wrap gap-2'>
+          <div className='flex flex-wrap items-center gap-2'>
             {rangeButtons.map((b) => (
               <Button
                 key={b.key}
                 size='sm'
                 variant={range === b.key ? 'default' : 'outline'}
-                onClick={() => setRange(b.key)}
+                onClick={() => handlePresetChange(b.key)}
               >
                 {b.label}
               </Button>
             ))}
+            <div className='min-w-[280px] flex-1 sm:max-w-[420px]'>
+              <CompactDateTimeRangePicker
+                start={selectedRange.start}
+                end={selectedRange.end}
+                onChange={handleCustomRangeChange}
+              />
+            </div>
           </div>
 
           {isLoading && (

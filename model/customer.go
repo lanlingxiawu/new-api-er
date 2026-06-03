@@ -52,6 +52,34 @@ type CustomerQuotaLog struct {
 	CreatedAt           int64  `json:"created_at" gorm:"autoCreateTime;index"`
 }
 
+func GetInvitedCustomersByEmployee(employeeUserId, page, pageSize int) ([]*User, int64, error) {
+	var customers []*User
+	var total int64
+	offset := (page - 1) * pageSize
+
+	tx := DB.Model(&User{}).
+		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser)
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Omit("password").Order("id DESC").Offset(offset).Limit(pageSize).Find(&customers).Error; err != nil {
+		return nil, 0, err
+	}
+	return customers, total, nil
+}
+
+func GetInvitedCustomerByEmployee(employeeUserId, customerUserId int, selectAll bool) (*User, error) {
+	var customer User
+	tx := DB.Where("id = ? AND inviter_id = ? AND role = ?", customerUserId, employeeUserId, common.RoleCommonUser)
+	if !selectAll {
+		tx = tx.Omit("password")
+	}
+	if err := tx.First(&customer).Error; err != nil {
+		return nil, err
+	}
+	return &customer, nil
+}
+
 func GetCustomersByEmployee(employeeUserId, page, pageSize int) ([]*CustomerProfile, int64, error) {
 	var customers []*CustomerProfile
 	var total int64

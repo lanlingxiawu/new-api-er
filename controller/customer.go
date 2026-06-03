@@ -92,6 +92,26 @@ func buildCustomerWithUser(cp *model.CustomerProfile) CustomerWithUser {
 	return item
 }
 
+func buildInvitedCustomerWithUser(employeeUserId int, customer *model.User) CustomerWithUser {
+	item := CustomerWithUser{
+		CustomerProfile: &model.CustomerProfile{
+			Id:             customer.Id,
+			EmployeeUserId: employeeUserId,
+			CustomerUserId: customer.Id,
+			Status:         customer.Status,
+			Remark:         customer.Remark,
+			CreatedAt:      customer.CreatedAt,
+		},
+		Username:    customer.Username,
+		DisplayName: customer.DisplayName,
+		Email:       customer.Email,
+		Quota:       customer.Quota,
+		UsedQuota:   customer.UsedQuota,
+	}
+	item.CommissionQuota = model.GetCustomerCommissionTotal(employeeUserId, customer.Id)
+	return item
+}
+
 func buildCustomerQuotaLogWithUser(log *model.CustomerQuotaLog) CustomerQuotaLogWithUser {
 	item := CustomerQuotaLogWithUser{CustomerQuotaLog: log}
 	if eu, err := model.GetUserById(log.EmployeeUserId, false); err == nil && eu != nil {
@@ -156,6 +176,25 @@ func getOwnedCustomerProfile(c *gin.Context, employeeUserId int) (*model.Custome
 	return cp, true
 }
 
+func getOwnedInvitedCustomer(c *gin.Context, employeeUserId int, selectAll bool) (*model.User, bool) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return nil, false
+	}
+
+	customer, err := model.GetInvitedCustomerByEmployee(employeeUserId, id, selectAll)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			common.ApiError(c, errNoPermission)
+			return nil, false
+		}
+		common.ApiError(c, err)
+		return nil, false
+	}
+	return customer, true
+}
+
 func EmployeeCreateCustomer(c *gin.Context) {
 	employeeUserId := c.GetInt("id")
 	if !model.IsEmployee(employeeUserId) {
@@ -180,8 +219,10 @@ func EmployeeCreateCustomer(c *gin.Context) {
 		Password:    req.Password,
 		DisplayName: req.DisplayName,
 		Email:       req.Email,
+		InviterId:   employeeUserId,
 		Role:        common.RoleCommonUser,
 		Status:      common.UserStatusEnabled,
+		Remark:      req.Remark,
 	}
 	if newUser.DisplayName == "" {
 		newUser.DisplayName = newUser.Username
@@ -190,18 +231,7 @@ func EmployeeCreateCustomer(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-
-	cp := &model.CustomerProfile{
-		EmployeeUserId: employeeUserId,
-		CustomerUserId: newUser.Id,
-		Status:         model.CustomerStatusEnabled,
-		Remark:         req.Remark,
-	}
-	if err := model.CreateCustomerProfile(cp); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, buildCustomerWithUser(cp))
+	common.ApiSuccess(c, buildInvitedCustomerWithUser(employeeUserId, newUser))
 }
 
 func EmployeeListCustomers(c *gin.Context) {
@@ -212,15 +242,15 @@ func EmployeeListCustomers(c *gin.Context) {
 	}
 
 	page, pageSize := normalizePage(c)
-	customers, total, err := model.GetCustomersByEmployee(employeeUserId, page, pageSize)
+	customers, total, err := model.GetInvitedCustomersByEmployee(employeeUserId, page, pageSize)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
 	items := make([]CustomerWithUser, 0, len(customers))
-	for _, cp := range customers {
-		items = append(items, buildCustomerWithUser(cp))
+	for _, customer := range customers {
+		items = append(items, buildInvitedCustomerWithUser(employeeUserId, customer))
 	}
 
 	common.ApiSuccess(c, gin.H{
@@ -238,11 +268,11 @@ func EmployeeGetCustomer(c *gin.Context) {
 		return
 	}
 
-	cp, ok := getOwnedCustomerProfile(c, employeeUserId)
+	customer, ok := getOwnedInvitedCustomer(c, employeeUserId, false)
 	if !ok {
 		return
 	}
-	common.ApiSuccess(c, buildCustomerWithUser(cp))
+	common.ApiSuccess(c, buildInvitedCustomerWithUser(employeeUserId, customer))
 }
 
 func EmployeeUpdateCustomer(c *gin.Context) {
@@ -252,7 +282,7 @@ func EmployeeUpdateCustomer(c *gin.Context) {
 		return
 	}
 
-	cp, ok := getOwnedCustomerProfile(c, employeeUserId)
+	customer, ok := getOwnedInvitedCustomer(c, employeeUserId, true)
 	if !ok {
 		return
 	}
@@ -265,8 +295,8 @@ func EmployeeUpdateCustomer(c *gin.Context) {
 		return
 	}
 
-	cp.Remark = req.Remark
-	if err := model.UpdateCustomerProfile(cp); err != nil {
+	customer.Remark = req.Remark
+	if err := customer.Update(false); err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -193,13 +193,13 @@ const resolvedFigmaHomeNavItems: NavItem[] = figmaHomeNavItems.map((item) => {
   //   }
   // }
 
-  // if (item.to === '/articles') {
-  //   return {
-  //     ...item,
-  //     to: HOME_BLOG_URL,
-  //     target: '_blank',
-  //   }
-  // }
+  if (item.to === '/articles') {
+    return {
+      ...item,
+      to: HOME_BLOG_URL,
+      target: '_blank',
+    }
+  }
 
   return item
 })

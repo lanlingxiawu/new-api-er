@@ -16,5 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { createFileRoute } from '@tanstack/react-router'
+import { ModelMarketplace } from '@/features/marketplace/model-marketplace'
 
-// MonitorHealthPanel was removed from the overview dashboard.
+export const Route = createFileRoute('/_authenticated/marketplace/')({
+  component: () => {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
+          <ModelMarketplace />
+        </div>
+      </div>
+    )
+  },
+})

@@ -564,6 +564,34 @@ func GetUserModels(c *gin.Context) {
 	return
 }
 
+// GetUserModelsWithAvailability 返回用户可用的模型及其可用性状态（用于模型广场）
+func GetUserModelsWithAvailability(c *gin.Context) {
+	userId := c.GetInt("id")
+	user, err := model.GetUserCache(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	// 获取用户可用的分组
+	groups := service.GetUserUsableGroups(user.Group)
+
+	// 为每个分组收集模型及其可用性状态
+	result := make(map[string]dto.ModelListWithAvailability)
+
+	for groupName := range groups {
+		enabledModels := model.GetGroupEnabledModels(groupName)
+		modelList := buildModelsWithAvailability(enabledModels, groupName)
+		result[groupName] = modelList
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    result,
+	})
+}
+
 func UpdateUser(c *gin.Context) {
 	var updatedUser model.User
 	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
@@ -1294,4 +1322,39 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	common.ApiSuccessI18n(c, i18n.MsgSettingSaved, nil)
+}
+
+func buildModelsWithAvailability(modelNames []string, groupName string) dto.ModelListWithAvailability {
+	groupStatus, _ := model.GetGroupStatus(groupName)
+	modelStatuses, _ := model.GetModelStatusesByGroup(groupName)
+
+	models := make([]dto.ModelWithAvailability, len(modelNames))
+	for i, modelName := range modelNames {
+		item := dto.ModelWithAvailability{
+			Name:      modelName,
+			Available: false,
+			Reason:    "Pending check",
+		}
+
+		if available, exists := modelStatuses[modelName]; exists {
+			item.Available = available
+			if available {
+				item.Reason = ""
+			} else {
+				item.Reason = "Repairing"
+			}
+		}
+
+		if groupStatus != nil {
+			item.LastCheckedTime = groupStatus.LastTestTime
+		}
+
+		models[i] = item
+	}
+
+	return dto.ModelListWithAvailability{
+		Models:     models,
+		TotalCount: len(models),
+		GroupName:  groupName,
+	}
 }

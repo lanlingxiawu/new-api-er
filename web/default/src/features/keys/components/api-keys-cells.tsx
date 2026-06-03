@@ -33,12 +33,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { StatusBadge } from '@/components/status-badge'
-import type { GroupStatusItem } from '@/features/monitoring/api'
-import { MonitorStatusBadge } from '@/features/monitoring/components/monitor-status-badge'
-import {
-  formatLatency,
-  formatUptimePct,
-} from '@/features/performance-metrics/lib/format'
 import { type ApiKey } from '../types'
 import { useApiKeys } from './api-keys-provider'
 
@@ -229,39 +223,5 @@ export function IpRestrictionsCell({ apiKey }: { apiKey: ApiKey }) {
         </div>
       </TooltipContent>
     </Tooltip>
-  )
-}
-
-export function GroupHealthCell(props: {
-  group?: string | null
-  status?: GroupStatusItem
-  crossGroupRetry?: boolean
-}) {
-  const { t } = useTranslation()
-  const group = props.group?.trim()
-
-  if (!group) {
-    return <MonitorStatusBadge status={null} />
-  }
-
-  if (group === 'auto') {
-    return (
-      <StatusBadge
-        label={props.crossGroupRetry ? t('Cross-group') : t('Auto routing')}
-        variant='info'
-        copyable={false}
-      />
-    )
-  }
-
-  if (!props.status) {
-    return <MonitorStatusBadge status={null} />
-  }
-  return (
-    <MonitorStatusBadge
-      status={props.status.status}
-      size='sm'
-      copyable={false}
-    />
   )
 }

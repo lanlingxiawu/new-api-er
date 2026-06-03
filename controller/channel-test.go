@@ -44,6 +44,25 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+func init() {
+	service.GroupModelActiveProbe = probeGroupModelAvailabilityWithChannelTest
+}
+
+func probeGroupModelAvailabilityWithChannelTest(ctx context.Context, userGroup string, channel *model.Channel, modelName string) error {
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		return err
+	}
+	result := testChannelWithGroup(channel, testUserID, modelName, "", shouldUseStreamForAutomaticChannelTest(channel), userGroup)
+	if result.localErr != nil {
+		return result.localErr
+	}
+	if result.newAPIError != nil {
+		return result.newAPIError
+	}
+	return nil
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -76,6 +95,10 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithGroup(channel, testUserID, testModel, endpointType, isStream, "")
+}
+
+func testChannelWithGroup(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, groupOverride string) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -170,13 +193,21 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	}
 	cache.WriteContext(c)
 	c.Set("id", testUserID)
+	if groupOverride = strings.TrimSpace(groupOverride); groupOverride != "" {
+		common.SetContextKey(c, constant.ContextKeyUserGroup, groupOverride)
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, groupOverride)
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, groupOverride)
+		c.Set("group", groupOverride)
+	}
 
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("channel", channel.Type)
 	c.Set("base_url", channel.GetBaseURL())
-	group, _ := model.GetUserGroup(testUserID, false)
-	c.Set("group", group)
+	if groupOverride == "" {
+		group, _ := model.GetUserGroup(testUserID, false)
+		c.Set("group", group)
+	}
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
 	if newAPIError != nil {

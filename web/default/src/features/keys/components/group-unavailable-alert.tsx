@@ -40,7 +40,7 @@ export function GroupUnavailableAlert() {
 
   const keysQuery = useQuery({
     queryKey: ['api-keys-all-for-alert'],
-    queryFn: () => getApiKeys({ page: 1, pageSize: 500 }),
+    queryFn: () => getApiKeys({ p: 1, size: 500 }),
     staleTime: 60 * 1000,
     retry: false,
   })

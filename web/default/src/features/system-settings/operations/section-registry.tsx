@@ -60,16 +60,6 @@ const OPERATIONS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_enabled'],
           'monitor_setting.auto_test_channel_minutes':
             settings['monitor_setting.auto_test_channel_minutes'],
-          'monitor_setting.status_warning_threshold':
-            settings['monitor_setting.status_warning_threshold'] ?? 95,
-          'monitor_setting.status_unhealthy_threshold':
-            settings['monitor_setting.status_unhealthy_threshold'] ?? 90,
-          'monitor_setting.status_unavailable_threshold':
-            settings['monitor_setting.status_unavailable_threshold'] ?? 75,
-          'monitor_setting.p95_healthy_threshold_ms':
-            settings['monitor_setting.p95_healthy_threshold_ms'] ?? 2000,
-          'monitor_setting.p95_warning_threshold_ms':
-            settings['monitor_setting.p95_warning_threshold_ms'] ?? 5000,
         }}
       />
     ),

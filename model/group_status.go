@@ -1,45 +1,46 @@
 package model
 
-// GroupStatus tracks the real-time health of each user group.
+// GroupStatus tracks the available models for each user group.
 type GroupStatus struct {
-	ID                int     `gorm:"primaryKey" json:"id"`
-	UserGroup         string  `gorm:"uniqueIndex;type:varchar(64);not null" json:"user_group"`
-	Status            int     `gorm:"default:1;index" json:"status"` // 1=healthy 2=warning 3=unhealthy 4=unavailable
-	LastTestTime      int64   `json:"last_test_time"`
-	SuccessRate       float64 `gorm:"default:100" json:"success_rate"`
-	AvgResponseTime   int     `json:"avg_response_time"` // ms
-	P95ResponseTime   int     `json:"p95_response_time"` // ms
-	ErrorCount        int     `gorm:"default:0" json:"error_count"`
-	TotalRequests     int     `gorm:"default:0" json:"total_requests"`
-	TotalChannels     int     `gorm:"default:0" json:"total_channels"`
-	AvailableChannels int     `gorm:"default:0" json:"available_channels"`
-	DisabledChannels  int     `gorm:"default:0" json:"disabled_channels"`
-	CreatedAt         int64   `json:"created_at"`
-	UpdatedAt         int64   `json:"updated_at"`
+	ID              int    `gorm:"primaryKey" json:"id"`
+	UserGroup       string `gorm:"uniqueIndex;type:varchar(64);not null" json:"user_group"`
+	AvailableModels int    `gorm:"default:0" json:"available_models"`
+	TotalModels     int    `gorm:"default:0" json:"total_models"`
+	LastTestTime    int64  `json:"last_test_time"`
+	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at"`
 }
 
 func (g *GroupStatus) TableName() string { return "group_statuses" }
 
-// GroupStatusHistory stores hourly snapshots of each group's metrics.
-type GroupStatusHistory struct {
-	ID                int64   `gorm:"primaryKey" json:"id"`
-	UserGroup         string  `gorm:"index:idx_group_hour,priority:1;type:varchar(64);not null" json:"user_group"`
-	SnapshotHour      int64   `gorm:"index:idx_group_hour,priority:2;index:idx_snapshot_hour" json:"snapshot_hour"` // unix timestamp of hour start
-	SuccessRate       float64 `json:"success_rate"`
-	AvgResponseTime   int     `json:"avg_response_time"`
-	AvailableChannels int     `json:"available_channels"`
-	ErrorCount        int     `json:"error_count"`
-	TotalRequests     int     `json:"total_requests"`
-	CreatedAt         int64   `json:"created_at"`
+// GroupModelStatus tracks model availability within a user group.
+type GroupModelStatus struct {
+	ID           int    `gorm:"primaryKey" json:"id"`
+	UserGroup    string `gorm:"uniqueIndex:idx_group_model;priority:1;type:varchar(64);not null" json:"user_group"`
+	ModelName    string `gorm:"uniqueIndex:idx_group_model;priority:2;type:varchar(128);not null" json:"model_name"`
+	Available    bool   `gorm:"default:1" json:"available"`
+	LastTestTime int64  `json:"last_test_time"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
 }
 
-func (h *GroupStatusHistory) TableName() string { return "group_status_histories" }
+func (m *GroupModelStatus) TableName() string { return "group_model_statuses" }
 
-// GetAllGroupStatuses returns all group status rows.
+// GetAllGroupStatuses returns all group status rows ordered by available models.
 func GetAllGroupStatuses() ([]GroupStatus, error) {
 	var gs []GroupStatus
-	err := DB.Order("status asc, success_rate desc").Find(&gs).Error
+	err := DB.Order("available_models DESC, user_group ASC").Find(&gs).Error
 	return gs, err
+}
+
+// GetGroupStatus returns the status of a specific group.
+func GetGroupStatus(userGroup string) (*GroupStatus, error) {
+	var gs GroupStatus
+	err := DB.Where("user_group = ?", userGroup).First(&gs).Error
+	if err != nil {
+		return nil, err
+	}
+	return &gs, nil
 }
 
 // UpsertGroupStatus saves-or-updates a group status row.
@@ -47,10 +48,53 @@ func UpsertGroupStatus(gs *GroupStatus) error {
 	return DB.Save(gs).Error
 }
 
-// GetGroupStatusHistory returns hourly history for a group within a time range.
-func GetGroupStatusHistory(userGroup string, startTime int64) ([]GroupStatusHistory, error) {
-	var hist []GroupStatusHistory
-	err := DB.Where("user_group = ? AND snapshot_hour >= ?", userGroup, startTime).
-		Order("snapshot_hour asc").Find(&hist).Error
-	return hist, err
+// GetAvailabilityRatio returns the availability rate (0-100%) for a group.
+func (g *GroupStatus) GetAvailabilityRatio() float64 {
+	if g.TotalModels == 0 {
+		return 0
+	}
+	return float64(g.AvailableModels) / float64(g.TotalModels) * 100
+}
+
+// GetGroupModelStatus returns the status of a specific model in a group.
+func GetGroupModelStatus(userGroup, modelName string) (*GroupModelStatus, error) {
+	var ms GroupModelStatus
+	err := DB.Where("user_group = ? AND model_name = ?", userGroup, modelName).First(&ms).Error
+	if err != nil {
+		return nil, err
+	}
+	return &ms, nil
+}
+
+// GetGroupModelStatuses returns all model statuses for a group.
+func GetGroupModelStatuses(userGroup string) ([]GroupModelStatus, error) {
+	var statuses []GroupModelStatus
+	err := DB.Where("user_group = ?", userGroup).Find(&statuses).Error
+	return statuses, err
+}
+
+// GetAllGroupModelStatuses returns every group/model availability row.
+func GetAllGroupModelStatuses() ([]GroupModelStatus, error) {
+	var statuses []GroupModelStatus
+	err := DB.Find(&statuses).Error
+	return statuses, err
+}
+
+// UpsertGroupModelStatus saves-or-updates a group model status row.
+func UpsertGroupModelStatus(ms *GroupModelStatus) error {
+	return DB.Save(ms).Error
+}
+
+// GetModelStatusesByGroup returns model availability for a group as a map.
+func GetModelStatusesByGroup(userGroup string) (map[string]bool, error) {
+	var statuses []GroupModelStatus
+	err := DB.Where("user_group = ?", userGroup).Find(&statuses).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool)
+	for _, s := range statuses {
+		result[s.ModelName] = s.Available
+	}
+	return result, nil
 }

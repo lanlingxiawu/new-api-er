@@ -44,7 +44,6 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const numericString = z.string().refine((value) => {
   const trimmed = value.trim()
@@ -67,11 +66,6 @@ const monitoringSchema = z
         .number()
         .int()
         .min(1, 'Interval must be at least 1 minute'),
-      status_warning_threshold: z.coerce.number().min(0).max(100),
-      status_unhealthy_threshold: z.coerce.number().min(0).max(100),
-      status_unavailable_threshold: z.coerce.number().min(0).max(100),
-      p95_healthy_threshold_ms: z.coerce.number().int().min(100),
-      p95_warning_threshold_ms: z.coerce.number().int().min(100),
     }),
   })
   .superRefine((values, ctx) => {
@@ -116,11 +110,6 @@ type MonitoringSettingsSectionProps = {
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
-    'monitor_setting.status_warning_threshold': number
-    'monitor_setting.status_unhealthy_threshold': number
-    'monitor_setting.status_unavailable_threshold': number
-    'monitor_setting.p95_healthy_threshold_ms': number
-    'monitor_setting.p95_warning_threshold_ms': number
   }
 }
 
@@ -138,11 +127,6 @@ type NormalizedMonitoringValues = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
-  'monitor_setting.status_warning_threshold': number
-  'monitor_setting.status_unhealthy_threshold': number
-  'monitor_setting.status_unavailable_threshold': number
-  'monitor_setting.p95_healthy_threshold_ms': number
-  'monitor_setting.p95_warning_threshold_ms': number
 }
 
 const buildFormDefaults = (
@@ -162,16 +146,6 @@ const buildFormDefaults = (
       defaults['monitor_setting.auto_test_channel_enabled'],
     auto_test_channel_minutes:
       defaults['monitor_setting.auto_test_channel_minutes'],
-    status_warning_threshold:
-      defaults['monitor_setting.status_warning_threshold'] ?? 95,
-    status_unhealthy_threshold:
-      defaults['monitor_setting.status_unhealthy_threshold'] ?? 90,
-    status_unavailable_threshold:
-      defaults['monitor_setting.status_unavailable_threshold'] ?? 75,
-    p95_healthy_threshold_ms:
-      defaults['monitor_setting.p95_healthy_threshold_ms'] ?? 2000,
-    p95_warning_threshold_ms:
-      defaults['monitor_setting.p95_warning_threshold_ms'] ?? 5000,
   },
 })
 
@@ -195,16 +169,6 @@ const normalizeDefaults = (
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
     defaults['monitor_setting.auto_test_channel_minutes'],
-  'monitor_setting.status_warning_threshold':
-    defaults['monitor_setting.status_warning_threshold'] ?? 95,
-  'monitor_setting.status_unhealthy_threshold':
-    defaults['monitor_setting.status_unhealthy_threshold'] ?? 90,
-  'monitor_setting.status_unavailable_threshold':
-    defaults['monitor_setting.status_unavailable_threshold'] ?? 75,
-  'monitor_setting.p95_healthy_threshold_ms':
-    defaults['monitor_setting.p95_healthy_threshold_ms'] ?? 2000,
-  'monitor_setting.p95_warning_threshold_ms':
-    defaults['monitor_setting.p95_warning_threshold_ms'] ?? 5000,
 })
 
 const normalizeFormValues = (
@@ -227,16 +191,6 @@ const normalizeFormValues = (
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
-  'monitor_setting.status_warning_threshold':
-    values.monitor_setting.status_warning_threshold,
-  'monitor_setting.status_unhealthy_threshold':
-    values.monitor_setting.status_unhealthy_threshold,
-  'monitor_setting.status_unavailable_threshold':
-    values.monitor_setting.status_unavailable_threshold,
-  'monitor_setting.p95_healthy_threshold_ms':
-    values.monitor_setting.p95_healthy_threshold_ms,
-  'monitor_setting.p95_warning_threshold_ms':
-    values.monitor_setting.p95_warning_threshold_ms,
 })
 
 export function MonitoringSettingsSection({
@@ -335,7 +289,18 @@ export function MonitoringSettingsSection({
                       type='number'
                       min={1}
                       step={1}
-                      {...safeNumberFieldProps(field)}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
                     />
                   </FormControl>
                   <FormDescription>
@@ -526,98 +491,6 @@ export function MonitoringSettingsSection({
               )}
             />
           </div>
-        {/* Health-status thresholds */}
-        <SettingsSection title={t('Health Status Thresholds')}>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Adjust success-rate and latency thresholds used to compute group/model health status. Changes take effect on the next monitoring aggregation run.'
-            )}
-          </p>
-          <div className='grid gap-4 sm:grid-cols-3'>
-            <FormField
-              control={form.control}
-              name='monitor_setting.status_warning_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Warning threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input type='number' min={0} max={100} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Success rate below this value triggers Warning status')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='monitor_setting.status_unhealthy_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Unhealthy threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input type='number' min={0} max={100} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Success rate below this value triggers Unhealthy status')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='monitor_setting.status_unavailable_threshold'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Unavailable threshold (%)')}</FormLabel>
-                  <FormControl>
-                    <Input type='number' min={0} max={100} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Success rate below this value triggers Unavailable status')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-          <div className='grid gap-4 sm:grid-cols-2'>
-            <FormField
-              control={form.control}
-              name='monitor_setting.p95_healthy_threshold_ms'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('P95 healthy threshold (ms)')}</FormLabel>
-                  <FormControl>
-                    <Input type='number' min={100} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t('P95 latency below this is considered healthy')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name='monitor_setting.p95_warning_threshold_ms'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('P95 warning threshold (ms)')}</FormLabel>
-                  <FormControl>
-                    <Input type='number' min={100} {...field} />
-                  </FormControl>
-                  <FormDescription>
-                    {t('P95 latency below this is considered warning')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </SettingsSection>
         </SettingsForm>
       </Form>
     </SettingsSection>

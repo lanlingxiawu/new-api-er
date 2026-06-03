@@ -1,4 +1,4 @@
-/*
+﻿/*
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { memo } from 'react'
-import { ChevronRight, Copy, WrenchIcon } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Copy, WrenchIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
@@ -46,12 +46,18 @@ export interface ModelCardProps {
   showRechargePrice?: boolean
   perf?: ModelPerfBadgeData
   monitorStatus?: ModelStatusItem
+  modelAvailability?: boolean
+  availabilityReason?: string
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
-  const isUnavailable = isMonitorStatusUnavailable(props.monitorStatus)
+  const isMonitorUnavailable = isMonitorStatusUnavailable(props.monitorStatus)
+  const isUnavailable = isMonitorUnavailable || props.modelAvailability === false
+  const unavailableReason = !props.modelAvailability
+    ? (props.availabilityReason || t('Repairing'))
+    : t('Under Maintenance')
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
@@ -99,12 +105,12 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         isUnavailable && 'opacity-75'
       )}
     >
-      {/* "修复中" overlay for unavailable models */}
+      {/* "淇涓? overlay for unavailable models */}
       {isUnavailable && (
         <div className='bg-background/60 pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-xl backdrop-blur-[2px]'>
           <WrenchIcon className='text-muted-foreground size-5' />
           <span className='text-muted-foreground text-xs font-medium'>
-            {t('Under Maintenance')}
+            {unavailableReason}
           </span>
         </div>
       )}
@@ -217,6 +223,18 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         </div>
 
         <div className='flex shrink-0 items-center gap-1.5'>
+          {props.modelAvailability === false && (
+            <div className='inline-flex items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-medium whitespace-nowrap text-orange-700 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200'>
+              <WrenchIcon className='size-3' />
+              {t('Repairing')}
+            </div>
+          )}
+          {props.modelAvailability === true && (
+            <div className='inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium whitespace-nowrap text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-200'>
+              <CheckCircle2 className='size-3' />
+              {t('Available')}
+            </div>
+          )}
           <button
             type='button'
             onClick={props.onClick}

@@ -60,7 +60,6 @@ import {
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
 import { FAQPanel } from './faq-panel'
-import { MonitorHealthPanel } from './monitor-health-panel'
 import { PerformanceHealthPanel } from './performance-health-panel'
 import { SummaryCards } from './summary-cards'
 import { UptimePanel } from './uptime-panel'
@@ -762,11 +761,8 @@ export function OverviewDashboard() {
               )}
             >
               {isAdmin && (
-                <CardStaggerItem className='lg:col-span-2'>
-                  <div className='grid gap-4 xl:grid-cols-2'>
-                    <MonitorHealthPanel />
-                    <PerformanceHealthPanel />
-                  </div>
+                <CardStaggerItem>
+                  <PerformanceHealthPanel />
                 </CardStaggerItem>
               )}
               {showApiInfoPanel && (

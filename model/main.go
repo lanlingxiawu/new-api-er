@@ -264,10 +264,8 @@ func migrateDB() error {
 		&DistributedLock{},
 		&SchedulerConfig{},
 		&GroupStatus{},
-		&GroupStatusHistory{},
 		&ModelStatus{},
-		&ModelStatusHistory{},
-		&AlertNotification{},
+		&GroupModelStatus{},
 		&Option{},
 		&Redemption{},
 		&Ability{},
@@ -354,10 +352,8 @@ func migrateDBFast() error {
 		{&DistributedLock{}, "DistributedLock"},
 		{&SchedulerConfig{}, "SchedulerConfig"},
 		{&GroupStatus{}, "GroupStatus"},
-		{&GroupStatusHistory{}, "GroupStatusHistory"},
 		{&ModelStatus{}, "ModelStatus"},
-		{&ModelStatusHistory{}, "ModelStatusHistory"},
-		{&AlertNotification{}, "AlertNotification"},
+		{&GroupModelStatus{}, "GroupModelStatus"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

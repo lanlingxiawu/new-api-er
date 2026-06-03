@@ -63,10 +63,8 @@ async function triggerTask(taskName: string): Promise<void> {
 // ─── Task descriptions ────────────────────────────────────────────────────────
 
 const TASK_DESCRIPTIONS: Record<string, string> = {
-  MonitorStatusAggregation:
-    '每小时从调用日志聚合各分组和模型的成功率、响应时间等健康指标，写入状态表和历史记录',
-  MonitorAlertGeneration:
-    '每5分钟检查分组/模型健康状态，对不可用目标生成告警通知（6小时内同一目标不重复告警）',
+  GroupModelAvailabilityTest:
+    '每30分钟测试各分组内的模型可通性，标记不可用的模型',
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
