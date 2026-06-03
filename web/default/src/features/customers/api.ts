@@ -90,20 +90,28 @@ export async function getMyCustomers(params: {
 
 export async function updateMyCustomer(
   id: number,
-  data: { status: number; remark?: string }
+  data: { remark?: string }
 ): Promise<ApiResponse> {
   const res = await api.put(`/api/user/employee/customers/${id}`, data)
   return res.data
 }
 
+/*
 export async function updateMyCustomerUser(
   id: number,
-  data: { display_name?: string; email?: string; remark?: string }
+  data: {
+    display_name?: string
+    email?: string
+    password?: string
+    remark?: string
+  }
 ): Promise<ApiResponse> {
   const res = await api.put(`/api/user/employee/customers/${id}/user`, data)
   return res.data
 }
+*/
 
+/*
 export async function transferQuotaToCustomer(
   id: number,
   data: { quota: number; mode?: string; remark?: string }
@@ -111,6 +119,7 @@ export async function transferQuotaToCustomer(
   const res = await api.post(`/api/user/employee/customers/${id}/quota`, data)
   return res.data
 }
+*/
 
 export async function getMyCustomerQuotaLogs(params: {
   page?: number

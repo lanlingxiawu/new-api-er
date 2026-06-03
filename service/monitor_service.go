@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm/clause"
 )
 
@@ -32,14 +33,6 @@ const (
 	statusWarning     = 2
 	statusUnhealthy   = 3
 	statusUnavailable = 4
-
-	// Success-rate thresholds (percent).
-	thresholdWarning   = 95.0
-	thresholdUnhealthy = 90.0
-
-	// P95 response-time thresholds (ms).
-	p95ThresholdWarning = 3000
-	p95ThresholdHealthy = 2000
 
 	// Alert dedup window — don't re-alert for the same target within 6 hours.
 	alertDedupWindowSeconds = 6 * 3600
@@ -309,7 +302,7 @@ func checkGroupAlerts(ctx context.Context) error {
 			Title:      fmt.Sprintf("分组 '%s' 健康度下降", g.UserGroup),
 			Message: fmt.Sprintf(
 				"成功率 %.1f%% (阈值: %.0f%%), P95响应时间 %dms, 可用渠道 %d/%d",
-				g.SuccessRate, thresholdWarning, g.P95ResponseTime,
+				g.SuccessRate, operation_setting.GetMonitorSetting().StatusWarningThreshold, g.P95ResponseTime,
 				g.AvailableChannels, g.TotalChannels,
 			),
 			Status:    "unread",
@@ -606,14 +599,24 @@ func percentileInt(sorted []int, p int) int {
 }
 
 func computeStatus(successRate float64, p95ms int) int {
-	if successRate >= 99 && p95ms < p95ThresholdHealthy {
+	cfg := operation_setting.GetMonitorSetting()
+	p95Healthy := cfg.P95HealthyThresholdMs
+	p95Warning := cfg.P95WarningThresholdMs
+	warnThreshold := cfg.StatusWarningThreshold
+	unhealthyThreshold := cfg.StatusUnhealthyThreshold
+	unavailableThreshold := cfg.StatusUnavailableThreshold
+
+	if successRate >= 99 && p95ms < p95Healthy {
 		return statusHealthy
 	}
-	if successRate >= thresholdWarning && p95ms < p95ThresholdWarning {
+	if successRate >= warnThreshold && p95ms < p95Warning {
 		return statusWarning
 	}
-	if successRate >= thresholdUnhealthy {
+	if successRate >= unhealthyThreshold {
 		return statusUnhealthy
+	}
+	if successRate >= unavailableThreshold {
+		return statusUnavailable
 	}
 	return statusUnavailable
 }

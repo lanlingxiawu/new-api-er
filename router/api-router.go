@@ -137,8 +137,10 @@ func SetApiRouter(router *gin.Engine) {
 				employeeCustomerRoute.GET("/quota-logs", controller.EmployeeListQuotaLogs)
 				employeeCustomerRoute.GET("/:id", controller.EmployeeGetCustomer)
 				employeeCustomerRoute.PUT("/:id", controller.EmployeeUpdateCustomer)
-				employeeCustomerRoute.PUT("/:id/user", controller.EmployeeUpdateCustomerUser)
-				employeeCustomerRoute.POST("/:id/quota", controller.EmployeeTransferQuota)
+				// Employee user-profile editing is temporarily disabled.
+				// employeeCustomerRoute.PUT("/:id/user", controller.EmployeeUpdateCustomerUser)
+				// Employee quota adjustment is temporarily disabled.
+				// employeeCustomerRoute.POST("/:id/quota", controller.EmployeeTransferQuota)
 			}
 
 			adminRoute := userRoute.Group("/")
@@ -471,11 +473,5 @@ func SetApiRouter(router *gin.Engine) {
 			monitorUserRoute.GET("/group/:group/history", controller.GetGroupStatusHistoryHandler)
 		}
 
-		alertsRoute := apiRouter.Group("/alerts")
-		alertsRoute.Use(middleware.UserAuth())
-		{
-			alertsRoute.GET("", controller.GetAlerts)
-			alertsRoute.POST("/:id/read", controller.MarkAlertAsRead)
-		}
 	}
 }

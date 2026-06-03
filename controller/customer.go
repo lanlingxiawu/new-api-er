@@ -33,6 +33,7 @@ type UpdateCustomerRequest struct {
 type UpdateCustomerUserRequest struct {
 	DisplayName string `json:"display_name"`
 	Email       string `json:"email"`
+	Password    string `json:"password"`
 	Remark      string `json:"remark"`
 }
 
@@ -256,13 +257,14 @@ func EmployeeUpdateCustomer(c *gin.Context) {
 		return
 	}
 
-	var req UpdateCustomerRequest
+	var req struct {
+		Remark string `json:"remark"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	cp.Status = req.Status
 	cp.Remark = req.Remark
 	if err := model.UpdateCustomerProfile(cp); err != nil {
 		common.ApiError(c, err)
@@ -271,6 +273,7 @@ func EmployeeUpdateCustomer(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
+/*
 func EmployeeUpdateCustomerUser(c *gin.Context) {
 	employeeUserId := c.GetInt("id")
 	if !model.IsEmployee(employeeUserId) {
@@ -300,16 +303,22 @@ func EmployeeUpdateCustomerUser(c *gin.Context) {
 	if req.Email != "" {
 		custUser.Email = req.Email
 	}
+	if req.Password != "" {
+		custUser.Password = req.Password
+	}
 	if req.Remark != "" {
 		custUser.Remark = req.Remark
 	}
-	if err := custUser.Update(false); err != nil {
+	updatePassword := req.Password != ""
+	if err := custUser.Update(updatePassword); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, nil)
 }
+*/
 
+/*
 func EmployeeTransferQuota(c *gin.Context) {
 	employeeUserId := c.GetInt("id")
 	if !model.IsEmployee(employeeUserId) {
@@ -343,6 +352,7 @@ func EmployeeTransferQuota(c *gin.Context) {
 	}
 	common.ApiSuccess(c, buildCustomerQuotaLogWithUser(logEntry))
 }
+*/
 
 func EmployeeListQuotaLogs(c *gin.Context) {
 	employeeUserId := c.GetInt("id")

@@ -257,29 +257,11 @@ export function GroupHealthCell(props: {
   if (!props.status) {
     return <MonitorStatusBadge status={null} />
   }
-
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className='inline-flex' />}>
-        <MonitorStatusBadge status={props.status.status} />
-      </TooltipTrigger>
-      <TooltipContent side='top' className='max-w-xs'>
-        <div className='space-y-1 text-xs'>
-          <div>
-            {t('Success rate')}: {formatUptimePct(props.status.success_rate)}
-          </div>
-          <div>
-            {t('P95')}: {formatLatency(props.status.p95_response_time)}
-          </div>
-          <div>
-            {t('Channels')}: {props.status.available_channels}/
-            {props.status.total_channels}
-          </div>
-          <div>
-            {t('Errors')}: {props.status.error_count}
-          </div>
-        </div>
-      </TooltipContent>
-    </Tooltip>
+    <MonitorStatusBadge
+      status={props.status.status}
+      size='sm'
+      copyable={false}
+    />
   )
 }

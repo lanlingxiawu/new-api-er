@@ -252,6 +252,13 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           <span className='text-muted-foreground text-xs font-medium'>
             {isTokenBased ? t('Token-based') : t('Per Request')}
           </span>
+          {props.monitorStatus && !isUnavailable && (
+            <MonitorStatusBadge
+              status={props.monitorStatus.status}
+              size='sm'
+              copyable={false}
+            />
+          )}
           {isDynamicPricing && (
             <StatusBadge
               label={t('Dynamic Pricing')}
@@ -259,9 +266,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               copyable={false}
               size='sm'
             />
-          )}
-          {props.monitorStatus && (
-            <MonitorStatusBadge status={props.monitorStatus.status} size='sm' />
           )}
         </div>
         <ModelPerfBadge perf={props.perf} className='row-span-2 self-start' />

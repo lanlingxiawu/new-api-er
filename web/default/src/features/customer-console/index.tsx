@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, PlusIcon, Send, UserRoundPen } from 'lucide-react'
+import { Pencil, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatQuota } from '@/lib/format'
@@ -14,13 +14,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   Table,
   TableBody,
   TableCell,
@@ -28,16 +21,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
-import { LogsTable, StatusBadge } from '@/features/customers'
+import { StatusBadge } from '@/features/customers'
 import {
   createMyCustomer,
-  getMyCustomerQuotaLogs,
+  // getMyCustomerQuotaLogs,
   getMyCustomers,
-  transferQuotaToCustomer,
+  // transferQuotaToCustomer,
   updateMyCustomer,
-  updateMyCustomerUser,
+  // updateMyCustomerUser,
 } from '@/features/customers/api'
 import type { CustomerProfile } from '@/features/customers/types'
 
@@ -122,7 +114,7 @@ function CreateCustomerDialog({
   )
 }
 
-function CustomerProfileDialog({
+function EditCustomerDialog({
   open,
   currentRow,
   onOpenChange,
@@ -134,12 +126,18 @@ function CustomerProfileDialog({
   onSuccess: () => void
 }) {
   const { t } = useTranslation()
-  const [status, setStatus] = useState(1)
+  // Employee user-profile editing is temporarily disabled.
+  // const [displayName, setDisplayName] = useState('')
+  // const [email, setEmail] = useState('')
+  // const [password, setPassword] = useState('')
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    setStatus(currentRow?.status ?? 1)
+    // Employee user-profile editing is temporarily disabled.
+    // setDisplayName(currentRow?.display_name ?? '')
+    // setEmail(currentRow?.email ?? '')
+    // setPassword('')
     setRemark(currentRow?.remark ?? '')
   }, [currentRow, open])
 
@@ -147,15 +145,21 @@ function CustomerProfileDialog({
     if (!currentRow) return
     setSaving(true)
     try {
-      const res = await updateMyCustomer(currentRow.id, { status, remark })
-      if (!res.success) throw new Error(res.message ?? 'Failed')
+      // Employee user-profile editing is temporarily disabled.
+      // const r1 = await updateMyCustomerUser(currentRow.id, {
+      //   display_name: displayName,
+      //   email,
+      //   password: password || undefined,
+      //   remark,
+      // })
+      const r2 = await updateMyCustomer(currentRow.id, { remark })
+      // if (!r1.success) throw new Error(r1.message ?? 'Failed')
+      if (!r2.success) throw new Error(r2.message ?? 'Failed')
       toast.success(t('Customer updated'))
       onOpenChange(false)
       onSuccess()
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
+      toast.error(error instanceof Error ? error.message : t('Operation failed'))
     } finally {
       setSaving(false)
     }
@@ -163,38 +167,54 @@ function CustomerProfileDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-[420px]'>
+      <DialogContent className='sm:max-w-[500px]'>
         <DialogHeader>
           <DialogTitle>{t('Edit Customer')}</DialogTitle>
+          <p className='text-muted-foreground text-sm'>{t('Update customer information')}</p>
         </DialogHeader>
-        <div className='flex flex-col gap-4'>
-          <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Status')}</label>
-            <Select
-              value={String(status)}
-              onValueChange={(v) => setStatus(Number(v))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='1'>{t('Enabled')}</SelectItem>
-                <SelectItem value='2'>{t('Disabled')}</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className='flex flex-col gap-6'>
+          {/*
+          Employee user-profile editing is temporarily disabled.
+          <div className='flex flex-col gap-3'>
+            <h3 className='text-sm font-semibold'>{t('Basic Information')}</h3>
+            <div className='flex flex-col gap-2'>
+              <label className='text-sm font-medium'>{t('Username')}</label>
+              <Input value={currentRow?.username ?? `#${currentRow?.customer_user_id}`} disabled className='bg-muted' />
+            </div>
+            <div className='flex flex-col gap-2'>
+              <label className='text-sm font-medium'>{t('Display Name')}</label>
+              <Input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder={currentRow?.username}
+              />
+              <p className='text-muted-foreground text-xs'>{t('Leave blank to use username')}</p>
+            </div>
+            <div className='flex flex-col gap-2'>
+              <label className='text-sm font-medium'>{t('Email')}</label>
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+            <div className='flex flex-col gap-2'>
+              <label className='text-sm font-medium'>{t('Password')}</label>
+              <Input
+                type='password'
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('Leave blank to keep unchanged')}
+              />
+            </div>
           </div>
-          <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Remark')}</label>
-            <Input
-              value={remark}
-              onChange={(event) => setRemark(event.target.value)}
-            />
+          */}
+
+          <div className='flex flex-col gap-3'>
+            <div className='flex flex-col gap-2'>
+              <label className='text-sm font-medium'>{t('Remark')}</label>
+              <Input value={remark} onChange={(e) => setRemark(e.target.value)} />
+            </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>
-            {t('Cancel')}
-          </Button>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>{t('Cancel')}</Button>
           <Button disabled={saving} onClick={submit}>
             {saving ? t('Saving...') : t('Save')}
           </Button>
@@ -204,93 +224,8 @@ function CustomerProfileDialog({
   )
 }
 
-function CustomerUserDialog({
-  open,
-  currentRow,
-  onOpenChange,
-  onSuccess,
-}: {
-  open: boolean
-  currentRow?: CustomerProfile
-  onOpenChange: (open: boolean) => void
-  onSuccess: () => void
-}) {
-  const { t } = useTranslation()
-  const [displayName, setDisplayName] = useState('')
-  const [email, setEmail] = useState('')
-  const [remark, setRemark] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    setDisplayName(currentRow?.display_name ?? '')
-    setEmail(currentRow?.email ?? '')
-    setRemark(currentRow?.remark ?? '')
-  }, [currentRow, open])
-
-  const submit = async () => {
-    if (!currentRow) return
-    setSaving(true)
-    try {
-      const res = await updateMyCustomerUser(currentRow.id, {
-        display_name: displayName,
-        email,
-        remark,
-      })
-      if (!res.success) throw new Error(res.message ?? 'Failed')
-      toast.success(t('Customer user updated'))
-      onOpenChange(false)
-      onSuccess()
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-[420px]'>
-        <DialogHeader>
-          <DialogTitle>{t('Edit Customer User')}</DialogTitle>
-        </DialogHeader>
-        <div className='flex flex-col gap-4'>
-          <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Display Name')}</label>
-            <Input
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-            />
-          </div>
-          <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Email')}</label>
-            <Input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </div>
-          <div className='flex flex-col gap-2'>
-            <label className='text-sm font-medium'>{t('Remark')}</label>
-            <Input
-              value={remark}
-              onChange={(event) => setRemark(event.target.value)}
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>
-            {t('Cancel')}
-          </Button>
-          <Button disabled={saving} onClick={submit}>
-            {saving ? t('Saving...') : t('Save')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
+/*
+Employee quota adjustment is temporarily disabled.
 const QUOTA_PER_DOLLAR = 500000
 
 type AdjustMode = 'add' | 'subtract' | 'override'
@@ -427,6 +362,7 @@ function TransferDialog({
     </Dialog>
   )
 }
+*/
 
 function MyCustomersTab() {
   const { t } = useTranslation()
@@ -434,8 +370,8 @@ function MyCustomersTab() {
   const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
-  const [editUserRow, setEditUserRow] = useState<CustomerProfile | undefined>()
-  const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
+  // Employee quota adjustment is temporarily disabled.
+  // const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
   const pageSize = 20
 
   const { data, isLoading } = useQuery({
@@ -514,6 +450,8 @@ function MyCustomersTab() {
               </TableCell>
               <TableCell>
                 <div className='flex gap-1'>
+                  {/*
+                  Employee quota adjustment is temporarily disabled.
                   <Button
                     size='icon'
                     variant='ghost'
@@ -521,19 +459,13 @@ function MyCustomersTab() {
                   >
                     <Send />
                   </Button>
+                  */}
                   <Button
                     size='icon'
                     variant='ghost'
                     onClick={() => setEditRow(row)}
                   >
                     <Pencil />
-                  </Button>
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    onClick={() => setEditUserRow(row)}
-                  >
-                    <UserRoundPen />
                   </Button>
                 </div>
               </TableCell>
@@ -569,28 +501,27 @@ function MyCustomersTab() {
         onOpenChange={setCreateOpen}
         onSuccess={refresh}
       />
+      {/*
+      Employee quota adjustment is temporarily disabled.
       <TransferDialog
         open={!!transferRow}
         currentRow={transferRow}
         onOpenChange={(open) => !open && setTransferRow(undefined)}
         onSuccess={refresh}
       />
-      <CustomerProfileDialog
+      */}
+      <EditCustomerDialog
         open={!!editRow}
         currentRow={editRow}
         onOpenChange={(open) => !open && setEditRow(undefined)}
-        onSuccess={refresh}
-      />
-      <CustomerUserDialog
-        open={!!editUserRow}
-        currentRow={editUserRow}
-        onOpenChange={(open) => !open && setEditUserRow(undefined)}
         onSuccess={refresh}
       />
     </div>
   )
 }
 
+/*
+Employee customer tabs and recharge logs are temporarily disabled.
 function MyRechargeLogsTab() {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
@@ -631,6 +562,7 @@ function MyRechargeLogsTab() {
     </div>
   )
 }
+*/
 
 export function CustomerConsole() {
   const { t } = useTranslation()
@@ -639,6 +571,9 @@ export function CustomerConsole() {
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('My Customers')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
+        <MyCustomersTab />
+        {/*
+        Employee customer tabs are temporarily disabled.
         <Tabs defaultValue='customers'>
           <TabsList>
             <TabsTrigger value='customers'>{t('Customers')}</TabsTrigger>
@@ -651,6 +586,7 @@ export function CustomerConsole() {
             <MyRechargeLogsTab />
           </TabsContent>
         </Tabs>
+        */}
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

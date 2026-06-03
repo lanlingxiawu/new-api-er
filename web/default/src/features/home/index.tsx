@@ -23,6 +23,8 @@ import {
 } from '@/i18n/languages'
 import { ArrowRight, ChevronDown, ChevronRight, Menu, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
 import heroOrbitImage from '@/assets/home/Ellipse 6.png'
 import homeOrbitDot from '@/assets/home/Frame 37.png'
 import featureGlobalAccess from '@/assets/home/Global Model Access.png'
@@ -562,6 +564,7 @@ function TypewriterTitle({ text }: { text: string }) {
 
 function FigmaHomeHeader() {
   const { t, i18n } = useTranslation()
+  const user = useAuthStore((s) => s.auth.user)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [mobileExpandedMenu, setMobileExpandedMenu] = useState<string | null>(
     null
@@ -591,14 +594,20 @@ function FigmaHomeHeader() {
     ) || languageOptions[0]
 
   const handleLanguageSelect = useCallback(
-    (languageKey: string) => {
+    async (languageKey: string) => {
       const nextLanguage = normalizeInterfaceLanguage(languageKey)
       setMobileMenuOpen(false)
       setMobileExpandedMenu(null)
-      i18n.changeLanguage(nextLanguage)
-      localStorage.setItem('i18nextLng', nextLanguage)
+      await i18n.changeLanguage(nextLanguage)
+      if (user) {
+        try {
+          await api.put('/api/user/self', { language: nextLanguage })
+        } catch {
+          // Best-effort persistence; don't block the UI on failure
+        }
+      }
     },
-    [i18n]
+    [i18n, user]
   )
 
   const mobileMenuItems: NavItem[] = useMemo(
