@@ -147,6 +147,9 @@ export function getLucideIcon(key, selected = false) {
     case 'models':
       return <Package {...commonProps} color={iconColor} />;
     case 'deployment':
+    // xiugai 添加号池节点功能
+    case 'node-pool':
+    // end
       return <Server {...commonProps} color={iconColor} />;
     case 'subscription':
       return <CalendarClock {...commonProps} color={iconColor} />;

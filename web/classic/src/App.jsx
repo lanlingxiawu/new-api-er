@@ -21,7 +21,7 @@ import React, { lazy, Suspense, useContext, useMemo } from 'react';
 import { Route, Routes, useLocation, useParams } from 'react-router-dom';
 import Loading from './components/common/ui/Loading';
 import User from './pages/User';
-import { AuthRedirect, PrivateRoute, AdminRoute } from './helpers';
+import { AuthRedirect, PrivateRoute, AdminRoute, RootRoute } from './helpers';
 import RegisterForm from './components/auth/RegisterForm';
 import LoginForm from './components/auth/LoginForm';
 import NotFound from './pages/NotFound';
@@ -49,6 +49,9 @@ import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
+// xiugai 添加号池节点功能
+import NodePool from './pages/NodePool';
+// end
 
 const Home = lazy(() => import('./pages/Home'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -131,6 +134,16 @@ function App() {
             </AdminRoute>
           }
         />
+        {/* xiugai 添加号池节点功能 - 修复路由权限与后端 RootAuth 一致 */}
+        <Route
+          path='/console/node-pool'
+          element={
+            <RootRoute>
+              <NodePool />
+            </RootRoute>
+          }
+        />
+        {/* end */}
         <Route
           path='/console/channel'
           element={

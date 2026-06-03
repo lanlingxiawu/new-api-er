@@ -38,6 +38,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { type SidebarData } from '@/components/layout/types'
+// xiugai 添加号池节点功能 - 修复侧边栏权限
+import { ROLE } from '@/lib/roles'
+// end
 
 /**
  * Root navigation groups for the application sidebar.
@@ -144,11 +147,12 @@ export function useSidebarData(): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
-          // xiugai 添加号池节点功能
+          // xiugai 添加号池节点功能 - 修复侧边栏权限，仅超级管理员可见
           {
             title: t('Node Pool'),
             url: '/node-pool',
             icon: Server,
+            minRole: ROLE.SUPER_ADMIN,
           },
           // end
           {

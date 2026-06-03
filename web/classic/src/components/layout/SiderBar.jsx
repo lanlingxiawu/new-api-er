@@ -49,6 +49,9 @@ const routerMap = {
   deployment: '/console/deployment',
   playground: '/console/playground',
   personal: '/console/personal',
+  // xiugai 添加号池节点功能
+  'node-pool': '/console/node-pool',
+  // end
 };
 
 const SiderBar = ({ onNavigate = () => {} }) => {
@@ -183,6 +186,14 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         to: '/user',
         className: isAdmin() ? '' : 'tableHiddle',
       },
+      // xiugai 添加号池节点功能
+      {
+        text: t('号池节点'),
+        itemKey: 'node-pool',
+        to: '/console/node-pool',
+        className: isRoot() ? '' : 'tableHiddle',
+      },
+      // end
       {
         text: t('系统设置'),
         itemKey: 'setting',

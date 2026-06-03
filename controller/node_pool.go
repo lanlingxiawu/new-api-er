@@ -4,6 +4,7 @@ package controller
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,54 +20,52 @@ import (
 
 var (
 	nodePoolClient     *http.Client
+	nodePoolClientErr  error
 	nodePoolClientOnce sync.Once
 )
 
-func getNodePoolClient() *http.Client {
+func getNodePoolClient() (*http.Client, error) {
 	nodePoolClientOnce.Do(func() {
-		nodePoolClient = buildNodePoolClient()
+		nodePoolClient, nodePoolClientErr = buildNodePoolClient()
 	})
-	return nodePoolClient
+	return nodePoolClient, nodePoolClientErr
 }
 
-func buildNodePoolClient() *http.Client {
+func buildNodePoolClient() (*http.Client, error) {
 	certFile := os.Getenv("NODE_POOL_CLIENT_CERT")
 	keyFile := os.Getenv("NODE_POOL_CLIENT_KEY")
 	caFile := os.Getenv("NODE_POOL_CA_CERT")
 
-	if certFile == "" || keyFile == "" {
-		return &http.Client{Timeout: 15 * time.Second}
+	if certFile == "" || keyFile == "" || caFile == "" {
+		return nil, errors.New("node pool: NODE_POOL_CLIENT_CERT、NODE_POOL_CLIENT_KEY、NODE_POOL_CA_CERT 均未配置，无法建立 mTLS 连接")
 	}
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		common.SysError(fmt.Sprintf("node pool: failed to load client cert/key: %v", err))
-		return &http.Client{Timeout: 15 * time.Second}
+		return nil, fmt.Errorf("node pool: 加载客户端证书失败: %w", err)
 	}
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
 
-	if caFile != "" {
-		caCert, err := os.ReadFile(caFile)
-		if err != nil {
-			common.SysError(fmt.Sprintf("node pool: failed to read CA cert: %v", err))
-		} else {
-			pool := x509.NewCertPool()
-			if !pool.AppendCertsFromPEM(caCert) {
-				common.SysError("node pool: failed to parse CA cert")
-			} else {
-				tlsConfig.RootCAs = pool
-			}
-		}
+	caCert, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("node pool: 读取 CA 证书失败: %w", err)
 	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caCert) {
+		return nil, errors.New("node pool: CA 证书解析失败，请检查文件格式是否为 PEM")
+	}
+	tlsConfig.RootCAs = pool
 
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
-	return &http.Client{
+	client := &http.Client{
 		Timeout:   15 * time.Second,
 		Transport: transport,
 	}
+	common.SysLog("node pool: mTLS 客户端初始化成功")
+	return client, nil
 }
 
 func getNodeControlBaseUrl() string {
@@ -84,6 +83,15 @@ func proxyNodePoolRequest(c *gin.Context, targetPath string, method string) {
 		return
 	}
 
+	client, err := getNodePoolClient()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
 	targetUrl := fmt.Sprintf("%s%s", baseUrl, targetPath)
 	req, err := http.NewRequest(method, targetUrl, nil)
 	if err != nil {
@@ -95,7 +103,7 @@ func proxyNodePoolRequest(c *gin.Context, targetPath string, method string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := getNodePoolClient().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,

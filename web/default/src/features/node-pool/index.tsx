@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 // xiugai 添加号池节点功能
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
@@ -31,6 +31,7 @@ import {
   Network,
   RefreshCw,
   Server,
+  Trash2,
   Wallet,
   XCircle,
 } from 'lucide-react'
@@ -38,7 +39,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SectionPageLayout } from '@/components/layout'
-import { getNodeAccounts, getNodes } from './api'
+import { deleteNode, getNodeAccounts, getNodes } from './api'
 import type { Node, NodeAccount, NodeStats } from './types'
 
 function formatNumber(n: number | undefined | null, decimals = 2): string {
@@ -176,11 +177,49 @@ function NodeDetailField({ label, value }: NodeDetailFieldProps) {
   )
 }
 
-function NodeDetailPanel({ node }: { node: Node }) {
+// xiugai 添加号池节点功能 - 离线节点删除按钮
+function NodeDetailPanel({
+  node,
+  onDelete,
+  deleting,
+}: {
+  node: Node
+  onDelete: () => void
+  deleting: boolean
+}) {
   const { t } = useTranslation()
+  const [confirming, setConfirming] = useState(false)
+
+  const handleClick = () => {
+    if (!confirming) {
+      setConfirming(true)
+      return
+    }
+    setConfirming(false)
+    onDelete()
+  }
+
   return (
     <div className='rounded-lg border bg-card p-4'>
-      <h3 className='mb-3 text-sm font-semibold'>{t('Node Details')}</h3>
+      <div className='mb-3 flex items-center justify-between'>
+        <h3 className='text-sm font-semibold'>{t('Node Details')}</h3>
+        {node.status === 'offline' && (
+          <Button
+            size='sm'
+            variant={confirming ? 'destructive' : 'outline'}
+            onClick={handleClick}
+            disabled={deleting}
+            className='h-7 gap-1.5 text-xs'
+          >
+            {deleting ? (
+              <Loader2 className='size-3 animate-spin' />
+            ) : (
+              <Trash2 className='size-3' />
+            )}
+            {confirming ? t('Confirm Delete') : t('Delete Node')}
+          </Button>
+        )}
+      </div>
       <div>
         <NodeDetailField label={t('Node Name')} value={node.node_name} />
         <NodeDetailField label={t('Public IP')} value={node.public_ip} />
@@ -265,6 +304,12 @@ export function NodePool() {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [accounts, setAccounts] = useState<NodeAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
+  // xiugai 添加号池节点功能 - 离线节点删除
+  const [deleting, setDeleting] = useState(false)
+  // end
+  // xiugai 添加号池节点功能 - 修复快速切换节点账号列表竞态
+  const fetchAccountsSeqRef = useRef(0)
+  // end
 
   const fetchNodes = useCallback(async () => {
     setLoading(true)
@@ -290,18 +335,22 @@ export function NodePool() {
     fetchNodes()
   }, [])
 
+  // xiugai 添加号池节点功能 - 修复快速切换节点账号列表竞态
   const fetchAccounts = useCallback(async (node: Node) => {
+    const seq = ++fetchAccountsSeqRef.current
     setAccountsLoading(true)
     setAccounts([])
     try {
       const data = await getNodeAccounts(node.public_ip, node.node_name)
+      if (seq !== fetchAccountsSeqRef.current) return
       setAccounts(data.accounts ?? [])
     } catch {
-      setAccounts([])
+      if (seq === fetchAccountsSeqRef.current) setAccounts([])
     } finally {
-      setAccountsLoading(false)
+      if (seq === fetchAccountsSeqRef.current) setAccountsLoading(false)
     }
   }, [])
+  // end
 
   const handleSelectNode = useCallback(
     (node: Node) => {
@@ -310,6 +359,23 @@ export function NodePool() {
     },
     [fetchAccounts]
   )
+
+  // xiugai 添加号池节点功能 - 离线节点删除
+  const handleDeleteNode = useCallback(async () => {
+    if (!selectedNode) return
+    setDeleting(true)
+    try {
+      await deleteNode(selectedNode.public_ip, selectedNode.node_name)
+      setSelectedNode(null)
+      setAccounts([])
+      await fetchNodes()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : t('Failed to delete node'))
+    } finally {
+      setDeleting(false)
+    }
+  }, [selectedNode, fetchNodes, t])
+  // end
 
   const stats: NodeStats = {
     total: nodes.length,
@@ -402,7 +468,11 @@ export function NodePool() {
               {selectedNode ? (
                 <>
                   {/* Node detail */}
-                  <NodeDetailPanel node={selectedNode} />
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    onDelete={handleDeleteNode}
+                    deleting={deleting}
+                  />
 
                   {/* Account list */}
                   <div className='rounded-lg border bg-card p-4'>

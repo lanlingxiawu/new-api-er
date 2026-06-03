@@ -72,6 +72,9 @@ const SystemSetting = () => {
     WorkerUrl: '',
     WorkerValidKey: '',
     WorkerAllowHttpImageRequestEnabled: '',
+    // xiugai 添加号池节点功能
+    NodeControlServiceUrl: '',
+    // end
     Footer: '',
     WeChatAuthEnabled: '',
     WeChatServerAddress: '',
@@ -313,6 +316,13 @@ const SystemSetting = () => {
     }
     await updateOptions(options);
   };
+
+  // xiugai 添加号池节点功能
+  const submitNodeControlService = async () => {
+    const url = removeTrailingSlash(inputs.NodeControlServiceUrl);
+    await updateOptions([{ key: 'NodeControlServiceUrl', value: url }]);
+  };
+  // end
 
   const submitServerAddress = async () => {
     let ServerAddress = removeTrailingSlash(inputs.ServerAddress);
@@ -783,6 +793,30 @@ const SystemSetting = () => {
                   <Button onClick={submitWorker}>{t('更新Worker设置')}</Button>
                 </Form.Section>
               </Card>
+
+              {/* xiugai 添加号池节点功能 */}
+              <Card>
+                <Form.Section text={t('节点控制服务')}>
+                  <Text>
+                    {t('配置号池节点控制服务地址，用于获取节点状态和账号信息')}
+                  </Text>
+                  <Row
+                    gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+                  >
+                    <Col xs={24} sm={24} md={16} lg={16} xl={16}>
+                      <Form.Input
+                        field='NodeControlServiceUrl'
+                        label={t('节点控制服务地址')}
+                        placeholder='https://127.0.0.1:8888'
+                      />
+                    </Col>
+                  </Row>
+                  <Button onClick={submitNodeControlService}>
+                    {t('更新节点控制服务设置')}
+                  </Button>
+                </Form.Section>
+              </Card>
+              {/* end */}
 
               <Card>
                 <Form.Section text={t('SSRF防护设置')}>
