@@ -476,7 +476,7 @@ export function NodePool() {
     }
   }, [])
 
-  const fetchNodes = useCallback(async () => {
+  const fetchNodes = useCallback(async (skipBulkCache = false) => {
     setLoading(true)
     setError(null)
     try {
@@ -496,10 +496,12 @@ export function NodePool() {
 
       // 选中节点：拉取展示账号（同时更新缓存）
       fetchAccounts(nodeToSelect)
-      // 其余节点：并发拉取缓存
-      list
-        .filter((n) => n.node_name !== nodeToSelect!.node_name)
-        .forEach((n) => fetchAccountsForCache(n))
+      // 其余节点：并发拉取缓存（删除节点后跳过，避免批量请求所有节点）
+      if (!skipBulkCache) {
+        list
+          .filter((n) => n.node_name !== nodeToSelect!.node_name)
+          .forEach((n) => fetchAccountsForCache(n))
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : t('Failed to fetch nodes'))
     } finally {
@@ -530,7 +532,7 @@ export function NodePool() {
       setSelectedNode(null)
       setAccounts([])
       setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n })
-      await fetchNodes()
+      await fetchNodes(true)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : t('Failed to delete node'))
     } finally {
