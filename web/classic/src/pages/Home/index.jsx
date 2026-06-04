@@ -17,120 +17,302 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useContext, useEffect, useState } from 'react';
-import {
-  Button,
-  Typography,
-  Input,
-  ScrollList,
-  ScrollItem,
-} from '@douyinfe/semi-ui';
-import { API, showError, copy, showSuccess } from '../../helpers';
-import { useIsMobile } from '../../hooks/common/useIsMobile';
-import { API_ENDPOINTS } from '../../constants/common.constant';
+import React, { useContext, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { marked } from 'marked';
+import { ArrowRight, ChevronRight } from 'lucide-react';
+import { API } from '../../helpers';
 import { StatusContext } from '../../context/Status';
 import { useActualTheme } from '../../context/Theme';
-import { marked } from 'marked';
-import { useTranslation } from 'react-i18next';
-import {
-  IconGithubLogo,
-  IconPlay,
-  IconFile,
-  IconCopy,
-} from '@douyinfe/semi-icons';
-import { Link } from 'react-router-dom';
 import NoticeModal from '../../components/layout/NoticeModal';
-import {
-  Moonshot,
-  OpenAI,
-  XAI,
-  Zhipu,
-  Volcengine,
-  Cohere,
-  Claude,
-  Gemini,
-  Suno,
-  Minimax,
-  Wenxin,
-  Spark,
-  Qingyan,
-  DeepSeek,
-  Qwen,
-  Midjourney,
-  Grok,
-  AzureAI,
-  Hunyuan,
-  Xinference,
-} from '@lobehub/icons';
+import FigmaHomeHeader, {
+  LogoMark,
+} from '../../components/layout/FigmaHomeHeader';
+import LogoLoading from '../../components/common/ui/LogoLoading';
+import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
+import { setEmbeddedInitialPrompt } from '../../app/utils/embedded';
+import featureGlobalAccess from '../../assets/home/Global Model Access.png';
+import featureStableFast from '../../assets/home/Stable & Fast.png';
+import featureSecureReliable from '../../assets/home/Secure & Reliable.png';
+import heroGlobeImage from '../../assets/home/image 6.png';
+import heroOrbitImage from '../../assets/home/Ellipse 6.png';
+import homeMapBg from '../../assets/home/home_mapbg.png';
+import homeOrbitDot from '../../assets/home/Frame 37.png';
+import homeSearchIcon from '../../assets/home/home_icon_search.png';
+import statModelsIcon from '../../assets/home/home_page01_icon_01.png';
+import statRegionsIcon from '../../assets/home/home_page01_icon_02.png';
+import statUptimeIcon from '../../assets/home/home_page01_icon_03.png';
+import statDevelopersIcon from '../../assets/home/home_page01_icon_04.png';
+import routeLineOne from '../../assets/home/Vector 1.png';
+import routeLineTwo from '../../assets/home/Vector 2.png';
+import routeLineFour from '../../assets/home/Vector 4.png';
+import routeLineFive from '../../assets/home/Vector 5.png';
+import routeLineSix from '../../assets/home/Vector 6.png';
+import routeLineSeven from '../../assets/home/Vector 7.png';
 
-const { Text } = Typography;
+const routeLines = [
+  {
+    src: routeLineOne,
+    className: 'figma-home-route-1',
+    direction: 'figma-home-route-left-to-right',
+  },
+  {
+    src: routeLineTwo,
+    className: 'figma-home-route-2',
+    direction: 'figma-home-route-left-to-right',
+  },
+  {
+    src: routeLineFour,
+    className: 'figma-home-route-4',
+    direction: 'figma-home-route-left-to-right',
+  },
+  {
+    src: routeLineSix,
+    className: 'figma-home-route-6',
+    direction: 'figma-home-route-right-to-left',
+  },
+  {
+    src: routeLineFive,
+    className: 'figma-home-route-5',
+    direction: 'figma-home-route-left-to-right',
+  },
+  {
+    src: routeLineSeven,
+    className: 'figma-home-route-7',
+    direction: 'figma-home-route-left-to-right',
+  },
+];
+
+const normalizeNoticeContent = (content) => {
+  if (content === undefined || content === null) return '';
+  const text = String(content);
+  const compactText = text.trim().replace(/\s+/g, '');
+  const emptyQuotedValues = new Set(['""', "''", '“”', '‘’']);
+  return emptyQuotedValues.has(compactText) ? '' : text;
+};
+
+const mapDots = [
+  'figma-home-map-dot-1',
+  'figma-home-map-dot-2',
+  'figma-home-map-dot-3',
+  'figma-home-map-dot-4',
+  'figma-home-map-dot-5',
+  'figma-home-map-dot-6',
+  'figma-home-map-dot-7',
+  'figma-home-map-dot-8',
+];
+
+const featureCards = [
+  {
+    title: '全球模型接入',
+    description:
+      '在一个统一平台中接入 OpenAI、Anthropic、Google、Meta 及更多顶级模型。',
+    icon: featureGlobalAccess,
+  },
+  {
+    title: '稳定高速',
+    description: '全球多节点 AI 路由网络，提供极速响应与 99.9% 可用性保障。',
+    icon: featureStableFast,
+  },
+  {
+    title: '安全可靠',
+    description: '企业级安全能力，支持端到端加密、零数据留存，并满足合规要求。',
+    icon: featureSecureReliable,
+  },
+];
+
+const stats = [
+  { value: '200+', label: '可接入模型', icon: statModelsIcon },
+  { value: '50+', label: '覆盖国家 / 地区', icon: statRegionsIcon },
+  { value: '99.9%', label: '可用性保障', icon: statUptimeIcon },
+  { value: '100K+', label: '开发者信赖', icon: statDevelopersIcon },
+];
+
+const HeroGlobe = () => (
+  <div className='figma-home-globe' aria-hidden='true'>
+    <img className='figma-home-globe-main' src={heroGlobeImage} alt='' />
+    <img className='figma-home-globe-orbit' src={heroOrbitImage} alt='' />
+    <img
+      className='figma-home-globe-dot figma-home-globe-dot-east'
+      src={homeOrbitDot}
+      alt=''
+    />
+    <img
+      className='figma-home-globe-dot figma-home-globe-dot-west'
+      src={homeOrbitDot}
+      alt=''
+    />
+    <img
+      className='figma-home-globe-dot figma-home-globe-dot-southwest'
+      src={homeOrbitDot}
+      alt=''
+    />
+    <img
+      className='figma-home-globe-dot figma-home-globe-dot-northeast'
+      src={homeOrbitDot}
+      alt=''
+    />
+  </div>
+);
+
+const GlobalMap = () => (
+  <div className='figma-home-map' aria-hidden='true'>
+    <img src={homeMapBg} alt='' />
+  </div>
+);
+
+const TypewriterTitle = ({ text }) => {
+  const characters = React.useMemo(() => Array.from(text), [text]);
+  const [visibleLength, setVisibleLength] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    setVisibleLength(0);
+    setIsDeleting(false);
+  }, [text]);
+
+  useEffect(() => {
+    if (!characters.length) return undefined;
+
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReducedMotion) {
+      setVisibleLength(characters.length);
+      return undefined;
+    }
+
+    let delay = isDeleting ? 45 : 90;
+
+    if (!isDeleting && visibleLength === characters.length) {
+      delay = 1400;
+    } else if (isDeleting && visibleLength === 0) {
+      delay = 500;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (!isDeleting && visibleLength === characters.length) {
+        setIsDeleting(true);
+        return;
+      }
+
+      if (isDeleting && visibleLength === 0) {
+        setIsDeleting(false);
+        return;
+      }
+
+      setVisibleLength((currentLength) =>
+        isDeleting
+          ? Math.max(currentLength - 1, 0)
+          : Math.min(currentLength + 1, characters.length),
+      );
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [characters, isDeleting, visibleLength]);
+
+  return (
+    <span className='figma-home-typewriter' aria-hidden='true'>
+      <span className='figma-home-typewriter-text'>
+        {characters.slice(0, visibleLength).join('')}
+      </span>
+    </span>
+  );
+};
 
 const Home = () => {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const [statusState] = useContext(StatusContext);
   const actualTheme = useActualTheme();
   const [homePageContentLoaded, setHomePageContentLoaded] = useState(false);
   const [homePageContent, setHomePageContent] = useState('');
   const [noticeVisible, setNoticeVisible] = useState(false);
-  const isMobile = useIsMobile();
-  const isDemoSiteMode = statusState?.status?.demo_site_enabled || false;
-  const docsLink = statusState?.status?.docs_link || '';
-  const serverAddress =
-    statusState?.status?.server_address || `${window.location.origin}`;
-  const endpointItems = API_ENDPOINTS.map((e) => ({ value: e }));
-  const [endpointIndex, setEndpointIndex] = useState(0);
-  const isChinese = i18n.language.startsWith('zh');
+  const [heroPrompt, setHeroPrompt] = useState('');
+  const [isRoutingActive, setIsRoutingActive] = useState(false);
+  const heroSectionRef = useRef(null);
+  const featureSectionRef = useRef(null);
+  const routingSectionRef = useRef(null);
+  const heroSearchRef = useRef(null);
+  const heroSearchInputRef = useRef(null);
 
-  const displayHomePageContent = async () => {
-    setHomePageContent(localStorage.getItem('home_page_content') || '');
-    const res = await API.get('/api/home_page_content');
-    const { success, message, data } = res.data;
-    if (success) {
-      let content = data;
-      if (!data.startsWith('https://')) {
-        content = marked.parse(data);
-      }
-      setHomePageContent(content);
-      localStorage.setItem('home_page_content', content);
+  const getStartedPath = '/console';
+  const customHomeContent = statusState?.status?.home_page_content || '';
+  const heroTitle = t('一个 API 接入所有 LLM');
 
-      // 如果内容是 URL，则发送主题模式
-      if (data.startsWith('https://')) {
-        const iframe = document.querySelector('iframe');
-        if (iframe) {
-          iframe.onload = () => {
-            iframe.contentWindow.postMessage({ themeMode: actualTheme }, '*');
-            iframe.contentWindow.postMessage({ lang: i18n.language }, '*');
-          };
-        }
+  const promoEnabled = statusState?.status?.home_promo_enabled !== false;
+  const promoTextZh = statusState?.status?.home_promo_text_zh;
+  const promoTextEn = statusState?.status?.home_promo_text_en;
+  const isEnglish = (i18n.language || '').toLowerCase().startsWith('en');
+  const fallbackText = t('限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！');
+  const promoTextRaw = isEnglish
+    ? promoTextEn || promoTextZh || fallbackText
+    : promoTextZh || promoTextEn || fallbackText;
+  const promoLink = statusState?.status?.home_promo_link || getStartedPath;
+  const promoIsExternal = /^https?:\/\//i.test(promoLink);
+
+  const promoSegments = React.useMemo(() => {
+    if (!promoTextRaw) return [];
+    const segments = [];
+    const regex = /\{\{([\s\S]+?)\}\}/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(promoTextRaw)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({
+          highlight: false,
+          text: promoTextRaw.slice(lastIndex, match.index),
+        });
       }
+      segments.push({ highlight: true, text: match[1] });
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < promoTextRaw.length) {
+      segments.push({
+        highlight: false,
+        text: promoTextRaw.slice(lastIndex),
+      });
+    }
+    return segments;
+  }, [promoTextRaw]);
+
+  const showPromo =
+    promoEnabled && promoTextRaw && promoTextRaw.trim() !== '';
+
+  const showHomeLoading = useMinimumLoadingTime(!homePageContentLoaded, 800);
+
+  useEffect(() => {
+    if (customHomeContent) {
+      const parsedContent = customHomeContent.startsWith('https://')
+        ? customHomeContent
+        : marked.parse(customHomeContent);
+      setHomePageContent(parsedContent);
+      localStorage.setItem('home_page_content', parsedContent);
     } else {
-      showError(message);
-      setHomePageContent('加载首页内容失败...');
+      setHomePageContent('');
+      localStorage.setItem('home_page_content', '');
     }
-    setHomePageContentLoaded(true);
-  };
 
-  const handleCopyBaseURL = async () => {
-    const ok = await copy(serverAddress);
-    if (ok) {
-      showSuccess(t('已复制到剪切板'));
-    }
-  };
+    setHomePageContentLoaded(true);
+  }, [customHomeContent]);
 
   useEffect(() => {
     const checkNoticeAndShow = async () => {
       const lastCloseDate = localStorage.getItem('notice_close_date');
       const today = new Date().toDateString();
-      if (lastCloseDate !== today) {
-        try {
-          const res = await API.get('/api/notice');
-          const { success, data } = res.data;
-          if (success && data && data.trim() !== '') {
-            setNoticeVisible(true);
-          }
-        } catch (error) {
-          console.error('获取公告失败:', error);
+      if (lastCloseDate === today) return;
+
+      try {
+        const res = await API.get('/api/notice');
+        const { success, data } = res.data;
+        const noticeContent = normalizeNoticeContent(data);
+        if (success && noticeContent.trim() !== '') {
+          setNoticeVisible(true);
         }
+      } catch (error) {
+        console.error('failed to load notice:', error);
       }
     };
 
@@ -138,218 +320,336 @@ const Home = () => {
   }, []);
 
   useEffect(() => {
-    displayHomePageContent().then();
-  }, []);
+    if (!homePageContent.startsWith('https://')) return;
+    const iframe = document.querySelector('.figma-home-custom-frame');
+    if (!iframe) return;
+
+    iframe.onload = () => {
+      iframe.contentWindow.postMessage({ themeMode: actualTheme }, '*');
+      iframe.contentWindow.postMessage({ lang: i18n.language }, '*');
+    };
+  }, [actualTheme, homePageContent, i18n.language]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setEndpointIndex((prev) => (prev + 1) % endpointItems.length);
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [endpointItems.length]);
+    if (showHomeLoading || !homePageContentLoaded || homePageContent !== '') {
+      return undefined;
+    }
+
+    const handleOutsidePointerDown = (event) => {
+      const searchContainer = heroSearchRef.current;
+      const searchInput = heroSearchInputRef.current;
+
+      if (
+        !searchContainer ||
+        !searchInput ||
+        document.activeElement !== searchInput ||
+        searchContainer.contains(event.target)
+      ) {
+        return;
+      }
+
+      searchInput.blur();
+    };
+
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+
+    return () => {
+      document.removeEventListener(
+        'pointerdown',
+        handleOutsidePointerDown,
+        true,
+      );
+    };
+  }, [homePageContent, homePageContentLoaded, showHomeLoading]);
+
+  useEffect(() => {
+    if (showHomeLoading || !homePageContentLoaded || homePageContent !== '') {
+      return undefined;
+    }
+
+    const routingSection = routingSectionRef.current;
+    if (!routingSection) return undefined;
+
+    let triggered = false;
+    const activate = () => {
+      if (triggered) return;
+      triggered = true;
+      setIsRoutingActive(true);
+    };
+
+    // Decide whether the section's top has scrolled into the visible area.
+    const isInView = () => {
+      const rect = routingSection.getBoundingClientRect();
+      const viewportH =
+        window.innerHeight || document.documentElement.clientHeight;
+      // Trigger as soon as the top edge of the section is within the viewport
+      // (with a small buffer so it kicks in slightly before fully visible).
+      return rect.top < viewportH - 80 && rect.bottom > 0;
+    };
+
+    // 1) IntersectionObserver against the viewport — primary path
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          activate();
+          observer.disconnect();
+        }
+      },
+      {
+        root: null, // viewport, not .app-layout-scroll (that container may not scroll)
+        threshold: 0.05,
+        rootMargin: '0px 0px -10% 0px',
+      },
+    );
+    observer.observe(routingSection);
+
+    // 2) Scroll/resize listener — works even when the page scrolls inside a
+    //    nested container that the IntersectionObserver root can't see.
+    const scrollContainer = document.querySelector('.app-layout-scroll');
+    const scrollTargets = [window, scrollContainer].filter(Boolean);
+
+    const handleScroll = () => {
+      if (isInView()) {
+        activate();
+        scrollTargets.forEach((t) =>
+          t.removeEventListener('scroll', handleScroll),
+        );
+        window.removeEventListener('resize', handleScroll);
+        observer.disconnect();
+      }
+    };
+
+    scrollTargets.forEach((t) =>
+      t.addEventListener('scroll', handleScroll, { passive: true }),
+    );
+    window.addEventListener('resize', handleScroll);
+
+    // Initial check in case the section is already on screen at mount.
+    handleScroll();
+
+    return () => {
+      observer.disconnect();
+      scrollTargets.forEach((t) =>
+        t.removeEventListener('scroll', handleScroll),
+      );
+      window.removeEventListener('resize', handleScroll);
+    };
+  }, [homePageContent, homePageContentLoaded, showHomeLoading]);
+
+  const handleHeroSearchSubmit = (event) => {
+    event?.preventDefault();
+    const prompt = heroPrompt.trim();
+    const chatPath = '/console/chat/0';
+
+    if (!prompt) {
+      navigate(chatPath);
+      return;
+    }
+
+    setEmbeddedInitialPrompt(prompt);
+    navigate(chatPath);
+  };
+
+  const handleHeroSearchKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+    handleHeroSearchSubmit(event);
+  };
+
+  if (showHomeLoading) {
+    return <LogoLoading className='home-logo-loading' />;
+  }
+
+  if (homePageContent !== '') {
+    return (
+      <>
+        <NoticeModal
+          visible={noticeVisible}
+          onClose={() => setNoticeVisible(false)}
+        />
+        {homePageContent.startsWith('https://') ? (
+          <iframe
+            src={homePageContent}
+            title='Home Page Content'
+            className='figma-home-custom-frame'
+          />
+        ) : (
+          <div
+            className='figma-home-custom-content markdown-body'
+            dangerouslySetInnerHTML={{ __html: homePageContent }}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
-    <div className='classic-page-fill classic-home-page w-full overflow-x-hidden'>
+    <>
       <NoticeModal
         visible={noticeVisible}
         onClose={() => setNoticeVisible(false)}
-        isMobile={isMobile}
       />
-      {homePageContentLoaded && homePageContent === '' ? (
-        <div className='classic-home-default w-full overflow-x-hidden'>
-          {/* Banner 部分 */}
-          <div className='classic-home-hero w-full border-b border-semi-color-border relative overflow-x-hidden'>
-            {/* 背景模糊晕染球 */}
-            <div className='blur-ball blur-ball-indigo' />
-            <div className='blur-ball blur-ball-teal' />
-            <div className='flex items-center justify-center px-4 pt-24 pb-8'>
-              {/* 居中内容区 */}
-              <div className='flex flex-col items-center justify-center text-center max-w-4xl mx-auto'>
-                <div className='flex flex-col items-center justify-center mb-6 md:mb-8'>
-                  <h1
-                    className={`text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-bold text-semi-color-text-0 leading-tight ${isChinese ? 'tracking-wide md:tracking-wider' : ''}`}
-                  >
-                    <>
-                      {t('统一的')}
-                      <br />
-                      <span className='shine-text'>{t('大模型接口网关')}</span>
-                    </>
-                  </h1>
-                  <p className='text-base md:text-lg lg:text-xl text-semi-color-text-1 mt-4 md:mt-6 max-w-xl'>
-                    {t('多模型统一接入，只需将基址替换为：')}
-                  </p>
-                  {/* BASE URL 与端点选择 */}
-                  <div className='flex flex-col md:flex-row items-center justify-center gap-4 w-full mt-4 md:mt-6 max-w-md'>
-                    <Input
-                      readonly
-                      value={serverAddress}
-                      className='flex-1 !rounded-full'
-                      size={isMobile ? 'default' : 'large'}
-                      suffix={
-                        <div className='flex items-center gap-2'>
-                          <ScrollList
-                            bodyHeight={32}
-                            style={{ border: 'unset', boxShadow: 'unset' }}
-                          >
-                            <ScrollItem
-                              mode='wheel'
-                              cycled={true}
-                              list={endpointItems}
-                              selectedIndex={endpointIndex}
-                              onSelect={({ index }) => setEndpointIndex(index)}
-                            />
-                          </ScrollList>
-                          <Button
-                            type='primary'
-                            onClick={handleCopyBaseURL}
-                            icon={<IconCopy />}
-                            className='!rounded-full'
-                          />
-                        </div>
-                      }
-                    />
-                  </div>
-                </div>
+      <main className='figma-home'>
+        <FigmaHomeHeader />
 
-                {/* 操作按钮 */}
-                <div className='flex flex-row gap-4 justify-center items-center'>
-                  <Link to='/console'>
-                    <Button
-                      theme='solid'
-                      type='primary'
-                      size={isMobile ? 'default' : 'large'}
-                      className='!rounded-3xl px-8 py-2'
-                      icon={<IconPlay />}
-                    >
-                      {t('获取密钥')}
-                    </Button>
-                  </Link>
-                  {isDemoSiteMode && statusState?.status?.version ? (
-                    <Button
-                      size={isMobile ? 'default' : 'large'}
-                      className='flex items-center !rounded-3xl px-6 py-2'
-                      icon={<IconGithubLogo />}
-                      onClick={() =>
-                        window.open(
-                          'https://github.com/QuantumNous/new-api',
-                          '_blank',
-                        )
-                      }
-                    >
-                      {statusState.status.version}
-                    </Button>
-                  ) : (
-                    docsLink && (
-                      <Button
-                        size={isMobile ? 'default' : 'large'}
-                        className='flex items-center !rounded-3xl px-6 py-2'
-                        icon={<IconFile />}
-                        onClick={() => window.open(docsLink, '_blank')}
+        <section ref={heroSectionRef} className='figma-home-hero'>
+          {showPromo &&
+            (promoIsExternal ? (
+              <a
+                href={promoLink}
+                className='figma-home-promo'
+                target='_blank'
+                rel='noopener noreferrer'
+              >
+                <span className='figma-home-promo-text'>
+                  {promoSegments.map((seg, idx) =>
+                    seg.highlight ? (
+                      <span
+                        key={idx}
+                        className='figma-home-promo-highlight'
                       >
-                        {t('文档')}
-                      </Button>
-                    )
+                        {seg.text}
+                      </span>
+                    ) : (
+                      <React.Fragment key={idx}>{seg.text}</React.Fragment>
+                    ),
                   )}
-                </div>
+                </span>
+                <ChevronRight size={24} />
+              </a>
+            ) : (
+              <Link to={promoLink} className='figma-home-promo'>
+                <span className='figma-home-promo-text'>
+                  {promoSegments.map((seg, idx) =>
+                    seg.highlight ? (
+                      <span
+                        key={idx}
+                        className='figma-home-promo-highlight'
+                      >
+                        {seg.text}
+                      </span>
+                    ) : (
+                      <React.Fragment key={idx}>{seg.text}</React.Fragment>
+                    ),
+                  )}
+                </span>
+                <ChevronRight size={24} />
+              </Link>
+            ))}
 
-                {/* 框架兼容性图标 */}
-                <div className='mt-12 md:mt-16 lg:mt-20 w-full'>
-                  <div className='flex items-center mb-6 md:mb-8 justify-center'>
-                    <Text
-                      type='tertiary'
-                      className='text-lg md:text-xl lg:text-2xl font-light'
-                    >
-                      {t('支持众多的大模型供应商')}
-                    </Text>
-                  </div>
-                  <div className='flex flex-wrap items-center justify-center gap-3 sm:gap-4 md:gap-6 lg:gap-8 max-w-5xl mx-auto px-4'>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Moonshot size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <OpenAI size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <XAI size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Zhipu.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Volcengine.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Cohere.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Claude.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Gemini.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Suno size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Minimax.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Wenxin.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Spark.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Qingyan.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <DeepSeek.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Qwen.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Midjourney size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Grok size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <AzureAI.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Hunyuan.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Xinference.Color size={40} />
-                    </div>
-                    <div className='w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center'>
-                      <Typography.Text className='!text-lg sm:!text-xl md:!text-2xl lg:!text-3xl font-bold'>
-                        30+
-                      </Typography.Text>
-                    </div>
-                  </div>
+          <h1 className='figma-home-hero-title' aria-label={heroTitle}>
+            <TypewriterTitle text={heroTitle} />
+            <span className='figma-home-typewriter-measure' aria-hidden='true'>
+              {heroTitle}
+            </span>
+          </h1>
+
+          <div className='figma-home-hero-art' aria-hidden='true'>
+            <HeroGlobe />
+            <LogoMark className='figma-home-hero-logo' />
+          </div>
+
+          <div ref={heroSearchRef} className='figma-home-search' role='search'>
+            <img
+              className='figma-home-search-icon'
+              src={homeSearchIcon}
+              alt=''
+            />
+            <input
+              ref={heroSearchInputRef}
+              value={heroPrompt}
+              onChange={(event) => setHeroPrompt(event.target.value)}
+              onKeyDown={handleHeroSearchKeyDown}
+              placeholder={t('你想了解什么？')}
+            />
+            <button
+              type='button'
+              aria-label={t('开始对话')}
+              onClick={handleHeroSearchSubmit}
+            >
+              <LogoMark />
+            </button>
+          </div>
+        </section>
+
+        <section ref={featureSectionRef} className='figma-home-feature-section'>
+          <div className='figma-home-feature-grid'>
+            {featureCards.map((card) => (
+              <article key={card.title} className='figma-home-feature-card'>
+                <div className='figma-home-feature-icon'>
+                  <img src={card.icon} alt='' />
+                </div>
+                <h2>{t(card.title)}</h2>
+                <p>{t(card.description)}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className='figma-home-stats'>
+            {stats.map((stat) => (
+              <div key={stat.label} className='figma-home-stat'>
+                <img src={stat.icon} alt='' />
+                <div>
+                  <strong>{stat.value}</strong>
+                  <span>{t(stat.label)}</span>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
-        </div>
-      ) : (
-        <div className='classic-page-fill overflow-x-hidden w-full'>
-          {homePageContent.startsWith('https://') ? (
-            <iframe
-              src={homePageContent}
-              className='w-full h-full border-none'
-            />
-          ) : (
-            <div
-              className='mt-[60px]'
-              dangerouslySetInnerHTML={{ __html: homePageContent }}
-            />
-          )}
-        </div>
-      )}
-    </div>
+        </section>
+
+        <section
+          ref={routingSectionRef}
+          className={`figma-home-routing${
+            isRoutingActive ? ' is-route-active' : ''
+          }`}
+        >
+          <div className='figma-home-routing-header'>
+            <h2>{t('智能路由，全球覆盖')}</h2>
+            <p>
+              {t('AI 驱动的路由会自动选择最优路径，降低延迟并提升你的体验。')}
+            </p>
+          </div>
+
+          <div className='figma-home-map-wrap'>
+            <GlobalMap />
+            <div className='figma-home-map-routes' aria-hidden='true'>
+              {routeLines.map((line) => (
+                <img
+                  key={line.className}
+                  className={`${line.className} ${line.direction}`}
+                  src={line.src}
+                  alt=''
+                />
+              ))}
+            </div>
+            {mapDots.map((dotClass) => (
+              <span
+                key={dotClass}
+                className={`figma-home-map-dot ${dotClass}`}
+              />
+            ))}
+            <div className='figma-home-region figma-home-region-us'>
+              <strong>{t('美国西部')}</strong>
+              <span>120ms</span>
+            </div>
+            <div className='figma-home-region figma-home-region-sa'>
+              <strong>{t('南美洲')}</strong>
+              <span>150ms</span>
+            </div>
+            <div className='figma-home-region figma-home-region-ap'>
+              <strong>{t('亚太地区')}</strong>
+              <span>60ms</span>
+            </div>
+            <LogoMark className='figma-home-map-logo' />
+          </div>
+
+          <Link to={getStartedPath} className='figma-home-routing-cta'>
+            {t('立即开始')}
+            <ArrowRight size={18} />
+          </Link>
+        </section>
+      </main>
+    </>
   );
 };
 

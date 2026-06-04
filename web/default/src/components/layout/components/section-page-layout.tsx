@@ -23,10 +23,11 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react'
+import { cn } from '@/lib/utils'
 import { Main } from './main'
 import { PageFooterProvider } from './page-footer'
 
-type SlotProps = { children?: ReactNode }
+type SlotProps = { children?: ReactNode; className?: string }
 
 function SectionPageLayoutTitle(_props: SlotProps) {
   return null
@@ -60,6 +61,7 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
   let title: ReactNode = null
   let actions: ReactNode = null
   let content: ReactNode = null
+  let contentClassName: string | undefined
   let breadcrumb: ReactNode = null
 
   Children.forEach(props.children, (node) => {
@@ -68,8 +70,10 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
     if (child.type === SectionPageLayoutTitle) title = child.props.children
     else if (child.type === SectionPageLayoutActions)
       actions = child.props.children
-    else if (child.type === SectionPageLayoutContent)
+    else if (child.type === SectionPageLayoutContent) {
       content = child.props.children
+      contentClassName = child.props.className
+    }
     else if (child.type === SectionPageLayoutBreadcrumb)
       breadcrumb = child.props.children
   })
@@ -95,7 +99,12 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
           </div>
         </div>
 
-        <div className='min-h-0 flex-1 overflow-auto px-3 pt-1 pb-3 sm:px-4 sm:pt-1.5 sm:pb-4'>
+        <div
+          className={cn(
+            'min-h-0 flex-1 overflow-auto px-3 pt-1 pb-3 sm:px-4 sm:pt-1.5 sm:pb-4',
+            contentClassName
+          )}
+        >
           {content}
         </div>
 

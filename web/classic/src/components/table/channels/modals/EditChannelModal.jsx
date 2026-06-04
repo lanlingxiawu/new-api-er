@@ -150,7 +150,7 @@ function type2secretPrompt(type) {
     case 45:
       return '请输入渠道对应的鉴权密钥, 豆包语音输入：AppId|AccessToken';
     case 50:
-      return '按照如下格式输入: AccessKey|SecretKey, 如果上游是New API，则直接输ApiKey';
+      return '按照如下格式输入: AccessKey|SecretKey, 如果上游是NEXAXIS API，则直接输ApiKey';
     case 51:
       return '按照如下格式输入: AccessKey|SecretAccessKey';
     case 57:
@@ -184,6 +184,7 @@ const EditChannelModal = (props) => {
     auto_ban: 1,
     test_model: '',
     groups: ['default'],
+    cost_ratio: undefined,
     priority: 0,
     weight: 0,
     tag: '',
@@ -620,7 +621,7 @@ const EditChannelModal = (props) => {
       Modal.confirm({
         title: '警告',
         content:
-          '不需要在末尾加/v1，New API会自动处理，添加后可能导致请求失败，是否继续？',
+          '不需要在末尾加/v1，NEXAXIS API会自动处理，添加后可能导致请求失败，是否继续？',
         onOk: () => {
           setInputs((inputs) => ({ ...inputs, [name]: value }));
         },
@@ -975,6 +976,7 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      data.cost_ratio = data.cost_ratio ?? 1;
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -1745,6 +1747,21 @@ const EditChannelModal = (props) => {
     if (localInputs.type === 18 && localInputs.other === '') {
       localInputs.other = 'v2.1';
     }
+
+    if (
+      localInputs.cost_ratio === undefined ||
+      localInputs.cost_ratio === null ||
+      localInputs.cost_ratio === ''
+    ) {
+      showInfo(t('Cost ratio is required'));
+      return;
+    }
+    const costRatio = Number(localInputs.cost_ratio);
+    if (!Number.isFinite(costRatio) || costRatio < 0) {
+      showInfo(t('Cost ratio must be greater than or equal to 0'));
+      return;
+    }
+    localInputs.cost_ratio = costRatio;
 
     // 生成渠道额外设置JSON
     const channelExtraSettings = {
@@ -2666,6 +2683,43 @@ const EditChannelModal = (props) => {
                       autoComplete='new-password'
                     />
 
+                    <Form.InputNumber
+                      field='cost_ratio'
+                      label={t('Cost Ratio *')}
+                      placeholder='1.0'
+                      min={0}
+                      step={0.01}
+                      rules={[
+                        {
+                          required: true,
+                          message: t('Cost ratio is required'),
+                        },
+                      ]}
+                      onNumberChange={(value) =>
+                        handleInputChange('cost_ratio', value)
+                      }
+                      style={{ width: '100%' }}
+                      extraText={
+                        <div>
+                          <div>
+                            {t(
+                              'Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.',
+                            )}
+                          </div>
+                          {!isEdit && (
+                            <div
+                              className='mt-1 font-medium'
+                              style={{ color: 'var(--semi-color-warning)' }}
+                            >
+                              {t(
+                                'Tip: configure the cost ratio now so employee commission profit is calculated correctly.',
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      }
+                    />
+
                     {inputs.type === 33 && (
                       <>
                         <Form.Select
@@ -3324,7 +3378,7 @@ const EditChannelModal = (props) => {
                           <Banner
                             type='warning'
                             description={t(
-                              '如果你对接的是上游One API或者New API等转发项目，请使用OpenAI类型，不要使用此类型，除非你知道你在做什么。',
+                              '如果你对接的是上游One API或者NEXAXIS API等转发项目，请使用OpenAI类型，不要使用此类型，除非你知道你在做什么。',
                             )}
                             className='!rounded-lg'
                           />

@@ -50,7 +50,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
-	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+	logId := model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
@@ -62,6 +62,12 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	infoCopy := *info
+	quotaCopy := info.PriceData.Quota
+	go func() {
+		RecordTransactionCost(&infoCopy, quotaCopy, 0, logId)
+		TrySettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
+	}()
 }
 
 // ---------------------------------------------------------------------------

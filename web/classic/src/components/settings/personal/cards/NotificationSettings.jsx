@@ -165,13 +165,21 @@ const NotificationSettings = ({
         midjourney: true,
         task: true,
       },
-      personal: { enabled: true, topup: true, personal: true },
+      personal: {
+        enabled: true,
+        topup: true,
+        personal: true,
+        commission: true,
+        customerConsole: true,
+      },
       admin: {
         enabled: true,
         channel: true,
         models: true,
         deployment: true,
         subscription: true,
+        employee: true,
+        businessOverview: true,
         redemption: true,
         user: true,
         setting: true,
@@ -284,9 +292,18 @@ const NotificationSettings = ({
           title: t('个人设置'),
           description: t('个人信息设置'),
         },
+        {
+          key: 'commission',
+          title: t('我的佣金'),
+          description: t('员工自助佣金看板'),
+        },
+        {
+          key: 'customerConsole',
+          title: t('我的客户'),
+          description: t('员工客户列表和维护工具'),
+        },
       ],
     },
-    // 管理员区域：根据后端权限控制显示
     {
       key: 'admin',
       title: t('管理员区域'),
@@ -303,6 +320,16 @@ const NotificationSettings = ({
           key: 'subscription',
           title: t('订阅管理'),
           description: t('订阅套餐管理'),
+        },
+        {
+          key: 'employee',
+          title: t('员工管理'),
+          description: t('管理员工与佣金比例'),
+        },
+        {
+          key: 'businessOverview',
+          title: t('业务概览'),
+          description: t('查看消耗、成本、利润与佣金统计'),
         },
         {
           key: 'redemption',

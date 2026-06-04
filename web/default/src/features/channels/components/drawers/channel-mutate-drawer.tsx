@@ -630,7 +630,7 @@ export function ChannelMutateDrawer({
     const timer = setTimeout(() => {
       toast.warning(
         t(
-          'Warning: Base URL should not end with /v1. New API will handle it automatically. This may cause request failures.'
+          'Warning: Base URL should not end with /v1. NEXAXIS API will handle it automatically. This may cause request failures.'
         ),
         { duration: 5000 }
       )
@@ -1127,6 +1127,46 @@ export function ChannelMutateDrawer({
                         )}
                       />
                     </div>
+
+                    <FormField
+                      control={form.control}
+                      name='cost_ratio'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Cost Ratio *')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              step='0.01'
+                              min='0'
+                              placeholder='1.0'
+                              {...field}
+                              value={field.value ?? ''}
+                              onChange={(e) =>
+                                field.onChange(
+                                  e.target.value === ''
+                                    ? undefined
+                                    : Number(e.target.value)
+                                )
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.'
+                            )}
+                            {!isEditing && (
+                              <span className='mt-1 block font-medium text-amber-600'>
+                                {t(
+                                  'Tip: configure the cost ratio now so employee commission profit is calculated correctly.'
+                                )}
+                              </span>
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
                     <FormField
                       control={form.control}

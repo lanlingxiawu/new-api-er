@@ -45,6 +45,12 @@ import ModelPage from './pages/Model';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import Playground from './pages/Playground';
 import Subscription from './pages/Subscription';
+import {
+  BusinessOverview,
+  CustomerConsole,
+  EmployeeConsole,
+  Employees,
+} from './pages/Business';
 import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
@@ -144,6 +150,38 @@ function App() {
           }
         />
         {/* end */}
+        <Route
+          path='/console/employees'
+          element={
+            <AdminRoute>
+              <Employees />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/employees'
+          element={
+            <AdminRoute>
+              <Employees />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/commission-overview'
+          element={
+            <AdminRoute>
+              <BusinessOverview />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path='/commission-overview'
+          element={
+            <AdminRoute>
+              <BusinessOverview />
+            </AdminRoute>
+          }
+        />
         <Route
           path='/console/channel'
           element={
@@ -277,6 +315,38 @@ function App() {
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
                 <PersonalSetting />
               </Suspense>
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/commission'
+          element={
+            <PrivateRoute>
+              <EmployeeConsole />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/commission'
+          element={
+            <PrivateRoute>
+              <EmployeeConsole />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/customer-console'
+          element={
+            <PrivateRoute>
+              <CustomerConsole />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/customer-console'
+          element={
+            <PrivateRoute>
+              <CustomerConsole />
             </PrivateRoute>
           }
         />

@@ -1,0 +1,340 @@
+
+Rsbuild v2.0.7
+
+  ➜  Local:    http://127.0.0.1:3000/
+
+start   build started...
+ready   built in 2.46 s
+start   building removed E:/code/new-api-er/web/default/src/features/subscriptions/components/subscriptions-provider.tsx and 808 more
+ready   built in 1.97 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.72 s
+start   building features\employee-console\index.tsx and 3 more
+ready   built in 0.85 s
+start   building src\features\pricing
+ready   built in 0.67 s
+start   building features\employee-console\api.ts
+ready   built in 9.52 s
+Rspack persistent cache save failed: Rspack FS Error:IO error: 文件存在。 (os error 80)
+  Persistent cache has been disabled for this session. Restart the process to re-enable it.
+start   building features\employee-console\index.tsx
+ready   built in 3.79 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 1.26 s
+start   building i18n\locales\en.json
+ready   built in 1.69 s
+start   building i18n\locales\vi.json and 4 more
+ready   built in 1.72 s
+start   building i18n\locales\en.json
+ready   built in 2.43 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.85 s
+start   building features\employee-console\index.tsx and 2 more
+ready   built in 1.08 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.74 s
+start   building i18n\locales\zh.json
+ready   built in 1.30 s
+start   building i18n\locales\fr.json
+ready   built in 1.29 s
+start   building i18n\locales\vi.json and 2 more
+ready   built in 1.05 s
+start   building i18n\locales\en.json
+ready   built in 1.40 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.28 s
+start   building i18n\locales\zh.json
+ready   built in 1.52 s
+start   building i18n\locales\en.json
+ready   built in 1.30 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.16 s
+start   building i18n\locales\zh.json
+ready   built in 1.26 s
+start   building i18n\locales\en.json
+ready   built in 1.40 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.13 s
+start   building _authenticated\customer-console\index.tsx
+ready   built in 1.44 s
+start   building i18n\locales\zh.json
+ready   built in 1.23 s
+start   building i18n\locales\en.json
+ready   built in 0.61 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 0.59 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.65 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.69 s
+start   building features\commission-overview\api.ts
+ready   built in 1.20 s
+start   building features\commission-overview\index.tsx
+start   building features\commission-overview\index.tsx
+ready   built in 0.97 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.54 s
+start   building features\employee-console\index.tsx
+ready   built in 0.67 s
+start   building features\employee-console\index.tsx
+ready   built in 0.50 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.58 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.57 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.01 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.98 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.61 s
+start   building src\features
+ready   built in 0.55 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.61 s
+start   building src
+ready   built in 0.71 s
+start   building features\business\format.ts
+ready   built in 0.57 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.98 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.97 s
+start   building features\employees\index.tsx
+ready   built in 1.09 s
+start   building features\employees\index.tsx
+ready   built in 0.54 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.54 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.58 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.51 s
+start   building features\employee-console\index.tsx
+ready   built in 0.93 s
+start   building features\customer-console\index.tsx
+ready   built in 0.55 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.97 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.88 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 1.50 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 1.62 s
+start   building i18n\locales\en.json
+ready   built in 1.69 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 1.52 s
+start   building scripts
+ready   built in 0.61 s
+start   building i18n\locales\en.json
+ready   built in 1.34 s
+start   building i18n\locales\vi.json and 4 more
+ready   built in 1.34 s
+start   building i18n\locales\en.json
+ready   built in 2.02 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.96 s
+start   building scripts
+ready   built in 1.16 s
+start   building i18n\locales\en.json
+ready   built in 0.56 s
+start   building i18n\locales\vi.json and 12 more
+ready   built in 0.55 s
+start   building features\home\index.tsx
+ready   built in 1.44 s
+start   building i18n\locales\en.json
+ready   built in 1.36 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 1.18 s
+start   building features\home\index.tsx
+ready   built in 0.79 s
+start   building features\home\index.tsx
+ready   built in 0.58 s
+start   building features\home\index.tsx
+ready   built in 0.85 s
+start   building i18n\locales\en.json
+ready   built in 0.56 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 0.57 s
+start   building i18n\locales\en.json
+ready   built in 1.34 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 1.28 s
+start   building features\home\index.tsx
+ready   built in 1.65 s
+start   building playground\components\playground-input.tsx
+ready   built in 0.53 s
+start   building features\playground\index.tsx
+ready   built in 1.23 s
+start   building features\playground\index.tsx
+ready   built in 0.75 s
+start   building features\home\index.tsx
+ready   built in 1.81 s
+start   building features\playground\index.tsx
+ready   built in 0.56 s
+start   building features\playground\index.tsx
+ready   built in 0.53 s
+t in 0.74 s
+start   building features\employee-console\api.ts
+ready   built in 9.53 s
+start   building features\employee-console\index.tsx
+ready   built in 4.21 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 2.67 s
+start   building i18n\locales\en.json
+ready   built in 2.48 s
+start   building i18n\locales\vi.json and 4 more
+ready   built in 7.53 s
+start   building i18n\locales\en.json
+ready   built in 4.13 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 2.51 s
+start   building features\commission-overview\index.tsx and 2 more
+ready   built in 2.54 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.76 s
+start   building i18n\locales\zh.json
+ready   built in 1.54 s
+start   building i18n\locales\fr.json
+ready   built in 1.17 s
+start   building i18n\locales\vi.json and 2 more
+ready   built in 1.10 s
+start   building i18n\locales\en.json
+ready   built in 1.44 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.09 s
+start   building i18n\locales\zh.json
+ready   built in 1.59 s
+start   building i18n\locales\en.json
+ready   built in 1.11 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.23 s
+start   building i18n\locales\zh.json
+ready   built in 1.26 s
+start   building i18n\locales\en.json
+ready   built in 1.55 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.10 s
+start   building _authenticated\customer-console\index.tsx
+ready   built in 1.44 s
+start   building i18n\locales\zh.json
+ready   built in 1.49 s
+start   building i18n\locales\en.json
+ready   built in 0.68 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 0.58 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.77 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.68 s
+start   building features\commission-overview\api.ts
+ready   built in 1.47 s
+start   building features\commission-overview\index.tsx
+start   building features\commission-overview\index.tsx
+ready   built in 1.55 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.69 s
+start   building features\employee-console\index.tsx
+ready   built in 0.67 s
+start   building features\employee-console\index.tsx
+ready   built in 0.52 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.67 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.64 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.94 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.03 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.62 s
+start   building src\features
+ready   built in 0.57 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.61 s
+start   building src
+ready   built in 0.70 s
+start   building features\business\format.ts
+ready   built in 0.54 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.91 s
+start   building features\commission-overview\index.tsx
+ready   built in 0.96 s
+start   building features\employees\index.tsx
+ready   built in 1.16 s
+start   building features\employees\index.tsx
+ready   built in 0.54 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.56 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.57 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.50 s
+start   building features\employee-console\index.tsx
+ready   built in 1.05 s
+start   building features\customer-console\index.tsx
+ready   built in 0.56 s
+start   building features\commission-overview\index.tsx
+ready   built in 1.12 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 0.87 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 1.31 s
+start   building employees\components\employee-form-dialog.tsx
+ready   built in 1.49 s
+start   building i18n\locales\en.json
+ready   built in 1.51 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 1.62 s
+start   building scripts
+ready   built in 0.66 s
+start   building i18n\locales\en.json
+ready   built in 1.55 s
+start   building i18n\locales\vi.json and 4 more
+ready   built in 1.47 s
+start   building i18n\locales\en.json
+ready   built in 2.11 s
+start   building i18n\locales\vi.json and 10 more
+ready   built in 2.12 s
+start   building scripts
+ready   built in 1.34 s
+start   building i18n\locales\en.json
+ready   built in 0.54 s
+start   building i18n\locales\vi.json and 12 more
+ready   built in 0.49 s
+start   building features\home\index.tsx
+ready   built in 1.45 s
+start   building features\home\index.tsx
+ready   built in 0.88 s
+start   building i18n\locales\en.json
+ready   built in 1.49 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 1.25 s
+start   building features\home\index.tsx
+ready   built in 0.90 s
+start   building features\home\index.tsx
+ready   built in 0.58 s
+start   building features\home\index.tsx
+ready   built in 0.85 s
+start   building i18n\locales\en.json
+ready   built in 0.56 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 0.56 s
+start   building i18n\locales\en.json
+ready   built in 1.34 s
+start   building i18n\locales\vi.json and 11 more
+ready   built in 1.15 s
+start   building features\home\index.tsx
+ready   built in 1.60 s
+start   building playground\components\playground-input.tsx
+ready   built in 0.60 s
+start   building features\playground\index.tsx
+ready   built in 1.31 s
+start   building features\home\index.tsx
+ready   built in 1.55 s
+start   building features\playground\index.tsx
+ready   built in 0.54 s
+start   building features\playground\index.tsx
+ready   built in 0.53 s

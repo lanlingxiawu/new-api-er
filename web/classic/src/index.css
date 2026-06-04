@@ -1,3 +1,5 @@
+@import './figma-home.css';
+
 /* ==================== Tailwind CSS 配置 ==================== */
 @layer tailwind-base, semi, tailwind-components, tailwind-utils;
 
@@ -569,6 +571,18 @@ html.dark .sbg-variant-green {
 
 .semi-table-body::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.business-channel-profit-table .semi-table-body {
+  height: 223px !important;
+  min-height: 223px !important;
+  max-height: 223px !important;
+}
+
+.business-employee-table .semi-table-body {
+  height: 223px !important;
+  min-height: 223px !important;
+  max-height: 223px !important;
 }
 
 /* 侧边抽屉滚动条样式 */

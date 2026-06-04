@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -175,7 +177,7 @@ func AddToken(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
 	}
-	// 非无限额度时，检查额度值是否超出有效范围
+	// Validate quota range when quota is limited.
 	if !token.UnlimitedQuota {
 		if token.RemainQuota < 0 {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
@@ -187,7 +189,6 @@ func AddToken(c *gin.Context) {
 			return
 		}
 	}
-	// 检查用户令牌数量是否已达上限
 	maxTokens := operation_setting.GetMaxUserTokens()
 	count, err := model.CountUserTokens(c.GetInt("id"))
 	if err != nil {
@@ -357,3 +358,51 @@ func GetTokenKeysBatch(c *gin.Context) {
 	}
 	common.ApiSuccess(c, gin.H{"keys": keysMap})
 }
+
+func GetAvailableModelsByGroup(c *gin.Context) {
+	userGroup := c.Param("group")
+	if userGroup == "" {
+		common.ApiError(c, fmt.Errorf("group parameter is required"))
+		return
+	}
+	channels, err := model.GetChannelsByGroup(userGroup)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	modelSet := make(map[string]bool)
+	windowStart := time.Now().Unix() - 30*60
+	for _, ch := range channels {
+		for _, modelName := range ch.GetModels() {
+			if modelName == "" {
+				continue
+			}
+
+			var count int64
+			model.LOG_DB.Model(&model.Log{}).
+				Where(&model.Log{
+					ModelName: modelName,
+					Group:     userGroup,
+					Type:      model.LogTypeConsume,
+				}).
+				Where("created_at >= ?", windowStart).
+				Count(&count)
+
+			if count > 0 {
+				modelSet[modelName] = true
+			}
+		}
+	}
+
+	models := make([]string, 0, len(modelSet))
+	for m := range modelSet {
+		models = append(models, m)
+	}
+
+	common.ApiSuccess(c, dto.AvailableModelsResponse{
+		Models: models,
+		Count:  len(models),
+	})
+}
+

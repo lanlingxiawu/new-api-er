@@ -41,6 +41,8 @@ import { useLocation } from 'react-router-dom';
 import { normalizeLanguage } from '../../i18n/language';
 const { Sider, Content, Header } = Layout;
 
+const noContentPaddingPaths = [];
+
 const PageLayout = () => {
   const [userState, userDispatch] = useContext(UserContext);
   const [, statusDispatch] = useContext(StatusContext);
@@ -62,14 +64,18 @@ const PageLayout = () => {
     '/pricing',
   ];
 
-  const shouldHideFooter = cardProPages.includes(location.pathname);
+  const isConsoleRoute = location.pathname.startsWith('/console');
+  const shouldHideFooter =
+    isConsoleRoute || cardProPages.includes(location.pathname);
 
   const shouldInnerPadding =
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground';
+  const shouldRemoveContentPadding = noContentPaddingPaths.includes(
+    location.pathname,
+  );
 
-  const isConsoleRoute = location.pathname.startsWith('/console');
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
   const isFixedLayout = isConsoleRoute || location.pathname === '/pricing';
 
@@ -214,10 +220,17 @@ const PageLayout = () => {
           <Content
             className={isFixedLayout ? undefined : 'public-page-content'}
             style={{
-              flex: isFixedLayout ? '1 0 auto' : '1 1 auto',
-              overflowY: isFixedLayout && !isMobile ? 'hidden' : 'visible',
+              flex: '1 1 auto',
+              minHeight: 0,
+              overflowY: isMobile ? 'visible' : 'hidden',
               WebkitOverflowScrolling: 'touch',
-              padding: shouldInnerPadding ? (isMobile ? '5px' : '24px') : '0',
+              padding: shouldRemoveContentPadding
+                ? '0'
+                : shouldInnerPadding
+                  ? isMobile
+                    ? '5px'
+                    : '24px'
+                  : '0',
               position: 'relative',
               minHeight: 0,
             }}

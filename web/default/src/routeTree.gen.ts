@@ -46,8 +46,14 @@ import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authent
 import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
 import { Route as AuthenticatedNodePoolIndexRouteImport } from './routes/_authenticated/node-pool/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
+import { Route as AuthenticatedMarketplaceIndexRouteImport } from './routes/_authenticated/marketplace/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
+import { Route as AuthenticatedEmployeesIndexRouteImport } from './routes/_authenticated/employees/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
+import { Route as AuthenticatedCustomersIndexRouteImport } from './routes/_authenticated/customers/index'
+import { Route as AuthenticatedCustomerConsoleIndexRouteImport } from './routes/_authenticated/customer-console/index'
+import { Route as AuthenticatedCommissionIndexRouteImport } from './routes/_authenticated/commission/index'
+import { Route as AuthenticatedCommissionOverviewIndexRouteImport } from './routes/_authenticated/commission-overview/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_authenticated/usage-logs/$section'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
@@ -263,15 +269,51 @@ const AuthenticatedModelsIndexRoute =
     path: '/models/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedMarketplaceIndexRoute =
+  AuthenticatedMarketplaceIndexRouteImport.update({
+    id: '/marketplace/',
+    path: '/marketplace/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedKeysIndexRoute = AuthenticatedKeysIndexRouteImport.update({
   id: '/keys/',
   path: '/keys/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedEmployeesIndexRoute =
+  AuthenticatedEmployeesIndexRouteImport.update({
+    id: '/employees/',
+    path: '/employees/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedDashboardIndexRoute =
   AuthenticatedDashboardIndexRouteImport.update({
     id: '/dashboard/',
     path: '/dashboard/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCustomersIndexRoute =
+  AuthenticatedCustomersIndexRouteImport.update({
+    id: '/customers/',
+    path: '/customers/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCustomerConsoleIndexRoute =
+  AuthenticatedCustomerConsoleIndexRouteImport.update({
+    id: '/customer-console/',
+    path: '/customer-console/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCommissionIndexRoute =
+  AuthenticatedCommissionIndexRouteImport.update({
+    id: '/commission/',
+    path: '/commission/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCommissionOverviewIndexRoute =
+  AuthenticatedCommissionOverviewIndexRouteImport.update({
+    id: '/commission-overview/',
+    path: '/commission-overview/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedChannelsIndexRoute =
@@ -431,8 +473,14 @@ export interface FileRoutesByFullPath {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/commission-overview/': typeof AuthenticatedCommissionOverviewIndexRoute
+  '/commission/': typeof AuthenticatedCommissionIndexRoute
+  '/customer-console/': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/customers/': typeof AuthenticatedCustomersIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/employees/': typeof AuthenticatedEmployeesIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
+  '/marketplace/': typeof AuthenticatedMarketplaceIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
   '/node-pool/': typeof AuthenticatedNodePoolIndexRoute
   '/playground/': typeof AuthenticatedPlaygroundIndexRoute
@@ -490,8 +538,14 @@ export interface FileRoutesByTo {
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
+  '/commission-overview': typeof AuthenticatedCommissionOverviewIndexRoute
+  '/commission': typeof AuthenticatedCommissionIndexRoute
+  '/customer-console': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/customers': typeof AuthenticatedCustomersIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
+  '/employees': typeof AuthenticatedEmployeesIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
+  '/marketplace': typeof AuthenticatedMarketplaceIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
   '/node-pool': typeof AuthenticatedNodePoolIndexRoute
   '/playground': typeof AuthenticatedPlaygroundIndexRoute
@@ -553,8 +607,14 @@ export interface FileRoutesById {
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/_authenticated/commission-overview/': typeof AuthenticatedCommissionOverviewIndexRoute
+  '/_authenticated/commission/': typeof AuthenticatedCommissionIndexRoute
+  '/_authenticated/customer-console/': typeof AuthenticatedCustomerConsoleIndexRoute
+  '/_authenticated/customers/': typeof AuthenticatedCustomersIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
+  '/_authenticated/employees/': typeof AuthenticatedEmployeesIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
+  '/_authenticated/marketplace/': typeof AuthenticatedMarketplaceIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
   '/_authenticated/node-pool/': typeof AuthenticatedNodePoolIndexRoute
   '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
@@ -615,8 +675,14 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/channels/'
+    | '/commission-overview/'
+    | '/commission/'
+    | '/customer-console/'
+    | '/customers/'
     | '/dashboard/'
+    | '/employees/'
     | '/keys/'
+    | '/marketplace/'
     | '/models/'
     | '/node-pool/'
     | '/playground/'
@@ -674,8 +740,14 @@ export interface FileRouteTypes {
     | '/models/$section'
     | '/usage-logs/$section'
     | '/channels'
+    | '/commission-overview'
+    | '/commission'
+    | '/customer-console'
+    | '/customers'
     | '/dashboard'
+    | '/employees'
     | '/keys'
+    | '/marketplace'
     | '/models'
     | '/node-pool'
     | '/playground'
@@ -736,8 +808,14 @@ export interface FileRouteTypes {
     | '/_authenticated/models/$section'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/channels/'
+    | '/_authenticated/commission-overview/'
+    | '/_authenticated/commission/'
+    | '/_authenticated/customer-console/'
+    | '/_authenticated/customers/'
     | '/_authenticated/dashboard/'
+    | '/_authenticated/employees/'
     | '/_authenticated/keys/'
+    | '/_authenticated/marketplace/'
     | '/_authenticated/models/'
     | '/_authenticated/node-pool/'
     | '/_authenticated/playground/'
@@ -1047,6 +1125,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedModelsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/marketplace/': {
+      id: '/_authenticated/marketplace/'
+      path: '/marketplace'
+      fullPath: '/marketplace/'
+      preLoaderRoute: typeof AuthenticatedMarketplaceIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/keys/': {
       id: '/_authenticated/keys/'
       path: '/keys'
@@ -1054,11 +1139,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedKeysIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/employees/': {
+      id: '/_authenticated/employees/'
+      path: '/employees'
+      fullPath: '/employees/'
+      preLoaderRoute: typeof AuthenticatedEmployeesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/dashboard/': {
       id: '/_authenticated/dashboard/'
       path: '/dashboard'
       fullPath: '/dashboard/'
       preLoaderRoute: typeof AuthenticatedDashboardIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/customers/': {
+      id: '/_authenticated/customers/'
+      path: '/customers'
+      fullPath: '/customers/'
+      preLoaderRoute: typeof AuthenticatedCustomersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/customer-console/': {
+      id: '/_authenticated/customer-console/'
+      path: '/customer-console'
+      fullPath: '/customer-console/'
+      preLoaderRoute: typeof AuthenticatedCustomerConsoleIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/commission/': {
+      id: '/_authenticated/commission/'
+      path: '/commission'
+      fullPath: '/commission/'
+      preLoaderRoute: typeof AuthenticatedCommissionIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/commission-overview/': {
+      id: '/_authenticated/commission-overview/'
+      path: '/commission-overview'
+      fullPath: '/commission-overview/'
+      preLoaderRoute: typeof AuthenticatedCommissionOverviewIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/channels/': {
@@ -1303,8 +1423,14 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
+  AuthenticatedCommissionOverviewIndexRoute: typeof AuthenticatedCommissionOverviewIndexRoute
+  AuthenticatedCommissionIndexRoute: typeof AuthenticatedCommissionIndexRoute
+  AuthenticatedCustomerConsoleIndexRoute: typeof AuthenticatedCustomerConsoleIndexRoute
+  AuthenticatedCustomersIndexRoute: typeof AuthenticatedCustomersIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
+  AuthenticatedEmployeesIndexRoute: typeof AuthenticatedEmployeesIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
+  AuthenticatedMarketplaceIndexRoute: typeof AuthenticatedMarketplaceIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
   AuthenticatedNodePoolIndexRoute: typeof AuthenticatedNodePoolIndexRoute
   AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
@@ -1326,8 +1452,16 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
+  AuthenticatedCommissionOverviewIndexRoute:
+    AuthenticatedCommissionOverviewIndexRoute,
+  AuthenticatedCommissionIndexRoute: AuthenticatedCommissionIndexRoute,
+  AuthenticatedCustomerConsoleIndexRoute:
+    AuthenticatedCustomerConsoleIndexRoute,
+  AuthenticatedCustomersIndexRoute: AuthenticatedCustomersIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
+  AuthenticatedEmployeesIndexRoute: AuthenticatedEmployeesIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
+  AuthenticatedMarketplaceIndexRoute: AuthenticatedMarketplaceIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
   AuthenticatedNodePoolIndexRoute: AuthenticatedNodePoolIndexRoute,
   AuthenticatedPlaygroundIndexRoute: AuthenticatedPlaygroundIndexRoute,

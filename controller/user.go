@@ -436,6 +436,7 @@ func GetSelf(c *gin.Context) {
 		"stripe_customer":   user.StripeCustomer,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,                // 新增权限字段
+		"is_employee":       model.IsEmployee(user.Id),  // 是否为启用状态的员工（用于前端控制「我的提成」菜单显隐）
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1294,3 +1295,4 @@ func UpdateUserSetting(c *gin.Context) {
 
 	common.ApiSuccessI18n(c, i18n.MsgSettingSaved, nil)
 }
+

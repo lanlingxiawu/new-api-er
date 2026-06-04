@@ -17,104 +17,122 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useContext } from 'react';
-import {
-  Button,
-  Card,
-  Col,
-  Form,
-  Row,
-  Switch,
-  Typography,
-} from '@douyinfe/semi-ui';
-import { API, showError, showSuccess } from '../../../helpers';
+import React, { useContext, useEffect, useState } from 'react';
+import { Button, Card, Col, Form, Row, Switch, Typography } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
+import { API, showError, showSuccess } from '../../../helpers';
 import { StatusContext } from '../../../context/Status';
 
 const { Text } = Typography;
+
+const DEFAULT_HEADER_MODULES = {
+  home: true,
+  console: true,
+  pricing: {
+    enabled: true,
+    requireAuth: false,
+  },
+  docs: true,
+  about: true,
+};
+
+const cloneDefaults = () => ({
+  ...DEFAULT_HEADER_MODULES,
+  pricing: { ...DEFAULT_HEADER_MODULES.pricing },
+});
+
+const normalizeAccessModule = (value, fallback) => {
+  if (typeof value === 'boolean') {
+    return {
+      enabled: value,
+      requireAuth: fallback.requireAuth,
+    };
+  }
+  if (value && typeof value === 'object') {
+    return {
+      enabled: value.enabled !== false,
+      requireAuth: value.requireAuth === true,
+    };
+  }
+  return { ...fallback };
+};
+
+const normalizeHeaderModules = (raw) => {
+  const defaults = cloneDefaults();
+  if (!raw) return defaults;
+
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return {
+      ...defaults,
+      ...parsed,
+      pricing: normalizeAccessModule(parsed?.pricing, defaults.pricing),
+    };
+  } catch (error) {
+    return defaults;
+  }
+};
 
 export default function SettingsHeaderNavModules(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [statusState, statusDispatch] = useContext(StatusContext);
+  const [headerNavModules, setHeaderNavModules] = useState(cloneDefaults);
 
-  // 顶栏模块管理状态
-  const [headerNavModules, setHeaderNavModules] = useState({
-    home: true,
-    console: true,
-    pricing: {
-      enabled: true,
-      requireAuth: false, // 默认不需要登录鉴权
-    },
-    docs: true,
-    about: true,
-  });
+  useEffect(() => {
+    if (props.options?.HeaderNavModules) {
+      setHeaderNavModules(normalizeHeaderModules(props.options.HeaderNavModules));
+    }
+  }, [props.options]);
 
-  // 处理顶栏模块配置变更
-  function handleHeaderNavModuleChange(moduleKey) {
-    return (checked) => {
-      const newModules = { ...headerNavModules };
+  const handleHeaderNavModuleChange = (moduleKey) => (checked) => {
+    setHeaderNavModules((prev) => {
+      const next = { ...prev };
       if (moduleKey === 'pricing') {
-        // 对于pricing模块，只更新enabled属性
-        newModules[moduleKey] = {
-          ...newModules[moduleKey],
+        next[moduleKey] = {
+          ...normalizeAccessModule(prev[moduleKey], DEFAULT_HEADER_MODULES[moduleKey]),
           enabled: checked,
         };
       } else {
-        newModules[moduleKey] = checked;
+        next[moduleKey] = checked;
       }
-      setHeaderNavModules(newModules);
-    };
-  }
+      return next;
+    });
+  };
 
-  // 处理模型广场权限控制变更
-  function handlePricingAuthChange(checked) {
-    const newModules = { ...headerNavModules };
-    newModules.pricing = {
-      ...newModules.pricing,
-      requireAuth: checked,
-    };
-    setHeaderNavModules(newModules);
-  }
-
-  // 重置顶栏模块为默认配置
-  function resetHeaderNavModules() {
-    const defaultModules = {
-      home: true,
-      console: true,
-      pricing: {
-        enabled: true,
-        requireAuth: false,
+  const handleAccessAuthChange = (moduleKey) => (checked) => {
+    setHeaderNavModules((prev) => ({
+      ...prev,
+      [moduleKey]: {
+        ...normalizeAccessModule(prev[moduleKey], DEFAULT_HEADER_MODULES[moduleKey]),
+        requireAuth: checked,
       },
-      docs: true,
-      about: true,
-    };
-    setHeaderNavModules(defaultModules);
-    showSuccess(t('已重置为默认配置'));
-  }
+    }));
+  };
 
-  // 保存配置
-  async function onSubmit() {
+  const resetHeaderNavModules = () => {
+    setHeaderNavModules(cloneDefaults());
+    showSuccess(t('已重置为默认配置'));
+  };
+
+  const onSubmit = async () => {
     setLoading(true);
     try {
+      const value = JSON.stringify(headerNavModules);
       const res = await API.put('/api/option/', {
         key: 'HeaderNavModules',
-        value: JSON.stringify(headerNavModules),
+        value,
       });
       const { success, message } = res.data;
       if (success) {
         showSuccess(t('保存成功'));
-
-        // 立即更新StatusContext中的状态
         statusDispatch({
           type: 'set',
           payload: {
             ...statusState.status,
-            HeaderNavModules: JSON.stringify(headerNavModules),
+            HeaderNavModules: value,
           },
         });
-
-        // 刷新父组件状态
         if (props.refresh) {
           await props.refresh();
         }
@@ -126,41 +144,8 @@ export default function SettingsHeaderNavModules(props) {
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  useEffect(() => {
-    // 从 props.options 中获取配置
-    if (props.options && props.options.HeaderNavModules) {
-      try {
-        const modules = JSON.parse(props.options.HeaderNavModules);
-
-        // 处理向后兼容性：如果pricing是boolean，转换为对象格式
-        if (typeof modules.pricing === 'boolean') {
-          modules.pricing = {
-            enabled: modules.pricing,
-            requireAuth: false, // 默认不需要登录鉴权
-          };
-        }
-
-        setHeaderNavModules(modules);
-      } catch (error) {
-        // 使用默认配置
-        const defaultModules = {
-          home: true,
-          console: true,
-          pricing: {
-            enabled: true,
-            requireAuth: false,
-          },
-          docs: true,
-          about: true,
-        };
-        setHeaderNavModules(defaultModules);
-      }
-    }
-  }, [props.options]);
-
-  // 模块配置数据
   const moduleConfigs = [
     {
       key: 'home',
@@ -175,8 +160,10 @@ export default function SettingsHeaderNavModules(props) {
     {
       key: 'pricing',
       title: t('模型广场'),
-      description: t('模型定价，需要登录访问'),
-      hasSubConfig: true, // 标识该模块有子配置
+      description: t('模型定价与可用模型展示'),
+      hasAccessConfig: true,
+      accessTitle: t('需要登录访问'),
+      accessDescription: t('开启后未登录用户无法访问模型广场'),
     },
     {
       key: 'docs',
@@ -190,15 +177,20 @@ export default function SettingsHeaderNavModules(props) {
     },
   ];
 
+  const isEnabled = (module) =>
+    module.hasAccessConfig
+      ? headerNavModules[module.key]?.enabled !== false
+      : headerNavModules[module.key] === true;
+
   return (
     <Card>
       <Form.Section
-        text={t('顶栏管理')}
-        extraText={t('控制顶栏模块显示状态，全局生效')}
+        text={t('顶部栏管理')}
+        extraText={t('控制顶部栏模块显示状态，全局生效')}
       >
         <Row gutter={[16, 16]} style={{ marginBottom: '24px' }}>
           {moduleConfigs.map((module) => (
-            <Col key={module.key} xs={24} sm={12} md={6} lg={6} xl={6}>
+            <Col key={module.key} xs={24} sm={12} md={8} lg={8} xl={8}>
               <Card
                 style={{
                   borderRadius: '8px',
@@ -244,72 +236,62 @@ export default function SettingsHeaderNavModules(props) {
                   </div>
                   <div style={{ marginLeft: '16px' }}>
                     <Switch
-                      checked={
-                        module.key === 'pricing'
-                          ? headerNavModules[module.key]?.enabled
-                          : headerNavModules[module.key]
-                      }
+                      checked={isEnabled(module)}
                       onChange={handleHeaderNavModuleChange(module.key)}
                       size='default'
                     />
                   </div>
                 </div>
 
-                {/* 为模型广场添加权限控制子开关 */}
-                {module.key === 'pricing' &&
-                  (module.key === 'pricing'
-                    ? headerNavModules[module.key]?.enabled
-                    : headerNavModules[module.key]) && (
+                {module.hasAccessConfig && isEnabled(module) ? (
+                  <div
+                    style={{
+                      borderTop: '1px solid var(--semi-color-border)',
+                      marginTop: '12px',
+                      paddingTop: '12px',
+                    }}
+                  >
                     <div
                       style={{
-                        borderTop: '1px solid var(--semi-color-border)',
-                        marginTop: '12px',
-                        paddingTop: '12px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
                       }}
                     >
-                      <div
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <div style={{ flex: 1, textAlign: 'left' }}>
-                          <div
-                            style={{
-                              fontWeight: '500',
-                              fontSize: '12px',
-                              color: 'var(--semi-color-text-1)',
-                              marginBottom: '2px',
-                            }}
-                          >
-                            {t('需要登录访问')}
-                          </div>
-                          <Text
-                            type='secondary'
-                            size='small'
-                            style={{
-                              fontSize: '11px',
-                              color: 'var(--semi-color-text-2)',
-                              lineHeight: '1.4',
-                              display: 'block',
-                            }}
-                          >
-                            {t('开启后未登录用户无法访问模型广场')}
-                          </Text>
+                      <div style={{ flex: 1, textAlign: 'left' }}>
+                        <div
+                          style={{
+                            fontWeight: '500',
+                            fontSize: '12px',
+                            color: 'var(--semi-color-text-1)',
+                            marginBottom: '2px',
+                          }}
+                        >
+                          {module.accessTitle}
                         </div>
-                        <div style={{ marginLeft: '16px' }}>
-                          <Switch
-                            checked={
-                              headerNavModules.pricing?.requireAuth || false
-                            }
-                            onChange={handlePricingAuthChange}
-                            size='default'
-                          />
-                        </div>
+                        <Text
+                          type='secondary'
+                          size='small'
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--semi-color-text-2)',
+                            lineHeight: '1.4',
+                            display: 'block',
+                          }}
+                        >
+                          {module.accessDescription}
+                        </Text>
+                      </div>
+                      <div style={{ marginLeft: '16px' }}>
+                        <Switch
+                          checked={headerNavModules[module.key]?.requireAuth || false}
+                          onChange={handleAccessAuthChange(module.key)}
+                          size='default'
+                        />
                       </div>
                     </div>
-                  )}
+                  </div>
+                ) : null}
               </Card>
             </Col>
           ))}

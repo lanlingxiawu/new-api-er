@@ -18,12 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Activity,
+  BadgeDollarSign,
   Box,
   CreditCard,
   FileText,
   FlaskConical,
   Key,
   LayoutDashboard,
+  LineChart,
   ListTodo,
   MessageSquare,
   Radio,
@@ -33,10 +35,13 @@ import {
   Settings,
   Ticket,
   User,
+  UserCog,
+  UserRoundCheck,
   Users,
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import { type SidebarData } from '@/components/layout/types'
 // xiugai 添加号池节点功能 - 修复侧边栏权限
 import { ROLE } from '@/lib/roles'
@@ -50,6 +55,7 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const isEmployee = useAuthStore((s) => Boolean(s.auth.user?.is_employee))
 
   return {
     navGroups: [
@@ -116,6 +122,21 @@ export function useSidebarData(): SidebarData {
             url: '/profile',
             icon: User,
           },
+          // 仅员工可见
+          ...(isEmployee
+            ? [
+                {
+                  title: t('My Commission'),
+                  url: '/commission',
+                  icon: BadgeDollarSign,
+                },
+                {
+                  title: t('My Customers'),
+                  url: '/customer-console',
+                  icon: UserRoundCheck,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -155,6 +176,16 @@ export function useSidebarData(): SidebarData {
             minRole: ROLE.SUPER_ADMIN,
           },
           // end
+          {
+            title: t('Employee Management'),
+            url: '/employees',
+            icon: UserCog,
+          },
+          {
+            title: t('Business Overview'),
+            url: '/commission-overview',
+            icon: LineChart,
+          },
           {
             title: t('System Settings'),
             url: '/system-settings/site',

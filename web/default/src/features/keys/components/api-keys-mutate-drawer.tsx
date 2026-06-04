@@ -16,14 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getUserModels, getUserGroups } from '@/lib/api'
+import { getUserGroups } from '@/lib/api'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -65,6 +65,7 @@ import {
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import { getPricing } from '@/features/pricing/api'
 import { createApiKey, updateApiKey, getApiKey } from '../api'
 import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
@@ -100,11 +101,10 @@ export function ApiKeysMutateDrawer({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const defaultUseAutoGroup = status?.default_use_auto_group === true
 
-  // Fetch models
-  const { data: modelsData } = useQuery({
-    queryKey: ['user-models'],
-    queryFn: getUserModels,
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  const { data: pricingData } = useQuery({
+    queryKey: ['pricing'],
+    queryFn: getPricing,
+    staleTime: 5 * 60 * 1000,
   })
 
   // Fetch groups
@@ -114,7 +114,6 @@ export function ApiKeysMutateDrawer({
     staleTime: 5 * 60 * 1000,
   })
 
-  const models = modelsData?.data || []
   const groupsRaw = groupsData?.data || {}
   const groups: ApiKeyGroupOption[] = Object.entries(groupsRaw).map(
     ([key, info]) => ({
@@ -131,6 +130,37 @@ export function ApiKeysMutateDrawer({
     resolver: zodResolver(schema),
     defaultValues: getApiKeyFormDefaultValues(defaultUseAutoGroup),
   })
+  const selectedGroup = form.watch('group')
+  const unlimitedQuota = form.watch('unlimited_quota')
+
+  const models = useMemo(() => {
+    const pricingModels = pricingData?.data ?? []
+    if (pricingModels.length === 0) return []
+
+    const autoGroups = pricingData?.auto_groups ?? []
+    if (selectedGroup === 'auto' && autoGroups.length === 0) {
+      return []
+    }
+
+    const targetGroups =
+      selectedGroup === 'auto'
+        ? autoGroups
+        : selectedGroup
+          ? [selectedGroup]
+          : []
+    const targetGroupSet = new Set(targetGroups)
+
+    return pricingModels
+      .filter((model) => {
+        const enableGroups = model.enable_groups ?? []
+        if (enableGroups.includes('all')) return true
+        if (targetGroupSet.size === 0) return true
+        return enableGroups.some((group) => targetGroupSet.has(group))
+      })
+      .map((model) => model.model_name)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+  }, [pricingData?.auto_groups, pricingData?.data, selectedGroup])
 
   // Load existing data when updating
   useEffect(() => {
@@ -162,6 +192,18 @@ export function ApiKeysMutateDrawer({
       }
     }
   }, [groups, form])
+
+  useEffect(() => {
+    if (!pricingData?.success) return
+    const availableModelSet = new Set(models)
+    const selectedModels = form.getValues('model_limits') ?? []
+    const nextModels = selectedModels.filter((model) =>
+      availableModelSet.has(model)
+    )
+    if (nextModels.length !== selectedModels.length) {
+      form.setValue('model_limits', nextModels)
+    }
+  }, [form, models, pricingData?.success])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
@@ -243,9 +285,6 @@ export function ApiKeysMutateDrawer({
   const quotaPlaceholder = tokensOnly
     ? t('Enter quota in tokens')
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
-  const selectedGroup = form.watch('group')
-  const unlimitedQuota = form.watch('unlimited_quota')
-
   return (
     <Sheet
       open={open}
@@ -266,7 +305,7 @@ export function ApiKeysMutateDrawer({
           <SheetDescription>
             {isUpdate
               ? t('Update the API key by providing necessary info.')
-              : t('Add a new API key by providing necessary info.')}
+              : t('Add a NEXAXIS API key by providing necessary info.')}
           </SheetDescription>
         </SheetHeader>
         <Form {...form}>
