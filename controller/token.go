@@ -11,9 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,127 +33,6 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 	return maskedTokens
 }
 
-func buildGroupStatusInfo(groupName string) (dto.GroupStatusInfo, bool) {
-	groupName = strings.TrimSpace(groupName)
-	if groupName == "" {
-		return dto.GroupStatusInfo{}, false
-	}
-
-	enabledModels := model.GetGroupEnabledModels(groupName)
-	totalModels := len(enabledModels)
-	modelStatuses, _ := model.GetModelStatusesByGroup(groupName)
-	availableModels := 0
-	for _, modelName := range enabledModels {
-		if available, ok := modelStatuses[modelName]; !ok || available {
-			availableModels++
-		}
-	}
-
-	lastTestTime := int64(0)
-	if groupStatus, err := model.GetGroupStatus(groupName); err == nil && groupStatus != nil {
-		if groupStatus.TotalModels > totalModels {
-			totalModels = groupStatus.TotalModels
-		}
-		if groupStatus.AvailableModels > availableModels {
-			availableModels = groupStatus.AvailableModels
-		}
-		lastTestTime = groupStatus.LastTestTime
-	}
-
-	availabilityRate := 0.0
-	if totalModels > 0 {
-		availabilityRate = float64(availableModels) / float64(totalModels) * 100
-	}
-
-	return dto.GroupStatusInfo{
-		AvailableModels:  availableModels,
-		TotalModels:      totalModels,
-		AvailabilityRate: availabilityRate,
-		LastTestTime:     lastTestTime,
-	}, true
-}
-
-func buildAggregateGroupStatusInfo(groupNames []string) (dto.GroupStatusInfo, bool) {
-	seen := make(map[string]bool)
-	result := dto.GroupStatusInfo{}
-	found := false
-	for _, groupName := range groupNames {
-		groupName = strings.TrimSpace(groupName)
-		if groupName == "" || seen[groupName] {
-			continue
-		}
-		seen[groupName] = true
-		info, ok := buildGroupStatusInfo(groupName)
-		if !ok {
-			continue
-		}
-		found = true
-		result.AvailableModels += info.AvailableModels
-		result.TotalModels += info.TotalModels
-		if info.LastTestTime > result.LastTestTime {
-			result.LastTestTime = info.LastTestTime
-		}
-	}
-	if result.TotalModels > 0 {
-		result.AvailabilityRate = float64(result.AvailableModels) / float64(result.TotalModels) * 100
-	}
-	return result, found
-}
-
-func buildTokenGroupStatusInfo(tokenGroup string, userGroup string) (dto.GroupStatusInfo, bool) {
-	if tokenGroup == "auto" {
-		return buildAggregateGroupStatusInfo(service.GetUserAutoGroup(userGroup))
-	}
-	return buildGroupStatusInfo(tokenGroup)
-}
-
-func buildTokensWithGroupStatus(tokens []*model.Token, userGroup string) []gin.H {
-	if len(tokens) == 0 {
-		return []gin.H{}
-	}
-
-	groupMap := make(map[string]dto.GroupStatusInfo)
-	for _, token := range tokens {
-		if token.Group == "" {
-			continue
-		}
-		if _, exists := groupMap[token.Group]; exists {
-			continue
-		}
-		if groupStatus, ok := buildTokenGroupStatusInfo(token.Group, userGroup); ok {
-			groupMap[token.Group] = groupStatus
-		}
-	}
-
-	result := make([]gin.H, 0, len(tokens))
-	for _, token := range tokens {
-		maskedToken := buildMaskedTokenResponse(token)
-		item := gin.H{
-			"id":                   maskedToken.Id,
-			"user_id":              maskedToken.UserId,
-			"key":                  maskedToken.Key,
-			"status":               maskedToken.Status,
-			"name":                 maskedToken.Name,
-			"created_time":         maskedToken.CreatedTime,
-			"accessed_time":        maskedToken.AccessedTime,
-			"expired_time":         maskedToken.ExpiredTime,
-			"remain_quota":         maskedToken.RemainQuota,
-			"unlimited_quota":      maskedToken.UnlimitedQuota,
-			"used_quota":           maskedToken.UsedQuota,
-			"group":                maskedToken.Group,
-			"model_limits_enabled": maskedToken.ModelLimitsEnabled,
-			"model_limits":         maskedToken.ModelLimits,
-			"allow_ips":            maskedToken.AllowIps,
-			"cross_group_retry":    maskedToken.CrossGroupRetry,
-		}
-		if groupStatus, ok := groupMap[token.Group]; ok {
-			item["group_status"] = groupStatus
-		}
-		result = append(result, item)
-	}
-	return result
-}
-
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
@@ -166,8 +43,7 @@ func GetAllTokens(c *gin.Context) {
 	}
 	total, _ := model.CountUserTokens(userId)
 	pageInfo.SetTotal(int(total))
-	userGroup, _ := model.GetUserGroup(userId, false)
-	pageInfo.SetItems(buildTokensWithGroupStatus(tokens, userGroup))
+	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -184,8 +60,7 @@ func SearchTokens(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	userGroup, _ := model.GetUserGroup(userId, false)
-	pageInfo.SetItems(buildTokensWithGroupStatus(tokens, userGroup))
+	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -531,59 +406,3 @@ func GetAvailableModelsByGroup(c *gin.Context) {
 	})
 }
 
-func GetGroupStatuses(c *gin.Context) {
-	type GroupStatusResponse struct {
-		UserGroup        string  `json:"user_group"`
-		AvailableModels  int     `json:"available_models"`
-		TotalModels      int     `json:"total_models"`
-		AvailabilityRate float64 `json:"availability_rate"`
-		LastTestTime     int64   `json:"last_test_time"`
-	}
-
-	groupNames := make(map[string]bool)
-	for groupName := range ratio_setting.GetGroupRatioCopy() {
-		groupNames[groupName] = true
-	}
-	groups, err := model.GetAllGroupStatuses()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	for _, g := range groups {
-		groupNames[g.UserGroup] = true
-	}
-
-	result := make([]GroupStatusResponse, 0, len(groupNames)+1)
-	for groupName := range groupNames {
-		info, ok := buildGroupStatusInfo(groupName)
-		if !ok {
-			continue
-		}
-		result = append(result, GroupStatusResponse{
-			UserGroup:        groupName,
-			AvailableModels:  info.AvailableModels,
-			TotalModels:      info.TotalModels,
-			AvailabilityRate: info.AvailabilityRate,
-			LastTestTime:     info.LastTestTime,
-		})
-	}
-
-	allGroups := make([]string, 0, len(groupNames))
-	for groupName := range groupNames {
-		allGroups = append(allGroups, groupName)
-	}
-	if autoInfo, ok := buildAggregateGroupStatusInfo(allGroups); ok {
-		result = append(result, GroupStatusResponse{
-			UserGroup:        "auto",
-			AvailableModels:  autoInfo.AvailableModels,
-			TotalModels:      autoInfo.TotalModels,
-			AvailabilityRate: autoInfo.AvailabilityRate,
-			LastTestTime:     autoInfo.LastTestTime,
-		})
-	}
-
-	common.ApiSuccess(c, gin.H{
-		"groups": result,
-		"count":  len(result),
-	})
-}

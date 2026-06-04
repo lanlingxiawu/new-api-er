@@ -44,18 +44,6 @@ const FooterBar = () => {
     <FigmaFooter
       footerConfig={footerConfig}
       copyrightText={`Copyright ${currentYear} ${systemName}. All rights reserved.`}
-      bottomExtra={
-        <span>
-          Built with{' '}
-          <a
-            href='https://github.com/QuantumNous/new-api'
-            target='_blank'
-            rel='noopener noreferrer'
-          >
-            NEXAXIS API
-          </a>
-        </span>
-      }
     />
   );
 };

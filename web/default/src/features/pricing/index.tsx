@@ -21,7 +21,6 @@ import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
-import { getUserModelsWithAvailability, getGroupStatuses } from '@/lib/api'
 import {
   LoadingSkeleton,
   EmptyState,
@@ -53,45 +52,6 @@ export function Pricing() {
     priceRate,
     usdExchangeRate,
   } = usePricingData()
-
-  // 获取模型可用性数据
-  const modelsAvailabilityQuery = useQuery({
-    queryKey: ['pricing', 'models-availability'],
-    queryFn: async () => {
-      const result = await getUserModelsWithAvailability()
-      return result.success ? (result.data ?? {}) : {}
-    },
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: 10 * 60 * 1000,
-  })
-
-  // 获取分组可用性统计
-  const groupStatusQuery = useQuery({
-    queryKey: ['pricing', 'group-statuses'],
-    queryFn: async () => {
-      const result = await getGroupStatuses()
-      if (result.success && result.data?.groups) {
-        const statusMap: Record<string, any> = {}
-        for (const status of result.data.groups) {
-          statusMap[status.user_group] = status
-        }
-        return statusMap
-      }
-      return {}
-    },
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: 10 * 60 * 1000,
-  })
-
-  const modelsAvailability = useMemo(
-    () => modelsAvailabilityQuery.data ?? {},
-    [modelsAvailabilityQuery.data]
-  )
-
-  const groupStatuses = useMemo(
-    () => groupStatusQuery.data ?? {},
-    [groupStatusQuery.data]
-  )
 
   const {
     searchInput,
@@ -169,8 +129,6 @@ export function Pricing() {
           usdExchangeRate={usdExchangeRate}
           tokenUnit={tokenUnit}
           showRechargePrice={showRechargePrice}
-          modelsAvailability={modelsAvailability}
-          groupStatuses={groupStatuses}
         />
       )
     }
@@ -183,8 +141,6 @@ export function Pricing() {
         tokenUnit={tokenUnit}
         showRechargePrice={showRechargePrice}
         onModelClick={handleModelClick}
-        modelsAvailability={modelsAvailability}
-        groupStatuses={groupStatuses}
       />
     )
   }

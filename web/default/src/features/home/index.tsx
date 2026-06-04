@@ -23,8 +23,6 @@ import {
 } from '@/i18n/languages'
 import { ArrowRight, ChevronDown, ChevronRight, Menu, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { api } from '@/lib/api'
 import heroOrbitImage from '@/assets/home/Ellipse 6.png'
 import homeOrbitDot from '@/assets/home/Frame 37.png'
 import featureGlobalAccess from '@/assets/home/Global Model Access.png'
@@ -43,6 +41,8 @@ import statRegionsIcon from '@/assets/home/home_page01_icon_02.png'
 import statUptimeIcon from '@/assets/home/home_page01_icon_03.png'
 import statDevelopersIcon from '@/assets/home/home_page01_icon_04.png'
 import heroGlobeImage from '@/assets/home/image 6.png'
+import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
 import { useStatus } from '@/hooks/use-status'
 import { Markdown } from '@/components/ui/markdown'
 import { useHomePageContent } from './hooks'
@@ -50,6 +50,13 @@ import { useHomePageContent } from './hooks'
 const EMBEDDED_INITIAL_PROMPT_KEY = '__NEW_API_NEXTCHAT_INITIAL_PROMPT__'
 const HOME_PRIMARY_LOGO = '/logo.png'
 const HOME_ACCENT_LOGO = '/logo1.png'
+const HOME_PROMO_FALLBACK_TEXT =
+  '限时，1:1 充值赠送，最高可获 {{$100}} 免费额度！'
+const HOME_PROMO_LEGACY_TEXT =
+  '限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！'
+
+const isChinesePromoText = (text: string | undefined): text is string =>
+  text === HOME_PROMO_FALLBACK_TEXT || text === HOME_PROMO_LEGACY_TEXT
 
 const setEmbeddedInitialPrompt = (prompt: string) => {
   if (typeof window === 'undefined') return
@@ -153,7 +160,11 @@ const figmaHomeNavItems: NavItem[] = [
     dropdown: true,
     children: [
       { label: '聊天', to: '/playground' },
-      { label: '绘图', to: 'https://nano.nexaxis.ai/textCreate/' ,target: '_blank'},
+      {
+        label: '绘图',
+        to: 'https://nano.nexaxis.ai/textCreate/',
+        target: '_blank',
+      },
       // { label: '视频', to: '/console/chat?tool=video' },
     ],
   },
@@ -163,7 +174,7 @@ const figmaHomeNavItems: NavItem[] = [
 
 const HOME_DASHBOARD_PATH = '/dashboard'
 const HOME_PLAYGROUND_PATH = '/playground'
-const HOME_BLOG_URL = 'https://github.com/QuantumNous/new-api'
+const HOME_BLOG_URL = 'https://nexaxis.ai'
 
 const resolvedFigmaHomeNavItems: NavItem[] = figmaHomeNavItems.map((item) => {
   // if (item.to === '/console/chat?tool=chat') {
@@ -853,11 +864,24 @@ export function Home() {
   const promoEnabled = status?.home_promo_enabled !== false
   const promoTextZh = status?.home_promo_text_zh as string | undefined
   const promoTextEn = status?.home_promo_text_en as string | undefined
-  const isEnglish = (i18n.language || '').toLowerCase().startsWith('en')
-  const fallbackText = '限时，1:1 充值赠送，最高可获 {{$100}} 免费额度！'
-  const promoTextRaw = isEnglish
-    ? promoTextEn || promoTextZh || fallbackText
-    : promoTextZh || promoTextEn || fallbackText
+  const currentLanguage = normalizeInterfaceLanguage(i18n.language)
+  const translatePromoText = (text: string) =>
+    t(text, {
+      defaultValue: text,
+      interpolation: { prefix: '__', suffix: '__' },
+    })
+  const promoTextRaw =
+    currentLanguage === 'en'
+      ? (isChinesePromoText(promoTextEn)
+          ? translatePromoText(promoTextEn)
+          : promoTextEn) ||
+        translatePromoText(promoTextZh || HOME_PROMO_FALLBACK_TEXT)
+      : currentLanguage === 'zh'
+        ? promoTextZh ||
+          translatePromoText(promoTextEn || HOME_PROMO_FALLBACK_TEXT)
+        : translatePromoText(
+            promoTextZh || promoTextEn || HOME_PROMO_FALLBACK_TEXT
+          )
   const promoLink =
     (status?.home_promo_link as string | undefined) || getStartedPath
   const promoIsExternal = /^https?:\/\//i.test(promoLink)
@@ -1007,7 +1031,9 @@ export function Home() {
       setEmbeddedInitialPrompt(prompt)
     }
 
-    window.location.href = chatPath
+    window.location.href = prompt
+      ? `${chatPath}?prompt=${encodeURIComponent(prompt)}`
+      : chatPath
   }
 
   const handleHeroSearchKeyDown = (
@@ -1142,7 +1168,7 @@ export function Home() {
       <section
         ref={routingSectionRef}
         className={`figma-home-routing${
-          isRoutingActive ? ' is-route-active' : ''
+          isRoutingActive ? 'is-route-active' : ''
         }`}
       >
         <div className='figma-home-routing-header'>

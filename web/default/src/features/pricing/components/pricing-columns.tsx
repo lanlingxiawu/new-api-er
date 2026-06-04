@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
-import { Wrench } from 'lucide-react'
+
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import {
@@ -52,8 +52,6 @@ export interface PricingColumnsOptions {
   priceRate?: number
   usdExchangeRate?: number
   showRechargePrice?: boolean
-  modelsAvailability?: Record<string, any>
-  groupStatuses?: Record<string, any>
 }
 
 function renderLimitedTags(
@@ -95,7 +93,6 @@ export function usePricingColumns(
     priceRate = 1,
     usdExchangeRate = 1,
     showRechargePrice = false,
-    modelsAvailability = {},
   } = options
 
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
@@ -114,14 +111,6 @@ export function usePricingColumns(
           ? getLobeIcon(model.vendor_icon, 14)
           : null
 
-        // 获取模型可用性信息
-        const modelGroup = model.enable_groups?.[0]
-        const groupAvailability = modelsAvailability?.[modelGroup]
-        const modelInGroup = groupAvailability?.models?.find(
-          (m: any) => m.name === model.model_name
-        )
-        const isModelAvailable = modelInGroup?.available ?? true
-
         return (
           <div className='flex min-w-[200px] items-center gap-2'>
             {vendorIcon}
@@ -130,12 +119,6 @@ export function usePricingColumns(
                 <span className='truncate font-mono text-sm font-medium'>
                   {model.model_name}
                 </span>
-                {isModelAvailable === false && (
-                  <span className='inline-flex items-center gap-1 rounded border border-orange-200 bg-orange-50 px-1.5 py-0.5 text-xs font-medium whitespace-nowrap text-orange-700 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200'>
-                    <Wrench className='size-3' />
-                    {t('Repairing')}
-                  </span>
-                )}
               </div>
             </div>
           </div>

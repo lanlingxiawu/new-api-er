@@ -47,8 +47,6 @@ export interface PricingTableProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   onModelClick?: (modelName: string) => void
-  modelsAvailability?: Record<string, any>
-  groupStatuses?: Record<string, any>
 }
 
 export function PricingTable(props: PricingTableProps) {
@@ -61,8 +59,6 @@ export function PricingTable(props: PricingTableProps) {
     tokenUnit = DEFAULT_TOKEN_UNIT,
     showRechargePrice = false,
     onModelClick,
-    modelsAvailability = {},
-    groupStatuses = {},
   } = props
 
   const [pagination, setPagination] = useState<PaginationState>({
@@ -75,8 +71,6 @@ export function PricingTable(props: PricingTableProps) {
     priceRate,
     usdExchangeRate,
     showRechargePrice,
-    modelsAvailability,
-    groupStatuses,
   })
 
   const table = useReactTable({

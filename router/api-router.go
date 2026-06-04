@@ -82,7 +82,6 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
 				selfRoute.GET("/models", controller.GetUserModels)
-				selfRoute.GET("/models/available", controller.GetUserModelsWithAvailability)
 				selfRoute.PUT("/self", controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", controller.GenerateAccessToken)
@@ -207,6 +206,13 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
+			// 阶梯提成等级配置
+			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
+			employeeAdminRoute.POST("/tiers", controller.AdminCreateTier)
+			employeeAdminRoute.PUT("/tiers/:id", controller.AdminUpdateTier)
+			employeeAdminRoute.DELETE("/tiers/:id", controller.AdminDeleteTier)
+			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
+			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
 		}
 
 		// Customer management (admin)
@@ -337,10 +343,9 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
 
-		// 分组状态路由（用于显示可用模型数量）
+		// 分组路由
 		groupRoute := apiRouter.Group("/group")
 		{
-			groupRoute.GET("/statuses", controller.GetGroupStatuses)               // 获取所有分组的状态（概览、模型广场用）
 			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup) // 获取分组的可用模型列表
 		}
 
@@ -457,25 +462,6 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.PUT("/:id/name", controller.UpdateDeploymentName)
 			deploymentsRoute.POST("/:id/extend", controller.ExtendDeployment)
 			deploymentsRoute.DELETE("/:id", controller.DeleteDeployment)
-		}
-
-		// Monitor: scheduler admin APIs
-		monitorAdminRoute := apiRouter.Group("/admin/monitor")
-		monitorAdminRoute.Use(middleware.AdminAuth())
-		{
-			monitorAdminRoute.GET("/scheduler/status", controller.GetSchedulerStatus)
-			monitorAdminRoute.GET("/scheduler/locks", controller.GetSchedulerLocks)
-			monitorAdminRoute.PUT("/scheduler/config/:task", controller.UpdateSchedulerConfig)
-			monitorAdminRoute.POST("/scheduler/trigger/:task", controller.TriggerTask)
-		}
-
-		// Monitor: model status is public because pricing can display it.
-		apiRouter.GET("/monitor/model/status", controller.GetModelStatusList)
-
-		monitorUserRoute := apiRouter.Group("/monitor")
-		monitorUserRoute.Use(middleware.UserAuth())
-		{
-			monitorUserRoute.GET("/group/status", controller.GetGroupStatusList)
 		}
 
 	}

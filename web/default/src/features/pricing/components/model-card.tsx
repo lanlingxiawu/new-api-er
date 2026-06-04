@@ -17,15 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { memo } from 'react'
-import { CheckCircle2, ChevronRight, Copy, WrenchIcon } from 'lucide-react'
+import { ChevronRight, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { StatusBadge } from '@/components/status-badge'
-import type { ModelStatusItem } from '@/features/monitoring/api'
-import { MonitorStatusBadge } from '@/features/monitoring/components/monitor-status-badge'
-import { isMonitorStatusUnavailable } from '@/features/monitoring/status'
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import {
   getDynamicDisplayGroupRatio,
@@ -45,19 +42,11 @@ export interface ModelCardProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   perf?: ModelPerfBadgeData
-  monitorStatus?: ModelStatusItem
-  modelAvailability?: boolean
-  availabilityReason?: string
 }
 
 export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
-  const isMonitorUnavailable = isMonitorStatusUnavailable(props.monitorStatus)
-  const isUnavailable = isMonitorUnavailable || props.modelAvailability === false
-  const unavailableReason = !props.modelAvailability
-    ? (props.availabilityReason || t('Repairing'))
-    : t('Under Maintenance')
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
@@ -102,18 +91,9 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       className={cn(
         'group relative flex flex-col rounded-xl border p-3 transition-colors sm:p-5',
         'hover:bg-muted/20',
-        isUnavailable && 'opacity-75'
       )}
     >
       {/* "淇涓? overlay for unavailable models */}
-      {isUnavailable && (
-        <div className='bg-background/60 pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-xl backdrop-blur-[2px]'>
-          <WrenchIcon className='text-muted-foreground size-5' />
-          <span className='text-muted-foreground text-xs font-medium'>
-            {unavailableReason}
-          </span>
-        </div>
-      )}
       {/* Header: icon + name + price + actions */}
       <div className='flex items-start justify-between gap-2.5 sm:gap-3'>
         <div className='flex min-w-0 items-start gap-2.5 sm:gap-3'>
@@ -223,18 +203,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         </div>
 
         <div className='flex shrink-0 items-center gap-1.5'>
-          {props.modelAvailability === false && (
-            <div className='inline-flex items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-xs font-medium whitespace-nowrap text-orange-700 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200'>
-              <WrenchIcon className='size-3' />
-              {t('Repairing')}
-            </div>
-          )}
-          {props.modelAvailability === true && (
-            <div className='inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium whitespace-nowrap text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-200'>
-              <CheckCircle2 className='size-3' />
-              {t('Available')}
-            </div>
-          )}
           <button
             type='button'
             onClick={props.onClick}
@@ -270,13 +238,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           <span className='text-muted-foreground text-xs font-medium'>
             {isTokenBased ? t('Token-based') : t('Per Request')}
           </span>
-          {props.monitorStatus && !isUnavailable && (
-            <MonitorStatusBadge
-              status={props.monitorStatus.status}
-              size='sm'
-              copyable={false}
-            />
-          )}
           {isDynamicPricing && (
             <StatusBadge
               label={t('Dynamic Pricing')}

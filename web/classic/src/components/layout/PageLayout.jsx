@@ -41,6 +41,8 @@ import { useLocation } from 'react-router-dom';
 import { normalizeLanguage } from '../../i18n/language';
 const { Sider, Content, Header } = Layout;
 
+const noContentPaddingPaths = [];
+
 const PageLayout = () => {
   const [userState, userDispatch] = useContext(UserContext);
   const [, statusDispatch] = useContext(StatusContext);
@@ -70,6 +72,9 @@ const PageLayout = () => {
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground';
+  const shouldRemoveContentPadding = noContentPaddingPaths.includes(
+    location.pathname,
+  );
 
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
 
@@ -211,10 +216,17 @@ const PageLayout = () => {
         >
           <Content
             style={{
-              flex: '1 0 auto',
+              flex: '1 1 auto',
+              minHeight: 0,
               overflowY: isMobile ? 'visible' : 'hidden',
               WebkitOverflowScrolling: 'touch',
-              padding: shouldInnerPadding ? (isMobile ? '5px' : '24px') : '0',
+              padding: shouldRemoveContentPadding
+                ? '0'
+                : shouldInnerPadding
+                  ? isMobile
+                    ? '5px'
+                    : '24px'
+                  : '0',
               position: 'relative',
             }}
           >

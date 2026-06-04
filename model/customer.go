@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -109,6 +110,52 @@ func GetAllCustomers(page, pageSize int, employeeUserId int) ([]*CustomerProfile
 		return nil, 0, err
 	}
 	return customers, total, nil
+}
+
+func GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds []int) (map[int]int64, error) {
+	totals := make(map[int]int64, len(employeeUserIds))
+	if len(employeeUserIds) == 0 {
+		return totals, nil
+	}
+
+	type customerUsedQuotaRow struct {
+		EmployeeUserId int
+		CustomerUserId int
+		UsedQuota      int64
+	}
+
+	addRows := func(rows []customerUsedQuotaRow, seen map[string]struct{}) {
+		for _, row := range rows {
+			key := strconv.Itoa(row.EmployeeUserId) + ":" + strconv.Itoa(row.CustomerUserId)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			totals[row.EmployeeUserId] += row.UsedQuota
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var profileRows []customerUsedQuotaRow
+	if err := DB.Model(&CustomerProfile{}).
+		Select("customer_profiles.employee_user_id, customer_profiles.customer_user_id, users.used_quota").
+		Joins("JOIN users ON users.id = customer_profiles.customer_user_id").
+		Where("customer_profiles.employee_user_id IN ?", employeeUserIds).
+		Scan(&profileRows).Error; err != nil {
+		return nil, err
+	}
+	addRows(profileRows, seen)
+
+	var invitedRows []customerUsedQuotaRow
+	if err := DB.Model(&User{}).
+		Select("inviter_id as employee_user_id, id as customer_user_id, used_quota").
+		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
+		Scan(&invitedRows).Error; err != nil {
+		return nil, err
+	}
+	addRows(invitedRows, seen)
+
+	return totals, nil
 }
 
 func GetCustomerProfileById(id int) (*CustomerProfile, error) {

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
@@ -33,8 +32,7 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
-import { getPricing } from '@/features/pricing/api'
-import type { PricingModel } from '@/features/pricing/types'
+
 import { API_KEY_STATUSES } from '../constants'
 import { type ApiKey } from '../types'
 import {
@@ -70,75 +68,9 @@ function useGroupRatios(): Record<string, number> {
   return data ?? {}
 }
 
-type ModelAvailabilityCount = { available: number; total: number }
-
-function countPricingModelsForGroups(
-  models: PricingModel[],
-  groups: string[]
-): number {
-  const groupSet = new Set(groups.filter(Boolean))
-  if (groupSet.size === 0) return models.length
-
-  return models.filter((model) => {
-    const enableGroups = model.enable_groups ?? []
-    if (enableGroups.includes('all')) return true
-    return enableGroups.some((group) => groupSet.has(group))
-  }).length
-}
-
-function usePricingModelAvailability(): {
-  all?: ModelAvailabilityCount
-  byGroup: Record<string, ModelAvailabilityCount>
-} {
-  const { data } = useQuery({
-    queryKey: ['pricing'],
-    queryFn: getPricing,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  })
-
-  return useMemo(() => {
-    if (!data?.success) return { byGroup: {} }
-
-    const pricingModels = data.data ?? []
-    const byGroup: Record<string, ModelAvailabilityCount> = {}
-    const groups = new Set<string>()
-
-    for (const group of Object.keys(data.group_ratio ?? {})) {
-      groups.add(group)
-    }
-    for (const group of Object.keys(data.usable_group ?? {})) {
-      groups.add(group)
-    }
-    for (const model of pricingModels) {
-      for (const group of model.enable_groups ?? []) {
-        if (group && group !== 'all') groups.add(group)
-      }
-    }
-
-    for (const group of groups) {
-      const count = countPricingModelsForGroups(pricingModels, [group])
-      byGroup[group] = { available: count, total: count }
-    }
-
-    const autoCount =
-      data.auto_groups?.length > 0
-        ? countPricingModelsForGroups(pricingModels, data.auto_groups)
-        : 0
-    byGroup.auto = { available: autoCount, total: autoCount }
-
-    const allCount = pricingModels.length
-    return {
-      all: { available: allCount, total: allCount },
-      byGroup,
-    }
-  }, [data])
-}
-
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
   const groupRatios = useGroupRatios()
-  const pricingAvailability = usePricingModelAvailability()
   return [
     {
       id: 'select',
@@ -300,64 +232,6 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         return <GroupBadge group={group} ratio={ratio} />
       },
       meta: { label: t('Group'), mobileHidden: true },
-    },
-    {
-      id: 'available_models',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Available Models')} />
-      ),
-      cell: ({ row }) => {
-        const group = row.original.group as string
-        const availability = group
-          ? pricingAvailability.byGroup[group]
-          : pricingAvailability.all
-
-        if (!availability) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
-
-        const { available, total } = availability
-
-        if (available === 0) {
-          return (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <StatusBadge
-                    label={`0/${total}`}
-                    variant='red'
-                    copyable={false}
-                  />
-                }
-              ></TooltipTrigger>
-              <TooltipContent>
-                <span className='text-xs'>
-                  {t('No models available. Please switch to another group.')}
-                </span>
-              </TooltipContent>
-            </Tooltip>
-          )
-        }
-
-        return (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span className='inline-flex items-center gap-1 text-xs font-medium'>
-                  {available}/{total}
-                </span>
-              }
-            ></TooltipTrigger>
-            <TooltipContent>
-              <span className='text-xs'>
-                {t('Available models in this group')}
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        )
-      },
-      enableSorting: false,
-      meta: { label: t('Available Models'), mobileHidden: true },
     },
     {
       id: 'model_limits',

@@ -1,4 +1,12 @@
-import { useMemo, useState, type ComponentType } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type UIEvent,
+} from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   TrendingUp,
@@ -9,19 +17,8 @@ import {
   Percent,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from 'recharts'
-import { formatQuota } from '@/lib/format'
+import { getEndOfDay, getStartOfDay } from '@/lib/time'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -31,11 +28,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
-import { getEndOfDay, getStartOfDay } from '@/lib/time'
+import {
+  formatBusinessAmount,
+  formatBusinessUsd,
+} from '@/features/business/format'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { getCommissionOverview } from './api'
 
-// ── Range options ──────────────────────────────────────────────────────────
+// Range options
 
 type RangeKey = '7d' | '30d' | '90d' | 'all' | 'custom'
 
@@ -77,40 +77,132 @@ function toUnixTimestamp(date?: Date): number | undefined {
   return Math.floor(date.getTime() / 1000)
 }
 
-// ── Stat card ────────────────────────────────────────────────────────────────
+const TABLE_INITIAL_ROWS = 5
+const TABLE_LOAD_STEP = 5
+const CLASSIC_TABLE_SCROLL_HEIGHT = 223
+
+function ScrollTable({
+  children,
+  hasMore,
+  onLoadMore,
+}: {
+  children: ReactNode
+  hasMore?: boolean
+  onLoadMore?: () => void
+}) {
+  const handleScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (!hasMore || !onLoadMore) return
+      const target = event.currentTarget
+      const distanceToBottom =
+        target.scrollHeight - target.scrollTop - target.clientHeight
+      if (distanceToBottom <= 24) {
+        onLoadMore()
+      }
+    },
+    [hasMore, onLoadMore]
+  )
+
+  return (
+    <div
+      className='w-full overflow-auto rounded-xl border'
+      style={{ height: CLASSIC_TABLE_SCROLL_HEIGHT }}
+      onScroll={handleScroll}
+    >
+      {children}
+    </div>
+  )
+}
+
+// Stat card
 
 function StatCard({
   title,
   value,
   sub,
   icon: Icon,
-  color,
 }: {
   title: string
   value: string
   sub?: string
   icon: ComponentType<{ className?: string }>
-  color: string
 }) {
   return (
-    <Card>
-      <CardHeader className='flex flex-row items-center justify-between pb-2'>
-        <CardTitle className='text-muted-foreground text-sm font-medium'>
+    <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'>
+      <div className='flex items-center gap-2'>
+        <Icon className='text-muted-foreground/60 size-3.5 shrink-0' />
+        <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
           {title}
-        </CardTitle>
-        <Icon className={`h-4 w-4 ${color}`} />
-      </CardHeader>
-      <CardContent>
-        <div className='text-2xl font-bold'>{value}</div>
-        {sub ? (
-          <p className='text-muted-foreground mt-1 text-xs'>{sub}</p>
-        ) : null}
-      </CardContent>
-    </Card>
+        </div>
+      </div>
+      <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+        {value}
+      </div>
+      {sub ? (
+        <div className='text-muted-foreground/60 mt-1 truncate text-xs'>
+          {sub}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+function StatPanel({
+  children,
+  columnsClassName,
+}: {
+  children: ReactNode
+  columnsClassName: string
+}) {
+  return (
+    <div className='overflow-hidden rounded-lg border'>
+      <div className={`divide-border/60 grid divide-x ${columnsClassName}`}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function SectionTitle({
+  children,
+  description,
+}: {
+  children: ReactNode
+  description?: ReactNode
+}) {
+  return (
+    <div className='space-y-1'>
+      <h3 className='text-sm font-semibold'>{children}</h3>
+      {description ? (
+        <p className='text-muted-foreground text-xs'>{description}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function BusinessSection({
+  title,
+  description,
+  children,
+}: {
+  title: ReactNode
+  description?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className='border-t pt-4'>
+      <div className='mb-3 flex flex-col gap-1'>
+        <div className='text-sm font-semibold'>{title}</div>
+        {description ? (
+          <div className='text-muted-foreground text-xs'>{description}</div>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// Main page
 
 export function CommissionOverview() {
   const { t } = useTranslation()
@@ -118,6 +210,10 @@ export function CommissionOverview() {
   const [customRange, setCustomRange] = useState<OverviewRange>(() =>
     getPresetRange('7d')
   )
+  const [visibleChannelRows, setVisibleChannelRows] =
+    useState(TABLE_INITIAL_ROWS)
+  const [visibleEmployeeRows, setVisibleEmployeeRows] =
+    useState(TABLE_INITIAL_ROWS)
 
   const selectedRange = useMemo(() => {
     if (range === 'custom') return customRange
@@ -133,7 +229,12 @@ export function CommissionOverview() {
   )
 
   const { data, isLoading } = useQuery({
-    queryKey: ['commission-overview', range, startTime ?? null, endTime ?? null],
+    queryKey: [
+      'commission-overview',
+      range,
+      startTime ?? null,
+      endTime ?? null,
+    ],
     queryFn: () =>
       getCommissionOverview({ start_time: startTime, end_time: endTime }),
   })
@@ -158,22 +259,51 @@ export function CommissionOverview() {
     setRange(resolveRangeKey(nextRange))
   }
 
-  const chartData = (d?.by_day ?? []).map((row) => ({
-    date: row.date.slice(5),
-    revenue: row.total_revenue,
-    cost: row.total_cost,
-    profit: row.total_profit,
-  }))
+  const channelPlatformRows = useMemo(
+    () => d?.by_channel_platform ?? [],
+    [d?.by_channel_platform]
+  )
+  const employeeRows = useMemo(
+    () => (d?.by_employee ?? []).slice(0, 10),
+    [d?.by_employee]
+  )
+  const displayedChannelRows = useMemo(
+    () => channelPlatformRows.slice(0, visibleChannelRows),
+    [channelPlatformRows, visibleChannelRows]
+  )
+  const displayedEmployeeRows = useMemo(
+    () => employeeRows.slice(0, visibleEmployeeRows),
+    [employeeRows, visibleEmployeeRows]
+  )
+  const hasMoreChannelRows = visibleChannelRows < channelPlatformRows.length
+  const hasMoreEmployeeRows = visibleEmployeeRows < employeeRows.length
+
+  useEffect(() => {
+    setVisibleChannelRows(TABLE_INITIAL_ROWS)
+    setVisibleEmployeeRows(TABLE_INITIAL_ROWS)
+  }, [channelPlatformRows, employeeRows])
+
+  const loadMoreChannelRows = useCallback(() => {
+    setVisibleChannelRows((current) =>
+      Math.min(current + TABLE_LOAD_STEP, channelPlatformRows.length)
+    )
+  }, [channelPlatformRows.length])
+
+  const loadMoreEmployeeRows = useCallback(() => {
+    setVisibleEmployeeRows((current) =>
+      Math.min(current + TABLE_LOAD_STEP, employeeRows.length)
+    )
+  }, [employeeRows.length])
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>
         {t('Business Overview')}
       </SectionPageLayout.Title>
-      <SectionPageLayout.Content>
-        <div className='space-y-6'>
+      <SectionPageLayout.Content className='overflow-hidden'>
+        <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
           {/* Range selector */}
-          <div className='flex flex-wrap items-center gap-2'>
+          <div className='flex shrink-0 flex-wrap items-center gap-2'>
             {rangeButtons.map((b) => (
               <Button
                 key={b.key}
@@ -193,327 +323,233 @@ export function CommissionOverview() {
             </div>
           </div>
 
-          {isLoading && (
-            <p className='text-muted-foreground'>{t('Loading...')}</p>
-          )}
+          <div className='min-h-0 flex-1 space-y-6 overflow-y-auto pr-1'>
+            {isLoading && (
+              <p className='text-muted-foreground'>{t('Loading...')}</p>
+            )}
 
-          {!isLoading && d && (
-            <>
-              {/* Platform consumption (whole platform) */}
-              <div>
-                <h3 className='text-muted-foreground mb-2 text-sm font-semibold'>
-                  {t('Platform-wide (all users)')}
-                </h3>
-                <div className='grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-3'>
-                  <StatCard
-                    title={t('Total Consumption')}
-                    value={formatQuota(platform?.total_consumption_quota ?? 0)}
-                    sub={`≈ $${(platform?.total_consumption_usd ?? 0).toFixed(4)}`}
-                    icon={Wallet}
-                    color='text-blue-600'
-                  />
-                  <StatCard
-                    title={t('Cost')}
-                    value={formatQuota(platform?.est_cost_quota ?? 0)}
-                    sub={`≈ $${(platform?.est_cost_usd ?? 0).toFixed(4)}`}
-                    icon={Wallet}
-                    color='text-orange-600'
-                  />
-                  <StatCard
-                    title={t('Profit')}
-                    value={formatQuota(platform?.est_profit_quota ?? 0)}
-                    sub={`≈ $${(platform?.est_profit_usd ?? 0).toFixed(4)}`}
-                    icon={PiggyBank}
-                    color='text-green-600'
-                  />
-                  <StatCard
-                    title={t('Gross Margin')}
-                    value={`${((platform?.est_gross_margin ?? 0) * 100).toFixed(1)}%`}
-                    icon={Percent}
-                    color='text-pink-600'
-                  />
-                  <StatCard
-                    title={t('Requests')}
-                    value={String(platform?.request_count ?? 0)}
-                    icon={TrendingUp}
-                    color='text-indigo-600'
-                  />
-                  <StatCard
-                    title={t('Tokens')}
-                    value={String(platform?.token_count ?? 0)}
-                    icon={DollarSign}
-                    color='text-cyan-600'
-                  />
-                </div>
-                <p className='text-muted-foreground mt-2 text-xs'>
-                  {t(
-                    'Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.'
-                  )}
-                </p>
-              </div>
-
-              {/* Daily trend */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t('Daily Trend')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {chartData.length === 0 ? (
-                    <p className='text-muted-foreground text-sm'>
-                      {t('No records')}
-                    </p>
-                  ) : (
-                    <div className='h-72 w-full'>
-                      <ResponsiveContainer width='100%' height='100%'>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray='3 3' opacity={0.2} />
-                          <XAxis dataKey='date' fontSize={12} />
-                          <YAxis fontSize={12} />
-                          <Tooltip
-                            formatter={(value) =>
-                              formatQuota(Number(value ?? 0))
-                            }
-                          />
-                          <Legend />
-                          <Line
-                            type='monotone'
-                            dataKey='revenue'
-                            name={t('Revenue')}
-                            stroke='#2563eb'
-                            dot={false}
-                          />
-                          <Line
-                            type='monotone'
-                            dataKey='cost'
-                            name={t('Cost')}
-                            stroke='#ea580c'
-                            dot={false}
-                          />
-                          <Line
-                            type='monotone'
-                            dataKey='profit'
-                            name={t('Profit')}
-                            stroke='#16a34a'
-                            dot={false}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Per-channel profit (platform-wide estimate) */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t('Channel Profit (platform-wide)')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t('Channel')}</TableHead>
-                        <TableHead>{t('Cost Ratio')}</TableHead>
-                        <TableHead>{t('Total Consumption')}</TableHead>
-                        <TableHead>{t('Cost')}</TableHead>
-                        <TableHead>{t('Profit')}</TableHead>
-                        <TableHead>{t('Gross Margin')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(d.by_channel_platform ?? []).length === 0 && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={6}
-                            className='text-muted-foreground text-center'
-                          >
-                            {t('No records')}
-                          </TableCell>
-                        </TableRow>
-                      )}
-                      {(d.by_channel_platform ?? []).map((ch) => (
-                        <TableRow key={ch.channel_id}>
-                          <TableCell>
-                            {ch.channel_name || `#${ch.channel_id}`}
-                          </TableCell>
-                          <TableCell>{ch.cost_ratio}</TableCell>
-                          <TableCell>
-                            {formatQuota(ch.consumption_quota)}
-                          </TableCell>
-                          <TableCell>
-                            {formatQuota(ch.est_cost_quota)}
-                          </TableCell>
-                          <TableCell
-                            className={
-                              ch.est_profit_quota < 0 ? 'text-destructive' : ''
-                            }
-                          >
-                            {formatQuota(ch.est_profit_quota)}
-                          </TableCell>
-                          <TableCell>
-                            {(ch.est_gross_margin * 100).toFixed(1)}%
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                  <p className='text-muted-foreground mt-2 text-xs'>
-                    {t(
-                      'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
+            {!isLoading && d && (
+              <>
+                {/* Platform consumption (whole platform) */}
+                <div className='space-y-2'>
+                  <SectionTitle
+                    description={t(
+                      'Cost is recorded precisely per transaction. Data generated before this feature was enabled has no cost record.'
                     )}
-                  </p>
-                </CardContent>
-              </Card>
-
-              {/* Commission-attributed financials */}
-              <div>
-                <h3 className='text-muted-foreground mb-2 text-sm font-semibold'>
-                  {t('Employee-attributed traffic')}
-                </h3>
-                <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5'>
-                  <StatCard
-                    title={t('Revenue')}
-                    value={formatQuota(comm?.total_revenue_quota ?? 0)}
-                    sub={`≈ $${(comm?.total_revenue_usd ?? 0).toFixed(4)}`}
-                    icon={DollarSign}
-                    color='text-blue-600'
-                  />
-                  <StatCard
-                    title={t('Cost')}
-                    value={formatQuota(comm?.total_cost_quota ?? 0)}
-                    sub={`≈ $${(comm?.total_cost_usd ?? 0).toFixed(4)}`}
-                    icon={Wallet}
-                    color='text-orange-600'
-                  />
-                  <StatCard
-                    title={t('Profit')}
-                    value={formatQuota(comm?.total_profit_quota ?? 0)}
-                    sub={`≈ $${(comm?.total_profit_usd ?? 0).toFixed(4)}`}
-                    icon={PiggyBank}
-                    color='text-green-600'
-                  />
-                  <StatCard
-                    title={t('Commission')}
-                    value={formatQuota(comm?.total_commission_quota ?? 0)}
-                    sub={`≈ $${(comm?.total_commission_usd ?? 0).toFixed(4)}`}
-                    icon={BadgeDollarSign}
-                    color='text-purple-600'
-                  />
-                  <StatCard
-                    title={t('Gross Margin')}
-                    value={`${((comm?.gross_margin ?? 0) * 100).toFixed(1)}%`}
-                    sub={`${comm?.record_count ?? 0} ${t('records')}`}
-                    icon={Percent}
-                    color='text-pink-600'
-                  />
+                  >
+                    {t('Platform-wide (all users)')}
+                  </SectionTitle>
+                  <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-3'>
+                    <StatCard
+                      title={t('Total Consumption')}
+                      value={formatBusinessAmount(
+                        platform?.total_consumption_quota ?? 0
+                      )}
+                      sub={formatBusinessUsd(platform?.total_consumption_usd)}
+                      icon={Wallet}
+                    />
+                    <StatCard
+                      title={t('Cost')}
+                      value={formatBusinessAmount(
+                        platform?.est_cost_quota ?? 0
+                      )}
+                      sub={formatBusinessUsd(platform?.est_cost_usd)}
+                      icon={Wallet}
+                    />
+                    <StatCard
+                      title={t('Profit')}
+                      value={formatBusinessAmount(
+                        platform?.est_profit_quota ?? 0
+                      )}
+                      sub={formatBusinessUsd(platform?.est_profit_usd)}
+                      icon={PiggyBank}
+                    />
+                    <StatCard
+                      title={t('Gross Margin')}
+                      value={`${((platform?.est_gross_margin ?? 0) * 100).toFixed(1)}%`}
+                      icon={Percent}
+                    />
+                    <StatCard
+                      title={t('Requests')}
+                      value={String(platform?.request_count ?? 0)}
+                      icon={TrendingUp}
+                    />
+                    <StatCard
+                      title={t('Tokens')}
+                      value={String(platform?.token_count ?? 0)}
+                      icon={DollarSign}
+                    />
+                  </StatPanel>
                 </div>
-              </div>
 
-              {/* By employee */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t('By Employee')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t('Employee')}</TableHead>
-                        <TableHead>{t('Revenue')}</TableHead>
-                        <TableHead>{t('Cost')}</TableHead>
-                        <TableHead>{t('Profit')}</TableHead>
-                        <TableHead>{t('Commission')}</TableHead>
-                        <TableHead>{t('Records')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(d.by_employee ?? []).length === 0 && (
+                <BusinessSection
+                  title={t('Channel Profit (platform-wide)')}
+                  description={t(
+                    'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
+                  )}
+                >
+                  <ScrollTable
+                    hasMore={hasMoreChannelRows}
+                    onLoadMore={loadMoreChannelRows}
+                  >
+                    <Table>
+                      <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
-                          <TableCell
-                            colSpan={6}
-                            className='text-muted-foreground text-center'
-                          >
-                            {t('No records')}
-                          </TableCell>
+                          <TableHead>{t('Channel')}</TableHead>
+                          <TableHead>{t('Cost Ratio')}</TableHead>
+                          <TableHead>{t('Total Consumption')}</TableHead>
+                          <TableHead>{t('Cost')}</TableHead>
+                          <TableHead>{t('Profit')}</TableHead>
+                          <TableHead>{t('Gross Margin')}</TableHead>
                         </TableRow>
-                      )}
-                      {(d.by_employee ?? []).map((e) => (
-                        <TableRow key={e.employee_user_id}>
-                          <TableCell>
-                            {e.username ||
-                              e.display_name ||
-                              `#${e.employee_user_id}`}
-                          </TableCell>
-                          <TableCell>{formatQuota(e.total_revenue)}</TableCell>
-                          <TableCell>{formatQuota(e.total_cost)}</TableCell>
-                          <TableCell
-                            className={
-                              e.total_profit < 0 ? 'text-destructive' : ''
-                            }
-                          >
-                            {formatQuota(e.total_profit)}
-                          </TableCell>
-                          <TableCell className='text-green-600'>
-                            {formatQuota(e.total_commission)}
-                          </TableCell>
-                          <TableCell>{e.record_count}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
+                      </TableHeader>
+                      <TableBody>
+                        {channelPlatformRows.length === 0 && (
+                          <TableRow>
+                            <TableCell
+                              colSpan={6}
+                              className='text-muted-foreground text-center'
+                            >
+                              {t('No records')}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {displayedChannelRows.map((ch) => (
+                          <TableRow key={ch.channel_id}>
+                            <TableCell>
+                              {ch.channel_name || `#${ch.channel_id}`}
+                            </TableCell>
+                            <TableCell>{ch.cost_ratio}</TableCell>
+                            <TableCell>
+                              {formatBusinessAmount(ch.consumption_quota)}
+                            </TableCell>
+                            <TableCell>
+                              {formatBusinessAmount(ch.est_cost_quota)}
+                            </TableCell>
+                            <TableCell
+                              className={
+                                ch.est_profit_quota < 0
+                                  ? 'text-destructive'
+                                  : ''
+                              }
+                            >
+                              {formatBusinessAmount(ch.est_profit_quota)}
+                            </TableCell>
+                            <TableCell>
+                              {(ch.est_gross_margin * 100).toFixed(1)}%
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollTable>
+                </BusinessSection>
 
-              {/* By channel */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>{t('By Channel')}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{t('Channel')}</TableHead>
-                        <TableHead>{t('Revenue')}</TableHead>
-                        <TableHead>{t('Cost')}</TableHead>
-                        <TableHead>{t('Profit')}</TableHead>
-                        <TableHead>{t('Records')}</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(d.by_channel ?? []).length === 0 && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={5}
-                            className='text-muted-foreground text-center'
-                          >
-                            {t('No records')}
-                          </TableCell>
-                        </TableRow>
+                {/* Commission-attributed financials */}
+                <div className='space-y-2'>
+                  <SectionTitle>
+                    {t('Employee-attributed traffic')}
+                  </SectionTitle>
+                  <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-2 lg:grid-cols-5'>
+                    <StatCard
+                      title={t('Revenue')}
+                      value={formatBusinessAmount(
+                        comm?.total_revenue_quota ?? 0
                       )}
-                      {(d.by_channel ?? []).map((ch) => (
-                        <TableRow key={ch.channel_id}>
-                          <TableCell>
-                            {ch.channel_name || `#${ch.channel_id}`}
-                          </TableCell>
-                          <TableCell>{formatQuota(ch.total_revenue)}</TableCell>
-                          <TableCell>{formatQuota(ch.total_cost)}</TableCell>
-                          <TableCell
-                            className={
-                              ch.total_profit < 0 ? 'text-destructive' : ''
-                            }
-                          >
-                            {formatQuota(ch.total_profit)}
-                          </TableCell>
-                          <TableCell>{ch.record_count}</TableCell>
+                      sub={formatBusinessUsd(comm?.total_revenue_usd)}
+                      icon={DollarSign}
+                    />
+                    <StatCard
+                      title={t('Cost')}
+                      value={formatBusinessAmount(comm?.total_cost_quota ?? 0)}
+                      sub={formatBusinessUsd(comm?.total_cost_usd)}
+                      icon={Wallet}
+                    />
+                    <StatCard
+                      title={t('Profit')}
+                      value={formatBusinessAmount(
+                        comm?.total_profit_quota ?? 0
+                      )}
+                      sub={formatBusinessUsd(comm?.total_profit_usd)}
+                      icon={PiggyBank}
+                    />
+                    <StatCard
+                      title={t('Commission')}
+                      value={formatBusinessAmount(
+                        comm?.total_commission_quota ?? 0
+                      )}
+                      sub={formatBusinessUsd(comm?.total_commission_usd)}
+                      icon={BadgeDollarSign}
+                    />
+                    <StatCard
+                      title={t('Gross Margin')}
+                      value={`${((comm?.gross_margin ?? 0) * 100).toFixed(1)}%`}
+                      sub={`${comm?.record_count ?? 0} ${t('records')}`}
+                      icon={Percent}
+                    />
+                  </StatPanel>
+                </div>
+
+                <BusinessSection title={t('By Employee')}>
+                  <ScrollTable
+                    hasMore={hasMoreEmployeeRows}
+                    onLoadMore={loadMoreEmployeeRows}
+                  >
+                    <Table>
+                      <TableHeader className='bg-background sticky top-0 z-10'>
+                        <TableRow>
+                          <TableHead>{t('Employee')}</TableHead>
+                          <TableHead>{t('Revenue')}</TableHead>
+                          <TableHead>{t('Cost')}</TableHead>
+                          <TableHead>{t('Profit')}</TableHead>
+                          <TableHead>{t('Commission')}</TableHead>
+                          <TableHead>{t('Records')}</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </>
-          )}
+                      </TableHeader>
+                      <TableBody>
+                        {employeeRows.length === 0 && (
+                          <TableRow>
+                            <TableCell
+                              colSpan={6}
+                              className='text-muted-foreground text-center'
+                            >
+                              {t('No records')}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {displayedEmployeeRows.map((e) => (
+                          <TableRow key={e.employee_user_id}>
+                            <TableCell>
+                              {e.username ||
+                                e.display_name ||
+                                `#${e.employee_user_id}`}
+                            </TableCell>
+                            <TableCell>
+                              {formatBusinessAmount(e.total_revenue)}
+                            </TableCell>
+                            <TableCell>
+                              {formatBusinessAmount(e.total_cost)}
+                            </TableCell>
+                            <TableCell
+                              className={
+                                e.total_profit < 0 ? 'text-destructive' : ''
+                              }
+                            >
+                              {formatBusinessAmount(e.total_profit)}
+                            </TableCell>
+                            <TableCell className='text-green-600'>
+                              {formatBusinessAmount(e.total_commission)}
+                            </TableCell>
+                            <TableCell>{e.record_count}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollTable>
+                </BusinessSection>
+              </>
+            )}
+          </div>
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

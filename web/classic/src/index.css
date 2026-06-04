@@ -551,6 +551,18 @@ html.dark .sbg-variant-green {
   background: transparent;
 }
 
+.business-channel-profit-table .semi-table-body {
+  height: 223px !important;
+  min-height: 223px !important;
+  max-height: 223px !important;
+}
+
+.business-employee-table .semi-table-body {
+  height: 223px !important;
+  min-height: 223px !important;
+  max-height: 223px !important;
+}
+
 /* 侧边抽屉滚动条样式 */
 .semi-sidesheet-body::-webkit-scrollbar {
   width: 6px;

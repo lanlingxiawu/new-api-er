@@ -31,20 +31,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { formatBusinessTargetAmount } from '@/features/business/format'
 import { searchUsers } from '@/features/users/api'
-import { createEmployee, updateEmployee } from '../api'
+import { createEmployee, getEmployeeTiers, updateEmployee } from '../api'
 import type { EmployeeProfile } from '../types'
 
 const createSchema = z.object({
   user_id: z.number({ error: 'Required' }).positive('Must be positive'),
   commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
-  target_quota: z.number().min(0).optional(),
+  target_amount: z.number().min(0).optional(),
   remark: z.string().max(255).optional(),
 })
 
 const updateSchema = z.object({
   commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
-  target_quota: z.number().min(0),
+  target_amount: z.number().min(0),
   status: z.number().min(1).max(2),
   remark: z.string().max(255).optional(),
 })
@@ -59,7 +60,7 @@ interface Props {
   onSuccess?: () => void
 }
 
-// 从用户列表搜索并选择用户（服务端搜索，避免手填 ID）
+// Search users server-side and select one instead of typing an ID.
 function UserPicker({
   value,
   onSelect,
@@ -152,7 +153,7 @@ function UserPicker({
                   </span>
                   <span className='text-muted-foreground text-xs'>
                     #{u.id}
-                    {u.email ? ` · ${u.email}` : ''}
+                    {u.email ? ` / ${u.email}` : ''}
                   </span>
                 </li>
               ))}
@@ -173,21 +174,104 @@ export function EmployeeFormDialog({
   const { t } = useTranslation()
   const isUpdate = !!currentRow
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [selectedTierId, setSelectedTierId] = useState('')
+
+  const { data: tiersData } = useQuery({
+    queryKey: ['employee-tiers'],
+    queryFn: getEmployeeTiers,
+    enabled: open,
+  })
+  const tiers = tiersData?.data ?? []
 
   const createForm = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: { commission_rate: 0.1, target_quota: 0 },
+    defaultValues: { commission_rate: 0.1, target_amount: 0 },
   })
 
   const updateForm = useForm<UpdateValues>({
     resolver: zodResolver(updateSchema),
     defaultValues: {
       commission_rate: currentRow?.commission_rate ?? 0.1,
-      target_quota: Number(currentRow?.target_quota ?? 0),
+      target_amount: Number(currentRow?.target_amount ?? 0),
       status: currentRow?.status ?? 1,
       remark: currentRow?.remark ?? '',
     },
   })
+
+  useEffect(() => {
+    if (!open) setSelectedTierId('')
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !currentRow) return
+    updateForm.reset({
+      commission_rate: currentRow.commission_rate ?? 0.1,
+      target_amount: Number(currentRow.target_amount ?? 0),
+      status: currentRow.status ?? 1,
+      remark: currentRow.remark ?? '',
+    })
+  }, [currentRow, open, updateForm])
+
+  const applyTierPreset = (tierId: string | null) => {
+    if (!tierId) {
+      setSelectedTierId('')
+      return
+    }
+    setSelectedTierId(tierId)
+    const tier = tiers.find((item) => String(item.id) === tierId)
+    if (!tier) return
+    if (isUpdate) {
+      updateForm.setValue('commission_rate', Number(tier.rate ?? 0))
+      updateForm.setValue('target_amount', Number(tier.threshold_usd ?? 0))
+    } else {
+      createForm.setValue('commission_rate', Number(tier.rate ?? 0))
+      createForm.setValue('target_amount', Number(tier.threshold_usd ?? 0))
+    }
+  }
+
+  const tierPresetField =
+    tiers.length > 0 ? (
+      <div className='space-y-2'>
+        <label className='text-sm font-medium'>{t('Apply Tier Preset')}</label>
+        <Select value={selectedTierId} onValueChange={applyTierPreset}>
+          <SelectTrigger className='w-full'>
+            <SelectValue
+              placeholder={t('Select a tier to fill rate and target')}
+            />
+          </SelectTrigger>
+          <SelectContent
+            align='start'
+            alignItemWithTrigger={false}
+            sideOffset={6}
+            className='max-h-60 rounded-xl p-1 shadow-lg'
+          >
+            {tiers.map((tier) => (
+              <SelectItem
+                key={tier.id}
+                value={String(tier.id)}
+                className='min-h-9 px-3 py-2'
+              >
+                {t(
+                  'Tier {{level}} - Threshold ${{threshold}} / Rate {{rate}}',
+                  {
+                    level: tier.level,
+                    threshold: formatBusinessTargetAmount(
+                      tier.threshold_usd
+                    ).replace(/^\$/, ''),
+                    rate: `${(Number(tier.rate || 0) * 100).toFixed(1)}%`,
+                  }
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'After selection, the values below are filled automatically and can still be edited.'
+          )}
+        </p>
+      </div>
+    ) : null
 
   const handleCreate = async (values: CreateValues) => {
     setIsSubmitting(true)
@@ -195,7 +279,7 @@ export function EmployeeFormDialog({
       const res = await createEmployee({
         user_id: values.user_id,
         commission_rate: values.commission_rate,
-        target_quota: values.target_quota ?? 0,
+        target_amount: values.target_amount ?? 0,
         remark: values.remark,
       })
       if (!res.success) throw new Error(res.message ?? 'Failed')
@@ -216,7 +300,7 @@ export function EmployeeFormDialog({
     try {
       const res = await updateEmployee(currentRow.id, {
         commission_rate: values.commission_rate,
-        target_quota: values.target_quota,
+        target_amount: values.target_amount,
         status: values.status,
         remark: values.remark,
       })
@@ -267,6 +351,7 @@ export function EmployeeFormDialog({
                   </FormItem>
                 )}
               />
+              {tierPresetField}
               <FormField
                 control={createForm.control}
                 name='commission_rate'
@@ -295,18 +380,19 @@ export function EmployeeFormDialog({
               />
               <FormField
                 control={createForm.control}
-                name='target_quota'
+                name='target_amount'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Performance Target (Quota)')}</FormLabel>
+                    <FormLabel>{t('Performance Target (USD)')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min='0'
+                        step='0.01'
                         placeholder='0 = no limit'
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(parseFloat(e.target.value) || 0)
                         }
                       />
                     </FormControl>
@@ -347,6 +433,7 @@ export function EmployeeFormDialog({
               onSubmit={updateForm.handleSubmit(handleUpdate)}
               className='space-y-4'
             >
+              {tierPresetField}
               <FormField
                 control={updateForm.control}
                 name='commission_rate'
@@ -374,17 +461,18 @@ export function EmployeeFormDialog({
               />
               <FormField
                 control={updateForm.control}
-                name='target_quota'
+                name='target_amount'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Performance Target (Quota)')}</FormLabel>
+                    <FormLabel>{t('Performance Target (USD)')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min='0'
+                        step='0.01'
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(parseFloat(e.target.value) || 0)
                         }
                       />
                     </FormControl>

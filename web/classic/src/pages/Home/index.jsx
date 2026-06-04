@@ -439,7 +439,7 @@ const Home = () => {
   const handleHeroSearchSubmit = (event) => {
     event?.preventDefault();
     const prompt = heroPrompt.trim();
-    const chatPath = '/console/chat?tool=chat';
+    const chatPath = '/console/chat/0';
 
     if (!prompt) {
       navigate(chatPath);

@@ -2,7 +2,6 @@ package controller
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,25 +41,6 @@ type testResult struct {
 	context     *gin.Context
 	localErr    error
 	newAPIError *types.NewAPIError
-}
-
-func init() {
-	service.GroupModelActiveProbe = probeGroupModelAvailabilityWithChannelTest
-}
-
-func probeGroupModelAvailabilityWithChannelTest(ctx context.Context, userGroup string, channel *model.Channel, modelName string) error {
-	testUserID, err := resolveChannelTestUserID(nil)
-	if err != nil {
-		return err
-	}
-	result := testChannelWithGroup(channel, testUserID, modelName, "", shouldUseStreamForAutomaticChannelTest(channel), userGroup)
-	if result.localErr != nil {
-		return result.localErr
-	}
-	if result.newAPIError != nil {
-		return result.newAPIError
-	}
-	return nil
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -1033,12 +1013,6 @@ func AutomaticallyTestChannels() {
 				common.SysLog("automatically testing all channels")
 				_ = testAllChannels(false)
 				common.SysLog("automatically channel test finished")
-				// Refresh group/model statuses from the last 24 h of logs.
-				go func() {
-					if err := service.UpdateGroupModelStatusFromChannelTest(context.Background()); err != nil {
-						common.SysLog("monitor status update after channel test failed: " + err.Error())
-					}
-				}()
 				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
 					break
 				}

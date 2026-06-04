@@ -57,9 +57,11 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 
 	// 5. 利润 <= 0 不计提成（含退款、成本高于售价等场景），
 	//    但仍写入日志用于审计与对账。
+	//    提成率优先使用员工当前等级的 rate；无等级时回退到 emp.CommissionRate。
+	effectiveRate := model.GetEffectiveCommissionRate(emp.UserId, emp.CommissionRate)
 	var commissionQuota int64
 	if profitQuota > 0 {
-		commissionQuota = calcCommissionQuota(profitQuota, emp.CommissionRate)
+		commissionQuota = calcCommissionQuota(profitQuota, effectiveRate)
 	}
 
 	// 6. 写入提成日志（无论是否产生提成都记录）
@@ -74,7 +76,7 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 		CostQuota:       costQuota,
 		ProfitQuota:     profitQuota,
 		CommissionQuota: commissionQuota,
-		CommissionRate:  emp.CommissionRate,
+		CommissionRate:  effectiveRate,
 		CostRatio:       costRatio,
 		GroupRatio:      groupRatio,
 	}
@@ -94,8 +96,15 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 			common.SysError("employee_commission: failed to update user_extensions: " + err.Error())
 		}
 	}
-	if err := model.AddRevenueStats(emp.UserId, revenueQuota, false); err != nil {
-		common.SysError("employee_commission: failed to update revenue stats: " + err.Error())
+	newProfitTotal, err := model.AddProfitStats(emp.UserId, profitQuota, false)
+	if err != nil {
+		common.SysError("employee_commission: failed to update profit stats: " + err.Error())
+		return
+	}
+
+	// 8. 检查是否触发等级升级（仅利润为正时才可能升级）
+	if profitQuota > 0 {
+		model.TryAutoUpgradeTier(emp.UserId, newProfitTotal)
 	}
 }
 

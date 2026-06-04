@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  type ColumnDef,
+  type PaginationState,
+  getCoreRowModel,
+  getPaginationRowModel,
+  useReactTable,
+} from '@tanstack/react-table'
 import { Pencil, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatQuota } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,15 +19,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
+import { formatBusinessAmount } from '@/features/business/format'
 import { StatusBadge } from '@/features/customers'
 import {
   createMyCustomer,
@@ -61,15 +61,27 @@ function CreateCustomerDialog({
   }, [open])
 
   const submit = async () => {
+    if (!username || !password) {
+      toast.error(t('Please enter username and password'))
+      return
+    }
     setSaving(true)
     try {
-      const res = await createMyCustomer({ username, password, display_name: displayName, email, remark })
+      const res = await createMyCustomer({
+        username,
+        password,
+        display_name: displayName,
+        email,
+        remark,
+      })
       if (!res.success) throw new Error(res.message ?? 'Failed')
       toast.success(t('Customer created'))
       onOpenChange(false)
       onSuccess()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('Operation failed'))
+      toast.error(
+        error instanceof Error ? error.message : t('Operation failed')
+      )
     } finally {
       setSaving(false)
     }
@@ -84,15 +96,25 @@ function CreateCustomerDialog({
         <div className='flex flex-col gap-4'>
           <div className='flex flex-col gap-2'>
             <label className='text-sm font-medium'>{t('Username')}</label>
-            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+            <Input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
           </div>
           <div className='flex flex-col gap-2'>
             <label className='text-sm font-medium'>{t('Password')}</label>
-            <Input type='password' value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Input
+              type='password'
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
           </div>
           <div className='flex flex-col gap-2'>
             <label className='text-sm font-medium'>{t('Display Name')}</label>
-            <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+            <Input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+            />
           </div>
           <div className='flex flex-col gap-2'>
             <label className='text-sm font-medium'>{t('Email')}</label>
@@ -104,7 +126,9 @@ function CreateCustomerDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>{t('Cancel')}</Button>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
+            {t('Cancel')}
+          </Button>
           <Button disabled={saving || !username || !password} onClick={submit}>
             {saving ? t('Saving...') : t('Save')}
           </Button>
@@ -159,7 +183,9 @@ function EditCustomerDialog({
       onOpenChange(false)
       onSuccess()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('Operation failed'))
+      toast.error(
+        error instanceof Error ? error.message : t('Operation failed')
+      )
     } finally {
       setSaving(false)
     }
@@ -170,7 +196,9 @@ function EditCustomerDialog({
       <DialogContent className='sm:max-w-[500px]'>
         <DialogHeader>
           <DialogTitle>{t('Edit Customer')}</DialogTitle>
-          <p className='text-muted-foreground text-sm'>{t('Update customer information')}</p>
+          <p className='text-muted-foreground text-sm'>
+            {t('Update customer information')}
+          </p>
         </DialogHeader>
         <div className='flex flex-col gap-6'>
           {/*
@@ -209,12 +237,17 @@ function EditCustomerDialog({
           <div className='flex flex-col gap-3'>
             <div className='flex flex-col gap-2'>
               <label className='text-sm font-medium'>{t('Remark')}</label>
-              <Input value={remark} onChange={(e) => setRemark(e.target.value)} />
+              <Input
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+              />
             </div>
           </div>
         </div>
         <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>{t('Cancel')}</Button>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
+            {t('Cancel')}
+          </Button>
           <Button disabled={saving} onClick={submit}>
             {saving ? t('Saving...') : t('Save')}
           </Button>
@@ -364,138 +397,158 @@ function TransferDialog({
 }
 */
 
+function useMyCustomerColumns({
+  onEdit,
+}: {
+  onEdit: (row: CustomerProfile) => void
+}) {
+  const { t } = useTranslation()
+
+  return useMemo(
+    (): ColumnDef<CustomerProfile>[] => [
+      {
+        accessorFn: (row) => row.username || `#${row.customer_user_id}`,
+        id: 'customer',
+        meta: { label: t('Customer'), mobileTitle: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Customer')} />
+        ),
+        cell: ({ row }) => (
+          <div className='flex flex-col'>
+            <span>
+              {row.original.username || `#${row.original.customer_user_id}`}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              #{row.original.customer_user_id}
+              {row.original.email ? ` / ${row.original.email}` : ''}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'quota',
+        meta: { label: t('Balance') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Balance')} />
+        ),
+        cell: ({ row }) => formatBusinessAmount(row.original.quota),
+      },
+      {
+        accessorKey: 'used_quota',
+        meta: { label: t('Used Quota') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Used Quota')} />
+        ),
+        cell: ({ row }) => formatBusinessAmount(row.original.used_quota),
+      },
+      {
+        accessorKey: 'commission_quota',
+        meta: { label: t('Commission'), mobileBadge: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Commission')} />
+        ),
+        cell: ({ row }) => (
+          <span className='font-medium text-green-600'>
+            {row.original.commission_quota
+              ? formatBusinessAmount(row.original.commission_quota)
+              : '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'status',
+        meta: { label: t('Status'), mobileBadge: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Status')} />
+        ),
+        cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      },
+      {
+        accessorKey: 'remark',
+        meta: { label: t('Remark'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Remark')} />
+        ),
+        cell: ({ row }) => (
+          <span className='block max-w-[160px] truncate'>
+            {row.original.remark || '-'}
+          </span>
+        ),
+      },
+      {
+        id: 'actions',
+        cell: ({ row }) => (
+          <Button
+            size='icon'
+            variant='ghost'
+            onClick={() => onEdit(row.original)}
+          >
+            <Pencil />
+          </Button>
+        ),
+      },
+    ],
+    [onEdit, t]
+  )
+}
+
 function MyCustomersTab() {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  })
+  const columns = useMyCustomerColumns({ onEdit: setEditRow })
   // Employee quota adjustment is temporarily disabled.
   // const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
-  const pageSize = 20
 
   const { data, isLoading } = useQuery({
-    queryKey: ['my-customers', page],
-    queryFn: () => getMyCustomers({ page, page_size: pageSize }),
+    queryKey: ['my-customers', pagination],
+    queryFn: () =>
+      getMyCustomers({
+        page: pagination.pageIndex + 1,
+        page_size: pagination.pageSize,
+      }),
   })
   const customers = data?.data?.items ?? []
-  const total = data?.data?.total ?? 0
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['my-customers'] })
     qc.invalidateQueries({ queryKey: ['my-customer-quota-logs'] })
   }
 
+  const table = useReactTable({
+    data: customers,
+    columns,
+    rowCount: data?.data?.total ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
+    manualPagination: true,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  })
+
   return (
-    <div className='flex flex-col gap-4'>
-      <div className='flex justify-end'>
-        <Button size='sm' onClick={() => setCreateOpen(true)}>
-          <PlusIcon data-icon='inline-start' />
-          {t('Add Customer')}
-        </Button>
-      </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('Customer')}</TableHead>
-            <TableHead>{t('Balance')}</TableHead>
-            <TableHead>{t('Used Quota')}</TableHead>
-            <TableHead>{t('Commission')}</TableHead>
-            <TableHead>{t('Status')}</TableHead>
-            <TableHead>{t('Remark')}</TableHead>
-            <TableHead>{t('Actions')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {isLoading && (
-            <TableRow>
-              <TableCell
-                colSpan={7}
-                className='text-muted-foreground text-center'
-              >
-                {t('Loading...')}
-              </TableCell>
-            </TableRow>
-          )}
-          {!isLoading && customers.length === 0 && (
-            <TableRow>
-              <TableCell
-                colSpan={7}
-                className='text-muted-foreground text-center'
-              >
-                {t('No customers yet')}
-              </TableCell>
-            </TableRow>
-          )}
-          {customers.map((row) => (
-            <TableRow key={row.id}>
-              <TableCell>
-                <div className='flex flex-col'>
-                  <span>{row.username || `#${row.customer_user_id}`}</span>
-                  <span className='text-muted-foreground text-xs'>
-                    #{row.customer_user_id}
-                    {row.email ? ` / ${row.email}` : ''}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>{formatQuota(row.quota)}</TableCell>
-              <TableCell>{formatQuota(row.used_quota)}</TableCell>
-              <TableCell className='font-medium text-green-600'>
-                {row.commission_quota ? formatQuota(row.commission_quota) : '-'}
-              </TableCell>
-              <TableCell>
-                <StatusBadge status={row.status} />
-              </TableCell>
-              <TableCell className='max-w-[160px] truncate'>
-                {row.remark || '-'}
-              </TableCell>
-              <TableCell>
-                <div className='flex gap-1'>
-                  {/*
-                  Employee quota adjustment is temporarily disabled.
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    onClick={() => setTransferRow(row)}
-                  >
-                    <Send />
-                  </Button>
-                  */}
-                  <Button
-                    size='icon'
-                    variant='ghost'
-                    onClick={() => setEditRow(row)}
-                  >
-                    <Pencil />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <div className='text-muted-foreground flex items-center justify-between text-sm'>
-        <span>
-          {t('Total')}: {total}
-        </span>
-        <div className='flex gap-2'>
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            {t('Previous')}
-          </Button>
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={page * pageSize >= total}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {t('Next')}
-          </Button>
-        </div>
-      </div>
+    <>
+      <DataTablePage
+        table={table}
+        columns={columns}
+        isLoading={isLoading}
+        emptyTitle={t('No customers yet')}
+        toolbar={
+          <div className='flex justify-end'>
+            <Button size='sm' onClick={() => setCreateOpen(true)}>
+              <PlusIcon data-icon='inline-start' />
+              {t('Add Customer')}
+            </Button>
+          </div>
+        }
+        skeletonKeyPrefix='my-customers-skeleton'
+        className='flex h-full min-h-0 flex-col overflow-hidden'
+        tableClassName='min-h-0 flex-1 overflow-auto'
+      />
       <CreateCustomerDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
@@ -516,7 +569,7 @@ function MyCustomersTab() {
         onOpenChange={(open) => !open && setEditRow(undefined)}
         onSuccess={refresh}
       />
-    </div>
+    </>
   )
 }
 
@@ -570,8 +623,10 @@ export function CustomerConsole() {
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('My Customers')}</SectionPageLayout.Title>
-      <SectionPageLayout.Content>
-        <MyCustomersTab />
+      <SectionPageLayout.Content className='overflow-hidden'>
+        <div className='h-full min-h-0 overflow-hidden'>
+          <MyCustomersTab />
+        </div>
         {/*
         Employee customer tabs are temporarily disabled.
         <Tabs defaultValue='customers'>

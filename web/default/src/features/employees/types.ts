@@ -7,7 +7,14 @@ export const employeeProfileSchema = z.object({
   display_name: z.string().optional(),
   email: z.string().optional(),
   commission_rate: z.number(),
-  target_quota: z.number(),
+  target_amount: z.number(),
+  total_consumption_quota: z.number().optional(),
+  total_cost_quota: z.number().optional(),
+  total_profit_quota: z.number().optional(),
+  total_commission_quota: z.number().optional(),
+  current_tier_level: z.number().optional(),
+  current_tier_rate: z.number().optional(),
+  current_performance_quota: z.number().optional(),
   commission_rules: z.string().optional(),
   status: z.number(),
   remark: z.string().optional(),
@@ -15,6 +22,15 @@ export const employeeProfileSchema = z.object({
   updated_at: z.number().optional(),
 })
 export type EmployeeProfile = z.infer<typeof employeeProfileSchema>
+
+export interface EmployeeTier {
+  id: number
+  level: number
+  threshold_usd: number
+  rate: number
+  created_at?: number
+  updated_at?: number
+}
 
 export const commissionLogSchema = z.object({
   id: z.number(),

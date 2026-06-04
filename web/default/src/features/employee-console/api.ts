@@ -3,13 +3,19 @@ import type { CommissionLog, EmployeeProfile } from '@/features/employees/types'
 
 export interface EmployeeExtension {
   commission_total_quota: number
+  total_commission_quota?: number
   commission_pending_quota: number
   commission_settled_quota: number
-  revenue_total_quota: number
+  profit_total_quota: number // Performance equals profit after customer cost.
+  total_profit_quota?: number
+  customer_total_consumption_quota?: number
   revenue_customer_count: number
   commission_total_usd: number
+  total_commission_usd?: number
+  customer_total_consumption_usd?: number
   commission_pending_usd: number
-  revenue_total_usd: number
+  profit_total_usd: number // Performance amount in USD.
+  total_profit_usd?: number
 }
 
 export interface MyProfileResponse {

@@ -35,7 +35,7 @@ export const figmaHomeNavItems = [
     to: '/console/playground',
     dropdown: true,
     children: [
-      { label: '聊天', to: '/console/chat?tool=chat' },
+      { label: '聊天', to: '/console/chat/0' },
       {
         label: '绘图',
         to: 'https://nano.nexaxis.ai/textCreate/',

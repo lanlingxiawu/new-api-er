@@ -53,9 +53,6 @@ import { CopyButton } from '@/components/copy-button'
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { GroupBadge } from '@/components/group-badge'
 import { PublicLayout } from '@/components/layout'
-import { getModelStatuses } from '@/features/monitoring/api'
-import { MonitorStatusBadge } from '@/features/monitoring/components/monitor-status-badge'
-import { buildModelStatusMap } from '@/features/monitoring/status'
 import { getPerfMetrics } from '@/features/performance-metrics/api'
 import {
   formatLatency,
@@ -269,89 +266,6 @@ function OverviewSummaryGrid(props: { model: PricingModel }) {
         intent={successIntent}
       />
     </div>
-  )
-}
-
-function ModelMonitorStatusSection(props: { model: PricingModel }) {
-  const { t } = useTranslation()
-  const statusQuery = useQuery({
-    queryKey: ['monitor', 'model-statuses'],
-    queryFn: getModelStatuses,
-    staleTime: 60 * 1000,
-    retry: false,
-  })
-  const statusMap = useMemo(
-    () => buildModelStatusMap(statusQuery.data?.data),
-    [statusQuery.data?.data]
-  )
-  const status = statusMap.get(props.model.model_name || '')
-
-  return (
-    <section className='bg-card/60 rounded-xl border p-4 shadow-sm'>
-      <div className='mb-3 flex flex-wrap items-center justify-between gap-2'>
-        <div className='flex min-w-0 items-center gap-2'>
-          <Activity className='text-muted-foreground/70 size-3.5 shrink-0' />
-          <div className='min-w-0'>
-            <h2 className='text-sm font-semibold'>{t('Current health')}</h2>
-            <p className='text-muted-foreground text-xs'>
-              {t('Scheduler snapshot for this model')}
-            </p>
-          </div>
-        </div>
-        {statusQuery.isLoading ? (
-          <Skeleton className='h-5 w-20 rounded-full' />
-        ) : (
-          <MonitorStatusBadge status={status?.status ?? null} size='sm' />
-        )}
-      </div>
-
-      {statusQuery.isLoading ? (
-        <div className='grid gap-2 sm:grid-cols-4'>
-          {Array.from({ length: 4 }).map((_, index) => (
-            <Skeleton key={index} className='h-16 rounded-lg' />
-          ))}
-        </div>
-      ) : status ? (
-        <div className='bg-muted/20 grid overflow-hidden rounded-lg border sm:grid-cols-2 sm:divide-x lg:grid-cols-4'>
-          <OverviewMetric
-            icon={HeartPulse}
-            label={t('Success rate')}
-            value={formatUptimePct(status.success_rate)}
-            intent={status.success_rate >= 95 ? 'success' : 'warning'}
-          />
-          <OverviewMetric
-            icon={Timer}
-            label={t('P95 response')}
-            value={formatLatency(status.p95_response_time)}
-          />
-          <OverviewMetric
-            icon={Activity}
-            label={t('Errors')}
-            value={`${status.error_count}/${status.total_requests}`}
-            intent={status.error_count > 0 ? 'warning' : 'success'}
-          />
-          <OverviewMetric
-            icon={Code2}
-            label={t('Available channels')}
-            value={`${status.available_channels}/${status.total_channels}`}
-            intent={
-              status.available_channels > 0 && status.status !== 4
-                ? 'success'
-                : 'warning'
-            }
-          />
-          <div className='text-muted-foreground border-t pt-2 text-xs sm:col-span-2 lg:col-span-4'>
-            <div className='px-3 py-2'>
-              {t('Last snapshot')}: {formatTimestampToDate(status.updated_at)}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className='text-muted-foreground rounded-lg border border-dashed p-3 text-sm'>
-          {t('No monitor data yet')}
-        </div>
-      )}
-    </section>
   )
 }
 
@@ -1033,8 +947,6 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
 
         <TabsContent value='overview' className='space-y-6 outline-none'>
           <OverviewSummaryGrid model={props.model} />
-          <ModelMonitorStatusSection model={props.model} />
-
           <section className='bg-card/60 space-y-5 rounded-xl border p-4 shadow-sm'>
             <SectionTitle>{t('Pricing')}</SectionTitle>
             <PriceSection

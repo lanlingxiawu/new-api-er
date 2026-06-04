@@ -195,30 +195,6 @@ export async function getUserModels(): Promise<{
   return res.data
 }
 
-// Get user available models with availability status (for model marketplace)
-export async function getUserModelsWithAvailability(): Promise<{
-  success: boolean
-  message?: string
-  data?: Record<
-    string,
-    {
-      models: Array<{
-        name: string
-        display_name?: string
-        owner?: string
-        available: boolean
-        reason?: string
-        last_checked_time: number
-      }>
-      total_count: number
-      group_name: string
-    }
-  >
-}> {
-  const res = await api.get('/api/user/models/available')
-  return res.data
-}
-
 // Get user groups with descriptions and ratios
 export async function getUserGroups(): Promise<{
   success: boolean
@@ -226,25 +202,6 @@ export async function getUserGroups(): Promise<{
   data?: Record<string, { desc: string; ratio: number | string }>
 }> {
   const res = await api.get('/api/user/self/groups')
-  return res.data
-}
-
-// Get group statuses (available models count for each group)
-export async function getGroupStatuses(): Promise<{
-  success: boolean
-  message?: string
-  data?: {
-    groups: Array<{
-      user_group: string
-      available_models: number
-      total_models: number
-      availability_rate: number
-      last_test_time: number
-    }>
-    count: number
-  }
-}> {
-  const res = await api.get('/api/group/statuses')
   return res.data
 }
 

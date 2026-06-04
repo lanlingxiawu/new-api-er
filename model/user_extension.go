@@ -16,9 +16,9 @@ type UserExtension struct {
 	CommissionPendingQuota int64 `json:"commission_pending_quota" gorm:"default:0"`
 	CommissionSettledQuota int64 `json:"commission_settled_quota" gorm:"default:0"`
 
-	// 业绩汇总
+	// 业绩汇总（业绩 = 利润，即客户消耗扣除渠道成本后的净收益）
 	RevenueCustomerCount int   `json:"revenue_customer_count" gorm:"default:0"`
-	RevenueTotalQuota    int64 `json:"revenue_total_quota" gorm:"default:0"`
+	ProfitTotalQuota     int64 `json:"profit_total_quota" gorm:"column:profit_total_quota;default:0"`
 
 	// JSON 预留扩展（不破坏表结构）
 	Extra string `json:"extra,omitempty" gorm:"type:text;default:''"`
@@ -63,19 +63,29 @@ func AddCommissionQuota(userId int, delta int64) error {
 		}).Error
 }
 
-// AddRevenueStats 原子累加业绩数据（新客户数 + 消费额度）。
-func AddRevenueStats(userId int, revenueQuota int64, newCustomer bool) error {
+// AddProfitStats 原子累加业绩数据（新客户数 + 利润额度）。
+// profitQuota = revenueQuota - costQuota，可为负值（退款/亏损冲销）。
+// 返回更新后的 profit_total_quota，供调用方做等级升级判断。
+func AddProfitStats(userId int, profitQuota int64, newCustomer bool) (int64, error) {
 	if err := EnsureUserExtension(userId); err != nil {
-		return err
+		return 0, err
 	}
 	updates := map[string]interface{}{
-		"revenue_total_quota": gorm.Expr("revenue_total_quota + ?", revenueQuota),
+		"profit_total_quota": gorm.Expr("profit_total_quota + ?", profitQuota),
 	}
 	if newCustomer {
 		updates["revenue_customer_count"] = gorm.Expr("revenue_customer_count + 1")
 	}
-	return DB.Model(&UserExtension{}).
+	if err := DB.Model(&UserExtension{}).
 		Where("user_id = ?", userId).
-		Updates(updates).Error
+		Updates(updates).Error; err != nil {
+		return 0, err
+	}
+	// 读取更新后的值，用于调用方等级升级判断
+	var ext UserExtension
+	if err := DB.Select("profit_total_quota").Where("user_id = ?", userId).First(&ext).Error; err != nil {
+		return 0, err
+	}
+	return ext.ProfitTotalQuota, nil
 }
 

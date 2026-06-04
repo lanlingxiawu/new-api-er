@@ -113,15 +113,6 @@ func main() {
 
 	go controller.AutomaticallyTestChannels()
 
-	// ── Task Scheduler ──────────────────────────────────────────────────────
-	// Seed default scheduler configs (idempotent: FirstOrCreate).
-	service.SeedSchedulerConfigs()
-	// Register simplified monitoring task: test group model availability every 30 min
-	service.RegisterScheduledTask("GroupModelAvailabilityTest", true, service.RunGroupModelAvailabilityTest)
-	// Start the cluster-safe scheduler.
-	service.StartTaskScheduler()
-	// ─────────────────────────────────────────────────────────────────────
-
 	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
 	service.StartCodexCredentialAutoRefreshTask()
 

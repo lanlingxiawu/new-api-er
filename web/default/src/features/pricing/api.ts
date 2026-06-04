@@ -19,13 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 import type { PricingData } from './types'
 
-export {
-  getGroupStatuses,
-  getModelStatuses,
-  type GroupStatusItem,
-  type ModelStatusItem,
-} from '@/features/monitoring/api'
-
 // ----------------------------------------------------------------------------
 // Pricing APIs
 // ----------------------------------------------------------------------------

@@ -2,6 +2,7 @@ package model
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,15 +19,15 @@ import (
 // EmployeeProfile 记录员工的提成配置。员工本身是普通用户（users 表），
 // 通过 user_id 关联；管理员创建此记录后该用户即具备员工身份。
 type EmployeeProfile struct {
-	Id             int    `json:"id"`
-	UserId         int    `json:"user_id" gorm:"uniqueIndex;not null"`
-	CommissionRate float64 `json:"commission_rate" gorm:"not null;default:0.1"` // 提成比例 0.0～1.0
-	TargetQuota    int64  `json:"target_quota" gorm:"default:0"`               // 业绩目标（quota 单位，0=不设限）
-	CommissionRules string `json:"commission_rules,omitempty" gorm:"type:text;default:''"` // JSON 预留多档规则
-	Status         int    `json:"status" gorm:"default:1"`                     // 1=启用 2=禁用
-	Remark         string `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
-	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt      int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	Id              int     `json:"id"`
+	UserId          int     `json:"user_id" gorm:"uniqueIndex;not null"`
+	CommissionRate  float64 `json:"commission_rate" gorm:"not null;default:0.1"`            // 提成比例 0.0～1.0
+	TargetAmount    float64 `json:"target_amount" gorm:"column:target_amount;default:0"`    // 业绩目标（USD 金额，0=不设限；业绩=客户消耗额）
+	CommissionRules string  `json:"commission_rules,omitempty" gorm:"type:text;default:''"` // JSON 预留多档规则
+	Status          int     `json:"status" gorm:"default:1"`                                // 1=启用 2=禁用
+	Remark          string  `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
+	CreatedAt       int64   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       int64   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // ============================================================================
@@ -51,19 +52,19 @@ type ChannelCostConfig struct {
 // EmployeeCommissionLog 记录每次 API 消费触发的提成计算结果。
 // commission_quota 可为负数（退款冲销场景）。
 type EmployeeCommissionLog struct {
-	Id             int     `json:"id"`
-	EmployeeId     int     `json:"employee_id" gorm:"index;not null"`
-	EmployeeUserId int     `json:"employee_user_id" gorm:"index;not null"`
-	CustomerUserId int     `json:"customer_user_id" gorm:"index;not null"`
+	Id             int `json:"id"`
+	EmployeeId     int `json:"employee_id" gorm:"index;not null"`
+	EmployeeUserId int `json:"employee_user_id" gorm:"index;not null"`
+	CustomerUserId int `json:"customer_user_id" gorm:"index;not null"`
 	// log_id 关联 logs.id，唯一约束用于提成幂等：同一笔消费日志只会产生一条提成记录，
 	// 避免上层结算重试导致重复计提。
-	LogId          int     `json:"log_id" gorm:"uniqueIndex;default:0"`
-	ModelName      string  `json:"model_name" gorm:"type:varchar(255);default:''"`
-	ChannelId      int     `json:"channel_id" gorm:"default:0"`
-	RevenueQuota   int64   `json:"revenue_quota" gorm:"default:0"`
-	CostQuota      int64   `json:"cost_quota" gorm:"default:0"`
-	ProfitQuota    int64   `json:"profit_quota" gorm:"default:0"`
-	CommissionQuota int64  `json:"commission_quota" gorm:"default:0"`
+	LogId           int     `json:"log_id" gorm:"uniqueIndex;default:0"`
+	ModelName       string  `json:"model_name" gorm:"type:varchar(255);default:''"`
+	ChannelId       int     `json:"channel_id" gorm:"default:0"`
+	RevenueQuota    int64   `json:"revenue_quota" gorm:"default:0"`
+	CostQuota       int64   `json:"cost_quota" gorm:"default:0"`
+	ProfitQuota     int64   `json:"profit_quota" gorm:"default:0"`
+	CommissionQuota int64   `json:"commission_quota" gorm:"default:0"`
 	CommissionRate  float64 `json:"commission_rate" gorm:"default:0"`
 	CostRatio       float64 `json:"cost_ratio" gorm:"default:1"`
 	GroupRatio      float64 `json:"group_ratio" gorm:"default:1"`
@@ -92,6 +93,14 @@ var (
 
 func channelCostRedisKey(channelId int) string {
 	return "channel_cost_ratio:" + strconv.Itoa(channelId)
+}
+
+// ResetChannelCostCache 清空渠道成本系数内存缓存（测试专用）。
+func ResetChannelCostCache() {
+	channelCostCacheLock.Lock()
+	channelCostCache = make(map[int]float64)
+	channelCostCacheTime = time.Time{}
+	channelCostCacheLock.Unlock()
 }
 
 // invalidateChannelCostCache 清空成本系数缓存。
@@ -152,6 +161,16 @@ func GetChannelCostRatio(channelId int) float64 {
 // EmployeeProfile CRUD
 // ============================================================================
 
+// GetEmployeeById 根据 employee.id 查询员工档案（不限状态）。
+func GetEmployeeById(id int) (*EmployeeProfile, error) {
+	var emp EmployeeProfile
+	err := DB.Where("id = ?", id).First(&emp).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &emp, err
+}
+
 // GetEmployeeByUserId 根据 user_id 查询启用的员工档案，未找到返回 nil。
 func GetEmployeeByUserId(userId int) *EmployeeProfile {
 	var emp EmployeeProfile
@@ -167,17 +186,58 @@ func IsEmployee(userId int) bool {
 	return GetEmployeeByUserId(userId) != nil
 }
 
+type EmployeeFilter struct {
+	UserId    int
+	Keyword   string
+	Status    int
+	SortBy    string
+	SortOrder string
+}
+
 // GetAllEmployees 获取员工列表（分页）。
-func GetAllEmployees(page, pageSize int) ([]*EmployeeProfile, int64, error) {
+func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProfile, int64, error) {
 	var employees []*EmployeeProfile
 	var total int64
 
 	offset := (page - 1) * pageSize
 	tx := DB.Model(&EmployeeProfile{})
+	if filter.UserId != 0 {
+		tx = tx.Where("employee_profiles.user_id = ?", filter.UserId)
+	}
+	if filter.Status != 0 {
+		tx = tx.Where("employee_profiles.status = ?", filter.Status)
+	}
+	if filter.Keyword != "" {
+		keyword := "%" + filter.Keyword + "%"
+		tx = tx.Joins("LEFT JOIN users ON users.id = employee_profiles.user_id").
+			Where("users.username LIKE ? OR users.display_name LIKE ? OR users.email LIKE ?", keyword, keyword, keyword)
+	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := tx.Order("id DESC").Offset(offset).Limit(pageSize).Find(&employees).Error; err != nil {
+	orderColumn := "employee_profiles.id"
+	switch filter.SortBy {
+	case "id":
+		orderColumn = "employee_profiles.id"
+	case "user_id":
+		orderColumn = "employee_profiles.user_id"
+	case "username":
+		tx = tx.Joins("LEFT JOIN users AS sort_users ON sort_users.id = employee_profiles.user_id")
+		orderColumn = "sort_users.username"
+	case "commission_rate":
+		orderColumn = "employee_profiles.commission_rate"
+	case "target_amount":
+		orderColumn = "employee_profiles.target_amount"
+	case "status":
+		orderColumn = "employee_profiles.status"
+	case "created_at":
+		orderColumn = "employee_profiles.created_at"
+	}
+	orderDirection := "DESC"
+	if strings.EqualFold(filter.SortOrder, "asc") {
+		orderDirection = "ASC"
+	}
+	if err := tx.Order(orderColumn + " " + orderDirection).Offset(offset).Limit(pageSize).Find(&employees).Error; err != nil {
 		return nil, 0, err
 	}
 	return employees, total, nil
@@ -203,7 +263,7 @@ func UpdateEmployee(emp *EmployeeProfile) error {
 	}
 	return DB.Model(emp).Updates(map[string]interface{}{
 		"commission_rate":  emp.CommissionRate,
-		"target_quota":     emp.TargetQuota,
+		"target_amount":    emp.TargetAmount,
 		"commission_rules": emp.CommissionRules,
 		"status":           emp.Status,
 		"remark":           emp.Remark,
@@ -271,6 +331,8 @@ func GetAllChannelCostConfigs() ([]*ChannelCostConfig, error) {
 type CommissionLogFilter struct {
 	EmployeeUserId int
 	CustomerUserId int
+	ModelName      string
+	ChannelId      int
 	StartTime      int64
 	EndTime        int64
 	Page           int
@@ -288,6 +350,12 @@ func GetCommissionLogs(filter CommissionLogFilter) ([]*EmployeeCommissionLog, in
 	}
 	if filter.CustomerUserId != 0 {
 		tx = tx.Where("customer_user_id = ?", filter.CustomerUserId)
+	}
+	if filter.ModelName != "" {
+		tx = tx.Where("model_name LIKE ?", "%"+filter.ModelName+"%")
+	}
+	if filter.ChannelId != 0 {
+		tx = tx.Where("channel_id = ?", filter.ChannelId)
 	}
 	if filter.StartTime != 0 {
 		tx = tx.Where("created_at >= ?", filter.StartTime)
@@ -308,12 +376,12 @@ func GetCommissionLogs(filter CommissionLogFilter) ([]*EmployeeCommissionLog, in
 }
 
 type CommissionSummaryItem struct {
-	EmployeeUserId  int     `json:"employee_user_id"`
-	TotalRevenue    int64   `json:"total_revenue_quota"`
-	TotalCost       int64   `json:"total_cost_quota"`
-	TotalProfit     int64   `json:"total_profit_quota"`
-	TotalCommission int64   `json:"total_commission_quota"`
-	RecordCount     int64   `json:"record_count"`
+	EmployeeUserId  int   `json:"employee_user_id"`
+	TotalRevenue    int64 `json:"total_revenue_quota"`
+	TotalCost       int64 `json:"total_cost_quota"`
+	TotalProfit     int64 `json:"total_profit_quota"`
+	TotalCommission int64 `json:"total_commission_quota"`
+	RecordCount     int64 `json:"record_count"`
 }
 
 // GetCommissionSummary 按员工汇总提成统计。
@@ -368,6 +436,20 @@ func GetCommissionTotals(startTime, endTime int64) (CommissionTotals, error) {
 			"COUNT(*) as record_count")
 	tx = applyCommissionTimeRange(tx, startTime, endTime)
 	err := tx.Scan(&t).Error
+	return t, err
+}
+
+// GetCommissionTotalsByEmployee 汇总指定员工的提成流量总计。
+func GetCommissionTotalsByEmployee(employeeUserId int) (CommissionTotals, error) {
+	var t CommissionTotals
+	err := DB.Model(&EmployeeCommissionLog{}).
+		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, "+
+			"COALESCE(SUM(cost_quota),0) as total_cost, "+
+			"COALESCE(SUM(profit_quota),0) as total_profit, "+
+			"COALESCE(SUM(commission_quota),0) as total_commission, "+
+			"COUNT(*) as record_count").
+		Where("employee_user_id = ?", employeeUserId).
+		Scan(&t).Error
 	return t, err
 }
 

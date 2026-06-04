@@ -5,8 +5,8 @@ import { CustomerConsole } from '@/features/customer-console'
 export const Route = createFileRoute('/_authenticated/customer-console/')({
   beforeLoad: () => {
     const { auth } = useAuthStore.getState()
-    if (!auth.user?.is_employee) {
-      throw redirect({ to: '/403' })
+    if (!auth.user) {
+      throw redirect({ to: '/sign-in' })
     }
   },
   component: CustomerConsole,

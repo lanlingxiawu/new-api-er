@@ -36,15 +36,6 @@ export interface EmployeeStat {
   record_count: number
 }
 
-export interface ChannelStat {
-  channel_id: number
-  channel_name?: string
-  total_revenue: number
-  total_cost: number
-  total_profit: number
-  record_count: number
-}
-
 export interface ChannelProfitStat {
   channel_id: number
   channel_name?: string
@@ -55,21 +46,11 @@ export interface ChannelProfitStat {
   cost_ratio: number
 }
 
-export interface DailyStat {
-  date: string
-  total_revenue: number
-  total_cost: number
-  total_profit: number
-  total_commission: number
-}
-
 export interface OverviewData {
   platform: PlatformStat
   commission: CommissionTotals
   by_employee: EmployeeStat[]
-  by_channel: ChannelStat[]
   by_channel_platform: ChannelProfitStat[]
-  by_day: DailyStat[]
 }
 
 export interface OverviewResponse {

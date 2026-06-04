@@ -34,15 +34,18 @@ import {
   Input,
   InputNumber,
   Modal,
+  Progress,
   Row,
   Select,
   Space,
   Spin,
-  TabPane,
-  Tabs,
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
+import {
+  IllustrationNoResult,
+  IllustrationNoResultDark,
+} from '@douyinfe/semi-illustrations';
 import {
   BadgeDollarSign,
   BriefcaseBusiness,
@@ -58,6 +61,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { API, renderQuota, showError, showSuccess } from '../../helpers';
+import { getQuotaPerUnit } from '../../helpers/quota';
 import CardPro from '../../components/common/ui/CardPro';
 import CardTable from '../../components/common/ui/CardTable';
 import { createCardProPagination } from '../../helpers/utils';
@@ -65,6 +69,7 @@ import { useIsMobile } from '../../hooks/common/useIsMobile';
 
 const { Text } = Typography;
 const PAGE_SIZE = 20;
+const BUSINESS_AMOUNT_DIGITS = 4;
 
 const formatTs = (ts) => {
   if (!ts) return '-';
@@ -77,6 +82,78 @@ const toNumber = (value, fallback = 0) => {
 };
 
 const formatPercent = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+const formatBusinessAmount = (value) =>
+  renderQuota(value || 0, BUSINESS_AMOUNT_DIGITS);
+const formatFullNumber = (value) => {
+  if (value === undefined || value === null || value === '') return '0';
+  const raw = String(value);
+  if (!/[eE]/.test(raw)) return raw;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return raw;
+
+  const [coefficient, exponentPart] = raw.toLowerCase().split('e');
+  const exponent = Number(exponentPart);
+  if (!Number.isFinite(exponent)) return raw;
+
+  const sign = coefficient.startsWith('-') ? '-' : '';
+  const unsigned = sign ? coefficient.slice(1) : coefficient;
+  const [integer, fraction = ''] = unsigned.split('.');
+  const digits = `${integer}${fraction}`;
+  const decimalIndex = integer.length + exponent;
+
+  if (decimalIndex <= 0) {
+    return `${sign}0.${'0'.repeat(Math.abs(decimalIndex))}${digits}`;
+  }
+  if (decimalIndex >= digits.length) {
+    return `${sign}${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  }
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+};
+const formatBusinessUsd = (value) => `≈ $${formatFullNumber(value)}`;
+const formatExactUsd = (value) => `$${formatFullNumber(value)}`;
+const formatTargetAmount = (value) => {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
+};
+
+const renderPerformanceProgress = (value, row, t) => {
+  const currentQuota = Number(value || 0);
+  const targetAmount = Number(row?.target_amount || 0);
+
+  if (!Number.isFinite(targetAmount) || targetAmount <= 0) {
+    return formatBusinessAmount(currentQuota);
+  }
+
+  const targetQuota = targetAmount * getQuotaPerUnit();
+  const rawPercent = targetQuota > 0 ? (currentQuota / targetQuota) * 100 : 0;
+  const percent = Math.max(0, Math.min(100, rawPercent));
+  const percentText = `${Number.isFinite(rawPercent) ? rawPercent.toFixed(0) : '0'}%`;
+
+  return (
+    <div className='min-w-[180px]'>
+      <div className='mb-1 flex items-center justify-between gap-2'>
+        <Text size='small'>{formatBusinessAmount(currentQuota)}</Text>
+        <Text type='secondary' size='small'>
+          {percentText}
+        </Text>
+      </div>
+      <Progress
+        percent={percent}
+        stroke={
+          rawPercent >= 100
+            ? 'var(--semi-color-success)'
+            : 'var(--semi-color-primary)'
+        }
+        aria-label='employee performance progress'
+        format={() => percentText}
+        style={{ marginBottom: 0 }}
+      />
+      <Text type='secondary' size='small'>
+        {t('业绩目标')}: {formatTargetAmount(targetAmount)}
+      </Text>
+    </div>
+  );
+};
 
 const buildParams = (params = {}) => {
   const result = {};
@@ -89,7 +166,7 @@ const buildParams = (params = {}) => {
 };
 
 function PageShell({ children }) {
-  return <div className='mt-[60px] px-2 pb-6'>{children}</div>;
+  return <div className='business-page-shell mt-[60px] px-2'>{children}</div>;
 }
 
 function ClassicDescription({
@@ -153,16 +230,16 @@ function BusinessCard({
   icon,
   color,
   actions,
+  searchArea,
   pagination,
   children,
   t,
-  type = 'type1',
+  type = 'type2',
 }) {
   return (
     <CardPro
       type={type}
-      className='mb-4'
-      descriptionArea={
+      statsArea={
         <ClassicDescription
           title={title}
           description={description}
@@ -170,12 +247,16 @@ function BusinessCard({
           color={color}
         />
       }
-      actionsArea={
-        actions ? (
+      searchArea={
+        searchArea ||
+        (actions ? (
           <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
-            {actions}
+            <div />
+            <div className='flex flex-wrap justify-end gap-2 w-full md:w-auto'>
+              {actions}
+            </div>
           </div>
-        ) : undefined
+        ) : undefined)
       }
       paginationArea={pagination}
       t={t}
@@ -187,13 +268,18 @@ function BusinessCard({
 
 function ClassicBusinessTable({
   className = '',
+  wrapperClassName = '',
+  wrapperStyle,
   style,
   scroll = { x: '100%' },
   size = 'middle',
   ...props
 }) {
   return (
-    <div className='w-full'>
+    <div
+      className={`w-full ${wrapperClassName}`.trim()}
+      style={wrapperStyle}
+    >
       <CardTable
         {...props}
         hidePagination
@@ -202,6 +288,38 @@ function ClassicBusinessTable({
         className={`rounded-xl overflow-hidden ${className}`.trim()}
         size={size}
       />
+    </div>
+  );
+}
+
+function BusinessEmpty({ description }) {
+  return (
+    <Empty
+      image={<IllustrationNoResult style={{ width: 150, height: 150 }} />}
+      darkModeImage={
+        <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
+      }
+      description={description}
+      style={{ padding: 30 }}
+    />
+  );
+}
+
+function BusinessSection({ title, description, children }) {
+  return (
+    <div
+      className='pt-4 border-t'
+      style={{ borderColor: 'var(--semi-color-border)' }}
+    >
+      <div className='mb-3 flex flex-col gap-1'>
+        <Text strong>{title}</Text>
+        {description ? (
+          <Text type='secondary' size='small'>
+            {description}
+          </Text>
+        ) : null}
+      </div>
+      {children}
     </div>
   );
 }
@@ -226,14 +344,16 @@ function StatCard({
         {Icon ? <Icon size={18} color={color} /> : null}
       </div>
       <div className='mt-2 text-2xl font-semibold'>{value}</div>
-      {sub ? (
-        <div
-          className='mt-1 text-xs'
-          style={{ color: 'var(--semi-color-text-2)' }}
-        >
-          {sub}
-        </div>
-      ) : null}
+      <div
+        className='mt-1 text-xs'
+        style={{
+          minHeight: 16,
+          color: 'var(--semi-color-text-2)',
+          visibility: sub ? 'visible' : 'hidden',
+        }}
+      >
+        {sub || '-'}
+      </div>
     </Card>
   );
 }
@@ -247,15 +367,15 @@ function StatusTag({ status }) {
   );
 }
 
-function AmountText({ value, positive }) {
+function AmountText({ value }) {
   const amount = Number(value || 0);
   const color =
-    positive || amount > 0
+    amount > 0
       ? 'var(--semi-color-success)'
       : amount < 0
         ? 'var(--semi-color-danger)'
         : undefined;
-  return <span style={{ color }}>{renderQuota(amount)}</span>;
+  return <span style={{ color }}>{formatBusinessAmount(amount)}</span>;
 }
 
 function Field({ label, children }) {
@@ -268,7 +388,7 @@ function Field({ label, children }) {
 }
 
 function usePagedEndpoint(endpoint, params = {}, options = {}) {
-  const { pageSize = PAGE_SIZE, paginate = true } = options;
+  const { pageSize = PAGE_SIZE, paginate = true, enabled = true } = options;
   const [page, setPage] = useState(1);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -280,6 +400,7 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
   }, [endpoint, paramsKey]);
 
   const load = useCallback(async () => {
+    if (!enabled) return;
     setLoading(true);
     try {
       const res = await API.get(endpoint, {
@@ -302,11 +423,13 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
     } finally {
       setLoading(false);
     }
-  }, [endpoint, page, paramsKey]);
+  }, [enabled, endpoint, page, paramsKey]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (enabled) {
+      load();
+    }
+  }, [enabled, load]);
 
   const pagination = paginate
     ? {
@@ -486,20 +609,33 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
   const { t } = useTranslation();
   const isUpdate = Boolean(row);
   const [saving, setSaving] = useState(false);
+  const [tiers, setTiers] = useState([]);
+  const [selectedTierId, setSelectedTierId] = useState(null);
   const [form, setForm] = useState({
     user_id: 0,
     commission_rate: 0.1,
-    target_quota: 0,
+    target_amount: 0,
     status: 1,
     remark: '',
   });
 
+  // 拉取等级列表（供下拉选择）
   useEffect(() => {
     if (!visible) return;
+    API.get('/api/admin/employee/tiers', { disableDuplicate: true })
+      .then((res) => {
+        if (res.data.success) setTiers(res.data.data || []);
+      })
+      .catch(() => {});
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setSelectedTierId(null);
     setForm({
       user_id: row?.user_id || 0,
       commission_rate: row?.commission_rate ?? 0.1,
-      target_quota: row?.target_quota || 0,
+      target_amount: row?.target_amount || 0,
       status: row?.status || 1,
       remark: row?.remark || '',
     });
@@ -507,6 +643,19 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
 
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // 选择等级后自动填写比例和业绩目标（可继续手动修改）
+  const handleTierSelect = (tierId) => {
+    setSelectedTierId(tierId);
+    if (!tierId) return;
+    const tier = tiers.find((t) => t.id === tierId);
+    if (!tier) return;
+    setForm((prev) => ({
+      ...prev,
+      commission_rate: tier.rate,
+      target_amount: tier.threshold_usd,
+    }));
   };
 
   const submit = async () => {
@@ -520,7 +669,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
       if (isUpdate) {
         await mutateRequest('put', `/api/admin/employee/${row.id}`, {
           commission_rate: toNumber(form.commission_rate),
-          target_quota: toNumber(form.target_quota),
+          target_amount: toNumber(form.target_amount),
           status: toNumber(form.status, 1),
           remark: form.remark,
         });
@@ -528,7 +677,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
         await mutateRequest('post', '/api/admin/employee', {
           user_id: toNumber(form.user_id),
           commission_rate: toNumber(form.commission_rate),
-          target_quota: toNumber(form.target_quota),
+          target_amount: toNumber(form.target_amount),
           remark: form.remark,
         });
       }
@@ -566,6 +715,26 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           </Text>
         </Field>
       ) : null}
+      {tiers.length > 0 ? (
+        <Field label={t('套用等级预设')}>
+          <Select
+            value={selectedTierId}
+            placeholder={t('选择等级自动填写比例和目标（可选）')}
+            onChange={handleTierSelect}
+            allowClear
+            style={{ width: '100%' }}
+          >
+            {tiers.map((tier) => (
+              <Select.Option key={tier.id} value={tier.id}>
+                {`等级 ${tier.level}  —  门槛 $${Number(tier.threshold_usd || 0).toFixed(2)}  /  提成 ${(Number(tier.rate || 0) * 100).toFixed(1)}%`}
+              </Select.Option>
+            ))}
+          </Select>
+          <Text type='secondary' size='small'>
+            {t('选择后自动填入下方数值，仍可手动修改')}
+          </Text>
+        </Field>
+      ) : null}
       <Field label={t('佣金比例')}>
         <InputNumber
           min={0}
@@ -579,11 +748,14 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           {t('0.1 表示 10%')}
         </Text>
       </Field>
-      <Field label={t('业绩目标')}>
+      <Field label={t('业绩目标 (USD)')}>
         <InputNumber
           min={0}
-          value={form.target_quota}
-          onChange={(value) => updateField('target_quota', toNumber(value))}
+          precision={2}
+          step={0.01}
+          prefix='$'
+          value={form.target_amount}
+          onChange={(value) => updateField('target_amount', toNumber(value))}
           style={{ width: '100%' }}
         />
       </Field>
@@ -609,20 +781,81 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
   );
 }
 
-function EmployeesTab() {
+function EmployeesTab({
+  employees: providedEmployees,
+  filters,
+  onFiltersChange,
+  onReadyToolbar,
+}) {
   const { t } = useTranslation();
-  const employees = usePagedEndpoint(
+  const ownEmployees = usePagedEndpoint(
     '/api/admin/employee',
-    {},
-    { pageSize: 100, paginate: false },
+    filters || {},
+    {
+      enabled: !providedEmployees,
+    },
   );
+  const employees = providedEmployees || ownEmployees;
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [filterForm, setFilterForm] = useState(() => ({
+    user_id: filters?.user_id || undefined,
+    keyword: filters?.keyword || '',
+    status: filters?.status || 0,
+  }));
 
-  const openCreate = () => {
+  useEffect(() => {
+    setFilterForm({
+      user_id: filters?.user_id || undefined,
+      keyword: filters?.keyword || '',
+      status: filters?.status || 0,
+    });
+  }, [filters]);
+
+  const updateFilter = (key, value) => {
+    setFilterForm((form) => ({ ...form, [key]: value }));
+  };
+
+  const applyFilters = () => {
+    onFiltersChange?.(
+      buildParams({
+        user_id: toNumber(filterForm.user_id),
+        keyword: filterForm.keyword?.trim(),
+        status: toNumber(filterForm.status),
+        sort_by: filters?.sort_by,
+        sort_order: filters?.sort_order,
+      }),
+    );
+  };
+
+  const resetFilters = () => {
+    setFilterForm({ user_id: undefined, keyword: '', status: 0 });
+    onFiltersChange?.({});
+  };
+
+  const getSortOrder = (key) => {
+    if (filters?.sort_by !== key) return false;
+    return filters?.sort_order === 'asc' ? 'ascend' : 'descend';
+  };
+
+  const handleTableChange = (_, __, sorter) => {
+    const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+    const sortKey = activeSorter?.dataIndex || activeSorter?.key;
+    const next = { ...(filters || {}) };
+    if (sortKey && activeSorter?.sortOrder) {
+      next.sort_by = sortKey === 'current_tier_level' ? 'current_tier_rate' : sortKey;
+      next.sort_order = activeSorter.sortOrder === 'ascend' ? 'asc' : 'desc';
+    } else {
+      delete next.sort_by;
+      delete next.sort_order;
+    }
+    onFiltersChange?.(next);
+  };
+
+  const openCreate = useCallback(() => {
     setModalRow(null);
     setModalVisible(true);
-  };
+  }, []);
 
   const openEdit = (row) => {
     setModalRow(row);
@@ -656,11 +889,18 @@ function EmployeesTab() {
   };
 
   const columns = [
-    { title: 'ID', dataIndex: 'id', width: 80 },
-    { title: t('用户 ID'), dataIndex: 'user_id', width: 100 },
+    {
+      title: t('用户 ID'),
+      dataIndex: 'user_id',
+      width: 100,
+      sorter: true,
+      sortOrder: getSortOrder('user_id'),
+    },
     {
       title: t('用户名'),
       dataIndex: 'username',
+      sorter: true,
+      sortOrder: getSortOrder('username'),
       render: (value, row) => (
         <div>
           <div>{value || `#${row.user_id}`}</div>
@@ -673,18 +913,83 @@ function EmployeesTab() {
       ),
     },
     {
+      title: t('客户总消耗'),
+      dataIndex: 'total_consumption_quota',
+      width: 130,
+      sorter: true,
+      sortOrder: getSortOrder('total_consumption_quota'),
+      render: (value) => formatBusinessAmount(value),
+    },
+    {
+      title: t('总成本'),
+      dataIndex: 'total_cost_quota',
+      width: 120,
+      sorter: true,
+      sortOrder: getSortOrder('total_cost_quota'),
+      render: (value) => formatBusinessAmount(value),
+    },
+    {
+      title: t('总利润'),
+      dataIndex: 'total_profit_quota',
+      width: 120,
+      sorter: true,
+      sortOrder: getSortOrder('total_profit_quota'),
+      render: (value) => formatBusinessAmount(value),
+    },
+    {
+      title: t('总提成'),
+      dataIndex: 'total_commission_quota',
+      width: 120,
+      sorter: true,
+      sortOrder: getSortOrder('total_commission_quota'),
+      render: (value) => formatBusinessAmount(value),
+    },
+    {
+      title: t('当前等级'),
+      dataIndex: 'current_tier_level',
+      width: 120,
+      sorter: true,
+      sortOrder: getSortOrder('current_tier_rate'),
+      render: (value, row) => {
+        if (!value) return <Text type='secondary'>-</Text>;
+        return (
+          <div>
+            <Tag color='blue'>{`等级 ${value}`}</Tag>
+            <div>
+              <Text type='secondary' size='small'>
+                {formatPercent(row.current_tier_rate)}
+              </Text>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
       title: t('佣金比例'),
       dataIndex: 'commission_rate',
+      sorter: true,
+      sortOrder: getSortOrder('commission_rate'),
       render: (value) => formatPercent(value),
     },
     {
       title: t('业绩目标'),
-      dataIndex: 'target_quota',
-      render: (value) => (value ? renderQuota(value) : t('无限制')),
+      dataIndex: 'target_amount',
+      sorter: true,
+      sortOrder: getSortOrder('target_amount'),
+      render: (value) => (value ? formatTargetAmount(value) : t('无限制')),
+    },
+    {
+      title: t('当前业绩'),
+      dataIndex: 'current_performance_quota',
+      sorter: true,
+      sortOrder: getSortOrder('current_performance_quota'),
+      render: (value, row) => renderPerformanceProgress(value, row, t),
     },
     {
       title: t('状态'),
       dataIndex: 'status',
+      sorter: true,
+      sortOrder: getSortOrder('status'),
       render: (value) => <StatusTag status={value} />,
     },
     { title: t('备注'), dataIndex: 'remark', render: (value) => value || '-' },
@@ -710,19 +1015,69 @@ function EmployeesTab() {
     },
   ];
 
+  useEffect(() => {
+    if (!onReadyToolbar) return undefined;
+    onReadyToolbar(
+      <Button
+        type='tertiary'
+        size='small'
+        icon={<Plus size={14} />}
+        onClick={openCreate}
+      >
+        {t('添加员工')}
+      </Button>,
+    );
+    return () => onReadyToolbar(null);
+  }, [onReadyToolbar, t]);
+
   return (
     <>
-      <div className='flex justify-end mb-3'>
-        <Button type='primary' icon={<Plus size={14} />} onClick={openCreate}>
-          {t('添加员工')}
-        </Button>
-      </div>
+      {onFiltersChange ? (
+        <div
+          className='mb-3 flex flex-wrap items-center gap-2'
+          style={{ rowGap: 8 }}
+        >
+          <InputNumber
+            size='small'
+            min={0}
+            hideButtons
+            placeholder={t('用户 ID')}
+            value={filterForm.user_id}
+            onChange={(value) => updateFilter('user_id', value)}
+            style={{ width: 120 }}
+          />
+          <Input
+            size='small'
+            placeholder={t('搜索用户名 / 显示名称 / 邮箱')}
+            value={filterForm.keyword}
+            onChange={(value) => updateFilter('keyword', value)}
+            style={{ width: 240 }}
+          />
+          <Select
+            size='small'
+            value={filterForm.status}
+            onChange={(value) => updateFilter('status', value)}
+            style={{ width: 120 }}
+          >
+            <Select.Option value={0}>{t('全部')}</Select.Option>
+            <Select.Option value={1}>{t('启用')}</Select.Option>
+            <Select.Option value={2}>{t('禁用')}</Select.Option>
+          </Select>
+          <Button size='small' type='primary' onClick={applyFilters}>
+            {t('查询')}
+          </Button>
+          <Button size='small' type='tertiary' onClick={resetFilters}>
+            {t('重置')}
+          </Button>
+        </div>
+      ) : null}
       <ClassicBusinessTable
         rowKey='id'
         columns={columns}
         dataSource={employees.items}
         loading={employees.loading}
-        empty={<Empty description={t('暂无数据')} />}
+        onChange={handleTableChange}
+        empty={<BusinessEmpty description={t('搜索无结果')} />}
       />
       <EmployeeModal
         visible={modalVisible}
@@ -739,9 +1094,76 @@ function CommissionLogsTable({
   title,
   selfView = false,
   embedded = false,
+  logs: providedLogs,
+  filters,
+  onFiltersChange,
+  showInlinePagination = embedded,
 }) {
   const { t } = useTranslation();
-  const logs = usePagedEndpoint(endpoint);
+  const ownLogs = usePagedEndpoint(endpoint, filters || {}, {
+    enabled: !providedLogs,
+  });
+  const logs = providedLogs || ownLogs;
+  const [filterForm, setFilterForm] = useState(() => ({
+    employee_user_id: filters?.employee_user_id || undefined,
+    customer_user_id: filters?.customer_user_id || undefined,
+    model_name: filters?.model_name || '',
+    channel_id: filters?.channel_id || undefined,
+    date_range:
+      filters?.start_time && filters?.end_time
+        ? [
+            new Date(Number(filters.start_time) * 1000),
+            new Date(Number(filters.end_time) * 1000),
+          ]
+        : [],
+  }));
+
+  useEffect(() => {
+    setFilterForm({
+      employee_user_id: filters?.employee_user_id || undefined,
+      customer_user_id: filters?.customer_user_id || undefined,
+      model_name: filters?.model_name || '',
+      channel_id: filters?.channel_id || undefined,
+      date_range:
+        filters?.start_time && filters?.end_time
+          ? [
+              new Date(Number(filters.start_time) * 1000),
+              new Date(Number(filters.end_time) * 1000),
+            ]
+          : [],
+    });
+  }, [filters]);
+
+  const updateFilter = (key, value) => {
+    setFilterForm((form) => ({ ...form, [key]: value }));
+  };
+
+  const applyFilters = () => {
+    const [start, end] = Array.isArray(filterForm.date_range)
+      ? filterForm.date_range
+      : [];
+    const nextFilters = buildParams({
+      employee_user_id: toNumber(filterForm.employee_user_id),
+      customer_user_id: toNumber(filterForm.customer_user_id),
+      model_name: filterForm.model_name?.trim(),
+      channel_id: toNumber(filterForm.channel_id),
+      start_time: start ? Math.floor(new Date(start).getTime() / 1000) : 0,
+      end_time: end ? Math.floor(new Date(end).getTime() / 1000) : 0,
+    });
+    onFiltersChange?.(nextFilters);
+  };
+
+  const resetFilters = () => {
+    setFilterForm({
+      employee_user_id: undefined,
+      customer_user_id: undefined,
+      model_name: '',
+      channel_id: undefined,
+      date_range: [],
+    });
+    onFiltersChange?.({});
+  };
+
   const columns = [
     { title: t('时间'), dataIndex: 'created_at', render: formatTs, width: 180 },
     ...(selfView
@@ -764,12 +1186,12 @@ function CommissionLogsTable({
     {
       title: t('收入'),
       dataIndex: 'revenue_quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('成本'),
       dataIndex: 'cost_quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('利润'),
@@ -779,7 +1201,7 @@ function CommissionLogsTable({
     {
       title: t('佣金'),
       dataIndex: 'commission_quota',
-      render: (value) => <AmountText value={value} positive />,
+      render: (value) => <AmountText value={value} />,
     },
     {
       title: t('比例'),
@@ -790,14 +1212,71 @@ function CommissionLogsTable({
 
   const content = (
     <>
+      {!selfView && onFiltersChange ? (
+        <div
+          className='mb-3 flex flex-wrap items-center gap-2'
+          style={{ rowGap: 8 }}
+        >
+          <InputNumber
+            size='small'
+            min={0}
+            hideButtons
+            placeholder={t('员工 UID')}
+            value={filterForm.employee_user_id}
+            onChange={(value) => updateFilter('employee_user_id', value)}
+            style={{ width: 120 }}
+          />
+          <InputNumber
+            size='small'
+            min={0}
+            hideButtons
+            placeholder={t('客户 UID')}
+            value={filterForm.customer_user_id}
+            onChange={(value) => updateFilter('customer_user_id', value)}
+            style={{ width: 120 }}
+          />
+          <Input
+            size='small'
+            placeholder={t('模型名称')}
+            value={filterForm.model_name}
+            onChange={(value) => updateFilter('model_name', value)}
+            style={{ width: 180 }}
+          />
+          <InputNumber
+            size='small'
+            min={0}
+            hideButtons
+            placeholder={t('渠道 ID')}
+            value={filterForm.channel_id}
+            onChange={(value) => updateFilter('channel_id', value)}
+            style={{ width: 110 }}
+          />
+          <DatePicker
+            type='dateTimeRange'
+            size='small'
+            value={filterForm.date_range}
+            placeholder={[t('开始时间'), t('结束时间')]}
+            onChange={(value) => updateFilter('date_range', value || [])}
+            style={{ width: 300 }}
+          />
+          <Button size='small' type='primary' onClick={applyFilters}>
+            {t('查询')}
+          </Button>
+          <Button size='small' type='tertiary' onClick={resetFilters}>
+            {t('重置')}
+          </Button>
+        </div>
+      ) : null}
       <ClassicBusinessTable
         rowKey='id'
         columns={columns}
         dataSource={logs.items}
         loading={logs.loading}
-        empty={<Empty description={t('暂无数据')} />}
+        empty={<BusinessEmpty description={t('搜索无结果')} />}
       />
-      {embedded ? <ClassicInlinePagination paged={logs} t={t} /> : null}
+      {showInlinePagination ? (
+        <ClassicInlinePagination paged={logs} t={t} />
+      ) : null}
     </>
   );
 
@@ -818,29 +1297,335 @@ function CommissionLogsTable({
   );
 }
 
+// ============================================================================
+// 阶梯提成等级配置
+// ============================================================================
+
+function TierModal({ visible, row, onCancel, onSuccess }) {
+  const { t } = useTranslation();
+  const isUpdate = Boolean(row);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    level: 1,
+    threshold_usd: 0,
+    rate: 0.1,
+  });
+
+  useEffect(() => {
+    if (!visible) return;
+    setForm({
+      level: row?.level ?? 1,
+      threshold_usd: row?.threshold_usd ?? 0,
+      rate: row?.rate ?? 0.1,
+    });
+  }, [visible, row]);
+
+  const updateField = (key, value) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
+
+  const submit = async () => {
+    if (!toNumber(form.level, 0) || form.level < 1) {
+      showError(t('等级编号必须 ≥ 1'));
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        level: toNumber(form.level),
+        threshold_usd: toNumber(form.threshold_usd),
+        rate: toNumber(form.rate),
+      };
+      if (isUpdate) {
+        await mutateRequest('put', `/api/admin/employee/tiers/${row.id}`, body);
+      } else {
+        await mutateRequest('post', '/api/admin/employee/tiers', body);
+      }
+      showSuccess(isUpdate ? t('等级已更新') : t('等级已创建'));
+      onSuccess();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      title={isUpdate ? t('编辑等级') : t('创建等级')}
+      onCancel={onCancel}
+      footer={
+        <Space>
+          <Button onClick={onCancel}>{t('取消')}</Button>
+          <Button type='primary' loading={saving} onClick={submit}>
+            {t('保存')}
+          </Button>
+        </Space>
+      }
+    >
+      <Field label={t('等级编号')}>
+        <InputNumber
+          min={1}
+          step={1}
+          precision={0}
+          value={form.level}
+          onChange={(v) => updateField('level', toNumber(v, 1))}
+          style={{ width: '100%' }}
+        />
+        <Text type='secondary' size='small'>
+          {t('正整数，数字越大等级越高（如 1、2、3）')}
+        </Text>
+      </Field>
+      <Field label={t('业绩门槛 (USD)')}>
+        <InputNumber
+          min={0}
+          step={100}
+          precision={2}
+          prefix='$'
+          value={form.threshold_usd}
+          onChange={(v) => updateField('threshold_usd', toNumber(v))}
+          style={{ width: '100%' }}
+        />
+        <Text type='secondary' size='small'>
+          {t('员工累计利润达到该金额后自动升级')}
+        </Text>
+      </Field>
+      <Field label={t('提成比例')}>
+        <InputNumber
+          min={0}
+          max={1}
+          step={0.01}
+          value={form.rate}
+          onChange={(v) => updateField('rate', toNumber(v))}
+          style={{ width: '100%' }}
+        />
+        <Text type='secondary' size='small'>
+          {t('0.1 表示 10%，达到此等级后生效')}
+        </Text>
+      </Field>
+    </Modal>
+  );
+}
+
+function TiersTab({ onReadyToolbar }) {
+  const { t } = useTranslation();
+  const [tiers, setTiers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [modalRow, setModalRow] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await API.get('/api/admin/employee/tiers', {
+        disableDuplicate: true,
+      });
+      const { success, message, data } = res.data;
+      if (success) {
+        setTiers(data || []);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error?.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const openCreate = useCallback(() => {
+    setModalRow(null);
+    setModalVisible(true);
+  }, []);
+
+  const openEdit = (row) => {
+    setModalRow(row);
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setModalRow(null);
+  };
+
+  const handleSuccess = () => {
+    closeModal();
+    load();
+  };
+
+  const deleteTier = (row) => {
+    Modal.confirm({
+      title: t('删除等级'),
+      content: t('删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。'),
+      onOk: async () => {
+        try {
+          await mutateRequest('delete', `/api/admin/employee/tiers/${row.id}`);
+          showSuccess(t('等级已删除'));
+          load();
+        } catch (error) {
+          showError(error.message);
+        }
+      },
+    });
+  };
+
+  const columns = [
+    {
+      title: t('等级'),
+      dataIndex: 'level',
+      width: 80,
+      render: (value) => <Tag color='blue'>{`等级 ${value}`}</Tag>,
+    },
+    {
+      title: t('业绩门槛 (USD)'),
+      dataIndex: 'threshold_usd',
+      render: (value) => (
+        <Text strong>{formatExactUsd(Number(value || 0))}</Text>
+      ),
+    },
+    {
+      title: t('提成比例'),
+      dataIndex: 'rate',
+      render: (value) => (
+        <Tag color='green'>{formatPercent(value)}</Tag>
+      ),
+    },
+    {
+      title: t('操作'),
+      width: 120,
+      render: (_, row) => (
+        <Space>
+          <Button
+            size='small'
+            icon={<Pencil size={14} />}
+            onClick={() => openEdit(row)}
+          />
+          <Button
+            size='small'
+            type='danger'
+            theme='light'
+            icon={<Trash2 size={14} />}
+            onClick={() => deleteTier(row)}
+          />
+        </Space>
+      ),
+    },
+  ];
+
+  useEffect(() => {
+    if (!onReadyToolbar) return undefined;
+    onReadyToolbar(
+      <Button
+        type='tertiary'
+        size='small'
+        icon={<Plus size={14} />}
+        onClick={openCreate}
+      >
+        {t('添加等级')}
+      </Button>,
+    );
+    return () => onReadyToolbar(null);
+  }, [onReadyToolbar, t, openCreate]);
+
+  return (
+    <>
+      <ClassicBusinessTable
+        rowKey='id'
+        columns={columns}
+        dataSource={tiers}
+        loading={loading}
+        empty={<BusinessEmpty description={t('暂无等级配置，点击「添加等级」创建')} />}
+      />
+      <TierModal
+        visible={modalVisible}
+        row={modalRow}
+        onCancel={closeModal}
+        onSuccess={handleSuccess}
+      />
+    </>
+  );
+}
+
 export function Employees() {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState('employees');
+  const [tabToolbar, setTabToolbar] = useState(null);
+  const [employeeFilters, setEmployeeFilters] = useState({});
+  const [commissionLogFilters, setCommissionLogFilters] = useState({});
+  const employees = usePagedEndpoint('/api/admin/employee', employeeFilters);
+  const commissionLogs = usePagedEndpoint(
+    '/api/admin/employee/commission',
+    commissionLogFilters,
+  );
+
+  const tabs = [
+    { key: 'employees', label: t('员工') },
+    { key: 'tiers', label: t('提成阶梯') },
+    { key: 'logs', label: t('佣金记录') },
+  ];
+
+  const pagination =
+    activeTab === 'logs' ? (
+      <ClassicPagination paged={commissionLogs} t={t} />
+    ) : activeTab === 'employees' ? (
+      <ClassicPagination paged={employees} t={t} />
+    ) : null;
+
   return (
     <PageShell>
       <BusinessCard
         title={t('员工管理')}
-        description={t('管理员工身份、佣金比例与佣金记录')}
         icon={Users}
         color='var(--semi-color-primary)'
+        pagination={pagination}
+        searchArea={
+          <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
+            <div className='flex flex-wrap gap-2'>
+              {tabs.map((tab) => (
+                <Button
+                  key={tab.key}
+                  type={activeTab === tab.key ? 'primary' : 'tertiary'}
+                  theme={activeTab === tab.key ? 'solid' : 'light'}
+                  size='small'
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  {tab.label}
+                </Button>
+              ))}
+            </div>
+            {tabToolbar ? (
+              <div className='flex flex-wrap justify-end gap-2 w-full md:w-auto'>
+                {tabToolbar}
+              </div>
+            ) : null}
+          </div>
+        }
         t={t}
       >
-        <Tabs type='line' defaultActiveKey='employees'>
-          <TabPane tab={t('员工')} itemKey='employees'>
-            <EmployeesTab />
-          </TabPane>
-          <TabPane tab={t('佣金记录')} itemKey='logs'>
-            <CommissionLogsTable
-              endpoint='/api/admin/employee/commission'
-              title={t('佣金记录')}
-              embedded
-            />
-          </TabPane>
-        </Tabs>
+        {activeTab === 'employees' ? (
+          <EmployeesTab
+            employees={employees}
+            filters={employeeFilters}
+            onFiltersChange={setEmployeeFilters}
+            onReadyToolbar={setTabToolbar}
+          />
+        ) : activeTab === 'tiers' ? (
+          <TiersTab onReadyToolbar={setTabToolbar} />
+        ) : (
+          <CommissionLogsTable
+            endpoint='/api/admin/employee/commission'
+            logs={commissionLogs}
+            filters={commissionLogFilters}
+            onFiltersChange={setCommissionLogFilters}
+            title={t('佣金记录')}
+            embedded
+            showInlinePagination={false}
+          />
+        )}
       </BusinessCard>
     </PageShell>
   );
@@ -851,6 +1636,13 @@ export function EmployeeConsole() {
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [summary, setSummary] = useState(null);
+  const commissionLogs = usePagedEndpoint(
+    '/api/user/employee/commission',
+    {},
+    {
+      enabled: Boolean(profileData?.success && profileData?.data),
+    },
+  );
 
   const loadProfile = useCallback(async () => {
     setLoading(true);
@@ -883,6 +1675,17 @@ export function EmployeeConsole() {
 
   const profile = profileData?.data?.profile;
   const extension = summary || profileData?.data?.extension || {};
+  const customerTotalConsumptionQuota =
+    extension.customer_total_consumption_quota ?? 0;
+  const customerTotalConsumptionUsd =
+    extension.customer_total_consumption_usd;
+  const totalProfitQuota = extension.profit_total_quota ?? extension.total_profit_quota ?? 0;
+  const totalProfitUsd = extension.profit_total_usd ?? extension.total_profit_usd;
+  const totalCommissionQuota =
+    extension.total_commission_quota ?? extension.commission_total_quota ?? 0;
+  const totalCommissionUsd =
+    extension.total_commission_usd ?? extension.commission_total_usd;
+  const targetAmount = Number(profile?.target_amount || 0);
 
   return (
     <PageShell>
@@ -890,12 +1693,11 @@ export function EmployeeConsole() {
         {!loading && (!profileData?.success || !profile) ? (
           <BusinessCard
             title={t('我的佣金')}
-            description={t('查看员工佣金概览和佣金明细')}
             icon={BadgeDollarSign}
             color='var(--semi-color-success)'
             t={t}
           >
-            <Empty
+            <BusinessEmpty
               description={t('你还不是员工，请联系管理员开通员工身份。')}
             />
           </BusinessCard>
@@ -903,60 +1705,49 @@ export function EmployeeConsole() {
           <>
             <BusinessCard
               title={t('我的佣金')}
-              description={t('查看员工佣金概览和佣金明细')}
               icon={BadgeDollarSign}
               color='var(--semi-color-success)'
+              pagination={<ClassicPagination paged={commissionLogs} t={t} />}
               t={t}
             >
-              {profile ? (
-                <div className='mb-4'>
-                  <Space wrap>
-                    <Tag color='blue'>
-                      {t('佣金比例')}: {formatPercent(profile.commission_rate)}
-                    </Tag>
-                    <Tag color='grey'>
-                      {t('业绩目标')}:{' '}
-                      {profile.target_quota
-                        ? renderQuota(profile.target_quota)
-                        : t('无限制')}
-                    </Tag>
-                  </Space>
-                </div>
-              ) : null}
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12} xl={6}>
                   <StatCard
-                    title={t('累计佣金')}
-                    value={renderQuota(extension.commission_total_quota || 0)}
-                    sub={`≈ $${Number(extension.commission_total_usd || 0).toFixed(4)}`}
-                    icon={BadgeDollarSign}
-                    color='var(--semi-color-success)'
-                  />
-                </Col>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('待结算')}
-                    value={renderQuota(extension.commission_pending_quota || 0)}
-                    sub={`≈ $${Number(extension.commission_pending_usd || 0).toFixed(4)}`}
-                    icon={Clock}
-                    color='var(--semi-color-warning)'
-                  />
-                </Col>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('客户收入')}
-                    value={renderQuota(extension.revenue_total_quota || 0)}
-                    sub={`≈ $${Number(extension.revenue_total_usd || 0).toFixed(4)}`}
+                    title={t('总消耗')}
+                    value={formatBusinessAmount(customerTotalConsumptionQuota)}
+                    sub={formatBusinessUsd(customerTotalConsumptionUsd)}
                     icon={DollarSign}
                     color='var(--semi-color-info)'
                   />
                 </Col>
                 <Col xs={24} md={12} xl={6}>
                   <StatCard
-                    title={t('活跃客户')}
-                    value={extension.revenue_customer_count || 0}
-                    sub={t('有消费记录的客户数量')}
-                    icon={Users}
+                    title={t('当前业绩')}
+                    value={formatBusinessAmount(totalProfitQuota)}
+                    sub={formatExactUsd(totalProfitUsd)}
+                    icon={TrendingUp}
+                    color='var(--semi-color-success)'
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={6}>
+                  <StatCard
+                    title={t('提成金额')}
+                    value={formatBusinessAmount(totalCommissionQuota)}
+                    sub={formatBusinessUsd(totalCommissionUsd)}
+                    icon={BadgeDollarSign}
+                    color='var(--semi-color-success)'
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={6}>
+                  <StatCard
+                    title={t('提成阶梯')}
+                    value={formatPercent(profile?.commission_rate || 0)}
+                    sub={
+                      targetAmount
+                        ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' ✓' : ''}`
+                        : `${t('业绩目标')}: ${t('无限制')}`
+                    }
+                    icon={Wallet}
                   />
                 </Col>
               </Row>
@@ -970,7 +1761,9 @@ export function EmployeeConsole() {
                 <CommissionLogsTable
                   endpoint='/api/user/employee/commission'
                   selfView
+                  logs={commissionLogs}
                   embedded
+                  showInlinePagination={false}
                 />
               </div>
             </BusinessCard>
@@ -1151,17 +1944,17 @@ export function CustomerConsole() {
     {
       title: t('余额'),
       dataIndex: 'quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('已用额度'),
       dataIndex: 'used_quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('佣金'),
       dataIndex: 'commission_quota',
-      render: (value) => (value ? <AmountText value={value} positive /> : '-'),
+      render: (value) => (value ? <AmountText value={value} /> : '-'),
     },
     {
       title: t('状态'),
@@ -1186,12 +1979,12 @@ export function CustomerConsole() {
     <PageShell>
       <BusinessCard
         title={t('我的客户')}
-        description={t('创建并维护归属于你的客户账号')}
         icon={UserRoundCheck}
         color='var(--semi-color-primary)'
         actions={
           <Button
-            type='primary'
+            type='tertiary'
+            size='small'
             icon={<Plus size={14} />}
             onClick={() => setCreateVisible(true)}
           >
@@ -1206,7 +1999,7 @@ export function CustomerConsole() {
           columns={columns}
           dataSource={customers.items}
           loading={customers.loading}
-          empty={<Empty description={t('暂无数据')} />}
+          empty={<BusinessEmpty description={t('搜索无结果')} />}
         />
       </BusinessCard>
       <MyCustomerCreateModal
@@ -1290,6 +2083,8 @@ export function BusinessOverview() {
 
   const platform = data?.platform || {};
   const commission = data?.commission || {};
+  const channelProfitRows = data?.by_channel_platform || [];
+  const employeeRows = (data?.by_employee || []).slice(0, 10);
   const rangeButtons = [
     { key: '7d', label: t('近 7 天') },
     { key: '30d', label: t('近 30 天') },
@@ -1307,12 +2102,12 @@ export function BusinessOverview() {
     {
       title: t('收入'),
       dataIndex: 'total_revenue',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('成本'),
       dataIndex: 'total_cost',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('利润'),
@@ -1322,7 +2117,7 @@ export function BusinessOverview() {
     {
       title: t('佣金'),
       dataIndex: 'total_commission',
-      render: (value) => <AmountText value={value} positive />,
+      render: (value) => <AmountText value={value} />,
     },
     { title: t('记录数'), dataIndex: 'record_count' },
   ];
@@ -1337,12 +2132,12 @@ export function BusinessOverview() {
     {
       title: t('总消耗'),
       dataIndex: 'consumption_quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('估算成本'),
       dataIndex: 'est_cost_quota',
-      render: (value) => renderQuota(value),
+      render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('估算利润'),
@@ -1360,7 +2155,6 @@ export function BusinessOverview() {
     <PageShell>
       <BusinessCard
         title={t('业务概览')}
-        description={t('查看平台成本、利润、员工佣金和渠道表现')}
         icon={TrendingUp}
         color='var(--semi-color-success)'
         actions={
@@ -1370,6 +2164,7 @@ export function BusinessOverview() {
                 key={item.key}
                 type={range === item.key ? 'primary' : 'tertiary'}
                 theme={range === item.key ? 'solid' : 'light'}
+                size='small'
                 onClick={() => setRange(item.key)}
               >
                 {item.label}
@@ -1379,6 +2174,7 @@ export function BusinessOverview() {
               type='dateTimeRange'
               value={datePickerValue}
               placeholder={[t('开始时间'), t('结束时间')]}
+              size='small'
               style={{ minWidth: 300 }}
               onChange={(value) => {
                 const [start, end] = Array.isArray(value) ? value : [];
@@ -1404,8 +2200,10 @@ export function BusinessOverview() {
               <Col xs={24} md={12} xl={4}>
                 <StatCard
                   title={t('总消耗')}
-                  value={renderQuota(platform.total_consumption_quota || 0)}
-                  sub={`≈ $${Number(platform.total_consumption_usd || 0).toFixed(4)}`}
+                  value={formatBusinessAmount(
+                    platform.total_consumption_quota || 0,
+                  )}
+                  sub={formatBusinessUsd(platform.total_consumption_usd)}
                   icon={Wallet}
                   color='var(--semi-color-info)'
                 />
@@ -1413,8 +2211,8 @@ export function BusinessOverview() {
               <Col xs={24} md={12} xl={4}>
                 <StatCard
                   title={t('估算成本')}
-                  value={renderQuota(platform.est_cost_quota || 0)}
-                  sub={`≈ $${Number(platform.est_cost_usd || 0).toFixed(4)}`}
+                  value={formatBusinessAmount(platform.est_cost_quota || 0)}
+                  sub={formatBusinessUsd(platform.est_cost_usd)}
                   icon={BriefcaseBusiness}
                   color='var(--semi-color-warning)'
                 />
@@ -1422,8 +2220,8 @@ export function BusinessOverview() {
               <Col xs={24} md={12} xl={4}>
                 <StatCard
                   title={t('估算利润')}
-                  value={renderQuota(platform.est_profit_quota || 0)}
-                  sub={`≈ $${Number(platform.est_profit_usd || 0).toFixed(4)}`}
+                  value={formatBusinessAmount(platform.est_profit_quota || 0)}
+                  sub={formatBusinessUsd(platform.est_profit_usd)}
                   icon={TrendingUp}
                   color='var(--semi-color-success)'
                 />
@@ -1454,50 +2252,51 @@ export function BusinessOverview() {
               {t('成本按交易精确记录。启用此功能前生成的数据没有成本记录。')}
             </Text>
 
-            <Card
+            <BusinessSection
               title={t('渠道盈利（全平台）')}
-              className='!rounded-2xl border-0'
+              description={t('成本和利润按分组倍率与渠道成本比例估算。')}
             >
               <ClassicBusinessTable
                 rowKey='channel_id'
                 columns={channelProfitColumns}
-                dataSource={data?.by_channel_platform || []}
-                empty={<Empty description={t('暂无数据')} />}
+                dataSource={channelProfitRows}
+                wrapperClassName='business-channel-profit-table pr-1'
+                scroll={{ x: '100%', y: 223 }}
+                empty={<BusinessEmpty description={t('搜索无结果')} />}
               />
-              <div className='mt-2'>
-                <Text type='secondary' size='small'>
-                  {t('成本和利润按分组倍率与渠道成本比例估算。')}
-                </Text>
-              </div>
-            </Card>
+            </BusinessSection>
 
             <Text strong type='secondary'>
-              {t('员工归因流量')}
+              {t('员工流量')}
             </Text>
             <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
               <div>
                 <StatCard
-                  title={t('员工归因收入')}
-                  value={renderQuota(commission.total_revenue_quota || 0)}
-                  sub={`≈ $${Number(commission.total_revenue_usd || 0).toFixed(4)}`}
+                  title={t('员工收入')}
+                  value={formatBusinessAmount(
+                    commission.total_revenue_quota || 0,
+                  )}
+                  sub={formatBusinessUsd(commission.total_revenue_usd)}
                   icon={DollarSign}
                   color='var(--semi-color-info)'
                 />
               </div>
               <div>
                 <StatCard
-                  title={t('员工归因成本')}
-                  value={renderQuota(commission.total_cost_quota || 0)}
-                  sub={`≈ $${Number(commission.total_cost_usd || 0).toFixed(4)}`}
+                  title={t('员工成本')}
+                  value={formatBusinessAmount(commission.total_cost_quota || 0)}
+                  sub={formatBusinessUsd(commission.total_cost_usd)}
                   icon={BriefcaseBusiness}
                   color='var(--semi-color-warning)'
                 />
               </div>
               <div>
                 <StatCard
-                  title={t('员工归因利润')}
-                  value={renderQuota(commission.total_profit_quota || 0)}
-                  sub={`≈ $${Number(commission.total_profit_usd || 0).toFixed(4)}`}
+                  title={t('员工利润')}
+                  value={formatBusinessAmount(
+                    commission.total_profit_quota || 0,
+                  )}
+                  sub={formatBusinessUsd(commission.total_profit_usd)}
                   icon={TrendingUp}
                   color='var(--semi-color-success)'
                 />
@@ -1505,14 +2304,16 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('佣金总额')}
-                  value={renderQuota(commission.total_commission_quota || 0)}
-                  sub={`≈ $${Number(commission.total_commission_usd || 0).toFixed(4)}`}
+                  value={formatBusinessAmount(
+                    commission.total_commission_quota || 0,
+                  )}
+                  sub={formatBusinessUsd(commission.total_commission_usd)}
                   icon={BadgeDollarSign}
                 />
               </div>
               <div>
                 <StatCard
-                  title={t('归因毛利率')}
+                  title={t('员工毛利率')}
                   value={formatPercent(commission.gross_margin || 0)}
                   sub={`${commission.record_count || 0} ${t('条记录')}`}
                   icon={Wallet}
@@ -1520,14 +2321,16 @@ export function BusinessOverview() {
               </div>
             </div>
 
-            <Card title={t('按员工')} className='!rounded-2xl border-0'>
+            <BusinessSection title={t('按员工')}>
               <ClassicBusinessTable
                 rowKey='employee_user_id'
                 columns={employeeColumns}
-                dataSource={data?.by_employee || []}
-                empty={<Empty description={t('暂无数据')} />}
+                dataSource={employeeRows}
+                wrapperClassName='business-employee-table pr-1'
+                scroll={{ x: '100%', y: 223 }}
+                empty={<BusinessEmpty description={t('搜索无结果')} />}
               />
-            </Card>
+            </BusinessSection>
           </div>
         </Spin>
       </BusinessCard>

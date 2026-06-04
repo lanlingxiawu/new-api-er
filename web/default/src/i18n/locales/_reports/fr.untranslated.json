@@ -1,14 +1,25 @@
 {
   "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
   "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.",
+  "After selection, the values below are filled automatically and can still be edited.": "After selection, the values below are filled automatically and can still be edited.",
+  "Click Add Tier to create one.": "Click Add Tier to create one.",
   "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
   "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "Cost and profit are estimated from per-group ratios and per-channel cost ratios.",
   "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
   "customers with consumption": "customers with consumption",
+  "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.": "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.",
+  "Leave blank to keep unchanged": "Leave blank to keep unchanged",
+  "Leave blank to use username": "Leave blank to use username",
   "Manage employees and commission rates.": "Manage employees and commission rates.",
+  "No models available. Please configure your groups.": "No models available. Please configure your groups.",
+  "No models available. Please switch to another group.": "No models available. Please switch to another group.",
+  "Please enter username and password": "Please enter username and password",
   "Search and select the user to assign employee status": "Search and select the user to assign employee status",
+  "Select a tier to fill rate and target": "Select a tier to fill rate and target",
+  "Select mode and enter amount": "Select mode and enter amount",
   "The user ID to assign employee status": "The user ID to assign employee status",
   "This will disable the employee. Historical commission logs are retained.": "This will disable the employee. Historical commission logs are retained.",
   "This will reset the channel cost ratio to the default (1.0).": "This will reset the channel cost ratio to the default (1.0).",
-  "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly."
+  "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+  "View all available models and their status": "View all available models and their status"
 }

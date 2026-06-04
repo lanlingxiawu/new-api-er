@@ -1,204 +1,292 @@
-import { useState } from 'react'
+import { useMemo, useState, type ComponentType } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import {
+  type ColumnDef,
+  type PaginationState,
+  getCoreRowModel,
+  getPaginationRowModel,
+  useReactTable,
+} from '@tanstack/react-table'
+import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { TrendingUp, Users, DollarSign, Clock } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+  formatBusinessAmount,
+  formatBusinessExactUsd,
+  formatBusinessTargetAmount,
+  formatBusinessUsd,
+} from '@/features/business/format'
+import type { CommissionLog } from '@/features/employees/types'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { formatQuota } from '@/lib/format'
-import {
-  getMyEmployeeProfile,
   getMyCommissionLogs,
   getMyCommissionSummary,
+  getMyEmployeeProfile,
+  type EmployeeExtension,
 } from './api'
-import type { EmployeeExtension } from './api'
-
-// ── Summary Cards ─────────────────────────────────────────────────────────────
-
-function SummaryCards({ data }: { data: Partial<EmployeeExtension> }) {
-  const { t } = useTranslation()
-
-  // 兜底：汇总接口未就绪时可能回退到 user_extension（不含 *_usd 字段），全部做空值保护
-  const num = (v: number | undefined) => v ?? 0
-
-  const cards = [
-    {
-      title: t('Total Commission'),
-      value: formatQuota(num(data.commission_total_quota)),
-      sub: `≈ $${num(data.commission_total_usd).toFixed(4)}`,
-      icon: TrendingUp,
-      color: 'text-green-600',
-    },
-    {
-      title: t('Pending Settlement'),
-      value: formatQuota(num(data.commission_pending_quota)),
-      sub: `≈ $${num(data.commission_pending_usd).toFixed(4)}`,
-      icon: Clock,
-      color: 'text-yellow-600',
-    },
-    {
-      title: t('Total Customer Revenue'),
-      value: formatQuota(num(data.revenue_total_quota)),
-      sub: `≈ $${num(data.revenue_total_usd).toFixed(4)}`,
-      icon: DollarSign,
-      color: 'text-blue-600',
-    },
-    {
-      title: t('Active Customers'),
-      value: String(num(data.revenue_customer_count)),
-      sub: t('customers with consumption'),
-      icon: Users,
-      color: 'text-purple-600',
-    },
-  ]
-
-  return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4'>
-      {cards.map((card) => (
-        <Card key={card.title}>
-          <CardHeader className='flex flex-row items-center justify-between pb-2'>
-            <CardTitle className='text-sm font-medium text-muted-foreground'>
-              {card.title}
-            </CardTitle>
-            <card.icon className={`h-4 w-4 ${card.color}`} />
-          </CardHeader>
-          <CardContent>
-            <div className='text-2xl font-bold'>{card.value}</div>
-            <p className='mt-1 text-xs text-muted-foreground'>{card.sub}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
-// ── Commission Log Table ──────────────────────────────────────────────────────
 
 function formatTs(ts: number) {
   if (!ts) return '-'
   return new Date(ts * 1000).toLocaleString()
 }
 
-function CommissionHistory() {
+function formatPercent(value: number | undefined) {
+  return `${(Number(value || 0) * 100).toFixed(1)}%`
+}
+
+function SummaryCards({
+  data,
+  commissionRate,
+  targetAmount,
+}: {
+  data: Partial<EmployeeExtension>
+  commissionRate: number
+  targetAmount: number
+}) {
   const { t } = useTranslation()
-  const [page, setPage] = useState(1)
-  const pageSize = 20
+  const num = (value: number | undefined) => value ?? 0
+  const totalConsumptionQuota = num(data.customer_total_consumption_quota)
+  const totalConsumptionUsd = data.customer_total_consumption_usd
+  const totalProfitQuota = num(
+    data.profit_total_quota ?? data.total_profit_quota
+  )
+  const totalProfitUsd = num(data.profit_total_usd ?? data.total_profit_usd)
+  const totalCommissionQuota = num(
+    data.total_commission_quota ?? data.commission_total_quota
+  )
+  const totalCommissionUsd =
+    data.total_commission_usd ?? data.commission_total_usd
+  const reachedTarget = totalProfitUsd >= targetAmount
+  const targetText = targetAmount
+    ? `${t('Performance')}: ${formatBusinessTargetAmount(totalProfitUsd)} / ${formatBusinessTargetAmount(targetAmount)}${reachedTarget ? ` ${t('Reached')}` : ''}`
+    : `${t('Performance Target')}: ${t('No limit')}`
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['my-commission-logs', page],
-    queryFn: () => getMyCommissionLogs({ page, page_size: pageSize }),
-  })
-
-  const logs = data?.data?.items ?? []
-  const total = data?.data?.total ?? 0
+  const cards = [
+    {
+      title: t('Total Consumption'),
+      value: formatBusinessAmount(totalConsumptionQuota),
+      sub:
+        totalConsumptionUsd === undefined
+          ? undefined
+          : formatBusinessUsd(num(totalConsumptionUsd)),
+      icon: DollarSign,
+    },
+    {
+      title: t('Current Performance'),
+      value: formatBusinessAmount(totalProfitQuota),
+      sub: formatBusinessExactUsd(totalProfitUsd),
+      icon: TrendingUp,
+    },
+    {
+      title: t('Commission Amount'),
+      value: formatBusinessAmount(totalCommissionQuota),
+      sub:
+        totalCommissionUsd === undefined
+          ? undefined
+          : formatBusinessUsd(num(totalCommissionUsd)),
+      icon: BadgeDollarSign,
+    },
+    {
+      title: t('Commission Tier'),
+      value: formatPercent(commissionRate),
+      sub: targetText,
+      icon: Wallet,
+    },
+  ]
 
   return (
-    <div className='space-y-4'>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('Time')}</TableHead>
-            <TableHead>{t('Customer')}</TableHead>
-            <TableHead>{t('Model')}</TableHead>
-            <TableHead>{t('Revenue')}</TableHead>
-            <TableHead>{t('Cost')}</TableHead>
-            <TableHead>{t('Profit')}</TableHead>
-            <TableHead>{t('Commission')}</TableHead>
-            <TableHead>{t('Rate')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {isLoading && (
-            <TableRow>
-              <TableCell colSpan={8} className='text-center text-muted-foreground'>
-                {t('Loading...')}
-              </TableCell>
-            </TableRow>
-          )}
-          {!isLoading && logs.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={8} className='text-center text-muted-foreground'>
-                {t('No commission records yet')}
-              </TableCell>
-            </TableRow>
-          )}
-          {logs.map((log) => (
-            <TableRow
-              key={log.id}
-              className={log.commission_quota < 0 ? 'opacity-60' : ''}
-            >
-              <TableCell className='text-xs'>{formatTs(log.created_at)}</TableCell>
-              <TableCell>
-                <Badge variant='outline'>
-                  {log.customer_user_id_masked ?? `#${log.customer_user_id}`}
-                </Badge>
-              </TableCell>
-              <TableCell className='max-w-[120px] truncate text-xs'>
-                {log.model_name || '-'}
-              </TableCell>
-              <TableCell>{formatQuota(log.revenue_quota)}</TableCell>
-              <TableCell className='text-muted-foreground'>
-                {formatQuota(log.cost_quota)}
-              </TableCell>
-              <TableCell>{formatQuota(log.profit_quota)}</TableCell>
-              <TableCell
-                className={
-                  log.commission_quota < 0
-                    ? 'font-medium text-destructive'
-                    : 'font-medium text-green-600'
-                }
-              >
-                {log.commission_quota < 0 ? '' : '+'}
-                {formatQuota(log.commission_quota)}
-              </TableCell>
-              <TableCell>{(log.commission_rate * 100).toFixed(1)}%</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-
-      <div className='flex items-center justify-between text-sm text-muted-foreground'>
-        <span>
-          {t('Total')}: {total}
-        </span>
-        <div className='flex gap-2'>
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            {t('Previous')}
-          </Button>
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={page * pageSize >= total}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {t('Next')}
-          </Button>
-        </div>
+    <div className='overflow-hidden rounded-lg border'>
+      <div className='divide-border/60 grid grid-cols-1 divide-x sm:grid-cols-2 lg:grid-cols-4'>
+        {cards.map((card) => (
+          <SummaryCard
+            key={card.title}
+            title={card.title}
+            value={card.value}
+            sub={card.sub}
+            icon={card.icon}
+          />
+        ))}
       </div>
     </div>
   )
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+function SummaryCard({
+  title,
+  value,
+  sub,
+  icon: Icon,
+}: {
+  title: string
+  value: string
+  sub?: string
+  icon: ComponentType<{ className?: string }>
+}) {
+  return (
+    <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'>
+      <div className='flex items-center gap-2'>
+        <Icon className='text-muted-foreground/60 size-3.5 shrink-0' />
+        <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+          {title}
+        </div>
+      </div>
+      <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+        {value}
+      </div>
+      {sub ? (
+        <div className='text-muted-foreground/60 mt-1 truncate text-xs'>
+          {sub}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function useMyCommissionColumns() {
+  const { t } = useTranslation()
+
+  return useMemo(
+    (): ColumnDef<CommissionLog>[] => [
+      {
+        accessorKey: 'created_at',
+        meta: { label: t('Time') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Time')} />
+        ),
+        cell: ({ row }) => (
+          <span className='text-xs'>{formatTs(row.original.created_at)}</span>
+        ),
+      },
+      {
+        accessorKey: 'customer_user_id',
+        meta: { label: t('Customer'), mobileTitle: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Customer')} />
+        ),
+        cell: ({ row }) => (
+          <Badge variant='outline'>
+            {row.original.customer_user_id_masked ??
+              `#${row.original.customer_user_id}`}
+          </Badge>
+        ),
+      },
+      {
+        accessorKey: 'model_name',
+        meta: { label: t('Model') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Model')} />
+        ),
+        cell: ({ row }) => (
+          <span className='block max-w-[140px] truncate text-xs'>
+            {row.original.model_name || '-'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'revenue_quota',
+        meta: { label: t('Revenue') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Revenue')} />
+        ),
+        cell: ({ row }) => formatBusinessAmount(row.original.revenue_quota),
+      },
+      {
+        accessorKey: 'cost_quota',
+        meta: { label: t('Cost') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Cost')} />
+        ),
+        cell: ({ row }) => (
+          <span className='text-muted-foreground'>
+            {formatBusinessAmount(row.original.cost_quota)}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'profit_quota',
+        meta: { label: t('Profit') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Profit')} />
+        ),
+        cell: ({ row }) => formatBusinessAmount(row.original.profit_quota),
+      },
+      {
+        accessorKey: 'commission_quota',
+        meta: { label: t('Commission'), mobileBadge: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Commission')} />
+        ),
+        cell: ({ row }) => (
+          <span
+            className={
+              row.original.commission_quota < 0
+                ? 'text-destructive font-medium'
+                : 'font-medium text-green-600'
+            }
+          >
+            {row.original.commission_quota < 0 ? '' : '+'}
+            {formatBusinessAmount(row.original.commission_quota)}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'commission_rate',
+        meta: { label: t('Rate') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Rate')} />
+        ),
+        cell: ({ row }) =>
+          `${(row.original.commission_rate * 100).toFixed(1)}%`,
+      },
+    ],
+    [t]
+  )
+}
+
+function CommissionHistory() {
+  const { t } = useTranslation()
+  const columns = useMyCommissionColumns()
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  })
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['my-commission-logs', pagination],
+    queryFn: () =>
+      getMyCommissionLogs({
+        page: pagination.pageIndex + 1,
+        page_size: pagination.pageSize,
+      }),
+  })
+
+  const table = useReactTable({
+    data: data?.data?.items ?? [],
+    columns,
+    rowCount: data?.data?.total ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
+    manualPagination: true,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  })
+
+  return (
+    <DataTablePage
+      table={table}
+      columns={columns}
+      isLoading={isLoading}
+      emptyTitle={t('No commission records yet')}
+      getRowClassName={(row) =>
+        row.original.commission_quota < 0 ? 'opacity-60' : undefined
+      }
+      skeletonKeyPrefix='my-commission-skeleton'
+      className='flex h-full min-h-0 flex-col overflow-hidden'
+      tableClassName='min-h-0 flex-1 overflow-auto'
+    />
+  )
+}
 
 export function EmployeeConsole() {
   const { t } = useTranslation()
@@ -219,7 +307,7 @@ export function EmployeeConsole() {
     return (
       <SectionPageLayout>
         <SectionPageLayout.Title>{t('My Commission')}</SectionPageLayout.Title>
-        <SectionPageLayout.Content>
+        <SectionPageLayout.Content className='overflow-hidden'>
           <p className='text-muted-foreground'>{t('Loading...')}</p>
         </SectionPageLayout.Content>
       </SectionPageLayout>
@@ -230,7 +318,7 @@ export function EmployeeConsole() {
     return (
       <SectionPageLayout>
         <SectionPageLayout.Title>{t('My Commission')}</SectionPageLayout.Title>
-        <SectionPageLayout.Content>
+        <SectionPageLayout.Content className='overflow-hidden'>
           <p className='text-muted-foreground'>
             {t('You do not have employee status. Contact your administrator.')}
           </p>
@@ -241,6 +329,7 @@ export function EmployeeConsole() {
 
   const profile = profileData.data.profile
   const summary = summaryData?.data ?? profileData.data.extension
+  const revenueUsd = summary?.profit_total_usd ?? 0
 
   return (
     <SectionPageLayout>
@@ -250,24 +339,35 @@ export function EmployeeConsole() {
           <Badge variant='default' className='text-xs'>
             {(profile.commission_rate * 100).toFixed(1)}% {t('rate')}
           </Badge>
-          {profile.target_quota ? (
-            <Badge variant='outline' className='text-xs'>
-              {t('Target')}: {formatQuota(profile.target_quota)}
+          {profile.target_amount ? (
+            <Badge
+              variant={
+                revenueUsd >= profile.target_amount ? 'default' : 'outline'
+              }
+              className='text-xs'
+            >
+              {t('Target')}: {formatBusinessTargetAmount(revenueUsd)} /{' '}
+              {formatBusinessTargetAmount(profile.target_amount)}
+              {revenueUsd >= profile.target_amount ? ` ${t('Reached')}` : ''}
             </Badge>
           ) : null}
         </span>
       </SectionPageLayout.Title>
-      <SectionPageLayout.Content>
-        <div className='space-y-6'>
-          {summary && <SummaryCards data={summary} />}
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('Commission History')}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CommissionHistory />
-            </CardContent>
-          </Card>
+      <SectionPageLayout.Content className='overflow-hidden'>
+        <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
+          {summary && (
+            <SummaryCards
+              data={summary}
+              commissionRate={profile.commission_rate}
+              targetAmount={Number(profile.target_amount || 0)}
+            />
+          )}
+          <h3 className='text-muted-foreground shrink-0 text-sm font-semibold'>
+            {t('Commission Details')}
+          </h3>
+          <div className='min-h-0 flex-1 overflow-hidden'>
+            <CommissionHistory />
+          </div>
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

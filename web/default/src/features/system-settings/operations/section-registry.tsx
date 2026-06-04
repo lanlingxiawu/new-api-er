@@ -25,7 +25,6 @@ import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
-import { SchedulerSection } from './scheduler-section'
 
 const OPERATIONS_SECTIONS = [
   {
@@ -151,11 +150,6 @@ const OPERATIONS_SECTIONS = [
         startTime={startTime}
       />
     ),
-  },
-  {
-    id: 'scheduler',
-    titleKey: 'Scheduled Tasks',
-    build: (_settings: OperationsSettings) => <SchedulerSection />,
   },
 ] as const
 
