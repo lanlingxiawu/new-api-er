@@ -80,6 +80,10 @@ import {
   Package,
   Server,
   CalendarClock,
+  BadgeDollarSign,
+  UserCog,
+  UserRoundCheck,
+  LineChart,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -150,6 +154,14 @@ export function getLucideIcon(key, selected = false) {
       return <Server {...commonProps} color={iconColor} />;
     case 'subscription':
       return <CalendarClock {...commonProps} color={iconColor} />;
+    case 'commission':
+      return <BadgeDollarSign {...commonProps} color={iconColor} />;
+    case 'customerConsole':
+      return <UserRoundCheck {...commonProps} color={iconColor} />;
+    case 'employee':
+      return <UserCog {...commonProps} color={iconColor} />;
+    case 'businessOverview':
+      return <LineChart {...commonProps} color={iconColor} />;
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
     default:

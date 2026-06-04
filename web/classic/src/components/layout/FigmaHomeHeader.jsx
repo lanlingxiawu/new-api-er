@@ -21,22 +21,26 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Menu, X } from 'lucide-react';
-import brandMark from '../../assets/home/Vector_b.png';
 import {
   LANGUAGE_PREFERENCE_KEY,
   languageOptions,
   normalizeLanguage,
 } from '../../i18n/language';
 
+const HOME_PRIMARY_LOGO = '/logo.png';
+
 export const figmaHomeNavItems = [
   {
     label: 'LLM服务',
-    to: '/console/chat?tool=chat',
+    to: '/console/playground',
     dropdown: true,
     children: [
       { label: '聊天', to: '/console/chat?tool=chat' },
-      { label: '绘图', to: '/chat/image' },
-      { label: '视频', to: '/console/chat?tool=video', hidden: true },
+      {
+        label: '绘图',
+        to: 'https://nano.nexaxis.ai/textCreate/',
+        target: '_blank',
+      },
     ],
   },
   { label: '控制台', to: '/console' },
@@ -46,9 +50,12 @@ export const figmaHomeNavItems = [
 const getVisibleChildren = (children = []) =>
   children.filter((child) => !child.hidden);
 
-const LogoMark = ({ className = '' }) => (
+const getLinkRel = (target) =>
+  target === '_blank' ? 'noopener noreferrer' : undefined;
+
+const LogoMark = ({ className = '', src = HOME_PRIMARY_LOGO }) => (
   <span className={`figma-home-logo ${className}`} aria-hidden='true'>
-    <img src={brandMark} alt='' />
+    <img src={src} alt='' />
   </span>
 );
 
@@ -128,14 +135,25 @@ const FigmaHomeHeader = () => {
                     </button>
                     <div className='figma-home-nav-menu'>
                       {visibleChildren.map((child) => (
-                        <Link key={child.label} to={child.to}>
+                        <Link
+                          key={child.label}
+                          to={child.to}
+                          target={child.target}
+                          rel={getLinkRel(child.target)}
+                        >
                           {t(child.label)}
                         </Link>
                       ))}
                     </div>
                   </>
                 ) : (
-                  <Link to={item.to}>{t(item.label)}</Link>
+                  <Link
+                    to={item.to}
+                    target={item.target}
+                    rel={getLinkRel(item.target)}
+                  >
+                    {t(item.label)}
+                  </Link>
                 )}
               </div>
             );
@@ -181,7 +199,7 @@ const FigmaHomeHeader = () => {
         <div className='figma-home-mobile-panel-top'>
           <img
             className='figma-home-mobile-logo-image'
-            src={brandMark}
+            src={HOME_PRIMARY_LOGO}
             alt=''
           />
           <button
@@ -203,6 +221,8 @@ const FigmaHomeHeader = () => {
                 <div key={item.label} className='figma-home-mobile-menu-item'>
                   <Link
                     to={item.to}
+                    target={item.target}
+                    rel={getLinkRel(item.target)}
                     className='figma-home-mobile-link'
                     onClick={closeMobileMenu}
                   >
@@ -243,6 +263,8 @@ const FigmaHomeHeader = () => {
                         <Link
                           key={child.label}
                           to={child.to}
+                          target={child.target}
+                          rel={getLinkRel(child.target)}
                           onClick={closeMobileMenu}
                         >
                           {t(child.label)}

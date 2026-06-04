@@ -82,7 +82,18 @@ func GetAllGroupModelStatuses() ([]GroupModelStatus, error) {
 
 // UpsertGroupModelStatus saves-or-updates a group model status row.
 func UpsertGroupModelStatus(ms *GroupModelStatus) error {
-	return DB.Save(ms).Error
+	values := map[string]any{
+		"user_group":     ms.UserGroup,
+		"model_name":     ms.ModelName,
+		"available":      ms.Available,
+		"last_test_time": ms.LastTestTime,
+		"created_at":     ms.CreatedAt,
+		"updated_at":     ms.UpdatedAt,
+	}
+	if ms.ID != 0 {
+		return DB.Model(&GroupModelStatus{}).Where("id = ?", ms.ID).Updates(values).Error
+	}
+	return DB.Model(&GroupModelStatus{}).Create(values).Error
 }
 
 // GetModelStatusesByGroup returns model availability for a group as a map.

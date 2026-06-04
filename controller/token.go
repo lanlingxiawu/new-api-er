@@ -46,7 +46,7 @@ func buildGroupStatusInfo(groupName string) (dto.GroupStatusInfo, bool) {
 	modelStatuses, _ := model.GetModelStatusesByGroup(groupName)
 	availableModels := 0
 	for _, modelName := range enabledModels {
-		if available, ok := modelStatuses[modelName]; ok && available {
+		if available, ok := modelStatuses[modelName]; !ok || available {
 			availableModels++
 		}
 	}

@@ -21,11 +21,12 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { scrollDocumentToTop } from '../../helpers/scroll';
-import brandMark from '../../assets/home/Vector_b.png';
+
+const HOME_ACCENT_LOGO = '/logo1.png';
 
 export const FigmaFooterLogo = ({ className = '' }) => (
   <span className={`figma-home-logo ${className}`} aria-hidden='true'>
-    <img src={brandMark} alt='' />
+    <img src={HOME_ACCENT_LOGO} alt='' />
   </span>
 );
 

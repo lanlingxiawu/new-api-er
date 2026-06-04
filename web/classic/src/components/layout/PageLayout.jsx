@@ -22,7 +22,6 @@ import { Layout } from '@douyinfe/semi-ui';
 import SiderBar from './SiderBar';
 import App from '../../App';
 import FooterBar from './Footer';
-import MarketingFooter from './MarketingFooter';
 import { ToastContainer } from 'react-toastify';
 import ErrorBoundary from '../common/ErrorBoundary';
 import React, { useContext, useEffect, useState } from 'react';
@@ -63,15 +62,15 @@ const PageLayout = () => {
     '/pricing',
   ];
 
-  const shouldHideFooter = cardProPages.includes(location.pathname);
+  const isConsoleRoute = location.pathname.startsWith('/console');
+  const shouldHideFooter =
+    isConsoleRoute || cardProPages.includes(location.pathname);
 
   const shouldInnerPadding =
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground';
 
-  const isConsoleRoute = location.pathname.startsWith('/console');
-  const useMarketingChrome = !isConsoleRoute;
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
 
   useEffect(() => {
@@ -230,7 +229,7 @@ const PageLayout = () => {
                 width: '100%',
               }}
             >
-              {useMarketingChrome ? <MarketingFooter /> : <FooterBar />}
+              <FooterBar />
             </Layout.Footer>
           )}
         </Layout>

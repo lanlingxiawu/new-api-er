@@ -33,7 +33,8 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
-import { getGroupStatuses as getGroupAvailabilityStatuses } from '@/lib/api'
+import { getPricing } from '@/features/pricing/api'
+import type { PricingModel } from '@/features/pricing/types'
 import { API_KEY_STATUSES } from '../constants'
 import { type ApiKey } from '../types'
 import {
@@ -69,31 +70,75 @@ function useGroupRatios(): Record<string, number> {
   return data ?? {}
 }
 
-function useGroupAvailabilityMap(): Record<string, { available: number; total: number }> {
+type ModelAvailabilityCount = { available: number; total: number }
+
+function countPricingModelsForGroups(
+  models: PricingModel[],
+  groups: string[]
+): number {
+  const groupSet = new Set(groups.filter(Boolean))
+  if (groupSet.size === 0) return models.length
+
+  return models.filter((model) => {
+    const enableGroups = model.enable_groups ?? []
+    if (enableGroups.includes('all')) return true
+    return enableGroups.some((group) => groupSet.has(group))
+  }).length
+}
+
+function usePricingModelAvailability(): {
+  all?: ModelAvailabilityCount
+  byGroup: Record<string, ModelAvailabilityCount>
+} {
   const { data } = useQuery({
-    queryKey: ['api', 'group-statuses'],
-    queryFn: getGroupAvailabilityStatuses,
+    queryKey: ['pricing'],
+    queryFn: getPricing,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
 
   return useMemo(() => {
-    if (!data?.success || !data?.data?.groups) return {}
-    const map: Record<string, { available: number; total: number }> = {}
-    for (const status of data.data.groups) {
-      map[status.user_group] = {
-        available: status.available_models,
-        total: status.total_models,
+    if (!data?.success) return { byGroup: {} }
+
+    const pricingModels = data.data ?? []
+    const byGroup: Record<string, ModelAvailabilityCount> = {}
+    const groups = new Set<string>()
+
+    for (const group of Object.keys(data.group_ratio ?? {})) {
+      groups.add(group)
+    }
+    for (const group of Object.keys(data.usable_group ?? {})) {
+      groups.add(group)
+    }
+    for (const model of pricingModels) {
+      for (const group of model.enable_groups ?? []) {
+        if (group && group !== 'all') groups.add(group)
       }
     }
-    return map
-  }, [data?.data?.groups])
+
+    for (const group of groups) {
+      const count = countPricingModelsForGroups(pricingModels, [group])
+      byGroup[group] = { available: count, total: count }
+    }
+
+    const autoCount =
+      data.auto_groups?.length > 0
+        ? countPricingModelsForGroups(pricingModels, data.auto_groups)
+        : 0
+    byGroup.auto = { available: autoCount, total: autoCount }
+
+    const allCount = pricingModels.length
+    return {
+      all: { available: allCount, total: allCount },
+      byGroup,
+    }
+  }, [data])
 }
 
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
   const groupRatios = useGroupRatios()
-  const groupAvailabilityMap = useGroupAvailabilityMap()
+  const pricingAvailability = usePricingModelAvailability()
   return [
     {
       id: 'select',
@@ -263,13 +308,9 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       ),
       cell: ({ row }) => {
         const group = row.original.group as string
-        const inlineStatus = row.original.group_status
-        const availability = inlineStatus
-          ? {
-              available: inlineStatus.available_models,
-              total: inlineStatus.total_models,
-            }
-          : groupAvailabilityMap[group]
+        const availability = group
+          ? pricingAvailability.byGroup[group]
+          : pricingAvailability.all
 
         if (!availability) {
           return <span className='text-muted-foreground text-xs'>-</span>
@@ -288,8 +329,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                     copyable={false}
                   />
                 }
-              >
-              </TooltipTrigger>
+              ></TooltipTrigger>
               <TooltipContent>
                 <span className='text-xs'>
                   {t('No models available. Please switch to another group.')}
@@ -307,8 +347,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                   {available}/{total}
                 </span>
               }
-            >
-            </TooltipTrigger>
+            ></TooltipTrigger>
             <TooltipContent>
               <span className='text-xs'>
                 {t('Available models in this group')}

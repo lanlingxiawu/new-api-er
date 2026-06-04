@@ -23,31 +23,31 @@ export const DEFAULT_FOOTER_CONFIG = {
   version: 1,
   groups: [
     {
-      id: 'company',
-      titleKey: '\u516c\u53f8',
+      id: 'about',
+      titleKey: '\u5173\u4e8e',
       links: [
         {
-          id: 'about',
-          labelKey: '\u5173\u4e8e',
-          url: '/about',
-          target: '_self',
+          id: 'about-com',
+          labelKey: '\u5173\u4e8e\u9879\u76ee',
+          url: 'https://docs.nexaxis.ai/docs',
+          target: '_blank',
         },
+      ],
+    },
+    {
+      id: 'work',
+      titleKey: '\u6587\u6863',
+      links: [
         {
           id: 'browse-models',
-          labelKey: '\u6d4f\u89c8\u6a21\u578b',
-          url: '/pricing',
-          target: '_self',
-        },
-        {
-          id: 'how-it-works',
-          labelKey: '\u5de5\u4f5c\u539f\u7406',
-          url: 'https://docs.newapi.pro/wiki/features-introduction/',
+          labelKey: 'API \u6587\u6863',
+          url: 'https://docs.nexaxis.ai/docs/models-list',
           target: '_blank',
         },
         {
-          id: 'blog',
-          labelKey: '\u535a\u5ba2',
-          url: 'https://github.com/QuantumNous/new-api',
+          id: 'how-it-works',
+          labelKey: '\u5e2e\u52a9',
+          url: 'https://docs.nexaxis.ai/docs/cc-switch',
           target: '_blank',
         },
       ],
@@ -59,19 +59,13 @@ export const DEFAULT_FOOTER_CONFIG = {
         {
           id: 'twitter-x',
           labelKey: 'Twitter / X',
-          url: 'https://github.com/QuantumNous/new-api',
+          url: 'https://x.com/NexaxisAI',
           target: '_blank',
         },
         {
           id: 'telegram',
           labelKey: 'Telegram',
-          url: 'https://github.com/QuantumNous/new-api',
-          target: '_blank',
-        },
-        {
-          id: 'discord',
-          labelKey: 'Discord',
-          url: 'https://github.com/QuantumNous/new-api',
+          url: 'https://t.me/nexaxis',
           target: '_blank',
         },
       ],
@@ -80,12 +74,6 @@ export const DEFAULT_FOOTER_CONFIG = {
       id: 'legal',
       titleKey: '\u6cd5\u5f8b',
       links: [
-        {
-          id: 'whitepaper',
-          labelKey: '\u767d\u76ae\u4e66',
-          url: 'https://docs.newapi.pro/',
-          target: '_blank',
-        },
         {
           id: 'privacy-policy',
           labelKey: '\u9690\u79c1\u653f\u7b56',

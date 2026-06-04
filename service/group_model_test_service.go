@@ -4,14 +4,26 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-const groupModelRecentSuccessWindow = time.Minute
+type probeWork struct {
+	userGroup string
+	modelName string
+	channels  []*model.Channel
+}
+
+type probeResult struct {
+	userGroup string
+	modelName string
+	available bool
+}
 
 // GroupModelActiveProbeFunc performs a real channel/model probe for a group.
 type GroupModelActiveProbeFunc func(ctx context.Context, userGroup string, channel *model.Channel, modelName string) error
@@ -68,7 +80,7 @@ func TestGroupModelAvailability(ctx context.Context, userGroup string) error {
 	return updateGroupStatus(ctx, userGroup, availableModels, totalModels)
 }
 
-// testModelAvailabilityViaChannel combines recent real traffic and active model probes.
+// testModelAvailabilityViaChannel runs an active probe against each supporting channel.
 func testModelAvailabilityViaChannel(ctx context.Context, userGroup, modelName string, channels []*model.Channel) bool {
 	supportingChannels := make([]*model.Channel, 0)
 
@@ -93,21 +105,6 @@ func testModelAvailabilityViaChannel(ctx context.Context, userGroup, modelName s
 	}
 
 	for _, channel := range supportingChannels {
-		if hasRecentSuccessfulRequest(ctx, userGroup, channel.Id, modelName) {
-			logger.LogInfo(ctx, fmt.Sprintf(
-				"[model-test] model %s in group %s is available (successful request in channel %d within %s)",
-				modelName, userGroup, channel.Id, groupModelRecentSuccessWindow,
-			))
-			return true
-		}
-	}
-
-	logger.LogInfo(ctx, fmt.Sprintf(
-		"[model-test] no recent requests for model %s in group %s, running active probe",
-		modelName, userGroup,
-	))
-
-	for _, channel := range supportingChannels {
 		if probeModelViaChannel(ctx, userGroup, channel, modelName) {
 			logger.LogInfo(ctx, fmt.Sprintf(
 				"[model-test] model %s in group %s is available (active probe passed on channel %d)",
@@ -118,7 +115,7 @@ func testModelAvailabilityViaChannel(ctx context.Context, userGroup, modelName s
 	}
 
 	logger.LogWarn(ctx, fmt.Sprintf(
-		"[model-test] model %s in group %s failed recent history and active probes",
+		"[model-test] model %s in group %s failed all active probes",
 		modelName, userGroup,
 	))
 	return false
@@ -142,37 +139,6 @@ func probeModelViaChannel(ctx context.Context, userGroup string, channel *model.
 	return true
 }
 
-func hasRecentSuccessfulRequest(ctx context.Context, userGroup string, channelID int, modelName string) bool {
-	windowStart := time.Now().Add(-groupModelRecentSuccessWindow).Unix()
-
-	var count int64
-	err := model.LOG_DB.Model(&model.Log{}).
-		Where(&model.Log{
-			ChannelId: channelID,
-			ModelName: modelName,
-			Group:     userGroup,
-			Type:      model.LogTypeConsume,
-		}).
-		Where("created_at >= ?", windowStart).
-		Count(&count).Error
-
-	if err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf(
-			"[model-test] failed to check recent requests for group %s channel %d model %s: %v",
-			userGroup, channelID, modelName, err,
-		))
-		return false
-	}
-
-	if count == 0 {
-		logger.LogDebug(ctx, fmt.Sprintf(
-			"[model-test] no recent requests for group %s channel %d model %s within %s",
-			userGroup, channelID, modelName, groupModelRecentSuccessWindow,
-		))
-		return false
-	}
-	return true
-}
 
 func updateGroupStatus(ctx context.Context, userGroup string, availableModels, totalModels int) error {
 	now := time.Now().Unix()
@@ -218,14 +184,20 @@ func updateModelStatus(ctx context.Context, userGroup, modelName string, availab
 	return model.UpsertGroupModelStatus(ms)
 }
 
-// RunGroupModelAvailabilityTest runs model availability checks for all known groups.
+// RunGroupModelAvailabilityTest runs model availability checks for all known groups
+// using a bounded worker pool so probes are batched rather than fired all at once.
+// The behaviour is controlled by MonitorSetting.ModelHealthCheck* fields.
 func RunGroupModelAvailabilityTest(ctx context.Context) error {
+	cfg := operation_setting.GetMonitorSetting()
+	if !cfg.ModelHealthCheckEnabled {
+		logger.LogInfo(ctx, "[model-test] model health check is disabled, skipping")
+		return nil
+	}
 	groups, err := model.GetAllGroupStatuses()
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to get all groups: %v", err))
 		return err
 	}
-
 	if len(groups) == 0 {
 		groups, err = getGroupsFromChannels()
 		if err != nil {
@@ -234,25 +206,149 @@ func RunGroupModelAvailabilityTest(ctx context.Context) error {
 		}
 	}
 
-	var errors []error
-	for _, g := range groups {
-		if err := TestGroupModelAvailability(ctx, g.UserGroup); err != nil {
-			logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to test group %s: %v", g.UserGroup, err))
-			errors = append(errors, err)
-		}
+	// ── Step 1: collect all (group, model, channels) work items ──────────────
+	works, err := collectProbeWorks(ctx, groups)
+	if err != nil {
+		return err
+	}
+	workers := cfg.ModelHealthCheckWorkers
+	logger.LogInfo(ctx, fmt.Sprintf("[model-test] starting batched probe: %d items, %d workers, %dms inter-probe delay",
+		len(works), workers, cfg.ModelHealthCheckIntervalMs))
+
+	// ── Step 2: run probes via worker pool ───────────────────────────────────
+	results := runProbesWithPool(ctx, works, workers, time.Duration(cfg.ModelHealthCheckIntervalMs)*time.Millisecond)
+
+	// ── Step 3: persist per-model results and aggregate per-group status ─────
+	if err := persistProbeResults(ctx, results); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to persist probe results: %v", err))
 	}
 
-	if len(errors) > 0 {
-		logger.LogWarn(ctx, fmt.Sprintf("[model-test] %d groups failed testing", len(errors)))
-	}
-
+	// ── Step 4: rebuild global model_statuses table ──────────────────────────
 	if err := rebuildGlobalModelStatusesFromGroupAvailability(ctx); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to rebuild global model statuses: %v", err))
-		if len(errors) == 0 {
-			return err
+		return err
+	}
+
+	return nil
+}
+
+// collectProbeWorks builds the full list of probes to run across all groups.
+func collectProbeWorks(ctx context.Context, groups []model.GroupStatus) ([]probeWork, error) {
+	var works []probeWork
+	for _, g := range groups {
+		channels, err := model.GetChannelsByGroup(g.UserGroup)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to get channels for group %s: %v", g.UserGroup, err))
+			continue
+		}
+
+		modelSet := make(map[string][]*model.Channel) // model → channels that support it
+		for _, ch := range channels {
+			if ch == nil || ch.Status != common.ChannelStatusEnabled {
+				continue
+			}
+			for _, m := range ch.GetModels() {
+				m = strings.TrimSpace(m)
+				if m != "" {
+					modelSet[m] = append(modelSet[m], ch)
+				}
+			}
+		}
+
+		for modelName, chans := range modelSet {
+			works = append(works, probeWork{
+				userGroup: g.UserGroup,
+				modelName: modelName,
+				channels:  chans,
+			})
+		}
+	}
+	return works, nil
+}
+
+// runProbesWithPool dispatches works to a bounded goroutine pool and collects results.
+func runProbesWithPool(ctx context.Context, works []probeWork, workers int, delay time.Duration) []probeResult {
+	results := make([]probeResult, len(works))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
+	for i, w := range works {
+		// 修复：用 select + return 真正终止循环，而非 break 出 select
+		select {
+		case <-ctx.Done():
+			logger.LogWarn(ctx, "[model-test] context cancelled, stopping probe pool early")
+			wg.Wait()
+			return results
+		default:
+		}
+
+		// 修复：sem 写入也要监听 ctx，防止 context 取消时在此永久阻塞
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			logger.LogWarn(ctx, "[model-test] context cancelled while waiting for worker slot")
+			wg.Wait()
+			return results
+		}
+
+		wg.Add(1)
+		go func(idx int, work probeWork) {
+			defer wg.Done()
+			defer func() {
+				if delay > 0 {
+					time.Sleep(delay)
+				}
+				<-sem
+			}()
+			available := probeModelViaChannel(ctx, work.userGroup, work.channels[0], work.modelName)
+			if !available {
+				for _, ch := range work.channels[1:] {
+					if probeModelViaChannel(ctx, work.userGroup, ch, work.modelName) {
+						available = true
+						break
+					}
+				}
+			}
+			results[idx] = probeResult{
+				userGroup: work.userGroup,
+				modelName: work.modelName,
+				available: available,
+			}
+		}(i, w)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// persistProbeResults writes per-model statuses and updates per-group aggregate counters.
+func persistProbeResults(ctx context.Context, results []probeResult) error {
+	// group → (available, total)
+	type groupAgg struct{ avail, total int }
+	agg := make(map[string]*groupAgg)
+
+	for _, r := range results {
+		if r.userGroup == "" {
+			continue
+		}
+		if err := updateModelStatus(ctx, r.userGroup, r.modelName, r.available); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to update model status %s/%s: %v", r.userGroup, r.modelName, err))
+		}
+		if agg[r.userGroup] == nil {
+			agg[r.userGroup] = &groupAgg{}
+		}
+		agg[r.userGroup].total++
+		if r.available {
+			agg[r.userGroup].avail++
 		}
 	}
 
+	for groupName, a := range agg {
+		if err := updateGroupStatus(ctx, groupName, a.avail, a.total); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to update group status %s: %v", groupName, err))
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("[model-test] group %s: %d/%d models available", groupName, a.avail, a.total))
+	}
 	return nil
 }
 
@@ -285,6 +381,7 @@ func rebuildGlobalModelStatusesFromGroupAvailability(ctx context.Context) error 
 	}
 
 	now := time.Now().Unix()
+	var firstErr error
 	for modelName, agg := range aggregates {
 		successRate := 0.0
 		if agg.total > 0 {
@@ -317,13 +414,17 @@ func rebuildGlobalModelStatusesFromGroupAvailability(ctx context.Context) error 
 			globalStatus.CreatedAt = now
 		}
 
+		// 修复：upsert 失败记录错误但继续，避免部分写入后中断导致全局状态表数据不一致
 		if err := model.UpsertModelStatus(globalStatus); err != nil {
-			return err
+			logger.LogWarn(ctx, fmt.Sprintf("[model-test] failed to upsert global status for model %s: %v", modelName, err))
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
 	logger.LogInfo(ctx, fmt.Sprintf("[model-test] rebuilt %d global model status rows", len(aggregates)))
-	return nil
+	return firstErr
 }
 
 func getGroupsFromChannels() ([]model.GroupStatus, error) {

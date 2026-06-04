@@ -1332,8 +1332,7 @@ func buildModelsWithAvailability(modelNames []string, groupName string) dto.Mode
 	for i, modelName := range modelNames {
 		item := dto.ModelWithAvailability{
 			Name:      modelName,
-			Available: false,
-			Reason:    "Pending check",
+			Available: true,
 		}
 
 		if available, exists := modelStatuses[modelName]; exists {

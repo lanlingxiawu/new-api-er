@@ -1123,8 +1123,10 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 // GetChannelsByGroup returns all channels belonging to a specific group
 func GetChannelsByGroup(userGroup string) ([]*Channel, error) {
 	var channels []*Channel
-	// 使用 FIND_IN_SET 来匹配逗号分隔的分组
-	// 例如：group = "default,vip" 应该匹配 userGroup = "vip"
-	err := DB.Where("FIND_IN_SET(?, `group`)", userGroup).Find(&channels).Error
+	userGroup = strings.TrimSpace(userGroup)
+	if userGroup == "" {
+		return channels, nil
+	}
+	err := DB.Where(channelGroupFilterCondition(), channelGroupFilterPattern(userGroup)).Find(&channels).Error
 	return channels, err
 }

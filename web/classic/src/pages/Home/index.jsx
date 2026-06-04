@@ -246,8 +246,7 @@ const Home = () => {
   const promoTextZh = statusState?.status?.home_promo_text_zh;
   const promoTextEn = statusState?.status?.home_promo_text_en;
   const isEnglish = (i18n.language || '').toLowerCase().startsWith('en');
-  const fallbackText =
-    '限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！';
+  const fallbackText = t('限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！');
   const promoTextRaw = isEnglish
     ? promoTextEn || promoTextZh || fallbackText
     : promoTextZh || promoTextEn || fallbackText;
