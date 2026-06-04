@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type UIEvent } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -33,8 +33,16 @@ import {
 } from '@/components/ui/select'
 import { formatBusinessTargetAmount } from '@/features/business/format'
 import { searchUsers } from '@/features/users/api'
-import { createEmployee, getEmployeeTiers, updateEmployee } from '../api'
-import type { EmployeeProfile } from '../types'
+import {
+  createEmployee,
+  getEmployeeTiers,
+  setEmployeeTier,
+  updateEmployee,
+} from '../api'
+import type { EmployeeProfile, EmployeeTier } from '../types'
+
+const EMPTY_TIERS: EmployeeTier[] = []
+const USER_PICKER_PAGE_SIZE = 20
 
 const createSchema = z.object({
   user_id: z.number({ error: 'Required' }).positive('Must be positive'),
@@ -60,6 +68,27 @@ interface Props {
   onSuccess?: () => void
 }
 
+function isSameNumber(left: number | undefined, right: number | undefined) {
+  return Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.000001
+}
+
+function resolveSelectedTierId(
+  currentRow: EmployeeProfile | undefined,
+  tiers: EmployeeTier[]
+) {
+  if (!currentRow) return ''
+
+  const currentTierId = Number(currentRow.current_tier_id ?? 0)
+  if (currentTierId > 0) return String(currentTierId)
+
+  const matchedTier = tiers.find(
+    (tier) =>
+      isSameNumber(tier.rate, currentRow.commission_rate) &&
+      isSameNumber(tier.threshold_usd, currentRow.target_amount)
+  )
+  return matchedTier ? String(matchedTier.id) : ''
+}
+
 // Search users server-side and select one instead of typing an ID.
 function UserPicker({
   value,
@@ -74,6 +103,10 @@ function UserPicker({
   const [debounced, setDebounced] = useState('')
   const [selectedLabel, setSelectedLabel] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!value) setSelectedLabel('')
+  }, [value])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
@@ -94,12 +127,35 @@ function UserPicker({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const { data, isFetching } = useQuery({
-    queryKey: ['employee-user-search', debounced],
-    queryFn: () => searchUsers({ keyword: debounced, page_size: 20 }),
-    enabled: open,
-  })
-  const users = data?.data?.items ?? []
+  const { data, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage } =
+    useInfiniteQuery({
+      queryKey: ['employee-user-search', debounced],
+      queryFn: ({ pageParam }) =>
+        searchUsers({
+          keyword: debounced,
+          p: Number(pageParam),
+          page_size: USER_PICKER_PAGE_SIZE,
+          exclude_employee: true,
+        }),
+      initialPageParam: 1,
+      getNextPageParam: (lastPage) => {
+        const page = lastPage.data?.page ?? 1
+        const pageSize = lastPage.data?.page_size ?? USER_PICKER_PAGE_SIZE
+        const total = lastPage.data?.total ?? 0
+        return page * pageSize < total ? page + 1 : undefined
+      },
+      enabled: open,
+    })
+  const users = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+  const isInitialFetching = isFetching && !data
+
+  const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
+    const list = event.currentTarget
+    const distanceToBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    if (distanceToBottom > 48 || !hasNextPage || isFetchingNextPage) return
+    void fetchNextPage()
+  }
 
   return (
     <div ref={containerRef} className='relative'>
@@ -119,7 +175,7 @@ function UserPicker({
       />
       {open && (
         <div className='bg-popover text-popover-foreground absolute top-full z-[100] mt-1 w-full rounded-md border shadow-md'>
-          {isFetching ? (
+          {isInitialFetching ? (
             <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
               {t('Loading...')}
             </div>
@@ -128,7 +184,10 @@ function UserPicker({
               {t('No users found')}
             </div>
           ) : (
-            <ul className='max-h-[240px] overflow-y-auto p-1'>
+            <ul
+              className='max-h-[240px] overflow-y-auto p-1'
+              onScroll={handleListScroll}
+            >
               {users.map((u) => (
                 <li
                   key={u.id}
@@ -157,6 +216,11 @@ function UserPicker({
                   </span>
                 </li>
               ))}
+              {isFetchingNextPage ? (
+                <li className='text-muted-foreground px-2 py-3 text-center text-sm'>
+                  {t('Loading...')}
+                </li>
+              ) : null}
             </ul>
           )}
         </div>
@@ -181,7 +245,7 @@ export function EmployeeFormDialog({
     queryFn: getEmployeeTiers,
     enabled: open,
   })
-  const tiers = tiersData?.data ?? []
+  const tiers = tiersData?.data ?? EMPTY_TIERS
 
   const createForm = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
@@ -204,6 +268,11 @@ export function EmployeeFormDialog({
 
   useEffect(() => {
     if (!open || !currentRow) return
+    setSelectedTierId(resolveSelectedTierId(currentRow, tiers))
+  }, [currentRow, open, tiers])
+
+  useEffect(() => {
+    if (!open || !currentRow) return
     updateForm.reset({
       commission_rate: currentRow.commission_rate ?? 0.1,
       target_amount: Number(currentRow.target_amount ?? 0),
@@ -221,11 +290,23 @@ export function EmployeeFormDialog({
     const tier = tiers.find((item) => String(item.id) === tierId)
     if (!tier) return
     if (isUpdate) {
-      updateForm.setValue('commission_rate', Number(tier.rate ?? 0))
-      updateForm.setValue('target_amount', Number(tier.threshold_usd ?? 0))
+      updateForm.setValue('commission_rate', Number(tier.rate ?? 0), {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+      updateForm.setValue('target_amount', Number(tier.threshold_usd ?? 0), {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
     } else {
-      createForm.setValue('commission_rate', Number(tier.rate ?? 0))
-      createForm.setValue('target_amount', Number(tier.threshold_usd ?? 0))
+      createForm.setValue('commission_rate', Number(tier.rate ?? 0), {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+      createForm.setValue('target_amount', Number(tier.threshold_usd ?? 0), {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
     }
   }
 
@@ -283,6 +364,14 @@ export function EmployeeFormDialog({
         remark: values.remark,
       })
       if (!res.success) throw new Error(res.message ?? 'Failed')
+      const tierId = Number(selectedTierId)
+      if (res.data?.id && Number.isFinite(tierId) && tierId > 0) {
+        const tierRes = await setEmployeeTier(res.data.id, {
+          tier_id: tierId,
+          source: 'manual',
+        })
+        if (!tierRes.success) throw new Error(tierRes.message ?? 'Failed')
+      }
       toast.success(t('Employee created successfully'))
       createForm.reset()
       onOpenChange(false)
@@ -305,6 +394,15 @@ export function EmployeeFormDialog({
         remark: values.remark,
       })
       if (!res.success) throw new Error(res.message ?? 'Failed')
+      const tierId = Number(selectedTierId)
+      const currentTierId = Number(currentRow.current_tier_id ?? 0)
+      if (Number.isFinite(tierId) && tierId > 0 && tierId !== currentTierId) {
+        const tierRes = await setEmployeeTier(currentRow.id, {
+          tier_id: tierId,
+          source: 'manual',
+        })
+        if (!tierRes.success) throw new Error(tierRes.message ?? 'Failed')
+      }
       toast.success(t('Employee updated successfully'))
       onOpenChange(false)
       onSuccess?.()

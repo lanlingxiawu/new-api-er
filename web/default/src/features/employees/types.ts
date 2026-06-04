@@ -12,6 +12,7 @@ export const employeeProfileSchema = z.object({
   total_cost_quota: z.number().optional(),
   total_profit_quota: z.number().optional(),
   total_commission_quota: z.number().optional(),
+  current_tier_id: z.number().optional(),
   current_tier_level: z.number().optional(),
   current_tier_rate: z.number().optional(),
   current_performance_quota: z.number().optional(),

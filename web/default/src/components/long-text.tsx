@@ -80,6 +80,7 @@ export function LongText({
       <div className='sm:hidden'>
         <Popover>
           <PopoverTrigger
+            nativeButton={false}
             render={<div ref={ref} className={cn('truncate', className)} />}
           >
             {children}

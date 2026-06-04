@@ -81,6 +81,23 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(number) ? number : fallback;
 };
 
+const isSameNumber = (left, right) =>
+  Math.abs(Number(left || 0) - Number(right || 0)) < 0.000001;
+
+const resolveSelectedTierId = (row, tiers) => {
+  if (!row) return null;
+
+  const currentTierId = Number(row.current_tier_id || 0);
+  if (currentTierId > 0) return currentTierId;
+
+  const matchedTier = tiers.find(
+    (tier) =>
+      isSameNumber(tier.rate, row.commission_rate) &&
+      isSameNumber(tier.threshold_usd, row.target_amount),
+  );
+  return matchedTier?.id || null;
+};
+
 const formatPercent = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
 const formatBusinessAmount = (value) =>
   renderQuota(value || 0, BUSINESS_AMOUNT_DIGITS);
@@ -276,10 +293,7 @@ function ClassicBusinessTable({
   ...props
 }) {
   return (
-    <div
-      className={`w-full ${wrapperClassName}`.trim()}
-      style={wrapperStyle}
-    >
+    <div className={`w-full ${wrapperClassName}`.trim()} style={wrapperStyle}>
       <CardTable
         {...props}
         hidePagination
@@ -479,7 +493,14 @@ function UserPicker({ value, onSelect }) {
   const [selectedLabel, setSelectedLabel] = useState('');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!value) setSelectedLabel('');
+  }, [value]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -499,37 +520,66 @@ function UserPicker({ value, onSelect }) {
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    let cancelled = false;
-    const loadUsers = async () => {
-      setLoading(true);
+  const loadUsers = useCallback(
+    async (nextPage = 1, replace = false) => {
+      if (replace) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
       try {
         const res = await API.get('/api/user/search', {
           params: buildParams({
             keyword: debouncedKeyword,
             page_size: 20,
+            p: nextPage,
+            exclude_employee: true,
           }),
           disableDuplicate: true,
         });
-        if (!cancelled) {
-          setUsers(res.data?.data?.items || []);
-        }
+        const data = res.data?.data || {};
+        const nextItems = data.items || [];
+        const currentPage = Number(data.page || nextPage);
+        const pageSize = Number(data.page_size || 20);
+        const total = Number(data.total || 0);
+        setUsers((prev) => {
+          if (replace) return nextItems;
+          const existingIds = new Set(prev.map((user) => user.id));
+          return [
+            ...prev,
+            ...nextItems.filter((user) => !existingIds.has(user.id)),
+          ];
+        });
+        setPage(currentPage);
+        setHasMore(currentPage * pageSize < total);
       } catch (error) {
-        if (!cancelled) {
+        if (replace) {
           setUsers([]);
+          setHasMore(false);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        setLoading(false);
+        setLoadingMore(false);
       }
-    };
-    loadUsers();
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedKeyword, open]);
+    },
+    [debouncedKeyword],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setUsers([]);
+    setPage(1);
+    setHasMore(false);
+    loadUsers(1, true);
+  }, [debouncedKeyword, loadUsers, open]);
+
+  const handleScroll = (event) => {
+    const target = event.currentTarget;
+    const distanceToBottom =
+      target.scrollHeight - target.scrollTop - target.clientHeight;
+    if (distanceToBottom > 48 || !hasMore || loadingMore || loading) return;
+    loadUsers(page + 1, false);
+  };
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
@@ -562,6 +612,7 @@ function UserPicker({ value, onSelect }) {
             boxShadow: 'var(--semi-shadow-elevated)',
             padding: 4,
           }}
+          onScroll={handleScroll}
         >
           {loading ? (
             <div className='px-2 py-6 text-center text-sm text-semi-color-text-2'>
@@ -572,32 +623,39 @@ function UserPicker({ value, onSelect }) {
               {t('未找到用户')}
             </div>
           ) : (
-            users.map((user) => (
-              <div
-                key={user.id}
-                role='option'
-                aria-selected={value === user.id}
-                className='cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-semi-color-fill-0'
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  const label = `${user.username}${
-                    user.display_name ? ` (${user.display_name})` : ''
-                  } #${user.id}`;
-                  setSelectedLabel(label);
-                  onSelect(user.id);
-                  setOpen(false);
-                }}
-              >
-                <div className='font-medium'>
-                  {user.username}
-                  {user.display_name ? ` (${user.display_name})` : ''}
+            <>
+              {users.map((user) => (
+                <div
+                  key={user.id}
+                  role='option'
+                  aria-selected={value === user.id}
+                  className='cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-semi-color-fill-0'
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    const label = `${user.username}${
+                      user.display_name ? ` (${user.display_name})` : ''
+                    } #${user.id}`;
+                    setSelectedLabel(label);
+                    onSelect(user.id);
+                    setOpen(false);
+                  }}
+                >
+                  <div className='font-medium'>
+                    {user.username}
+                    {user.display_name ? ` (${user.display_name})` : ''}
+                  </div>
+                  <div className='text-xs text-semi-color-text-2'>
+                    #{user.id}
+                    {user.email ? ` / ${user.email}` : ''}
+                  </div>
                 </div>
-                <div className='text-xs text-semi-color-text-2'>
-                  #{user.id}
-                  {user.email ? ` / ${user.email}` : ''}
+              ))}
+              {loadingMore ? (
+                <div className='px-2 py-3 text-center text-sm text-semi-color-text-2'>
+                  {t('加载中...')}
                 </div>
-              </div>
-            ))
+              ) : null}
+            </>
           )}
         </div>
       ) : null}
@@ -641,15 +699,20 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
     });
   }, [visible, row]);
 
+  useEffect(() => {
+    if (!visible || !isUpdate) return;
+    setSelectedTierId(resolveSelectedTierId(row, tiers));
+  }, [isUpdate, row, tiers, visible]);
+
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
   // 选择等级后自动填写比例和业绩目标（可继续手动修改）
   const handleTierSelect = (tierId) => {
-    setSelectedTierId(tierId);
+    setSelectedTierId(tierId || null);
     if (!tierId) return;
-    const tier = tiers.find((t) => t.id === tierId);
+    const tier = tiers.find((t) => Number(t.id) === Number(tierId));
     if (!tier) return;
     setForm((prev) => ({
       ...prev,
@@ -666,6 +729,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
 
     setSaving(true);
     try {
+      let employeeId = row?.id;
       if (isUpdate) {
         await mutateRequest('put', `/api/admin/employee/${row.id}`, {
           commission_rate: toNumber(form.commission_rate),
@@ -674,11 +738,20 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           remark: form.remark,
         });
       } else {
-        await mutateRequest('post', '/api/admin/employee', {
+        const created = await mutateRequest('post', '/api/admin/employee', {
           user_id: toNumber(form.user_id),
           commission_rate: toNumber(form.commission_rate),
           target_amount: toNumber(form.target_amount),
           remark: form.remark,
+        });
+        employeeId = created?.data?.id;
+      }
+      const tierId = Number(selectedTierId || 0);
+      const currentTierId = Number(row?.current_tier_id || 0);
+      if (employeeId && tierId > 0 && (!isUpdate || tierId !== currentTierId)) {
+        await mutateRequest('post', `/api/admin/employee/${employeeId}/tier`, {
+          tier_id: tierId,
+          source: 'manual',
         });
       }
       showSuccess(isUpdate ? t('员工已更新') : t('员工已创建'));
@@ -788,13 +861,9 @@ function EmployeesTab({
   onReadyToolbar,
 }) {
   const { t } = useTranslation();
-  const ownEmployees = usePagedEndpoint(
-    '/api/admin/employee',
-    filters || {},
-    {
-      enabled: !providedEmployees,
-    },
-  );
+  const ownEmployees = usePagedEndpoint('/api/admin/employee', filters || {}, {
+    enabled: !providedEmployees,
+  });
   const employees = providedEmployees || ownEmployees;
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -843,7 +912,8 @@ function EmployeesTab({
     const sortKey = activeSorter?.dataIndex || activeSorter?.key;
     const next = { ...(filters || {}) };
     if (sortKey && activeSorter?.sortOrder) {
-      next.sort_by = sortKey === 'current_tier_level' ? 'current_tier_rate' : sortKey;
+      next.sort_by =
+        sortKey === 'current_tier_level' ? 'current_tier_rate' : sortKey;
       next.sort_order = activeSorter.sortOrder === 'ascend' ? 'asc' : 'desc';
     } else {
       delete next.sort_by;
@@ -1460,7 +1530,9 @@ function TiersTab({ onReadyToolbar }) {
   const deleteTier = (row) => {
     Modal.confirm({
       title: t('删除等级'),
-      content: t('删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。'),
+      content: t(
+        '删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。',
+      ),
       onOk: async () => {
         try {
           await mutateRequest('delete', `/api/admin/employee/tiers/${row.id}`);
@@ -1490,9 +1562,7 @@ function TiersTab({ onReadyToolbar }) {
     {
       title: t('提成比例'),
       dataIndex: 'rate',
-      render: (value) => (
-        <Tag color='green'>{formatPercent(value)}</Tag>
-      ),
+      render: (value) => <Tag color='green'>{formatPercent(value)}</Tag>,
     },
     {
       title: t('操作'),
@@ -1538,7 +1608,11 @@ function TiersTab({ onReadyToolbar }) {
         columns={columns}
         dataSource={tiers}
         loading={loading}
-        empty={<BusinessEmpty description={t('暂无等级配置，点击「添加等级」创建')} />}
+        empty={
+          <BusinessEmpty
+            description={t('暂无等级配置，点击「添加等级」创建')}
+          />
+        }
       />
       <TierModal
         visible={modalVisible}
@@ -1677,10 +1751,11 @@ export function EmployeeConsole() {
   const extension = summary || profileData?.data?.extension || {};
   const customerTotalConsumptionQuota =
     extension.customer_total_consumption_quota ?? 0;
-  const customerTotalConsumptionUsd =
-    extension.customer_total_consumption_usd;
-  const totalProfitQuota = extension.profit_total_quota ?? extension.total_profit_quota ?? 0;
-  const totalProfitUsd = extension.profit_total_usd ?? extension.total_profit_usd;
+  const customerTotalConsumptionUsd = extension.customer_total_consumption_usd;
+  const totalProfitQuota =
+    extension.profit_total_quota ?? extension.total_profit_quota ?? 0;
+  const totalProfitUsd =
+    extension.profit_total_usd ?? extension.total_profit_usd;
   const totalCommissionQuota =
     extension.total_commission_quota ?? extension.commission_total_quota ?? 0;
   const totalCommissionUsd =
@@ -2021,7 +2096,7 @@ function getPresetRange(range) {
   if (range === 'all') {
     return { start: null, end: null };
   }
-  const days = range === '90d' ? 90 : range === '30d' ? 30 : 7;
+  const days = { '1d': 1, '7d': 7, '30d': 30, '90d': 90 }[range] || 7;
   const end = new Date();
   end.setHours(23, 59, 59, 999);
   const start = new Date(end);
@@ -2040,8 +2115,8 @@ function rangeToParams(range) {
 
 export function BusinessOverview() {
   const { t } = useTranslation();
-  const [range, setRange] = useState('7d');
-  const [customRange, setCustomRange] = useState(() => getPresetRange('7d'));
+  const [range, setRange] = useState('1d');
+  const [customRange, setCustomRange] = useState(() => getPresetRange('1d'));
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const selectedRange = useMemo(
@@ -2086,6 +2161,7 @@ export function BusinessOverview() {
   const channelProfitRows = data?.by_channel_platform || [];
   const employeeRows = (data?.by_employee || []).slice(0, 10);
   const rangeButtons = [
+    { key: '1d', label: t('近 1 天') },
     { key: '7d', label: t('近 7 天') },
     { key: '30d', label: t('近 30 天') },
     { key: '90d', label: t('近 90 天') },

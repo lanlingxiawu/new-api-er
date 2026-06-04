@@ -94,6 +94,7 @@ export interface SearchUsersParams {
   group?: string
   role?: string
   status?: string
+  exclude_employee?: boolean
   p?: number
   page_size?: number
 }

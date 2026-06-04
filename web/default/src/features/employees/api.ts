@@ -57,6 +57,18 @@ export async function updateEmployee(
   return res.data
 }
 
+export async function setEmployeeTier(
+  id: number,
+  data: {
+    tier_id: number
+    source?: 'manual' | 'custom'
+    remark?: string
+  }
+): Promise<ApiResponse> {
+  const res = await api.post(`/api/admin/employee/${id}/tier`, data)
+  return res.data
+}
+
 export async function deleteEmployee(id: number): Promise<ApiResponse> {
   const res = await api.delete(`/api/admin/employee/${id}`)
   return res.data

@@ -2276,6 +2276,7 @@
     "Language Preferences": "言語設定",
     "Language preferences sync across your signed-in devices and affect API error messages.": "言語設定はログイン中のすべてのデバイスで同期され、API のエラーメッセージ言語にも反映されます。",
     "Last 24h usage": "直近24時間の使用量",
+    "Last 1 day": "過去1日",
     "Last 30 days": "Last 30 days",
     "Last 30 days uptime": "直近 30 日の稼働率",
     "Last 7 days": "Last 7 days",

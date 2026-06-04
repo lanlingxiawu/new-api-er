@@ -37,7 +37,7 @@ import { getCommissionOverview } from './api'
 
 // Range options
 
-type RangeKey = '7d' | '30d' | '90d' | 'all' | 'custom'
+type RangeKey = '1d' | '7d' | '30d' | '90d' | 'all' | 'custom'
 
 interface OverviewRange {
   start?: Date
@@ -52,6 +52,7 @@ function createTrailingDayRange(days: number): OverviewRange {
 }
 
 function getPresetRange(range: Exclude<RangeKey, 'custom'>): OverviewRange {
+  if (range === '1d') return createTrailingDayRange(1)
   if (range === '7d') return createTrailingDayRange(7)
   if (range === '30d') return createTrailingDayRange(30)
   if (range === '90d') return createTrailingDayRange(90)
@@ -66,6 +67,7 @@ function rangesMatch(a: OverviewRange, b: OverviewRange): boolean {
 
 function resolveRangeKey(range: OverviewRange): RangeKey {
   if (!range.start && !range.end) return 'all'
+  if (rangesMatch(range, getPresetRange('1d'))) return '1d'
   if (rangesMatch(range, getPresetRange('7d'))) return '7d'
   if (rangesMatch(range, getPresetRange('30d'))) return '30d'
   if (rangesMatch(range, getPresetRange('90d'))) return '90d'
@@ -206,9 +208,9 @@ function BusinessSection({
 
 export function CommissionOverview() {
   const { t } = useTranslation()
-  const [range, setRange] = useState<RangeKey>('7d')
+  const [range, setRange] = useState<RangeKey>('1d')
   const [customRange, setCustomRange] = useState<OverviewRange>(() =>
-    getPresetRange('7d')
+    getPresetRange('1d')
   )
   const [visibleChannelRows, setVisibleChannelRows] =
     useState(TABLE_INITIAL_ROWS)
@@ -244,6 +246,7 @@ export function CommissionOverview() {
   const comm = d?.commission
 
   const rangeButtons: { key: Exclude<RangeKey, 'custom'>; label: string }[] = [
+    { key: '1d', label: t('Last 1 day') },
     { key: '7d', label: t('Last 7 days') },
     { key: '30d', label: t('Last 30 days') },
     { key: '90d', label: t('Last 90 days') },

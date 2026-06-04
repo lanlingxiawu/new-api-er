@@ -225,7 +225,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -252,7 +252,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	keywordInt, err := strconv.Atoi(keyword)
 	if err == nil {
 		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
+		likeCondition = "users.id = ? OR " + likeCondition
 		likeArgs = append([]interface{}{keywordInt}, likeArgs...)
 	}
 
@@ -266,6 +266,10 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	if status != nil {
 		query = query.Where("status = ?", *status)
 	}
+	if excludeEmployees {
+		query = query.Joins("LEFT JOIN employee_profiles AS employee_filter ON employee_filter.user_id = users.id").
+			Where("employee_filter.id IS NULL")
+	}
 
 	// 获取总数
 	err = query.Count(&total).Error
@@ -275,7 +279,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	}
 
 	// 获取分页数据
-	err = query.Omit("password").Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
+	err = query.Omit("password").Order("users.id desc").Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
