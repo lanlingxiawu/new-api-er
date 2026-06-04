@@ -4221,6 +4221,7 @@
     "公网IP": "IP công khai",
     "号池节点": "Nhóm node",
     "获取节点列表失败": "Không thể lấy danh sách node",
+    "加载节点中...": "Đang tải node...",
     "节点控制服务": "Dịch vụ điều khiển node",
     "节点控制服务地址": "URL dịch vụ điều khiển node",
     "节点列表": "Danh sách node",

@@ -3687,6 +3687,7 @@
     "公网IP": "IP publique",
     "号池节点": "Pool de noeuds",
     "获取节点列表失败": "Echec de la recuperation des noeuds",
+    "加载节点中...": "Chargement des noeuds...",
     "监听端口": "Port d ecoute",
     "节点控制服务": "Service de controle des noeuds",
     "节点控制服务地址": "URL du service de controle des noeuds",

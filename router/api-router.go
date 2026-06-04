@@ -185,8 +185,8 @@ func SetApiRouter(router *gin.Engine) {
 		nodePoolRoute.Use(middleware.RootAuth())
 		{
 			nodePoolRoute.GET("/nodes", controller.GetNodePoolNodes)
-			nodePoolRoute.GET("/nodes/:public_ip/:node_name/accounts", controller.GetNodePoolAccounts)
-			nodePoolRoute.DELETE("/nodes/:public_ip/:node_name", controller.DeleteNodePoolNode)
+			nodePoolRoute.GET("/nodes/:node_name/accounts", controller.GetNodePoolAccounts)
+			nodePoolRoute.DELETE("/nodes/:node_name", controller.DeleteNodePoolNode)
 		}
 		// end
 		optionRoute := apiRouter.Group("/option")

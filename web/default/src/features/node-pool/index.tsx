@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 // xiugai 添加号池节点功能
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, startTransition } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
@@ -32,12 +32,14 @@ import {
   RefreshCw,
   Server,
   Trash2,
+  Users,
   Wallet,
   XCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { SectionPageLayout } from '@/components/layout'
 import { deleteNode, getNodeAccounts, getNodes } from './api'
 import type { Node, NodeAccount, NodeStats } from './types'
@@ -110,7 +112,7 @@ function NodeStatusBadge({ status }: { status: string }) {
 
 function AccountStatusBadge({ status }: { status: string }) {
   const cls =
-    status === 'online'
+    status === '正常'
       ? 'bg-green-600 text-white hover:bg-green-600'
       : 'bg-gray-400 text-white hover:bg-gray-400'
   return (
@@ -120,13 +122,16 @@ function AccountStatusBadge({ status }: { status: string }) {
   )
 }
 
+type AccountStats = { available: number; total: number }
+
 type NodeListItemProps = {
   node: Node
   selected: boolean
   onClick: () => void
+  accountStats?: AccountStats
 }
 
-function NodeListItem({ node, selected, onClick }: NodeListItemProps) {
+function NodeListItem({ node, selected, onClick, accountStats }: NodeListItemProps) {
   return (
     <button
       type='button'
@@ -158,6 +163,14 @@ function NodeListItem({ node, selected, onClick }: NodeListItemProps) {
           <Network className='size-3 shrink-0' />
           {formatNumber(node.upload_bandwidth, 0)}↑
         </span>
+        {accountStats != null && (
+          <span className='col-span-3 mt-0.5 flex items-center gap-1'>
+            <Users className='size-3 shrink-0' />
+            <span className='text-green-600 dark:text-green-400'>{accountStats.available}</span>
+            <span>/</span>
+            <span>{accountStats.total}</span>
+          </span>
+        )}
       </div>
     </button>
   )
@@ -170,8 +183,8 @@ type NodeDetailFieldProps = {
 
 function NodeDetailField({ label, value }: NodeDetailFieldProps) {
   return (
-    <div className='flex items-center justify-between gap-4 border-b py-1.5 last:border-b-0 text-sm'>
-      <span className='shrink-0 text-muted-foreground'>{label}</span>
+    <div className='flex flex-col gap-0.5 rounded-md bg-muted/40 px-3 py-2 text-sm'>
+      <span className='text-xs text-muted-foreground'>{label}</span>
       <span className='min-w-0 break-all font-medium'>{value}</span>
     </div>
   )
@@ -220,7 +233,7 @@ function NodeDetailPanel({
           </Button>
         )}
       </div>
-      <div>
+      <div className='grid grid-cols-2 gap-2'>
         <NodeDetailField label={t('Node Name')} value={node.node_name} />
         <NodeDetailField label={t('Public IP')} value={node.public_ip} />
         <NodeDetailField label={t('Internal IP')} value={node.internal_ip} />
@@ -243,8 +256,22 @@ function NodeDetailPanel({
   )
 }
 
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+
+type StatusFilter = 'all' | 'online' | 'offline'
+
 function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading: boolean }) {
   const { t } = useTranslation()
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [filterId, setFilterId] = useState('')
+  const [filterName, setFilterName] = useState('')
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>('all')
+
+  useEffect(() => {
+    startTransition(() => setPage(1))
+  }, [accounts])
+
   if (loading) {
     return (
       <div className='flex h-24 items-center justify-center text-muted-foreground'>
@@ -260,38 +287,140 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
       </div>
     )
   }
+
+  const filtered = accounts.filter((acc) => {
+    if (filterId && !acc.id.toLowerCase().includes(filterId.toLowerCase())) return false
+    if (filterName && !(acc.name ?? '').toLowerCase().includes(filterName.toLowerCase())) return false
+    if (filterStatus === 'online' && acc.status !== '正常') return false
+    if (filterStatus === 'offline' && acc.status === '正常') return false
+    return true
+  })
+
+  const totalPages = Math.ceil(filtered.length / pageSize)
+  const pageAccounts = filtered.slice((page - 1) * pageSize, page * pageSize)
+
   return (
-    <div className='overflow-auto'>
-      <table className='w-full text-sm'>
-        <thead>
-          <tr className='border-b text-left text-xs text-muted-foreground'>
-            <th className='pb-2 pr-3 font-medium'>{t('ID')}</th>
-            <th className='pb-2 pr-3 font-medium'>{t('Name')}</th>
-            <th className='pb-2 pr-3 font-medium'>{t('Status')}</th>
-            <th className='pb-2 pr-3 font-medium text-right'>{t('Requests')}</th>
-            <th className='pb-2 pr-3 font-medium text-right'>{t('Tokens')}</th>
-            <th className='pb-2 pr-3 font-medium text-right'>{t('Account Cost')}</th>
-            <th className='pb-2 pr-3 font-medium text-right'>{t('User Cost')}</th>
-            <th className='pb-2 font-medium text-right'>{t('Capacity')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {accounts.map((acc) => (
-            <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
-              <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
-              <td className='py-2 pr-3'>{acc.name || '–'}</td>
-              <td className='py-2 pr-3'>
-                <AccountStatusBadge status={acc.status} />
-              </td>
-              <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
-              <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
-              <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
-              <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
-              <td className='py-2 text-right tabular-nums'>{acc.capacity ?? '–'}</td>
-            </tr>
+    <div>
+      {/* 筛选栏 */}
+      <div className='mb-3 flex flex-wrap items-center gap-2'>
+        <Input
+          className='h-7 w-36 text-xs'
+          placeholder={t('Filter by ID')}
+          value={filterId}
+          onChange={(e) => { setFilterId(e.target.value); startTransition(() => setPage(1)) }}
+        />
+        <Input
+          className='h-7 w-36 text-xs'
+          placeholder={t('Filter by Name')}
+          value={filterName}
+          onChange={(e) => { setFilterName(e.target.value); startTransition(() => setPage(1)) }}
+        />
+        <div className='flex rounded-md border text-xs'>
+          {(['all', 'online', 'offline'] as StatusFilter[]).map((s) => (
+            <button
+              key={s}
+              type='button'
+              onClick={() => { setFilterStatus(s); startTransition(() => setPage(1)) }}
+              className={cn(
+                'px-2.5 py-1 first:rounded-l-md last:rounded-r-md transition-colors',
+                filterStatus === s
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-muted'
+              )}
+            >
+              {s === 'all' ? t('All') : s === 'online' ? t('Online') : t('Offline')}
+            </button>
           ))}
-        </tbody>
-      </table>
+        </div>
+      </div>
+      {filtered.length === 0 && (
+        <div className='flex h-16 items-center justify-center text-sm text-muted-foreground'>
+          {t('No matching accounts')}
+        </div>
+      )}
+      <div className='overflow-auto'>
+        <table className='w-full text-sm'>
+          <thead>
+            <tr className='border-b text-left text-xs text-muted-foreground'>
+              <th className='pb-2 pr-3 font-medium'>{t('ID')}</th>
+              <th className='pb-2 pr-3 font-medium'>{t('Name')}</th>
+              <th className='pb-2 pr-3 font-medium'>{t('Status')}</th>
+              <th className='pb-2 pr-3 font-medium text-right'>{t('Requests')}</th>
+              <th className='pb-2 pr-3 font-medium text-right'>{t('Token Count')}</th>
+              <th className='pb-2 pr-3 font-medium text-right'>{t('Account Cost')}</th>
+              <th className='pb-2 pr-3 font-medium text-right'>{t('User Cost')}</th>
+              <th className='pb-2 font-medium text-right'>{t('Used / Total')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageAccounts.map((acc) => (
+              <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
+                <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
+                <td className='py-2 pr-3'>{acc.name || '–'}</td>
+                <td className='py-2 pr-3'>
+                  <AccountStatusBadge status={acc.status} />
+                </td>
+                <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
+                <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
+                <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
+                <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
+                <td className='py-2 text-right tabular-nums'>
+                  {acc.used_capacity != null || acc.total_capacity != null ? (
+                    <div className='flex flex-col items-end gap-1'>
+                      <span>{formatNumber(acc.used_capacity)} / {formatNumber(acc.total_capacity)}</span>
+                      <div className='h-1 w-16 overflow-hidden rounded-full bg-muted'>
+                        <div
+                          className='h-full rounded-full bg-primary transition-all'
+                          style={{
+                            width: `${Math.min(100, acc.total_capacity > 0 ? (acc.used_capacity / acc.total_capacity) * 100 : 0).toFixed(1)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : '–'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className='flex items-center justify-between pt-3 text-xs text-muted-foreground'>
+        <div className='flex items-center gap-2'>
+          <span>
+            {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
+          </span>
+          <select
+            value={pageSize}
+            onChange={(e) => { setPageSize(Number(e.target.value)); startTransition(() => setPage(1)) }}
+            className='h-6 rounded border bg-background px-1 text-xs'
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n}>{n} / {t('page')}</option>
+            ))}
+          </select>
+        </div>
+        <div className='flex items-center gap-1'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 px-2 text-xs'
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            {t('Prev')}
+          </Button>
+          <span className='px-1 tabular-nums'>{page} / {totalPages}</span>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 px-2 text-xs'
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            {t('Next')}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -304,12 +433,45 @@ export function NodePool() {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [accounts, setAccounts] = useState<NodeAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
+  const [accountStatsCache, setAccountStatsCache] = useState<Record<string, AccountStats>>({})
   // xiugai 添加号池节点功能 - 离线节点删除
   const [deleting, setDeleting] = useState(false)
   // end
+  const selectedNodeRef = useRef<Node | null>(null)
   // xiugai 添加号池节点功能 - 修复快速切换节点账号列表竞态
   const fetchAccountsSeqRef = useRef(0)
   // end
+
+  // 更新展示账号 + 缓存（带竞态保护）
+  const fetchAccounts = useCallback(async (node: Node) => {
+    const seq = ++fetchAccountsSeqRef.current
+    setAccountsLoading(true)
+    setAccounts([])
+    try {
+      const data = await getNodeAccounts(node.node_name)
+      if (seq !== fetchAccountsSeqRef.current) return
+      const list = data.accounts ?? []
+      setAccounts(list)
+      const available = list.filter((a) => a.status === '正常').length
+      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }))
+    } catch {
+      if (seq === fetchAccountsSeqRef.current) setAccounts([])
+    } finally {
+      if (seq === fetchAccountsSeqRef.current) setAccountsLoading(false)
+    }
+  }, [])
+
+  // 仅更新缓存，不修改展示账号状态
+  const fetchAccountsForCache = useCallback(async (node: Node) => {
+    try {
+      const data = await getNodeAccounts(node.node_name)
+      const list = data.accounts ?? []
+      const available = list.filter((a) => a.status === '正常').length
+      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }))
+    } catch {
+      // 缓存拉取失败静默忽略
+    }
+  }, [])
 
   const fetchNodes = useCallback(async () => {
     setLoading(true)
@@ -318,42 +480,37 @@ export function NodePool() {
       const data = await getNodes()
       const list = data.nodes ?? []
       setNodes(list)
-      if (selectedNode) {
-        const updated = list.find(
-          (n) => n.public_ip === selectedNode.public_ip && n.node_name === selectedNode.node_name
-        )
-        if (updated) setSelectedNode(updated)
-      }
+      if (list.length === 0) return
+
+      // 保持或自动选中第一个节点
+      const cur = selectedNodeRef.current
+      let nodeToSelect = cur
+        ? list.find((n) => n.public_ip === cur.public_ip && n.node_name === cur.node_name)
+        : undefined
+      if (!nodeToSelect) nodeToSelect = list[0]
+      selectedNodeRef.current = nodeToSelect
+      setSelectedNode(nodeToSelect)
+
+      // 选中节点：拉取展示账号（同时更新缓存）
+      fetchAccounts(nodeToSelect)
+      // 其余节点：并发拉取缓存
+      list
+        .filter((n) => n.node_name !== nodeToSelect!.node_name)
+        .forEach((n) => fetchAccountsForCache(n))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : t('Failed to fetch nodes'))
     } finally {
       setLoading(false)
     }
-  }, [selectedNode, t])
+  }, [t, fetchAccounts, fetchAccountsForCache])
 
   useEffect(() => {
-    fetchNodes()
-  }, [])
-
-  // xiugai 添加号池节点功能 - 修复快速切换节点账号列表竞态
-  const fetchAccounts = useCallback(async (node: Node) => {
-    const seq = ++fetchAccountsSeqRef.current
-    setAccountsLoading(true)
-    setAccounts([])
-    try {
-      const data = await getNodeAccounts(node.public_ip, node.node_name)
-      if (seq !== fetchAccountsSeqRef.current) return
-      setAccounts(data.accounts ?? [])
-    } catch {
-      if (seq === fetchAccountsSeqRef.current) setAccounts([])
-    } finally {
-      if (seq === fetchAccountsSeqRef.current) setAccountsLoading(false)
-    }
-  }, [])
-  // end
+    startTransition(() => void fetchNodes())
+  }, [fetchNodes])
 
   const handleSelectNode = useCallback(
     (node: Node) => {
+      selectedNodeRef.current = node
       setSelectedNode(node)
       fetchAccounts(node)
     },
@@ -365,9 +522,11 @@ export function NodePool() {
     if (!selectedNode) return
     setDeleting(true)
     try {
-      await deleteNode(selectedNode.public_ip, selectedNode.node_name)
+      await deleteNode(selectedNode.node_name)
+      selectedNodeRef.current = null
       setSelectedNode(null)
       setAccounts([])
+      setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n })
       await fetchNodes()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : t('Failed to delete node'))
@@ -458,6 +617,7 @@ export function NodePool() {
                       selectedNode?.node_name === node.node_name
                     }
                     onClick={() => handleSelectNode(node)}
+                    accountStats={accountStatsCache[node.node_name]}
                   />
                 ))
               )}

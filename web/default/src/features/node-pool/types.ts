@@ -47,7 +47,8 @@ export type NodeAccount = {
   tokens: number
   account_cost: number
   user_cost: number
-  capacity: number
+  total_capacity: number
+  used_capacity: number
 }
 
 export type NodesResponse = {

@@ -3833,6 +3833,7 @@
     "公网IP": "Public IP",
     "号池节点": "Node Pool",
     "获取节点列表失败": "Failed to fetch nodes",
+    "加载节点中...": "Loading nodes...",
     "监听端口": "Listen Port",
     "节点控制服务": "Node Control Service",
     "节点控制服务地址": "Node Control Service URL",

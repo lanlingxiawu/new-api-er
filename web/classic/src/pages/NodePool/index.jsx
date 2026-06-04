@@ -20,7 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 // xiugai 添加号池节点功能
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Spin, Table, Tag, Typography } from '@douyinfe/semi-ui';
+import { Button, Input, Pagination, Spin, Tag } from '@douyinfe/semi-ui';
 import {
   Activity,
   AlertCircle,
@@ -34,253 +34,155 @@ import {
   RefreshCw,
   Server,
   Trash2,
+  Users,
   Wallet,
   XCircle,
 } from 'lucide-react';
 import { API } from '../../helpers';
+import './index.css';
 
-const { Text } = Typography;
-
-function fmt(n, dec = 2) {
-  if (n == null) return '–';
-  if (n === 0) return '0';
-  return Number(n).toFixed(dec);
+function formatNumber(value, decimals = 2) {
+  if (value == null) return '–';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '–';
+  if (number === 0) return '0';
+  return number.toFixed(decimals);
 }
 
-// ─── 统计卡片 ────────────────────────────────────────────────────────────────
+function formatCount(value) {
+  if (value == null) return '–';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '–';
+  return number.toLocaleString();
+}
 
-function StatCard({ label, value, icon: Icon, variant }) {
-  const borderColor =
-    variant === 'online'
-      ? 'var(--semi-color-success-light-active)'
-      : variant === 'offline'
-        ? 'var(--semi-color-danger-light-active)'
-        : 'var(--semi-color-border)';
-  const bgColor =
-    variant === 'online'
-      ? 'var(--semi-color-success-light-default)'
-      : variant === 'offline'
-        ? 'var(--semi-color-danger-light-default)'
-        : 'var(--semi-color-bg-2)';
-  const iconColor =
-    variant === 'online'
-      ? 'var(--semi-color-success)'
-      : variant === 'offline'
-        ? 'var(--semi-color-danger)'
-        : 'var(--semi-color-text-2)';
-  const valueColor =
-    variant === 'online'
-      ? 'var(--semi-color-success)'
-      : variant === 'offline'
-        ? 'var(--semi-color-danger)'
-        : 'var(--semi-color-text-0)';
+function getNodeKey(node) {
+  return `${node.public_ip}:${node.node_name}`;
+}
 
+function isSameNode(a, b) {
+  return Boolean(
+    a && b && a.public_ip === b.public_ip && a.node_name === b.node_name,
+  );
+}
+
+function StatCard({ label, value, icon: Icon, variant = 'default' }) {
   return (
-    <div
-      style={{
-        flex: '1 1 0',
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-        borderRadius: 8,
-        border: `1px solid ${borderColor}`,
-        backgroundColor: bgColor,
-        padding: '12px',
-        boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Icon size={14} color={iconColor} />
-        <Text size='small' style={{ color: 'var(--semi-color-text-2)' }}>
-          {label}
-        </Text>
-      </div>
-      <p
-        style={{
-          fontSize: 20,
-          fontWeight: 700,
-          fontVariantNumeric: 'tabular-nums',
-          color: valueColor,
-          margin: 0,
-        }}
-      >
-        {value}
-      </p>
+    <div className={`node-pool-stat-card node-pool-stat-${variant}`}>
+      <span className='node-pool-stat-icon'>
+        <Icon size={16} />
+      </span>
+      <span className='node-pool-stat-copy'>
+        <span className='node-pool-stat-label'>{label}</span>
+        <strong className='node-pool-stat-value'>{value}</strong>
+      </span>
     </div>
   );
 }
 
-// ─── 节点状态标签 ─────────────────────────────────────────────────────────────
-
 function NodeStatusTag({ status }) {
   const { t } = useTranslation();
-  if (status === 'online') {
-    return (
-      <Tag
-        color='green'
-        size='small'
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-      >
-        <CheckCircle2 size={11} />
-        {t('在线')}
-      </Tag>
-    );
-  }
+  const online = status === 'online';
+  const Icon = online ? CheckCircle2 : XCircle;
+
   return (
     <Tag
-      color='red'
+      color={online ? 'green' : 'red'}
       size='small'
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+      className={`node-pool-status-tag ${online ? 'is-online' : 'is-offline'}`}
     >
-      <XCircle size={11} />
-      {t('离线')}
+      <Icon size={12} />
+      {online ? t('在线') : t('离线')}
     </Tag>
   );
 }
-
-// ─── 账号状态标签 ─────────────────────────────────────────────────────────────
 
 function AccountStatusTag({ status }) {
+  const { t } = useTranslation();
+  const normal = status === '正常';
+
   return (
-    <Tag color={status === 'online' ? 'green' : 'grey'} size='small'>
-      {status}
+    <Tag
+      color={normal ? 'green' : 'grey'}
+      size='small'
+      className='node-pool-status-tag'
+    >
+      {status ? t(status) : '–'}
     </Tag>
   );
 }
 
-// ─── 节点列表卡片项 ───────────────────────────────────────────────────────────
+function NodeMetric({ icon: Icon, value }) {
+  return (
+    <span className='node-pool-node-metric'>
+      <Icon size={13} />
+      {value}
+    </span>
+  );
+}
 
-function NodeListItem({ node, selected, onClick }) {
-  const [hover, setHover] = useState(false);
-
-  const bg = selected
-    ? 'var(--semi-color-primary-light-hover)'
-    : hover
-      ? 'var(--semi-color-fill-0)'
-      : 'var(--semi-color-bg-2)';
-  const borderColor = selected
-    ? 'var(--semi-color-primary)'
-    : 'var(--semi-color-border)';
-
+function NodeListItem({ node, selected, onClick, accountStats }) {
   return (
     <button
       type='button'
+      className={`node-pool-node-card ${selected ? 'is-selected' : ''}`}
+      aria-pressed={selected}
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        width: '100%',
-        textAlign: 'left',
-        background: bg,
-        border: `1px solid ${borderColor}`,
-        borderRadius: 8,
-        padding: 12,
-        cursor: 'pointer',
-        transition: 'background 0.15s, border-color 0.15s',
-        display: 'block',
-      }}
     >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: 8,
-          marginBottom: 8,
-        }}
-      >
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 14,
-              fontWeight: 500,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              color: 'var(--semi-color-text-0)',
-            }}
-          >
-            {node.node_name}
-          </p>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 12,
-              color: 'var(--semi-color-text-2)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
+      <span className='node-pool-node-card-header'>
+        <span className='node-pool-node-avatar'>
+          <Server size={16} />
+        </span>
+        <span className='node-pool-node-main'>
+          <span className='node-pool-node-name'>{node.node_name}</span>
+          <span className='node-pool-node-address'>
             {node.public_ip}:{node.listen_port}
-          </p>
-        </div>
+          </span>
+        </span>
         <NodeStatusTag status={node.status} />
-      </div>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
-          gap: '2px 8px',
-          fontSize: 12,
-          color: 'var(--semi-color-text-2)',
-        }}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Cpu size={12} style={{ flexShrink: 0 }} />
-          {fmt(node.cpu_usage, 1)}%
-        </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <MemoryStick size={12} style={{ flexShrink: 0 }} />
-          {fmt(node.mem_usage, 1)}%
-        </span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Network size={12} style={{ flexShrink: 0 }} />
-          {fmt(node.upload_bandwidth, 0)}↑
-        </span>
-      </div>
+      </span>
+      <span className='node-pool-node-metrics'>
+        <NodeMetric icon={Cpu} value={`${formatNumber(node.cpu_usage, 1)}%`} />
+        <NodeMetric
+          icon={MemoryStick}
+          value={`${formatNumber(node.mem_usage, 1)}%`}
+        />
+        <NodeMetric
+          icon={Network}
+          value={`${formatNumber(node.upload_bandwidth, 0)}↑`}
+        />
+        {accountStats != null && (
+          <NodeMetric
+            icon={Users}
+            value={
+              <span>
+                <span style={{ color: 'var(--semi-color-success)' }}>{accountStats.available}</span>
+                /{accountStats.total}
+              </span>
+            }
+          />
+        )}
+      </span>
     </button>
   );
 }
 
-// ─── 详情字段行 ───────────────────────────────────────────────────────────────
-
 function DetailField({ label, value }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 16,
-        borderBottom: '1px solid var(--semi-color-border)',
-        padding: '6px 0',
-        fontSize: 14,
-      }}
-    >
-      <span style={{ color: 'var(--semi-color-text-2)', flexShrink: 0 }}>
-        {label}
-      </span>
-      <span
-        style={{
-          fontWeight: 500,
-          wordBreak: 'break-all',
-          color: 'var(--semi-color-text-0)',
-        }}
-      >
-        {value}
-      </span>
+    <div className='node-pool-detail-field'>
+      <span className='node-pool-detail-label'>{label}</span>
+      <span className='node-pool-detail-value'>{value}</span>
     </div>
   );
 }
 
-// ─── 节点详情面板 ─────────────────────────────────────────────────────────────
-
 function NodeDetailPanel({ node, onDelete, deleting }) {
   const { t } = useTranslation();
   const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    setConfirming(false);
+  }, [node.public_ip, node.node_name]);
 
   const handleDeleteClick = () => {
     if (!confirming) {
@@ -292,233 +194,330 @@ function NodeDetailPanel({ node, onDelete, deleting }) {
   };
 
   return (
-    <div
-      style={{
-        borderRadius: 8,
-        border: '1px solid var(--semi-color-border)',
-        background: 'var(--semi-color-bg-2)',
-        padding: 16,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 12,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 14,
-            fontWeight: 600,
-            color: 'var(--semi-color-text-0)',
-          }}
-        >
-          {t('节点详情')}
-        </span>
+    <section className='node-pool-panel'>
+      <div className='node-pool-panel-header'>
+        <div className='node-pool-panel-title-group'>
+          <span className='node-pool-panel-icon'>
+            <Server size={16} />
+          </span>
+          <div>
+            <h2 className='node-pool-panel-title'>{t('节点详情')}</h2>
+            <p className='node-pool-panel-subtitle'>
+              {node.public_ip}:{node.listen_port}
+            </p>
+          </div>
+        </div>
         {node.status === 'offline' && (
           <Button
             size='small'
             type={confirming ? 'danger' : 'tertiary'}
             theme={confirming ? 'solid' : 'light'}
             loading={deleting}
-            icon={<Trash2 size={12} />}
+            icon={
+              deleting ? (
+                <Loader2 size={13} className='node-pool-spin' />
+              ) : (
+                <Trash2 size={13} />
+              )
+            }
+            disabled={deleting}
             onClick={handleDeleteClick}
           >
-            {confirming ? t('确认删除') : t('删除节点')}
+            {confirming ? t('确认删除节点') : t('删除节点')}
           </Button>
         )}
       </div>
-      <div>
-        <DetailField label={t('节点名称')} value={node.node_name} />
+      <div className='node-pool-detail-grid'>
+        <DetailField label={t('节点名')} value={node.node_name} />
         <DetailField label={t('公网IP')} value={node.public_ip} />
-        <DetailField label={t('内网IP')} value={node.internal_ip} />
-        <DetailField label={t('端口')} value={node.listen_port} />
+        <DetailField label={t('内网IP')} value={node.internal_ip || '–'} />
+        <DetailField label={t('监听端口')} value={node.listen_port ?? '–'} />
         <DetailField
           label={t('状态')}
           value={<NodeStatusTag status={node.status} />}
         />
         <DetailField
           label={t('最后心跳')}
-          value={
-            node.last_seen
-              ? new Date(node.last_seen).toLocaleString()
-              : '–'
-          }
+          value={node.last_seen ? new Date(node.last_seen).toLocaleString() : '–'}
         />
         <DetailField
-          label={t('CPU使用率')}
-          value={`${fmt(node.cpu_usage, 1)}%`}
+          label='CPU'
+          value={`${formatNumber(node.cpu_usage, 1)}%`}
         />
         <DetailField
-          label={t('内存使用率')}
-          value={`${fmt(node.mem_usage, 1)}%`}
+          label={t('内存')}
+          value={`${formatNumber(node.mem_usage, 1)}%`}
         />
         <DetailField
           label={t('上行带宽')}
-          value={`${fmt(node.upload_bandwidth, 1)} Mbps`}
+          value={`${formatNumber(node.upload_bandwidth, 1)} Mbps`}
         />
         <DetailField
           label={t('下行带宽')}
-          value={`${fmt(node.download_bandwidth, 1)} Mbps`}
+          value={`${formatNumber(node.download_bandwidth, 1)} Mbps`}
         />
-        <DetailField label={t('今日请求')} value={node.today_requests ?? '–'} />
-        <DetailField label={t('总请求')} value={node.total_requests ?? '–'} />
+        <DetailField
+          label={t('今日请求')}
+          value={formatCount(node.today_requests)}
+        />
+        <DetailField label={t('总请求')} value={formatCount(node.total_requests)} />
         <DetailField
           label={t('今日消费')}
-          value={`$${fmt(node.today_consumption)}`}
+          value={`$${formatNumber(node.today_consumption)}`}
         />
         <DetailField
           label={t('累计消费')}
-          value={`$${fmt(node.total_consumption)}`}
+          value={`$${formatNumber(node.total_consumption)}`}
         />
-        <DetailField label={t('总RPM')} value={fmt(node.total_rpm, 1)} />
-        <DetailField label={t('当前RPM')} value={fmt(node.current_rpm, 1)} />
+        <DetailField label={t('总RPM')} value={formatNumber(node.total_rpm, 1)} />
+        <DetailField
+          label={t('当前RPM')}
+          value={formatNumber(node.current_rpm, 1)}
+        />
         <DetailField
           label={t('平均响应时间')}
-          value={`${fmt(node.avg_response_time, 0)} ms`}
+          value={`${formatNumber(node.avg_response_time, 0)} ms`}
         />
       </div>
-    </div>
+    </section>
   );
 }
 
-// ─── 账号列表表格 ─────────────────────────────────────────────────────────────
+function AccountRows({ accounts }) {
+  return accounts.map((account) => (
+    <tr key={account.id}>
+      <td className='node-pool-account-id'>{account.id}</td>
+      <td>{account.name || '–'}</td>
+      <td>
+        <AccountStatusTag status={account.status} />
+      </td>
+      <td className='node-pool-number-cell'>{formatCount(account.req ?? 0)}</td>
+      <td className='node-pool-number-cell'>
+        {formatCount(account.tokens ?? 0)}
+      </td>
+      <td className='node-pool-number-cell'>
+        ${formatNumber(account.account_cost)}
+      </td>
+      <td className='node-pool-number-cell'>${formatNumber(account.user_cost)}</td>
+      <td className='node-pool-number-cell'>
+        {account.used_capacity != null || account.total_capacity != null ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <span>{formatNumber(account.used_capacity)} / {formatNumber(account.total_capacity)}</span>
+            <div style={{ width: 64, height: 4, borderRadius: 9999, background: 'var(--semi-color-fill-2)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                borderRadius: 9999,
+                background: 'var(--semi-color-primary)',
+                width: `${Math.min(100, account.total_capacity > 0 ? (account.used_capacity / account.total_capacity) * 100 : 0).toFixed(1)}%`,
+                transition: 'width 0.3s',
+              }} />
+            </div>
+          </div>
+        ) : '–'}
+      </td>
+    </tr>
+  ));
+}
 
-function AccountsTable({ accounts, loading }) {
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+const STATUS_FILTERS = ['all', 'online', 'offline'];
+
+function AccountsPanel({ accounts, loading }) {
   const { t } = useTranslation();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [filterId, setFilterId] = useState('');
+  const [filterName, setFilterName] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
 
-  const columns = [
-    {
-      title: 'ID',
-      dataIndex: 'id',
-      width: 140,
-      render: (v) => (
-        <Text size='small' type='tertiary'>
-          {v}
-        </Text>
-      ),
-    },
-    {
-      title: t('名称'),
-      dataIndex: 'name',
-      width: 100,
-      render: (v) => v || '–',
-    },
-    {
-      title: t('状态'),
-      dataIndex: 'status',
-      width: 72,
-      render: (v) => <AccountStatusTag status={v} />,
-    },
-    {
-      title: t('请求数'),
-      dataIndex: 'req',
-      width: 80,
-      align: 'right',
-      render: (v) => v ?? 0,
-    },
-    {
-      title: t('令牌数'),
-      dataIndex: 'tokens',
-      width: 90,
-      align: 'right',
-      render: (v) => v ?? 0,
-    },
-    {
-      title: t('账号费用'),
-      dataIndex: 'account_cost',
-      width: 90,
-      align: 'right',
-      render: (v) => `$${fmt(v)}`,
-    },
-    {
-      title: t('用户费用'),
-      dataIndex: 'user_cost',
-      width: 90,
-      align: 'right',
-      render: (v) => `$${fmt(v)}`,
-    },
-    {
-      title: t('容量'),
-      dataIndex: 'capacity',
-      width: 72,
-      align: 'right',
-      render: (v) => v ?? '–',
-    },
-  ];
+  useEffect(() => {
+    setPage(1);
+  }, [accounts]);
+
+  const filtered = accounts.filter((acc) => {
+    if (filterId && !acc.id.toLowerCase().includes(filterId.toLowerCase())) return false;
+    if (filterName && !(acc.name ?? '').toLowerCase().includes(filterName.toLowerCase())) return false;
+    if (filterStatus === 'online' && acc.status !== '正常') return false;
+    if (filterStatus === 'offline' && acc.status === '正常') return false;
+    return true;
+  });
+
+  const pageAccounts = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  const statusLabel = { all: t('全部'), online: t('在线'), offline: t('离线') };
 
   return (
-    <div
-      style={{
-        borderRadius: 8,
-        border: '1px solid var(--semi-color-border)',
-        background: 'var(--semi-color-bg-2)',
-        padding: 16,
-      }}
-    >
-      <div
-        style={{
-          marginBottom: 12,
-          fontSize: 14,
-          fontWeight: 600,
-          color: 'var(--semi-color-text-0)',
-        }}
-      >
-        {t('账号列表')}
-        {!loading && (
-          <span
-            style={{
-              marginLeft: 8,
-              fontSize: 12,
-              fontWeight: 400,
-              color: 'var(--semi-color-text-2)',
-            }}
-          >
-            ({accounts.length})
+    <section className='node-pool-panel'>
+      <div className='node-pool-panel-header'>
+        <div className='node-pool-panel-title-group'>
+          <span className='node-pool-panel-icon'>
+            <Database size={16} />
           </span>
-        )}
+          <div>
+            <h2 className='node-pool-panel-title'>
+              {t('账号列表')}
+              {!loading && (
+                <span className='node-pool-panel-count'>({accounts.length})</span>
+              )}
+            </h2>
+          </div>
+        </div>
       </div>
       <Spin spinning={loading}>
-        {!loading && accounts.length === 0 ? (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '24px 0',
-              color: 'var(--semi-color-text-2)',
-              fontSize: 14,
-            }}
-          >
+        {loading ? (
+          <div className='node-pool-empty node-pool-empty-compact'>
+            <Loader2 size={18} className='node-pool-spin' />
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className='node-pool-empty node-pool-empty-compact'>
             {t('暂无账号')}
           </div>
         ) : (
-          <Table
-            size='small'
-            dataSource={accounts}
-            columns={columns}
-            rowKey='id'
-            pagination={false}
-            scroll={{ x: 760 }}
-          />
+          <>
+            {/* 筛选栏 */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              <Input
+                size='small'
+                placeholder={t('筛选 ID')}
+                value={filterId}
+                onChange={(v) => { setFilterId(v); setPage(1); }}
+                style={{ width: 140 }}
+                showClear
+              />
+              <Input
+                size='small'
+                placeholder={t('筛选账号名')}
+                value={filterName}
+                onChange={(v) => { setFilterName(v); setPage(1); }}
+                style={{ width: 140 }}
+                showClear
+              />
+              <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--semi-color-border)' }}>
+                {STATUS_FILTERS.map((s) => (
+                  <button
+                    key={s}
+                    type='button'
+                    onClick={() => { setFilterStatus(s); setPage(1); }}
+                    style={{
+                      padding: '0 10px',
+                      height: 28,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      border: 'none',
+                      borderRight: s !== 'offline' ? '1px solid var(--semi-color-border)' : 'none',
+                      background: filterStatus === s ? 'var(--semi-color-primary)' : 'var(--semi-color-bg-2)',
+                      color: filterStatus === s ? '#fff' : 'var(--semi-color-text-0)',
+                      transition: 'background 0.15s',
+                    }}
+                  >
+                    {statusLabel[s]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {filtered.length === 0 ? (
+              <div className='node-pool-empty node-pool-empty-compact'>
+                {t('无匹配账号')}
+              </div>
+            ) : (
+              <>
+                <div className='node-pool-account-table-wrap'>
+                  <table className='node-pool-account-table'>
+                    <thead>
+                      <tr>
+                        <th>{t('ID')}</th>
+                        <th>{t('名称')}</th>
+                        <th>{t('状态')}</th>
+                        <th className='node-pool-number-cell'>{t('请求数')}</th>
+                        <th className='node-pool-number-cell'>{t('token数')}</th>
+                        <th className='node-pool-number-cell'>{t('账号费用')}</th>
+                        <th className='node-pool-number-cell'>{t('用户费用')}</th>
+                        <th className='node-pool-number-cell'>{t('已用/总量')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <AccountRows accounts={pageAccounts} />
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: 'var(--semi-color-text-2)' }}>
+                      {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
+                    </span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                      style={{ height: 24, borderRadius: 4, border: '1px solid var(--semi-color-border)', background: 'var(--semi-color-bg-2)', color: 'var(--semi-color-text-0)', fontSize: 12, padding: '0 4px', cursor: 'pointer' }}
+                    >
+                      {PAGE_SIZE_OPTIONS.map((n) => (
+                        <option key={n} value={n}>{n} / {t('页')}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <Pagination
+                    currentPage={page}
+                    total={filtered.length}
+                    pageSize={pageSize}
+                    onChange={(p) => setPage(p)}
+                    size='small'
+                    showSizeChanger={false}
+                  />
+                </div>
+              </>
+            )}
+          </>
         )}
       </Spin>
-    </div>
+    </section>
   );
 }
-
-// ─── 主页面 ───────────────────────────────────────────────────────────────────
 
 export default function NodePool() {
   const { t } = useTranslation();
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selected, setSelected] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountStatsCache, setAccountStatsCache] = useState({});
   const [deleting, setDeleting] = useState(false);
+  const selectedNodeRef = useRef(null);
   const fetchAccountsSeqRef = useRef(0);
+
+  // 更新展示账号 + 缓存（带竞态保护）
+  const fetchAccounts = useCallback(async (node) => {
+    const seq = ++fetchAccountsSeqRef.current;
+    setAccountsLoading(true);
+    setAccounts([]);
+    try {
+      const name = encodeURIComponent(node.node_name);
+      const res = await API.get(`/api/node-pool/nodes/${name}/accounts`);
+      if (seq !== fetchAccountsSeqRef.current) return;
+      const list = res.data?.accounts ?? [];
+      setAccounts(list);
+      const available = list.filter((a) => a.status === '正常').length;
+      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }));
+    } catch {
+      if (seq === fetchAccountsSeqRef.current) setAccounts([]);
+    } finally {
+      if (seq === fetchAccountsSeqRef.current) setAccountsLoading(false);
+    }
+  }, []);
+
+  // 仅更新缓存，不修改展示账号状态
+  const fetchAccountsForCache = useCallback(async (node) => {
+    try {
+      const name = encodeURIComponent(node.node_name);
+      const res = await API.get(`/api/node-pool/nodes/${name}/accounts`);
+      const list = res.data?.accounts ?? [];
+      const available = list.filter((a) => a.status === '正常').length;
+      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }));
+    } catch {
+      // 缓存拉取失败静默忽略
+    }
+  }, []);
 
   const fetchNodes = useCallback(async () => {
     setLoading(true);
@@ -527,277 +526,193 @@ export default function NodePool() {
       const res = await API.get('/api/node-pool/nodes');
       const list = res.data?.nodes ?? [];
       setNodes(list);
-      if (selected) {
-        const updated = list.find(
-          (n) =>
-            n.public_ip === selected.public_ip &&
-            n.node_name === selected.node_name,
-        );
-        if (updated) setSelected(updated);
-      }
+      if (list.length === 0) return;
+
+      // 保持或自动选中第一个节点
+      const cur = selectedNodeRef.current;
+      let nodeToSelect = cur ? list.find((n) => isSameNode(n, cur)) : undefined;
+      if (!nodeToSelect) nodeToSelect = list[0];
+      selectedNodeRef.current = nodeToSelect;
+      setSelectedNode(nodeToSelect);
+
+      // 选中节点：拉取展示账号（同时更新缓存）
+      fetchAccounts(nodeToSelect);
+      // 其余节点：并发拉取缓存
+      list
+        .filter((n) => n.node_name !== nodeToSelect.node_name)
+        .forEach((n) => fetchAccountsForCache(n));
     } catch (e) {
       setError(e?.message ?? t('获取节点列表失败'));
     } finally {
       setLoading(false);
     }
-  }, [selected, t]);
+  }, [t, fetchAccounts, fetchAccountsForCache]);
 
   useEffect(() => {
     fetchNodes();
-  }, []);
+  }, [fetchNodes]);
 
-  const fetchAccounts = useCallback(async (node) => {
-    const seq = ++fetchAccountsSeqRef.current;
-    setAccountsLoading(true);
-    setAccounts([]);
-    try {
-      const ip = encodeURIComponent(node.public_ip);
-      const name = encodeURIComponent(node.node_name);
-      const res = await API.get(`/api/node-pool/nodes/${ip}/${name}/accounts`);
-      if (seq !== fetchAccountsSeqRef.current) return;
-      setAccounts(res.data?.accounts ?? []);
-    } catch {
-      if (seq === fetchAccountsSeqRef.current) setAccounts([]);
-    } finally {
-      if (seq === fetchAccountsSeqRef.current) setAccountsLoading(false);
-    }
-  }, []);
-
-  const handleSelect = useCallback(
+  const handleSelectNode = useCallback(
     (node) => {
-      setSelected(node);
+      selectedNodeRef.current = node;
+      setSelectedNode(node);
       fetchAccounts(node);
     },
     [fetchAccounts],
   );
 
-  const handleDelete = useCallback(async () => {
-    if (!selected) return;
+  const handleDeleteNode = useCallback(async () => {
+    if (!selectedNode) return;
     setDeleting(true);
     try {
-      const ip = encodeURIComponent(selected.public_ip);
-      const name = encodeURIComponent(selected.node_name);
-      await API.delete(`/api/node-pool/nodes/${ip}/${name}`);
-      setSelected(null);
+      const name = encodeURIComponent(selectedNode.node_name);
+      await API.delete(`/api/node-pool/nodes/${name}`);
+      selectedNodeRef.current = null;
+      setSelectedNode(null);
       setAccounts([]);
+      setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n; });
       await fetchNodes();
     } catch (e) {
       setError(e?.message ?? t('删除节点失败'));
     } finally {
       setDeleting(false);
     }
-  }, [selected, fetchNodes, t]);
+  }, [selectedNode, fetchNodes, t]);
 
   const stats = {
     total: nodes.length,
-    online: nodes.filter((n) => n.status === 'online').length,
-    offline: nodes.filter((n) => n.status === 'offline').length,
-    todayConsumption: nodes.reduce((s, n) => s + (n.today_consumption ?? 0), 0),
-    totalConsumption: nodes.reduce((s, n) => s + (n.total_consumption ?? 0), 0),
-    totalRpm: nodes.reduce((s, n) => s + (n.total_rpm ?? 0), 0),
+    online: nodes.filter((node) => node.status === 'online').length,
+    offline: nodes.filter((node) => node.status === 'offline').length,
+    todayConsumption: nodes.reduce(
+      (sum, node) => sum + (node.today_consumption ?? 0),
+      0,
+    ),
+    totalConsumption: nodes.reduce(
+      (sum, node) => sum + (node.total_consumption ?? 0),
+      0,
+    ),
+    totalRpm: nodes.reduce((sum, node) => sum + (node.total_rpm ?? 0), 0),
   };
 
   return (
-    <div style={{ marginTop: 60, padding: '0 16px 24px' }}>
-      {/* 标题行 */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 20,
-            fontWeight: 700,
-            color: 'var(--semi-color-text-0)',
-          }}
-        >
-          {t('号池节点')}
-        </span>
-        <Button
-          size='small'
-          theme='light'
-          type='tertiary'
-          icon={
-            loading ? (
-              <Loader2 size={14} className='animate-spin' />
-            ) : (
-              <RefreshCw size={14} />
-            )
-          }
-          disabled={loading}
-          onClick={fetchNodes}
-        >
-          {t('刷新')}
-        </Button>
-      </div>
-
-      {/* 统计卡片行 */}
-      <div
-        style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}
-      >
-        <StatCard label={t('总节点数')} value={stats.total} icon={Server} />
-        <StatCard
-          label={t('在线节点')}
-          value={stats.online}
-          icon={CheckCircle2}
-          variant='online'
-        />
-        <StatCard
-          label={t('离线节点')}
-          value={stats.offline}
-          icon={XCircle}
-          variant='offline'
-        />
-        <StatCard
-          label={t('今日消费')}
-          value={`$${fmt(stats.todayConsumption)}`}
-          icon={Activity}
-        />
-        <StatCard
-          label={t('累计消费')}
-          value={`$${fmt(stats.totalConsumption)}`}
-          icon={Wallet}
-        />
-        <StatCard
-          label={t('总RPM')}
-          value={fmt(stats.totalRpm, 1)}
-          icon={Database}
-        />
-      </div>
-
-      {/* 错误提示 */}
-      {error && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            borderRadius: 8,
-            border: '1px solid var(--semi-color-danger-light-active)',
-            background: 'var(--semi-color-danger-light-default)',
-            padding: '12px 16px',
-            marginBottom: 16,
-            fontSize: 14,
-            color: 'var(--semi-color-danger)',
-          }}
-        >
-          <AlertCircle size={16} style={{ flexShrink: 0 }} />
-          {error}
-        </div>
-      )}
-
-      {/* 主体区域 */}
-      {loading && nodes.length === 0 ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: 160,
-            color: 'var(--semi-color-text-2)',
-          }}
-        >
-          <Loader2 size={20} className='animate-spin' style={{ marginRight: 8 }} />
-          {t('加载节点中...')}
-        </div>
-      ) : (
-        <div
-          style={{
-            display: 'flex',
-            gap: 16,
-            height: 'calc(100vh - 340px)',
-            minHeight: 400,
-          }}
-        >
-          {/* 左侧：节点卡片列表 */}
-          <div
-            style={{
-              width: 288,
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              overflowY: 'auto',
-            }}
-          >
-            {nodes.length === 0 ? (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  height: 96,
-                  fontSize: 14,
-                  color: 'var(--semi-color-text-2)',
-                }}
-              >
-                <CircleDashed size={16} style={{ marginRight: 8 }} />
-                {t('暂无节点')}
-              </div>
-            ) : (
-              nodes.map((node) => (
-                <NodeListItem
-                  key={`${node.public_ip}:${node.node_name}`}
-                  node={node}
-                  selected={
-                    selected?.public_ip === node.public_ip &&
-                    selected?.node_name === node.node_name
-                  }
-                  onClick={() => handleSelect(node)}
-                />
-              ))
-            )}
+    <div className='node-pool-page'>
+      <div className='node-pool-shell'>
+        <header className='node-pool-header'>
+          <div className='node-pool-title-group'>
+            <span className='node-pool-title-icon'>
+              <Server size={20} />
+            </span>
+            <h1 className='node-pool-title'>{t('号池节点')}</h1>
           </div>
-
-          {/* 右侧：详情 + 账号列表 */}
-          <div
-            style={{
-              flex: 1,
-              minWidth: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 16,
-              overflowY: 'auto',
-            }}
+          <Button
+            size='small'
+            theme='light'
+            type='tertiary'
+            icon={
+              loading ? (
+                <Loader2 size={14} className='node-pool-spin' />
+              ) : (
+                <RefreshCw size={14} />
+              )
+            }
+            disabled={loading}
+            onClick={fetchNodes}
           >
-            {selected ? (
-              <>
-                <NodeDetailPanel
-                  node={selected}
-                  onDelete={handleDelete}
-                  deleting={deleting}
-                />
-                <AccountsTable
-                  accounts={accounts}
-                  loading={accountsLoading}
-                />
-              </>
-            ) : (
-              <div
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 8,
-                  border: '1px dashed var(--semi-color-border)',
-                  color: 'var(--semi-color-text-2)',
-                }}
-              >
-                <Server size={40} style={{ opacity: 0.3, marginBottom: 12 }} />
-                <p style={{ fontSize: 14, margin: 0 }}>
-                  {t('点击左侧节点查看详细信息')}
-                </p>
-              </div>
-            )}
-          </div>
+            {t('刷新')}
+          </Button>
+        </header>
+
+        <div className='node-pool-stat-grid'>
+          <StatCard
+            label={t('总节点数')}
+            value={stats.total}
+            icon={Server}
+          />
+          <StatCard
+            label={t('在线')}
+            value={stats.online}
+            icon={CheckCircle2}
+            variant='online'
+          />
+          <StatCard
+            label={t('离线')}
+            value={stats.offline}
+            icon={XCircle}
+            variant='offline'
+          />
+          <StatCard
+            label={t('今日消费')}
+            value={`$${formatNumber(stats.todayConsumption)}`}
+            icon={Activity}
+          />
+          <StatCard
+            label={t('累计消费')}
+            value={`$${formatNumber(stats.totalConsumption)}`}
+            icon={Wallet}
+          />
+          <StatCard
+            label={t('总RPM')}
+            value={formatNumber(stats.totalRpm, 1)}
+            icon={Database}
+          />
         </div>
-      )}
+
+        {error && (
+          <div className='node-pool-error'>
+            <AlertCircle size={16} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading && nodes.length === 0 ? (
+          <div className='node-pool-loading'>
+            <Loader2 size={20} className='node-pool-spin' />
+            {t('加载节点中...')}
+          </div>
+        ) : (
+          <div className='node-pool-content'>
+            <aside className='node-pool-list'>
+              {nodes.length === 0 ? (
+                <div className='node-pool-empty node-pool-empty-list'>
+                  <CircleDashed size={17} />
+                  {t('暂无节点')}
+                </div>
+              ) : (
+                nodes.map((node) => (
+                  <NodeListItem
+                    key={getNodeKey(node)}
+                    node={node}
+                    selected={isSameNode(selectedNode, node)}
+                    onClick={() => handleSelectNode(node)}
+                    accountStats={accountStatsCache[node.node_name]}
+                  />
+                ))
+              )}
+            </aside>
+
+            <main className='node-pool-main'>
+              {selectedNode ? (
+                <>
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    onDelete={handleDeleteNode}
+                    deleting={deleting}
+                  />
+                  <AccountsPanel
+                    accounts={accounts}
+                    loading={accountsLoading}
+                  />
+                </>
+              ) : (
+                <div className='node-pool-empty node-pool-empty-detail'>
+                  <Server size={40} />
+                  <p>{t('点击左侧节点查看详细信息')}</p>
+                </div>
+              )}
+            </main>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

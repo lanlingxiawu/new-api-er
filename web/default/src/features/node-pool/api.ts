@@ -25,24 +25,16 @@ export async function getNodes(): Promise<NodesResponse> {
   return res.data
 }
 
-export async function getNodeAccounts(
-  publicIp: string,
-  nodeName: string
-): Promise<NodeAccountsResponse> {
-  const ip = encodeURIComponent(publicIp)
+export async function getNodeAccounts(nodeName: string): Promise<NodeAccountsResponse> {
   const name = encodeURIComponent(nodeName)
   const res = await api.get<NodeAccountsResponse>(
-    `/api/node-pool/nodes/${ip}/${name}/accounts`
+    `/api/node-pool/nodes/${name}/accounts`
   )
   return res.data
 }
 
-export async function deleteNode(
-  publicIp: string,
-  nodeName: string
-): Promise<void> {
-  const ip = encodeURIComponent(publicIp)
+export async function deleteNode(nodeName: string): Promise<void> {
   const name = encodeURIComponent(nodeName)
-  await api.delete(`/api/node-pool/nodes/${ip}/${name}`)
+  await api.delete(`/api/node-pool/nodes/${name}`)
 }
 // end

@@ -123,15 +123,13 @@ func GetNodePoolNodes(c *gin.Context) {
 }
 
 func GetNodePoolAccounts(c *gin.Context) {
-	publicIP := c.Param("public_ip")
 	nodeName := c.Param("node_name")
-	proxyNodePoolRequest(c, fmt.Sprintf("/api/v1/nodes/%s/%s/accounts", publicIP, nodeName), http.MethodGet)
+	proxyNodePoolRequest(c, fmt.Sprintf("/api/v1/nodes/%s/accounts", nodeName), http.MethodGet)
 }
 
 func DeleteNodePoolNode(c *gin.Context) {
-	publicIP := c.Param("public_ip")
 	nodeName := c.Param("node_name")
-	proxyNodePoolRequest(c, fmt.Sprintf("/api/v1/nodes/%s/%s", publicIP, nodeName), http.MethodDelete)
+	proxyNodePoolRequest(c, fmt.Sprintf("/api/v1/nodes/%s", nodeName), http.MethodDelete)
 }
 
 // end
