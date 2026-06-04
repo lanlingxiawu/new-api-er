@@ -166,8 +166,8 @@
 
 .node-pool-content {
   display: flex;
+  height: calc(100vh - 260px);
   min-height: 400px;
-  height: calc(100vh - 200px);
   gap: 16px;
 }
 
@@ -187,7 +187,7 @@
   flex: 1;
   flex-direction: column;
   gap: 16px;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .node-pool-list,
@@ -370,7 +370,7 @@
 
 .node-pool-detail-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -521,7 +521,6 @@ html.dark .node-pool-stat-offline {
   }
 
   .node-pool-content {
-    height: auto;
     min-height: 0;
     flex-direction: column;
   }
@@ -533,7 +532,6 @@ html.dark .node-pool-stat-offline {
   }
 
   .node-pool-main {
-    overflow: visible;
     gap: 12px;
   }
 }
@@ -548,9 +546,12 @@ html.dark .node-pool-stat-offline {
     align-self: flex-start;
   }
 
-  .node-pool-stat-grid,
-  .node-pool-detail-grid {
+  .node-pool-stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .node-pool-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .node-pool-panel {
@@ -560,5 +561,11 @@ html.dark .node-pool-stat-offline {
   .node-pool-panel-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 420px) {
+  .node-pool-detail-grid {
+    grid-template-columns: 1fr;
   }
 }

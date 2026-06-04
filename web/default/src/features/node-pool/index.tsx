@@ -233,7 +233,7 @@ function NodeDetailPanel({
           </Button>
         )}
       </div>
-      <div className='grid grid-cols-3 gap-2'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
         <NodeDetailField label={t('Node Name')} value={node.node_name} />
         <NodeDetailField label={t('Public IP')} value={node.public_ip} />
         <NodeDetailField label={t('Internal IP')} value={node.internal_ip} />
@@ -285,7 +285,7 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
   const hasData = !loading && accounts.length > 0 && filtered.length > 0
 
   return (
-    <div className='flex min-h-0 flex-1 flex-col'>
+    <div className='flex flex-col'>
       {/* 筛选栏 — 固定顶部，不随表格滚动 */}
       {!loading && accounts.length > 0 && (
         <div className='flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2.5'>
@@ -322,7 +322,7 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
       )}
 
       {/* 表格区域 — 仅此层滚动 */}
-      <div className='min-h-0 flex-1 overflow-auto px-4'>
+      <div className='overflow-auto px-4' style={{ maxHeight: 'calc(100vh - 440px)', minHeight: 120 }}>
         {loading ? (
           <div className='flex h-24 items-center justify-center text-muted-foreground'>
             <Loader2 className='mr-2 size-4 animate-spin' />
@@ -604,7 +604,7 @@ export function NodePool() {
             {t('Loading nodes...')}
           </div>
         ) : (
-          <div className='flex min-h-0 gap-4' style={{ height: 'calc(100vh - 200px)', minHeight: 400 }}>
+          <div className='flex gap-4' style={{ height: 'calc(100vh - 160px)', minHeight: 400 }}>
             {/* Left: Node list */}
             <div className='flex w-72 shrink-0 flex-col gap-2 overflow-y-auto'>
               {nodes.length === 0 ? (
@@ -629,7 +629,7 @@ export function NodePool() {
             </div>
 
             {/* Right: Details + Accounts */}
-            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-hidden'>
+            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pb-4 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border'>
               {selectedNode ? (
                 <>
                   {/* Node detail */}
@@ -640,7 +640,7 @@ export function NodePool() {
                   />
 
                   {/* Account list */}
-                  <div className='flex min-h-0 flex-1 flex-col rounded-lg border bg-card'>
+                  <div className='flex flex-col rounded-lg border bg-card'>
                     <h3 className='shrink-0 border-b px-4 py-3 text-sm font-semibold'>
                       {t('Accounts')}
                       {!accountsLoading && (

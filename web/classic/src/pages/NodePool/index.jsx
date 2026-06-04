@@ -351,7 +351,7 @@ function AccountsPanel({ accounts, loading }) {
   return (
     <section
       className='node-pool-panel'
-      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: 0, overflow: 'hidden' }}
+      style={{ display: 'flex', flexDirection: 'column', padding: 0 }}
     >
       {/* 标题栏 — 固定顶部 */}
       <div
@@ -427,7 +427,7 @@ function AccountsPanel({ accounts, loading }) {
       )}
 
       {/* 表格区域 — 仅此层滚动 */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 16px' }}>
+      <div style={{ maxHeight: 'calc(100vh - 500px)', minHeight: 120, overflowY: 'auto', overflowX: 'hidden', padding: '0 16px' }}>
         <Spin spinning={loading}>
           {loading ? (
             <div className='node-pool-empty node-pool-empty-compact'>
