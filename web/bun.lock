@@ -11,7 +11,7 @@
       "dependencies": {
         "@douyinfe/semi-icons": "^2.63.1",
         "@douyinfe/semi-illustrations": "^2.69.1",
-        "@douyinfe/semi-ui": "^2.69.2",
+        "@douyinfe/semi-ui": "^2.99.3",
         "@lobehub/icons": "catalog:",
         "@visactor/react-vchart": "~1.8.8",
         "@visactor/vchart": "~1.8.8",
@@ -283,7 +283,7 @@
 
     "@douyinfe/semi-icons": ["@douyinfe/semi-icons@2.99.3", "", { "dependencies": { "classnames": "^2.2.6" }, "peerDependencies": { "react": ">=16.0.0" } }, "sha512-Pm5H3Ua/PDumUCCsnJWwN+znVoKiyFCqag6DJy9/cuF6OOdd1+QUnvi0NHNg6+0fx/LHH088UwKFoOiZRkbaSw=="],
 
-    "@douyinfe/semi-illustrations": ["@douyinfe/semi-illustrations@2.69.1", "", { "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0" } }, "sha512-UzWlf/UYf/2o2ZhVABNX35Ai8bTVke28MwlN9oohmcuvtnChEw14PMzZsifMkIdNp3atp7Rx4rGeQtOslrC37g=="],
+    "@douyinfe/semi-illustrations": ["@douyinfe/semi-illustrations@2.99.3", "", { "peerDependencies": { "react": ">=16.0.0" } }, "sha512-z1rQPgWOV2xtZS8NkmL8JCK1DltQ8FGiL1qYlXbSHjEs1XkNYruq4W3dKv0IJEpTVLIlPsbDg4VmPAuuwLCCkQ=="],
 
     "@douyinfe/semi-json-viewer-core": ["@douyinfe/semi-json-viewer-core@2.99.3", "", { "dependencies": { "jsonc-parser": "^3.3.1" } }, "sha512-KEbZEyyM2qqGv9K+Yw/ZvAn4CEgcY2lQfL6a2ASEt80FlPoDAIWA7tGjpYxxM9/NcX9omNtsM/HLgDmrCjjBXQ=="],
 
@@ -3030,10 +3030,6 @@
     "@dotenvx/dotenvx/which": ["which@4.0.0", "", { "dependencies": { "isexe": "^3.1.1" }, "bin": { "node-which": "bin/which.js" } }, "sha512-GlaYyEb07DPxYCKhKzplCWBJtvxZcZMrL+4UkrTSJHHPyZU4mYYTv3qaOe77H7EODLSSopAUFAc6W8U4yqvscg=="],
 
     "@douyinfe/semi-foundation/date-fns": ["date-fns@2.30.0", "", { "dependencies": { "@babel/runtime": "^7.21.0" } }, "sha512-fnULvOpxnC5/Vg3NCiWelDsLiUc9bRwAPs/+LfTLNvetFCtCTN+yQz15C/fs4AwX1R9K5GLtLfn8QW+dWisaAw=="],
-
-    "@douyinfe/semi-illustrations/react": ["react@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="],
-
-    "@douyinfe/semi-ui/@douyinfe/semi-illustrations": ["@douyinfe/semi-illustrations@2.99.3", "", { "peerDependencies": { "react": ">=16.0.0" } }, "sha512-z1rQPgWOV2xtZS8NkmL8JCK1DltQ8FGiL1qYlXbSHjEs1XkNYruq4W3dKv0IJEpTVLIlPsbDg4VmPAuuwLCCkQ=="],
 
     "@douyinfe/semi-ui/date-fns": ["date-fns@2.30.0", "", { "dependencies": { "@babel/runtime": "^7.21.0" } }, "sha512-fnULvOpxnC5/Vg3NCiWelDsLiUc9bRwAPs/+LfTLNvetFCtCTN+yQz15C/fs4AwX1R9K5GLtLfn8QW+dWisaAw=="],
 

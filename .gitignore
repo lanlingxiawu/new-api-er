@@ -38,3 +38,6 @@ skills-lock.json
 .playwright-mcp
 *.log
 certs
+*.log
+tmp/
+

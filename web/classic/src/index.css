@@ -472,6 +472,22 @@ html.dark .sbg-variant-green {
 }
 
 /* Tabs组件样式 */
+.setting-page {
+  height: calc(100vh - 108px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.setting-page > .semi-layout,
+.setting-page > .semi-layout > .semi-layout-content,
+.setting-page .semi-tabs {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .semi-tabs-content {
   padding: 0 !important;
   height: calc(100% - 40px) !important;
@@ -485,6 +501,25 @@ html.dark .sbg-variant-green {
 
 .semi-tabs-content .semi-tabs-pane > div {
   height: 100% !important;
+}
+
+.setting-page .semi-tabs-content {
+  min-height: 0;
+  height: auto !important;
+  flex: 1 1 auto !important;
+  overflow: hidden !important;
+}
+
+.setting-page .semi-tabs-content .semi-tabs-pane {
+  min-height: 0;
+  height: 100% !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+
+.setting-page .semi-tabs-content .semi-tabs-pane > div {
+  min-height: 100%;
+  height: auto !important;
 }
 
 /* 表格样式 */
