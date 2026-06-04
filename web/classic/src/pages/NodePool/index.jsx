@@ -346,9 +346,18 @@ function AccountsPanel({ accounts, loading }) {
 
   const statusLabel = { all: t('全部'), online: t('在线'), offline: t('离线') };
 
+  const hasData = !loading && accounts.length > 0 && filtered.length > 0;
+
   return (
-    <section className='node-pool-panel'>
-      <div className='node-pool-panel-header'>
+    <section
+      className='node-pool-panel'
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: 0, overflow: 'hidden' }}
+    >
+      {/* 标题栏 — 固定顶部 */}
+      <div
+        className='node-pool-panel-header'
+        style={{ flexShrink: 0, padding: '14px 16px', marginBottom: 0, borderBottom: '1px solid var(--semi-color-border)' }}
+      >
         <div className='node-pool-panel-title-group'>
           <span className='node-pool-panel-icon'>
             <Database size={16} />
@@ -363,112 +372,135 @@ function AccountsPanel({ accounts, loading }) {
           </div>
         </div>
       </div>
-      <Spin spinning={loading}>
-        {loading ? (
-          <div className='node-pool-empty node-pool-empty-compact'>
-            <Loader2 size={18} className='node-pool-spin' />
+
+      {/* 筛选栏 — 固定，不随表格滚动 */}
+      {!loading && accounts.length > 0 && (
+        <div
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            padding: '10px 16px',
+            borderBottom: '1px solid var(--semi-color-border)',
+          }}
+        >
+          <Input
+            size='small'
+            placeholder={t('筛选 ID')}
+            value={filterId}
+            onChange={(v) => { setFilterId(v); setPage(1); }}
+            style={{ width: 140 }}
+            showClear
+          />
+          <Input
+            size='small'
+            placeholder={t('筛选账号名')}
+            value={filterName}
+            onChange={(v) => { setFilterName(v); setPage(1); }}
+            style={{ width: 140 }}
+            showClear
+          />
+          <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--semi-color-border)' }}>
+            {STATUS_FILTERS.map((s) => (
+              <button
+                key={s}
+                type='button'
+                onClick={() => { setFilterStatus(s); setPage(1); }}
+                style={{
+                  padding: '0 10px',
+                  height: 28,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  border: 'none',
+                  borderRight: s !== 'offline' ? '1px solid var(--semi-color-border)' : 'none',
+                  background: filterStatus === s ? 'var(--semi-color-primary)' : 'var(--semi-color-bg-2)',
+                  color: filterStatus === s ? '#fff' : 'var(--semi-color-text-0)',
+                  transition: 'background 0.15s',
+                }}
+              >
+                {statusLabel[s]}
+              </button>
+            ))}
           </div>
-        ) : accounts.length === 0 ? (
-          <div className='node-pool-empty node-pool-empty-compact'>
-            {t('暂无账号')}
-          </div>
-        ) : (
-          <>
-            {/* 筛选栏 */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              <Input
-                size='small'
-                placeholder={t('筛选 ID')}
-                value={filterId}
-                onChange={(v) => { setFilterId(v); setPage(1); }}
-                style={{ width: 140 }}
-                showClear
-              />
-              <Input
-                size='small'
-                placeholder={t('筛选账号名')}
-                value={filterName}
-                onChange={(v) => { setFilterName(v); setPage(1); }}
-                style={{ width: 140 }}
-                showClear
-              />
-              <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--semi-color-border)' }}>
-                {STATUS_FILTERS.map((s) => (
-                  <button
-                    key={s}
-                    type='button'
-                    onClick={() => { setFilterStatus(s); setPage(1); }}
-                    style={{
-                      padding: '0 10px',
-                      height: 28,
-                      fontSize: 12,
-                      cursor: 'pointer',
-                      border: 'none',
-                      borderRight: s !== 'offline' ? '1px solid var(--semi-color-border)' : 'none',
-                      background: filterStatus === s ? 'var(--semi-color-primary)' : 'var(--semi-color-bg-2)',
-                      color: filterStatus === s ? '#fff' : 'var(--semi-color-text-0)',
-                      transition: 'background 0.15s',
-                    }}
-                  >
-                    {statusLabel[s]}
-                  </button>
-                ))}
-              </div>
+        </div>
+      )}
+
+      {/* 表格区域 — 仅此层滚动 */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 16px' }}>
+        <Spin spinning={loading}>
+          {loading ? (
+            <div className='node-pool-empty node-pool-empty-compact'>
+              <Loader2 size={18} className='node-pool-spin' />
             </div>
-            {filtered.length === 0 ? (
-              <div className='node-pool-empty node-pool-empty-compact'>
-                {t('无匹配账号')}
-              </div>
-            ) : (
-              <>
-                <div className='node-pool-account-table-wrap'>
-                  <table className='node-pool-account-table'>
-                    <thead>
-                      <tr>
-                        <th>{t('ID')}</th>
-                        <th>{t('名称')}</th>
-                        <th>{t('状态')}</th>
-                        <th className='node-pool-number-cell'>{t('请求数')}</th>
-                        <th className='node-pool-number-cell'>{t('token数')}</th>
-                        <th className='node-pool-number-cell'>{t('账号费用')}</th>
-                        <th className='node-pool-number-cell'>{t('用户费用')}</th>
-                        <th className='node-pool-number-cell'>{t('已用/总量')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <AccountRows accounts={pageAccounts} />
-                    </tbody>
-                  </table>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, color: 'var(--semi-color-text-2)' }}>
-                      {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
-                    </span>
-                    <select
-                      value={pageSize}
-                      onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
-                      style={{ height: 24, borderRadius: 4, border: '1px solid var(--semi-color-border)', background: 'var(--semi-color-bg-2)', color: 'var(--semi-color-text-0)', fontSize: 12, padding: '0 4px', cursor: 'pointer' }}
-                    >
-                      {PAGE_SIZE_OPTIONS.map((n) => (
-                        <option key={n} value={n}>{n} / {t('页')}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <Pagination
-                    currentPage={page}
-                    total={filtered.length}
-                    pageSize={pageSize}
-                    onChange={(p) => setPage(p)}
-                    size='small'
-                    showSizeChanger={false}
-                  />
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </Spin>
+          ) : accounts.length === 0 ? (
+            <div className='node-pool-empty node-pool-empty-compact'>
+              {t('暂无账号')}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className='node-pool-empty node-pool-empty-compact'>
+              {t('无匹配账号')}
+            </div>
+          ) : (
+            <div className='node-pool-account-table-wrap' style={{ overflowX: 'auto', overflowY: 'visible' }}>
+              <table className='node-pool-account-table'>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--semi-color-bg-2)' }}>
+                  <tr>
+                    <th>{t('ID')}</th>
+                    <th>{t('名称')}</th>
+                    <th>{t('状态')}</th>
+                    <th className='node-pool-number-cell'>{t('请求数')}</th>
+                    <th className='node-pool-number-cell'>{t('token数')}</th>
+                    <th className='node-pool-number-cell'>{t('账号费用')}</th>
+                    <th className='node-pool-number-cell'>{t('用户费用')}</th>
+                    <th className='node-pool-number-cell'>{t('已用/总量')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <AccountRows accounts={pageAccounts} />
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Spin>
+      </div>
+
+      {/* 分页栏 — 固定底部 */}
+      {hasData && (
+        <div
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '10px 16px',
+            borderTop: '1px solid var(--semi-color-border)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: 'var(--semi-color-text-2)' }}>
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
+            </span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              style={{ height: 24, borderRadius: 4, border: '1px solid var(--semi-color-border)', background: 'var(--semi-color-bg-2)', color: 'var(--semi-color-text-0)', fontSize: 12, padding: '0 4px', cursor: 'pointer' }}
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} / {t('页')}</option>
+              ))}
+            </select>
+          </div>
+          <Pagination
+            currentPage={page}
+            total={filtered.length}
+            pageSize={pageSize}
+            onChange={(p) => setPage(p)}
+            size='small'
+            showSizeChanger={false}
+          />
+        </div>
+      )}
     </section>
   );
 }

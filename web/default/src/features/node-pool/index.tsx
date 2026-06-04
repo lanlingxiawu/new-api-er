@@ -213,7 +213,7 @@ function NodeDetailPanel({
   }
 
   return (
-    <div className='rounded-lg border bg-card p-4'>
+    <div className='shrink-0 rounded-lg border bg-card p-4'>
       <div className='mb-3 flex items-center justify-between'>
         <h3 className='text-sm font-semibold'>{t('Node Details')}</h3>
         {node.status === 'offline' && (
@@ -233,7 +233,7 @@ function NodeDetailPanel({
           </Button>
         )}
       </div>
-      <div className='grid grid-cols-2 gap-2'>
+      <div className='grid grid-cols-3 gap-2'>
         <NodeDetailField label={t('Node Name')} value={node.node_name} />
         <NodeDetailField label={t('Public IP')} value={node.public_ip} />
         <NodeDetailField label={t('Internal IP')} value={node.internal_ip} />
@@ -272,22 +272,6 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
     startTransition(() => setPage(1))
   }, [accounts])
 
-  if (loading) {
-    return (
-      <div className='flex h-24 items-center justify-center text-muted-foreground'>
-        <Loader2 className='mr-2 size-4 animate-spin' />
-        {t('Loading accounts...')}
-      </div>
-    )
-  }
-  if (!accounts.length) {
-    return (
-      <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
-        {t('No accounts')}
-      </div>
-    )
-  }
-
   const filtered = accounts.filter((acc) => {
     if (filterId && !acc.id.toLowerCase().includes(filterId.toLowerCase())) return false
     if (filterName && !(acc.name ?? '').toLowerCase().includes(filterName.toLowerCase())) return false
@@ -298,129 +282,148 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
 
   const totalPages = Math.ceil(filtered.length / pageSize)
   const pageAccounts = filtered.slice((page - 1) * pageSize, page * pageSize)
+  const hasData = !loading && accounts.length > 0 && filtered.length > 0
 
   return (
-    <div>
-      {/* 筛选栏 */}
-      <div className='mb-3 flex flex-wrap items-center gap-2'>
-        <Input
-          className='h-7 w-36 text-xs'
-          placeholder={t('Filter by ID')}
-          value={filterId}
-          onChange={(e) => { setFilterId(e.target.value); startTransition(() => setPage(1)) }}
-        />
-        <Input
-          className='h-7 w-36 text-xs'
-          placeholder={t('Filter by Name')}
-          value={filterName}
-          onChange={(e) => { setFilterName(e.target.value); startTransition(() => setPage(1)) }}
-        />
-        <div className='flex rounded-md border text-xs'>
-          {(['all', 'online', 'offline'] as StatusFilter[]).map((s) => (
-            <button
-              key={s}
-              type='button'
-              onClick={() => { setFilterStatus(s); startTransition(() => setPage(1)) }}
-              className={cn(
-                'px-2.5 py-1 first:rounded-l-md last:rounded-r-md transition-colors',
-                filterStatus === s
-                  ? 'bg-primary text-primary-foreground'
-                  : 'hover:bg-muted'
-              )}
-            >
-              {s === 'all' ? t('All') : s === 'online' ? t('Online') : t('Offline')}
-            </button>
-          ))}
-        </div>
-      </div>
-      {filtered.length === 0 && (
-        <div className='flex h-16 items-center justify-center text-sm text-muted-foreground'>
-          {t('No matching accounts')}
+    <div className='flex min-h-0 flex-1 flex-col'>
+      {/* 筛选栏 — 固定顶部，不随表格滚动 */}
+      {!loading && accounts.length > 0 && (
+        <div className='flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2.5'>
+          <Input
+            className='h-7 w-36 text-xs'
+            placeholder={t('Filter by ID')}
+            value={filterId}
+            onChange={(e) => { setFilterId(e.target.value); startTransition(() => setPage(1)) }}
+          />
+          <Input
+            className='h-7 w-36 text-xs'
+            placeholder={t('Filter by Name')}
+            value={filterName}
+            onChange={(e) => { setFilterName(e.target.value); startTransition(() => setPage(1)) }}
+          />
+          <div className='flex rounded-md border text-xs'>
+            {(['all', 'online', 'offline'] as StatusFilter[]).map((s) => (
+              <button
+                key={s}
+                type='button'
+                onClick={() => { setFilterStatus(s); startTransition(() => setPage(1)) }}
+                className={cn(
+                  'px-2.5 py-1 first:rounded-l-md last:rounded-r-md transition-colors',
+                  filterStatus === s
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-muted'
+                )}
+              >
+                {s === 'all' ? t('All') : s === 'online' ? t('Online') : t('Offline')}
+              </button>
+            ))}
+          </div>
         </div>
       )}
-      <div className='overflow-auto'>
-        <table className='w-full text-sm'>
-          <thead>
-            <tr className='border-b text-left text-xs text-muted-foreground'>
-              <th className='pb-2 pr-3 font-medium'>{t('ID')}</th>
-              <th className='pb-2 pr-3 font-medium'>{t('Name')}</th>
-              <th className='pb-2 pr-3 font-medium'>{t('Status')}</th>
-              <th className='pb-2 pr-3 font-medium text-right'>{t('Requests')}</th>
-              <th className='pb-2 pr-3 font-medium text-right'>{t('Token Count')}</th>
-              <th className='pb-2 pr-3 font-medium text-right'>{t('Account Cost')}</th>
-              <th className='pb-2 pr-3 font-medium text-right'>{t('User Cost')}</th>
-              <th className='pb-2 font-medium text-right'>{t('Used / Total')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageAccounts.map((acc) => (
-              <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
-                <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
-                <td className='py-2 pr-3'>{acc.name || '–'}</td>
-                <td className='py-2 pr-3'>
-                  <AccountStatusBadge status={acc.status} />
-                </td>
-                <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
-                <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
-                <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
-                <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
-                <td className='py-2 text-right tabular-nums'>
-                  {acc.used_capacity != null || acc.total_capacity != null ? (
-                    <div className='flex flex-col items-end gap-1'>
-                      <span>{formatNumber(acc.used_capacity)} / {formatNumber(acc.total_capacity)}</span>
-                      <div className='h-1 w-16 overflow-hidden rounded-full bg-muted'>
-                        <div
-                          className='h-full rounded-full bg-primary transition-all'
-                          style={{
-                            width: `${Math.min(100, acc.total_capacity > 0 ? (acc.used_capacity / acc.total_capacity) * 100 : 0).toFixed(1)}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ) : '–'}
-                </td>
+
+      {/* 表格区域 — 仅此层滚动 */}
+      <div className='min-h-0 flex-1 overflow-auto px-4'>
+        {loading ? (
+          <div className='flex h-24 items-center justify-center text-muted-foreground'>
+            <Loader2 className='mr-2 size-4 animate-spin' />
+            {t('Loading accounts...')}
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
+            {t('No accounts')}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className='flex h-16 items-center justify-center text-sm text-muted-foreground'>
+            {t('No matching accounts')}
+          </div>
+        ) : (
+          <table className='w-full text-sm'>
+            <thead className='sticky top-0 z-10 bg-card'>
+              <tr className='border-b text-left text-xs text-muted-foreground'>
+                <th className='pb-2 pr-3 pt-3 font-medium'>{t('ID')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium'>{t('Name')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium'>{t('Status')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Requests')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Token Count')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Account Cost')}</th>
+                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('User Cost')}</th>
+                <th className='pb-2 pt-3 font-medium text-right'>{t('Used / Total')}</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {pageAccounts.map((acc) => (
+                <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
+                  <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
+                  <td className='py-2 pr-3'>{acc.name || '–'}</td>
+                  <td className='py-2 pr-3'>
+                    <AccountStatusBadge status={acc.status} />
+                  </td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
+                  <td className='py-2 text-right tabular-nums'>
+                    {acc.used_capacity != null || acc.total_capacity != null ? (
+                      <div className='flex flex-col items-end gap-1'>
+                        <span>{formatNumber(acc.used_capacity)} / {formatNumber(acc.total_capacity)}</span>
+                        <div className='h-1 w-16 overflow-hidden rounded-full bg-muted'>
+                          <div
+                            className='h-full rounded-full bg-primary transition-all'
+                            style={{
+                              width: `${Math.min(100, acc.total_capacity > 0 ? (acc.used_capacity / acc.total_capacity) * 100 : 0).toFixed(1)}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : '–'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-      <div className='flex items-center justify-between pt-3 text-xs text-muted-foreground'>
-        <div className='flex items-center gap-2'>
-          <span>
-            {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
-          </span>
-          <select
-            value={pageSize}
-            onChange={(e) => { setPageSize(Number(e.target.value)); startTransition(() => setPage(1)) }}
-            className='h-6 rounded border bg-background px-1 text-xs'
-          >
-            {PAGE_SIZE_OPTIONS.map((n) => (
-              <option key={n} value={n}>{n} / {t('page')}</option>
-            ))}
-          </select>
+
+      {/* 分页栏 — 固定底部，不随表格滚动 */}
+      {hasData && (
+        <div className='flex shrink-0 items-center justify-between border-t px-4 py-2.5 text-xs text-muted-foreground'>
+          <div className='flex items-center gap-2'>
+            <span>
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
+            </span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); startTransition(() => setPage(1)) }}
+              className='h-6 rounded border bg-background px-1 text-xs'
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} / {t('page')}</option>
+              ))}
+            </select>
+          </div>
+          <div className='flex items-center gap-1'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-6 px-2 text-xs'
+              disabled={page <= 1}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              {t('Prev')}
+            </Button>
+            <span className='px-1 tabular-nums'>{page} / {totalPages}</span>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-6 px-2 text-xs'
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              {t('Next')}
+            </Button>
+          </div>
         </div>
-        <div className='flex items-center gap-1'>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-6 px-2 text-xs'
-            disabled={page <= 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            {t('Prev')}
-          </Button>
-          <span className='px-1 tabular-nums'>{page} / {totalPages}</span>
-          <Button
-            size='sm'
-            variant='outline'
-            className='h-6 px-2 text-xs'
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {t('Next')}
-          </Button>
-        </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -599,7 +602,7 @@ export function NodePool() {
             {t('Loading nodes...')}
           </div>
         ) : (
-          <div className='flex min-h-0 gap-4' style={{ height: 'calc(100vh - 340px)', minHeight: 400 }}>
+          <div className='flex min-h-0 gap-4' style={{ height: 'calc(100vh - 200px)', minHeight: 400 }}>
             {/* Left: Node list */}
             <div className='flex w-72 shrink-0 flex-col gap-2 overflow-y-auto'>
               {nodes.length === 0 ? (
@@ -624,7 +627,7 @@ export function NodePool() {
             </div>
 
             {/* Right: Details + Accounts */}
-            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto'>
+            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-hidden'>
               {selectedNode ? (
                 <>
                   {/* Node detail */}
@@ -635,8 +638,8 @@ export function NodePool() {
                   />
 
                   {/* Account list */}
-                  <div className='rounded-lg border bg-card p-4'>
-                    <h3 className='mb-3 text-sm font-semibold'>
+                  <div className='flex min-h-0 flex-1 flex-col rounded-lg border bg-card'>
+                    <h3 className='shrink-0 border-b px-4 py-3 text-sm font-semibold'>
                       {t('Accounts')}
                       {!accountsLoading && (
                         <span className='ml-2 text-xs font-normal text-muted-foreground'>

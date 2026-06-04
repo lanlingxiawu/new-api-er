@@ -167,7 +167,7 @@
 .node-pool-content {
   display: flex;
   min-height: 400px;
-  height: calc(100vh - 340px);
+  height: calc(100vh - 200px);
   gap: 16px;
 }
 
@@ -187,7 +187,7 @@
   flex: 1;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .node-pool-list,
@@ -370,7 +370,7 @@
 
 .node-pool-detail-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -534,6 +534,7 @@ html.dark .node-pool-stat-offline {
 
   .node-pool-main {
     overflow: visible;
+    gap: 12px;
   }
 }
 
