@@ -213,6 +213,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.DELETE("/tiers/:id", controller.AdminDeleteTier)
 			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
 			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
+			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)
 		}
 
 		// Customer management (admin)

@@ -54,9 +54,12 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
+  TrendingDown,
   TrendingUp,
   UserRoundCheck,
+  UserRoundPlus,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -147,7 +150,7 @@ const renderPerformanceProgress = (value, row, t) => {
   const percentText = `${Number.isFinite(rawPercent) ? rawPercent.toFixed(0) : '0'}%`;
 
   return (
-    <div className='min-w-[180px]'>
+    <div className='min-w-[120px]'>
       <div className='mb-1 flex items-center justify-between gap-2'>
         <Text size='small'>{formatBusinessAmount(currentQuota)}</Text>
         <Text type='secondary' size='small'>
@@ -485,7 +488,7 @@ async function mutateRequest(method, url, data) {
   return res.data;
 }
 
-function UserPicker({ value, onSelect }) {
+function UserPicker({ value, onSelect, excludeEmployee = true }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -533,7 +536,7 @@ function UserPicker({ value, onSelect }) {
             keyword: debouncedKeyword,
             page_size: 20,
             p: nextPage,
-            exclude_employee: true,
+            exclude_employee: excludeEmployee,
           }),
           disableDuplicate: true,
         });
@@ -562,7 +565,7 @@ function UserPicker({ value, onSelect }) {
         setLoadingMore(false);
       }
     },
-    [debouncedKeyword],
+    [debouncedKeyword, excludeEmployee],
   );
 
   useEffect(() => {
@@ -599,17 +602,12 @@ function UserPicker({ value, onSelect }) {
       {open ? (
         <div
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            zIndex: 1000,
-            maxHeight: 240,
+            marginTop: 8,
+            maxHeight: 224,
             overflowY: 'auto',
             border: '1px solid var(--semi-color-border)',
-            borderRadius: 6,
-            background: 'var(--semi-color-bg-2)',
-            boxShadow: 'var(--semi-shadow-elevated)',
+            borderRadius: 10,
+            background: 'var(--semi-color-fill-0)',
             padding: 4,
           }}
           onScroll={handleScroll}
@@ -629,7 +627,14 @@ function UserPicker({ value, onSelect }) {
                   key={user.id}
                   role='option'
                   aria-selected={value === user.id}
-                  className='cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-semi-color-fill-0'
+                  className='cursor-pointer rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1'
+                  style={{
+                    background: value === user.id
+                      ? 'var(--semi-color-fill-1)'
+                      : user.is_assigned_customer
+                        ? 'var(--semi-color-warning-light-default)'
+                        : undefined,
+                  }}
                   onMouseDown={(event) => {
                     event.preventDefault();
                     const label = `${user.username}${
@@ -640,14 +645,29 @@ function UserPicker({ value, onSelect }) {
                     setOpen(false);
                   }}
                 >
-                  <div className='font-medium'>
-                    {user.username}
-                    {user.display_name ? ` (${user.display_name})` : ''}
+                  <div className='flex min-w-0 items-center justify-between gap-3'>
+                    <span className='truncate font-medium'>
+                      {user.username}
+                      {user.display_name ? ` (${user.display_name})` : ''}
+                    </span>
+                    <div className='flex items-center gap-1.5 shrink-0'>
+                      {user.is_assigned_customer ? (
+                        <Tag color='orange' size='small'>{t('已分配')}</Tag>
+                      ) : null}
+                      <span className='text-xs text-semi-color-text-2'>#{user.id}</span>
+                    </div>
                   </div>
-                  <div className='text-xs text-semi-color-text-2'>
-                    #{user.id}
-                    {user.email ? ` / ${user.email}` : ''}
-                  </div>
+                  {user.is_assigned_customer ? (
+                    <div className='mt-0.5 truncate text-xs' style={{ color: 'var(--semi-color-warning)' }}>
+                      {user.assigned_employee_name
+                        ? `${t('已分配给')}: ${user.assigned_employee_name}`
+                        : t('已分配给其他员工')}
+                    </div>
+                  ) : user.email ? (
+                    <div className='mt-0.5 truncate text-xs text-semi-color-text-2'>
+                      {user.email}
+                    </div>
+                  ) : null}
                 </div>
               ))}
               {loadingMore ? (
@@ -660,6 +680,93 @@ function UserPicker({ value, onSelect }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
+  const { t } = useTranslation();
+  const [saving, setSaving] = useState(false);
+  const [userId, setUserId] = useState(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setUserId(null);
+    }
+  }, [visible]);
+
+  const submit = async () => {
+    if (!userId) {
+      showError(t('请选择用户'));
+      return;
+    }
+    setSaving(true);
+    try {
+      await mutateRequest(
+        'post',
+        `/api/admin/employee/${row.id}/assign-customer`,
+        {
+          user_id: toNumber(userId),
+        },
+      );
+      showSuccess(t('客户分配成功'));
+      onSuccess();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      title={t('分配客户')}
+      onCancel={onCancel}
+      width={520}
+      footer={
+        <Space>
+          <Button onClick={onCancel}>{t('取消')}</Button>
+          <Button type='primary' loading={saving} onClick={submit}>
+            {t('确认')}
+          </Button>
+        </Space>
+      }
+    >
+      <div
+        className='mb-4 rounded-lg border px-3 py-2'
+        style={{
+          borderColor: 'var(--semi-color-border)',
+          background: 'var(--semi-color-fill-0)',
+        }}
+      >
+        <Text type='secondary' size='small'>
+          {t('员工')}
+        </Text>
+        <div className='mt-1 flex min-w-0 items-center gap-2'>
+          <Text strong ellipsis>
+            {row?.username || `#${row?.user_id}`}
+          </Text>
+          {row?.display_name ? (
+            <Text type='secondary' ellipsis>
+              {row.display_name}
+            </Text>
+          ) : null}
+          <Tag size='small' color='white' className='ml-auto shrink-0'>
+            #{row?.user_id}
+          </Tag>
+        </div>
+      </div>
+      <Field label={t('客户')}>
+        <UserPicker value={userId} onSelect={setUserId} excludeEmployee />
+        <Text
+          type='secondary'
+          size='small'
+          className='mt-2 block leading-relaxed'
+        >
+          {t('将该用户的受邀人设置为此员工，其消费将为员工产生提成')}
+        </Text>
+      </Field>
+    </Modal>
   );
 }
 
@@ -782,6 +889,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           <UserPicker
             value={form.user_id}
             onSelect={(userId) => updateField('user_id', userId)}
+            excludeEmployee
           />
           <Text type='secondary' size='small'>
             {t('搜索并选择要设为员工的用户')}
@@ -867,6 +975,8 @@ function EmployeesTab({
   const employees = providedEmployees || ownEmployees;
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [assignModalRow, setAssignModalRow] = useState(null);
+  const [assignModalVisible, setAssignModalVisible] = useState(false);
   const [filterForm, setFilterForm] = useState(() => ({
     user_id: filters?.user_id || undefined,
     keyword: filters?.keyword || '',
@@ -932,9 +1042,19 @@ function EmployeesTab({
     setModalVisible(true);
   };
 
+  const openAssign = (row) => {
+    setAssignModalRow(row);
+    setAssignModalVisible(true);
+  };
+
   const closeModal = () => {
     setModalVisible(false);
     setModalRow(null);
+  };
+
+  const closeAssignModal = () => {
+    setAssignModalVisible(false);
+    setAssignModalRow(null);
   };
 
   const refreshAfterModal = () => {
@@ -981,6 +1101,14 @@ function EmployeesTab({
           ) : null}
         </div>
       ),
+    },
+    {
+      title: t('客户数量'),
+      dataIndex: 'customer_count',
+      width: 100,
+      sorter: true,
+      sortOrder: getSortOrder('customer_count'),
+      render: (value) => value || 0,
     },
     {
       title: t('客户总消耗'),
@@ -1051,6 +1179,7 @@ function EmployeesTab({
     {
       title: t('当前业绩'),
       dataIndex: 'current_performance_quota',
+      width: 130,
       sorter: true,
       sortOrder: getSortOrder('current_performance_quota'),
       render: (value, row) => renderPerformanceProgress(value, row, t),
@@ -1065,9 +1194,15 @@ function EmployeesTab({
     { title: t('备注'), dataIndex: 'remark', render: (value) => value || '-' },
     {
       title: t('操作'),
-      width: 140,
+      width: 180,
       render: (_, row) => (
         <Space>
+          <Button
+            size='small'
+            icon={<UserRoundPlus size={14} />}
+            onClick={() => openAssign(row)}
+            title={t('分配客户')}
+          />
           <Button
             size='small'
             icon={<Pencil size={14} />}
@@ -1154,6 +1289,15 @@ function EmployeesTab({
         row={modalRow}
         onCancel={closeModal}
         onSuccess={refreshAfterModal}
+      />
+      <AssignCustomerModal
+        visible={assignModalVisible}
+        row={assignModalRow}
+        onCancel={closeAssignModal}
+        onSuccess={() => {
+          closeAssignModal();
+          employees.load();
+        }}
       />
     </>
   );
@@ -2160,6 +2304,16 @@ export function BusinessOverview() {
   const commission = data?.commission || {};
   const channelProfitRows = data?.by_channel_platform || [];
   const employeeRows = (data?.by_employee || []).slice(0, 10);
+  const [channelNameFilter, setChannelNameFilter] = useState('');
+  const filteredChannelProfitRows = useMemo(() => {
+    const kw = channelNameFilter.trim().toLowerCase();
+    if (!kw) return channelProfitRows;
+    return channelProfitRows.filter(
+      (r) =>
+        (r.channel_name ?? '').toLowerCase().includes(kw) ||
+        String(r.channel_id).includes(kw),
+    );
+  }, [channelProfitRows, channelNameFilter]);
   const rangeButtons = [
     { key: '1d', label: t('近 1 天') },
     { key: '7d', label: t('近 7 天') },
@@ -2202,27 +2356,37 @@ export function BusinessOverview() {
     {
       title: t('渠道'),
       dataIndex: 'channel_name',
+      sorter: (a, b) =>
+        (a.channel_name ?? '').localeCompare(b.channel_name ?? ''),
       render: (value, row) => value || `#${row.channel_id}`,
     },
-    { title: t('成本比例'), dataIndex: 'cost_ratio' },
+    {
+      title: t('成本比例'),
+      dataIndex: 'cost_ratio',
+      sorter: (a, b) => a.cost_ratio - b.cost_ratio,
+    },
     {
       title: t('总消耗'),
       dataIndex: 'consumption_quota',
+      sorter: (a, b) => a.consumption_quota - b.consumption_quota,
       render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('估算成本'),
       dataIndex: 'est_cost_quota',
+      sorter: (a, b) => a.est_cost_quota - b.est_cost_quota,
       render: (value) => formatBusinessAmount(value),
     },
     {
       title: t('估算利润'),
       dataIndex: 'est_profit_quota',
+      sorter: (a, b) => a.est_profit_quota - b.est_profit_quota,
       render: (value) => <AmountText value={value} />,
     },
     {
       title: t('毛利率'),
       dataIndex: 'est_gross_margin',
+      sorter: (a, b) => a.est_gross_margin - b.est_gross_margin,
       render: (value) => formatPercent(value),
     },
   ];
@@ -2263,6 +2427,15 @@ export function BusinessOverview() {
                 }
               }}
             />
+            <Button
+              size='small'
+              type='tertiary'
+              icon={<RefreshCw size={14} />}
+              loading={loading}
+              onClick={loadOverview}
+            >
+              {t('刷新')}
+            </Button>
           </Space>
         }
         t={t}
@@ -2317,11 +2490,30 @@ export function BusinessOverview() {
                 />
               </Col>
               <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('Token 数')}
-                  value={platform.token_count || 0}
-                  icon={Users}
-                />
+                <Card
+                  className='!rounded-2xl border-0'
+                  bodyStyle={{ padding: 16 }}
+                  style={{ height: '100%' }}
+                >
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <div className='flex items-center justify-between gap-3'>
+                        <Text type='secondary' size='small'>{t('盈利渠道')}</Text>
+                        <TrendingUp size={18} color='var(--semi-color-success)' />
+                      </div>
+                      <div className='mt-2 text-2xl font-semibold'>{platform.profitable_channel_count || 0}</div>
+                      <div className='mt-1 text-xs' style={{ minHeight: 16, visibility: 'hidden' }}>-</div>
+                    </div>
+                    <div>
+                      <div className='flex items-center justify-between gap-3'>
+                        <Text type='secondary' size='small'>{t('亏损渠道')}</Text>
+                        <TrendingDown size={18} color='var(--semi-color-danger)' />
+                      </div>
+                      <div className='mt-2 text-2xl font-semibold'>{platform.loss_channel_count || 0}</div>
+                      <div className='mt-1 text-xs' style={{ minHeight: 16, visibility: 'hidden' }}>-</div>
+                    </div>
+                  </div>
+                </Card>
               </Col>
             </Row>
             <Text type='secondary' size='small'>
@@ -2332,10 +2524,21 @@ export function BusinessOverview() {
               title={t('渠道盈利（全平台）')}
               description={t('成本和利润按分组倍率与渠道成本比例估算。')}
             >
+              <div className='mb-3 flex items-center gap-2'>
+                <Input
+                  size='small'
+                  prefix={<Search size={14} />}
+                  placeholder={t('搜索渠道名称')}
+                  value={channelNameFilter}
+                  onChange={setChannelNameFilter}
+                  style={{ width: 200 }}
+                  showClear
+                />
+              </div>
               <ClassicBusinessTable
                 rowKey='channel_id'
                 columns={channelProfitColumns}
-                dataSource={channelProfitRows}
+                dataSource={filteredChannelProfitRows}
                 wrapperClassName='business-channel-profit-table pr-1'
                 scroll={{ x: '100%', y: 223 }}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}

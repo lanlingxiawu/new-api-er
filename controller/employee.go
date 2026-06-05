@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -62,6 +63,7 @@ func AdminListEmployees(c *gin.Context) {
 	}
 
 	isComputedSort := sortBy == "total_consumption_quota" ||
+		sortBy == "customer_count" ||
 		sortBy == "total_cost_quota" ||
 		sortBy == "total_profit_quota" ||
 		sortBy == "total_commission_quota" ||
@@ -97,6 +99,7 @@ func AdminListEmployees(c *gin.Context) {
 		Username              string  `json:"username"`
 		DisplayName           string  `json:"display_name"`
 		Email                 string  `json:"email"`
+		CustomerCount         int     `json:"customer_count"`
 		TotalConsumptionQuota int64   `json:"total_consumption_quota"`
 		TotalConsumptionUsd   float64 `json:"total_consumption_usd"`
 		TotalCostQuota        int64   `json:"total_cost_quota"`
@@ -111,25 +114,55 @@ func AdminListEmployees(c *gin.Context) {
 		CurrentTierLevel      int     `json:"current_tier_level"`
 		CurrentTierRate       float64 `json:"current_tier_rate"`
 	}
-	profitStats, err := model.GetCommissionStatsByEmployee(0, 0)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	statsByUserId := make(map[int]*model.CommissionEmployeeStat, len(profitStats))
-	for _, s := range profitStats {
-		statsByUserId[s.EmployeeUserId] = s
-	}
+
 	employeeUserIds := make([]int, 0, len(employees))
 	for _, emp := range employees {
 		employeeUserIds = append(employeeUserIds, emp.UserId)
 	}
-	customerConsumptionByUserId, err := model.GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds)
-	if err != nil {
+
+	// 并行拉取当前页所需的 5 类附加数据
+	var (
+		profitStats                []*model.CommissionEmployeeStat
+		customerConsumptionByUserId map[int]int64
+		customerCountsByUserId     map[int]int
+		tierLevelsByUserId         map[int]*model.EmployeeTierLevel
+		userMap                    map[int]*model.User
+	)
+	eg, _ := errgroup.WithContext(c.Request.Context())
+	eg.Go(func() error {
+		var err error
+		profitStats, err = model.GetCommissionStatsByEmployeeIds(employeeUserIds)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		customerConsumptionByUserId, err = model.GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		customerCountsByUserId, err = model.GetCustomerCountsByEmployees(employeeUserIds)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		tierLevelsByUserId, err = model.GetTierLevelsByUserIds(employeeUserIds)
+		return err
+	})
+	eg.Go(func() error {
+		var err error
+		userMap, err = model.GetUsersByIds(employeeUserIds)
+		return err
+	})
+	if err := eg.Wait(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	tierLevelsByUserId, _ := model.GetTierLevelsByUserIds(employeeUserIds)
+
+	statsByUserId := make(map[int]*model.CommissionEmployeeStat, len(profitStats))
+	for _, s := range profitStats {
+		statsByUserId[s.EmployeeUserId] = s
+	}
 	allTiers := model.GetAllTiersCached()
 	tierById := make(map[int64]*model.EmployeeCommissionTier, len(allTiers))
 	for _, t := range allTiers {
@@ -138,7 +171,6 @@ func AdminListEmployees(c *gin.Context) {
 
 	items := make([]EmployeeWithUser, 0, len(employees))
 	for _, emp := range employees {
-		u, _ := model.GetUserById(emp.UserId, false)
 		totalConsumptionQuota := customerConsumptionByUserId[emp.UserId]
 		var totalCostQuota, totalProfitQuota, totalCommissionQuota int64
 		if stat := statsByUserId[emp.UserId]; stat != nil {
@@ -148,6 +180,7 @@ func AdminListEmployees(c *gin.Context) {
 		}
 		item := EmployeeWithUser{
 			EmployeeProfile:       emp,
+			CustomerCount:         customerCountsByUserId[emp.UserId],
 			TotalConsumptionQuota: totalConsumptionQuota,
 			TotalConsumptionUsd:   common.QuotaToUSD(totalConsumptionQuota),
 			TotalCostQuota:        totalCostQuota,
@@ -166,7 +199,7 @@ func AdminListEmployees(c *gin.Context) {
 				item.CurrentTierRate = t.Rate
 			}
 		}
-		if u != nil {
+		if u := userMap[emp.UserId]; u != nil {
 			item.Username = u.Username
 			item.DisplayName = u.DisplayName
 			item.Email = u.Email
@@ -179,6 +212,8 @@ func AdminListEmployees(c *gin.Context) {
 		sort.SliceStable(items, func(i, j int) bool {
 			var left, right int64
 			switch sortBy {
+			case "customer_count":
+				left, right = int64(items[i].CustomerCount), int64(items[j].CustomerCount)
 			case "total_consumption_quota":
 				left, right = items[i].TotalConsumptionQuota, items[j].TotalConsumptionQuota
 			case "total_cost_quota":
@@ -353,17 +388,41 @@ func AdminCommissionOverview(c *gin.Context) {
 	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
 
-	platformStat, err := model.SumUsedQuota(model.LogTypeConsume, startTime, endTime, "", "", "", 0, "")
-	if err != nil {
+	var (
+		costTotals   model.ConsumptionCostTotals
+		channelStats []*model.ConsumptionCostChannelStat
+		totals       model.CommissionTotals
+		byEmployee   []*model.CommissionEmployeeStat
+	)
+
+	g, _ := errgroup.WithContext(c.Request.Context())
+	g.Go(func() error {
+		var err error
+		costTotals, err = model.GetConsumptionCostTotals(startTime, endTime)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		channelStats, err = model.GetConsumptionCostByChannel(startTime, endTime)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		totals, err = model.GetCommissionTotals(startTime, endTime)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		byEmployee, err = model.GetCommissionStatsByEmployee(startTime, endTime)
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	costTotals, err := model.GetConsumptionCostTotals(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	platformConsumption := int64(platformStat.Quota)
+
+	platformConsumption := costTotals.TotalRevenue
 	platformCostQuota := costTotals.TotalCost
 	platformProfitQuota := platformConsumption - platformCostQuota
 	var platformGrossMargin float64
@@ -379,11 +438,6 @@ func AdminCommissionOverview(c *gin.Context) {
 		EstProfitQuota   int64   `json:"est_profit_quota"`
 		EstGrossMargin   float64 `json:"est_gross_margin"`
 		CostRatio        float64 `json:"cost_ratio"`
-	}
-	channelStats, err := model.GetConsumptionCostByChannel(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
 	}
 	channelProfit := make([]ChannelProfitItem, 0, len(channelStats))
 	for _, s := range channelStats {
@@ -406,45 +460,38 @@ func AdminCommissionOverview(c *gin.Context) {
 		return channelProfit[i].EstProfitQuota > channelProfit[j].EstProfitQuota
 	})
 
-	totals, err := model.GetCommissionTotals(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	byEmployee, err := model.GetCommissionStatsByEmployee(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
+	// 批量拉取员工用户信息，避免 N+1 查询
 	type EmployeeStatWithUser struct {
 		*model.CommissionEmployeeStat
 		Username    string `json:"username"`
 		DisplayName string `json:"display_name"`
 	}
 	empItems := make([]EmployeeStatWithUser, 0, len(byEmployee))
-	for _, s := range byEmployee {
-		item := EmployeeStatWithUser{CommissionEmployeeStat: s}
-		if u, uerr := model.GetUserById(s.EmployeeUserId, false); uerr == nil && u != nil {
-			item.Username = u.Username
-			item.DisplayName = u.DisplayName
+	if len(byEmployee) > 0 {
+		empIds := make([]int, 0, len(byEmployee))
+		for _, s := range byEmployee {
+			empIds = append(empIds, s.EmployeeUserId)
 		}
-		empItems = append(empItems, item)
-	}
-	byChannel, err := model.GetCommissionStatsByChannel(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	for _, s := range byChannel {
-		if ch, cerr := model.CacheGetChannel(s.ChannelId); cerr == nil && ch != nil {
-			s.ChannelName = ch.Name
+		userMap, _ := model.GetUsersByIds(empIds)
+		for _, s := range byEmployee {
+			item := EmployeeStatWithUser{CommissionEmployeeStat: s}
+			if u := userMap[s.EmployeeUserId]; u != nil {
+				item.Username = u.Username
+				item.DisplayName = u.DisplayName
+			}
+			empItems = append(empItems, item)
 		}
 	}
-	byDay, err := model.GetCommissionStatsByDay(startTime, endTime)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
+
+	var profitableChannelCount, lossChannelCount int
+	for _, item := range channelProfit {
+		if item.EstProfitQuota > 0 {
+			profitableChannelCount++
+		} else if item.EstProfitQuota < 0 {
+			lossChannelCount++
+		}
 	}
+
 	var grossMargin float64
 	if totals.TotalRevenue != 0 {
 		grossMargin = float64(totals.TotalProfit) / float64(totals.TotalRevenue)
@@ -453,15 +500,16 @@ func AdminCommissionOverview(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"platform": gin.H{
-				"total_consumption_quota": platformConsumption,
-				"total_consumption_usd":   common.QuotaToUSD(platformConsumption),
-				"request_count":           platformStat.Rpm,
-				"token_count":             platformStat.Tpm,
-				"est_cost_quota":          platformCostQuota,
-				"est_cost_usd":            common.QuotaToUSD(platformCostQuota),
-				"est_profit_quota":        platformProfitQuota,
-				"est_profit_usd":          common.QuotaToUSD(platformProfitQuota),
-				"est_gross_margin":        platformGrossMargin,
+				"total_consumption_quota":  platformConsumption,
+				"total_consumption_usd":    common.QuotaToUSD(platformConsumption),
+				"request_count":            costTotals.RecordCount,
+				"est_cost_quota":           platformCostQuota,
+				"est_cost_usd":             common.QuotaToUSD(platformCostQuota),
+				"est_profit_quota":         platformProfitQuota,
+				"est_profit_usd":           common.QuotaToUSD(platformProfitQuota),
+				"est_gross_margin":         platformGrossMargin,
+				"profitable_channel_count": profitableChannelCount,
+				"loss_channel_count":       lossChannelCount,
 			},
 			"commission": gin.H{
 				"total_revenue_quota":    totals.TotalRevenue,
@@ -476,9 +524,7 @@ func AdminCommissionOverview(c *gin.Context) {
 				"total_commission_usd":   common.QuotaToUSD(totals.TotalCommission),
 			},
 			"by_employee":         empItems,
-			"by_channel":          byChannel,
 			"by_channel_platform": channelProfit,
-			"by_day":              byDay,
 		},
 	})
 }
@@ -794,6 +840,54 @@ func GetMyCommissionSummary(c *gin.Context) {
 			"customer_total_consumption_usd":   common.QuotaToUSD(totals.TotalRevenue),
 		},
 	})
+}
+
+// AdminAssignCustomerToEmployee POST /api/admin/employee/:id/assign-customer
+// 将某个用户的 inviter_id 改为该员工的 user_id，完成客户分配。
+func AdminAssignCustomerToEmployee(c *gin.Context) {
+	employeeId, _ := strconv.Atoi(c.Param("id"))
+	if employeeId <= 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
+		return
+	}
+
+	var req struct {
+		UserId int `json:"user_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	emp, err := model.GetEmployeeById(employeeId)
+	if err != nil || emp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
+		return
+	}
+	if emp.Status != 1 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee is disabled"})
+		return
+	}
+	if emp.UserId == req.UserId {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "cannot assign employee to themselves"})
+		return
+	}
+
+	customerUser, err := model.GetUserById(req.UserId, false)
+	if err != nil || customerUser == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user not found"})
+		return
+	}
+	if customerUser.Role != common.RoleCommonUser || customerUser.Status != common.UserStatusEnabled {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user must be an enabled common user"})
+		return
+	}
+
+	if err := model.UpdateUserInviterId(req.UserId, emp.UserId); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // maskUserId 将用户 ID 脱敏为 #XXXX 格式

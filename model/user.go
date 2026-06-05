@@ -53,6 +53,10 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+
+	// 非持久化：仅在用户搜索（分配客户场景）中填充
+	IsAssignedCustomer   bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
+	AssignedEmployeeName string `json:"assigned_employee_name,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -290,6 +294,41 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 		return nil, 0, err
 	}
 
+	// 填充客户分配信息（非持久化字段）
+	if len(users) > 0 {
+		userIds := make([]int, 0, len(users))
+		for _, u := range users {
+			userIds = append(userIds, u.Id)
+		}
+		type cpRow struct {
+			CustomerUserId      int
+			EmployeeUsername    string
+			EmployeeDisplayName string
+		}
+		var cpRows []cpRow
+		_ = DB.Table("customer_profiles").
+			Select("customer_profiles.customer_user_id, u.username as employee_username, u.display_name as employee_display_name").
+			Joins("JOIN users u ON u.id = customer_profiles.employee_user_id").
+			Where("customer_profiles.customer_user_id IN ?", userIds).
+			Scan(&cpRows).Error
+		if len(cpRows) > 0 {
+			cpMap := make(map[int]cpRow, len(cpRows))
+			for _, row := range cpRows {
+				cpMap[row.CustomerUserId] = row
+			}
+			for _, u := range users {
+				if row, ok := cpMap[u.Id]; ok {
+					u.IsAssignedCustomer = true
+					if row.EmployeeDisplayName != "" {
+						u.AssignedEmployeeName = row.EmployeeDisplayName
+					} else {
+						u.AssignedEmployeeName = row.EmployeeUsername
+					}
+				}
+			}
+		}
+	}
+
 	return users, total, nil
 }
 
@@ -305,6 +344,23 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 		err = DB.Omit("password").First(&user, "id = ?", id).Error
 	}
 	return &user, err
+}
+
+// GetUsersByIds 批量查询用户（只取 id/username/display_name），返回 id→User 映射。
+func GetUsersByIds(ids []int) (map[int]*User, error) {
+	if len(ids) == 0 {
+		return map[int]*User{}, nil
+	}
+	var users []*User
+	err := DB.Select("id, username, display_name").Where("id IN ?", ids).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]*User, len(users))
+	for _, u := range users {
+		result[u.Id] = u
+	}
+	return result, nil
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {
@@ -824,6 +880,11 @@ func GetUserInviterId(userId int) int {
 	var inviterId int
 	DB.Model(&User{}).Where("id = ?", userId).Select("inviter_id").Scan(&inviterId)
 	return inviterId
+}
+
+// UpdateUserInviterId 修改指定用户的 inviter_id 字段。
+func UpdateUserInviterId(userId, inviterId int) error {
+	return DB.Model(&User{}).Where("id = ?", userId).Update("inviter_id", inviterId).Error
 }
 
 func GetUserEmail(id int) (email string, err error) {

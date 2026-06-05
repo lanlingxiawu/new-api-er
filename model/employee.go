@@ -480,6 +480,25 @@ func GetCommissionStatsByEmployee(startTime, endTime int64) ([]*CommissionEmploy
 	return items, err
 }
 
+// GetCommissionStatsByEmployeeIds 仅汇总指定员工 ID 的提成统计，用于分页列表只查当前页数据。
+func GetCommissionStatsByEmployeeIds(employeeUserIds []int) ([]*CommissionEmployeeStat, error) {
+	var items []*CommissionEmployeeStat
+	tx := DB.Model(&EmployeeCommissionLog{}).
+		Select("employee_user_id, " +
+			"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
+			"COALESCE(SUM(cost_quota),0) as total_cost, " +
+			"COALESCE(SUM(profit_quota),0) as total_profit, " +
+			"COALESCE(SUM(commission_quota),0) as total_commission, " +
+			"COUNT(*) as record_count").
+		Group("employee_user_id").
+		Order("total_commission DESC")
+	if len(employeeUserIds) > 0 {
+		tx = tx.Where("employee_user_id IN ?", employeeUserIds)
+	}
+	err := tx.Scan(&items).Error
+	return items, err
+}
+
 // CommissionChannelStat 按渠道汇总。
 type CommissionChannelStat struct {
 	ChannelId    int    `json:"channel_id"`
@@ -517,44 +536,39 @@ type CommissionDailyStat struct {
 
 // GetCommissionStatsByDay 按天汇总。
 //
-// 为保证 SQLite/MySQL/PostgreSQL 三库一致，不使用各库差异化的日期函数，
-// 改为只取必要列后在 Go 侧按 UTC 自然日聚合。
+// 使用 FLOOR(created_at / 86400) 做 UTC 自然日分组，避免全量扫描后在 Go 侧聚合。
+// FLOOR 是 SQLite/MySQL/PostgreSQL 均支持的数学函数，不依赖差异化日期函数。
 func GetCommissionStatsByDay(startTime, endTime int64) ([]*CommissionDailyStat, error) {
-	type row struct {
-		CreatedAt       int64
-		RevenueQuota    int64
-		CostQuota       int64
-		ProfitQuota     int64
-		CommissionQuota int64
+	type dayRow struct {
+		DayBucket       int64
+		TotalRevenue    int64
+		TotalCost       int64
+		TotalProfit     int64
+		TotalCommission int64
 	}
-	var rows []row
+	var rows []dayRow
 	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("created_at, revenue_quota, cost_quota, profit_quota, commission_quota").
-		Order("created_at ASC")
+		Select("FLOOR(created_at / 86400) as day_bucket, " +
+			"COALESCE(SUM(revenue_quota), 0) as total_revenue, " +
+			"COALESCE(SUM(cost_quota), 0) as total_cost, " +
+			"COALESCE(SUM(profit_quota), 0) as total_profit, " +
+			"COALESCE(SUM(commission_quota), 0) as total_commission").
+		Group("FLOOR(created_at / 86400)").
+		Order("day_bucket ASC")
 	tx = applyCommissionTimeRange(tx, startTime, endTime)
 	if err := tx.Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 
-	bucket := make(map[string]*CommissionDailyStat)
-	order := make([]string, 0)
+	result := make([]*CommissionDailyStat, 0, len(rows))
 	for _, r := range rows {
-		day := time.Unix(r.CreatedAt, 0).UTC().Format("2006-01-02")
-		stat, ok := bucket[day]
-		if !ok {
-			stat = &CommissionDailyStat{Date: day}
-			bucket[day] = stat
-			order = append(order, day)
-		}
-		stat.TotalRevenue += r.RevenueQuota
-		stat.TotalCost += r.CostQuota
-		stat.TotalProfit += r.ProfitQuota
-		stat.TotalCommission += r.CommissionQuota
-	}
-
-	result := make([]*CommissionDailyStat, 0, len(order))
-	for _, day := range order {
-		result = append(result, bucket[day])
+		result = append(result, &CommissionDailyStat{
+			Date:            time.Unix(r.DayBucket*86400, 0).UTC().Format("2006-01-02"),
+			TotalRevenue:    r.TotalRevenue,
+			TotalCost:       r.TotalCost,
+			TotalProfit:     r.TotalProfit,
+			TotalCommission: r.TotalCommission,
+		})
 	}
 	return result, nil
 }

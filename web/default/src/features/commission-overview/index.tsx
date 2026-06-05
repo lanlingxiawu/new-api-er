@@ -10,11 +10,16 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import {
   TrendingUp,
+  TrendingDown,
   DollarSign,
   Wallet,
   PiggyBank,
   BadgeDollarSign,
   Percent,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+  RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getEndOfDay, getStartOfDay } from '@/lib/time'
@@ -149,6 +154,35 @@ function StatCard({
   )
 }
 
+function SortableHead({
+  children,
+  sortKey,
+  currentSort,
+  onSort,
+}: {
+  children: ReactNode
+  sortKey: string
+  currentSort: { key: string; dir: 'asc' | 'desc' } | null
+  onSort: (key: string) => void
+}) {
+  const isActive = currentSort?.key === sortKey
+  return (
+    <button
+      className='flex items-center gap-1 hover:text-foreground transition-colors'
+      onClick={() => onSort(sortKey)}
+    >
+      {children}
+      {isActive && currentSort!.dir === 'desc' ? (
+        <ArrowDown className='size-3' />
+      ) : isActive && currentSort!.dir === 'asc' ? (
+        <ArrowUp className='size-3' />
+      ) : (
+        <ArrowUpDown className='size-3 opacity-40' />
+      )}
+    </button>
+  )
+}
+
 function StatPanel({
   children,
   columnsClassName,
@@ -216,6 +250,11 @@ export function CommissionOverview() {
     useState(TABLE_INITIAL_ROWS)
   const [visibleEmployeeRows, setVisibleEmployeeRows] =
     useState(TABLE_INITIAL_ROWS)
+  const [channelFilter, setChannelFilter] = useState('')
+  const [channelSort, setChannelSort] = useState<{
+    key: string
+    dir: 'asc' | 'desc'
+  } | null>(null)
 
   const selectedRange = useMemo(() => {
     if (range === 'custom') return customRange
@@ -230,7 +269,7 @@ export function CommissionOverview() {
     [selectedRange.end]
   )
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: [
       'commission-overview',
       range,
@@ -270,27 +309,67 @@ export function CommissionOverview() {
     () => (d?.by_employee ?? []).slice(0, 10),
     [d?.by_employee]
   )
+  const filteredChannelRows = useMemo(() => {
+    let rows = channelPlatformRows
+    const kw = channelFilter.trim().toLowerCase()
+    if (kw) {
+      rows = rows.filter(
+        (r) =>
+          (r.channel_name ?? '').toLowerCase().includes(kw) ||
+          String(r.channel_id).includes(kw),
+      )
+    }
+    if (channelSort) {
+      const { key, dir } = channelSort
+      rows = [...rows].sort((a, b) => {
+        const av = (a as Record<string, unknown>)[key]
+        const bv = (b as Record<string, unknown>)[key]
+        if (typeof av === 'string' || typeof bv === 'string') {
+          return dir === 'asc'
+            ? String(av ?? '').localeCompare(String(bv ?? ''))
+            : String(bv ?? '').localeCompare(String(av ?? ''))
+        }
+        return dir === 'asc'
+          ? Number(av ?? 0) - Number(bv ?? 0)
+          : Number(bv ?? 0) - Number(av ?? 0)
+      })
+    }
+    return rows
+  }, [channelPlatformRows, channelFilter, channelSort])
   const displayedChannelRows = useMemo(
-    () => channelPlatformRows.slice(0, visibleChannelRows),
-    [channelPlatformRows, visibleChannelRows]
+    () => filteredChannelRows.slice(0, visibleChannelRows),
+    [filteredChannelRows, visibleChannelRows]
   )
   const displayedEmployeeRows = useMemo(
     () => employeeRows.slice(0, visibleEmployeeRows),
     [employeeRows, visibleEmployeeRows]
   )
-  const hasMoreChannelRows = visibleChannelRows < channelPlatformRows.length
+  const hasMoreChannelRows = visibleChannelRows < filteredChannelRows.length
   const hasMoreEmployeeRows = visibleEmployeeRows < employeeRows.length
 
   useEffect(() => {
     setVisibleChannelRows(TABLE_INITIAL_ROWS)
+  }, [filteredChannelRows])
+
+  useEffect(() => {
     setVisibleEmployeeRows(TABLE_INITIAL_ROWS)
-  }, [channelPlatformRows, employeeRows])
+  }, [employeeRows])
+
+  const toggleChannelSort = useCallback((key: string) => {
+    setChannelSort((prev) =>
+      prev?.key === key
+        ? prev.dir === 'desc'
+          ? { key, dir: 'asc' }
+          : null
+        : { key, dir: 'desc' },
+    )
+  }, [])
 
   const loadMoreChannelRows = useCallback(() => {
     setVisibleChannelRows((current) =>
-      Math.min(current + TABLE_LOAD_STEP, channelPlatformRows.length)
+      Math.min(current + TABLE_LOAD_STEP, filteredChannelRows.length)
     )
-  }, [channelPlatformRows.length])
+  }, [filteredChannelRows.length])
 
   const loadMoreEmployeeRows = useCallback(() => {
     setVisibleEmployeeRows((current) =>
@@ -324,6 +403,15 @@ export function CommissionOverview() {
                 onChange={handleCustomRangeChange}
               />
             </div>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => refetch()}
+              disabled={isFetching}
+              title={t('Refresh')}
+            >
+              <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+            </Button>
           </div>
 
           <div className='min-h-0 flex-1 space-y-6 overflow-y-auto pr-1'>
@@ -377,11 +465,30 @@ export function CommissionOverview() {
                       value={String(platform?.request_count ?? 0)}
                       icon={TrendingUp}
                     />
-                    <StatCard
-                      title={t('Tokens')}
-                      value={String(platform?.token_count ?? 0)}
-                      icon={DollarSign}
-                    />
+                    <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4 grid grid-cols-2 divide-x divide-border/60'>
+                      <div className='pr-3'>
+                        <div className='flex items-center gap-2'>
+                          <TrendingUp className='text-muted-foreground/60 size-3.5 shrink-0' />
+                          <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+                            {t('Profitable Channels')}
+                          </div>
+                        </div>
+                        <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+                          {String(platform?.profitable_channel_count ?? 0)}
+                        </div>
+                      </div>
+                      <div className='pl-3'>
+                        <div className='flex items-center gap-2'>
+                          <TrendingDown className='text-muted-foreground/60 size-3.5 shrink-0' />
+                          <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+                            {t('Loss Channels')}
+                          </div>
+                        </div>
+                        <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+                          {String(platform?.loss_channel_count ?? 0)}
+                        </div>
+                      </div>
+                    </div>
                   </StatPanel>
                 </div>
 
@@ -391,23 +498,66 @@ export function CommissionOverview() {
                     'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
                   )}
                 >
+                  <div className='mb-2 flex items-center gap-2'>
+                    <input
+                      type='text'
+                      value={channelFilter}
+                      onChange={(e) => setChannelFilter(e.target.value)}
+                      placeholder={t('Filter channels...')}
+                      className='h-7 w-44 rounded-md border border-input bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring'
+                    />
+                    {channelFilter && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => setChannelFilter('')}
+                        className='h-7 px-2 text-xs'
+                      >
+                        {t('Clear')}
+                      </Button>
+                    )}
+                  </div>
                   <ScrollTable
                     hasMore={hasMoreChannelRows}
                     onLoadMore={loadMoreChannelRows}
                   >
-                    <Table>
+                    <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
-                          <TableHead>{t('Channel')}</TableHead>
-                          <TableHead>{t('Cost Ratio')}</TableHead>
-                          <TableHead>{t('Total Consumption')}</TableHead>
-                          <TableHead>{t('Cost')}</TableHead>
-                          <TableHead>{t('Profit')}</TableHead>
-                          <TableHead>{t('Gross Margin')}</TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='channel_name' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Channel')}
+                            </SortableHead>
+                          </TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='cost_ratio' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Cost Ratio')}
+                            </SortableHead>
+                          </TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='consumption_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Total Consumption')}
+                            </SortableHead>
+                          </TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='est_cost_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Cost')}
+                            </SortableHead>
+                          </TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='est_profit_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Profit')}
+                            </SortableHead>
+                          </TableHead>
+                          <TableHead>
+                            <SortableHead sortKey='est_gross_margin' currentSort={channelSort} onSort={toggleChannelSort}>
+                              {t('Gross Margin')}
+                            </SortableHead>
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {channelPlatformRows.length === 0 && (
+                        {filteredChannelRows.length === 0 && (
                           <TableRow>
                             <TableCell
                               colSpan={6}
@@ -498,7 +648,7 @@ export function CommissionOverview() {
                     hasMore={hasMoreEmployeeRows}
                     onLoadMore={loadMoreEmployeeRows}
                   >
-                    <Table>
+                    <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
                           <TableHead>{t('Employee')}</TableHead>

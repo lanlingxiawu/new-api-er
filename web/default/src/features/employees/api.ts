@@ -171,3 +171,11 @@ export async function deleteChannelCost(
   const res = await api.delete(`/api/admin/channel/cost/${channelId}`)
   return res.data
 }
+
+export async function assignCustomerToEmployee(
+  employeeId: number,
+  userId: number
+): Promise<ApiResponse> {
+  const res = await api.post(`/api/admin/employee/${employeeId}/assign-customer`, { user_id: userId })
+  return res.data
+}

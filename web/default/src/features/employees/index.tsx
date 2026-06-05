@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   type ColumnDef,
   type PaginationState,
@@ -8,8 +12,9 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Pencil, PlusIcon, Trash2 } from 'lucide-react'
+import { Pencil, PlusIcon, Trash2, UserRoundPlus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -46,7 +51,9 @@ import {
   formatBusinessTargetAmount,
 } from '@/features/business/format'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { searchUsers } from '@/features/users/api'
 import {
+  assignCustomerToEmployee,
   createEmployeeTier,
   deleteEmployee,
   deleteEmployeeTier,
@@ -57,6 +64,256 @@ import {
 } from './api'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
 import type { CommissionLog, EmployeeProfile, EmployeeTier } from './types'
+
+const ASSIGN_USER_PICKER_PAGE_SIZE = 20
+
+function AssignUserPicker({
+  value,
+  onSelect,
+}: {
+  value?: number
+  onSelect: (id: number) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [keyword, setKeyword] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [selectedLabel, setSelectedLabel] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!value) setSelectedLabel('')
+  }, [value])
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const { data, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage } =
+    useInfiniteQuery({
+      queryKey: ['assign-customer-user-search', debounced],
+      queryFn: ({ pageParam }) =>
+        searchUsers({
+          keyword: debounced,
+          exclude_employee: true,
+          p: Number(pageParam),
+          page_size: ASSIGN_USER_PICKER_PAGE_SIZE,
+        }),
+      initialPageParam: 1,
+      getNextPageParam: (lastPage) => {
+        const page = lastPage.data?.page ?? 1
+        const pageSize =
+          lastPage.data?.page_size ?? ASSIGN_USER_PICKER_PAGE_SIZE
+        const total = lastPage.data?.total ?? 0
+        return page * pageSize < total ? page + 1 : undefined
+      },
+      enabled: open,
+    })
+  const users = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+  const isInitialFetching = isFetching && !data
+
+  const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
+    const list = event.currentTarget
+    const distanceToBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    if (distanceToBottom > 48 || !hasNextPage || isFetchingNextPage) return
+    void fetchNextPage()
+  }
+
+  return (
+    <div ref={containerRef} className='relative'>
+      <Input
+        type='text'
+        autoComplete='off'
+        placeholder={t('Search username / display name / email')}
+        value={open ? keyword : selectedLabel}
+        onChange={(e) => {
+          setKeyword(e.target.value)
+          if (!open) setOpen(true)
+        }}
+        onFocus={() => {
+          setKeyword('')
+          setOpen(true)
+        }}
+      />
+      {open && (
+        <div className='bg-muted/20 mt-2 overflow-hidden rounded-lg border'>
+          <ul
+            onScroll={handleListScroll}
+            className='max-h-56 overflow-y-auto p-1'
+          >
+            {isInitialFetching ? (
+              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
+                {t('Loading...')}
+              </li>
+            ) : users.length === 0 ? (
+              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
+                {t('No users found')}
+              </li>
+            ) : (
+              <>
+                {users.map((user) => (
+                  <li
+                    key={user.id}
+                    role='option'
+                    aria-selected={value === user.id}
+                    className={cn(
+                      'hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors',
+                      user.is_assigned_customer &&
+                        'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50'
+                    )}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      const label = `${user.username}${user.display_name ? ` (${user.display_name})` : ''} #${user.id}`
+                      setSelectedLabel(label)
+                      onSelect(user.id)
+                      setOpen(false)
+                    }}
+                  >
+                    <div className='flex min-w-0 items-center justify-between gap-3'>
+                      <span className='truncate font-medium'>
+                        {user.username}
+                        {user.display_name ? ` (${user.display_name})` : ''}
+                      </span>
+                      <div className='flex shrink-0 items-center gap-1.5'>
+                        {user.is_assigned_customer ? (
+                          <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
+                            {t('Assigned')}
+                          </span>
+                        ) : null}
+                        <span className='text-muted-foreground text-xs'>
+                          #{user.id}
+                        </span>
+                      </div>
+                    </div>
+                    {user.is_assigned_customer ? (
+                      <div className='mt-0.5 truncate text-xs text-amber-600 dark:text-amber-400'>
+                        {user.assigned_employee_name
+                          ? `${t('Assigned to')}: ${user.assigned_employee_name}`
+                          : t('Assigned to another employee')}
+                      </div>
+                    ) : user.email ? (
+                      <div className='text-muted-foreground mt-0.5 truncate text-xs'>
+                        {user.email}
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+                {isFetchingNextPage && (
+                  <li className='text-muted-foreground px-3 py-3 text-center text-sm'>
+                    {t('Loading...')}
+                  </li>
+                )}
+              </>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AssignCustomerDialog({
+  open,
+  employee,
+  onOpenChange,
+  onSuccess,
+}: {
+  open: boolean
+  employee?: EmployeeProfile
+  onOpenChange: (open: boolean) => void
+  onSuccess: () => void
+}) {
+  const { t } = useTranslation()
+  const [userId, setUserId] = useState<number | undefined>()
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) setUserId(undefined)
+  }, [open])
+
+  const submit = async () => {
+    if (!employee || !userId) {
+      toast.error(t('Please select a user'))
+      return
+    }
+    setSaving(true)
+    try {
+      const res = await assignCustomerToEmployee(employee.id, userId)
+      if (!res.success) throw new Error(res.message)
+      toast.success(t('Customer assigned successfully'))
+      onOpenChange(false)
+      onSuccess()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : t('Operation failed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className='max-h-[86vh] overflow-y-auto sm:max-w-[520px]'
+        initialFocus={false}
+      >
+        <DialogHeader>
+          <DialogTitle>{t('Assign Customer')}</DialogTitle>
+        </DialogHeader>
+        <div className='space-y-4'>
+          <div className='bg-muted/30 rounded-lg border px-3 py-2'>
+            <div className='text-muted-foreground text-xs'>{t('Employee')}</div>
+            <div className='mt-1 flex min-w-0 items-center gap-2'>
+              <span className='truncate font-medium'>
+                {employee?.username || `#${employee?.user_id}`}
+              </span>
+              {employee?.display_name ? (
+                <span className='text-muted-foreground truncate text-sm'>
+                  {employee.display_name}
+                </span>
+              ) : null}
+              <Badge variant='outline' className='ml-auto shrink-0'>
+                #{employee?.user_id}
+              </Badge>
+            </div>
+          </div>
+          <div className='space-y-2'>
+            <label className='text-sm font-medium'>{t('Customer')}</label>
+            <AssignUserPicker value={userId} onSelect={setUserId} />
+          </div>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              "This will set the user's inviter to this employee, so their consumption generates commission."
+            )}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant='outline' onClick={() => onOpenChange(false)}>
+            {t('Cancel')}
+          </Button>
+          <Button disabled={saving || !userId} onClick={submit}>
+            {saving ? t('Saving...') : t('Confirm')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function formatTs(ts: number) {
   if (!ts) return '-'
@@ -90,26 +347,21 @@ function StatusBadge({ status }: { status: number }) {
 function useEmployeesColumns({
   onEdit,
   onDelete,
+  onAssign,
 }: {
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
+  onAssign: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
   return useMemo(
     (): ColumnDef<EmployeeProfile>[] => [
       {
-        accessorKey: 'id',
-        meta: { label: t('ID'), mobileHidden: true },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('ID')} />
-        ),
-      },
-      {
         accessorKey: 'user_id',
-        meta: { label: t('User ID') },
+        meta: { label: t('Employee ID') },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('User ID')} />
+          <DataTableColumnHeader column={column} title={t('Employee ID')} />
         ),
       },
       {
@@ -128,6 +380,14 @@ function useEmployeesColumns({
             ) : null}
           </div>
         ),
+      },
+      {
+        accessorKey: 'customer_count',
+        meta: { label: t('Customer Count'), mobileBadge: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Customer Count')} />
+        ),
+        cell: ({ row }) => row.original.customer_count ?? 0,
       },
       {
         accessorKey: 'total_consumption_quota',
@@ -226,7 +486,7 @@ function useEmployeesColumns({
           />
         ),
         cell: ({ row }) => (
-          <div className='min-w-[150px]'>
+          <div className='min-w-[110px]'>
             <div>
               {formatBusinessAmount(
                 row.original.current_performance_quota ?? 0
@@ -269,6 +529,14 @@ function useEmployeesColumns({
             <Button
               size='icon'
               variant='ghost'
+              title={t('Assign Customer')}
+              onClick={() => onAssign(row.original)}
+            >
+              <UserRoundPlus className='h-4 w-4' />
+            </Button>
+            <Button
+              size='icon'
+              variant='ghost'
               onClick={() => onEdit(row.original)}
             >
               <Pencil className='h-4 w-4' />
@@ -284,7 +552,7 @@ function useEmployeesColumns({
         ),
       },
     ],
-    [onDelete, onEdit, t]
+    [onAssign, onDelete, onEdit, t]
   )
 }
 
@@ -391,6 +659,7 @@ function EmployeesTab() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<EmployeeProfile | undefined>()
   const [deleteRow, setDeleteRow] = useState<EmployeeProfile | undefined>()
+  const [assignRow, setAssignRow] = useState<EmployeeProfile | undefined>()
   const [filterForm, setFilterForm] = useState({
     userId: '',
     keyword: '',
@@ -409,6 +678,7 @@ function EmployeesTab() {
   const columns = useEmployeesColumns({
     onEdit: setEditRow,
     onDelete: setDeleteRow,
+    onAssign: setAssignRow,
   })
 
   const { data, isLoading } = useQuery({
@@ -571,6 +841,12 @@ function EmployeesTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AssignCustomerDialog
+        open={!!assignRow}
+        employee={assignRow}
+        onOpenChange={(open) => !open && setAssignRow(undefined)}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
+      />
     </>
   )
 }

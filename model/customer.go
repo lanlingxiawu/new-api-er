@@ -59,7 +59,8 @@ func GetInvitedCustomersByEmployee(employeeUserId, page, pageSize int) ([]*User,
 	offset := (page - 1) * pageSize
 
 	tx := DB.Model(&User{}).
-		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser)
+		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id"))
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -150,12 +151,58 @@ func GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds []int) (map[int]int64
 	if err := DB.Model(&User{}).
 		Select("inviter_id as employee_user_id, id as customer_user_id, used_quota").
 		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id")).
 		Scan(&invitedRows).Error; err != nil {
 		return nil, err
 	}
 	addRows(invitedRows, seen)
 
 	return totals, nil
+}
+
+func GetCustomerCountsByEmployees(employeeUserIds []int) (map[int]int, error) {
+	counts := make(map[int]int, len(employeeUserIds))
+	if len(employeeUserIds) == 0 {
+		return counts, nil
+	}
+
+	type customerOwnerRow struct {
+		EmployeeUserId int
+		CustomerUserId int
+	}
+
+	addRows := func(rows []customerOwnerRow, seen map[string]struct{}) {
+		for _, row := range rows {
+			key := strconv.Itoa(row.EmployeeUserId) + ":" + strconv.Itoa(row.CustomerUserId)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			counts[row.EmployeeUserId]++
+		}
+	}
+
+	seen := make(map[string]struct{})
+	var profileRows []customerOwnerRow
+	if err := DB.Model(&CustomerProfile{}).
+		Select("employee_user_id, customer_user_id").
+		Where("employee_user_id IN ?", employeeUserIds).
+		Scan(&profileRows).Error; err != nil {
+		return nil, err
+	}
+	addRows(profileRows, seen)
+
+	var invitedRows []customerOwnerRow
+	if err := DB.Model(&User{}).
+		Select("inviter_id as employee_user_id, id as customer_user_id").
+		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id")).
+		Scan(&invitedRows).Error; err != nil {
+		return nil, err
+	}
+	addRows(invitedRows, seen)
+
+	return counts, nil
 }
 
 func GetCustomerProfileById(id int) (*CustomerProfile, error) {

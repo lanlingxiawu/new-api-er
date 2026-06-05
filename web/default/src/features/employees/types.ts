@@ -6,6 +6,7 @@ export const employeeProfileSchema = z.object({
   username: z.string().optional(),
   display_name: z.string().optional(),
   email: z.string().optional(),
+  customer_count: z.number().optional(),
   commission_rate: z.number(),
   target_amount: z.number(),
   total_consumption_quota: z.number().optional(),

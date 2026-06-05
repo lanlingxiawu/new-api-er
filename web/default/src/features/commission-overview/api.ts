@@ -4,12 +4,13 @@ export interface PlatformStat {
   total_consumption_quota: number
   total_consumption_usd: number
   request_count: number
-  token_count: number
   est_cost_quota: number
   est_cost_usd: number
   est_profit_quota: number
   est_profit_usd: number
   est_gross_margin: number
+  profitable_channel_count: number
+  loss_channel_count: number
 }
 
 export interface CommissionTotals {
