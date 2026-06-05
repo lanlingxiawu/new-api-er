@@ -52,12 +52,19 @@ export async function getMyEmployeeProfile(): Promise<MyProfileResponse> {
 export async function getMyCommissionLogs(params: {
   page?: number
   page_size?: number
+  customer_user_id?: number
+  model_name?: string
+  channel_id?: number
   start_time?: number
   end_time?: number
 }): Promise<MyLogsResponse> {
   const q = new URLSearchParams()
   if (params.page) q.set('page', String(params.page))
   if (params.page_size) q.set('page_size', String(params.page_size))
+  if (params.customer_user_id)
+    q.set('customer_user_id', String(params.customer_user_id))
+  if (params.model_name) q.set('model_name', params.model_name)
+  if (params.channel_id) q.set('channel_id', String(params.channel_id))
   if (params.start_time) q.set('start_time', String(params.start_time))
   if (params.end_time) q.set('end_time', String(params.end_time))
   const res = await api.get(`/api/user/employee/commission?${q.toString()}`)

@@ -6,7 +6,7 @@ import type {
   PagedResponse,
 } from './types'
 
-const buildQuery = (params: Record<string, number | undefined>) => {
+const buildQuery = (params: Record<string, number | string | undefined>) => {
   const q = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
     if (value) q.set(key, String(value))
@@ -81,6 +81,9 @@ export async function createMyCustomer(data: {
 export async function getMyCustomers(params: {
   page?: number
   page_size?: number
+  customer_user_id?: number
+  keyword?: string
+  status?: number
 }): Promise<PagedResponse<CustomerProfile>> {
   const res = await api.get(
     `/api/user/employee/customers?${buildQuery(params)}`

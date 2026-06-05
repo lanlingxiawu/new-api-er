@@ -55,8 +55,9 @@ type User struct {
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 
 	// 非持久化：仅在用户搜索（分配客户场景）中填充
-	IsAssignedCustomer   bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
-	AssignedEmployeeName string `json:"assigned_employee_name,omitempty" gorm:"-:all"`
+	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
+	AssignedEmployeeUserId int    `json:"assigned_employee_user_id,omitempty" gorm:"-:all"`
+	AssignedEmployeeName   string `json:"assigned_employee_name,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -295,35 +296,53 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	}
 
 	// 填充客户分配信息（非持久化字段）
+	// 检查两个来源：customer_profiles 表（显式绑定）以及 inviter_id 指向活跃员工（邀请码注册）
 	if len(users) > 0 {
 		userIds := make([]int, 0, len(users))
 		for _, u := range users {
 			userIds = append(userIds, u.Id)
 		}
-		type cpRow struct {
+		type assignRow struct {
 			CustomerUserId      int
+			EmployeeUserId      int
 			EmployeeUsername    string
 			EmployeeDisplayName string
 		}
-		var cpRows []cpRow
+		assignMap := make(map[int]assignRow)
+
+		// 来源一：customer_profiles 表
+		var cpRows []assignRow
 		_ = DB.Table("customer_profiles").
-			Select("customer_profiles.customer_user_id, u.username as employee_username, u.display_name as employee_display_name").
+			Select("customer_profiles.customer_user_id, customer_profiles.employee_user_id, u.username as employee_username, u.display_name as employee_display_name").
 			Joins("JOIN users u ON u.id = customer_profiles.employee_user_id").
 			Where("customer_profiles.customer_user_id IN ?", userIds).
 			Scan(&cpRows).Error
-		if len(cpRows) > 0 {
-			cpMap := make(map[int]cpRow, len(cpRows))
-			for _, row := range cpRows {
-				cpMap[row.CustomerUserId] = row
+		for _, row := range cpRows {
+			assignMap[row.CustomerUserId] = row
+		}
+
+		// 来源二：inviter_id 指向启用状态员工（通过邀请码注册且尚无 customer_profiles 记录）
+		var inviterRows []assignRow
+		_ = DB.Table("users AS cu").
+			Select("cu.id as customer_user_id, eu.id as employee_user_id, eu.username as employee_username, eu.display_name as employee_display_name").
+			Joins("JOIN users eu ON eu.id = cu.inviter_id").
+			Joins("JOIN employee_profiles ep ON ep.user_id = cu.inviter_id AND ep.status = 1").
+			Where("cu.id IN ? AND cu.inviter_id IS NOT NULL AND cu.inviter_id != 0", userIds).
+			Scan(&inviterRows).Error
+		for _, row := range inviterRows {
+			if _, exists := assignMap[row.CustomerUserId]; !exists {
+				assignMap[row.CustomerUserId] = row
 			}
-			for _, u := range users {
-				if row, ok := cpMap[u.Id]; ok {
-					u.IsAssignedCustomer = true
-					if row.EmployeeDisplayName != "" {
-						u.AssignedEmployeeName = row.EmployeeDisplayName
-					} else {
-						u.AssignedEmployeeName = row.EmployeeUsername
-					}
+		}
+
+		for _, u := range users {
+			if row, ok := assignMap[u.Id]; ok {
+				u.IsAssignedCustomer = true
+				u.AssignedEmployeeUserId = row.EmployeeUserId
+				if row.EmployeeDisplayName != "" {
+					u.AssignedEmployeeName = row.EmployeeDisplayName
+				} else {
+					u.AssignedEmployeeName = row.EmployeeUsername
 				}
 			}
 		}
@@ -447,6 +466,9 @@ func (user *User) Insert(inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
+	if inviterId != 0 && user.InviterId == 0 {
+		user.InviterId = inviterId
+	}
 
 	// 初始化用户设置，包括默认的边栏配置
 	if user.Setting == "" {
@@ -508,6 +530,9 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	}
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
+	if inviterId != 0 && user.InviterId == 0 {
+		user.InviterId = inviterId
+	}
 
 	// 初始化用户设置
 	if user.Setting == "" {

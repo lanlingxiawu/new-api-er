@@ -4021,6 +4021,7 @@
     "帮助": "Help",
     "社交": "Social",
     "法律": "Legal",
-    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Limited time: 1:1 recharge bonus, get up to {{$100}} in free credits!"
+    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Limited time: 1:1 recharge bonus, get up to {{$100}} in free credits!",
+    "用户名 / 邮箱 / 备注": "Username / Email / Remark"
   }
 }

@@ -122,11 +122,11 @@ func AdminListEmployees(c *gin.Context) {
 
 	// 并行拉取当前页所需的 5 类附加数据
 	var (
-		profitStats                []*model.CommissionEmployeeStat
+		profitStats                 []*model.CommissionEmployeeStat
 		customerConsumptionByUserId map[int]int64
-		customerCountsByUserId     map[int]int
-		tierLevelsByUserId         map[int]*model.EmployeeTierLevel
-		userMap                    map[int]*model.User
+		customerCountsByUserId      map[int]int
+		tierLevelsByUserId          map[int]*model.EmployeeTierLevel
+		userMap                     map[int]*model.User
 	)
 	eg, _ := errgroup.WithContext(c.Request.Context())
 	eg.Go(func() error {
@@ -766,6 +766,9 @@ func GetMyCommissionLogs(c *gin.Context) {
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
+	channelId, _ := strconv.Atoi(c.Query("channel_id"))
+	modelName := strings.TrimSpace(c.Query("model_name"))
 	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
 	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
 	if page < 1 {
@@ -776,6 +779,9 @@ func GetMyCommissionLogs(c *gin.Context) {
 	}
 	logs, total, err := model.GetCommissionLogs(model.CommissionLogFilter{
 		EmployeeUserId: userId,
+		CustomerUserId: customerUserId,
+		ModelName:      modelName,
+		ChannelId:      channelId,
 		StartTime:      startTime,
 		EndTime:        endTime,
 		Page:           page,
@@ -887,10 +893,57 @@ func AdminAssignCustomerToEmployee(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	// Keep customer_profiles in sync so customer_count is accurate and the
+	// search picker shows the correct "already assigned" state.
+	_ = model.UpsertCustomerProfileEmployee(req.UserId, emp.UserId)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // maskUserId 将用户 ID 脱敏为 #XXXX 格式
+// AdminUnassignCustomerFromEmployee DELETE /api/admin/employee/:id/customer/:user_id
+func AdminUnassignCustomerFromEmployee(c *gin.Context) {
+	employeeId, err := strconv.Atoi(c.Param("id"))
+	if err != nil || employeeId <= 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
+		return
+	}
+	customerUserId, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil || customerUserId <= 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid customer id"})
+		return
+	}
+
+	emp, err := model.GetEmployeeById(employeeId)
+	if err != nil || emp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
+		return
+	}
+	if emp.UserId == customerUserId {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "cannot unassign employee from themselves"})
+		return
+	}
+
+	customerUser, err := model.GetUserById(customerUserId, false)
+	if err != nil || customerUser == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user not found"})
+		return
+	}
+	if customerUser.Role != common.RoleCommonUser {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user must be a common user"})
+		return
+	}
+
+	if err := model.UnassignCustomerFromEmployee(customerUserId, emp.UserId); err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "customer is not assigned to this employee"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 func maskUserId(id int) string {
 	s := strconv.Itoa(id)
 	if len(s) <= 4 {

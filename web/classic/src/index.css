@@ -911,6 +911,49 @@ html.dark .with-pastel-balls::before {
   mix-blend-mode: screen;
 }
 
+/* ==================== 业务页面滚动 ==================== */
+/* 单表业务页保持 table-scroll-card 固定高度和底部分页，仅隐藏页面外壳滚动条 */
+.business-page-shell {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.business-page-shell::-webkit-scrollbar {
+  display: none;
+}
+
+/* 数据看板页由页面外壳接管滚动，避免被控制台 Content 的 overflow:hidden 裁切 */
+.dashboard-page-shell {
+  height: calc(100vh - 108px);
+  height: calc(100dvh - 108px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dashboard-page-shell::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .dashboard-page-shell {
+    height: auto;
+    overflow-y: visible;
+  }
+}
+
+/* 业务概览页使用 Content 滚动，卡片自适应高度 */
+.business-overview-shell > .table-scroll-card {
+  height: auto !important;
+  max-height: none !important;
+}
+
+.business-overview-shell > .table-scroll-card > .semi-card-body {
+  overflow-y: visible !important;
+  flex: 0 0 auto !important;
+}
+
 /* ==================== 表格卡片滚动设置 ==================== */
 .table-scroll-card {
   display: flex;

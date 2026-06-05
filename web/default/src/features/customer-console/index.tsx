@@ -19,6 +19,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { formatBusinessAmount } from '@/features/business/format'
@@ -497,6 +504,16 @@ function MyCustomersTab() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
+  const [filterForm, setFilterForm] = useState({
+    customerUserId: '',
+    keyword: '',
+    status: 'all',
+  })
+  const [filters, setFilters] = useState<{
+    customer_user_id?: number
+    keyword?: string
+    status?: number
+  }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 20,
@@ -506,11 +523,12 @@ function MyCustomersTab() {
   // const [transferRow, setTransferRow] = useState<CustomerProfile | undefined>()
 
   const { data, isLoading } = useQuery({
-    queryKey: ['my-customers', pagination],
+    queryKey: ['my-customers', pagination, filters],
     queryFn: () =>
       getMyCustomers({
         page: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+        ...filters,
       }),
   })
   const customers = data?.data?.items ?? []
@@ -530,6 +548,27 @@ function MyCustomersTab() {
     getPaginationRowModel: getPaginationRowModel(),
   })
 
+  const applyFilters = () => {
+    const customerUserId = Number(filterForm.customerUserId)
+    const status = Number(filterForm.status)
+    setFilters({
+      ...(Number.isFinite(customerUserId) && customerUserId > 0
+        ? { customer_user_id: customerUserId }
+        : {}),
+      ...(filterForm.keyword.trim()
+        ? { keyword: filterForm.keyword.trim() }
+        : {}),
+      ...(Number.isFinite(status) && status > 0 ? { status } : {}),
+    })
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
+
+  const resetFilters = () => {
+    setFilterForm({ customerUserId: '', keyword: '', status: 'all' })
+    setFilters({})
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
+
   return (
     <>
       <DataTablePage
@@ -538,7 +577,52 @@ function MyCustomersTab() {
         isLoading={isLoading}
         emptyTitle={t('No customers yet')}
         toolbar={
-          <div className='flex justify-end'>
+          <div className='flex flex-wrap items-center justify-end gap-2'>
+            <Input
+              type='number'
+              min={1}
+              placeholder={t('Customer UID')}
+              value={filterForm.customerUserId}
+              onChange={(event) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  customerUserId: event.target.value,
+                }))
+              }
+              className='w-[120px]'
+            />
+            <Input
+              placeholder={t('Username / Email / Remark')}
+              value={filterForm.keyword}
+              onChange={(event) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  keyword: event.target.value,
+                }))
+              }
+              className='w-[220px]'
+            />
+            <Select
+              value={filterForm.status}
+              onValueChange={(value) =>
+                setFilterForm((form) => ({ ...form, status: value ?? 'all' }))
+              }
+            >
+              <SelectTrigger size='sm' className='w-[120px]'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value='all'>{t('All Statuses')}</SelectItem>
+                <SelectItem value='1'>{t('Enabled')}</SelectItem>
+                <SelectItem value='2'>{t('Disabled')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button size='sm' variant='outline' onClick={applyFilters}>
+              {t('Search')}
+            </Button>
+            <Button size='sm' variant='outline' onClick={resetFilters}>
+              {t('Reset')}
+            </Button>
             <Button size='sm' onClick={() => setCreateOpen(true)}>
               <PlusIcon data-icon='inline-start' />
               {t('Add Customer')}

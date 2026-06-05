@@ -4405,6 +4405,7 @@
     "帮助": "Trợ giúp",
     "社交": "Mạng xã hội",
     "法律": "Pháp lý",
-    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Có thời hạn: nạp 1:1 tặng thêm, nhận tối đa {{$100}} tín dụng miễn phí!"
+    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Có thời hạn: nạp 1:1 tặng thêm, nhận tối đa {{$100}} tín dụng miễn phí!",
+    "用户名 / 邮箱 / 备注": "Tên người dùng / Email / Ghi chú"
   }
 }

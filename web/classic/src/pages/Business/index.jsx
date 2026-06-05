@@ -62,6 +62,7 @@ import {
   UserRoundPlus,
   Users,
   Wallet,
+  X,
 } from 'lucide-react';
 import { API, renderQuota, showError, showSuccess } from '../../helpers';
 import { getQuotaPerUnit } from '../../helpers/quota';
@@ -488,7 +489,15 @@ async function mutateRequest(method, url, data) {
   return res.data;
 }
 
-function UserPicker({ value, onSelect, excludeEmployee = true }) {
+function UserPicker({
+  value,
+  onSelect,
+  onClear,
+  excludeEmployee = true,
+  employeeId,
+  employeeUserId,
+  onUnassignSuccess,
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -497,6 +506,7 @@ function UserPicker({ value, onSelect, excludeEmployee = true }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [removingUserId, setRemovingUserId] = useState(null);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const containerRef = useRef(null);
@@ -545,13 +555,18 @@ function UserPicker({ value, onSelect, excludeEmployee = true }) {
         const currentPage = Number(data.page || nextPage);
         const pageSize = Number(data.page_size || 20);
         const total = Number(data.total || 0);
+        const sortByAssigned = (arr) =>
+          [...arr].sort((a, b) => {
+            if (a.is_assigned_customer === b.is_assigned_customer) return 0;
+            return a.is_assigned_customer ? 1 : -1;
+          });
         setUsers((prev) => {
-          if (replace) return nextItems;
+          if (replace) return sortByAssigned(nextItems);
           const existingIds = new Set(prev.map((user) => user.id));
-          return [
+          return sortByAssigned([
             ...prev,
             ...nextItems.filter((user) => !existingIds.has(user.id)),
-          ];
+          ]);
         });
         setPage(currentPage);
         setHasMore(currentPage * pageSize < total);
@@ -584,6 +599,34 @@ function UserPicker({ value, onSelect, excludeEmployee = true }) {
     loadUsers(page + 1, false);
   };
 
+  const clearSelection = () => {
+    setSelectedLabel('');
+    setKeyword('');
+    setDebouncedKeyword('');
+    onClear?.();
+  };
+
+  const removeAssignment = async (userId) => {
+    if (!employeeId) return;
+    setRemovingUserId(userId);
+    try {
+      await mutateRequest(
+        'delete',
+        `/api/admin/employee/${employeeId}/customer/${userId}`,
+      );
+      showSuccess(t('删除成功'));
+      if (value === userId) {
+        clearSelection();
+      }
+      await loadUsers(1, true);
+      onUnassignSuccess?.();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setRemovingUserId(null);
+    }
+  };
+
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       <Input
@@ -599,6 +642,24 @@ function UserPicker({ value, onSelect, excludeEmployee = true }) {
           setOpen(true);
         }}
       />
+      {value && !open ? (
+        <Button
+          type='tertiary'
+          theme='borderless'
+          size='small'
+          icon={<X size={14} />}
+          aria-label={t('清空')}
+          title={t('清空')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={clearSelection}
+          style={{
+            position: 'absolute',
+            right: 4,
+            top: 4,
+            zIndex: 1,
+          }}
+        />
+      ) : null}
       {open ? (
         <div
           style={{
@@ -622,54 +683,86 @@ function UserPicker({ value, onSelect, excludeEmployee = true }) {
             </div>
           ) : (
             <>
-              {users.map((user) => (
-                <div
-                  key={user.id}
-                  role='option'
-                  aria-selected={value === user.id}
-                  className='cursor-pointer rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1'
-                  style={{
-                    background: value === user.id
-                      ? 'var(--semi-color-fill-1)'
-                      : user.is_assigned_customer
-                        ? 'var(--semi-color-warning-light-default)'
-                        : undefined,
-                  }}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    const label = `${user.username}${
-                      user.display_name ? ` (${user.display_name})` : ''
-                    } #${user.id}`;
-                    setSelectedLabel(label);
-                    onSelect(user.id);
-                    setOpen(false);
-                  }}
-                >
-                  <div className='flex min-w-0 items-center justify-between gap-3'>
-                    <span className='truncate font-medium'>
-                      {user.username}
-                      {user.display_name ? ` (${user.display_name})` : ''}
-                    </span>
-                    <div className='flex items-center gap-1.5 shrink-0'>
-                      {user.is_assigned_customer ? (
-                        <Tag color='orange' size='small'>{t('已分配')}</Tag>
-                      ) : null}
-                      <span className='text-xs text-semi-color-text-2'>#{user.id}</span>
+              {users.map((user) => {
+                const canRemove =
+                  user.is_assigned_customer &&
+                  user.assigned_employee_user_id === employeeUserId;
+                return (
+                  <div
+                    key={user.id}
+                    role='option'
+                    aria-selected={value === user.id}
+                    className='cursor-pointer rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1'
+                    style={{
+                      background:
+                        value === user.id
+                          ? 'var(--semi-color-fill-1)'
+                          : user.is_assigned_customer
+                            ? 'var(--semi-color-warning-light-default)'
+                            : undefined,
+                    }}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      const label = `${user.username}${
+                        user.display_name ? ` (${user.display_name})` : ''
+                      } #${user.id}`;
+                      setSelectedLabel(label);
+                      onSelect(user.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <div className='flex min-w-0 items-center justify-between gap-3'>
+                      <span className='truncate font-medium'>
+                        {user.username}
+                        {user.display_name ? ` (${user.display_name})` : ''}
+                      </span>
+                      <div className='flex items-center gap-1.5 shrink-0'>
+                        {user.is_assigned_customer ? (
+                          <Tag color='orange' size='small'>
+                            {t('已分配')}
+                          </Tag>
+                        ) : null}
+                        {canRemove ? (
+                          <Button
+                            size='small'
+                            type='tertiary'
+                            theme='light'
+                            loading={removingUserId === user.id}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              removeAssignment(user.id);
+                            }}
+                          >
+                            {t('移除')}
+                          </Button>
+                        ) : null}
+                        <span className='text-xs text-semi-color-text-2'>
+                          #{user.id}
+                        </span>
+                      </div>
                     </div>
+                    {user.is_assigned_customer ? (
+                      <div
+                        className='mt-0.5 truncate text-xs'
+                        style={{ color: 'var(--semi-color-warning)' }}
+                      >
+                        {user.assigned_employee_name
+                          ? `${t('已分配给')}: ${user.assigned_employee_name}`
+                          : t('已分配给其他员工')}
+                      </div>
+                    ) : user.email ? (
+                      <div className='mt-0.5 truncate text-xs text-semi-color-text-2'>
+                        {user.email}
+                      </div>
+                    ) : null}
                   </div>
-                  {user.is_assigned_customer ? (
-                    <div className='mt-0.5 truncate text-xs' style={{ color: 'var(--semi-color-warning)' }}>
-                      {user.assigned_employee_name
-                        ? `${t('已分配给')}: ${user.assigned_employee_name}`
-                        : t('已分配给其他员工')}
-                    </div>
-                  ) : user.email ? (
-                    <div className='mt-0.5 truncate text-xs text-semi-color-text-2'>
-                      {user.email}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+                );
+              })}
               {loadingMore ? (
                 <div className='px-2 py-3 text-center text-sm text-semi-color-text-2'>
                   {t('加载中...')}
@@ -757,7 +850,18 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
         </div>
       </div>
       <Field label={t('客户')}>
-        <UserPicker value={userId} onSelect={setUserId} excludeEmployee />
+        <UserPicker
+          value={userId}
+          onSelect={setUserId}
+          onClear={() => setUserId(null)}
+          excludeEmployee
+          employeeId={row?.id}
+          employeeUserId={row?.user_id}
+          onUnassignSuccess={() => {
+            setUserId(null);
+            onSuccess();
+          }}
+        />
         <Text
           type='secondary'
           size='small'
@@ -1426,20 +1530,22 @@ function CommissionLogsTable({
 
   const content = (
     <>
-      {!selfView && onFiltersChange ? (
+      {onFiltersChange ? (
         <div
           className='mb-3 flex flex-wrap items-center gap-2'
           style={{ rowGap: 8 }}
         >
-          <InputNumber
-            size='small'
-            min={0}
-            hideButtons
-            placeholder={t('员工 UID')}
-            value={filterForm.employee_user_id}
-            onChange={(value) => updateFilter('employee_user_id', value)}
-            style={{ width: 120 }}
-          />
+          {!selfView ? (
+            <InputNumber
+              size='small'
+              min={0}
+              hideButtons
+              placeholder={t('员工 UID')}
+              value={filterForm.employee_user_id}
+              onChange={(value) => updateFilter('employee_user_id', value)}
+              style={{ width: 120 }}
+            />
+          ) : null}
           <InputNumber
             size='small'
             min={0}
@@ -1854,9 +1960,10 @@ export function EmployeeConsole() {
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [commissionLogFilters, setCommissionLogFilters] = useState({});
   const commissionLogs = usePagedEndpoint(
     '/api/user/employee/commission',
-    {},
+    commissionLogFilters,
     {
       enabled: Boolean(profileData?.success && profileData?.data),
     },
@@ -1981,6 +2088,8 @@ export function EmployeeConsole() {
                   endpoint='/api/user/employee/commission'
                   selfView
                   logs={commissionLogs}
+                  filters={commissionLogFilters}
+                  onFiltersChange={setCommissionLogFilters}
                   embedded
                   showInlinePagination={false}
                 />
@@ -2136,9 +2245,41 @@ function MyCustomerEditModal({ visible, row, onCancel, onSuccess }) {
 
 export function CustomerConsole() {
   const { t } = useTranslation();
-  const customers = usePagedEndpoint('/api/user/employee/customers');
+  const [customerFilters, setCustomerFilters] = useState({});
+  const [filterForm, setFilterForm] = useState({
+    customer_user_id: undefined,
+    keyword: '',
+    status: undefined,
+  });
+  const customers = usePagedEndpoint(
+    '/api/user/employee/customers',
+    customerFilters,
+  );
   const [createVisible, setCreateVisible] = useState(false);
   const [editRow, setEditRow] = useState(null);
+
+  const updateFilter = (key, value) => {
+    setFilterForm((form) => ({ ...form, [key]: value }));
+  };
+
+  const applyFilters = () => {
+    setCustomerFilters(
+      buildParams({
+        customer_user_id: toNumber(filterForm.customer_user_id),
+        keyword: filterForm.keyword?.trim(),
+        status: toNumber(filterForm.status),
+      }),
+    );
+  };
+
+  const resetFilters = () => {
+    setFilterForm({
+      customer_user_id: undefined,
+      keyword: '',
+      status: undefined,
+    });
+    setCustomerFilters({});
+  };
 
   const closeAndRefresh = () => {
     setCreateVisible(false);
@@ -2201,14 +2342,48 @@ export function CustomerConsole() {
         icon={UserRoundCheck}
         color='var(--semi-color-primary)'
         actions={
-          <Button
-            type='tertiary'
-            size='small'
-            icon={<Plus size={14} />}
-            onClick={() => setCreateVisible(true)}
-          >
-            {t('添加客户')}
-          </Button>
+          <div className='flex flex-wrap justify-end gap-2'>
+            <InputNumber
+              size='small'
+              min={0}
+              hideButtons
+              placeholder={t('客户 UID')}
+              value={filterForm.customer_user_id}
+              onChange={(value) => updateFilter('customer_user_id', value)}
+              style={{ width: 120 }}
+            />
+            <Input
+              size='small'
+              placeholder={t('用户名 / 邮箱 / 备注')}
+              value={filterForm.keyword}
+              onChange={(value) => updateFilter('keyword', value)}
+              style={{ width: 180 }}
+            />
+            <Select
+              size='small'
+              placeholder={t('全部状态')}
+              value={filterForm.status}
+              onChange={(value) => updateFilter('status', value)}
+              style={{ width: 110 }}
+            >
+              <Select.Option value={1}>{t('启用')}</Select.Option>
+              <Select.Option value={2}>{t('禁用')}</Select.Option>
+            </Select>
+            <Button size='small' type='primary' onClick={applyFilters}>
+              {t('查询')}
+            </Button>
+            <Button size='small' type='tertiary' onClick={resetFilters}>
+              {t('重置')}
+            </Button>
+            <Button
+              type='tertiary'
+              size='small'
+              icon={<Plus size={14} />}
+              onClick={() => setCreateVisible(true)}
+            >
+              {t('添加客户')}
+            </Button>
+          </div>
         }
         pagination={<ClassicPagination paged={customers} t={t} />}
         t={t}
@@ -2392,7 +2567,7 @@ export function BusinessOverview() {
   ];
 
   return (
-    <PageShell>
+    <div className='business-overview-shell mt-[60px] px-2'>
       <BusinessCard
         title={t('业务概览')}
         icon={TrendingUp}
@@ -2495,22 +2670,52 @@ export function BusinessOverview() {
                   bodyStyle={{ padding: 16 }}
                   style={{ height: '100%' }}
                 >
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: 8,
+                    }}
+                  >
                     <div>
                       <div className='flex items-center justify-between gap-3'>
-                        <Text type='secondary' size='small'>{t('盈利渠道')}</Text>
-                        <TrendingUp size={18} color='var(--semi-color-success)' />
+                        <Text type='secondary' size='small'>
+                          {t('盈利渠道')}
+                        </Text>
+                        <TrendingUp
+                          size={18}
+                          color='var(--semi-color-success)'
+                        />
                       </div>
-                      <div className='mt-2 text-2xl font-semibold'>{platform.profitable_channel_count || 0}</div>
-                      <div className='mt-1 text-xs' style={{ minHeight: 16, visibility: 'hidden' }}>-</div>
+                      <div className='mt-2 text-2xl font-semibold'>
+                        {platform.profitable_channel_count || 0}
+                      </div>
+                      <div
+                        className='mt-1 text-xs'
+                        style={{ minHeight: 16, visibility: 'hidden' }}
+                      >
+                        -
+                      </div>
                     </div>
                     <div>
                       <div className='flex items-center justify-between gap-3'>
-                        <Text type='secondary' size='small'>{t('亏损渠道')}</Text>
-                        <TrendingDown size={18} color='var(--semi-color-danger)' />
+                        <Text type='secondary' size='small'>
+                          {t('亏损渠道')}
+                        </Text>
+                        <TrendingDown
+                          size={18}
+                          color='var(--semi-color-danger)'
+                        />
                       </div>
-                      <div className='mt-2 text-2xl font-semibold'>{platform.loss_channel_count || 0}</div>
-                      <div className='mt-1 text-xs' style={{ minHeight: 16, visibility: 'hidden' }}>-</div>
+                      <div className='mt-2 text-2xl font-semibold'>
+                        {platform.loss_channel_count || 0}
+                      </div>
+                      <div
+                        className='mt-1 text-xs'
+                        style={{ minHeight: 16, visibility: 'hidden' }}
+                      >
+                        -
+                      </div>
                     </div>
                   </div>
                 </Card>
@@ -2613,6 +2818,6 @@ export function BusinessOverview() {
           </div>
         </Spin>
       </BusinessCard>
-    </PageShell>
+    </div>
   );
 }

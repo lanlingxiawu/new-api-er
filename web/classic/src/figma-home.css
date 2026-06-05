@@ -1820,7 +1820,13 @@ html.dark .figma-home-header {
 }
 
 .home-logo-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
   min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--semi-color-bg-0);
 }
 
 .app-logo-loading {

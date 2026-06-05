@@ -53,18 +53,45 @@ type CustomerQuotaLog struct {
 	CreatedAt           int64  `json:"created_at" gorm:"autoCreateTime;index"`
 }
 
+type InvitedCustomerFilter struct {
+	EmployeeUserId int
+	CustomerUserId int
+	Keyword        string
+	Status         int
+	Page           int
+	PageSize       int
+}
+
 func GetInvitedCustomersByEmployee(employeeUserId, page, pageSize int) ([]*User, int64, error) {
+	return GetInvitedCustomersByEmployeeWithFilter(InvitedCustomerFilter{
+		EmployeeUserId: employeeUserId,
+		Page:           page,
+		PageSize:       pageSize,
+	})
+}
+
+func GetInvitedCustomersByEmployeeWithFilter(filter InvitedCustomerFilter) ([]*User, int64, error) {
 	var customers []*User
 	var total int64
-	offset := (page - 1) * pageSize
+	offset := (filter.Page - 1) * filter.PageSize
 
 	tx := DB.Model(&User{}).
-		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser).
+		Where("inviter_id = ? AND role = ?", filter.EmployeeUserId, common.RoleCommonUser).
 		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id"))
+	if filter.CustomerUserId != 0 {
+		tx = tx.Where("id = ?", filter.CustomerUserId)
+	}
+	if filter.Status != 0 {
+		tx = tx.Where("status = ?", filter.Status)
+	}
+	if filter.Keyword != "" {
+		keyword := "%" + filter.Keyword + "%"
+		tx = tx.Where("username LIKE ? OR display_name LIKE ? OR email LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword)
+	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := tx.Omit("password").Order("id DESC").Offset(offset).Limit(pageSize).Find(&customers).Error; err != nil {
+	if err := tx.Omit("password").Order("id DESC").Offset(offset).Limit(filter.PageSize).Find(&customers).Error; err != nil {
 		return nil, 0, err
 	}
 	return customers, total, nil
@@ -166,42 +193,22 @@ func GetCustomerCountsByEmployees(employeeUserIds []int) (map[int]int, error) {
 		return counts, nil
 	}
 
-	type customerOwnerRow struct {
-		EmployeeUserId int
-		CustomerUserId int
+	type countRow struct {
+		InviterId int
+		Count     int
 	}
-
-	addRows := func(rows []customerOwnerRow, seen map[string]struct{}) {
-		for _, row := range rows {
-			key := strconv.Itoa(row.EmployeeUserId) + ":" + strconv.Itoa(row.CustomerUserId)
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			counts[row.EmployeeUserId]++
-		}
-	}
-
-	seen := make(map[string]struct{})
-	var profileRows []customerOwnerRow
-	if err := DB.Model(&CustomerProfile{}).
-		Select("employee_user_id, customer_user_id").
-		Where("employee_user_id IN ?", employeeUserIds).
-		Scan(&profileRows).Error; err != nil {
-		return nil, err
-	}
-	addRows(profileRows, seen)
-
-	var invitedRows []customerOwnerRow
+	var rows []countRow
 	if err := DB.Model(&User{}).
-		Select("inviter_id as employee_user_id, id as customer_user_id").
+		Select("inviter_id, count(*) as count").
 		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
 		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id")).
-		Scan(&invitedRows).Error; err != nil {
+		Group("inviter_id").
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	addRows(invitedRows, seen)
-
+	for _, row := range rows {
+		counts[row.InviterId] = row.Count
+	}
 	return counts, nil
 }
 
@@ -219,6 +226,51 @@ func GetCustomerProfileByCustomerUserId(customerUserId int) (*CustomerProfile, e
 		return nil, err
 	}
 	return &cp, nil
+}
+
+// UpsertCustomerProfileEmployee sets the owning employee for a customer.
+// If a CustomerProfile already exists for customerUserId, its employee_user_id is updated.
+// If not, a new record is created. This keeps customer_profiles in sync with users.inviter_id
+// when admin assigns a customer via AdminAssignCustomerToEmployee.
+func UpsertCustomerProfileEmployee(customerUserId, employeeUserId int) error {
+	result := DB.Model(&CustomerProfile{}).
+		Where("customer_user_id = ?", customerUserId).
+		Updates(map[string]interface{}{
+			"employee_user_id": employeeUserId,
+			"status":           CustomerStatusEnabled,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		cp := &CustomerProfile{
+			CustomerUserId: customerUserId,
+			EmployeeUserId: employeeUserId,
+			Status:         CustomerStatusEnabled,
+		}
+		return DB.Create(cp).Error
+	}
+	return nil
+}
+
+func UnassignCustomerFromEmployee(customerUserId, employeeUserId int) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&User{}).
+			Where("id = ? AND inviter_id = ?", customerUserId, employeeUserId).
+			Update("inviter_id", 0)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.Delete(
+			&CustomerProfile{},
+			"customer_user_id = ? AND employee_user_id = ?",
+			customerUserId,
+			employeeUserId,
+		).Error
+	})
 }
 
 func CreateCustomerProfile(cp *CustomerProfile) error {

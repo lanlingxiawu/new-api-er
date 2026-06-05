@@ -10,6 +10,8 @@ import {
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import {
@@ -19,6 +21,7 @@ import {
   formatBusinessUsd,
 } from '@/features/business/format'
 import type { CommissionLog } from '@/features/employees/types'
+import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getMyCommissionLogs,
   getMyCommissionSummary,
@@ -247,19 +250,69 @@ function useMyCommissionColumns() {
 function CommissionHistory() {
   const { t } = useTranslation()
   const columns = useMyCommissionColumns()
+  const [filterForm, setFilterForm] = useState({
+    customerUserId: '',
+    modelName: '',
+    channelId: '',
+    start: undefined as Date | undefined,
+    end: undefined as Date | undefined,
+  })
+  const [filters, setFilters] = useState<{
+    customer_user_id?: number
+    model_name?: string
+    channel_id?: number
+    start_time?: number
+    end_time?: number
+  }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 20,
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['my-commission-logs', pagination],
+    queryKey: ['my-commission-logs', pagination, filters],
     queryFn: () =>
       getMyCommissionLogs({
         page: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+        ...filters,
       }),
   })
+
+  const applyFilters = () => {
+    const customerUserId = Number(filterForm.customerUserId)
+    const channelId = Number(filterForm.channelId)
+    setFilters({
+      ...(Number.isFinite(customerUserId) && customerUserId > 0
+        ? { customer_user_id: customerUserId }
+        : {}),
+      ...(filterForm.modelName.trim()
+        ? { model_name: filterForm.modelName.trim() }
+        : {}),
+      ...(Number.isFinite(channelId) && channelId > 0
+        ? { channel_id: channelId }
+        : {}),
+      ...(filterForm.start
+        ? { start_time: Math.floor(filterForm.start.getTime() / 1000) }
+        : {}),
+      ...(filterForm.end
+        ? { end_time: Math.floor(filterForm.end.getTime() / 1000) }
+        : {}),
+    })
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
+
+  const resetFilters = () => {
+    setFilterForm({
+      customerUserId: '',
+      modelName: '',
+      channelId: '',
+      start: undefined,
+      end: undefined,
+    })
+    setFilters({})
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }
 
   const table = useReactTable({
     data: data?.data?.items ?? [],
@@ -278,6 +331,62 @@ function CommissionHistory() {
       columns={columns}
       isLoading={isLoading}
       emptyTitle={t('No commission records yet')}
+      toolbar={
+        <div className='flex flex-wrap items-center gap-2'>
+          <Input
+            type='number'
+            min={1}
+            placeholder={t('Customer UID')}
+            value={filterForm.customerUserId}
+            onChange={(event) =>
+              setFilterForm((form) => ({
+                ...form,
+                customerUserId: event.target.value,
+              }))
+            }
+            className='w-[120px]'
+          />
+          <Input
+            placeholder={t('Model Name')}
+            value={filterForm.modelName}
+            onChange={(event) =>
+              setFilterForm((form) => ({
+                ...form,
+                modelName: event.target.value,
+              }))
+            }
+            className='w-[180px]'
+          />
+          <Input
+            type='number'
+            min={1}
+            placeholder={t('Channel ID')}
+            value={filterForm.channelId}
+            onChange={(event) =>
+              setFilterForm((form) => ({
+                ...form,
+                channelId: event.target.value,
+              }))
+            }
+            className='w-[120px]'
+          />
+          <div className='w-[300px]'>
+            <CompactDateTimeRangePicker
+              start={filterForm.start}
+              end={filterForm.end}
+              onChange={({ start, end }) =>
+                setFilterForm((form) => ({ ...form, start, end }))
+              }
+            />
+          </div>
+          <Button size='sm' onClick={applyFilters}>
+            {t('Search')}
+          </Button>
+          <Button size='sm' variant='outline' onClick={resetFilters}>
+            {t('Reset')}
+          </Button>
+        </div>
+      }
       getRowClassName={(row) =>
         row.original.commission_quota < 0 ? 'opacity-60' : undefined
       }

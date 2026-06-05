@@ -3875,6 +3875,7 @@
     "帮助": "Aide",
     "社交": "Social",
     "法律": "Mentions légales",
-    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Offre limitée : bonus de recharge 1:1, jusqu'à {{$100}} de crédit gratuit !"
+    "限时：1:1 充值赠送，最高可获 {{$100}} 免费额度！": "Offre limitée : bonus de recharge 1:1, jusqu'à {{$100}} de crédit gratuit !",
+    "用户名 / 邮箱 / 备注": "Nom d’utilisateur / e-mail / remarque"
   }
 }

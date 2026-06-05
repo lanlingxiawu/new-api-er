@@ -72,6 +72,10 @@ const PageLayout = () => {
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground';
+
+  const shouldContentScroll =
+    location.pathname === '/console/commission-overview' ||
+    location.pathname === '/commission-overview';
   const shouldRemoveContentPadding = noContentPaddingPaths.includes(
     location.pathname,
   );
@@ -222,7 +226,11 @@ const PageLayout = () => {
             style={{
               flex: '1 1 auto',
               minHeight: 0,
-              overflowY: isMobile ? 'visible' : 'hidden',
+              overflowY: isMobile
+                ? 'visible'
+                : shouldContentScroll
+                  ? 'auto'
+                  : 'hidden',
               WebkitOverflowScrolling: 'touch',
               padding: shouldRemoveContentPadding
                 ? '0'
@@ -232,7 +240,6 @@ const PageLayout = () => {
                     : '24px'
                   : '0',
               position: 'relative',
-              minHeight: 0,
             }}
           >
             <ErrorBoundary>

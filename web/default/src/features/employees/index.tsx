@@ -12,10 +12,10 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Pencil, PlusIcon, Trash2, UserRoundPlus } from 'lucide-react'
+import { Pencil, PlusIcon, Trash2, UserRoundPlus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,6 +60,7 @@ import {
   getCommissionLogs,
   getEmployeeTiers,
   getEmployees,
+  unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
@@ -70,15 +71,25 @@ const ASSIGN_USER_PICKER_PAGE_SIZE = 20
 function AssignUserPicker({
   value,
   onSelect,
+  onClear,
+  employeeId,
+  employeeUserId,
+  onUnassignSuccess,
 }: {
   value?: number
   onSelect: (id: number) => void
+  onClear: () => void
+  employeeId?: number
+  employeeUserId?: number
+  onUnassignSuccess: () => void
 }) {
   const { t } = useTranslation()
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [debounced, setDebounced] = useState('')
   const [selectedLabel, setSelectedLabel] = useState('')
+  const [removingUserId, setRemovingUserId] = useState<number | undefined>()
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -124,7 +135,13 @@ function AssignUserPicker({
       },
       enabled: open,
     })
-  const users = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+  const users = useMemo(() => {
+    const all = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+    return [...all].sort((a, b) => {
+      if (a.is_assigned_customer === b.is_assigned_customer) return 0
+      return a.is_assigned_customer ? 1 : -1
+    })
+  }, [data])
   const isInitialFetching = isFetching && !data
 
   const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
@@ -133,6 +150,32 @@ function AssignUserPicker({
       list.scrollHeight - list.scrollTop - list.clientHeight
     if (distanceToBottom > 48 || !hasNextPage || isFetchingNextPage) return
     void fetchNextPage()
+  }
+
+  const clearSelection = () => {
+    setSelectedLabel('')
+    setKeyword('')
+    setDebounced('')
+    onClear()
+  }
+
+  const removeAssignment = async (userId: number) => {
+    if (!employeeId) return
+    setRemovingUserId(userId)
+    try {
+      const res = await unassignCustomerFromEmployee(employeeId, userId)
+      if (!res.success) throw new Error(res.message)
+      toast.success(t('Removed'))
+      if (value === userId) clearSelection()
+      qc.invalidateQueries({ queryKey: ['assign-customer-user-search'] })
+      onUnassignSuccess()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Operation failed')
+      )
+    } finally {
+      setRemovingUserId(undefined)
+    }
   }
 
   return (
@@ -150,7 +193,22 @@ function AssignUserPicker({
           setKeyword('')
           setOpen(true)
         }}
+        className={value && !open ? 'pr-9' : undefined}
       />
+      {value && !open ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='absolute top-1/2 right-1 size-7 -translate-y-1/2'
+          title={t('Clear selection')}
+          aria-label={t('Clear selection')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={clearSelection}
+        >
+          <X className='size-4' />
+        </Button>
+      ) : null}
       {open && (
         <div className='bg-muted/20 mt-2 overflow-hidden rounded-lg border'>
           <ul
@@ -167,53 +225,80 @@ function AssignUserPicker({
               </li>
             ) : (
               <>
-                {users.map((user) => (
-                  <li
-                    key={user.id}
-                    role='option'
-                    aria-selected={value === user.id}
-                    className={cn(
-                      'hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors',
-                      user.is_assigned_customer &&
-                        'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50'
-                    )}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      const label = `${user.username}${user.display_name ? ` (${user.display_name})` : ''} #${user.id}`
-                      setSelectedLabel(label)
-                      onSelect(user.id)
-                      setOpen(false)
-                    }}
-                  >
-                    <div className='flex min-w-0 items-center justify-between gap-3'>
-                      <span className='truncate font-medium'>
-                        {user.username}
-                        {user.display_name ? ` (${user.display_name})` : ''}
-                      </span>
-                      <div className='flex shrink-0 items-center gap-1.5'>
-                        {user.is_assigned_customer ? (
-                          <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
-                            {t('Assigned')}
-                          </span>
-                        ) : null}
-                        <span className='text-muted-foreground text-xs'>
-                          #{user.id}
+                {users.map((user) => {
+                  const canRemove =
+                    user.is_assigned_customer &&
+                    user.assigned_employee_user_id === employeeUserId
+                  return (
+                    <li
+                      key={user.id}
+                      role='option'
+                      aria-selected={value === user.id}
+                      className={cn(
+                        'hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors',
+                        user.is_assigned_customer &&
+                          'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50'
+                      )}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        const label = `${user.username}${user.display_name ? ` (${user.display_name})` : ''} #${user.id}`
+                        setSelectedLabel(label)
+                        onSelect(user.id)
+                        setOpen(false)
+                      }}
+                    >
+                      <div className='flex min-w-0 items-center justify-between gap-3'>
+                        <span className='truncate font-medium'>
+                          {user.username}
+                          {user.display_name ? ` (${user.display_name})` : ''}
                         </span>
+                        <div className='flex shrink-0 items-center gap-1.5'>
+                          {user.is_assigned_customer ? (
+                            <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
+                              {t('Assigned')}
+                            </span>
+                          ) : null}
+                          {canRemove ? (
+                            <Button
+                              type='button'
+                              size='sm'
+                              variant='outline'
+                              disabled={removingUserId === user.id}
+                              className='h-6 px-2 text-xs'
+                              onMouseDown={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                void removeAssignment(user.id)
+                              }}
+                            >
+                              {removingUserId === user.id
+                                ? t('Saving...')
+                                : t('Remove')}
+                            </Button>
+                          ) : null}
+                          <span className='text-muted-foreground text-xs'>
+                            #{user.id}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    {user.is_assigned_customer ? (
-                      <div className='mt-0.5 truncate text-xs text-amber-600 dark:text-amber-400'>
-                        {user.assigned_employee_name
-                          ? `${t('Assigned to')}: ${user.assigned_employee_name}`
-                          : t('Assigned to another employee')}
-                      </div>
-                    ) : user.email ? (
-                      <div className='text-muted-foreground mt-0.5 truncate text-xs'>
-                        {user.email}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
+                      {user.is_assigned_customer ? (
+                        <div className='mt-0.5 truncate text-xs text-amber-600 dark:text-amber-400'>
+                          {user.assigned_employee_name
+                            ? `${t('Assigned to')}: ${user.assigned_employee_name}`
+                            : t('Assigned to another employee')}
+                        </div>
+                      ) : user.email ? (
+                        <div className='text-muted-foreground mt-0.5 truncate text-xs'>
+                          {user.email}
+                        </div>
+                      ) : null}
+                    </li>
+                  )
+                })}
                 {isFetchingNextPage && (
                   <li className='text-muted-foreground px-3 py-3 text-center text-sm'>
                     {t('Loading...')}
@@ -294,7 +379,17 @@ function AssignCustomerDialog({
           </div>
           <div className='space-y-2'>
             <label className='text-sm font-medium'>{t('Customer')}</label>
-            <AssignUserPicker value={userId} onSelect={setUserId} />
+            <AssignUserPicker
+              value={userId}
+              onSelect={setUserId}
+              onClear={() => setUserId(undefined)}
+              employeeId={employee?.id}
+              employeeUserId={employee?.user_id}
+              onUnassignSuccess={() => {
+                setUserId(undefined)
+                onSuccess()
+              }}
+            />
           </div>
           <p className='text-muted-foreground text-xs'>
             {t(

@@ -242,7 +242,17 @@ func EmployeeListCustomers(c *gin.Context) {
 	}
 
 	page, pageSize := normalizePage(c)
-	customers, total, err := model.GetInvitedCustomersByEmployee(employeeUserId, page, pageSize)
+	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
+	status, _ := strconv.Atoi(c.Query("status"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	customers, total, err := model.GetInvitedCustomersByEmployeeWithFilter(model.InvitedCustomerFilter{
+		EmployeeUserId: employeeUserId,
+		CustomerUserId: customerUserId,
+		Keyword:        keyword,
+		Status:         status,
+		Page:           page,
+		PageSize:       pageSize,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -459,6 +469,10 @@ func AdminCreateCustomer(c *gin.Context) {
 		CustomerUserId: req.CustomerUserId,
 		Status:         model.CustomerStatusEnabled,
 		Remark:         req.Remark,
+	}
+	if err := model.UpdateUserInviterId(req.CustomerUserId, req.EmployeeUserId); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	if err := model.CreateCustomerProfile(cp); err != nil {
 		common.ApiError(c, err)
