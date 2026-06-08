@@ -217,6 +217,7 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
+	CreatedAt        int64                  `json:"created_at"`
 }
 
 // RecordConsumeLog 记录消费日志，返回插入的 log.Id（失败时返回 0）。
@@ -229,6 +230,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(params.Other)
+	createdAt := params.CreatedAt
+	if createdAt == 0 {
+		createdAt = common.GetTimestamp()
+	}
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -239,7 +244,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	logEntry := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -469,7 +474,7 @@ type ChannelGroupConsumption struct {
 func GetConsumptionByChannelGroup(startTimestamp, endTimestamp int64) ([]ChannelGroupConsumption, error) {
 	var rows []ChannelGroupConsumption
 	tx := LOG_DB.Table("logs").
-		Select("channel_id as channel_id, " + logGroupCol + " as group_name, COALESCE(SUM(quota),0) as quota").
+		Select("channel_id as channel_id, "+logGroupCol+" as group_name, COALESCE(SUM(quota),0) as quota").
 		Where("type = ?", LogTypeConsume)
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)

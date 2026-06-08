@@ -331,6 +331,7 @@ function CommissionHistory() {
       columns={columns}
       isLoading={isLoading}
       emptyTitle={t('No commission records yet')}
+      paginationInFooter={false}
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <Input
@@ -437,6 +438,10 @@ export function EmployeeConsole() {
   }
 
   const profile = profileData.data.profile
+  const tierInfo = profileData.data.tier
+  const effectiveRate = tierInfo?.tier_rate ?? profile.commission_rate ?? 0
+  const tierGroup: string = tierInfo?.tier_group || ''
+  const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
   const summary = summaryData?.data ?? profileData.data.extension
   const revenueUsd = summary?.profit_total_usd ?? 0
 
@@ -446,18 +451,17 @@ export function EmployeeConsole() {
         <span className='flex items-center gap-2'>
           {t('My Commission')}
           <Badge variant='default' className='text-xs'>
-            {(profile.commission_rate * 100).toFixed(1)}% {t('rate')}
+            {(effectiveRate * 100).toFixed(1)}% {t('rate')}
+            {tierGroup ? ` · ${tierGroup}` : ''}
           </Badge>
-          {profile.target_amount ? (
+          {tierTargetAmount ? (
             <Badge
-              variant={
-                revenueUsd >= profile.target_amount ? 'default' : 'outline'
-              }
+              variant={revenueUsd >= tierTargetAmount ? 'default' : 'outline'}
               className='text-xs'
             >
               {t('Target')}: {formatBusinessTargetAmount(revenueUsd)} /{' '}
-              {formatBusinessTargetAmount(profile.target_amount)}
-              {revenueUsd >= profile.target_amount ? ` ${t('Reached')}` : ''}
+              {formatBusinessTargetAmount(tierTargetAmount)}
+              {revenueUsd >= tierTargetAmount ? ` ${t('Reached')}` : ''}
             </Badge>
           ) : null}
         </span>
@@ -467,8 +471,8 @@ export function EmployeeConsole() {
           {summary && (
             <SummaryCards
               data={summary}
-              commissionRate={profile.commission_rate}
-              targetAmount={Number(profile.target_amount || 0)}
+              commissionRate={effectiveRate}
+              targetAmount={tierTargetAmount}
             />
           )}
           <h3 className='text-muted-foreground shrink-0 text-sm font-semibold'>

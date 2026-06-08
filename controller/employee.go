@@ -1,8 +1,8 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -14,33 +14,41 @@ import (
 )
 
 // ============================================================================
-// 请求/响应结构
+// Request and response structures
 // ============================================================================
 
 type CreateEmployeeRequest struct {
-	UserId         int     `json:"user_id" binding:"required"`
-	CommissionRate float64 `json:"commission_rate" binding:"required,min=0,max=1"`
-	TargetAmount   float64 `json:"target_amount"` // USD 金额，0=不设限
-	Remark         string  `json:"remark"`
+	UserId int    `json:"user_id" binding:"required"`
+	TierId int64  `json:"tier_id"` // initial tier, 0 means unbound
+	Remark string `json:"remark"`
 }
 
 type UpdateEmployeeRequest struct {
-	CommissionRate float64 `json:"commission_rate" binding:"required,min=0,max=1"`
-	TargetAmount   float64 `json:"target_amount"` // USD 金额，0=不设限
-	Status         int     `json:"status" binding:"required,min=1,max=2"`
-	Remark         string  `json:"remark"`
+	TierId int64  `json:"tier_id"` // changed tier, 0 means unchanged
+	Status int    `json:"status" binding:"required,min=1,max=2"`
+	Remark string `json:"remark"`
 }
 
 type UpsertChannelCostRequest struct {
-	ChannelId int `json:"channel_id" binding:"required"`
-	// cost_ratio = 模型基础价 × 上游倍率 的折扣系数。不设上限（上游倍率可能很高，
-	// 需允许 >1 以覆盖真实采购价）；允许为 0（零成本/免费渠道），故用 gte 而非 required。
+	ChannelId int     `json:"channel_id" binding:"required"`
 	CostRatio float64 `json:"cost_ratio" binding:"gte=0"`
 	Remark    string  `json:"remark"`
 }
 
+func normalizePrefixedPage(c *gin.Context, prefix string) (int, int) {
+	page, _ := strconv.Atoi(c.DefaultQuery(prefix+"page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery(prefix+"page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	return page, pageSize
+}
+
 // ============================================================================
-// 管理员：员工管理
+// Admin employee management
 // ============================================================================
 
 // AdminListEmployees GET /api/admin/employee
@@ -62,20 +70,6 @@ func AdminListEmployees(c *gin.Context) {
 		pageSize = 20
 	}
 
-	isComputedSort := sortBy == "total_consumption_quota" ||
-		sortBy == "customer_count" ||
-		sortBy == "total_cost_quota" ||
-		sortBy == "total_profit_quota" ||
-		sortBy == "total_commission_quota" ||
-		sortBy == "current_performance_quota" ||
-		sortBy == "current_tier_rate"
-
-	queryPage := page
-	queryPageSize := pageSize
-	if isComputedSort {
-		queryPage = 1
-		queryPageSize = 1000000
-	}
 	employeeFilter := model.EmployeeFilter{
 		UserId:    userId,
 		Keyword:   keyword,
@@ -83,17 +77,13 @@ func AdminListEmployees(c *gin.Context) {
 		SortBy:    sortBy,
 		SortOrder: sortOrder,
 	}
-	if isComputedSort {
-		employeeFilter.SortBy = ""
-		employeeFilter.SortOrder = ""
-	}
-	employees, total, err := model.GetAllEmployees(queryPage, queryPageSize, employeeFilter)
+	employees, total, err := model.GetAllEmployees(page, pageSize, employeeFilter)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
-	// 附加用户名 + 当前业绩（利润）
+	// Attach user info and current performance metrics.
 	type EmployeeWithUser struct {
 		*model.EmployeeProfile
 		Username              string  `json:"username"`
@@ -112,7 +102,14 @@ func AdminListEmployees(c *gin.Context) {
 		CurrentProfitUsd      float64 `json:"current_performance_usd"`
 		CurrentTierId         int64   `json:"current_tier_id"`
 		CurrentTierLevel      int     `json:"current_tier_level"`
+		CurrentTierGroup      string  `json:"current_tier_group"`
 		CurrentTierRate       float64 `json:"current_tier_rate"`
+		CurrentTierThreshold  float64 `json:"current_tier_threshold_usd"`
+		NextTierId            int64   `json:"next_tier_id"`
+		NextTierLevel         int     `json:"next_tier_level"`
+		NextTierGroup         string  `json:"next_tier_group"`
+		NextTierRate          float64 `json:"next_tier_rate"`
+		NextTierThreshold     float64 `json:"next_tier_threshold_usd"`
 	}
 
 	employeeUserIds := make([]int, 0, len(employees))
@@ -120,7 +117,6 @@ func AdminListEmployees(c *gin.Context) {
 		employeeUserIds = append(employeeUserIds, emp.UserId)
 	}
 
-	// 并行拉取当前页所需的 5 类附加数据
 	var (
 		profitStats                 []*model.CommissionEmployeeStat
 		customerConsumptionByUserId map[int]int64
@@ -168,6 +164,20 @@ func AdminListEmployees(c *gin.Context) {
 	for _, t := range allTiers {
 		tierById[t.Id] = t
 	}
+	findNextTier := func(currentLevel int, group string, currentProfitUsd float64) *model.EmployeeCommissionTier {
+		for _, t := range allTiers {
+			if group != "" && t.Group != group {
+				continue
+			}
+			if t.Level <= currentLevel {
+				continue
+			}
+			if t.ThresholdUsd > currentProfitUsd {
+				return t
+			}
+		}
+		return nil
+	}
 
 	items := make([]EmployeeWithUser, 0, len(employees))
 	for _, emp := range employees {
@@ -192,12 +202,25 @@ func AdminListEmployees(c *gin.Context) {
 			CurrentProfitQuota:    totalProfitQuota,
 			CurrentProfitUsd:      common.QuotaToUSD(totalProfitQuota),
 		}
+		currentLevel := 0
+		currentGroup := ""
 		if lvl, ok := tierLevelsByUserId[emp.UserId]; ok && lvl.TierId != 0 {
 			item.CurrentTierId = lvl.TierId
 			if t, ok2 := tierById[lvl.TierId]; ok2 {
 				item.CurrentTierLevel = t.Level
+				item.CurrentTierGroup = t.Group
 				item.CurrentTierRate = t.Rate
+				item.CurrentTierThreshold = t.ThresholdUsd
+				currentLevel = t.Level
+				currentGroup = t.Group
 			}
+		}
+		if nextTier := findNextTier(currentLevel, currentGroup, item.CurrentProfitUsd); nextTier != nil {
+			item.NextTierId = nextTier.Id
+			item.NextTierLevel = nextTier.Level
+			item.NextTierGroup = nextTier.Group
+			item.NextTierRate = nextTier.Rate
+			item.NextTierThreshold = nextTier.ThresholdUsd
 		}
 		if u := userMap[emp.UserId]; u != nil {
 			item.Username = u.Username
@@ -205,44 +228,6 @@ func AdminListEmployees(c *gin.Context) {
 			item.Email = u.Email
 		}
 		items = append(items, item)
-	}
-
-	if isComputedSort {
-		desc := sortOrder == "desc"
-		sort.SliceStable(items, func(i, j int) bool {
-			var left, right int64
-			switch sortBy {
-			case "customer_count":
-				left, right = int64(items[i].CustomerCount), int64(items[j].CustomerCount)
-			case "total_consumption_quota":
-				left, right = items[i].TotalConsumptionQuota, items[j].TotalConsumptionQuota
-			case "total_cost_quota":
-				left, right = items[i].TotalCostQuota, items[j].TotalCostQuota
-			case "total_profit_quota", "current_performance_quota":
-				left, right = items[i].TotalProfitQuota, items[j].TotalProfitQuota
-			case "total_commission_quota":
-				left, right = items[i].TotalCommissionQuota, items[j].TotalCommissionQuota
-			case "current_tier_rate":
-				if desc {
-					return items[i].CurrentTierRate > items[j].CurrentTierRate
-				}
-				return items[i].CurrentTierRate < items[j].CurrentTierRate
-			}
-			if desc {
-				return left > right
-			}
-			return left < right
-		})
-		start := (page - 1) * pageSize
-		if start >= len(items) {
-			items = items[:0]
-		} else {
-			end := start + pageSize
-			if end > len(items) {
-				end = len(items)
-			}
-			items = items[start:end]
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -265,19 +250,35 @@ func AdminCreateEmployee(c *gin.Context) {
 	}
 	user, err := model.GetUserById(req.UserId, false)
 	if err != nil || user == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "用户不存在"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user not found"})
 		return
 	}
+	if req.TierId > 0 {
+		exists, err := model.TierExists(req.TierId)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		if !exists {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "tier not found"})
+			return
+		}
+	}
 	emp := &model.EmployeeProfile{
-		UserId:         req.UserId,
-		CommissionRate: req.CommissionRate,
-		TargetAmount:   req.TargetAmount,
-		Status:         1,
-		Remark:         req.Remark,
+		UserId: req.UserId,
+		Status: 1,
+		Remark: req.Remark,
 	}
 	if err := model.CreateEmployee(emp); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
+	}
+	if req.TierId > 0 {
+		operatedBy := c.GetInt("id")
+		if err := model.SetTierLevel(req.UserId, req.TierId, "manual", operatedBy, "", 0); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": emp})
 }
@@ -286,7 +287,7 @@ func AdminCreateEmployee(c *gin.Context) {
 func AdminUpdateEmployee(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
 	var req UpdateEmployeeRequest
@@ -295,19 +296,30 @@ func AdminUpdateEmployee(c *gin.Context) {
 		return
 	}
 	emp := &model.EmployeeProfile{
-		Id:             id,
-		CommissionRate: req.CommissionRate,
-		TargetAmount:   req.TargetAmount,
-		Status:         req.Status,
-		Remark:         req.Remark,
+		Id:     id,
+		Status: req.Status,
+		Remark: req.Remark,
 	}
 	if err := model.UpdateEmployee(emp); err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": "员工档案不存在"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee profile not found"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
+	}
+	if req.TierId > 0 {
+		existingEmp, _ := model.GetEmployeeById(id)
+		if existingEmp != nil {
+			currentLevel, _ := model.GetOrCreateTierLevel(existingEmp.UserId)
+			if currentLevel == nil || currentLevel.TierId != req.TierId {
+				operatedBy := c.GetInt("id")
+				if err := model.SetTierLevel(existingEmp.UserId, req.TierId, "manual", operatedBy, "", 0); err != nil {
+					c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+					return
+				}
+			}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -316,7 +328,7 @@ func AdminUpdateEmployee(c *gin.Context) {
 func AdminDeleteEmployee(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
 	if err := model.DisableEmployee(id); err != nil {
@@ -327,7 +339,7 @@ func AdminDeleteEmployee(c *gin.Context) {
 }
 
 // ============================================================================
-// 管理员：提成日志
+// Admin commission logs
 // ============================================================================
 
 // AdminListCommissionLogs GET /api/admin/employee/commission
@@ -338,8 +350,11 @@ func AdminListCommissionLogs(c *gin.Context) {
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
 	channelId, _ := strconv.Atoi(c.Query("channel_id"))
 	modelName := strings.TrimSpace(c.Query("model_name"))
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -351,8 +366,8 @@ func AdminListCommissionLogs(c *gin.Context) {
 		CustomerUserId: customerUserId,
 		ModelName:      modelName,
 		ChannelId:      channelId,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		StartTime:      timeRange.StartTime,
+		EndTime:        timeRange.EndTime,
 		Page:           page,
 		PageSize:       pageSize,
 	})
@@ -373,9 +388,12 @@ func AdminListCommissionLogs(c *gin.Context) {
 
 // AdminCommissionSummary GET /api/admin/employee/commission/summary
 func AdminCommissionSummary(c *gin.Context) {
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
-	items, err := model.GetCommissionSummary(startTime, endTime)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	items, err := model.GetCommissionSummary(timeRange.StartTime, timeRange.EndTime)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -385,35 +403,56 @@ func AdminCommissionSummary(c *gin.Context) {
 
 // AdminCommissionOverview GET /api/admin/employee/overview
 func AdminCommissionOverview(c *gin.Context) {
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	channelPage, channelPageSize := normalizePrefixedPage(c, "channel_")
+	employeePage, employeePageSize := normalizePrefixedPage(c, "employee_")
+	channelKeyword := strings.ToLower(strings.TrimSpace(c.Query("channel_keyword")))
+	channelSortBy := strings.TrimSpace(c.DefaultQuery("channel_sort_by", "est_profit_quota"))
+	channelSortOrder := strings.ToLower(strings.TrimSpace(c.DefaultQuery("channel_sort_order", "desc")))
+	if channelSortOrder != "asc" {
+		channelSortOrder = "desc"
+	}
+
+	// Build one shared query plan for channel and employee overview queries.
+	queryPlan, err := model.ResolveBusinessStatsQueryPlan(timeRange.StartTime, timeRange.EndTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 
 	var (
-		costTotals   model.ConsumptionCostTotals
-		channelStats []*model.ConsumptionCostChannelStat
-		totals       model.CommissionTotals
-		byEmployee   []*model.CommissionEmployeeStat
+		channelStats   []*model.ConsumptionCostChannelStat
+		channelSummary model.ConsumptionCostChannelSummary
+		channelTotal   int64
+		byEmployee     []*model.CommissionEmployeeStat
+		employeeTotal  int64
+		totals         model.CommissionTotals
 	)
 
 	g, _ := errgroup.WithContext(c.Request.Context())
 	g.Go(func() error {
 		var err error
-		costTotals, err = model.GetConsumptionCostTotals(startTime, endTime)
+		channelStats, channelTotal, err = model.GetConsumptionCostByChannelPageWithPlan(queryPlan, channelPage, channelPageSize, channelKeyword, channelSortBy, channelSortOrder)
 		return err
 	})
 	g.Go(func() error {
 		var err error
-		channelStats, err = model.GetConsumptionCostByChannel(startTime, endTime)
+		channelSummary, err = model.GetConsumptionCostChannelSummaryWithPlan(queryPlan)
+		return err
+	})
+	// Fetch paged employee stats and totals concurrently.
+	g.Go(func() error {
+		var err error
+		byEmployee, employeeTotal, err = model.GetCommissionStatsByEmployeePageWithPlan(queryPlan, employeePage, employeePageSize)
 		return err
 	})
 	g.Go(func() error {
 		var err error
-		totals, err = model.GetCommissionTotals(startTime, endTime)
-		return err
-	})
-	g.Go(func() error {
-		var err error
-		byEmployee, err = model.GetCommissionStatsByEmployee(startTime, endTime)
+		totals, err = model.GetCommissionTotalsWithPlan(queryPlan)
 		return err
 	})
 
@@ -421,6 +460,9 @@ func AdminCommissionOverview(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+
+	// Reuse the shared channel summary for platform totals.
+	costTotals := channelSummary.Totals
 
 	platformConsumption := costTotals.TotalRevenue
 	platformCostQuota := costTotals.TotalCost
@@ -446,21 +488,14 @@ func AdminCommissionOverview(c *gin.Context) {
 			ConsumptionQuota: s.TotalRevenue,
 			EstCostQuota:     s.TotalCost,
 			EstProfitQuota:   s.TotalRevenue - s.TotalCost,
-			CostRatio:        model.GetChannelCostRatio(s.ChannelId),
+			CostRatio:        s.CostRatio,
 		}
 		if s.TotalRevenue != 0 {
 			item.EstGrossMargin = float64(item.EstProfitQuota) / float64(s.TotalRevenue)
 		}
-		if ch, e := model.CacheGetChannel(s.ChannelId); e == nil && ch != nil {
-			item.ChannelName = ch.Name
-		}
+		item.ChannelName = s.ChannelName
 		channelProfit = append(channelProfit, item)
 	}
-	sort.Slice(channelProfit, func(i, j int) bool {
-		return channelProfit[i].EstProfitQuota > channelProfit[j].EstProfitQuota
-	})
-
-	// 批量拉取员工用户信息，避免 N+1 查询
 	type EmployeeStatWithUser struct {
 		*model.CommissionEmployeeStat
 		Username    string `json:"username"`
@@ -472,7 +507,7 @@ func AdminCommissionOverview(c *gin.Context) {
 		for _, s := range byEmployee {
 			empIds = append(empIds, s.EmployeeUserId)
 		}
-		userMap, _ := model.GetUsersByIds(empIds)
+		userMap, _ := model.GetUsersByIdsUnscoped(empIds)
 		for _, s := range byEmployee {
 			item := EmployeeStatWithUser{CommissionEmployeeStat: s}
 			if u := userMap[s.EmployeeUserId]; u != nil {
@@ -480,15 +515,6 @@ func AdminCommissionOverview(c *gin.Context) {
 				item.DisplayName = u.DisplayName
 			}
 			empItems = append(empItems, item)
-		}
-	}
-
-	var profitableChannelCount, lossChannelCount int
-	for _, item := range channelProfit {
-		if item.EstProfitQuota > 0 {
-			profitableChannelCount++
-		} else if item.EstProfitQuota < 0 {
-			lossChannelCount++
 		}
 	}
 
@@ -508,8 +534,8 @@ func AdminCommissionOverview(c *gin.Context) {
 				"est_profit_quota":         platformProfitQuota,
 				"est_profit_usd":           common.QuotaToUSD(platformProfitQuota),
 				"est_gross_margin":         platformGrossMargin,
-				"profitable_channel_count": profitableChannelCount,
-				"loss_channel_count":       lossChannelCount,
+				"profitable_channel_count": channelSummary.ProfitableChannelCount,
+				"loss_channel_count":       channelSummary.LossChannelCount,
 			},
 			"commission": gin.H{
 				"total_revenue_quota":    totals.TotalRevenue,
@@ -523,14 +549,21 @@ func AdminCommissionOverview(c *gin.Context) {
 				"total_profit_usd":       common.QuotaToUSD(totals.TotalProfit),
 				"total_commission_usd":   common.QuotaToUSD(totals.TotalCommission),
 			},
-			"by_employee":         empItems,
-			"by_channel_platform": channelProfit,
+			"by_employee":                   empItems,
+			"by_employee_total":             employeeTotal,
+			"by_employee_page":              employeePage,
+			"by_employee_page_size":         employeePageSize,
+			"by_channel_platform":           channelProfit,
+			"by_channel_platform_total":     channelTotal,
+			"by_channel_platform_page":      channelPage,
+			"by_channel_platform_page_size": channelPageSize,
+			"needs_backfill":                model.NeedsBusinessStatsBackfill(),
 		},
 	})
 }
 
 // ============================================================================
-// 管理员：渠道成本配置
+// Admin channel cost configuration
 // ============================================================================
 
 // AdminListChannelCosts GET /api/admin/channel/cost
@@ -561,7 +594,7 @@ func AdminUpsertChannelCost(c *gin.Context) {
 func AdminDeleteChannelCost(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("channel_id"))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的渠道 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid channel id"})
 		return
 	}
 	if err := model.DeleteChannelCostConfig(channelId); err != nil {
@@ -572,29 +605,57 @@ func AdminDeleteChannelCost(c *gin.Context) {
 }
 
 // ============================================================================
-// 管理员：阶梯提成等级配置
+// Admin tiered commission configuration
 // ============================================================================
 
 type CreateTierRequest struct {
 	Level        int     `json:"level" binding:"required,min=1"`
+	Group        string  `json:"group"`
 	ThresholdUsd float64 `json:"threshold_usd" binding:"gte=0"`
-	Rate         float64 `json:"rate" binding:"required,min=0,max=1"`
+	Rate         float64 `json:"rate" binding:"gte=0,lte=1"`
 }
 
 type UpdateTierRequest struct {
 	Level        int     `json:"level" binding:"required,min=1"`
+	Group        string  `json:"group"`
 	ThresholdUsd float64 `json:"threshold_usd" binding:"gte=0"`
-	Rate         float64 `json:"rate" binding:"required,min=0,max=1"`
+	Rate         float64 `json:"rate" binding:"gte=0,lte=1"`
 }
 
 type SetEmployeeTierRequest struct {
-	TierId int64  `json:"tier_id"` // 0 = 清除等级
+	TierId int64  `json:"tier_id"` // 0 = clear tier
 	Source string `json:"source"`  // manual / custom
 	Remark string `json:"remark"`
 }
 
 // AdminListTiers GET /api/admin/employee/tiers
 func AdminListTiers(c *gin.Context) {
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+		tiers, total, err := model.GetTiers(page, pageSize)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"items":     tiers,
+				"total":     total,
+				"page":      page,
+				"page_size": pageSize,
+			},
+		})
+		return
+	}
+
 	tiers, err := model.GetAllTiers()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -610,8 +671,13 @@ func AdminCreateTier(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	group := strings.TrimSpace(req.Group)
+	if group == "" {
+		group = "通用"
+	}
 	tier := &model.EmployeeCommissionTier{
 		Level:        req.Level,
+		Group:        group,
 		ThresholdUsd: req.ThresholdUsd,
 		Rate:         req.Rate,
 	}
@@ -626,7 +692,7 @@ func AdminCreateTier(c *gin.Context) {
 func AdminUpdateTier(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
 	var req UpdateTierRequest
@@ -634,15 +700,20 @@ func AdminUpdateTier(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	updateGroup := strings.TrimSpace(req.Group)
+	if updateGroup == "" {
+		updateGroup = "通用"
+	}
 	tier := &model.EmployeeCommissionTier{
 		Id:           id,
 		Level:        req.Level,
+		Group:        updateGroup,
 		ThresholdUsd: req.ThresholdUsd,
 		Rate:         req.Rate,
 	}
 	if err := model.UpdateTier(tier); err != nil {
 		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": "等级不存在"})
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "tier not found"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -655,7 +726,7 @@ func AdminUpdateTier(c *gin.Context) {
 func AdminDeleteTier(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
 	if err := model.DeleteTier(id); err != nil {
@@ -669,7 +740,7 @@ func AdminDeleteTier(c *gin.Context) {
 func AdminSetEmployeeTier(c *gin.Context) {
 	empId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的员工 ID"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
 		return
 	}
 	var req SetEmployeeTierRequest
@@ -679,7 +750,7 @@ func AdminSetEmployeeTier(c *gin.Context) {
 	}
 	emp, err := model.GetEmployeeById(empId)
 	if err != nil || emp == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "员工不存在"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
 		return
 	}
 	source := req.Source
@@ -726,7 +797,7 @@ func AdminListTierLogs(c *gin.Context) {
 }
 
 // ============================================================================
-// 员工自查接口（仅本人数据）
+// Employee self-service endpoints.
 // ============================================================================
 
 // GetMyEmployeeProfile GET /api/user/employee/profile
@@ -734,17 +805,19 @@ func GetMyEmployeeProfile(c *gin.Context) {
 	userId := c.GetInt("id")
 	emp := model.GetEmployeeByUserId(userId)
 	if emp == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "您不是员工"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "current user is not an employee"})
 		return
 	}
 	ext, _ := model.GetUserExtension(userId)
 	tierLevel, tier := model.GetTierLevelByUserId(userId)
-	tierInfo := gin.H{"tier_id": int64(0), "tier_level": 0, "tier_rate": 0.0}
+	tierInfo := gin.H{"tier_id": int64(0), "tier_level": 0, "tier_group": "", "tier_rate": 0.0, "tier_threshold_usd": 0.0}
 	if tierLevel != nil && tierLevel.TierId != 0 && tier != nil {
 		tierInfo = gin.H{
-			"tier_id":    tierLevel.TierId,
-			"tier_level": tier.Level,
-			"tier_rate":  tier.Rate,
+			"tier_id":            tierLevel.TierId,
+			"tier_level":         tier.Level,
+			"tier_group":         tier.Group,
+			"tier_rate":          tier.Rate,
+			"tier_threshold_usd": tier.ThresholdUsd,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -761,7 +834,7 @@ func GetMyEmployeeProfile(c *gin.Context) {
 func GetMyCommissionLogs(c *gin.Context) {
 	userId := c.GetInt("id")
 	if !model.IsEmployee(userId) {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "权限不足"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "permission denied"})
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -769,8 +842,11 @@ func GetMyCommissionLogs(c *gin.Context) {
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
 	channelId, _ := strconv.Atoi(c.Query("channel_id"))
 	modelName := strings.TrimSpace(c.Query("model_name"))
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -782,8 +858,8 @@ func GetMyCommissionLogs(c *gin.Context) {
 		CustomerUserId: customerUserId,
 		ModelName:      modelName,
 		ChannelId:      channelId,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		StartTime:      timeRange.StartTime,
+		EndTime:        timeRange.EndTime,
 		Page:           page,
 		PageSize:       pageSize,
 	})
@@ -818,7 +894,7 @@ func GetMyCommissionLogs(c *gin.Context) {
 func GetMyCommissionSummary(c *gin.Context) {
 	userId := c.GetInt("id")
 	if !model.IsEmployee(userId) {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "权限不足"})
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "permission denied"})
 		return
 	}
 	ext, err := model.GetUserExtension(userId)
@@ -849,7 +925,6 @@ func GetMyCommissionSummary(c *gin.Context) {
 }
 
 // AdminAssignCustomerToEmployee POST /api/admin/employee/:id/assign-customer
-// 将某个用户的 inviter_id 改为该员工的 user_id，完成客户分配。
 func AdminAssignCustomerToEmployee(c *gin.Context) {
 	employeeId, _ := strconv.Atoi(c.Param("id"))
 	if employeeId <= 0 {
@@ -874,18 +949,11 @@ func AdminAssignCustomerToEmployee(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee is disabled"})
 		return
 	}
-	if emp.UserId == req.UserId {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "cannot assign employee to themselves"})
-		return
-	}
-
-	customerUser, err := model.GetUserById(req.UserId, false)
-	if err != nil || customerUser == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user not found"})
-		return
-	}
-	if customerUser.Role != common.RoleCommonUser || customerUser.Status != common.UserStatusEnabled {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "user must be an enabled common user"})
+	if err := validateCustomerBinding(emp.UserId, req.UserId); err != nil {
+		if errors.Is(err, errMutualInvitation) {
+			logBlockedMutualInvitation("admin_assign_customer", emp.UserId, req.UserId, c.GetInt("id"))
+		}
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
@@ -899,7 +967,52 @@ func AdminAssignCustomerToEmployee(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// maskUserId 将用户 ID 脱敏为 #XXXX 格式
+// AdminListEmployeeCustomers GET /api/admin/employee/:id/customers
+func AdminListEmployeeCustomers(c *gin.Context) {
+	employeeId, err := strconv.Atoi(c.Param("id"))
+	if err != nil || employeeId <= 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
+		return
+	}
+
+	emp, err := model.GetEmployeeById(employeeId)
+	if err != nil || emp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
+		return
+	}
+
+	page, pageSize := normalizePage(c)
+	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
+	status, _ := strconv.Atoi(c.Query("status"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	customers, total, err := model.GetInvitedCustomersByEmployeeWithFilter(model.InvitedCustomerFilter{
+		EmployeeUserId: emp.UserId,
+		CustomerUserId: customerUserId,
+		Keyword:        keyword,
+		Status:         status,
+		Page:           page,
+		PageSize:       pageSize,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	items, err := buildInvitedCustomersWithUser(emp.UserId, customers)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// maskUserId masks a user ID as #XXXX.
 // AdminUnassignCustomerFromEmployee DELETE /api/admin/employee/:id/customer/:user_id
 func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 	employeeId, err := strconv.Atoi(c.Param("id"))

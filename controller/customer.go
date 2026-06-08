@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,8 @@ var (
 	errInvalidCustomer    = errors.New("customer must be an enabled common user")
 	errInvalidEmployee    = errors.New("employee must be an enabled employee")
 	errCannotBindSelf     = errors.New("employee and customer cannot be the same user")
+	errCustomerIsEmployee = errors.New("customer cannot be an employee")
+	errMutualInvitation   = errors.New("employee and customer cannot be mutual inviters")
 	errInvalidCustomerId  = errors.New("invalid customer id")
 	errInvalidEmployeeId  = errors.New("invalid employee id")
 	errInvalidCustomerLog = errors.New("invalid customer quota log")
@@ -112,6 +115,38 @@ func buildInvitedCustomerWithUser(employeeUserId int, customer *model.User) Cust
 	return item
 }
 
+func buildInvitedCustomersWithUser(employeeUserId int, customers []*model.User) ([]CustomerWithUser, error) {
+	customerIds := make([]int, 0, len(customers))
+	for _, customer := range customers {
+		customerIds = append(customerIds, customer.Id)
+	}
+	commissionTotals, err := model.GetCustomerCommissionTotals(employeeUserId, customerIds)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]CustomerWithUser, 0, len(customers))
+	for _, customer := range customers {
+		item := CustomerWithUser{
+			CustomerProfile: &model.CustomerProfile{
+				Id:             customer.Id,
+				EmployeeUserId: employeeUserId,
+				CustomerUserId: customer.Id,
+				Status:         customer.Status,
+				Remark:         customer.Remark,
+				CreatedAt:      customer.CreatedAt,
+			},
+			Username:        customer.Username,
+			DisplayName:     customer.DisplayName,
+			Email:           customer.Email,
+			Quota:           customer.Quota,
+			UsedQuota:       customer.UsedQuota,
+			CommissionQuota: commissionTotals[customer.Id],
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func buildCustomerQuotaLogWithUser(log *model.CustomerQuotaLog) CustomerQuotaLogWithUser {
 	item := CustomerQuotaLogWithUser{CustomerQuotaLog: log}
 	if eu, err := model.GetUserById(log.EmployeeUserId, false); err == nil && eu != nil {
@@ -131,6 +166,29 @@ func buildCustomerQuotaLogsWithUser(logs []*model.CustomerQuotaLog) []CustomerQu
 		items = append(items, buildCustomerQuotaLogWithUser(log))
 	}
 	return items
+}
+
+func logBlockedMutualInvitation(action string, employeeUserId, customerUserId, operatedBy int) {
+	adminInfo := map[string]interface{}{
+		"action":           action,
+		"reason":           "mutual_invitation",
+		"employee_user_id": employeeUserId,
+		"customer_user_id": customerUserId,
+		"operated_by":      operatedBy,
+	}
+	model.RecordLogWithAdminInfo(
+		customerUserId,
+		model.LogTypeManage,
+		"blocked employee customer binding because employee and customer are mutual inviters",
+		adminInfo,
+	)
+	common.SysLog(fmt.Sprintf(
+		"employee_customer: blocked mutual invitation action=%s employee_user_id=%d customer_user_id=%d operated_by=%d",
+		action,
+		employeeUserId,
+		customerUserId,
+		operatedBy,
+	))
 }
 
 func validateCustomerBinding(employeeUserId, customerUserId int) error {
@@ -153,6 +211,16 @@ func validateCustomerBinding(employeeUserId, customerUserId int) error {
 	}
 	if customerUser.Role != common.RoleCommonUser || customerUser.Status != common.UserStatusEnabled {
 		return errInvalidCustomer
+	}
+	if model.HasEmployeeProfile(customerUserId) {
+		return errCustomerIsEmployee
+	}
+	mutual, err := model.IsMutualInvitation(customerUserId, employeeUserId)
+	if err != nil {
+		return err
+	}
+	if mutual {
+		return errMutualInvitation
 	}
 	return nil
 }
@@ -258,9 +326,10 @@ func EmployeeListCustomers(c *gin.Context) {
 		return
 	}
 
-	items := make([]CustomerWithUser, 0, len(customers))
-	for _, customer := range customers {
-		items = append(items, buildInvitedCustomerWithUser(employeeUserId, customer))
+	items, err := buildInvitedCustomersWithUser(employeeUserId, customers)
+	if err != nil {
+		common.ApiError(c, err)
+		return
 	}
 
 	common.ApiSuccess(c, gin.H{
@@ -403,14 +472,17 @@ func EmployeeListQuotaLogs(c *gin.Context) {
 
 	page, pageSize := normalizePage(c)
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	logs, total, err := model.GetCustomerQuotaLogs(model.CustomerQuotaLogFilter{
 		EmployeeUserId: employeeUserId,
 		CustomerUserId: customerUserId,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		StartTime:      timeRange.StartTime,
+		EndTime:        timeRange.EndTime,
 		Page:           page,
 		PageSize:       pageSize,
 	})
@@ -460,6 +532,9 @@ func AdminCreateCustomer(c *gin.Context) {
 		return
 	}
 	if err := validateCustomerBinding(req.EmployeeUserId, req.CustomerUserId); err != nil {
+		if errors.Is(err, errMutualInvitation) {
+			logBlockedMutualInvitation("admin_create_customer", req.EmployeeUserId, req.CustomerUserId, c.GetInt("id"))
+		}
 		common.ApiError(c, err)
 		return
 	}
@@ -582,14 +657,17 @@ func AdminListCustomerQuotaLogs(c *gin.Context) {
 	page, pageSize := normalizePage(c)
 	employeeUserId, _ := strconv.Atoi(c.Query("employee_user_id"))
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
-	startTime, _ := strconv.ParseInt(c.Query("start_time"), 10, 64)
-	endTime, _ := strconv.ParseInt(c.Query("end_time"), 10, 64)
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	logs, total, err := model.GetCustomerQuotaLogs(model.CustomerQuotaLogFilter{
 		EmployeeUserId: employeeUserId,
 		CustomerUserId: customerUserId,
-		StartTime:      startTime,
-		EndTime:        endTime,
+		StartTime:      timeRange.StartTime,
+		EndTime:        timeRange.EndTime,
 		Page:           page,
 		PageSize:       pageSize,
 	})

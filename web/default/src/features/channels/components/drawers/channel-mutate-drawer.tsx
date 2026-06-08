@@ -1133,7 +1133,7 @@ export function ChannelMutateDrawer({
                       name='cost_ratio'
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>{t('Cost Ratio *')}</FormLabel>
+                          <FormLabel>{t('Cost Ratio')}</FormLabel>
                           <FormControl>
                             <Input
                               type='number'
@@ -1153,7 +1153,7 @@ export function ChannelMutateDrawer({
                           </FormControl>
                           <FormDescription>
                             {t(
-                              'Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.'
+                              '填写上游或中转站倍率，用于计算成本、利润和员工提成；如 0.6 表示按 60% 计成本。'
                             )}
                             {!isEditing && (
                               <span className='mt-1 block font-medium text-amber-600'>

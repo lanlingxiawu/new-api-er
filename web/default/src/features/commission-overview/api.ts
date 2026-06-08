@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { appendUnixTimeRangeParams } from '@/lib/query-params'
 
 export interface PlatformStat {
   total_consumption_quota: number
@@ -51,7 +52,19 @@ export interface OverviewData {
   platform: PlatformStat
   commission: CommissionTotals
   by_employee: EmployeeStat[]
+  by_employee_total?: number
+  by_employee_page?: number
+  by_employee_page_size?: number
   by_channel_platform: ChannelProfitStat[]
+  by_channel_platform_total?: number
+  by_channel_platform_page?: number
+  by_channel_platform_page_size?: number
+  needs_backfill?: boolean
+}
+
+export async function triggerBackfill(): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post('/api/admin/employee/overview/backfill')
+  return res.data
 }
 
 export interface OverviewResponse {
@@ -63,10 +76,27 @@ export interface OverviewResponse {
 export async function getCommissionOverview(params?: {
   start_time?: number
   end_time?: number
+  channel_page?: number
+  channel_page_size?: number
+  channel_keyword?: string
+  channel_sort_by?: string
+  channel_sort_order?: 'asc' | 'desc'
+  employee_page?: number
+  employee_page_size?: number
 }): Promise<OverviewResponse> {
   const q = new URLSearchParams()
-  if (params?.start_time) q.set('start_time', String(params.start_time))
-  if (params?.end_time) q.set('end_time', String(params.end_time))
+  appendUnixTimeRangeParams(q, params)
+  if (params?.channel_page) q.set('channel_page', String(params.channel_page))
+  if (params?.channel_page_size)
+    q.set('channel_page_size', String(params.channel_page_size))
+  if (params?.channel_keyword) q.set('channel_keyword', params.channel_keyword)
+  if (params?.channel_sort_by) q.set('channel_sort_by', params.channel_sort_by)
+  if (params?.channel_sort_order)
+    q.set('channel_sort_order', params.channel_sort_order)
+  if (params?.employee_page)
+    q.set('employee_page', String(params.employee_page))
+  if (params?.employee_page_size)
+    q.set('employee_page_size', String(params.employee_page_size))
   const res = await api.get(`/api/admin/employee/overview?${q.toString()}`)
   return res.data
 }

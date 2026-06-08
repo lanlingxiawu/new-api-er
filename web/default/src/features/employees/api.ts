@@ -1,6 +1,8 @@
 import { api } from '@/lib/api'
+import { appendUnixTimeRangeParams } from '@/lib/query-params'
 import type {
   EmployeeProfile,
+  EmployeeCustomer,
   CommissionLog,
   ChannelCostConfig,
   CommissionSummaryItem,
@@ -36,8 +38,7 @@ export async function getEmployees(
 
 export async function createEmployee(data: {
   user_id: number
-  commission_rate: number
-  target_amount?: number
+  tier_id?: number
   remark?: string
 }): Promise<ApiResponse<EmployeeProfile>> {
   const res = await api.post('/api/admin/employee', data)
@@ -47,8 +48,7 @@ export async function createEmployee(data: {
 export async function updateEmployee(
   id: number,
   data: {
-    commission_rate: number
-    target_amount: number
+    tier_id?: number
     status: number
     remark?: string
   }
@@ -74,6 +74,24 @@ export async function deleteEmployee(id: number): Promise<ApiResponse> {
   return res.data
 }
 
+export async function getEmployeeCustomers(
+  employeeId: number,
+  params?: {
+    page?: number
+    page_size?: number
+    keyword?: string
+  }
+): Promise<PagedResponse<EmployeeCustomer>> {
+  const q = new URLSearchParams()
+  if (params?.page) q.set('page', String(params.page))
+  if (params?.page_size) q.set('page_size', String(params.page_size))
+  if (params?.keyword) q.set('keyword', params.keyword)
+  const res = await api.get(
+    `/api/admin/employee/${employeeId}/customers?${q.toString()}`
+  )
+  return res.data
+}
+
 // Commission Logs
 
 export async function getCommissionLogs(params: {
@@ -95,8 +113,7 @@ export async function getCommissionLogs(params: {
     q.set('customer_user_id', String(params.customer_user_id))
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
-  if (params.start_time) q.set('start_time', String(params.start_time))
-  if (params.end_time) q.set('end_time', String(params.end_time))
+  appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission?${q.toString()}`)
   return res.data
 }
@@ -108,8 +125,20 @@ export async function getEmployeeTiers(): Promise<ApiResponse<EmployeeTier[]>> {
   return res.data
 }
 
+export async function getEmployeeTiersPage(params: {
+  page?: number
+  page_size?: number
+}): Promise<PagedResponse<EmployeeTier>> {
+  const q = new URLSearchParams()
+  if (params.page) q.set('page', String(params.page))
+  if (params.page_size) q.set('page_size', String(params.page_size))
+  const res = await api.get(`/api/admin/employee/tiers?${q.toString()}`)
+  return res.data
+}
+
 export async function createEmployeeTier(data: {
   level: number
+  group?: string
   threshold_usd: number
   rate: number
 }): Promise<ApiResponse<EmployeeTier>> {
@@ -121,6 +150,7 @@ export async function updateEmployeeTier(
   id: number,
   data: {
     level: number
+    group?: string
     threshold_usd: number
     rate: number
   }
@@ -139,8 +169,7 @@ export async function getCommissionSummary(params?: {
   end_time?: number
 }): Promise<ApiResponse<CommissionSummaryItem[]>> {
   const q = new URLSearchParams()
-  if (params?.start_time) q.set('start_time', String(params.start_time))
-  if (params?.end_time) q.set('end_time', String(params.end_time))
+  appendUnixTimeRangeParams(q, params)
   const res = await api.get(
     `/api/admin/employee/commission/summary?${q.toString()}`
   )

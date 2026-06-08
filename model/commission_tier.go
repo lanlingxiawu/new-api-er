@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,10 +16,12 @@ import (
 
 // EmployeeCommissionTier 阶梯提成等级配置（全局共享）。
 // Level 为正整数等级编号（1、2、3…），级别越大越高。
+// Group 为同一等级内的分组名称（默认"通用"），同 Level+Group 唯一。
 // ThresholdUsd 为员工累计利润（USD）达到该等级的最低门槛。
 type EmployeeCommissionTier struct {
 	Id           int64   `json:"id"`
-	Level        int     `json:"level" gorm:"not null;default:1"`
+	Level        int     `json:"level" gorm:"not null;default:1;uniqueIndex:uniq_tier_level_group"`
+	Group        string  `json:"group" gorm:"column:tier_group;not null;default:'通用';uniqueIndex:uniq_tier_level_group"`
 	ThresholdUsd float64 `json:"threshold_usd" gorm:"column:threshold_usd;not null;default:0"`
 	Rate         float64 `json:"rate" gorm:"not null;default:0"`
 	CreatedAt    int64   `json:"created_at" gorm:"autoCreateTime"`
@@ -41,14 +44,14 @@ type EmployeeTierLevel struct {
 // EmployeeTierLog 等级变更日志（只追加，用于审计溯源）。
 // ProfitSnapshotUsd 记录触发时员工的累计利润（USD），仅 auto 时有值。
 type EmployeeTierLog struct {
-	Id                 int64   `json:"id"`
-	UserId             int     `json:"user_id" gorm:"index;not null"`
-	FromTierId         int64   `json:"from_tier_id" gorm:"default:0"`
-	ToTierId           int64   `json:"to_tier_id" gorm:"not null"`
-	Source             string  `json:"source" gorm:"type:varchar(16);default:'auto'"`
-	ProfitSnapshotUsd  float64 `json:"profit_snapshot_usd" gorm:"column:profit_snapshot_usd;default:0"`
-	OperatedAt         int64   `json:"operated_at" gorm:"autoCreateTime"`
-	OperatedBy         int     `json:"operated_by,omitempty" gorm:"default:0"`
+	Id                int64   `json:"id"`
+	UserId            int     `json:"user_id" gorm:"index;not null"`
+	FromTierId        int64   `json:"from_tier_id" gorm:"default:0"`
+	ToTierId          int64   `json:"to_tier_id" gorm:"not null"`
+	Source            string  `json:"source" gorm:"type:varchar(16);default:'auto'"`
+	ProfitSnapshotUsd float64 `json:"profit_snapshot_usd" gorm:"column:profit_snapshot_usd;default:0"`
+	OperatedAt        int64   `json:"operated_at" gorm:"autoCreateTime"`
+	OperatedBy        int     `json:"operated_by,omitempty" gorm:"default:0"`
 }
 
 // ============================================================================
@@ -75,7 +78,7 @@ func InvalidateTierCache() {
 	tierCacheLock.Unlock()
 }
 
-// GetAllTiersCached 返回按 level ASC 排序的全量等级列表（带缓存）。
+// GetAllTiersCached 返回按 tier_group ASC, level ASC 排序的全量等级列表（带缓存）。
 func GetAllTiersCached() []*EmployeeCommissionTier {
 	tierCacheLock.RLock()
 	if !tierCacheTime.IsZero() && time.Since(tierCacheTime) < tierCacheTTL && tierCache != nil {
@@ -97,7 +100,7 @@ func GetAllTiersCached() []*EmployeeCommissionTier {
 
 func loadTiersFromDB() []*EmployeeCommissionTier {
 	var tiers []*EmployeeCommissionTier
-	_ = DB.Order("level ASC").Find(&tiers).Error
+	_ = DB.Order("tier_group ASC, level ASC").Find(&tiers).Error
 	return tiers
 }
 
@@ -107,8 +110,28 @@ func loadTiersFromDB() []*EmployeeCommissionTier {
 
 func GetAllTiers() ([]*EmployeeCommissionTier, error) {
 	var tiers []*EmployeeCommissionTier
-	err := DB.Order("level ASC").Find(&tiers).Error
+	err := DB.Order("tier_group ASC, level ASC").Find(&tiers).Error
 	return tiers, err
+}
+
+func GetTiers(page, pageSize int) ([]*EmployeeCommissionTier, int64, error) {
+	var tiers []*EmployeeCommissionTier
+	var total int64
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	tx := DB.Model(&EmployeeCommissionTier{})
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if err := tx.Order("tier_group ASC, level ASC").Offset(offset).Limit(pageSize).Find(&tiers).Error; err != nil {
+		return nil, 0, err
+	}
+	return tiers, total, nil
 }
 
 func CreateTier(tier *EmployeeCommissionTier) error {
@@ -129,6 +152,7 @@ func UpdateTier(tier *EmployeeCommissionTier) error {
 	}
 	err := DB.Model(tier).Updates(map[string]interface{}{
 		"level":         tier.Level,
+		"tier_group":    tier.Group,
 		"threshold_usd": tier.ThresholdUsd,
 		"rate":          tier.Rate,
 	}).Error
@@ -139,11 +163,26 @@ func UpdateTier(tier *EmployeeCommissionTier) error {
 }
 
 func DeleteTier(id int64) error {
+	var refCount int64
+	if err := DB.Model(&EmployeeTierLevel{}).Where("tier_id = ?", id).Count(&refCount).Error; err != nil {
+		return err
+	}
+	if refCount > 0 {
+		return fmt.Errorf("该提成等级已有 %d 名员工使用，请先迁移员工后再删除", refCount)
+	}
 	err := DB.Delete(&EmployeeCommissionTier{}, "id = ?", id).Error
 	if err == nil {
 		InvalidateTierCache()
 	}
 	return err
+}
+
+func TierExists(id int64) (bool, error) {
+	var count int64
+	if err := DB.Model(&EmployeeCommissionTier{}).Where("id = ?", id).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // ============================================================================
@@ -173,6 +212,16 @@ func GetOrCreateTierLevel(userId int) (*EmployeeTierLevel, error) {
 
 // SetTierLevel 更新员工等级（admin/system 调用）并写入变更日志。
 func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, remark string, profitSnapshotUsd float64) error {
+	if newTierId > 0 {
+		exists, err := TierExists(newTierId)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return gorm.ErrRecordNotFound
+		}
+	}
+
 	level, err := GetOrCreateTierLevel(userId)
 	if err != nil {
 		return err
@@ -203,6 +252,7 @@ func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, re
 
 // TryAutoUpgradeTier 检查员工是否应升级等级，若是则自动升级（只升不降）。
 // currentProfit 为刚更新后的 profit_total_quota（quota 单位），内部转换为 USD 与门槛比较。
+// 升级时保持员工当前分组（Group）不变；若当前无分组则默认使用"通用"分组。
 func TryAutoUpgradeTier(userId int, currentProfit int64) {
 	tiers := GetAllTiersCached()
 	if len(tiers) == 0 {
@@ -211,31 +261,48 @@ func TryAutoUpgradeTier(userId int, currentProfit int64) {
 
 	currentProfitUsd := common.QuotaToUSD(currentProfit)
 
-	// 找到当前利润（USD）能达到的最高等级（按 level ASC 已排序）
-	var bestTier *EmployeeCommissionTier
-	for _, t := range tiers {
-		if currentProfitUsd >= t.ThresholdUsd {
-			bestTier = t
-		}
-	}
-	if bestTier == nil {
-		return // 未达到任何等级
-	}
-
 	level, err := GetOrCreateTierLevel(userId)
 	if err != nil {
 		return
 	}
-	if level.TierId == bestTier.Id {
-		return // 已是该等级，无需变更
-	}
 
-	// 只升不降：若当前等级的门槛 >= bestTier 的门槛，跳过
+	// 获取当前分组与等级
+	currentGroup := "通用"
+	currentLevel := 0
 	if level.TierId != 0 {
-		currentThreshold := getTierThresholdUsd(tiers, level.TierId)
-		if currentThreshold >= bestTier.ThresholdUsd {
+		found := false
+		for _, t := range tiers {
+			if t.Id == level.TierId {
+				currentGroup = t.Group
+				currentLevel = t.Level
+				found = true
+				break
+			}
+		}
+		if !found {
+			// 员工绑定的等级已被删除，跳过自动升级，避免静默切换到其他分组
+			common.SysError(fmt.Sprintf("TryAutoUpgradeTier: userId=%d has orphaned tierId=%d, skipping auto upgrade", userId, level.TierId))
 			return
 		}
+	}
+
+	// 在当前分组内找到可达的最高等级（同分组内 tiers 已按 level ASC 排序）
+	var bestTier *EmployeeCommissionTier
+	for _, t := range tiers {
+		if t.Group != currentGroup {
+			continue
+		}
+		if currentProfitUsd >= t.ThresholdUsd {
+			bestTier = t
+		}
+	}
+
+	if bestTier == nil || bestTier.Id == level.TierId {
+		return
+	}
+	// 只升不降：按等级比较
+	if bestTier.Level <= currentLevel {
+		return
 	}
 
 	_ = SetTierLevel(userId, bestTier.Id, "auto", 0, "", currentProfitUsd)
@@ -252,22 +319,12 @@ func getTierThresholdUsd(tiers []*EmployeeCommissionTier, tierId int64) float64 
 }
 
 // GetEffectiveCommissionRate 返回员工的有效提成率。
-//
-// 优先级：
-//  1. 员工自定义 CommissionRate（fallbackRate > 0）—— 最高优先级，始终生效。
-//  2. 当前等级的 Rate —— 仅在员工未配置自定义比例（fallbackRate == 0）时生效。
-//
-// 等级 Rate 主要用于「套用等级预设」时的自动填充建议；
-// 管理员为员工手动设定了比例后，该比例始终优先于等级配置。
-func GetEffectiveCommissionRate(userId int, fallbackRate float64) float64 {
-	// 员工有自定义比例，直接使用
-	if fallbackRate > 0 {
-		return fallbackRate
-	}
-	// 未设置自定义比例时，从当前等级获取 rate 作为兜底
+// 提成率统一由员工当前等级决定，不再支持自定义比例。
+// 未绑定等级时返回 0（不计提成）。
+func GetEffectiveCommissionRate(userId int) float64 {
 	level, err := GetOrCreateTierLevel(userId)
 	if err != nil || level.TierId == 0 {
-		return fallbackRate
+		return 0
 	}
 	tiers := GetAllTiersCached()
 	for _, t := range tiers {
@@ -275,7 +332,7 @@ func GetEffectiveCommissionRate(userId int, fallbackRate float64) float64 {
 			return t.Rate
 		}
 	}
-	return fallbackRate
+	return 0
 }
 
 // ============================================================================
@@ -300,7 +357,7 @@ func GetTierLogs(filter TierLogFilter) ([]*EmployeeTierLog, int64, error) {
 		return nil, 0, err
 	}
 	offset := (filter.Page - 1) * filter.PageSize
-	if err := tx.Order("operated_at DESC").Offset(offset).Limit(filter.PageSize).Find(&logs).Error; err != nil {
+	if err := tx.Order("operated_at DESC, id DESC").Offset(offset).Limit(filter.PageSize).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
 	return logs, total, nil

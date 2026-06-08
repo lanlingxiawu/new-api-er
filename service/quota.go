@@ -195,6 +195,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		},
 		ModelName:  modelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -256,8 +257,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	relayInfoCopy := *relayInfo
 	quotaCopy := quota
 	gopool.Go(func() {
-		RecordTransactionCost(&relayInfoCopy, quotaCopy, 0, logId)
-		TrySettleEmployeeCommission(&relayInfoCopy, quotaCopy, 0, logId)
+		RecordCostAndSettleEmployeeCommission(&relayInfoCopy, quotaCopy, 0, logId)
 	})
 }
 
@@ -322,6 +322,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		},
 		ModelName:  relayInfo.OriginModelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -383,8 +384,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	relayInfoCopy2 := *relayInfo
 	quotaCopy2 := quota
 	gopool.Go(func() {
-		RecordTransactionCost(&relayInfoCopy2, quotaCopy2, 0, logId)
-		TrySettleEmployeeCommission(&relayInfoCopy2, quotaCopy2, 0, logId)
+		RecordCostAndSettleEmployeeCommission(&relayInfoCopy2, quotaCopy2, 0, logId)
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))

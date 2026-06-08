@@ -2685,7 +2685,7 @@ const EditChannelModal = (props) => {
 
                     <Form.InputNumber
                       field='cost_ratio'
-                      label={t('Cost Ratio *')}
+                      label={t('Cost Ratio')}
                       placeholder='1.0'
                       min={0}
                       step={0.01}
@@ -2703,7 +2703,7 @@ const EditChannelModal = (props) => {
                         <div>
                           <div>
                             {t(
-                              'Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.',
+                              '填写上游或中转站倍率，用于计算成本、利润和员工提成；如 0.6 表示按 60% 计成本。',
                             )}
                           </div>
                           {!isEdit && (

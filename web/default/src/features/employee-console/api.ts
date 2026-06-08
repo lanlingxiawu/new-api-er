@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { appendUnixTimeRangeParams } from '@/lib/query-params'
 import type { CommissionLog, EmployeeProfile } from '@/features/employees/types'
 
 export interface EmployeeExtension {
@@ -24,6 +25,13 @@ export interface MyProfileResponse {
   data?: {
     profile: EmployeeProfile
     extension: EmployeeExtension
+    tier: {
+      tier_id: number
+      tier_level: number
+      tier_group: string
+      tier_rate: number
+      tier_threshold_usd: number
+    }
   }
 }
 
@@ -65,8 +73,7 @@ export async function getMyCommissionLogs(params: {
     q.set('customer_user_id', String(params.customer_user_id))
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
-  if (params.start_time) q.set('start_time', String(params.start_time))
-  if (params.end_time) q.set('end_time', String(params.end_time))
+  appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/user/employee/commission?${q.toString()}`)
   return res.data
 }

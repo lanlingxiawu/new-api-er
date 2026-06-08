@@ -12,9 +12,20 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Pencil, PlusIcon, Trash2, UserRoundPlus, X } from 'lucide-react'
+import {
+  MoreHorizontal,
+  Pencil,
+  PlusIcon,
+  RotateCcw,
+  Search,
+  Trash2,
+  UserMinus,
+  UserRoundPlus,
+  X,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getCurrencyDisplay } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -28,23 +39,32 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ButtonGroup } from '@/components/ui/button-group'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTableColumnHeader,
+  DataTablePage,
+} from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import {
   formatBusinessAmount,
@@ -52,49 +72,61 @@ import {
 } from '@/features/business/format'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { searchUsers } from '@/features/users/api'
+import type { User } from '@/features/users/types'
 import {
   assignCustomerToEmployee,
   createEmployeeTier,
   deleteEmployee,
   deleteEmployeeTier,
+  getEmployeeCustomers,
   getCommissionLogs,
   getEmployeeTiers,
+  getEmployeeTiersPage,
   getEmployees,
   unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
-import type { CommissionLog, EmployeeProfile, EmployeeTier } from './types'
+import {
+  getEmployeeTierGroupBadgeClass,
+  getEmployeeTierGroupDotClass,
+  getEmployeeTierLevelBadgeClass,
+} from './lib/tiers'
+import type {
+  CommissionLog,
+  EmployeeCustomer,
+  EmployeeProfile,
+  EmployeeTier,
+} from './types'
 
 const ASSIGN_USER_PICKER_PAGE_SIZE = 20
+const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8
+const DEFAULT_TIER_GROUP = '通用'
+
+function getCustomerLabel(
+  user: Pick<User, 'username' | 'display_name'> | EmployeeCustomer
+) {
+  return `${user.username}${user.display_name ? ` (${user.display_name})` : ''}`
+}
 
 function AssignUserPicker({
-  value,
-  onSelect,
-  onClear,
-  employeeId,
+  selectedUsers,
+  onToggle,
   employeeUserId,
-  onUnassignSuccess,
 }: {
-  value?: number
-  onSelect: (id: number) => void
-  onClear: () => void
-  employeeId?: number
+  selectedUsers: User[]
+  onToggle: (user: User) => void
   employeeUserId?: number
-  onUnassignSuccess: () => void
 }) {
   const { t } = useTranslation()
-  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [debounced, setDebounced] = useState('')
-  const [selectedLabel, setSelectedLabel] = useState('')
-  const [removingUserId, setRemovingUserId] = useState<number | undefined>()
   const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!value) setSelectedLabel('')
-  }, [value])
+  const selectedIds = useMemo(
+    () => new Set(selectedUsers.map((user) => user.id)),
+    [selectedUsers]
+  )
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
@@ -138,10 +170,13 @@ function AssignUserPicker({
   const users = useMemo(() => {
     const all = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
     return [...all].sort((a, b) => {
+      const aSelected = selectedIds.has(a.id)
+      const bSelected = selectedIds.has(b.id)
+      if (aSelected !== bSelected) return aSelected ? -1 : 1
       if (a.is_assigned_customer === b.is_assigned_customer) return 0
       return a.is_assigned_customer ? 1 : -1
     })
-  }, [data])
+  }, [data, selectedIds])
   const isInitialFetching = isFetching && !data
 
   const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
@@ -152,50 +187,21 @@ function AssignUserPicker({
     void fetchNextPage()
   }
 
-  const clearSelection = () => {
-    setSelectedLabel('')
-    setKeyword('')
-    setDebounced('')
-    onClear()
-  }
-
-  const removeAssignment = async (userId: number) => {
-    if (!employeeId) return
-    setRemovingUserId(userId)
-    try {
-      const res = await unassignCustomerFromEmployee(employeeId, userId)
-      if (!res.success) throw new Error(res.message)
-      toast.success(t('Removed'))
-      if (value === userId) clearSelection()
-      qc.invalidateQueries({ queryKey: ['assign-customer-user-search'] })
-      onUnassignSuccess()
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
-    } finally {
-      setRemovingUserId(undefined)
-    }
-  }
-
   return (
     <div ref={containerRef} className='relative'>
       <Input
         type='text'
         autoComplete='off'
         placeholder={t('Search username / display name / email')}
-        value={open ? keyword : selectedLabel}
+        value={keyword}
         onChange={(e) => {
           setKeyword(e.target.value)
           if (!open) setOpen(true)
         }}
-        onFocus={() => {
-          setKeyword('')
-          setOpen(true)
-        }}
-        className={value && !open ? 'pr-9' : undefined}
+        onFocus={() => setOpen(true)}
+        className={keyword ? 'pr-9' : undefined}
       />
-      {value && !open ? (
+      {keyword ? (
         <Button
           type='button'
           size='icon'
@@ -204,7 +210,10 @@ function AssignUserPicker({
           title={t('Clear selection')}
           aria-label={t('Clear selection')}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={clearSelection}
+          onClick={() => {
+            setKeyword('')
+            setDebounced('')
+          }}
         >
           <X className='size-4' />
         </Button>
@@ -226,59 +235,45 @@ function AssignUserPicker({
             ) : (
               <>
                 {users.map((user) => {
-                  const canRemove =
+                  const isCurrentEmployeeCustomer =
                     user.is_assigned_customer &&
                     user.assigned_employee_user_id === employeeUserId
+                  const isSelected = selectedIds.has(user.id)
+                  const canSelect = !isCurrentEmployeeCustomer
                   return (
                     <li
                       key={user.id}
                       role='option'
-                      aria-selected={value === user.id}
+                      aria-selected={isSelected}
                       className={cn(
                         'hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors',
+                        !canSelect && 'cursor-default',
                         user.is_assigned_customer &&
                           'bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-950/50'
                       )}
                       onMouseDown={(e) => {
                         e.preventDefault()
-                        const label = `${user.username}${user.display_name ? ` (${user.display_name})` : ''} #${user.id}`
-                        setSelectedLabel(label)
-                        onSelect(user.id)
-                        setOpen(false)
+                        if (!canSelect) return
+                        onToggle(user)
+                        setOpen(true)
                       }}
                     >
                       <div className='flex min-w-0 items-center justify-between gap-3'>
                         <span className='truncate font-medium'>
-                          {user.username}
-                          {user.display_name ? ` (${user.display_name})` : ''}
+                          {getCustomerLabel(user)}
                         </span>
                         <div className='flex shrink-0 items-center gap-1.5'>
-                          {user.is_assigned_customer ? (
-                            <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
-                              {t('Assigned')}
+                          {isSelected ? (
+                            <span className='border-primary/50 text-primary rounded border px-1 py-0.5 text-[10px] leading-none'>
+                              {t('Selected')}
                             </span>
                           ) : null}
-                          {canRemove ? (
-                            <Button
-                              type='button'
-                              size='sm'
-                              variant='outline'
-                              disabled={removingUserId === user.id}
-                              className='h-6 px-2 text-xs'
-                              onMouseDown={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                              }}
-                              onClick={(event) => {
-                                event.preventDefault()
-                                event.stopPropagation()
-                                void removeAssignment(user.id)
-                              }}
-                            >
-                              {removingUserId === user.id
-                                ? t('Saving...')
-                                : t('Remove')}
-                            </Button>
+                          {user.is_assigned_customer ? (
+                            <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
+                              {user.assigned_employee_user_id === employeeUserId
+                                ? t('Current employee')
+                                : t('Assigned')}
+                            </span>
                           ) : null}
                           <span className='text-muted-foreground text-xs'>
                             #{user.id}
@@ -313,6 +308,369 @@ function AssignUserPicker({
   )
 }
 
+function getCustomerUserId(customer: User | EmployeeCustomer) {
+  return 'customer_user_id' in customer
+    ? customer.customer_user_id
+    : customer.id
+}
+
+function RemoveCustomersDialog({
+  open,
+  employee,
+  onOpenChange,
+  onSuccess,
+}: {
+  open: boolean
+  employee?: EmployeeProfile
+  onOpenChange: (open: boolean) => void
+  onSuccess: () => void
+}) {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  const [keyword, setKeyword] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: EMPLOYEE_CUSTOMERS_PAGE_SIZE,
+  })
+  const [customerToRemove, setCustomerToRemove] = useState<
+    EmployeeCustomer | undefined
+  >()
+  const [removing, setRemoving] = useState(false)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!open) {
+      setKeyword('')
+      setDebounced('')
+      setPagination((current) => ({ ...current, pageIndex: 0 }))
+      setCustomerToRemove(undefined)
+    }
+  }, [open])
+
+  useEffect(() => {
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }, [debounced, employee?.id])
+
+  const { data, isLoading, isFetching, refetch } = useQuery({
+    queryKey: [
+      'employee-current-customers',
+      employee?.id,
+      debounced,
+      pagination,
+    ],
+    queryFn: () =>
+      getEmployeeCustomers(employee!.id, {
+        page: pagination.pageIndex + 1,
+        page_size: pagination.pageSize,
+        keyword: debounced,
+      }),
+    enabled: open && Boolean(employee?.id),
+  })
+
+  const customers = data?.data?.items ?? []
+  const total = data?.data?.total ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / pagination.pageSize))
+  const pageStart =
+    total === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1
+  const pageEnd = Math.min(
+    total,
+    (pagination.pageIndex + 1) * pagination.pageSize
+  )
+  const employeeLabel =
+    employee?.username ||
+    employee?.display_name ||
+    (employee?.user_id ? `#${employee.user_id}` : '-')
+
+  const confirmRemoveCustomer = async () => {
+    if (!employee || !customerToRemove) return
+    const customerUserId = getCustomerUserId(customerToRemove)
+    setRemoving(true)
+    try {
+      const res = await unassignCustomerFromEmployee(
+        employee.id,
+        customerUserId
+      )
+      if (!res.success) throw new Error(res.message)
+      toast.success(t('Customer removed from employee'))
+      setCustomerToRemove(undefined)
+      qc.invalidateQueries({ queryKey: ['assign-customer-user-search'] })
+      onSuccess()
+      if (customers.length === 1 && pagination.pageIndex > 0) {
+        setPagination((current) => ({
+          ...current,
+          pageIndex: current.pageIndex - 1,
+        }))
+      } else {
+        void refetch()
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Operation failed')
+      )
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          className='max-h-[86vh] overflow-y-auto sm:max-w-[760px]'
+          initialFocus={false}
+        >
+          <DialogHeader>
+            <DialogTitle>{t('Remove Customers')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'Review currently assigned customers and remove ownership when needed.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='space-y-4'>
+            <div className='bg-muted/30 rounded-lg border px-3 py-2'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Employee')}
+              </div>
+              <div className='mt-1 flex min-w-0 items-center gap-2'>
+                <span className='truncate font-medium'>{employeeLabel}</span>
+                {employee?.display_name && employee.username ? (
+                  <span className='text-muted-foreground truncate text-sm'>
+                    {employee.display_name}
+                  </span>
+                ) : null}
+                <Badge variant='outline' className='ml-auto shrink-0'>
+                  #{employee?.user_id}
+                </Badge>
+              </div>
+            </div>
+
+            <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='relative min-w-0 flex-1'>
+                <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2' />
+                <Input
+                  value={keyword}
+                  onChange={(event) => setKeyword(event.target.value)}
+                  placeholder={t('Search current customers')}
+                  className={cn('pl-8', keyword && 'pr-8')}
+                />
+                {keyword ? (
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='ghost'
+                    className='absolute top-1/2 right-1 size-7 -translate-y-1/2'
+                    aria-label={t('Clear')}
+                    onClick={() => {
+                      setKeyword('')
+                      setDebounced('')
+                    }}
+                  >
+                    <X className='size-4' />
+                  </Button>
+                ) : null}
+              </div>
+              <div className='flex shrink-0 items-center gap-2'>
+                <Badge variant='outline'>
+                  {t('{{count}} customers', { count: total })}
+                </Badge>
+                <Button
+                  type='button'
+                  size='icon'
+                  variant='outline'
+                  className='size-9'
+                  title={t('Refresh')}
+                  aria-label={t('Refresh')}
+                  onClick={() => void refetch()}
+                >
+                  <RotateCcw
+                    className={cn('size-4', isFetching && 'animate-spin')}
+                  />
+                </Button>
+              </div>
+            </div>
+
+            <div className='overflow-hidden rounded-lg border'>
+              <div className='bg-muted/40 text-muted-foreground grid grid-cols-[minmax(0,1fr)_96px_96px_110px] gap-3 px-3 py-2 text-xs font-medium max-sm:hidden'>
+                <span>{t('Customer')}</span>
+                <span className='text-right'>{t('Used quota')}</span>
+                <span className='text-right'>{t('Commission')}</span>
+                <span className='text-right'>{t('Action')}</span>
+              </div>
+              <div className='min-h-[300px] divide-y'>
+                {isLoading ? (
+                  <div className='text-muted-foreground flex h-[300px] items-center justify-center text-sm'>
+                    {t('Loading...')}
+                  </div>
+                ) : customers.length === 0 ? (
+                  <div className='text-muted-foreground flex h-[300px] items-center justify-center px-6 text-center text-sm'>
+                    {debounced
+                      ? t('No current customers match your search')
+                      : t('This employee has no assigned customers')}
+                  </div>
+                ) : (
+                  customers.map((customer) => {
+                    const customerUserId = getCustomerUserId(customer)
+                    return (
+                      <div
+                        key={customerUserId}
+                        className='hover:bg-muted/30 grid grid-cols-[minmax(0,1fr)_96px_96px_110px] items-center gap-3 px-3 py-2.5 text-sm transition-colors max-sm:grid-cols-1 max-sm:gap-2'
+                      >
+                        <div className='min-w-0'>
+                          <div className='truncate font-medium'>
+                            {getCustomerLabel(customer)}
+                          </div>
+                          <div className='text-muted-foreground truncate text-xs'>
+                            #{customerUserId}
+                            {customer.email ? ` / ${customer.email}` : ''}
+                          </div>
+                        </div>
+                        <div className='text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
+                          <span className='text-muted-foreground hidden text-xs max-sm:inline'>
+                            {t('Used quota')}
+                          </span>
+                          {formatBusinessAmount(customer.used_quota ?? 0)}
+                        </div>
+                        <div className='text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
+                          <span className='text-muted-foreground hidden text-xs max-sm:inline'>
+                            {t('Commission')}
+                          </span>
+                          {formatBusinessAmount(customer.commission_quota ?? 0)}
+                        </div>
+                        <div className='flex justify-end'>
+                          <Button
+                            type='button'
+                            size='sm'
+                            variant='outline'
+                            className='h-8'
+                            onClick={() => setCustomerToRemove(customer)}
+                          >
+                            <UserMinus className='size-4' />
+                            {t('Remove')}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className='flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between'>
+              <span className='text-muted-foreground'>
+                {t('Showing {{start}}-{{end}} of {{total}} customers', {
+                  start: pageStart,
+                  end: pageEnd,
+                  total,
+                })}
+              </span>
+              <div className='flex items-center justify-end gap-2'>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={pagination.pageIndex === 0 || isFetching}
+                  onClick={() =>
+                    setPagination((current) => ({
+                      ...current,
+                      pageIndex: Math.max(0, current.pageIndex - 1),
+                    }))
+                  }
+                >
+                  {t('Previous')}
+                </Button>
+                <Badge variant='secondary'>
+                  {t('Page {{current}} of {{total}}', {
+                    current: pagination.pageIndex + 1,
+                    total: pageCount,
+                  })}
+                </Badge>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={pagination.pageIndex + 1 >= pageCount || isFetching}
+                  onClick={() =>
+                    setPagination((current) => ({
+                      ...current,
+                      pageIndex: Math.min(pageCount - 1, current.pageIndex + 1),
+                    }))
+                  }
+                >
+                  {t('Next')}
+                </Button>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant='outline' onClick={() => onOpenChange(false)}>
+              {t('Close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={Boolean(customerToRemove)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !removing) setCustomerToRemove(undefined)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Confirm customer removal')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'Removing this customer will stop future commission from being counted for this employee.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {customerToRemove ? (
+            <div className='bg-muted/30 rounded-lg border px-3 py-2 text-sm'>
+              <div className='flex items-center justify-between gap-3'>
+                <span className='text-muted-foreground'>{t('Customer')}</span>
+                <span className='min-w-0 truncate font-medium'>
+                  {getCustomerLabel(customerToRemove)}
+                </span>
+              </div>
+              <div className='mt-1 flex items-center justify-between gap-3'>
+                <span className='text-muted-foreground'>{t('User ID')}</span>
+                <span className='font-medium'>
+                  #{getCustomerUserId(customerToRemove)}
+                </span>
+              </div>
+              <div className='mt-1 flex items-center justify-between gap-3'>
+                <span className='text-muted-foreground'>
+                  {t('Target employee')}
+                </span>
+                <span className='min-w-0 truncate font-medium'>
+                  {employeeLabel}
+                </span>
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              onClick={confirmRemoveCustomer}
+              disabled={removing}
+            >
+              {removing ? t('Saving...') : t('Remove customer')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+}
+
 function AssignCustomerDialog({
   open,
   employee,
@@ -325,23 +683,68 @@ function AssignCustomerDialog({
   onSuccess: () => void
 }) {
   const { t } = useTranslation()
-  const [userId, setUserId] = useState<number | undefined>()
+  const [selectedCustomers, setSelectedCustomers] = useState<User[]>([])
+  const [confirmReassignOpen, setConfirmReassignOpen] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (!open) setUserId(undefined)
+    if (!open) {
+      setSelectedCustomers([])
+      setConfirmReassignOpen(false)
+    }
   }, [open])
 
+  const employeeLabel =
+    employee?.username ||
+    employee?.display_name ||
+    (employee?.user_id ? `#${employee.user_id}` : '-')
+  const selectedCount = selectedCustomers.length
+  const reassignmentCustomers = selectedCustomers.filter(
+    (customer) =>
+      customer.is_assigned_customer &&
+      customer.assigned_employee_user_id !== employee?.user_id
+  )
+  const isReassignment = reassignmentCustomers.length > 0
+
+  const toggleCustomer = (customer: User) => {
+    setSelectedCustomers((prev) => {
+      if (prev.some((item) => item.id === customer.id)) {
+        return prev.filter((item) => item.id !== customer.id)
+      }
+      return [...prev, customer]
+    })
+  }
+
+  const removeSelectedCustomer = (customerId: number) => {
+    setSelectedCustomers((prev) =>
+      prev.filter((customer) => customer.id !== customerId)
+    )
+  }
+
   const submit = async () => {
-    if (!employee || !userId) {
-      toast.error(t('Please select a user'))
+    if (!employee || selectedCount === 0) {
+      toast.error(t('Please select at least one customer'))
+      return
+    }
+    if (isReassignment && !confirmReassignOpen) {
+      setConfirmReassignOpen(true)
       return
     }
     setSaving(true)
     try {
-      const res = await assignCustomerToEmployee(employee.id, userId)
-      if (!res.success) throw new Error(res.message)
-      toast.success(t('Customer assigned successfully'))
+      for (const customer of selectedCustomers) {
+        const res = await assignCustomerToEmployee(employee.id, customer.id)
+        if (!res.success) throw new Error(res.message)
+      }
+      toast.success(
+        isReassignment
+          ? t('Reassigned {{count}} customer(s) successfully', {
+              count: selectedCount,
+            })
+          : t('Assigned {{count}} customer(s) successfully', {
+              count: selectedCount,
+            })
+      )
       onOpenChange(false)
       onSuccess()
     } catch (e: unknown) {
@@ -351,62 +754,197 @@ function AssignCustomerDialog({
     }
   }
 
+  const submitLabel = isReassignment
+    ? t('Reassign selected customers')
+    : t('Assign selected customers')
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className='max-h-[86vh] overflow-y-auto sm:max-w-[520px]'
-        initialFocus={false}
-      >
-        <DialogHeader>
-          <DialogTitle>{t('Assign Customer')}</DialogTitle>
-        </DialogHeader>
-        <div className='space-y-4'>
-          <div className='bg-muted/30 rounded-lg border px-3 py-2'>
-            <div className='text-muted-foreground text-xs'>{t('Employee')}</div>
-            <div className='mt-1 flex min-w-0 items-center gap-2'>
-              <span className='truncate font-medium'>
-                {employee?.username || `#${employee?.user_id}`}
-              </span>
-              {employee?.display_name ? (
-                <span className='text-muted-foreground truncate text-sm'>
-                  {employee.display_name}
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          className='max-h-[86vh] overflow-y-auto sm:max-w-[560px]'
+          initialFocus={false}
+        >
+          <DialogHeader>
+            <DialogTitle>{t('Assign Customer')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                "Assign a customer to an employee so future consumption is counted toward that employee's commission."
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className='space-y-4'>
+            <div className='bg-muted/30 rounded-lg border px-3 py-2'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Employee')}
+              </div>
+              <div className='mt-1 flex min-w-0 items-center gap-2'>
+                <span className='truncate font-medium'>
+                  {employee?.username || `#${employee?.user_id}`}
                 </span>
+                {employee?.display_name ? (
+                  <span className='text-muted-foreground truncate text-sm'>
+                    {employee.display_name}
+                  </span>
+                ) : null}
+                <Badge variant='outline' className='ml-auto shrink-0'>
+                  #{employee?.user_id}
+                </Badge>
+              </div>
+            </div>
+            <div className='space-y-2'>
+              <label className='text-sm font-medium'>
+                {t('Add customers')}
+              </label>
+              <AssignUserPicker
+                selectedUsers={selectedCustomers}
+                onToggle={toggleCustomer}
+                employeeUserId={employee?.user_id}
+              />
+            </div>
+            {selectedCustomers.length > 0 ? (
+              <div
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-sm',
+                  isReassignment
+                    ? 'border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100'
+                    : 'bg-muted/30'
+                )}
+              >
+                <div className='grid gap-1.5'>
+                  <div className='flex items-center justify-between gap-3'>
+                    <span className='text-muted-foreground'>
+                      {t('Selected customers')}
+                    </span>
+                    <Badge variant='outline' className='shrink-0'>
+                      {selectedCount}
+                    </Badge>
+                  </div>
+                  <div className='flex items-center justify-between gap-3'>
+                    <span className='text-muted-foreground'>
+                      {t('Target employee')}
+                    </span>
+                    <span className='min-w-0 truncate font-medium'>
+                      {employeeLabel}
+                    </span>
+                  </div>
+                  {isReassignment ? (
+                    <div className='flex items-center justify-between gap-3'>
+                      <span className='text-muted-foreground'>
+                        {t('Customers to reassign')}
+                      </span>
+                      <span className='min-w-0 truncate font-medium'>
+                        {reassignmentCustomers.length}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+                <div className='mt-3 flex flex-wrap gap-2'>
+                  {selectedCustomers.map((customer) => (
+                    <Badge
+                      key={customer.id}
+                      variant='secondary'
+                      className='max-w-full gap-1 pr-1'
+                    >
+                      <span className='max-w-[220px] truncate'>
+                        {getCustomerLabel(customer)} #{customer.id}
+                      </span>
+                      <Button
+                        type='button'
+                        size='icon'
+                        variant='ghost'
+                        className='size-5'
+                        aria-label={t('Remove')}
+                        onClick={() => removeSelectedCustomer(customer.id)}
+                      >
+                        <X className='size-3' />
+                      </Button>
+                    </Badge>
+                  ))}
+                </div>
+                {isReassignment ? (
+                  <p className='mt-2 text-xs'>
+                    {t(
+                      'Some selected customers are already assigned to another employee. Reassigning will update future commission ownership.'
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                "This will set the user's inviter to this employee, so their consumption generates commission."
+              )}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant='outline' onClick={() => onOpenChange(false)}>
+              {t('Cancel')}
+            </Button>
+            <Button disabled={saving || selectedCount === 0} onClick={submit}>
+              {saving ? t('Saving...') : submitLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={confirmReassignOpen}
+        onOpenChange={setConfirmReassignOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Confirm reassignment')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'Some selected customers are already assigned to another employee. Reassigning will update future commission ownership.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className='bg-muted/30 rounded-lg border px-3 py-2 text-sm'>
+            <div className='flex items-center justify-between gap-3'>
+              <span className='text-muted-foreground'>
+                {t('Selected customers')}
+              </span>
+              <span className='min-w-0 truncate font-medium'>
+                {selectedCount}
+              </span>
+            </div>
+            <div className='mt-1 flex items-center justify-between gap-3'>
+              <span className='text-muted-foreground'>
+                {t('Customers to reassign')}
+              </span>
+              <span className='min-w-0 truncate font-medium'>
+                {reassignmentCustomers.length}
+              </span>
+            </div>
+            <div className='mt-1 flex items-center justify-between gap-3'>
+              <span className='text-muted-foreground'>
+                {t('Target employee')}
+              </span>
+              <span className='min-w-0 truncate font-medium'>
+                {employeeLabel}
+              </span>
+            </div>
+            <div className='mt-3 flex flex-wrap gap-2'>
+              {selectedCustomers.slice(0, 6).map((customer) => (
+                <Badge key={customer.id} variant='secondary'>
+                  {getCustomerLabel(customer)} #{customer.id}
+                </Badge>
+              ))}
+              {selectedCustomers.length > 6 ? (
+                <Badge variant='outline'>+{selectedCustomers.length - 6}</Badge>
               ) : null}
-              <Badge variant='outline' className='ml-auto shrink-0'>
-                #{employee?.user_id}
-              </Badge>
             </div>
           </div>
-          <div className='space-y-2'>
-            <label className='text-sm font-medium'>{t('Customer')}</label>
-            <AssignUserPicker
-              value={userId}
-              onSelect={setUserId}
-              onClear={() => setUserId(undefined)}
-              employeeId={employee?.id}
-              employeeUserId={employee?.user_id}
-              onUnassignSuccess={() => {
-                setUserId(undefined)
-                onSuccess()
-              }}
-            />
-          </div>
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              "This will set the user's inviter to this employee, so their consumption generates commission."
-            )}
-          </p>
-        </div>
-        <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>
-            {t('Cancel')}
-          </Button>
-          <Button disabled={saving || !userId} onClick={submit}>
-            {saving ? t('Saving...') : t('Confirm')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={submit} disabled={saving}>
+              {saving ? t('Saving...') : t('Reassign selected customers')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -430,6 +968,63 @@ function AmountText({ value }: { value?: number }) {
   return <span className={className}>{formatBusinessAmount(amount)}</span>
 }
 
+function getPerformanceTargetUsd(row: EmployeeProfile) {
+  const nextTierTargetUsd = Number(row.next_tier_threshold_usd || 0)
+  if (Number.isFinite(nextTierTargetUsd) && nextTierTargetUsd > 0) {
+    return nextTierTargetUsd
+  }
+  const profileTargetUsd = Number(row.target_amount || 0)
+  return Number.isFinite(profileTargetUsd) && profileTargetUsd > 0
+    ? profileTargetUsd
+    : 0
+}
+
+function PerformanceProgressCell({ row }: { row: EmployeeProfile }) {
+  const { t } = useTranslation()
+  const currentQuota = Number(row.current_performance_quota || 0)
+  const targetUsd = getPerformanceTargetUsd(row)
+
+  if (!Number.isFinite(targetUsd) || targetUsd <= 0) {
+    return (
+      <div className='min-w-[110px]'>{formatBusinessAmount(currentQuota)}</div>
+    )
+  }
+
+  const { config } = getCurrencyDisplay()
+  const targetQuota = targetUsd * config.quotaPerUnit
+  const rawPercent = targetQuota > 0 ? (currentQuota / targetQuota) * 100 : 0
+  const progressPercent = Math.max(0, Math.min(100, rawPercent))
+  const percentText = `${Number.isFinite(rawPercent) ? rawPercent.toFixed(0) : '0'}%`
+
+  return (
+    <div className='min-w-[130px] space-y-1'>
+      <div className='flex items-center justify-between gap-2 text-xs'>
+        <span className='font-medium tabular-nums'>
+          {formatBusinessAmount(currentQuota)}
+        </span>
+        <span className='text-muted-foreground tabular-nums'>
+          {percentText}
+        </span>
+      </div>
+      <Progress
+        value={progressPercent}
+        className={cn(
+          'h-1.5',
+          rawPercent >= 100
+            ? '[&_[data-slot=progress-indicator]]:bg-emerald-500'
+            : '[&_[data-slot=progress-indicator]]:bg-primary'
+        )}
+      />
+      <div className='text-muted-foreground text-xs'>
+        {row.next_tier_level
+          ? `${t('Tier {{level}}', { level: row.next_tier_level })}: `
+          : `${t('Target')}: `}
+        {formatTargetAmount(targetUsd)}
+      </div>
+    </div>
+  )
+}
+
 function StatusBadge({ status }: { status: number }) {
   const { t } = useTranslation()
   return status === 1 ? (
@@ -439,14 +1034,70 @@ function StatusBadge({ status }: { status: number }) {
   )
 }
 
+function EmployeeRowActions({
+  row,
+  onEdit,
+  onDelete,
+  onAssign,
+  onRemoveCustomers,
+}: {
+  row: EmployeeProfile
+  onEdit: (row: EmployeeProfile) => void
+  onDelete: (row: EmployeeProfile) => void
+  onAssign: (row: EmployeeProfile) => void
+  onRemoveCustomers: (row: EmployeeProfile) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger
+        render={<Button variant='ghost' size='sm' className='h-7 px-2' />}
+      >
+        <MoreHorizontal className='h-4 w-4' />
+        {t('Manage')}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end' className='w-[190px]'>
+        <DropdownMenuItem onClick={() => onAssign(row)}>
+          {t('Assign Customer')}
+          <DropdownMenuShortcut>
+            <UserRoundPlus className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onRemoveCustomers(row)}>
+          {t('Remove Customers')}
+          <DropdownMenuShortcut>
+            <UserMinus className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onEdit(row)}>
+          {t('Edit Employee')}
+          <DropdownMenuShortcut>
+            <Pencil className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant='destructive' onClick={() => onDelete(row)}>
+          {t('Disable Employee')}
+          <DropdownMenuShortcut>
+            <Trash2 className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function useEmployeesColumns({
   onEdit,
   onDelete,
   onAssign,
+  onRemoveCustomers,
 }: {
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
+  onRemoveCustomers: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
@@ -536,29 +1187,38 @@ function useEmployeesColumns({
         cell: ({ row }) =>
           row.original.current_tier_level ? (
             <div className='flex flex-col gap-1'>
-              <Badge variant='outline'>
+              <Badge
+                variant='outline'
+                className={getEmployeeTierLevelBadgeClass(
+                  row.original.current_tier_level
+                )}
+              >
                 {t('Tier {{level}}', {
                   level: row.original.current_tier_level,
                 })}
               </Badge>
-              <span className='text-muted-foreground text-xs'>
-                {formatPercent(row.original.current_tier_rate)}
-              </span>
+              <div className='flex flex-wrap items-center gap-1.5'>
+                <span className='text-muted-foreground text-xs'>
+                  {formatPercent(row.original.current_tier_rate)}
+                </span>
+                {row.original.current_tier_group ? (
+                  <Badge
+                    variant='outline'
+                    className={getEmployeeTierGroupBadgeClass(
+                      row.original.current_tier_group
+                    )}
+                  >
+                    {row.original.current_tier_group}
+                  </Badge>
+                ) : null}
+              </div>
             </div>
           ) : (
             <span className='text-muted-foreground'>-</span>
           ),
       },
       {
-        accessorKey: 'commission_rate',
-        meta: { label: t('Commission Rate') },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Commission Rate')} />
-        ),
-        cell: ({ row }) => formatPercent(row.original.commission_rate),
-      },
-      {
-        accessorKey: 'target_amount',
+        accessorKey: 'current_tier_threshold_usd',
         meta: { label: t('Performance Target') },
         header: ({ column }) => (
           <DataTableColumnHeader
@@ -567,8 +1227,8 @@ function useEmployeesColumns({
           />
         ),
         cell: ({ row }) =>
-          row.original.target_amount
-            ? formatTargetAmount(row.original.target_amount)
+          getPerformanceTargetUsd(row.original)
+            ? formatTargetAmount(getPerformanceTargetUsd(row.original))
             : t('No limit'),
       },
       {
@@ -580,20 +1240,7 @@ function useEmployeesColumns({
             title={t('Current Performance')}
           />
         ),
-        cell: ({ row }) => (
-          <div className='min-w-[110px]'>
-            <div>
-              {formatBusinessAmount(
-                row.original.current_performance_quota ?? 0
-              )}
-            </div>
-            {row.original.target_amount ? (
-              <div className='text-muted-foreground text-xs'>
-                {t('Target')}: {formatTargetAmount(row.original.target_amount)}
-              </div>
-            ) : null}
-          </div>
-        ),
+        cell: ({ row }) => <PerformanceProgressCell row={row.original} />,
       },
       {
         accessorKey: 'status',
@@ -620,34 +1267,17 @@ function useEmployeesColumns({
         id: 'actions',
         enableSorting: false,
         cell: ({ row }) => (
-          <div className='flex gap-1'>
-            <Button
-              size='icon'
-              variant='ghost'
-              title={t('Assign Customer')}
-              onClick={() => onAssign(row.original)}
-            >
-              <UserRoundPlus className='h-4 w-4' />
-            </Button>
-            <Button
-              size='icon'
-              variant='ghost'
-              onClick={() => onEdit(row.original)}
-            >
-              <Pencil className='h-4 w-4' />
-            </Button>
-            <Button
-              size='icon'
-              variant='ghost'
-              onClick={() => onDelete(row.original)}
-            >
-              <Trash2 className='text-destructive h-4 w-4' />
-            </Button>
-          </div>
+          <EmployeeRowActions
+            row={row.original}
+            onAssign={onAssign}
+            onDelete={onDelete}
+            onEdit={onEdit}
+            onRemoveCustomers={onRemoveCustomers}
+          />
         ),
       },
     ],
-    [onAssign, onDelete, onEdit, t]
+    [onAssign, onDelete, onEdit, onRemoveCustomers, t]
   )
 }
 
@@ -755,6 +1385,9 @@ function EmployeesTab() {
   const [editRow, setEditRow] = useState<EmployeeProfile | undefined>()
   const [deleteRow, setDeleteRow] = useState<EmployeeProfile | undefined>()
   const [assignRow, setAssignRow] = useState<EmployeeProfile | undefined>()
+  const [removeCustomersRow, setRemoveCustomersRow] = useState<
+    EmployeeProfile | undefined
+  >()
   const [filterForm, setFilterForm] = useState({
     userId: '',
     keyword: '',
@@ -774,9 +1407,10 @@ function EmployeesTab() {
     onEdit: setEditRow,
     onDelete: setDeleteRow,
     onAssign: setAssignRow,
+    onRemoveCustomers: setRemoveCustomersRow,
   })
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['employees', filters, sorting, pagination],
     queryFn: () => {
       const activeSort = sorting[0]
@@ -838,15 +1472,48 @@ function EmployeesTab() {
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
 
+  const hasFilterDrafts =
+    Boolean(filterForm.userId) ||
+    Boolean(filterForm.keyword.trim()) ||
+    filterForm.status !== '0'
+  const hasActiveFilters =
+    Boolean(filters.user_id) ||
+    Boolean(filters.keyword) ||
+    Boolean(filters.status) ||
+    hasFilterDrafts
+  const employeeTotal = data?.data?.total ?? 0
+  const statusOptions = [
+    { label: t('All'), value: '0' },
+    { label: t('Enabled'), value: '1' },
+    { label: t('Disabled'), value: '2' },
+  ]
+
   return (
     <>
       <DataTablePage
         table={table}
         columns={columns}
         isLoading={isLoading}
+        isFetching={isFetching}
         emptyTitle={t('No employees yet')}
+        emptyDescription={t(
+          'Create an employee to start tracking customers, performance, and commission.'
+        )}
+        emptyAction={
+          <Button size='sm' onClick={() => setCreateOpen(true)}>
+            <PlusIcon className='h-4 w-4' />
+            {t('Add Employee')}
+          </Button>
+        }
+        paginationInFooter={false}
         toolbar={
-          <div className='flex w-full flex-col gap-2 lg:flex-row lg:items-center lg:justify-between'>
+          <form
+            className='flex w-full flex-col gap-2 lg:flex-row lg:items-center lg:justify-between'
+            onSubmit={(event) => {
+              event.preventDefault()
+              applyFilters()
+            }}
+          >
             <div className='flex flex-wrap items-center gap-2'>
               <Input
                 type='number'
@@ -872,33 +1539,56 @@ function EmployeesTab() {
                 }
                 className='w-[240px]'
               />
-              <Select
-                value={filterForm.status}
-                onValueChange={(value) =>
-                  setFilterForm((form) => ({ ...form, status: value ?? '0' }))
-                }
-              >
-                <SelectTrigger className='w-[120px]'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='0'>{t('All')}</SelectItem>
-                  <SelectItem value='1'>{t('Enabled')}</SelectItem>
-                  <SelectItem value='2'>{t('Disabled')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button size='sm' onClick={applyFilters}>
+              <ButtonGroup>
+                {statusOptions.map((option) => (
+                  <Button
+                    key={option.value}
+                    type='button'
+                    size='sm'
+                    variant={
+                      filterForm.status === option.value ? 'default' : 'outline'
+                    }
+                    onClick={() =>
+                      setFilterForm((form) => ({
+                        ...form,
+                        status: option.value,
+                      }))
+                    }
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </ButtonGroup>
+              <Button size='sm' type='submit'>
+                <Search className='h-4 w-4' />
                 {t('Search')}
               </Button>
-              <Button size='sm' variant='outline' onClick={resetFilters}>
+              <Button
+                size='sm'
+                type='button'
+                variant='outline'
+                disabled={!hasActiveFilters}
+                onClick={resetFilters}
+              >
+                <RotateCcw className='h-4 w-4' />
                 {t('Reset')}
               </Button>
+              <span className='text-muted-foreground text-xs'>
+                {t('{{count}} employees found', { count: employeeTotal })}
+              </span>
             </div>
-            <Button size='sm' onClick={() => setCreateOpen(true)}>
+            <Button type='button' size='sm' onClick={() => setCreateOpen(true)}>
               <PlusIcon className='mr-1 h-4 w-4' />
               {t('Add Employee')}
             </Button>
-          </div>
+          </form>
+        }
+        getRowClassName={(row, ctx) =>
+          row.original.status === 2
+            ? ctx.isMobile
+              ? DISABLED_ROW_MOBILE
+              : DISABLED_ROW_DESKTOP
+            : undefined
         }
         skeletonKeyPrefix='employees-skeleton'
         className='flex h-full min-h-0 flex-col overflow-hidden'
@@ -922,16 +1612,40 @@ function EmployeesTab() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('Disable Employee')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(
-                'This will disable the employee. Historical commission logs are retained.'
-              )}
+            <AlertDialogDescription render={<div />}>
+              <div className='space-y-3'>
+                <p>
+                  {t(
+                    'This will disable the employee. Historical commission logs are retained.'
+                  )}
+                </p>
+                {deleteRow ? (
+                  <div className='bg-muted/40 text-foreground rounded-lg border px-3 py-2 text-sm'>
+                    <div className='flex min-w-0 items-center gap-2'>
+                      <span className='truncate font-medium'>
+                        {deleteRow.username || `#${deleteRow.user_id}`}
+                      </span>
+                      {deleteRow.display_name ? (
+                        <span className='text-muted-foreground truncate'>
+                          {deleteRow.display_name}
+                        </span>
+                      ) : null}
+                      <Badge variant='outline' className='ml-auto shrink-0'>
+                        #{deleteRow.user_id}
+                      </Badge>
+                    </div>
+                    <div className='text-muted-foreground mt-1 text-xs'>
+                      {t('Customer Count')}: {deleteRow.customer_count ?? 0}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>
-              {t('Confirm')}
+            <AlertDialogAction variant='destructive' onClick={handleDelete}>
+              {t('Disable Employee')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -940,6 +1654,12 @@ function EmployeesTab() {
         open={!!assignRow}
         employee={assignRow}
         onOpenChange={(open) => !open && setAssignRow(undefined)}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
+      />
+      <RemoveCustomersDialog
+        open={!!removeCustomersRow}
+        employee={removeCustomersRow}
+        onOpenChange={(open) => !open && setRemoveCustomersRow(undefined)}
         onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
       />
     </>
@@ -970,7 +1690,7 @@ function CommissionLogsTab() {
     pageSize: 20,
   })
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['admin-commission-logs', pagination, filters],
     queryFn: () =>
       getCommissionLogs({
@@ -1036,7 +1756,9 @@ function CommissionLogsTab() {
       table={table}
       columns={columns}
       isLoading={isLoading}
+      isFetching={isFetching}
       emptyTitle={t('No records')}
+      paginationInFooter={false}
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <Input
@@ -1119,26 +1841,79 @@ function CommissionLogsTab() {
 function TierDialog({
   open,
   currentRow,
+  tiers = [],
   onOpenChange,
   onSuccess,
 }: {
   open: boolean
   currentRow?: EmployeeTier
+  tiers?: EmployeeTier[]
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
 }) {
   const { t } = useTranslation()
   const [level, setLevel] = useState('1')
+  const [group, setGroup] = useState(DEFAULT_TIER_GROUP)
   const [thresholdUsd, setThresholdUsd] = useState('0')
   const [rate, setRate] = useState('0.1')
   const [saving, setSaving] = useState(false)
+  const [addingGroup, setAddingGroup] = useState(false)
+  const [newGroupText, setNewGroupText] = useState('')
+  const [extraGroups, setExtraGroups] = useState<string[]>([])
+  const newGroupInputRef = useRef<HTMLInputElement>(null)
+  const parsedLevel = Number(level)
+  const parsedThresholdUsd = Number(thresholdUsd)
+  const parsedRate = Number(rate)
+  const normalizedGroup = group.trim() || DEFAULT_TIER_GROUP
+  const rateText = Number.isFinite(parsedRate) ? formatPercent(parsedRate) : '-'
+  const thresholdText =
+    Number.isFinite(parsedThresholdUsd) && parsedThresholdUsd > 0
+      ? formatTargetAmount(parsedThresholdUsd)
+      : t('No limit')
+  const duplicateTier = tiers.find(
+    (tier) =>
+      tier.id !== currentRow?.id &&
+      tier.level === parsedLevel &&
+      (tier.group || DEFAULT_TIER_GROUP) === normalizedGroup
+  )
+
+  const baseGroups = useMemo(() => {
+    const seen = new Set<string>([DEFAULT_TIER_GROUP])
+    tiers.forEach((t) => {
+      if (t.group) seen.add(t.group)
+    })
+    return Array.from(seen)
+  }, [tiers])
+
+  const allGroups = useMemo(() => {
+    const seen = new Set<string>(baseGroups)
+    extraGroups.forEach((g) => seen.add(g))
+    if (group && !seen.has(group)) seen.add(group)
+    return Array.from(seen)
+  }, [baseGroups, extraGroups, group])
 
   useEffect(() => {
     if (!open) return
+    setExtraGroups([])
+    setAddingGroup(false)
+    setNewGroupText('')
     setLevel(String(currentRow?.level ?? 1))
+    setGroup(currentRow?.group || DEFAULT_TIER_GROUP)
     setThresholdUsd(String(currentRow?.threshold_usd ?? 0))
     setRate(String(currentRow?.rate ?? 0.1))
   }, [currentRow, open])
+
+  useEffect(() => {
+    if (addingGroup) newGroupInputRef.current?.focus()
+  }, [addingGroup])
+
+  const confirmNewGroup = () => {
+    const g = newGroupText.trim()
+    if (g && !allGroups.includes(g)) setExtraGroups((prev) => [...prev, g])
+    if (g) setGroup(g)
+    setAddingGroup(false)
+    setNewGroupText('')
+  }
 
   const submit = async () => {
     const nextLevel = Number(level)
@@ -1146,10 +1921,25 @@ function TierDialog({
       toast.error(t('Tier number must be at least 1'))
       return
     }
+    const nextThresholdUsd = Number(thresholdUsd)
+    if (!Number.isFinite(nextThresholdUsd) || nextThresholdUsd < 0) {
+      toast.error(t('Threshold must be zero or greater'))
+      return
+    }
+    const nextRate = Number(rate)
+    if (!Number.isFinite(nextRate) || nextRate < 0 || nextRate > 1) {
+      toast.error(t('Commission rate must be between 0 and 1'))
+      return
+    }
+    if (duplicateTier) {
+      toast.error(t('A tier with the same level and group already exists'))
+      return
+    }
     const body = {
       level: nextLevel,
-      threshold_usd: Number(thresholdUsd) || 0,
-      rate: Number(rate) || 0,
+      group: normalizedGroup,
+      threshold_usd: nextThresholdUsd,
+      rate: nextRate,
     }
     setSaving(true)
     try {
@@ -1180,6 +1970,11 @@ function TierDialog({
           <DialogTitle>
             {currentRow ? t('Edit Tier') : t('Create Tier')}
           </DialogTitle>
+          <DialogDescription>
+            {t(
+              'Set the promotion threshold and commission rate employees receive after reaching this tier.'
+            )}
+          </DialogDescription>
         </DialogHeader>
         <div className='space-y-4'>
           <div className='space-y-2'>
@@ -1196,6 +1991,72 @@ function TierDialog({
                 'A positive integer. Higher numbers indicate higher tiers, such as 1, 2, 3.'
               )}
             </p>
+          </div>
+          <div className='space-y-2'>
+            <label className='text-sm font-medium'>{t('Group')}</label>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              {allGroups.map((g) => (
+                <button
+                  key={g}
+                  type='button'
+                  onClick={() => setGroup(g)}
+                  className={cn(
+                    'rounded-full border px-4 py-1.5 text-sm font-medium transition-colors',
+                    group === g
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mr-2 inline-block size-2 rounded-full align-middle',
+                      group === g
+                        ? 'bg-primary-foreground'
+                        : getEmployeeTierGroupDotClass(g)
+                    )}
+                  />
+                  {g}
+                </button>
+              ))}
+              {addingGroup ? (
+                <input
+                  ref={newGroupInputRef}
+                  value={newGroupText}
+                  onChange={(e) => setNewGroupText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      confirmNewGroup()
+                    }
+                    if (e.key === 'Escape') {
+                      setAddingGroup(false)
+                      setNewGroupText('')
+                    }
+                  }}
+                  onBlur={confirmNewGroup}
+                  placeholder={t('Group name')}
+                  className='border-input bg-background w-24 rounded-full border px-3 py-1 text-xs outline-none focus:ring-1'
+                />
+              ) : (
+                <button
+                  type='button'
+                  onClick={() => setAddingGroup(true)}
+                  className='border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-full border px-4 py-1.5 text-sm font-medium transition-colors'
+                >
+                  + {t('New')}
+                </button>
+              )}
+            </div>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Group name within this tier level. Multiple groups can share the same tier level with different rates. Defaults to the general group.'
+              )}
+            </p>
+            {duplicateTier ? (
+              <p className='text-destructive text-xs'>
+                {t('A tier with the same level and group already exists')}
+              </p>
+            ) : null}
           </div>
           <div className='space-y-2'>
             <label className='text-sm font-medium'>
@@ -1226,21 +2087,102 @@ function TierDialog({
               value={rate}
               onChange={(event) => setRate(event.target.value)}
             />
+            <div className='flex flex-wrap gap-1.5'>
+              {[0.05, 0.1, 0.15, 0.2].map((preset) => (
+                <Button
+                  key={preset}
+                  type='button'
+                  size='xs'
+                  variant={Number(rate) === preset ? 'default' : 'outline'}
+                  onClick={() => setRate(String(preset))}
+                >
+                  {formatPercent(preset)}
+                </Button>
+              ))}
+            </div>
             <p className='text-muted-foreground text-xs'>
               {t('0.1 means 10%, applied after reaching this tier.')}
             </p>
+          </div>
+          <div className='bg-muted/30 rounded-lg border px-3 py-2 text-sm'>
+            <div className='text-muted-foreground text-xs'>
+              {t('Tier preview')}
+            </div>
+            <div className='mt-1 flex flex-wrap items-center gap-2'>
+              <Badge
+                variant='outline'
+                className={getEmployeeTierLevelBadgeClass(parsedLevel)}
+              >
+                {t('Tier {{level}}', {
+                  level:
+                    Number.isFinite(parsedLevel) && parsedLevel > 0
+                      ? parsedLevel
+                      : '-',
+                })}
+              </Badge>
+              <Badge
+                variant='outline'
+                className={getEmployeeTierGroupBadgeClass(normalizedGroup)}
+              >
+                {normalizedGroup}
+              </Badge>
+              <span className='text-muted-foreground'>
+                {t('Threshold')}: {thresholdText}
+              </span>
+              <span className='text-muted-foreground'>
+                {t('Rate')}: {rateText}
+              </span>
+            </div>
           </div>
         </div>
         <DialogFooter>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('Cancel')}
           </Button>
-          <Button disabled={saving} onClick={submit}>
+          <Button disabled={saving || Boolean(duplicateTier)} onClick={submit}>
             {saving ? t('Saving...') : t('Save')}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function TierRowActions({
+  row,
+  onEdit,
+  onDelete,
+}: {
+  row: EmployeeTier
+  onEdit: (row: EmployeeTier) => void
+  onDelete: (row: EmployeeTier) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger
+        render={<Button variant='ghost' size='sm' className='h-7 px-2' />}
+      >
+        <MoreHorizontal className='h-4 w-4' />
+        {t('Manage')}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end' className='w-[170px]'>
+        <DropdownMenuItem onClick={() => onEdit(row)}>
+          {t('Edit Tier')}
+          <DropdownMenuShortcut>
+            <Pencil className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant='destructive' onClick={() => onDelete(row)}>
+          {t('Delete Tier')}
+          <DropdownMenuShortcut>
+            <Trash2 className='h-4 w-4' />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -1250,17 +2192,41 @@ function TiersTab() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<EmployeeTier | undefined>()
   const [deleteRow, setDeleteRow] = useState<EmployeeTier | undefined>()
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  })
 
   const columns = useMemo(
     (): ColumnDef<EmployeeTier>[] => [
       {
+        accessorKey: 'group',
+        meta: { label: t('Group'), mobileTitle: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Group')} />
+        ),
+        cell: ({ row }) => (
+          <Badge
+            variant='outline'
+            className={getEmployeeTierGroupBadgeClass(
+              row.original.group || DEFAULT_TIER_GROUP
+            )}
+          >
+            {row.original.group || DEFAULT_TIER_GROUP}
+          </Badge>
+        ),
+      },
+      {
         accessorKey: 'level',
-        meta: { label: t('Tier'), mobileTitle: true },
+        meta: { label: t('Tier') },
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Tier')} />
         ),
         cell: ({ row }) => (
-          <Badge variant='outline'>
+          <Badge
+            variant='outline'
+            className={getEmployeeTierLevelBadgeClass(row.original.level)}
+          >
             {t('Tier {{level}}', { level: row.original.level })}
           </Badge>
         ),
@@ -1290,41 +2256,44 @@ function TiersTab() {
         id: 'actions',
         enableSorting: false,
         cell: ({ row }) => (
-          <div className='flex gap-1'>
-            <Button
-              size='icon'
-              variant='ghost'
-              onClick={() => setEditRow(row.original)}
-            >
-              <Pencil className='h-4 w-4' />
-            </Button>
-            <Button
-              size='icon'
-              variant='ghost'
-              onClick={() => setDeleteRow(row.original)}
-            >
-              <Trash2 className='text-destructive h-4 w-4' />
-            </Button>
-          </div>
+          <TierRowActions
+            row={row.original}
+            onDelete={setDeleteRow}
+            onEdit={setEditRow}
+          />
         ),
       },
     ],
     [t]
   )
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['employee-tiers'],
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['employee-tiers', 'page', pagination],
+    queryFn: () =>
+      getEmployeeTiersPage({
+        page: pagination.pageIndex + 1,
+        page_size: pagination.pageSize,
+      }),
+  })
+
+  const { data: allTiersData } = useQuery({
+    queryKey: ['employee-tiers', 'all'],
     queryFn: getEmployeeTiers,
   })
 
   const table = useReactTable({
-    data: data?.data ?? [],
+    data: data?.data?.items ?? [],
     columns,
+    rowCount: data?.data?.total ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
+    manualPagination: true,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['employee-tiers'] })
+  const tierTotal = data?.data?.total ?? 0
 
   const handleDelete = async () => {
     if (!deleteRow) return
@@ -1348,29 +2317,41 @@ function TiersTab() {
         table={table}
         columns={columns}
         isLoading={isLoading}
+        isFetching={isFetching}
         emptyTitle={t('No tier configuration yet')}
         emptyDescription={t('Click Add Tier to create one.')}
+        emptyAction={
+          <Button size='sm' onClick={() => setCreateOpen(true)}>
+            <PlusIcon className='h-4 w-4' />
+            {t('Add Tier')}
+          </Button>
+        }
         toolbar={
-          <div className='flex justify-end'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <span className='text-muted-foreground text-xs'>
+              {t('{{count}} tiers configured', { count: tierTotal })}
+            </span>
             <Button size='sm' onClick={() => setCreateOpen(true)}>
               <PlusIcon className='mr-1 h-4 w-4' />
               {t('Add Tier')}
             </Button>
           </div>
         }
-        showPagination={false}
+        paginationInFooter={false}
         skeletonKeyPrefix='employee-tiers-skeleton'
         className='flex h-full min-h-0 flex-col overflow-hidden'
         tableClassName='min-h-0 flex-1 overflow-auto'
       />
       <TierDialog
         open={createOpen}
+        tiers={allTiersData?.data ?? []}
         onOpenChange={setCreateOpen}
         onSuccess={refresh}
       />
       <TierDialog
         open={!!editRow}
         currentRow={editRow}
+        tiers={allTiersData?.data ?? []}
         onOpenChange={(open) => !open && setEditRow(undefined)}
         onSuccess={refresh}
       />
@@ -1381,16 +2362,51 @@ function TiersTab() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('Delete Tier')}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(
-                'Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.'
-              )}
+            <AlertDialogDescription render={<div />}>
+              <div className='space-y-3'>
+                <p>
+                  {t(
+                    'Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.'
+                  )}
+                </p>
+                {deleteRow ? (
+                  <div className='bg-muted/40 text-foreground rounded-lg border px-3 py-2 text-sm'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <Badge
+                        variant='outline'
+                        className={getEmployeeTierLevelBadgeClass(
+                          deleteRow.level
+                        )}
+                      >
+                        {t('Tier {{level}}', { level: deleteRow.level })}
+                      </Badge>
+                      <Badge
+                        variant='outline'
+                        className={getEmployeeTierGroupBadgeClass(
+                          deleteRow.group || DEFAULT_TIER_GROUP
+                        )}
+                      >
+                        {deleteRow.group || DEFAULT_TIER_GROUP}
+                      </Badge>
+                    </div>
+                    <div className='text-muted-foreground mt-2 grid gap-1 text-xs'>
+                      <span>
+                        {t('Performance Threshold (USD)')}:{' '}
+                        {formatTargetAmount(deleteRow.threshold_usd)}
+                      </span>
+                      <span>
+                        {t('Commission Rate')}: {formatPercent(deleteRow.rate)}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>
-              {t('Confirm')}
+            <AlertDialogAction variant='destructive' onClick={handleDelete}>
+              {t('Delete Tier')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

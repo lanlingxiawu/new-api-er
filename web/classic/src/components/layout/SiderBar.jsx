@@ -144,7 +144,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         to: '/personal',
       },
       {
-        text: t('我的佣金'),
+        text: t('我的提成'),
         itemKey: 'commission',
         to: '/commission',
         className: userState?.user?.is_employee ? '' : 'tableHiddle',

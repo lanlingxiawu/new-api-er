@@ -120,7 +120,9 @@ export function ChannelCostFormDialog({
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('1.0 = full cost, 0.6 = 60% of standard price')}
+                    {t(
+                      '填写上游或中转站倍率，用于计算成本、利润和员工提成；如 0.6 表示按 60% 计成本。'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

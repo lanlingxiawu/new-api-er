@@ -15,7 +15,14 @@ export const employeeProfileSchema = z.object({
   total_commission_quota: z.number().optional(),
   current_tier_id: z.number().optional(),
   current_tier_level: z.number().optional(),
+  current_tier_group: z.string().optional(),
   current_tier_rate: z.number().optional(),
+  current_tier_threshold_usd: z.number().optional(),
+  next_tier_id: z.number().optional(),
+  next_tier_level: z.number().optional(),
+  next_tier_group: z.string().optional(),
+  next_tier_rate: z.number().optional(),
+  next_tier_threshold_usd: z.number().optional(),
   current_performance_quota: z.number().optional(),
   commission_rules: z.string().optional(),
   status: z.number(),
@@ -25,9 +32,25 @@ export const employeeProfileSchema = z.object({
 })
 export type EmployeeProfile = z.infer<typeof employeeProfileSchema>
 
+export interface EmployeeCustomer {
+  id: number
+  employee_user_id: number
+  customer_user_id: number
+  username: string
+  display_name?: string
+  email?: string
+  quota?: number
+  used_quota?: number
+  commission_quota?: number
+  status?: number
+  remark?: string
+  created_at?: number
+}
+
 export interface EmployeeTier {
   id: number
   level: number
+  group: string
   threshold_usd: number
   rate: number
   created_at?: number
@@ -39,7 +62,7 @@ export const commissionLogSchema = z.object({
   employee_id: z.number(),
   employee_user_id: z.number(),
   customer_user_id: z.number(),
-  log_id: z.number(),
+  log_id: z.number().nullable(),
   model_name: z.string(),
   channel_id: z.number(),
   revenue_quota: z.number(),

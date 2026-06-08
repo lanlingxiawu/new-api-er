@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
   type ReactNode,
@@ -38,9 +39,15 @@ import {
   formatBusinessUsd,
 } from '@/features/business/format'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
-import { getCommissionOverview } from './api'
+import {
+  getCommissionOverview,
+  triggerBackfill,
+  type ChannelProfitStat,
+  type EmployeeStat,
+} from './api'
 
 // Range options
+const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running'
 
 type RangeKey = '1d' | '7d' | '30d' | '90d' | 'all' | 'custom'
 
@@ -84,9 +91,9 @@ function toUnixTimestamp(date?: Date): number | undefined {
   return Math.floor(date.getTime() / 1000)
 }
 
-const TABLE_INITIAL_ROWS = 5
-const TABLE_LOAD_STEP = 5
 const CLASSIC_TABLE_SCROLL_HEIGHT = 223
+const OVERVIEW_TABLE_PAGE_SIZE = 20
+const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10
 
 function ScrollTable({
   children,
@@ -168,7 +175,7 @@ function SortableHead({
   const isActive = currentSort?.key === sortKey
   return (
     <button
-      className='flex items-center gap-1 hover:text-foreground transition-colors'
+      className='hover:text-foreground flex items-center gap-1 transition-colors'
       onClick={() => onSort(sortKey)}
     >
       {children}
@@ -246,15 +253,21 @@ export function CommissionOverview() {
   const [customRange, setCustomRange] = useState<OverviewRange>(() =>
     getPresetRange('1d')
   )
-  const [visibleChannelRows, setVisibleChannelRows] =
-    useState(TABLE_INITIAL_ROWS)
-  const [visibleEmployeeRows, setVisibleEmployeeRows] =
-    useState(TABLE_INITIAL_ROWS)
+  const [channelPage, setChannelPage] = useState(1)
+  const [employeePage, setEmployeePage] = useState(1)
   const [channelFilter, setChannelFilter] = useState('')
   const [channelSort, setChannelSort] = useState<{
     key: string
     dir: 'asc' | 'desc'
   } | null>(null)
+  const [loadedChannelRows, setLoadedChannelRows] = useState<
+    ChannelProfitStat[]
+  >([])
+  const [loadedEmployeeRows, setLoadedEmployeeRows] = useState<EmployeeStat[]>(
+    []
+  )
+  const channelRowsByPageRef = useRef(new Map<string, ChannelProfitStat[]>())
+  const employeeRowsByPageRef = useRef(new Map<string, EmployeeStat[]>())
 
   const selectedRange = useMemo(() => {
     if (range === 'custom') return customRange
@@ -268,6 +281,29 @@ export function CommissionOverview() {
     () => toUnixTimestamp(selectedRange.end),
     [selectedRange.end]
   )
+  const channelMergeScope = useMemo(
+    () =>
+      [
+        range,
+        startTime ?? '',
+        endTime ?? '',
+        channelFilter.trim(),
+        channelSort?.key ?? '',
+        channelSort?.dir ?? '',
+      ].join('|'),
+    [
+      channelFilter,
+      channelSort?.dir,
+      channelSort?.key,
+      endTime,
+      range,
+      startTime,
+    ]
+  )
+  const employeeMergeScope = useMemo(
+    () => [range, startTime ?? '', endTime ?? ''].join('|'),
+    [endTime, range, startTime]
+  )
 
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: [
@@ -275,14 +311,65 @@ export function CommissionOverview() {
       range,
       startTime ?? null,
       endTime ?? null,
+      channelPage,
+      employeePage,
+      channelFilter,
+      channelSort?.key ?? null,
+      channelSort?.dir ?? null,
     ],
     queryFn: () =>
-      getCommissionOverview({ start_time: startTime, end_time: endTime }),
+      getCommissionOverview({
+        start_time: startTime,
+        end_time: endTime,
+        channel_page: channelPage,
+        channel_page_size: OVERVIEW_TABLE_PAGE_SIZE,
+        channel_keyword: channelFilter.trim() || undefined,
+        channel_sort_by: channelSort?.key,
+        channel_sort_order: channelSort?.dir,
+        employee_page: employeePage,
+        employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
+      }),
   })
 
   const d = data?.data
   const platform = d?.platform
   const comm = d?.commission
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillStarted, setBackfillStarted] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return (
+      window.localStorage.getItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY) ===
+      'true'
+    )
+  })
+  const showBackfill = Boolean(d?.needs_backfill)
+  const showBackfillRunning = showBackfill && (backfilling || backfillStarted)
+
+  useEffect(() => {
+    if (!d || d.needs_backfill) return
+    setBackfillStarted(false)
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY)
+    }
+  }, [d?.needs_backfill])
+
+  const handleBackfill = useCallback(async () => {
+    setBackfilling(true)
+    try {
+      await triggerBackfill()
+      setBackfillStarted(true)
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY, 'true')
+      }
+    } catch {
+      setBackfillStarted(false)
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY)
+      }
+    } finally {
+      setBackfilling(false)
+    }
+  }, [])
 
   const rangeButtons: { key: Exclude<RangeKey, 'custom'>; label: string }[] = [
     { key: '1d', label: t('Last 1 day') },
@@ -294,66 +381,82 @@ export function CommissionOverview() {
 
   const handlePresetChange = (nextRange: Exclude<RangeKey, 'custom'>) => {
     setRange(nextRange)
+    setChannelPage(1)
+    setEmployeePage(1)
+    channelRowsByPageRef.current.clear()
+    employeeRowsByPageRef.current.clear()
+    setLoadedChannelRows([])
+    setLoadedEmployeeRows([])
   }
 
   const handleCustomRangeChange = (nextRange: OverviewRange) => {
     setCustomRange(nextRange)
     setRange(resolveRangeKey(nextRange))
+    setChannelPage(1)
+    setEmployeePage(1)
+    channelRowsByPageRef.current.clear()
+    employeeRowsByPageRef.current.clear()
+    setLoadedChannelRows([])
+    setLoadedEmployeeRows([])
   }
 
   const channelPlatformRows = useMemo(
     () => d?.by_channel_platform ?? [],
     [d?.by_channel_platform]
   )
-  const employeeRows = useMemo(
-    () => (d?.by_employee ?? []).slice(0, 10),
-    [d?.by_employee]
-  )
-  const filteredChannelRows = useMemo(() => {
-    let rows = channelPlatformRows
-    const kw = channelFilter.trim().toLowerCase()
-    if (kw) {
-      rows = rows.filter(
-        (r) =>
-          (r.channel_name ?? '').toLowerCase().includes(kw) ||
-          String(r.channel_id).includes(kw),
+  const employeeRows = useMemo(() => d?.by_employee ?? [], [d?.by_employee])
+  const displayedChannelRows = loadedChannelRows
+  const displayedEmployeeRows = loadedEmployeeRows
+  const channelTotal =
+    d?.by_channel_platform_total ?? channelPlatformRows.length
+  const hasMoreChannelRows = displayedChannelRows.length < channelTotal
+
+  useEffect(() => {
+    setChannelPage(1)
+    channelRowsByPageRef.current.clear()
+    setLoadedChannelRows([])
+  }, [channelFilter, channelSort])
+
+  useEffect(() => {
+    if (!d) return
+    const fetchedChannelPage = d.by_channel_platform_page ?? channelPage
+    channelRowsByPageRef.current.set(
+      `${channelMergeScope}|${fetchedChannelPage}`,
+      channelPlatformRows
+    )
+    const nextRows: ChannelProfitStat[] = []
+    for (let page = 1; ; page += 1) {
+      const rows = channelRowsByPageRef.current.get(
+        `${channelMergeScope}|${page}`
       )
+      if (!rows) break
+      nextRows.push(...rows)
     }
-    if (channelSort) {
-      const { key, dir } = channelSort
-      rows = [...rows].sort((a, b) => {
-        const av = (a as Record<string, unknown>)[key]
-        const bv = (b as Record<string, unknown>)[key]
-        if (typeof av === 'string' || typeof bv === 'string') {
-          return dir === 'asc'
-            ? String(av ?? '').localeCompare(String(bv ?? ''))
-            : String(bv ?? '').localeCompare(String(av ?? ''))
-        }
-        return dir === 'asc'
-          ? Number(av ?? 0) - Number(bv ?? 0)
-          : Number(bv ?? 0) - Number(av ?? 0)
-      })
-    }
-    return rows
-  }, [channelPlatformRows, channelFilter, channelSort])
-  const displayedChannelRows = useMemo(
-    () => filteredChannelRows.slice(0, visibleChannelRows),
-    [filteredChannelRows, visibleChannelRows]
-  )
-  const displayedEmployeeRows = useMemo(
-    () => employeeRows.slice(0, visibleEmployeeRows),
-    [employeeRows, visibleEmployeeRows]
-  )
-  const hasMoreChannelRows = visibleChannelRows < filteredChannelRows.length
-  const hasMoreEmployeeRows = visibleEmployeeRows < employeeRows.length
+    setLoadedChannelRows(nextRows)
+  }, [channelMergeScope, channelPage, channelPlatformRows, d])
 
   useEffect(() => {
-    setVisibleChannelRows(TABLE_INITIAL_ROWS)
-  }, [filteredChannelRows])
+    if (!d) return
+    const fetchedEmployeePage = d.by_employee_page ?? employeePage
+    employeeRowsByPageRef.current.set(
+      `${employeeMergeScope}|${fetchedEmployeePage}`,
+      employeeRows
+    )
+    const nextRows: EmployeeStat[] = []
+    for (let page = 1; ; page += 1) {
+      const rows = employeeRowsByPageRef.current.get(
+        `${employeeMergeScope}|${page}`
+      )
+      if (!rows) break
+      nextRows.push(...rows)
+    }
+    setLoadedEmployeeRows(nextRows)
+  }, [employeeMergeScope, employeePage, employeeRows, d])
 
-  useEffect(() => {
-    setVisibleEmployeeRows(TABLE_INITIAL_ROWS)
-  }, [employeeRows])
+  const loadMoreChannels = useCallback(() => {
+    if (isFetching || !hasMoreChannelRows) return
+    setChannelPage((page) => page + 1)
+  }, [hasMoreChannelRows, isFetching])
 
   const toggleChannelSort = useCallback((key: string) => {
     setChannelSort((prev) =>
@@ -361,21 +464,9 @@ export function CommissionOverview() {
         ? prev.dir === 'desc'
           ? { key, dir: 'asc' }
           : null
-        : { key, dir: 'desc' },
+        : { key, dir: 'desc' }
     )
   }, [])
-
-  const loadMoreChannelRows = useCallback(() => {
-    setVisibleChannelRows((current) =>
-      Math.min(current + TABLE_LOAD_STEP, filteredChannelRows.length)
-    )
-  }, [filteredChannelRows.length])
-
-  const loadMoreEmployeeRows = useCallback(() => {
-    setVisibleEmployeeRows((current) =>
-      Math.min(current + TABLE_LOAD_STEP, employeeRows.length)
-    )
-  }, [employeeRows.length])
 
   return (
     <SectionPageLayout>
@@ -410,7 +501,9 @@ export function CommissionOverview() {
               disabled={isFetching}
               title={t('Refresh')}
             >
-              <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`}
+              />
             </Button>
           </div>
 
@@ -421,6 +514,26 @@ export function CommissionOverview() {
 
             {!isLoading && d && (
               <>
+                {showBackfill && (
+                  <div className='flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950/30'>
+                    <p className='flex-1 text-sm'>
+                      {showBackfillRunning
+                        ? t('Historical data is being backfilled.')
+                        : t(
+                            'Historical cost data needs to be migrated for accurate statistics. This is a one-time operation.'
+                          )}
+                    </p>
+                    {!showBackfillRunning && (
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        onClick={handleBackfill}
+                      >
+                        {t('Migrate now')}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {/* Platform consumption (whole platform) */}
                 <div className='space-y-2'>
                   <SectionTitle
@@ -465,7 +578,7 @@ export function CommissionOverview() {
                       value={String(platform?.request_count ?? 0)}
                       icon={TrendingUp}
                     />
-                    <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4 grid grid-cols-2 divide-x divide-border/60'>
+                    <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x px-3 py-3 sm:px-5 sm:py-4'>
                       <div className='pr-3'>
                         <div className='flex items-center gap-2'>
                           <TrendingUp className='text-muted-foreground/60 size-3.5 shrink-0' />
@@ -504,7 +617,7 @@ export function CommissionOverview() {
                       value={channelFilter}
                       onChange={(e) => setChannelFilter(e.target.value)}
                       placeholder={t('Filter channels...')}
-                      className='h-7 w-44 rounded-md border border-input bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring'
+                      className='border-input placeholder:text-muted-foreground focus:ring-ring h-7 w-44 rounded-md border bg-transparent px-3 text-sm outline-none focus:ring-1'
                     />
                     {channelFilter && (
                       <Button
@@ -519,45 +632,69 @@ export function CommissionOverview() {
                   </div>
                   <ScrollTable
                     hasMore={hasMoreChannelRows}
-                    onLoadMore={loadMoreChannelRows}
+                    onLoadMore={loadMoreChannels}
                   >
                     <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
                           <TableHead>
-                            <SortableHead sortKey='channel_name' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='channel_name'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Channel')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
-                            <SortableHead sortKey='cost_ratio' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='cost_ratio'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Cost Ratio')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
-                            <SortableHead sortKey='consumption_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='consumption_quota'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Total Consumption')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
-                            <SortableHead sortKey='est_cost_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='est_cost_quota'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Cost')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
-                            <SortableHead sortKey='est_profit_quota' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='est_profit_quota'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Profit')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
-                            <SortableHead sortKey='est_gross_margin' currentSort={channelSort} onSort={toggleChannelSort}>
+                            <SortableHead
+                              sortKey='est_gross_margin'
+                              currentSort={channelSort}
+                              onSort={toggleChannelSort}
+                            >
                               {t('Gross Margin')}
                             </SortableHead>
                           </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {filteredChannelRows.length === 0 && (
+                        {displayedChannelRows.length === 0 && (
                           <TableRow>
                             <TableCell
                               colSpan={6}
@@ -601,11 +738,11 @@ export function CommissionOverview() {
                 {/* Commission-attributed financials */}
                 <div className='space-y-2'>
                   <SectionTitle>
-                    {t('Employee-attributed traffic')}
+                    {t('Employee-attributed performance')}
                   </SectionTitle>
                   <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-2 lg:grid-cols-5'>
                     <StatCard
-                      title={t('Revenue')}
+                      title={t('Customer consumption')}
                       value={formatBusinessAmount(
                         comm?.total_revenue_quota ?? 0
                       )}
@@ -613,13 +750,13 @@ export function CommissionOverview() {
                       icon={DollarSign}
                     />
                     <StatCard
-                      title={t('Cost')}
+                      title={t('Customer cost')}
                       value={formatBusinessAmount(comm?.total_cost_quota ?? 0)}
                       sub={formatBusinessUsd(comm?.total_cost_usd)}
                       icon={Wallet}
                     />
                     <StatCard
-                      title={t('Profit')}
+                      title={t('Customer profit')}
                       value={formatBusinessAmount(
                         comm?.total_profit_quota ?? 0
                       )}
@@ -643,24 +780,27 @@ export function CommissionOverview() {
                   </StatPanel>
                 </div>
 
-                <BusinessSection title={t('By Employee')}>
-                  <ScrollTable
-                    hasMore={hasMoreEmployeeRows}
-                    onLoadMore={loadMoreEmployeeRows}
-                  >
+                <BusinessSection title={t('Top 10 employee performance')}>
+                  <ScrollTable>
                     <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
                           <TableHead>{t('Employee')}</TableHead>
-                          <TableHead>{t('Revenue')}</TableHead>
-                          <TableHead>{t('Cost')}</TableHead>
-                          <TableHead>{t('Profit')}</TableHead>
+                          <TableHead>
+                            {t('Customer consumption')}
+                          </TableHead>
+                          <TableHead>
+                            {t('Customer cost')}
+                          </TableHead>
+                          <TableHead>
+                            {t('Customer profit')}
+                          </TableHead>
                           <TableHead>{t('Commission')}</TableHead>
                           <TableHead>{t('Records')}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {employeeRows.length === 0 && (
+                        {displayedEmployeeRows.length === 0 && (
                           <TableRow>
                             <TableCell
                               colSpan={6}
@@ -673,8 +813,8 @@ export function CommissionOverview() {
                         {displayedEmployeeRows.map((e) => (
                           <TableRow key={e.employee_user_id}>
                             <TableCell>
-                              {e.username ||
-                                e.display_name ||
+                              {e.display_name ||
+                                e.username ||
                                 `#${e.employee_user_id}`}
                             </TableCell>
                             <TableCell>

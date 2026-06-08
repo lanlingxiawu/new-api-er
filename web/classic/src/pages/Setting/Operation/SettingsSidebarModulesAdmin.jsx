@@ -185,8 +185,8 @@ export default function SettingsSidebarModulesAdmin(props) {
         },
         {
           key: 'commission',
-          title: t('我的佣金'),
-          description: t('员工自助佣金看板'),
+          title: t('我的提成'),
+          description: t('员工自助提成看板'),
         },
         {
           key: 'customerConsole',
@@ -223,12 +223,12 @@ export default function SettingsSidebarModulesAdmin(props) {
         {
           key: 'employee',
           title: t('员工管理'),
-          description: t('管理员工与佣金比例'),
+          description: t('管理员工与提成比例'),
         },
         {
           key: 'businessOverview',
           title: t('业务概览'),
-          description: t('查看消耗、成本、利润与佣金统计'),
+          description: t('查看消耗、成本、利润与提成统计'),
         },
         {
           key: 'redemption',

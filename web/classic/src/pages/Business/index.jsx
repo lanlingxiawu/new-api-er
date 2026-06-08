@@ -30,6 +30,7 @@ import {
   Card,
   Col,
   DatePicker,
+  Dropdown,
   Empty,
   Input,
   InputNumber,
@@ -40,6 +41,7 @@ import {
   Space,
   Spin,
   Tag,
+  TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
 import {
@@ -51,15 +53,14 @@ import {
   BriefcaseBusiness,
   Clock,
   DollarSign,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
   Search,
-  Trash2,
   TrendingDown,
   TrendingUp,
   UserRoundCheck,
-  UserRoundPlus,
   Users,
   Wallet,
   X,
@@ -68,12 +69,79 @@ import { API, renderQuota, showError, showSuccess } from '../../helpers';
 import { getQuotaPerUnit } from '../../helpers/quota';
 import CardPro from '../../components/common/ui/CardPro';
 import CardTable from '../../components/common/ui/CardTable';
+import CompactModeToggle from '../../components/common/ui/CompactModeToggle';
 import { createCardProPagination } from '../../helpers/utils';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
+import { useTableCompactMode } from '../../hooks/common/useTableCompactMode';
 
 const { Text } = Typography;
 const PAGE_SIZE = 20;
+const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10;
+const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8;
+const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running';
 const BUSINESS_AMOUNT_DIGITS = 4;
+const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
+const DEFAULT_TIER_GROUP = '通用';
+
+const getTierGroup = (tier) => (tier?.group || '').trim() || DEFAULT_TIER_GROUP;
+
+const compareTierGroupLevel = (a, b) => {
+  const groupCompare = getTierGroup(a).localeCompare(
+    getTierGroup(b),
+    undefined,
+    {
+      numeric: true,
+      sensitivity: 'base',
+    },
+  );
+  if (groupCompare !== 0) return groupCompare;
+  return (
+    toNumber(a?.level) - toNumber(b?.level) ||
+    toNumber(a?.threshold_usd) - toNumber(b?.threshold_usd) ||
+    toNumber(a?.id) - toNumber(b?.id)
+  );
+};
+
+const TIER_GROUP_TAG_COLORS = [
+  'blue',
+  'green',
+  'orange',
+  'purple',
+  'cyan',
+  'pink',
+  'teal',
+  'violet',
+];
+
+const TIER_LEVEL_TAG_COLORS = [
+  'grey',
+  'indigo',
+  'teal',
+  'orange',
+  'pink',
+  'blue',
+  'green',
+  'yellow',
+];
+
+const getTierGroupTagColor = (group) => {
+  const text = String(group || DEFAULT_TIER_GROUP);
+  let hash = 0;
+  for (const char of text) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return TIER_GROUP_TAG_COLORS[hash % TIER_GROUP_TAG_COLORS.length];
+};
+
+const getTierLevelTagColor = (level) => {
+  const numericLevel = Number(level || 0);
+  if (Number.isFinite(numericLevel) && numericLevel > 0) {
+    return TIER_LEVEL_TAG_COLORS[
+      (Math.floor(numericLevel) - 1) % TIER_LEVEL_TAG_COLORS.length
+    ];
+  }
+  return TIER_LEVEL_TAG_COLORS[0];
+};
 
 const formatTs = (ts) => {
   if (!ts) return '-';
@@ -83,23 +151,6 @@ const formatTs = (ts) => {
 const toNumber = (value, fallback = 0) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
-};
-
-const isSameNumber = (left, right) =>
-  Math.abs(Number(left || 0) - Number(right || 0)) < 0.000001;
-
-const resolveSelectedTierId = (row, tiers) => {
-  if (!row) return null;
-
-  const currentTierId = Number(row.current_tier_id || 0);
-  if (currentTierId > 0) return currentTierId;
-
-  const matchedTier = tiers.find(
-    (tier) =>
-      isSameNumber(tier.rate, row.commission_rate) &&
-      isSameNumber(tier.threshold_usd, row.target_amount),
-  );
-  return matchedTier?.id || null;
 };
 
 const formatPercent = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
@@ -137,9 +188,20 @@ const formatTargetAmount = (value) => {
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
 };
 
+const getPerformanceTargetAmount = (row) => {
+  const nextTierTarget = Number(row?.next_tier_threshold_usd || 0);
+  if (Number.isFinite(nextTierTarget) && nextTierTarget > 0) {
+    return nextTierTarget;
+  }
+  const profileTarget = Number(row?.target_amount || 0);
+  return Number.isFinite(profileTarget) && profileTarget > 0
+    ? profileTarget
+    : 0;
+};
+
 const renderPerformanceProgress = (value, row, t) => {
   const currentQuota = Number(value || 0);
-  const targetAmount = Number(row?.target_amount || 0);
+  const targetAmount = getPerformanceTargetAmount(row);
 
   if (!Number.isFinite(targetAmount) || targetAmount <= 0) {
     return formatBusinessAmount(currentQuota);
@@ -224,8 +286,8 @@ function ClassicPagination({ paged, t }) {
     pageSize: paged.pageSize,
     total: paged.total,
     onPageChange: paged.setPage,
-    onPageSizeChange: () => {},
-    showSizeChanger: false,
+    onPageSizeChange: paged.setPageSize,
+    showSizeChanger: Boolean(paged.setPageSize),
     isMobile,
     t,
   });
@@ -294,14 +356,34 @@ function ClassicBusinessTable({
   style,
   scroll = { x: '100%' },
   size = 'middle',
+  hasMore = false,
+  onLoadMore,
   ...props
 }) {
+  const handleScroll = useCallback(
+    (event) => {
+      if (!hasMore || !onLoadMore) return;
+      const target = event.currentTarget;
+      const distanceToBottom =
+        target.scrollHeight - target.scrollTop - target.clientHeight;
+      if (distanceToBottom <= 24) {
+        onLoadMore();
+      }
+    },
+    [hasMore, onLoadMore],
+  );
+
   return (
-    <div className={`w-full ${wrapperClassName}`.trim()} style={wrapperStyle}>
+    <div
+      className={`w-full ${wrapperClassName}`.trim()}
+      style={wrapperStyle}
+      onScroll={handleScroll}
+    >
       <CardTable
         {...props}
         hidePagination
         scroll={scroll}
+        onScroll={handleScroll}
         style={{ width: '100%', ...style }}
         className={`rounded-xl overflow-hidden ${className}`.trim()}
         size={size}
@@ -405,9 +487,55 @@ function Field({ label, children }) {
   );
 }
 
+function SummaryPanel({ children, danger = false, className = '' }) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 ${className}`.trim()}
+      style={{
+        borderColor: danger
+          ? 'var(--semi-color-danger-light-default)'
+          : 'var(--semi-color-border)',
+        background: danger
+          ? 'var(--semi-color-danger-light-default)'
+          : 'var(--semi-color-fill-0)',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SummaryItem({ label, value }) {
+  return (
+    <div className='flex min-w-0 items-center justify-between gap-3 py-0.5'>
+      <Text type='secondary' size='small' className='shrink-0'>
+        {label}
+      </Text>
+      <Text strong size='small' ellipsis>
+        {value ?? '-'}
+      </Text>
+    </div>
+  );
+}
+
+function RowActionDropdown({ label, actions }) {
+  return (
+    <Dropdown trigger='click' position='bottomRight' menu={actions}>
+      <Button type='tertiary' size='small' icon={<MoreHorizontal size={14} />}>
+        {label}
+      </Button>
+    </Dropdown>
+  );
+}
+
 function usePagedEndpoint(endpoint, params = {}, options = {}) {
-  const { pageSize = PAGE_SIZE, paginate = true, enabled = true } = options;
+  const {
+    pageSize: initialPageSize = PAGE_SIZE,
+    paginate = true,
+    enabled = true,
+  } = options;
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSizeState] = useState(initialPageSize);
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -441,7 +569,7 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
     } finally {
       setLoading(false);
     }
-  }, [enabled, endpoint, page, paramsKey]);
+  }, [enabled, endpoint, page, pageSize, paramsKey]);
 
   useEffect(() => {
     if (enabled) {
@@ -449,13 +577,19 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
     }
   }, [enabled, load]);
 
+  const setPageSize = useCallback((nextPageSize) => {
+    setPageSizeState(Number(nextPageSize) || PAGE_SIZE);
+    setPage(1);
+  }, []);
+
   const pagination = paginate
     ? {
         currentPage: page,
         pageSize,
         total,
-        showSizeChanger: false,
+        showSizeChanger: true,
         onPageChange: setPage,
+        onPageSizeChange: setPageSize,
       }
     : false;
 
@@ -464,6 +598,7 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
     pageSize,
     paginate,
     setPage,
+    setPageSize,
     items,
     total,
     loading,
@@ -493,10 +628,11 @@ function UserPicker({
   value,
   onSelect,
   onClear,
+  multiple = false,
+  selectedUsers = [],
+  onToggle,
   excludeEmployee = true,
-  employeeId,
   employeeUserId,
-  onUnassignSuccess,
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -506,14 +642,17 @@ function UserPicker({
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [removingUserId, setRemovingUserId] = useState(null);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const containerRef = useRef(null);
+  const selectedIds = useMemo(
+    () => new Set(selectedUsers.map((user) => user.id)),
+    [selectedUsers],
+  );
 
   useEffect(() => {
-    if (!value) setSelectedLabel('');
-  }, [value]);
+    if (!value || multiple) setSelectedLabel('');
+  }, [multiple, value]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -606,31 +745,10 @@ function UserPicker({
     onClear?.();
   };
 
-  const removeAssignment = async (userId) => {
-    if (!employeeId) return;
-    setRemovingUserId(userId);
-    try {
-      await mutateRequest(
-        'delete',
-        `/api/admin/employee/${employeeId}/customer/${userId}`,
-      );
-      showSuccess(t('删除成功'));
-      if (value === userId) {
-        clearSelection();
-      }
-      await loadUsers(1, true);
-      onUnassignSuccess?.();
-    } catch (error) {
-      showError(error.message);
-    } finally {
-      setRemovingUserId(null);
-    }
-  };
-
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       <Input
-        value={open ? keyword : selectedLabel}
+        value={multiple ? keyword : open ? keyword : selectedLabel}
         placeholder={t('搜索用户名 / 显示名称 / 邮箱')}
         autoComplete='off'
         onChange={(nextValue) => {
@@ -638,11 +756,11 @@ function UserPicker({
           if (!open) setOpen(true);
         }}
         onFocus={() => {
-          setKeyword('');
+          if (!multiple) setKeyword('');
           setOpen(true);
         }}
       />
-      {value && !open ? (
+      {!multiple && value && !open ? (
         <Button
           type='tertiary'
           theme='borderless'
@@ -684,31 +802,42 @@ function UserPicker({
           ) : (
             <>
               {users.map((user) => {
-                const canRemove =
+                const isCurrentEmployeeCustomer =
                   user.is_assigned_customer &&
                   user.assigned_employee_user_id === employeeUserId;
+                const isSelected = multiple
+                  ? selectedIds.has(user.id)
+                  : value === user.id;
+                const canSelect = !multiple || !isCurrentEmployeeCustomer;
                 return (
                   <div
                     key={user.id}
                     role='option'
-                    aria-selected={value === user.id}
-                    className='cursor-pointer rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1'
+                    aria-selected={isSelected}
+                    className={`rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1 ${
+                      canSelect ? 'cursor-pointer' : 'cursor-default'
+                    }`}
                     style={{
-                      background:
-                        value === user.id
-                          ? 'var(--semi-color-fill-1)'
-                          : user.is_assigned_customer
-                            ? 'var(--semi-color-warning-light-default)'
-                            : undefined,
+                      background: isSelected
+                        ? 'var(--semi-color-fill-1)'
+                        : user.is_assigned_customer
+                          ? 'var(--semi-color-warning-light-default)'
+                          : undefined,
                     }}
                     onMouseDown={(event) => {
                       event.preventDefault();
+                      if (!canSelect) return;
                       const label = `${user.username}${
                         user.display_name ? ` (${user.display_name})` : ''
                       } #${user.id}`;
-                      setSelectedLabel(label);
-                      onSelect(user.id);
-                      setOpen(false);
+                      if (multiple) {
+                        onToggle?.(user);
+                        setOpen(true);
+                      } else {
+                        setSelectedLabel(label);
+                        onSelect(user);
+                        setOpen(false);
+                      }
                     }}
                   >
                     <div className='flex min-w-0 items-center justify-between gap-3'>
@@ -717,29 +846,17 @@ function UserPicker({
                         {user.display_name ? ` (${user.display_name})` : ''}
                       </span>
                       <div className='flex items-center gap-1.5 shrink-0'>
-                        {user.is_assigned_customer ? (
-                          <Tag color='orange' size='small'>
-                            {t('已分配')}
+                        {multiple && isSelected ? (
+                          <Tag color='blue' size='small'>
+                            {t('已选择')}
                           </Tag>
                         ) : null}
-                        {canRemove ? (
-                          <Button
-                            size='small'
-                            type='tertiary'
-                            theme='light'
-                            loading={removingUserId === user.id}
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              removeAssignment(user.id);
-                            }}
-                          >
-                            {t('移除')}
-                          </Button>
+                        {user.is_assigned_customer ? (
+                          <Tag color='orange' size='small'>
+                            {user.assigned_employee_user_id === employeeUserId
+                              ? t('当前员工')
+                              : t('已分配')}
+                          </Tag>
                         ) : null}
                         <span className='text-xs text-semi-color-text-2'>
                           #{user.id}
@@ -776,32 +893,400 @@ function UserPicker({
   );
 }
 
-function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
+function RemoveCustomersModal({ visible, row, onCancel, onRefresh }) {
   const { t } = useTranslation();
-  const [saving, setSaving] = useState(false);
-  const [userId, setUserId] = useState(null);
+  const [keyword, setKeyword] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [customerToRemove, setCustomerToRemove] = useState(null);
+  const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedKeyword(keyword.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [keyword]);
 
   useEffect(() => {
     if (!visible) {
-      setUserId(null);
+      setKeyword('');
+      setDebouncedKeyword('');
+      setCustomers([]);
+      setTotal(0);
+      setPage(1);
+      setCustomerToRemove(null);
     }
   }, [visible]);
 
-  const submit = async () => {
-    if (!userId) {
-      showError(t('请选择用户'));
-      return;
-    }
-    setSaving(true);
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedKeyword, row?.id]);
+
+  const loadCustomers = useCallback(
+    async (nextPage = page) => {
+      if (!visible || !row?.id) return;
+      setLoading(true);
+      try {
+        const res = await API.get(`/api/admin/employee/${row.id}/customers`, {
+          params: buildParams({
+            keyword: debouncedKeyword,
+            page_size: EMPLOYEE_CUSTOMERS_PAGE_SIZE,
+            page: nextPage,
+          }),
+          disableDuplicate: true,
+        });
+        const data = res.data?.data || {};
+        const nextItems = data.items || [];
+        const currentPage = Number(data.page || nextPage);
+        const nextTotal = Number(data.total || 0);
+        setCustomers(nextItems);
+        setPage(currentPage);
+        setTotal(nextTotal);
+      } catch (error) {
+        setCustomers([]);
+        setTotal(0);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [debouncedKeyword, page, row?.id, visible],
+  );
+
+  useEffect(() => {
+    if (!visible || !row?.id) return;
+    loadCustomers(page);
+  }, [loadCustomers, page, row?.id, visible]);
+
+  const getCustomerLabel = (customer) =>
+    `${customer.username || '-'}${
+      customer.display_name ? ` (${customer.display_name})` : ''
+    }`;
+  const getCustomerUserId = (customer) =>
+    customer.customer_user_id || customer.id;
+  const pageCount = Math.max(
+    1,
+    Math.ceil(total / EMPLOYEE_CUSTOMERS_PAGE_SIZE),
+  );
+  const pageStart =
+    total === 0 ? 0 : (page - 1) * EMPLOYEE_CUSTOMERS_PAGE_SIZE + 1;
+  const pageEnd = Math.min(total, page * EMPLOYEE_CUSTOMERS_PAGE_SIZE);
+  const employeeLabel =
+    row?.username ||
+    row?.display_name ||
+    (row?.user_id ? `#${row.user_id}` : '-');
+
+  const performRemoveCustomer = async () => {
+    if (!customerToRemove || !row?.id) return;
+    const customerUserId = getCustomerUserId(customerToRemove);
+    setRemoving(true);
     try {
       await mutateRequest(
-        'post',
-        `/api/admin/employee/${row.id}/assign-customer`,
-        {
-          user_id: toNumber(userId),
-        },
+        'delete',
+        `/api/admin/employee/${row.id}/customer/${customerUserId}`,
       );
-      showSuccess(t('客户分配成功'));
+      showSuccess(t('客户已从员工移除'));
+      setCustomerToRemove(null);
+      onRefresh?.();
+      if (customers.length === 1 && page > 1) {
+        setPage((current) => Math.max(1, current - 1));
+      } else {
+        await loadCustomers(page);
+      }
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <>
+      <Modal
+        visible={visible}
+        title={t('移除客户')}
+        onCancel={onCancel}
+        width={760}
+        footer={<Button onClick={onCancel}>{t('关闭')}</Button>}
+      >
+        <div
+          className='mb-4 rounded-lg border px-3 py-2'
+          style={{
+            borderColor: 'var(--semi-color-border)',
+            background: 'var(--semi-color-fill-0)',
+          }}
+        >
+          <Text type='secondary' size='small'>
+            {t('员工')}
+          </Text>
+          <div className='mt-1 flex min-w-0 items-center gap-2'>
+            <Text strong ellipsis>
+              {row?.username || `#${row?.user_id}`}
+            </Text>
+            {row?.display_name ? (
+              <Text type='secondary' ellipsis>
+                {row.display_name}
+              </Text>
+            ) : null}
+            <Tag size='small' color='white' className='ml-auto shrink-0'>
+              #{row?.user_id}
+            </Tag>
+          </div>
+        </div>
+        <div className='mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
+          <div className='min-w-0 flex-1'>
+            <Input
+              prefix={<Search size={14} />}
+              suffix={
+                keyword ? (
+                  <Button
+                    type='tertiary'
+                    theme='borderless'
+                    size='small'
+                    icon={<X size={14} />}
+                    aria-label={t('清空')}
+                    onClick={() => {
+                      setKeyword('');
+                      setDebouncedKeyword('');
+                    }}
+                  />
+                ) : null
+              }
+              value={keyword}
+              placeholder={t('搜索当前客户')}
+              onChange={setKeyword}
+            />
+          </div>
+          <Space spacing={8}>
+            <Tag size='small' color='white'>
+              {t('共 {{count}} 个客户', { count: total })}
+            </Tag>
+            <Button
+              type='tertiary'
+              theme='light'
+              size='small'
+              icon={<RefreshCw size={14} />}
+              loading={loading}
+              onClick={() => loadCustomers(page)}
+            >
+              {t('刷新')}
+            </Button>
+          </Space>
+        </div>
+        <div
+          className='rounded-lg border overflow-hidden'
+          style={{ borderColor: 'var(--semi-color-border)' }}
+        >
+          <div
+            className='grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-3 px-3 py-2 text-xs font-medium'
+            style={{
+              background: 'var(--semi-color-fill-0)',
+              color: 'var(--semi-color-text-2)',
+            }}
+          >
+            <span>{t('客户')}</span>
+            <span className='text-right'>{t('已用额度')}</span>
+            <span className='text-right'>{t('提成')}</span>
+            <span className='text-right'>{t('操作')}</span>
+          </div>
+          <div className='min-h-[300px] divide-y'>
+            {loading ? (
+              <div className='flex h-[300px] items-center justify-center text-sm text-semi-color-text-2'>
+                {t('加载中...')}
+              </div>
+            ) : customers.length === 0 ? (
+              <div className='flex h-[300px] items-center justify-center px-6 text-center text-sm text-semi-color-text-2'>
+                {debouncedKeyword ? t('未找到客户') : t('该员工暂无已分配客户')}
+              </div>
+            ) : (
+              customers.map((customer) => {
+                const customerUserId = getCustomerUserId(customer);
+                return (
+                  <div
+                    key={customerUserId}
+                    className='grid grid-cols-[minmax(0,1fr)_96px_96px_96px] items-center gap-3 px-3 py-2.5 text-sm hover:bg-semi-color-fill-1'
+                  >
+                    <div className='min-w-0'>
+                      <div className='truncate font-medium'>
+                        {getCustomerLabel(customer)}
+                      </div>
+                      <div className='truncate text-xs text-semi-color-text-2'>
+                        #{customerUserId}
+                        {customer.email ? ` / ${customer.email}` : ''}
+                      </div>
+                    </div>
+                    <div className='text-right tabular-nums'>
+                      {formatBusinessAmount(customer.used_quota || 0)}
+                    </div>
+                    <div className='text-right tabular-nums'>
+                      {formatBusinessAmount(customer.commission_quota || 0)}
+                    </div>
+                    <div className='flex justify-end'>
+                      <Button
+                        size='small'
+                        type='tertiary'
+                        theme='light'
+                        icon={<X size={14} />}
+                        onClick={() => setCustomerToRemove(customer)}
+                      >
+                        {t('移除')}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+        <div className='mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
+          <Text type='secondary' size='small'>
+            {t('显示 {{start}}-{{end}} / {{total}} 个客户', {
+              start: pageStart,
+              end: pageEnd,
+              total,
+            })}
+          </Text>
+          <Space>
+            <Button
+              size='small'
+              type='tertiary'
+              theme='light'
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              {t('上一页')}
+            </Button>
+            <Tag color='white' size='small'>
+              {t('第 {{current}} / {{total}} 页', {
+                current: page,
+                total: pageCount,
+              })}
+            </Tag>
+            <Button
+              size='small'
+              type='tertiary'
+              theme='light'
+              disabled={page >= pageCount || loading}
+              onClick={() =>
+                setPage((current) => Math.min(pageCount, current + 1))
+              }
+            >
+              {t('下一页')}
+            </Button>
+          </Space>
+        </div>
+      </Modal>
+      <Modal
+        visible={Boolean(customerToRemove)}
+        title={t('确认移除客户')}
+        onCancel={() => {
+          if (!removing) setCustomerToRemove(null);
+        }}
+        width={460}
+        footer={
+          <Space>
+            <Button
+              disabled={removing}
+              onClick={() => setCustomerToRemove(null)}
+            >
+              {t('取消')}
+            </Button>
+            <Button
+              type='danger'
+              loading={removing}
+              onClick={performRemoveCustomer}
+            >
+              {t('移除客户')}
+            </Button>
+          </Space>
+        }
+      >
+        <div className='space-y-3'>
+          <Text>{t('移除后，该客户后续消费将不再计入该员工提成。')}</Text>
+          {customerToRemove ? (
+            <SummaryPanel danger>
+              <SummaryItem
+                label={t('客户')}
+                value={getCustomerLabel(customerToRemove)}
+              />
+              <SummaryItem
+                label={t('用户 ID')}
+                value={`#${getCustomerUserId(customerToRemove)}`}
+              />
+              <SummaryItem label={t('目标员工')} value={employeeLabel} />
+            </SummaryPanel>
+          ) : null}
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
+  const { t } = useTranslation();
+  const [saving, setSaving] = useState(false);
+  const [selectedCustomers, setSelectedCustomers] = useState([]);
+
+  useEffect(() => {
+    if (!visible) {
+      setSelectedCustomers([]);
+    }
+  }, [visible]);
+
+  const employeeLabel =
+    row?.username ||
+    row?.display_name ||
+    (row?.user_id ? `#${row.user_id}` : '-');
+  const selectedCount = selectedCustomers.length;
+  const reassignmentCustomers = selectedCustomers.filter(
+    (customer) =>
+      customer.is_assigned_customer &&
+      customer.assigned_employee_user_id !== row?.user_id,
+  );
+  const isReassignment = reassignmentCustomers.length > 0;
+
+  const getCustomerLabel = (customer) =>
+    `${customer.username || '-'}${
+      customer.display_name ? ` (${customer.display_name})` : ''
+    }`;
+
+  const toggleCustomer = (customer) => {
+    setSelectedCustomers((prev) => {
+      if (prev.some((item) => item.id === customer.id)) {
+        return prev.filter((item) => item.id !== customer.id);
+      }
+      return [...prev, customer];
+    });
+  };
+
+  const removeSelectedCustomer = (customerId) => {
+    setSelectedCustomers((prev) =>
+      prev.filter((customer) => customer.id !== customerId),
+    );
+  };
+
+  const performAssign = async () => {
+    setSaving(true);
+    try {
+      for (const customer of selectedCustomers) {
+        await mutateRequest(
+          'post',
+          `/api/admin/employee/${row.id}/assign-customer`,
+          {
+            user_id: toNumber(customer.id),
+          },
+        );
+      }
+      showSuccess(
+        isReassignment
+          ? t('已成功重新分共 {{count}} 个客户', {
+              count: selectedCount,
+            })
+          : t('已成功分共 {{count}} 个客户', { count: selectedCount }),
+      );
       onSuccess();
     } catch (error) {
       showError(error.message);
@@ -810,17 +1295,73 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
     }
   };
 
+  const submit = async () => {
+    if (selectedCount === 0) {
+      showError(t('请选择至少一个客户'));
+      return;
+    }
+    if (isReassignment) {
+      Modal.confirm({
+        title: t('确认重新分配'),
+        content: (
+          <div className='space-y-3'>
+            <Text>
+              {t(
+                '选中的客户中包含已分配给其他员工的客户，重新分配会更新后续提成归属。',
+              )}
+            </Text>
+            <SummaryPanel danger>
+              <SummaryItem label={t('已选择客户')} value={selectedCount} />
+              <SummaryItem
+                label={t('需要重新分配')}
+                value={reassignmentCustomers.length}
+              />
+              <SummaryItem label={t('目标员工')} value={employeeLabel} />
+              <div className='mt-3 flex flex-wrap gap-2'>
+                {selectedCustomers.slice(0, 6).map((customer) => (
+                  <Tag key={customer.id} color='white' size='small'>
+                    {getCustomerLabel(customer)} #{customer.id}
+                  </Tag>
+                ))}
+                {selectedCustomers.length > 6 ? (
+                  <Tag color='white' size='small'>
+                    +{selectedCustomers.length - 6}
+                  </Tag>
+                ) : null}
+              </div>
+            </SummaryPanel>
+          </div>
+        ),
+        okText: t('重新分配选中客户'),
+        cancelText: t('取消'),
+        okType: 'danger',
+        onOk: performAssign,
+      });
+      return;
+    }
+    await performAssign();
+  };
+
+  const submitLabel = isReassignment
+    ? t('重新分配选中客户')
+    : t('分配选中客户');
+
   return (
     <Modal
       visible={visible}
       title={t('分配客户')}
       onCancel={onCancel}
-      width={520}
+      width={560}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
-          <Button type='primary' loading={saving} onClick={submit}>
-            {t('确认')}
+          <Button
+            type='primary'
+            loading={saving}
+            disabled={selectedCount === 0}
+            onClick={submit}
+          >
+            {submitLabel}
           </Button>
         </Space>
       }
@@ -849,19 +1390,46 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
           </Tag>
         </div>
       </div>
-      <Field label={t('客户')}>
+      <Field label={t('添加客户')}>
         <UserPicker
-          value={userId}
-          onSelect={setUserId}
-          onClear={() => setUserId(null)}
+          multiple
+          selectedUsers={selectedCustomers}
+          onToggle={toggleCustomer}
           excludeEmployee
-          employeeId={row?.id}
           employeeUserId={row?.user_id}
-          onUnassignSuccess={() => {
-            setUserId(null);
-            onSuccess();
-          }}
         />
+        {selectedCustomers.length > 0 ? (
+          <SummaryPanel danger={isReassignment} className='mt-3'>
+            <SummaryItem label={t('已选择客户')} value={selectedCount} />
+            <SummaryItem label={t('目标员工')} value={employeeLabel} />
+            {isReassignment ? (
+              <SummaryItem
+                label={t('需要重新分配')}
+                value={reassignmentCustomers.length}
+              />
+            ) : null}
+            <div className='mt-3 flex flex-wrap gap-2'>
+              {selectedCustomers.map((customer) => (
+                <Tag
+                  key={customer.id}
+                  color='white'
+                  size='small'
+                  closable
+                  onClose={() => removeSelectedCustomer(customer.id)}
+                >
+                  {getCustomerLabel(customer)} #{customer.id}
+                </Tag>
+              ))}
+            </div>
+            {isReassignment ? (
+              <Text type='warning' size='small' className='mt-2 block'>
+                {t(
+                  '选中的客户中包含已分配给其他员工的客户，重新分配会更新后续提成归属。',
+                )}
+              </Text>
+            ) : null}
+          </SummaryPanel>
+        ) : null}
         <Text
           type='secondary'
           size='small'
@@ -879,16 +1447,46 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
   const isUpdate = Boolean(row);
   const [saving, setSaving] = useState(false);
   const [tiers, setTiers] = useState([]);
-  const [selectedTierId, setSelectedTierId] = useState(null);
   const [form, setForm] = useState({
     user_id: 0,
-    commission_rate: 0.1,
-    target_amount: 0,
+    tier_id: null,
     status: 1,
     remark: '',
   });
 
-  // 拉取等级列表（供下拉选择）
+  const tierGroups = useMemo(() => {
+    const map = new Map();
+    tiers.forEach((tier) => {
+      const group = getTierGroup(tier);
+      if (!map.has(group)) map.set(group, []);
+      map.get(group).push(tier);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) =>
+        a[0].localeCompare(b[0], undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        }),
+      )
+      .map(([group, ts]) => [
+        group,
+        [...ts].sort(
+          (a, b) =>
+            toNumber(a.level) - toNumber(b.level) ||
+            toNumber(a.threshold_usd) - toNumber(b.threshold_usd) ||
+            toNumber(a.id) - toNumber(b.id),
+        ),
+      ]);
+  }, [tiers]);
+
+  const currentTier = tiers.find((t) => t.id === form.tier_id);
+  const employeeLabel =
+    row?.username ||
+    row?.display_name ||
+    (row?.user_id ? `#${row.user_id}` : '-');
+
+  const [activeGroup, setActiveGroup] = useState(null);
+
   useEffect(() => {
     if (!visible) return;
     API.get('/api/admin/employee/tiers', { disableDuplicate: true })
@@ -900,36 +1498,54 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
 
   useEffect(() => {
     if (!visible) return;
-    setSelectedTierId(null);
     setForm({
       user_id: row?.user_id || 0,
-      commission_rate: row?.commission_rate ?? 0.1,
-      target_amount: row?.target_amount || 0,
+      tier_id: row?.current_tier_id || null,
       status: row?.status || 1,
       remark: row?.remark || '',
     });
+    setActiveGroup(null);
   }, [visible, row]);
 
   useEffect(() => {
-    if (!visible || !isUpdate) return;
-    setSelectedTierId(resolveSelectedTierId(row, tiers));
-  }, [isUpdate, row, tiers, visible]);
+    if (!visible || tiers.length === 0) return;
+    const initialTierId = row?.current_tier_id || null;
+    if (initialTierId) {
+      const found = tiers.find((t) => t.id === initialTierId);
+      if (found) setActiveGroup(getTierGroup(found));
+    } else if (!row) {
+      const sorted = [...tiers].sort(compareTierGroupLevel);
+      const defaultTier =
+        sorted.find((t) => getTierGroup(t) === DEFAULT_TIER_GROUP) ?? sorted[0];
+      if (defaultTier) {
+        setForm((prev) => {
+          if (prev.tier_id) return prev;
+          return { ...prev, tier_id: defaultTier.id };
+        });
+        setActiveGroup(getTierGroup(defaultTier));
+      }
+    }
+  }, [visible, row, tiers]);
+
+  useEffect(() => {
+    if (!visible || currentTier || tierGroups.length === 0) return;
+    if (!tierGroups.some(([group]) => group === activeGroup)) {
+      setActiveGroup(tierGroups[0][0]);
+    }
+  }, [activeGroup, currentTier, tierGroups, visible]);
 
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  // 选择等级后自动填写比例和业绩目标（可继续手动修改）
+  const selectGroup = (group) => {
+    setActiveGroup(group);
+    const groupTiers = tierGroups.find(([g]) => g === group)?.[1] ?? [];
+    updateField('tier_id', groupTiers[0]?.id ?? null);
+  };
+
   const handleTierSelect = (tierId) => {
-    setSelectedTierId(tierId || null);
-    if (!tierId) return;
-    const tier = tiers.find((t) => Number(t.id) === Number(tierId));
-    if (!tier) return;
-    setForm((prev) => ({
-      ...prev,
-      commission_rate: tier.rate,
-      target_amount: tier.threshold_usd,
-    }));
+    updateField('tier_id', tierId || null);
   };
 
   const submit = async () => {
@@ -940,29 +1556,17 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
 
     setSaving(true);
     try {
-      let employeeId = row?.id;
       if (isUpdate) {
         await mutateRequest('put', `/api/admin/employee/${row.id}`, {
-          commission_rate: toNumber(form.commission_rate),
-          target_amount: toNumber(form.target_amount),
+          tier_id: toNumber(form.tier_id),
           status: toNumber(form.status, 1),
           remark: form.remark,
         });
       } else {
-        const created = await mutateRequest('post', '/api/admin/employee', {
+        await mutateRequest('post', '/api/admin/employee', {
           user_id: toNumber(form.user_id),
-          commission_rate: toNumber(form.commission_rate),
-          target_amount: toNumber(form.target_amount),
+          tier_id: toNumber(form.tier_id),
           remark: form.remark,
-        });
-        employeeId = created?.data?.id;
-      }
-      const tierId = Number(selectedTierId || 0);
-      const currentTierId = Number(row?.current_tier_id || 0);
-      if (employeeId && tierId > 0 && (!isUpdate || tierId !== currentTierId)) {
-        await mutateRequest('post', `/api/admin/employee/${employeeId}/tier`, {
-          tier_id: tierId,
-          source: 'manual',
         });
       }
       showSuccess(isUpdate ? t('员工已更新') : t('员工已创建'));
@@ -979,20 +1583,47 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
       visible={visible}
       title={isUpdate ? t('编辑员工') : t('创建员工')}
       onCancel={onCancel}
+      width={560}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
-          <Button type='primary' loading={saving} onClick={submit}>
+          <Button
+            type='primary'
+            loading={saving}
+            disabled={!isUpdate && !form.user_id}
+            onClick={submit}
+          >
             {t('保存')}
           </Button>
         </Space>
       }
     >
+      {isUpdate ? (
+        <SummaryPanel className='mb-4'>
+          <SummaryItem label={t('员工')} value={employeeLabel} />
+          <SummaryItem
+            label={t('员工 UID')}
+            value={`#${row?.user_id || '-'}`}
+          />
+          <SummaryItem label={t('客户数量')} value={row?.customer_count ?? 0} />
+          <SummaryItem
+            label={t('当前等级')}
+            value={
+              row?.current_tier_level
+                ? `${t('等级')} ${row.current_tier_level} / ${
+                    row.current_tier_group || t('通用')
+                  }`
+                : '-'
+            }
+          />
+        </SummaryPanel>
+      ) : null}
       {!isUpdate ? (
         <Field label={t('用户')}>
           <UserPicker
             value={form.user_id}
-            onSelect={(userId) => updateField('user_id', userId)}
+            onSelect={(user) => updateField('user_id', user.id)}
+            onClear={() => updateField('user_id', 0)}
             excludeEmployee
           />
           <Text type='secondary' size='small'>
@@ -1000,49 +1631,94 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           </Text>
         </Field>
       ) : null}
-      {tiers.length > 0 ? (
-        <Field label={t('套用等级预设')}>
-          <Select
-            value={selectedTierId}
-            placeholder={t('选择等级自动填写比例和目标（可选）')}
-            onChange={handleTierSelect}
-            allowClear
-            style={{ width: '100%' }}
-          >
-            {tiers.map((tier) => (
-              <Select.Option key={tier.id} value={tier.id}>
-                {`等级 ${tier.level}  —  门槛 $${Number(tier.threshold_usd || 0).toFixed(2)}  /  提成 ${(Number(tier.rate || 0) * 100).toFixed(1)}%`}
-              </Select.Option>
-            ))}
-          </Select>
+      <Field label={t('提成等级')}>
+        {tiers.length === 0 ? (
           <Text type='secondary' size='small'>
-            {t('选择后自动填入下方数值，仍可手动修改')}
+            {t('暂无等级配置')}
           </Text>
-        </Field>
-      ) : null}
-      <Field label={t('佣金比例')}>
-        <InputNumber
-          min={0}
-          max={1}
-          step={0.01}
-          value={form.commission_rate}
-          onChange={(value) => updateField('commission_rate', toNumber(value))}
-          style={{ width: '100%' }}
-        />
+        ) : (
+          <>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              {tierGroups.map(([group]) => (
+                <Tag
+                  key={group}
+                  size='large'
+                  color={getTierGroupTagColor(group)}
+                  type={activeGroup === group ? 'light' : 'ghost'}
+                  style={{ cursor: 'pointer', userSelect: 'none' }}
+                  onClick={() => selectGroup(group)}
+                >
+                  {group}
+                </Tag>
+              ))}
+            </div>
+            {activeGroup !== null &&
+              (() => {
+                const groupTiers =
+                  tierGroups.find(([group]) => group === activeGroup)?.[1] ??
+                  [];
+                if (groupTiers.length === 0) return null;
+                return (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 8,
+                      marginBottom: 8,
+                    }}
+                  >
+                    {groupTiers.map((tier) => (
+                      <Tag
+                        key={tier.id}
+                        size='large'
+                        color={getTierLevelTagColor(tier.level)}
+                        type={form.tier_id === tier.id ? 'light' : 'ghost'}
+                        style={{ cursor: 'pointer', userSelect: 'none' }}
+                        onClick={() => handleTierSelect(tier.id)}
+                      >
+                        {`等级 ${tier.level} ${(Number(tier.rate || 0) * 100).toFixed(1)}%`}
+                      </Tag>
+                    ))}
+                  </div>
+                );
+              })()}
+            {/* 选中信息 */}
+            {currentTier && (
+              <div
+                style={{
+                  background: 'var(--semi-color-fill-0)',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  color: 'var(--semi-color-text-1)',
+                  marginBottom: 4,
+                }}
+              >
+                <Tag color={getTierLevelTagColor(currentTier.level)}>
+                  {`等级 ${currentTier.level}`}
+                </Tag>
+                <Tag
+                  color={getTierGroupTagColor(
+                    currentTier.group || DEFAULT_TIER_GROUP,
+                  )}
+                >
+                  {currentTier.group || DEFAULT_TIER_GROUP}
+                </Tag>
+                <Text size='small'>{`  ·  门槛 $${Number(currentTier.threshold_usd || 0).toFixed(2)}  ·  提成 ${(Number(currentTier.rate || 0) * 100).toFixed(1)}%`}</Text>
+              </div>
+            )}
+          </>
+        )}
         <Text type='secondary' size='small'>
-          {t('0.1 表示 10%')}
+          {t('提成比例和业绩目标由等级决定，请在「提成阶梯」中配置')}
         </Text>
-      </Field>
-      <Field label={t('业绩目标 (USD)')}>
-        <InputNumber
-          min={0}
-          precision={2}
-          step={0.01}
-          prefix='$'
-          value={form.target_amount}
-          onChange={(value) => updateField('target_amount', toNumber(value))}
-          style={{ width: '100%' }}
-        />
       </Field>
       {isUpdate ? (
         <Field label={t('状态')}>
@@ -1057,9 +1733,11 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
         </Field>
       ) : null}
       <Field label={t('备注')}>
-        <Input
+        <TextArea
           value={form.remark}
           onChange={(value) => updateField('remark', value)}
+          autosize={{ minRows: 3, maxRows: 5 }}
+          placeholder={t('请输入备注（仅管理员可见）')}
         />
       </Field>
     </Modal>
@@ -1077,10 +1755,13 @@ function EmployeesTab({
     enabled: !providedEmployees,
   });
   const employees = providedEmployees || ownEmployees;
+  const [compactMode, setCompactMode] = useTableCompactMode('employees');
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [assignModalRow, setAssignModalRow] = useState(null);
   const [assignModalVisible, setAssignModalVisible] = useState(false);
+  const [removeModalRow, setRemoveModalRow] = useState(null);
+  const [removeModalVisible, setRemoveModalVisible] = useState(false);
   const [filterForm, setFilterForm] = useState(() => ({
     user_id: filters?.user_id || undefined,
     keyword: filters?.keyword || '',
@@ -1102,13 +1783,18 @@ function EmployeesTab({
   const applyFilters = () => {
     onFiltersChange?.(
       buildParams({
-        user_id: toNumber(filterForm.user_id),
+        user_id: filterForm.user_id ? toNumber(filterForm.user_id) : undefined,
         keyword: filterForm.keyword?.trim(),
-        status: toNumber(filterForm.status),
+        status: toNumber(filterForm.status) || undefined,
         sort_by: filters?.sort_by,
         sort_order: filters?.sort_order,
       }),
     );
+  };
+
+  const handleFilterSubmit = (event) => {
+    event?.preventDefault();
+    applyFilters();
   };
 
   const resetFilters = () => {
@@ -1151,6 +1837,11 @@ function EmployeesTab({
     setAssignModalVisible(true);
   };
 
+  const openRemoveCustomers = (row) => {
+    setRemoveModalRow(row);
+    setRemoveModalVisible(true);
+  };
+
   const closeModal = () => {
     setModalVisible(false);
     setModalRow(null);
@@ -1161,15 +1852,42 @@ function EmployeesTab({
     setAssignModalRow(null);
   };
 
+  const closeRemoveModal = () => {
+    setRemoveModalVisible(false);
+    setRemoveModalRow(null);
+  };
+
   const refreshAfterModal = () => {
     closeModal();
     employees.load();
   };
 
   const disableEmployee = (row) => {
+    const employeeLabel =
+      row?.username ||
+      row?.display_name ||
+      (row?.user_id ? `#${row.user_id}` : '-');
     Modal.confirm({
-      title: t('禁用员工'),
-      content: t('禁用后历史佣金记录会保留。'),
+      title: t('确认禁用'),
+      content: (
+        <div className='space-y-3'>
+          <Text>{t('禁用后历史提成记录会保留。')}</Text>
+          <SummaryPanel danger>
+            <SummaryItem label={t('员工')} value={employeeLabel} />
+            <SummaryItem
+              label={t('员工 UID')}
+              value={`#${row?.user_id || '-'}`}
+            />
+            <SummaryItem
+              label={t('客户数量')}
+              value={row?.customer_count ?? 0}
+            />
+          </SummaryPanel>
+        </div>
+      ),
+      okText: t('确认禁用'),
+      cancelText: t('取消'),
+      okType: 'danger',
       onOk: async () => {
         try {
           await mutateRequest('delete', `/api/admin/employee/${row.id}`);
@@ -1180,6 +1898,46 @@ function EmployeesTab({
         }
       },
     });
+  };
+
+  const filterStatusOptions = [
+    { value: 0, label: t('全部') },
+    { value: 1, label: t('启用') },
+    { value: 2, label: t('禁用') },
+  ];
+
+  const getEmployeeActions = (row) => {
+    const actions = [
+      {
+        node: 'item',
+        name: t('分配客户'),
+        onClick: () => openAssign(row),
+      },
+      {
+        node: 'item',
+        name: t('移除客户'),
+        onClick: () => openRemoveCustomers(row),
+      },
+      {
+        node: 'item',
+        name: t('编辑员工'),
+        onClick: () => openEdit(row),
+      },
+    ];
+
+    if (Number(row.status) === 1) {
+      actions.push(
+        { node: 'divider' },
+        {
+          node: 'item',
+          name: t('禁用员工'),
+          type: 'danger',
+          onClick: () => disableEmployee(row),
+        },
+      );
+    }
+
+    return actions;
   };
 
   const columns = [
@@ -1215,7 +1973,7 @@ function EmployeesTab({
       render: (value) => value || 0,
     },
     {
-      title: t('客户总消耗'),
+      title: t('客户总消费'),
       dataIndex: 'total_consumption_quota',
       width: 130,
       sorter: true,
@@ -1256,7 +2014,14 @@ function EmployeesTab({
         if (!value) return <Text type='secondary'>-</Text>;
         return (
           <div>
-            <Tag color='blue'>{`等级 ${value}`}</Tag>
+            <Space>
+              <Tag color={getTierLevelTagColor(value)}>{`等级 ${value}`}</Tag>
+              {row.current_tier_group ? (
+                <Tag color={getTierGroupTagColor(row.current_tier_group)}>
+                  {row.current_tier_group}
+                </Tag>
+              ) : null}
+            </Space>
             <div>
               <Text type='secondary' size='small'>
                 {formatPercent(row.current_tier_rate)}
@@ -1267,17 +2032,8 @@ function EmployeesTab({
       },
     },
     {
-      title: t('佣金比例'),
-      dataIndex: 'commission_rate',
-      sorter: true,
-      sortOrder: getSortOrder('commission_rate'),
-      render: (value) => formatPercent(value),
-    },
-    {
       title: t('业绩目标'),
-      dataIndex: 'target_amount',
-      sorter: true,
-      sortOrder: getSortOrder('target_amount'),
+      dataIndex: 'next_tier_threshold_usd',
       render: (value) => (value ? formatTargetAmount(value) : t('无限制')),
     },
     {
@@ -1295,56 +2051,65 @@ function EmployeesTab({
       sortOrder: getSortOrder('status'),
       render: (value) => <StatusTag status={value} />,
     },
-    { title: t('备注'), dataIndex: 'remark', render: (value) => value || '-' },
+    {
+      title: t('备注'),
+      dataIndex: 'remark',
+      render: (value) => value || '-',
+    },
     {
       title: t('操作'),
-      width: 180,
+      key: 'operate',
+      width: 110,
+      fixed: 'right',
       render: (_, row) => (
-        <Space>
-          <Button
-            size='small'
-            icon={<UserRoundPlus size={14} />}
-            onClick={() => openAssign(row)}
-            title={t('分配客户')}
-          />
-          <Button
-            size='small'
-            icon={<Pencil size={14} />}
-            onClick={() => openEdit(row)}
-          />
-          <Button
-            size='small'
-            type='danger'
-            theme='light'
-            icon={<Trash2 size={14} />}
-            onClick={() => disableEmployee(row)}
-          />
-        </Space>
+        <RowActionDropdown
+          label={t('管理')}
+          actions={getEmployeeActions(row)}
+        />
       ),
     },
   ];
 
+  const tableColumns = useMemo(() => {
+    if (!compactMode) return columns;
+    return columns.map((col) => {
+      if (col.key === 'operate' || col.dataIndex === 'operate') {
+        const { fixed, ...rest } = col;
+        return rest;
+      }
+      return col;
+    });
+  }, [compactMode, columns]);
+
   useEffect(() => {
     if (!onReadyToolbar) return undefined;
     onReadyToolbar(
-      <Button
-        type='tertiary'
-        size='small'
-        icon={<Plus size={14} />}
-        onClick={openCreate}
-      >
-        {t('添加员工')}
-      </Button>,
+      <>
+        <CompactModeToggle
+          compactMode={compactMode}
+          setCompactMode={setCompactMode}
+          t={t}
+        />
+        <Button
+          type='tertiary'
+          size='small'
+          icon={<Plus size={14} />}
+          onClick={openCreate}
+        >
+          {t('添加员工')}
+        </Button>
+      </>,
     );
     return () => onReadyToolbar(null);
-  }, [onReadyToolbar, t]);
+  }, [compactMode, onReadyToolbar, openCreate, setCompactMode, t]);
 
   return (
     <>
       {onFiltersChange ? (
-        <div
+        <form
           className='mb-3 flex flex-wrap items-center gap-2'
           style={{ rowGap: 8 }}
+          onSubmit={handleFilterSubmit}
         >
           <InputNumber
             size='small'
@@ -1362,30 +2127,63 @@ function EmployeesTab({
             onChange={(value) => updateFilter('keyword', value)}
             style={{ width: 240 }}
           />
-          <Select
-            size='small'
-            value={filterForm.status}
-            onChange={(value) => updateFilter('status', value)}
-            style={{ width: 120 }}
+          <div
+            className='flex rounded-md border p-0.5'
+            style={{ borderColor: 'var(--semi-color-border)' }}
           >
-            <Select.Option value={0}>{t('全部')}</Select.Option>
-            <Select.Option value={1}>{t('启用')}</Select.Option>
-            <Select.Option value={2}>{t('禁用')}</Select.Option>
-          </Select>
-          <Button size='small' type='primary' onClick={applyFilters}>
+            {filterStatusOptions.map((option) => (
+              <Button
+                key={option.value}
+                htmlType='button'
+                size='small'
+                type={
+                  Number(filterForm.status) === option.value
+                    ? 'primary'
+                    : 'tertiary'
+                }
+                theme={
+                  Number(filterForm.status) === option.value
+                    ? 'solid'
+                    : 'borderless'
+                }
+                onClick={() => updateFilter('status', option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+          <Button
+            size='small'
+            type='primary'
+            htmlType='submit'
+            icon={<Search size={14} />}
+          >
             {t('查询')}
           </Button>
-          <Button size='small' type='tertiary' onClick={resetFilters}>
+          <Button
+            size='small'
+            type='tertiary'
+            htmlType='button'
+            icon={<X size={14} />}
+            onClick={resetFilters}
+          >
             {t('重置')}
           </Button>
-        </div>
+          <Text type='secondary' size='small'>
+            {t('共 {{count}} 名员工', { count: employees.total || 0 })}
+          </Text>
+        </form>
       ) : null}
       <ClassicBusinessTable
         rowKey='id'
-        columns={columns}
+        columns={tableColumns}
         dataSource={employees.items}
         loading={employees.loading}
         onChange={handleTableChange}
+        rowClassName={(record) =>
+          Number(record.status) === 2 ? 'opacity-60' : ''
+        }
+        scroll={compactMode ? null : { x: 'max-content' }}
         empty={<BusinessEmpty description={t('搜索无结果')} />}
       />
       <EmployeeModal
@@ -1402,6 +2200,12 @@ function EmployeesTab({
           closeAssignModal();
           employees.load();
         }}
+      />
+      <RemoveCustomersModal
+        visible={removeModalVisible}
+        row={removeModalRow}
+        onCancel={closeRemoveModal}
+        onRefresh={() => employees.load()}
       />
     </>
   );
@@ -1483,7 +2287,12 @@ function CommissionLogsTable({
   };
 
   const columns = [
-    { title: t('时间'), dataIndex: 'created_at', render: formatTs, width: 180 },
+    {
+      title: t('时间'),
+      dataIndex: 'created_at',
+      render: formatTs,
+      width: 180,
+    },
     ...(selfView
       ? [
           {
@@ -1517,7 +2326,7 @@ function CommissionLogsTable({
       render: (value) => <AmountText value={value} />,
     },
     {
-      title: t('佣金'),
+      title: t('提成'),
       dataIndex: 'commission_quota',
       render: (value) => <AmountText value={value} />,
     },
@@ -1621,39 +2430,103 @@ function CommissionLogsTable({
 // 阶梯提成等级配置
 // ============================================================================
 
-function TierModal({ visible, row, onCancel, onSuccess }) {
+function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
   const { t } = useTranslation();
   const isUpdate = Boolean(row);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     level: 1,
+    group: '通用',
     threshold_usd: 0,
     rate: 0.1,
   });
+  const [addingGroup, setAddingGroup] = useState(false);
+  const [newGroupText, setNewGroupText] = useState('');
+  const newGroupInputRef = useRef(null);
+
+  const baseGroups = useMemo(() => {
+    const seen = new Set(['通用']);
+    tiers.forEach((tier) => {
+      if (tier.group) seen.add(tier.group);
+    });
+    return Array.from(seen);
+  }, [tiers]);
+
+  const [extraGroups, setExtraGroups] = useState([]);
+
+  const allGroups = useMemo(() => {
+    const seen = new Set(baseGroups);
+    extraGroups.forEach((g) => seen.add(g));
+    if (form.group && !seen.has(form.group)) seen.add(form.group);
+    return Array.from(seen);
+  }, [baseGroups, extraGroups, form.group]);
+  const normalizedGroup = (form.group || '').trim() || '通用';
+  const commissionRate = toNumber(form.rate);
+  const duplicateTier = useMemo(() => {
+    const level = toNumber(form.level, 0);
+    if (!level) return null;
+    return tiers.find(
+      (tier) =>
+        Number(tier.id) !== Number(row?.id) &&
+        toNumber(tier.level) === level &&
+        ((tier.group || '通用').trim() || '通用') === normalizedGroup,
+    );
+  }, [form.level, normalizedGroup, row?.id, tiers]);
 
   useEffect(() => {
     if (!visible) return;
+    setExtraGroups([]);
+    setAddingGroup(false);
+    setNewGroupText('');
     setForm({
       level: row?.level ?? 1,
+      group: row?.group || '通用',
       threshold_usd: row?.threshold_usd ?? 0,
       rate: row?.rate ?? 0.1,
     });
   }, [visible, row]);
+
+  useEffect(() => {
+    if (addingGroup && newGroupInputRef.current) {
+      newGroupInputRef.current.focus();
+    }
+  }, [addingGroup]);
+
+  const confirmNewGroup = () => {
+    const g = newGroupText.trim();
+    if (g && !allGroups.includes(g)) {
+      setExtraGroups((prev) => [...prev, g]);
+    }
+    if (g) {
+      setForm((prev) => ({ ...prev, group: g }));
+    }
+    setAddingGroup(false);
+    setNewGroupText('');
+  };
 
   const updateField = (key, value) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const submit = async () => {
     if (!toNumber(form.level, 0) || form.level < 1) {
-      showError(t('等级编号必须 ≥ 1'));
+      showError(t('等级编号必须 >= 1'));
+      return;
+    }
+    if (duplicateTier) {
+      showError(t('已存在相同等级和分组的阶梯'));
+      return;
+    }
+    if (commissionRate < 0 || commissionRate > 1) {
+      showError(t('提成比例必须在 0 到 1 之间'));
       return;
     }
     setSaving(true);
     try {
       const body = {
         level: toNumber(form.level),
+        group: normalizedGroup,
         threshold_usd: toNumber(form.threshold_usd),
-        rate: toNumber(form.rate),
+        rate: commissionRate,
       };
       if (isUpdate) {
         await mutateRequest('put', `/api/admin/employee/tiers/${row.id}`, body);
@@ -1674,10 +2547,16 @@ function TierModal({ visible, row, onCancel, onSuccess }) {
       visible={visible}
       title={isUpdate ? t('编辑等级') : t('创建等级')}
       onCancel={onCancel}
+      width={560}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
-          <Button type='primary' loading={saving} onClick={submit}>
+          <Button
+            type='primary'
+            loading={saving}
+            disabled={Boolean(duplicateTier)}
+            onClick={submit}
+          >
             {t('保存')}
           </Button>
         </Space>
@@ -1695,6 +2574,61 @@ function TierModal({ visible, row, onCancel, onSuccess }) {
         <Text type='secondary' size='small'>
           {t('正整数，数字越大等级越高（如 1、2、3）')}
         </Text>
+      </Field>
+      <Field label={t('分组')}>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'center',
+          }}
+        >
+          {allGroups.map((g) => (
+            <Tag
+              key={g}
+              size='large'
+              color={getTierGroupTagColor(g)}
+              type={form.group === g ? 'light' : 'ghost'}
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => updateField('group', g)}
+            >
+              {g}
+            </Tag>
+          ))}
+          {addingGroup ? (
+            <Input
+              ref={newGroupInputRef}
+              size='default'
+              value={newGroupText}
+              onChange={(v) => setNewGroupText(v)}
+              onEnterPress={confirmNewGroup}
+              onBlur={confirmNewGroup}
+              placeholder={t('输入分组名')}
+              style={{ width: 110 }}
+            />
+          ) : (
+            <Tag
+              size='large'
+              color='blue'
+              type='ghost'
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => setAddingGroup(true)}
+            >
+              + {t('新增')}
+            </Tag>
+          )}
+        </div>
+        <Text type='secondary' size='small' style={{ marginTop: 4 }}>
+          {t(
+            '同一等级可设置多个分组（如 "通用"、"VIP"），各分组提成比例独立，默认 "通用"',
+          )}
+        </Text>
+        {duplicateTier ? (
+          <Text type='danger' size='small' className='mt-2 block'>
+            {t('已存在相同等级和分组的阶梯')}
+          </Text>
+        ) : null}
       </Field>
       <Field label={t('业绩门槛 (USD)')}>
         <InputNumber
@@ -1722,6 +2656,49 @@ function TierModal({ visible, row, onCancel, onSuccess }) {
         <Text type='secondary' size='small'>
           {t('0.1 表示 10%，达到此等级后生效')}
         </Text>
+        <div className='mt-2 flex flex-wrap items-center gap-2'>
+          <Text type='secondary' size='small'>
+            {t('快速选择')}
+          </Text>
+          {COMMISSION_RATE_PRESETS.map((rate) => (
+            <Tag
+              key={rate}
+              color={commissionRate === rate ? 'green' : 'grey'}
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              onClick={() => updateField('rate', rate)}
+            >
+              {formatPercent(rate)}
+            </Tag>
+          ))}
+        </div>
+      </Field>
+      <Field label={t('生效预览')}>
+        <SummaryPanel>
+          <SummaryItem
+            label={t('等级')}
+            value={
+              <Tag color={getTierLevelTagColor(form.level)}>
+                {`${t('等级')} ${toNumber(form.level, 1)}`}
+              </Tag>
+            }
+          />
+          <SummaryItem
+            label={t('分组')}
+            value={
+              <Tag color={getTierGroupTagColor(normalizedGroup)}>
+                {normalizedGroup}
+              </Tag>
+            }
+          />
+          <SummaryItem
+            label={t('业绩门槛 (USD)')}
+            value={formatExactUsd(toNumber(form.threshold_usd))}
+          />
+          <SummaryItem
+            label={t('提成比例')}
+            value={formatPercent(commissionRate)}
+          />
+        </SummaryPanel>
       </Field>
     </Modal>
   );
@@ -1729,33 +2706,30 @@ function TierModal({ visible, row, onCancel, onSuccess }) {
 
 function TiersTab({ onReadyToolbar }) {
   const { t } = useTranslation();
-  const [tiers, setTiers] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const tiersPaged = usePagedEndpoint('/api/admin/employee/tiers');
+  const [allTiers, setAllTiers] = useState([]);
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const loadAllTiers = useCallback(async () => {
     try {
       const res = await API.get('/api/admin/employee/tiers', {
         disableDuplicate: true,
       });
       const { success, message, data } = res.data;
       if (success) {
-        setTiers(data || []);
+        setAllTiers(data || []);
       } else {
         showError(message);
       }
     } catch (error) {
       showError(error?.message || 'Request failed');
-    } finally {
-      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadAllTiers();
+  }, [loadAllTiers]);
 
   const openCreate = useCallback(() => {
     setModalRow(null);
@@ -1774,20 +2748,59 @@ function TiersTab({ onReadyToolbar }) {
 
   const handleSuccess = () => {
     closeModal();
-    load();
+    tiersPaged.load();
+    loadAllTiers();
   };
 
   const deleteTier = (row) => {
     Modal.confirm({
-      title: t('删除等级'),
-      content: t(
-        '删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。',
+      title: t('确认删除'),
+      content: (
+        <div className='space-y-3'>
+          <Text>
+            {t(
+              '删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。',
+            )}
+          </Text>
+          <SummaryPanel danger>
+            <SummaryItem
+              label={t('等级')}
+              value={
+                <Tag color={getTierLevelTagColor(row.level)}>
+                  {`${t('等级')} ${row.level}`}
+                </Tag>
+              }
+            />
+            <SummaryItem
+              label={t('分组')}
+              value={
+                <Tag
+                  color={getTierGroupTagColor(row.group || DEFAULT_TIER_GROUP)}
+                >
+                  {row.group || DEFAULT_TIER_GROUP}
+                </Tag>
+              }
+            />
+            <SummaryItem
+              label={t('业绩门槛 (USD)')}
+              value={formatExactUsd(Number(row.threshold_usd || 0))}
+            />
+            <SummaryItem
+              label={t('提成比例')}
+              value={formatPercent(row.rate)}
+            />
+          </SummaryPanel>
+        </div>
       ),
+      okText: t('确认删除'),
+      cancelText: t('取消'),
+      okType: 'danger',
       onOk: async () => {
         try {
           await mutateRequest('delete', `/api/admin/employee/tiers/${row.id}`);
           showSuccess(t('等级已删除'));
-          load();
+          tiersPaged.load();
+          loadAllTiers();
         } catch (error) {
           showError(error.message);
         }
@@ -1795,12 +2808,39 @@ function TiersTab({ onReadyToolbar }) {
     });
   };
 
+  const getTierActions = (row) => [
+    {
+      node: 'item',
+      name: t('编辑等级'),
+      onClick: () => openEdit(row),
+    },
+    { node: 'divider' },
+    {
+      node: 'item',
+      name: t('删除等级'),
+      type: 'danger',
+      onClick: () => deleteTier(row),
+    },
+  ];
+
   const columns = [
+    {
+      title: t('分组'),
+      dataIndex: 'group',
+      width: 100,
+      render: (value) => (
+        <Tag color={getTierGroupTagColor(value || DEFAULT_TIER_GROUP)}>
+          {value || DEFAULT_TIER_GROUP}
+        </Tag>
+      ),
+    },
     {
       title: t('等级'),
       dataIndex: 'level',
-      width: 80,
-      render: (value) => <Tag color='blue'>{`等级 ${value}`}</Tag>,
+      width: 120,
+      render: (value) => (
+        <Tag color={getTierLevelTagColor(value)}>{`等级 ${value}`}</Tag>
+      ),
     },
     {
       title: t('业绩门槛 (USD)'),
@@ -1816,22 +2856,11 @@ function TiersTab({ onReadyToolbar }) {
     },
     {
       title: t('操作'),
-      width: 120,
+      key: 'operate',
+      width: 110,
+      fixed: 'right',
       render: (_, row) => (
-        <Space>
-          <Button
-            size='small'
-            icon={<Pencil size={14} />}
-            onClick={() => openEdit(row)}
-          />
-          <Button
-            size='small'
-            type='danger'
-            theme='light'
-            icon={<Trash2 size={14} />}
-            onClick={() => deleteTier(row)}
-          />
-        </Space>
+        <RowActionDropdown label={t('管理')} actions={getTierActions(row)} />
       ),
     },
   ];
@@ -1856,17 +2885,19 @@ function TiersTab({ onReadyToolbar }) {
       <ClassicBusinessTable
         rowKey='id'
         columns={columns}
-        dataSource={tiers}
-        loading={loading}
+        dataSource={tiersPaged.items}
+        loading={tiersPaged.loading}
         empty={
           <BusinessEmpty
             description={t('暂无等级配置，点击「添加等级」创建')}
           />
         }
       />
+      <ClassicInlinePagination paged={tiersPaged} t={t} />
       <TierModal
         visible={modalVisible}
         row={modalRow}
+        tiers={allTiers}
         onCancel={closeModal}
         onSuccess={handleSuccess}
       />
@@ -1884,12 +2915,13 @@ export function Employees() {
   const commissionLogs = usePagedEndpoint(
     '/api/admin/employee/commission',
     commissionLogFilters,
+    { enabled: activeTab === 'logs' },
   );
 
   const tabs = [
     { key: 'employees', label: t('员工') },
     { key: 'tiers', label: t('提成阶梯') },
-    { key: 'logs', label: t('佣金记录') },
+    { key: 'logs', label: t('提成记录') },
   ];
 
   const pagination =
@@ -1945,7 +2977,7 @@ export function Employees() {
             logs={commissionLogs}
             filters={commissionLogFilters}
             onFiltersChange={setCommissionLogFilters}
-            title={t('佣金记录')}
+            title={t('提成记录')}
             embedded
             showInlinePagination={false}
           />
@@ -1999,6 +3031,9 @@ export function EmployeeConsole() {
   }, [loadProfile]);
 
   const profile = profileData?.data?.profile;
+  const tierInfo = profileData?.data?.tier;
+  const effectiveRate = tierInfo?.tier_rate ?? profile?.commission_rate ?? 0;
+  const tierGroup = tierInfo?.tier_group || '';
   const extension = summary || profileData?.data?.extension || {};
   const customerTotalConsumptionQuota =
     extension.customer_total_consumption_quota ?? 0;
@@ -2011,14 +3046,16 @@ export function EmployeeConsole() {
     extension.total_commission_quota ?? extension.commission_total_quota ?? 0;
   const totalCommissionUsd =
     extension.total_commission_usd ?? extension.commission_total_usd;
-  const targetAmount = Number(profile?.target_amount || 0);
+  const targetAmount = Number(
+    tierInfo?.tier_threshold_usd || profile?.target_amount || 0,
+  );
 
   return (
     <PageShell>
       <Spin spinning={loading}>
         {!loading && (!profileData?.success || !profile) ? (
           <BusinessCard
-            title={t('我的佣金')}
+            title={t('我的提成')}
             icon={BadgeDollarSign}
             color='var(--semi-color-success)'
             t={t}
@@ -2030,7 +3067,7 @@ export function EmployeeConsole() {
         ) : (
           <>
             <BusinessCard
-              title={t('我的佣金')}
+              title={t('我的提成')}
               icon={BadgeDollarSign}
               color='var(--semi-color-success)'
               pagination={<ClassicPagination paged={commissionLogs} t={t} />}
@@ -2039,7 +3076,7 @@ export function EmployeeConsole() {
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12} xl={6}>
                   <StatCard
-                    title={t('总消耗')}
+                    title={t('总消费')}
                     value={formatBusinessAmount(customerTotalConsumptionQuota)}
                     sub={formatBusinessUsd(customerTotalConsumptionUsd)}
                     icon={DollarSign}
@@ -2067,10 +3104,19 @@ export function EmployeeConsole() {
                 <Col xs={24} md={12} xl={6}>
                   <StatCard
                     title={t('提成阶梯')}
-                    value={formatPercent(profile?.commission_rate || 0)}
+                    value={
+                      <span>
+                        {formatPercent(effectiveRate)}
+                        {tierGroup ? (
+                          <Tag size='small' style={{ marginLeft: 6 }}>
+                            {tierGroup}
+                          </Tag>
+                        ) : null}
+                      </span>
+                    }
                     sub={
                       targetAmount
-                        ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' ✓' : ''}`
+                        ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' done' : ''}`
                         : `${t('业绩目标')}: ${t('无限制')}`
                     }
                     icon={Wallet}
@@ -2082,7 +3128,7 @@ export function EmployeeConsole() {
                 style={{ borderColor: 'var(--semi-color-border)' }}
               >
                 <div className='mb-3'>
-                  <Text strong>{t('佣金明细')}</Text>
+                  <Text strong>{t('提成明细')}</Text>
                 </div>
                 <CommissionLogsTable
                   endpoint='/api/user/employee/commission'
@@ -2312,7 +3358,7 @@ export function CustomerConsole() {
       render: (value) => formatBusinessAmount(value),
     },
     {
-      title: t('佣金'),
+      title: t('提成'),
       dataIndex: 'commission_quota',
       render: (value) => (value ? <AmountText value={value} /> : '-'),
     },
@@ -2321,7 +3367,11 @@ export function CustomerConsole() {
       dataIndex: 'status',
       render: (value) => <StatusTag status={value} />,
     },
-    { title: t('备注'), dataIndex: 'remark', render: (value) => value || '-' },
+    {
+      title: t('备注'),
+      dataIndex: 'remark',
+      render: (value) => value || '-',
+    },
     {
       title: t('操作'),
       width: 90,
@@ -2354,7 +3404,7 @@ export function CustomerConsole() {
             />
             <Input
               size='small'
-              placeholder={t('用户名 / 邮箱 / 备注')}
+              placeholder={t('用户名/ 邮箱 / 备注')}
               value={filterForm.keyword}
               onChange={(value) => updateFilter('keyword', value)}
               style={{ width: 180 }}
@@ -2436,13 +3486,46 @@ export function BusinessOverview() {
   const { t } = useTranslation();
   const [range, setRange] = useState('1d');
   const [customRange, setCustomRange] = useState(() => getPresetRange('1d'));
+  const [channelPage, setChannelPage] = useState(1);
+  const [employeePage, setEmployeePage] = useState(1);
+  const [channelNameFilter, setChannelNameFilter] = useState('');
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
+  const [loadedChannelRows, setLoadedChannelRows] = useState([]);
+  const [loadedEmployeeRows, setLoadedEmployeeRows] = useState([]);
+  const channelRowsByPageRef = useRef(new Map());
+  const employeeRowsByPageRef = useRef(new Map());
   const selectedRange = useMemo(
     () => (range === 'custom' ? customRange : getPresetRange(range)),
     [customRange, range],
   );
-  const params = useMemo(() => rangeToParams(selectedRange), [selectedRange]);
+  const rangeKey = useMemo(
+    () =>
+      [
+        range,
+        selectedRange.start?.getTime?.() || '',
+        selectedRange.end?.getTime?.() || '',
+      ].join('|'),
+    [range, selectedRange],
+  );
+  const channelMergeScope = useMemo(
+    () => [rangeKey, channelNameFilter.trim()].join('|'),
+    [channelNameFilter, rangeKey],
+  );
+  const employeeMergeScope = rangeKey;
+  const params = useMemo(
+    () => ({
+      ...rangeToParams(selectedRange),
+      channel_page: channelPage,
+      channel_page_size: PAGE_SIZE,
+      employee_page: employeePage,
+      employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
+      ...(channelNameFilter.trim()
+        ? { channel_keyword: channelNameFilter.trim() }
+        : {}),
+    }),
+    [selectedRange, channelPage, employeePage, channelNameFilter],
+  );
   const datePickerValue = useMemo(
     () =>
       selectedRange.start && selectedRange.end
@@ -2475,20 +3558,108 @@ export function BusinessOverview() {
     loadOverview();
   }, [loadOverview]);
 
+  useEffect(() => {
+    setChannelPage(1);
+    channelRowsByPageRef.current.clear();
+    setLoadedChannelRows([]);
+  }, [channelNameFilter, selectedRange]);
+
+  useEffect(() => {
+    setEmployeePage(1);
+    employeeRowsByPageRef.current.clear();
+    setLoadedEmployeeRows([]);
+  }, [selectedRange]);
+
   const platform = data?.platform || {};
   const commission = data?.commission || {};
   const channelProfitRows = data?.by_channel_platform || [];
-  const employeeRows = (data?.by_employee || []).slice(0, 10);
-  const [channelNameFilter, setChannelNameFilter] = useState('');
-  const filteredChannelProfitRows = useMemo(() => {
-    const kw = channelNameFilter.trim().toLowerCase();
-    if (!kw) return channelProfitRows;
-    return channelProfitRows.filter(
-      (r) =>
-        (r.channel_name ?? '').toLowerCase().includes(kw) ||
-        String(r.channel_id).includes(kw),
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillStarted, setBackfillStarted] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.localStorage.getItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY) ===
+      'true'
     );
-  }, [channelProfitRows, channelNameFilter]);
+  });
+  const showBackfill = Boolean(data?.needs_backfill);
+  const showBackfillRunning = showBackfill && (backfilling || backfillStarted);
+
+  useEffect(() => {
+    if (!data || data.needs_backfill) return;
+    setBackfillStarted(false);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY);
+    }
+  }, [data?.needs_backfill]);
+
+  const handleBackfill = useCallback(async () => {
+    setBackfilling(true);
+    try {
+      await API.post('/api/admin/employee/overview/backfill');
+      setBackfillStarted(true);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          BUSINESS_STATS_BACKFILL_RUNNING_KEY,
+          'true',
+        );
+      }
+      showSuccess(t('正在回填历史数据'));
+    } catch (error) {
+      setBackfillStarted(false);
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY);
+      }
+      showError(error?.message || 'Request failed');
+    } finally {
+      setBackfilling(false);
+    }
+  }, [t]);
+  const employeeRows = data?.by_employee || [];
+  const channelTotal =
+    data?.by_channel_platform_total || channelProfitRows.length;
+  const hasMoreChannelRows = loadedChannelRows.length < channelTotal;
+
+  useEffect(() => {
+    if (!data) return;
+    const fetchedChannelPage = data.by_channel_platform_page || channelPage;
+    channelRowsByPageRef.current.set(
+      `${channelMergeScope}|${fetchedChannelPage}`,
+      channelProfitRows,
+    );
+    const nextRows = [];
+    for (let page = 1; ; page += 1) {
+      const rows = channelRowsByPageRef.current.get(
+        `${channelMergeScope}|${page}`,
+      );
+      if (!rows) break;
+      nextRows.push(...rows);
+    }
+    setLoadedChannelRows(nextRows);
+  }, [channelMergeScope, channelPage, channelProfitRows, data]);
+
+  useEffect(() => {
+    if (!data) return;
+    const fetchedEmployeePage = data.by_employee_page || employeePage;
+    employeeRowsByPageRef.current.set(
+      `${employeeMergeScope}|${fetchedEmployeePage}`,
+      employeeRows,
+    );
+    const nextRows = [];
+    for (let page = 1; ; page += 1) {
+      const rows = employeeRowsByPageRef.current.get(
+        `${employeeMergeScope}|${page}`,
+      );
+      if (!rows) break;
+      nextRows.push(...rows);
+    }
+    setLoadedEmployeeRows(nextRows);
+  }, [employeeMergeScope, employeePage, employeeRows, data]);
+
+  const loadMoreChannels = useCallback(() => {
+    if (loading || !hasMoreChannelRows) return;
+    setChannelPage((page) => page + 1);
+  }, [hasMoreChannelRows, loading]);
+
   const rangeButtons = [
     { key: '1d', label: t('近 1 天') },
     { key: '7d', label: t('近 7 天') },
@@ -2502,25 +3673,25 @@ export function BusinessOverview() {
       title: t('员工'),
       dataIndex: 'username',
       render: (value, row) =>
-        value || row.display_name || `#${row.employee_user_id}`,
+        row.display_name || value || `#${row.employee_user_id}`,
     },
     {
-      title: t('收入'),
+      title: t('客户消费'),
       dataIndex: 'total_revenue',
       render: (value) => formatBusinessAmount(value),
     },
     {
-      title: t('成本'),
+      title: t('客户成本'),
       dataIndex: 'total_cost',
       render: (value) => formatBusinessAmount(value),
     },
     {
-      title: t('利润'),
+      title: t('客户利润'),
       dataIndex: 'total_profit',
       render: (value) => <AmountText value={value} />,
     },
     {
-      title: t('佣金'),
+      title: t('提成'),
       dataIndex: 'total_commission',
       render: (value) => <AmountText value={value} />,
     },
@@ -2541,7 +3712,7 @@ export function BusinessOverview() {
       sorter: (a, b) => a.cost_ratio - b.cost_ratio,
     },
     {
-      title: t('总消耗'),
+      title: t('总消费'),
       dataIndex: 'consumption_quota',
       sorter: (a, b) => a.consumption_quota - b.consumption_quota,
       render: (value) => formatBusinessAmount(value),
@@ -2617,13 +3788,40 @@ export function BusinessOverview() {
       >
         <Spin spinning={loading}>
           <div className='flex flex-col gap-4'>
+            {showBackfill ? (
+              <div
+                className='flex items-center gap-3 rounded-xl px-4 py-3'
+                style={{
+                  border: '1px solid var(--semi-color-warning)',
+                  background: 'var(--semi-color-warning-light-default)',
+                }}
+              >
+                <Text className='flex-1' size='small'>
+                  {showBackfillRunning
+                    ? t('正在回填历史数据')
+                    : t(
+                        '检测到历史成本数据尚未迁移，迁移后可获得更准确的统计。此操作仅需执行一次。',
+                      )}
+                </Text>
+                {!showBackfillRunning ? (
+                  <Button
+                    size='small'
+                    type='warning'
+                    theme='solid'
+                    onClick={handleBackfill}
+                  >
+                    {t('立即迁移')}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <Text strong type='secondary'>
               {t('平台范围（所有用户）')}
             </Text>
             <Row gutter={[16, 16]}>
               <Col xs={24} md={12} xl={4}>
                 <StatCard
-                  title={t('总消耗')}
+                  title={t('总消费')}
                   value={formatBusinessAmount(
                     platform.total_consumption_quota || 0,
                   )}
@@ -2743,20 +3941,22 @@ export function BusinessOverview() {
               <ClassicBusinessTable
                 rowKey='channel_id'
                 columns={channelProfitColumns}
-                dataSource={filteredChannelProfitRows}
+                dataSource={loadedChannelRows}
                 wrapperClassName='business-channel-profit-table pr-1'
                 scroll={{ x: '100%', y: 223 }}
+                hasMore={hasMoreChannelRows}
+                onLoadMore={loadMoreChannels}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}
               />
             </BusinessSection>
 
             <Text strong type='secondary'>
-              {t('员工流量')}
+              {t('员工归属业绩')}
             </Text>
             <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
               <div>
                 <StatCard
-                  title={t('员工收入')}
+                  title={t('客户消费')}
                   value={formatBusinessAmount(
                     commission.total_revenue_quota || 0,
                   )}
@@ -2767,7 +3967,7 @@ export function BusinessOverview() {
               </div>
               <div>
                 <StatCard
-                  title={t('员工成本')}
+                  title={t('客户成本')}
                   value={formatBusinessAmount(commission.total_cost_quota || 0)}
                   sub={formatBusinessUsd(commission.total_cost_usd)}
                   icon={BriefcaseBusiness}
@@ -2776,7 +3976,7 @@ export function BusinessOverview() {
               </div>
               <div>
                 <StatCard
-                  title={t('员工利润')}
+                  title={t('客户利润')}
                   value={formatBusinessAmount(
                     commission.total_profit_quota || 0,
                   )}
@@ -2787,7 +3987,7 @@ export function BusinessOverview() {
               </div>
               <div>
                 <StatCard
-                  title={t('佣金总额')}
+                  title={t('提成总额')}
                   value={formatBusinessAmount(
                     commission.total_commission_quota || 0,
                   )}
@@ -2805,11 +4005,11 @@ export function BusinessOverview() {
               </div>
             </div>
 
-            <BusinessSection title={t('按员工')}>
+            <BusinessSection title={t('员工业绩 Top 10')}>
               <ClassicBusinessTable
                 rowKey='employee_user_id'
                 columns={employeeColumns}
-                dataSource={employeeRows}
+                dataSource={loadedEmployeeRows}
                 wrapperClassName='business-employee-table pr-1'
                 scroll={{ x: '100%', y: 223 }}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}

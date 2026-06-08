@@ -426,12 +426,7 @@ func GetCustomerQuotaLogs(filter CustomerQuotaLogFilter) ([]*CustomerQuotaLog, i
 	if filter.CustomerUserId != 0 {
 		tx = tx.Where("customer_user_id = ?", filter.CustomerUserId)
 	}
-	if filter.StartTime != 0 {
-		tx = tx.Where("created_at >= ?", filter.StartTime)
-	}
-	if filter.EndTime != 0 {
-		tx = tx.Where("created_at <= ?", filter.EndTime)
-	}
+	tx = applyCreatedAtTimeRange(tx, filter.StartTime, filter.EndTime)
 
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err

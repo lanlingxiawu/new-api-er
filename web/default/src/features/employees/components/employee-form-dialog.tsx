@@ -1,15 +1,18 @@
-import { useState, useEffect, useRef, type UIEvent } from 'react'
+import { useState, useEffect, useMemo, useRef, type UIEvent } from 'react'
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -31,29 +34,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { formatBusinessTargetAmount } from '@/features/business/format'
 import { searchUsers } from '@/features/users/api'
+import { createEmployee, getEmployeeTiers, updateEmployee } from '../api'
 import {
-  createEmployee,
-  getEmployeeTiers,
-  setEmployeeTier,
-  updateEmployee,
-} from '../api'
+  compareEmployeeTiersByGroupLevel,
+  getEmployeeTierGroupBadgeClass,
+  getEmployeeTierGroupDotClass,
+  getEmployeeTierGroup,
+  getEmployeeTierLevelBadgeClass,
+} from '../lib/tiers'
 import type { EmployeeProfile, EmployeeTier } from '../types'
 
 const EMPTY_TIERS: EmployeeTier[] = []
 const USER_PICKER_PAGE_SIZE = 20
+const DEFAULT_TIER_GROUP = '通用'
 
 const createSchema = z.object({
   user_id: z.number({ error: 'Required' }).positive('Must be positive'),
-  commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
-  target_amount: z.number().min(0).optional(),
+  tier_id: z.number().optional(),
   remark: z.string().max(255).optional(),
 })
 
 const updateSchema = z.object({
-  commission_rate: z.number().min(0, 'Min 0').max(1, 'Max 1 (100%)'),
-  target_amount: z.number().min(0),
+  tier_id: z.number().optional(),
   status: z.number().min(1).max(2),
   remark: z.string().max(255).optional(),
 })
@@ -68,34 +73,15 @@ interface Props {
   onSuccess?: () => void
 }
 
-function isSameNumber(left: number | undefined, right: number | undefined) {
-  return Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.000001
-}
-
-function resolveSelectedTierId(
-  currentRow: EmployeeProfile | undefined,
-  tiers: EmployeeTier[]
-) {
-  if (!currentRow) return ''
-
-  const currentTierId = Number(currentRow.current_tier_id ?? 0)
-  if (currentTierId > 0) return String(currentTierId)
-
-  const matchedTier = tiers.find(
-    (tier) =>
-      isSameNumber(tier.rate, currentRow.commission_rate) &&
-      isSameNumber(tier.threshold_usd, currentRow.target_amount)
-  )
-  return matchedTier ? String(matchedTier.id) : ''
-}
-
 // Search users server-side and select one instead of typing an ID.
 function UserPicker({
   value,
   onSelect,
+  onClear,
 }: {
   value?: number
   onSelect: (id: number) => void
+  onClear: () => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -157,6 +143,13 @@ function UserPicker({
     void fetchNextPage()
   }
 
+  const clearSelection = () => {
+    setSelectedLabel('')
+    setKeyword('')
+    setDebounced('')
+    onClear()
+  }
+
   return (
     <div ref={containerRef} className='relative'>
       <Input
@@ -172,7 +165,22 @@ function UserPicker({
           setKeyword('')
           setOpen(true)
         }}
+        className={value && !open ? 'pr-9' : undefined}
       />
+      {value && !open ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='absolute top-1/2 right-1 size-7 -translate-y-1/2'
+          title={t('Clear selection')}
+          aria-label={t('Clear selection')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={clearSelection}
+        >
+          <X className='size-4' />
+        </Button>
+      ) : null}
       {open && (
         <div className='bg-popover text-popover-foreground absolute top-full z-[100] mt-1 w-full rounded-md border shadow-md'>
           {isInitialFetching ? (
@@ -202,6 +210,8 @@ function UserPicker({
                     setSelectedLabel(
                       `${u.username}${u.display_name ? ` (${u.display_name})` : ''} #${u.id}`
                     )
+                    setKeyword('')
+                    setDebounced('')
                     onSelect(u.id)
                     setOpen(false)
                   }}
@@ -229,6 +239,189 @@ function UserPicker({
   )
 }
 
+function TierSelectField({
+  value,
+  onValueChange,
+  tiers,
+}: {
+  value: string
+  onValueChange: (tierId: string) => void
+  tiers: EmployeeTier[]
+}) {
+  const { t } = useTranslation()
+
+  const groups = useMemo(() => {
+    const map = new Map<string, EmployeeTier[]>()
+    tiers.forEach((tier) => {
+      const group = getEmployeeTierGroup(tier, DEFAULT_TIER_GROUP)
+      if (!map.has(group)) map.set(group, [])
+      map.get(group)!.push(tier)
+    })
+    return Array.from(map.entries())
+      .sort((a, b) =>
+        a[0].localeCompare(b[0], undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        })
+      )
+      .map(
+        ([group, ts]) =>
+          [
+            group,
+            [...ts].sort(
+              (a, b) =>
+                Number(a.level || 0) - Number(b.level || 0) ||
+                Number(a.threshold_usd || 0) - Number(b.threshold_usd || 0) ||
+                Number(a.id || 0) - Number(b.id || 0)
+            ),
+          ] as [string, EmployeeTier[]]
+      )
+  }, [tiers])
+
+  const currentTier = tiers.find((t) => String(t.id) === value)
+
+  const [activeGroup, setActiveGroup] = useState<string>(
+    () =>
+      (currentTier
+        ? getEmployeeTierGroup(currentTier, DEFAULT_TIER_GROUP)
+        : groups[0]?.[0]) ?? DEFAULT_TIER_GROUP
+  )
+
+  useEffect(() => {
+    if (currentTier) {
+      setActiveGroup(getEmployeeTierGroup(currentTier, DEFAULT_TIER_GROUP))
+    }
+  }, [value, currentTier])
+
+  useEffect(() => {
+    if (currentTier || groups.length === 0) return
+    if (!groups.some(([group]) => group === activeGroup)) {
+      setActiveGroup(groups[0][0])
+    }
+  }, [activeGroup, currentTier, groups])
+
+  const tiersForGroup = useMemo(
+    () => groups.find(([group]) => group === activeGroup)?.[1] ?? [],
+    [groups, activeGroup]
+  )
+
+  const selectGroup = (group: string) => {
+    setActiveGroup(group)
+    const groupTiers = groups.find(([g]) => g === group)?.[1] ?? []
+    if (groupTiers[0]) onValueChange(String(groupTiers[0].id))
+  }
+
+  if (tiers.length === 0) {
+    return (
+      <div className='space-y-1'>
+        <label className='text-sm font-medium'>{t('Commission Tier')}</label>
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'Commission rate and target are determined by the tier. Configure tiers in the Commission Tiers tab.'
+          )}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className='space-y-2'>
+      <label className='text-sm font-medium'>{t('Commission Tier')}</label>
+
+      {/* Group tabs */}
+      <div className='flex flex-wrap gap-2'>
+        {groups.map(([group]) => (
+          <button
+            key={group}
+            type='button'
+            onClick={() => selectGroup(group)}
+            className={cn(
+              'rounded-md border px-4 py-1.5 text-sm font-medium transition-colors',
+              activeGroup === group
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+            )}
+          >
+            <span
+              className={cn(
+                'mr-2 inline-block size-2 rounded-full align-middle',
+                activeGroup === group
+                  ? 'bg-primary-foreground'
+                  : getEmployeeTierGroupDotClass(group)
+              )}
+            />
+            {group}
+          </button>
+        ))}
+      </div>
+
+      {/* Tier buttons within the selected group */}
+      {tiersForGroup.length > 0 && (
+        <div className='flex flex-wrap gap-2'>
+          {tiersForGroup.map((tier) => (
+            <button
+              key={tier.id}
+              type='button'
+              onClick={() => onValueChange(String(tier.id))}
+              className={cn(
+                'rounded-md border px-4 py-1.5 text-sm transition-colors',
+                String(tier.id) === value
+                  ? getEmployeeTierLevelBadgeClass(tier.level)
+                  : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+              )}
+            >
+              {t('Tier {{level}}', { level: tier.level })}
+              <span className='text-muted-foreground ml-1.5'>
+                {(Number(tier.rate || 0) * 100).toFixed(1)}%
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 当前选中等级信息 */}
+      {currentTier && (
+        <div className='bg-muted text-muted-foreground rounded-md px-3 py-2 text-xs'>
+          <Badge
+            variant='outline'
+            className={cn(
+              'align-middle',
+              getEmployeeTierLevelBadgeClass(currentTier.level)
+            )}
+          >
+            {t('Tier {{level}}', { level: currentTier.level })}
+          </Badge>
+          {' · '}
+          <Badge
+            variant='outline'
+            className={cn(
+              'mx-1.5 align-middle',
+              getEmployeeTierGroupBadgeClass(
+                currentTier.group || DEFAULT_TIER_GROUP
+              )
+            )}
+          >
+            {currentTier.group || DEFAULT_TIER_GROUP}
+          </Badge>
+          {t('Threshold')}: $
+          {formatBusinessTargetAmount(currentTier.threshold_usd).replace(
+            /^\$/,
+            ''
+          )}
+          {' · '}
+          {t('Rate')}: {(Number(currentTier.rate || 0) * 100).toFixed(1)}%
+        </div>
+      )}
+
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Commission rate and target are determined by the tier. Configure tiers in the Commission Tiers tab.'
+        )}
+      </p>
+    </div>
+  )
+}
+
 export function EmployeeFormDialog({
   open,
   onOpenChange,
@@ -249,14 +442,12 @@ export function EmployeeFormDialog({
 
   const createForm = useForm<CreateValues>({
     resolver: zodResolver(createSchema),
-    defaultValues: { commission_rate: 0.1, target_amount: 0 },
+    defaultValues: {},
   })
 
   const updateForm = useForm<UpdateValues>({
     resolver: zodResolver(updateSchema),
     defaultValues: {
-      commission_rate: currentRow?.commission_rate ?? 0.1,
-      target_amount: Number(currentRow?.target_amount ?? 0),
       status: currentRow?.status ?? 1,
       remark: currentRow?.remark ?? '',
     },
@@ -268,110 +459,47 @@ export function EmployeeFormDialog({
 
   useEffect(() => {
     if (!open || !currentRow) return
-    setSelectedTierId(resolveSelectedTierId(currentRow, tiers))
-  }, [currentRow, open, tiers])
+    const tierId = Number(currentRow.current_tier_id ?? 0)
+    setSelectedTierId(tierId > 0 ? String(tierId) : '')
+  }, [currentRow, open])
+
+  // Auto-select the lowest-level default tier when opening in create mode
+  useEffect(() => {
+    if (!open || currentRow || tiers.length === 0 || selectedTierId) return
+    const sorted = [...tiers].sort((a, b) =>
+      compareEmployeeTiersByGroupLevel(a, b, DEFAULT_TIER_GROUP)
+    )
+    const defaultTier =
+      sorted.find((t) => t.group === DEFAULT_TIER_GROUP) ?? sorted[0]
+    if (defaultTier) setSelectedTierId(String(defaultTier.id))
+  }, [open, currentRow, tiers, selectedTierId])
 
   useEffect(() => {
     if (!open || !currentRow) return
     updateForm.reset({
-      commission_rate: currentRow.commission_rate ?? 0.1,
-      target_amount: Number(currentRow.target_amount ?? 0),
       status: currentRow.status ?? 1,
       remark: currentRow.remark ?? '',
     })
   }, [currentRow, open, updateForm])
 
-  const applyTierPreset = (tierId: string | null) => {
-    if (!tierId) {
-      setSelectedTierId('')
-      return
-    }
+  const handleTierChange = (tierId: string) => {
     setSelectedTierId(tierId)
-    const tier = tiers.find((item) => String(item.id) === tierId)
-    if (!tier) return
-    if (isUpdate) {
-      updateForm.setValue('commission_rate', Number(tier.rate ?? 0), {
-        shouldDirty: true,
-        shouldValidate: true,
-      })
-      updateForm.setValue('target_amount', Number(tier.threshold_usd ?? 0), {
-        shouldDirty: true,
-        shouldValidate: true,
-      })
-    } else {
-      createForm.setValue('commission_rate', Number(tier.rate ?? 0), {
-        shouldDirty: true,
-        shouldValidate: true,
-      })
-      createForm.setValue('target_amount', Number(tier.threshold_usd ?? 0), {
-        shouldDirty: true,
-        shouldValidate: true,
-      })
-    }
   }
 
-  const tierPresetField =
-    tiers.length > 0 ? (
-      <div className='space-y-2'>
-        <label className='text-sm font-medium'>{t('Apply Tier Preset')}</label>
-        <Select value={selectedTierId} onValueChange={applyTierPreset}>
-          <SelectTrigger className='w-full'>
-            <SelectValue
-              placeholder={t('Select a tier to fill rate and target')}
-            />
-          </SelectTrigger>
-          <SelectContent
-            align='start'
-            alignItemWithTrigger={false}
-            sideOffset={6}
-            className='max-h-60 rounded-xl p-1 shadow-lg'
-          >
-            {tiers.map((tier) => (
-              <SelectItem
-                key={tier.id}
-                value={String(tier.id)}
-                className='min-h-9 px-3 py-2'
-              >
-                {t(
-                  'Tier {{level}} - Threshold ${{threshold}} / Rate {{rate}}',
-                  {
-                    level: tier.level,
-                    threshold: formatBusinessTargetAmount(
-                      tier.threshold_usd
-                    ).replace(/^\$/, ''),
-                    rate: `${(Number(tier.rate || 0) * 100).toFixed(1)}%`,
-                  }
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className='text-muted-foreground text-xs'>
-          {t(
-            'After selection, the values below are filled automatically and can still be edited.'
-          )}
-        </p>
-      </div>
-    ) : null
+  const selectedUserId = createForm.watch('user_id')
+  const currentEmployeeName =
+    currentRow?.username || (currentRow ? `#${currentRow.user_id}` : '')
 
   const handleCreate = async (values: CreateValues) => {
     setIsSubmitting(true)
     try {
+      const tierId = Number(selectedTierId) || 0
       const res = await createEmployee({
         user_id: values.user_id,
-        commission_rate: values.commission_rate,
-        target_amount: values.target_amount ?? 0,
+        tier_id: tierId,
         remark: values.remark,
       })
       if (!res.success) throw new Error(res.message ?? 'Failed')
-      const tierId = Number(selectedTierId)
-      if (res.data?.id && Number.isFinite(tierId) && tierId > 0) {
-        const tierRes = await setEmployeeTier(res.data.id, {
-          tier_id: tierId,
-          source: 'manual',
-        })
-        if (!tierRes.success) throw new Error(tierRes.message ?? 'Failed')
-      }
       toast.success(t('Employee created successfully'))
       createForm.reset()
       onOpenChange(false)
@@ -387,22 +515,13 @@ export function EmployeeFormDialog({
     if (!currentRow) return
     setIsSubmitting(true)
     try {
+      const tierId = Number(selectedTierId) || 0
       const res = await updateEmployee(currentRow.id, {
-        commission_rate: values.commission_rate,
-        target_amount: values.target_amount,
+        tier_id: tierId,
         status: values.status,
         remark: values.remark,
       })
       if (!res.success) throw new Error(res.message ?? 'Failed')
-      const tierId = Number(selectedTierId)
-      const currentTierId = Number(currentRow.current_tier_id ?? 0)
-      if (Number.isFinite(tierId) && tierId > 0 && tierId !== currentTierId) {
-        const tierRes = await setEmployeeTier(currentRow.id, {
-          tier_id: tierId,
-          source: 'manual',
-        })
-        if (!tierRes.success) throw new Error(tierRes.message ?? 'Failed')
-      }
       toast.success(t('Employee updated successfully'))
       onOpenChange(false)
       onSuccess?.()
@@ -413,13 +532,28 @@ export function EmployeeFormDialog({
     }
   }
 
+  const tierField = (
+    <TierSelectField
+      value={selectedTierId}
+      onValueChange={handleTierChange}
+      tiers={tiers}
+    />
+  )
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-[480px]' initialFocus={false}>
+      <DialogContent className='sm:max-w-120' initialFocus={false}>
         <DialogHeader>
           <DialogTitle>
             {isUpdate ? t('Edit Employee') : t('Create Employee')}
           </DialogTitle>
+          <DialogDescription>
+            {isUpdate
+              ? t('Adjust tier, status, and internal remark for this employee.')
+              : t(
+                  'Pick an existing user, choose a starting tier, then create the employee profile.'
+                )}
+          </DialogDescription>
         </DialogHeader>
 
         {!isUpdate ? (
@@ -438,6 +572,7 @@ export function EmployeeFormDialog({
                       <UserPicker
                         value={field.value}
                         onSelect={(id) => field.onChange(id)}
+                        onClear={() => field.onChange(undefined)}
                       />
                     </FormControl>
                     <FormDescription>
@@ -449,55 +584,7 @@ export function EmployeeFormDialog({
                   </FormItem>
                 )}
               />
-              {tierPresetField}
-              <FormField
-                control={createForm.control}
-                name='commission_rate'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Commission Rate')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        step='0.01'
-                        min='0'
-                        max='1'
-                        placeholder='e.g. 0.1'
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseFloat(e.target.value) || 0)
-                        }
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('0.0 ~ 1.0 (e.g. 0.1 = 10%)')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={createForm.control}
-                name='target_amount'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Performance Target (USD)')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min='0'
-                        step='0.01'
-                        placeholder='0 = no limit'
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseFloat(e.target.value) || 0)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {tierField}
               <FormField
                 control={createForm.control}
                 name='remark'
@@ -505,7 +592,11 @@ export function EmployeeFormDialog({
                   <FormItem>
                     <FormLabel>{t('Remark')}</FormLabel>
                     <FormControl>
-                      <Input placeholder={t('Optional')} {...field} />
+                      <Textarea
+                        rows={3}
+                        placeholder={t('Optional')}
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -519,7 +610,10 @@ export function EmployeeFormDialog({
                 >
                   {t('Cancel')}
                 </Button>
-                <Button type='submit' disabled={isSubmitting}>
+                <Button
+                  type='submit'
+                  disabled={isSubmitting || !selectedUserId}
+                >
                   {isSubmitting ? t('Saving...') : t('Create')}
                 </Button>
               </DialogFooter>
@@ -531,53 +625,35 @@ export function EmployeeFormDialog({
               onSubmit={updateForm.handleSubmit(handleUpdate)}
               className='space-y-4'
             >
-              {tierPresetField}
-              <FormField
-                control={updateForm.control}
-                name='commission_rate'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Commission Rate')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        step='0.01'
-                        min='0'
-                        max='1'
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseFloat(e.target.value) || 0)
-                        }
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t('0.0 ~ 1.0 (e.g. 0.1 = 10%)')}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={updateForm.control}
-                name='target_amount'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Performance Target (USD)')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min='0'
-                        step='0.01'
-                        {...field}
-                        onChange={(e) =>
-                          field.onChange(parseFloat(e.target.value) || 0)
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <div className='bg-muted/30 rounded-lg border px-3 py-2'>
+                <div className='text-muted-foreground text-xs'>
+                  {t('Employee')}
+                </div>
+                <div className='mt-1 flex min-w-0 items-center gap-2'>
+                  <span className='truncate font-medium'>
+                    {currentEmployeeName}
+                  </span>
+                  {currentRow?.display_name ? (
+                    <span className='text-muted-foreground truncate text-sm'>
+                      {currentRow.display_name}
+                    </span>
+                  ) : null}
+                  <Badge variant='outline' className='ml-auto shrink-0'>
+                    #{currentRow?.user_id}
+                  </Badge>
+                </div>
+                <div className='mt-2 flex flex-wrap items-center gap-2 text-xs'>
+                  <Badge
+                    variant={currentRow?.status === 2 ? 'secondary' : 'default'}
+                  >
+                    {currentRow?.status === 2 ? t('Disabled') : t('Enabled')}
+                  </Badge>
+                  <span className='text-muted-foreground'>
+                    {t('Customer Count')}: {currentRow?.customer_count ?? 0}
+                  </span>
+                </div>
+              </div>
+              {tierField}
               <FormField
                 control={updateForm.control}
                 name='status'
@@ -613,7 +689,11 @@ export function EmployeeFormDialog({
                   <FormItem>
                     <FormLabel>{t('Remark')}</FormLabel>
                     <FormControl>
-                      <Input placeholder={t('Optional')} {...field} />
+                      <Textarea
+                        rows={3}
+                        placeholder={t('Optional')}
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
