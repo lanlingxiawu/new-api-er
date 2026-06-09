@@ -219,9 +219,7 @@ func IsEmployee(userId int) bool {
 	return GetEmployeeByUserId(userId) != nil
 }
 
-// HasEmployeeProfile reports whether a user already has any employee profile,
-// including disabled profiles. Customer assignment should not bind employees
-// as customers because employee identity is independent from user role.
+// HasEmployeeProfile reports whether a user already has any employee profile.
 func HasEmployeeProfile(userId int) bool {
 	var count int64
 	err := DB.Model(&EmployeeProfile{}).Where("user_id = ?", userId).Count(&count).Error
@@ -230,6 +228,28 @@ func HasEmployeeProfile(userId int) bool {
 		return false
 	}
 	return count > 0
+}
+
+func GetEmployeeProfileStatusesByUserIds(userIds []int) (map[int]int, error) {
+	statuses := make(map[int]int, len(userIds))
+	if len(userIds) == 0 {
+		return statuses, nil
+	}
+	type statusRow struct {
+		UserId int
+		Status int
+	}
+	var rows []statusRow
+	if err := DB.Model(&EmployeeProfile{}).
+		Select("user_id, status").
+		Where("user_id IN ?", userIds).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		statuses[row.UserId] = row.Status
+	}
+	return statuses, nil
 }
 
 type EmployeeFilter struct {
@@ -256,7 +276,7 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 	if filter.Keyword != "" {
 		keyword := "%" + filter.Keyword + "%"
 		tx = tx.Joins("LEFT JOIN users ON users.id = employee_profiles.user_id").
-			Where("users.username LIKE ? OR users.display_name LIKE ? OR users.email LIKE ?", keyword, keyword, keyword)
+			Where("users.username LIKE ? OR users.display_name LIKE ? OR users.email LIKE ? OR users.remark LIKE ?", keyword, keyword, keyword, keyword)
 	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -295,6 +315,9 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 		orderColumn = "COALESCE(tiers_sort.rate, 0)"
 	case "status":
 		orderColumn = "employee_profiles.status"
+	case "remark":
+		tx = tx.Joins("LEFT JOIN users AS remark_users ON remark_users.id = employee_profiles.user_id")
+		orderColumn = "remark_users.remark"
 	case "created_at":
 		orderColumn = "employee_profiles.created_at"
 	}
@@ -310,10 +333,24 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 
 // CreateEmployee 创建员工档案，并确保对应的 user_extensions 记录存在。
 func CreateEmployee(emp *EmployeeProfile) error {
-	if err := DB.Create(emp).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(emp).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&User{}).
+			Where("id = ?", emp.UserId).
+			Updates(map[string]interface{}{
+				"inviter_id": 0,
+				"remark":     emp.Remark,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&CustomerProfile{}, "customer_user_id = ?", emp.UserId).Error
+	}); err != nil {
 		return err
 	}
 	InvalidateEmployeeCache(emp.UserId)
+	InvalidateInviterIdCache(emp.UserId)
 	return EnsureUserExtension(emp.UserId)
 }
 
@@ -327,12 +364,18 @@ func UpdateEmployee(emp *EmployeeProfile) error {
 		}
 		return err
 	}
-	err := DB.Model(&EmployeeProfile{}).Where("id = ?", emp.Id).Updates(map[string]interface{}{
-		"status": emp.Status,
-		"remark": emp.Remark,
-	}).Error
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&EmployeeProfile{}).Where("id = ?", emp.Id).Updates(map[string]interface{}{
+			"status": emp.Status,
+			"remark": emp.Remark,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&User{}).Where("id = ?", existing.UserId).Update("remark", emp.Remark).Error
+	})
 	if err == nil {
 		InvalidateEmployeeCache(existing.UserId)
+		_ = invalidateUserCache(existing.UserId)
 	}
 	return err
 }

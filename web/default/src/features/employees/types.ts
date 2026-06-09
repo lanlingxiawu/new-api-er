@@ -42,6 +42,7 @@ export interface EmployeeCustomer {
   quota?: number
   used_quota?: number
   commission_quota?: number
+  customer_employee_status?: number
   status?: number
   remark?: string
   created_at?: number

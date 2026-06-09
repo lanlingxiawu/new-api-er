@@ -48,14 +48,15 @@ type TransferQuotaRequest struct {
 
 type CustomerWithUser struct {
 	*model.CustomerProfile
-	Username            string `json:"username"`
-	DisplayName         string `json:"display_name"`
-	Email               string `json:"email"`
-	Quota               int    `json:"quota"`
-	UsedQuota           int    `json:"used_quota"`
-	EmployeeUsername    string `json:"employee_username"`
-	EmployeeDisplayName string `json:"employee_display_name"`
-	CommissionQuota     int64  `json:"commission_quota"`
+	Username               string `json:"username"`
+	DisplayName            string `json:"display_name"`
+	Email                  string `json:"email"`
+	Quota                  int    `json:"quota"`
+	UsedQuota              int    `json:"used_quota"`
+	EmployeeUsername       string `json:"employee_username"`
+	EmployeeDisplayName    string `json:"employee_display_name"`
+	CommissionQuota        int64  `json:"commission_quota"`
+	CustomerEmployeeStatus int    `json:"customer_employee_status,omitempty"`
 }
 
 type CustomerQuotaLogWithUser struct {
@@ -112,6 +113,9 @@ func buildInvitedCustomerWithUser(employeeUserId int, customer *model.User) Cust
 		UsedQuota:   customer.UsedQuota,
 	}
 	item.CommissionQuota = model.GetCustomerCommissionTotal(employeeUserId, customer.Id)
+	if statuses, err := model.GetEmployeeProfileStatusesByUserIds([]int{customer.Id}); err == nil {
+		item.CustomerEmployeeStatus = statuses[customer.Id]
+	}
 	return item
 }
 
@@ -121,6 +125,10 @@ func buildInvitedCustomersWithUser(employeeUserId int, customers []*model.User) 
 		customerIds = append(customerIds, customer.Id)
 	}
 	commissionTotals, err := model.GetCustomerCommissionTotals(employeeUserId, customerIds)
+	if err != nil {
+		return nil, err
+	}
+	employeeStatuses, err := model.GetEmployeeProfileStatusesByUserIds(customerIds)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +143,13 @@ func buildInvitedCustomersWithUser(employeeUserId int, customers []*model.User) 
 				Remark:         customer.Remark,
 				CreatedAt:      customer.CreatedAt,
 			},
-			Username:        customer.Username,
-			DisplayName:     customer.DisplayName,
-			Email:           customer.Email,
-			Quota:           customer.Quota,
-			UsedQuota:       customer.UsedQuota,
-			CommissionQuota: commissionTotals[customer.Id],
+			Username:               customer.Username,
+			DisplayName:            customer.DisplayName,
+			Email:                  customer.Email,
+			Quota:                  customer.Quota,
+			UsedQuota:              customer.UsedQuota,
+			CommissionQuota:        commissionTotals[customer.Id],
+			CustomerEmployeeStatus: employeeStatuses[customer.Id],
 		}
 		items = append(items, item)
 	}
@@ -212,7 +221,7 @@ func validateCustomerBinding(employeeUserId, customerUserId int) error {
 	if customerUser.Role != common.RoleCommonUser || customerUser.Status != common.UserStatusEnabled {
 		return errInvalidCustomer
 	}
-	if model.HasEmployeeProfile(customerUserId) {
+	if model.IsEmployee(customerUserId) {
 		return errCustomerIsEmployee
 	}
 	mutual, err := model.IsMutualInvitation(customerUserId, employeeUserId)

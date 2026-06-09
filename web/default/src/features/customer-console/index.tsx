@@ -516,7 +516,7 @@ function MyCustomersTab() {
   }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 20,
+    pageSize: 10,
   })
   const columns = useMyCustomerColumns({ onEdit: setEditRow })
   // Employee quota adjustment is temporarily disabled.

@@ -226,6 +226,7 @@ func AdminListEmployees(c *gin.Context) {
 			item.Username = u.Username
 			item.DisplayName = u.DisplayName
 			item.Email = u.Email
+			item.EmployeeProfile.Remark = u.Remark
 		}
 		items = append(items, item)
 	}
@@ -268,6 +269,9 @@ func AdminCreateEmployee(c *gin.Context) {
 		UserId: req.UserId,
 		Status: 1,
 		Remark: req.Remark,
+	}
+	if emp.Remark == "" {
+		emp.Remark = user.Remark
 	}
 	if err := model.CreateEmployee(emp); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})

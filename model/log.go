@@ -280,6 +280,40 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	return logEntry.Id
 }
 
+func GetChannelNameSnapshotsFromLogs(ids []int) map[int]string {
+	result := make(map[int]string, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		var logs []Log
+		err := LOG_DB.Model(&Log{}).
+			Select("channel_id, other").
+			Where("channel_id = ? AND other LIKE ?", id, "%channel_name%").
+			Order("created_at desc, id desc").
+			Limit(20).
+			Find(&logs).Error
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to get channel name snapshot from logs: channel_id=%d, error=%v", id, err))
+			continue
+		}
+		for _, log := range logs {
+			otherMap, _ := common.StrToMap(log.Other)
+			if otherMap == nil {
+				continue
+			}
+			if name, ok := otherMap["channel_name"].(string); ok {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					result[id] = name
+					break
+				}
+			}
+		}
+	}
+	return result
+}
+
 type RecordTaskBillingLogParams struct {
 	UserId    int
 	LogType   int
@@ -292,9 +326,9 @@ type RecordTaskBillingLogParams struct {
 	Other     map[string]interface{}
 }
 
-func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
+func RecordTaskBillingLog(params RecordTaskBillingLogParams) int {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return 0
 	}
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
@@ -320,7 +354,9 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+		return 0
 	}
+	return log.Id
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {

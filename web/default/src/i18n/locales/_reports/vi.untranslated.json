@@ -8,6 +8,7 @@
   "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
   "customers with consumption": "customers with consumption",
   "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.": "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.",
+  "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.": "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.",
   "Leave blank to keep unchanged": "Leave blank to keep unchanged",
   "Leave blank to use username": "Leave blank to use username",
   "Manage employees and commission rates.": "Manage employees and commission rates.",

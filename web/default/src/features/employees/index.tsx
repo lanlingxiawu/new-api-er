@@ -13,7 +13,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import {
-  MoreHorizontal,
   Pencil,
   PlusIcon,
   RotateCcw,
@@ -21,6 +20,7 @@ import {
   Trash2,
   UserMinus,
   UserRoundPlus,
+  Users,
   X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -48,14 +48,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -154,6 +146,7 @@ function AssignUserPicker({
         searchUsers({
           keyword: debounced,
           exclude_employee: true,
+          exclude_admin: true,
           p: Number(pageParam),
           page_size: ASSIGN_USER_PICKER_PAGE_SIZE,
         }),
@@ -213,13 +206,14 @@ function AssignUserPicker({
           onClick={() => {
             setKeyword('')
             setDebounced('')
+            setOpen(true)
           }}
         >
           <X className='size-4' />
         </Button>
       ) : null}
       {open && (
-        <div className='bg-muted/20 mt-2 overflow-hidden rounded-lg border'>
+        <div className='bg-popover text-popover-foreground absolute top-full right-0 left-0 z-[120] mt-2 overflow-hidden rounded-lg border shadow-lg'>
           <ul
             onScroll={handleListScroll}
             className='max-h-56 overflow-y-auto p-1'
@@ -421,18 +415,18 @@ function RemoveCustomersDialog({
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
-          className='max-h-[86vh] overflow-y-auto sm:max-w-[760px]'
+          className='flex h-[86vh] max-h-[720px] flex-col overflow-hidden sm:max-w-[760px]'
           initialFocus={false}
         >
-          <DialogHeader>
-            <DialogTitle>{t('Remove Customers')}</DialogTitle>
+          <DialogHeader className='shrink-0'>
+            <DialogTitle>{t('Employee Customer List')}</DialogTitle>
             <DialogDescription>
               {t(
-                'Review currently assigned customers and remove ownership when needed.'
+                'View customers assigned to this employee. You can remove a customer from this list when needed.'
               )}
             </DialogDescription>
           </DialogHeader>
-          <div className='space-y-4'>
+          <div className='flex min-h-0 flex-1 flex-col gap-4'>
             <div className='bg-muted/30 rounded-lg border px-3 py-2'>
               <div className='text-muted-foreground text-xs'>
                 {t('Employee')}
@@ -495,20 +489,20 @@ function RemoveCustomersDialog({
               </div>
             </div>
 
-            <div className='overflow-hidden rounded-lg border'>
-              <div className='bg-muted/40 text-muted-foreground grid grid-cols-[minmax(0,1fr)_96px_96px_110px] gap-3 px-3 py-2 text-xs font-medium max-sm:hidden'>
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border'>
+              <div className='bg-muted/30 text-muted-foreground border-border/50 grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-4 border-b px-4 py-2 text-xs font-medium max-sm:hidden'>
                 <span>{t('Customer')}</span>
                 <span className='text-right'>{t('Used quota')}</span>
                 <span className='text-right'>{t('Commission')}</span>
                 <span className='text-right'>{t('Action')}</span>
               </div>
-              <div className='min-h-[300px] divide-y'>
+              <div className='divide-border/40 min-h-0 flex-1 divide-y overflow-y-auto'>
                 {isLoading ? (
-                  <div className='text-muted-foreground flex h-[300px] items-center justify-center text-sm'>
+                  <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center text-sm'>
                     {t('Loading...')}
                   </div>
                 ) : customers.length === 0 ? (
-                  <div className='text-muted-foreground flex h-[300px] items-center justify-center px-6 text-center text-sm'>
+                  <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center px-6 text-center text-sm'>
                     {debounced
                       ? t('No current customers match your search')
                       : t('This employee has no assigned customers')}
@@ -519,24 +513,35 @@ function RemoveCustomersDialog({
                     return (
                       <div
                         key={customerUserId}
-                        className='hover:bg-muted/30 grid grid-cols-[minmax(0,1fr)_96px_96px_110px] items-center gap-3 px-3 py-2.5 text-sm transition-colors max-sm:grid-cols-1 max-sm:gap-2'
+                        className='hover:bg-muted/20 grid min-h-14 grid-cols-[minmax(0,1fr)_96px_96px_96px] items-center gap-4 px-4 py-2.5 text-sm transition-colors max-sm:grid-cols-1 max-sm:gap-2 max-sm:py-3'
                       >
                         <div className='min-w-0'>
-                          <div className='truncate font-medium'>
-                            {getCustomerLabel(customer)}
+                          <div className='flex min-w-0 items-center gap-2'>
+                            <span className='truncate font-medium'>
+                              {customer.username || '-'}
+                              {customer.remark ? ` (${customer.remark})` : ''}
+                            </span>
+                            {customer.customer_employee_status === 2 ? (
+                              <Badge
+                                variant='secondary'
+                                className='h-5 shrink-0 rounded-sm px-1.5 text-[10px] font-normal'
+                              >
+                                {t('Employee status disabled')}
+                              </Badge>
+                            ) : null}
                           </div>
                           <div className='text-muted-foreground truncate text-xs'>
                             #{customerUserId}
                             {customer.email ? ` / ${customer.email}` : ''}
                           </div>
                         </div>
-                        <div className='text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
+                        <div className='text-right font-medium tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
                           <span className='text-muted-foreground hidden text-xs max-sm:inline'>
                             {t('Used quota')}
                           </span>
                           {formatBusinessAmount(customer.used_quota ?? 0)}
                         </div>
-                        <div className='text-right tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
+                        <div className='text-right font-medium tabular-nums max-sm:flex max-sm:justify-between max-sm:text-left'>
                           <span className='text-muted-foreground hidden text-xs max-sm:inline'>
                             {t('Commission')}
                           </span>
@@ -546,8 +551,8 @@ function RemoveCustomersDialog({
                           <Button
                             type='button'
                             size='sm'
-                            variant='outline'
-                            className='h-8'
+                            variant='ghost'
+                            className='text-destructive hover:bg-destructive/10 hover:text-destructive h-8 px-2'
                             onClick={() => setCustomerToRemove(customer)}
                           >
                             <UserMinus className='size-4' />
@@ -561,7 +566,7 @@ function RemoveCustomersDialog({
               </div>
             </div>
 
-            <div className='flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between'>
+            <div className='flex shrink-0 flex-col gap-2 pt-3 text-sm sm:flex-row sm:items-center sm:justify-between'>
               <span className='text-muted-foreground'>
                 {t('Showing {{start}}-{{end}} of {{total}} customers', {
                   start: pageStart,
@@ -607,7 +612,7 @@ function RemoveCustomersDialog({
               </div>
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className='shrink-0'>
             <Button variant='outline' onClick={() => onOpenChange(false)}>
               {t('Close')}
             </Button>
@@ -762,7 +767,7 @@ function AssignCustomerDialog({
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
-          className='max-h-[86vh] overflow-y-auto sm:max-w-[560px]'
+          className='h-[86vh] max-h-[620px] overflow-visible sm:max-w-[560px]'
           initialFocus={false}
         >
           <DialogHeader>
@@ -1039,52 +1044,67 @@ function EmployeeRowActions({
   onEdit,
   onDelete,
   onAssign,
-  onRemoveCustomers,
+  onViewCustomers,
 }: {
   row: EmployeeProfile
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
-  onRemoveCustomers: (row: EmployeeProfile) => void
+  onViewCustomers: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger
-        render={<Button variant='ghost' size='sm' className='h-7 px-2' />}
+    <div className='flex flex-nowrap items-center justify-end gap-1'>
+      {row.status === 1 ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='size-8'
+          title={t('Assign Customer')}
+          aria-label={t('Assign Customer')}
+          onClick={() => onAssign(row)}
+        >
+          <UserRoundPlus className='size-4' />
+        </Button>
+      ) : null}
+      <Button
+        type='button'
+        size='icon'
+        variant='ghost'
+        className='size-8'
+        title={t('View Customers')}
+        aria-label={t('View Customers')}
+        onClick={() => onViewCustomers(row)}
       >
-        <MoreHorizontal className='h-4 w-4' />
-        {t('Manage')}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-[190px]'>
-        <DropdownMenuItem onClick={() => onAssign(row)}>
-          {t('Assign Customer')}
-          <DropdownMenuShortcut>
-            <UserRoundPlus className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onRemoveCustomers(row)}>
-          {t('Remove Customers')}
-          <DropdownMenuShortcut>
-            <UserMinus className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onEdit(row)}>
-          {t('Edit Employee')}
-          <DropdownMenuShortcut>
-            <Pencil className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant='destructive' onClick={() => onDelete(row)}>
-          {t('Disable Employee')}
-          <DropdownMenuShortcut>
-            <Trash2 className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <Users className='size-4' />
+      </Button>
+      <Button
+        type='button'
+        size='icon'
+        variant='ghost'
+        className='size-8'
+        title={t('Edit Employee')}
+        aria-label={t('Edit Employee')}
+        onClick={() => onEdit(row)}
+      >
+        <Pencil className='size-4' />
+      </Button>
+      {row.status === 1 ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='text-destructive hover:text-destructive size-8'
+          title={t('Disable Employee')}
+          aria-label={t('Disable Employee')}
+          onClick={() => onDelete(row)}
+        >
+          <Trash2 className='size-4' />
+        </Button>
+      ) : null}
+    </div>
   )
 }
 
@@ -1092,12 +1112,12 @@ function useEmployeesColumns({
   onEdit,
   onDelete,
   onAssign,
-  onRemoveCustomers,
+  onViewCustomers,
 }: {
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
-  onRemoveCustomers: (row: EmployeeProfile) => void
+  onViewCustomers: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
@@ -1131,9 +1151,29 @@ function useEmployeesColumns({
         accessorKey: 'customer_count',
         meta: { label: t('Customer Count'), mobileBadge: true },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Customer Count')} />
+          <DataTableColumnHeader
+            column={column}
+            title={t('Customer Count')}
+            className='whitespace-nowrap'
+          />
         ),
-        cell: ({ row }) => row.original.customer_count ?? 0,
+        cell: ({ row }) => {
+          const count = row.original.customer_count ?? 0
+          return (
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='inline-flex h-7 min-w-12 flex-nowrap items-center justify-center gap-1.5 px-2 whitespace-nowrap tabular-nums'
+              title={t('View Customers')}
+              aria-label={t('View customers for this employee')}
+              onClick={() => onViewCustomers(row.original)}
+            >
+              <Users className='size-3.5' />
+              {count}
+            </Button>
+          )
+        },
       },
       {
         accessorKey: 'total_consumption_quota',
@@ -1272,12 +1312,12 @@ function useEmployeesColumns({
             onAssign={onAssign}
             onDelete={onDelete}
             onEdit={onEdit}
-            onRemoveCustomers={onRemoveCustomers}
+            onViewCustomers={onViewCustomers}
           />
         ),
       },
     ],
-    [onAssign, onDelete, onEdit, onRemoveCustomers, t]
+    [onAssign, onDelete, onEdit, onViewCustomers, t]
   )
 }
 
@@ -1385,7 +1425,7 @@ function EmployeesTab() {
   const [editRow, setEditRow] = useState<EmployeeProfile | undefined>()
   const [deleteRow, setDeleteRow] = useState<EmployeeProfile | undefined>()
   const [assignRow, setAssignRow] = useState<EmployeeProfile | undefined>()
-  const [removeCustomersRow, setRemoveCustomersRow] = useState<
+  const [customerListRow, setCustomerListRow] = useState<
     EmployeeProfile | undefined
   >()
   const [filterForm, setFilterForm] = useState({
@@ -1400,14 +1440,14 @@ function EmployeesTab() {
   }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 20,
+    pageSize: 10,
   })
   const [sorting, setSorting] = useState<SortingState>([])
   const columns = useEmployeesColumns({
     onEdit: setEditRow,
     onDelete: setDeleteRow,
     onAssign: setAssignRow,
-    onRemoveCustomers: setRemoveCustomersRow,
+    onViewCustomers: setCustomerListRow,
   })
 
   const { data, isLoading, isFetching } = useQuery({
@@ -1657,9 +1697,9 @@ function EmployeesTab() {
         onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
       />
       <RemoveCustomersDialog
-        open={!!removeCustomersRow}
-        employee={removeCustomersRow}
-        onOpenChange={(open) => !open && setRemoveCustomersRow(undefined)}
+        open={!!customerListRow}
+        employee={customerListRow}
+        onOpenChange={(open) => !open && setCustomerListRow(undefined)}
         onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
       />
     </>
@@ -1687,7 +1727,7 @@ function CommissionLogsTab() {
   }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 20,
+    pageSize: 10,
   })
 
   const { data, isLoading, isFetching } = useQuery({
@@ -1965,7 +2005,10 @@ function TierDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-[420px]' initialFocus={false}>
+      <DialogContent
+        className='h-[86vh] max-h-[620px] overflow-y-auto sm:max-w-[420px]'
+        initialFocus={false}
+      >
         <DialogHeader>
           <DialogTitle>
             {currentRow ? t('Edit Tier') : t('Create Tier')}
@@ -2160,29 +2203,30 @@ function TierRowActions({
   const { t } = useTranslation()
 
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger
-        render={<Button variant='ghost' size='sm' className='h-7 px-2' />}
+    <div className='flex flex-nowrap items-center justify-end gap-1'>
+      <Button
+        type='button'
+        size='icon'
+        variant='ghost'
+        className='size-8'
+        title={t('Edit Tier')}
+        aria-label={t('Edit Tier')}
+        onClick={() => onEdit(row)}
       >
-        <MoreHorizontal className='h-4 w-4' />
-        {t('Manage')}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-[170px]'>
-        <DropdownMenuItem onClick={() => onEdit(row)}>
-          {t('Edit Tier')}
-          <DropdownMenuShortcut>
-            <Pencil className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant='destructive' onClick={() => onDelete(row)}>
-          {t('Delete Tier')}
-          <DropdownMenuShortcut>
-            <Trash2 className='h-4 w-4' />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <Pencil className='size-4' />
+      </Button>
+      <Button
+        type='button'
+        size='icon'
+        variant='ghost'
+        className='text-destructive hover:text-destructive size-8'
+        title={t('Delete Tier')}
+        aria-label={t('Delete Tier')}
+        onClick={() => onDelete(row)}
+      >
+        <Trash2 className='size-4' />
+      </Button>
+    </div>
   )
 }
 
@@ -2194,7 +2238,7 @@ function TiersTab() {
   const [deleteRow, setDeleteRow] = useState<EmployeeTier | undefined>()
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 20,
+    pageSize: 10,
   })
 
   const columns = useMemo(
@@ -2337,7 +2381,6 @@ function TiersTab() {
             </Button>
           </div>
         }
-        paginationInFooter={false}
         skeletonKeyPrefix='employee-tiers-skeleton'
         className='flex h-full min-h-0 flex-col overflow-hidden'
         tableClassName='min-h-0 flex-1 overflow-auto'

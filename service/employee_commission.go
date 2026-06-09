@@ -22,20 +22,34 @@ func optionalLogId(logId int) *int {
 	return common.GetPointer(logId)
 }
 
+func relayChannelName(relayInfo *relaycommon.RelayInfo) string {
+	if relayInfo == nil || relayInfo.ChannelMeta == nil {
+		return ""
+	}
+	if name := relayInfo.ChannelName; name != "" {
+		return name
+	}
+	if relayInfo.ChannelId == 0 {
+		return ""
+	}
+	if channel, err := model.CacheGetChannel(relayInfo.ChannelId); err == nil && channel != nil {
+		return channel.Name
+	}
+	return ""
+}
+
 func buildConsumptionCostRecord(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int, createdAt int64) *model.ConsumptionCost {
 	revenueQuota := int64(quota)
 	costRatio := model.GetChannelCostRatio(relayInfo.ChannelId)
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 
-	surcharge := clampSurcharge(surchargeQuota, revenueQuota)
-	tokenRevenue := revenueQuota - surcharge
-	costQuota := calcCostQuota(tokenRevenue, groupRatio, costRatio) +
-		calcCostQuota(surcharge, groupRatio, 1.0)
+	costQuota := calcCostQuota(revenueQuota, groupRatio, costRatio)
 
 	return &model.ConsumptionCost{
 		LogId:        optionalLogId(logId),
 		UserId:       relayInfo.UserId,
 		ChannelId:    relayInfo.ChannelId,
+		ChannelName:  relayChannelName(relayInfo),
 		GroupName:    relayInfo.UsingGroup,
 		ModelName:    relayInfo.OriginModelName,
 		RevenueQuota: revenueQuota,
@@ -153,9 +167,7 @@ func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quo
 //
 //	relayInfo      — 当次请求的 relay 信息（含 PriceData、ChannelId 等）
 //	quota          — 用户实际消耗的 quota（即收入，可为负，退款冲销）
-//	surchargeQuota — quota 中属于「固定价加付项」的部分（如 web/file search、
-//	                 图像生成调用），已包含组倍率。这部分上游为固定单价，不随
-//	                 渠道 token 折扣变化，故不套用 cost_ratio。无加付项传 0。
+//	surchargeQuota — 保留参数，暂未使用
 //	logId          — 对应的 logs.id（用于关联溯源、幂等去重）
 func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int) {
 	if quota == 0 {
@@ -221,14 +233,7 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 	costRatio := model.GetChannelCostRatio(relayInfo.ChannelId)
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 
-	// 拆分收入：固定价加付项按 cost_ratio=1 计成本（仅组倍率部分计入毛利），
-	// 其余 token 收入套用渠道成本系数。
-	surcharge := clampSurcharge(surchargeQuota, revenueQuota)
-	tokenRevenue := revenueQuota - surcharge
-
-	tokenCost := calcCostQuota(tokenRevenue, groupRatio, costRatio)
-	surchargeCost := calcCostQuota(surcharge, groupRatio, 1.0)
-	costQuota := tokenCost + surchargeCost
+	costQuota := calcCostQuota(revenueQuota, groupRatio, costRatio)
 	profitQuota := revenueQuota - costQuota
 
 	// 5. 正向消费只在利润为正时计提；退款/负消费按同一成本公式冲销佣金。
@@ -270,7 +275,7 @@ func TrySettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, su
 
 // RecordTransactionCost 在每笔消费结算后异步调用，记录逐笔精确成本到 consumption_costs。
 // 覆盖全平台所有消费（不仅员工归属流量），用于平台级成本/利润精确统计。
-// 成本算法与提成一致：token 部分套用渠道成本系数，固定价加付项按 cost_ratio=1。
+// 成本算法与提成一致：全部收入统一套用渠道成本系数。
 func RecordTransactionCost(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int) {
 	if quota == 0 {
 		return
@@ -279,19 +284,6 @@ func RecordTransactionCost(relayInfo *relaycommon.RelayInfo, quota int, surcharg
 	if err := model.CreateConsumptionCost(rec); err != nil {
 		common.SysError("consumption_cost: failed to create record: " + err.Error())
 	}
-}
-
-// clampSurcharge 约束加付项额度，保证 0 <= surcharge <= revenue（revenue>0 时）。
-// revenue<=0（退款等）时返回 0，因为此时利润必 <=0、不影响提成结果，
-// 同时避免 tokenRevenue 出现非预期负值。
-func clampSurcharge(surcharge, revenue int64) int64 {
-	if surcharge <= 0 || revenue <= 0 {
-		return 0
-	}
-	if surcharge > revenue {
-		return revenue
-	}
-	return surcharge
 }
 
 // calcCostQuota 用 decimal 精度计算成本额度。
@@ -322,13 +314,10 @@ func calcCostQuota(revenueQuota int64, groupRatio, costRatio float64) int64 {
 // 正向消费：只有正利润计提。
 // 退款冲销：只有负利润产生负佣金，和原正向计提保持符号对称。
 func calcSettlementCommissionQuota(revenueQuota, profitQuota int64, commissionRate float64) int64 {
-	if revenueQuota > 0 && profitQuota > 0 {
-		return calcCommissionQuota(profitQuota, commissionRate)
+	if profitQuota == 0 {
+		return 0
 	}
-	if revenueQuota < 0 && profitQuota < 0 {
-		return calcCommissionQuota(profitQuota, commissionRate)
-	}
-	return 0
+	return calcCommissionQuota(profitQuota, commissionRate)
 }
 
 // calcCommissionQuota 用 decimal 精度计算提成额度。

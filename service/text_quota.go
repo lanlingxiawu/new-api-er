@@ -54,6 +54,7 @@ type textQuotaSummary struct {
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
 	ToolCallSurchargeQuota   decimal.Decimal
+	LedgerQuota              int
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -300,9 +301,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	}
 
 	if summary.TotalTokens == 0 {
+		if !summary.ToolCallSurchargeQuota.IsZero() {
+			summary.LedgerQuota = summary.Quota
+		}
 		summary.Quota = 0
 	} else if !ratio.IsZero() && summary.Quota == 0 {
 		summary.Quota = 1
+	}
+	if summary.TotalTokens != 0 {
+		summary.LedgerQuota = summary.Quota
 	}
 
 	return summary
@@ -467,8 +474,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:                  other,
 		CountUsage:             countUsage,
 		AsyncCostAndCommission: true,
-		// 固定价加付项（web/file search、图像生成等）不套用渠道 token 成本系数
-		SurchargeQuota: int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		SurchargeQuota:         int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		LedgerQuota:            summary.LedgerQuota,
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))

@@ -16,6 +16,7 @@ type ConsumptionCost struct {
 	LogId        *int    `json:"log_id" gorm:"uniqueIndex"` // 关联 logs.id，唯一约束保证幂等；无日志时为 NULL
 	UserId       int     `json:"user_id" gorm:"index;default:0"`
 	ChannelId    int     `json:"channel_id" gorm:"index;index:idx_consumption_cost_created_channel,priority:2;default:0"`
+	ChannelName  string  `json:"channel_name" gorm:"type:varchar(255);default:''"`
 	GroupName    string  `json:"group_name" gorm:"column:group_name;type:varchar(64);default:''"`
 	ModelName    string  `json:"model_name" gorm:"type:varchar(255);default:''"`
 	RevenueQuota int64   `json:"revenue_quota" gorm:"default:0"`
@@ -127,6 +128,7 @@ func GetConsumptionCostByChannelFromLedger(startTime, endTime int64) ([]*Consump
 	var items []*ConsumptionCostChannelStat
 	tx := DB.Model(&ConsumptionCost{}).
 		Select("channel_id, " +
+			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, " +
 			"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
 			"COALESCE(SUM(cost_quota),0) as total_cost, " +
 			"COALESCE(AVG(cost_ratio),1) as cost_ratio, " +

@@ -707,7 +707,10 @@ export function CommissionOverview() {
                         {displayedChannelRows.map((ch) => (
                           <TableRow key={ch.channel_id}>
                             <TableCell>
-                              {ch.channel_name || `#${ch.channel_id}`}
+                              {ch.channel_name ||
+                                t('Deleted channel #{{id}}', {
+                                  id: ch.channel_id,
+                                })}
                             </TableCell>
                             <TableCell>{ch.cost_ratio}</TableCell>
                             <TableCell>

@@ -45,10 +45,13 @@ func commissionStatRedisKey(statDate int64, employeeUserId int) string {
 }
 
 // bufferPlatformStatRedis 将平台侧日统计增量累加到 Redis Hash。
-func bufferPlatformStatRedis(statDate int64, channelId int, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
+func bufferPlatformStatRedis(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
 	key := platformStatRedisKey(statDate, channelId)
 	ctx := context.Background()
 	pipe := common.RDB.Pipeline()
+	if channelName != "" {
+		pipe.HSetNX(ctx, key, "channel_name", channelName)
+	}
 	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
 	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
 	pipe.HIncrBy(ctx, key, "record_count", 1)
@@ -100,6 +103,7 @@ func bufferCommissionStatRedis(statDate int64, employeeUserId int, revenueQuota,
 type platformStatDelta struct {
 	StatDate      int64
 	ChannelId     int
+	ChannelName   string
 	RevenueQuota  int64
 	CostQuota     int64
 	RecordCount   int64
@@ -134,7 +138,7 @@ func memCommissionKey(statDate int64, employeeUserId int) string {
 	return fmt.Sprintf("%d:%d", statDate, employeeUserId)
 }
 
-func bufferPlatformStatMem(statDate int64, channelId int, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
+func bufferPlatformStatMem(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
 	key := memPlatformKey(statDate, channelId)
 	memPlatformLock.Lock()
 	defer memPlatformLock.Unlock()
@@ -147,6 +151,9 @@ func bufferPlatformStatMem(statDate int64, channelId int, revenueQuota, costQuot
 	d.CostQuota += costQuota
 	d.RecordCount++
 	d.CostRatioSum += costRatio
+	if d.ChannelName == "" {
+		d.ChannelName = channelName
+	}
 	if createdAt > d.LastCreatedAt {
 		d.LastCreatedAt = createdAt
 	}
@@ -177,9 +184,9 @@ func bufferCommissionStatMem(statDate int64, employeeUserId int, revenueQuota, c
 func BufferPlatformDailyStat(rec *ConsumptionCost) {
 	statDate := unixDayStart(rec.CreatedAt)
 	if common.RedisEnabled {
-		bufferPlatformStatRedis(statDate, rec.ChannelId, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
+		bufferPlatformStatRedis(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
 	} else {
-		bufferPlatformStatMem(statDate, rec.ChannelId, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
+		bufferPlatformStatMem(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
 	}
 	// coverage 标记仍走进程内缓存 + 异步 DB upsert（频率极低，不需要缓冲）
 	go ensureDailyCoverageAsync(statDate)
@@ -222,7 +229,7 @@ func flushPlatformStatsFromMem() {
 		return
 	}
 	for _, d := range buf {
-		upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt)
+		upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt)
 	}
 	common.SysLog(fmt.Sprintf("flush_business_stats: platform mem items=%d", len(buf)))
 }
@@ -318,6 +325,7 @@ func flushOnePlatformKey(ctx context.Context, key string) bool {
 	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
 	costRatioSumE9, _ := strconv.ParseInt(vals["cost_ratio_sum_e9"], 10, 64)
 	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
+	channelName := vals["channel_name"]
 	costRatioSum := float64(costRatioSumE9) / 1e9
 
 	if recordCount == 0 {
@@ -325,7 +333,7 @@ func flushOnePlatformKey(ctx context.Context, key string) bool {
 		return false
 	}
 
-	upsertPlatformDailyStat(statDate, channelId, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
+	upsertPlatformDailyStat(statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
 	common.RDB.Del(ctx, key)
 	return true
 }
@@ -367,10 +375,11 @@ func flushOneCommissionKey(ctx context.Context, key string) bool {
 
 // ---- DB upsert（批量刷盘时调用）----
 
-func upsertPlatformDailyStat(statDate int64, channelId int, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) {
+func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) {
 	row := PlatformChannelDailyStat{
 		StatDate:      statDate,
 		ChannelId:     channelId,
+		ChannelName:   channelName,
 		RevenueQuota:  revenueQuota,
 		CostQuota:     costQuota,
 		RecordCount:   recordCount,
@@ -384,6 +393,7 @@ func upsertPlatformDailyStat(statDate int64, channelId int, revenueQuota, costQu
 			"cost_quota":      gorm.Expr("cost_quota + ?", costQuota),
 			"record_count":    gorm.Expr("record_count + ?", recordCount),
 			"cost_ratio_sum":  gorm.Expr("cost_ratio_sum + ?", costRatioSum),
+			"channel_name":    gorm.Expr("COALESCE(NULLIF(channel_name, ''), ?)", channelName),
 			"last_created_at": gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
 		}),
 	}).Create(&row).Error; err != nil {

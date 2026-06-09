@@ -1153,7 +1153,7 @@ export function ChannelMutateDrawer({
                           </FormControl>
                           <FormDescription>
                             {t(
-                              '填写上游或中转站倍率，用于计算成本、利润和员工提成；如 0.6 表示按 60% 计成本。'
+                              'Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.'
                             )}
                             {!isEditing && (
                               <span className='mt-1 block font-medium text-amber-600'>

@@ -188,29 +188,23 @@ function useMyCommissionColumns() {
       },
       {
         accessorKey: 'revenue_quota',
-        meta: { label: t('Revenue') },
+        meta: { label: t('Employee Consumption') },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Revenue')} />
+          <DataTableColumnHeader
+            column={column}
+            title={t('Employee Consumption')}
+          />
         ),
         cell: ({ row }) => formatBusinessAmount(row.original.revenue_quota),
       },
       {
-        accessorKey: 'cost_quota',
-        meta: { label: t('Cost') },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Cost')} />
-        ),
-        cell: ({ row }) => (
-          <span className='text-muted-foreground'>
-            {formatBusinessAmount(row.original.cost_quota)}
-          </span>
-        ),
-      },
-      {
         accessorKey: 'profit_quota',
-        meta: { label: t('Profit') },
+        meta: { label: t('Employee Performance') },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Profit')} />
+          <DataTableColumnHeader
+            column={column}
+            title={t('Employee Performance')}
+          />
         ),
         cell: ({ row }) => formatBusinessAmount(row.original.profit_quota),
       },
@@ -266,7 +260,7 @@ function CommissionHistory() {
   }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 20,
+    pageSize: 10,
   })
 
   const { data, isLoading } = useQuery({

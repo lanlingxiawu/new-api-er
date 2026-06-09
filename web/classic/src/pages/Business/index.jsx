@@ -58,9 +58,11 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   TrendingDown,
   TrendingUp,
   UserRoundCheck,
+  UserRoundPlus,
   Users,
   Wallet,
   X,
@@ -75,7 +77,7 @@ import { useIsMobile } from '../../hooks/common/useIsMobile';
 import { useTableCompactMode } from '../../hooks/common/useTableCompactMode';
 
 const { Text } = Typography;
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10;
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8;
 const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running';
@@ -632,6 +634,8 @@ function UserPicker({
   selectedUsers = [],
   onToggle,
   excludeEmployee = true,
+  excludeAdmin = false,
+  excludeAssignedCustomer = false,
   employeeUserId,
 }) {
   const { t } = useTranslation();
@@ -686,6 +690,8 @@ function UserPicker({
             page_size: 20,
             p: nextPage,
             exclude_employee: excludeEmployee,
+            exclude_admin: excludeAdmin,
+            exclude_assigned_customer: excludeAssignedCustomer,
           }),
           disableDuplicate: true,
         });
@@ -719,7 +725,7 @@ function UserPicker({
         setLoadingMore(false);
       }
     },
-    [debouncedKeyword, excludeEmployee],
+    [debouncedKeyword, excludeAdmin, excludeAssignedCustomer, excludeEmployee],
   );
 
   useEffect(() => {
@@ -743,6 +749,7 @@ function UserPicker({
     setKeyword('');
     setDebouncedKeyword('');
     onClear?.();
+    setOpen(true);
   };
 
   return (
@@ -781,12 +788,17 @@ function UserPicker({
       {open ? (
         <div
           style={{
-            marginTop: 8,
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            left: 0,
+            right: 0,
+            zIndex: 1200,
             maxHeight: 224,
             overflowY: 'auto',
             border: '1px solid var(--semi-color-border)',
             borderRadius: 10,
-            background: 'var(--semi-color-fill-0)',
+            background: 'var(--semi-color-bg-2)',
+            boxShadow: 'var(--semi-shadow-elevated)',
             padding: 4,
           }}
           onScroll={handleScroll}
@@ -1007,176 +1019,201 @@ function RemoveCustomersModal({ visible, row, onCancel, onRefresh }) {
     <>
       <Modal
         visible={visible}
-        title={t('移除客户')}
+        title={t('员工客户列表')}
         onCancel={onCancel}
         width={760}
+        bodyStyle={{ height: 560, overflow: 'hidden' }}
         footer={<Button onClick={onCancel}>{t('关闭')}</Button>}
       >
-        <div
-          className='mb-4 rounded-lg border px-3 py-2'
-          style={{
-            borderColor: 'var(--semi-color-border)',
-            background: 'var(--semi-color-fill-0)',
-          }}
-        >
-          <Text type='secondary' size='small'>
-            {t('员工')}
-          </Text>
-          <div className='mt-1 flex min-w-0 items-center gap-2'>
-            <Text strong ellipsis>
-              {row?.username || `#${row?.user_id}`}
-            </Text>
-            {row?.display_name ? (
-              <Text type='secondary' ellipsis>
-                {row.display_name}
-              </Text>
-            ) : null}
-            <Tag size='small' color='white' className='ml-auto shrink-0'>
-              #{row?.user_id}
-            </Tag>
-          </div>
-        </div>
-        <div className='mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
-          <div className='min-w-0 flex-1'>
-            <Input
-              prefix={<Search size={14} />}
-              suffix={
-                keyword ? (
-                  <Button
-                    type='tertiary'
-                    theme='borderless'
-                    size='small'
-                    icon={<X size={14} />}
-                    aria-label={t('清空')}
-                    onClick={() => {
-                      setKeyword('');
-                      setDebouncedKeyword('');
-                    }}
-                  />
-                ) : null
-              }
-              value={keyword}
-              placeholder={t('搜索当前客户')}
-              onChange={setKeyword}
-            />
-          </div>
-          <Space spacing={8}>
-            <Tag size='small' color='white'>
-              {t('共 {{count}} 个客户', { count: total })}
-            </Tag>
-            <Button
-              type='tertiary'
-              theme='light'
-              size='small'
-              icon={<RefreshCw size={14} />}
-              loading={loading}
-              onClick={() => loadCustomers(page)}
-            >
-              {t('刷新')}
-            </Button>
-          </Space>
-        </div>
-        <div
-          className='rounded-lg border overflow-hidden'
-          style={{ borderColor: 'var(--semi-color-border)' }}
-        >
+        <div className='flex h-full min-h-0 flex-col gap-3'>
           <div
-            className='grid grid-cols-[minmax(0,1fr)_96px_96px_96px] gap-3 px-3 py-2 text-xs font-medium'
+            className='rounded-lg border px-3 py-2'
             style={{
+              borderColor: 'var(--semi-color-border)',
               background: 'var(--semi-color-fill-0)',
-              color: 'var(--semi-color-text-2)',
             }}
           >
-            <span>{t('客户')}</span>
-            <span className='text-right'>{t('已用额度')}</span>
-            <span className='text-right'>{t('提成')}</span>
-            <span className='text-right'>{t('操作')}</span>
+            <Text type='secondary' size='small'>
+              {t('员工')}
+            </Text>
+            <div className='mt-1 flex min-w-0 items-center gap-2'>
+              <Text strong ellipsis>
+                {row?.username || `#${row?.user_id}`}
+              </Text>
+              {row?.display_name ? (
+                <Text type='secondary' ellipsis>
+                  {row.display_name}
+                </Text>
+              ) : null}
+              <Tag size='small' color='white' className='ml-auto shrink-0'>
+                #{row?.user_id}
+              </Tag>
+            </div>
           </div>
-          <div className='min-h-[300px] divide-y'>
-            {loading ? (
-              <div className='flex h-[300px] items-center justify-center text-sm text-semi-color-text-2'>
-                {t('加载中...')}
-              </div>
-            ) : customers.length === 0 ? (
-              <div className='flex h-[300px] items-center justify-center px-6 text-center text-sm text-semi-color-text-2'>
-                {debouncedKeyword ? t('未找到客户') : t('该员工暂无已分配客户')}
-              </div>
-            ) : (
-              customers.map((customer) => {
-                const customerUserId = getCustomerUserId(customer);
-                return (
-                  <div
-                    key={customerUserId}
-                    className='grid grid-cols-[minmax(0,1fr)_96px_96px_96px] items-center gap-3 px-3 py-2.5 text-sm hover:bg-semi-color-fill-1'
-                  >
-                    <div className='min-w-0'>
-                      <div className='truncate font-medium'>
-                        {getCustomerLabel(customer)}
-                      </div>
-                      <div className='truncate text-xs text-semi-color-text-2'>
-                        #{customerUserId}
-                        {customer.email ? ` / ${customer.email}` : ''}
-                      </div>
-                    </div>
-                    <div className='text-right tabular-nums'>
-                      {formatBusinessAmount(customer.used_quota || 0)}
-                    </div>
-                    <div className='text-right tabular-nums'>
-                      {formatBusinessAmount(customer.commission_quota || 0)}
-                    </div>
-                    <div className='flex justify-end'>
-                      <Button
-                        size='small'
-                        type='tertiary'
-                        theme='light'
-                        icon={<X size={14} />}
-                        onClick={() => setCustomerToRemove(customer)}
-                      >
-                        {t('移除')}
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-        <div className='mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
           <Text type='secondary' size='small'>
-            {t('显示 {{start}}-{{end}} / {{total}} 个客户', {
-              start: pageStart,
-              end: pageEnd,
-              total,
-            })}
+            {t('查看分配给该员工的客户。需要时可在列表中移除客户。')}
           </Text>
-          <Space>
-            <Button
-              size='small'
-              type='tertiary'
-              theme='light'
-              disabled={page <= 1 || loading}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+          <div className='flex flex-col gap-2 md:flex-row md:items-center md:justify-between'>
+            <div className='min-w-0 flex-1'>
+              <Input
+                prefix={<Search size={14} />}
+                suffix={
+                  keyword ? (
+                    <Button
+                      type='tertiary'
+                      theme='borderless'
+                      size='small'
+                      icon={<X size={14} />}
+                      aria-label={t('清空')}
+                      onClick={() => {
+                        setKeyword('');
+                        setDebouncedKeyword('');
+                      }}
+                    />
+                  ) : null
+                }
+                value={keyword}
+                placeholder={t('搜索当前客户')}
+                onChange={setKeyword}
+              />
+            </div>
+            <Space spacing={8}>
+              <Tag size='small' color='white'>
+                {t('共 {{count}} 个客户', { count: total })}
+              </Tag>
+              <Button
+                type='tertiary'
+                theme='light'
+                size='small'
+                icon={<RefreshCw size={14} />}
+                loading={loading}
+                onClick={() => loadCustomers(page)}
+              >
+                {t('刷新')}
+              </Button>
+            </Space>
+          </div>
+          <div
+            className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border'
+            style={{
+              borderColor: 'var(--semi-color-border)',
+            }}
+          >
+            <div
+              className='grid grid-cols-[minmax(0,1fr)_96px_96px_88px] gap-4 border-b px-4 py-2 text-xs font-medium'
+              style={{
+                background: 'var(--semi-color-fill-0)',
+                color: 'var(--semi-color-text-2)',
+                borderColor: 'var(--semi-color-border)',
+              }}
             >
-              {t('上一页')}
-            </Button>
-            <Tag color='white' size='small'>
-              {t('第 {{current}} / {{total}} 页', {
-                current: page,
-                total: pageCount,
+              <span>{t('客户')}</span>
+              <span className='text-right'>{t('已用额度')}</span>
+              <span className='text-right'>{t('提成')}</span>
+              <span className='text-right'>{t('操作')}</span>
+            </div>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
+              {loading ? (
+                <div className='flex h-full min-h-[260px] items-center justify-center text-sm text-semi-color-text-2'>
+                  {t('加载中...')}
+                </div>
+              ) : customers.length === 0 ? (
+                <div className='flex h-full min-h-[260px] items-center justify-center px-6 text-center text-sm text-semi-color-text-2'>
+                  {debouncedKeyword
+                    ? t('未找到客户')
+                    : t('该员工暂无已分配客户')}
+                </div>
+              ) : (
+                customers.map((customer, index) => {
+                  const customerUserId = getCustomerUserId(customer);
+                  return (
+                    <div
+                      key={customerUserId}
+                      className='grid min-h-14 grid-cols-[minmax(0,1fr)_96px_96px_88px] items-center gap-4 px-4 py-2.5 text-sm hover:bg-semi-color-fill-1'
+                      style={{
+                        borderBottom:
+                          index < customers.length - 1
+                            ? '1px solid var(--semi-color-fill-1)'
+                            : undefined,
+                      }}
+                    >
+                      <div className='min-w-0'>
+                        <div className='flex min-w-0 items-center gap-2'>
+                          <span className='truncate font-medium'>
+                            {customer.username || '-'}
+                            {customer.remark ? ` (${customer.remark})` : ''}
+                          </span>
+                          {customer.customer_employee_status === 2 ? (
+                            <Tag color='grey' size='small'>
+                              {t('员工身份已禁用')}
+                            </Tag>
+                          ) : null}
+                        </div>
+                        <div className='truncate text-xs text-semi-color-text-2'>
+                          #{customerUserId}
+                          {customer.email ? ` / ${customer.email}` : ''}
+                        </div>
+                      </div>
+                      <div className='text-right font-medium tabular-nums'>
+                        {formatBusinessAmount(customer.used_quota || 0)}
+                      </div>
+                      <div className='text-right font-medium tabular-nums'>
+                        {formatBusinessAmount(customer.commission_quota || 0)}
+                      </div>
+                      <div className='flex justify-end'>
+                        <Button
+                          size='small'
+                          type='danger'
+                          theme='borderless'
+                          icon={<X size={14} />}
+                          onClick={() => setCustomerToRemove(customer)}
+                        >
+                          {t('移除')}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <div className='flex flex-col gap-2 pt-3 md:flex-row md:items-center md:justify-between'>
+            <Text type='secondary' size='small'>
+              {t('显示 {{start}}-{{end}} / {{total}} 个客户', {
+                start: pageStart,
+                end: pageEnd,
+                total,
               })}
-            </Tag>
-            <Button
-              size='small'
-              type='tertiary'
-              theme='light'
-              disabled={page >= pageCount || loading}
-              onClick={() =>
-                setPage((current) => Math.min(pageCount, current + 1))
-              }
-            >
-              {t('下一页')}
-            </Button>
-          </Space>
+            </Text>
+            <Space>
+              <Button
+                size='small'
+                type='tertiary'
+                theme='light'
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+              >
+                {t('上一页')}
+              </Button>
+              <Tag color='white' size='small'>
+                {t('第 {{current}} / {{total}} 页', {
+                  current: page,
+                  total: pageCount,
+                })}
+              </Tag>
+              <Button
+                size='small'
+                type='tertiary'
+                theme='light'
+                disabled={page >= pageCount || loading}
+                onClick={() =>
+                  setPage((current) => Math.min(pageCount, current + 1))
+                }
+              >
+                {t('下一页')}
+              </Button>
+            </Space>
+          </div>
         </div>
       </Modal>
       <Modal
@@ -1352,6 +1389,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
       title={t('分配客户')}
       onCancel={onCancel}
       width={560}
+      bodyStyle={{ height: 500, overflow: 'visible' }}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
@@ -1396,6 +1434,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
           selectedUsers={selectedCustomers}
           onToggle={toggleCustomer}
           excludeEmployee
+          excludeAdmin
           employeeUserId={row?.user_id}
         />
         {selectedCustomers.length > 0 ? (
@@ -1584,6 +1623,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
       title={isUpdate ? t('编辑员工') : t('创建员工')}
       onCancel={onCancel}
       width={560}
+      bodyStyle={{ height: 540, overflow: 'visible' }}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
@@ -1622,9 +1662,16 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
         <Field label={t('用户')}>
           <UserPicker
             value={form.user_id}
-            onSelect={(user) => updateField('user_id', user.id)}
-            onClear={() => updateField('user_id', 0)}
+            onSelect={(user) => {
+              updateField('user_id', user.id);
+              updateField('remark', user.remark || '');
+            }}
+            onClear={() => {
+              updateField('user_id', 0);
+              updateField('remark', '');
+            }}
             excludeEmployee
+            excludeAssignedCustomer
           />
           <Text type='secondary' size='small'>
             {t('搜索并选择要设为员工的用户')}
@@ -1760,8 +1807,9 @@ function EmployeesTab({
   const [modalVisible, setModalVisible] = useState(false);
   const [assignModalRow, setAssignModalRow] = useState(null);
   const [assignModalVisible, setAssignModalVisible] = useState(false);
-  const [removeModalRow, setRemoveModalRow] = useState(null);
-  const [removeModalVisible, setRemoveModalVisible] = useState(false);
+  const [customerListModalRow, setCustomerListModalRow] = useState(null);
+  const [customerListModalVisible, setCustomerListModalVisible] =
+    useState(false);
   const [filterForm, setFilterForm] = useState(() => ({
     user_id: filters?.user_id || undefined,
     keyword: filters?.keyword || '',
@@ -1837,9 +1885,9 @@ function EmployeesTab({
     setAssignModalVisible(true);
   };
 
-  const openRemoveCustomers = (row) => {
-    setRemoveModalRow(row);
-    setRemoveModalVisible(true);
+  const openCustomerList = (row) => {
+    setCustomerListModalRow(row);
+    setCustomerListModalVisible(true);
   };
 
   const closeModal = () => {
@@ -1852,9 +1900,9 @@ function EmployeesTab({
     setAssignModalRow(null);
   };
 
-  const closeRemoveModal = () => {
-    setRemoveModalVisible(false);
-    setRemoveModalRow(null);
+  const closeCustomerListModal = () => {
+    setCustomerListModalVisible(false);
+    setCustomerListModalRow(null);
   };
 
   const refreshAfterModal = () => {
@@ -1906,40 +1954,6 @@ function EmployeesTab({
     { value: 2, label: t('禁用') },
   ];
 
-  const getEmployeeActions = (row) => {
-    const actions = [
-      {
-        node: 'item',
-        name: t('分配客户'),
-        onClick: () => openAssign(row),
-      },
-      {
-        node: 'item',
-        name: t('移除客户'),
-        onClick: () => openRemoveCustomers(row),
-      },
-      {
-        node: 'item',
-        name: t('编辑员工'),
-        onClick: () => openEdit(row),
-      },
-    ];
-
-    if (Number(row.status) === 1) {
-      actions.push(
-        { node: 'divider' },
-        {
-          node: 'item',
-          name: t('禁用员工'),
-          type: 'danger',
-          onClick: () => disableEmployee(row),
-        },
-      );
-    }
-
-    return actions;
-  };
-
   const columns = [
     {
       title: t('用户 ID'),
@@ -1965,12 +1979,27 @@ function EmployeesTab({
       ),
     },
     {
-      title: t('客户数量'),
+      title: <span className='whitespace-nowrap'>{t('客户数量')}</span>,
       dataIndex: 'customer_count',
-      width: 100,
+      width: 112,
       sorter: true,
       sortOrder: getSortOrder('customer_count'),
-      render: (value) => value || 0,
+      render: (value, row) => (
+        <Button
+          size='small'
+          type='tertiary'
+          theme='borderless'
+          icon={<Users size={14} />}
+          className='inline-flex min-w-[48px] flex-nowrap items-center justify-center whitespace-nowrap tabular-nums'
+          aria-label={t('查看该员工的客户')}
+          onClick={(event) => {
+            event?.stopPropagation?.();
+            openCustomerList(row);
+          }}
+        >
+          {value || 0}
+        </Button>
+      ),
     },
     {
       title: t('客户总消费'),
@@ -2059,13 +2088,51 @@ function EmployeesTab({
     {
       title: t('操作'),
       key: 'operate',
-      width: 110,
+      width: 150,
       fixed: 'right',
       render: (_, row) => (
-        <RowActionDropdown
-          label={t('管理')}
-          actions={getEmployeeActions(row)}
-        />
+        <Space spacing={4} className='flex-nowrap'>
+          {Number(row.status) === 1 ? (
+            <Button
+              size='small'
+              type='tertiary'
+              theme='borderless'
+              icon={<UserRoundPlus size={14} />}
+              title={t('分配客户')}
+              aria-label={t('分配客户')}
+              onClick={() => openAssign(row)}
+            />
+          ) : null}
+          <Button
+            size='small'
+            type='tertiary'
+            theme='borderless'
+            icon={<Users size={14} />}
+            title={t('查看客户')}
+            aria-label={t('查看客户')}
+            onClick={() => openCustomerList(row)}
+          />
+          <Button
+            size='small'
+            type='tertiary'
+            theme='borderless'
+            icon={<Pencil size={14} />}
+            title={t('编辑员工')}
+            aria-label={t('编辑员工')}
+            onClick={() => openEdit(row)}
+          />
+          {Number(row.status) === 1 ? (
+            <Button
+              size='small'
+              type='danger'
+              theme='borderless'
+              icon={<Trash2 size={14} />}
+              title={t('禁用员工')}
+              aria-label={t('禁用员工')}
+              onClick={() => disableEmployee(row)}
+            />
+          ) : null}
+        </Space>
       ),
     },
   ];
@@ -2202,9 +2269,9 @@ function EmployeesTab({
         }}
       />
       <RemoveCustomersModal
-        visible={removeModalVisible}
-        row={removeModalRow}
-        onCancel={closeRemoveModal}
+        visible={customerListModalVisible}
+        row={customerListModalRow}
+        onCancel={closeCustomerListModal}
         onRefresh={() => employees.load()}
       />
     </>
@@ -2311,17 +2378,21 @@ function CommissionLogsTable({
       render: (value) => value || '-',
     },
     {
-      title: t('收入'),
+      title: selfView ? t('消耗') : t('收入'),
       dataIndex: 'revenue_quota',
       render: (value) => formatBusinessAmount(value),
     },
+    ...(!selfView
+      ? [
+          {
+            title: t('成本'),
+            dataIndex: 'cost_quota',
+            render: (value) => formatBusinessAmount(value),
+          },
+        ]
+      : []),
     {
-      title: t('成本'),
-      dataIndex: 'cost_quota',
-      render: (value) => formatBusinessAmount(value),
-    },
-    {
-      title: t('利润'),
+      title: selfView ? t('业绩') : t('利润'),
       dataIndex: 'profit_quota',
       render: (value) => <AmountText value={value} />,
     },
@@ -2548,6 +2619,7 @@ function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
       title={isUpdate ? t('编辑等级') : t('创建等级')}
       onCancel={onCancel}
       width={560}
+      bodyStyle={{ height: 560, overflowY: 'auto' }}
       footer={
         <Space>
           <Button onClick={onCancel}>{t('取消')}</Button>
@@ -2704,9 +2776,8 @@ function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
   );
 }
 
-function TiersTab({ onReadyToolbar }) {
+function TiersTab({ tiersPaged, onReadyToolbar }) {
   const { t } = useTranslation();
-  const tiersPaged = usePagedEndpoint('/api/admin/employee/tiers');
   const [allTiers, setAllTiers] = useState([]);
   const [modalRow, setModalRow] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -2808,21 +2879,6 @@ function TiersTab({ onReadyToolbar }) {
     });
   };
 
-  const getTierActions = (row) => [
-    {
-      node: 'item',
-      name: t('编辑等级'),
-      onClick: () => openEdit(row),
-    },
-    { node: 'divider' },
-    {
-      node: 'item',
-      name: t('删除等级'),
-      type: 'danger',
-      onClick: () => deleteTier(row),
-    },
-  ];
-
   const columns = [
     {
       title: t('分组'),
@@ -2857,10 +2913,29 @@ function TiersTab({ onReadyToolbar }) {
     {
       title: t('操作'),
       key: 'operate',
-      width: 110,
+      width: 90,
       fixed: 'right',
       render: (_, row) => (
-        <RowActionDropdown label={t('管理')} actions={getTierActions(row)} />
+        <Space spacing={4} className='flex-nowrap'>
+          <Button
+            size='small'
+            type='tertiary'
+            theme='borderless'
+            icon={<Pencil size={14} />}
+            title={t('编辑等级')}
+            aria-label={t('编辑等级')}
+            onClick={() => openEdit(row)}
+          />
+          <Button
+            size='small'
+            type='danger'
+            theme='borderless'
+            icon={<Trash2 size={14} />}
+            title={t('删除等级')}
+            aria-label={t('删除等级')}
+            onClick={() => deleteTier(row)}
+          />
+        </Space>
       ),
     },
   ];
@@ -2893,7 +2968,6 @@ function TiersTab({ onReadyToolbar }) {
           />
         }
       />
-      <ClassicInlinePagination paged={tiersPaged} t={t} />
       <TierModal
         visible={modalVisible}
         row={modalRow}
@@ -2912,6 +2986,11 @@ export function Employees() {
   const [employeeFilters, setEmployeeFilters] = useState({});
   const [commissionLogFilters, setCommissionLogFilters] = useState({});
   const employees = usePagedEndpoint('/api/admin/employee', employeeFilters);
+  const tiers = usePagedEndpoint(
+    '/api/admin/employee/tiers',
+    {},
+    { enabled: activeTab === 'tiers' },
+  );
   const commissionLogs = usePagedEndpoint(
     '/api/admin/employee/commission',
     commissionLogFilters,
@@ -2929,6 +3008,8 @@ export function Employees() {
       <ClassicPagination paged={commissionLogs} t={t} />
     ) : activeTab === 'employees' ? (
       <ClassicPagination paged={employees} t={t} />
+    ) : activeTab === 'tiers' ? (
+      <ClassicPagination paged={tiers} t={t} />
     ) : null;
 
   return (
@@ -2970,7 +3051,7 @@ export function Employees() {
             onReadyToolbar={setTabToolbar}
           />
         ) : activeTab === 'tiers' ? (
-          <TiersTab onReadyToolbar={setTabToolbar} />
+          <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
         ) : (
           <CommissionLogsTable
             endpoint='/api/admin/employee/commission'
@@ -3704,7 +3785,8 @@ export function BusinessOverview() {
       dataIndex: 'channel_name',
       sorter: (a, b) =>
         (a.channel_name ?? '').localeCompare(b.channel_name ?? ''),
-      render: (value, row) => value || `#${row.channel_id}`,
+      render: (value, row) =>
+        value || t('已删除渠道 #{{id}}', { id: row.channel_id }),
     },
     {
       title: t('成本比例'),

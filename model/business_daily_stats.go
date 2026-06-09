@@ -22,6 +22,7 @@ type PlatformChannelDailyStat struct {
 	Id            int     `json:"id"`
 	StatDate      int64   `json:"stat_date" gorm:"uniqueIndex:idx_platform_channel_daily,priority:1;index"`
 	ChannelId     int     `json:"channel_id" gorm:"uniqueIndex:idx_platform_channel_daily,priority:2;index"`
+	ChannelName   string  `json:"channel_name" gorm:"type:varchar(255);default:''"`
 	RevenueQuota  int64   `json:"revenue_quota" gorm:"default:0"`
 	CostQuota     int64   `json:"cost_quota" gorm:"default:0"`
 	RecordCount   int64   `json:"record_count" gorm:"default:0"`
@@ -279,6 +280,7 @@ func addPlatformChannelDailyStatTx(tx *gorm.DB, rec *ConsumptionCost) error {
 	row := PlatformChannelDailyStat{
 		StatDate:      statDate,
 		ChannelId:     rec.ChannelId,
+		ChannelName:   rec.ChannelName,
 		RevenueQuota:  rec.RevenueQuota,
 		CostQuota:     rec.CostQuota,
 		RecordCount:   1,
@@ -292,6 +294,7 @@ func addPlatformChannelDailyStatTx(tx *gorm.DB, rec *ConsumptionCost) error {
 			"cost_quota":      gorm.Expr("cost_quota + ?", rec.CostQuota),
 			"record_count":    gorm.Expr("record_count + ?", 1),
 			"cost_ratio_sum":  gorm.Expr("cost_ratio_sum + ?", rec.CostRatio),
+			"channel_name":    gorm.Expr("COALESCE(NULLIF(channel_name, ''), ?)", rec.ChannelName),
 			"last_created_at": gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", rec.CreatedAt, rec.CreatedAt),
 		}),
 	}).Create(&row).Error; err != nil {
@@ -417,14 +420,15 @@ func applyChannelKeyword(tx *gorm.DB, keyword string) *gorm.DB {
 	}
 	like := "%" + keyword + "%"
 	if channelId, err := strconv.Atoi(keyword); err == nil {
-		return tx.Where("(LOWER(channels.name) LIKE ? OR platform_channel_daily_stats.channel_id = ?)", like, channelId)
+		return tx.Where("(LOWER(channels.name) LIKE ? OR LOWER(platform_channel_daily_stats.channel_name) LIKE ? OR platform_channel_daily_stats.channel_id = ?)", like, like, channelId)
 	}
-	return tx.Where("LOWER(channels.name) LIKE ?", like)
+	return tx.Where("(LOWER(channels.name) LIKE ? OR LOWER(platform_channel_daily_stats.channel_name) LIKE ?)", like, like)
 }
 
 func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate bool) ([]*ConsumptionCostChannelStat, error) {
 	type row struct {
 		ChannelId    int
+		ChannelName  string
 		TotalRevenue int64
 		TotalCost    int64
 		RecordCount  int64
@@ -433,6 +437,7 @@ func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate b
 	var rows []row
 	tx := DB.Model(&PlatformChannelDailyStat{}).
 		Select("channel_id, "+
+			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, "+
 			"COALESCE(SUM(revenue_quota),0) as total_revenue, "+
 			"COALESCE(SUM(cost_quota),0) as total_cost, "+
 			"COALESCE(SUM(record_count),0) as record_count, "+
@@ -449,6 +454,7 @@ func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate b
 	for _, r := range rows {
 		item := &ConsumptionCostChannelStat{
 			ChannelId:    r.ChannelId,
+			ChannelName:  r.ChannelName,
 			TotalRevenue: r.TotalRevenue,
 			TotalCost:    r.TotalCost,
 			RecordCount:  r.RecordCount,
@@ -649,7 +655,7 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 			orderDirection = "ASC"
 		}
 		err := base.Select("platform_channel_daily_stats.channel_id, " +
-			"MAX(channels.name) as channel_name, " +
+			"COALESCE(NULLIF(MAX(platform_channel_daily_stats.channel_name), ''), MAX(channels.name), '') as channel_name, " +
 			"COALESCE(SUM(platform_channel_daily_stats.revenue_quota),0) as total_revenue, " +
 			"COALESCE(SUM(platform_channel_daily_stats.cost_quota),0) as total_cost, " +
 			"COALESCE(SUM(platform_channel_daily_stats.record_count),0) as record_count, " +
@@ -673,9 +679,15 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 		if err != nil {
 			return nil, 0, err
 		}
+		logChannelNames := GetChannelNameSnapshotsFromLogs(missingChannelNameIds(rows, channelNames))
 		for _, row := range rows {
 			finalizeConsumptionCostChannelStat(row)
-			row.ChannelName = channelNames[row.ChannelId]
+			if row.ChannelName == "" {
+				row.ChannelName = channelNames[row.ChannelId]
+			}
+			if row.ChannelName == "" {
+				row.ChannelName = logChannelNames[row.ChannelId]
+			}
 		}
 		return rows, total, nil
 	}
@@ -692,8 +704,14 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 	if err != nil {
 		return nil, 0, err
 	}
+	logChannelNames := GetChannelNameSnapshotsFromLogs(missingChannelNameIds(items, channelNames))
 	for _, item := range items {
-		item.ChannelName = channelNames[item.ChannelId]
+		if item.ChannelName == "" {
+			item.ChannelName = channelNames[item.ChannelId]
+		}
+		if item.ChannelName == "" {
+			item.ChannelName = logChannelNames[item.ChannelId]
+		}
 	}
 	if keyword != "" {
 		filtered := make([]*ConsumptionCostChannelStat, 0, len(items))
@@ -716,6 +734,21 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 		end = len(items)
 	}
 	return items[start:end], total, nil
+}
+
+func missingChannelNameIds(items []*ConsumptionCostChannelStat, channelNames map[int]string) []int {
+	seen := make(map[int]bool)
+	ids := make([]int, 0)
+	for _, item := range items {
+		if item == nil || item.ChannelName != "" || channelNames[item.ChannelId] != "" {
+			continue
+		}
+		if !seen[item.ChannelId] {
+			seen[item.ChannelId] = true
+			ids = append(ids, item.ChannelId)
+		}
+	}
+	return ids
 }
 
 func mergeConsumptionCostChannelStats(dst map[int]*ConsumptionCostChannelStat, rows []*ConsumptionCostChannelStat) {
@@ -1221,6 +1254,7 @@ func aggregatePlatformChannelDailyStatsFromLedger(startDate, endDate int64) ([]P
 	err := DB.Model(&ConsumptionCost{}).
 		Select("FLOOR(created_at / 86400) * 86400 as stat_date, "+
 			"channel_id, "+
+			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, "+
 			"COALESCE(SUM(revenue_quota),0) as revenue_quota, "+
 			"COALESCE(SUM(cost_quota),0) as cost_quota, "+
 			"COUNT(*) as record_count, "+

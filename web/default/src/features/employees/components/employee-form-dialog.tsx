@@ -37,6 +37,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { formatBusinessTargetAmount } from '@/features/business/format'
 import { searchUsers } from '@/features/users/api'
+import type { User } from '@/features/users/types'
 import { createEmployee, getEmployeeTiers, updateEmployee } from '../api'
 import {
   compareEmployeeTiersByGroupLevel,
@@ -80,7 +81,7 @@ function UserPicker({
   onClear,
 }: {
   value?: number
-  onSelect: (id: number) => void
+  onSelect: (user: User) => void
   onClear: () => void
 }) {
   const { t } = useTranslation()
@@ -122,6 +123,8 @@ function UserPicker({
           p: Number(pageParam),
           page_size: USER_PICKER_PAGE_SIZE,
           exclude_employee: true,
+          exclude_admin: true,
+          exclude_assigned_customer: true,
         }),
       initialPageParam: 1,
       getNextPageParam: (lastPage) => {
@@ -148,6 +151,7 @@ function UserPicker({
     setKeyword('')
     setDebounced('')
     onClear()
+    setOpen(true)
   }
 
   return (
@@ -212,7 +216,7 @@ function UserPicker({
                     )
                     setKeyword('')
                     setDebounced('')
-                    onSelect(u.id)
+                    onSelect(u)
                     setOpen(false)
                   }}
                 >
@@ -542,7 +546,10 @@ export function EmployeeFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-120' initialFocus={false}>
+      <DialogContent
+        className='h-[86vh] max-h-[640px] overflow-visible sm:max-w-120'
+        initialFocus={false}
+      >
         <DialogHeader>
           <DialogTitle>
             {isUpdate ? t('Edit Employee') : t('Create Employee')}
@@ -571,8 +578,14 @@ export function EmployeeFormDialog({
                     <FormControl>
                       <UserPicker
                         value={field.value}
-                        onSelect={(id) => field.onChange(id)}
-                        onClear={() => field.onChange(undefined)}
+                        onSelect={(user) => {
+                          field.onChange(user.id)
+                          createForm.setValue('remark', user.remark ?? '')
+                        }}
+                        onClear={() => {
+                          field.onChange(undefined)
+                          createForm.setValue('remark', '')
+                        }}
                       />
                     </FormControl>
                     <FormDescription>

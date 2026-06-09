@@ -77,7 +77,7 @@ func GetInvitedCustomersByEmployeeWithFilter(filter InvitedCustomerFilter) ([]*U
 
 	tx := DB.Model(&User{}).
 		Where("inviter_id = ? AND role = ?", filter.EmployeeUserId, common.RoleCommonUser).
-		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id"))
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1))
 	if filter.CustomerUserId != 0 {
 		tx = tx.Where("id = ?", filter.CustomerUserId)
 	}
@@ -178,7 +178,7 @@ func GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds []int) (map[int]int64
 	if err := DB.Model(&User{}).
 		Select("inviter_id as employee_user_id, id as customer_user_id, used_quota").
 		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
-		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id")).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1)).
 		Scan(&invitedRows).Error; err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func GetCustomerCountsByEmployees(employeeUserIds []int) (map[int]int, error) {
 	if err := DB.Model(&User{}).
 		Select("inviter_id, count(*) as count").
 		Where("inviter_id IN ? AND role = ?", employeeUserIds, common.RoleCommonUser).
-		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id")).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1)).
 		Group("inviter_id").
 		Scan(&rows).Error; err != nil {
 		return nil, err

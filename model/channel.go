@@ -475,6 +475,10 @@ func BatchDeleteChannels(ids []int) error {
 		return tx.Error
 	}
 	for _, chunk := range lo.Chunk(ids, 200) {
+		if err := snapshotChannelNamesBeforeDeleteTx(tx, chunk); err != nil {
+			tx.Rollback()
+			return err
+		}
 		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -606,13 +610,50 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, []int{channel.Id}); err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = channel.DeleteAbilities()
-	return err
+	if err := tx.Delete(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+
+func snapshotChannelNamesBeforeDeleteTx(tx *gorm.DB, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var channels []Channel
+	if err := tx.Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		name := strings.TrimSpace(channel.Name)
+		if channel.Id == 0 || name == "" {
+			continue
+		}
+		if err := tx.Model(&ConsumptionCost{}).
+			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
+			Update("channel_name", name).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&PlatformChannelDailyStat{}).
+			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
+			Update("channel_name", name).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var channelStatusLock sync.Mutex
@@ -881,13 +922,49 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	result := DB.Where("status = ?", status).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	var ids []int
+	if err := tx.Model(&Channel{}).Where("status = ?", status).Pluck("id", &ids).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	result := tx.Where("status = ?", status).Delete(&Channel{})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, result.Error
+	}
+	return result.RowsAffected, tx.Commit().Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	var ids []int
+	if err := tx.Model(&Channel{}).
+		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
+		Pluck("id", &ids).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	result := tx.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, result.Error
+	}
+	return result.RowsAffected, tx.Commit().Error
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {

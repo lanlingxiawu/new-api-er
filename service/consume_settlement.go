@@ -25,6 +25,7 @@ type ConsumptionSettlementParams struct {
 	CreatedAt              int64
 	CountUsage             bool
 	AsyncCostAndCommission bool
+	LedgerQuota            int
 }
 
 // FinalizeConsumptionSettlement runs the post-consume side effects shared by
@@ -85,6 +86,9 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		relayInfoCopy.ChannelMeta.ChannelId = params.ChannelId
 	}
 	quotaCopy := params.Quota
+	if params.LedgerQuota != 0 {
+		quotaCopy = params.LedgerQuota
+	}
 	surchargeCopy := params.SurchargeQuota
 	recordCostAndCommission := func() {
 		RecordCostAndSettleEmployeeCommission(&relayInfoCopy, quotaCopy, surchargeCopy, logId)

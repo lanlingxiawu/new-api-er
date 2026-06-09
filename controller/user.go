@@ -252,6 +252,8 @@ func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
 	excludeEmployees := isTruthyQuery(c.Query("exclude_employee")) || isTruthyQuery(c.Query("exclude_employees"))
+	excludeAdmins := isTruthyQuery(c.Query("exclude_admin")) || isTruthyQuery(c.Query("exclude_admins"))
+	excludeAssignedCustomers := isTruthyQuery(c.Query("exclude_assigned_customer")) || isTruthyQuery(c.Query("exclude_assigned_customers"))
 	var role *int
 	if roleStr := c.Query("role"); roleStr != "" {
 		if parsed, err := strconv.Atoi(roleStr); err == nil {
@@ -265,7 +267,7 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, excludeEmployees, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(keyword, group, role, status, excludeEmployees, excludeAdmins, excludeAssignedCustomers, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -286,7 +286,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -327,9 +327,26 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	if status != nil {
 		query = query.Where("status = ?", *status)
 	}
+	if excludeAdmins {
+		query = query.Where("role < ?", common.RoleAdminUser)
+	}
 	if excludeEmployees {
-		query = query.Joins("LEFT JOIN employee_profiles AS employee_filter ON employee_filter.user_id = users.id").
-			Where("employee_filter.id IS NULL")
+		query = query.Where(
+			"users.id NOT IN (?)",
+			DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1),
+		)
+	}
+	if excludeAssignedCustomers {
+		query = query.Where(
+			"users.id NOT IN (?)",
+			DB.Model(&CustomerProfile{}).Select("customer_user_id"),
+		).Where(
+			"users.id NOT IN (?)",
+			DB.Model(&User{}).
+				Select("users.id").
+				Joins("JOIN employee_profiles ON employee_profiles.user_id = users.inviter_id AND employee_profiles.status = ?", 1).
+				Where("users.inviter_id IS NOT NULL AND users.inviter_id != 0"),
+		)
 	}
 
 	// 获取总数
@@ -376,7 +393,7 @@ func GetUsersByIds(ids []int) (map[int]*User, error) {
 		return map[int]*User{}, nil
 	}
 	var users []*User
-	err := DB.Select("id, username, display_name").Where("id IN ?", ids).Find(&users).Error
+	err := DB.Select("id, username, display_name, email, remark").Where("id IN ?", ids).Find(&users).Error
 	if err != nil {
 		return nil, err
 	}
@@ -385,6 +402,13 @@ func GetUsersByIds(ids []int) (map[int]*User, error) {
 		result[u.Id] = u
 	}
 	return result, nil
+}
+
+func UpdateUserRemark(userId int, remark string) error {
+	if err := DB.Model(&User{}).Where("id = ?", userId).Update("remark", remark).Error; err != nil {
+		return err
+	}
+	return invalidateUserCache(userId)
 }
 
 func GetUsersByIdsUnscoped(ids []int) (map[int]*User, error) {
