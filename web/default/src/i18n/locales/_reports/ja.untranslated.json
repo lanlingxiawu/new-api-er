@@ -24,6 +24,7 @@
   "Channel Profit (platform-wide)": "Channel Profit (platform-wide)",
   "Click Add Tier to create one.": "Click Add Tier to create one.",
   "Commission": "Commission",
+  "Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.": "Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.",
   "Commission Amount": "Commission Amount",
   "Commission Details": "Commission Details",
   "Commission History": "Commission History",
@@ -40,6 +41,7 @@
   "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
   "Create Employee": "Create Employee",
   "Create Tier": "Create Tier",
+  "Current Commission": "Current Commission",
   "Current Performance": "Current Performance",
   "Current Tier": "Current Tier",
   "Customer": "Customer",
@@ -69,6 +71,7 @@
   "Est. Gross Margin": "Est. Gross Margin",
   "Est. Profit": "Est. Profit",
   "Gross Margin": "Gross Margin",
+  "If the configured day does not exist in a given month, the last day of that month is used. The schedule runs in the server timezone.": "If the configured day does not exist in a given month, the last day of that month is used. The schedule runs in the server timezone.",
   "Last 30 days": "Last 30 days",
   "Last 7 days": "Last 7 days",
   "Last 90 days": "Last 90 days",
@@ -87,6 +90,14 @@
   "No models available. Please switch to another group.": "No models available. Please switch to another group.",
   "No records": "No records",
   "No tier configuration yet": "No tier configuration yet",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+  "No users found": "No users found",
+=======
+  "On a monthly schedule, automatically reset every employee tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals and commission records are not affected.": "On a monthly schedule, automatically reset every employee tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals and commission records are not affected.",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   "Optional": "Optional",
   "Pending Settlement": "Pending Settlement",
   "Performance Target": "Performance Target",
@@ -96,12 +107,21 @@
   "Platform-wide (all users)": "Platform-wide (all users)",
   "Please enter username and password": "Please enter username and password",
   "Profit": "Profit",
+  "Profit accumulated since the last monthly reset, used to determine progress toward the next tier. It resets to zero on the next scheduled reset and does not affect total profit or historical records.": "Profit accumulated since the last monthly reset, used to determine progress toward the next tier. It resets to zero on the next scheduled reset and does not affect total profit or historical records.",
   "Reached": "Reached",
   "records": "records",
-  "Records": "Records",
   "Repairing": "Repairing",
   "Requests ": "Requests ",
+  "Reset Now": "Reset Now",
   "Search and select the user to assign employee status": "Search and select the user to assign employee status",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+  "Search username / display name / email": "Search username / display name / email",
+=======
+  "Second": "Second",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   "Select a tier to fill rate and target": "Select a tier to fill rate and target",
   "Select mode and enter amount": "Select mode and enter amount",
   "Set Channel Cost Ratio": "Set Channel Cost Ratio",
@@ -110,6 +130,7 @@
   "Target Quota": "Target Quota",
   "The user ID to assign employee status": "The user ID to assign employee status",
   "This will disable the employee. Historical commission logs are retained.": "This will disable the employee. Historical commission logs are retained.",
+  "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.": "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.",
   "This will reset the channel cost ratio to the default (1.0).": "This will reset the channel cost ratio to the default (1.0).",
   "Tier {{level}}": "Tier {{level}}",
   "Tier created successfully": "Tier created successfully",
@@ -126,5 +147,6 @@
   "Updated At": "Updated At",
   "Updates every 30 minutes": "Updates every 30 minutes",
   "View all available models and their status": "View all available models and their status",
+  "When enabled, employee tiers and current period stats are reset automatically on the schedule below.": "When enabled, employee tiers and current period stats are reset automatically on the schedule below.",
   "You do not have employee status. Contact your administrator.": "You do not have employee status. Contact your administrator."
 }

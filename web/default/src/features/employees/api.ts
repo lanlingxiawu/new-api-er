@@ -6,9 +6,13 @@ import type {
   CommissionLog,
   ChannelCostConfig,
   CommissionSummaryItem,
+  CommissionCalendarStats,
+  CommissionMonthlyStatItem,
   PagedResponse,
   ApiResponse,
   EmployeeTier,
+  TierResetConfig,
+  TierResetResult,
 } from './types'
 
 // Employee CRUD
@@ -118,6 +122,42 @@ export async function getCommissionLogs(params: {
   return res.data
 }
 
+export async function getCommissionCalendarStats(params: {
+  employee_user_id?: number
+  start_time: number
+  end_time: number
+}): Promise<ApiResponse<CommissionCalendarStats>> {
+  const q = new URLSearchParams()
+  q.set('start_time', String(params.start_time))
+  q.set('end_time', String(params.end_time))
+  if (params.employee_user_id)
+    q.set('employee_user_id', String(params.employee_user_id))
+  const res = await api.get(
+    `/api/admin/employee/commission/calendar?${q.toString()}`
+  )
+  return res.data
+}
+
+export async function getCommissionMonthlyStats(params: {
+  page?: number
+  page_size?: number
+  employee_user_id?: number
+  period_start_at?: number
+  start_time?: number
+  end_time?: number
+}): Promise<PagedResponse<CommissionMonthlyStatItem>> {
+  const q = new URLSearchParams()
+  q.set('page', String(params.page ?? 1))
+  q.set('page_size', String(params.page_size ?? 100))
+  if (params.employee_user_id)
+    q.set('employee_user_id', String(params.employee_user_id))
+  if (params.period_start_at)
+    q.set('period_start_at', String(params.period_start_at))
+  appendUnixTimeRangeParams(q, params)
+  const res = await api.get(`/api/admin/employee/commission/monthly?${q}`)
+  return res.data
+}
+
 // Employee Tiers
 
 export async function getEmployeeTiers(): Promise<ApiResponse<EmployeeTier[]>> {
@@ -161,6 +201,22 @@ export async function updateEmployeeTier(
 
 export async function deleteEmployeeTier(id: number): Promise<ApiResponse> {
   const res = await api.delete(`/api/admin/employee/tiers/${id}`)
+  return res.data
+}
+
+// Tier / performance period monthly auto-reset
+
+export async function getTierResetConfig(): Promise<
+  ApiResponse<TierResetConfig>
+> {
+  const res = await api.get('/api/admin/employee/tiers/reset-config')
+  return res.data
+}
+
+export async function triggerTierReset(): Promise<
+  ApiResponse<TierResetResult>
+> {
+  const res = await api.post('/api/admin/employee/tiers/reset-now')
   return res.data
 }
 

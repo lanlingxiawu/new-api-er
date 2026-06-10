@@ -34,11 +34,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-type DataTableColumnHeaderProps<TData, TValue> =
-  React.HTMLAttributes<HTMLDivElement> & {
-    column: Column<TData, TValue>
-    title: React.ReactNode
-  }
+type DataTableColumnHeaderProps<TData, TValue> = Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  'title'
+> & {
+  column: Column<TData, TValue>
+  title: React.ReactNode
+}
 
 export function DataTableColumnHeader<TData, TValue>({
   column,

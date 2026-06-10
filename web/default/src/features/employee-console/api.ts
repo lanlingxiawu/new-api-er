@@ -1,6 +1,19 @@
 import { api } from '@/lib/api'
+<<<<<<< Updated upstream
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
+=======
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
 import type { CommissionLog, EmployeeProfile } from '@/features/employees/types'
+=======
+import { appendUnixTimeRangeParams } from '@/lib/query-params'
+import type {
+  CommissionLog,
+  CommissionCalendarStats,
+  CommissionMonthlyStatItem,
+  EmployeeProfile,
+} from '@/features/employees/types'
+>>>>>>> Stashed changes
 
 export interface EmployeeExtension {
   commission_total_quota: number
@@ -80,5 +93,45 @@ export async function getMyCommissionLogs(params: {
 
 export async function getMyCommissionSummary(): Promise<MySummaryResponse> {
   const res = await api.get('/api/user/employee/commission/summary')
+  return res.data
+}
+
+export async function getMyCommissionCalendarStats(params: {
+  start_time: number
+  end_time: number
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: CommissionCalendarStats
+}> {
+  const q = new URLSearchParams()
+  q.set('start_time', String(params.start_time))
+  q.set('end_time', String(params.end_time))
+  const res = await api.get(
+    `/api/user/employee/commission/calendar?${q.toString()}`
+  )
+  return res.data
+}
+
+export async function getMyCommissionMonthlyStats(params: {
+  page?: number
+  page_size?: number
+  start_time?: number
+  end_time?: number
+}): Promise<{
+  success: boolean
+  message?: string
+  data?: {
+    items: CommissionMonthlyStatItem[]
+    total: number
+    page: number
+    page_size: number
+  }
+}> {
+  const q = new URLSearchParams()
+  q.set('page', String(params.page ?? 1))
+  q.set('page_size', String(params.page_size ?? 100))
+  appendUnixTimeRangeParams(q, params)
+  const res = await api.get(`/api/user/employee/commission/monthly?${q}`)
   return res.data
 }

@@ -1,0 +1,288 @@
+diff --git a/model/employee.go b/model/employee.go
+index 14236fb7..b6b28fa8 100644
+--- a/model/employee.go
++++ b/model/employee.go
+@@ -20,7 +20,6 @@ import (
+ type EmployeeProfile struct {
+ 	Id              int     `json:"id"`
+ 	UserId          int     `json:"user_id" gorm:"uniqueIndex;not null"`
+-	CommissionRate  float64 `json:"commission_rate" gorm:"not null;default:0.1"`            // 提成比例 0.0～1.0
+ 	TargetAmount    float64 `json:"target_amount" gorm:"column:target_amount;default:0"`    // 业绩目标（USD 金额，0=不设限；业绩=客户消耗额）
+ 	CommissionRules string  `json:"commission_rules,omitempty" gorm:"type:text;default:''"` // JSON 预留多档规则
+ 	Status          int     `json:"status" gorm:"default:1"`                                // 1=启用 2=禁用
+@@ -290,8 +289,6 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
+ 	case "username":
+ 		tx = tx.Joins("LEFT JOIN users AS sort_users ON sort_users.id = employee_profiles.user_id")
+ 		orderColumn = "sort_users.username"
+-	case "commission_rate":
+-		orderColumn = "employee_profiles.commission_rate"
+ 	case "target_amount":
+ 		orderColumn = "employee_profiles.target_amount"
+ 	case "customer_count":
+@@ -303,12 +300,20 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
+ 	case "total_cost_quota":
+ 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(cost_quota),0) AS total_cost_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
+ 		orderColumn = "COALESCE(commission_rollup.total_cost_quota, 0)"
+-	case "total_profit_quota", "current_performance_quota":
++	case "total_profit_quota":
+ 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
+ 		orderColumn = "COALESCE(commission_rollup.total_profit_quota, 0)"
+ 	case "total_commission_quota":
+ 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
+ 		orderColumn = "COALESCE(commission_rollup.total_commission_quota, 0)"
++	case "current_performance_quota":
++		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_profit_rollup ON current_profit_rollup.employee_user_id = employee_profiles.user_id").
++			Joins("LEFT JOIN employee_tier_levels AS current_perf_levels ON current_perf_levels.user_id = employee_profiles.user_id")
++		orderColumn = "CASE WHEN COALESCE(current_profit_rollup.total_profit_quota, 0) - COALESCE(current_perf_levels.baseline_profit_quota, 0) < 0 THEN 0 ELSE COALESCE(current_profit_rollup.total_profit_quota, 0) - COALESCE(current_perf_levels.baseline_profit_quota, 0) END"
++	case "current_commission_quota":
++		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_commission_rollup ON current_commission_rollup.employee_user_id = employee_profiles.user_id").
++			Joins("LEFT JOIN employee_tier_levels AS current_commission_levels ON current_commission_levels.user_id = employee_profiles.user_id")
++		orderColumn = "CASE WHEN COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) < 0 THEN 0 ELSE COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) END"
+ 	case "current_tier_rate":
+ 		tx = tx.Joins("LEFT JOIN employee_tier_levels AS tier_levels_sort ON tier_levels_sort.user_id = employee_profiles.user_id").
+ 			Joins("LEFT JOIN employee_commission_tiers AS tiers_sort ON tiers_sort.id = tier_levels_sort.tier_id")
+@@ -579,6 +584,160 @@ type CommissionSummaryItem struct {
+ }
+ 
+ // GetCommissionSummary 按员工汇总提成统计，优先使用日聚合统计。
++type CommissionMonthlyStatFilter struct {
++	EmployeeUserId int
++	PeriodStartAt  int64
++	Page           int
++	PageSize       int
++}
++
++type EmployeeCommissionMonthlyStatItem struct {
++	EmployeeCommissionMonthlyStat
++	TotalRevenueUsd    float64 `json:"total_revenue_usd"`
++	TotalCostUsd       float64 `json:"total_cost_usd"`
++	TotalProfitUsd     float64 `json:"total_profit_usd"`
++	TotalCommissionUsd float64 `json:"total_commission_usd"`
++}
++
++type CommissionCalendarDayStat struct {
++	StatDate        int64   `json:"stat_date"`
++	Date            string  `json:"date"`
++	RevenueQuota    int64   `json:"revenue_quota"`
++	CostQuota       int64   `json:"cost_quota"`
++	ProfitQuota     int64   `json:"profit_quota"`
++	CommissionQuota int64   `json:"commission_quota"`
++	RecordCount     int64   `json:"record_count"`
++	RevenueUsd      float64 `json:"revenue_usd"`
++	CostUsd         float64 `json:"cost_usd"`
++	ProfitUsd       float64 `json:"profit_usd"`
++	CommissionUsd   float64 `json:"commission_usd"`
++}
++
++type CommissionCalendarSummary struct {
++	RevenueQuota    int64   `json:"revenue_quota"`
++	CostQuota       int64   `json:"cost_quota"`
++	ProfitQuota     int64   `json:"profit_quota"`
++	CommissionQuota int64   `json:"commission_quota"`
++	RecordCount     int64   `json:"record_count"`
++	RevenueUsd      float64 `json:"revenue_usd"`
++	CostUsd         float64 `json:"cost_usd"`
++	ProfitUsd       float64 `json:"profit_usd"`
++	CommissionUsd   float64 `json:"commission_usd"`
++}
++
++type CommissionCalendarStats struct {
++	Days    []*CommissionCalendarDayStat `json:"days"`
++	Summary CommissionCalendarSummary    `json:"summary"`
++}
++
++func normalizeCommissionMonthlyStatFilter(filter CommissionMonthlyStatFilter) CommissionMonthlyStatFilter {
++	if filter.Page < 1 {
++		filter.Page = 1
++	}
++	if filter.PageSize < 1 || filter.PageSize > 100 {
++		filter.PageSize = 20
++	}
++	return filter
++}
++
++func applyCommissionMonthlyStatFilter(tx *gorm.DB, filter CommissionMonthlyStatFilter) *gorm.DB {
++	if filter.EmployeeUserId != 0 {
++		tx = tx.Where("employee_user_id = ?", filter.EmployeeUserId)
++	}
++	if filter.PeriodStartAt != 0 {
++		tx = tx.Where("period_start_at = ?", filter.PeriodStartAt)
++	}
++	return tx
++}
++
++func GetCommissionMonthlyStats(filter CommissionMonthlyStatFilter) ([]*EmployeeCommissionMonthlyStatItem, int64, error) {
++	filter = normalizeCommissionMonthlyStatFilter(filter)
++	base := applyCommissionMonthlyStatFilter(DB.Model(&EmployeeCommissionMonthlyStat{}), filter)
++	var total int64
++	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
++		return nil, 0, err
++	}
++
++	var rows []*EmployeeCommissionMonthlyStat
++	offset := (filter.Page - 1) * filter.PageSize
++	if err := base.Session(&gorm.Session{}).Order("period_start_at DESC, commission_quota DESC").
++		Offset(offset).
++		Limit(filter.PageSize).
++		Find(&rows).Error; err != nil {
++		return nil, 0, err
++	}
++	items := make([]*EmployeeCommissionMonthlyStatItem, 0, len(rows))
++	for _, row := range rows {
++		item := &EmployeeCommissionMonthlyStatItem{
++			EmployeeCommissionMonthlyStat: *row,
++			TotalRevenueUsd:               common.QuotaToUSD(row.RevenueQuota),
++			TotalCostUsd:                  common.QuotaToUSD(row.CostQuota),
++			TotalProfitUsd:                common.QuotaToUSD(row.ProfitQuota),
++			TotalCommissionUsd:            common.QuotaToUSD(row.CommissionQuota),
++		}
++		items = append(items, item)
++	}
++	return items, total, nil
++}
++
++func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*CommissionCalendarStats, error) {
++	if startTime <= 0 || endTime <= 0 || startTime > endTime {
++		return &CommissionCalendarStats{Days: []*CommissionCalendarDayStat{}}, nil
++	}
++	startDate := unixDayStart(startTime)
++	endDate := unixDayStart(endTime)
++	type row struct {
++		StatDate        int64
++		RevenueQuota    int64
++		CostQuota       int64
++		ProfitQuota     int64
++		CommissionQuota int64
++		RecordCount     int64
++	}
++	var rows []row
++	tx := DB.Model(&EmployeeCommissionDailyStat{}).
++		Select("stat_date, "+
++			"COALESCE(SUM(revenue_quota),0) as revenue_quota, "+
++			"COALESCE(SUM(cost_quota),0) as cost_quota, "+
++			"COALESCE(SUM(profit_quota),0) as profit_quota, "+
++			"COALESCE(SUM(commission_quota),0) as commission_quota, "+
++			"COALESCE(SUM(record_count),0) as record_count").
++		Where("stat_date >= ? AND stat_date <= ?", startDate, endDate)
++	if employeeUserId > 0 {
++		tx = tx.Where("employee_user_id = ?", employeeUserId)
++	}
++	if err := tx.Group("stat_date").Order("stat_date ASC").Scan(&rows).Error; err != nil {
++		return nil, err
++	}
++	stats := &CommissionCalendarStats{Days: make([]*CommissionCalendarDayStat, 0, len(rows))}
++	for _, r := range rows {
++		day := &CommissionCalendarDayStat{
++			StatDate:        r.StatDate,
++			Date:            time.Unix(r.StatDate, 0).UTC().Format("2006-01-02"),
++			RevenueQuota:    r.RevenueQuota,
++			CostQuota:       r.CostQuota,
++			ProfitQuota:     r.ProfitQuota,
++			CommissionQuota: r.CommissionQuota,
++			RecordCount:     r.RecordCount,
++			RevenueUsd:      common.QuotaToUSD(r.RevenueQuota),
++			CostUsd:         common.QuotaToUSD(r.CostQuota),
++			ProfitUsd:       common.QuotaToUSD(r.ProfitQuota),
++			CommissionUsd:   common.QuotaToUSD(r.CommissionQuota),
++		}
++		stats.Days = append(stats.Days, day)
++		stats.Summary.RevenueQuota += r.RevenueQuota
++		stats.Summary.CostQuota += r.CostQuota
++		stats.Summary.ProfitQuota += r.ProfitQuota
++		stats.Summary.CommissionQuota += r.CommissionQuota
++		stats.Summary.RecordCount += r.RecordCount
++	}
++	stats.Summary.RevenueUsd = common.QuotaToUSD(stats.Summary.RevenueQuota)
++	stats.Summary.CostUsd = common.QuotaToUSD(stats.Summary.CostQuota)
++	stats.Summary.ProfitUsd = common.QuotaToUSD(stats.Summary.ProfitQuota)
++	stats.Summary.CommissionUsd = common.QuotaToUSD(stats.Summary.CommissionQuota)
++	return stats, nil
++}
++
+ func GetCommissionSummary(startTime, endTime int64) ([]*CommissionSummaryItem, error) {
+ 	stats, err := GetCommissionStatsByEmployee(startTime, endTime, 0)
+ 	if err != nil {
+@@ -726,7 +885,7 @@ func GetCommissionTotalsWithPlan(plan *ResolvedQueryPlan) (CommissionTotals, err
+ 
+ // GetCommissionTotalsByEmployee 汇总指定员工的提成流量总计。
+ func GetCommissionTotalsByEmployee(employeeUserId int) (CommissionTotals, error) {
+-	plan, err := ResolveBusinessStatsQueryPlan(0, 0)
++	plan, err := ResolveBusinessStatsDailyOnlyQueryPlan(0, 0)
+ 	if err != nil {
+ 		return CommissionTotals{}, err
+ 	}
+@@ -767,7 +926,11 @@ type CommissionEmployeeStat struct {
+ 
+ // GetCommissionStatsByEmployee 按员工分组汇总，优先使用日聚合统计。
+ func GetCommissionStatsByEmployee(startTime, endTime int64, limit int) ([]*CommissionEmployeeStat, error) {
+-	return getCommissionStatsByEmployeeFromStats(startTime, endTime, limit)
++	resolved, err := ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime)
++	if err != nil {
++		return nil, err
++	}
++	return GetCommissionStatsByEmployeeWithPlan(resolved, limit)
+ }
+ 
+ // GetCommissionStatsByEmployeeFromLedger 从逐笔提成台账实时按员工汇总。
+@@ -903,8 +1066,8 @@ func GetCustomerCommissionTotal(employeeUserId, customerUserId int) int64 {
+ }
+ 
+ // GetCustomerCommissionTotals returns commission totals for the requested customers
+-// in a single grouped ledger query. This is used by paged customer lists to avoid
+-// issuing one aggregate query per row.
++// from the employee-customer daily aggregate table. Paged customer views must not
++// aggregate employee_commission_logs directly.
+ func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map[int]int64, error) {
+ 	totals := make(map[int]int64, len(customerUserIds))
+ 	if employeeUserId == 0 || len(customerUserIds) == 0 {
+@@ -915,7 +1078,15 @@ func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map
+ 		CommissionQuota int64
+ 	}
+ 	var rows []row
+-	err := DB.Model(&EmployeeCommissionLog{}).
++	useLedgerFallback, err := shouldFallbackCustomerCommissionTotalsToLedger(employeeUserId)
++	if err != nil {
++		return nil, err
++	}
++	source := DB.Model(&EmployeeCustomerCommissionDailyStat{})
++	if useLedgerFallback {
++		source = DB.Model(&EmployeeCommissionLog{})
++	}
++	err = source.
+ 		Select("customer_user_id, COALESCE(SUM(commission_quota), 0) as commission_quota").
+ 		Where("employee_user_id = ? AND customer_user_id IN ?", employeeUserId, customerUserIds).
+ 		Group("customer_user_id").
+@@ -929,6 +1100,33 @@ func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map
+ 	return totals, nil
+ }
+ 
++func shouldFallbackCustomerCommissionTotalsToLedger(employeeUserId int) (bool, error) {
++	var daily struct{ Id int }
++	if err := DB.Model(&EmployeeCustomerCommissionDailyStat{}).
++		Select("id").
++		Where("employee_user_id = ?", employeeUserId).
++		Limit(1).
++		First(&daily).Error; err != nil {
++		if err != gorm.ErrRecordNotFound {
++			return false, err
++		}
++	} else {
++		return false, nil
++	}
++	var ledger struct{ Id int }
++	if err := DB.Model(&EmployeeCommissionLog{}).
++		Select("id").
++		Where("employee_user_id = ?", employeeUserId).
++		Limit(1).
++		First(&ledger).Error; err != nil {
++		if err == gorm.ErrRecordNotFound {
++			return false, nil
++		}
++		return false, err
++	}
++	return true, nil
++}
++
+ func CreateCommissionLog(log *EmployeeCommissionLog) (inserted bool, err error) {
+ 	if log.CreatedAt == 0 {
+ 		log.CreatedAt = time.Now().Unix()

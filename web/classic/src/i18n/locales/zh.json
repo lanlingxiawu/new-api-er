@@ -119,6 +119,7 @@
     "本地": "本地",
     "本地计费": "本地计费",
     "本地数据存储": "本地数据存储",
+    "本期提成": "本期提成",
     "本设备：手机指纹/面容，外接：USB安全密钥": "本设备：手机指纹/面容，外接：USB安全密钥",
     "本设备内置": "本设备内置",
     "本项目根据": "本项目根据",
@@ -372,12 +373,22 @@
     "登录过期，请重新登录！": "登录过期，请重新登录！",
     "等待获取邮箱信息...": "等待获取邮箱信息...",
     "等待中": "等待中",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "等级",
     "等级编号": "等级编号",
     "等级编号必须 ≥ 1": "等级编号必须 ≥ 1",
     "等级已创建": "等级已创建",
     "等级已更新": "等级已更新",
     "等级已删除": "等级已删除",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "等级与业绩月度重置设置",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "等价金额：",
     "低于此额度时将发送邮件提醒用户": "低于此额度时将发送邮件提醒用户",
     "第 {{current}} / {{total}} 页": "第 {{current}} / {{total}} 页",
@@ -473,6 +484,7 @@
     "否": "否",
     "服务可用性": "服务可用性",
     "服务器地址": "服务器地址",
+    "服务器时区": "服务器时区",
     "服务商": "服务商",
     "服务显示名称": "服务显示名称",
     "复制": "复制",
@@ -510,7 +522,15 @@
     "该渠道已开启请求透传：参数覆写、模型重定向、渠道适配等 NewAPI 内置功能将失效，非最佳实践；如因此产生问题，请勿提交 issue 反馈。": "该渠道已开启请求透传：参数覆写、模型重定向、渠道适配等 NewAPI 内置功能将失效，非最佳实践；如因此产生问题，请勿提交 issue 反馈。",
     "该数据可能不可信，请谨慎使用": "该数据可能不可信，请谨慎使用",
     "该域名已存在于白名单中": "该域名已存在于白名单中",
+<<<<<<< Updated upstream
     "该员工暂无已分配客户": "该员工暂无已分配客户",
+=======
+<<<<<<< Updated upstream
+=======
+    "该员工暂无已分配客户": "该员工暂无已分配客户",
+    "概览": "概览",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "高级配置": "高级配置",
     "高级设置": "高级设置",
     "格式错误": "格式错误",
@@ -771,6 +791,7 @@
     "将清除选定时间之前的所有日志": "将清除选定时间之前的所有日志",
     "将删除": "将删除",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。",
+    "将所有员工重置到最低等级？": "将所有员工重置到最低等级？",
     "将为选中的 ": "将为选中的 ",
     "奖励说明": "奖励说明",
     "降低您账户的安全性": "降低您账户的安全性",
@@ -789,6 +810,7 @@
     "解析错误": "解析错误",
     "解析密钥文件失败: {{msg}}": "解析密钥文件失败: {{msg}}",
     "解析响应数据时发生错误": "解析响应数据时发生错误",
+    "今日": "今日",
     "今日关闭": "今日关闭",
     "今日已签到": "今日已签到",
     "今日已签到，累计签到": "今日已签到，累计签到",
@@ -914,7 +936,15 @@
     "立即开始": "立即开始",
     "立即迁移": "立即迁移",
     "立即签到": "立即签到",
+<<<<<<< Updated upstream
     "利润": "利润",
+=======
+<<<<<<< Updated upstream
+=======
+    "立即重置": "立即重置",
+    "利润": "利润",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "例如 €, £, Rp, ₩, ₹...": "例如 €, £, Rp, ₩, ₹...",
     "例如 https://docs.newapi.pro": "例如 https://docs.newapi.pro",
     "例如：": "例如：",
@@ -995,7 +1025,15 @@
     "每日签到可获得随机额度奖励": "每日签到可获得随机额度奖励",
     "每日趋势": "每日趋势",
     "每容器GPU数": "每容器GPU数",
+<<<<<<< Updated upstream
     "美国西部": "美国西部",
+=======
+<<<<<<< Updated upstream
+=======
+    "每月重置日": "每月重置日",
+    "美国西部": "美国西部",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "美元": "美元",
     "密码": "密码",
     "密码管理": "密码管理",
@@ -1222,6 +1260,7 @@
     "启用所有密钥失败": "启用所有密钥失败",
     "启用验证": "启用验证",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "启用用户模型请求速率限制（可能会影响高并发性能）",
+    "启用月度自动重置": "启用月度自动重置",
     "启用Claude思考适配（-thinking后缀）": "启用Claude思考适配（-thinking后缀）",
     "启用FunctionCall思维签名填充": "启用FunctionCall思维签名填充",
     "启用Gemini思考后缀适配": "启用Gemini思考后缀适配",
@@ -1566,6 +1605,7 @@
     "确认解绑": "确认解绑",
     "确认解绑 Passkey": "确认解绑 Passkey",
     "确认禁用": "确认禁用",
+    "确认立即重置": "确认立即重置",
     "确认密码": "确认密码",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。",
     "确认切换": "确认切换",
@@ -1647,6 +1687,7 @@
     "删除自动禁用密钥": "删除自动禁用密钥",
     "商品价格 ID": "商品价格 ID",
     "上次保存: ": "上次保存: ",
+    "上次重置时间": "上次重置时间",
     "上一步": "上一步",
     "上一个表单块": "上一个表单块",
     "上一页": "上一页",
@@ -1679,6 +1720,7 @@
     "设置系统名称": "设置系统名称",
     "设置页脚": "设置页脚",
     "设置已保存": "设置已保存",
+    "设置已更新": "设置已更新",
     "设置隐私政策": "设置隐私政策",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]",
     "设置用户协议": "设置用户协议",
@@ -1707,6 +1749,7 @@
     "时间": "时间",
     "时间粒度": "时间粒度",
     "时间信息": "时间信息",
+    "时区": "时区",
     "实付": "实付",
     "实付金额": "实付金额",
     "实付金额：": "实付金额：",
@@ -1950,6 +1993,8 @@
     "同时重置消息": "同时重置消息",
     "统计次数": "统计次数",
     "统计额度": "统计额度",
+    "统计月份": "统计月份",
+    "统计周期": "统计周期",
     "统计Tokens": "统计Tokens",
     "统一的": "统一的",
     "透传请求体": "透传请求体",
@@ -2092,6 +2137,7 @@
     "系统消息": "系统消息",
     "系统信息": "系统信息",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "系统已为该部署准备 Ollama 镜像与随机 API Key",
+    "下次重置时间": "下次重置时间",
     "下午好": "下午好",
     "下一步": "下一步",
     "下一个表单块": "下一个表单块",
@@ -2461,6 +2507,8 @@
     "原因：": "原因：",
     "源地址": "源地址",
     "约": "约",
+    "月度统计": "月度统计",
+    "月度重置": "月度重置",
     "允许 AccountFilter 参数": "允许 AccountFilter 参数",
     "允许 HTTP 协议图片请求（适用于自部署代理）": "允许 HTTP 协议图片请求（适用于自部署代理）",
     "允许 safety_identifier 透传": "允许 safety_identifier 透传",
@@ -2535,6 +2583,7 @@
     "暂无响应数据": "暂无响应数据",
     "暂无项目": "暂无项目",
     "暂无预填组": "暂无预填组",
+    "暂无月度提成统计": "暂无月度提成统计",
     "暂无API信息": "暂无API信息",
     "暂无SSE响应数据": "暂无SSE响应数据",
     "早上好": "早上好",
@@ -2601,6 +2650,7 @@
     "智能体ID": "智能体ID",
     "智谱": "智谱",
     "置信度": "置信度",
+    "中国时区": "中国时区",
     "中午好": "中午好",
     "终止请求中": "终止请求中",
     "终止中": "终止中",
@@ -2627,11 +2677,20 @@
     "重置 Passkey": "重置 Passkey",
     "重置模型倍率": "重置模型倍率",
     "重置配置": "重置配置",
+    "重置完成，已处理 {{count}} 名员工": "重置完成，已处理 {{count}} 名员工",
     "重置为默认": "重置为默认",
     "重置选项": "重置选项",
     "重置邮件发送成功，请检查邮箱！": "重置邮件发送成功，请检查邮箱！",
     "周": "周",
+<<<<<<< Updated upstream
     "主导航": "主导航",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "周期开始时间戳",
+    "主导航": "主导航",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主页链接填": "主页链接填",
     "注 册": "注 册",
     "注册": "注册",
@@ -2697,6 +2756,7 @@
     "最低": "最低",
     "最低充值美元数量": "最低充值美元数量",
     "最后更新": "最后更新",
+    "最后记录": "最后记录",
     "最后请求": "最后请求",
     "最后使用时间": "最后使用时间",
     "最近事件": "最近事件",
@@ -2744,13 +2804,27 @@
     "Claude思考适配 BudgetTokens = MaxTokens * BudgetTokens 百分比": "Claude思考适配 BudgetTokens = MaxTokens * BudgetTokens 百分比",
     "Client ID": "Client ID",
     "Client Secret": "Client Secret",
+<<<<<<< Updated upstream
     "Code copied": "代码已复制",
     "common.changeLanguage": "common.changeLanguage",
+=======
+<<<<<<< Updated upstream
+    "common.changeLanguage": "common.changeLanguage",
+=======
+    "Code copied": "代码已复制",
+    "Commission": "提成",
+    "common.changeLanguage": "common.changeLanguage",
+    "Consumption": "消耗",
+>>>>>>> Stashed changes
     "Cost Ratio": "成本系数",
     "Cost Ratio *": "成本系数 *",
     "Cost ratio is required": "成本系数为必填项",
     "Cost ratio must be greater than or equal to 0": "成本系数必须大于或等于 0",
     "Countries / regions covered": "覆盖国家 / 地区",
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Creem 充值": "Creem 充值",
     "Creem 介绍": "Creem 是一个简单的支付处理平台，支持固定金额产品销售，以及订阅销售。",
     "Creem 设置": "Creem 设置",
@@ -2764,8 +2838,10 @@
     "Discord Client ID": "Discord Client ID",
     "Discord Client Secret": "Discord Client Secret",
     "Discord ID": "Discord ID",
+    "Employee UID": "员工 UID",
     "EUR (欧元)": "EUR (欧元)",
     "false": "false",
+    "Fri": "周五",
     "Gemini安全设置": "Gemini安全设置",
     "Gemini版本设置": "Gemini版本设置",
     "Gemini设置": "Gemini设置",
@@ -2795,7 +2871,15 @@
     "JSON格式错误": "JSON格式错误",
     "JSON格式密钥，请确保格式正确": "JSON格式密钥，请确保格式正确",
     "JSON解析错误:": "JSON解析错误:",
+<<<<<<< Updated upstream
     "Legal": "法律",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "最后记录",
+    "Legal": "法律",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "Linux DO Client ID",
     "Linux DO Client Secret": "Linux DO Client Secret",
     "LinuxDO": "LinuxDO",
@@ -2804,8 +2888,21 @@
     "Logo 图片地址": "Logo 图片地址",
     "Midjourney 任务记录": "Midjourney 任务记录",
     "MIT许可证": "MIT许可证",
+    "Mon": "周一",
+    "Monthly Commission": "月度提成",
+    "Monthly Performance": "月度业绩",
+    "Monthly Stats": "月度统计",
     "NEXAXIS API项目仓库地址：": "NEXAXIS API项目仓库地址：",
+<<<<<<< Updated upstream
     "No redemption codes to export": "没有可导出的兑换码",
+=======
+<<<<<<< Updated upstream
+=======
+    "Next month": "下一月",
+    "No monthly commission stats yet": "暂无月度提成统计",
+    "No redemption codes to export": "没有可导出的兑换码",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OIDC": "OIDC",
     "OIDC ID": "OIDC ID",
     "Ollama 版本信息": "Ollama 版本信息",
@@ -2818,10 +2915,18 @@
     "Passkey 已重置": "Passkey 已重置",
     "Passkey 注册成功": "Passkey 注册成功",
     "Passkey 注册失败，请重试": "Passkey 注册失败，请重试",
+    "Performance": "业绩",
+    "Period": "时间范围",
+    "Period start timestamp": "周期开始时间戳",
     "Ping间隔（秒）": "Ping间隔（秒）",
+    "Previous month": "上一月",
     "price_xxx 的商品价格 ID，新建产品后可获得": "price_xxx 的商品价格 ID，新建产品后可获得",
     "Reasoning Effort": "Reasoning Effort",
+    "Records": "记录数",
+    "Reset": "重置",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私",
+    "Sat": "周六",
+    "Search": "查询",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示",
     "SMTP 端口": "SMTP 端口",
@@ -2836,14 +2941,25 @@
     "SSRF防护详细说明": "SSRF防护可防止恶意用户利用您的服务器访问内网资源。您可以配置受信任域名/IP的白名单，并限制允许的端口。适用于文件下载、Webhook回调和通知功能。",
     "store 字段用于授权 OpenAI 存储请求数据以评估和优化产品。默认关闭，开启后可能导致 Codex 无法正常使用": "store 字段用于授权 OpenAI 存储请求数据以评估和优化产品。默认关闭，开启后可能导致 Codex 无法正常使用",
     "Stripe 设置": "Stripe 设置",
+    "Sun": "周日",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Telegram Bot 名称",
     "Telegram Bot Token": "Telegram Bot Token",
     "Telegram ID": "Telegram ID",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建议现在就配置成本系数，以便正确核算员工提成利润。",
     "Token 数": "Token 数",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "周四",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建议现在就配置成本系数，以便正确核算员工提成利润。",
+    "Token 数": "Token 数",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Token Endpoint": "Token Endpoint",
     "true": "true",
+    "Tue": "周二",
     "Turnstile Secret Key": "Turnstile Secret Key",
     "Turnstile Site Key": "Turnstile Site Key",
     "Twitter / X": "Twitter / X",
@@ -2864,6 +2980,7 @@
     "Webhook通知": "Webhook通知",
     "WeChat Server 访问凭证": "WeChat Server 访问凭证",
     "WeChat Server 服务器地址": "WeChat Server 服务器地址",
+    "Wed": "周三",
     "Well-Known URL": "Well-Known URL",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "Well-Known URL 必须以 http:// 或 https:// 开头",
     "Whitepaper": "白皮书",

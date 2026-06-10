@@ -10,8 +10,17 @@ import {
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
+<<<<<<< Updated upstream
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+=======
+<<<<<<< Updated upstream
+=======
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import {
@@ -20,10 +29,12 @@ import {
   formatBusinessTargetAmount,
   formatBusinessUsd,
 } from '@/features/business/format'
+import { CommissionMonthlyPeriodSection } from '@/features/employees/components/commission-financial-calendar'
 import type { CommissionLog } from '@/features/employees/types'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getMyCommissionLogs,
+  getMyCommissionMonthlyStats,
   getMyCommissionSummary,
   getMyEmployeeProfile,
   type EmployeeExtension,
@@ -241,6 +252,21 @@ function useMyCommissionColumns() {
   )
 }
 
+function MonthlyStats() {
+  return (
+    <CommissionMonthlyPeriodSection
+      queryKey={['my-commission-monthly-stats']}
+      queryFn={(range) =>
+        getMyCommissionMonthlyStats({
+          ...range,
+          page: 1,
+          page_size: 100,
+        })
+      }
+    />
+  )
+}
+
 function CommissionHistory() {
   const { t } = useTranslation()
   const columns = useMyCommissionColumns()
@@ -431,11 +457,21 @@ export function EmployeeConsole() {
     )
   }
 
+<<<<<<< Updated upstream
   const profile = profileData.data.profile
+<<<<<<< Updated upstream
   const tierInfo = profileData.data.tier
   const effectiveRate = tierInfo?.tier_rate ?? profile.commission_rate ?? 0
   const tierGroup: string = tierInfo?.tier_group || ''
   const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
+=======
+=======
+  const tierInfo = profileData.data.tier
+  const effectiveRate = tierInfo?.tier_rate ?? 0
+  const tierGroup: string = tierInfo?.tier_group || ''
+  const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   const summary = summaryData?.data ?? profileData.data.extension
   const revenueUsd = summary?.profit_total_usd ?? 0
 
@@ -461,6 +497,7 @@ export function EmployeeConsole() {
         </span>
       </SectionPageLayout.Title>
       <SectionPageLayout.Content className='overflow-hidden'>
+<<<<<<< Updated upstream
         <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
           {summary && (
             <SummaryCards
@@ -476,6 +513,41 @@ export function EmployeeConsole() {
             <CommissionHistory />
           </div>
         </div>
+=======
+        <Tabs
+          defaultValue='details'
+          className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'
+        >
+          <TabsList className='shrink-0'>
+            <TabsTrigger value='monthly'>{t('Monthly Stats')}</TabsTrigger>
+            <TabsTrigger value='details'>{t('Commission Details')}</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
+            <MonthlyStats />
+          </TabsContent>
+
+          <TabsContent
+            value='details'
+            className='min-h-0 flex-1 overflow-hidden'
+          >
+            <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
+              {summary ? (
+                <div className='shrink-0'>
+                  <SummaryCards
+                    data={summary}
+                    commissionRate={effectiveRate}
+                    targetAmount={tierTargetAmount}
+                  />
+                </div>
+              ) : null}
+              <div className='min-h-0 flex-1 overflow-hidden'>
+                <CommissionHistory />
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+>>>>>>> Stashed changes
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

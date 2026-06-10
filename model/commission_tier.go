@@ -39,6 +39,13 @@ type EmployeeTierLevel struct {
 	EffectiveAt int64  `json:"effective_at" gorm:"default:0"`
 	Remark      string `json:"remark,omitempty" gorm:"type:varchar(256);default:''"`
 	UpdatedBy   int    `json:"updated_by,omitempty" gorm:"default:0"`
+
+	// BaselineProfitQuota/BaselineCommissionQuota 为上次月度重置时
+	// UserExtension.ProfitTotalQuota/CommissionTotalQuota 的快照值（quota 单位）。
+	// "本期"值 = 对应累计值 - 基准值（结果 clamp 到 >=0）。默认 0，未发生过重置时
+	// 等价于"本期=累计"，向后兼容。
+	BaselineProfitQuota     int64 `json:"baseline_profit_quota" gorm:"column:baseline_profit_quota;not null;default:0"`
+	BaselineCommissionQuota int64 `json:"baseline_commission_quota" gorm:"column:baseline_commission_quota;not null;default:0"`
 }
 
 // EmployeeTierLog 等级变更日志（只追加，用于审计溯源）。
@@ -259,8 +266,58 @@ func TryAutoUpgradeTier(userId int, currentProfit int64) {
 		return
 	}
 
+<<<<<<< Updated upstream
 	currentProfitUsd := common.QuotaToUSD(currentProfit)
 
+<<<<<<< Updated upstream
+=======
+	// 找到当前利润（USD）能达到的最高等级（按 level ASC 已排序）
+=======
+	level, err := GetOrCreateTierLevel(userId)
+	if err != nil {
+		return
+	}
+
+	// 周期利润 = 累计利润 - 上次重置基准（默认 0，向后兼容）。
+	periodProfit := currentProfit - level.BaselineProfitQuota
+	if periodProfit < 0 {
+		periodProfit = 0
+	}
+	currentProfitUsd := common.QuotaToUSD(periodProfit)
+
+	// 获取当前分组与等级
+	currentGroup := "通用"
+	currentLevel := 0
+	if level.TierId != 0 {
+		found := false
+		for _, t := range tiers {
+			if t.Id == level.TierId {
+				currentGroup = t.Group
+				currentLevel = t.Level
+				found = true
+				break
+			}
+		}
+		if !found {
+			// 员工绑定的等级已被删除，跳过自动升级，避免静默切换到其他分组
+			common.SysError(fmt.Sprintf("TryAutoUpgradeTier: userId=%d has orphaned tierId=%d, skipping auto upgrade", userId, level.TierId))
+			return
+		}
+	}
+
+	// 在当前分组内找到可达的最高等级（同分组内 tiers 已按 level ASC 排序）
+>>>>>>> Stashed changes
+	var bestTier *EmployeeCommissionTier
+	for _, t := range tiers {
+		if currentProfitUsd >= t.ThresholdUsd {
+			bestTier = t
+		}
+	}
+	if bestTier == nil {
+		return // 未达到任何等级
+	}
+
+>>>>>>> Stashed changes
 	level, err := GetOrCreateTierLevel(userId)
 	if err != nil {
 		return
@@ -392,4 +449,128 @@ func GetTierLevelsByUserIds(userIds []int) (map[int]*EmployeeTierLevel, error) {
 		result[l.UserId] = l
 	}
 	return result, nil
+}
+
+// ============================================================================
+// 月度周期重置
+// ============================================================================
+
+// ResetEmployeeTierLevelsForPeriod 批量重置员工等级与"本期业绩/本期提成"基准。
+//
+// 对每条 effective_at < resetAt 的 EmployeeTierLevel：
+//   - tier_id != 0：重置到该等级所在分组（Group）内 Level 最小的等级；
+//   - tier_id == 0：保持不变（无分组上下文，无需调级）；
+//   - 无论是否调级，均将 baseline_profit_quota/baseline_commission_quota
+//     刷新为该员工当前 UserExtension.profit_total_quota/commission_total_quota
+//     的快照值，并写入一条 source="reset" 的 EmployeeTierLog。
+//
+// effective_at < resetAt 同时承担"本周期是否已处理"的幂等守卫：处理后
+// effective_at 被置为 resetAt，重复调用（如崩溃重启后）会自动跳过已处理的行。
+//
+// 调用方应循环调用直到 processed == 0；本函数本身不做日期/调度判断，
+// resetAt 由调用方（定时任务或"立即重置"接口）计算后传入。
+//
+// operatedBy 写入 EmployeeTierLevel.UpdatedBy 与 EmployeeTierLog.OperatedBy：
+// 定时任务传 0（系统），管理员"立即重置"传当前管理员的 user id。
+func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy int) (processed int, err error) {
+	if batchSize <= 0 {
+		batchSize = 300
+	}
+
+	// Load valid tiers before selecting rows so orphaned tier_id records do not
+	// occupy an entire batch and block valid employees behind them.
+	tiers := GetAllTiersCached()
+	tierById := make(map[int64]*EmployeeCommissionTier, len(tiers))
+	groupMinTier := make(map[string]*EmployeeCommissionTier, len(tiers))
+	validTierIds := make([]int64, 0, len(tiers))
+	for _, t := range tiers {
+		tierById[t.Id] = t
+		validTierIds = append(validTierIds, t.Id)
+		if existing, ok := groupMinTier[t.Group]; !ok || t.Level < existing.Level {
+			groupMinTier[t.Group] = t
+		}
+	}
+
+	var levels []*EmployeeTierLevel
+	tx := DB.Where("effective_at < ?", resetAt)
+	if len(validTierIds) > 0 {
+		tx = tx.Where("tier_id = 0 OR tier_id IN ?", validTierIds)
+	} else {
+		tx = tx.Where("tier_id = 0")
+	}
+	if err = tx.Order("id ASC").Limit(batchSize).Find(&levels).Error; err != nil {
+		return 0, err
+	}
+	if len(levels) == 0 {
+		return 0, nil
+	}
+
+	userIds := make([]int, 0, len(levels))
+	for _, l := range levels {
+		userIds = append(userIds, l.UserId)
+	}
+	extByUserId, err := GetUserExtensionsByUserIds(userIds)
+	if err != nil {
+		return 0, err
+	}
+
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		for _, level := range levels {
+			var profitTotal, commissionTotal int64
+			if ext, ok := extByUserId[level.UserId]; ok {
+				profitTotal = ext.ProfitTotalQuota
+				commissionTotal = ext.CommissionTotalQuota
+			}
+
+			targetTierId := level.TierId
+			if level.TierId != 0 {
+				if currentTier, ok := tierById[level.TierId]; ok {
+					if minTier, ok2 := groupMinTier[currentTier.Group]; ok2 {
+						targetTierId = minTier.Id
+					}
+				} else {
+					common.SysError(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d has orphaned tierId=%d, skipped", level.UserId, level.TierId))
+					continue
+				}
+			}
+
+			updates := map[string]interface{}{
+				"tier_id":                   targetTierId,
+				"source":                    "reset",
+				"effective_at":              resetAt,
+				"remark":                    "月度自动重置",
+				"updated_by":                operatedBy,
+				"baseline_profit_quota":     profitTotal,
+				"baseline_commission_quota": commissionTotal,
+			}
+			res := tx.Model(&EmployeeTierLevel{}).Where("id = ? AND effective_at = ?", level.Id, level.EffectiveAt).Updates(updates)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				common.SysLog(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d skipped due to concurrent tier update", level.UserId))
+				continue
+			}
+
+			log := &EmployeeTierLog{
+				UserId:            level.UserId,
+				FromTierId:        level.TierId,
+				ToTierId:          targetTierId,
+				Source:            "reset",
+				ProfitSnapshotUsd: common.QuotaToUSD(profitTotal),
+				OperatedAt:        resetAt,
+				OperatedBy:        operatedBy,
+			}
+			if err := tx.Create(log).Error; err != nil {
+				return err
+			}
+			processed++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return processed, nil
 }

@@ -40,6 +40,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Tag,
   TextArea,
   Typography,
@@ -51,6 +52,9 @@ import {
 import {
   BadgeDollarSign,
   BriefcaseBusiness,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   DollarSign,
   MoreHorizontal,
@@ -82,8 +86,21 @@ const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10;
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8;
 const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running';
 const BUSINESS_AMOUNT_DIGITS = 4;
+<<<<<<< Updated upstream
 const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
 const DEFAULT_TIER_GROUP = '通用';
+=======
+<<<<<<< Updated upstream
+=======
+const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
+const DEFAULT_TIER_GROUP = '通用';
+const RESET_TIMEZONES = ['Asia/Shanghai', 'Local'];
+const RESET_DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => index + 1);
+
+function normalizeResetTimezone(timezone) {
+  return timezone === 'Local' ? 'Local' : 'Asia/Shanghai';
+}
+>>>>>>> Stashed changes
 
 const getTierGroup = (tier) => (tier?.group || '').trim() || DEFAULT_TIER_GROUP;
 
@@ -144,10 +161,89 @@ const getTierLevelTagColor = (level) => {
   }
   return TIER_LEVEL_TAG_COLORS[0];
 };
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 
 const formatTs = (ts) => {
   if (!ts) return '-';
   return new Date(Number(ts) * 1000).toLocaleString();
+};
+
+const formatDate = (ts) => {
+  if (!ts) return '-';
+  return new Date(Number(ts) * 1000).toLocaleDateString();
+};
+
+const monthValueToTimestamp = (value) => {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return Math.floor(
+    new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0).getTime() / 1000,
+  );
+};
+
+const currentMonthValue = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const shiftMonthValue = (value, offset) => {
+  const [year, month] = String(value || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const date = new Date(year, (month || 1) - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const monthValueToRange = (value) => {
+  const [year, month] = String(value || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const start = new Date(year, month - 1, 1, 0, 0, 0);
+  const end = new Date(year, month, 0, 23, 59, 59);
+  return {
+    start_time: Math.floor(start.getTime() / 1000),
+    end_time: Math.floor(end.getTime() / 1000),
+  };
+};
+
+const dateKey = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+const isCurrentDay = (date) => dateKey(date) === dateKey(new Date());
+
+const buildMonthCalendarCells = (monthValue, days = []) => {
+  const [year, month] = String(monthValue || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const first = new Date(year, month - 1, 1);
+  const gridStart = new Date(first);
+  gridStart.setDate(first.getDate() - first.getDay());
+  const dayMap = new Map(days.map((day) => [day.date, day]));
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    const key = dateKey(date);
+    return {
+      key,
+      date,
+      inMonth: date.getMonth() === month - 1,
+      stat: dayMap.get(key),
+    };
+  });
+};
+
+const monthLabel = (value) => {
+  const [year, month] = String(value || currentMonthValue())
+    .split('-')
+    .map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+  });
 };
 
 const toNumber = (value, fallback = 0) => {
@@ -607,6 +703,42 @@ function usePagedEndpoint(endpoint, params = {}, options = {}) {
     load,
     pagination,
   };
+}
+
+function useEndpointData(endpoint, params = {}, options = {}) {
+  const { enabled = true } = options;
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const paramsKey = JSON.stringify(params);
+
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    setLoading(true);
+    try {
+      const res = await API.get(endpoint, {
+        params: buildParams(params),
+        disableDuplicate: true,
+      });
+      const { success, message, data: payload } = res.data;
+      if (success) {
+        setData(payload || null);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error?.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  }, [enabled, endpoint, paramsKey]);
+
+  useEffect(() => {
+    if (enabled) {
+      load();
+    }
+  }, [enabled, load]);
+
+  return { data, loading, reload: load };
 }
 
 async function mutateRequest(method, url, data) {
@@ -2074,6 +2206,23 @@ function EmployeesTab({
       render: (value, row) => renderPerformanceProgress(value, row, t),
     },
     {
+      title: t('本期提成'),
+      dataIndex: 'current_commission_quota',
+      width: 130,
+      sorter: true,
+      sortOrder: getSortOrder('current_commission_quota'),
+      render: (value, row) => (
+        <div>
+          <AmountText value={value || 0} />
+          <div>
+            <Text type='secondary' size='small'>
+              {formatBusinessUsd(row.current_commission_usd)}
+            </Text>
+          </div>
+        </div>
+      ),
+    },
+    {
       title: t('状态'),
       dataIndex: 'status',
       sorter: true,
@@ -2501,7 +2650,242 @@ function CommissionLogsTable({
 // 阶梯提成等级配置
 // ============================================================================
 
+<<<<<<< Updated upstream
 function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
+=======
+<<<<<<< Updated upstream
+function TierModal({ visible, row, onCancel, onSuccess }) {
+=======
+function CommissionMonthlyCalendar({
+  endpoint,
+  selfView = false,
+  embedded = false,
+}) {
+  const { t } = useTranslation();
+  const [month, setMonth] = useState(currentMonthValue);
+  const [employeeInput, setEmployeeInput] = useState(undefined);
+  const [employeeUserId, setEmployeeUserId] = useState(undefined);
+  const [selectedDate, setSelectedDate] = useState(undefined);
+  const range = useMemo(() => monthValueToRange(month), [month]);
+  const params = useMemo(
+    () =>
+      buildParams({
+        ...range,
+        page: 1,
+        page_size: 100,
+        employee_user_id: selfView ? undefined : employeeUserId,
+      }),
+    [employeeUserId, range, selfView],
+  );
+  const stats = useEndpointData(endpoint, params);
+
+  const applyFilters = () => {
+    const next = toNumber(employeeInput);
+    setEmployeeUserId(Number.isFinite(next) && next > 0 ? next : undefined);
+  };
+
+  const resetFilters = () => {
+    setEmployeeInput(undefined);
+    setEmployeeUserId(undefined);
+  };
+
+  const periodItems = stats.data?.items || [];
+  const summary = useMemo(
+    () =>
+      periodItems.reduce(
+        (next, item) => ({
+          revenue_quota: next.revenue_quota + (item.revenue_quota || 0),
+          cost_quota: next.cost_quota + (item.cost_quota || 0),
+          profit_quota: next.profit_quota + (item.profit_quota || 0),
+          commission_quota:
+            next.commission_quota + (item.commission_quota || 0),
+          record_count: next.record_count + (item.record_count || 0),
+        }),
+        {
+          revenue_quota: 0,
+          cost_quota: 0,
+          profit_quota: 0,
+          commission_quota: 0,
+          record_count: 0,
+        },
+      ),
+    [periodItems],
+  );
+
+  const content = (
+    <div className='space-y-4'>
+      <div className='flex flex-wrap items-center justify-between gap-3 rounded bg-[var(--semi-color-fill-0)] p-3'>
+        <Space wrap>
+          <Button
+            size='small'
+            type='tertiary'
+            icon={<ChevronLeft size={14} />}
+            onClick={() => setMonth(shiftMonthValue(month, -1))}
+          />
+          <DatePicker
+            type='month'
+            size='small'
+            value={new Date(`${month}-01T00:00:00`)}
+            placeholder={t('统计月份')}
+            onChange={(value) => {
+              const date = value instanceof Date ? value : new Date(value);
+              if (!Number.isNaN(date.getTime())) {
+                setMonth(
+                  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+                );
+              }
+            }}
+            style={{ width: 150 }}
+          />
+          <Button
+            size='small'
+            type='tertiary'
+            icon={<ChevronRight size={14} />}
+            onClick={() => setMonth(shiftMonthValue(month, 1))}
+          />
+          <Button
+            size='small'
+            type={month === currentMonthValue() ? 'secondary' : 'tertiary'}
+            onClick={() => setMonth(currentMonthValue())}
+          >
+            {t('今日')}
+          </Button>
+        </Space>
+        {!selfView ? (
+          <Space wrap>
+            <InputNumber
+              size='small'
+              min={0}
+              hideButtons
+              placeholder={t('Employee UID')}
+              value={employeeInput}
+              onChange={setEmployeeInput}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') applyFilters();
+              }}
+              style={{ width: 140 }}
+            />
+            <Button size='small' type='primary' onClick={applyFilters}>
+              {t('Search')}
+            </Button>
+            <Button size='small' type='tertiary' onClick={resetFilters}>
+              {t('Reset')}
+            </Button>
+          </Space>
+        ) : null}
+      </div>
+      <Row gutter={[12, 12]}>
+        <Col xs={24} md={12}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <div className='flex items-center gap-2'>
+              <CalendarDays size={16} color='var(--semi-color-success)' />
+              <Text type='secondary'>{monthLabel(month)}</Text>
+            </div>
+            <div className='mt-2 text-2xl font-semibold'>
+              {stats.loading ? (
+                <Spin size='small' />
+              ) : (
+                formatBusinessAmount(summary.commission_quota || 0)
+              )}
+            </div>
+            <Text type='secondary' size='small'>
+              {t('Monthly Commission')}
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <Text type='secondary' size='small'>
+              {t('Monthly Performance')}
+            </Text>
+            <div className='mt-2 font-semibold'>
+              {formatBusinessAmount(summary.profit_quota || 0)}
+            </div>
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <Text type='secondary' size='small'>
+              {t('Records')}
+            </Text>
+            <div className='mt-2 font-semibold'>
+              {summary.record_count || 0}
+            </div>
+          </Card>
+        </Col>
+      </Row>
+      <Row gutter={[12, 12]}>
+        {periodItems.map((item) => (
+          <Col xs={24} lg={12} key={`${item.period_start_at}-${item.employee_user_id}`}>
+            <Card bodyStyle={{ minHeight: 156, padding: 16 }}>
+              <div className='flex flex-wrap justify-between gap-3'>
+                <div>
+                  <Text strong>{item.period_key || t('Period')}</Text>
+                  <div className='mt-1 text-xs text-[var(--semi-color-text-2)]'>
+                    {formatTs(item.period_start_at)} - {formatTs(item.period_end_at)}
+                  </div>
+                </div>
+                <div className='text-right'>
+                  <div className='text-lg font-semibold'>
+                    {formatBusinessAmount(item.commission_quota || 0)}
+                  </div>
+                  <Text type='secondary' size='small'>
+                    {t('Commission')}
+                  </Text>
+                </div>
+              </div>
+              <Row gutter={[12, 12]} className='mt-3'>
+                <Col span={6}>
+                  <Text type='secondary' size='small'>{t('Profit')}</Text>
+                  <div className='font-medium'>{formatBusinessAmount(item.profit_quota || 0)}</div>
+                </Col>
+                <Col span={6}>
+                  <Text type='secondary' size='small'>{t('Revenue')}</Text>
+                  <div className='font-medium'>{formatBusinessAmount(item.revenue_quota || 0)}</div>
+                </Col>
+                <Col span={6}>
+                  <Text type='secondary' size='small'>{t('Cost')}</Text>
+                  <div className='font-medium'>{formatBusinessAmount(item.cost_quota || 0)}</div>
+                </Col>
+                <Col span={6}>
+                  <Text type='secondary' size='small'>{t('Records')}</Text>
+                  <div className='font-medium'>{item.record_count || 0}</div>
+                </Col>
+              </Row>
+              {!selfView ? (
+                <Text type='tertiary' size='small' className='mt-3 block'>
+                  {t('Employee UID')}: {item.employee_user_id}
+                </Text>
+              ) : null}
+            </Card>
+          </Col>
+        ))}
+      </Row>
+      {!stats.loading && periodItems.length === 0 ? (
+        <BusinessEmpty description={t('暂无数据')} />
+      ) : null}
+    </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <BusinessCard
+      title={t('月度统计')}
+      icon={BadgeDollarSign}
+      color='var(--semi-color-success)'
+      t={t}
+    >
+      {content}
+    </BusinessCard>
+  );
+}
+
+function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   const { t } = useTranslation();
   const isUpdate = Boolean(row);
   const [saving, setSaving] = useState(false);
@@ -2776,7 +3160,232 @@ function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
   );
 }
 
+<<<<<<< Updated upstream
 function TiersTab({ tiersPaged, onReadyToolbar }) {
+=======
+<<<<<<< Updated upstream
+function TiersTab({ onReadyToolbar }) {
+=======
+function TierResetSettingsCard({ onResetSuccess }) {
+  const { t } = useTranslation();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState({
+    enabled: false,
+    reset_day: 10,
+    timezone: 'Asia/Shanghai',
+  });
+
+  const loadConfig = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await API.get('/api/admin/employee/tiers/reset-config', {
+        disableDuplicate: true,
+      });
+      const { success, message, data } = res.data;
+      if (!success) {
+        showError(message);
+        return;
+      }
+      const nextConfig = data || {};
+      setConfig(nextConfig);
+      setForm({
+        enabled: Boolean(nextConfig.enabled),
+        reset_day: Number(nextConfig.reset_day || 10),
+        timezone: normalizeResetTimezone(nextConfig.timezone),
+      });
+    } catch (error) {
+      showError(error?.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConfig();
+  }, [loadConfig]);
+
+  const updateForm = (key, value) => {
+    setForm((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const isDirty =
+    !!config &&
+    (form.enabled !== Boolean(config.enabled) ||
+      form.reset_day !== Number(config.reset_day || 10) ||
+      form.timezone !== normalizeResetTimezone(config.timezone));
+
+  const saveConfig = async () => {
+    if (!config) return;
+    setSaving(true);
+    try {
+      const updates = [
+        ['commission_tier_reset_setting.enabled', String(form.enabled)],
+        ['commission_tier_reset_setting.reset_day', String(form.reset_day)],
+        ['commission_tier_reset_setting.reset_hour', '0'],
+        ['commission_tier_reset_setting.reset_minute', '0'],
+        ['commission_tier_reset_setting.reset_second', '0'],
+        ['commission_tier_reset_setting.timezone', form.timezone],
+      ];
+      for (const [key, value] of updates) {
+        const res = await API.put('/api/option/', { key, value });
+        const { success, message } = res.data;
+        if (!success) {
+          throw new Error(message || 'Operation failed');
+        }
+      }
+      showSuccess(t('设置已更新'));
+      await loadConfig();
+      setSettingsVisible(false);
+    } catch (error) {
+      showError(error?.message || 'Operation failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetNow = () => {
+    Modal.confirm({
+      title: t('确认立即重置'),
+      content: t('将所有员工重置到最低等级？'),
+      okText: t('立即重置'),
+      cancelText: t('取消'),
+      okType: 'danger',
+      onOk: async () => {
+        setResetting(true);
+        try {
+          const res = await API.post('/api/admin/employee/tiers/reset-now');
+          const { success, message, data } = res.data;
+          if (!success) {
+            throw new Error(message || 'Operation failed');
+          }
+          showSuccess(
+            t('重置完成，已处理 {{count}} 名员工', {
+              count: data?.processed || 0,
+            }),
+          );
+          await loadConfig();
+          onResetSuccess?.();
+        } catch (error) {
+          showError(error?.message || 'Operation failed');
+        } finally {
+          setResetting(false);
+        }
+      },
+    });
+  };
+
+  return (
+    <>
+      <Button
+        type='tertiary'
+        size='small'
+        icon={<RefreshCw size={14} />}
+        disabled={loading}
+        onClick={() => setSettingsVisible(true)}
+      >
+        {t('月度重置')}
+      </Button>
+
+      <Modal
+        title={t('等级与业绩月度重置设置')}
+        visible={settingsVisible}
+        onCancel={() => setSettingsVisible(false)}
+        footer={
+          <Space>
+            <Button
+              type='tertiary'
+              icon={<RefreshCw size={14} />}
+              loading={resetting}
+              onClick={resetNow}
+            >
+              {t('立即重置')}
+            </Button>
+            <Button onClick={() => setSettingsVisible(false)}>
+              {t('取消')}
+            </Button>
+            <Button
+              type='primary'
+              loading={saving}
+              disabled={!isDirty}
+              onClick={saveConfig}
+            >
+              {t('保存')}
+            </Button>
+          </Space>
+        }
+      >
+        <div className='space-y-6 py-1'>
+          <div className='flex flex-wrap items-center justify-between gap-3 pb-2'>
+            <Text strong>{t('启用月度自动重置')}</Text>
+            <Switch
+              checked={form.enabled}
+              onChange={(checked) => updateForm('enabled', checked)}
+              disabled={loading || saving}
+            />
+          </div>
+
+          <Row gutter={[12, 12]}>
+            <Col xs={24} sm={12}>
+              <Field label={t('每月重置日')}>
+                <Select
+                  value={form.reset_day}
+                  onChange={(value) =>
+                    updateForm('reset_day', Math.trunc(Number(value) || 1))
+                  }
+                  className='w-full'
+                >
+                  {RESET_DAY_OPTIONS.map((day) => (
+                    <Select.Option key={day} value={day}>
+                      {day}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Field>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Field label={t('时区')}>
+                <Select
+                  value={form.timezone}
+                  onChange={(value) => updateForm('timezone', value || 'Local')}
+                  className='w-full'
+                >
+                  {RESET_TIMEZONES.map((timezone) => (
+                    <Select.Option key={timezone} value={timezone}>
+                      {timezone === 'Local' ? t('服务器时区') : t('中国时区')}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Field>
+            </Col>
+          </Row>
+          <Row gutter={[12, 12]}>
+            <Col xs={24} sm={12}>
+              <Text type='secondary'>
+                {t('上次重置时间')}: {formatTs(config?.last_reset_at)}
+              </Text>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Text type='secondary'>
+                {t('下次重置时间')}: {formatTs(config?.next_reset_at)}
+              </Text>
+            </Col>
+          </Row>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function TiersTab({ tiersPaged, onReadyToolbar }) {
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   const { t } = useTranslation();
   const [allTiers, setAllTiers] = useState([]);
   const [modalRow, setModalRow] = useState(null);
@@ -2940,20 +3549,28 @@ function TiersTab({ tiersPaged, onReadyToolbar }) {
     },
   ];
 
+  const handleTierResetSuccess = useCallback(() => {
+    tiersPaged.load();
+    loadAllTiers();
+  }, [tiersPaged.load, loadAllTiers]);
+
   useEffect(() => {
     if (!onReadyToolbar) return undefined;
     onReadyToolbar(
-      <Button
-        type='tertiary'
-        size='small'
-        icon={<Plus size={14} />}
-        onClick={openCreate}
-      >
-        {t('添加等级')}
-      </Button>,
+      <Space>
+        <TierResetSettingsCard onResetSuccess={handleTierResetSuccess} />
+        <Button
+          type='tertiary'
+          size='small'
+          icon={<Plus size={14} />}
+          onClick={openCreate}
+        >
+          {t('添加等级')}
+        </Button>
+      </Space>,
     );
     return () => onReadyToolbar(null);
-  }, [onReadyToolbar, t, openCreate]);
+  }, [onReadyToolbar, t, openCreate, handleTierResetSuccess]);
 
   return (
     <>
@@ -2996,8 +3613,8 @@ export function Employees() {
     commissionLogFilters,
     { enabled: activeTab === 'logs' },
   );
-
   const tabs = [
+    { key: 'monthly', label: t('月度统计') },
     { key: 'employees', label: t('员工') },
     { key: 'tiers', label: t('提成阶梯') },
     { key: 'logs', label: t('提成记录') },
@@ -3051,7 +3668,20 @@ export function Employees() {
             onReadyToolbar={setTabToolbar}
           />
         ) : activeTab === 'tiers' ? (
+<<<<<<< Updated upstream
           <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
+=======
+<<<<<<< Updated upstream
+          <TiersTab onReadyToolbar={setTabToolbar} />
+=======
+          <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
+        ) : activeTab === 'monthly' ? (
+          <CommissionMonthlyCalendar
+            endpoint='/api/admin/employee/commission/monthly'
+            embedded
+          />
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
         ) : (
           <CommissionLogsTable
             endpoint='/api/admin/employee/commission'
@@ -3073,7 +3703,15 @@ export function EmployeeConsole() {
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [summary, setSummary] = useState(null);
+<<<<<<< Updated upstream
   const [commissionLogFilters, setCommissionLogFilters] = useState({});
+=======
+<<<<<<< Updated upstream
+=======
+  const [commissionLogFilters, setCommissionLogFilters] = useState({});
+  const [activeConsoleTab, setActiveConsoleTab] = useState('details');
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   const commissionLogs = usePagedEndpoint(
     '/api/user/employee/commission',
     commissionLogFilters,
@@ -3112,9 +3750,18 @@ export function EmployeeConsole() {
   }, [loadProfile]);
 
   const profile = profileData?.data?.profile;
+<<<<<<< Updated upstream
   const tierInfo = profileData?.data?.tier;
   const effectiveRate = tierInfo?.tier_rate ?? profile?.commission_rate ?? 0;
   const tierGroup = tierInfo?.tier_group || '';
+=======
+<<<<<<< Updated upstream
+=======
+  const tierInfo = profileData?.data?.tier;
+  const effectiveRate = tierInfo?.tier_rate ?? 0;
+  const tierGroup = tierInfo?.tier_group || '';
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   const extension = summary || profileData?.data?.extension || {};
   const customerTotalConsumptionQuota =
     extension.customer_total_consumption_quota ?? 0;
@@ -3151,9 +3798,35 @@ export function EmployeeConsole() {
               title={t('我的提成')}
               icon={BadgeDollarSign}
               color='var(--semi-color-success)'
-              pagination={<ClassicPagination paged={commissionLogs} t={t} />}
+              pagination={
+                activeConsoleTab === 'details' ? (
+                  <ClassicPagination paged={commissionLogs} t={t} />
+                ) : null
+              }
+              searchArea={
+                <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
+                  <div className='flex flex-wrap gap-2'>
+                    {[
+                      ['monthly', t('月度统计')],
+                      ['details', t('提成明细')],
+                    ].map(([key, label]) => (
+                      <Button
+                        key={key}
+                        size='small'
+                        type={activeConsoleTab === key ? 'primary' : 'tertiary'}
+                        theme={activeConsoleTab === key ? 'solid' : 'light'}
+                        onClick={() => setActiveConsoleTab(key)}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                  <div />
+                </div>
+              }
               t={t}
             >
+<<<<<<< Updated upstream
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12} xl={6}>
                   <StatCard
@@ -3215,12 +3888,84 @@ export function EmployeeConsole() {
                   endpoint='/api/user/employee/commission'
                   selfView
                   logs={commissionLogs}
+<<<<<<< Updated upstream
                   filters={commissionLogFilters}
                   onFiltersChange={setCommissionLogFilters}
+=======
+=======
+              {activeConsoleTab === 'monthly' ? (
+                <CommissionMonthlyCalendar
+                  endpoint='/api/user/employee/commission/monthly'
+                  selfView
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
                   embedded
-                  showInlinePagination={false}
                 />
-              </div>
+              ) : (
+                <div className='space-y-4'>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} md={12} xl={6}>
+                      <StatCard
+                        title={t('总消费')}
+                        value={formatBusinessAmount(
+                          customerTotalConsumptionQuota,
+                        )}
+                        sub={formatBusinessUsd(customerTotalConsumptionUsd)}
+                        icon={DollarSign}
+                        color='var(--semi-color-info)'
+                      />
+                    </Col>
+                    <Col xs={24} md={12} xl={6}>
+                      <StatCard
+                        title={t('当前业绩')}
+                        value={formatBusinessAmount(totalProfitQuota)}
+                        sub={formatExactUsd(totalProfitUsd)}
+                        icon={TrendingUp}
+                        color='var(--semi-color-success)'
+                      />
+                    </Col>
+                    <Col xs={24} md={12} xl={6}>
+                      <StatCard
+                        title={t('提成金额')}
+                        value={formatBusinessAmount(totalCommissionQuota)}
+                        sub={formatBusinessUsd(totalCommissionUsd)}
+                        icon={BadgeDollarSign}
+                        color='var(--semi-color-success)'
+                      />
+                    </Col>
+                    <Col xs={24} md={12} xl={6}>
+                      <StatCard
+                        title={t('提成阶梯')}
+                        value={
+                          <span>
+                            {formatPercent(effectiveRate)}
+                            {tierGroup ? (
+                              <Tag size='small' style={{ marginLeft: 6 }}>
+                                {tierGroup}
+                              </Tag>
+                            ) : null}
+                          </span>
+                        }
+                        sub={
+                          targetAmount
+                            ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' done' : ''}`
+                            : `${t('业绩目标')}: ${t('无限制')}`
+                        }
+                        icon={Wallet}
+                      />
+                    </Col>
+                  </Row>
+                  <CommissionLogsTable
+                    endpoint='/api/user/employee/commission'
+                    selfView
+                    logs={commissionLogs}
+                    filters={commissionLogFilters}
+                    onFiltersChange={setCommissionLogFilters}
+                    embedded
+                    showInlinePagination={false}
+                  />
+                </div>
+              )}
             </BusinessCard>
           </>
         )}

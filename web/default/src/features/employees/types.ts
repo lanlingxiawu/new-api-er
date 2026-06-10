@@ -6,8 +6,15 @@ export const employeeProfileSchema = z.object({
   username: z.string().optional(),
   display_name: z.string().optional(),
   email: z.string().optional(),
+<<<<<<< Updated upstream
   customer_count: z.number().optional(),
+=======
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
   commission_rate: z.number(),
+=======
+  customer_count: z.number().optional(),
+>>>>>>> Stashed changes
   target_amount: z.number(),
   total_consumption_quota: z.number().optional(),
   total_cost_quota: z.number().optional(),
@@ -24,6 +31,9 @@ export const employeeProfileSchema = z.object({
   next_tier_rate: z.number().optional(),
   next_tier_threshold_usd: z.number().optional(),
   current_performance_quota: z.number().optional(),
+  current_performance_usd: z.number().optional(),
+  current_commission_quota: z.number().optional(),
+  current_commission_usd: z.number().optional(),
   commission_rules: z.string().optional(),
   status: z.number(),
   remark: z.string().optional(),
@@ -81,6 +91,54 @@ export const commissionLogSchema = z.object({
 })
 export type CommissionLog = z.infer<typeof commissionLogSchema>
 
+export interface CommissionCalendarDayStat {
+  stat_date: number
+  date: string
+  revenue_quota: number
+  cost_quota: number
+  profit_quota: number
+  commission_quota: number
+  record_count: number
+  revenue_usd?: number
+  cost_usd?: number
+  profit_usd?: number
+  commission_usd?: number
+}
+
+export interface CommissionCalendarStats {
+  days: CommissionCalendarDayStat[]
+  summary: {
+    revenue_quota: number
+    cost_quota: number
+    profit_quota: number
+    commission_quota: number
+    record_count: number
+    revenue_usd?: number
+    cost_usd?: number
+    profit_usd?: number
+    commission_usd?: number
+  }
+}
+
+export interface CommissionMonthlyStatItem {
+  id: number
+  period_start_at: number
+  period_end_at: number
+  period_key: string
+  timezone: string
+  employee_user_id: number
+  revenue_quota: number
+  cost_quota: number
+  profit_quota: number
+  commission_quota: number
+  record_count: number
+  last_created_at: number
+  total_revenue_usd?: number
+  total_cost_usd?: number
+  total_profit_usd?: number
+  total_commission_usd?: number
+}
+
 export const channelCostConfigSchema = z.object({
   id: z.number(),
   channel_id: z.number(),
@@ -115,6 +173,22 @@ export interface ApiResponse<T = unknown> {
   success: boolean
   message?: string
   data?: T
+}
+
+export interface TierResetConfig {
+  enabled: boolean
+  reset_day: number
+  reset_hour: number
+  reset_minute: number
+  reset_second: number
+  timezone: string
+  last_reset_at: number
+  next_reset_at: number
+}
+
+export interface TierResetResult {
+  processed: number
+  reset_at: number
 }
 
 export type EmployeeDialogType = 'create' | 'update' | 'delete'

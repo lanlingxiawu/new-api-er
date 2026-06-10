@@ -112,10 +112,22 @@ func TestMain(m *testing.M) {
 		&EmployeeProfile{},
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
+<<<<<<< Updated upstream
 		&ConsumptionCost{},
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&BusinessDailyStatsCoverage{},
+=======
+<<<<<<< Updated upstream
+=======
+		&ConsumptionCost{},
+		&PlatformChannelDailyStat{},
+		&EmployeeCommissionDailyStat{},
+		&EmployeeCustomerCommissionDailyStat{},
+		&EmployeeCommissionMonthlyStat{},
+		&BusinessDailyStatsCoverage{},
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 		&EmployeeCommissionTier{},
 		&EmployeeTierLevel{},
 		&EmployeeTierLog{},

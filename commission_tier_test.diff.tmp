@@ -1,0 +1,184 @@
+diff --git a/model/commission_tier_test.go b/model/commission_tier_test.go
+index 5ba3b3d8..46475929 100644
+--- a/model/commission_tier_test.go
++++ b/model/commission_tier_test.go
+@@ -1,8 +1,10 @@
+ package model
+ 
+ import (
++	"fmt"
+ 	"sync"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"github.com/stretchr/testify/require"
+@@ -39,7 +41,7 @@ func cleanTierTables(t *testing.T) {
+ 
+ func seedUser(t *testing.T, id int) {
+ 	t.Helper()
+-	u := &User{Id: id, Username: "testuser", Password: "x", Status: 1}
++	u := &User{Id: id, Username: fmt.Sprintf("testuser%d", id), Password: "x", Status: 1, AffCode: fmt.Sprintf("aff%d", id)}
+ 	require.NoError(t, DB.Create(u).Error)
+ }
+ 
+@@ -254,40 +256,30 @@ func TestTryAutoUpgradeTier_NoTiersConfigured(t *testing.T) {
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// 5. GetEffectiveCommissionRate：员工自定义率优先，未设置时回退等级 rate
++// 5. GetEffectiveCommissionRate：提成率统一由当前等级决定
+ // ---------------------------------------------------------------------------
+ 
+ func TestGetEffectiveCommissionRate(t *testing.T) {
+ 	cleanTierTables(t)
+ 	seedUser(t, 4001)
+ 
++	// 未绑定等级时返回 0
++	rate := GetEffectiveCommissionRate(4001)
++	assert.Equal(t, 0.0, rate, "未绑定等级时应返回 0")
++
+ 	tier := &EmployeeCommissionTier{Level: 3, ThresholdUsd: 1000.0, Rate: 0.12}
+ 	require.NoError(t, CreateTier(tier))
+ 	require.NoError(t, SetTierLevel(4001, tier.Id, "manual", 0, "", 0))
+ 	InvalidateTierCache()
+ 
+-	// 员工有自定义比例 0.08，即使有等级配置（0.12）也应优先使用 0.08
+-	rate := GetEffectiveCommissionRate(4001, 0.08)
+-	assert.Equal(t, 0.08, rate, "员工自定义 rate 应优先于等级 rate")
+-
+-	// 员工自定义比例更高（0.15），同样优先
+-	rate = GetEffectiveCommissionRate(4001, 0.15)
+-	assert.Equal(t, 0.15, rate, "员工自定义 rate（更高）应优先于等级 rate")
+-
+-	// 员工未设置自定义比例（fallbackRate=0）时，使用等级 rate
+-	rate = GetEffectiveCommissionRate(4001, 0)
+-	assert.Equal(t, 0.12, rate, "fallbackRate=0 时应回退到等级 rate")
+-
+-	// 等级被删除后，fallbackRate=0 返回 0
+-	require.NoError(t, DeleteTier(tier.Id))
+-	InvalidateTierCache()
+-
+-	rate = GetEffectiveCommissionRate(4001, 0)
+-	assert.Equal(t, 0.0, rate, "等级已删除且无自定义比例时返回 0")
++	// 绑定等级后返回该等级对应的 rate
++	rate = GetEffectiveCommissionRate(4001)
++	assert.Equal(t, 0.12, rate, "应返回当前等级对应的 rate")
+ 
+-	// 重新验证：有自定义比例时永远不依赖等级
+-	rate = GetEffectiveCommissionRate(4001, 0.05)
+-	assert.Equal(t, 0.05, rate, "有自定义比例时不受等级删除影响")
++	// 解绑等级后返回 0
++	require.NoError(t, SetTierLevel(4001, 0, "manual", 0, "", 0))
++	rate = GetEffectiveCommissionRate(4001)
++	assert.Equal(t, 0.0, rate, "解绑等级后应返回 0")
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -382,3 +374,106 @@ func TestGetTierLevelsByUserIds(t *testing.T) {
+ 	require.NoError(t, err)
+ 	assert.Empty(t, empty)
+ }
++
++// ---------------------------------------------------------------------------
++// 10. TryAutoUpgradeTier：基于 BaselineProfitQuota 的"周期利润"判定
++// ---------------------------------------------------------------------------
++
++func TestTryAutoUpgradeTier_WithBaseline(t *testing.T) {
++	cleanTierTables(t)
++	seedUser(t, 3005)
++
++	t1 := &EmployeeCommissionTier{Level: 1, ThresholdUsd: 1.0, Rate: 0.05}
++	t2 := &EmployeeCommissionTier{Level: 2, ThresholdUsd: 5.0, Rate: 0.08}
++	require.NoError(t, CreateTier(t1))
++	require.NoError(t, CreateTier(t2))
++	InvalidateTierCache()
++
++	// 累计利润 $1，升至等级1
++	TryAutoUpgradeTier(3005, usd2q(1.0))
++	lvl, _ := GetOrCreateTierLevel(3005)
++	require.Equal(t, t1.Id, lvl.TierId)
++
++	// 模拟一次月度重置：基准设为当前累计利润（$1）
++	require.NoError(t, DB.Model(&EmployeeTierLevel{}).Where("user_id = ?", 3005).
++		Update("baseline_profit_quota", usd2q(1.0)).Error)
++
++	// 累计利润增至 $1.5（周期利润 $0.5），未达等级2门槛（$5），不应升级
++	TryAutoUpgradeTier(3005, usd2q(1.5))
++	lvl, _ = GetOrCreateTierLevel(3005)
++	assert.Equal(t, t1.Id, lvl.TierId, "周期利润未达门槛，不应升级")
++
++	// 累计利润增至 $6（周期利润 $5），达到等级2门槛，应升级
++	TryAutoUpgradeTier(3005, usd2q(6.0))
++	lvl, _ = GetOrCreateTierLevel(3005)
++	assert.Equal(t, t2.Id, lvl.TierId, "周期利润达到门槛，应升级到等级2")
++}
++
++// ---------------------------------------------------------------------------
++// 11. ResetEmployeeTierLevelsForPeriod：月度等级 + 本期业绩/提成基准重置
++// ---------------------------------------------------------------------------
++
++func TestResetEmployeeTierLevelsForPeriod(t *testing.T) {
++	cleanTierTables(t)
++	seedUser(t, 8001)
++	seedUser(t, 8002)
++
++	// 同一分组"通用"内的三个等级
++	g1 := &EmployeeCommissionTier{Level: 1, Group: "通用", ThresholdUsd: 1.0, Rate: 0.05}
++	g2 := &EmployeeCommissionTier{Level: 2, Group: "通用", ThresholdUsd: 5.0, Rate: 0.08}
++	g3 := &EmployeeCommissionTier{Level: 3, Group: "通用", ThresholdUsd: 10.0, Rate: 0.12}
++	require.NoError(t, CreateTier(g1))
++	require.NoError(t, CreateTier(g2))
++	require.NoError(t, CreateTier(g3))
++	InvalidateTierCache()
++
++	// 8001：升到等级3
++	TryAutoUpgradeTier(8001, usd2q(20.0))
++	lvl, _ := GetOrCreateTierLevel(8001)
++	require.Equal(t, g3.Id, lvl.TierId)
++
++	// 8001 累计业绩/提成
++	_, err := AddProfitStats(8001, usd2q(20.0), false)
++	require.NoError(t, err)
++	require.NoError(t, AddCommissionQuota(8001, usd2q(2.0)))
++
++	// 8002：未定级，但已有累计业绩，确保懒创建 EmployeeTierLevel 行
++	_, err = GetOrCreateTierLevel(8002)
++	require.NoError(t, err)
++	_, err = AddProfitStats(8002, usd2q(0.5), false)
++	require.NoError(t, err)
++
++	resetAt := time.Now().Unix() + 100
++
++	processed, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
++	require.NoError(t, err)
++	assert.Equal(t, 2, processed)
++
++	// 8001：重置到本组最低等级（g1），baseline 刷新为当前累计值
++	lvl1, err := GetOrCreateTierLevel(8001)
++	require.NoError(t, err)
++	assert.Equal(t, g1.Id, lvl1.TierId, "应重置到本组最低等级")
++	assert.Equal(t, "reset", lvl1.Source)
++	assert.Equal(t, resetAt, lvl1.EffectiveAt)
++	assert.Equal(t, "月度自动重置", lvl1.Remark)
++	assert.Equal(t, usd2q(20.0), lvl1.BaselineProfitQuota)
++	assert.Equal(t, usd2q(2.0), lvl1.BaselineCommissionQuota)
++
++	// 8002：tier_id=0 保持不变，但 baseline 仍刷新
++	lvl2, err := GetOrCreateTierLevel(8002)
++	require.NoError(t, err)
++	assert.Equal(t, int64(0), lvl2.TierId, "未定级应保持不变")
++	assert.Equal(t, "reset", lvl2.Source)
++	assert.Equal(t, usd2q(0.5), lvl2.BaselineProfitQuota)
++	assert.Equal(t, int64(0), lvl2.BaselineCommissionQuota)
++
++	// 应各写入一条 source=reset 的日志
++	var resetLogCount int64
++	require.NoError(t, DB.Model(&EmployeeTierLog{}).Where("source = ?", "reset").Count(&resetLogCount).Error)
++	assert.Equal(t, int64(2), resetLogCount)
++
++	// 幂等性：effective_at 已被置为 resetAt，effective_at < resetAt 不再成立，不应重复处理
++	processed2, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
++	require.NoError(t, err)
++	assert.Equal(t, 0, processed2, "已处理的行不应被重复重置")
++}

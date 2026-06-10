@@ -12,7 +12,15 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
+<<<<<<< Updated upstream
 import {
+=======
+<<<<<<< Updated upstream
+import { Pencil, PlusIcon, Trash2 } from 'lucide-react'
+=======
+import {
+  Info,
+>>>>>>> Stashed changes
   Pencil,
   PlusIcon,
   RotateCcw,
@@ -23,6 +31,10 @@ import {
   Users,
   X,
 } from 'lucide-react'
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getCurrencyDisplay } from '@/lib/currency'
@@ -49,14 +61,37 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+<<<<<<< Updated upstream
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+=======
+import {
+<<<<<<< Updated upstream
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
+=======
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+>>>>>>> Stashed changes
 import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
   DataTableColumnHeader,
   DataTablePage,
 } from '@/components/data-table'
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 import { SectionPageLayout } from '@/components/layout'
 import {
   formatBusinessAmount,
@@ -70,7 +105,15 @@ import {
   createEmployeeTier,
   deleteEmployee,
   deleteEmployeeTier,
+<<<<<<< Updated upstream
   getEmployeeCustomers,
+=======
+<<<<<<< Updated upstream
+=======
+  getEmployeeCustomers,
+  getCommissionMonthlyStats,
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
   getCommissionLogs,
   getEmployeeTiers,
   getEmployeeTiersPage,
@@ -78,7 +121,15 @@ import {
   unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
+import { CommissionMonthlyPeriodSection } from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+import type { CommissionLog, EmployeeProfile, EmployeeTier } from './types'
+=======
+import { TierResetSettingsCard } from './components/tier-reset-settings-card'
+>>>>>>> Stashed changes
 import {
   getEmployeeTierGroupBadgeClass,
   getEmployeeTierGroupDotClass,
@@ -952,6 +1003,10 @@ function AssignCustomerDialog({
     </>
   )
 }
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 
 function formatTs(ts: number) {
   if (!ts) return '-'
@@ -973,6 +1028,11 @@ function AmountText({ value }: { value?: number }) {
   return <span className={className}>{formatBusinessAmount(amount)}</span>
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
 function getPerformanceTargetUsd(row: EmployeeProfile) {
   const nextTierTargetUsd = Number(row.next_tier_threshold_usd || 0)
   if (Number.isFinite(nextTierTargetUsd) && nextTierTargetUsd > 0) {
@@ -1030,6 +1090,34 @@ function PerformanceProgressCell({ row }: { row: EmployeeProfile }) {
   )
 }
 
+<<<<<<< Updated upstream
+=======
+function ColumnHeaderWithHint({
+  title,
+  hint,
+}: {
+  title: React.ReactNode
+  hint: React.ReactNode
+}) {
+  return (
+    <span className='inline-flex items-center gap-1'>
+      {title}
+      <TooltipProvider delay={0}>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Info className='text-muted-foreground size-3.5 shrink-0 cursor-help' />
+            }
+          />
+          <TooltipContent className='max-w-[260px]'>{hint}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </span>
+  )
+}
+
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 function StatusBadge({ status }: { status: number }) {
   const { t } = useTranslation()
   return status === 1 ? (
@@ -1219,6 +1307,25 @@ function useEmployeesColumns({
           formatBusinessAmount(row.original.total_commission_quota ?? 0),
       },
       {
+        accessorKey: 'current_commission_quota',
+        meta: { label: t('Current Commission') },
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title={
+              <ColumnHeaderWithHint
+                title={t('Current Commission')}
+                hint={t(
+                  'Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.'
+                )}
+              />
+            }
+          />
+        ),
+        cell: ({ row }) =>
+          formatBusinessAmount(row.original.current_commission_quota ?? 0),
+      },
+      {
         accessorKey: 'current_tier_level',
         meta: { label: t('Current Tier') },
         header: ({ column }) => (
@@ -1277,7 +1384,14 @@ function useEmployeesColumns({
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title={t('Current Performance')}
+            title={
+              <ColumnHeaderWithHint
+                title={t('Current Performance')}
+                hint={t(
+                  'Profit accumulated since the last monthly reset, used to determine progress toward the next tier. It resets to zero on the next scheduled reset and does not affect total profit or historical records.'
+                )}
+              />
+            }
           />
         ),
         cell: ({ row }) => <PerformanceProgressCell row={row.original} />,
@@ -1878,6 +1992,68 @@ function CommissionLogsTab() {
   )
 }
 
+function CommissionMonthlyStatsTab() {
+  const { t } = useTranslation()
+  const [filterForm, setFilterForm] = useState({
+    employeeUserId: '',
+  })
+  const [employeeUserId, setEmployeeUserId] = useState<number | undefined>()
+
+  const applyFilters = () => {
+    const employeeUserId = Number(filterForm.employeeUserId)
+    setEmployeeUserId(
+      Number.isFinite(employeeUserId) && employeeUserId > 0
+        ? employeeUserId
+        : undefined
+    )
+  }
+
+  const resetFilters = () => {
+    setFilterForm({ employeeUserId: '' })
+    setEmployeeUserId(undefined)
+  }
+
+  return (
+    <CommissionMonthlyPeriodSection
+      queryKey={['admin-commission-monthly-stats', employeeUserId]}
+      queryFn={(range) =>
+        getCommissionMonthlyStats({
+          ...range,
+          employee_user_id: employeeUserId,
+          page: 1,
+          page_size: 100,
+        })
+      }
+      toolbar={
+        <div className='flex flex-wrap items-center justify-end gap-2'>
+          <Input
+            type='number'
+            min={1}
+            placeholder={t('Employee UID')}
+            value={filterForm.employeeUserId}
+            onChange={(event) =>
+              setFilterForm((form) => ({
+                ...form,
+                employeeUserId: event.target.value,
+              }))
+            }
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') applyFilters()
+            }}
+            className='w-[140px]'
+          />
+          <Button size='sm' onClick={applyFilters}>
+            {t('Search')}
+          </Button>
+          <Button size='sm' variant='outline' onClick={resetFilters}>
+            {t('Reset')}
+          </Button>
+        </div>
+      }
+    />
+  )
+}
+
 function TierDialog({
   open,
   currentRow,
@@ -2356,7 +2532,7 @@ function TiersTab() {
   }
 
   return (
-    <>
+    <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
       <DataTablePage
         table={table}
         columns={columns}
@@ -2371,18 +2547,36 @@ function TiersTab() {
           </Button>
         }
         toolbar={
+<<<<<<< Updated upstream
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <span className='text-muted-foreground text-xs'>
               {t('{{count}} tiers configured', { count: tierTotal })}
             </span>
+=======
+<<<<<<< Updated upstream
+          <div className='flex justify-end'>
+>>>>>>> Stashed changes
             <Button size='sm' onClick={() => setCreateOpen(true)}>
               <PlusIcon className='mr-1 h-4 w-4' />
               {t('Add Tier')}
             </Button>
+=======
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <span className='text-muted-foreground text-xs'>
+              {t('{{count}} tiers configured', { count: tierTotal })}
+            </span>
+            <div className='flex items-center gap-2'>
+              <TierResetSettingsCard />
+              <Button size='sm' onClick={() => setCreateOpen(true)}>
+                <PlusIcon className='mr-1 h-4 w-4' />
+                {t('Add Tier')}
+              </Button>
+            </div>
+>>>>>>> Stashed changes
           </div>
         }
         skeletonKeyPrefix='employee-tiers-skeleton'
-        className='flex h-full min-h-0 flex-col overflow-hidden'
+        className='flex min-h-0 flex-1 flex-col overflow-hidden'
         tableClassName='min-h-0 flex-1 overflow-auto'
       />
       <TierDialog
@@ -2454,7 +2648,7 @@ function TiersTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </div>
   )
 }
 
@@ -2477,6 +2671,7 @@ export function Employees() {
             <TabsTrigger value='employees'>{t('Employees')}</TabsTrigger>
             <TabsTrigger value='tiers'>{t('Commission Tiers')}</TabsTrigger>
             <TabsTrigger value='commission'>{t('Commission Logs')}</TabsTrigger>
+            <TabsTrigger value='monthly'>{t('Monthly Stats')}</TabsTrigger>
           </TabsList>
           <TabsContent value='employees' className='min-h-0 overflow-hidden'>
             {activeTab === 'employees' && <EmployeesTab />}
@@ -2486,6 +2681,9 @@ export function Employees() {
           </TabsContent>
           <TabsContent value='commission' className='min-h-0 overflow-hidden'>
             {activeTab === 'commission' && <CommissionLogsTab />}
+          </TabsContent>
+          <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
+            {activeTab === 'monthly' && <CommissionMonthlyStatsTab />}
           </TabsContent>
         </Tabs>
       </SectionPageLayout.Content>

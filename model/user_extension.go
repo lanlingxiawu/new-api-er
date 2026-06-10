@@ -45,6 +45,23 @@ func GetUserExtension(userId int) (*UserExtension, error) {
 	return &ext, err
 }
 
+// GetUserExtensionsByUserIds 批量获取用户扩展信息，返回 userId -> UserExtension map。
+// 不存在记录的 userId 不会出现在返回的 map 中（调用方应按零值处理）。
+func GetUserExtensionsByUserIds(userIds []int) (map[int]*UserExtension, error) {
+	if len(userIds) == 0 {
+		return map[int]*UserExtension{}, nil
+	}
+	var exts []*UserExtension
+	if err := DB.Where("user_id IN ?", userIds).Find(&exts).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[int]*UserExtension, len(exts))
+	for _, e := range exts {
+		result[e.UserId] = e
+	}
+	return result, nil
+}
+
 // AddCommissionQuota 原子累加提成额度到 user_extensions。
 // delta 可为负值（退款冲销）。
 func AddCommissionQuota(userId int, delta int64) error {

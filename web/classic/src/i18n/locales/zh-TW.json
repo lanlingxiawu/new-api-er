@@ -164,6 +164,7 @@
     "本地": "本地",
     "本地计费": "本地計費",
     "本地数据存储": "本地數據存儲",
+    "本期提成": "本期提成",
     "本设备：手机指纹/面容，外接：USB安全密钥": "本設備：手機指紋/面容，外接：USB安全密鑰",
     "本设备内置": "本設備內置",
     "本项目根据": "本項目根據",
@@ -515,12 +516,22 @@
     "登录过期，请重新登录！": "登錄過期，請重新登錄！",
     "等待获取邮箱信息...": "等待獲取信箱資訊...",
     "等待中": "等待中",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "等級",
     "等级编号": "等級編號",
     "等级编号必须 ≥ 1": "等級編號必須 ≥ 1",
     "等级已创建": "等級已建立",
     "等级已更新": "等級已更新",
     "等级已删除": "等級已刪除",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "等級與業績月度重置設定",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "等價金額：",
     "低于此额度时将发送邮件提醒用户": "低於此額度時將發送郵件提醒使用者",
     "递归": "",
@@ -669,6 +680,7 @@
     "服务器地址": "伺服器位址",
     "服务器日志功能未启用（未配置日志目录）": "伺服器日誌功能未啟用（未配置日誌目錄）",
     "服务器日志管理": "伺服器日誌管理",
+    "服务器时区": "伺服器時區",
     "服务器IP": "伺服器IP",
     "服务商": "服務商",
     "服务显示名称": "服務顯示名稱",
@@ -1108,6 +1120,7 @@
     "将删除 {{value}} 天前的日志文件。": "將刪除 {{value}} 天前的日誌檔案。",
     "将删除所有仍在内存中的渠道亲和性缓存条目。": "",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "將刪除已使用、已禁用及過期的兌換碼，此操作不可撤銷。",
+    "将所有员工重置到最低等级？": "將所有員工重置到最低等級？",
     "将为选中的 ": "將為選中的 ",
     "将只保留最近 {{value}} 个日志文件，其余将被删除。": "將只保留最近 {{value}} 個日誌檔案，其餘將被刪除。",
     "将追加 2 条规则到现有规则列表。": "",
@@ -1140,6 +1153,7 @@
     "解析密钥文件失败: {{msg}}": "解析密鑰檔案失敗: {{msg}}",
     "解析响应数据时发生错误": "解析響應數據時發生錯誤",
     "界面语言和其他个人偏好": "界面語言和其他個人偏好",
+    "今日": "今日",
     "今日关闭": "今日關閉",
     "今日请求": "今日請求",
     "今日消费": "今日消費",
@@ -1317,7 +1331,15 @@
     "立即开始": "立即開始",
     "立即迁移": "立即遷移",
     "立即签到": "立即簽到",
+<<<<<<< Updated upstream
     "利润": "利潤",
+=======
+<<<<<<< Updated upstream
+=======
+    "立即重置": "立即重置",
+    "利润": "利潤",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "例如": "例如",
     "例如 /var/cache/new-api": "例如 /var/cache/new-api",
     "例如 €, £, Rp, ₩, ₹...": "例如 €, £, Rp, ₩, ₹...",
@@ -1448,6 +1470,7 @@
     "每容器GPU数": "每容器GPU數",
     "每天": "",
     "每月": "",
+    "每月重置日": "每月重置日",
     "每周": "",
     "美国西部": "美國西部",
     "美元": "美元",
@@ -1753,6 +1776,7 @@
     "启用性能监控后，当系统资源使用率超过设定阈值时，将拒绝新的 Relay 请求 (/v1, /v1beta 等)，以保护系统稳定性。": "啟用性能監控後，當系統資源使用率超過設定閾值時，將拒絕新的 Relay 請求 (/v1, /v1beta 等)，以保護系統穩定性。",
     "启用验证": "啟用驗證",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "啟用使用者模型請求速率限制（可能會影響高併發性能）",
+    "启用月度自动重置": "啟用月度自動重置",
     "启用状态": "啟用狀態",
     "启用Claude思考适配（-thinking后缀）": "啟用Claude思考相容（-thinking後綴）",
     "启用FunctionCall思维签名填充": "啟用FunctionCall思維簽名填充",
@@ -2161,6 +2185,7 @@
     "确认解绑": "確認解綁",
     "确认解绑 Passkey": "確認解綁 Passkey",
     "确认禁用": "確認禁用",
+    "确认立即重置": "確認立即重置",
     "确认密码": "確認密碼",
     "确认启用": "",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。",
@@ -2283,8 +2308,17 @@
     "上次保存: ": "上次儲存: ",
     "上次检测到可加入模型": "",
     "上次检测时间": "",
+<<<<<<< Updated upstream
     "上行": "上行",
     "上行带宽": "上行頻寬",
+=======
+<<<<<<< Updated upstream
+=======
+    "上次重置时间": "上次重置時間",
+    "上行": "上行",
+    "上行带宽": "上行頻寬",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "上一步": "上一步",
     "上一个表单块": "上一個表單塊",
     "上一页": "上一頁",
@@ -2320,6 +2354,7 @@
     "设置系统名称": "設定系統名稱",
     "设置页脚": "設定頁腳",
     "设置已保存": "設定已儲存",
+    "设置已更新": "設定已更新",
     "设置隐私政策": "設定隱私政策",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "設定使用者可選擇的儲值數量選項，例如：[10, 20, 50, 100, 200, 500]",
     "设置用户协议": "設定使用者協議",
@@ -2358,6 +2393,7 @@
     "时间": "時間",
     "时间粒度": "時間粒度",
     "时间信息": "時間資訊",
+    "时区": "時區",
     "实付": "實付",
     "实付金额": "實付金額",
     "实付金额：": "實付金額：",
@@ -2684,6 +2720,8 @@
     "统计次数": "統計次數",
     "统计额度": "統計額度",
     "统计已重置": "統計已重置",
+    "统计月份": "統計月份",
+    "统计周期": "統計週期",
     "统计Tokens": "統計Tokens",
     "统一的": "統一的",
     "透传请求体": "透傳請求體",
@@ -2868,6 +2906,7 @@
     "系统信息": "系統訊息",
     "系统性能监控": "系統性能監控",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "系統已為該部署準備 Ollama 鏡像與隨機 API Key",
+    "下次重置时间": "下次重置時間",
     "下面是带注释的示例，仅用于参考；实际保存时请删除注释。": "",
     "下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。": "下方會顯示此模型儲存後將寫入哪些後端欄位，方便與原始 JSON 編輯框保持一致。",
     "下午好": "午安",
@@ -3365,6 +3404,8 @@
     "源地址": "源位址",
     "约": "約",
     "月": "",
+    "月度统计": "月度統計",
+    "月度重置": "月度重置",
     "允许 AccountFilter 参数": "允許 AccountFilter 參數",
     "允许 HTTP 协议图片请求（适用于自部署代理）": "允許 HTTP 協議圖片請求（適用於自部署代理）",
     "允许 inference_geo 透传": "允許 inference_geo 透傳",
@@ -3458,7 +3499,15 @@
     "暂无项目": "暫無項目",
     "暂无已绑定项": "",
     "暂无预填组": "暫無預填組",
+<<<<<<< Updated upstream
     "暂无账号": "暫無帳號",
+=======
+<<<<<<< Updated upstream
+=======
+    "暂无月度提成统计": "暫無月度提成統計",
+    "暂无账号": "暫無帳號",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "暂无支付方式，点击上方按钮新增": "",
     "暂无自定义 OAuth 提供商": "暫無自訂 OAuth 提供商",
     "暂无自动分组，点击下方按钮添加": "暫無自動分組，點擊下方按鈕新增",
@@ -3569,6 +3618,7 @@
     "智能体ID": "智慧體ID",
     "智谱": "智譜",
     "置信度": "置信度",
+    "中国时区": "中國時區",
     "中午好": "午安",
     "终止请求中": "終止請求中",
     "终止中": "終止中",
@@ -3599,12 +3649,21 @@
     "重置配置": "重置設定",
     "重置失败": "重置失敗",
     "重置统计": "重置統計",
+    "重置完成，已处理 {{count}} 名员工": "重置完成，已處理 {{count}} 名員工",
     "重置为默认": "重置為預設",
     "重置选项": "重置選項",
     "重置邮件发送成功，请检查邮箱！": "重置郵件發送成功，請檢查信箱！",
     "重置周期": "重置週期",
     "周": "周",
+<<<<<<< Updated upstream
     "主导航": "主導航",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "週期開始時間戳",
+    "主导航": "主導航",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主页链接填": "首頁連結填",
     "注 册": "注 冊",
     "注册": "註冊",
@@ -3702,6 +3761,7 @@
     "最低充值数量": "",
     "最高优先级": "最高優先級",
     "最后更新": "最後更新",
+    "最后记录": "最後記錄",
     "最后请求": "最後請求",
     "最后使用时间": "最後使用時間",
     "最后心跳": "最後心跳",
@@ -3772,9 +3832,11 @@
     "Code copied": "代碼已複製",
     "Codex 渠道不支持批量创建": "",
     "Codex 授权": "",
+    "Commission": "提成",
     "common.changeLanguage": "common.changeLanguage",
     "Completion tokens": "",
     "Configuration": "",
+    "Consumption": "消耗",
     "context_int/context_string 从请求上下文读取；gjson 从入口请求的 JSON body 按 gjson path 读取。": "",
     "Cost Ratio": "成本係數",
     "Cost Ratio *": "成本係數 *",
@@ -3800,8 +3862,10 @@
     "Discovery 建议 scopes：": "",
     "Discovery claims": "",
     "Discovery scopes": "",
+    "Employee UID": "員工 UID",
     "EUR (欧元)": "EUR (歐元)",
     "false": "false",
+    "Fri": "週五",
     "GC 次数": "GC 次數",
     "GC 已执行": "GC 已執行",
     "GC 执行失败": "GC 執行失敗",
@@ -3849,7 +3913,15 @@
     "Key 来源类型": "",
     "Key 摘要": "Key 摘要",
     "Key 指纹": "",
+<<<<<<< Updated upstream
     "Legal": "法律",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "最後記錄",
+    "Legal": "法律",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "Linux DO Client ID",
     "Linux DO Client Secret": "Linux DO Client Secret",
     "LinuxDO": "LinuxDO",
@@ -3858,9 +3930,26 @@
     "Logo 图片地址": "Logo 圖片位址",
     "Midjourney 任务记录": "Midjourney 任務記錄",
     "MIT许可证": "MIT許可證",
+<<<<<<< Updated upstream
     "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "",
     "NEXAXIS API项目仓库地址：": "NEXAXIS API項目倉庫位址：",
     "No redemption codes to export": "沒有可匯出的兌換碼",
+=======
+<<<<<<< Updated upstream
+    "NEXAXIS API项目仓库地址：": "NEXAXIS API項目倉庫位址：",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "",
+=======
+    "Mon": "週一",
+    "Monthly Commission": "月度提成",
+    "Monthly Performance": "月度業績",
+    "Monthly Stats": "月度統計",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "",
+    "NEXAXIS API项目仓库地址：": "NEXAXIS API項目倉庫位址：",
+    "Next month": "下一月",
+    "No monthly commission stats yet": "暫無月度提成統計",
+    "No redemption codes to export": "沒有可匯出的兌換碼",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OAuth 登录失败：": "OAuth 登錄失敗：",
     "OAuth 端点": "",
     "OAuth 配置错误：授权端点必须是完整的 URL（以 http:// 或 https:// 开头）": "OAuth 設定錯誤：授權端點必須是完整的 URL（以 http:// 或 https:// 開頭）",
@@ -3880,17 +3969,25 @@
     "Passkey 注册失败，请重试": "Passkey 註冊失敗，請重試",
     "Pay Method Name": "",
     "Pay Method Type": "",
+    "Performance": "業績",
+    "Period": "時間範圍",
+    "Period start timestamp": "週期開始時間戳",
     "Ping间隔（秒）": "Ping間隔（秒）",
     "POST 参数": "",
+    "Previous month": "上一月",
     "price_xxx 的商品价格 ID，新建产品后可获得": "price_xxx 的商品價格 ID，新建產品後可獲得",
     "Prompt cache hit tokens": "",
     "Prompt tokens": "",
     "Reasoning Effort": "Reasoning Effort",
+    "Records": "記錄數",
     "Request ID": "",
+    "Reset": "重置",
     "RSA 私钥 (沙盒)": "",
     "RSA 私钥 (生产)": "",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "safety_identifier 字段用於幫助 OpenAI 識別可能違反使用政策的應用程式使用者。預設關閉以保護使用者隱私",
+    "Sat": "週六",
     "Scopes（可选）": "",
+    "Search": "查詢",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "service_tier 字段用於指定服務層級，允許透傳可能導致實際計費高於預期。預設關閉以避免額外費用",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "sk_xxx 或 rk_xxx 的 Stripe 密鑰，敏感資訊不顯示",
     "SMTP 端口": "SMTP 端口",
@@ -3909,11 +4006,20 @@
     "Stripe 设置": "Stripe 設定",
     "Stripe/Creem 商品ID（可选）": "Stripe/Creem 商品ID（可選）",
     "Stripe/Creem 需在第三方平台创建商品并填入 ID": "Stripe/Creem 需在第三方平臺建立商品並填入 ID",
+    "Sun": "週日",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Telegram Bot 名稱",
     "Telegram Bot Token": "Telegram Bot Token",
     "Telegram ID": "Telegram ID",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建議現在就配置成本係數，以便正確核算員工提成利潤。",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "週四",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "提示：建議現在就配置成本係數，以便正確核算員工提成利潤。",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "token 会按倍率换算成“额度/次数”，请求结束后再做差额结算（补扣/返还）。": "",
     "Token 数": "Token 數",
     "Token Endpoint": "Token Endpoint",
@@ -3921,6 +4027,7 @@
     "true": "true",
     "TTL（秒，0 表示默认）": "",
     "TTL（秒）": "",
+    "Tue": "週二",
     "Turnstile Secret Key": "Turnstile Secret Key",
     "Turnstile Site Key": "Turnstile Site Key",
     "Twitter / X": "Twitter / X",
@@ -3955,6 +4062,7 @@
     "Webhook通知": "Webhook通知",
     "WeChat Server 访问凭证": "WeChat Server 訪問憑證",
     "WeChat Server 服务器地址": "WeChat Server 伺服器位址",
+    "Wed": "週三",
     "Well-Known URL": "Well-Known URL",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "Well-Known URL 必須以 http:// 或 https:// 開頭",
     "Whitepaper": "白皮書",

@@ -11,25 +11,57 @@
       "file": "fr.json",
       "missingCount": 0,
       "extrasCount": 0,
+<<<<<<< Updated upstream
       "untranslatedCount": 24
+=======
+<<<<<<< Updated upstream
+      "untranslatedCount": 23
+=======
+      "untranslatedCount": 30
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     },
     "ja": {
       "file": "ja.json",
       "missingCount": 0,
       "extrasCount": 0,
+<<<<<<< Updated upstream
       "untranslatedCount": 128
+=======
+<<<<<<< Updated upstream
+      "untranslatedCount": 133
+=======
+      "untranslatedCount": 136
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     },
     "ru": {
       "file": "ru.json",
       "missingCount": 0,
       "extrasCount": 0,
+<<<<<<< Updated upstream
       "untranslatedCount": 128
+=======
+<<<<<<< Updated upstream
+      "untranslatedCount": 133
+=======
+      "untranslatedCount": 136
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     },
     "vi": {
       "file": "vi.json",
       "missingCount": 0,
       "extrasCount": 0,
+<<<<<<< Updated upstream
       "untranslatedCount": 24
+=======
+<<<<<<< Updated upstream
+      "untranslatedCount": 23
+=======
+      "untranslatedCount": 30
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     },
     "zh": {
       "file": "zh.json",

@@ -1,0 +1,905 @@
+diff --git a/model/business_stats_buffer.go b/model/business_stats_buffer.go
+index 7d72e0ee..3a07a370 100644
+--- a/model/business_stats_buffer.go
++++ b/model/business_stats_buffer.go
+@@ -24,16 +24,21 @@ import (
+ 
+ const (
+ 	// Redis key 前缀
+-	platformStatBufferPrefix   = "biz_buf:platform:"   // + {statDate}:{channelId}
+-	commissionStatBufferPrefix = "biz_buf:commission:" // + {statDate}:{employeeUserId}
++	platformStatBufferPrefix           = "biz_buf:platform:"            // + {statDate}:{channelId}
++	commissionStatBufferPrefix         = "biz_buf:commission:"          // + {statDate}:{employeeUserId}
++	customerCommissionStatBufferPrefix = "biz_buf:customer_commission:" // + {statDate}:{employeeUserId}:{customerUserId}
++	commissionMonthlyStatBufferPrefix  = "biz_buf:commission_monthly:"  // + {periodStartAt}:{employeeUserId}
+ 
+ 	// Redis key 的 TTL，防止 flush 失败导致 key 永驻
+-	statBufferKeyTTL = 48 * time.Hour
++	statBufferKeyTTL     = 48 * time.Hour
++	statBufferMaxRetries = 10
+ 
+ 	// 默认刷盘间隔（如果配置未指定或无效）
+ 	DefaultBusinessStatsFlushInterval = 5 // 秒
+ )
+ 
++var businessStatsFlushMu sync.Mutex
++
+ // ---- Redis 缓冲 ----
+ 
+ func platformStatRedisKey(statDate int64, channelId int) string {
+@@ -44,6 +49,14 @@ func commissionStatRedisKey(statDate int64, employeeUserId int) string {
+ 	return fmt.Sprintf("%s%d:%d", commissionStatBufferPrefix, statDate, employeeUserId)
+ }
+ 
++func customerCommissionStatRedisKey(statDate int64, employeeUserId, customerUserId int) string {
++	return fmt.Sprintf("%s%d:%d:%d", customerCommissionStatBufferPrefix, statDate, employeeUserId, customerUserId)
++}
++
++func commissionMonthlyStatRedisKey(periodStartAt int64, employeeUserId int) string {
++	return fmt.Sprintf("%s%d:%d", commissionMonthlyStatBufferPrefix, periodStartAt, employeeUserId)
++}
++
+ // bufferPlatformStatRedis 将平台侧日统计增量累加到 Redis Hash。
+ func bufferPlatformStatRedis(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
+ 	key := platformStatRedisKey(statDate, channelId)
+@@ -98,8 +111,61 @@ func bufferCommissionStatRedis(statDate int64, employeeUserId int, revenueQuota,
+ 	}
+ }
+ 
++func bufferCustomerCommissionStatRedis(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
++	key := customerCommissionStatRedisKey(statDate, employeeUserId, customerUserId)
++	ctx := context.Background()
++	pipe := common.RDB.Pipeline()
++	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
++	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
++	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
++	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
++	pipe.HIncrBy(ctx, key, "record_count", 1)
++	pipe.HIncrBy(ctx, key, "last_created_at", 0)
++	luaUpdateMax := `
++		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
++		if tonumber(ARGV[1]) > cur then
++			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
++		end
++		return 1
++	`
++	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
++	pipe.Expire(ctx, key, statBufferKeyTTL)
++	if _, err := pipe.Exec(ctx); err != nil {
++		common.SysError("bufferCustomerCommissionStatRedis: pipeline error: " + err.Error())
++		bufferCustomerCommissionStatMem(statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
++	}
++}
++
+ // ---- 内存缓冲（无 Redis 降级） ----
+ 
++func bufferCommissionMonthlyStatRedis(period CommissionMonthlyPeriod, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
++	key := commissionMonthlyStatRedisKey(period.PeriodStartAt, employeeUserId)
++	ctx := context.Background()
++	pipe := common.RDB.Pipeline()
++	pipe.HSetNX(ctx, key, "period_end_at", period.PeriodEndAt)
++	pipe.HSetNX(ctx, key, "period_key", period.PeriodKey)
++	pipe.HSetNX(ctx, key, "timezone", period.Timezone)
++	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
++	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
++	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
++	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
++	pipe.HIncrBy(ctx, key, "record_count", 1)
++	pipe.HIncrBy(ctx, key, "last_created_at", 0)
++	luaUpdateMax := `
++		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
++		if tonumber(ARGV[1]) > cur then
++			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
++		end
++		return 1
++	`
++	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
++	pipe.Expire(ctx, key, statBufferKeyTTL)
++	if _, err := pipe.Exec(ctx); err != nil {
++		common.SysError("bufferCommissionMonthlyStatRedis: pipeline error: " + err.Error())
++		bufferCommissionMonthlyStatMem(period, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
++	}
++}
++
+ type platformStatDelta struct {
+ 	StatDate      int64
+ 	ChannelId     int
+@@ -109,6 +175,7 @@ type platformStatDelta struct {
+ 	RecordCount   int64
+ 	CostRatioSum  float64
+ 	LastCreatedAt int64
++	RetryCount    int
+ }
+ 
+ type commissionStatDelta struct {
+@@ -120,14 +187,47 @@ type commissionStatDelta struct {
+ 	CommissionQuota int64
+ 	RecordCount     int64
+ 	LastCreatedAt   int64
++	RetryCount      int
++}
++
++type customerCommissionStatDelta struct {
++	StatDate        int64
++	EmployeeUserId  int
++	CustomerUserId  int
++	RevenueQuota    int64
++	CostQuota       int64
++	ProfitQuota     int64
++	CommissionQuota int64
++	RecordCount     int64
++	LastCreatedAt   int64
++	RetryCount      int
++}
++
++type commissionMonthlyStatDelta struct {
++	PeriodStartAt   int64
++	PeriodEndAt     int64
++	PeriodKey       string
++	Timezone        string
++	EmployeeUserId  int
++	RevenueQuota    int64
++	CostQuota       int64
++	ProfitQuota     int64
++	CommissionQuota int64
++	RecordCount     int64
++	LastCreatedAt   int64
++	RetryCount      int
+ }
+ 
+ var (
+ 	memPlatformBuf  = make(map[string]*platformStatDelta)
+ 	memPlatformLock sync.Mutex
+ 
+-	memCommissionBuf  = make(map[string]*commissionStatDelta)
+-	memCommissionLock sync.Mutex
++	memCommissionBuf          = make(map[string]*commissionStatDelta)
++	memCommissionLock         sync.Mutex
++	memCustomerCommissionBuf  = make(map[string]*customerCommissionStatDelta)
++	memCustomerCommissionLock sync.Mutex
++	memCommissionMonthlyBuf   = make(map[string]*commissionMonthlyStatDelta)
++	memCommissionMonthlyLock  sync.Mutex
+ )
+ 
+ func memPlatformKey(statDate int64, channelId int) string {
+@@ -138,6 +238,14 @@ func memCommissionKey(statDate int64, employeeUserId int) string {
+ 	return fmt.Sprintf("%d:%d", statDate, employeeUserId)
+ }
+ 
++func memCustomerCommissionKey(statDate int64, employeeUserId, customerUserId int) string {
++	return fmt.Sprintf("%d:%d:%d", statDate, employeeUserId, customerUserId)
++}
++
++func memCommissionMonthlyKey(periodStartAt int64, employeeUserId int) string {
++	return fmt.Sprintf("%d:%d", periodStartAt, employeeUserId)
++}
++
+ func bufferPlatformStatMem(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
+ 	key := memPlatformKey(statDate, channelId)
+ 	memPlatformLock.Lock()
+@@ -178,6 +286,185 @@ func bufferCommissionStatMem(statDate int64, employeeUserId int, revenueQuota, c
+ 	}
+ }
+ 
++func bufferCustomerCommissionStatMem(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
++	key := memCustomerCommissionKey(statDate, employeeUserId, customerUserId)
++	memCustomerCommissionLock.Lock()
++	defer memCustomerCommissionLock.Unlock()
++	d, ok := memCustomerCommissionBuf[key]
++	if !ok {
++		d = &customerCommissionStatDelta{StatDate: statDate, EmployeeUserId: employeeUserId, CustomerUserId: customerUserId}
++		memCustomerCommissionBuf[key] = d
++	}
++	d.RevenueQuota += revenueQuota
++	d.CostQuota += costQuota
++	d.ProfitQuota += profitQuota
++	d.CommissionQuota += commissionQuota
++	d.RecordCount++
++	if createdAt > d.LastCreatedAt {
++		d.LastCreatedAt = createdAt
++	}
++}
++
++func bufferCommissionMonthlyStatMem(period CommissionMonthlyPeriod, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
++	key := memCommissionMonthlyKey(period.PeriodStartAt, employeeUserId)
++	memCommissionMonthlyLock.Lock()
++	defer memCommissionMonthlyLock.Unlock()
++	d, ok := memCommissionMonthlyBuf[key]
++	if !ok {
++		d = &commissionMonthlyStatDelta{
++			PeriodStartAt:  period.PeriodStartAt,
++			PeriodEndAt:    period.PeriodEndAt,
++			PeriodKey:      period.PeriodKey,
++			Timezone:       period.Timezone,
++			EmployeeUserId: employeeUserId,
++		}
++		memCommissionMonthlyBuf[key] = d
++	}
++	d.RevenueQuota += revenueQuota
++	d.CostQuota += costQuota
++	d.ProfitQuota += profitQuota
++	d.CommissionQuota += commissionQuota
++	d.RecordCount++
++	if createdAt > d.LastCreatedAt {
++		d.LastCreatedAt = createdAt
++	}
++}
++
++func requeuePlatformStatMem(d *platformStatDelta) {
++	if d == nil {
++		return
++	}
++	d.RetryCount++
++	if d.RetryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter("platform_daily_stat", "max retries exceeded", d.RetryCount, d)
++		return
++	}
++	memPlatformLock.Lock()
++	defer memPlatformLock.Unlock()
++	key := memPlatformKey(d.StatDate, d.ChannelId)
++	existing := memPlatformBuf[key]
++	if existing == nil {
++		copyDelta := *d
++		memPlatformBuf[key] = &copyDelta
++		return
++	}
++	existing.RevenueQuota += d.RevenueQuota
++	existing.CostQuota += d.CostQuota
++	existing.RecordCount += d.RecordCount
++	existing.CostRatioSum += d.CostRatioSum
++	if existing.ChannelName == "" {
++		existing.ChannelName = d.ChannelName
++	}
++	if d.LastCreatedAt > existing.LastCreatedAt {
++		existing.LastCreatedAt = d.LastCreatedAt
++	}
++	if d.RetryCount > existing.RetryCount {
++		existing.RetryCount = d.RetryCount
++	}
++}
++
++func requeueCommissionStatMem(d *commissionStatDelta) {
++	if d == nil {
++		return
++	}
++	d.RetryCount++
++	if d.RetryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter("commission_daily_stat", "max retries exceeded", d.RetryCount, d)
++		return
++	}
++	memCommissionLock.Lock()
++	defer memCommissionLock.Unlock()
++	key := memCommissionKey(d.StatDate, d.EmployeeUserId)
++	existing := memCommissionBuf[key]
++	if existing == nil {
++		copyDelta := *d
++		memCommissionBuf[key] = &copyDelta
++		return
++	}
++	existing.RevenueQuota += d.RevenueQuota
++	existing.CostQuota += d.CostQuota
++	existing.ProfitQuota += d.ProfitQuota
++	existing.CommissionQuota += d.CommissionQuota
++	existing.RecordCount += d.RecordCount
++	if d.LastCreatedAt > existing.LastCreatedAt {
++		existing.LastCreatedAt = d.LastCreatedAt
++	}
++	if d.RetryCount > existing.RetryCount {
++		existing.RetryCount = d.RetryCount
++	}
++}
++
++func requeueCustomerCommissionStatMem(d *customerCommissionStatDelta) {
++	if d == nil {
++		return
++	}
++	d.RetryCount++
++	if d.RetryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter("customer_commission_daily_stat", "max retries exceeded", d.RetryCount, d)
++		return
++	}
++	memCustomerCommissionLock.Lock()
++	defer memCustomerCommissionLock.Unlock()
++	key := memCustomerCommissionKey(d.StatDate, d.EmployeeUserId, d.CustomerUserId)
++	existing := memCustomerCommissionBuf[key]
++	if existing == nil {
++		copyDelta := *d
++		memCustomerCommissionBuf[key] = &copyDelta
++		return
++	}
++	existing.RevenueQuota += d.RevenueQuota
++	existing.CostQuota += d.CostQuota
++	existing.ProfitQuota += d.ProfitQuota
++	existing.CommissionQuota += d.CommissionQuota
++	existing.RecordCount += d.RecordCount
++	if d.LastCreatedAt > existing.LastCreatedAt {
++		existing.LastCreatedAt = d.LastCreatedAt
++	}
++	if d.RetryCount > existing.RetryCount {
++		existing.RetryCount = d.RetryCount
++	}
++}
++
++func requeueCommissionMonthlyStatMem(d *commissionMonthlyStatDelta) {
++	if d == nil {
++		return
++	}
++	d.RetryCount++
++	if d.RetryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter("commission_monthly_stat", "max retries exceeded", d.RetryCount, d)
++		return
++	}
++	memCommissionMonthlyLock.Lock()
++	defer memCommissionMonthlyLock.Unlock()
++	key := memCommissionMonthlyKey(d.PeriodStartAt, d.EmployeeUserId)
++	existing := memCommissionMonthlyBuf[key]
++	if existing == nil {
++		copyDelta := *d
++		memCommissionMonthlyBuf[key] = &copyDelta
++		return
++	}
++	existing.RevenueQuota += d.RevenueQuota
++	existing.CostQuota += d.CostQuota
++	existing.ProfitQuota += d.ProfitQuota
++	existing.CommissionQuota += d.CommissionQuota
++	existing.RecordCount += d.RecordCount
++	if existing.PeriodKey == "" {
++		existing.PeriodKey = d.PeriodKey
++	}
++	if existing.Timezone == "" {
++		existing.Timezone = d.Timezone
++	}
++	if existing.PeriodEndAt == 0 {
++		existing.PeriodEndAt = d.PeriodEndAt
++	}
++	if d.LastCreatedAt > existing.LastCreatedAt {
++		existing.LastCreatedAt = d.LastCreatedAt
++	}
++	if d.RetryCount > existing.RetryCount {
++		existing.RetryCount = d.RetryCount
++	}
++}
++
+ // ---- 公共入口 ----
+ 
+ // BufferPlatformDailyStat 将平台侧日统计增量写入缓冲区（Redis 或内存）。
+@@ -195,10 +482,15 @@ func BufferPlatformDailyStat(rec *ConsumptionCost) {
+ // BufferCommissionDailyStat 将员工提成侧日统计增量写入缓冲区（Redis 或内存）。
+ func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
+ 	statDate := unixDayStart(log.CreatedAt)
++	period := ResolveCommissionMonthlyPeriod(log.CreatedAt)
+ 	if common.RedisEnabled {
+ 		bufferCommissionStatRedis(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
++		bufferCustomerCommissionStatRedis(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
++		bufferCommissionMonthlyStatRedis(period, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+ 	} else {
+ 		bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
++		bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
++		bufferCommissionMonthlyStatMem(period, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+ 	}
+ }
+ 
+@@ -229,7 +521,9 @@ func flushPlatformStatsFromMem() {
+ 		return
+ 	}
+ 	for _, d := range buf {
+-		upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt)
++		if !upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt) {
++			requeuePlatformStatMem(d)
++		}
+ 	}
+ 	common.SysLog(fmt.Sprintf("flush_business_stats: platform mem items=%d", len(buf)))
+ }
+@@ -244,11 +538,47 @@ func flushCommissionStatsFromMem() {
+ 		return
+ 	}
+ 	for _, d := range buf {
+-		upsertCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt)
++		if !upsertCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
++			requeueCommissionStatMem(d)
++		}
+ 	}
+ 	common.SysLog(fmt.Sprintf("flush_business_stats: commission mem items=%d", len(buf)))
+ }
+ 
++func flushCustomerCommissionStatsFromMem() {
++	memCustomerCommissionLock.Lock()
++	buf := memCustomerCommissionBuf
++	memCustomerCommissionBuf = make(map[string]*customerCommissionStatDelta)
++	memCustomerCommissionLock.Unlock()
++
++	if len(buf) == 0 {
++		return
++	}
++	for _, d := range buf {
++		if !upsertCustomerCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.CustomerUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
++			requeueCustomerCommissionStatMem(d)
++		}
++	}
++	common.SysLog(fmt.Sprintf("flush_business_stats: customer commission mem items=%d", len(buf)))
++}
++
++func flushCommissionMonthlyStatsFromMem() {
++	memCommissionMonthlyLock.Lock()
++	buf := memCommissionMonthlyBuf
++	memCommissionMonthlyBuf = make(map[string]*commissionMonthlyStatDelta)
++	memCommissionMonthlyLock.Unlock()
++
++	if len(buf) == 0 {
++		return
++	}
++	for _, d := range buf {
++		if !upsertCommissionMonthlyStat(d.PeriodStartAt, d.PeriodEndAt, d.PeriodKey, d.Timezone, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
++			requeueCommissionMonthlyStatMem(d)
++		}
++	}
++	common.SysLog(fmt.Sprintf("flush_business_stats: commission monthly mem items=%d", len(buf)))
++}
++
+ func flushPlatformStatsFromRedis() {
+ 	ctx := context.Background()
+ 	pattern := platformStatBufferPrefix + "*"
+@@ -301,6 +631,58 @@ func flushCommissionStatsFromRedis() {
+ 	}
+ }
+ 
++func flushCustomerCommissionStatsFromRedis() {
++	ctx := context.Background()
++	pattern := customerCommissionStatBufferPrefix + "*"
++	var cursor uint64
++	var flushed int
++	for {
++		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 200).Result()
++		if err != nil {
++			common.SysError("flushCustomerCommissionStatsFromRedis: scan error: " + err.Error())
++			return
++		}
++		for _, key := range keys {
++			if flushOneCustomerCommissionKey(ctx, key) {
++				flushed++
++			}
++		}
++		cursor = nextCursor
++		if cursor == 0 {
++			break
++		}
++	}
++	if flushed > 0 {
++		common.SysLog(fmt.Sprintf("flush_business_stats: customer commission redis keys=%d", flushed))
++	}
++}
++
++func flushCommissionMonthlyStatsFromRedis() {
++	ctx := context.Background()
++	pattern := commissionMonthlyStatBufferPrefix + "*"
++	var cursor uint64
++	var flushed int
++	for {
++		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 200).Result()
++		if err != nil {
++			common.SysError("flushCommissionMonthlyStatsFromRedis: scan error: " + err.Error())
++			return
++		}
++		for _, key := range keys {
++			if flushOneCommissionMonthlyKey(ctx, key) {
++				flushed++
++			}
++		}
++		cursor = nextCursor
++		if cursor == 0 {
++			break
++		}
++	}
++	if flushed > 0 {
++		common.SysLog(fmt.Sprintf("flush_business_stats: commission monthly redis keys=%d", flushed))
++	}
++}
++
+ func flushOnePlatformKey(ctx context.Context, key string) bool {
+ 	vals, err := common.RDB.HGetAll(ctx, key).Result()
+ 	if err != nil || len(vals) == 0 {
+@@ -333,11 +715,33 @@ func flushOnePlatformKey(ctx context.Context, key string) bool {
+ 		return false
+ 	}
+ 
+-	upsertPlatformDailyStat(statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
++	if !upsertPlatformDailyStat(statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt) {
++		handleRedisStatFlushFailure(ctx, key, "platform_daily_stat", "db upsert failed", vals)
++		return false
++	}
+ 	common.RDB.Del(ctx, key)
+ 	return true
+ }
+ 
++func handleRedisStatFlushFailure(ctx context.Context, key, kind, reason string, vals map[string]string) {
++	retryCount, _ := strconv.Atoi(vals["retry_count"])
++	retryCount++
++	if retryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter(kind, reason, retryCount, map[string]any{
++			"key":    key,
++			"values": vals,
++		})
++		common.RDB.Del(ctx, key)
++		return
++	}
++	pipe := common.RDB.Pipeline()
++	pipe.HSet(ctx, key, "retry_count", retryCount)
++	pipe.Expire(ctx, key, statBufferKeyTTL)
++	if _, err := pipe.Exec(ctx); err != nil {
++		common.SysError("handleRedisStatFlushFailure: pipeline error: " + err.Error())
++	}
++}
++
+ func flushOneCommissionKey(ctx context.Context, key string) bool {
+ 	vals, err := common.RDB.HGetAll(ctx, key).Result()
+ 	if err != nil || len(vals) == 0 {
+@@ -368,14 +772,95 @@ func flushOneCommissionKey(ctx context.Context, key string) bool {
+ 		return false
+ 	}
+ 
+-	upsertCommissionDailyStat(statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
++	if !upsertCommissionDailyStat(statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt) {
++		handleRedisStatFlushFailure(ctx, key, "commission_daily_stat", "db upsert failed", vals)
++		return false
++	}
++	common.RDB.Del(ctx, key)
++	return true
++}
++
++func flushOneCustomerCommissionKey(ctx context.Context, key string) bool {
++	vals, err := common.RDB.HGetAll(ctx, key).Result()
++	if err != nil || len(vals) == 0 {
++		return false
++	}
++	parts := strings.TrimPrefix(key, customerCommissionStatBufferPrefix)
++	pieces := strings.Split(parts, ":")
++	if len(pieces) != 3 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++	statDate, _ := strconv.ParseInt(pieces[0], 10, 64)
++	employeeUserId, _ := strconv.Atoi(pieces[1])
++	customerUserId, _ := strconv.Atoi(pieces[2])
++	if statDate == 0 || employeeUserId == 0 || customerUserId == 0 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++
++	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
++	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
++	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
++	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
++	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
++	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
++
++	if recordCount == 0 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++
++	if !upsertCustomerCommissionDailyStat(statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt) {
++		handleRedisStatFlushFailure(ctx, key, "customer_commission_daily_stat", "db upsert failed", vals)
++		return false
++	}
+ 	common.RDB.Del(ctx, key)
+ 	return true
+ }
+ 
+ // ---- DB upsert（批量刷盘时调用）----
+ 
+-func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) {
++func flushOneCommissionMonthlyKey(ctx context.Context, key string) bool {
++	vals, err := common.RDB.HGetAll(ctx, key).Result()
++	if err != nil || len(vals) == 0 {
++		return false
++	}
++	parts := strings.TrimPrefix(key, commissionMonthlyStatBufferPrefix)
++	sepIdx := strings.Index(parts, ":")
++	if sepIdx < 0 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++	periodStartAt, _ := strconv.ParseInt(parts[:sepIdx], 10, 64)
++	employeeUserId, _ := strconv.Atoi(parts[sepIdx+1:])
++	if periodStartAt == 0 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++
++	periodEndAt, _ := strconv.ParseInt(vals["period_end_at"], 10, 64)
++	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
++	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
++	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
++	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
++	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
++	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
++
++	if recordCount == 0 {
++		common.RDB.Del(ctx, key)
++		return false
++	}
++
++	if !upsertCommissionMonthlyStat(periodStartAt, periodEndAt, vals["period_key"], vals["timezone"], employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt) {
++		handleRedisStatFlushFailure(ctx, key, "commission_monthly_stat", "db upsert failed", vals)
++		return false
++	}
++	common.RDB.Del(ctx, key)
++	return true
++}
++
++func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) bool {
+ 	row := PlatformChannelDailyStat{
+ 		StatDate:      statDate,
+ 		ChannelId:     channelId,
+@@ -398,10 +883,12 @@ func upsertPlatformDailyStat(statDate int64, channelId int, channelName string,
+ 		}),
+ 	}).Create(&row).Error; err != nil {
+ 		common.SysError(fmt.Sprintf("upsertPlatformDailyStat: statDate=%d channelId=%d err=%s", statDate, channelId, err.Error()))
++		return false
+ 	}
++	return true
+ }
+ 
+-func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) {
++func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
+ 	row := EmployeeCommissionDailyStat{
+ 		StatDate:        statDate,
+ 		EmployeeUserId:  employeeUserId,
+@@ -424,7 +911,72 @@ func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota,
+ 		}),
+ 	}).Create(&row).Error; err != nil {
+ 		common.SysError(fmt.Sprintf("upsertCommissionDailyStat: statDate=%d empUserId=%d err=%s", statDate, employeeUserId, err.Error()))
++		return false
++	}
++	return true
++}
++
++func upsertCustomerCommissionDailyStat(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
++	row := EmployeeCustomerCommissionDailyStat{
++		StatDate:        statDate,
++		EmployeeUserId:  employeeUserId,
++		CustomerUserId:  customerUserId,
++		RevenueQuota:    revenueQuota,
++		CostQuota:       costQuota,
++		ProfitQuota:     profitQuota,
++		CommissionQuota: commissionQuota,
++		RecordCount:     recordCount,
++		LastCreatedAt:   lastCreatedAt,
++	}
++	if err := DB.Clauses(clause.OnConflict{
++		Columns: []clause.Column{{Name: "stat_date"}, {Name: "employee_user_id"}, {Name: "customer_user_id"}},
++		DoUpdates: clause.Assignments(map[string]interface{}{
++			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
++			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
++			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
++			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
++			"record_count":     gorm.Expr("record_count + ?", recordCount),
++			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
++		}),
++	}).Create(&row).Error; err != nil {
++		common.SysError(fmt.Sprintf("upsertCustomerCommissionDailyStat: statDate=%d empUserId=%d customerUserId=%d err=%s", statDate, employeeUserId, customerUserId, err.Error()))
++		return false
+ 	}
++	return true
++}
++
++func upsertCommissionMonthlyStat(periodStartAt, periodEndAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
++	row := EmployeeCommissionMonthlyStat{
++		PeriodStartAt:   periodStartAt,
++		PeriodEndAt:     periodEndAt,
++		PeriodKey:       periodKey,
++		Timezone:        timezone,
++		EmployeeUserId:  employeeUserId,
++		RevenueQuota:    revenueQuota,
++		CostQuota:       costQuota,
++		ProfitQuota:     profitQuota,
++		CommissionQuota: commissionQuota,
++		RecordCount:     recordCount,
++		LastCreatedAt:   lastCreatedAt,
++	}
++	if err := DB.Clauses(clause.OnConflict{
++		Columns: []clause.Column{{Name: "period_start_at"}, {Name: "employee_user_id"}},
++		DoUpdates: clause.Assignments(map[string]interface{}{
++			"period_end_at":    periodEndAt,
++			"period_key":       gorm.Expr("COALESCE(NULLIF(period_key, ''), ?)", periodKey),
++			"timezone":         gorm.Expr("COALESCE(NULLIF(timezone, ''), ?)", timezone),
++			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
++			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
++			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
++			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
++			"record_count":     gorm.Expr("record_count + ?", recordCount),
++			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
++		}),
++	}).Create(&row).Error; err != nil {
++		common.SysError(fmt.Sprintf("upsertCommissionMonthlyStat: periodStartAt=%d empUserId=%d err=%s", periodStartAt, employeeUserId, err.Error()))
++		return false
++	}
++	return true
+ }
+ 
+ // ============================================================================
+@@ -745,6 +1297,7 @@ const (
+ type employeeExtDelta struct {
+ 	CommissionDelta int64
+ 	ProfitDelta     int64
++	RetryCount      int
+ }
+ 
+ var (
+@@ -780,6 +1333,10 @@ func BufferCommissionAndProfit(userId int, commissionDelta, profitDelta int64) {
+ }
+ 
+ func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
++	bufferEmployeeExtMemWithRetry(userId, commissionDelta, profitDelta, 0)
++}
++
++func bufferEmployeeExtMemWithRetry(userId int, commissionDelta, profitDelta int64, retryCount int) {
+ 	memEmployeeExtLock.Lock()
+ 	defer memEmployeeExtLock.Unlock()
+ 	d, ok := memEmployeeExtBuf[userId]
+@@ -789,9 +1346,45 @@ func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
+ 	}
+ 	d.CommissionDelta += commissionDelta
+ 	d.ProfitDelta += profitDelta
++	if retryCount > d.RetryCount {
++		d.RetryCount = retryCount
++	}
+ }
+ 
+ // flushEmployeeExtBuffers 批量刷入 user_extensions 并检查等级升级。
++func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
++	if d == nil || (d.CommissionDelta == 0 && d.ProfitDelta == 0) {
++		return
++	}
++	d.RetryCount++
++	if d.RetryCount >= statBufferMaxRetries {
++		writeBusinessStatsDeadLetter("employee_ext_delta", "max retries exceeded", d.RetryCount, map[string]any{
++			"user_id": userId,
++			"delta":   d,
++		})
++		return
++	}
++	if common.RedisEnabled {
++		key := fmt.Sprintf("%s%d", employeeExtBufferPrefix, userId)
++		ctx := context.Background()
++		pipe := common.RDB.Pipeline()
++		if d.CommissionDelta != 0 {
++			pipe.HIncrBy(ctx, key, "commission_delta", d.CommissionDelta)
++		}
++		if d.ProfitDelta != 0 {
++			pipe.HIncrBy(ctx, key, "profit_delta", d.ProfitDelta)
++		}
++		pipe.HSet(ctx, key, "retry_count", d.RetryCount)
++		pipe.Expire(ctx, key, statBufferKeyTTL)
++		if _, err := pipe.Exec(ctx); err != nil {
++			common.SysError("requeueEmployeeExtDelta: redis pipeline error: " + err.Error())
++			bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
++		}
++		return
++	}
++	bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
++}
++
+ func flushEmployeeExtBuffers() {
+ 	var items map[int]*employeeExtDelta
+ 
+@@ -820,11 +1413,18 @@ func flushEmployeeExtBuffers() {
+ 	for uid := range items {
+ 		userIds = append(userIds, uid)
+ 	}
+-	ensureUserExtensionsBatch(userIds)
++	if !ensureUserExtensionsBatch(userIds) {
++		for uid, d := range items {
++			requeueEmployeeExtDelta(uid, d)
++		}
++		return
++	}
+ 
+ 	// 逐个 UPDATE + 等级升级检查
+ 	for uid, d := range items {
+-		applyEmployeeExtDelta(uid, d)
++		if !applyEmployeeExtDelta(uid, d) {
++			requeueEmployeeExtDelta(uid, d)
++		}
+ 	}
+ 
+ 	common.SysLog(fmt.Sprintf("flush_business_stats: employee_ext items=%d", len(items)))
+@@ -862,6 +1462,7 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
+ 			}
+ 			commDelta, _ := strconv.ParseInt(vals["commission_delta"], 10, 64)
+ 			profitDelta, _ := strconv.ParseInt(vals["profit_delta"], 10, 64)
++			retryCount, _ := strconv.Atoi(vals["retry_count"])
+ 			if commDelta == 0 && profitDelta == 0 {
+ 				common.RDB.Del(ctx, key)
+ 				continue
+@@ -869,6 +1470,7 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
+ 			items[uid] = &employeeExtDelta{
+ 				CommissionDelta: commDelta,
+ 				ProfitDelta:     profitDelta,
++				RetryCount:      retryCount,
+ 			}
+ 			common.RDB.Del(ctx, key)
+ 		}
+@@ -881,9 +1483,9 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
+ }
+ 
+ // ensureUserExtensionsBatch 批量确保 user_extensions 记录存在。
+-func ensureUserExtensionsBatch(userIds []int) {
++func ensureUserExtensionsBatch(userIds []int) bool {
+ 	if len(userIds) == 0 {
+-		return
++		return true
+ 	}
+ 	rows := make([]UserExtension, 0, len(userIds))
+ 	for _, uid := range userIds {
+@@ -892,11 +1494,13 @@ func ensureUserExtensionsBatch(userIds []int) {
+ 	// ON CONFLICT DO NOTHING, 批量插入
+ 	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
+ 		common.SysError("ensureUserExtensionsBatch: " + err.Error())
++		return false
+ 	}
++	return true
+ }
+ 
+ // applyEmployeeExtDelta 将累计增量写入 DB 并检查等级升级。
+-func applyEmployeeExtDelta(userId int, d *employeeExtDelta) {
++func applyEmployeeExtDelta(userId int, d *employeeExtDelta) bool {
+ 	updates := map[string]interface{}{}
+ 	if d.CommissionDelta != 0 {
+ 		updates["commission_total_quota"] = gorm.Expr("commission_total_quota + ?", d.CommissionDelta)
+@@ -906,27 +1510,36 @@ func applyEmployeeExtDelta(userId int, d *employeeExtDelta) {
+ 		updates["profit_total_quota"] = gorm.Expr("profit_total_quota + ?", d.ProfitDelta)
+ 	}
+ 	if len(updates) == 0 {
+-		return
++		return true
+ 	}
+-	if err := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates).Error; err != nil {
+-		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, err.Error()))
+-		return
++	result := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
++	if result.Error != nil {
++		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
++		return false
++	}
++	if result.RowsAffected == 0 {
++		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d no rows affected", userId))
++		return false
+ 	}
+ 	// 等级升级检查（仅利润有正增量时）
+ 	if d.ProfitDelta > 0 {
+ 		var ext UserExtension
+ 		if err := DB.Select("profit_total_quota").Where("user_id = ?", userId).First(&ext).Error; err != nil {
+ 			common.SysError(fmt.Sprintf("applyEmployeeExtDelta: read profit failed userId=%d err=%s", userId, err.Error()))
+-			return
++			return true
+ 		}
+ 		TryAutoUpgradeTier(userId, ext.ProfitTotalQuota)
+ 	}
++	return true
+ }
+ 
+ // ---- 刷盘入口 ----
+ 
+ // FlushBusinessStatBuffers 将缓冲区的增量批量刷入 DB。由后台定时任务调用。
+ func FlushBusinessStatBuffers() {
++	businessStatsFlushMu.Lock()
++	defer businessStatsFlushMu.Unlock()
++
+ 	// 1. 先刷明细台账（顺序保证一致性，但三类台账互不阻塞）
+ 	paired := flushCostAndCommissionLedger()
+ 	flushConsumptionCostLedger()
+@@ -939,9 +1552,13 @@ func FlushBusinessStatBuffers() {
+ 	if common.RedisEnabled {
+ 		flushPlatformStatsFromRedis()
+ 		flushCommissionStatsFromRedis()
++		flushCustomerCommissionStatsFromRedis()
++		flushCommissionMonthlyStatsFromRedis()
+ 	} else {
+ 		flushPlatformStatsFromMem()
+ 		flushCommissionStatsFromMem()
++		flushCustomerCommissionStatsFromMem()
++		flushCommissionMonthlyStatsFromMem()
+ 	}
+ 	// 3. 刷员工汇总（user_extensions + 等级升级）
+ 	flushEmployeeExtBuffers()

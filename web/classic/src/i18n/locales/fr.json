@@ -171,6 +171,7 @@
     "本地": "Local",
     "本地计费": "Facturation locale",
     "本地数据存储": "Stockage de données locales",
+    "本期提成": "Commission actuelle",
     "本设备：手机指纹/面容，外接：USB安全密钥": "Intégré : empreinte digitale/visage du téléphone, Externe : clé de sécurité USB",
     "本设备内置": "Intégré à cet appareil",
     "本项目根据": "Ce projet est sous licence ",
@@ -518,12 +519,22 @@
     "登录过期，请重新登录！": "Session expirée, veuillez vous reconnecter !",
     "等待获取邮箱信息...": "En attente d'obtenir des informations par e-mail...",
     "等待中": "En attente",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "Palier",
     "等级编号": "Numéro du palier",
     "等级编号必须 ≥ 1": "Le numéro du palier doit être ≥ 1",
     "等级已创建": "Palier créé",
     "等级已更新": "Palier mis à jour",
     "等级已删除": "Palier supprimé",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "Paramètres de réinitialisation mensuelle des paliers et performances",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "Montant équivalent : ",
     "低于此额度时将发送邮件提醒用户": "Un rappel par e-mail sera envoyé lorsque le quota tombera en dessous de ce seuil",
     "递归": "Récursif",
@@ -671,6 +682,7 @@
     "服务器地址": "Adresse du serveur",
     "服务器日志功能未启用（未配置日志目录）": "La journalisation du serveur n'est pas activée (répertoire de journaux non configuré)",
     "服务器日志管理": "Gestion des journaux du serveur",
+    "服务器时区": "Fuseau horaire du serveur",
     "服务器IP": "IP du serveur",
     "服务商": "Service Provider",
     "服务显示名称": "Nom d'affichage du service",
@@ -727,8 +739,16 @@
     "该套餐未配置 Creem": "Ce plan n'est pas configuré pour Creem",
     "该套餐未配置 Stripe": "Ce plan n'est pas configuré pour Stripe",
     "该域名已存在于白名单中": "Ce nom de domaine existe déjà dans la liste blanche",
+<<<<<<< Updated upstream
     "该员工暂无已分配客户": "Aucun client assigné à cet employé",
+=======
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
     "概览": "Overview",
+=======
+    "该员工暂无已分配客户": "Aucun client assigné à cet employé",
+    "概览": "Aperçu",
+>>>>>>> Stashed changes
     "高级": "Avancé",
     "高级配置": "Advanced Configuration",
     "高级设置": "Paramètres avancés",
@@ -1029,7 +1049,14 @@
     "计算费用中...": "Calculating fees...",
     "计算中": "Calculating",
     "记录请求与错误日志IP": "Enregistrer l'adresse IP du journal des requêtes et des erreurs",
+<<<<<<< Updated upstream
     "记录数": "Nombre d'enregistrements",
+=======
+<<<<<<< Updated upstream
+=======
+    "记录数": "Enregistrements",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "继续": "Continuer",
     "加密存储": "Encrypted Storage",
     "加入渠道": "Join Channel",
@@ -1108,6 +1135,7 @@
     "将删除 {{value}} 天前的日志文件。": "Les fichiers journaux de plus de {{value}} jours seront supprimés.",
     "将删除所有仍在内存中的渠道亲和性缓存条目。": "Ceci supprimera toutes les entrées de cache d'affinité de canal encore en mémoire.",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "Cela supprimera tous les codes d'échange utilisés, désactivés et expirés, cette opération ne peut pas être annulée.",
+    "将所有员工重置到最低等级？": "Réinitialiser tous les employés au niveau le plus bas ?",
     "将为选中的 ": "Définira pour la sélection ",
     "将只保留最近 {{value}} 个日志文件，其余将被删除。": "Seuls les {{value}} derniers fichiers journaux seront conservés ; le reste sera supprimé.",
     "将追加 2 条规则到现有规则列表。": "2 règles seront ajoutées à la liste de règles existante.",
@@ -1140,6 +1168,7 @@
     "解析密钥文件失败: {{msg}}": "Échec de l'analyse du fichier de clés : {{msg}}",
     "解析响应数据时发生错误": "Erreur lors de l'analyse des données de réponse",
     "界面语言和其他个人偏好": "Langue de l'interface et autres préférences personnelles",
+    "今日": "Aujourd'hui",
     "今日关闭": "Fermer aujourd'hui",
     "今日请求": "Requetes du jour",
     "今日消费": "Consommation du jour",
@@ -1318,7 +1347,15 @@
     "立即开始": "Commencer maintenant",
     "立即迁移": "Migrer maintenant",
     "立即签到": "S'enregistrer maintenant",
+<<<<<<< Updated upstream
     "利润": "Bénéfice",
+=======
+<<<<<<< Updated upstream
+=======
+    "立即重置": "Réinitialiser maintenant",
+    "利润": "Bénéfice",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "例如 /var/cache/new-api": "ex. : /var/cache/new-api",
     "例如 €, £, Rp, ₩, ₹...": "Par exemple, €, £, Rp, ₩, ₹...",
     "例如 https://docs.newapi.pro": "Par exemple, https://docs.newapi.pro",
@@ -1447,6 +1484,7 @@
     "每容器GPU数": "GPUs per Container",
     "每天": "Quotidien",
     "每月": "Mensuel",
+    "每月重置日": "Jour de réinitialisation mensuelle",
     "每周": "Hebdomadaire",
     "美国西部": "Ouest des États-Unis",
     "美元": "Dollar américain",
@@ -1754,6 +1792,7 @@
     "启用性能监控后，当系统资源使用率超过设定阈值时，将拒绝新的 Relay 请求 (/v1, /v1beta 等)，以保护系统稳定性。": "Lorsque la surveillance des performances est activée et que l'utilisation des ressources système dépasse le seuil défini, les nouvelles requêtes Relay (/v1, /v1beta, etc.) seront rejetées pour protéger la stabilité du système.",
     "启用验证": "Activer l'authentification",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "Activer la limite de débit de requête de modèle utilisateur (peut affecter les performances à haute concurrence)",
+    "启用月度自动重置": "Activer la réinitialisation mensuelle automatique",
     "启用状态": "Statut d'activation",
     "启用Claude思考适配（-thinking后缀）": "Activer l'adaptation de la pensée Claude (suffixe -thinking)",
     "启用FunctionCall思维签名填充": "Activer le remplissage de thoughtSignature pour FunctionCall",
@@ -2164,6 +2203,7 @@
     "确认解绑": "Confirmer la dissociation",
     "确认解绑 Passkey": "Confirmer la dissociation du Passkey",
     "确认禁用": "Confirmer la désactivation",
+    "确认立即重置": "Confirmer la réinitialisation maintenant",
     "确认密码": "Confirmer le mot de passe",
     "确认启用": "Confirmer l'activation",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "Payment, redemption codes, subscription plans, and invitation rewards remain locked until confirmation.",
@@ -2286,8 +2326,17 @@
     "上次保存: ": "Dernier enregistrement : ",
     "上次检测到可加入模型": "",
     "上次检测时间": "",
+<<<<<<< Updated upstream
     "上行": "Montee",
     "上行带宽": "Bande passante montante",
+=======
+<<<<<<< Updated upstream
+=======
+    "上次重置时间": "Dernière réinitialisation",
+    "上行": "Montee",
+    "上行带宽": "Bande passante montante",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "上一步": "Précédent",
     "上一个表单块": "Bloc de formulaire précédent",
     "上一页": "Précédent",
@@ -2324,6 +2373,7 @@
     "设置系统名称": "Définir le nom du système",
     "设置页脚": "Définir le pied de page",
     "设置已保存": "Paramètres enregistrés",
+    "设置已更新": "Paramètre mis à jour avec succès",
     "设置隐私政策": "Définir la politique de confidentialité",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "Définir les options de montant de recharge sélectionnables par l'utilisateur, par exemple : [10, 20, 50, 100, 200, 500]",
     "设置用户协议": "Définir l'accord utilisateur",
@@ -2362,6 +2412,7 @@
     "时间": "Heure",
     "时间粒度": "Granularité temporelle",
     "时间信息": "Time Information",
+    "时区": "Fuseau horaire",
     "实付": "Paiement réel",
     "实付金额": "Montant du paiement réel",
     "实付金额：": "Montant du paiement réel : ",
@@ -2683,6 +2734,8 @@
     "统计次数": "Nombre de statistiques",
     "统计额度": "Quota statistique",
     "统计已重置": "Statistiques réinitialisées",
+    "统计月份": "Mois",
+    "统计周期": "Période",
     "统计Tokens": "Jetons statistiques",
     "统一的": "La Passerelle",
     "透传请求体": "Corps de transmission",
@@ -2866,6 +2919,7 @@
     "系统信息": "Informations système",
     "系统性能监控": "Surveillance des performances du système",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "System has prepared Ollama image and random API Key for this deployment",
+    "下次重置时间": "Prochaine réinitialisation",
     "下面是带注释的示例，仅用于参考；实际保存时请删除注释。": "",
     "下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。": "Les champs backend écrits après l'enregistrement sont affichés ci-dessous afin de rester cohérents avec les éditeurs JSON bruts.",
     "下午好": "Bon après-midi",
@@ -3375,6 +3429,8 @@
     "源地址": "Adresse source",
     "约": "Environ",
     "月": "mois",
+    "月度统计": "Statistiques mensuelles",
+    "月度重置": "Réinitialisation mensuelle",
     "允许 AccountFilter 参数": "Autoriser le paramètre AccountFilter",
     "允许 HTTP 协议图片请求（适用于自部署代理）": "Autoriser les requêtes d'images via le protocole HTTP (applicable aux proxies auto-déployés)",
     "允许 inference_geo 透传": "Autoriser la transmission de inference_geo",
@@ -3468,7 +3524,15 @@
     "暂无项目": "Aucun projet",
     "暂无已绑定项": "Aucun élément lié",
     "暂无预填组": "Aucun groupe pré-rempli",
+<<<<<<< Updated upstream
     "暂无账号": "Aucun compte",
+=======
+<<<<<<< Updated upstream
+=======
+    "暂无月度提成统计": "Aucune statistique mensuelle de commission pour le moment",
+    "暂无账号": "Aucun compte",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "暂无支付方式，点击上方按钮新增": "",
     "暂无自定义 OAuth 提供商": "Aucun fournisseur OAuth personnalisé",
     "暂无自动分组，点击下方按钮添加": "No auto groups yet. Click the button below to add one.",
@@ -3575,6 +3639,7 @@
     "智能体ID": "ID de l'agent intelligent",
     "智谱": "Zhipu AI",
     "置信度": "Confiance",
+    "中国时区": "Fuseau horaire de Chine",
     "中午好": "Bon midi",
     "终止请求中": "Terminating request",
     "终止中": "Terminating",
@@ -3605,12 +3670,21 @@
     "重置配置": "Réinitialiser la configuration",
     "重置失败": "Échec de la réinitialisation",
     "重置统计": "Réinitialiser les statistiques",
+    "重置完成，已处理 {{count}} 名员工": "Réinitialisation terminée, {{count}} employé(s) traité(s)",
     "重置为默认": "Réinitialiser aux valeurs par défaut",
     "重置选项": "Options de réinitialisation",
     "重置邮件发送成功，请检查邮箱！": "L'e-mail de réinitialisation a été envoyé avec succès, veuillez vérifier votre e-mail !",
     "重置周期": "Période de réinitialisation",
     "周": "semaine",
+<<<<<<< Updated upstream
     "主导航": "Navigation principale",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "Horodatage de début de période",
+    "主导航": "Navigation principale",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主模型": "Modèle principal",
     "主页链接填": "Remplir le lien de la page d'accueil",
     "注 册": "S'inscrire",
@@ -3708,6 +3782,7 @@
     "最低充值数量": "",
     "最高优先级": "highest priority",
     "最后更新": "Last Updated",
+    "最后记录": "Dernier enregistrement",
     "最后请求": "Dernière requête",
     "最后使用时间": "Dernière utilisation",
     "最后心跳": "Dernier signal",
@@ -3778,9 +3853,11 @@
     "Code copied": "Code copié",
     "Codex 渠道不支持批量创建": "Le canal Codex ne prend pas en charge la création par lot",
     "Codex 授权": "Autorisation Codex",
+    "Commission": "Commission",
     "common.changeLanguage": "Changer de langue",
     "Completion tokens": "Completion tokens",
     "Configuration": "Configuration",
+    "Consumption": "Consommation",
     "context_int/context_string 从请求上下文读取；gjson 从入口请求的 JSON body 按 gjson path 读取。": "context_int/context_string lit depuis le contexte de la requête ; gjson lit depuis le body JSON de la requête d'entrée via le chemin gjson.",
     "Cost Ratio": "Ratio de coût",
     "Cost Ratio *": "Cost Ratio *",
@@ -3811,11 +3888,22 @@
     "Discovery 建议 scopes：": "Scopes Discovery recommandés :",
     "Discovery claims": "Discovery claims",
     "Discovery scopes": "Discovery scopes",
+<<<<<<< Updated upstream
     "Edit Customer User": "Modifier l’utilisateur client",
     "Employee Balance": "Solde de l’employé",
     "Employee customer list and recharge tools.": "Liste des clients de l’employé et outils de recharge.",
+=======
+<<<<<<< Updated upstream
+=======
+    "Edit Customer User": "Modifier l’utilisateur client",
+    "Employee Balance": "Solde de l’employé",
+    "Employee customer list and recharge tools.": "Liste des clients de l’employé et outils de recharge.",
+    "Employee UID": "UID employé",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "EUR (欧元)": "EUR (Euro)",
     "false": "faux",
+    "Fri": "Ven",
     "GC 次数": "Nombre de GC",
     "GC 已执行": "GC exécuté",
     "GC 执行失败": "Échec de l'exécution du GC",
@@ -3864,7 +3952,15 @@
     "Key 来源类型": "Type de source de clé",
     "Key 摘要": "Résumé de Key",
     "Key 指纹": "Empreinte de clé",
+<<<<<<< Updated upstream
     "Legal": "Mentions légales",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "Dernier enregistrement",
+    "Legal": "Mentions légales",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "ID client Linux DO",
     "Linux DO Client Secret": "Secret client Linux DO",
     "LinuxDO": "LinuxDO",
@@ -3874,9 +3970,26 @@
     "Manage employee customer ownership and recharge logs.": "Gérer l’attribution des clients aux employés et les journaux de recharge.",
     "Midjourney 任务记录": "Tâches Midjourney",
     "MIT许可证": "Licence MIT",
+<<<<<<< Updated upstream
     "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI ne transmet pas le User-Agent de la requête entrante aux canaux en amont par défaut ; cette condition sert uniquement à identifier les clients accédant à ce site.",
     "NEXAXIS API项目仓库地址：": "Adresse du référentiel du projet NEXAXIS API : ",
     "No redemption codes to export": "Aucun code à exporter",
+=======
+<<<<<<< Updated upstream
+    "NEXAXIS API项目仓库地址：": "Adresse du référentiel du projet NEXAXIS API : ",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI ne transmet pas le User-Agent de la requête entrante aux canaux en amont par défaut ; cette condition sert uniquement à identifier les clients accédant à ce site.",
+=======
+    "Mon": "Lun",
+    "Monthly Commission": "Commission mensuelle",
+    "Monthly Performance": "Performance mensuelle",
+    "Monthly Stats": "Statistiques mensuelles",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI ne transmet pas le User-Agent de la requête entrante aux canaux en amont par défaut ; cette condition sert uniquement à identifier les clients accédant à ce site.",
+    "NEXAXIS API项目仓库地址：": "Adresse du référentiel du projet NEXAXIS API : ",
+    "Next month": "Mois suivant",
+    "No monthly commission stats yet": "Aucune statistique mensuelle de commission pour le moment",
+    "No redemption codes to export": "Aucun code à exporter",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OAuth 端点": "Points de terminaison OAuth",
     "OAuth Client ID": "OAuth Client ID",
     "OAuth Client Secret": "OAuth Client Secret",
@@ -3895,18 +4008,33 @@
     "Passkey 注册失败，请重试": "L'enregistrement du Passkey a échoué. Veuillez réessayer.",
     "Pay Method Name": "",
     "Pay Method Type": "",
+    "Performance": "Performance",
+    "Period": "Période",
+    "Period start timestamp": "Horodatage de début de période",
     "Ping间隔（秒）": "Intervalle de ping (secondes)",
     "POST 参数": "Paramètres POST",
+    "Previous month": "Mois précédent",
     "price_xxx 的商品价格 ID，新建产品后可获得": "ID de prix du produit price_xxx, peut être obtenu après la création d'un nouveau produit",
     "Prompt cache hit tokens": "Prompt cache hit tokens",
     "Prompt tokens": "Prompt tokens",
     "Reasoning Effort": "Effort de raisonnement",
+<<<<<<< Updated upstream
     "Recharge completed": "Recharge terminée",
+=======
+<<<<<<< Updated upstream
+=======
+    "Recharge completed": "Recharge terminée",
+    "Records": "Enregistrements",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Request ID": "Request ID",
+    "Reset": "Réinitialiser",
     "RSA 私钥 (沙盒)": "",
     "RSA 私钥 (生产)": "",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "Le champ safety_identifier aide OpenAI à identifier les utilisateurs d'applications susceptibles de violer les politiques d'utilisation. Désactivé par défaut pour protéger la confidentialité des utilisateurs",
+    "Sat": "Sam",
     "Scopes（可选）": "Scopes (optionnel)",
+    "Search": "Rechercher",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "Le champ service_tier est utilisé pour spécifier le niveau de service. Permettre le passage peut entraîner une facturation plus élevée que prévu. Désactivé par défaut pour éviter des frais supplémentaires",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "Clé secrète Stripe sk_xxx ou rk_xxx, les informations sensibles ne sont pas affichées",
     "SMTP 端口": "Port SMTP",
@@ -3926,11 +4054,20 @@
     "Stripe 设置": "Paramètres Stripe",
     "Stripe/Creem 商品ID（可选）": "ID produit Stripe/Creem (optionnel)",
     "Stripe/Creem 需在第三方平台创建商品并填入 ID": "Les produits Stripe/Creem doivent être créés sur la plateforme tierce et l'ID doit être renseigné",
+    "Sun": "Dim",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Nom du bot Telegram",
     "Telegram Bot Token": "Jeton du bot Telegram",
     "Telegram ID": "ID Telegram",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "Jeu",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "token 会按倍率换算成“额度/次数”，请求结束后再做差额结算（补扣/返还）。": "Les tokens sont convertis en quota/nombre d'utilisations selon le ratio. Après la requête, la différence est réglée (déduction supplémentaire/remboursement).",
     "Token 数": "Nombre de tokens",
     "Token Endpoint": "Point de terminaison du jeton",
@@ -3938,6 +4075,7 @@
     "true": "vrai",
     "TTL（秒，0 表示默认）": "TTL (secondes, 0 pour la valeur par défaut)",
     "TTL（秒）": "TTL (secondes)",
+    "Tue": "Mar",
     "Turnstile Secret Key": "Clé secrète Turnstile",
     "Turnstile Site Key": "Clé du site Turnstile",
     "Twitter / X": "Twitter / X",
@@ -3972,6 +4110,7 @@
     "Webhook通知": "Notification par Webhook",
     "WeChat Server 访问凭证": "Informations d'identification d'accès au serveur WeChat",
     "WeChat Server 服务器地址": "Adresse du serveur WeChat Server",
+    "Wed": "Mer",
     "Well-Known URL": "URL bien connue",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "L'URL bien connue doit commencer par http:// ou https://",
     "Whitepaper": "Livre blanc",

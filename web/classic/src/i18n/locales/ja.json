@@ -165,6 +165,7 @@
     "本地": "ローカル",
     "本地计费": "Local billing",
     "本地数据存储": "ローカルストレージ",
+    "本期提成": "当期コミッション",
     "本设备：手机指纹/面容，外接：USB安全密钥": "内蔵：スマートフォンの指紋/顔認証、外部：USBセキュリティキー",
     "本设备内置": "このデバイス",
     "本项目根据": "本プロジェクトは",
@@ -512,12 +513,22 @@
     "登录过期，请重新登录！": "セッションの有効期限が切れています。再度ログインしてください",
     "等待获取邮箱信息...": "メールアドレス情報を取得中...",
     "等待中": "待機中",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "等級",
     "等级编号": "等級番号",
     "等级编号必须 ≥ 1": "等級番号は 1 以上である必要があります",
     "等级已创建": "等級を作成しました",
     "等级已更新": "等級を更新しました",
     "等级已删除": "等級を削除しました",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "等級と実績の月次リセット設定",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "相当額：",
     "低于此额度时将发送邮件提醒用户": "このクォータを下回った場合に、ユーザーへメールで通知します。",
     "递归": "再帰",
@@ -665,6 +676,7 @@
     "服务器地址": "サーバーURL",
     "服务器日志功能未启用（未配置日志目录）": "サーバーログ機能が有効になっていません（ログディレクトリが未設定）",
     "服务器日志管理": "サーバーログ管理",
+    "服务器时区": "サーバータイムゾーン",
     "服务器IP": "サーバーIP",
     "服务商": "Service Provider",
     "服务显示名称": "サービス表示名",
@@ -1018,7 +1030,14 @@
     "计算费用中...": "Calculating fees...",
     "计算中": "Calculating",
     "记录请求与错误日志IP": "リクエストログとエラーログのIP記録",
+<<<<<<< Updated upstream
     "记录数": "記録数",
+=======
+<<<<<<< Updated upstream
+=======
+    "记录数": "レコード数",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "继续": "次へ",
     "加密存储": "Encrypted Storage",
     "加入渠道": "Join Channel",
@@ -1095,6 +1114,7 @@
     "将删除 {{value}} 天前的日志文件。": "{{value}} 日より前のログファイルが削除されます。",
     "将删除所有仍在内存中的渠道亲和性缓存条目。": "メモリ内に残っているすべてのチャネルアフィニティキャッシュエントリが削除されます。",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "使用済み、無効、および有効期限切れの引き換えコードを削除します。この操作は元に戻すことはできません。",
+    "将所有员工重置到最低等级？": "すべての従業員を最低等級にリセットしますか？",
     "将为选中的 ": "選択中の",
     "将只保留最近 {{value}} 个日志文件，其余将被删除。": "最新の {{value}} 個のログファイルのみ保持し、残りは削除されます。",
     "将追加 2 条规则到现有规则列表。": "既存のルールリストに2つのルールが追加されます。",
@@ -1127,6 +1147,7 @@
     "解析密钥文件失败: {{msg}}": "APIキーファイルの解析に失敗しました：{{msg}}",
     "解析响应数据时发生错误": "レスポンスデータの解析時にエラーが発生しました",
     "界面语言和其他个人偏好": "インターフェース言語とその他の個人設定",
+    "今日": "今日",
     "今日关闭": "今日は表示しない",
     "今日请求": "本日のリクエスト",
     "今日消费": "本日の消費",
@@ -1305,7 +1326,15 @@
     "立即开始": "今すぐ開始",
     "立即迁移": "今すぐ移行",
     "立即签到": "今すぐチェックイン",
+<<<<<<< Updated upstream
     "利润": "利益",
+=======
+<<<<<<< Updated upstream
+=======
+    "立即重置": "今すぐリセット",
+    "利润": "利益",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "例如 /var/cache/new-api": "例：/var/cache/new-api",
     "例如 €, £, Rp, ₩, ₹...": "例：€, £, Rp, ₩, ₹...",
     "例如 https://docs.newapi.pro": "例：https://docs.newapi.pro",
@@ -1434,6 +1463,7 @@
     "每容器GPU数": "GPUs per Container",
     "每天": "毎日",
     "每月": "毎月",
+    "每月重置日": "毎月のリセット日",
     "每周": "毎週",
     "美国西部": "米国西部",
     "美元": "US Dollar",
@@ -1739,6 +1769,7 @@
     "启用性能监控后，当系统资源使用率超过设定阈值时，将拒绝新的 Relay 请求 (/v1, /v1beta 等)，以保护系统稳定性。": "パフォーマンス監視が有効で、システムリソース使用率が設定されたしきい値を超えた場合、システムの安定性を保護するために新しいRelayリクエスト（/v1, /v1betaなど）は拒否されます。",
     "启用验证": "認証を有効にする",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "ユーザー単位のモデルリクエストレート制限を有効にする（高同時実行パフォーマンスに影響する可能性があります）",
+    "启用月度自动重置": "月次自動リセットを有効化",
     "启用状态": "有効状態",
     "启用Claude思考适配（-thinking后缀）": "Claude思考モードを有効にする（-thinkingサフィックス）",
     "启用FunctionCall思维签名填充": "FunctionCall用のthoughtSignature自動付与を有効化",
@@ -2147,6 +2178,7 @@
     "确认解绑": "連携解除の確認",
     "确认解绑 Passkey": "Passkey連携解除の確認",
     "确认禁用": "無効化の確認",
+    "确认立即重置": "今すぐリセットを確認",
     "确认密码": "パスワード（確認用）",
     "确认启用": "有効化を確認",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "Payment, redemption codes, subscription plans, and invitation rewards remain locked until confirmation.",
@@ -2269,8 +2301,17 @@
     "上次保存: ": "最終保存： ",
     "上次检测到可加入模型": "",
     "上次检测时间": "",
+<<<<<<< Updated upstream
     "上行": "アップロード",
     "上行带宽": "アップロード帯域幅",
+=======
+<<<<<<< Updated upstream
+=======
+    "上次重置时间": "前回のリセット時刻",
+    "上行": "アップロード",
+    "上行带宽": "アップロード帯域幅",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "上一步": "前へ",
     "上一个表单块": "前のフォームブロック",
     "上一页": "前へ",
@@ -2307,6 +2348,7 @@
     "设置系统名称": "システム名称設定",
     "设置页脚": "フッターを設定",
     "设置已保存": "設定が保存されました",
+    "设置已更新": "設定が正常に更新されました",
     "设置隐私政策": "プライバシーポリシー設定",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "ユーザーが選択可能なチャージ額のオプションを設定します。例：[10, 20, 50, 100, 200, 500]",
     "设置用户协议": "ユーザー利用規約設定",
@@ -2345,6 +2387,7 @@
     "时间": "時間",
     "时间粒度": "時間粒度",
     "时间信息": "Time Information",
+    "时区": "タイムゾーン",
     "实付": "決済額",
     "实付金额": "決済金額",
     "实付金额：": "決済金額：",
@@ -2666,6 +2709,8 @@
     "统计次数": "リクエスト数統計",
     "统计额度": "クォータ統計",
     "统计已重置": "統計がリセットされました",
+    "统计月份": "集計月",
+    "统计周期": "集計期間",
     "统计Tokens": "トークン統計",
     "统一的": "統合型",
     "透传请求体": "リクエストボディパススルー",
@@ -2849,6 +2894,7 @@
     "系统信息": "システム情報",
     "系统性能监控": "システムパフォーマンス監視",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "System has prepared Ollama image and random API Key for this deployment",
+    "下次重置时间": "次回のリセット時刻",
     "下面是带注释的示例，仅用于参考；实际保存时请删除注释。": "",
     "下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。": "保存後にこのモデルでどのバックエンド項目に書き込まれるかを以下に表示します。元の JSON エディタとの整合確認に便利です。",
     "下午好": "こんにちは",
@@ -3344,6 +3390,8 @@
     "源地址": "ベースURL",
     "约": "約",
     "月": "月",
+    "月度统计": "月次統計",
+    "月度重置": "月次リセット",
     "允许 AccountFilter 参数": "AccountFilterパラメータを許可する",
     "允许 HTTP 协议图片请求（适用于自部署代理）": "HTTPプロトコルによる画像リクエストを許可する（セルフホストプロキシ向け）",
     "允许 inference_geo 透传": "inference_geoパススルーを許可",
@@ -3437,7 +3485,15 @@
     "暂无项目": "プロジェクトはありません",
     "暂无已绑定项": "バインド済みの項目はありません",
     "暂无预填组": "事前入力グループはありません",
+<<<<<<< Updated upstream
     "暂无账号": "アカウントがありません",
+=======
+<<<<<<< Updated upstream
+=======
+    "暂无月度提成统计": "月次コミッション統計はまだありません",
+    "暂无账号": "アカウントがありません",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "暂无支付方式，点击上方按钮新增": "",
     "暂无自定义 OAuth 提供商": "カスタムOAuthプロバイダーはありません",
     "暂无自动分组，点击下方按钮添加": "自動グループがありません。下のボタンをクリックして追加してください。",
@@ -3544,6 +3600,7 @@
     "智能体ID": "エージェントID",
     "智谱": "Zhipu AI",
     "置信度": "信頼度",
+    "中国时区": "中国タイムゾーン",
     "中午好": "こんにちは",
     "终止请求中": "Terminating request",
     "终止中": "Terminating",
@@ -3574,12 +3631,21 @@
     "重置配置": "設定リセット",
     "重置失败": "リセットに失敗しました",
     "重置统计": "統計をリセット",
+    "重置完成，已处理 {{count}} 名员工": "リセット完了、{{count}} 名の従業員を処理しました",
     "重置为默认": "デフォルトへのリセット",
     "重置选项": "オプションリセット",
     "重置邮件发送成功，请检查邮箱！": "パスワードリセットのメールを送信しました。メールをご確認ください",
     "重置周期": "リセット周期",
     "周": "週",
+<<<<<<< Updated upstream
     "主导航": "メインナビゲーション",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "期間開始タイムスタンプ",
+    "主导航": "メインナビゲーション",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主模型": "メインモデル",
     "主页链接填": "ホームページURLを入力してください。",
     "注 册": "サインアップ",
@@ -3677,6 +3743,7 @@
     "最低充值数量": "",
     "最高优先级": "最高優先",
     "最后更新": "Last Updated",
+    "最后记录": "最終記録",
     "最后请求": "最終リクエスト日時",
     "最后使用时间": "最終利用日時",
     "最后心跳": "最終ハートビート",
@@ -3747,9 +3814,11 @@
     "Code copied": "コードをコピーしました",
     "Codex 渠道不支持批量创建": "Codexチャネルはバッチ作成をサポートしていません",
     "Codex 授权": "Codex 認可",
+    "Commission": "コミッション",
     "common.changeLanguage": "common.changeLanguage",
     "Completion tokens": "Completion tokens",
     "Configuration": "Configuration",
+    "Consumption": "消費",
     "context_int/context_string 从请求上下文读取；gjson 从入口请求的 JSON body 按 gjson path 读取。": "context_int/context_stringはリクエストコンテキストから読み取り、gjsonはエントリリクエストのJSON bodyからgjsonパスで読み取ります。",
     "Cost Ratio": "コスト倍率",
     "Cost Ratio *": "Cost Ratio *",
@@ -3775,8 +3844,10 @@
     "Discovery 建议 scopes：": "推奨Discovery scopes：",
     "Discovery claims": "Discovery claims",
     "Discovery scopes": "Discovery scopes",
+    "Employee UID": "従業員 UID",
     "EUR (欧元)": "EUR (Euro)",
     "false": "false",
+    "Fri": "金",
     "GC 次数": "GC回数",
     "GC 已执行": "GC実行済み",
     "GC 执行失败": "GC実行失敗",
@@ -3825,7 +3896,15 @@
     "Key 来源类型": "キーソースタイプ",
     "Key 摘要": "Key 要約",
     "Key 指纹": "キーフィンガープリント",
+<<<<<<< Updated upstream
     "Legal": "法務",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "最終記録",
+    "Legal": "法務",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "Linux DO Client ID",
     "Linux DO Client Secret": "Linux DO Client Secret",
     "LinuxDO": "LinuxDO",
@@ -3834,9 +3913,26 @@
     "Logo 图片地址": "ロゴ画像URL",
     "Midjourney 任务记录": "Midjourneyタスク履歴",
     "MIT许可证": "MITライセンス",
+<<<<<<< Updated upstream
     "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPIはデフォルトでは入力リクエストのUser-Agentを上流チャネルにパススルーしません。この条件はこのサイトにアクセスするクライアントの識別にのみ使用されます。",
     "NEXAXIS API项目仓库地址：": "NEXAXIS APIプロジェクトリポジトリ：",
     "No redemption codes to export": "エクスポートする引換コードがありません",
+=======
+<<<<<<< Updated upstream
+    "NEXAXIS API项目仓库地址：": "NEXAXIS APIプロジェクトリポジトリ：",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPIはデフォルトでは入力リクエストのUser-Agentを上流チャネルにパススルーしません。この条件はこのサイトにアクセスするクライアントの識別にのみ使用されます。",
+=======
+    "Mon": "月",
+    "Monthly Commission": "月次コミッション",
+    "Monthly Performance": "月次実績",
+    "Monthly Stats": "月次統計",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPIはデフォルトでは入力リクエストのUser-Agentを上流チャネルにパススルーしません。この条件はこのサイトにアクセスするクライアントの識別にのみ使用されます。",
+    "NEXAXIS API项目仓库地址：": "NEXAXIS APIプロジェクトリポジトリ：",
+    "Next month": "翌月",
+    "No monthly commission stats yet": "月次コミッション統計はまだありません",
+    "No redemption codes to export": "エクスポートする引換コードがありません",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OAuth 端点": "OAuthエンドポイント",
     "OAuth Client ID": "OAuth Client ID",
     "OAuth Client Secret": "OAuth Client Secret",
@@ -3855,17 +3951,25 @@
     "Passkey 注册失败，请重试": "Passkeyの登録に失敗しました。再試行してください",
     "Pay Method Name": "",
     "Pay Method Type": "",
+    "Performance": "実績",
+    "Period": "期間",
+    "Period start timestamp": "期間開始タイムスタンプ",
     "Ping间隔（秒）": "Ping間隔（秒）",
     "POST 参数": "POSTパラメータ",
+    "Previous month": "前月",
     "price_xxx 的商品价格 ID，新建产品后可获得": "price_xxx の料金ID。新規製品の作成後に取得できます",
     "Prompt cache hit tokens": "Prompt cache hit tokens",
     "Prompt tokens": "Prompt tokens",
     "Reasoning Effort": "Reasoning Effort",
+    "Records": "レコード",
     "Request ID": "Request ID",
+    "Reset": "リセット",
     "RSA 私钥 (沙盒)": "",
     "RSA 私钥 (生产)": "",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "safety_identifierフィールドは、OpenAIが利用ポリシーに違反する可能性のあるアプリユーザーを特定するために使用されます。ユーザーのプライバシーを保護するため、デフォルトでは無効です",
+    "Sat": "土",
     "Scopes（可选）": "Scopes（オプション）",
+    "Search": "検索",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "service_tierフィールドはサービス階層の指定に使用されます。パススルーを許可すると実際の課金額が想定を上回る場合があるため、追加料金を避けるためにデフォルトでは無効になっています",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "sk_xxx または rk_xxx のStripe APIキー。機密情報は表示されません",
     "SMTP 端口": "SMTP ポート",
@@ -3885,11 +3989,20 @@
     "Stripe 设置": "Stripe 設定",
     "Stripe/Creem 商品ID（可选）": "Stripe/Creem 商品ID（任意）",
     "Stripe/Creem 需在第三方平台创建商品并填入 ID": "Stripe/Creem の商品は外部プラットフォームで作成し、ID を入力してください",
+    "Sun": "日",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Telegram Bot 名称",
     "Telegram Bot Token": "Telegram Bot Token",
     "Telegram ID": "Telegram ID",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "木",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "token 会按倍率换算成“额度/次数”，请求结束后再做差额结算（补扣/返还）。": "トークンは比率に基づいて「クォータ/回数」に換算されます。リクエスト完了後に差額精算（追加控除/返金）が行われます。",
     "Token 数": "トークン数",
     "Token Endpoint": "Token Endpoint",
@@ -3897,6 +4010,7 @@
     "true": "true",
     "TTL（秒，0 表示默认）": "TTL（秒、0はデフォルト）",
     "TTL（秒）": "TTL（秒）",
+    "Tue": "火",
     "Turnstile Secret Key": "Turnstile Secret Key",
     "Turnstile Site Key": "Turnstile Site Key",
     "Twitter / X": "Twitter / X",
@@ -3931,6 +4045,7 @@
     "Webhook通知": "Webhook通知",
     "WeChat Server 访问凭证": "WeChatサーバー認証情報",
     "WeChat Server 服务器地址": "WeChat Server サーバーURL",
+    "Wed": "水",
     "Well-Known URL": "Well-Known URL",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "Well-Known URLは、http://またはhttps://で始まることが必須です",
     "Whitepaper": "ホワイトペーパー",

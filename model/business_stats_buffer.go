@@ -24,16 +24,33 @@ import (
 
 const (
 	// Redis key 前缀
+<<<<<<< Updated upstream
 	platformStatBufferPrefix   = "biz_buf:platform:"   // + {statDate}:{channelId}
 	commissionStatBufferPrefix = "biz_buf:commission:" // + {statDate}:{employeeUserId}
 
 	// Redis key 的 TTL，防止 flush 失败导致 key 永驻
 	statBufferKeyTTL = 48 * time.Hour
+=======
+	platformStatBufferPrefix           = "biz_buf:platform:"            // + {statDate}:{channelId}
+	commissionStatBufferPrefix         = "biz_buf:commission:"          // + {statDate}:{employeeUserId}
+	customerCommissionStatBufferPrefix = "biz_buf:customer_commission:" // + {statDate}:{employeeUserId}:{customerUserId}
+	commissionMonthlyStatBufferPrefix  = "biz_buf:commission_monthly:"  // + {periodStartAt}:{employeeUserId}
+	redisStatProcessingPrefix          = "biz_buf:processing:"
+
+	// Redis key 的 TTL，防止 flush 失败导致 key 永驻
+	statBufferKeyTTL     = 48 * time.Hour
+	statBufferMaxRetries = 10
+>>>>>>> Stashed changes
 
 	// 默认刷盘间隔（如果配置未指定或无效）
 	DefaultBusinessStatsFlushInterval = 5 // 秒
 )
 
+<<<<<<< Updated upstream
+=======
+var businessStatsFlushMu sync.Mutex
+
+>>>>>>> Stashed changes
 // ---- Redis 缓冲 ----
 
 func platformStatRedisKey(statDate int64, channelId int) string {
@@ -44,6 +61,54 @@ func commissionStatRedisKey(statDate int64, employeeUserId int) string {
 	return fmt.Sprintf("%s%d:%d", commissionStatBufferPrefix, statDate, employeeUserId)
 }
 
+<<<<<<< Updated upstream
+=======
+func customerCommissionStatRedisKey(statDate int64, employeeUserId, customerUserId int) string {
+	return fmt.Sprintf("%s%d:%d:%d", customerCommissionStatBufferPrefix, statDate, employeeUserId, customerUserId)
+}
+
+func commissionMonthlyStatRedisKey(periodStartAt int64, employeeUserId int) string {
+	return fmt.Sprintf("%s%d:%d", commissionMonthlyStatBufferPrefix, periodStartAt, employeeUserId)
+}
+
+func redisStatProcessingKey(key string) string {
+	return redisStatProcessingPrefix + key
+}
+
+func redisStatOriginalKey(key string) string {
+	return strings.TrimPrefix(key, redisStatProcessingPrefix)
+}
+
+func prepareRedisStatProcessingKey(ctx context.Context, key string) (string, bool) {
+	if strings.HasPrefix(key, redisStatProcessingPrefix) {
+		return key, true
+	}
+	processingKey := redisStatProcessingKey(key)
+	renamed, err := common.RDB.RenameNX(ctx, key, processingKey).Result()
+	if err != nil {
+		common.SysError("prepareRedisStatProcessingKey: rename failed: " + err.Error())
+		return "", false
+	}
+	return processingKey, renamed
+}
+
+func ensureRedisStatBatchID(ctx context.Context, key string) string {
+	batchID, _ := common.RDB.HGet(ctx, key, "_batch_id").Result()
+	if batchID != "" {
+		return batchID
+	}
+	batchID = fmt.Sprintf("%s:%d", key, time.Now().UnixNano())
+	if ok, err := common.RDB.HSetNX(ctx, key, "_batch_id", batchID).Result(); err != nil {
+		common.SysError("ensureRedisStatBatchID: hsetnx failed: " + err.Error())
+		return ""
+	} else if ok {
+		return batchID
+	}
+	batchID, _ = common.RDB.HGet(ctx, key, "_batch_id").Result()
+	return batchID
+}
+
+>>>>>>> Stashed changes
 // bufferPlatformStatRedis 将平台侧日统计增量累加到 Redis Hash。
 func bufferPlatformStatRedis(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
 	key := platformStatRedisKey(statDate, channelId)
@@ -98,8 +163,66 @@ func bufferCommissionStatRedis(statDate int64, employeeUserId int, revenueQuota,
 	}
 }
 
+<<<<<<< Updated upstream
 // ---- 内存缓冲（无 Redis 降级） ----
 
+=======
+func bufferCustomerCommissionStatRedis(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	key := customerCommissionStatRedisKey(statDate, employeeUserId, customerUserId)
+	ctx := context.Background()
+	pipe := common.RDB.Pipeline()
+	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
+	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
+	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
+	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
+	pipe.HIncrBy(ctx, key, "record_count", 1)
+	pipe.HIncrBy(ctx, key, "last_created_at", 0)
+	luaUpdateMax := `
+		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
+		if tonumber(ARGV[1]) > cur then
+			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
+		end
+		return 1
+	`
+	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
+	pipe.Expire(ctx, key, statBufferKeyTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		common.SysError("bufferCustomerCommissionStatRedis: pipeline error: " + err.Error())
+		bufferCustomerCommissionStatMem(statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
+	}
+}
+
+// ---- 内存缓冲（无 Redis 降级） ----
+
+func bufferCommissionMonthlyStatRedis(period CommissionMonthlyPeriod, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	key := commissionMonthlyStatRedisKey(period.PeriodStartAt, employeeUserId)
+	ctx := context.Background()
+	pipe := common.RDB.Pipeline()
+	pipe.HSetNX(ctx, key, "period_end_at", period.PeriodEndAt)
+	pipe.HSetNX(ctx, key, "period_key", period.PeriodKey)
+	pipe.HSetNX(ctx, key, "timezone", period.Timezone)
+	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
+	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
+	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
+	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
+	pipe.HIncrBy(ctx, key, "record_count", 1)
+	pipe.HIncrBy(ctx, key, "last_created_at", 0)
+	luaUpdateMax := `
+		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
+		if tonumber(ARGV[1]) > cur then
+			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
+		end
+		return 1
+	`
+	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
+	pipe.Expire(ctx, key, statBufferKeyTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		common.SysError("bufferCommissionMonthlyStatRedis: pipeline error: " + err.Error())
+		bufferCommissionMonthlyStatMem(period, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
+	}
+}
+
+>>>>>>> Stashed changes
 type platformStatDelta struct {
 	StatDate      int64
 	ChannelId     int
@@ -109,6 +232,10 @@ type platformStatDelta struct {
 	RecordCount   int64
 	CostRatioSum  float64
 	LastCreatedAt int64
+<<<<<<< Updated upstream
+=======
+	RetryCount    int
+>>>>>>> Stashed changes
 }
 
 type commissionStatDelta struct {
@@ -120,14 +247,55 @@ type commissionStatDelta struct {
 	CommissionQuota int64
 	RecordCount     int64
 	LastCreatedAt   int64
+<<<<<<< Updated upstream
+=======
+	RetryCount      int
+}
+
+type customerCommissionStatDelta struct {
+	StatDate        int64
+	EmployeeUserId  int
+	CustomerUserId  int
+	RevenueQuota    int64
+	CostQuota       int64
+	ProfitQuota     int64
+	CommissionQuota int64
+	RecordCount     int64
+	LastCreatedAt   int64
+	RetryCount      int
+}
+
+type commissionMonthlyStatDelta struct {
+	PeriodStartAt   int64
+	PeriodEndAt     int64
+	PeriodKey       string
+	Timezone        string
+	EmployeeUserId  int
+	RevenueQuota    int64
+	CostQuota       int64
+	ProfitQuota     int64
+	CommissionQuota int64
+	RecordCount     int64
+	LastCreatedAt   int64
+	RetryCount      int
+>>>>>>> Stashed changes
 }
 
 var (
 	memPlatformBuf  = make(map[string]*platformStatDelta)
 	memPlatformLock sync.Mutex
 
+<<<<<<< Updated upstream
 	memCommissionBuf  = make(map[string]*commissionStatDelta)
 	memCommissionLock sync.Mutex
+=======
+	memCommissionBuf          = make(map[string]*commissionStatDelta)
+	memCommissionLock         sync.Mutex
+	memCustomerCommissionBuf  = make(map[string]*customerCommissionStatDelta)
+	memCustomerCommissionLock sync.Mutex
+	memCommissionMonthlyBuf   = make(map[string]*commissionMonthlyStatDelta)
+	memCommissionMonthlyLock  sync.Mutex
+>>>>>>> Stashed changes
 )
 
 func memPlatformKey(statDate int64, channelId int) string {
@@ -138,6 +306,17 @@ func memCommissionKey(statDate int64, employeeUserId int) string {
 	return fmt.Sprintf("%d:%d", statDate, employeeUserId)
 }
 
+<<<<<<< Updated upstream
+=======
+func memCustomerCommissionKey(statDate int64, employeeUserId, customerUserId int) string {
+	return fmt.Sprintf("%d:%d:%d", statDate, employeeUserId, customerUserId)
+}
+
+func memCommissionMonthlyKey(periodStartAt int64, employeeUserId int) string {
+	return fmt.Sprintf("%d:%d", periodStartAt, employeeUserId)
+}
+
+>>>>>>> Stashed changes
 func bufferPlatformStatMem(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
 	key := memPlatformKey(statDate, channelId)
 	memPlatformLock.Lock()
@@ -178,6 +357,188 @@ func bufferCommissionStatMem(statDate int64, employeeUserId int, revenueQuota, c
 	}
 }
 
+<<<<<<< Updated upstream
+=======
+func bufferCustomerCommissionStatMem(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	key := memCustomerCommissionKey(statDate, employeeUserId, customerUserId)
+	memCustomerCommissionLock.Lock()
+	defer memCustomerCommissionLock.Unlock()
+	d, ok := memCustomerCommissionBuf[key]
+	if !ok {
+		d = &customerCommissionStatDelta{StatDate: statDate, EmployeeUserId: employeeUserId, CustomerUserId: customerUserId}
+		memCustomerCommissionBuf[key] = d
+	}
+	d.RevenueQuota += revenueQuota
+	d.CostQuota += costQuota
+	d.ProfitQuota += profitQuota
+	d.CommissionQuota += commissionQuota
+	d.RecordCount++
+	if createdAt > d.LastCreatedAt {
+		d.LastCreatedAt = createdAt
+	}
+}
+
+func bufferCommissionMonthlyStatMem(period CommissionMonthlyPeriod, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	key := memCommissionMonthlyKey(period.PeriodStartAt, employeeUserId)
+	memCommissionMonthlyLock.Lock()
+	defer memCommissionMonthlyLock.Unlock()
+	d, ok := memCommissionMonthlyBuf[key]
+	if !ok {
+		d = &commissionMonthlyStatDelta{
+			PeriodStartAt:  period.PeriodStartAt,
+			PeriodEndAt:    period.PeriodEndAt,
+			PeriodKey:      period.PeriodKey,
+			Timezone:       period.Timezone,
+			EmployeeUserId: employeeUserId,
+		}
+		memCommissionMonthlyBuf[key] = d
+	}
+	d.RevenueQuota += revenueQuota
+	d.CostQuota += costQuota
+	d.ProfitQuota += profitQuota
+	d.CommissionQuota += commissionQuota
+	d.RecordCount++
+	if createdAt > d.LastCreatedAt {
+		d.LastCreatedAt = createdAt
+	}
+}
+
+func requeuePlatformStatMem(d *platformStatDelta) {
+	if d == nil {
+		return
+	}
+	d.RetryCount++
+	if d.RetryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter("platform_daily_stat", "max retries exceeded", d.RetryCount, d)
+		return
+	}
+	memPlatformLock.Lock()
+	defer memPlatformLock.Unlock()
+	key := memPlatformKey(d.StatDate, d.ChannelId)
+	existing := memPlatformBuf[key]
+	if existing == nil {
+		copyDelta := *d
+		memPlatformBuf[key] = &copyDelta
+		return
+	}
+	existing.RevenueQuota += d.RevenueQuota
+	existing.CostQuota += d.CostQuota
+	existing.RecordCount += d.RecordCount
+	existing.CostRatioSum += d.CostRatioSum
+	if existing.ChannelName == "" {
+		existing.ChannelName = d.ChannelName
+	}
+	if d.LastCreatedAt > existing.LastCreatedAt {
+		existing.LastCreatedAt = d.LastCreatedAt
+	}
+	if d.RetryCount > existing.RetryCount {
+		existing.RetryCount = d.RetryCount
+	}
+}
+
+func requeueCommissionStatMem(d *commissionStatDelta) {
+	if d == nil {
+		return
+	}
+	d.RetryCount++
+	if d.RetryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter("commission_daily_stat", "max retries exceeded", d.RetryCount, d)
+		return
+	}
+	memCommissionLock.Lock()
+	defer memCommissionLock.Unlock()
+	key := memCommissionKey(d.StatDate, d.EmployeeUserId)
+	existing := memCommissionBuf[key]
+	if existing == nil {
+		copyDelta := *d
+		memCommissionBuf[key] = &copyDelta
+		return
+	}
+	existing.RevenueQuota += d.RevenueQuota
+	existing.CostQuota += d.CostQuota
+	existing.ProfitQuota += d.ProfitQuota
+	existing.CommissionQuota += d.CommissionQuota
+	existing.RecordCount += d.RecordCount
+	if d.LastCreatedAt > existing.LastCreatedAt {
+		existing.LastCreatedAt = d.LastCreatedAt
+	}
+	if d.RetryCount > existing.RetryCount {
+		existing.RetryCount = d.RetryCount
+	}
+}
+
+func requeueCustomerCommissionStatMem(d *customerCommissionStatDelta) {
+	if d == nil {
+		return
+	}
+	d.RetryCount++
+	if d.RetryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter("customer_commission_daily_stat", "max retries exceeded", d.RetryCount, d)
+		return
+	}
+	memCustomerCommissionLock.Lock()
+	defer memCustomerCommissionLock.Unlock()
+	key := memCustomerCommissionKey(d.StatDate, d.EmployeeUserId, d.CustomerUserId)
+	existing := memCustomerCommissionBuf[key]
+	if existing == nil {
+		copyDelta := *d
+		memCustomerCommissionBuf[key] = &copyDelta
+		return
+	}
+	existing.RevenueQuota += d.RevenueQuota
+	existing.CostQuota += d.CostQuota
+	existing.ProfitQuota += d.ProfitQuota
+	existing.CommissionQuota += d.CommissionQuota
+	existing.RecordCount += d.RecordCount
+	if d.LastCreatedAt > existing.LastCreatedAt {
+		existing.LastCreatedAt = d.LastCreatedAt
+	}
+	if d.RetryCount > existing.RetryCount {
+		existing.RetryCount = d.RetryCount
+	}
+}
+
+func requeueCommissionMonthlyStatMem(d *commissionMonthlyStatDelta) {
+	if d == nil {
+		return
+	}
+	d.RetryCount++
+	if d.RetryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter("commission_monthly_stat", "max retries exceeded", d.RetryCount, d)
+		return
+	}
+	memCommissionMonthlyLock.Lock()
+	defer memCommissionMonthlyLock.Unlock()
+	key := memCommissionMonthlyKey(d.PeriodStartAt, d.EmployeeUserId)
+	existing := memCommissionMonthlyBuf[key]
+	if existing == nil {
+		copyDelta := *d
+		memCommissionMonthlyBuf[key] = &copyDelta
+		return
+	}
+	existing.RevenueQuota += d.RevenueQuota
+	existing.CostQuota += d.CostQuota
+	existing.ProfitQuota += d.ProfitQuota
+	existing.CommissionQuota += d.CommissionQuota
+	existing.RecordCount += d.RecordCount
+	if existing.PeriodKey == "" {
+		existing.PeriodKey = d.PeriodKey
+	}
+	if existing.Timezone == "" {
+		existing.Timezone = d.Timezone
+	}
+	if existing.PeriodEndAt == 0 {
+		existing.PeriodEndAt = d.PeriodEndAt
+	}
+	if d.LastCreatedAt > existing.LastCreatedAt {
+		existing.LastCreatedAt = d.LastCreatedAt
+	}
+	if d.RetryCount > existing.RetryCount {
+		existing.RetryCount = d.RetryCount
+	}
+}
+
+>>>>>>> Stashed changes
 // ---- 公共入口 ----
 
 // BufferPlatformDailyStat 将平台侧日统计增量写入缓冲区（Redis 或内存）。
@@ -195,10 +556,22 @@ func BufferPlatformDailyStat(rec *ConsumptionCost) {
 // BufferCommissionDailyStat 将员工提成侧日统计增量写入缓冲区（Redis 或内存）。
 func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
 	statDate := unixDayStart(log.CreatedAt)
+<<<<<<< Updated upstream
 	if common.RedisEnabled {
 		bufferCommissionStatRedis(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 	} else {
 		bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+=======
+	period := ResolveCommissionMonthlyPeriod(log.CreatedAt)
+	if common.RedisEnabled {
+		bufferCommissionStatRedis(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCustomerCommissionStatRedis(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionMonthlyStatRedis(period, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+	} else {
+		bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionMonthlyStatMem(period, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+>>>>>>> Stashed changes
 	}
 }
 
@@ -229,7 +602,13 @@ func flushPlatformStatsFromMem() {
 		return
 	}
 	for _, d := range buf {
+<<<<<<< Updated upstream
 		upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt)
+=======
+		if !upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt) {
+			requeuePlatformStatMem(d)
+		}
+>>>>>>> Stashed changes
 	}
 	common.SysLog(fmt.Sprintf("flush_business_stats: platform mem items=%d", len(buf)))
 }
@@ -244,11 +623,18 @@ func flushCommissionStatsFromMem() {
 		return
 	}
 	for _, d := range buf {
+<<<<<<< Updated upstream
 		upsertCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt)
+=======
+		if !upsertCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+			requeueCommissionStatMem(d)
+		}
+>>>>>>> Stashed changes
 	}
 	common.SysLog(fmt.Sprintf("flush_business_stats: commission mem items=%d", len(buf)))
 }
 
+<<<<<<< Updated upstream
 func flushPlatformStatsFromRedis() {
 	ctx := context.Background()
 	pattern := platformStatBufferPrefix + "*"
@@ -270,6 +656,46 @@ func flushPlatformStatsFromRedis() {
 			break
 		}
 	}
+=======
+func flushCustomerCommissionStatsFromMem() {
+	memCustomerCommissionLock.Lock()
+	buf := memCustomerCommissionBuf
+	memCustomerCommissionBuf = make(map[string]*customerCommissionStatDelta)
+	memCustomerCommissionLock.Unlock()
+
+	if len(buf) == 0 {
+		return
+	}
+	for _, d := range buf {
+		if !upsertCustomerCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.CustomerUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+			requeueCustomerCommissionStatMem(d)
+		}
+	}
+	common.SysLog(fmt.Sprintf("flush_business_stats: customer commission mem items=%d", len(buf)))
+}
+
+func flushCommissionMonthlyStatsFromMem() {
+	memCommissionMonthlyLock.Lock()
+	buf := memCommissionMonthlyBuf
+	memCommissionMonthlyBuf = make(map[string]*commissionMonthlyStatDelta)
+	memCommissionMonthlyLock.Unlock()
+
+	if len(buf) == 0 {
+		return
+	}
+	for _, d := range buf {
+		if !upsertCommissionMonthlyStat(d.PeriodStartAt, d.PeriodEndAt, d.PeriodKey, d.Timezone, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+			requeueCommissionMonthlyStatMem(d)
+		}
+	}
+	common.SysLog(fmt.Sprintf("flush_business_stats: commission monthly mem items=%d", len(buf)))
+}
+
+func flushPlatformStatsFromRedis() {
+	ctx := context.Background()
+	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+platformStatBufferPrefix+"*", flushOnePlatformKey)
+	flushed += flushRedisStatKeys(ctx, platformStatBufferPrefix+"*", flushOnePlatformKey)
+>>>>>>> Stashed changes
 	if flushed > 0 {
 		common.SysLog(fmt.Sprintf("flush_business_stats: platform redis keys=%d", flushed))
 	}
@@ -277,17 +703,54 @@ func flushPlatformStatsFromRedis() {
 
 func flushCommissionStatsFromRedis() {
 	ctx := context.Background()
+<<<<<<< Updated upstream
 	pattern := commissionStatBufferPrefix + "*"
+=======
+	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+commissionStatBufferPrefix+"*", flushOneCommissionKey)
+	flushed += flushRedisStatKeys(ctx, commissionStatBufferPrefix+"*", flushOneCommissionKey)
+	if flushed > 0 {
+		common.SysLog(fmt.Sprintf("flush_business_stats: commission redis keys=%d", flushed))
+	}
+}
+
+func flushCustomerCommissionStatsFromRedis() {
+	ctx := context.Background()
+	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+customerCommissionStatBufferPrefix+"*", flushOneCustomerCommissionKey)
+	flushed += flushRedisStatKeys(ctx, customerCommissionStatBufferPrefix+"*", flushOneCustomerCommissionKey)
+	if flushed > 0 {
+		common.SysLog(fmt.Sprintf("flush_business_stats: customer commission redis keys=%d", flushed))
+	}
+}
+
+func flushCommissionMonthlyStatsFromRedis() {
+	ctx := context.Background()
+	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+commissionMonthlyStatBufferPrefix+"*", flushOneCommissionMonthlyKey)
+	flushed += flushRedisStatKeys(ctx, commissionMonthlyStatBufferPrefix+"*", flushOneCommissionMonthlyKey)
+	if flushed > 0 {
+		common.SysLog(fmt.Sprintf("flush_business_stats: commission monthly redis keys=%d", flushed))
+	}
+}
+
+func flushRedisStatKeys(ctx context.Context, pattern string, flush func(context.Context, string) bool) int {
+>>>>>>> Stashed changes
 	var cursor uint64
 	var flushed int
 	for {
 		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 200).Result()
 		if err != nil {
+<<<<<<< Updated upstream
 			common.SysError("flushCommissionStatsFromRedis: scan error: " + err.Error())
 			return
 		}
 		for _, key := range keys {
 			if flushOneCommissionKey(ctx, key) {
+=======
+			common.SysError("flushRedisStatKeys: scan error: " + err.Error())
+			return flushed
+		}
+		for _, key := range keys {
+			if flush(ctx, key) {
+>>>>>>> Stashed changes
 				flushed++
 			}
 		}
@@ -296,18 +759,60 @@ func flushCommissionStatsFromRedis() {
 			break
 		}
 	}
+<<<<<<< Updated upstream
 	if flushed > 0 {
 		common.SysLog(fmt.Sprintf("flush_business_stats: commission redis keys=%d", flushed))
 	}
 }
 
 func flushOnePlatformKey(ctx context.Context, key string) bool {
+=======
+	return flushed
+}
+
+func applyRedisStatBatch(batchKey string, apply func(tx *gorm.DB) error) (bool, bool) {
+	if batchKey == "" {
+		return false, false
+	}
+	applied := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		row := BusinessStatsAppliedBatch{BatchKey: batchKey, AppliedAt: time.Now().Unix()}
+		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			applied = false
+			return nil
+		}
+		applied = true
+		return apply(tx)
+	})
+	if err != nil {
+		common.SysError("applyRedisStatBatch: " + err.Error())
+		return false, false
+	}
+	return true, !applied
+}
+
+func flushOnePlatformKey(ctx context.Context, key string) bool {
+	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
+	if !ok {
+		return false
+	}
+	key = processingKey
+>>>>>>> Stashed changes
 	vals, err := common.RDB.HGetAll(ctx, key).Result()
 	if err != nil || len(vals) == 0 {
 		return false
 	}
 	// 解析 key: "biz_buf:platform:{statDate}:{channelId}"
+<<<<<<< Updated upstream
 	parts := strings.TrimPrefix(key, platformStatBufferPrefix)
+=======
+	originalKey := redisStatOriginalKey(key)
+	parts := strings.TrimPrefix(originalKey, platformStatBufferPrefix)
+>>>>>>> Stashed changes
 	sepIdx := strings.Index(parts, ":")
 	if sepIdx < 0 {
 		common.RDB.Del(ctx, key)
@@ -333,17 +838,64 @@ func flushOnePlatformKey(ctx context.Context, key string) bool {
 		return false
 	}
 
+<<<<<<< Updated upstream
 	upsertPlatformDailyStat(statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
+=======
+	batchID := ensureRedisStatBatchID(ctx, key)
+	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
+		return upsertPlatformDailyStatTx(tx, statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
+	})
+	if !ok {
+		handleRedisStatFlushFailure(ctx, key, "platform_daily_stat", "db upsert failed", vals)
+		return false
+	}
+	if duplicate {
+		common.SysLog("flushOnePlatformKey: skip duplicate batch " + batchID)
+	}
+>>>>>>> Stashed changes
 	common.RDB.Del(ctx, key)
 	return true
 }
 
+<<<<<<< Updated upstream
 func flushOneCommissionKey(ctx context.Context, key string) bool {
+=======
+func handleRedisStatFlushFailure(ctx context.Context, key, kind, reason string, vals map[string]string) {
+	retryCount, _ := strconv.Atoi(vals["retry_count"])
+	retryCount++
+	if retryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter(kind, reason, retryCount, map[string]any{
+			"key":    key,
+			"values": vals,
+		})
+		common.RDB.Del(ctx, key)
+		return
+	}
+	pipe := common.RDB.Pipeline()
+	pipe.HSet(ctx, key, "retry_count", retryCount)
+	pipe.Expire(ctx, key, statBufferKeyTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		common.SysError("handleRedisStatFlushFailure: pipeline error: " + err.Error())
+	}
+}
+
+func flushOneCommissionKey(ctx context.Context, key string) bool {
+	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
+	if !ok {
+		return false
+	}
+	key = processingKey
+>>>>>>> Stashed changes
 	vals, err := common.RDB.HGetAll(ctx, key).Result()
 	if err != nil || len(vals) == 0 {
 		return false
 	}
+<<<<<<< Updated upstream
 	parts := strings.TrimPrefix(key, commissionStatBufferPrefix)
+=======
+	originalKey := redisStatOriginalKey(key)
+	parts := strings.TrimPrefix(originalKey, commissionStatBufferPrefix)
+>>>>>>> Stashed changes
 	sepIdx := strings.Index(parts, ":")
 	if sepIdx < 0 {
 		common.RDB.Del(ctx, key)
@@ -368,14 +920,144 @@ func flushOneCommissionKey(ctx context.Context, key string) bool {
 		return false
 	}
 
+<<<<<<< Updated upstream
 	upsertCommissionDailyStat(statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
+=======
+	batchID := ensureRedisStatBatchID(ctx, key)
+	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
+		return upsertCommissionDailyStatTx(tx, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
+	})
+	if !ok {
+		handleRedisStatFlushFailure(ctx, key, "commission_daily_stat", "db upsert failed", vals)
+		return false
+	}
+	if duplicate {
+		common.SysLog("flushOneCommissionKey: skip duplicate batch " + batchID)
+	}
+	common.RDB.Del(ctx, key)
+	return true
+}
+
+func flushOneCustomerCommissionKey(ctx context.Context, key string) bool {
+	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
+	if !ok {
+		return false
+	}
+	key = processingKey
+	vals, err := common.RDB.HGetAll(ctx, key).Result()
+	if err != nil || len(vals) == 0 {
+		return false
+	}
+	originalKey := redisStatOriginalKey(key)
+	parts := strings.TrimPrefix(originalKey, customerCommissionStatBufferPrefix)
+	pieces := strings.Split(parts, ":")
+	if len(pieces) != 3 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+	statDate, _ := strconv.ParseInt(pieces[0], 10, 64)
+	employeeUserId, _ := strconv.Atoi(pieces[1])
+	customerUserId, _ := strconv.Atoi(pieces[2])
+	if statDate == 0 || employeeUserId == 0 || customerUserId == 0 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+
+	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
+	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
+	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
+	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
+	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
+	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
+
+	if recordCount == 0 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+
+	batchID := ensureRedisStatBatchID(ctx, key)
+	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
+		return upsertCustomerCommissionDailyStatTx(tx, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
+	})
+	if !ok {
+		handleRedisStatFlushFailure(ctx, key, "customer_commission_daily_stat", "db upsert failed", vals)
+		return false
+	}
+	if duplicate {
+		common.SysLog("flushOneCustomerCommissionKey: skip duplicate batch " + batchID)
+	}
+>>>>>>> Stashed changes
 	common.RDB.Del(ctx, key)
 	return true
 }
 
 // ---- DB upsert（批量刷盘时调用）----
 
+<<<<<<< Updated upstream
 func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) {
+=======
+func flushOneCommissionMonthlyKey(ctx context.Context, key string) bool {
+	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
+	if !ok {
+		return false
+	}
+	key = processingKey
+	vals, err := common.RDB.HGetAll(ctx, key).Result()
+	if err != nil || len(vals) == 0 {
+		return false
+	}
+	originalKey := redisStatOriginalKey(key)
+	parts := strings.TrimPrefix(originalKey, commissionMonthlyStatBufferPrefix)
+	sepIdx := strings.Index(parts, ":")
+	if sepIdx < 0 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+	periodStartAt, _ := strconv.ParseInt(parts[:sepIdx], 10, 64)
+	employeeUserId, _ := strconv.Atoi(parts[sepIdx+1:])
+	if periodStartAt == 0 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+
+	periodEndAt, _ := strconv.ParseInt(vals["period_end_at"], 10, 64)
+	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
+	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
+	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
+	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
+	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
+	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
+
+	if recordCount == 0 {
+		common.RDB.Del(ctx, key)
+		return false
+	}
+
+	batchID := ensureRedisStatBatchID(ctx, key)
+	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
+		return upsertCommissionMonthlyStatTx(tx, periodStartAt, periodEndAt, vals["period_key"], vals["timezone"], employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
+	})
+	if !ok {
+		handleRedisStatFlushFailure(ctx, key, "commission_monthly_stat", "db upsert failed", vals)
+		return false
+	}
+	if duplicate {
+		common.SysLog("flushOneCommissionMonthlyKey: skip duplicate batch " + batchID)
+	}
+	common.RDB.Del(ctx, key)
+	return true
+}
+
+func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) bool {
+	if err := upsertPlatformDailyStatTx(DB, statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt); err != nil {
+		common.SysError(fmt.Sprintf("upsertPlatformDailyStat: statDate=%d channelId=%d err=%s", statDate, channelId, err.Error()))
+		return false
+	}
+	return true
+}
+
+func upsertPlatformDailyStatTx(tx *gorm.DB, statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) error {
+>>>>>>> Stashed changes
 	row := PlatformChannelDailyStat{
 		StatDate:      statDate,
 		ChannelId:     channelId,
@@ -386,7 +1068,11 @@ func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, 
 		CostRatioSum:  costRatioSum,
 		LastCreatedAt: lastCreatedAt,
 	}
+<<<<<<< Updated upstream
 	if err := DB.Clauses(clause.OnConflict{
+=======
+	return tx.Clauses(clause.OnConflict{
+>>>>>>> Stashed changes
 		Columns: []clause.Column{{Name: "stat_date"}, {Name: "channel_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"revenue_quota":   gorm.Expr("revenue_quota + ?", revenueQuota),
@@ -396,12 +1082,27 @@ func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, 
 			"channel_name":    gorm.Expr("COALESCE(NULLIF(channel_name, ''), ?)", channelName),
 			"last_created_at": gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
 		}),
+<<<<<<< Updated upstream
 	}).Create(&row).Error; err != nil {
 		common.SysError(fmt.Sprintf("upsertPlatformDailyStat: statDate=%d channelId=%d err=%s", statDate, channelId, err.Error()))
 	}
 }
 
 func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) {
+=======
+	}).Create(&row).Error
+}
+
+func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
+	if err := upsertCommissionDailyStatTx(DB, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+		common.SysError(fmt.Sprintf("upsertCommissionDailyStat: statDate=%d empUserId=%d err=%s", statDate, employeeUserId, err.Error()))
+		return false
+	}
+	return true
+}
+
+func upsertCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) error {
+>>>>>>> Stashed changes
 	row := EmployeeCommissionDailyStat{
 		StatDate:        statDate,
 		EmployeeUserId:  employeeUserId,
@@ -412,7 +1113,11 @@ func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota,
 		RecordCount:     recordCount,
 		LastCreatedAt:   lastCreatedAt,
 	}
+<<<<<<< Updated upstream
 	if err := DB.Clauses(clause.OnConflict{
+=======
+	return tx.Clauses(clause.OnConflict{
+>>>>>>> Stashed changes
 		Columns: []clause.Column{{Name: "stat_date"}, {Name: "employee_user_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
@@ -422,9 +1127,84 @@ func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota,
 			"record_count":     gorm.Expr("record_count + ?", recordCount),
 			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
 		}),
+<<<<<<< Updated upstream
 	}).Create(&row).Error; err != nil {
 		common.SysError(fmt.Sprintf("upsertCommissionDailyStat: statDate=%d empUserId=%d err=%s", statDate, employeeUserId, err.Error()))
 	}
+=======
+	}).Create(&row).Error
+}
+
+func upsertCustomerCommissionDailyStat(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
+	if err := upsertCustomerCommissionDailyStatTx(DB, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+		common.SysError(fmt.Sprintf("upsertCustomerCommissionDailyStat: statDate=%d empUserId=%d customerUserId=%d err=%s", statDate, employeeUserId, customerUserId, err.Error()))
+		return false
+	}
+	return true
+}
+
+func upsertCustomerCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) error {
+	row := EmployeeCustomerCommissionDailyStat{
+		StatDate:        statDate,
+		EmployeeUserId:  employeeUserId,
+		CustomerUserId:  customerUserId,
+		RevenueQuota:    revenueQuota,
+		CostQuota:       costQuota,
+		ProfitQuota:     profitQuota,
+		CommissionQuota: commissionQuota,
+		RecordCount:     recordCount,
+		LastCreatedAt:   lastCreatedAt,
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "stat_date"}, {Name: "employee_user_id"}, {Name: "customer_user_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
+			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
+			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
+			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
+			"record_count":     gorm.Expr("record_count + ?", recordCount),
+			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		}),
+	}).Create(&row).Error
+}
+
+func upsertCommissionMonthlyStat(periodStartAt, periodEndAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
+	if err := upsertCommissionMonthlyStatTx(DB, periodStartAt, periodEndAt, periodKey, timezone, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+		common.SysError(fmt.Sprintf("upsertCommissionMonthlyStat: periodStartAt=%d empUserId=%d err=%s", periodStartAt, employeeUserId, err.Error()))
+		return false
+	}
+	return true
+}
+
+func upsertCommissionMonthlyStatTx(tx *gorm.DB, periodStartAt, periodEndAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) error {
+	row := EmployeeCommissionMonthlyStat{
+		PeriodStartAt:   periodStartAt,
+		PeriodEndAt:     periodEndAt,
+		PeriodKey:       periodKey,
+		Timezone:        timezone,
+		EmployeeUserId:  employeeUserId,
+		RevenueQuota:    revenueQuota,
+		CostQuota:       costQuota,
+		ProfitQuota:     profitQuota,
+		CommissionQuota: commissionQuota,
+		RecordCount:     recordCount,
+		LastCreatedAt:   lastCreatedAt,
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "period_start_at"}, {Name: "employee_user_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"period_end_at":    periodEndAt,
+			"period_key":       gorm.Expr("COALESCE(NULLIF(period_key, ''), ?)", periodKey),
+			"timezone":         gorm.Expr("COALESCE(NULLIF(timezone, ''), ?)", timezone),
+			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
+			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
+			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
+			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
+			"record_count":     gorm.Expr("record_count + ?", recordCount),
+			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		}),
+	}).Create(&row).Error
+>>>>>>> Stashed changes
 }
 
 // ============================================================================
@@ -745,6 +1525,10 @@ const (
 type employeeExtDelta struct {
 	CommissionDelta int64
 	ProfitDelta     int64
+<<<<<<< Updated upstream
+=======
+	RetryCount      int
+>>>>>>> Stashed changes
 }
 
 var (
@@ -780,6 +1564,13 @@ func BufferCommissionAndProfit(userId int, commissionDelta, profitDelta int64) {
 }
 
 func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
+<<<<<<< Updated upstream
+=======
+	bufferEmployeeExtMemWithRetry(userId, commissionDelta, profitDelta, 0)
+}
+
+func bufferEmployeeExtMemWithRetry(userId int, commissionDelta, profitDelta int64, retryCount int) {
+>>>>>>> Stashed changes
 	memEmployeeExtLock.Lock()
 	defer memEmployeeExtLock.Unlock()
 	d, ok := memEmployeeExtBuf[userId]
@@ -789,9 +1580,51 @@ func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
 	}
 	d.CommissionDelta += commissionDelta
 	d.ProfitDelta += profitDelta
+<<<<<<< Updated upstream
 }
 
 // flushEmployeeExtBuffers 批量刷入 user_extensions 并检查等级升级。
+=======
+	if retryCount > d.RetryCount {
+		d.RetryCount = retryCount
+	}
+}
+
+// flushEmployeeExtBuffers 批量刷入 user_extensions 并检查等级升级。
+func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
+	if d == nil || (d.CommissionDelta == 0 && d.ProfitDelta == 0) {
+		return
+	}
+	d.RetryCount++
+	if d.RetryCount >= statBufferMaxRetries {
+		writeBusinessStatsDeadLetter("employee_ext_delta", "max retries exceeded", d.RetryCount, map[string]any{
+			"user_id": userId,
+			"delta":   d,
+		})
+		return
+	}
+	if common.RedisEnabled {
+		key := fmt.Sprintf("%s%d", employeeExtBufferPrefix, userId)
+		ctx := context.Background()
+		pipe := common.RDB.Pipeline()
+		if d.CommissionDelta != 0 {
+			pipe.HIncrBy(ctx, key, "commission_delta", d.CommissionDelta)
+		}
+		if d.ProfitDelta != 0 {
+			pipe.HIncrBy(ctx, key, "profit_delta", d.ProfitDelta)
+		}
+		pipe.HSet(ctx, key, "retry_count", d.RetryCount)
+		pipe.Expire(ctx, key, statBufferKeyTTL)
+		if _, err := pipe.Exec(ctx); err != nil {
+			common.SysError("requeueEmployeeExtDelta: redis pipeline error: " + err.Error())
+			bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
+		}
+		return
+	}
+	bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
+}
+
+>>>>>>> Stashed changes
 func flushEmployeeExtBuffers() {
 	var items map[int]*employeeExtDelta
 
@@ -820,11 +1653,26 @@ func flushEmployeeExtBuffers() {
 	for uid := range items {
 		userIds = append(userIds, uid)
 	}
+<<<<<<< Updated upstream
 	ensureUserExtensionsBatch(userIds)
 
 	// 逐个 UPDATE + 等级升级检查
 	for uid, d := range items {
 		applyEmployeeExtDelta(uid, d)
+=======
+	if !ensureUserExtensionsBatch(userIds) {
+		for uid, d := range items {
+			requeueEmployeeExtDelta(uid, d)
+		}
+		return
+	}
+
+	// 逐个 UPDATE + 等级升级检查
+	for uid, d := range items {
+		if !applyEmployeeExtDelta(uid, d) {
+			requeueEmployeeExtDelta(uid, d)
+		}
+>>>>>>> Stashed changes
 	}
 
 	common.SysLog(fmt.Sprintf("flush_business_stats: employee_ext items=%d", len(items)))
@@ -862,6 +1710,10 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
 			}
 			commDelta, _ := strconv.ParseInt(vals["commission_delta"], 10, 64)
 			profitDelta, _ := strconv.ParseInt(vals["profit_delta"], 10, 64)
+<<<<<<< Updated upstream
+=======
+			retryCount, _ := strconv.Atoi(vals["retry_count"])
+>>>>>>> Stashed changes
 			if commDelta == 0 && profitDelta == 0 {
 				common.RDB.Del(ctx, key)
 				continue
@@ -869,6 +1721,10 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
 			items[uid] = &employeeExtDelta{
 				CommissionDelta: commDelta,
 				ProfitDelta:     profitDelta,
+<<<<<<< Updated upstream
+=======
+				RetryCount:      retryCount,
+>>>>>>> Stashed changes
 			}
 			common.RDB.Del(ctx, key)
 		}
@@ -881,9 +1737,15 @@ func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
 }
 
 // ensureUserExtensionsBatch 批量确保 user_extensions 记录存在。
+<<<<<<< Updated upstream
 func ensureUserExtensionsBatch(userIds []int) {
 	if len(userIds) == 0 {
 		return
+=======
+func ensureUserExtensionsBatch(userIds []int) bool {
+	if len(userIds) == 0 {
+		return true
+>>>>>>> Stashed changes
 	}
 	rows := make([]UserExtension, 0, len(userIds))
 	for _, uid := range userIds {
@@ -892,11 +1754,21 @@ func ensureUserExtensionsBatch(userIds []int) {
 	// ON CONFLICT DO NOTHING, 批量插入
 	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
 		common.SysError("ensureUserExtensionsBatch: " + err.Error())
+<<<<<<< Updated upstream
 	}
 }
 
 // applyEmployeeExtDelta 将累计增量写入 DB 并检查等级升级。
 func applyEmployeeExtDelta(userId int, d *employeeExtDelta) {
+=======
+		return false
+	}
+	return true
+}
+
+// applyEmployeeExtDelta 将累计增量写入 DB 并检查等级升级。
+func applyEmployeeExtDelta(userId int, d *employeeExtDelta) bool {
+>>>>>>> Stashed changes
 	updates := map[string]interface{}{}
 	if d.CommissionDelta != 0 {
 		updates["commission_total_quota"] = gorm.Expr("commission_total_quota + ?", d.CommissionDelta)
@@ -906,27 +1778,54 @@ func applyEmployeeExtDelta(userId int, d *employeeExtDelta) {
 		updates["profit_total_quota"] = gorm.Expr("profit_total_quota + ?", d.ProfitDelta)
 	}
 	if len(updates) == 0 {
+<<<<<<< Updated upstream
 		return
 	}
 	if err := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates).Error; err != nil {
 		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, err.Error()))
 		return
+=======
+		return true
+	}
+	result := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
+	if result.Error != nil {
+		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
+		return false
+	}
+	if result.RowsAffected == 0 {
+		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d no rows affected", userId))
+		return false
+>>>>>>> Stashed changes
 	}
 	// 等级升级检查（仅利润有正增量时）
 	if d.ProfitDelta > 0 {
 		var ext UserExtension
 		if err := DB.Select("profit_total_quota").Where("user_id = ?", userId).First(&ext).Error; err != nil {
 			common.SysError(fmt.Sprintf("applyEmployeeExtDelta: read profit failed userId=%d err=%s", userId, err.Error()))
+<<<<<<< Updated upstream
 			return
 		}
 		TryAutoUpgradeTier(userId, ext.ProfitTotalQuota)
 	}
+=======
+			return true
+		}
+		TryAutoUpgradeTier(userId, ext.ProfitTotalQuota)
+	}
+	return true
+>>>>>>> Stashed changes
 }
 
 // ---- 刷盘入口 ----
 
 // FlushBusinessStatBuffers 将缓冲区的增量批量刷入 DB。由后台定时任务调用。
 func FlushBusinessStatBuffers() {
+<<<<<<< Updated upstream
+=======
+	businessStatsFlushMu.Lock()
+	defer businessStatsFlushMu.Unlock()
+
+>>>>>>> Stashed changes
 	// 1. 先刷明细台账（顺序保证一致性，但三类台账互不阻塞）
 	paired := flushCostAndCommissionLedger()
 	flushConsumptionCostLedger()
@@ -939,9 +1838,19 @@ func FlushBusinessStatBuffers() {
 	if common.RedisEnabled {
 		flushPlatformStatsFromRedis()
 		flushCommissionStatsFromRedis()
+<<<<<<< Updated upstream
 	} else {
 		flushPlatformStatsFromMem()
 		flushCommissionStatsFromMem()
+=======
+		flushCustomerCommissionStatsFromRedis()
+		flushCommissionMonthlyStatsFromRedis()
+	} else {
+		flushPlatformStatsFromMem()
+		flushCommissionStatsFromMem()
+		flushCustomerCommissionStatsFromMem()
+		flushCommissionMonthlyStatsFromMem()
+>>>>>>> Stashed changes
 	}
 	// 3. 刷员工汇总（user_extensions + 等级升级）
 	flushEmployeeExtBuffers()

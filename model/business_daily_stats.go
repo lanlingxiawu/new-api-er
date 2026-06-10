@@ -1,6 +1,11 @@
 package model
 
 import (
+<<<<<<< Updated upstream
+=======
+	"context"
+	"fmt"
+>>>>>>> Stashed changes
 	"sort"
 	"strconv"
 	"strings"
@@ -8,6 +13,10 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+<<<<<<< Updated upstream
+=======
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+>>>>>>> Stashed changes
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -17,6 +26,10 @@ import (
 var coveredDaysCache sync.Map
 
 const businessStatsDaySeconds int64 = 86400
+<<<<<<< Updated upstream
+=======
+const businessStatsBackfillLockTTL = 12 * time.Hour
+>>>>>>> Stashed changes
 
 type PlatformChannelDailyStat struct {
 	Id            int     `json:"id"`
@@ -42,12 +55,66 @@ type EmployeeCommissionDailyStat struct {
 	LastCreatedAt   int64 `json:"last_created_at" gorm:"default:0"`
 }
 
+<<<<<<< Updated upstream
+=======
+type EmployeeCustomerCommissionDailyStat struct {
+	Id              int   `json:"id"`
+	StatDate        int64 `json:"stat_date" gorm:"uniqueIndex:idx_employee_customer_commission_daily,priority:1;index"`
+	EmployeeUserId  int   `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_customer_commission_daily,priority:2;index"`
+	CustomerUserId  int   `json:"customer_user_id" gorm:"uniqueIndex:idx_employee_customer_commission_daily,priority:3;index"`
+	RevenueQuota    int64 `json:"revenue_quota" gorm:"default:0"`
+	CostQuota       int64 `json:"cost_quota" gorm:"default:0"`
+	ProfitQuota     int64 `json:"profit_quota" gorm:"default:0"`
+	CommissionQuota int64 `json:"commission_quota" gorm:"default:0"`
+	RecordCount     int64 `json:"record_count" gorm:"default:0"`
+	LastCreatedAt   int64 `json:"last_created_at" gorm:"default:0"`
+}
+
+type EmployeeCommissionMonthlyStat struct {
+	Id              int    `json:"id"`
+	PeriodStartAt   int64  `json:"period_start_at" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:1;index"`
+	PeriodEndAt     int64  `json:"period_end_at" gorm:"index;default:0"`
+	PeriodKey       string `json:"period_key" gorm:"type:varchar(32);default:''"`
+	Timezone        string `json:"timezone" gorm:"type:varchar(64);default:''"`
+	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:2;index"`
+	RevenueQuota    int64  `json:"revenue_quota" gorm:"default:0"`
+	CostQuota       int64  `json:"cost_quota" gorm:"default:0"`
+	ProfitQuota     int64  `json:"profit_quota" gorm:"default:0"`
+	CommissionQuota int64  `json:"commission_quota" gorm:"default:0"`
+	RecordCount     int64  `json:"record_count" gorm:"default:0"`
+	LastCreatedAt   int64  `json:"last_created_at" gorm:"default:0"`
+}
+
+>>>>>>> Stashed changes
 type BusinessDailyStatsCoverage struct {
 	Id          int   `json:"id"`
 	StatDate    int64 `json:"stat_date" gorm:"uniqueIndex:idx_business_daily_stats_coverage_date"`
 	CompletedAt int64 `json:"completed_at" gorm:"default:0"`
 }
 
+<<<<<<< Updated upstream
+=======
+type BusinessStatsAppliedBatch struct {
+	Id        int    `json:"id"`
+	BatchKey  string `json:"batch_key" gorm:"uniqueIndex;type:varchar(255)"`
+	AppliedAt int64  `json:"applied_at" gorm:"index;default:0"`
+}
+
+type BusinessStatsBackfillLock struct {
+	Id        int    `json:"id" gorm:"primaryKey"`
+	Owner     string `json:"owner" gorm:"type:varchar(128);default:''"`
+	ExpiresAt int64  `json:"expires_at" gorm:"index;default:0"`
+	UpdatedAt int64  `json:"updated_at" gorm:"default:0"`
+}
+
+type CommissionMonthlyPeriod struct {
+	PeriodStartAt int64  `json:"period_start_at"`
+	PeriodEndAt   int64  `json:"period_end_at"`
+	PeriodKey     string `json:"period_key"`
+	Timezone      string `json:"timezone"`
+}
+
+>>>>>>> Stashed changes
 type statsTimeRange struct {
 	StartTime int64
 	EndTime   int64
@@ -73,6 +140,123 @@ func unixDayEnd(ts int64) int64 {
 	return unixDayStart(ts) + businessStatsDaySeconds - 1
 }
 
+<<<<<<< Updated upstream
+=======
+func AcquireBusinessStatsBackfillLock() (string, bool) {
+	owner := fmt.Sprintf("%d", time.Now().UnixNano())
+	if common.RedisEnabled && common.RDB != nil {
+		ok, err := common.RDB.SetNX(context.Background(), "lock:business_stats_backfill", owner, businessStatsBackfillLockTTL).Result()
+		if err == nil {
+			return "redis:" + owner, ok
+		}
+		common.SysError("AcquireBusinessStatsBackfillLock: redis lock failed: " + err.Error())
+	}
+
+	now := time.Now().Unix()
+	expiresAt := now + int64(businessStatsBackfillLockTTL/time.Second)
+	lock := BusinessStatsBackfillLock{Id: 1, Owner: owner, ExpiresAt: expiresAt, UpdatedAt: now}
+	if err := DB.Create(&lock).Error; err == nil {
+		return "db:" + owner, true
+	}
+	result := DB.Model(&BusinessStatsBackfillLock{}).
+		Where("id = ? AND expires_at < ?", 1, now).
+		Updates(map[string]interface{}{"owner": owner, "expires_at": expiresAt, "updated_at": now})
+	if result.Error != nil {
+		common.SysError("AcquireBusinessStatsBackfillLock: db lock failed: " + result.Error.Error())
+		return owner, false
+	}
+	return "db:" + owner, result.RowsAffected > 0
+}
+
+func ReleaseBusinessStatsBackfillLock(owner string) {
+	if owner == "" {
+		return
+	}
+	if strings.HasPrefix(owner, "redis:") && common.RDB != nil {
+		owner = strings.TrimPrefix(owner, "redis:")
+		ctx := context.Background()
+		const releaseScript = `
+			if redis.call("GET", KEYS[1]) == ARGV[1] then
+				return redis.call("DEL", KEYS[1])
+			end
+			return 0
+		`
+		if err := common.RDB.Eval(ctx, releaseScript, []string{"lock:business_stats_backfill"}, owner).Err(); err != nil {
+			common.SysError("ReleaseBusinessStatsBackfillLock: redis release failed: " + err.Error())
+		}
+		return
+	}
+	owner = strings.TrimPrefix(owner, "db:")
+	if err := DB.Model(&BusinessStatsBackfillLock{}).
+		Where("id = ? AND owner = ?", 1, owner).
+		Updates(map[string]interface{}{"owner": "", "expires_at": 0, "updated_at": time.Now().Unix()}).Error; err != nil {
+		common.SysError("ReleaseBusinessStatsBackfillLock: db release failed: " + err.Error())
+	}
+}
+
+func commissionResetDaysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func commissionMonthlyStatLocation(timezone string) (*time.Location, string) {
+	if timezone == "Local" {
+		return time.Local, "Local"
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if timezone == "Asia/Shanghai" && err == nil {
+		return loc, "Asia/Shanghai"
+	}
+	if err != nil {
+		return time.Local, "Local"
+	}
+	return loc, "Asia/Shanghai"
+}
+
+func commissionMonthlyScheduledTime(year int, month time.Month, cfg *operation_setting.CommissionTierResetSetting, loc *time.Location) time.Time {
+	day := cfg.ResetDay
+	if day < 1 {
+		day = 1
+	}
+	if maxDay := commissionResetDaysInMonth(year, month); day > maxDay {
+		day = maxDay
+	}
+	return time.Date(year, month, day, cfg.ResetHour, cfg.ResetMinute, cfg.ResetSecond, 0, loc)
+}
+
+func previousCommissionMonth(year int, month time.Month) (int, time.Month) {
+	if month == time.January {
+		return year - 1, time.December
+	}
+	return year, month - 1
+}
+
+func nextCommissionMonth(year int, month time.Month) (int, time.Month) {
+	if month == time.December {
+		return year + 1, time.January
+	}
+	return year, month + 1
+}
+
+func ResolveCommissionMonthlyPeriod(createdAt int64) CommissionMonthlyPeriod {
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, timezone := commissionMonthlyStatLocation(cfg.Timezone)
+	t := time.Unix(createdAt, 0).In(loc)
+	start := commissionMonthlyScheduledTime(t.Year(), t.Month(), cfg, loc)
+	if t.Before(start) {
+		year, month := previousCommissionMonth(t.Year(), t.Month())
+		start = commissionMonthlyScheduledTime(year, month, cfg, loc)
+	}
+	nextYear, nextMonth := nextCommissionMonth(start.In(loc).Year(), start.In(loc).Month())
+	end := commissionMonthlyScheduledTime(nextYear, nextMonth, cfg, loc).Add(-time.Second)
+	return CommissionMonthlyPeriod{
+		PeriodStartAt: start.Unix(),
+		PeriodEndAt:   end.Unix(),
+		PeriodKey:     start.In(loc).Format("2006-01-02"),
+		Timezone:      timezone,
+	}
+}
+
+>>>>>>> Stashed changes
 func splitDailyAggregatePlan(startTime, endTime int64) dailyAggregatePlan {
 	var plan dailyAggregatePlan
 
@@ -383,6 +567,41 @@ func ResolveBusinessStatsQueryPlan(startTime, endTime int64) (*ResolvedQueryPlan
 	return resolved, nil
 }
 
+<<<<<<< Updated upstream
+=======
+// ResolveBusinessStatsDailyOnlyQueryPlan maps the requested range to whole-day
+// aggregate rows and never falls back to ledger/detail aggregation.
+func ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime int64) (*ResolvedQueryPlan, error) {
+	minDate, maxDate, err := getBusinessStatsDailyBounds()
+	if err != nil {
+		return nil, err
+	}
+	if maxDate == 0 {
+		return &ResolvedQueryPlan{}, nil
+	}
+	startDate := minDate
+	endDate := maxDate
+	if startTime != 0 {
+		startDate = unixDayStart(startTime)
+	}
+	if endTime != 0 {
+		endDate = unixDayStart(endTime)
+	}
+	if startDate < minDate {
+		startDate = minDate
+	}
+	if endDate > maxDate {
+		endDate = maxDate
+	}
+	if endDate < startDate {
+		return &ResolvedQueryPlan{}, nil
+	}
+	return &ResolvedQueryPlan{
+		CoveredRanges: []statDateRange{{StartDate: startDate, EndDate: endDate}},
+	}, nil
+}
+
+>>>>>>> Stashed changes
 func normalizeStatsPagination(page, pageSize int) (int, int, int) {
 	if page < 1 {
 		page = 1
@@ -921,6 +1140,10 @@ type BusinessDailyStatsBackfillResult struct {
 	Days              int64 `json:"days"`
 	PlatformRows      int64 `json:"platform_rows"`
 	EmployeeRows      int64 `json:"employee_rows"`
+<<<<<<< Updated upstream
+=======
+	CustomerRows      int64 `json:"customer_rows"`
+>>>>>>> Stashed changes
 	CostRecords       int64 `json:"cost_records"`
 	CommissionRecords int64 `json:"commission_records"`
 	TotalRecords      int64 `json:"total_records"`
@@ -947,6 +1170,10 @@ type businessStatsBackfillPlan struct {
 type businessStatsBackfillDayResult struct {
 	PlatformRows      int64
 	EmployeeRows      int64
+<<<<<<< Updated upstream
+=======
+	CustomerRows      int64
+>>>>>>> Stashed changes
 	CostRecords       int64
 	CommissionRecords int64
 }
@@ -979,6 +1206,10 @@ func BackfillBusinessDailyStats(startTime, endTime int64, batchDays int) (Busine
 		result.Days++
 		result.PlatformRows += dayResult.PlatformRows
 		result.EmployeeRows += dayResult.EmployeeRows
+<<<<<<< Updated upstream
+=======
+		result.CustomerRows += dayResult.CustomerRows
+>>>>>>> Stashed changes
 
 		if statDate < plan.EndDate {
 			sleep := businessStatsBackfillSleepDuration(plan.SleepMs, dayResult.CostRecords+dayResult.CommissionRecords, time.Since(startedAt))
@@ -1018,6 +1249,23 @@ func resolveBusinessStatsBackfillPlan(startTime, endTime int64, requestedBatchDa
 
 	startDate := unixDayStart(startTime)
 	endDate := unixDayStart(endTime)
+<<<<<<< Updated upstream
+=======
+	yesterdayEndDate := unixDayStart(time.Now().Unix()) - businessStatsDaySeconds
+	if yesterdayEndDate > 0 && endDate > yesterdayEndDate {
+		endDate = yesterdayEndDate
+	}
+	if endDate < startDate {
+		return businessStatsBackfillPlan{
+			StartTime:  startTime,
+			EndTime:    endTime,
+			StartDate:  startDate,
+			EndDate:    endDate,
+			BatchDays:  normalizeBackfillBatchDays(requestedBatchDays, 0),
+			MaxRetries: 3,
+		}, nil
+	}
+>>>>>>> Stashed changes
 	days := (endDate-startDate)/businessStatsDaySeconds + 1
 
 	costRows, err := countCreatedAtRangeRows(&ConsumptionCost{}, startDate, endDate+businessStatsDaySeconds-1)
@@ -1137,10 +1385,21 @@ func backfillBusinessDailyStatsDay(statDate int64) (businessStatsBackfillDayResu
 	if err != nil {
 		return businessStatsBackfillDayResult{}, err
 	}
+<<<<<<< Updated upstream
+=======
+	customerRows, err := aggregateEmployeeCustomerCommissionDailyStatsFromLedger(statDate, statDate)
+	if err != nil {
+		return businessStatsBackfillDayResult{}, err
+	}
+>>>>>>> Stashed changes
 
 	result := businessStatsBackfillDayResult{
 		PlatformRows: int64(len(platformRows)),
 		EmployeeRows: int64(len(employeeRows)),
+<<<<<<< Updated upstream
+=======
+		CustomerRows: int64(len(customerRows)),
+>>>>>>> Stashed changes
 	}
 	for _, row := range platformRows {
 		result.CostRecords += row.RecordCount
@@ -1156,6 +1415,12 @@ func backfillBusinessDailyStatsDay(statDate int64) (businessStatsBackfillDayResu
 		if err := tx.Where("stat_date = ?", statDate).Delete(&EmployeeCommissionDailyStat{}).Error; err != nil {
 			return err
 		}
+<<<<<<< Updated upstream
+=======
+		if err := tx.Where("stat_date = ?", statDate).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
+			return err
+		}
+>>>>>>> Stashed changes
 		if len(platformRows) > 0 {
 			if err := tx.CreateInBatches(platformRows, 1000).Error; err != nil {
 				return err
@@ -1166,6 +1431,14 @@ func backfillBusinessDailyStatsDay(statDate int64) (businessStatsBackfillDayResu
 				return err
 			}
 		}
+<<<<<<< Updated upstream
+=======
+		if len(customerRows) > 0 {
+			if err := tx.CreateInBatches(customerRows, 1000).Error; err != nil {
+				return err
+			}
+		}
+>>>>>>> Stashed changes
 		return tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "stat_date"}},
 			DoUpdates: clause.AssignmentColumns([]string{"completed_at"}),
@@ -1266,21 +1539,32 @@ func aggregatePlatformChannelDailyStatsFromLedger(startDate, endDate int64) ([]P
 	return rows, err
 }
 
+<<<<<<< Updated upstream
 // NeedsBusinessStatsBackfill 检查是否有台账数据尚未被 coverage 覆盖。
 // 如果 option 中已标记回填完成则直接返回 false，避免每次查询都检查。
+=======
+// NeedsBusinessStatsBackfill checks whether aggregate tables still miss ledger data.
+// The legacy completion option only skips the old day coverage check; newer
+// aggregate tables must still be verified so already-deployed databases can
+// expose the one-time backfill action when their employee/customer stats are missing.
+>>>>>>> Stashed changes
 func NeedsBusinessStatsBackfill() bool {
 	common.OptionMapRWMutex.RLock()
 	completed := common.OptionMap["BusinessStatsBackfillCompleted"] == "true"
 	common.OptionMapRWMutex.RUnlock()
+<<<<<<< Updated upstream
 	if completed {
 		return false
 	}
+=======
+>>>>>>> Stashed changes
 	minCreated, maxCreated, err := getBusinessStatsLedgerBounds()
 	if err != nil || minCreated == 0 || maxCreated == 0 {
 		return false
 	}
 	minDate := unixDayStart(minCreated)
 	maxDate := unixDayStart(maxCreated)
+<<<<<<< Updated upstream
 	expectedDays := (maxDate-minDate)/businessStatsDaySeconds + 1
 	if expectedDays <= 0 {
 		return false
@@ -1293,6 +1577,78 @@ func NeedsBusinessStatsBackfill() bool {
 		return false
 	}
 	return coveredDays < expectedDays
+=======
+	if !completed {
+		expectedDays := (maxDate-minDate)/businessStatsDaySeconds + 1
+		if expectedDays <= 0 {
+			return false
+		}
+		var coveredDays int64
+		if err := DB.Model(&BusinessDailyStatsCoverage{}).
+			Where("stat_date >= ? AND stat_date <= ?", minDate, maxDate).
+			Distinct("stat_date").
+			Count(&coveredDays).Error; err != nil {
+			return false
+		}
+		if coveredDays < expectedDays {
+			return true
+		}
+	}
+	common.OptionMapRWMutex.RLock()
+	customerCaughtUp := common.OptionMap["BusinessStatsEmployeeCustomerBackfillCaughtUp"] == "true"
+	common.OptionMapRWMutex.RUnlock()
+	if customerCaughtUp {
+		return false
+	}
+	customerBackfillNeeded, err := needsEmployeeCustomerCommissionStatsBackfill()
+	if err != nil {
+		common.SysError("needsEmployeeCustomerCommissionStatsBackfill: " + err.Error())
+		return false
+	}
+	return customerBackfillNeeded
+}
+
+func needsEmployeeCustomerCommissionStatsBackfill() (bool, error) {
+	minCreated, maxCreated, err := getCreatedAtBounds(&EmployeeCommissionLog{})
+	if err != nil || minCreated == 0 || maxCreated == 0 {
+		return false, err
+	}
+	minDate := unixDayStart(minCreated)
+	maxDate := unixDayStart(maxCreated)
+	customerMin, customerMax, err := getStatDateBounds(&EmployeeCustomerCommissionDailyStat{})
+	if err != nil {
+		return false, err
+	}
+	if customerMin == 0 || customerMax == 0 || customerMin > minDate || customerMax < maxDate {
+		return true, nil
+	}
+
+	expectedBase := DB.Model(&EmployeeCommissionLog{}).
+		Select("FLOOR(created_at / 86400) as stat_date, employee_user_id, customer_user_id").
+		Where("created_at >= ? AND created_at <= ?", minDate, maxDate+businessStatsDaySeconds-1).
+		Group("FLOOR(created_at / 86400), employee_user_id, customer_user_id")
+	var expectedGroups int64
+	if err := DB.Table("(?) as grouped", expectedBase).Count(&expectedGroups).Error; err != nil {
+		return false, err
+	}
+	if expectedGroups == 0 {
+		return false, nil
+	}
+
+	actualBase := DB.Model(&EmployeeCustomerCommissionDailyStat{}).
+		Select("stat_date, employee_user_id, customer_user_id").
+		Where("stat_date >= ? AND stat_date <= ?", minDate, maxDate).
+		Group("stat_date, employee_user_id, customer_user_id")
+	var actualGroups int64
+	if err := DB.Table("(?) as grouped", actualBase).Count(&actualGroups).Error; err != nil {
+		return false, err
+	}
+	if actualGroups < expectedGroups {
+		return true, nil
+	}
+	_ = UpdateOption("BusinessStatsEmployeeCustomerBackfillCaughtUp", "true")
+	return false, nil
+>>>>>>> Stashed changes
 }
 
 func aggregateEmployeeCommissionDailyStatsFromLedger(startDate, endDate int64) ([]EmployeeCommissionDailyStat, error) {
@@ -1311,3 +1667,24 @@ func aggregateEmployeeCommissionDailyStatsFromLedger(startDate, endDate int64) (
 		Scan(&rows).Error
 	return rows, err
 }
+<<<<<<< Updated upstream
+=======
+
+func aggregateEmployeeCustomerCommissionDailyStatsFromLedger(startDate, endDate int64) ([]EmployeeCustomerCommissionDailyStat, error) {
+	var rows []EmployeeCustomerCommissionDailyStat
+	err := DB.Model(&EmployeeCommissionLog{}).
+		Select("FLOOR(created_at / 86400) * 86400 as stat_date, "+
+			"employee_user_id, "+
+			"customer_user_id, "+
+			"COALESCE(SUM(revenue_quota),0) as revenue_quota, "+
+			"COALESCE(SUM(cost_quota),0) as cost_quota, "+
+			"COALESCE(SUM(profit_quota),0) as profit_quota, "+
+			"COALESCE(SUM(commission_quota),0) as commission_quota, "+
+			"COUNT(*) as record_count, "+
+			"COALESCE(MAX(created_at),0) as last_created_at").
+		Where("created_at >= ? AND created_at <= ?", startDate, endDate+businessStatsDaySeconds-1).
+		Group("FLOOR(created_at / 86400), employee_user_id, customer_user_id").
+		Scan(&rows).Error
+	return rows, err
+}
+>>>>>>> Stashed changes

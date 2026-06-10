@@ -179,6 +179,7 @@
     "本地": "Cục bộ",
     "本地计费": "Local billing",
     "本地数据存储": "Lưu trữ dữ liệu cục bộ",
+    "本期提成": "Hoa hồng kỳ hiện tại",
     "本设备：手机指纹/面容，外接：USB安全密钥": "Tích hợp: vân tay/khuôn mặt điện thoại, Bên ngoài: khóa bảo mật USB",
     "本设备内置": "Thiết bị tích hợp",
     "本项目根据": "Dự án này được cấp phép theo ",
@@ -567,12 +568,22 @@
     "登录注册": "Đăng nhập & Đăng ký",
     "等待获取邮箱信息...": "Đang chờ lấy thông tin email...",
     "等待中": "Đang chờ",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "Bậc",
     "等级编号": "Số bậc",
     "等级编号必须 ≥ 1": "Số bậc phải ≥ 1",
     "等级已创建": "Đã tạo bậc",
     "等级已更新": "Đã cập nhật bậc",
     "等级已删除": "Đã xóa bậc",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "Cài đặt đặt lại hàng tháng cho cấp và hiệu suất",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "Số tiền tương đương: ",
     "低于此额度时将发送邮件提醒用户": "Email nhắc nhở sẽ được gửi khi hạn ngạch giảm xuống dưới mức này",
     "递归": "Đệ quy",
@@ -745,6 +756,7 @@
     "服务器地址": "Địa chỉ máy chủ",
     "服务器日志功能未启用（未配置日志目录）": "Ghi nhật ký máy chủ chưa được bật (chưa cấu hình thư mục nhật ký)",
     "服务器日志管理": "Quản lý nhật ký máy chủ",
+    "服务器时区": "Múi giờ máy chủ",
     "服务器IP": "IP máy chủ",
     "服务商": "Service Provider",
     "服务显示名称": "Tên hiển thị dịch vụ",
@@ -803,8 +815,16 @@
     "该套餐未配置 Creem": "Gói này chưa cấu hình Creem",
     "该套餐未配置 Stripe": "Gói này chưa cấu hình Stripe",
     "该域名已存在于白名单中": "Tên miền đã tồn tại trong danh sách trắng",
+<<<<<<< Updated upstream
     "该员工暂无已分配客户": "Nhân viên này chưa có khách hàng được phân công",
+=======
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
     "概览": "Overview",
+=======
+    "该员工暂无已分配客户": "Nhân viên này chưa có khách hàng được phân công",
+    "概览": "Tổng quan",
+>>>>>>> Stashed changes
     "高级": "Nâng cao",
     "高级配置": "Advanced Configuration",
     "高级设置": "Cài đặt nâng cao",
@@ -1132,7 +1152,14 @@
     "计算费用中...": "Calculating fees...",
     "计算中": "Calculating",
     "记录请求与错误日志IP": "Ghi lại IP nhật ký yêu cầu và lỗi",
+<<<<<<< Updated upstream
     "记录数": "Số bản ghi",
+=======
+<<<<<<< Updated upstream
+=======
+    "记录数": "Bản ghi",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "继续": "Tiếp tục",
     "加密存储": "Encrypted Storage",
     "加入渠道": "Join Channel",
@@ -1214,6 +1241,7 @@
     "将删除 {{value}} 天前的日志文件。": "Tệp nhật ký cũ hơn {{value}} ngày sẽ bị xóa.",
     "将删除所有仍在内存中的渠道亲和性缓存条目。": "Sẽ xóa tất cả mục bộ nhớ đệm ưu ái kênh còn trong bộ nhớ.",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "Thao tác này sẽ xóa tất cả các mã đổi thưởng đã sử dụng, bị vô hiệu hóa và hết hạn, thao tác này không thể hoàn tác.",
+    "将所有员工重置到最低等级？": "Đặt lại tất cả nhân viên về cấp thấp nhất?",
     "将为选中的 ": "Sẽ đặt cho đã chọn ",
     "将只保留最近 {{value}} 个日志文件，其余将被删除。": "Chỉ giữ lại {{value}} tệp nhật ký gần nhất; phần còn lại sẽ bị xóa.",
     "将追加 2 条规则到现有规则列表。": "2 quy tắc sẽ được thêm vào danh sách quy tắc hiện có.",
@@ -1248,6 +1276,7 @@
     "解析密钥文件失败: {{msg}}": "Phân tích tệp khóa thất bại: {{msg}}",
     "解析响应数据时发生错误": "Đã xảy ra lỗi khi phân tích dữ liệu phản hồi",
     "界面语言和其他个人偏好": "Ngôn ngữ giao diện và tùy chọn cá nhân khác",
+    "今日": "Hôm nay",
     "今日关闭": "Đóng hôm nay",
     "今日请求": "Yêu cầu hôm nay",
     "今日消费": "Tiêu thụ hôm nay",
@@ -1444,6 +1473,7 @@
     "立即迁移": "Di chuyển ngay",
     "立即签到": "Đăng nhập ngay",
     "立即验证": "Xác minh ngay",
+    "立即重置": "Đặt lại ngay",
     "立即注册": "Đăng ký ngay",
     "利润": "Lợi nhuận",
     "例如 /var/cache/new-api": "VD: /var/cache/new-api",
@@ -1593,6 +1623,7 @@
     "每容器GPU数": "GPUs per Container",
     "每天": "Hàng ngày",
     "每月": "Hàng tháng",
+    "每月重置日": "Ngày đặt lại hàng tháng",
     "每周": "Hàng tuần",
     "美国西部": "Miền Tây Hoa Kỳ",
     "美金": "USD",
@@ -1937,6 +1968,7 @@
     "启用性能监控后，当系统资源使用率超过设定阈值时，将拒绝新的 Relay 请求 (/v1, /v1beta 等)，以保护系统稳定性。": "Khi giám sát hiệu suất được bật và mức sử dụng tài nguyên hệ thống vượt quá ngưỡng đã đặt, các yêu cầu Relay mới (/v1, /v1beta, v.v.) sẽ bị từ chối để bảo vệ sự ổn định của hệ thống.",
     "启用验证": "Bật xác thực",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "Bật giới hạn tốc độ yêu cầu mô hình người dùng (có thể ảnh hưởng đến hiệu suất đồng thời cao)",
+    "启用月度自动重置": "Bật tự động đặt lại hàng tháng",
     "启用状态": "Trạng thái bật",
     "启用Claude思考适配（-thinking后缀）": "Bật thích ứng tư duy Claude (hậu tố -thinking)",
     "启用FunctionCall思维签名填充": "Bật điền chữ ký tư duy FunctionCall",
@@ -2465,6 +2497,7 @@
     "确认解绑": "Xác nhận hủy liên kết",
     "确认解绑 Passkey": "Xác nhận hủy liên kết Passkey",
     "确认禁用": "Xác nhận vô hiệu hóa",
+    "确认立即重置": "Xác nhận đặt lại ngay",
     "确认密码": "Xác nhận mật khẩu",
     "确认启用": "Xác nhận bật",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "Payment, redemption codes, subscription plans, and invitation rewards remain locked until confirmation.",
@@ -2601,8 +2634,17 @@
     "上次保存: ": "Lần lưu cuối: ",
     "上次检测到可加入模型": "",
     "上次检测时间": "",
+<<<<<<< Updated upstream
     "上行": "Tải lên",
     "上行带宽": "Băng thông tải lên",
+=======
+<<<<<<< Updated upstream
+=======
+    "上次重置时间": "Thời gian đặt lại gần nhất",
+    "上行": "Tải lên",
+    "上行带宽": "Băng thông tải lên",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "上一步": "Trước",
     "上一个表单块": "Khối biểu mẫu trước",
     "上一页": "Trước",
@@ -2639,6 +2681,7 @@
     "设置系统名称": "Cài đặt tên hệ thống",
     "设置页脚": "Cài đặt chân trang",
     "设置已保存": "Cài đặt đã được lưu",
+    "设置已更新": "Cài đặt đã được cập nhật thành công",
     "设置隐私政策": "Cài đặt chính sách bảo mật",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "Đặt các tùy chọn số lượng nạp tiền mà người dùng có thể chọn, ví dụ: [10, 20, 50, 100, 200, 500]",
     "设置用户协议": "Cài đặt thỏa thuận người dùng",
@@ -2689,6 +2732,7 @@
     "时间": "Thời gian",
     "时间粒度": "Độ chi tiết thời gian",
     "时间信息": "Time Information",
+    "时区": "Múi giờ",
     "实付": "Thanh toán thực tế",
     "实付金额": "Số tiền thanh toán thực tế",
     "实付金额：": "Số tiền thanh toán thực tế: ",
@@ -3057,6 +3101,8 @@
     "统计额度": "Thống kê hạn ngạch",
     "统计信息": "Thông tin thống kê",
     "统计已重置": "Thống kê đã được đặt lại",
+    "统计月份": "Tháng",
+    "统计周期": "Kỳ thống kê",
     "统计Tokens": "Thống kê Tokens",
     "统一的": "Cổng thống nhất",
     "透传请求体": "Truyền qua thân yêu cầu",
@@ -3253,6 +3299,7 @@
     "系统性能监控": "Giám sát hiệu suất hệ thống",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "System has prepared Ollama image and random API Key for this deployment",
     "系统状态": "Trạng thái hệ thống",
+    "下次重置时间": "Thời gian đặt lại tiếp theo",
     "下面是带注释的示例，仅用于参考；实际保存时请删除注释。": "",
     "下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。": "Bên dưới hiển thị các trường backend sẽ được ghi sau khi lưu, giúp bạn dễ đối chiếu với ô chỉnh sửa JSON gốc.",
     "下午好": "Chào buổi chiều",
@@ -3817,6 +3864,8 @@
     "源码": "Mã nguồn",
     "约": "Khoảng",
     "月": "tháng",
+    "月度统计": "Thống kê hàng tháng",
+    "月度重置": "Đặt lại hàng tháng",
     "阅读": "Đọc",
     "阅读更多": "Đọc thêm",
     "允许 AccountFilter 参数": "Cho phép tham số AccountFilter",
@@ -3914,7 +3963,15 @@
     "暂无项目": "Không có dự án",
     "暂无已绑定项": "Không có mục đã liên kết",
     "暂无预填组": "Không có nhóm điền sẵn",
+<<<<<<< Updated upstream
     "暂无账号": "Chưa có tài khoản",
+=======
+<<<<<<< Updated upstream
+=======
+    "暂无月度提成统计": "Chưa có thống kê hoa hồng hàng tháng",
+    "暂无账号": "Chưa có tài khoản",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "暂无支付方式，点击上方按钮新增": "",
     "暂无自定义 OAuth 提供商": "Không có nhà cung cấp OAuth tùy chỉnh",
     "暂无自动分组，点击下方按钮添加": "No auto groups yet. Click the button below to add one.",
@@ -4053,6 +4110,7 @@
     "智谱": "Zhipu AI",
     "置顶": "Ghim",
     "置信度": "Độ tin cậy",
+    "中国时区": "Múi giờ Trung Quốc",
     "中午好": "Chào buổi trưa",
     "终止请求中": "Terminating request",
     "终止中": "Terminating",
@@ -4096,6 +4154,7 @@
     "重置数据库": "Đặt lại cơ sở dữ liệu",
     "重置所有": "Đặt lại tất cả",
     "重置统计": "Đặt lại thống kê",
+    "重置完成，已处理 {{count}} 名员工": "Đặt lại hoàn tất, đã xử lý {{count}} nhân viên",
     "重置为默认": "Đặt lại về mặc định",
     "重置系统": "Đặt lại hệ thống",
     "重置选项": "Đặt lại tùy chọn",
@@ -4103,7 +4162,15 @@
     "重置邮件发送成功，请检查邮箱！": "Email đặt lại đã được gửi thành công, vui lòng kiểm tra email!",
     "重置周期": "Chu kỳ đặt lại",
     "周": "tuần",
+<<<<<<< Updated upstream
     "主导航": "Điều hướng chính",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "Dấu thời gian bắt đầu kỳ",
+    "主导航": "Điều hướng chính",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主模型": "Model chính",
     "主页链接填": "Nhập liên kết trang chủ",
     "注 册": "Đăng ký",
@@ -4235,6 +4302,7 @@
     "最低充值数量": "",
     "最高优先级": "highest priority",
     "最后更新": "Last Updated",
+    "最后记录": "Bản ghi cuối",
     "最后请求": "Yêu cầu cuối cùng",
     "最后使用时间": "Thời gian sử dụng cuối cùng",
     "最后心跳": "Heartbeat cuối",
@@ -4306,9 +4374,11 @@
     "Code copied": "Đã sao chép mã",
     "Codex 渠道不支持批量创建": "Kênh Codex không hỗ trợ tạo hàng loạt",
     "Codex 授权": "Xác thực Codex",
+    "Commission": "Hoa hồng",
     "common.changeLanguage": "Thay đổi ngôn ngữ",
     "Completion tokens": "Completion tokens",
     "Configuration": "Cấu hình",
+    "Consumption": "Tiêu thụ",
     "context_int/context_string 从请求上下文读取；gjson 从入口请求的 JSON body 按 gjson path 读取。": "context_int/context_string đọc từ context yêu cầu; gjson đọc từ JSON body yêu cầu đầu vào theo gjson path.",
     "Cost Ratio": "Hệ số chi phí",
     "Cost Ratio *": "Cost Ratio *",
@@ -4342,12 +4412,23 @@
     "Discovery 建议 scopes：": "Discovery scopes được đề xuất:",
     "Discovery claims": "Discovery claims",
     "Discovery scopes": "Discovery scopes",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "Edit Customer": "Sửa khách hàng",
     "Edit Customer User": "Sửa người dùng khách hàng",
     "Employee Balance": "Số dư nhân viên",
     "Employee customer list and recharge tools.": "Danh sách khách hàng của nhân viên và công cụ nạp tiền.",
+<<<<<<< Updated upstream
+=======
+    "Employee UID": "UID nhân viên",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "EUR (欧元)": "EUR (Euro)",
     "false": "sai",
+    "Fri": "T6",
     "GC 次数": "Số lần GC",
     "GC 已执行": "GC đã thực thi",
     "GC 执行失败": "Thực thi GC thất bại",
@@ -4396,7 +4477,15 @@
     "Key 来源类型": "Loại nguồn Key",
     "Key 摘要": "Tóm tắt Key",
     "Key 指纹": "Vân tay Key",
+<<<<<<< Updated upstream
     "Legal": "Pháp lý",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "Bản ghi cuối",
+    "Legal": "Pháp lý",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "Linux DO Client ID",
     "Linux DO Client Secret": "Linux DO Client Secret",
     "LinuxDO": "LinuxDO",
@@ -4406,11 +4495,30 @@
     "Manage employee customer ownership and recharge logs.": "Quản lý phân bổ khách hàng cho nhân viên và nhật ký nạp tiền.",
     "Midjourney 任务记录": "Hồ sơ tác vụ Midjourney",
     "MIT许可证": "Giấy phép MIT",
+<<<<<<< Updated upstream
     "My Customers": "Khách hàng của tôi",
     "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI mặc định không truyền User-Agent của yêu cầu đến kênh upstream; điều kiện này chỉ dùng để nhận diện client truy cập trang web này.",
     "NEXAXIS API项目仓库地址：": "Địa chỉ kho dự án NEXAXIS API: ",
     "No customers yet": "Chưa có khách hàng",
     "No redemption codes to export": "Không có mã đổi thưởng để xuất",
+=======
+<<<<<<< Updated upstream
+    "NEXAXIS API项目仓库地址：": "Địa chỉ kho dự án NEXAXIS API: ",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI mặc định không truyền User-Agent của yêu cầu đến kênh upstream; điều kiện này chỉ dùng để nhận diện client truy cập trang web này.",
+=======
+    "Mon": "T2",
+    "Monthly Commission": "Hoa hồng hàng tháng",
+    "Monthly Performance": "Hiệu suất hàng tháng",
+    "Monthly Stats": "Thống kê hàng tháng",
+    "My Customers": "Khách hàng của tôi",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI mặc định không truyền User-Agent của yêu cầu đến kênh upstream; điều kiện này chỉ dùng để nhận diện client truy cập trang web này.",
+    "NEXAXIS API项目仓库地址：": "Địa chỉ kho dự án NEXAXIS API: ",
+    "Next month": "Tháng sau",
+    "No customers yet": "Chưa có khách hàng",
+    "No monthly commission stats yet": "Chưa có thống kê hoa hồng hàng tháng",
+    "No redemption codes to export": "Không có mã đổi thưởng để xuất",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OAuth 端点": "Endpoint OAuth",
     "OAuth Client ID": "OAuth Client ID",
     "OAuth Client Secret": "OAuth Client Secret",
@@ -4429,8 +4537,12 @@
     "Passkey 注册失败，请重试": "Đăng ký Passkey thất bại. Vui lòng thử lại.",
     "Pay Method Name": "",
     "Pay Method Type": "",
+    "Performance": "Hiệu suất",
+    "Period": "Kỳ",
+    "Period start timestamp": "Dấu thời gian bắt đầu kỳ",
     "Ping间隔（秒）": "Khoảng thời gian Ping (giây)",
     "POST 参数": "Tham số POST",
+    "Previous month": "Tháng trước",
     "price_xxx 的商品价格 ID，新建产品后可获得": "ID giá sản phẩm cho price_xxx, có sẵn sau khi tạo sản phẩm mới",
     "Prompt cache hit tokens": "Prompt cache hit tokens",
     "Prompt tokens": "Prompt tokens",
@@ -4439,11 +4551,15 @@
     "Recharge Customer": "Nạp tiền cho khách hàng",
     "Recharge Logs": "Nhật ký nạp tiền",
     "Recharge Quota": "Hạn ngạch nạp tiền",
+    "Records": "Bản ghi",
     "Request ID": "Request ID",
+    "Reset": "Đặt lại",
     "RSA 私钥 (沙盒)": "",
     "RSA 私钥 (生产)": "",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "Trường safety_identifier giúp OpenAI xác định người dùng ứng dụng có thể vi phạm chính sách sử dụng. Tắt theo mặc định để bảo vệ quyền riêng tư của người dùng",
+    "Sat": "T7",
     "Scopes（可选）": "Scopes (tùy chọn)",
+    "Search": "Tìm kiếm",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "Trường service_tier được sử dụng để chỉ định cấp độ dịch vụ. Cho phép truyền qua có thể dẫn đến việc tính phí thực tế cao hơn dự kiến. Tắt theo mặc định để tránh phí bổ sung",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "Khóa Stripe cho sk_xxx hoặc rk_xxx, thông tin nhạy cảm không được hiển thị",
     "SMTP 端口": "Cổng SMTP",
@@ -4463,11 +4579,20 @@
     "Stripe 设置": "Cài đặt Stripe",
     "Stripe/Creem 商品ID（可选）": "ID sản phẩm Stripe/Creem (tùy chọn)",
     "Stripe/Creem 需在第三方平台创建商品并填入 ID": "Sản phẩm Stripe/Creem phải được tạo trên nền tảng bên thứ ba và điền ID",
+    "Sun": "CN",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Tên Telegram Bot",
     "Telegram Bot Token": "Telegram Bot Token",
     "Telegram ID": "Telegram ID",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "T5",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "token 会按倍率换算成“额度/次数”，请求结束后再做差额结算（补扣/返还）。": "Token được quy đổi thành hạn mức/số lần theo tỷ lệ. Sau khi yêu cầu hoàn tất, chênh lệch sẽ được quyết toán (trừ thêm/hoàn trả).",
     "Token 数": "Số token",
     "Token Endpoint": "Token Endpoint",
@@ -4475,6 +4600,7 @@
     "true": "đúng",
     "TTL（秒，0 表示默认）": "TTL (giây, 0 là mặc định)",
     "TTL（秒）": "TTL (giây)",
+    "Tue": "T3",
     "Turnstile Secret Key": "Turnstile Secret Key",
     "Turnstile Site Key": "Turnstile Site Key",
     "Twitter / X": "Twitter / X",
@@ -4509,6 +4635,7 @@
     "Webhook通知": "Thông báo Webhook",
     "WeChat Server 访问凭证": "Thông tin xác thực truy cập WeChat Server",
     "WeChat Server 服务器地址": "Địa chỉ máy chủ WeChat Server",
+    "Wed": "T4",
     "Well-Known URL": "Well-Known URL",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "Well-Known URL phải bắt đầu bằng http:// hoặc https://",
     "Whitepaper": "Sách trắng",

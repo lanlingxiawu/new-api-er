@@ -125,6 +125,8 @@ func SetApiRouter(router *gin.Engine) {
 				// Employee self-query routes
 				selfRoute.GET("/employee/profile", controller.GetMyEmployeeProfile)
 				selfRoute.GET("/employee/commission", controller.GetMyCommissionLogs)
+				selfRoute.GET("/employee/commission/monthly", controller.GetMyCommissionMonthlyStats)
+				selfRoute.GET("/employee/commission/calendar", controller.GetMyCommissionCalendarStats)
 				selfRoute.GET("/employee/commission/summary", controller.GetMyCommissionSummary)
 			}
 
@@ -204,6 +206,8 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.PUT("/:id", controller.AdminUpdateEmployee)
 			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
 			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
+			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionMonthlyStats)
+			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
 			employeeAdminRoute.POST("/overview/backfill", controller.AdminBackfillBusinessStats)
@@ -213,6 +217,8 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.PUT("/tiers/:id", controller.AdminUpdateTier)
 			employeeAdminRoute.DELETE("/tiers/:id", controller.AdminDeleteTier)
 			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
+			employeeAdminRoute.GET("/tiers/reset-config", controller.AdminGetTierResetConfig)
+			employeeAdminRoute.POST("/tiers/reset-now", controller.AdminTriggerTierReset)
 			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
 			employeeAdminRoute.GET("/:id/customers", controller.AdminListEmployeeCustomers)
 			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)

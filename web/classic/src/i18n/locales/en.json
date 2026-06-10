@@ -170,6 +170,7 @@
     "本地": "Local",
     "本地计费": "Local billing",
     "本地数据存储": "Local data storage",
+    "本期提成": "Current Commission",
     "本设备：手机指纹/面容，外接：USB安全密钥": "Built-in: phone fingerprint/face, External: USB security key",
     "本设备内置": "Built-in device",
     "本项目根据": "This project is licensed under the ",
@@ -530,12 +531,22 @@
     "登录过期，请重新登录！": "Login expired, please log in again!",
     "等待获取邮箱信息...": "Waiting to get email information...",
     "等待中": "Waiting",
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
     "等级": "Tier",
     "等级编号": "Tier Number",
     "等级编号必须 ≥ 1": "Tier number must be ≥ 1",
     "等级已创建": "Tier created",
     "等级已更新": "Tier updated",
     "等级已删除": "Tier deleted",
+<<<<<<< Updated upstream
+=======
+    "等级与业绩月度重置设置": "Monthly tier and performance reset settings",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "等价金额：": "Equivalent Amount: ",
     "低于此额度时将发送邮件提醒用户": "Email reminder will be sent when quota falls below this",
     "递归": "Recursive",
@@ -690,6 +701,7 @@
     "服务器地址": "Server Address",
     "服务器日志功能未启用（未配置日志目录）": "Server logging is not enabled (log directory not configured)",
     "服务器日志管理": "Server Log Management",
+    "服务器时区": "Server Timezone",
     "服务器IP": "Server IP",
     "服务商": "Service Provider",
     "服务显示名称": "Service Display Name",
@@ -1158,6 +1170,7 @@
     "将删除 {{value}} 天前的日志文件。": "Log files older than {{value}} days will be deleted.",
     "将删除所有仍在内存中的渠道亲和性缓存条目。": "This will delete all channel affinity cache entries still in memory.",
     "将删除已使用、已禁用及过期的兑换码，此操作不可撤销。": "This will delete all used, disabled, and expired redemption codes, this operation cannot be undone.",
+    "将所有员工重置到最低等级？": "Reset all employees to the lowest tier?",
     "将为选中的 ": "Will set for selected ",
     "将只保留最近 {{value}} 个日志文件，其余将被删除。": "Only the last {{value}} log files will be retained; the rest will be deleted.",
     "将追加 2 条规则到现有规则列表。": "2 rules will be appended to the existing rule list.",
@@ -1198,6 +1211,7 @@
     "解析密钥文件失败: {{msg}}": "Failed to parse key file: {{msg}}",
     "解析响应数据时发生错误": "An error occurred while parsing response data",
     "界面语言和其他个人偏好": "Interface language and other personal preferences",
+    "今日": "Today",
     "今日关闭": "Close Today",
     "今日请求": "Today Requests",
     "今日消费": "Today Consumption",
@@ -1382,7 +1396,15 @@
     "立即开始": "Start Now",
     "立即迁移": "Migrate Now",
     "立即签到": "Check in now",
+<<<<<<< Updated upstream
     "利润": "Profit",
+=======
+<<<<<<< Updated upstream
+=======
+    "立即重置": "Reset now",
+    "利润": "Profit",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "例如": "e.g.",
     "例如 /var/cache/new-api": "e.g. /var/cache/new-api",
     "例如 €, £, Rp, ₩, ₹...": "For example, €, £, Rp, ₩, ₹...",
@@ -1515,6 +1537,7 @@
     "每容器GPU数": "GPUs per Container",
     "每天": "Daily",
     "每月": "Monthly",
+    "每月重置日": "Monthly reset day",
     "每周": "Weekly",
     "美国西部": "US West",
     "美元": "US Dollar",
@@ -1822,6 +1845,7 @@
     "启用性能监控后，当系统资源使用率超过设定阈值时，将拒绝新的 Relay 请求 (/v1, /v1beta 等)，以保护系统稳定性。": "When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests (/v1, /v1beta, etc.) will be rejected to protect system stability.",
     "启用验证": "Enable Authentication",
     "启用用户模型请求速率限制（可能会影响高并发性能）": "Enable user model request rate limit (may affect high concurrency performance)",
+    "启用月度自动重置": "Enable monthly auto reset",
     "启用状态": "Enabled Status",
     "启用Claude思考适配（-thinking后缀）": "Enable Claude thinking adaptation (-thinking suffix)",
     "启用FunctionCall思维签名填充": "Enable FunctionCall thoughtSignature fill",
@@ -2234,6 +2258,7 @@
     "确认解绑": "Confirm Unbind",
     "确认解绑 Passkey": "Confirm Unbind Passkey",
     "确认禁用": "Confirm disable",
+    "确认立即重置": "Confirm reset now",
     "确认密码": "Confirm Password",
     "确认启用": "Confirm Enable",
     "确认前，支付、兑换码、订阅计划和邀请返利功能将保持锁定。": "Payment, redemption codes, subscription plans, and invitation rewards remain locked until confirmation.",
@@ -2357,6 +2382,7 @@
     "上次保存: ": "Last saved: ",
     "上次检测到可加入模型": "",
     "上次检测时间": "",
+    "上次重置时间": "Last reset time",
     "上限": "Up To",
     "上行": "Upload",
     "上行带宽": "Upload Bandwidth",
@@ -2396,6 +2422,7 @@
     "设置系统名称": "Set system name",
     "设置页脚": "Set Footer",
     "设置已保存": "Settings saved",
+    "设置已更新": "Setting updated successfully",
     "设置隐私政策": "Set privacy policy",
     "设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]": "Set recharge amount options that users can choose from, for example: [10, 20, 50, 100, 200, 500]",
     "设置用户协议": "Set user agreement",
@@ -2794,6 +2821,8 @@
     "统计次数": "Statistical count",
     "统计额度": "Statistical quota",
     "统计已重置": "Statistics reset",
+    "统计月份": "Month",
+    "统计周期": "Period",
     "统计Tokens": "Statistical Tokens",
     "统一的": "The Unified",
     "统一定价": "Flat Rate",
@@ -2984,6 +3013,7 @@
     "系统信息": "System Information",
     "系统性能监控": "System Performance Monitoring",
     "系统已为该部署准备 Ollama 镜像与随机 API Key": "System has prepared Ollama image and random API Key for this deployment",
+    "下次重置时间": "Next reset time",
     "下面是带注释的示例，仅用于参考；实际保存时请删除注释。": "",
     "下面展示这个模型保存后会写入哪些后端字段，便于和原始 JSON 编辑框保持一致。": "The fields below show which backend values will be written after saving, so you can keep them aligned with the raw JSON editors.",
     "下午好": "Good afternoon",
@@ -3500,6 +3530,8 @@
     "源地址": "Source address",
     "约": "Approximately",
     "月": "month",
+    "月度统计": "Monthly Stats",
+    "月度重置": "Monthly Reset",
     "月份": "Month",
     "允许 AccountFilter 参数": "Allow AccountFilter parameter",
     "允许 HTTP 协议图片请求（适用于自部署代理）": "Allow HTTP protocol image requests (for self-deployed proxies)",
@@ -3594,7 +3626,15 @@
     "暂无项目": "No projects",
     "暂无已绑定项": "No bound items",
     "暂无预填组": "No prefilled groups",
+<<<<<<< Updated upstream
     "暂无账号": "No accounts",
+=======
+<<<<<<< Updated upstream
+=======
+    "暂无月度提成统计": "No monthly commission stats yet",
+    "暂无账号": "No accounts",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "暂无支付方式，点击上方按钮新增": "",
     "暂无自定义 OAuth 提供商": "No custom OAuth providers",
     "暂无自动分组，点击下方按钮添加": "No auto groups yet. Click the button below to add one.",
@@ -3708,6 +3748,7 @@
     "智能体ID": "Agent ID",
     "智谱": "Zhipu AI",
     "置信度": "Confidence",
+    "中国时区": "China Timezone",
     "中午好": "Good afternoon",
     "终止请求中": "Terminating request",
     "终止中": "Terminating",
@@ -3738,12 +3779,21 @@
     "重置配置": "Reset configuration",
     "重置失败": "Reset failed",
     "重置统计": "Reset Stats",
+    "重置完成，已处理 {{count}} 名员工": "Reset completed, {{count}} employee(s) processed",
     "重置为默认": "Reset to Default",
     "重置选项": "Reset options",
     "重置邮件发送成功，请检查邮箱！": "The reset email was sent successfully, please check your email!",
     "重置周期": "Reset Period",
     "周": "week",
+<<<<<<< Updated upstream
     "主导航": "Main navigation",
+=======
+<<<<<<< Updated upstream
+=======
+    "周期开始时间戳": "Period start timestamp",
+    "主导航": "Main navigation",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "主模型": "Primary Model",
     "主页链接填": "Enter homepage link",
     "注 册": "Sign Up",
@@ -3843,6 +3893,7 @@
     "最高档": "Highest Tier",
     "最高优先级": "highest priority",
     "最后更新": "Last Updated",
+    "最后记录": "Last Record",
     "最后请求": "Last request",
     "最后使用时间": "Last used time",
     "最后心跳": "Last Heartbeat",
@@ -3915,9 +3966,11 @@
     "Code copied": "Code copied",
     "Codex 渠道不支持批量创建": "Codex channel does not support batch creation",
     "Codex 授权": "Codex Authorization",
+    "Commission": "Commission",
     "common.changeLanguage": "Change Language",
     "Completion tokens": "Completion tokens",
     "Configuration": "Configuration",
+    "Consumption": "Consumption",
     "context_int/context_string 从请求上下文读取；gjson 从入口请求的 JSON body 按 gjson path 读取。": "context_int/context_string reads from request context; gjson reads from the entry request JSON body using gjson path.",
     "Cost Ratio": "Cost Ratio",
     "Cost Ratio *": "Cost Ratio *",
@@ -3943,9 +3996,11 @@
     "Discovery 建议 scopes：": "Recommended Discovery scopes:",
     "Discovery claims": "Discovery claims",
     "Discovery scopes": "Discovery scopes",
+    "Employee UID": "Employee UID",
     "EUR (欧元)": "EUR (Euro)",
     "Expr 预览": "Expression Preview",
     "false": "false",
+    "Fri": "Fri",
     "GC 次数": "GC Count",
     "GC 已执行": "GC executed",
     "GC 执行失败": "GC execution failed",
@@ -3995,7 +4050,15 @@
     "Key 来源类型": "Key Source Type",
     "Key 摘要": "Key summary",
     "Key 指纹": "Key Fingerprint",
+<<<<<<< Updated upstream
     "Legal": "Legal",
+=======
+<<<<<<< Updated upstream
+=======
+    "Last Record": "Last Record",
+    "Legal": "Legal",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Linux DO Client ID": "Linux DO Client ID",
     "Linux DO Client Secret": "Linux DO Client Secret",
     "LinuxDO": "LinuxDO",
@@ -4004,9 +4067,26 @@
     "Logo 图片地址": "Logo image address",
     "Midjourney 任务记录": "Midjourney Task Records",
     "MIT许可证": "MIT License",
+<<<<<<< Updated upstream
     "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI does not pass the incoming request's User-Agent to upstream channels by default; this condition is only used to identify clients accessing this site.",
     "NEXAXIS API项目仓库地址：": "NEXAXIS API project repository address: ",
     "No redemption codes to export": "No redemption codes to export",
+=======
+<<<<<<< Updated upstream
+    "NEXAXIS API项目仓库地址：": "NEXAXIS API project repository address: ",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI does not pass the incoming request's User-Agent to upstream channels by default; this condition is only used to identify clients accessing this site.",
+=======
+    "Mon": "Mon",
+    "Monthly Commission": "Monthly Commission",
+    "Monthly Performance": "Monthly Performance",
+    "Monthly Stats": "Monthly Stats",
+    "NewAPI 默认不会将入口请求的 User-Agent 透传到上游渠道；该条件仅用于识别访问本站点的客户端。": "NewAPI does not pass the incoming request's User-Agent to upstream channels by default; this condition is only used to identify clients accessing this site.",
+    "NEXAXIS API项目仓库地址：": "NEXAXIS API project repository address: ",
+    "Next month": "Next month",
+    "No monthly commission stats yet": "No monthly commission stats yet",
+    "No redemption codes to export": "No redemption codes to export",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "OAuth 登录失败：": "OAuth login failed: ",
     "OAuth 端点": "OAuth Endpoints",
     "OAuth 配置错误：授权端点必须是完整的 URL（以 http:// 或 https:// 开头）": "OAuth configuration error: Authorization endpoint must be a full URL (starting with http:// or https://)",
@@ -4027,18 +4107,26 @@
     "Passkey 注册失败，请重试": "Passkey registration failed. Please try again.",
     "Pay Method Name": "",
     "Pay Method Type": "",
+    "Performance": "Performance",
+    "Period": "Period",
+    "Period start timestamp": "Period start timestamp",
     "Ping间隔（秒）": "Ping Interval (seconds)",
     "POST 参数": "POST Parameters",
+    "Previous month": "Previous month",
     "price_xxx 的商品价格 ID，新建产品后可获得": "Product price ID for price_xxx, available after creating new product",
     "Prompt cache hit tokens": "Prompt cache hit tokens",
     "Prompt tokens": "Prompt tokens",
     "Reasoning Effort": "Reasoning Effort",
     "Recharge Quota": "Recharge Quota",
+    "Records": "Records",
     "Request ID": "Request ID",
+    "Reset": "Reset",
     "RSA 私钥 (沙盒)": "",
     "RSA 私钥 (生产)": "",
     "safety_identifier 字段用于帮助 OpenAI 识别可能违反使用政策的应用程序用户。默认关闭以保护用户隐私": "The safety_identifier field helps OpenAI identify application users who may violate usage policies. Disabled by default to protect user privacy",
+    "Sat": "Sat",
     "Scopes（可选）": "Scopes (optional)",
+    "Search": "Search",
     "service_tier 字段用于指定服务层级，允许透传可能导致实际计费高于预期。默认关闭以避免额外费用": "The service_tier field is used to specify service level. Allowing pass-through may result in higher billing than expected. Disabled by default to avoid extra charges",
     "sk_xxx 或 rk_xxx 的 Stripe 密钥，敏感信息不显示": "Stripe key for sk_xxx or rk_xxx, sensitive information not displayed",
     "SMTP 端口": "SMTP Port",
@@ -4058,11 +4146,20 @@
     "Stripe 设置": "Stripe Settings",
     "Stripe/Creem 商品ID（可选）": "Stripe/Creem Product ID (optional)",
     "Stripe/Creem 需在第三方平台创建商品并填入 ID": "Stripe/Creem products must be created on the third-party platform and the ID filled in",
+    "Sun": "Sun",
     "Telegram": "Telegram",
     "Telegram Bot 名称": "Telegram Bot Name",
     "Telegram Bot Token": "Telegram Bot Token",
     "Telegram ID": "Telegram ID",
+<<<<<<< Updated upstream
     "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+=======
+<<<<<<< Updated upstream
+=======
+    "Thu": "Thu",
+    "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     "Token 估算器": "Token Estimator",
     "token 会按倍率换算成“额度/次数”，请求结束后再做差额结算（补扣/返还）。": "Tokens are converted to quota/usage count by ratio. After the request completes, the difference is settled (additional deduction/refund).",
     "Token 类型": "Token Type",
@@ -4073,6 +4170,7 @@
     "true": "true",
     "TTL（秒，0 表示默认）": "TTL (seconds, 0 for default)",
     "TTL（秒）": "TTL (seconds)",
+    "Tue": "Tue",
     "Turnstile Secret Key": "Turnstile Secret Key",
     "Turnstile Site Key": "Turnstile Site Key",
     "Twitter / X": "Twitter / X",
@@ -4108,6 +4206,7 @@
     "Webhook通知": "Webhook notification",
     "WeChat Server 访问凭证": "WeChat Server Access Credential",
     "WeChat Server 服务器地址": "WeChat Server Address",
+    "Wed": "Wed",
     "Well-Known URL": "Well-Known URL",
     "Well-Known URL 必须以 http:// 或 https:// 开头": "Well-Known URL must start with http:// or https://",
     "Whitepaper": "Whitepaper",
