@@ -160,7 +160,7 @@ export function SidebarModulesSection({
       },
       employee: {
         title: t('Employee Management'),
-        description: t('Manage employees and commission rates.'),
+        description: t('Manage employees and tiered commission settings.'),
       },
       customer: {
         title: t('Customer Management'),

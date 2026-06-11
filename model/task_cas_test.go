@@ -107,27 +107,46 @@ func TestMain(m *testing.M) {
 	initCol()
 
 	if err := db.AutoMigrate(
+		&Channel{},
+		&Token{},
 		&User{},
+		&PasskeyCredential{},
+		&Option{},
+		&Redemption{},
+		&Ability{},
+		&Log{},
+		&Midjourney{},
+		&TopUp{},
+		&QuotaData{},
+		&Task{},
+		&Model{},
+		&Vendor{},
+		&PrefillGroup{},
+		&Setup{},
+		&TwoFA{},
+		&TwoFABackupCode{},
+		&Checkin{},
+		&SubscriptionPlan{},
+		&SubscriptionOrder{},
+		&UserSubscription{},
+		&SubscriptionPreConsumeRecord{},
+		&CustomOAuthProvider{},
+		&UserOAuthBinding{},
+		&PerfMetric{},
 		&UserExtension{},
 		&EmployeeProfile{},
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
-<<<<<<< Updated upstream
-		&ConsumptionCost{},
-		&PlatformChannelDailyStat{},
-		&EmployeeCommissionDailyStat{},
-		&BusinessDailyStatsCoverage{},
-=======
-<<<<<<< Updated upstream
-=======
 		&ConsumptionCost{},
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&EmployeeCustomerCommissionDailyStat{},
 		&EmployeeCommissionMonthlyStat{},
+		&BusinessStatsAppliedBatch{},
+		&BusinessStatsBackfillLock{},
 		&BusinessDailyStatsCoverage{},
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+		&CustomerProfile{},
+		&CustomerQuotaLog{},
 		&EmployeeCommissionTier{},
 		&EmployeeTierLevel{},
 		&EmployeeTierLog{},
@@ -139,9 +158,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func allowTestDBCleanup() bool {
+	return strings.ToLower(os.Getenv("TEST_DB_CLEANUP")) == "true"
+}
+
 func truncateTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		if !allowTestDBCleanup() {
+			return
+		}
 		DB.Exec("DELETE FROM tasks")
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM tokens")

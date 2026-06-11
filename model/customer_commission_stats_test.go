@@ -11,11 +11,13 @@ func TestGetCustomerCommissionTotalsUsesDailyStats(t *testing.T) {
 	customerUserId := 910002
 	statDate := int64(1770076800)
 
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
-		t.Fatal(err)
+	if allowTestDBCleanup() {
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	detailAmount := int64(9999)
@@ -48,18 +50,23 @@ func TestGetCustomerCommissionTotalsUsesDailyStats(t *testing.T) {
 	}
 }
 
-func TestGetCustomerCommissionTotalsFallsBackWhenDailyStatsMissing(t *testing.T) {
+func TestGetCustomerCommissionTotalsDoesNotFallbackWhenDailyStatsMissing(t *testing.T) {
 	employeeUserId := 910021
 	customerUserId := 910022
 	statDate := int64(1770249600)
 
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
-		t.Fatal(err)
+	if allowTestDBCleanup() {
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() {
+		if !allowTestDBCleanup() {
+			return
+		}
 		_ = DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error
 		_ = DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error
 	})
@@ -77,8 +84,8 @@ func TestGetCustomerCommissionTotalsFallsBackWhenDailyStatsMissing(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if totals[customerUserId] != 4321 {
-		t.Fatalf("expected ledger fallback amount %d, got %d", 4321, totals[customerUserId])
+	if totals[customerUserId] != 0 {
+		t.Fatalf("expected 0 without daily stats, got %d", totals[customerUserId])
 	}
 }
 
@@ -87,11 +94,13 @@ func TestNeedsBusinessStatsBackfillDetectsMissingCustomerDailyStats(t *testing.T
 	customerUserId := 910012
 	statDate := int64(1770163200)
 
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
-		t.Fatal(err)
+	if allowTestDBCleanup() {
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := DB.Create(&EmployeeCommissionLog{
 		EmployeeUserId:  employeeUserId,
@@ -117,6 +126,9 @@ func TestNeedsBusinessStatsBackfillDetectsMissingCustomerDailyStats(t *testing.T
 			common.OptionMap["BusinessStatsBackfillCompleted"] = previous
 		}
 		common.OptionMapRWMutex.Unlock()
+		if !allowTestDBCleanup() {
+			return
+		}
 		_ = DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCommissionLog{}).Error
 		_ = DB.Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).Delete(&EmployeeCustomerCommissionDailyStat{}).Error
 	})

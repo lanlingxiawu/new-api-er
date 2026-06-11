@@ -59,7 +59,7 @@ export function formatBusinessFullNumber(value: number | null | undefined) {
 }
 
 export function formatBusinessUsd(value: number | null | undefined) {
-  return `~ $${formatBusinessFullNumber(value)}`
+  return `≈ $${formatBusinessFullNumber(value)}`
 }
 
 export function formatBusinessExactUsd(value: number | null | undefined) {

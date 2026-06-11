@@ -324,7 +324,7 @@ const NotificationSettings = ({
         {
           key: 'employee',
           title: t('员工管理'),
-          description: t('管理员工与提成比例'),
+          description: t('管理员工与等级提成设置'),
         },
         {
           key: 'businessOverview',

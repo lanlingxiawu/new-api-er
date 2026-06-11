@@ -117,25 +117,27 @@ func TestMain(m *testing.M) {
 		&model.User{},
 		&model.Token{},
 		&model.Channel{},
+		&model.Ability{},
+		&model.Log{},
+		&model.TopUp{},
+		&model.Task{},
+		&model.SubscriptionPlan{},
+		&model.SubscriptionOrder{},
+		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.PerfMetric{},
 		&model.UserExtension{},
 		&model.EmployeeProfile{},
 		&model.ChannelCostConfig{},
 		&model.EmployeeCommissionLog{},
-<<<<<<< Updated upstream
 		&model.ConsumptionCost{},
 		&model.PlatformChannelDailyStat{},
 		&model.EmployeeCommissionDailyStat{},
-		&model.BusinessDailyStatsCoverage{},
-=======
-<<<<<<< Updated upstream
-=======
-		&model.ConsumptionCost{},
-		&model.PlatformChannelDailyStat{},
-		&model.EmployeeCommissionDailyStat{},
+		&model.EmployeeCustomerCommissionDailyStat{},
 		&model.EmployeeCommissionMonthlyStat{},
+		&model.BusinessStatsAppliedBatch{},
+		&model.BusinessStatsBackfillLock{},
 		&model.BusinessDailyStatsCoverage{},
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 		&model.EmployeeCommissionTier{},
 		&model.EmployeeTierLevel{},
 		&model.EmployeeTierLog{},
@@ -164,20 +166,33 @@ func TestMain(m *testing.M) {
 
 func truncate(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() {
+	cleanup := func() {
+		if strings.ToLower(os.Getenv("TEST_DB_CLEANUP")) != "true" {
+			return
+		}
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
+		if model.LOG_DB != nil {
+			model.LOG_DB.Exec("DELETE FROM logs")
+		}
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
-	})
+	}
+	t.Cleanup(cleanup)
 }
 
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
-	user := &model.User{Id: id, Username: "test_user", Quota: quota, Status: common.UserStatusEnabled}
+	user := &model.User{
+		Id:       id,
+		Username: "test_user",
+		Quota:    quota,
+		Status:   common.UserStatusEnabled,
+		AffCode:  fmt.Sprintf("aff%d", id),
+	}
 	require.NoError(t, model.DB.Create(user).Error)
 }
 

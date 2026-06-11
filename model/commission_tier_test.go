@@ -27,7 +27,20 @@ func usd2q(usd float64) int64 {
 
 func cleanTierTables(t *testing.T) {
 	t.Helper()
+	if allowTestDBCleanup() {
+		DB.Exec("DELETE FROM employee_commission_tiers")
+		DB.Exec("DELETE FROM employee_tier_levels")
+		DB.Exec("DELETE FROM employee_tier_logs")
+		DB.Exec("DELETE FROM user_extensions")
+		DB.Exec("DELETE FROM channel_cost_configs")
+		DB.Exec("DELETE FROM users")
+		InvalidateTierCache()
+		ResetChannelCostCache()
+	}
 	t.Cleanup(func() {
+		if !allowTestDBCleanup() {
+			return
+		}
 		DB.Exec("DELETE FROM employee_commission_tiers")
 		DB.Exec("DELETE FROM employee_tier_levels")
 		DB.Exec("DELETE FROM employee_tier_logs")
@@ -443,21 +456,23 @@ func TestResetEmployeeTierLevelsForPeriod(t *testing.T) {
 	_, err = AddProfitStats(8002, usd2q(0.5), false)
 	require.NoError(t, err)
 
-	resetAt := time.Now().Unix() + 100
+	resetAt := time.Now().Unix() - 100
 
-	processed, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
+	processed, selected, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
 	require.NoError(t, err)
 	assert.Equal(t, 2, processed)
+	assert.Equal(t, 2, selected)
 
 	// 8001：重置到本组最低等级（g1），baseline 刷新为当前累计值
 	lvl1, err := GetOrCreateTierLevel(8001)
 	require.NoError(t, err)
 	assert.Equal(t, g1.Id, lvl1.TierId, "应重置到本组最低等级")
 	assert.Equal(t, "reset", lvl1.Source)
-	assert.Equal(t, resetAt, lvl1.EffectiveAt)
+	assert.GreaterOrEqual(t, lvl1.EffectiveAt, resetAt)
 	assert.Equal(t, "月度自动重置", lvl1.Remark)
 	assert.Equal(t, usd2q(20.0), lvl1.BaselineProfitQuota)
 	assert.Equal(t, usd2q(2.0), lvl1.BaselineCommissionQuota)
+	assert.Equal(t, resetAt, lvl1.BaselineResetAt)
 
 	// 8002：tier_id=0 保持不变，但 baseline 仍刷新
 	lvl2, err := GetOrCreateTierLevel(8002)
@@ -466,19 +481,21 @@ func TestResetEmployeeTierLevelsForPeriod(t *testing.T) {
 	assert.Equal(t, "reset", lvl2.Source)
 	assert.Equal(t, usd2q(0.5), lvl2.BaselineProfitQuota)
 	assert.Equal(t, int64(0), lvl2.BaselineCommissionQuota)
+	assert.Equal(t, resetAt, lvl2.BaselineResetAt)
 
 	// 应各写入一条 source=reset 的日志
 	var resetLogCount int64
 	require.NoError(t, DB.Model(&EmployeeTierLog{}).Where("source = ?", "reset").Count(&resetLogCount).Error)
 	assert.Equal(t, int64(2), resetLogCount)
 
-	// 幂等性：effective_at 已被置为 resetAt，effective_at < resetAt 不再成立，不应重复处理
-	processed2, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
+	// 幂等性：baseline_reset_at 已被置为 resetAt，baseline_reset_at < resetAt 不再成立，不应重复处理
+	processed2, selected2, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
 	require.NoError(t, err)
 	assert.Equal(t, 0, processed2, "已处理的行不应被重复重置")
+	assert.Equal(t, 0, selected2, "已处理的行不应被重复选中")
 }
 
-func TestResetEmployeeTierLevelsForPeriodSkipsOrphanWithoutBlockingBatch(t *testing.T) {
+func TestResetEmployeeTierLevelsForPeriodRefreshesOrphanBaselineWithoutBlockingBatch(t *testing.T) {
 	cleanTierTables(t)
 	seedUser(t, 8101)
 	seedUser(t, 8102)
@@ -500,18 +517,50 @@ func TestResetEmployeeTierLevelsForPeriodSkipsOrphanWithoutBlockingBatch(t *test
 		EffectiveAt: 1,
 	}).Error)
 
-	resetAt := time.Now().Unix() + 100
-	processed, err := ResetEmployeeTierLevelsForPeriod(resetAt, 1, 0)
+	resetAt := time.Now().Unix() - 100
+	processed, selected, err := ResetEmployeeTierLevelsForPeriod(resetAt, 1, 0)
 	require.NoError(t, err)
 	assert.Equal(t, 1, processed)
+	assert.Equal(t, 1, selected)
 
 	var orphan EmployeeTierLevel
 	require.NoError(t, DB.Where("user_id = ?", 8101).First(&orphan).Error)
 	assert.Equal(t, int64(999999), orphan.TierId)
-	assert.Equal(t, int64(1), orphan.EffectiveAt)
+	assert.Equal(t, resetAt, orphan.BaselineResetAt)
+	assert.Equal(t, "reset", orphan.Source)
 
 	var valid EmployeeTierLevel
 	require.NoError(t, DB.Where("user_id = ?", 8102).First(&valid).Error)
-	assert.Equal(t, resetAt, valid.EffectiveAt)
+	assert.GreaterOrEqual(t, valid.EffectiveAt, resetAt)
 	assert.Equal(t, "reset", valid.Source)
+}
+
+func TestResetEmployeeTierLevelsForPeriodUsesBaselineResetAtNotEffectiveAt(t *testing.T) {
+	cleanTierTables(t)
+	seedUser(t, 8201)
+
+	tier := &EmployeeCommissionTier{Level: 1, Group: "default", ThresholdUsd: 1.0, Rate: 0.05}
+	require.NoError(t, CreateTier(tier))
+	InvalidateTierCache()
+
+	resetAt := time.Now().Unix() - 60
+	require.NoError(t, DB.Create(&EmployeeTierLevel{
+		UserId:          8201,
+		TierId:          tier.Id,
+		Source:          "auto",
+		EffectiveAt:     resetAt + 30,
+		BaselineResetAt: 0,
+	}).Error)
+	_, err := AddProfitStats(8201, usd2q(3.0), false)
+	require.NoError(t, err)
+
+	processed, selected, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, processed)
+	assert.Equal(t, 1, selected)
+
+	var level EmployeeTierLevel
+	require.NoError(t, DB.Where("user_id = ?", 8201).First(&level).Error)
+	assert.Equal(t, resetAt, level.BaselineResetAt)
+	assert.Equal(t, usd2q(3.0), level.BaselineProfitQuota)
 }

@@ -286,13 +286,6 @@ func migrateDB() error {
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
 		&ConsumptionCost{},
-<<<<<<< Updated upstream
-		&PlatformChannelDailyStat{},
-		&EmployeeCommissionDailyStat{},
-		&BusinessDailyStatsCoverage{},
-=======
-<<<<<<< Updated upstream
-=======
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&EmployeeCustomerCommissionDailyStat{},
@@ -300,8 +293,6 @@ func migrateDB() error {
 		&BusinessStatsAppliedBatch{},
 		&BusinessStatsBackfillLock{},
 		&BusinessDailyStatsCoverage{},
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 		&CustomerProfile{},
 		&CustomerQuotaLog{},
 		&EmployeeCommissionTier{},
@@ -361,13 +352,6 @@ func migrateDBFast() error {
 		{&ChannelCostConfig{}, "ChannelCostConfig"},
 		{&EmployeeCommissionLog{}, "EmployeeCommissionLog"},
 		{&ConsumptionCost{}, "ConsumptionCost"},
-<<<<<<< Updated upstream
-		{&PlatformChannelDailyStat{}, "PlatformChannelDailyStat"},
-		{&EmployeeCommissionDailyStat{}, "EmployeeCommissionDailyStat"},
-		{&BusinessDailyStatsCoverage{}, "BusinessDailyStatsCoverage"},
-=======
-<<<<<<< Updated upstream
-=======
 		{&PlatformChannelDailyStat{}, "PlatformChannelDailyStat"},
 		{&EmployeeCommissionDailyStat{}, "EmployeeCommissionDailyStat"},
 		{&EmployeeCustomerCommissionDailyStat{}, "EmployeeCustomerCommissionDailyStat"},
@@ -375,8 +359,6 @@ func migrateDBFast() error {
 		{&BusinessStatsAppliedBatch{}, "BusinessStatsAppliedBatch"},
 		{&BusinessStatsBackfillLock{}, "BusinessStatsBackfillLock"},
 		{&BusinessDailyStatsCoverage{}, "BusinessDailyStatsCoverage"},
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 		{&EmployeeCommissionTier{}, "EmployeeCommissionTier"},
 		{&EmployeeTierLevel{}, "EmployeeTierLevel"},
 		{&EmployeeTierLog{}, "EmployeeTierLog"},

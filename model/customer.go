@@ -86,7 +86,11 @@ func GetInvitedCustomersByEmployeeWithFilter(filter InvitedCustomerFilter) ([]*U
 	}
 	if filter.Keyword != "" {
 		keyword := "%" + filter.Keyword + "%"
-		tx = tx.Where("username LIKE ? OR display_name LIKE ? OR email LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword)
+		if customerUserId, err := strconv.Atoi(filter.Keyword); err == nil {
+			tx = tx.Where("id = ? OR username LIKE ? OR display_name LIKE ? OR email LIKE ? OR remark LIKE ?", customerUserId, keyword, keyword, keyword, keyword)
+		} else {
+			tx = tx.Where("username LIKE ? OR display_name LIKE ? OR email LIKE ? OR remark LIKE ?", keyword, keyword, keyword, keyword)
+		}
 	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err

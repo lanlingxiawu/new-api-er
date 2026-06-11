@@ -6,15 +6,7 @@ export const employeeProfileSchema = z.object({
   username: z.string().optional(),
   display_name: z.string().optional(),
   email: z.string().optional(),
-<<<<<<< Updated upstream
   customer_count: z.number().optional(),
-=======
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-  commission_rate: z.number(),
-=======
-  customer_count: z.number().optional(),
->>>>>>> Stashed changes
   target_amount: z.number(),
   total_consumption_quota: z.number().optional(),
   total_cost_quota: z.number().optional(),
@@ -34,7 +26,6 @@ export const employeeProfileSchema = z.object({
   current_performance_usd: z.number().optional(),
   current_commission_quota: z.number().optional(),
   current_commission_usd: z.number().optional(),
-  commission_rules: z.string().optional(),
   status: z.number(),
   remark: z.string().optional(),
   created_at: z.number().optional(),
@@ -107,6 +98,11 @@ export interface CommissionCalendarDayStat {
 
 export interface CommissionCalendarStats {
   days: CommissionCalendarDayStat[]
+  period_start_at?: number
+  period_end_at?: number
+  period_boundary_at?: number
+  period_key?: string
+  timezone?: string
   summary: {
     revenue_quota: number
     cost_quota: number

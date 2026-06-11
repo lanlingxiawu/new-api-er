@@ -10,31 +10,31 @@ import {
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
-<<<<<<< Updated upstream
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-=======
-<<<<<<< Updated upstream
-=======
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
+import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
   formatBusinessExactUsd,
   formatBusinessTargetAmount,
   formatBusinessUsd,
 } from '@/features/business/format'
-import { CommissionMonthlyPeriodSection } from '@/features/employees/components/commission-financial-calendar'
+import { CommissionCalendarSection } from '@/features/employees/components/commission-financial-calendar'
 import type { CommissionLog } from '@/features/employees/types'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getMyCommissionLogs,
-  getMyCommissionMonthlyStats,
+  getMyCommissionCalendarStats,
   getMyCommissionSummary,
   getMyEmployeeProfile,
   type EmployeeExtension,
@@ -63,14 +63,22 @@ function SummaryCards({
   const totalConsumptionQuota = num(data.customer_total_consumption_quota)
   const totalConsumptionUsd = data.customer_total_consumption_usd
   const totalProfitQuota = num(
-    data.profit_total_quota ?? data.total_profit_quota
+    data.current_performance_quota ??
+      data.profit_total_quota ??
+      data.total_profit_quota
   )
-  const totalProfitUsd = num(data.profit_total_usd ?? data.total_profit_usd)
+  const totalProfitUsd = num(
+    data.current_performance_usd ?? data.profit_total_usd ?? data.total_profit_usd
+  )
   const totalCommissionQuota = num(
-    data.total_commission_quota ?? data.commission_total_quota
+    data.current_commission_quota ??
+      data.total_commission_quota ??
+      data.commission_total_quota
   )
   const totalCommissionUsd =
-    data.total_commission_usd ?? data.commission_total_usd
+    data.current_commission_usd ??
+    data.total_commission_usd ??
+    data.commission_total_usd
   const reachedTarget = totalProfitUsd >= targetAmount
   const targetText = targetAmount
     ? `${t('Performance')}: ${formatBusinessTargetAmount(totalProfitUsd)} / ${formatBusinessTargetAmount(targetAmount)}${reachedTarget ? ` ${t('Reached')}` : ''}`
@@ -145,7 +153,7 @@ function SummaryCard({
           {title}
         </div>
       </div>
-      <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+      <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
         {value}
       </div>
       {sub ? (
@@ -173,21 +181,8 @@ function useMyCommissionColumns() {
         ),
       },
       {
-        accessorKey: 'customer_user_id',
-        meta: { label: t('Customer'), mobileTitle: true },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Customer')} />
-        ),
-        cell: ({ row }) => (
-          <Badge variant='outline'>
-            {row.original.customer_user_id_masked ??
-              `#${row.original.customer_user_id}`}
-          </Badge>
-        ),
-      },
-      {
         accessorKey: 'model_name',
-        meta: { label: t('Model') },
+        meta: { label: t('Model'), mobileTitle: true },
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Model')} />
         ),
@@ -206,7 +201,7 @@ function useMyCommissionColumns() {
             title={t('Employee Consumption')}
           />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.revenue_quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.revenue_quota} />,
       },
       {
         accessorKey: 'profit_quota',
@@ -217,7 +212,7 @@ function useMyCommissionColumns() {
             title={t('Employee Performance')}
           />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.profit_quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.profit_quota} />,
       },
       {
         accessorKey: 'commission_quota',
@@ -226,16 +221,12 @@ function useMyCommissionColumns() {
           <DataTableColumnHeader column={column} title={t('Commission')} />
         ),
         cell: ({ row }) => (
-          <span
-            className={
-              row.original.commission_quota < 0
-                ? 'text-destructive font-medium'
-                : 'font-medium text-green-600'
-            }
-          >
-            {row.original.commission_quota < 0 ? '' : '+'}
-            {formatBusinessAmount(row.original.commission_quota)}
-          </span>
+          <BusinessAmount
+            value={row.original.commission_quota}
+            className='font-medium'
+            positiveClassName='text-green-600'
+            showPositiveSign
+          />
         ),
       },
       {
@@ -254,15 +245,10 @@ function useMyCommissionColumns() {
 
 function MonthlyStats() {
   return (
-    <CommissionMonthlyPeriodSection
-      queryKey={['my-commission-monthly-stats']}
-      queryFn={(range) =>
-        getMyCommissionMonthlyStats({
-          ...range,
-          page: 1,
-          page_size: 100,
-        })
-      }
+    <CommissionCalendarSection
+      queryKey={['my-commission-calendar-stats']}
+      queryFn={(range) => getMyCommissionCalendarStats(range)}
+      showSelectedDetail={false}
     />
   )
 }
@@ -271,16 +257,16 @@ function CommissionHistory() {
   const { t } = useTranslation()
   const columns = useMyCommissionColumns()
   const [filterForm, setFilterForm] = useState({
-    customerUserId: '',
     modelName: '',
     channelId: '',
+    lossStatus: 'all' as 'all' | 'loss' | 'normal',
     start: undefined as Date | undefined,
     end: undefined as Date | undefined,
   })
   const [filters, setFilters] = useState<{
-    customer_user_id?: number
     model_name?: string
     channel_id?: number
+    loss_status?: 'loss' | 'normal'
     start_time?: number
     end_time?: number
   }>({})
@@ -300,17 +286,16 @@ function CommissionHistory() {
   })
 
   const applyFilters = () => {
-    const customerUserId = Number(filterForm.customerUserId)
     const channelId = Number(filterForm.channelId)
     setFilters({
-      ...(Number.isFinite(customerUserId) && customerUserId > 0
-        ? { customer_user_id: customerUserId }
-        : {}),
       ...(filterForm.modelName.trim()
         ? { model_name: filterForm.modelName.trim() }
         : {}),
       ...(Number.isFinite(channelId) && channelId > 0
         ? { channel_id: channelId }
+        : {}),
+      ...(filterForm.lossStatus !== 'all'
+        ? { loss_status: filterForm.lossStatus }
         : {}),
       ...(filterForm.start
         ? { start_time: Math.floor(filterForm.start.getTime() / 1000) }
@@ -324,9 +309,9 @@ function CommissionHistory() {
 
   const resetFilters = () => {
     setFilterForm({
-      customerUserId: '',
       modelName: '',
       channelId: '',
+      lossStatus: 'all',
       start: undefined,
       end: undefined,
     })
@@ -355,19 +340,6 @@ function CommissionHistory() {
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <Input
-            type='number'
-            min={1}
-            placeholder={t('Customer UID')}
-            value={filterForm.customerUserId}
-            onChange={(event) =>
-              setFilterForm((form) => ({
-                ...form,
-                customerUserId: event.target.value,
-              }))
-            }
-            className='w-[120px]'
-          />
-          <Input
             placeholder={t('Model Name')}
             value={filterForm.modelName}
             onChange={(event) =>
@@ -376,7 +348,7 @@ function CommissionHistory() {
                 modelName: event.target.value,
               }))
             }
-            className='w-[180px]'
+            className='w-[170px]'
           />
           <Input
             type='number'
@@ -389,8 +361,26 @@ function CommissionHistory() {
                 channelId: event.target.value,
               }))
             }
-            className='w-[120px]'
+            className='w-[110px]'
           />
+          <Select
+            value={filterForm.lossStatus}
+            onValueChange={(value) =>
+              setFilterForm((form) => ({
+                ...form,
+                lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
+              }))
+            }
+          >
+            <SelectTrigger size='sm' className='w-[132px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='all'>{t('All profit states')}</SelectItem>
+              <SelectItem value='loss'>{t('Loss only')}</SelectItem>
+              <SelectItem value='normal'>{t('Non-loss only')}</SelectItem>
+            </SelectContent>
+          </Select>
           <div className='w-[300px]'>
             <CompactDateTimeRangePicker
               start={filterForm.start}
@@ -409,7 +399,7 @@ function CommissionHistory() {
         </div>
       }
       getRowClassName={(row) =>
-        row.original.commission_quota < 0 ? 'opacity-60' : undefined
+        row.original.profit_quota < 0 ? 'opacity-60' : undefined
       }
       skeletonKeyPrefix='my-commission-skeleton'
       className='flex h-full min-h-0 flex-col overflow-hidden'
@@ -457,23 +447,17 @@ export function EmployeeConsole() {
     )
   }
 
-<<<<<<< Updated upstream
-  const profile = profileData.data.profile
-<<<<<<< Updated upstream
-  const tierInfo = profileData.data.tier
-  const effectiveRate = tierInfo?.tier_rate ?? profile.commission_rate ?? 0
-  const tierGroup: string = tierInfo?.tier_group || ''
-  const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
-=======
-=======
   const tierInfo = profileData.data.tier
   const effectiveRate = tierInfo?.tier_rate ?? 0
   const tierGroup: string = tierInfo?.tier_group || ''
   const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
-  const summary = summaryData?.data ?? profileData.data.extension
-  const revenueUsd = summary?.profit_total_usd ?? 0
+  const summary = {
+    ...profileData.data.extension,
+    ...profileData.data.period,
+    ...summaryData?.data,
+  }
+  const revenueUsd =
+    summary?.current_performance_usd ?? summary?.profit_total_usd ?? 0
 
   return (
     <SectionPageLayout>
@@ -482,7 +466,6 @@ export function EmployeeConsole() {
           {t('My Commission')}
           <Badge variant='default' className='text-xs'>
             {(effectiveRate * 100).toFixed(1)}% {t('rate')}
-            {tierGroup ? ` · ${tierGroup}` : ''}
           </Badge>
           {tierTargetAmount ? (
             <Badge
@@ -497,25 +480,8 @@ export function EmployeeConsole() {
         </span>
       </SectionPageLayout.Title>
       <SectionPageLayout.Content className='overflow-hidden'>
-<<<<<<< Updated upstream
-        <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
-          {summary && (
-            <SummaryCards
-              data={summary}
-              commissionRate={effectiveRate}
-              targetAmount={tierTargetAmount}
-            />
-          )}
-          <h3 className='text-muted-foreground shrink-0 text-sm font-semibold'>
-            {t('Commission Details')}
-          </h3>
-          <div className='min-h-0 flex-1 overflow-hidden'>
-            <CommissionHistory />
-          </div>
-        </div>
-=======
         <Tabs
-          defaultValue='details'
+          defaultValue='monthly'
           className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'
         >
           <TabsList className='shrink-0'>
@@ -547,7 +513,6 @@ export function EmployeeConsole() {
             </div>
           </TabsContent>
         </Tabs>
->>>>>>> Stashed changes
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

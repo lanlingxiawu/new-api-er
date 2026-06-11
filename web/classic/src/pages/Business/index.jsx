@@ -84,14 +84,9 @@ const { Text } = Typography;
 const PAGE_SIZE = 10;
 const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10;
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8;
+const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20;
 const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running';
 const BUSINESS_AMOUNT_DIGITS = 4;
-<<<<<<< Updated upstream
-const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
-const DEFAULT_TIER_GROUP = '通用';
-=======
-<<<<<<< Updated upstream
-=======
 const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
 const DEFAULT_TIER_GROUP = '通用';
 const RESET_TIMEZONES = ['Asia/Shanghai', 'Local'];
@@ -100,7 +95,6 @@ const RESET_DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => index + 1);
 function normalizeResetTimezone(timezone) {
   return timezone === 'Local' ? 'Local' : 'Asia/Shanghai';
 }
->>>>>>> Stashed changes
 
 const getTierGroup = (tier) => (tier?.group || '').trim() || DEFAULT_TIER_GROUP;
 
@@ -161,10 +155,6 @@ const getTierLevelTagColor = (level) => {
   }
   return TIER_LEVEL_TAG_COLORS[0];
 };
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 const formatTs = (ts) => {
   if (!ts) return '-';
@@ -187,50 +177,107 @@ const monthValueToTimestamp = (value) => {
 
 const currentMonthValue = () => {
   const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
 const shiftMonthValue = (value, offset) => {
   const [year, month] = String(value || currentMonthValue())
     .split('-')
     .map(Number);
-  const date = new Date(year, (month || 1) - 1 + offset, 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  const date = new Date(
+    Date.UTC(year || new Date().getUTCFullYear(), (month || 1) - 1 + offset, 1),
+  );
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
 const monthValueToRange = (value) => {
   const [year, month] = String(value || currentMonthValue())
     .split('-')
     .map(Number);
-  const start = new Date(year, month - 1, 1, 0, 0, 0);
-  const end = new Date(year, month, 0, 23, 59, 59);
+  const start = Date.UTC(
+    year || new Date().getUTCFullYear(),
+    (month || 1) - 1,
+    1,
+    0,
+    0,
+    0,
+  );
+  const end = Date.UTC(
+    year || new Date().getUTCFullYear(),
+    month || 1,
+    0,
+    23,
+    59,
+    59,
+  );
   return {
-    start_time: Math.floor(start.getTime() / 1000),
-    end_time: Math.floor(end.getTime() / 1000),
+    start_time: Math.floor(start / 1000),
+    end_time: Math.floor(end / 1000),
+  };
+};
+
+const monthValueToCalendarRange = (value) => {
+  if (value === currentMonthValue()) {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      start_time: now,
+      end_time: now,
+    };
+  }
+  const [, month] = String(value || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const range = monthValueToRange(value);
+  const anchor = month ? range.end_time : range.start_time;
+  return {
+    start_time: anchor,
+    end_time: anchor,
   };
 };
 
 const dateKey = (date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 
-const isCurrentDay = (date) => dateKey(date) === dateKey(new Date());
+const calendarDateFromTimestamp = (value, timezone) => {
+  const date = new Date(Number(value) * 1000);
+  if (timezone === 'Asia/Shanghai') {
+    const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    return new Date(
+      Date.UTC(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth(),
+        shifted.getUTCDate(),
+      ),
+    );
+  }
+  return new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+  );
+};
+
+const formatCalendarDate = (date) =>
+  date.toLocaleDateString(undefined, { timeZone: 'UTC' });
+
+const isCurrentDay = (date, timezone) =>
+  dateKey(date) ===
+  dateKey(calendarDateFromTimestamp(Math.floor(Date.now() / 1000), timezone));
 
 const buildMonthCalendarCells = (monthValue, days = []) => {
   const [year, month] = String(monthValue || currentMonthValue())
     .split('-')
     .map(Number);
-  const first = new Date(year, month - 1, 1);
+  const first = new Date(Date.UTC(year, month - 1, 1));
   const gridStart = new Date(first);
-  gridStart.setDate(first.getDate() - first.getDay());
+  gridStart.setUTCDate(first.getUTCDate() - first.getUTCDay());
   const dayMap = new Map(days.map((day) => [day.date, day]));
   return Array.from({ length: 42 }, (_, index) => {
     const date = new Date(gridStart);
-    date.setDate(gridStart.getDate() + index);
+    date.setUTCDate(gridStart.getUTCDate() + index);
     const key = dateKey(date);
     return {
       key,
       date,
-      inMonth: date.getMonth() === month - 1,
+      inMonth: date.getUTCMonth() === month - 1,
       stat: dayMap.get(key),
     };
   });
@@ -240,10 +287,71 @@ const monthLabel = (value) => {
   const [year, month] = String(value || currentMonthValue())
     .split('-')
     .map(Number);
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'long',
+    timeZone: 'UTC',
   });
+};
+
+const periodDateLabel = (startAt, endAt, fallback, timezone) => {
+  if (!startAt || !endAt) return fallback || '-';
+  const start = formatCalendarDate(calendarDateFromTimestamp(startAt, timezone));
+  const end = formatCalendarDate(calendarDateFromTimestamp(endAt, timezone));
+  return `${start} - ${end}`;
+};
+
+const buildPeriodCalendarCells = (
+  monthValue,
+  days = [],
+  periodStartAt,
+  periodEndAt,
+  timezone,
+) => {
+  const [year, month] = String(monthValue || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const periodStart = periodStartAt
+    ? calendarDateFromTimestamp(periodStartAt, timezone)
+    : new Date(Date.UTC(year, month - 1, 1));
+  const periodEnd = periodEndAt
+    ? calendarDateFromTimestamp(periodEndAt, timezone)
+    : new Date(Date.UTC(year, month, 0));
+  const periodStartKey = dateKey(periodStart);
+  const periodEndKey = dateKey(periodEnd);
+  const gridStart = new Date(periodStart);
+  gridStart.setUTCDate(periodStart.getUTCDate() - periodStart.getUTCDay());
+  const gridEnd = new Date(periodEnd);
+  gridEnd.setUTCDate(gridEnd.getUTCDate() + (6 - gridEnd.getUTCDay()));
+  const cellCount = Math.max(
+    7,
+    Math.round((gridEnd.getTime() - gridStart.getTime()) / 86400000) + 1,
+  );
+  const dayMap = new Map(days.map((day) => [day.date, day]));
+  return Array.from({ length: cellCount }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setUTCDate(gridStart.getUTCDate() + index);
+    const key = dateKey(date);
+    return {
+      key,
+      date,
+      inPeriod: key >= periodStartKey && key <= periodEndKey,
+      stat: dayMap.get(key),
+    };
+  });
+};
+
+const commissionIntensity = (amount, maxAbsAmount) => {
+  if (!amount || !maxAbsAmount) return 0;
+  const ratio = Math.abs(amount) / maxAbsAmount;
+  if (ratio >= 0.66) return 3;
+  if (ratio >= 0.33) return 2;
+  return 1;
+};
+
+const commissionBarWidth = (amount, maxAbsAmount) => {
+  if (!amount || !maxAbsAmount) return '0%';
+  return `${Math.max(18, Math.round((Math.abs(amount) / maxAbsAmount) * 100))}%`;
 };
 
 const toNumber = (value, fallback = 0) => {
@@ -541,7 +649,7 @@ function StatCard({
         </Text>
         {Icon ? <Icon size={18} color={color} /> : null}
       </div>
-      <div className='mt-2 text-2xl font-semibold'>{value}</div>
+      <div className='mt-2 text-xl font-semibold md:text-2xl'>{value}</div>
       <div
         className='mt-1 text-xs'
         style={{
@@ -565,15 +673,31 @@ function StatusTag({ status }) {
   );
 }
 
-function AmountText({ value }) {
+function AmountText({ value, positive = true }) {
+  const { t } = useTranslation();
   const amount = Number(value || 0);
   const color =
-    amount > 0
+    amount > 0 && positive
       ? 'var(--semi-color-success)'
       : amount < 0
         ? 'var(--semi-color-danger)'
         : undefined;
-  return <span style={{ color }}>{formatBusinessAmount(amount)}</span>;
+  return (
+    <span className='inline-flex min-w-0 items-center gap-1.5' style={{ color }}>
+      <span className='min-w-0 truncate tabular-nums'>
+        {formatBusinessAmount(amount)}
+      </span>
+      {amount < 0 ? (
+        <Tag
+          color='red'
+          size='small'
+          style={{ flexShrink: 0, fontSize: 10, lineHeight: '16px' }}
+        >
+          {t('亏损')}
+        </Tag>
+      ) : null}
+    </span>
+  );
 }
 
 function Field({ label, children }) {
@@ -999,7 +1123,7 @@ function UserPicker({
                           <Tag color='orange' size='small'>
                             {user.assigned_employee_user_id === employeeUserId
                               ? t('当前员工')
-                              : t('已分配')}
+                              : t('已分配给其他员工')}
                           </Tag>
                         ) : null}
                         <span className='text-xs text-semi-color-text-2'>
@@ -1034,6 +1158,308 @@ function UserPicker({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function getEmployeeMonthlyAccountLabel(employee) {
+  return employee.username || `#${employee.user_id}`;
+}
+
+function getEmployeeMonthlyOptionLabel(employee) {
+  const account = getEmployeeMonthlyAccountLabel(employee);
+  return employee.remark ? `${employee.remark} / ${account}` : account;
+}
+
+function EmployeeMonthlySelector({ value, onChange }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [keyword, setKeyword] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const containerRef = useRef(null);
+  const allEmployeesLabel = t('All employees');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedKeyword(keyword.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [keyword]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setOpen(false);
+        setKeyword('');
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const loadEmployees = useCallback(
+    async (nextPage = 1, replace = false) => {
+      if (replace) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+      try {
+        const res = await API.get('/api/admin/employee', {
+          params: buildParams({
+            keyword: debouncedKeyword,
+            status: 1,
+            page: nextPage,
+            page_size: EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE,
+          }),
+          disableDuplicate: true,
+        });
+        const data = res.data?.data || {};
+        const nextItems = data.items || [];
+        const currentPage = Number(data.page || nextPage);
+        const pageSize = Number(
+          data.page_size || EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE,
+        );
+        const total = Number(data.total || 0);
+        setEmployees((prev) => {
+          if (replace) return nextItems;
+          const existingIds = new Set(prev.map((employee) => employee.id));
+          return [
+            ...prev,
+            ...nextItems.filter((employee) => !existingIds.has(employee.id)),
+          ];
+        });
+        setPage(currentPage);
+        setHasMore(currentPage * pageSize < total);
+      } catch (error) {
+        if (replace) {
+          setEmployees([]);
+          setHasMore(false);
+        }
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [debouncedKeyword],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setEmployees([]);
+    setPage(1);
+    setHasMore(false);
+    loadEmployees(1, true);
+  }, [debouncedKeyword, loadEmployees, open]);
+
+  const handleScroll = (event) => {
+    const target = event.currentTarget;
+    const distanceToBottom =
+      target.scrollHeight - target.scrollTop - target.clientHeight;
+    if (distanceToBottom > 48 || !hasMore || loadingMore || loading) return;
+    loadEmployees(page + 1, false);
+  };
+
+  const clearSelection = () => {
+    setKeyword('');
+    setDebouncedKeyword('');
+    onChange(undefined);
+    setOpen(true);
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: 280 }}>
+      <Input
+        value={open ? keyword : value ? getEmployeeMonthlyOptionLabel(value) : ''}
+        placeholder={allEmployeesLabel}
+        autoComplete='off'
+        onChange={(nextValue) => {
+          setKeyword(nextValue);
+          if (!open) setOpen(true);
+        }}
+        onFocus={() => {
+          setKeyword('');
+          setOpen(true);
+        }}
+        suffix={
+          value && !open ? (
+            <Button
+              type='tertiary'
+              theme='borderless'
+              size='small'
+              icon={<X size={14} />}
+              aria-label={t('Clear selection')}
+              title={t('Clear selection')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={clearSelection}
+            />
+          ) : null
+        }
+      />
+      {open ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 8px)',
+            left: 0,
+            right: 0,
+            zIndex: 1200,
+            maxHeight: 280,
+            overflowY: 'auto',
+            border: '1px solid var(--semi-color-border)',
+            borderRadius: 10,
+            background: 'var(--semi-color-bg-2)',
+            boxShadow: 'var(--semi-shadow-elevated)',
+            padding: 4,
+          }}
+          onScroll={handleScroll}
+        >
+          <div
+            role='option'
+            aria-selected={!value}
+            className='rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1 cursor-pointer'
+            style={{
+              background: !value ? 'var(--semi-color-fill-1)' : undefined,
+            }}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              clearSelection();
+              setOpen(false);
+            }}
+          >
+            <div className='flex items-center justify-between gap-3'>
+              <Text strong size='small'>
+                {allEmployeesLabel}
+              </Text>
+              <Text type='secondary' size='small'>
+                {t('All')}
+              </Text>
+            </div>
+          </div>
+          <div
+            style={{
+              height: 1,
+              background: 'var(--semi-color-border)',
+              margin: '4px 0',
+            }}
+          />
+          {loading ? (
+            <div className='px-2 py-6 text-center text-sm text-semi-color-text-2'>
+              {t('Loading...')}
+            </div>
+          ) : employees.length === 0 ? (
+            <div className='px-2 py-6 text-center text-sm text-semi-color-text-2'>
+              {t('No users found')}
+            </div>
+          ) : (
+            <>
+              {employees.map((employee) => {
+                const isSelected = value?.id === employee.id;
+                return (
+                  <div
+                    key={employee.id}
+                    role='option'
+                    aria-selected={isSelected}
+                    className='rounded px-3 py-2 text-sm hover:bg-semi-color-fill-1 cursor-pointer'
+                    style={{
+                      background: isSelected
+                        ? 'var(--semi-color-fill-1)'
+                        : undefined,
+                    }}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onChange(employee);
+                      setKeyword('');
+                      setOpen(false);
+                    }}
+                  >
+                    <div className='flex min-w-0 items-center justify-between gap-3'>
+                      <span className='truncate font-medium'>
+                        {employee.remark || getEmployeeMonthlyAccountLabel(employee)}
+                      </span>
+                      {employee.remark ? (
+                        <span className='text-xs text-semi-color-text-2 shrink-0 truncate'>
+                          {getEmployeeMonthlyAccountLabel(employee)}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+              {loadingMore ? (
+                <div className='px-2 py-3 text-center text-sm text-semi-color-text-2'>
+                  {t('Loading...')}
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MonthValueSelector({ value, onChange }) {
+  const { t, i18n } = useTranslation();
+  const [selectedYear, selectedMonth] = String(value || currentMonthValue())
+    .split('-')
+    .map(Number);
+  const nowYear = new Date().getUTCFullYear();
+  const years = useMemo(() => {
+    const start = Math.min(nowYear - 5, selectedYear || nowYear);
+    const end = Math.max(nowYear + 1, selectedYear || nowYear);
+    return Array.from({ length: end - start + 1 }, (_, index) => {
+      const year = start + index;
+      return { label: String(year), value: year };
+    });
+  }, [nowYear, selectedYear]);
+  const monthFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language || undefined, {
+        month: 'short',
+        timeZone: 'UTC',
+      }),
+    [i18n.language],
+  );
+  const months = useMemo(
+    () =>
+      Array.from({ length: 12 }, (_, index) => ({
+        label: monthFormatter.format(new Date(Date.UTC(2024, index, 1))),
+        value: index + 1,
+      })),
+    [monthFormatter],
+  );
+
+  const updateMonth = (year, month) => {
+    const nextYear = Number(year) || nowYear;
+    const nextMonth = Number(month) || 1;
+    onChange(`${nextYear}-${String(nextMonth).padStart(2, '0')}`);
+  };
+
+  return (
+    <Space spacing={4} aria-label={t('统计月份')}>
+      <Select
+        size='small'
+        value={selectedYear || nowYear}
+        optionList={years}
+        onChange={(nextYear) => updateMonth(nextYear, selectedMonth)}
+        style={{ width: 92 }}
+        aria-label={t('统计月份')}
+      />
+      <Select
+        size='small'
+        value={selectedMonth || 1}
+        optionList={months}
+        onChange={(nextMonth) => updateMonth(selectedYear, nextMonth)}
+        style={{ width: 96 }}
+        aria-label={t('统计月份')}
+      />
+    </Space>
   );
 }
 
@@ -1311,7 +1737,7 @@ function RemoveCustomersModal({ visible, row, onCancel, onRefresh }) {
           </div>
           <div className='flex flex-col gap-2 pt-3 md:flex-row md:items-center md:justify-between'>
             <Text type='secondary' size='small'>
-              {t('显示 {{start}}-{{end}} / {{total}} 个客户', {
+              {t('显示 {{start}}-{{end}} / {{total}}', {
                 start: pageStart,
                 end: pageEnd,
                 total,
@@ -1451,10 +1877,10 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
       }
       showSuccess(
         isReassignment
-          ? t('已成功重新分共 {{count}} 个客户', {
+          ? t('已重新分配 {{count}} 个客户', {
               count: selectedCount,
             })
-          : t('已成功分共 {{count}} 个客户', { count: selectedCount }),
+          : t('已分配 {{count}} 个客户', { count: selectedCount }),
       );
       onSuccess();
     } catch (error) {
@@ -1476,7 +1902,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
           <div className='space-y-3'>
             <Text>
               {t(
-                '选中的客户中包含已分配给其他员工的客户，重新分配会更新后续提成归属。',
+                '',
               )}
             </Text>
             <SummaryPanel danger>
@@ -1595,7 +2021,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
             {isReassignment ? (
               <Text type='warning' size='small' className='mt-2 block'>
                 {t(
-                  '选中的客户中包含已分配给其他员工的客户，重新分配会更新后续提成归属。',
+                  '',
                 )}
               </Text>
             ) : null}
@@ -1916,7 +2342,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
           value={form.remark}
           onChange={(value) => updateField('remark', value)}
           autosize={{ minRows: 3, maxRows: 5 }}
-          placeholder={t('请输入备注（仅管理员可见）')}
+          placeholder={t('备注')}
         />
       </Field>
     </Modal>
@@ -1987,14 +2413,19 @@ function EmployeesTab({
     return filters?.sort_order === 'asc' ? 'ascend' : 'descend';
   };
 
-  const handleTableChange = (_, __, sorter) => {
+  const handleTableChange = (...args) => {
+    const changeInfo = args[0];
+    const sorter = changeInfo?.sorter || args[2];
     const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
-    const sortKey = activeSorter?.dataIndex || activeSorter?.key;
+    const rawSortKey = activeSorter?.dataIndex || activeSorter?.key;
+    const sortKey = Array.isArray(rawSortKey)
+      ? rawSortKey.join('.')
+      : rawSortKey;
+    const sortOrder = activeSorter?.sortOrder;
     const next = { ...(filters || {}) };
-    if (sortKey && activeSorter?.sortOrder) {
-      next.sort_by =
-        sortKey === 'current_tier_level' ? 'current_tier_rate' : sortKey;
-      next.sort_order = activeSorter.sortOrder === 'ascend' ? 'asc' : 'desc';
+    if (sortKey && (sortOrder === 'ascend' || sortOrder === 'descend')) {
+      next.sort_by = sortKey;
+      next.sort_order = sortOrder === 'ascend' ? 'asc' : 'desc';
     } else {
       delete next.sort_by;
       delete next.sort_order;
@@ -2139,7 +2570,7 @@ function EmployeesTab({
       width: 130,
       sorter: true,
       sortOrder: getSortOrder('total_consumption_quota'),
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('总成本'),
@@ -2147,7 +2578,7 @@ function EmployeesTab({
       width: 120,
       sorter: true,
       sortOrder: getSortOrder('total_cost_quota'),
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('总利润'),
@@ -2155,7 +2586,7 @@ function EmployeesTab({
       width: 120,
       sorter: true,
       sortOrder: getSortOrder('total_profit_quota'),
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} />,
     },
     {
       title: t('总提成'),
@@ -2163,14 +2594,14 @@ function EmployeesTab({
       width: 120,
       sorter: true,
       sortOrder: getSortOrder('total_commission_quota'),
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} />,
     },
     {
       title: t('当前等级'),
       dataIndex: 'current_tier_level',
       width: 120,
       sorter: true,
-      sortOrder: getSortOrder('current_tier_rate'),
+      sortOrder: getSortOrder('current_tier_level'),
       render: (value, row) => {
         if (!value) return <Text type='secondary'>-</Text>;
         return (
@@ -2193,11 +2624,6 @@ function EmployeesTab({
       },
     },
     {
-      title: t('业绩目标'),
-      dataIndex: 'next_tier_threshold_usd',
-      render: (value) => (value ? formatTargetAmount(value) : t('无限制')),
-    },
-    {
       title: t('当前业绩'),
       dataIndex: 'current_performance_quota',
       width: 130,
@@ -2211,16 +2637,7 @@ function EmployeesTab({
       width: 130,
       sorter: true,
       sortOrder: getSortOrder('current_commission_quota'),
-      render: (value, row) => (
-        <div>
-          <AmountText value={value || 0} />
-          <div>
-            <Text type='secondary' size='small'>
-              {formatBusinessUsd(row.current_commission_usd)}
-            </Text>
-          </div>
-        </div>
-      ),
+      render: (value) => <AmountText value={value || 0} />,
     },
     {
       title: t('状态'),
@@ -2447,6 +2864,7 @@ function CommissionLogsTable({
     customer_user_id: filters?.customer_user_id || undefined,
     model_name: filters?.model_name || '',
     channel_id: filters?.channel_id || undefined,
+    loss_status: filters?.loss_status || 'all',
     date_range:
       filters?.start_time && filters?.end_time
         ? [
@@ -2462,6 +2880,7 @@ function CommissionLogsTable({
       customer_user_id: filters?.customer_user_id || undefined,
       model_name: filters?.model_name || '',
       channel_id: filters?.channel_id || undefined,
+      loss_status: filters?.loss_status || 'all',
       date_range:
         filters?.start_time && filters?.end_time
           ? [
@@ -2482,9 +2901,14 @@ function CommissionLogsTable({
       : [];
     const nextFilters = buildParams({
       employee_user_id: toNumber(filterForm.employee_user_id),
-      customer_user_id: toNumber(filterForm.customer_user_id),
+      ...(!selfView
+        ? { customer_user_id: toNumber(filterForm.customer_user_id) }
+        : {}),
       model_name: filterForm.model_name?.trim(),
       channel_id: toNumber(filterForm.channel_id),
+      ...(filterForm.loss_status !== 'all'
+        ? { loss_status: filterForm.loss_status }
+        : {}),
       start_time: start ? Math.floor(new Date(start).getTime() / 1000) : 0,
       end_time: end ? Math.floor(new Date(end).getTime() / 1000) : 0,
     });
@@ -2497,6 +2921,7 @@ function CommissionLogsTable({
       customer_user_id: undefined,
       model_name: '',
       channel_id: undefined,
+      loss_status: 'all',
       date_range: [],
     });
     onFiltersChange?.({});
@@ -2510,13 +2935,7 @@ function CommissionLogsTable({
       width: 180,
     },
     ...(selfView
-      ? [
-          {
-            title: t('客户'),
-            dataIndex: 'customer_user_id_masked',
-            render: (value, row) => value || `#${row.customer_user_id}`,
-          },
-        ]
+      ? []
       : [
           { title: t('员工 UID'), dataIndex: 'employee_user_id', width: 110 },
           { title: t('客户 UID'), dataIndex: 'customer_user_id', width: 110 },
@@ -2527,7 +2946,7 @@ function CommissionLogsTable({
       render: (value) => value || '-',
     },
     {
-      title: selfView ? t('消耗') : t('收入'),
+      title: selfView ? t('消费') : t('收入'),
       dataIndex: 'revenue_quota',
       render: (value) => formatBusinessAmount(value),
     },
@@ -2575,15 +2994,17 @@ function CommissionLogsTable({
               style={{ width: 120 }}
             />
           ) : null}
-          <InputNumber
-            size='small'
-            min={0}
-            hideButtons
-            placeholder={t('客户 UID')}
-            value={filterForm.customer_user_id}
-            onChange={(value) => updateFilter('customer_user_id', value)}
-            style={{ width: 120 }}
-          />
+          {!selfView ? (
+            <InputNumber
+              size='small'
+              min={0}
+              hideButtons
+              placeholder={t('客户 UID')}
+              value={filterForm.customer_user_id}
+              onChange={(value) => updateFilter('customer_user_id', value)}
+              style={{ width: 120 }}
+            />
+          ) : null}
           <Input
             size='small'
             placeholder={t('模型名称')}
@@ -2599,6 +3020,17 @@ function CommissionLogsTable({
             value={filterForm.channel_id}
             onChange={(value) => updateFilter('channel_id', value)}
             style={{ width: 110 }}
+          />
+          <Select
+            size='small'
+            value={filterForm.loss_status}
+            onChange={(value) => updateFilter('loss_status', value || 'all')}
+            style={{ width: 136 }}
+            optionList={[
+              { label: t('全部盈亏'), value: 'all' },
+              { label: t('仅亏损'), value: 'loss' },
+              { label: t('非亏损'), value: 'normal' },
+            ]}
           />
           <DatePicker
             type='dateTimeRange'
@@ -2650,12 +3082,6 @@ function CommissionLogsTable({
 // 阶梯提成等级配置
 // ============================================================================
 
-<<<<<<< Updated upstream
-function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
-=======
-<<<<<<< Updated upstream
-function TierModal({ visible, row, onCancel, onSuccess }) {
-=======
 function CommissionMonthlyCalendar({
   endpoint,
   selfView = false,
@@ -2663,84 +3089,63 @@ function CommissionMonthlyCalendar({
 }) {
   const { t } = useTranslation();
   const [month, setMonth] = useState(currentMonthValue);
-  const [employeeInput, setEmployeeInput] = useState(undefined);
-  const [employeeUserId, setEmployeeUserId] = useState(undefined);
+  const [selectedEmployee, setSelectedEmployee] = useState(undefined);
   const [selectedDate, setSelectedDate] = useState(undefined);
-  const range = useMemo(() => monthValueToRange(month), [month]);
+  const employeeUserId = selectedEmployee?.user_id;
+  const range = useMemo(() => monthValueToCalendarRange(month), [month]);
   const params = useMemo(
     () =>
       buildParams({
         ...range,
-        page: 1,
-        page_size: 100,
         employee_user_id: selfView ? undefined : employeeUserId,
       }),
     [employeeUserId, range, selfView],
   );
   const stats = useEndpointData(endpoint, params);
 
-  const applyFilters = () => {
-    const next = toNumber(employeeInput);
-    setEmployeeUserId(Number.isFinite(next) && next > 0 ? next : undefined);
-  };
-
-  const resetFilters = () => {
-    setEmployeeInput(undefined);
-    setEmployeeUserId(undefined);
-  };
-
+  const days = stats.data?.days || [];
   const periodItems = stats.data?.items || [];
-  const summary = useMemo(
-    () =>
-      periodItems.reduce(
-        (next, item) => ({
-          revenue_quota: next.revenue_quota + (item.revenue_quota || 0),
-          cost_quota: next.cost_quota + (item.cost_quota || 0),
-          profit_quota: next.profit_quota + (item.profit_quota || 0),
-          commission_quota:
-            next.commission_quota + (item.commission_quota || 0),
-          record_count: next.record_count + (item.record_count || 0),
-        }),
-        {
-          revenue_quota: 0,
-          cost_quota: 0,
-          profit_quota: 0,
-          commission_quota: 0,
-          record_count: 0,
-        },
-      ),
-    [periodItems],
-  );
+  const summary = stats.data?.summary || {};
+  const cells = useMemo(() => buildMonthCalendarCells(month, days), [days, month]);
+  const selectedCell = cells.find((cell) => cell.key === selectedDate);
+  const weekdays = [
+    t('Sun'),
+    t('Mon'),
+    t('Tue'),
+    t('Wed'),
+    t('Thu'),
+    t('Fri'),
+    t('Sat'),
+  ];
+
+  useEffect(() => {
+    const selectedInMonth = cells.some(
+      (cell) => cell.key === selectedDate && cell.inMonth,
+    );
+    if (selectedInMonth) return;
+    const today = cells.find((cell) => cell.inMonth && isCurrentDay(cell.date));
+    const firstStat = cells.find((cell) => cell.inMonth && cell.stat);
+    const firstDay = cells.find((cell) => cell.inMonth);
+    setSelectedDate((today || firstStat || firstDay)?.key);
+  }, [cells, selectedDate]);
 
   const content = (
     <div className='space-y-4'>
-      <div className='flex flex-wrap items-center justify-between gap-3 rounded bg-[var(--semi-color-fill-0)] p-3'>
+      <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--semi-color-fill-0)] p-3'>
         <Space wrap>
           <Button
             size='small'
             type='tertiary'
             icon={<ChevronLeft size={14} />}
+            aria-label={t('Previous month')}
             onClick={() => setMonth(shiftMonthValue(month, -1))}
           />
-          <DatePicker
-            type='month'
-            size='small'
-            value={new Date(`${month}-01T00:00:00`)}
-            placeholder={t('统计月份')}
-            onChange={(value) => {
-              const date = value instanceof Date ? value : new Date(value);
-              if (!Number.isNaN(date.getTime())) {
-                setMonth(
-                  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
-                );
-              }
-            }}
-            style={{ width: 150 }}
-          />
+          <MonthValueSelector value={month} onChange={setMonth} />
           <Button
             size='small'
             type='tertiary'
             icon={<ChevronRight size={14} />}
+            aria-label={t('Next month')}
             onClick={() => setMonth(shiftMonthValue(month, 1))}
           />
           <Button
@@ -2748,30 +3153,19 @@ function CommissionMonthlyCalendar({
             type={month === currentMonthValue() ? 'secondary' : 'tertiary'}
             onClick={() => setMonth(currentMonthValue())}
           >
-            {t('今日')}
+            {t('Today')}
           </Button>
         </Space>
         {!selfView ? (
-          <Space wrap>
-            <InputNumber
-              size='small'
-              min={0}
-              hideButtons
-              placeholder={t('Employee UID')}
-              value={employeeInput}
-              onChange={setEmployeeInput}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') applyFilters();
-              }}
-              style={{ width: 140 }}
+          <div className='flex items-center gap-2'>
+            <Text type='secondary' size='small'>
+              {t('Employee')}
+            </Text>
+            <EmployeeMonthlySelector
+              value={selectedEmployee}
+              onChange={setSelectedEmployee}
             />
-            <Button size='small' type='primary' onClick={applyFilters}>
-              {t('Search')}
-            </Button>
-            <Button size='small' type='tertiary' onClick={resetFilters}>
-              {t('Reset')}
-            </Button>
-          </Space>
+          </div>
         ) : null}
       </div>
       <Row gutter={[12, 12]}>
@@ -2785,7 +3179,7 @@ function CommissionMonthlyCalendar({
               {stats.loading ? (
                 <Spin size='small' />
               ) : (
-                formatBusinessAmount(summary.commission_quota || 0)
+                <AmountText value={summary.commission_quota || 0} />
               )}
             </div>
             <Text type='secondary' size='small'>
@@ -2798,8 +3192,8 @@ function CommissionMonthlyCalendar({
             <Text type='secondary' size='small'>
               {t('Monthly Performance')}
             </Text>
-            <div className='mt-2 font-semibold'>
-              {formatBusinessAmount(summary.profit_quota || 0)}
+            <div className='mt-2 text-base font-semibold md:text-lg'>
+              <AmountText value={summary.profit_quota || 0} />
             </div>
           </Card>
         </Col>
@@ -2820,35 +3214,41 @@ function CommissionMonthlyCalendar({
             <Card bodyStyle={{ minHeight: 156, padding: 16 }}>
               <div className='flex flex-wrap justify-between gap-3'>
                 <div>
-                  <Text strong>{item.period_key || t('Period')}</Text>
+                  <Text strong>{item.period_key || t('统计周期')}</Text>
                   <div className='mt-1 text-xs text-[var(--semi-color-text-2)]'>
                     {formatTs(item.period_start_at)} - {formatTs(item.period_end_at)}
                   </div>
                 </div>
                 <div className='text-right'>
-                  <div className='text-lg font-semibold'>
-                    {formatBusinessAmount(item.commission_quota || 0)}
+                  <div className='text-base font-semibold md:text-lg'>
+                    <AmountText value={item.commission_quota || 0} />
                   </div>
                   <Text type='secondary' size='small'>
-                    {t('Commission')}
+                    {t('提成')}
                   </Text>
                 </div>
               </div>
               <Row gutter={[12, 12]} className='mt-3'>
                 <Col span={6}>
-                  <Text type='secondary' size='small'>{t('Profit')}</Text>
-                  <div className='font-medium'>{formatBusinessAmount(item.profit_quota || 0)}</div>
+                  <Text type='secondary' size='small'>{t('利润')}</Text>
+                  <div className='font-medium'>
+                    <AmountText value={item.profit_quota || 0} />
+                  </div>
                 </Col>
                 <Col span={6}>
-                  <Text type='secondary' size='small'>{t('Revenue')}</Text>
-                  <div className='font-medium'>{formatBusinessAmount(item.revenue_quota || 0)}</div>
+                  <Text type='secondary' size='small'>{t('收入')}</Text>
+                  <div className='font-medium'>
+                    <AmountText value={item.revenue_quota || 0} positive={false} />
+                  </div>
                 </Col>
                 <Col span={6}>
-                  <Text type='secondary' size='small'>{t('Cost')}</Text>
-                  <div className='font-medium'>{formatBusinessAmount(item.cost_quota || 0)}</div>
+                  <Text type='secondary' size='small'>{t('成本')}</Text>
+                  <div className='font-medium'>
+                    <AmountText value={item.cost_quota || 0} positive={false} />
+                  </div>
                 </Col>
                 <Col span={6}>
-                  <Text type='secondary' size='small'>{t('Records')}</Text>
+                  <Text type='secondary' size='small'>{t('记录数')}</Text>
                   <div className='font-medium'>{item.record_count || 0}</div>
                 </Col>
               </Row>
@@ -2883,9 +3283,268 @@ function CommissionMonthlyCalendar({
   );
 }
 
+function CommissionFinancialMonthlyCalendar({
+  endpoint,
+  selfView = false,
+  embedded = false,
+}) {
+  const { t } = useTranslation();
+  const [month, setMonth] = useState(currentMonthValue);
+  const [selectedEmployee, setSelectedEmployee] = useState(undefined);
+  const [selectedDate, setSelectedDate] = useState(undefined);
+  const employeeUserId = selectedEmployee?.user_id;
+  const range = useMemo(() => monthValueToCalendarRange(month), [month]);
+  const params = useMemo(
+    () =>
+      buildParams({
+        ...range,
+        employee_user_id: selfView ? undefined : employeeUserId,
+      }),
+    [employeeUserId, range, selfView],
+  );
+  const stats = useEndpointData(endpoint, params);
+  const days = stats.data?.days || [];
+  const summary = stats.data?.summary || {};
+  const periodStartAt = stats.data?.period_start_at;
+  const periodEndAt = stats.data?.period_end_at;
+  const visualPeriodEndAt = stats.data?.period_boundary_at || periodEndAt;
+  const periodTimezone = stats.data?.timezone;
+  const cells = useMemo(
+    () =>
+      buildPeriodCalendarCells(
+        month,
+        days,
+        periodStartAt,
+        visualPeriodEndAt,
+        periodTimezone,
+      ),
+    [days, month, periodStartAt, visualPeriodEndAt, periodTimezone],
+  );
+  const maxAbsCommission = useMemo(
+    () =>
+      days.reduce(
+        (max, day) => Math.max(max, Math.abs(day.commission_quota || 0)),
+        0,
+      ),
+    [days],
+  );
+  const selectedCell = cells.find((cell) => cell.key === selectedDate);
+  const weekdays = [
+    t('Sun'),
+    t('Mon'),
+    t('Tue'),
+    t('Wed'),
+    t('Thu'),
+    t('Fri'),
+    t('Sat'),
+  ];
+
+  useEffect(() => {
+    const selectedInMonth = cells.some(
+      (cell) => cell.key === selectedDate && cell.inPeriod,
+    );
+    if (selectedInMonth) return;
+    const today = cells.find(
+      (cell) => cell.inPeriod && isCurrentDay(cell.date, periodTimezone),
+    );
+    const firstStat = cells.find((cell) => cell.inPeriod && cell.stat);
+    const firstDay = cells.find((cell) => cell.inPeriod);
+    setSelectedDate((today || firstStat || firstDay)?.key);
+  }, [cells, selectedDate]);
+
+  const content = (
+    <div className='space-y-4'>
+      <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--semi-color-fill-0)] p-3'>
+        <Space wrap>
+          <Button
+            size='small'
+            type='tertiary'
+            icon={<ChevronLeft size={14} />}
+            aria-label={t('Previous month')}
+            onClick={() => setMonth(shiftMonthValue(month, -1))}
+          />
+          <MonthValueSelector value={month} onChange={setMonth} />
+          <Button
+            size='small'
+            type='tertiary'
+            icon={<ChevronRight size={14} />}
+            aria-label={t('Next month')}
+            onClick={() => setMonth(shiftMonthValue(month, 1))}
+          />
+          <Button
+            size='small'
+            type={month === currentMonthValue() ? 'secondary' : 'tertiary'}
+            onClick={() => setMonth(currentMonthValue())}
+          >
+            {t('Today')}
+          </Button>
+        </Space>
+        {!selfView ? (
+          <div className='flex items-center gap-2'>
+            <Text type='secondary' size='small'>
+              {t('Employee')}
+            </Text>
+            <EmployeeMonthlySelector
+              value={selectedEmployee}
+              onChange={setSelectedEmployee}
+            />
+          </div>
+        ) : null}
+      </div>
+      <Row gutter={[12, 12]}>
+        <Col xs={24} md={12}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <div className='flex items-center gap-2'>
+              <CalendarDays size={16} color='var(--semi-color-success)' />
+              <Text type='secondary'>
+                {periodDateLabel(
+                  periodStartAt,
+                  visualPeriodEndAt,
+                  monthLabel(month),
+                  periodTimezone,
+                )}
+              </Text>
+            </div>
+            <div className='mt-2 text-2xl font-semibold'>
+              {stats.loading ? (
+                <Spin size='small' />
+              ) : (
+                <AmountText value={summary.commission_quota || 0} />
+              )}
+            </div>
+            <Text type='secondary' size='small'>
+              {t('Monthly Commission')}
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <Text type='secondary' size='small'>
+              {t('Monthly Performance')}
+            </Text>
+            <div className='mt-2 text-base font-semibold md:text-lg'>
+              <AmountText value={summary.profit_quota || 0} />
+            </div>
+          </Card>
+        </Col>
+        <Col xs={12} md={6}>
+          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
+            <Text type='secondary' size='small'>
+              {t('Records')}
+            </Text>
+            <div className='mt-2 font-semibold'>
+              {summary.record_count || 0}
+            </div>
+          </Card>
+        </Col>
+      </Row>
+      <div className='overflow-hidden rounded border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-2)] shadow-sm'>
+        <div className='grid grid-cols-7 border-b border-[var(--semi-color-border)] bg-zinc-900 text-center text-[11px] font-semibold uppercase tracking-normal text-white'>
+          {weekdays.map((day) => (
+            <div key={day} className='px-2 py-2.5'>
+              {day}
+            </div>
+          ))}
+        </div>
+        <div className='grid grid-cols-7'>
+          {cells.map(({ key, date, inPeriod, stat }, index) => {
+            const commission = stat?.commission_quota || 0;
+            const selected = key === selectedDate;
+            const isLastColumn = (index + 1) % 7 === 0;
+            const intensity = commissionIntensity(commission, maxAbsCommission);
+            const positive = commission >= 0;
+            return (
+              <button
+                key={key}
+                type='button'
+                aria-pressed={selected}
+                title={
+                  stat
+                    ? `${key} ${formatBusinessAmount(commission)} (${stat.record_count || 0})`
+                    : key
+                }
+                onClick={() => setSelectedDate(key)}
+                className={[
+                  'group relative min-h-[92px] border-b border-[var(--semi-color-border)] p-2.5 text-left transition-all outline-none hover:z-10 hover:-translate-y-px hover:shadow-md',
+                  isLastColumn ? '' : 'border-r border-[var(--semi-color-border)]',
+                  inPeriod ? 'bg-[var(--semi-color-bg-2)]' : 'bg-[var(--semi-color-fill-0)] text-[var(--semi-color-text-2)] opacity-60',
+                  inPeriod && !stat ? 'hover:bg-[var(--semi-color-fill-0)]' : '',
+                  inPeriod && stat && positive && intensity === 1 ? 'bg-emerald-50/70 hover:bg-emerald-50' : '',
+                  inPeriod && stat && positive && intensity === 2 ? 'bg-emerald-100/80 hover:bg-emerald-100' : '',
+                  inPeriod && stat && positive && intensity === 3 ? 'bg-emerald-200/80 hover:bg-emerald-200' : '',
+                  inPeriod && stat && !positive && intensity === 1 ? 'bg-red-50/70 hover:bg-red-50' : '',
+                  inPeriod && stat && !positive && intensity === 2 ? 'bg-red-100/80 hover:bg-red-100' : '',
+                  inPeriod && stat && !positive && intensity === 3 ? 'bg-red-200/80 hover:bg-red-200' : '',
+                  selected ? 'z-20 ring-2 ring-inset ring-[var(--semi-color-primary)]' : '',
+                ].filter(Boolean).join(' ')}
+              >
+                <div className='flex items-center justify-between gap-1'>
+                  <span
+                    className={[
+                      'flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold',
+                      isCurrentDay(date, periodTimezone)
+                        ? 'bg-[var(--semi-color-primary)] text-white shadow-sm'
+                        : '',
+                      selected && !isCurrentDay(date, periodTimezone)
+                        ? 'bg-[var(--semi-color-primary-light-default)] text-[var(--semi-color-primary)]'
+                        : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {date.getUTCDate()}
+                  </span>
+                  {stat?.record_count ? (
+                    <span className='rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-medium text-[var(--semi-color-text-2)] shadow-sm'>
+                      {stat.record_count}
+                    </span>
+                  ) : null}
+                </div>
+                {stat ? (
+                  <div className='mt-3 space-y-1'>
+                    <div
+                      className={[
+                        'truncate text-xs font-bold md:text-sm',
+                        positive ? 'text-emerald-700' : 'text-red-700',
+                      ].join(' ')}
+                    >
+                      <AmountText value={commission} />
+                    </div>
+                    <div
+                      className={[
+                        'h-1 rounded-full transition-all',
+                        positive ? 'bg-emerald-500/70' : 'bg-red-500/70',
+                      ].join(' ')}
+                      style={{ width: commissionBarWidth(commission, maxAbsCommission) }}
+                    />
+                  </div>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {false ? (
+        <BusinessEmpty description={t('暂无数据')} />
+      ) : null}
+    </div>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <BusinessCard
+      title={t('月度统计')}
+      icon={BadgeDollarSign}
+      color='var(--semi-color-success)'
+      t={t}
+    >
+      {content}
+    </BusinessCard>
+  );
+}
+
 function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   const { t } = useTranslation();
   const isUpdate = Boolean(row);
   const [saving, setSaving] = useState(false);
@@ -3160,12 +3819,6 @@ function TierModal({ visible, row, onCancel, onSuccess, tiers = [] }) {
   );
 }
 
-<<<<<<< Updated upstream
-function TiersTab({ tiersPaged, onReadyToolbar }) {
-=======
-<<<<<<< Updated upstream
-function TiersTab({ onReadyToolbar }) {
-=======
 function TierResetSettingsCard({ onResetSuccess }) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -3384,8 +4037,6 @@ function TierResetSettingsCard({ onResetSuccess }) {
 }
 
 function TiersTab({ tiersPaged, onReadyToolbar }) {
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   const { t } = useTranslation();
   const [allTiers, setAllTiers] = useState([]);
   const [modalRow, setModalRow] = useState(null);
@@ -3439,7 +4090,7 @@ function TiersTab({ tiersPaged, onReadyToolbar }) {
         <div className='space-y-3'>
           <Text>
             {t(
-              '删除后已处于该等级的员工不会自动降级，但下次升级判断时会使用新配置。',
+              '',
             )}
           </Text>
           <SummaryPanel danger>
@@ -3598,7 +4249,7 @@ function TiersTab({ tiersPaged, onReadyToolbar }) {
 
 export function Employees() {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState('employees');
+  const [activeTab, setActiveTab] = useState('monthly');
   const [tabToolbar, setTabToolbar] = useState(null);
   const [employeeFilters, setEmployeeFilters] = useState({});
   const [commissionLogFilters, setCommissionLogFilters] = useState({});
@@ -3668,20 +4319,12 @@ export function Employees() {
             onReadyToolbar={setTabToolbar}
           />
         ) : activeTab === 'tiers' ? (
-<<<<<<< Updated upstream
-          <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
-=======
-<<<<<<< Updated upstream
-          <TiersTab onReadyToolbar={setTabToolbar} />
-=======
           <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
         ) : activeTab === 'monthly' ? (
-          <CommissionMonthlyCalendar
-            endpoint='/api/admin/employee/commission/monthly'
+          <CommissionFinancialMonthlyCalendar
+            endpoint='/api/admin/employee/commission/calendar'
             embedded
           />
->>>>>>> Stashed changes
->>>>>>> Stashed changes
         ) : (
           <CommissionLogsTable
             endpoint='/api/admin/employee/commission'
@@ -3703,15 +4346,8 @@ export function EmployeeConsole() {
   const [loading, setLoading] = useState(true);
   const [profileData, setProfileData] = useState(null);
   const [summary, setSummary] = useState(null);
-<<<<<<< Updated upstream
   const [commissionLogFilters, setCommissionLogFilters] = useState({});
-=======
-<<<<<<< Updated upstream
-=======
-  const [commissionLogFilters, setCommissionLogFilters] = useState({});
-  const [activeConsoleTab, setActiveConsoleTab] = useState('details');
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+  const [activeConsoleTab, setActiveConsoleTab] = useState('monthly');
   const commissionLogs = usePagedEndpoint(
     '/api/user/employee/commission',
     commissionLogFilters,
@@ -3750,18 +4386,9 @@ export function EmployeeConsole() {
   }, [loadProfile]);
 
   const profile = profileData?.data?.profile;
-<<<<<<< Updated upstream
-  const tierInfo = profileData?.data?.tier;
-  const effectiveRate = tierInfo?.tier_rate ?? profile?.commission_rate ?? 0;
-  const tierGroup = tierInfo?.tier_group || '';
-=======
-<<<<<<< Updated upstream
-=======
   const tierInfo = profileData?.data?.tier;
   const effectiveRate = tierInfo?.tier_rate ?? 0;
   const tierGroup = tierInfo?.tier_group || '';
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   const extension = summary || profileData?.data?.extension || {};
   const customerTotalConsumptionQuota =
     extension.customer_total_consumption_quota ?? 0;
@@ -3826,79 +4453,10 @@ export function EmployeeConsole() {
               }
               t={t}
             >
-<<<<<<< Updated upstream
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('总消费')}
-                    value={formatBusinessAmount(customerTotalConsumptionQuota)}
-                    sub={formatBusinessUsd(customerTotalConsumptionUsd)}
-                    icon={DollarSign}
-                    color='var(--semi-color-info)'
-                  />
-                </Col>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('当前业绩')}
-                    value={formatBusinessAmount(totalProfitQuota)}
-                    sub={formatExactUsd(totalProfitUsd)}
-                    icon={TrendingUp}
-                    color='var(--semi-color-success)'
-                  />
-                </Col>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('提成金额')}
-                    value={formatBusinessAmount(totalCommissionQuota)}
-                    sub={formatBusinessUsd(totalCommissionUsd)}
-                    icon={BadgeDollarSign}
-                    color='var(--semi-color-success)'
-                  />
-                </Col>
-                <Col xs={24} md={12} xl={6}>
-                  <StatCard
-                    title={t('提成阶梯')}
-                    value={
-                      <span>
-                        {formatPercent(effectiveRate)}
-                        {tierGroup ? (
-                          <Tag size='small' style={{ marginLeft: 6 }}>
-                            {tierGroup}
-                          </Tag>
-                        ) : null}
-                      </span>
-                    }
-                    sub={
-                      targetAmount
-                        ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' done' : ''}`
-                        : `${t('业绩目标')}: ${t('无限制')}`
-                    }
-                    icon={Wallet}
-                  />
-                </Col>
-              </Row>
-              <div
-                className='mt-4 pt-4 border-t'
-                style={{ borderColor: 'var(--semi-color-border)' }}
-              >
-                <div className='mb-3'>
-                  <Text strong>{t('提成明细')}</Text>
-                </div>
-                <CommissionLogsTable
-                  endpoint='/api/user/employee/commission'
-                  selfView
-                  logs={commissionLogs}
-<<<<<<< Updated upstream
-                  filters={commissionLogFilters}
-                  onFiltersChange={setCommissionLogFilters}
-=======
-=======
               {activeConsoleTab === 'monthly' ? (
-                <CommissionMonthlyCalendar
-                  endpoint='/api/user/employee/commission/monthly'
+                <CommissionFinancialMonthlyCalendar
+                  endpoint='/api/user/employee/commission/calendar'
                   selfView
->>>>>>> Stashed changes
->>>>>>> Stashed changes
                   embedded
                 />
               ) : (
@@ -3906,7 +4464,7 @@ export function EmployeeConsole() {
                   <Row gutter={[16, 16]}>
                     <Col xs={24} md={12} xl={6}>
                       <StatCard
-                        title={t('总消费')}
+                        title={t('累计消费')}
                         value={formatBusinessAmount(
                           customerTotalConsumptionQuota,
                         )}
@@ -3936,19 +4494,10 @@ export function EmployeeConsole() {
                     <Col xs={24} md={12} xl={6}>
                       <StatCard
                         title={t('提成阶梯')}
-                        value={
-                          <span>
-                            {formatPercent(effectiveRate)}
-                            {tierGroup ? (
-                              <Tag size='small' style={{ marginLeft: 6 }}>
-                                {tierGroup}
-                              </Tag>
-                            ) : null}
-                          </span>
-                        }
+                        value={formatPercent(effectiveRate)}
                         sub={
                           targetAmount
-                            ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ' done' : ''}`
+                            ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ` ${t('已完成')}` : ''}`
                             : `${t('业绩目标')}: ${t('无限制')}`
                         }
                         icon={Wallet}
@@ -4119,9 +4668,7 @@ export function CustomerConsole() {
   const { t } = useTranslation();
   const [customerFilters, setCustomerFilters] = useState({});
   const [filterForm, setFilterForm] = useState({
-    customer_user_id: undefined,
     keyword: '',
-    status: undefined,
   });
   const customers = usePagedEndpoint(
     '/api/user/employee/customers',
@@ -4137,18 +4684,14 @@ export function CustomerConsole() {
   const applyFilters = () => {
     setCustomerFilters(
       buildParams({
-        customer_user_id: toNumber(filterForm.customer_user_id),
         keyword: filterForm.keyword?.trim(),
-        status: toNumber(filterForm.status),
       }),
     );
   };
 
   const resetFilters = () => {
     setFilterForm({
-      customer_user_id: undefined,
       keyword: '',
-      status: undefined,
     });
     setCustomerFilters({});
   };
@@ -4189,11 +4732,6 @@ export function CustomerConsole() {
       render: (value) => (value ? <AmountText value={value} /> : '-'),
     },
     {
-      title: t('状态'),
-      dataIndex: 'status',
-      render: (value) => <StatusTag status={value} />,
-    },
-    {
       title: t('备注'),
       dataIndex: 'remark',
       render: (value) => value || '-',
@@ -4219,32 +4757,13 @@ export function CustomerConsole() {
         color='var(--semi-color-primary)'
         actions={
           <div className='flex flex-wrap justify-end gap-2'>
-            <InputNumber
-              size='small'
-              min={0}
-              hideButtons
-              placeholder={t('客户 UID')}
-              value={filterForm.customer_user_id}
-              onChange={(value) => updateFilter('customer_user_id', value)}
-              style={{ width: 120 }}
-            />
             <Input
               size='small'
-              placeholder={t('用户名/ 邮箱 / 备注')}
+              placeholder={t('客户ID / 账号名称 / 备注')}
               value={filterForm.keyword}
               onChange={(value) => updateFilter('keyword', value)}
-              style={{ width: 180 }}
+              style={{ width: 220 }}
             />
-            <Select
-              size='small'
-              placeholder={t('全部状态')}
-              value={filterForm.status}
-              onChange={(value) => updateFilter('status', value)}
-              style={{ width: 110 }}
-            >
-              <Select.Option value={1}>{t('启用')}</Select.Option>
-              <Select.Option value={2}>{t('禁用')}</Select.Option>
-            </Select>
             <Button size='small' type='primary' onClick={applyFilters}>
               {t('查询')}
             </Button>
@@ -4504,12 +5023,12 @@ export function BusinessOverview() {
     {
       title: t('客户消费'),
       dataIndex: 'total_revenue',
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('客户成本'),
       dataIndex: 'total_cost',
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('客户利润'),
@@ -4539,16 +5058,16 @@ export function BusinessOverview() {
       sorter: (a, b) => a.cost_ratio - b.cost_ratio,
     },
     {
-      title: t('总消费'),
+      title: t('累计消费'),
       dataIndex: 'consumption_quota',
       sorter: (a, b) => a.consumption_quota - b.consumption_quota,
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('估算成本'),
       dataIndex: 'est_cost_quota',
       sorter: (a, b) => a.est_cost_quota - b.est_cost_quota,
-      render: (value) => formatBusinessAmount(value),
+      render: (value) => <AmountText value={value} positive={false} />,
     },
     {
       title: t('估算利润'),
@@ -4627,7 +5146,7 @@ export function BusinessOverview() {
                   {showBackfillRunning
                     ? t('正在回填历史数据')
                     : t(
-                        '检测到历史成本数据尚未迁移，迁移后可获得更准确的统计。此操作仅需执行一次。',
+                        '',
                       )}
                 </Text>
                 {!showBackfillRunning ? (
@@ -4648,10 +5167,13 @@ export function BusinessOverview() {
             <Row gutter={[16, 16]}>
               <Col xs={24} md={12} xl={4}>
                 <StatCard
-                  title={t('总消费')}
-                  value={formatBusinessAmount(
-                    platform.total_consumption_quota || 0,
-                  )}
+                  title={t('累计消费')}
+                  value={
+                    <AmountText
+                      value={platform.total_consumption_quota || 0}
+                      positive={false}
+                    />
+                  }
                   sub={formatBusinessUsd(platform.total_consumption_usd)}
                   icon={Wallet}
                   color='var(--semi-color-info)'
@@ -4660,7 +5182,12 @@ export function BusinessOverview() {
               <Col xs={24} md={12} xl={4}>
                 <StatCard
                   title={t('估算成本')}
-                  value={formatBusinessAmount(platform.est_cost_quota || 0)}
+                  value={
+                    <AmountText
+                      value={platform.est_cost_quota || 0}
+                      positive={false}
+                    />
+                  }
                   sub={formatBusinessUsd(platform.est_cost_usd)}
                   icon={BriefcaseBusiness}
                   color='var(--semi-color-warning)'
@@ -4669,7 +5196,7 @@ export function BusinessOverview() {
               <Col xs={24} md={12} xl={4}>
                 <StatCard
                   title={t('估算利润')}
-                  value={formatBusinessAmount(platform.est_profit_quota || 0)}
+                  value={<AmountText value={platform.est_profit_quota || 0} />}
                   sub={formatBusinessUsd(platform.est_profit_usd)}
                   icon={TrendingUp}
                   color='var(--semi-color-success)'
@@ -4784,9 +5311,12 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('客户消费')}
-                  value={formatBusinessAmount(
-                    commission.total_revenue_quota || 0,
-                  )}
+                  value={
+                    <AmountText
+                      value={commission.total_revenue_quota || 0}
+                      positive={false}
+                    />
+                  }
                   sub={formatBusinessUsd(commission.total_revenue_usd)}
                   icon={DollarSign}
                   color='var(--semi-color-info)'
@@ -4795,7 +5325,12 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('客户成本')}
-                  value={formatBusinessAmount(commission.total_cost_quota || 0)}
+                  value={
+                    <AmountText
+                      value={commission.total_cost_quota || 0}
+                      positive={false}
+                    />
+                  }
                   sub={formatBusinessUsd(commission.total_cost_usd)}
                   icon={BriefcaseBusiness}
                   color='var(--semi-color-warning)'
@@ -4804,9 +5339,7 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('客户利润')}
-                  value={formatBusinessAmount(
-                    commission.total_profit_quota || 0,
-                  )}
+                  value={<AmountText value={commission.total_profit_quota || 0} />}
                   sub={formatBusinessUsd(commission.total_profit_usd)}
                   icon={TrendingUp}
                   color='var(--semi-color-success)'
@@ -4815,9 +5348,9 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('提成总额')}
-                  value={formatBusinessAmount(
-                    commission.total_commission_quota || 0,
-                  )}
+                  value={
+                    <AmountText value={commission.total_commission_quota || 0} />
+                  }
                   sub={formatBusinessUsd(commission.total_commission_usd)}
                   icon={BadgeDollarSign}
                 />

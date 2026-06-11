@@ -40,8 +40,6 @@ func parseUnixTimeRangeQuery(c *gin.Context) (unixTimeRangeQuery, error) {
 	}
 	return unixTimeRangeQuery{StartTime: startTime, EndTime: endTime}, nil
 }
-<<<<<<< Updated upstream
-=======
 
 func parseOptionalInt64Query(c *gin.Context, key string) (int64, error) {
 	raw := strings.TrimSpace(c.Query(key))
@@ -54,4 +52,3 @@ func parseOptionalInt64Query(c *gin.Context, key string) (int64, error) {
 	}
 	return value, nil
 }
->>>>>>> Stashed changes

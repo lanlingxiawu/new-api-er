@@ -105,6 +105,7 @@ export async function getCommissionLogs(params: {
   customer_user_id?: number
   model_name?: string
   channel_id?: number
+  loss_status?: 'loss' | 'normal'
   start_time?: number
   end_time?: number
 }): Promise<PagedResponse<CommissionLog>> {
@@ -117,6 +118,7 @@ export async function getCommissionLogs(params: {
     q.set('customer_user_id', String(params.customer_user_id))
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
+  if (params.loss_status) q.set('loss_status', params.loss_status)
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission?${q.toString()}`)
   return res.data

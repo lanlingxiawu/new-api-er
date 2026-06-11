@@ -1,39 +1,20 @@
 {
-  "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost (no margin from channel), 0.6 = 60%. Used for employee commission profit calculation.",
-  "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.": "Actual upstream cost relative to standard price. 1.0 = full cost, 0.6 = 60%, 0 = no cost (free channel). Used for employee commission profit calculation.",
-  "After selection, the values below are filled automatically and can still be edited.": "After selection, the values below are filled automatically and can still be edited.",
   "Click Add Tier to create one.": "Click Add Tier to create one.",
-  "Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.": "Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.",
   "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
   "Cost and profit are estimated from per-group ratios and per-channel cost ratios.": "Cost and profit are estimated from per-group ratios and per-channel cost ratios.",
   "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
-  "customers with consumption": "customers with consumption",
   "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.": "Employees already at this tier will not be downgraded automatically, but future upgrade checks will use the new configuration.",
-<<<<<<< Updated upstream
   "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.": "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.",
-=======
-<<<<<<< Updated upstream
-=======
-  "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.": "Enter the upstream cost or proxy station ratio as a multiplier for cost, profit, and employee commission; 0 means zero cost, 0.6 means cost is 0.6x.",
-  "If the configured day does not exist in a given month, the last day of that month is used. The schedule runs in the server timezone.": "If the configured day does not exist in a given month, the last day of that month is used. The schedule runs in the server timezone.",
->>>>>>> Stashed changes
->>>>>>> Stashed changes
   "Leave blank to keep unchanged": "Leave blank to keep unchanged",
   "Leave blank to use username": "Leave blank to use username",
-  "Manage employees and commission rates.": "Manage employees and commission rates.",
   "No models available. Please configure your groups.": "No models available. Please configure your groups.",
-  "No models available. Please switch to another group.": "No models available. Please switch to another group.",
-  "On a monthly schedule, automatically reset every employee tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals and commission records are not affected.": "On a monthly schedule, automatically reset every employee tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals and commission records are not affected.",
   "Please enter username and password": "Please enter username and password",
   "Profit accumulated since the last monthly reset, used to determine progress toward the next tier. It resets to zero on the next scheduled reset and does not affect total profit or historical records.": "Profit accumulated since the last monthly reset, used to determine progress toward the next tier. It resets to zero on the next scheduled reset and does not affect total profit or historical records.",
   "Search and select the user to assign employee status": "Search and select the user to assign employee status",
-  "Select a tier to fill rate and target": "Select a tier to fill rate and target",
   "Select mode and enter amount": "Select mode and enter amount",
   "The user ID to assign employee status": "The user ID to assign employee status",
   "This will disable the employee. Historical commission logs are retained.": "This will disable the employee. Historical commission logs are retained.",
   "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.": "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.",
-  "This will reset the channel cost ratio to the default (1.0).": "This will reset the channel cost ratio to the default (1.0).",
   "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
-  "View all available models and their status": "View all available models and their status",
-  "When enabled, employee tiers and current period stats are reset automatically on the schedule below.": "When enabled, employee tiers and current period stats are reset automatically on the schedule below."
+  "View all available models and their status": "View all available models and their status"
 }

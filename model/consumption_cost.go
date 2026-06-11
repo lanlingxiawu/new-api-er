@@ -1,10 +1,6 @@
 package model
 
-import (
-	"time"
-
-	"gorm.io/gorm"
-)
+import "time"
 
 // ConsumptionCost 逐笔消费成本台账（覆盖全平台所有消费，不仅员工归属流量）。
 // 在每笔消费结算后异步写入，记录当次真实的分组倍率与渠道成本系数算出的精确成本，
@@ -69,10 +65,6 @@ func CreateConsumptionCostAndCommissionLog(cost *ConsumptionCost, log *EmployeeC
 	return inserted, nil
 }
 
-func applyConsumptionCostTimeRange(tx *gorm.DB, startTime, endTime int64) *gorm.DB {
-	return applyCreatedAtTimeRange(tx, startTime, endTime)
-}
-
 // ConsumptionCostTotals 时间范围内的精确收入/成本总计。
 type ConsumptionCostTotals struct {
 	TotalRevenue int64 `json:"total_revenue"`
@@ -95,18 +87,6 @@ func GetConsumptionCostTotals(startTime, endTime int64) (ConsumptionCostTotals, 
 	return t, nil
 }
 
-// GetConsumptionCostTotalsFromLedger 从逐笔台账实时聚合，主要用于日统计回填和边界时间补数。
-func GetConsumptionCostTotalsFromLedger(startTime, endTime int64) (ConsumptionCostTotals, error) {
-	var t ConsumptionCostTotals
-	tx := DB.Model(&ConsumptionCost{}).
-		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota),0) as total_cost, " +
-			"COUNT(*) as record_count")
-	tx = applyConsumptionCostTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&t).Error
-	return t, err
-}
-
 // ConsumptionCostChannelStat 按渠道的精确收入/成本汇总。
 type ConsumptionCostChannelStat struct {
 	ChannelId    int     `json:"channel_id"`
@@ -121,21 +101,4 @@ type ConsumptionCostChannelStat struct {
 // GetConsumptionCostByChannel 按渠道精确汇总，优先使用日聚合统计。
 func GetConsumptionCostByChannel(startTime, endTime int64) ([]*ConsumptionCostChannelStat, error) {
 	return getConsumptionCostByChannelFromStats(startTime, endTime)
-}
-
-// GetConsumptionCostByChannelFromLedger 从逐笔台账实时按渠道聚合。
-func GetConsumptionCostByChannelFromLedger(startTime, endTime int64) ([]*ConsumptionCostChannelStat, error) {
-	var items []*ConsumptionCostChannelStat
-	tx := DB.Model(&ConsumptionCost{}).
-		Select("channel_id, " +
-			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, " +
-			"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota),0) as total_cost, " +
-			"COALESCE(AVG(cost_ratio),1) as cost_ratio, " +
-			"COALESCE(SUM(cost_ratio),0) as cost_ratio_sum, " +
-			"COUNT(*) as record_count").
-		Group("channel_id")
-	tx = applyConsumptionCostTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&items).Error
-	return items, err
 }

@@ -34,6 +34,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
+import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
   formatBusinessUsd,
@@ -149,8 +150,39 @@ function StatCard({
           {title}
         </div>
       </div>
-      <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+      <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
         {value}
+      </div>
+      {sub ? (
+        <div className='text-muted-foreground/60 mt-1 truncate text-xs'>
+          {sub}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function AmountStatCard({
+  title,
+  value,
+  sub,
+  icon: Icon,
+}: {
+  title: string
+  value: number | null | undefined
+  sub?: string
+  icon: ComponentType<{ className?: string }>
+}) {
+  return (
+    <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'>
+      <div className='flex items-center gap-2'>
+        <Icon className='text-muted-foreground/60 size-3.5 shrink-0' />
+        <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+          {title}
+        </div>
+      </div>
+      <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight tabular-nums sm:mt-2 sm:text-xl'>
+        <BusinessAmount value={value} />
       </div>
       {sub ? (
         <div className='text-muted-foreground/60 mt-1 truncate text-xs'>
@@ -544,27 +576,21 @@ export function CommissionOverview() {
                     {t('Platform-wide (all users)')}
                   </SectionTitle>
                   <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-3'>
-                    <StatCard
+                    <AmountStatCard
                       title={t('Total Consumption')}
-                      value={formatBusinessAmount(
-                        platform?.total_consumption_quota ?? 0
-                      )}
+                      value={platform?.total_consumption_quota ?? 0}
                       sub={formatBusinessUsd(platform?.total_consumption_usd)}
                       icon={Wallet}
                     />
-                    <StatCard
+                    <AmountStatCard
                       title={t('Cost')}
-                      value={formatBusinessAmount(
-                        platform?.est_cost_quota ?? 0
-                      )}
+                      value={platform?.est_cost_quota ?? 0}
                       sub={formatBusinessUsd(platform?.est_cost_usd)}
                       icon={Wallet}
                     />
-                    <StatCard
+                    <AmountStatCard
                       title={t('Profit')}
-                      value={formatBusinessAmount(
-                        platform?.est_profit_quota ?? 0
-                      )}
+                      value={platform?.est_profit_quota ?? 0}
                       sub={formatBusinessUsd(platform?.est_profit_usd)}
                       icon={PiggyBank}
                     />
@@ -586,7 +612,7 @@ export function CommissionOverview() {
                             {t('Profitable Channels')}
                           </div>
                         </div>
-                        <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+                        <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
                           {String(platform?.profitable_channel_count ?? 0)}
                         </div>
                       </div>
@@ -597,7 +623,7 @@ export function CommissionOverview() {
                             {t('Loss Channels')}
                           </div>
                         </div>
-                        <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-2xl'>
+                        <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
                           {String(platform?.loss_channel_count ?? 0)}
                         </div>
                       </div>
@@ -714,19 +740,13 @@ export function CommissionOverview() {
                             </TableCell>
                             <TableCell>{ch.cost_ratio}</TableCell>
                             <TableCell>
-                              {formatBusinessAmount(ch.consumption_quota)}
+                              <BusinessAmount value={ch.consumption_quota} />
                             </TableCell>
                             <TableCell>
-                              {formatBusinessAmount(ch.est_cost_quota)}
+                              <BusinessAmount value={ch.est_cost_quota} />
                             </TableCell>
-                            <TableCell
-                              className={
-                                ch.est_profit_quota < 0
-                                  ? 'text-destructive'
-                                  : ''
-                              }
-                            >
-                              {formatBusinessAmount(ch.est_profit_quota)}
+                            <TableCell>
+                              <BusinessAmount value={ch.est_profit_quota} />
                             </TableCell>
                             <TableCell>
                               {(ch.est_gross_margin * 100).toFixed(1)}%
@@ -744,33 +764,27 @@ export function CommissionOverview() {
                     {t('Employee-attributed performance')}
                   </SectionTitle>
                   <StatPanel columnsClassName='grid-cols-1 sm:grid-cols-2 lg:grid-cols-5'>
-                    <StatCard
+                    <AmountStatCard
                       title={t('Customer consumption')}
-                      value={formatBusinessAmount(
-                        comm?.total_revenue_quota ?? 0
-                      )}
+                      value={comm?.total_revenue_quota ?? 0}
                       sub={formatBusinessUsd(comm?.total_revenue_usd)}
                       icon={DollarSign}
                     />
-                    <StatCard
+                    <AmountStatCard
                       title={t('Customer cost')}
-                      value={formatBusinessAmount(comm?.total_cost_quota ?? 0)}
+                      value={comm?.total_cost_quota ?? 0}
                       sub={formatBusinessUsd(comm?.total_cost_usd)}
                       icon={Wallet}
                     />
-                    <StatCard
+                    <AmountStatCard
                       title={t('Customer profit')}
-                      value={formatBusinessAmount(
-                        comm?.total_profit_quota ?? 0
-                      )}
+                      value={comm?.total_profit_quota ?? 0}
                       sub={formatBusinessUsd(comm?.total_profit_usd)}
                       icon={PiggyBank}
                     />
-                    <StatCard
+                    <AmountStatCard
                       title={t('Commission')}
-                      value={formatBusinessAmount(
-                        comm?.total_commission_quota ?? 0
-                      )}
+                      value={comm?.total_commission_quota ?? 0}
                       sub={formatBusinessUsd(comm?.total_commission_usd)}
                       icon={BadgeDollarSign}
                     />
@@ -821,20 +835,19 @@ export function CommissionOverview() {
                                 `#${e.employee_user_id}`}
                             </TableCell>
                             <TableCell>
-                              {formatBusinessAmount(e.total_revenue)}
+                              <BusinessAmount value={e.total_revenue} />
                             </TableCell>
                             <TableCell>
-                              {formatBusinessAmount(e.total_cost)}
+                              <BusinessAmount value={e.total_cost} />
                             </TableCell>
-                            <TableCell
-                              className={
-                                e.total_profit < 0 ? 'text-destructive' : ''
-                              }
-                            >
-                              {formatBusinessAmount(e.total_profit)}
+                            <TableCell>
+                              <BusinessAmount value={e.total_profit} />
                             </TableCell>
-                            <TableCell className='text-green-600'>
-                              {formatBusinessAmount(e.total_commission)}
+                            <TableCell>
+                              <BusinessAmount
+                                value={e.total_commission}
+                                positiveClassName='text-green-600'
+                              />
                             </TableCell>
                             <TableCell>{e.record_count}</TableCell>
                           </TableRow>

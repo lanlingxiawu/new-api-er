@@ -50,6 +50,7 @@ func TestLastScheduledTimeAtOrBefore(t *testing.T) {
 		ResetHour:   12,
 		ResetMinute: 0,
 		ResetSecond: 0,
+		Timezone:    "UTC",
 	}
 
 	// now 在本月调度时刻之后 -> 返回本月调度时刻
@@ -77,7 +78,7 @@ func TestLastScheduledTimeAtOrBefore(t *testing.T) {
 	assert.Equal(t, want, got)
 
 	// 月末夹紧：ResetDay=31，本月候选(3/31)在 now 之后 -> 取2月最后一天
-	cfgEom := &operation_setting.CommissionTierResetSetting{ResetDay: 31, ResetHour: 0, ResetMinute: 0, ResetSecond: 0}
+	cfgEom := &operation_setting.CommissionTierResetSetting{ResetDay: 31, ResetHour: 0, ResetMinute: 0, ResetSecond: 0, Timezone: "UTC"}
 	now = time.Date(2023, time.March, 1, 0, 0, 0, 0, loc)
 	got = lastScheduledTimeAtOrBefore(now, cfgEom)
 	want = time.Date(2023, time.February, 28, 0, 0, 0, 0, loc).Unix()
@@ -97,6 +98,7 @@ func TestNextScheduledResetAt(t *testing.T) {
 	cfg.ResetHour = 12
 	cfg.ResetMinute = 0
 	cfg.ResetSecond = 0
+	cfg.Timezone = "Local"
 
 	loc := time.Local
 

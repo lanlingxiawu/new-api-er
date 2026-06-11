@@ -5,8 +5,17 @@ import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessAmount } from '@/features/business/format'
 import type {
   ApiResponse,
@@ -18,68 +27,238 @@ import type {
 
 export function currentMonthValue() {
   const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
 export function shiftMonthValue(value: string, offset: number) {
   const [year, month] = value.split('-').map(Number)
   const date = new Date(
-    year || new Date().getFullYear(),
-    (month || 1) - 1 + offset,
-    1
+    Date.UTC(
+      year || new Date().getUTCFullYear(),
+      (month || 1) - 1 + offset,
+      1
+    )
   )
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
 export function monthValueToRange(value: string) {
   const [year, month] = value.split('-').map(Number)
-  const start = new Date(year, month - 1, 1, 0, 0, 0)
-  const end = new Date(year, month, 0, 23, 59, 59)
+  const start = Date.UTC(
+    year || new Date().getUTCFullYear(),
+    (month || 1) - 1,
+    1,
+    0,
+    0,
+    0
+  )
+  const end = Date.UTC(
+    year || new Date().getUTCFullYear(),
+    month || 1,
+    0,
+    23,
+    59,
+    59
+  )
   return {
-    start_time: Math.floor(start.getTime() / 1000),
-    end_time: Math.floor(end.getTime() / 1000),
+    start_time: Math.floor(start / 1000),
+    end_time: Math.floor(end / 1000),
+  }
+}
+
+function monthValueToCalendarRange(value: string) {
+  const currentMonth = currentMonthValue()
+  if (value === currentMonth) {
+    const now = Math.floor(Date.now() / 1000)
+    return {
+      start_time: now,
+      end_time: now,
+    }
+  }
+
+  const [, month] = value.split('-').map(Number)
+  const range = monthValueToRange(value)
+  return {
+    start_time: month ? range.end_time : range.start_time,
+    end_time: month ? range.end_time : range.start_time,
   }
 }
 
 function monthLabel(value: string) {
   const [year, month] = value.split('-').map(Number)
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'long',
+    timeZone: 'UTC',
   })
 }
 
 function toDateKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
 }
 
-function isToday(date: Date) {
-  const now = new Date()
-  return toDateKey(date) === toDateKey(now)
+function calendarDateFromTimestamp(value: number, timezone?: string) {
+  const date = new Date(value * 1000)
+  if (timezone === 'Asia/Shanghai') {
+    const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+    return new Date(
+      Date.UTC(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth(),
+        shifted.getUTCDate()
+      )
+    )
+  }
+  return new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  )
+}
+
+function formatCalendarDate(date: Date) {
+  return date.toLocaleDateString(undefined, { timeZone: 'UTC' })
+}
+
+function periodLabel(
+  startAt?: number,
+  endAt?: number,
+  fallback?: string,
+  timezone?: string
+) {
+  if (!startAt || !endAt) return fallback || '-'
+  const start = formatCalendarDate(calendarDateFromTimestamp(startAt, timezone))
+  const end = formatCalendarDate(calendarDateFromTimestamp(endAt, timezone))
+  return `${start} - ${end}`
+}
+
+function isToday(date: Date, timezone?: string) {
+  const today = calendarDateFromTimestamp(Math.floor(Date.now() / 1000), timezone)
+  return toDateKey(date) === toDateKey(today)
 }
 
 function isMonthValue(value: string) {
   return /^\d{4}-\d{2}$/.test(value)
 }
 
+function MonthValueSelector({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (value: string) => void
+}) {
+  const { t, i18n } = useTranslation()
+  const [selectedYear, selectedMonth] = value.split('-').map(Number)
+  const nowYear = new Date().getUTCFullYear()
+  const years = useMemo(() => {
+    const start = Math.min(nowYear - 5, selectedYear || nowYear)
+    const end = Math.max(nowYear + 1, selectedYear || nowYear)
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+  }, [nowYear, selectedYear])
+  const monthFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language || undefined, {
+        month: 'short',
+        timeZone: 'UTC',
+      }),
+    [i18n.language]
+  )
+  const months = useMemo(
+    () =>
+      Array.from({ length: 12 }, (_, index) => ({
+        value: index + 1,
+        label: monthFormatter.format(new Date(Date.UTC(2024, index, 1))),
+      })),
+    [monthFormatter]
+  )
+
+  const updateMonth = (year: string | number, month: string | number) => {
+    const nextYear = Number(year) || nowYear
+    const nextMonth = Number(month) || 1
+    onChange(`${nextYear}-${String(nextMonth).padStart(2, '0')}`)
+  }
+
+  return (
+    <div className='flex items-center gap-1.5' aria-label={t('统计月份')}>
+      <Select
+        items={years.map((year) => ({
+          value: String(year),
+          label: String(year),
+        }))}
+        value={String(selectedYear || nowYear)}
+        onValueChange={(year) => updateMonth(year, selectedMonth)}
+      >
+        <SelectTrigger size='sm' className='w-[92px]'>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectGroup>
+            {years.map((year) => (
+              <SelectItem key={year} value={String(year)}>
+                {year}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <Select
+        items={months.map((month) => ({
+          value: String(month.value),
+          label: month.label,
+        }))}
+        value={String(selectedMonth || 1)}
+        onValueChange={(month) => updateMonth(selectedYear, month)}
+      >
+        <SelectTrigger size='sm' className='w-[96px]'>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false}>
+          <SelectGroup>
+            {months.map((month) => (
+              <SelectItem key={month.value} value={String(month.value)}>
+                {month.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 function buildCalendarCells(
   monthValue: string,
-  days: CommissionCalendarDayStat[]
+  days: CommissionCalendarDayStat[],
+  periodStartAt?: number,
+  periodEndAt?: number,
+  timezone?: string
 ) {
   const [year, month] = monthValue.split('-').map(Number)
-  const first = new Date(year, month - 1, 1)
-  const gridStart = new Date(first)
-  gridStart.setDate(first.getDate() - first.getDay())
+  const periodStart = periodStartAt
+    ? calendarDateFromTimestamp(periodStartAt, timezone)
+    : new Date(Date.UTC(year, month - 1, 1))
+  const periodEnd = periodEndAt
+    ? calendarDateFromTimestamp(periodEndAt, timezone)
+    : new Date(Date.UTC(year, month, 0))
+  const periodStartKey = toDateKey(periodStart)
+  const periodEndKey = toDateKey(periodEnd)
+  const gridStart = new Date(periodStart)
+  gridStart.setUTCDate(periodStart.getUTCDate() - periodStart.getUTCDay())
+  const gridEnd = new Date(periodEnd)
+  gridEnd.setUTCDate(gridEnd.getUTCDate() + (6 - gridEnd.getUTCDay()))
+  const cellCount = Math.max(
+    7,
+    Math.round((gridEnd.getTime() - gridStart.getTime()) / 86400000) + 1
+  )
 
   const dayMap = new Map(days.map((day) => [day.date, day]))
-  return Array.from({ length: 42 }, (_, index) => {
+  return Array.from({ length: cellCount }, (_, index) => {
     const date = new Date(gridStart)
-    date.setDate(gridStart.getDate() + index)
+    date.setUTCDate(gridStart.getUTCDate() + index)
     const key = toDateKey(date)
     return {
       key,
       date,
-      inMonth: date.getMonth() === month - 1,
+      inPeriod: key >= periodStartKey && key <= periodEndKey,
       stat: dayMap.get(key),
     }
   })
@@ -99,14 +278,27 @@ function CalendarAmount({
       <div className='text-muted-foreground text-xs'>{label}</div>
       <div
         className={cn(
-          'mt-1 truncate font-medium',
-          primary ? 'text-base' : 'text-sm'
+          'mt-1 font-medium',
+          primary ? 'text-sm sm:text-base' : 'text-sm'
         )}
       >
-        {formatBusinessAmount(value ?? 0)}
+        <BusinessAmount value={value ?? 0} />
       </div>
     </div>
   )
+}
+
+function commissionIntensity(amount: number, maxAbsAmount: number) {
+  if (!amount || !maxAbsAmount) return 0
+  const ratio = Math.abs(amount) / maxAbsAmount
+  if (ratio >= 0.66) return 3
+  if (ratio >= 0.33) return 2
+  return 1
+}
+
+function commissionBarWidth(amount: number, maxAbsAmount: number) {
+  if (!amount || !maxAbsAmount) return '0%'
+  return `${Math.max(18, Math.round((Math.abs(amount) / maxAbsAmount) * 100))}%`
 }
 
 export function CommissionFinancialCalendar({
@@ -114,6 +306,10 @@ export function CommissionFinancialCalendar({
   onMonthChange,
   days,
   summary,
+  periodStartAt,
+  periodEndAt,
+  periodBoundaryAt,
+  timezone,
   isLoading,
   toolbar,
   showSummaryCards = true,
@@ -128,17 +324,40 @@ export function CommissionFinancialCalendar({
     commission_quota?: number
     record_count?: number
   }
+  periodStartAt?: number
+  periodEndAt?: number
+  periodBoundaryAt?: number
+  timezone?: string
   isLoading?: boolean
   toolbar?: ReactNode
   showSummaryCards?: boolean
   showSelectedDetail?: boolean
 }) {
   const { t } = useTranslation()
-  const cells = useMemo(() => buildCalendarCells(month, days), [month, days])
+  const visualPeriodEndAt = periodBoundaryAt || periodEndAt
+  const cells = useMemo(
+    () =>
+      buildCalendarCells(
+        month,
+        days,
+        periodStartAt,
+        visualPeriodEndAt,
+        timezone
+      ),
+    [days, month, periodStartAt, visualPeriodEndAt, timezone]
+  )
   const currentMonth = currentMonthValue()
   const [selectedDate, setSelectedDate] = useState<string>()
   const selectedCell = cells.find((cell) => cell.key === selectedDate)
   const selectedStat = selectedCell?.stat
+  const maxAbsCommission = useMemo(
+    () =>
+      days.reduce(
+        (max, day) => Math.max(max, Math.abs(day.commission_quota || 0)),
+        0
+      ),
+    [days]
+  )
   const weekdays = [
     t('Sun'),
     t('Mon'),
@@ -151,12 +370,12 @@ export function CommissionFinancialCalendar({
 
   useEffect(() => {
     const selectedInMonth = cells.some(
-      (cell) => cell.key === selectedDate && cell.inMonth
+      (cell) => cell.key === selectedDate && cell.inPeriod
     )
     if (selectedInMonth) return
-    const today = cells.find((cell) => cell.inMonth && isToday(cell.date))
-    const firstStat = cells.find((cell) => cell.inMonth && cell.stat)
-    const firstDay = cells.find((cell) => cell.inMonth)
+    const today = cells.find((cell) => cell.inPeriod && isToday(cell.date, timezone))
+    const firstStat = cells.find((cell) => cell.inPeriod && cell.stat)
+    const firstDay = cells.find((cell) => cell.inPeriod)
     setSelectedDate((today || firstStat || firstDay)?.key)
   }, [cells, selectedDate])
 
@@ -177,14 +396,7 @@ export function CommissionFinancialCalendar({
           >
             <ChevronLeft className='h-4 w-4' />
           </Button>
-          <Input
-            type='month'
-            value={month}
-            aria-label={t('Month number')}
-            title={t('Month number')}
-            onChange={(event) => selectMonth(event.target.value)}
-            className='w-[150px]'
-          />
+          <MonthValueSelector value={month} onChange={selectMonth} />
           <Button
             type='button'
             variant='outline'
@@ -214,15 +426,15 @@ export function CommissionFinancialCalendar({
             <div>
               <div className='text-muted-foreground mb-1 flex items-center gap-2 text-sm'>
                 <CalendarDays className='h-4 w-4' />
-                {monthLabel(month)}
+                {periodLabel(periodStartAt, visualPeriodEndAt, monthLabel(month), timezone)}
               </div>
-              <div className='text-2xl font-semibold'>
-                {isLoading ? (
-                  <Skeleton className='h-8 w-36' />
-                ) : (
-                  formatBusinessAmount(summary?.commission_quota ?? 0)
-                )}
-              </div>
+            <div className='text-xl font-semibold sm:text-2xl'>
+              {isLoading ? (
+                <Skeleton className='h-8 w-36' />
+              ) : (
+                <BusinessAmount value={summary?.commission_quota ?? 0} />
+              )}
+            </div>
             </div>
             <div className='text-muted-foreground mt-2 text-sm'>
               {t('Monthly Commission')}
@@ -232,17 +444,17 @@ export function CommissionFinancialCalendar({
             <div className='text-muted-foreground text-sm'>
               {t('Monthly Performance')}
             </div>
-            <div className='mt-1 text-lg font-semibold'>
+            <div className='mt-1 text-base font-semibold sm:text-lg'>
               {isLoading ? (
                 <Skeleton className='h-6 w-28' />
               ) : (
-                formatBusinessAmount(summary?.profit_quota ?? 0)
+                <BusinessAmount value={summary?.profit_quota ?? 0} />
               )}
             </div>
           </div>
           <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
             <div className='text-muted-foreground text-sm'>{t('Records')}</div>
-            <div className='mt-1 text-lg font-semibold'>
+            <div className='mt-1 text-base font-semibold sm:text-lg'>
               {isLoading ? (
                 <Skeleton className='h-6 w-16' />
               ) : (
@@ -253,62 +465,119 @@ export function CommissionFinancialCalendar({
         </div>
       ) : null}
 
-      <div className='border-border bg-card overflow-hidden rounded-md border shadow-xs'>
-        <div className='bg-muted/40 grid grid-cols-7 border-b text-center text-xs font-medium'>
+      <div className='border-border bg-card overflow-hidden rounded-md border shadow-sm'>
+        <div className='grid grid-cols-7 border-b bg-zinc-900 text-center text-[11px] font-semibold uppercase tracking-normal text-white dark:bg-zinc-100 dark:text-zinc-900'>
           {weekdays.map((day) => (
-            <div key={day} className='text-muted-foreground px-2 py-2'>
+            <div key={day} className='px-2 py-2.5'>
               {day}
             </div>
           ))}
         </div>
         <div className='grid grid-cols-7'>
-          {cells.map(({ key, date, inMonth, stat }) => {
+          {cells.map(({ key, date, inPeriod, stat }) => {
             const commission = stat?.commission_quota ?? 0
             const selected = key === selectedDate
+            const intensity = commissionIntensity(commission, maxAbsCommission)
+            const positive = commission >= 0
             return (
               <button
                 key={key}
                 type='button'
                 aria-pressed={selected}
+                title={
+                  stat
+                    ? `${key} ${formatBusinessAmount(commission)} (${stat.record_count || 0})`
+                    : key
+                }
                 onClick={() => setSelectedDate(key)}
                 className={cn(
-                  'border-border/70 min-h-[72px] border-r border-b p-2 text-left transition-colors outline-none last:border-r-0 sm:min-h-[88px]',
-                  'hover:bg-muted/50 focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset',
-                  !inMonth && 'bg-muted/20 text-muted-foreground',
-                  inMonth &&
-                    commission > 0 &&
-                    'bg-emerald-50/70 dark:bg-emerald-950/20',
-                  inMonth &&
-                    commission < 0 &&
-                    'bg-red-50/70 dark:bg-red-950/20',
-                  selected && 'ring-primary/70 ring-2 ring-inset'
+                  'group relative min-h-[82px] border-r border-b p-2.5 text-left transition-all outline-none [&:nth-child(7n)]:border-r-0 sm:min-h-[104px]',
+                  'border-border/70 hover:z-10 hover:-translate-y-px hover:shadow-md focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset',
+                  !inPeriod && 'bg-muted/20 text-muted-foreground opacity-60',
+                  inPeriod && !stat && 'bg-card hover:bg-muted/40',
+                  inPeriod &&
+                    stat &&
+                    positive &&
+                    intensity === 1 &&
+                    'bg-emerald-50/70 hover:bg-emerald-50 dark:bg-emerald-950/15 dark:hover:bg-emerald-950/25',
+                  inPeriod &&
+                    stat &&
+                    positive &&
+                    intensity === 2 &&
+                    'bg-emerald-100/80 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:hover:bg-emerald-950/40',
+                  inPeriod &&
+                    stat &&
+                    positive &&
+                    intensity === 3 &&
+                    'bg-emerald-200/80 hover:bg-emerald-200 dark:bg-emerald-900/45 dark:hover:bg-emerald-900/55',
+                  inPeriod &&
+                    stat &&
+                    !positive &&
+                    intensity === 1 &&
+                    'bg-red-50/70 hover:bg-red-50 dark:bg-red-950/15 dark:hover:bg-red-950/25',
+                  inPeriod &&
+                    stat &&
+                    !positive &&
+                    intensity === 2 &&
+                    'bg-red-100/80 hover:bg-red-100 dark:bg-red-950/30 dark:hover:bg-red-950/40',
+                  inPeriod &&
+                    stat &&
+                    !positive &&
+                    intensity === 3 &&
+                    'bg-red-200/80 hover:bg-red-200 dark:bg-red-900/45 dark:hover:bg-red-900/55',
+                  selected && 'ring-primary z-20 ring-2 ring-inset'
                 )}
               >
                 <div className='flex items-center justify-between gap-1'>
                   <span
                     className={cn(
-                      'flex size-5 items-center justify-center rounded-full text-xs font-medium',
-                      isToday(date) && 'bg-primary text-primary-foreground'
+                      'flex size-6 items-center justify-center rounded-full text-xs font-semibold',
+                      isToday(date, timezone) &&
+                        'bg-primary text-primary-foreground shadow-sm',
+                      selected &&
+                        !isToday(date, timezone) &&
+                        'bg-primary/10 text-primary'
                     )}
                   >
-                    {date.getDate()}
+                    {date.getUTCDate()}
                   </span>
                   {stat?.record_count ? (
-                    <span className='text-muted-foreground text-[10px]'>
+                    <span className='rounded-full bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-xs'>
                       {stat.record_count}
                     </span>
                   ) : null}
                 </div>
                 {stat ? (
-                  <div
-                    className={cn(
-                      'mt-2 truncate text-xs font-semibold sm:text-sm',
-                      commission >= 0
-                        ? 'text-emerald-700 dark:text-emerald-300'
-                        : 'text-red-700 dark:text-red-300'
-                    )}
-                  >
-                    {formatBusinessAmount(commission)}
+                  <div className='mt-3 space-y-1'>
+                    <div
+                      className={cn(
+                        'flex min-w-0 flex-wrap items-center gap-1 text-xs font-bold sm:text-sm',
+                        positive
+                          ? 'text-emerald-700 dark:text-emerald-300'
+                          : 'text-red-700 dark:text-red-300'
+                      )}
+                    >
+                      <span className='min-w-0 truncate'>
+                        {formatBusinessAmount(commission)}
+                      </span>
+                      {!positive ? (
+                        <Badge
+                          variant='outline'
+                          className='border-red-400/40 bg-red-50/80 px-1 py-0 text-[10px] text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                        >
+                          {t('Loss')}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div
+                      className={cn(
+                        'h-1 rounded-full transition-all',
+                        positive
+                          ? 'bg-emerald-500/70'
+                          : 'bg-red-500/70'
+                      )}
+                      style={{ width: commissionBarWidth(commission, maxAbsCommission) }}
+                    />
                   </div>
                 ) : null}
               </button>
@@ -322,7 +591,7 @@ export function CommissionFinancialCalendar({
           <div className='mb-3 flex items-center gap-2 text-sm'>
             <CalendarDays className='text-muted-foreground h-4 w-4' />
             <span className='text-muted-foreground'>
-              {selectedCell?.date.toLocaleDateString() || monthLabel(month)}
+              {selectedCell ? formatCalendarDate(selectedCell.date) : monthLabel(month)}
             </span>
           </div>
           <div className='grid gap-3 sm:grid-cols-3 lg:grid-cols-5'>
@@ -374,7 +643,7 @@ export function CommissionCalendarSection({
   showSelectedDetail?: boolean
 }) {
   const [month, setMonth] = useState(currentMonthValue)
-  const range = useMemo(() => monthValueToRange(month), [month])
+  const range = useMemo(() => monthValueToCalendarRange(month), [month])
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [...queryKey, month],
     queryFn: () => queryFn(range),
@@ -386,6 +655,10 @@ export function CommissionCalendarSection({
       onMonthChange={setMonth}
       days={data?.data?.days ?? []}
       summary={data?.data?.summary}
+      periodStartAt={data?.data?.period_start_at}
+      periodEndAt={data?.data?.period_end_at}
+      periodBoundaryAt={data?.data?.period_boundary_at}
+      timezone={data?.data?.timezone}
       isLoading={isLoading || isFetching}
       toolbar={toolbar}
       showSummaryCards={showSummaryCards}
@@ -455,19 +728,11 @@ export function CommissionMonthlyPeriodSection({
           >
             <ChevronLeft className='h-4 w-4' />
           </Button>
-          <Input
-            type='month'
+          <MonthValueSelector
             value={month}
-            aria-label={t('Month number')}
-            title={t('Month number')}
-            onChange={(event) =>
-              setMonth(
-                isMonthValue(event.target.value)
-                  ? event.target.value
-                  : currentMonthValue()
-              )
+            onChange={(value) =>
+              setMonth(isMonthValue(value) ? value : currentMonthValue())
             }
-            className='w-[150px]'
           />
           <Button
             type='button'
@@ -499,11 +764,11 @@ export function CommissionMonthlyPeriodSection({
               <CalendarDays className='h-4 w-4' />
               {monthLabel(month)}
             </div>
-            <div className='text-2xl font-semibold'>
+            <div className='text-xl font-semibold sm:text-2xl'>
               {loading ? (
                 <Skeleton className='h-8 w-36' />
               ) : (
-                formatBusinessAmount(summary.commission_quota)
+                <BusinessAmount value={summary.commission_quota} />
               )}
             </div>
           </div>
@@ -515,17 +780,17 @@ export function CommissionMonthlyPeriodSection({
           <div className='text-muted-foreground text-sm'>
             {t('Monthly Performance')}
           </div>
-          <div className='mt-1 text-lg font-semibold'>
+          <div className='mt-1 text-base font-semibold sm:text-lg'>
             {loading ? (
               <Skeleton className='h-6 w-28' />
             ) : (
-              formatBusinessAmount(summary.profit_quota)
+              <BusinessAmount value={summary.profit_quota} />
             )}
           </div>
         </div>
         <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
           <div className='text-muted-foreground text-sm'>{t('Records')}</div>
-          <div className='mt-1 text-lg font-semibold'>
+          <div className='mt-1 text-base font-semibold sm:text-lg'>
             {loading ? <Skeleton className='h-6 w-16' /> : summary.record_count}
           </div>
         </div>
@@ -551,7 +816,7 @@ export function CommissionMonthlyPeriodSection({
                 <div className='flex flex-wrap items-start justify-between gap-3'>
                   <div>
                     <div className='font-medium'>
-                      {item.period_key || t('Period')}
+                      {item.period_key || t('统计周期')}
                     </div>
                     <div className='text-muted-foreground mt-1 text-xs'>
                       {unixTimeLabel(item.period_start_at)} -{' '}
@@ -559,8 +824,8 @@ export function CommissionMonthlyPeriodSection({
                     </div>
                   </div>
                   <div className='text-right'>
-                    <div className='text-lg font-semibold'>
-                      {formatBusinessAmount(item.commission_quota)}
+                    <div className='text-base font-semibold sm:text-lg'>
+                      <BusinessAmount value={item.commission_quota} />
                     </div>
                     <div className='text-muted-foreground text-xs'>
                       {t('Commission')}

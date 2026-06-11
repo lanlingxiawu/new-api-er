@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,14 +19,13 @@ import (
 // EmployeeProfile 记录员工的提成配置。员工本身是普通用户（users 表），
 // 通过 user_id 关联；管理员创建此记录后该用户即具备员工身份。
 type EmployeeProfile struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"uniqueIndex;not null"`
-	TargetAmount    float64 `json:"target_amount" gorm:"column:target_amount;default:0"`    // 业绩目标（USD 金额，0=不设限；业绩=客户消耗额）
-	CommissionRules string  `json:"commission_rules,omitempty" gorm:"type:text;default:''"` // JSON 预留多档规则
-	Status          int     `json:"status" gorm:"default:1"`                                // 1=启用 2=禁用
-	Remark          string  `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
-	CreatedAt       int64   `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt       int64   `json:"updated_at" gorm:"autoUpdateTime"`
+	Id           int     `json:"id"`
+	UserId       int     `json:"user_id" gorm:"uniqueIndex;not null"`
+	TargetAmount float64 `json:"target_amount" gorm:"column:target_amount;default:0"` // 业绩目标（USD 金额，0=不设限；业绩=客户消耗额）
+	Status       int     `json:"status" gorm:"default:1"`                             // 1=启用 2=禁用
+	Remark       string  `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
+	CreatedAt    int64   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt    int64   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // ============================================================================
@@ -291,11 +291,6 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 		orderColumn = "sort_users.username"
 	case "target_amount":
 		orderColumn = "employee_profiles.target_amount"
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 	case "customer_count":
 		tx = tx.Joins("LEFT JOIN (SELECT inviter_id AS employee_user_id, COUNT(*) AS customer_count FROM users WHERE role = ? GROUP BY inviter_id) customer_rollup ON customer_rollup.employee_user_id = employee_profiles.user_id", common.RoleCommonUser)
 		orderColumn = "COALESCE(customer_rollup.customer_count, 0)"
@@ -305,18 +300,12 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 	case "total_cost_quota":
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(cost_quota),0) AS total_cost_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
 		orderColumn = "COALESCE(commission_rollup.total_cost_quota, 0)"
-<<<<<<< Updated upstream
-	case "total_profit_quota", "current_performance_quota":
-=======
 	case "total_profit_quota":
->>>>>>> Stashed changes
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
 		orderColumn = "COALESCE(commission_rollup.total_profit_quota, 0)"
 	case "total_commission_quota":
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
 		orderColumn = "COALESCE(commission_rollup.total_commission_quota, 0)"
-<<<<<<< Updated upstream
-=======
 	case "current_performance_quota":
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_profit_rollup ON current_profit_rollup.employee_user_id = employee_profiles.user_id").
 			Joins("LEFT JOIN employee_tier_levels AS current_perf_levels ON current_perf_levels.user_id = employee_profiles.user_id")
@@ -325,15 +314,14 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_commission_rollup ON current_commission_rollup.employee_user_id = employee_profiles.user_id").
 			Joins("LEFT JOIN employee_tier_levels AS current_commission_levels ON current_commission_levels.user_id = employee_profiles.user_id")
 		orderColumn = "CASE WHEN COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) < 0 THEN 0 ELSE COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) END"
->>>>>>> Stashed changes
 	case "current_tier_rate":
 		tx = tx.Joins("LEFT JOIN employee_tier_levels AS tier_levels_sort ON tier_levels_sort.user_id = employee_profiles.user_id").
 			Joins("LEFT JOIN employee_commission_tiers AS tiers_sort ON tiers_sort.id = tier_levels_sort.tier_id")
 		orderColumn = "COALESCE(tiers_sort.rate, 0)"
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+	case "current_tier_level":
+		tx = tx.Joins("LEFT JOIN employee_tier_levels AS tier_levels_sort ON tier_levels_sort.user_id = employee_profiles.user_id").
+			Joins("LEFT JOIN employee_commission_tiers AS tiers_sort ON tiers_sort.id = tier_levels_sort.tier_id")
+		orderColumn = "COALESCE(tiers_sort.level, 0)"
 	case "status":
 		orderColumn = "employee_profiles.status"
 	case "remark":
@@ -472,6 +460,7 @@ type CommissionLogFilter struct {
 	CustomerUserId int
 	ModelName      string
 	ChannelId      int
+	LossStatus     string
 	StartTime      int64
 	EndTime        int64
 	Page           int
@@ -491,12 +480,19 @@ func applyCommissionLogFilter(tx *gorm.DB, filter CommissionLogFilter) *gorm.DB 
 	if filter.ChannelId != 0 {
 		tx = tx.Where("channel_id = ?", filter.ChannelId)
 	}
+	switch strings.TrimSpace(filter.LossStatus) {
+	case "loss":
+		tx = tx.Where("profit_quota < ?", 0)
+	case "normal":
+		tx = tx.Where("profit_quota >= ?", 0)
+	}
 	return applyCreatedAtTimeRange(tx, filter.StartTime, filter.EndTime)
 }
 
 func canCountCommissionLogsFromDaily(filter CommissionLogFilter) bool {
 	return filter.CustomerUserId == 0 &&
 		filter.ChannelId == 0 &&
+		strings.TrimSpace(filter.LossStatus) == "" &&
 		strings.TrimSpace(filter.ModelName) == ""
 }
 
@@ -599,12 +595,6 @@ type CommissionSummaryItem struct {
 	RecordCount     int64 `json:"record_count"`
 }
 
-<<<<<<< Updated upstream
-// GetCommissionSummary 按员工汇总提成统计，优先使用日聚合统计。
-=======
-<<<<<<< Updated upstream
-// GetCommissionSummary 按员工汇总提成统计。
-=======
 // GetCommissionSummary 按员工汇总提成统计，优先使用日聚合统计。
 type CommissionMonthlyStatFilter struct {
 	EmployeeUserId int
@@ -650,8 +640,13 @@ type CommissionCalendarSummary struct {
 }
 
 type CommissionCalendarStats struct {
-	Days    []*CommissionCalendarDayStat `json:"days"`
-	Summary CommissionCalendarSummary    `json:"summary"`
+	Days             []*CommissionCalendarDayStat `json:"days"`
+	Summary          CommissionCalendarSummary    `json:"summary"`
+	PeriodStartAt    int64                        `json:"period_start_at"`
+	PeriodEndAt      int64                        `json:"period_end_at"`
+	PeriodBoundaryAt int64                        `json:"period_boundary_at"`
+	PeriodKey        string                       `json:"period_key"`
+	Timezone         string                       `json:"timezone"`
 }
 
 func normalizeCommissionMonthlyStatFilter(filter CommissionMonthlyStatFilter) CommissionMonthlyStatFilter {
@@ -711,53 +706,76 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 	if startTime <= 0 || endTime <= 0 || startTime > endTime {
 		return &CommissionCalendarStats{Days: []*CommissionCalendarDayStat{}}, nil
 	}
-	startDate := unixDayStart(startTime)
-	endDate := unixDayStart(endTime)
-	type row struct {
-		StatDate        int64
+	period := ResolveCommissionMonthlyPeriod(startTime)
+	loc, _ := commissionMonthlyStatLocation(period.Timezone)
+	boundaryAt := period.PeriodEndAt + 1
+	stats := &CommissionCalendarStats{
+		Days:             make([]*CommissionCalendarDayStat, 0),
+		PeriodStartAt:    period.PeriodStartAt,
+		PeriodEndAt:      period.PeriodEndAt,
+		PeriodBoundaryAt: boundaryAt,
+		PeriodKey:        period.PeriodKey,
+		Timezone:         period.Timezone,
+	}
+
+	dayStats := make(map[string]*CommissionCalendarDayStat)
+	tx := DB.Model(&EmployeeCommissionLog{}).
+		Select("id, created_at, revenue_quota, cost_quota, profit_quota, commission_quota").
+		Where("created_at >= ? AND created_at < ?", period.PeriodStartAt, boundaryAt).
+		Order("id ASC")
+	if employeeUserId > 0 {
+		tx = tx.Where("employee_user_id = ?", employeeUserId)
+	}
+
+	type calendarLogRow struct {
+		Id              int
+		CreatedAt       int64
 		RevenueQuota    int64
 		CostQuota       int64
 		ProfitQuota     int64
 		CommissionQuota int64
-		RecordCount     int64
 	}
-	var rows []row
-	tx := DB.Model(&EmployeeCommissionDailyStat{}).
-		Select("stat_date, "+
-			"COALESCE(SUM(revenue_quota),0) as revenue_quota, "+
-			"COALESCE(SUM(cost_quota),0) as cost_quota, "+
-			"COALESCE(SUM(profit_quota),0) as profit_quota, "+
-			"COALESCE(SUM(commission_quota),0) as commission_quota, "+
-			"COALESCE(SUM(record_count),0) as record_count").
-		Where("stat_date >= ? AND stat_date <= ?", startDate, endDate)
-	if employeeUserId > 0 {
-		tx = tx.Where("employee_user_id = ?", employeeUserId)
-	}
-	if err := tx.Group("stat_date").Order("stat_date ASC").Scan(&rows).Error; err != nil {
+	var rows []calendarLogRow
+	if err := tx.FindInBatches(&rows, 1000, func(batchTx *gorm.DB, batch int) error {
+		for _, r := range rows {
+			local := time.Unix(r.CreatedAt, 0).In(loc)
+			date := local.Format("2006-01-02")
+			day := dayStats[date]
+			if day == nil {
+				localDayStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+				day = &CommissionCalendarDayStat{
+					StatDate: localDayStart.Unix(),
+					Date:     date,
+				}
+				dayStats[date] = day
+			}
+			day.RevenueQuota += r.RevenueQuota
+			day.CostQuota += r.CostQuota
+			day.ProfitQuota += r.ProfitQuota
+			day.CommissionQuota += r.CommissionQuota
+			day.RecordCount++
+			stats.Summary.RevenueQuota += r.RevenueQuota
+			stats.Summary.CostQuota += r.CostQuota
+			stats.Summary.ProfitQuota += r.ProfitQuota
+			stats.Summary.CommissionQuota += r.CommissionQuota
+			stats.Summary.RecordCount++
+		}
+		return nil
+	}).Error; err != nil {
 		return nil, err
 	}
-	stats := &CommissionCalendarStats{Days: make([]*CommissionCalendarDayStat, 0, len(rows))}
-	for _, r := range rows {
-		day := &CommissionCalendarDayStat{
-			StatDate:        r.StatDate,
-			Date:            time.Unix(r.StatDate, 0).UTC().Format("2006-01-02"),
-			RevenueQuota:    r.RevenueQuota,
-			CostQuota:       r.CostQuota,
-			ProfitQuota:     r.ProfitQuota,
-			CommissionQuota: r.CommissionQuota,
-			RecordCount:     r.RecordCount,
-			RevenueUsd:      common.QuotaToUSD(r.RevenueQuota),
-			CostUsd:         common.QuotaToUSD(r.CostQuota),
-			ProfitUsd:       common.QuotaToUSD(r.ProfitQuota),
-			CommissionUsd:   common.QuotaToUSD(r.CommissionQuota),
-		}
+
+	for _, day := range dayStats {
+		day.RevenueUsd = common.QuotaToUSD(day.RevenueQuota)
+		day.CostUsd = common.QuotaToUSD(day.CostQuota)
+		day.ProfitUsd = common.QuotaToUSD(day.ProfitQuota)
+		day.CommissionUsd = common.QuotaToUSD(day.CommissionQuota)
 		stats.Days = append(stats.Days, day)
-		stats.Summary.RevenueQuota += r.RevenueQuota
-		stats.Summary.CostQuota += r.CostQuota
-		stats.Summary.ProfitQuota += r.ProfitQuota
-		stats.Summary.CommissionQuota += r.CommissionQuota
-		stats.Summary.RecordCount += r.RecordCount
 	}
+	sort.Slice(stats.Days, func(i, j int) bool {
+		return stats.Days[i].Date < stats.Days[j].Date
+	})
+
 	stats.Summary.RevenueUsd = common.QuotaToUSD(stats.Summary.RevenueQuota)
 	stats.Summary.CostUsd = common.QuotaToUSD(stats.Summary.CostQuota)
 	stats.Summary.ProfitUsd = common.QuotaToUSD(stats.Summary.ProfitQuota)
@@ -765,8 +783,6 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 	return stats, nil
 }
 
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 func GetCommissionSummary(startTime, endTime int64) ([]*CommissionSummaryItem, error) {
 	stats, err := GetCommissionStatsByEmployee(startTime, endTime, 0)
 	if err != nil {
@@ -786,17 +802,6 @@ func GetCommissionSummary(startTime, endTime int64) ([]*CommissionSummaryItem, e
 	return items, nil
 }
 
-// GetCommissionSummaryFromLedger 从逐笔提成台账实时按员工汇总。
-func GetCommissionSummaryFromLedger(startTime, endTime int64) ([]*CommissionSummaryItem, error) {
-	var items []*CommissionSummaryItem
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("employee_user_id, SUM(revenue_quota) as total_revenue_quota, SUM(cost_quota) as total_cost_quota, SUM(profit_quota) as total_profit_quota, SUM(commission_quota) as total_commission_quota, COUNT(*) as record_count").
-		Group("employee_user_id")
-	tx = applyCreatedAtTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&items).Error
-	return items, err
-}
-
 // ============================================================================
 // 经营概览（财务统计）聚合
 // ============================================================================
@@ -810,30 +815,10 @@ type CommissionTotals struct {
 	RecordCount     int64 `json:"record_count"`
 }
 
-// applyCommissionTimeRange 给查询附加时间范围条件。
-func applyCommissionTimeRange(tx *gorm.DB, startTime, endTime int64) *gorm.DB {
-	return applyCreatedAtTimeRange(tx, startTime, endTime)
-}
-
 // Deprecated: GetCommissionTotals 已被 AdminCommissionOverview 中的内联计算替代。
 // 保留供其他可能的调用方使用。若需在概览中使用，优先通过 GetCommissionStatsByEmployeeWithPlan 取全量再求和。
 func GetCommissionTotals(startTime, endTime int64) (CommissionTotals, error) {
 	return getCommissionTotalsFromStats(startTime, endTime)
-}
-
-// GetCommissionTotalsFromLedger 从逐笔提成台账实时汇总。
-// 别名与结构体字段 snake_case 一一对应，保证跨库 Scan 正确。
-func GetCommissionTotalsFromLedger(startTime, endTime int64) (CommissionTotals, error) {
-	var t CommissionTotals
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota),0) as total_cost, " +
-			"COALESCE(SUM(profit_quota),0) as total_profit, " +
-			"COALESCE(SUM(commission_quota),0) as total_commission, " +
-			"COUNT(*) as record_count")
-	tx = applyCommissionTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&t).Error
-	return t, err
 }
 
 func getCommissionTotalsFromDailyRange(startDate, endDate int64) (CommissionTotals, error) {
@@ -862,25 +847,6 @@ func getCommissionTotalsByEmployeeFromDailyRange(employeeUserId int, startDate, 
 	return t, err
 }
 
-func getCommissionTotalsByEmployeeFromLedger(employeeUserId int, startTime, endTime int64) (CommissionTotals, error) {
-	var t CommissionTotals
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, "+
-			"COALESCE(SUM(cost_quota),0) as total_cost, "+
-			"COALESCE(SUM(profit_quota),0) as total_profit, "+
-			"COALESCE(SUM(commission_quota),0) as total_commission, "+
-			"COUNT(*) as record_count").
-		Where("employee_user_id = ?", employeeUserId)
-	tx = applyCommissionTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&t).Error
-	return t, err
-}
-
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 func addCommissionTotals(dst *CommissionTotals, src CommissionTotals) {
 	dst.TotalRevenue += src.TotalRevenue
 	dst.TotalCost += src.TotalCost
@@ -889,26 +855,11 @@ func addCommissionTotals(dst *CommissionTotals, src CommissionTotals) {
 	dst.RecordCount += src.RecordCount
 }
 
-// GetCommissionTotalsWithPlan sums commission totals from daily aggregates when
-// available and only uses the ledger for uncovered/detail ranges.
+// GetCommissionTotalsWithPlan sums commission totals from daily aggregates only.
 func GetCommissionTotalsWithPlan(plan *ResolvedQueryPlan) (CommissionTotals, error) {
 	var totals CommissionTotals
 	for _, r := range plan.CoveredRanges {
 		t, err := getCommissionTotalsFromDailyRange(r.StartDate, r.EndDate)
-		if err != nil {
-			return CommissionTotals{}, err
-		}
-		addCommissionTotals(&totals, t)
-	}
-	for _, r := range plan.UncoveredRanges {
-		t, err := GetCommissionTotalsFromLedger(r.StartDate, unixDayEnd(r.EndDate))
-		if err != nil {
-			return CommissionTotals{}, err
-		}
-		addCommissionTotals(&totals, t)
-	}
-	for _, r := range plan.DetailRanges {
-		t, err := GetCommissionTotalsFromLedger(r.StartTime, r.EndTime)
 		if err != nil {
 			return CommissionTotals{}, err
 		}
@@ -919,11 +870,7 @@ func GetCommissionTotalsWithPlan(plan *ResolvedQueryPlan) (CommissionTotals, err
 
 // GetCommissionTotalsByEmployee 汇总指定员工的提成流量总计。
 func GetCommissionTotalsByEmployee(employeeUserId int) (CommissionTotals, error) {
-<<<<<<< Updated upstream
-	plan, err := ResolveBusinessStatsQueryPlan(0, 0)
-=======
 	plan, err := ResolveBusinessStatsDailyOnlyQueryPlan(0, 0)
->>>>>>> Stashed changes
 	if err != nil {
 		return CommissionTotals{}, err
 	}
@@ -935,27 +882,9 @@ func GetCommissionTotalsByEmployee(employeeUserId int) (CommissionTotals, error)
 		}
 		addCommissionTotals(&totals, t)
 	}
-	for _, r := range plan.UncoveredRanges {
-		t, err := getCommissionTotalsByEmployeeFromLedger(employeeUserId, r.StartDate, unixDayEnd(r.EndDate))
-		if err != nil {
-			return CommissionTotals{}, err
-		}
-		addCommissionTotals(&totals, t)
-	}
-	for _, r := range plan.DetailRanges {
-		t, err := getCommissionTotalsByEmployeeFromLedger(employeeUserId, r.StartTime, r.EndTime)
-		if err != nil {
-			return CommissionTotals{}, err
-		}
-		addCommissionTotals(&totals, t)
-	}
 	return totals, nil
 }
 
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 // CommissionEmployeeStat 按员工汇总。
 type CommissionEmployeeStat struct {
 	EmployeeUserId  int   `json:"employee_user_id"`
@@ -966,15 +895,6 @@ type CommissionEmployeeStat struct {
 	RecordCount     int64 `json:"record_count"`
 }
 
-<<<<<<< Updated upstream
-// GetCommissionStatsByEmployee 按员工分组汇总，优先使用日聚合统计。
-func GetCommissionStatsByEmployee(startTime, endTime int64, limit int) ([]*CommissionEmployeeStat, error) {
-	return getCommissionStatsByEmployeeFromStats(startTime, endTime, limit)
-=======
-<<<<<<< Updated upstream
-// GetCommissionStatsByEmployee 按员工分组汇总。
-func GetCommissionStatsByEmployee(startTime, endTime int64) ([]*CommissionEmployeeStat, error) {
-=======
 // GetCommissionStatsByEmployee 按员工分组汇总，优先使用日聚合统计。
 func GetCommissionStatsByEmployee(startTime, endTime int64, limit int) ([]*CommissionEmployeeStat, error) {
 	resolved, err := ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime)
@@ -982,31 +902,6 @@ func GetCommissionStatsByEmployee(startTime, endTime int64, limit int) ([]*Commi
 		return nil, err
 	}
 	return GetCommissionStatsByEmployeeWithPlan(resolved, limit)
->>>>>>> Stashed changes
-}
-
-// GetCommissionStatsByEmployeeFromLedger 从逐笔提成台账实时按员工汇总。
-func GetCommissionStatsByEmployeeFromLedger(startTime, endTime int64, limit int) ([]*CommissionEmployeeStat, error) {
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
-	var items []*CommissionEmployeeStat
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("employee_user_id, " +
-			"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota),0) as total_cost, " +
-			"COALESCE(SUM(profit_quota),0) as total_profit, " +
-			"COALESCE(SUM(commission_quota),0) as total_commission, " +
-			"COUNT(*) as record_count").
-		Group("employee_user_id").
-		Order("total_commission DESC")
-	tx = applyCommissionTimeRange(tx, startTime, endTime)
-	if limit > 0 {
-		tx = tx.Limit(limit)
-	}
-	err := tx.Scan(&items).Error
-	return items, err
 }
 
 // GetCommissionStatsByEmployeeIds 仅汇总指定员工 ID 的提成统计，用于分页列表只查当前页数据。
@@ -1028,80 +923,6 @@ func GetCommissionStatsByEmployeeIds(employeeUserIds []int) ([]*CommissionEmploy
 	return items, err
 }
 
-// CommissionChannelStat 按渠道汇总。
-type CommissionChannelStat struct {
-	ChannelId    int    `json:"channel_id"`
-	TotalRevenue int64  `json:"total_revenue"`
-	TotalCost    int64  `json:"total_cost"`
-	TotalProfit  int64  `json:"total_profit"`
-	RecordCount  int64  `json:"record_count"`
-	ChannelName  string `json:"channel_name" gorm:"-"`
-}
-
-// GetCommissionStatsByChannel 按渠道分组汇总。
-func GetCommissionStatsByChannel(startTime, endTime int64) ([]*CommissionChannelStat, error) {
-	var items []*CommissionChannelStat
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("channel_id, " +
-			"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota),0) as total_cost, " +
-			"COALESCE(SUM(profit_quota),0) as total_profit, " +
-			"COUNT(*) as record_count").
-		Group("channel_id").
-		Order("total_profit DESC")
-	tx = applyCommissionTimeRange(tx, startTime, endTime)
-	err := tx.Scan(&items).Error
-	return items, err
-}
-
-// CommissionDailyStat 按天汇总（date 为 UTC 日期 YYYY-MM-DD）。
-type CommissionDailyStat struct {
-	Date            string `json:"date"`
-	TotalRevenue    int64  `json:"total_revenue"`
-	TotalCost       int64  `json:"total_cost"`
-	TotalProfit     int64  `json:"total_profit"`
-	TotalCommission int64  `json:"total_commission"`
-}
-
-// GetCommissionStatsByDay 按天汇总。
-//
-// 使用 FLOOR(created_at / 86400) 做 UTC 自然日分组，避免全量扫描后在 Go 侧聚合。
-// FLOOR 是 SQLite/MySQL/PostgreSQL 均支持的数学函数，不依赖差异化日期函数。
-func GetCommissionStatsByDay(startTime, endTime int64) ([]*CommissionDailyStat, error) {
-	type dayRow struct {
-		DayBucket       int64
-		TotalRevenue    int64
-		TotalCost       int64
-		TotalProfit     int64
-		TotalCommission int64
-	}
-	var rows []dayRow
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("FLOOR(created_at / 86400) as day_bucket, " +
-			"COALESCE(SUM(revenue_quota), 0) as total_revenue, " +
-			"COALESCE(SUM(cost_quota), 0) as total_cost, " +
-			"COALESCE(SUM(profit_quota), 0) as total_profit, " +
-			"COALESCE(SUM(commission_quota), 0) as total_commission").
-		Group("FLOOR(created_at / 86400)").
-		Order("day_bucket ASC")
-	tx = applyCommissionTimeRange(tx, startTime, endTime)
-	if err := tx.Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-
-	result := make([]*CommissionDailyStat, 0, len(rows))
-	for _, r := range rows {
-		result = append(result, &CommissionDailyStat{
-			Date:            time.Unix(r.DayBucket*86400, 0).UTC().Format("2006-01-02"),
-			TotalRevenue:    r.TotalRevenue,
-			TotalCost:       r.TotalCost,
-			TotalProfit:     r.TotalProfit,
-			TotalCommission: r.TotalCommission,
-		})
-	}
-	return result, nil
-}
-
 // CreateCommissionLog 写入提成日志（幂等）。
 //
 // 通过 log_id 唯一索引 + ON CONFLICT DO NOTHING 实现去重：
@@ -1113,17 +934,6 @@ func GetCommissionStatsByDay(startTime, endTime int64) ([]*CommissionDailyStat, 
 // 这类记录直接插入并视为已插入，正常消费链路 log_id 恒为正值。
 // GetCustomerCommissionTotal 返回指定员工从指定客户获得的累计提成额度。
 func GetCustomerCommissionTotal(employeeUserId, customerUserId int) int64 {
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-	var total int64
-	DB.Model(&EmployeeCommissionLog{}).
-		Where("employee_user_id = ? AND customer_user_id = ?", employeeUserId, customerUserId).
-		Select("COALESCE(SUM(commission_quota), 0)").
-		Scan(&total)
-	return total
-=======
->>>>>>> Stashed changes
 	totals, err := GetCustomerCommissionTotals(employeeUserId, []int{customerUserId})
 	if err != nil {
 		common.SysLog("failed to get customer commission total: " + err.Error())
@@ -1133,13 +943,8 @@ func GetCustomerCommissionTotal(employeeUserId, customerUserId int) int64 {
 }
 
 // GetCustomerCommissionTotals returns commission totals for the requested customers
-<<<<<<< Updated upstream
-// in a single grouped ledger query. This is used by paged customer lists to avoid
-// issuing one aggregate query per row.
-=======
 // from the employee-customer daily aggregate table. Paged customer views must not
 // aggregate employee_commission_logs directly.
->>>>>>> Stashed changes
 func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map[int]int64, error) {
 	totals := make(map[int]int64, len(customerUserIds))
 	if employeeUserId == 0 || len(customerUserIds) == 0 {
@@ -1150,19 +955,7 @@ func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map
 		CommissionQuota int64
 	}
 	var rows []row
-<<<<<<< Updated upstream
-	err := DB.Model(&EmployeeCommissionLog{}).
-=======
-	useLedgerFallback, err := shouldFallbackCustomerCommissionTotalsToLedger(employeeUserId)
-	if err != nil {
-		return nil, err
-	}
-	source := DB.Model(&EmployeeCustomerCommissionDailyStat{})
-	if useLedgerFallback {
-		source = DB.Model(&EmployeeCommissionLog{})
-	}
-	err = source.
->>>>>>> Stashed changes
+	err := DB.Model(&EmployeeCustomerCommissionDailyStat{}).
 		Select("customer_user_id, COALESCE(SUM(commission_quota), 0) as commission_quota").
 		Where("employee_user_id = ? AND customer_user_id IN ?", employeeUserId, customerUserIds).
 		Group("customer_user_id").
@@ -1174,37 +967,6 @@ func GetCustomerCommissionTotals(employeeUserId int, customerUserIds []int) (map
 		totals[r.CustomerUserId] = r.CommissionQuota
 	}
 	return totals, nil
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
-}
-
-func shouldFallbackCustomerCommissionTotalsToLedger(employeeUserId int) (bool, error) {
-	var daily struct{ Id int }
-	if err := DB.Model(&EmployeeCustomerCommissionDailyStat{}).
-		Select("id").
-		Where("employee_user_id = ?", employeeUserId).
-		Limit(1).
-		First(&daily).Error; err != nil {
-		if err != gorm.ErrRecordNotFound {
-			return false, err
-		}
-	} else {
-		return false, nil
-	}
-	var ledger struct{ Id int }
-	if err := DB.Model(&EmployeeCommissionLog{}).
-		Select("id").
-		Where("employee_user_id = ?", employeeUserId).
-		Limit(1).
-		First(&ledger).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
->>>>>>> Stashed changes
 }
 
 func CreateCommissionLog(log *EmployeeCommissionLog) (inserted bool, err error) {

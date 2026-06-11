@@ -19,17 +19,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
 import { formatBusinessAmount } from '@/features/business/format'
-import { StatusBadge } from '@/features/customers'
 import {
   createMyCustomer,
   // getMyCustomerQuotaLogs,
@@ -463,14 +455,6 @@ function useMyCustomerColumns({
         ),
       },
       {
-        accessorKey: 'status',
-        meta: { label: t('Status'), mobileBadge: true },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Status')} />
-        ),
-        cell: ({ row }) => <StatusBadge status={row.original.status} />,
-      },
-      {
         accessorKey: 'remark',
         meta: { label: t('Remark'), mobileHidden: true },
         header: ({ column }) => (
@@ -505,14 +489,10 @@ function MyCustomersTab() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editRow, setEditRow] = useState<CustomerProfile | undefined>()
   const [filterForm, setFilterForm] = useState({
-    customerUserId: '',
     keyword: '',
-    status: 'all',
   })
   const [filters, setFilters] = useState<{
-    customer_user_id?: number
     keyword?: string
-    status?: number
   }>({})
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
@@ -549,22 +529,16 @@ function MyCustomersTab() {
   })
 
   const applyFilters = () => {
-    const customerUserId = Number(filterForm.customerUserId)
-    const status = Number(filterForm.status)
     setFilters({
-      ...(Number.isFinite(customerUserId) && customerUserId > 0
-        ? { customer_user_id: customerUserId }
-        : {}),
       ...(filterForm.keyword.trim()
         ? { keyword: filterForm.keyword.trim() }
         : {}),
-      ...(Number.isFinite(status) && status > 0 ? { status } : {}),
     })
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
 
   const resetFilters = () => {
-    setFilterForm({ customerUserId: '', keyword: '', status: 'all' })
+    setFilterForm({ keyword: '' })
     setFilters({})
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
@@ -580,20 +554,7 @@ function MyCustomersTab() {
         toolbar={
           <div className='flex flex-wrap items-center justify-end gap-2'>
             <Input
-              type='number'
-              min={1}
-              placeholder={t('Customer UID')}
-              value={filterForm.customerUserId}
-              onChange={(event) =>
-                setFilterForm((form) => ({
-                  ...form,
-                  customerUserId: event.target.value,
-                }))
-              }
-              className='w-[120px]'
-            />
-            <Input
-              placeholder={t('Username / Email / Remark')}
+              placeholder={t('Customer ID / Account name / Remark')}
               value={filterForm.keyword}
               onChange={(event) =>
                 setFilterForm((form) => ({
@@ -603,21 +564,6 @@ function MyCustomersTab() {
               }
               className='w-[220px]'
             />
-            <Select
-              value={filterForm.status}
-              onValueChange={(value) =>
-                setFilterForm((form) => ({ ...form, status: value ?? 'all' }))
-              }
-            >
-              <SelectTrigger size='sm' className='w-[120px]'>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='all'>{t('All Statuses')}</SelectItem>
-                <SelectItem value='1'>{t('Enabled')}</SelectItem>
-                <SelectItem value='2'>{t('Disabled')}</SelectItem>
-              </SelectContent>
-            </Select>
             <Button size='sm' variant='outline' onClick={applyFilters}>
               {t('Search')}
             </Button>

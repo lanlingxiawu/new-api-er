@@ -8,8 +8,13 @@ import (
 )
 
 func TestGetChannelsByGroupMatchesCommaSeparatedGroupsOnSQLite(t *testing.T) {
-	require.NoError(t, DB.Exec("DELETE FROM channels").Error)
+	if allowTestDBCleanup() {
+		require.NoError(t, DB.Exec("DELETE FROM channels").Error)
+	}
 	t.Cleanup(func() {
+		if !allowTestDBCleanup() {
+			return
+		}
 		require.NoError(t, DB.Exec("DELETE FROM channels").Error)
 	})
 

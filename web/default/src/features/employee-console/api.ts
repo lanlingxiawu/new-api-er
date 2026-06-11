@@ -1,11 +1,4 @@
 import { api } from '@/lib/api'
-<<<<<<< Updated upstream
-import { appendUnixTimeRangeParams } from '@/lib/query-params'
-=======
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-import type { CommissionLog, EmployeeProfile } from '@/features/employees/types'
-=======
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
 import type {
   CommissionLog,
@@ -13,7 +6,6 @@ import type {
   CommissionMonthlyStatItem,
   EmployeeProfile,
 } from '@/features/employees/types'
->>>>>>> Stashed changes
 
 export interface EmployeeExtension {
   commission_total_quota: number
@@ -30,6 +22,15 @@ export interface EmployeeExtension {
   commission_pending_usd: number
   profit_total_usd: number // Performance amount in USD.
   total_profit_usd?: number
+  baseline_reset_at?: number
+  baseline_profit_quota?: number
+  baseline_profit_usd?: number
+  baseline_commission_quota?: number
+  baseline_commission_usd?: number
+  current_performance_quota?: number
+  current_performance_usd?: number
+  current_commission_quota?: number
+  current_commission_usd?: number
 }
 
 export interface MyProfileResponse {
@@ -44,6 +45,17 @@ export interface MyProfileResponse {
       tier_group: string
       tier_rate: number
       tier_threshold_usd: number
+    }
+    period?: {
+      baseline_reset_at: number
+      baseline_profit_quota: number
+      baseline_profit_usd: number
+      baseline_commission_quota: number
+      baseline_commission_usd: number
+      current_performance_quota: number
+      current_performance_usd: number
+      current_commission_quota: number
+      current_commission_usd: number
     }
   }
 }
@@ -76,6 +88,7 @@ export async function getMyCommissionLogs(params: {
   customer_user_id?: number
   model_name?: string
   channel_id?: number
+  loss_status?: 'loss' | 'normal'
   start_time?: number
   end_time?: number
 }): Promise<MyLogsResponse> {
@@ -86,6 +99,7 @@ export async function getMyCommissionLogs(params: {
     q.set('customer_user_id', String(params.customer_user_id))
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
+  if (params.loss_status) q.set('loss_status', params.loss_status)
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/user/employee/commission?${q.toString()}`)
   return res.data

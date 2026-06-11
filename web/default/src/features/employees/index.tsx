@@ -12,15 +12,8 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-<<<<<<< Updated upstream
-import {
-=======
-<<<<<<< Updated upstream
-import { Pencil, PlusIcon, Trash2 } from 'lucide-react'
-=======
 import {
   Info,
->>>>>>> Stashed changes
   Pencil,
   PlusIcon,
   RotateCcw,
@@ -31,10 +24,6 @@ import {
   Users,
   X,
 } from 'lucide-react'
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getCurrencyDisplay } from '@/lib/currency'
@@ -61,12 +50,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-<<<<<<< Updated upstream
 import { Progress } from '@/components/ui/progress'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-=======
 import {
-<<<<<<< Updated upstream
   Select,
   SelectContent,
   SelectItem,
@@ -74,25 +59,20 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
-=======
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
->>>>>>> Stashed changes
 import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
   DataTableColumnHeader,
   DataTablePage,
 } from '@/components/data-table'
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 import { SectionPageLayout } from '@/components/layout'
+import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
   formatBusinessTargetAmount,
@@ -105,15 +85,8 @@ import {
   createEmployeeTier,
   deleteEmployee,
   deleteEmployeeTier,
-<<<<<<< Updated upstream
   getEmployeeCustomers,
-=======
-<<<<<<< Updated upstream
-=======
-  getEmployeeCustomers,
-  getCommissionMonthlyStats,
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+  getCommissionCalendarStats,
   getCommissionLogs,
   getEmployeeTiers,
   getEmployeeTiersPage,
@@ -121,15 +94,9 @@ import {
   unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
-import { CommissionMonthlyPeriodSection } from './components/commission-financial-calendar'
+import { CommissionCalendarSection } from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-import type { CommissionLog, EmployeeProfile, EmployeeTier } from './types'
-=======
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
->>>>>>> Stashed changes
 import {
   getEmployeeTierGroupBadgeClass,
   getEmployeeTierGroupDotClass,
@@ -143,6 +110,7 @@ import type {
 } from './types'
 
 const ASSIGN_USER_PICKER_PAGE_SIZE = 20
+const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8
 const DEFAULT_TIER_GROUP = '通用'
 
@@ -150,6 +118,15 @@ function getCustomerLabel(
   user: Pick<User, 'username' | 'display_name'> | EmployeeCustomer
 ) {
   return `${user.username}${user.display_name ? ` (${user.display_name})` : ''}`
+}
+
+function getEmployeeMonthlyAccountLabel(employee: EmployeeProfile) {
+  return employee.username || `#${employee.user_id}`
+}
+
+function getEmployeeMonthlyOptionLabel(employee: EmployeeProfile) {
+  const account = getEmployeeMonthlyAccountLabel(employee)
+  return employee.remark ? `${employee.remark} / ${account}` : account
 }
 
 function AssignUserPicker({
@@ -1003,10 +980,6 @@ function AssignCustomerDialog({
     </>
   )
 }
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 
 function formatTs(ts: number) {
   if (!ts) return '-'
@@ -1022,17 +995,14 @@ function formatTargetAmount(value: number | undefined) {
 }
 
 function AmountText({ value }: { value?: number }) {
-  const amount = Number(value || 0)
-  const className =
-    amount > 0 ? 'text-green-600' : amount < 0 ? 'text-destructive' : undefined
-  return <span className={className}>{formatBusinessAmount(amount)}</span>
+  return (
+    <BusinessAmount
+      value={value}
+      positiveClassName='text-green-600'
+    />
+  )
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 function getPerformanceTargetUsd(row: EmployeeProfile) {
   const nextTierTargetUsd = Number(row.next_tier_threshold_usd || 0)
   if (Number.isFinite(nextTierTargetUsd) && nextTierTargetUsd > 0) {
@@ -1090,8 +1060,6 @@ function PerformanceProgressCell({ row }: { row: EmployeeProfile }) {
   )
 }
 
-<<<<<<< Updated upstream
-=======
 function ColumnHeaderWithHint({
   title,
   hint,
@@ -1116,8 +1084,6 @@ function ColumnHeaderWithHint({
   )
 }
 
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 function StatusBadge({ status }: { status: number }) {
   const { t } = useTranslation()
   return status === 1 ? (
@@ -1273,7 +1239,7 @@ function useEmployeesColumns({
           />
         ),
         cell: ({ row }) =>
-          formatBusinessAmount(row.original.total_consumption_quota ?? 0),
+          <BusinessAmount value={row.original.total_consumption_quota ?? 0} />,
       },
       {
         accessorKey: 'total_cost_quota',
@@ -1282,7 +1248,7 @@ function useEmployeesColumns({
           <DataTableColumnHeader column={column} title={t('Total Cost')} />
         ),
         cell: ({ row }) =>
-          formatBusinessAmount(row.original.total_cost_quota ?? 0),
+          <BusinessAmount value={row.original.total_cost_quota ?? 0} />,
       },
       {
         accessorKey: 'total_profit_quota',
@@ -1304,7 +1270,10 @@ function useEmployeesColumns({
           />
         ),
         cell: ({ row }) =>
-          formatBusinessAmount(row.original.total_commission_quota ?? 0),
+          <BusinessAmount
+            value={row.original.total_commission_quota ?? 0}
+            positiveClassName='text-green-600'
+          />,
       },
       {
         accessorKey: 'current_commission_quota',
@@ -1323,7 +1292,10 @@ function useEmployeesColumns({
           />
         ),
         cell: ({ row }) =>
-          formatBusinessAmount(row.original.current_commission_quota ?? 0),
+          <BusinessAmount
+            value={row.original.current_commission_quota ?? 0}
+            positiveClassName='text-green-600'
+          />,
       },
       {
         accessorKey: 'current_tier_level',
@@ -1363,20 +1335,6 @@ function useEmployeesColumns({
           ) : (
             <span className='text-muted-foreground'>-</span>
           ),
-      },
-      {
-        accessorKey: 'current_tier_threshold_usd',
-        meta: { label: t('Performance Target') },
-        header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('Performance Target')}
-          />
-        ),
-        cell: ({ row }) =>
-          getPerformanceTargetUsd(row.original)
-            ? formatTargetAmount(getPerformanceTargetUsd(row.original))
-            : t('No limit'),
       },
       {
         accessorKey: 'current_performance_quota',
@@ -1482,7 +1440,7 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Revenue')} />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.revenue_quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.revenue_quota} />,
       },
       {
         accessorKey: 'cost_quota',
@@ -1490,7 +1448,7 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Cost')} />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.cost_quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.cost_quota} />,
       },
       {
         accessorKey: 'profit_quota',
@@ -1498,7 +1456,7 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Profit')} />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.profit_quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.profit_quota} />,
       },
       {
         accessorKey: 'commission_quota',
@@ -1507,15 +1465,10 @@ function useCommissionLogColumns() {
           <DataTableColumnHeader column={column} title={t('Commission')} />
         ),
         cell: ({ row }) => (
-          <span
-            className={
-              row.original.commission_quota < 0
-                ? 'text-destructive'
-                : 'text-green-600'
-            }
-          >
-            {formatBusinessAmount(row.original.commission_quota)}
-          </span>
+          <BusinessAmount
+            value={row.original.commission_quota}
+            positiveClassName='text-green-600'
+          />
         ),
       },
       {
@@ -1828,6 +1781,7 @@ function CommissionLogsTab() {
     customerUserId: '',
     modelName: '',
     channelId: '',
+    lossStatus: 'all' as 'all' | 'loss' | 'normal',
     start: undefined as Date | undefined,
     end: undefined as Date | undefined,
   })
@@ -1836,6 +1790,7 @@ function CommissionLogsTab() {
     customer_user_id?: number
     model_name?: string
     channel_id?: number
+    loss_status?: 'loss' | 'normal'
     start_time?: number
     end_time?: number
   }>({})
@@ -1871,6 +1826,9 @@ function CommissionLogsTab() {
       ...(Number.isFinite(channelId) && channelId > 0
         ? { channel_id: channelId }
         : {}),
+      ...(filterForm.lossStatus !== 'all'
+        ? { loss_status: filterForm.lossStatus }
+        : {}),
       ...(filterForm.start
         ? { start_time: Math.floor(filterForm.start.getTime() / 1000) }
         : {}),
@@ -1887,6 +1845,7 @@ function CommissionLogsTab() {
       customerUserId: '',
       modelName: '',
       channelId: '',
+      lossStatus: 'all',
       start: undefined,
       end: undefined,
     })
@@ -1926,7 +1885,7 @@ function CommissionLogsTab() {
                 employeeUserId: event.target.value,
               }))
             }
-            className='w-[120px]'
+            className='w-[112px]'
           />
           <Input
             type='number'
@@ -1939,7 +1898,7 @@ function CommissionLogsTab() {
                 customerUserId: event.target.value,
               }))
             }
-            className='w-[120px]'
+            className='w-[112px]'
           />
           <Input
             placeholder={t('Model Name')}
@@ -1950,7 +1909,7 @@ function CommissionLogsTab() {
                 modelName: event.target.value,
               }))
             }
-            className='w-[180px]'
+            className='w-[160px]'
           />
           <Input
             type='number'
@@ -1963,8 +1922,26 @@ function CommissionLogsTab() {
                 channelId: event.target.value,
               }))
             }
-            className='w-[120px]'
+            className='w-[112px]'
           />
+          <Select
+            value={filterForm.lossStatus}
+            onValueChange={(value) =>
+              setFilterForm((form) => ({
+                ...form,
+                lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
+              }))
+            }
+          >
+            <SelectTrigger size='sm' className='w-[132px]'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='all'>{t('All profit states')}</SelectItem>
+              <SelectItem value='loss'>{t('Loss only')}</SelectItem>
+              <SelectItem value='normal'>{t('Non-loss only')}</SelectItem>
+            </SelectContent>
+          </Select>
           <div className='w-[300px]'>
             <CompactDateTimeRangePicker
               start={filterForm.start}
@@ -1983,7 +1960,7 @@ function CommissionLogsTab() {
         </div>
       }
       getRowClassName={(row) =>
-        row.original.commission_quota < 0 ? 'opacity-60' : undefined
+        row.original.profit_quota < 0 ? 'opacity-60' : undefined
       }
       skeletonKeyPrefix='commission-logs-skeleton'
       className='flex h-full min-h-0 flex-col overflow-hidden'
@@ -1992,62 +1969,220 @@ function CommissionLogsTab() {
   )
 }
 
-function CommissionMonthlyStatsTab() {
+function EmployeeMonthlySelector({
+  value,
+  onChange,
+}: {
+  value?: EmployeeProfile
+  onChange: (employee?: EmployeeProfile) => void
+}) {
   const { t } = useTranslation()
-  const [filterForm, setFilterForm] = useState({
-    employeeUserId: '',
-  })
-  const [employeeUserId, setEmployeeUserId] = useState<number | undefined>()
+  const [open, setOpen] = useState(false)
+  const [keyword, setKeyword] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
 
-  const applyFilters = () => {
-    const employeeUserId = Number(filterForm.employeeUserId)
-    setEmployeeUserId(
-      Number.isFinite(employeeUserId) && employeeUserId > 0
-        ? employeeUserId
-        : undefined
-    )
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(keyword.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [keyword])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (event: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false)
+        setKeyword('')
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const { data, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage } =
+    useInfiniteQuery({
+      queryKey: ['commission-monthly-employee-selector', debounced],
+      queryFn: ({ pageParam }) =>
+        getEmployees(Number(pageParam), EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE, {
+          keyword: debounced,
+          status: 1,
+        }),
+      initialPageParam: 1,
+      getNextPageParam: (lastPage) => {
+        const page = lastPage.data?.page ?? 1
+        const pageSize =
+          lastPage.data?.page_size ?? EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE
+        const total = lastPage.data?.total ?? 0
+        return page * pageSize < total ? page + 1 : undefined
+      },
+      enabled: open,
+    })
+
+  const employees = useMemo(() => {
+    const all = data?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+    const existing = new Set<number>()
+    return all.filter((employee) => {
+      if (existing.has(employee.id)) return false
+      existing.add(employee.id)
+      return true
+    })
+  }, [data])
+  const isInitialFetching = isFetching && !data
+  const allEmployeesLabel = t('All employees')
+  const displayValue = open
+    ? keyword
+    : value
+      ? getEmployeeMonthlyOptionLabel(value)
+      : ''
+
+  const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
+    const list = event.currentTarget
+    const distanceToBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    if (distanceToBottom > 48 || !hasNextPage || isFetchingNextPage) return
+    void fetchNextPage()
   }
 
-  const resetFilters = () => {
-    setFilterForm({ employeeUserId: '' })
-    setEmployeeUserId(undefined)
+  const clearSelection = () => {
+    setKeyword('')
+    setDebounced('')
+    onChange(undefined)
+    setOpen(true)
   }
 
   return (
-    <CommissionMonthlyPeriodSection
-      queryKey={['admin-commission-monthly-stats', employeeUserId]}
+    <div ref={containerRef} className='relative w-full sm:w-[280px]'>
+      <Input
+        type='text'
+        autoComplete='off'
+        placeholder={allEmployeesLabel}
+        value={displayValue}
+        onChange={(event) => {
+          setKeyword(event.target.value)
+          if (!open) setOpen(true)
+        }}
+        onFocus={() => {
+          setKeyword('')
+          setOpen(true)
+        }}
+        className={value && !open ? 'pr-9' : undefined}
+      />
+      {value && !open ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='absolute top-1/2 right-1 size-7 -translate-y-1/2'
+          title={t('Clear selection')}
+          aria-label={t('Clear selection')}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={clearSelection}
+        >
+          <X className='size-4' />
+        </Button>
+      ) : null}
+      {open ? (
+        <div className='bg-popover text-popover-foreground absolute top-full right-0 left-0 z-[120] mt-2 overflow-hidden rounded-lg border shadow-lg'>
+          <button
+            type='button'
+            className={cn(
+              'hover:bg-accent flex w-full items-center justify-between px-3 py-2 text-left text-sm',
+              !value && 'bg-accent/70'
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault()
+              clearSelection()
+              setOpen(false)
+            }}
+          >
+            <span className='font-medium'>{allEmployeesLabel}</span>
+            <span className='text-muted-foreground text-xs'>
+              {t('All')}
+            </span>
+          </button>
+          <ul
+            onScroll={handleListScroll}
+            className='max-h-64 overflow-y-auto border-t p-1'
+          >
+            {isInitialFetching ? (
+              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
+                {t('Loading...')}
+              </li>
+            ) : employees.length === 0 ? (
+              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
+                {t('No users found')}
+              </li>
+            ) : (
+              <>
+                {employees.map((employee) => {
+                  const isSelected = value?.id === employee.id
+                  return (
+                    <li
+                      key={employee.id}
+                      role='option'
+                      aria-selected={isSelected}
+                      className='hover:bg-accent aria-selected:bg-accent/80 cursor-pointer rounded-md px-3 py-2 text-sm transition-colors'
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        onChange(employee)
+                        setKeyword('')
+                        setOpen(false)
+                      }}
+                    >
+                      <div className='flex min-w-0 items-center justify-between gap-3'>
+                        <span className='truncate font-medium'>
+                          {employee.remark || getEmployeeMonthlyAccountLabel(employee)}
+                        </span>
+                        {employee.remark ? (
+                          <span className='text-muted-foreground shrink-0 truncate text-xs'>
+                            {getEmployeeMonthlyAccountLabel(employee)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  )
+                })}
+                {isFetchingNextPage ? (
+                  <li className='text-muted-foreground px-3 py-3 text-center text-sm'>
+                    {t('Loading...')}
+                  </li>
+                ) : null}
+              </>
+            )}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function CommissionMonthlyStatsTab() {
+  const { t } = useTranslation()
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile>()
+  const employeeUserId = selectedEmployee?.user_id
+
+  return (
+    <CommissionCalendarSection
+      queryKey={['admin-commission-calendar-stats', employeeUserId]}
       queryFn={(range) =>
-        getCommissionMonthlyStats({
+        getCommissionCalendarStats({
           ...range,
           employee_user_id: employeeUserId,
-          page: 1,
-          page_size: 100,
         })
       }
+      showSelectedDetail={false}
       toolbar={
-        <div className='flex flex-wrap items-center justify-end gap-2'>
-          <Input
-            type='number'
-            min={1}
-            placeholder={t('Employee UID')}
-            value={filterForm.employeeUserId}
-            onChange={(event) =>
-              setFilterForm((form) => ({
-                ...form,
-                employeeUserId: event.target.value,
-              }))
-            }
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') applyFilters()
-            }}
-            className='w-[140px]'
+        <div className='flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end'>
+          <span className='text-muted-foreground shrink-0 text-xs font-medium sm:text-sm'>
+            {t('Employee')}
+          </span>
+          <EmployeeMonthlySelector
+            value={selectedEmployee}
+            onChange={setSelectedEmployee}
           />
-          <Button size='sm' onClick={applyFilters}>
-            {t('Search')}
-          </Button>
-          <Button size='sm' variant='outline' onClick={resetFilters}>
-            {t('Reset')}
-          </Button>
         </div>
       }
     />
@@ -2547,20 +2682,6 @@ function TiersTab() {
           </Button>
         }
         toolbar={
-<<<<<<< Updated upstream
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <span className='text-muted-foreground text-xs'>
-              {t('{{count}} tiers configured', { count: tierTotal })}
-            </span>
-=======
-<<<<<<< Updated upstream
-          <div className='flex justify-end'>
->>>>>>> Stashed changes
-            <Button size='sm' onClick={() => setCreateOpen(true)}>
-              <PlusIcon className='mr-1 h-4 w-4' />
-              {t('Add Tier')}
-            </Button>
-=======
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <span className='text-muted-foreground text-xs'>
               {t('{{count}} tiers configured', { count: tierTotal })}
@@ -2572,7 +2693,6 @@ function TiersTab() {
                 {t('Add Tier')}
               </Button>
             </div>
->>>>>>> Stashed changes
           </div>
         }
         skeletonKeyPrefix='employee-tiers-skeleton'

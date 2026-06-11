@@ -51,17 +51,10 @@ func daysInMonth(year int, month time.Month) int {
 }
 
 func tierResetLocation(cfg *operation_setting.CommissionTierResetSetting) *time.Location {
-	if cfg == nil || cfg.Timezone == "" {
-		return nil
-	}
-	if cfg.Timezone == "Local" {
+	if cfg == nil {
 		return time.Local
 	}
-	loc, err := time.LoadLocation(cfg.Timezone)
-	if err != nil {
-		common.SysError("invalid commission tier reset timezone, fallback to local: " + cfg.Timezone)
-		return time.Local
-	}
+	loc, _ := operation_setting.ResolveCommissionTierResetLocation(cfg.Timezone)
 	return loc
 }
 
@@ -143,16 +136,16 @@ func runCommissionTierResetCheck() {
 	model.FlushBusinessStatBuffers()
 	total := 0
 	for {
-		n, err := model.ResetEmployeeTierLevelsForPeriod(due, tierResetBatchSize, 0)
+		n, selected, err := model.ResetEmployeeTierLevelsForPeriod(due, tierResetBatchSize, 0)
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("commission tier reset task failed: %v", err))
 			return
 		}
-		if n == 0 {
+		if selected == 0 {
 			break
 		}
 		total += n
-		if n < tierResetBatchSize {
+		if selected < tierResetBatchSize {
 			break
 		}
 	}
@@ -173,19 +166,21 @@ func RunCommissionTierResetNow(resetAt int64, operatedBy int) (processed int, er
 
 	model.FlushBusinessStatBuffers()
 	for {
-		n, err := model.ResetEmployeeTierLevelsForPeriod(resetAt, tierResetBatchSize, operatedBy)
+		n, selected, err := model.ResetEmployeeTierLevelsForPeriod(resetAt, tierResetBatchSize, operatedBy)
 		if err != nil {
 			return processed, err
 		}
-		if n == 0 {
+		if selected == 0 {
 			break
 		}
 		processed += n
-		if n < tierResetBatchSize {
+		if selected < tierResetBatchSize {
 			break
 		}
 	}
-	persistTierResetLastResetAt(resetAt)
+	if operation_setting.IsCommissionTierResetEnabled() {
+		persistTierResetLastResetAt(resetAt)
+	}
 	return processed, nil
 }
 

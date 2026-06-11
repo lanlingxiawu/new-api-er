@@ -101,26 +101,6 @@ func AdminListEmployees(c *gin.Context) {
 		TotalProfitUsd        float64 `json:"total_profit_usd"`
 		TotalCommissionQuota  int64   `json:"total_commission_quota"`
 		TotalCommissionUsd    float64 `json:"total_commission_usd"`
-<<<<<<< Updated upstream
-		CurrentProfitQuota    int64   `json:"current_performance_quota"`
-		CurrentProfitUsd      float64 `json:"current_performance_usd"`
-		CurrentTierId         int64   `json:"current_tier_id"`
-		CurrentTierLevel      int     `json:"current_tier_level"`
-		CurrentTierGroup      string  `json:"current_tier_group"`
-		CurrentTierRate       float64 `json:"current_tier_rate"`
-		CurrentTierThreshold  float64 `json:"current_tier_threshold_usd"`
-		NextTierId            int64   `json:"next_tier_id"`
-		NextTierLevel         int     `json:"next_tier_level"`
-		NextTierGroup         string  `json:"next_tier_group"`
-		NextTierRate          float64 `json:"next_tier_rate"`
-		NextTierThreshold     float64 `json:"next_tier_threshold_usd"`
-	}
-<<<<<<< Updated upstream
-
-=======
-	profitStats, err := model.GetCommissionStatsByEmployee(0, 0)
-	if err != nil {
-=======
 		// CurrentProfitQuota/CurrentCommissionQuota 为"本期"值（自上次月度重置以来的增量，
 		// 重置功能未启用/未触发过时等价于对应累计值），与 TotalProfit/TotalCommission（历史累计）含义不同。
 		CurrentProfitQuota     int64   `json:"current_performance_quota"`
@@ -184,58 +164,9 @@ func AdminListEmployees(c *gin.Context) {
 		return err
 	})
 	if err := eg.Wait(); err != nil {
->>>>>>> Stashed changes
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	statsByUserId := make(map[int]*model.CommissionEmployeeStat, len(profitStats))
-	for _, s := range profitStats {
-		statsByUserId[s.EmployeeUserId] = s
-	}
->>>>>>> Stashed changes
-	employeeUserIds := make([]int, 0, len(employees))
-	for _, emp := range employees {
-		employeeUserIds = append(employeeUserIds, emp.UserId)
-	}
-
-	var (
-		profitStats                 []*model.CommissionEmployeeStat
-		customerConsumptionByUserId map[int]int64
-		customerCountsByUserId      map[int]int
-		tierLevelsByUserId          map[int]*model.EmployeeTierLevel
-		userMap                     map[int]*model.User
-	)
-	eg, _ := errgroup.WithContext(c.Request.Context())
-	eg.Go(func() error {
-		var err error
-		profitStats, err = model.GetCommissionStatsByEmployeeIds(employeeUserIds)
-		return err
-	})
-	eg.Go(func() error {
-		var err error
-		customerConsumptionByUserId, err = model.GetCustomerUsedQuotaTotalsByEmployees(employeeUserIds)
-		return err
-	})
-	eg.Go(func() error {
-		var err error
-		customerCountsByUserId, err = model.GetCustomerCountsByEmployees(employeeUserIds)
-		return err
-	})
-	eg.Go(func() error {
-		var err error
-		tierLevelsByUserId, err = model.GetTierLevelsByUserIds(employeeUserIds)
-		return err
-	})
-	eg.Go(func() error {
-		var err error
-		userMap, err = model.GetUsersByIds(employeeUserIds)
-		return err
-	})
-	if err := eg.Wait(); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-
 	statsByUserId := make(map[int]*model.CommissionEmployeeStat, len(profitStats))
 	for _, s := range profitStats {
 		statsByUserId[s.EmployeeUserId] = s
@@ -288,20 +219,6 @@ func AdminListEmployees(c *gin.Context) {
 		}
 
 		item := EmployeeWithUser{
-<<<<<<< Updated upstream
-			EmployeeProfile:       emp,
-			CustomerCount:         customerCountsByUserId[emp.UserId],
-			TotalConsumptionQuota: totalConsumptionQuota,
-			TotalConsumptionUsd:   common.QuotaToUSD(totalConsumptionQuota),
-			TotalCostQuota:        totalCostQuota,
-			TotalCostUsd:          common.QuotaToUSD(totalCostQuota),
-			TotalProfitQuota:      totalProfitQuota,
-			TotalProfitUsd:        common.QuotaToUSD(totalProfitQuota),
-			TotalCommissionQuota:  totalCommissionQuota,
-			TotalCommissionUsd:    common.QuotaToUSD(totalCommissionQuota),
-			CurrentProfitQuota:    totalProfitQuota,
-			CurrentProfitUsd:      common.QuotaToUSD(totalProfitQuota),
-=======
 			EmployeeProfile:        emp,
 			CustomerCount:          customerCountsByUserId[emp.UserId],
 			TotalConsumptionQuota:  totalConsumptionQuota,
@@ -316,7 +233,6 @@ func AdminListEmployees(c *gin.Context) {
 			CurrentProfitUsd:       common.QuotaToUSD(periodProfitQuota),
 			CurrentCommissionQuota: periodCommissionQuota,
 			CurrentCommissionUsd:   common.QuotaToUSD(periodCommissionQuota),
->>>>>>> Stashed changes
 		}
 		currentLevel := 0
 		currentGroup := ""
@@ -470,6 +386,7 @@ func AdminListCommissionLogs(c *gin.Context) {
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
 	channelId, _ := strconv.Atoi(c.Query("channel_id"))
 	modelName := strings.TrimSpace(c.Query("model_name"))
+	lossStatus := strings.TrimSpace(c.Query("loss_status"))
 	timeRange, err := parseUnixTimeRangeQuery(c)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -486,6 +403,7 @@ func AdminListCommissionLogs(c *gin.Context) {
 		CustomerUserId: customerUserId,
 		ModelName:      modelName,
 		ChannelId:      channelId,
+		LossStatus:     lossStatus,
 		StartTime:      timeRange.StartTime,
 		EndTime:        timeRange.EndTime,
 		Page:           page,
@@ -594,13 +512,12 @@ func AdminCommissionOverview(c *gin.Context) {
 		channelSortOrder = "desc"
 	}
 
-	// Build one shared query plan for channel and employee overview queries.
-	queryPlan, err := model.ResolveBusinessStatsQueryPlan(timeRange.StartTime, timeRange.EndTime)
+	// Build one shared aggregate-only query plan for channel and employee overview queries.
+	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlan(timeRange.StartTime, timeRange.EndTime)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-<<<<<<< Updated upstream
 
 	var (
 		channelStats   []*model.ConsumptionCostChannelStat
@@ -635,24 +552,6 @@ func AdminCommissionOverview(c *gin.Context) {
 	})
 
 	if err := g.Wait(); err != nil {
-=======
-<<<<<<< Updated upstream
-	costTotals, err := model.GetConsumptionCostTotals(startTime, endTime)
-=======
-	channelPage, channelPageSize := normalizePrefixedPage(c, "channel_")
-	employeePage, employeePageSize := normalizePrefixedPage(c, "employee_")
-	channelKeyword := strings.ToLower(strings.TrimSpace(c.Query("channel_keyword")))
-	channelSortBy := strings.TrimSpace(c.DefaultQuery("channel_sort_by", "est_profit_quota"))
-	channelSortOrder := strings.ToLower(strings.TrimSpace(c.DefaultQuery("channel_sort_order", "desc")))
-	if channelSortOrder != "asc" {
-		channelSortOrder = "desc"
-	}
-
-	// Build one shared aggregate-only query plan for channel and employee overview queries.
-	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlan(timeRange.StartTime, timeRange.EndTime)
->>>>>>> Stashed changes
-	if err != nil {
->>>>>>> Stashed changes
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
@@ -1054,12 +953,42 @@ func GetMyEmployeeProfile(c *gin.Context) {
 			"tier_threshold_usd": tier.ThresholdUsd,
 		}
 	}
+	var profitTotalQuota, commissionTotalQuota int64
+	if ext != nil {
+		profitTotalQuota = ext.ProfitTotalQuota
+		commissionTotalQuota = ext.CommissionTotalQuota
+	}
+	var baselineProfitQuota, baselineCommissionQuota, baselineResetAt int64
+	if tierLevel != nil {
+		baselineProfitQuota = tierLevel.BaselineProfitQuota
+		baselineCommissionQuota = tierLevel.BaselineCommissionQuota
+		baselineResetAt = tierLevel.BaselineResetAt
+	}
+	currentProfitQuota := profitTotalQuota - baselineProfitQuota
+	if currentProfitQuota < 0 {
+		currentProfitQuota = 0
+	}
+	currentCommissionQuota := commissionTotalQuota - baselineCommissionQuota
+	if currentCommissionQuota < 0 {
+		currentCommissionQuota = 0
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
 			"profile":   emp,
 			"extension": ext,
 			"tier":      tierInfo,
+			"period": gin.H{
+				"baseline_reset_at":         baselineResetAt,
+				"baseline_profit_quota":     baselineProfitQuota,
+				"baseline_profit_usd":       common.QuotaToUSD(baselineProfitQuota),
+				"baseline_commission_quota": baselineCommissionQuota,
+				"baseline_commission_usd":   common.QuotaToUSD(baselineCommissionQuota),
+				"current_performance_quota": currentProfitQuota,
+				"current_performance_usd":   common.QuotaToUSD(currentProfitQuota),
+				"current_commission_quota":  currentCommissionQuota,
+				"current_commission_usd":    common.QuotaToUSD(currentCommissionQuota),
+			},
 		},
 	})
 }
@@ -1076,6 +1005,7 @@ func GetMyCommissionLogs(c *gin.Context) {
 	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
 	channelId, _ := strconv.Atoi(c.Query("channel_id"))
 	modelName := strings.TrimSpace(c.Query("model_name"))
+	lossStatus := strings.TrimSpace(c.Query("loss_status"))
 	timeRange, err := parseUnixTimeRangeQuery(c)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -1092,6 +1022,7 @@ func GetMyCommissionLogs(c *gin.Context) {
 		CustomerUserId: customerUserId,
 		ModelName:      modelName,
 		ChannelId:      channelId,
+		LossStatus:     lossStatus,
 		StartTime:      timeRange.StartTime,
 		EndTime:        timeRange.EndTime,
 		Page:           page,
@@ -1136,6 +1067,21 @@ func GetMyCommissionSummary(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	tierLevel, _ := model.GetTierLevelByUserId(userId)
+	var baselineProfitQuota, baselineCommissionQuota, baselineResetAt int64
+	if tierLevel != nil {
+		baselineProfitQuota = tierLevel.BaselineProfitQuota
+		baselineCommissionQuota = tierLevel.BaselineCommissionQuota
+		baselineResetAt = tierLevel.BaselineResetAt
+	}
+	currentProfitQuota := ext.ProfitTotalQuota - baselineProfitQuota
+	if currentProfitQuota < 0 {
+		currentProfitQuota = 0
+	}
+	currentCommissionQuota := ext.CommissionTotalQuota - baselineCommissionQuota
+	if currentCommissionQuota < 0 {
+		currentCommissionQuota = 0
+	}
 	customerConsumptionByUserId, err := model.GetCustomerUsedQuotaTotalsByEmployees([]int{userId})
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -1155,6 +1101,15 @@ func GetMyCommissionSummary(c *gin.Context) {
 			"commission_pending_usd":           common.QuotaToUSD(ext.CommissionPendingQuota),
 			"profit_total_usd":                 common.QuotaToUSD(ext.ProfitTotalQuota),
 			"customer_total_consumption_usd":   common.QuotaToUSD(customerTotalConsumptionQuota),
+			"baseline_reset_at":                baselineResetAt,
+			"baseline_profit_quota":            baselineProfitQuota,
+			"baseline_profit_usd":              common.QuotaToUSD(baselineProfitQuota),
+			"baseline_commission_quota":        baselineCommissionQuota,
+			"baseline_commission_usd":          common.QuotaToUSD(baselineCommissionQuota),
+			"current_performance_quota":        currentProfitQuota,
+			"current_performance_usd":          common.QuotaToUSD(currentProfitQuota),
+			"current_commission_quota":         currentCommissionQuota,
+			"current_commission_usd":           common.QuotaToUSD(currentCommissionQuota),
 		},
 	})
 }
@@ -1200,11 +1155,6 @@ func GetMyCommissionMonthlyStats(c *gin.Context) {
 	})
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-// maskUserId 将用户 ID 脱敏为 #XXXX 格式
-=======
 // GetMyCommissionCalendarStats GET /api/user/employee/commission/calendar
 func GetMyCommissionCalendarStats(c *gin.Context) {
 	userId := c.GetInt("id")
@@ -1229,7 +1179,6 @@ func GetMyCommissionCalendarStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": stats})
 }
 
->>>>>>> Stashed changes
 // AdminAssignCustomerToEmployee POST /api/admin/employee/:id/assign-customer
 func AdminAssignCustomerToEmployee(c *gin.Context) {
 	employeeId, _ := strconv.Atoi(c.Param("id"))
@@ -1363,10 +1312,6 @@ func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 func maskUserId(id int) string {
 	s := strconv.Itoa(id)
 	if len(s) <= 4 {

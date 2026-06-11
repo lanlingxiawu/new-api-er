@@ -29,10 +29,6 @@ func AdminBackfillBusinessStats(c *gin.Context) {
 		common.ApiErrorMsg(c, "business stats backfill already running")
 		return
 	}
-<<<<<<< Updated upstream
-	if !model.NeedsBusinessStatsBackfill() {
-		atomic.StoreInt32(&businessStatsBackfillRunning, 0)
-=======
 	lockOwner, locked := model.AcquireBusinessStatsBackfillLock()
 	if !locked {
 		atomic.StoreInt32(&businessStatsBackfillRunning, 0)
@@ -42,7 +38,6 @@ func AdminBackfillBusinessStats(c *gin.Context) {
 	if !model.NeedsBusinessStatsBackfill() {
 		atomic.StoreInt32(&businessStatsBackfillRunning, 0)
 		model.ReleaseBusinessStatsBackfillLock(lockOwner)
->>>>>>> Stashed changes
 		common.ApiSuccess(c, gin.H{"started": false, "completed": true})
 		return
 	}
@@ -51,10 +46,7 @@ func AdminBackfillBusinessStats(c *gin.Context) {
 	endTime := timeRange.EndTime
 	go func() {
 		defer atomic.StoreInt32(&businessStatsBackfillRunning, 0)
-<<<<<<< Updated upstream
-=======
 		defer model.ReleaseBusinessStatsBackfillLock(lockOwner)
->>>>>>> Stashed changes
 		model.FlushBusinessStatBuffers()
 		result, err := model.BackfillBusinessDailyStats(startTime, endTime, batchDays)
 		if err != nil {
@@ -62,11 +54,7 @@ func AdminBackfillBusinessStats(c *gin.Context) {
 			return
 		}
 		common.SysLog(fmt.Sprintf(
-<<<<<<< Updated upstream
-			"business_stats_backfill: completed start_date=%d end_date=%d days=%d batch_days=%d sleep_ms=%d cost_records=%d commission_records=%d platform_rows=%d employee_rows=%d",
-=======
-			"business_stats_backfill: completed start_date=%d end_date=%d days=%d batch_days=%d sleep_ms=%d cost_records=%d commission_records=%d platform_rows=%d employee_rows=%d customer_rows=%d",
->>>>>>> Stashed changes
+			"business_stats_backfill: completed start_date=%d end_date=%d days=%d batch_days=%d sleep_ms=%d cost_records=%d commission_records=%d platform_rows=%d employee_rows=%d customer_rows=%d monthly_rows=%d",
 			result.StartDate,
 			result.EndDate,
 			result.Days,
@@ -76,12 +64,10 @@ func AdminBackfillBusinessStats(c *gin.Context) {
 			result.CommissionRecords,
 			result.PlatformRows,
 			result.EmployeeRows,
-<<<<<<< Updated upstream
-=======
 			result.CustomerRows,
->>>>>>> Stashed changes
+			result.MonthlyRows,
 		))
-		// 回填完成后标记，后续 NeedsBusinessStatsBackfill 直接返回 false
+		// 记录历史回填已追平；NeedsBusinessStatsBackfill 仍会按完整日期校验新增缺口。
 		if !model.NeedsBusinessStatsBackfill() {
 			_ = model.UpdateOption("BusinessStatsBackfillCompleted", "true")
 		}
