@@ -1130,6 +1130,123 @@ func GetChannelNamesByIds(ids []int) (map[int]string, error) {
 	return result, nil
 }
 
+// ResolveChannelDisplayNames 批量解析渠道显示名称（兼容已删除渠道），仅用于按页展示等小批量场景。
+// 解析链：channels 表 → platform_channel_daily_stats 名称快照 → logs 快照。
+// 渠道删除时 snapshotChannelNamesBeforeDeleteTx 已保证日聚合表留有名称，因此该链路对已删渠道是闭合的。
+func ResolveChannelDisplayNames(ids []int) map[int]string {
+	uniq := make([]int, 0, len(ids))
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	result, err := GetChannelNamesByIds(uniq)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to resolve channel names from channels: %v", err))
+		result = make(map[int]string, len(uniq))
+	}
+	missing := make([]int, 0)
+	for _, id := range uniq {
+		if result[id] == "" {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return result
+	}
+	var rows []struct {
+		ChannelId   int
+		ChannelName string
+	}
+	err = DB.Model(&PlatformChannelDailyStat{}).
+		Select("channel_id, MAX(channel_name) as channel_name").
+		Where("channel_id IN ? AND channel_name <> ''", missing).
+		Group("channel_id").
+		Scan(&rows).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to resolve channel names from daily stats: %v", err))
+	} else {
+		for _, row := range rows {
+			if row.ChannelName != "" {
+				result[row.ChannelId] = row.ChannelName
+			}
+		}
+	}
+	still := make([]int, 0)
+	for _, id := range missing {
+		if result[id] == "" {
+			still = append(still, id)
+		}
+	}
+	if len(still) > 0 {
+		for id, name := range GetChannelNameSnapshotsFromLogs(still) {
+			result[id] = name
+		}
+	}
+	return result
+}
+
+// ChannelDisplayOption 渠道筛选下拉选项（含已删除渠道）。
+type ChannelDisplayOption struct {
+	ChannelId   int    `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	Deleted     bool   `json:"deleted"`
+}
+
+// ListChannelDisplayOptions 列出产生过消费的渠道（含已删除），用于筛选下拉。
+// 数据源为 platform_channel_daily_stats（每渠道每天一行的小表，渠道删除时
+// snapshotChannelNamesBeforeDeleteTx 已把名称快照回填），在世渠道叠加当前名称。
+// 不扫描 logs / consumption_costs / employee_commission_logs 等大表。
+func ListChannelDisplayOptions(page, pageSize int) ([]ChannelDisplayOption, int64, error) {
+	var total int64
+	if err := DB.Model(&PlatformChannelDailyStat{}).
+		Distinct("channel_id").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var rows []struct {
+		ChannelId   int
+		ChannelName string
+	}
+	if err := DB.Model(&PlatformChannelDailyStat{}).
+		Select("channel_id, MAX(channel_name) as channel_name").
+		Group("channel_id").
+		Order("channel_id").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	ids := make([]int, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ChannelId)
+	}
+	liveNames, err := GetChannelNamesByIds(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	options := make([]ChannelDisplayOption, 0, len(rows))
+	for _, row := range rows {
+		opt := ChannelDisplayOption{
+			ChannelId:   row.ChannelId,
+			ChannelName: row.ChannelName,
+		}
+		if liveName, ok := liveNames[row.ChannelId]; ok {
+			if liveName != "" {
+				opt.ChannelName = liveName
+			}
+		} else {
+			opt.Deleted = true
+		}
+		options = append(options, opt)
+	}
+	return options, total, nil
+}
+
 func BatchSetChannelTag(ids []int, tag *string) error {
 	// 开启事务
 	tx := DB.Begin()

@@ -124,6 +124,26 @@ export async function getCommissionLogs(params: {
   return res.data
 }
 
+export interface CommissionChannelOption {
+  channel_id: number
+  channel_name: string
+  deleted: boolean
+}
+
+// 渠道筛选下拉选项（含已删除渠道的历史名称快照）
+export async function getCommissionChannelOptions(params?: {
+  page?: number
+  page_size?: number
+}): Promise<PagedResponse<CommissionChannelOption>> {
+  const q = new URLSearchParams()
+  if (params?.page) q.set('page', String(params.page))
+  if (params?.page_size) q.set('page_size', String(params.page_size))
+  const res = await api.get(
+    `/api/admin/employee/commission/channels?${q.toString()}`
+  )
+  return res.data
+}
+
 export async function getCommissionCalendarStats(params: {
   employee_user_id?: number
   start_time: number

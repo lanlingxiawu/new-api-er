@@ -95,7 +95,9 @@ type ConsumptionCostChannelStat struct {
 	RecordCount  int64   `json:"record_count"`
 	CostRatio    float64 `json:"cost_ratio"`
 	CostRatioSum float64 `json:"-"`
-	ChannelName  string  `json:"channel_name" gorm:"-"`
+	// ChannelName 由查询的 channel_name 快照列填充；注意不能加 gorm:"-"，
+	// 否则 Scan 时会丢弃 SQL 查出的快照名称，渠道删除后将无法显示名称。
+	ChannelName string `json:"channel_name"`
 }
 
 // GetConsumptionCostByChannel 按渠道精确汇总，优先使用日聚合统计。

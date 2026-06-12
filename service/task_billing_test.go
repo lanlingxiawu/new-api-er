@@ -136,7 +136,6 @@ func TestMain(m *testing.M) {
 		&model.EmployeeCustomerCommissionDailyStat{},
 		&model.EmployeeCommissionMonthlyStat{},
 		&model.BusinessStatsAppliedBatch{},
-		&model.BusinessStatsBackfillLock{},
 		&model.BusinessDailyStatsCoverage{},
 		&model.EmployeeCommissionTier{},
 		&model.EmployeeTierLevel{},

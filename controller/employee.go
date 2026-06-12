@@ -413,10 +413,51 @@ func AdminListCommissionLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	// 按页解析渠道名称（兼容已删除渠道），明细表本身不存名称快照，避免大表回填
+	channelNames := model.ResolveChannelDisplayNames(commissionLogChannelIds(logs))
+	type LogWithChannel struct {
+		*model.EmployeeCommissionLog
+		ChannelName string `json:"channel_name"`
+	}
+	items := make([]LogWithChannel, 0, len(logs))
+	for _, l := range logs {
+		items = append(items, LogWithChannel{
+			EmployeeCommissionLog: l,
+			ChannelName:           channelNames[l.ChannelId],
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"items":     logs,
+			"items":     items,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		},
+	})
+}
+
+func commissionLogChannelIds(logs []*model.EmployeeCommissionLog) []int {
+	ids := make([]int, 0, len(logs))
+	for _, l := range logs {
+		ids = append(ids, l.ChannelId)
+	}
+	return ids
+}
+
+// AdminListCommissionChannelOptions GET /api/admin/employee/commission/channels
+// 渠道筛选下拉选项（含已删除渠道的历史名称快照）。
+func AdminListCommissionChannelOptions(c *gin.Context) {
+	page, pageSize := normalizePage(c)
+	options, total, err := model.ListChannelDisplayOptions(page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"items":     options,
 			"total":     total,
 			"page":      page,
 			"page_size": pageSize,
@@ -652,7 +693,6 @@ func AdminCommissionOverview(c *gin.Context) {
 			"by_channel_platform_total":     channelTotal,
 			"by_channel_platform_page":      channelPage,
 			"by_channel_platform_page_size": channelPageSize,
-			"needs_backfill":                model.NeedsBusinessStatsBackfill(),
 		},
 	})
 }
@@ -1032,6 +1072,7 @@ func GetMyCommissionLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	// 注意：员工端不返回渠道名称（渠道名可能包含上游内部信息），仅管理员端展示
 	type SafeLog struct {
 		*model.EmployeeCommissionLog
 		CustomerUserIdMasked string `json:"customer_user_id_masked"`

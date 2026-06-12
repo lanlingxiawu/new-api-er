@@ -67,6 +67,8 @@ export const commissionLogSchema = z.object({
   log_id: z.number().nullable(),
   model_name: z.string(),
   channel_id: z.number(),
+  // admin view only: resolved channel name (supports deleted channels)
+  channel_name: z.string().optional(),
   revenue_quota: z.number(),
   cost_quota: z.number(),
   profit_quota: z.number(),

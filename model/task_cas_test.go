@@ -143,7 +143,6 @@ func TestMain(m *testing.M) {
 		&EmployeeCustomerCommissionDailyStat{},
 		&EmployeeCommissionMonthlyStat{},
 		&BusinessStatsAppliedBatch{},
-		&BusinessStatsBackfillLock{},
 		&BusinessDailyStatsCoverage{},
 		&CustomerProfile{},
 		&CustomerQuotaLog{},

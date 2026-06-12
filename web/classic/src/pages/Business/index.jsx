@@ -85,6 +85,7 @@ const PAGE_SIZE = 10;
 const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10;
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8;
 const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20;
+const COMMISSION_CHANNEL_FILTER_PAGE_SIZE = 30;
 const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running';
 const BUSINESS_AMOUNT_DIGITS = 4;
 const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
@@ -2859,6 +2860,11 @@ function CommissionLogsTable({
     enabled: !providedLogs,
   });
   const logs = providedLogs || ownLogs;
+  const [channelOptions, setChannelOptions] = useState([]);
+  const [channelOptionsPage, setChannelOptionsPage] = useState(0);
+  const [channelOptionsTotal, setChannelOptionsTotal] = useState(0);
+  const [channelOptionsLoading, setChannelOptionsLoading] = useState(false);
+  const channelOptionsLoadingRef = useRef(false);
   const [filterForm, setFilterForm] = useState(() => ({
     employee_user_id: filters?.employee_user_id || undefined,
     customer_user_id: filters?.customer_user_id || undefined,
@@ -2894,6 +2900,87 @@ function CommissionLogsTable({
   const updateFilter = (key, value) => {
     setFilterForm((form) => ({ ...form, [key]: value }));
   };
+
+  const loadChannelOptions = useCallback(
+    async (page = 1) => {
+      if (selfView || channelOptionsLoadingRef.current) return;
+      channelOptionsLoadingRef.current = true;
+      setChannelOptionsLoading(true);
+      try {
+        const res = await API.get('/api/admin/employee/commission/channels', {
+          params: {
+            page,
+            page_size: COMMISSION_CHANNEL_FILTER_PAGE_SIZE,
+          },
+          disableDuplicate: true,
+        });
+        const { success, message, data } = res.data || {};
+        if (!success) {
+          showError(message);
+          return;
+        }
+        const nextItems = data?.items || [];
+        setChannelOptions((prev) => {
+          const base = page === 1 ? [] : prev;
+          const existingIds = new Set(base.map((item) => item.channel_id));
+          return [
+            ...base,
+            ...nextItems.filter((item) => !existingIds.has(item.channel_id)),
+          ];
+        });
+        setChannelOptionsPage(data?.page || page);
+        setChannelOptionsTotal(data?.total || 0);
+      } catch (error) {
+        showError(error?.message || 'Request failed');
+      } finally {
+        channelOptionsLoadingRef.current = false;
+        setChannelOptionsLoading(false);
+      }
+    },
+    [selfView],
+  );
+
+  useEffect(() => {
+    if (!selfView) {
+      loadChannelOptions(1);
+    }
+  }, [loadChannelOptions, selfView]);
+
+  const channelOptionList = useMemo(
+    () => [
+      { label: t('全部渠道'), value: 'all' },
+      ...channelOptions.map((item) => {
+        const name =
+          item.channel_name || t('已删除渠道 #{{id}}', { id: item.channel_id });
+        return {
+          label: `${name} #${item.channel_id}${item.deleted ? ` (${t('已删除')})` : ''}`,
+          value: String(item.channel_id),
+        };
+      }),
+      ...(channelOptionsLoading
+        ? [{ label: t('加载中...'), value: '__loading__', disabled: true }]
+        : []),
+    ],
+    [channelOptions, channelOptionsLoading, t],
+  );
+
+  const handleChannelOptionsScroll = useCallback(
+    (event) => {
+      const list = event.currentTarget;
+      const distanceToBottom =
+        list.scrollHeight - list.scrollTop - list.clientHeight;
+      const hasMore = channelOptions.length < channelOptionsTotal;
+      if (distanceToBottom > 48 || !hasMore || channelOptionsLoading) return;
+      loadChannelOptions(channelOptionsPage + 1);
+    },
+    [
+      channelOptions.length,
+      channelOptionsLoading,
+      channelOptionsPage,
+      channelOptionsTotal,
+      loadChannelOptions,
+    ],
+  );
 
   const applyFilters = () => {
     const [start, end] = Array.isArray(filterForm.date_range)
@@ -2939,6 +3026,39 @@ function CommissionLogsTable({
       : [
           { title: t('员工 UID'), dataIndex: 'employee_user_id', width: 110 },
           { title: t('客户 UID'), dataIndex: 'customer_user_id', width: 110 },
+          {
+            title: t('消费日志 ID'),
+            dataIndex: 'log_id',
+            render: (value) => value || '-',
+            width: 120,
+          },
+          {
+            title: t('渠道'),
+            dataIndex: 'channel_name',
+            render: (value, record) => value || `#${record.channel_id}`,
+            width: 140,
+          },
+          {
+            title: t('Cost Ratio'),
+            dataIndex: 'cost_ratio',
+            render: (value) => Number(value || 0).toFixed(4),
+            width: 120,
+          },
+          {
+            title: t('分组倍率'),
+            dataIndex: 'group_ratio',
+            render: (value, record) => (
+              <Space spacing={4}>
+                <span>{Number(value || 0).toFixed(4)}</span>
+                {Number(value || 0) < Number(record.cost_ratio || 0) ? (
+                  <Tag color='red' size='small'>
+                    {t('低于成本系数')}
+                  </Tag>
+                ) : null}
+              </Space>
+            ),
+            width: 180,
+          },
         ]),
     {
       title: t('模型'),
@@ -3012,14 +3132,27 @@ function CommissionLogsTable({
             onChange={(value) => updateFilter('model_name', value)}
             style={{ width: 180 }}
           />
-          <InputNumber
+          <Select
             size='small'
-            min={0}
-            hideButtons
-            placeholder={t('渠道 ID')}
-            value={filterForm.channel_id}
-            onChange={(value) => updateFilter('channel_id', value)}
-            style={{ width: 110 }}
+            placeholder={t('渠道')}
+            value={
+              filterForm.channel_id ? String(filterForm.channel_id) : 'all'
+            }
+            onChange={(value) => {
+              if (value === '__loading__') return;
+              updateFilter(
+                'channel_id',
+                value && value !== 'all' ? Number(value) : undefined,
+              );
+            }}
+            onDropdownVisibleChange={(visible) => {
+              if (visible && channelOptions.length === 0) {
+                loadChannelOptions(1);
+              }
+            }}
+            onListScroll={handleChannelOptionsScroll}
+            style={{ width: 220 }}
+            optionList={channelOptionList}
           />
           <Select
             size='small'
@@ -5146,7 +5279,7 @@ export function BusinessOverview() {
                   {showBackfillRunning
                     ? t('正在回填历史数据')
                     : t(
-                        '',
+                        '检测到历史成本数据尚未迁移，迁移后可获得更准确的统计，数据截止昨天，今天的数据需要明天在进行迁移',
                       )}
                 </Text>
                 {!showBackfillRunning ? (

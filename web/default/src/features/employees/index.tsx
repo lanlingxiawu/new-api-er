@@ -54,6 +54,7 @@ import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -87,6 +88,7 @@ import {
   deleteEmployeeTier,
   getEmployeeCustomers,
   getCommissionCalendarStats,
+  getCommissionChannelOptions,
   getCommissionLogs,
   getEmployeeTiers,
   getEmployeeTiersPage,
@@ -112,6 +114,7 @@ import type {
 const ASSIGN_USER_PICKER_PAGE_SIZE = 20
 const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20
 const EMPLOYEE_CUSTOMERS_PAGE_SIZE = 8
+const COMMISSION_CHANNEL_FILTER_PAGE_SIZE = 30
 const DEFAULT_TIER_GROUP = '通用'
 
 function getCustomerLabel(
@@ -1435,6 +1438,55 @@ function useCommissionLogColumns() {
         ),
       },
       {
+        accessorKey: 'log_id',
+        meta: { label: t('Log ID') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Log ID')} />
+        ),
+        cell: ({ row }) => row.original.log_id ?? '-',
+      },
+      {
+        accessorKey: 'channel_id',
+        meta: { label: t('Channel') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Channel')} />
+        ),
+        cell: ({ row }) => (
+          <span className='block max-w-[140px] truncate text-xs'>
+            {row.original.channel_name || `#${row.original.channel_id}`}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'cost_ratio',
+        meta: { label: t('Cost Ratio') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Cost Ratio')} />
+        ),
+        cell: ({ row }) => row.original.cost_ratio.toFixed(4),
+      },
+      {
+        accessorKey: 'group_ratio',
+        meta: { label: t('Group Ratio') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Group Ratio')} />
+        ),
+        cell: ({ row }) => {
+          const belowCostRatio =
+            row.original.group_ratio < row.original.cost_ratio
+          return (
+            <div className='flex min-w-0 items-center gap-1.5'>
+              <span className='tabular-nums'>
+                {row.original.group_ratio.toFixed(4)}
+              </span>
+              {belowCostRatio ? (
+                <Badge variant='destructive'>{t('Below cost ratio')}</Badge>
+              ) : null}
+            </div>
+          )
+        },
+      },
+      {
         accessorKey: 'revenue_quota',
         meta: { label: t('Revenue') },
         header: ({ column }) => (
@@ -1809,6 +1861,55 @@ function CommissionLogsTab() {
       }),
   })
 
+  // 渠道下拉选项（含已删除渠道的历史名称）
+  const {
+    data: channelOptionsData,
+    fetchNextPage: fetchNextChannelOptionsPage,
+    hasNextPage: hasNextChannelOptionsPage,
+    isFetching: isFetchingChannelOptions,
+    isFetchingNextPage: isFetchingNextChannelOptionsPage,
+  } = useInfiniteQuery({
+    queryKey: ['admin-commission-channel-options'],
+    queryFn: ({ pageParam }) =>
+      getCommissionChannelOptions({
+        page: Number(pageParam),
+        page_size: COMMISSION_CHANNEL_FILTER_PAGE_SIZE,
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const page = lastPage.data?.page ?? 1
+      const pageSize =
+        lastPage.data?.page_size ?? COMMISSION_CHANNEL_FILTER_PAGE_SIZE
+      const total = lastPage.data?.total ?? 0
+      return page * pageSize < total ? page + 1 : undefined
+    },
+    staleTime: 60 * 1000,
+  })
+  const channelOptions = useMemo(() => {
+    const all =
+      channelOptionsData?.pages.flatMap((page) => page.data?.items ?? []) ?? []
+    const existing = new Set<number>()
+    return all.filter((channel) => {
+      if (existing.has(channel.channel_id)) return false
+      existing.add(channel.channel_id)
+      return true
+    })
+  }, [channelOptionsData])
+
+  const handleChannelOptionsScroll = (event: UIEvent<HTMLDivElement>) => {
+    const list = event.currentTarget
+    const distanceToBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    if (
+      distanceToBottom > 48 ||
+      !hasNextChannelOptionsPage ||
+      isFetchingNextChannelOptionsPage
+    ) {
+      return
+    }
+    void fetchNextChannelOptionsPage()
+  }
+
   const applyFilters = () => {
     const employeeUserId = Number(filterForm.employeeUserId)
     const customerUserId = Number(filterForm.customerUserId)
@@ -1911,19 +2012,48 @@ function CommissionLogsTab() {
             }
             className='w-[160px]'
           />
-          <Input
-            type='number'
-            min={1}
-            placeholder={t('Channel ID')}
-            value={filterForm.channelId}
-            onChange={(event) =>
+          <Select
+            value={filterForm.channelId || 'all'}
+            onValueChange={(value) =>
               setFilterForm((form) => ({
                 ...form,
-                channelId: event.target.value,
+                channelId: !value || value === 'all' ? '' : value,
               }))
             }
-            className='w-[112px]'
-          />
+          >
+            <SelectTrigger size='sm' className='w-[200px]'>
+              <SelectValue placeholder={t('Channel')} />
+            </SelectTrigger>
+            <SelectContent onScroll={handleChannelOptionsScroll}>
+              <SelectGroup>
+                <SelectItem value='all'>{t('All channels')}</SelectItem>
+                {channelOptions.map((ch) => (
+                  <SelectItem key={ch.channel_id} value={String(ch.channel_id)}>
+                    <span className='flex items-center gap-1'>
+                      <span className='max-w-[180px] truncate'>
+                        {ch.channel_name || `#${ch.channel_id}`}
+                      </span>
+                      {ch.deleted ? (
+                        <span className='text-muted-foreground text-xs'>
+                          {t('(Deleted)')}
+                        </span>
+                      ) : null}
+                    </span>
+                  </SelectItem>
+                ))}
+                {isFetchingNextChannelOptionsPage ? (
+                  <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+                    {t('Loading...')}
+                  </div>
+                ) : null}
+                {!isFetchingChannelOptions && channelOptions.length === 0 ? (
+                  <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+                    {t('No records')}
+                  </div>
+                ) : null}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           <Select
             value={filterForm.lossStatus}
             onValueChange={(value) =>

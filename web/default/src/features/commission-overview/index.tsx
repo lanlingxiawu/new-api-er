@@ -42,14 +42,11 @@ import {
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getCommissionOverview,
-  triggerBackfill,
   type ChannelProfitStat,
   type EmployeeStat,
 } from './api'
 
 // Range options
-const BUSINESS_STATS_BACKFILL_RUNNING_KEY = 'business_stats_backfill_running'
-
 type RangeKey = '1d' | '7d' | '30d' | '90d' | 'all' | 'custom'
 
 interface OverviewRange {
@@ -366,42 +363,6 @@ export function CommissionOverview() {
   const d = data?.data
   const platform = d?.platform
   const comm = d?.commission
-  const [backfilling, setBackfilling] = useState(false)
-  const [backfillStarted, setBackfillStarted] = useState(() => {
-    if (typeof window === 'undefined') return false
-    return (
-      window.localStorage.getItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY) ===
-      'true'
-    )
-  })
-  const showBackfill = Boolean(d?.needs_backfill)
-  const showBackfillRunning = showBackfill && (backfilling || backfillStarted)
-
-  useEffect(() => {
-    if (!d || d.needs_backfill) return
-    setBackfillStarted(false)
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY)
-    }
-  }, [d?.needs_backfill])
-
-  const handleBackfill = useCallback(async () => {
-    setBackfilling(true)
-    try {
-      await triggerBackfill()
-      setBackfillStarted(true)
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY, 'true')
-      }
-    } catch {
-      setBackfillStarted(false)
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(BUSINESS_STATS_BACKFILL_RUNNING_KEY)
-      }
-    } finally {
-      setBackfilling(false)
-    }
-  }, [])
 
   const rangeButtons: { key: Exclude<RangeKey, 'custom'>; label: string }[] = [
     { key: '1d', label: t('Last 1 day') },
@@ -546,26 +507,6 @@ export function CommissionOverview() {
 
             {!isLoading && d && (
               <>
-                {showBackfill && (
-                  <div className='flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900 dark:bg-amber-950/30'>
-                    <p className='flex-1 text-sm'>
-                      {showBackfillRunning
-                        ? t('Historical data is being backfilled.')
-                        : t(
-                            'Historical cost data needs to be migrated for accurate statistics. This is a one-time operation.'
-                          )}
-                    </p>
-                    {!showBackfillRunning && (
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={handleBackfill}
-                      >
-                        {t('Migrate now')}
-                      </Button>
-                    )}
-                  </div>
-                )}
                 {/* Platform consumption (whole platform) */}
                 <div className='space-y-2'>
                   <SectionTitle

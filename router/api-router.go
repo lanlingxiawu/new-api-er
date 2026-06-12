@@ -206,11 +206,11 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.PUT("/:id", controller.AdminUpdateEmployee)
 			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
 			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
+			employeeAdminRoute.GET("/commission/channels", controller.AdminListCommissionChannelOptions)
 			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionMonthlyStats)
 			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
-			employeeAdminRoute.POST("/overview/backfill", controller.AdminBackfillBusinessStats)
 			// 阶梯提成等级配置
 			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
 			employeeAdminRoute.POST("/tiers", controller.AdminCreateTier)

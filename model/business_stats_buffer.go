@@ -1070,7 +1070,11 @@ func upsertCommissionMonthlyStatTx(tx *gorm.DB, periodStartAt, periodEndAt int64
 // 高并发下避免每笔消费单条 INSERT，攒批后 CreateInBatches + ON CONFLICT DO NOTHING。
 // consumption_costs: 调用方不依赖 inserted，直接缓冲。
 // employee_commission_logs: 调用方依赖 inserted 做后续提成结算，
-//   用 Redis SET(SADD) / 内存 map 对 log_id 做前置去重，保证返回值准确。
+//   用 Redis SETNX / 内存 map 对 log_id 做前置去重，保证返回值准确。
+//
+// 连接占用约束：本层在请求路径上不做任何 DB 访问（Redis 故障时降级为
+// 进程内去重，绝不逐笔直插），所有入库集中在单刷盘协程，峰值占用 1 个连接。
+// 护栏：缓冲条数有上限（超限丢最旧并计数），刷盘失败 requeue + 指数退避。
 // ============================================================================
 
 const (
@@ -1079,13 +1083,63 @@ const (
 	pairedLedgerFlushMaxPerCycle = 1000
 	commissionLogDedupPrefix     = "biz_buf:dedup:commission_log_id:"
 	commissionLogDedupTTL        = 24 * time.Hour
+
+	// ledgerBufMaxEntries 台账内存缓冲条数上限。
+	// DB 长时间故障时缓冲会持续积压，超限后丢弃最旧记录并累加丢弃计数，防止 OOM。
+	ledgerBufMaxEntries = 100000
+	// dedupMemSetMaxEntries 内存去重集合条数上限，超限整体重建。
+	// 重建后的重复缓冲由刷盘侧 ON CONFLICT(log_id) DO NOTHING 兜底，不影响幂等。
+	dedupMemSetMaxEntries = 200000
+	// ledgerFlushBackoffMax 刷盘连续失败的最大退避时长。
+	// 上限刻意取小（关闭流程的最终刷盘也受退避约束，过长会扩大丢数窗口）。
+	ledgerFlushBackoffMax = 30 * time.Second
+)
+
+// ledgerFlushState 单个台账的刷盘失败退避状态。
+// 仅在刷盘协程内访问（调用方持有 businessStatsFlushMu），无需加锁。
+type ledgerFlushState struct {
+	consecFailures int
+	nextRetryAt    time.Time
+}
+
+func (s *ledgerFlushState) canFlush(now time.Time) bool {
+	return !now.Before(s.nextRetryAt)
+}
+
+func (s *ledgerFlushState) onSuccess() {
+	s.consecFailures = 0
+	s.nextRetryAt = time.Time{}
+}
+
+func (s *ledgerFlushState) onFailure(now time.Time) {
+	s.consecFailures++
+	base := time.Duration(common.BusinessStatsFlushInterval) * time.Second
+	if base <= 0 {
+		base = DefaultBusinessStatsFlushInterval * time.Second
+	}
+	shift := s.consecFailures - 1
+	if shift > 4 {
+		shift = 4
+	}
+	backoff := base * time.Duration(1<<uint(shift))
+	if backoff > ledgerFlushBackoffMax {
+		backoff = ledgerFlushBackoffMax
+	}
+	s.nextRetryAt = now.Add(backoff)
+}
+
+var (
+	costLedgerFlushState       ledgerFlushState
+	pairLedgerFlushState       ledgerFlushState
+	commissionLedgerFlushState ledgerFlushState
 )
 
 // ---- consumption_costs 缓冲 ----
 
 var (
-	costLedgerBuf  []*ConsumptionCost
-	costLedgerLock sync.Mutex
+	costLedgerBuf     []*ConsumptionCost
+	costLedgerLock    sync.Mutex
+	costLedgerDropped int64 // 累计因缓冲超限丢弃的条数，guarded by costLedgerLock
 )
 
 type costCommissionLedgerPair struct {
@@ -1096,24 +1150,49 @@ type costCommissionLedgerPair struct {
 var (
 	costCommissionLedgerBuf  []*costCommissionLedgerPair
 	costCommissionLedgerLock sync.Mutex
+	pairLedgerDropped        int64 // 累计因缓冲超限丢弃的条数，guarded by costCommissionLedgerLock
 )
 
 // BufferConsumptionCostRecord 将消费成本记录推入缓冲区，由后台批量入库。
+// 缓冲超限时丢弃最旧记录并计数，防止 DB 长时间故障导致内存无限增长。
 func BufferConsumptionCostRecord(rec *ConsumptionCost) {
 	costLedgerLock.Lock()
 	costLedgerBuf = append(costLedgerBuf, rec)
+	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		costLedgerBuf = costLedgerBuf[over:]
+		costLedgerDropped += int64(over)
+	}
+	costLedgerLock.Unlock()
+}
+
+// requeueCostLedger 刷盘失败时将未入库的记录放回缓冲区头部（保持最旧在前），并执行上限保护。
+func requeueCostLedger(items []*ConsumptionCost) {
+	if len(items) == 0 {
+		return
+	}
+	costLedgerLock.Lock()
+	costLedgerBuf = append(items, costLedgerBuf...)
+	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		costLedgerBuf = costLedgerBuf[over:]
+		costLedgerDropped += int64(over)
+	}
 	costLedgerLock.Unlock()
 }
 
 func flushConsumptionCostLedger() {
+	if !costLedgerFlushState.canFlush(time.Now()) {
+		return
+	}
 	costLedgerLock.Lock()
 	buf := costLedgerBuf
 	costLedgerBuf = nil
+	droppedTotal := costLedgerDropped
 	costLedgerLock.Unlock()
 
 	if len(buf) == 0 {
 		return
 	}
+	start := time.Now()
 	// 分批入库，ON CONFLICT DO NOTHING 保证幂等
 	for i := 0; i < len(buf); i += pairedLedgerFlushBatchSize {
 		end := i + pairedLedgerFlushBatchSize
@@ -1129,9 +1208,15 @@ func flushConsumptionCostLedger() {
 			DoNothing: true,
 		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
+			requeueCostLedger(buf[i:])
+			costLedgerFlushState.onFailure(time.Now())
+			return
 		}
 	}
-	common.SysLog(fmt.Sprintf("flush_business_stats: consumption_costs ledger items=%d", len(buf)))
+	costLedgerFlushState.onSuccess()
+	common.SysLog(fmt.Sprintf("flush_business_stats: consumption_costs ledger items=%d took=%dms dropped_total=%d",
+		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 }
 
 func bufferCostAndCommissionLedger(cost *ConsumptionCost, log *EmployeeCommissionLog) {
@@ -1140,6 +1225,24 @@ func bufferCostAndCommissionLedger(cost *ConsumptionCost, log *EmployeeCommissio
 		Cost:       cost,
 		Commission: log,
 	})
+	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
+		pairLedgerDropped += int64(over)
+	}
+	costCommissionLedgerLock.Unlock()
+}
+
+// requeuePairLedger 刷盘失败时将未入库的成对记录放回缓冲区头部，并执行上限保护。
+func requeuePairLedger(items []*costCommissionLedgerPair) {
+	if len(items) == 0 {
+		return
+	}
+	costCommissionLedgerLock.Lock()
+	costCommissionLedgerBuf = append(items, costCommissionLedgerBuf...)
+	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
+		pairLedgerDropped += int64(over)
+	}
 	costCommissionLedgerLock.Unlock()
 }
 
@@ -1149,6 +1252,14 @@ type pairedFlushResult struct {
 }
 
 func flushCostAndCommissionLedger() pairedFlushResult {
+	if !pairLedgerFlushState.canFlush(time.Now()) {
+		// 退避期内不刷盘；若仍有积压，须向调用方报告 Failed，
+		// 阻止日统计/员工汇总超前于明细台账（与刷盘失败同语义）。
+		costCommissionLedgerLock.Lock()
+		pending := len(costCommissionLedgerBuf) > 0
+		costCommissionLedgerLock.Unlock()
+		return pairedFlushResult{HadItems: pending, Failed: pending}
+	}
 	costCommissionLedgerLock.Lock()
 	buf := costCommissionLedgerBuf
 	if len(buf) > pairedLedgerFlushMaxPerCycle {
@@ -1157,11 +1268,13 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 	} else {
 		costCommissionLedgerBuf = nil
 	}
+	droppedTotal := pairLedgerDropped
 	costCommissionLedgerLock.Unlock()
 
 	if len(buf) == 0 {
 		return pairedFlushResult{}
 	}
+	start := time.Now()
 	for i := 0; i < len(buf); i += ledgerFlushBatchSize {
 		end := i + ledgerFlushBatchSize
 		if end > len(buf) {
@@ -1194,25 +1307,68 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 			}).CreateInBatches(commissionBatch, pairedLedgerFlushBatchSize).Error
 		}); err != nil {
 			common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
-			costCommissionLedgerLock.Lock()
-			costCommissionLedgerBuf = append(buf[i:], costCommissionLedgerBuf...)
-			costCommissionLedgerLock.Unlock()
+			requeuePairLedger(buf[i:])
+			pairLedgerFlushState.onFailure(time.Now())
 			return pairedFlushResult{HadItems: true, Failed: true}
 		}
 	}
-	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d", len(buf)))
+	pairLedgerFlushState.onSuccess()
+	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d took=%dms dropped_total=%d",
+		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 	return pairedFlushResult{HadItems: true, Failed: false}
 }
 
 // ---- employee_commission_logs 缓冲 ----
 
 var (
-	commissionLedgerBuf  []*EmployeeCommissionLog
-	commissionLedgerLock sync.Mutex
-	// 内存去重集合（无 Redis 时使用），存 log_id
+	commissionLedgerBuf     []*EmployeeCommissionLog
+	commissionLedgerLock    sync.Mutex
+	commissionLedgerDropped int64 // 累计因缓冲超限丢弃的条数，guarded by commissionLedgerLock
+	// 内存去重集合（无 Redis 或 Redis 故障降级时使用），存 log_id
 	commissionLogIdSet     = make(map[int]struct{})
 	commissionLogIdSetLock sync.Mutex
 )
+
+// memDedupCommissionLogId 进程内 log_id 去重，返回 true 表示首次出现。
+// 集合超限时整体重建——重建后可能产生重复缓冲，
+// 幂等性由刷盘侧 ON CONFLICT(log_id) DO NOTHING 兜底，不会重复入库。
+func memDedupCommissionLogId(logId int) bool {
+	commissionLogIdSetLock.Lock()
+	defer commissionLogIdSetLock.Unlock()
+	if _, exists := commissionLogIdSet[logId]; exists {
+		return false
+	}
+	if len(commissionLogIdSet) >= dedupMemSetMaxEntries {
+		commissionLogIdSet = make(map[int]struct{})
+	}
+	commissionLogIdSet[logId] = struct{}{}
+	return true
+}
+
+// appendCommissionLedger 入缓冲并执行上限保护。
+func appendCommissionLedger(log *EmployeeCommissionLog) {
+	commissionLedgerLock.Lock()
+	commissionLedgerBuf = append(commissionLedgerBuf, log)
+	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		commissionLedgerBuf = commissionLedgerBuf[over:]
+		commissionLedgerDropped += int64(over)
+	}
+	commissionLedgerLock.Unlock()
+}
+
+// requeueCommissionLedger 刷盘失败时将未入库的记录放回缓冲区头部，并执行上限保护。
+func requeueCommissionLedger(items []*EmployeeCommissionLog) {
+	if len(items) == 0 {
+		return
+	}
+	commissionLedgerLock.Lock()
+	commissionLedgerBuf = append(items, commissionLedgerBuf...)
+	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+		commissionLedgerBuf = commissionLedgerBuf[over:]
+		commissionLedgerDropped += int64(over)
+	}
+	commissionLedgerLock.Unlock()
+}
 
 // CheckAndBufferCommissionLog 检查 log_id 是否重复，若不重复则推入缓冲区。
 // 返回 inserted=true 表示首次写入（调用方据此执行后续提成结算）。
@@ -1221,9 +1377,7 @@ func CheckAndBufferCommissionLog(log *EmployeeCommissionLog) (inserted bool) {
 	// 无 log_id 的记录没有幂等约束，直接入缓冲
 	if log.LogId == nil || *log.LogId <= 0 {
 		log.LogId = nil
-		commissionLedgerLock.Lock()
-		commissionLedgerBuf = append(commissionLedgerBuf, log)
-		commissionLedgerLock.Unlock()
+		appendCommissionLedger(log)
 		return true
 	}
 	logId := *log.LogId
@@ -1235,25 +1389,25 @@ func CheckAndBufferCommissionLog(log *EmployeeCommissionLog) (inserted bool) {
 		added, err := common.RDB.SetNX(ctx, key, "1", commissionLogDedupTTL).Result()
 		if err != nil {
 			common.SysError("CheckAndBufferCommissionLog: redis SETNX error: " + err.Error())
-			// Redis 故障时回退到 DB 直接插入
-			return directInsertCommissionLog(log)
+			// Redis 故障降级：进程内去重 + 照常入缓冲。
+			// 不再逐笔直插 DB——故障期间高并发直插会放大 DB 连接占用；
+			// 幂等性由刷盘侧 ON CONFLICT(log_id) DO NOTHING 兜底。
+			if !memDedupCommissionLogId(logId) {
+				return false
+			}
+			appendCommissionLedger(log)
+			return true
 		}
 		if !added {
 			return false // 已存在，重复
 		}
 	} else {
-		commissionLogIdSetLock.Lock()
-		if _, exists := commissionLogIdSet[logId]; exists {
-			commissionLogIdSetLock.Unlock()
+		if !memDedupCommissionLogId(logId) {
 			return false
 		}
-		commissionLogIdSet[logId] = struct{}{}
-		commissionLogIdSetLock.Unlock()
 	}
 
-	commissionLedgerLock.Lock()
-	commissionLedgerBuf = append(commissionLedgerBuf, log)
-	commissionLedgerLock.Unlock()
+	appendCommissionLedger(log)
 	return true
 }
 
@@ -1277,76 +1431,40 @@ func CheckAndBufferCostAndCommission(cost *ConsumptionCost, log *EmployeeCommiss
 		added, err := common.RDB.SetNX(ctx, key, "1", commissionLogDedupTTL).Result()
 		if err != nil {
 			common.SysError("CheckAndBufferCostAndCommission: redis SETNX error: " + err.Error())
-			return directInsertCostAndCommission(cost, log)
+			// Redis 故障降级：进程内去重 + 照常入缓冲（见 CheckAndBufferCommissionLog 同款说明）。
+			if !memDedupCommissionLogId(logId) {
+				return false
+			}
+			bufferCostAndCommissionLedger(cost, log)
+			return true
 		}
 		if !added {
 			return false
 		}
 	} else {
-		commissionLogIdSetLock.Lock()
-		if _, exists := commissionLogIdSet[logId]; exists {
-			commissionLogIdSetLock.Unlock()
+		if !memDedupCommissionLogId(logId) {
 			return false
 		}
-		commissionLogIdSet[logId] = struct{}{}
-		commissionLogIdSetLock.Unlock()
 	}
 
 	bufferCostAndCommissionLedger(cost, log)
 	return true
 }
 
-// directInsertCommissionLog Redis 故障时回退：直接单条入库。
-func directInsertCommissionLog(log *EmployeeCommissionLog) bool {
-	result := DB.Select(
-		"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
-		"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
-		"CostRatio", "GroupRatio", "CreatedAt",
-	).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "log_id"}},
-		DoNothing: true,
-	}).Create(log)
-	return result.Error == nil && result.RowsAffected > 0
-}
-
-func directInsertCostAndCommission(cost *ConsumptionCost, log *EmployeeCommissionLog) bool {
-	inserted := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Select(
-			"LogId", "UserId", "ChannelId", "GroupName", "ModelName",
-			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).Create(cost).Error; err != nil {
-			return err
-		}
-		result := tx.Select(
-			"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
-			"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
-			"CostRatio", "GroupRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).Create(log)
-		if result.Error != nil {
-			return result.Error
-		}
-		inserted = result.RowsAffected > 0
-		return nil
-	})
-	return err == nil && inserted
-}
-
 func flushCommissionLogLedger() {
+	if !commissionLedgerFlushState.canFlush(time.Now()) {
+		return
+	}
 	commissionLedgerLock.Lock()
 	buf := commissionLedgerBuf
 	commissionLedgerBuf = nil
+	droppedTotal := commissionLedgerDropped
 	commissionLedgerLock.Unlock()
 
 	if len(buf) == 0 {
 		return
 	}
+	start := time.Now()
 	for i := 0; i < len(buf); i += ledgerFlushBatchSize {
 		end := i + ledgerFlushBatchSize
 		if end > len(buf) {
@@ -1362,9 +1480,15 @@ func flushCommissionLogLedger() {
 			DoNothing: true,
 		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushCommissionLogLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
+			requeueCommissionLedger(buf[i:])
+			commissionLedgerFlushState.onFailure(time.Now())
+			return
 		}
 	}
-	common.SysLog(fmt.Sprintf("flush_business_stats: commission_logs ledger items=%d", len(buf)))
+	commissionLedgerFlushState.onSuccess()
+	common.SysLog(fmt.Sprintf("flush_business_stats: commission_logs ledger items=%d took=%dms dropped_total=%d",
+		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 }
 
 // ============================================================================

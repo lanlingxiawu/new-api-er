@@ -59,12 +59,6 @@ export interface OverviewData {
   by_channel_platform_total?: number
   by_channel_platform_page?: number
   by_channel_platform_page_size?: number
-  needs_backfill?: boolean
-}
-
-export async function triggerBackfill(): Promise<{ success: boolean; message?: string }> {
-  const res = await api.post('/api/admin/employee/overview/backfill')
-  return res.data
 }
 
 export interface OverviewResponse {

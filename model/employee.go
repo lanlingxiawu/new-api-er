@@ -52,8 +52,8 @@ type ChannelCostConfig struct {
 type EmployeeCommissionLog struct {
 	Id             int `json:"id"`
 	EmployeeId     int `json:"employee_id" gorm:"index;not null"`
-	EmployeeUserId int `json:"employee_user_id" gorm:"index;index:idx_employee_commission_created_employee,priority:2;not null"`
-	CustomerUserId int `json:"customer_user_id" gorm:"index;not null"`
+	EmployeeUserId int `json:"employee_user_id" gorm:"index;index:idx_employee_commission_created_employee,priority:2;index:idx_employee_commission_created_customer,priority:2;not null"`
+	CustomerUserId int `json:"customer_user_id" gorm:"index;index:idx_employee_commission_created_customer,priority:3;not null"`
 	// log_id 关联 logs.id，唯一约束用于提成幂等：同一笔消费日志只会产生一条提成记录，
 	// 避免上层结算重试导致重复计提。
 	LogId           *int    `json:"log_id" gorm:"uniqueIndex"`
@@ -69,7 +69,7 @@ type EmployeeCommissionLog struct {
 	// settle_status: 0=待结算 1=已结算 2=已撤销（v2 实现结算功能）
 	SettleStatus int   `json:"settle_status" gorm:"default:0"`
 	SettledAt    int64 `json:"settled_at" gorm:"default:0"`
-	CreatedAt    int64 `json:"created_at" gorm:"autoCreateTime;index;index:idx_employee_commission_created_employee,priority:1;index:idx_employee_commission_created_channel,priority:1"`
+	CreatedAt    int64 `json:"created_at" gorm:"autoCreateTime;index;index:idx_employee_commission_created_employee,priority:1;index:idx_employee_commission_created_channel,priority:1;index:idx_employee_commission_created_customer,priority:1"`
 }
 
 // ============================================================================
@@ -707,7 +707,6 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		return &CommissionCalendarStats{Days: []*CommissionCalendarDayStat{}}, nil
 	}
 	period := ResolveCommissionMonthlyPeriod(startTime)
-	loc, _ := commissionMonthlyStatLocation(period.Timezone)
 	boundaryAt := period.PeriodEndAt + 1
 	stats := &CommissionCalendarStats{
 		Days:             make([]*CommissionCalendarDayStat, 0),
@@ -718,51 +717,59 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		Timezone:         period.Timezone,
 	}
 
-	dayStats := make(map[string]*CommissionCalendarDayStat)
-	tx := DB.Model(&EmployeeCommissionLog{}).
-		Select("id, created_at, revenue_quota, cost_quota, profit_quota, commission_quota").
-		Where("created_at >= ? AND created_at < ?", period.PeriodStartAt, boundaryAt).
-		Order("id ASC")
-	if employeeUserId > 0 {
-		tx = tx.Where("employee_user_id = ?", employeeUserId)
-	}
+	// 员工数 × 31 行（月度统计不要求明细级精确）：
+	// 1. 天桶按 UTC 日划分（写入侧 unixDayStart 语义），与提成时区的本地日
+	//    可能相差一个时区偏移；Date 标签按 UTC 日期格式化，与桶语义一致。
+	// 2. 周期起止落在某 UTC 日中间时，该边界日的数值包含周期外的同日记录。
+	// 3. 数据新鲜度 = 业务统计刷盘间隔（默认 5 秒）。
+	statDateStart := unixDayStart(period.PeriodStartAt)
+	statDateEnd := unixDayStart(period.PeriodEndAt)
 
-	type calendarLogRow struct {
-		Id              int
-		CreatedAt       int64
+	type calendarDailyRow struct {
+		StatDate        int64
 		RevenueQuota    int64
 		CostQuota       int64
 		ProfitQuota     int64
 		CommissionQuota int64
+		RecordCount     int64
 	}
-	var rows []calendarLogRow
-	if err := tx.FindInBatches(&rows, 1000, func(batchTx *gorm.DB, batch int) error {
-		for _, r := range rows {
-			local := time.Unix(r.CreatedAt, 0).In(loc)
-			date := local.Format("2006-01-02")
-			day := dayStats[date]
-			if day == nil {
-				localDayStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-				day = &CommissionCalendarDayStat{
-					StatDate: localDayStart.Unix(),
-					Date:     date,
-				}
-				dayStats[date] = day
-			}
-			day.RevenueQuota += r.RevenueQuota
-			day.CostQuota += r.CostQuota
-			day.ProfitQuota += r.ProfitQuota
-			day.CommissionQuota += r.CommissionQuota
-			day.RecordCount++
-			stats.Summary.RevenueQuota += r.RevenueQuota
-			stats.Summary.CostQuota += r.CostQuota
-			stats.Summary.ProfitQuota += r.ProfitQuota
-			stats.Summary.CommissionQuota += r.CommissionQuota
-			stats.Summary.RecordCount++
-		}
-		return nil
-	}).Error; err != nil {
+	tx := DB.Model(&EmployeeCommissionDailyStat{}).
+		Select("stat_date, " +
+			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, " +
+			"COALESCE(SUM(cost_quota),0) AS cost_quota, " +
+			"COALESCE(SUM(profit_quota),0) AS profit_quota, " +
+			"COALESCE(SUM(commission_quota),0) AS commission_quota, " +
+			"COALESCE(SUM(record_count),0) AS record_count").
+		Where("stat_date >= ? AND stat_date <= ?", statDateStart, statDateEnd)
+	if employeeUserId > 0 {
+		tx = tx.Where("employee_user_id = ?", employeeUserId)
+	}
+	var aggRows []calendarDailyRow
+	if err := tx.Group("stat_date").Scan(&aggRows).Error; err != nil {
 		return nil, err
+	}
+
+	dayStats := make(map[string]*CommissionCalendarDayStat, len(aggRows))
+	for _, r := range aggRows {
+		date := time.Unix(r.StatDate, 0).UTC().Format("2006-01-02")
+		day := dayStats[date]
+		if day == nil {
+			day = &CommissionCalendarDayStat{
+				StatDate: r.StatDate,
+				Date:     date,
+			}
+			dayStats[date] = day
+		}
+		day.RevenueQuota += r.RevenueQuota
+		day.CostQuota += r.CostQuota
+		day.ProfitQuota += r.ProfitQuota
+		day.CommissionQuota += r.CommissionQuota
+		day.RecordCount += r.RecordCount
+		stats.Summary.RevenueQuota += r.RevenueQuota
+		stats.Summary.CostQuota += r.CostQuota
+		stats.Summary.ProfitQuota += r.ProfitQuota
+		stats.Summary.CommissionQuota += r.CommissionQuota
+		stats.Summary.RecordCount += r.RecordCount
 	}
 
 	for _, day := range dayStats {
