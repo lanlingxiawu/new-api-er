@@ -30,6 +30,8 @@ import type { UsageLog } from './data/schema'
  */
 export type LogCategory = 'common' | 'drawing' | 'task'
 
+export type LogsScope = 'admin' | 'employee' | 'self'
+
 // ============================================================================
 // Filter Types
 // ============================================================================
@@ -51,6 +53,7 @@ export interface CommonLogFilters extends CommonFilters {
   token?: string
   group?: string
   username?: string
+  customerUserId?: string
   requestId?: string
   upstreamRequestId?: string
 }
@@ -266,6 +269,7 @@ export interface GetLogsParams {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
+  customer_user_id?: number
   group?: string
   request_id?: string
   upstream_request_id?: string
@@ -290,6 +294,7 @@ export interface GetLogStatsParams {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
+  customer_user_id?: number
   group?: string
   request_id?: string
   upstream_request_id?: string
@@ -336,7 +341,7 @@ export interface GetTaskLogsParams {
  */
 export interface FetchLogsConfig {
   logCategory: LogCategory
-  isAdmin: boolean
+  scope: LogsScope
   page: number
   pageSize: number
   searchParams: Record<string, unknown>

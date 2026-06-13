@@ -32,6 +32,7 @@ const LogsFilters = ({
   setLogType,
   loading,
   isAdminUser,
+  logScope,
   t,
 }) => {
   return (
@@ -120,6 +121,16 @@ const LogsFilters = ({
                 pure
                 size='small'
               />
+              {logScope === 'employee' && (
+                <Form.Input
+                  field='customer_user_id'
+                  prefix={<IconSearch />}
+                  placeholder={t('Customer User ID')}
+                  showClear
+                  pure
+                  size='small'
+                />
+              )}
             </>
           )}
         </div>

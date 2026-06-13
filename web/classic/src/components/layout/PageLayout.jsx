@@ -89,11 +89,29 @@ const PageLayout = () => {
     }
   }, [isMobile, drawerOpen, collapsed, setCollapsed]);
 
+  const applyUser = (data) => {
+    localStorage.setItem('user', JSON.stringify(data));
+    userDispatch({ type: 'login', payload: data });
+  };
+
   const loadUser = () => {
     let user = localStorage.getItem('user');
     if (user) {
       let data = JSON.parse(user);
       userDispatch({ type: 'login', payload: data });
+    }
+  };
+
+  const refreshUser = async () => {
+    if (!localStorage.getItem('user')) return;
+    try {
+      const res = await API.get('/api/user/self');
+      const { success, data } = res.data;
+      if (success && data) {
+        applyUser(data);
+      }
+    } catch (error) {
+      // Keep the cached user; API interceptors handle expired sessions.
     }
   };
 
@@ -114,6 +132,7 @@ const PageLayout = () => {
 
   useEffect(() => {
     loadUser();
+    refreshUser().catch(console.error);
     loadStatus().catch(console.error);
     let systemName = getSystemName();
     if (systemName) {

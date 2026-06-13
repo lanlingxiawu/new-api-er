@@ -17,13 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
   API,
   getTodayStartTimestamp,
   isAdmin,
+  isEmployee,
   showError,
   showSuccess,
   timestamp2string,
@@ -40,11 +41,13 @@ import {
   renderTaskBillingProcess,
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
+import { UserContext } from '../../context/User';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
 
 export const useLogsData = () => {
   const { t } = useTranslation();
+  const [userState] = useContext(UserContext);
 
   // Define column keys for selection
   const COLUMN_KEYS = {
@@ -76,14 +79,27 @@ export const useLogsData = () => {
   const [logType, setLogType] = useState(0);
 
   // User and admin
-  const isAdminUser = isAdmin();
+  const canUseAdminActions = isAdmin();
+  const isEmployeeUser = Boolean(userState?.user?.is_employee) || isEmployee();
+  const logScope = canUseAdminActions
+    ? 'admin'
+    : isEmployeeUser
+      ? 'employee'
+      : 'self';
+  const isAdminUser = logScope !== 'self';
   // Role-specific storage key to prevent different roles from overwriting each other
-  const STORAGE_KEY = isAdminUser
+  const STORAGE_KEY =
+    logScope === 'admin'
     ? 'logs-table-columns-admin'
-    : 'logs-table-columns-user';
-  const BILLING_DISPLAY_MODE_STORAGE_KEY = isAdminUser
+      : logScope === 'employee'
+        ? 'logs-table-columns-employee'
+        : 'logs-table-columns-user';
+  const BILLING_DISPLAY_MODE_STORAGE_KEY =
+    logScope === 'admin'
     ? 'logs-billing-display-mode-admin'
-    : 'logs-billing-display-mode-user';
+      : logScope === 'employee'
+        ? 'logs-billing-display-mode-employee'
+        : 'logs-billing-display-mode-user';
 
   // Statistics state
   const [stat, setStat] = useState({
@@ -101,6 +117,7 @@ export const useLogsData = () => {
     channel: '',
     group: '',
     request_id: '',
+    customer_user_id: '',
     dateRange: [
       timestamp2string(getTodayStartTimestamp()),
       timestamp2string(now.getTime() / 1000 + 3600),
@@ -250,6 +267,7 @@ export const useLogsData = () => {
 
     return {
       username: formValues.username || '',
+      customer_user_id: formValues.customer_user_id || '',
       token_name: formValues.token_name || '',
       model_name: formValues.model_name || '',
       start_timestamp,
@@ -275,6 +293,32 @@ export const useLogsData = () => {
     let localStartTimestamp = Date.parse(start_timestamp) / 1000;
     let localEndTimestamp = Date.parse(end_timestamp) / 1000;
     let url = `/api/log/self/stat?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}`;
+    url = encodeURI(url);
+    let res = await API.get(url);
+    const { success, message, data } = res.data;
+    if (success) {
+      setStat(data);
+    } else {
+      showError(message);
+    }
+  };
+
+  const getLogEmployeeStat = async () => {
+    const {
+      username,
+      customer_user_id,
+      token_name,
+      model_name,
+      start_timestamp,
+      end_timestamp,
+      channel,
+      group,
+      logType: formLogType,
+    } = getFormValues();
+    const currentLogType = formLogType !== undefined ? formLogType : logType;
+    let localStartTimestamp = Date.parse(start_timestamp) / 1000;
+    let localEndTimestamp = Date.parse(end_timestamp) / 1000;
+    let url = `/api/log/employee/stat?type=${currentLogType}&username=${username}&customer_user_id=${customer_user_id}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}`;
     url = encodeURI(url);
     let res = await API.get(url);
     const { success, message, data } = res.data;
@@ -315,8 +359,10 @@ export const useLogsData = () => {
       return;
     }
     setLoadingStat(true);
-    if (isAdminUser) {
+    if (logScope === 'admin') {
       await getLogStat();
+    } else if (logScope === 'employee') {
+      await getLogEmployeeStat();
     } else {
       await getLogSelfStat();
     }
@@ -326,7 +372,7 @@ export const useLogsData = () => {
 
   // User info function
   const showUserInfoFunc = async (userId) => {
-    if (!isAdminUser) {
+    if (!canUseAdminActions) {
       return;
     }
     const res = await API.get(`/api/user/${userId}`);
@@ -340,6 +386,9 @@ export const useLogsData = () => {
   };
 
   const openChannelAffinityUsageCacheModal = (affinity) => {
+    if (!canUseAdminActions) {
+      return;
+    }
     const a = affinity || {};
     setChannelAffinityUsageCacheTarget({
       rule_name: a.rule_name || a.reason || '',
@@ -732,6 +781,7 @@ export const useLogsData = () => {
     let url = '';
     const {
       username,
+      customer_user_id,
       token_name,
       model_name,
       start_timestamp,
@@ -751,8 +801,10 @@ export const useLogsData = () => {
 
     let localStartTimestamp = Date.parse(start_timestamp) / 1000;
     let localEndTimestamp = Date.parse(end_timestamp) / 1000;
-    if (isAdminUser) {
+    if (logScope === 'admin') {
       url = `/api/log/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}&request_id=${request_id}`;
+    } else if (logScope === 'employee') {
+      url = `/api/log/employee?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&username=${username}&customer_user_id=${customer_user_id}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}&request_id=${request_id}`;
     } else {
       url = `/api/log/self/?p=${startIdx}&page_size=${pageSize}&type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}&request_id=${request_id}`;
     }
@@ -782,7 +834,7 @@ export const useLogsData = () => {
     localStorage.setItem('page-size', size + '');
     setPageSize(size);
     setActivePage(1);
-    loadLogs(activePage, size)
+    loadLogs(1, size)
       .then()
       .catch((reason) => {
         showError(reason);
@@ -811,19 +863,20 @@ export const useLogsData = () => {
     const localPageSize =
       parseInt(localStorage.getItem('page-size')) || ITEMS_PER_PAGE;
     setPageSize(localPageSize);
-    loadLogs(activePage, localPageSize)
+    setActivePage(1);
+    loadLogs(1, localPageSize)
       .then()
       .catch((reason) => {
         showError(reason);
       });
-  }, []);
+  }, [logScope]);
 
   // Initialize statistics when formApi is available
   useEffect(() => {
     if (formApi) {
       handleEyeClick();
     }
-  }, [formApi]);
+  }, [formApi, logScope]);
 
   // Check if any record has expandable content
   const hasExpandableRows = () => {
@@ -845,6 +898,8 @@ export const useLogsData = () => {
     logType,
     stat,
     isAdminUser,
+    canUseAdminActions,
+    logScope,
 
     // Form state
     formApi,

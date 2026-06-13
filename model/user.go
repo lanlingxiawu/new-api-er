@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -412,11 +413,15 @@ func UpdateUserRemark(userId int, remark string) error {
 }
 
 func GetUsersByIdsUnscoped(ids []int) (map[int]*User, error) {
+	return GetUsersByIdsUnscopedWithContext(context.Background(), ids)
+}
+
+func GetUsersByIdsUnscopedWithContext(ctx context.Context, ids []int) (map[int]*User, error) {
 	if len(ids) == 0 {
 		return map[int]*User{}, nil
 	}
 	var users []*User
-	err := DB.Unscoped().Select("id, username, display_name").Where("id IN ?", ids).Find(&users).Error
+	err := DB.WithContext(safeDBContext(ctx)).Unscoped().Select("id, username, display_name").Where("id IN ?", ids).Find(&users).Error
 	if err != nil {
 		return nil, err
 	}

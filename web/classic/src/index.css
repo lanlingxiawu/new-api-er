@@ -967,6 +967,18 @@ html.dark .with-pastel-balls::before {
   overflow-y: auto;
 }
 
+.table-scroll-card .semi-card-body > .sticky,
+.table-scroll-card .semi-card-body > .business-sticky-filter {
+  background-color: var(--semi-color-bg-2);
+}
+
+.business-sticky-filter {
+  top: -10px;
+  margin: 0 -10px 12px;
+  padding: 10px 10px 12px;
+  border-bottom: 1px solid var(--semi-color-border);
+}
+
 .table-scroll-card .semi-card-body::-webkit-scrollbar {
   width: 6px;
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -1111,6 +1112,10 @@ func GetChannelsByIds(ids []int) ([]*Channel, error) {
 }
 
 func GetChannelNamesByIds(ids []int) (map[int]string, error) {
+	return GetChannelNamesByIdsWithContext(context.Background(), ids)
+}
+
+func GetChannelNamesByIdsWithContext(ctx context.Context, ids []int) (map[int]string, error) {
 	result := make(map[int]string, len(ids))
 	if len(ids) == 0 {
 		return result, nil
@@ -1120,7 +1125,7 @@ func GetChannelNamesByIds(ids []int) (map[int]string, error) {
 		Name string
 	}
 	// Unscoped: 已删除渠道的历史消费数据仍需显示渠道名
-	err := DB.Unscoped().Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Scan(&rows).Error
+	err := DB.WithContext(safeDBContext(ctx)).Unscoped().Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

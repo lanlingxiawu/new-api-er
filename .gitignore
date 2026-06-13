@@ -41,3 +41,10 @@ certs
 *.log
 tmp/
 
+AGENTS.md
+CLAUDE.md
+/.tmp-go-cache
+/test
+/docs
+/.agents
+

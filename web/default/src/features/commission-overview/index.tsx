@@ -574,9 +574,20 @@ export function CommissionOverview() {
 
                 <BusinessSection
                   title={t('Channel Profit (platform-wide)')}
-                  description={t(
-                    'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
-                  )}
+                  description={
+                    <>
+                      {t(
+                        'Cost and profit are estimated from per-group ratios and per-channel cost ratios.'
+                      )}
+                      {(platform?.loss_channel_count ?? 0) > 0 ? (
+                        <span className='ml-2 font-medium text-amber-600 dark:text-amber-400'>
+                          {t(
+                            'Losses usually come from effective group ratios below channel cost ratios, or refund/reversal records.'
+                          )}
+                        </span>
+                      ) : null}
+                    </>
+                  }
                 >
                   <div className='mb-2 flex items-center gap-2'>
                     <input

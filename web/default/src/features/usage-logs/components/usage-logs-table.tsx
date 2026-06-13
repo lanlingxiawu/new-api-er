@@ -33,7 +33,7 @@ import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { useIsAdmin } from '@/hooks/use-admin'
+import { useIsAdmin, useIsEmployee } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { DataTablePage } from '@/components/data-table'
@@ -68,6 +68,9 @@ interface UsageLogsTableProps {
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
   const isAdmin = useIsAdmin()
+  const isEmployee = useIsEmployee()
+  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
+  const showAdminFields = isAdmin || (logsScope === 'employee' && logCategory === 'common')
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
 
@@ -92,7 +95,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       { columnId: 'model_name', searchKey: 'model', type: 'string' as const },
       { columnId: 'token_name', searchKey: 'token', type: 'string' as const },
       { columnId: 'group', searchKey: 'group', type: 'string' as const },
-      ...(isAdmin
+      ...(showAdminFields
         ? [
             {
               columnId: 'channel',
@@ -106,6 +109,15 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
             },
           ]
         : []),
+      ...(logsScope === 'employee' && logCategory === 'common'
+        ? [
+            {
+              columnId: 'customer_user_id',
+              searchKey: 'customerUserId',
+              type: 'string' as const,
+            },
+          ]
+        : []),
     ],
   })
 
@@ -113,7 +125,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     queryKey: [
       'logs',
       logCategory,
-      isAdmin,
+      logsScope,
       pagination.pageIndex + 1,
       pagination.pageSize,
       columnFilters,
@@ -123,7 +135,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     queryFn: async () => {
       const result = await fetchLogsByCategory({
         logCategory,
-        isAdmin,
+        scope: logsScope,
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
         searchParams,
@@ -146,7 +158,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   })
 
   const logs = data?.items || []
-  const columns = useColumnsByCategory(logCategory, isAdmin)
+  const columns = useColumnsByCategory(logCategory, showAdminFields, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
 
   const table = useReactTable({

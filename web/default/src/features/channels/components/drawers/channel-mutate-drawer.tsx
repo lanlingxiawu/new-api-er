@@ -105,6 +105,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { getSystemOptions } from '@/features/system-settings/api'
 import {
   fetchModels,
   getAllModels,
@@ -197,6 +198,34 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
+
+function parseGroupRatioMap(value: string | undefined): Record<string, number> {
+  if (!value?.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    return Object.entries(parsed).reduce<Record<string, number>>(
+      (acc, [group, ratio]) => {
+        const normalizedRatio = Number(ratio)
+        if (Number.isFinite(normalizedRatio)) {
+          acc[group] = normalizedRatio
+        }
+        return acc
+      },
+      {}
+    )
+  } catch {
+    return {}
+  }
+}
+
+function formatRatio(value: number): string {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+}
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -318,6 +347,11 @@ export function ChannelMutateDrawer({
     queryFn: getGroups,
   })
 
+  const { data: systemOptionsData } = useQuery({
+    queryKey: ['system-options', 'channel-group-profit-warning'],
+    queryFn: getSystemOptions,
+  })
+
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['channel_models'],
@@ -371,6 +405,7 @@ export function ChannelMutateDrawer({
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentName = form.watch('name')
+  const currentCostRatio = form.watch('cost_ratio')
   const currentModelMapping = form.watch('model_mapping')
   const awsKeyType = form.watch('aws_key_type')
   const upstreamModelUpdateCheckEnabled = form.watch(
@@ -433,6 +468,25 @@ export function ChannelMutateDrawer({
       label: group,
     }))
   }, [groupsData, currentGroups])
+
+  const groupRatioMap = useMemo(() => {
+    const groupRatioOption = systemOptionsData?.data?.find(
+      (option) => option.key === 'GroupRatio'
+    )
+    return parseGroupRatioMap(groupRatioOption?.value)
+  }, [systemOptionsData])
+
+  const lossMakingGroups = useMemo(() => {
+    const costRatio = Number(currentCostRatio)
+    if (!Number.isFinite(costRatio) || costRatio < 0) return []
+
+    return (currentGroups || []).flatMap((group) => {
+      const groupRatio = groupRatioMap[group] ?? 1
+      const profitRatio = groupRatio - costRatio
+      if (profitRatio >= 0) return []
+      return [{ group, groupRatio, costRatio, profitRatio }]
+    })
+  }, [currentCostRatio, currentGroups, groupRatioMap])
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -2524,6 +2578,23 @@ export function ChannelMutateDrawer({
                                   />
                                 )}
                               </FormControl>
+                              {lossMakingGroups.length > 0 && (
+                                <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                                  <AlertDescription>
+                                    {t(
+                                      'Selected group pricing may be loss-making: {{groups}}. Profit ratio = group ratio - cost ratio; negative values indicate loss.',
+                                      {
+                                        groups: lossMakingGroups
+                                          .map(
+                                            (item) =>
+                                              `${item.group} (${formatRatio(item.groupRatio)}x - ${formatRatio(item.costRatio)}x = ${formatRatio(item.profitRatio)}x)`
+                                          )
+                                          .join(', '),
+                                      }
+                                    )}
+                                  </AlertDescription>
+                                </Alert>
+                              )}
                               <FormMessage />
                             </FormItem>
                           )}

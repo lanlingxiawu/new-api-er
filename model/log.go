@@ -281,33 +281,47 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 }
 
 func GetChannelNameSnapshotsFromLogs(ids []int) map[int]string {
+	return GetChannelNameSnapshotsFromLogsWithContext(context.Background(), ids)
+}
+
+func GetChannelNameSnapshotsFromLogsWithContext(ctx context.Context, ids []int) map[int]string {
 	result := make(map[int]string, len(ids))
+	uniq := make([]int, 0, len(ids))
+	seen := make(map[int]bool, len(ids))
 	for _, id := range ids {
-		if id == 0 {
+		if id == 0 || seen[id] {
 			continue
 		}
-		var logs []Log
-		err := LOG_DB.Model(&Log{}).
-			Select("channel_id, other").
-			Where("channel_id = ? AND other LIKE ?", id, "%channel_name%").
-			Order("created_at desc, id desc").
-			Limit(20).
-			Find(&logs).Error
-		if err != nil {
-			common.SysLog(fmt.Sprintf("failed to get channel name snapshot from logs: channel_id=%d, error=%v", id, err))
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return result
+	}
+
+	var logs []Log
+	err := LOG_DB.WithContext(safeDBContext(ctx)).Model(&Log{}).
+		Select("channel_id, other").
+		Where("channel_id IN ? AND other LIKE ?", uniq, "%channel_name%").
+		Order("created_at desc, id desc").
+		Limit(len(uniq) * 20).
+		Find(&logs).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to get channel name snapshots from logs: channel_ids=%v, error=%v", uniq, err))
+		return result
+	}
+	for _, log := range logs {
+		if result[log.ChannelId] != "" {
 			continue
 		}
-		for _, log := range logs {
-			otherMap, _ := common.StrToMap(log.Other)
-			if otherMap == nil {
-				continue
-			}
-			if name, ok := otherMap["channel_name"].(string); ok {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					result[id] = name
-					break
-				}
+		otherMap, _ := common.StrToMap(log.Other)
+		if otherMap == nil {
+			continue
+		}
+		if name, ok := otherMap["channel_name"].(string); ok {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				result[log.ChannelId] = name
 			}
 		}
 	}
@@ -359,7 +373,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) int {
 	return log.Id
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, logId int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -390,6 +404,9 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	}
 	if channel != 0 {
 		tx = tx.Where("logs.channel_id = ?", channel)
+	}
+	if logId > 0 {
+		tx = tx.Where("logs.id = ?", logId)
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
@@ -446,9 +463,179 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	return logs, total, err
 }
 
+type EmployeeCustomerLogFilter struct {
+	EmployeeUserId    int
+	CustomerUserId    int
+	LogType           int
+	StartTimestamp    int64
+	EndTimestamp      int64
+	ModelName         string
+	Username          string
+	TokenName         string
+	Channel           int
+	LogId             int
+	Group             string
+	RequestId         string
+	UpstreamRequestId string
+	StartIdx          int
+	PageSize          int
+}
+
+func getEmployeeCustomerLogUserIds(employeeUserId, customerUserId int) ([]int, error) {
+	if employeeUserId <= 0 {
+		return nil, nil
+	}
+	userIds := make([]int, 0, 8)
+	if customerUserId <= 0 {
+		userIds = append(userIds, employeeUserId)
+	}
+	customerUserIds := make([]int, 0)
+	tx := DB.Model(&User{}).
+		Where("inviter_id = ? AND role = ?", employeeUserId, common.RoleCommonUser).
+		Where("id NOT IN (?)", DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", CustomerStatusEnabled))
+	if customerUserId > 0 {
+		tx = tx.Where("id = ?", customerUserId)
+	}
+	if err := tx.Pluck("id", &customerUserIds).Error; err != nil {
+		return nil, err
+	}
+	userIds = append(userIds, customerUserIds...)
+	return userIds, nil
+}
+
+func applyEmployeeCustomerLogScope(tx *gorm.DB, employeeUserId, customerUserId int) *gorm.DB {
+	if customerUserId <= 0 {
+		return tx.Joins("LEFT JOIN users ON users.id = logs.user_id").
+			Joins("LEFT JOIN employee_profiles ep ON ep.user_id = users.id AND ep.status = ?", CustomerStatusEnabled).
+			Where("logs.user_id = ? OR (users.inviter_id = ? AND users.role = ? AND users.deleted_at IS NULL AND ep.user_id IS NULL)", employeeUserId, employeeUserId, common.RoleCommonUser)
+	}
+	tx = tx.Joins("JOIN users ON users.id = logs.user_id").
+		Joins("LEFT JOIN employee_profiles ep ON ep.user_id = users.id AND ep.status = ?", CustomerStatusEnabled).
+		Where("users.inviter_id = ? AND users.role = ? AND users.deleted_at IS NULL AND ep.user_id IS NULL", employeeUserId, common.RoleCommonUser)
+	return tx.Where("logs.user_id = ?", customerUserId)
+}
+
+func applyEmployeeCustomerLogUserScope(tx *gorm.DB, filter EmployeeCustomerLogFilter) (*gorm.DB, bool, error) {
+	if LOG_DB == DB {
+		return applyEmployeeCustomerLogScope(tx, filter.EmployeeUserId, filter.CustomerUserId), false, nil
+	}
+	userIds, err := getEmployeeCustomerLogUserIds(filter.EmployeeUserId, filter.CustomerUserId)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(userIds) == 0 {
+		return tx, true, nil
+	}
+	return tx.Where("logs.user_id IN ?", userIds), false, nil
+}
+
+func applyEmployeeCustomerLogFilters(tx *gorm.DB, filter EmployeeCustomerLogFilter) (*gorm.DB, error) {
+	var err error
+	if filter.LogType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", filter.LogType)
+	}
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", filter.ModelName); err != nil {
+		return nil, err
+	}
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", filter.Username); err != nil {
+		return nil, err
+	}
+	if filter.TokenName != "" {
+		tx = tx.Where("logs.token_name = ?", filter.TokenName)
+	}
+	if filter.RequestId != "" {
+		tx = tx.Where("logs.request_id = ?", filter.RequestId)
+	}
+	if filter.UpstreamRequestId != "" {
+		tx = tx.Where("logs.upstream_request_id = ?", filter.UpstreamRequestId)
+	}
+	if filter.StartTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", filter.StartTimestamp)
+	}
+	if filter.EndTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", filter.EndTimestamp)
+	}
+	if filter.Channel != 0 {
+		tx = tx.Where("logs.channel_id = ?", filter.Channel)
+	}
+	if filter.LogId > 0 {
+		tx = tx.Where("logs.id = ?", filter.LogId)
+	}
+	if filter.Group != "" {
+		tx = tx.Where("logs."+logGroupCol+" = ?", filter.Group)
+	}
+	return tx, nil
+}
+
+func fillLogChannelNames(logs []*Log) error {
+	channelIds := types.NewSet[int]()
+	for _, log := range logs {
+		if log.ChannelId != 0 {
+			channelIds.Add(log.ChannelId)
+		}
+	}
+
+	if channelIds.Len() == 0 {
+		return nil
+	}
+
+	var channels []struct {
+		Id   int    `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	if common.MemoryCacheEnabled {
+		for _, channelId := range channelIds.Items() {
+			if cacheChannel, err := CacheGetChannel(channelId); err == nil {
+				channels = append(channels, struct {
+					Id   int    `gorm:"column:id"`
+					Name string `gorm:"column:name"`
+				}{
+					Id:   channelId,
+					Name: cacheChannel.Name,
+				})
+			}
+		}
+	} else {
+		if err := DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+			return err
+		}
+	}
+	channelMap := make(map[int]string, len(channels))
+	for _, channel := range channels {
+		channelMap[channel.Id] = channel.Name
+	}
+	for i := range logs {
+		logs[i].ChannelName = channelMap[logs[i].ChannelId]
+	}
+	return nil
+}
+
+func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, total int64, err error) {
+	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Model(&Log{}), filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	if empty {
+		return []*Log{}, 0, nil
+	}
+	if tx, err = applyEmployeeCustomerLogFilters(tx, filter); err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if err = tx.Order("logs.created_at desc, logs.id desc").Limit(filter.PageSize).Offset(filter.StartIdx).Find(&logs).Error; err != nil {
+		return nil, 0, err
+	}
+	if err = fillLogChannelNames(logs); err != nil {
+		return logs, total, err
+	}
+	return logs, total, nil
+}
+
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, logId int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -473,6 +660,9 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 	if endTimestamp != 0 {
 		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if logId > 0 {
+		tx = tx.Where("logs.id = ?", logId)
 	}
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
@@ -576,6 +766,45 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		return stat, errors.New("查询统计数据失败")
 	}
 
+	return stat, nil
+}
+
+func SumEmployeeCustomerUsedQuota(filter EmployeeCustomerLogFilter) (stat Stat, err error) {
+	tx, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Table("logs").Select("sum(logs.quota) quota"), filter)
+	if err != nil {
+		return stat, err
+	}
+	if empty {
+		return stat, nil
+	}
+	rpmTpmQuery, empty, err := applyEmployeeCustomerLogUserScope(LOG_DB.Table("logs").Select("count(*) rpm, sum(logs.prompt_tokens) + sum(logs.completion_tokens) tpm"), filter)
+	if err != nil {
+		return stat, err
+	}
+	if empty {
+		return stat, nil
+	}
+
+	filter.LogType = LogTypeUnknown
+	if tx, err = applyEmployeeCustomerLogFilters(tx, filter); err != nil {
+		return stat, err
+	}
+	if rpmTpmQuery, err = applyEmployeeCustomerLogFilters(rpmTpmQuery, filter); err != nil {
+		return stat, err
+	}
+
+	tx = tx.Where("logs.type = ?", LogTypeConsume)
+	rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", LogTypeConsume)
+	rpmTpmQuery = rpmTpmQuery.Where("logs.created_at >= ?", time.Now().Add(-60*time.Second).Unix())
+
+	if err := tx.Scan(&stat).Error; err != nil {
+		common.SysError("failed to query employee customer log stat: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+		common.SysError("failed to query employee customer rpm/tpm stat: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
 	return stat, nil
 }
 

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -539,6 +540,9 @@ func AdminCommissionCalendarStats(c *gin.Context) {
 
 // AdminCommissionOverview GET /api/admin/employee/overview
 func AdminCommissionOverview(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
 	timeRange, err := parseUnixTimeRangeQuery(c)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -553,8 +557,9 @@ func AdminCommissionOverview(c *gin.Context) {
 		channelSortOrder = "desc"
 	}
 
-	// Build one shared aggregate-only query plan for channel and employee overview queries.
-	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlan(timeRange.StartTime, timeRange.EndTime)
+	// Build one shared mixed query plan: covered full days use daily aggregates,
+	// uncovered full days and partial boundaries use ledger/detail tables.
+	queryPlan, err := model.ResolveBusinessStatsQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -569,7 +574,8 @@ func AdminCommissionOverview(c *gin.Context) {
 		totals         model.CommissionTotals
 	)
 
-	g, _ := errgroup.WithContext(c.Request.Context())
+	g, groupCtx := errgroup.WithContext(ctx)
+	queryPlan.Context = groupCtx
 	g.Go(func() error {
 		var err error
 		channelStats, channelTotal, err = model.GetConsumptionCostByChannelPageWithPlan(queryPlan, channelPage, channelPageSize, channelKeyword, channelSortBy, channelSortOrder)
@@ -643,7 +649,7 @@ func AdminCommissionOverview(c *gin.Context) {
 		for _, s := range byEmployee {
 			empIds = append(empIds, s.EmployeeUserId)
 		}
-		userMap, _ := model.GetUsersByIdsUnscoped(empIds)
+		userMap, _ := model.GetUsersByIdsUnscopedWithContext(ctx, empIds)
 		for _, s := range byEmployee {
 			item := EmployeeStatWithUser{CommissionEmployeeStat: s}
 			if u := userMap[s.EmployeeUserId]; u != nil {

@@ -19,10 +19,11 @@ func GetAllLogs(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
+	logId, _ := strconv.Atoi(c.Query("log_id"))
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, logId, group, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -41,10 +42,11 @@ func GetUserLogs(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
+	logId, _ := strconv.Atoi(c.Query("log_id"))
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), logId, group, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -53,6 +55,50 @@ func GetUserLogs(c *gin.Context) {
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+func getEmployeeCustomerLogFilter(c *gin.Context) model.EmployeeCustomerLogFilter {
+	pageInfo := common.GetPageQuery(c)
+	logType, _ := strconv.Atoi(c.Query("type"))
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	customerUserId, _ := strconv.Atoi(c.Query("customer_user_id"))
+	channel, _ := strconv.Atoi(c.Query("channel"))
+	logId, _ := strconv.Atoi(c.Query("log_id"))
+	return model.EmployeeCustomerLogFilter{
+		EmployeeUserId:    c.GetInt("id"),
+		CustomerUserId:    customerUserId,
+		LogType:           logType,
+		StartTimestamp:    startTimestamp,
+		EndTimestamp:      endTimestamp,
+		ModelName:         c.Query("model_name"),
+		Username:          c.Query("username"),
+		TokenName:         c.Query("token_name"),
+		Channel:           channel,
+		LogId:             logId,
+		Group:             c.Query("group"),
+		RequestId:         c.Query("request_id"),
+		UpstreamRequestId: c.Query("upstream_request_id"),
+		StartIdx:          pageInfo.GetStartIdx(),
+		PageSize:          pageInfo.GetPageSize(),
+	}
+}
+
+func GetEmployeeCustomerLogs(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	if !model.IsEmployee(c.GetInt("id")) {
+		common.ApiError(c, errNotEmployee)
+		return
+	}
+	filter := getEmployeeCustomerLogFilter(c)
+	logs, total, err := model.GetEmployeeCustomerLogs(filter)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(logs)
+	common.ApiSuccess(c, pageInfo)
 }
 
 // Deprecated: SearchAllLogs 已废弃，前端未使用该接口。
@@ -148,6 +194,28 @@ func GetLogsSelfStat(c *gin.Context) {
 		},
 	})
 	return
+}
+
+func GetEmployeeCustomerLogsStat(c *gin.Context) {
+	if !model.IsEmployee(c.GetInt("id")) {
+		common.ApiError(c, errNotEmployee)
+		return
+	}
+	filter := getEmployeeCustomerLogFilter(c)
+	stat, err := model.SumEmployeeCustomerUsedQuota(filter)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(200, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"quota": stat.Quota,
+			"rpm":   stat.Rpm,
+			"tpm":   stat.Tpm,
+		},
+	})
 }
 
 func DeleteHistoryLogs(c *gin.Context) {

@@ -1,5 +1,6 @@
 import { api } from '@/lib/api'
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
+import type { UsageLog } from '@/features/usage-logs/data/schema'
 import type {
   EmployeeProfile,
   EmployeeCustomer,
@@ -122,6 +123,22 @@ export async function getCommissionLogs(params: {
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission?${q.toString()}`)
   return res.data
+}
+
+export async function getUsageLogById(
+  logId: number
+): Promise<ApiResponse<UsageLog | null>> {
+  const q = new URLSearchParams()
+  q.set('page', '1')
+  q.set('page_size', '1')
+  q.set('log_id', String(logId))
+  const res = await api.get(`/api/log?${q.toString()}`)
+  const pageData = res.data?.data
+  return {
+    success: Boolean(res.data?.success),
+    message: res.data?.message,
+    data: pageData?.items?.[0] ?? null,
+  }
 }
 
 export interface CommissionChannelOption {

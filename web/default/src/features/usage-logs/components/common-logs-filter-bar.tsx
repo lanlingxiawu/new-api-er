@@ -22,7 +22,7 @@ import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
 import { Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useIsAdmin } from '@/hooks/use-admin'
+import { useIsAdmin, useIsEmployee } from '@/hooks/use-admin'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -71,6 +71,9 @@ export function CommonLogsFilterBar<TData>(
   const queryClient = useQueryClient()
   const searchParams = route.useSearch()
   const isAdmin = useIsAdmin()
+  const isEmployee = useIsEmployee()
+  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
+  const showAdminFields = logsScope !== 'self'
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
 
@@ -92,6 +95,7 @@ export function CommonLogsFilterBar<TData>(
       token: searchParams.token || undefined,
       group: searchParams.group || undefined,
       username: searchParams.username || undefined,
+      customerUserId: searchParams.customerUserId || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
     })
@@ -112,6 +116,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.token,
     searchParams.group,
     searchParams.username,
+    searchParams.customerUserId,
     searchParams.requestId,
     searchParams.upstreamRequestId,
     searchParams.type,
@@ -169,6 +174,7 @@ export function CommonLogsFilterBar<TData>(
   const hasExpandedFilters =
     !!filters.token ||
     !!filters.username ||
+    !!filters.customerUserId ||
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId
@@ -179,8 +185,9 @@ export function CommonLogsFilterBar<TData>(
 
   const expandedFilterCount = [
     filters.token,
-    isAdmin ? filters.username : undefined,
-    isAdmin ? filters.channel : undefined,
+    showAdminFields ? filters.username : undefined,
+    logsScope === 'employee' ? filters.customerUserId : undefined,
+    showAdminFields ? filters.channel : undefined,
     filters.requestId,
     filters.upstreamRequestId,
   ].filter(Boolean).length
@@ -290,7 +297,7 @@ export function CommonLogsFilterBar<TData>(
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
-      {isAdmin && (
+      {showAdminFields && (
         <LogsFilterField>
           <LogsFilterInput
             placeholder={t('Username')}
@@ -301,7 +308,17 @@ export function CommonLogsFilterBar<TData>(
           />
         </LogsFilterField>
       )}
-      {isAdmin && (
+      {logsScope === 'employee' && (
+        <LogsFilterField>
+          <LogsFilterInput
+            placeholder={t('Customer User ID')}
+            value={filters.customerUserId || ''}
+            onChange={(e) => handleChange('customerUserId', e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </LogsFilterField>
+      )}
+      {showAdminFields && (
         <LogsFilterField>
           <LogsFilterInput
             placeholder={t('Channel ID')}

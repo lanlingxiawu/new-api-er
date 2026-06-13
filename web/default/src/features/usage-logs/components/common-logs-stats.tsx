@@ -21,9 +21,13 @@ import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { formatLogQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useIsAdmin } from '@/hooks/use-admin'
+import { useIsAdmin, useIsEmployee } from '@/hooks/use-admin'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getLogStats, getUserLogStats } from '../api'
+import {
+  getEmployeeCustomerLogStats,
+  getLogStats,
+  getUserLogStats,
+} from '../api'
 import { DEFAULT_LOG_STATS } from '../constants'
 import { buildApiParams } from '../lib/utils'
 import { useUsageLogsContext } from './usage-logs-provider'
@@ -49,23 +53,28 @@ function StatBadge(props: {
 export function CommonLogsStats() {
   const { t } = useTranslation()
   const isAdmin = useIsAdmin()
+  const isEmployee = useIsEmployee()
+  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
 
   const { data: stats, isLoading } = useQuery({
-    queryKey: ['usage-logs-stats', isAdmin, searchParams],
+    queryKey: ['usage-logs-stats', logsScope, searchParams],
     queryFn: async () => {
       const params = buildApiParams({
         page: 1,
         pageSize: 1,
         searchParams,
         columnFilters: [],
-        isAdmin,
+        scope: logsScope,
       })
 
-      const result = isAdmin
-        ? await getLogStats(params)
-        : await getUserLogStats(params)
+      const result =
+        logsScope === 'admin'
+          ? await getLogStats(params)
+          : logsScope === 'employee'
+            ? await getEmployeeCustomerLogStats(params)
+            : await getUserLogStats(params)
 
       return result.success
         ? result.data || DEFAULT_LOG_STATS

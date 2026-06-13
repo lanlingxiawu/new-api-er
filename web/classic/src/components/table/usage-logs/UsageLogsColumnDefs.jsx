@@ -481,6 +481,7 @@ export const getLogsColumns = ({
   showUserInfoFunc,
   openChannelAffinityUsageCacheModal,
   isAdminUser,
+  canUseAdminActions = isAdminUser,
   billingDisplayMode = 'price',
 }) => {
   return [
@@ -535,7 +536,7 @@ export const getLogsColumns = ({
                   </Tag>
                 </span>
               </Tooltip>
-              {showMarker && (
+              {showMarker && canUseAdminActions && (
                 <Tooltip
                   content={
                     <div style={{ lineHeight: 1.6 }}>
@@ -596,7 +597,9 @@ export const getLogsColumns = ({
               style={{ marginRight: 4 }}
               onClick={(event) => {
                 event.stopPropagation();
-                showUserInfoFunc(record.user_id);
+                if (canUseAdminActions) {
+                  showUserInfoFunc(record.user_id);
+                }
               }}
             >
               {typeof text === 'string' && text.slice(0, 1)}

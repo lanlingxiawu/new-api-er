@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
@@ -225,19 +226,27 @@ func splitDailyAggregatePlan(startTime, endTime int64) dailyAggregatePlan {
 func getBusinessStatsQueryBounds() (int64, int64, error) {
 	// 日聚合表自上线起持续写入（回填功能已移除，历史数据已确认完整），
 	// 直接以日表边界为准，无需再查明细台账边界。
-	return getBusinessStatsDailyBounds()
+	return getBusinessStatsQueryBoundsWithContext(context.Background())
+}
+
+func getBusinessStatsQueryBoundsWithContext(ctx context.Context) (int64, int64, error) {
+	return getBusinessStatsDailyBoundsWithContext(ctx)
 }
 
 func getBusinessStatsDailyBounds() (int64, int64, error) {
-	platformMin, platformMax, err := getStatDateBounds(&PlatformChannelDailyStat{})
+	return getBusinessStatsDailyBoundsWithContext(context.Background())
+}
+
+func getBusinessStatsDailyBoundsWithContext(ctx context.Context) (int64, int64, error) {
+	platformMin, platformMax, err := getStatDateBoundsWithContext(ctx, &PlatformChannelDailyStat{})
 	if err != nil {
 		return 0, 0, err
 	}
-	employeeMin, employeeMax, err := getStatDateBounds(&EmployeeCommissionDailyStat{})
+	employeeMin, employeeMax, err := getStatDateBoundsWithContext(ctx, &EmployeeCommissionDailyStat{})
 	if err != nil {
 		return 0, 0, err
 	}
-	customerMin, customerMax, err := getStatDateBounds(&EmployeeCustomerCommissionDailyStat{})
+	customerMin, customerMax, err := getStatDateBoundsWithContext(ctx, &EmployeeCustomerCommissionDailyStat{})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -259,11 +268,15 @@ func getBusinessStatsDailyBounds() (int64, int64, error) {
 }
 
 func getStatDateBounds(table any) (int64, int64, error) {
+	return getStatDateBoundsWithContext(context.Background(), table)
+}
+
+func getStatDateBoundsWithContext(ctx context.Context, table any) (int64, int64, error) {
 	var result struct {
 		MinDate int64
 		MaxDate int64
 	}
-	if err := DB.Model(table).
+	if err := DB.WithContext(safeDBContext(ctx)).Model(table).
 		Select("COALESCE(MIN(stat_date),0) as min_date, COALESCE(MAX(stat_date),0) as max_date").
 		Scan(&result).Error; err != nil {
 		return 0, 0, err
@@ -272,12 +285,16 @@ func getStatDateBounds(table any) (int64, int64, error) {
 }
 
 func normalizeAggregateDateRange(plan dailyAggregatePlan, startTime, endTime int64) (int64, int64, bool, error) {
+	return normalizeAggregateDateRangeWithContext(context.Background(), plan, startTime, endTime)
+}
+
+func normalizeAggregateDateRangeWithContext(ctx context.Context, plan dailyAggregatePlan, startTime, endTime int64) (int64, int64, bool, error) {
 	if !plan.HasAggregate {
 		return 0, 0, false, nil
 	}
 	startDate := plan.AggregateStartDate
 	endDate := plan.AggregateEndDate
-	minDate, maxDate, err := getBusinessStatsQueryBounds()
+	minDate, maxDate, err := getBusinessStatsQueryBoundsWithContext(ctx)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -300,11 +317,15 @@ func normalizeAggregateDateRange(plan dailyAggregatePlan, startTime, endTime int
 }
 
 func splitCoveredDailyRanges(startDate, endDate int64) ([]statDateRange, []statDateRange, error) {
+	return splitCoveredDailyRangesWithContext(context.Background(), startDate, endDate)
+}
+
+func splitCoveredDailyRangesWithContext(ctx context.Context, startDate, endDate int64) ([]statDateRange, []statDateRange, error) {
 	if endDate < startDate {
 		return nil, nil, nil
 	}
 	var coveredDates []int64
-	if err := DB.Model(&BusinessDailyStatsCoverage{}).
+	if err := DB.WithContext(safeDBContext(ctx)).Model(&BusinessDailyStatsCoverage{}).
 		Where("stat_date >= ? AND stat_date <= ?", startDate, endDate).
 		Pluck("stat_date", &coveredDates).Error; err != nil {
 		return nil, nil, err
@@ -423,6 +444,7 @@ func ensureDailyCoverageTx(tx *gorm.DB, statDate int64) error {
 // 由 ResolveBusinessStatsQueryPlan 生成一次，可传给多个查询函数复用，
 // 避免重复计算 splitDailyAggregatePlan / normalizeAggregateDateRange / splitCoveredDailyRanges。
 type ResolvedQueryPlan struct {
+	Context         context.Context
 	CoveredRanges   []statDateRange
 	UncoveredRanges []statDateRange
 	DetailRanges    []statsTimeRange
@@ -436,17 +458,22 @@ type ConsumptionCostChannelSummary struct {
 
 // ResolveBusinessStatsQueryPlan 根据时间范围生成查询计划。
 func ResolveBusinessStatsQueryPlan(startTime, endTime int64) (*ResolvedQueryPlan, error) {
+	return ResolveBusinessStatsQueryPlanWithContext(context.Background(), startTime, endTime)
+}
+
+func ResolveBusinessStatsQueryPlanWithContext(ctx context.Context, startTime, endTime int64) (*ResolvedQueryPlan, error) {
 	plan := splitDailyAggregatePlan(startTime, endTime)
 	resolved := &ResolvedQueryPlan{
+		Context:      ctx,
 		DetailRanges: plan.DetailRanges,
 	}
 	if plan.HasAggregate {
-		startDate, endDate, hasAggregate, err := normalizeAggregateDateRange(plan, startTime, endTime)
+		startDate, endDate, hasAggregate, err := normalizeAggregateDateRangeWithContext(ctx, plan, startTime, endTime)
 		if err != nil {
 			return nil, err
 		}
 		if hasAggregate {
-			covered, uncovered, err := splitCoveredDailyRanges(startDate, endDate)
+			covered, uncovered, err := splitCoveredDailyRangesWithContext(ctx, startDate, endDate)
 			if err != nil {
 				return nil, err
 			}
@@ -460,12 +487,16 @@ func ResolveBusinessStatsQueryPlan(startTime, endTime int64) (*ResolvedQueryPlan
 // ResolveBusinessStatsDailyOnlyQueryPlan maps the requested range to whole-day
 // aggregate rows and never falls back to ledger/detail aggregation.
 func ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime int64) (*ResolvedQueryPlan, error) {
-	minDate, maxDate, err := getBusinessStatsDailyBounds()
+	return ResolveBusinessStatsDailyOnlyQueryPlanWithContext(context.Background(), startTime, endTime)
+}
+
+func ResolveBusinessStatsDailyOnlyQueryPlanWithContext(ctx context.Context, startTime, endTime int64) (*ResolvedQueryPlan, error) {
+	minDate, maxDate, err := getBusinessStatsDailyBoundsWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if maxDate == 0 {
-		return &ResolvedQueryPlan{}, nil
+		return &ResolvedQueryPlan{Context: ctx}, nil
 	}
 	startDate := minDate
 	endDate := maxDate
@@ -482,11 +513,26 @@ func ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime int64) (*Resolved
 		endDate = maxDate
 	}
 	if endDate < startDate {
-		return &ResolvedQueryPlan{}, nil
+		return &ResolvedQueryPlan{Context: ctx}, nil
 	}
 	return &ResolvedQueryPlan{
+		Context:       ctx,
 		CoveredRanges: []statDateRange{{StartDate: startDate, EndDate: endDate}},
 	}, nil
+}
+
+func dbWithPlanContext(plan *ResolvedQueryPlan) *gorm.DB {
+	if plan != nil && plan.Context != nil {
+		return DB.WithContext(safeDBContext(plan.Context))
+	}
+	return DB
+}
+
+func safeDBContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func normalizeStatsPagination(page, pageSize int) (int, int, int) {
@@ -532,6 +578,10 @@ func applyChannelKeyword(tx *gorm.DB, keyword string) *gorm.DB {
 }
 
 func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate bool) ([]*ConsumptionCostChannelStat, error) {
+	return getConsumptionCostByChannelFromDailyWithContext(nil, startDate, endDate, hasEndDate)
+}
+
+func getConsumptionCostByChannelFromDailyWithContext(ctx context.Context, startDate, endDate int64, hasEndDate bool) ([]*ConsumptionCostChannelStat, error) {
 	type row struct {
 		ChannelId    int
 		ChannelName  string
@@ -541,7 +591,7 @@ func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate b
 		CostRatioSum float64
 	}
 	var rows []row
-	tx := DB.Model(&PlatformChannelDailyStat{}).
+	tx := DB.WithContext(safeDBContext(ctx)).Model(&PlatformChannelDailyStat{}).
 		Select("channel_id, "+
 			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, "+
 			"COALESCE(SUM(revenue_quota),0) as total_revenue, "+
@@ -573,8 +623,44 @@ func getConsumptionCostByChannelFromDaily(startDate, endDate int64, hasEndDate b
 	return items, nil
 }
 
+func getConsumptionCostByChannelFromLedgerRange(ctx context.Context, startTime, endTime int64) ([]*ConsumptionCostChannelStat, error) {
+	type row struct {
+		ChannelId    int
+		ChannelName  string
+		TotalRevenue int64
+		TotalCost    int64
+		RecordCount  int64
+		CostRatioSum float64
+	}
+	var rows []row
+	tx := DB.WithContext(safeDBContext(ctx)).Model(&ConsumptionCost{}).
+		Select("channel_id, "+
+			"COALESCE(NULLIF(MAX(channel_name), ''), '') as channel_name, "+
+			"COALESCE(SUM(revenue_quota),0) as total_revenue, "+
+			"COALESCE(SUM(cost_quota),0) as total_cost, "+
+			"COUNT(*) as record_count, "+
+			"COALESCE(SUM(cost_ratio),0) as cost_ratio_sum").
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime).
+		Group("channel_id")
+	if err := tx.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	items := make([]*ConsumptionCostChannelStat, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, &ConsumptionCostChannelStat{
+			ChannelId:    r.ChannelId,
+			ChannelName:  r.ChannelName,
+			TotalRevenue: r.TotalRevenue,
+			TotalCost:    r.TotalCost,
+			RecordCount:  r.RecordCount,
+			CostRatioSum: r.CostRatioSum,
+		})
+	}
+	return items, nil
+}
+
 func getConsumptionCostByChannelFromStats(startTime, endTime int64) ([]*ConsumptionCostChannelStat, error) {
-	resolved, err := ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime)
+	resolved, err := ResolveBusinessStatsQueryPlan(startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +671,21 @@ func getConsumptionCostByChannelFromStats(startTime, endTime int64) ([]*Consumpt
 func GetConsumptionCostByChannelWithPlan(plan *ResolvedQueryPlan) ([]*ConsumptionCostChannelStat, error) {
 	byChannel := make(map[int]*ConsumptionCostChannelStat)
 	for _, r := range plan.CoveredRanges {
-		rows, err := getConsumptionCostByChannelFromDaily(r.StartDate, r.EndDate, true)
+		rows, err := getConsumptionCostByChannelFromDailyWithContext(plan.Context, r.StartDate, r.EndDate, true)
+		if err != nil {
+			return nil, err
+		}
+		mergeConsumptionCostChannelStats(byChannel, rows)
+	}
+	for _, r := range plan.UncoveredRanges {
+		rows, err := getConsumptionCostByChannelFromLedgerRange(plan.Context, r.StartDate, unixDayEnd(r.EndDate))
+		if err != nil {
+			return nil, err
+		}
+		mergeConsumptionCostChannelStats(byChannel, rows)
+	}
+	for _, r := range plan.DetailRanges {
+		rows, err := getConsumptionCostByChannelFromLedgerRange(plan.Context, r.StartTime, r.EndTime)
 		if err != nil {
 			return nil, err
 		}
@@ -600,6 +700,7 @@ func GetConsumptionCostByChannelWithPlan(plan *ResolvedQueryPlan) ([]*Consumptio
 }
 
 func GetConsumptionCostChannelSummaryWithPlan(plan *ResolvedQueryPlan) (ConsumptionCostChannelSummary, error) {
+	db := dbWithPlanContext(plan)
 	if isDailyOnlyPlan(plan) {
 		type summaryRow struct {
 			TotalRevenue           int64
@@ -608,7 +709,7 @@ func GetConsumptionCostChannelSummaryWithPlan(plan *ResolvedQueryPlan) (Consumpt
 			ProfitableChannelCount int
 			LossChannelCount       int
 		}
-		base := DB.Model(&PlatformChannelDailyStat{}).
+		base := db.Model(&PlatformChannelDailyStat{}).
 			Select("channel_id, " +
 				"COALESCE(SUM(revenue_quota),0) as total_revenue, " +
 				"COALESCE(SUM(cost_quota),0) as total_cost, " +
@@ -617,7 +718,7 @@ func GetConsumptionCostChannelSummaryWithPlan(plan *ResolvedQueryPlan) (Consumpt
 		base = applyStatDateRanges(base, plan.CoveredRanges)
 
 		var row summaryRow
-		err := DB.Table("(?) as grouped", base).
+		err := db.Table("(?) as grouped", base).
 			Select("COALESCE(SUM(total_revenue),0) as total_revenue, " +
 				"COALESCE(SUM(total_cost),0) as total_cost, " +
 				"COALESCE(SUM(record_count),0) as record_count, " +
@@ -726,8 +827,9 @@ func sortConsumptionCostChannels(items []*ConsumptionCostChannelStat, sortBy, so
 
 func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, pageSize int, keyword, sortBy, sortOrder string) ([]*ConsumptionCostChannelStat, int64, error) {
 	_, pageSize, offset := normalizeStatsPagination(page, pageSize)
+	db := dbWithPlanContext(plan)
 	if isDailyOnlyPlan(plan) {
-		base := DB.Model(&PlatformChannelDailyStat{}).
+		base := db.Model(&PlatformChannelDailyStat{}).
 			Joins("LEFT JOIN channels ON channels.id = platform_channel_daily_stats.channel_id")
 		base = applyStatDateRanges(base, plan.CoveredRanges)
 		base = applyChannelKeyword(base, keyword)
@@ -736,7 +838,7 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 			Select("platform_channel_daily_stats.channel_id").
 			Group("platform_channel_daily_stats.channel_id")
 		var total int64
-		if err := DB.Table("(?) as grouped", countBase).Count(&total).Error; err != nil {
+		if err := db.Table("(?) as grouped", countBase).Count(&total).Error; err != nil {
 			return nil, 0, err
 		}
 
@@ -767,11 +869,11 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 		for _, row := range rows {
 			channelIds = append(channelIds, row.ChannelId)
 		}
-		channelNames, err := GetChannelNamesByIds(channelIds)
+		channelNames, err := GetChannelNamesByIdsWithContext(plan.Context, channelIds)
 		if err != nil {
 			return nil, 0, err
 		}
-		logChannelNames := GetChannelNameSnapshotsFromLogs(missingChannelNameIds(rows, channelNames))
+		logChannelNames := GetChannelNameSnapshotsFromLogsWithContext(plan.Context, missingChannelNameIds(rows, channelNames))
 		for _, row := range rows {
 			finalizeConsumptionCostChannelStat(row)
 			if row.ChannelName == "" {
@@ -792,11 +894,11 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 	for _, item := range items {
 		channelIds = append(channelIds, item.ChannelId)
 	}
-	channelNames, err := GetChannelNamesByIds(channelIds)
+	channelNames, err := GetChannelNamesByIdsWithContext(plan.Context, channelIds)
 	if err != nil {
 		return nil, 0, err
 	}
-	logChannelNames := GetChannelNameSnapshotsFromLogs(missingChannelNameIds(items, channelNames))
+	logChannelNames := GetChannelNameSnapshotsFromLogsWithContext(plan.Context, missingChannelNameIds(items, channelNames))
 	for _, item := range items {
 		if item.ChannelName == "" {
 			item.ChannelName = channelNames[item.ChannelId]
@@ -870,8 +972,12 @@ func finalizeConsumptionCostChannelStat(item *ConsumptionCostChannelStat) {
 }
 
 func getCommissionStatsByEmployeeFromDaily(startDate, endDate int64, hasEndDate bool) ([]*CommissionEmployeeStat, error) {
+	return getCommissionStatsByEmployeeFromDailyWithContext(nil, startDate, endDate, hasEndDate)
+}
+
+func getCommissionStatsByEmployeeFromDailyWithContext(ctx context.Context, startDate, endDate int64, hasEndDate bool) ([]*CommissionEmployeeStat, error) {
 	var rows []*CommissionEmployeeStat
-	tx := DB.Model(&EmployeeCommissionDailyStat{}).
+	tx := DB.WithContext(safeDBContext(ctx)).Model(&EmployeeCommissionDailyStat{}).
 		Select("employee_user_id, "+
 			"COALESCE(SUM(revenue_quota),0) as total_revenue, "+
 			"COALESCE(SUM(cost_quota),0) as total_cost, "+
@@ -887,8 +993,23 @@ func getCommissionStatsByEmployeeFromDaily(startDate, endDate int64, hasEndDate 
 	return rows, err
 }
 
+func getCommissionStatsByEmployeeFromLedgerRange(ctx context.Context, startTime, endTime int64) ([]*CommissionEmployeeStat, error) {
+	var rows []*CommissionEmployeeStat
+	err := DB.WithContext(safeDBContext(ctx)).Model(&EmployeeCommissionLog{}).
+		Select("employee_user_id, "+
+			"COALESCE(SUM(revenue_quota),0) as total_revenue, "+
+			"COALESCE(SUM(cost_quota),0) as total_cost, "+
+			"COALESCE(SUM(profit_quota),0) as total_profit, "+
+			"COALESCE(SUM(commission_quota),0) as total_commission, "+
+			"COUNT(*) as record_count").
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime).
+		Group("employee_user_id").
+		Scan(&rows).Error
+	return rows, err
+}
+
 func getCommissionStatsByEmployeeFromStats(startTime, endTime int64, limit int) ([]*CommissionEmployeeStat, error) {
-	resolved, err := ResolveBusinessStatsDailyOnlyQueryPlan(startTime, endTime)
+	resolved, err := ResolveBusinessStatsQueryPlan(startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
@@ -899,7 +1020,21 @@ func getCommissionStatsByEmployeeFromStats(startTime, endTime int64, limit int) 
 func GetCommissionStatsByEmployeeWithPlan(plan *ResolvedQueryPlan, limit int) ([]*CommissionEmployeeStat, error) {
 	byEmployee := make(map[int]*CommissionEmployeeStat)
 	for _, r := range plan.CoveredRanges {
-		rows, err := getCommissionStatsByEmployeeFromDaily(r.StartDate, r.EndDate, true)
+		rows, err := getCommissionStatsByEmployeeFromDailyWithContext(plan.Context, r.StartDate, r.EndDate, true)
+		if err != nil {
+			return nil, err
+		}
+		mergeCommissionEmployeeStats(byEmployee, rows)
+	}
+	for _, r := range plan.UncoveredRanges {
+		rows, err := getCommissionStatsByEmployeeFromLedgerRange(plan.Context, r.StartDate, unixDayEnd(r.EndDate))
+		if err != nil {
+			return nil, err
+		}
+		mergeCommissionEmployeeStats(byEmployee, rows)
+	}
+	for _, r := range plan.DetailRanges {
+		rows, err := getCommissionStatsByEmployeeFromLedgerRange(plan.Context, r.StartTime, r.EndTime)
 		if err != nil {
 			return nil, err
 		}
@@ -920,15 +1055,16 @@ func GetCommissionStatsByEmployeeWithPlan(plan *ResolvedQueryPlan, limit int) ([
 
 func GetCommissionStatsByEmployeePageWithPlan(plan *ResolvedQueryPlan, page, pageSize int) ([]*CommissionEmployeeStat, int64, error) {
 	_, pageSize, offset := normalizeStatsPagination(page, pageSize)
+	db := dbWithPlanContext(plan)
 	if isDailyOnlyPlan(plan) {
-		base := DB.Model(&EmployeeCommissionDailyStat{})
+		base := db.Model(&EmployeeCommissionDailyStat{})
 		base = applyStatDateRanges(base, plan.CoveredRanges)
 
 		countBase := base.Session(&gorm.Session{}).
 			Select("employee_user_id").
 			Group("employee_user_id")
 		var total int64
-		if err := DB.Table("(?) as grouped", countBase).Count(&total).Error; err != nil {
+		if err := db.Table("(?) as grouped", countBase).Count(&total).Error; err != nil {
 			return nil, 0, err
 		}
 

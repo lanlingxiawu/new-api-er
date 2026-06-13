@@ -449,8 +449,59 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 		}
 	}
 
+	if len(validTierIds) > 0 {
+		var orphanLevels []*EmployeeTierLevel
+		if err = DB.Where("baseline_reset_at < ? AND tier_id <> ? AND tier_id NOT IN ?", resetAt, 0, validTierIds).
+			Order("id ASC").
+			Find(&orphanLevels).Error; err != nil {
+			return 0, 0, err
+		}
+		if len(orphanLevels) > 0 {
+			userIds := make([]int, 0, len(orphanLevels))
+			for _, l := range orphanLevels {
+				userIds = append(userIds, l.UserId)
+			}
+			extByUserId, err := GetUserExtensionsByUserIds(userIds)
+			if err != nil {
+				return 0, 0, err
+			}
+			err = DB.Transaction(func(tx *gorm.DB) error {
+				for _, level := range orphanLevels {
+					operatedAt := time.Now().Unix()
+					var profitTotal, commissionTotal int64
+					if ext, ok := extByUserId[level.UserId]; ok {
+						profitTotal = ext.ProfitTotalQuota
+						commissionTotal = ext.CommissionTotalQuota
+					}
+					common.SysError(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d has orphaned tierId=%d, refreshing baseline only", level.UserId, level.TierId))
+					updates := map[string]interface{}{
+						"source":                    "reset",
+						"effective_at":              operatedAt,
+						"remark":                    "鏈堝害鑷姩閲嶇疆",
+						"updated_by":                operatedBy,
+						"baseline_profit_quota":     profitTotal,
+						"baseline_commission_quota": commissionTotal,
+						"baseline_reset_at":         resetAt,
+					}
+					res := tx.Model(&EmployeeTierLevel{}).Where("id = ? AND baseline_reset_at = ?", level.Id, level.BaselineResetAt).Updates(updates)
+					if res.Error != nil {
+						return res.Error
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+	}
+
 	var levels []*EmployeeTierLevel
-	if err = DB.Where("baseline_reset_at < ?", resetAt).Order("id ASC").Limit(batchSize).Find(&levels).Error; err != nil {
+	query := DB.Where("baseline_reset_at < ?", resetAt)
+	if len(validTierIds) > 0 {
+		query = query.Where("tier_id = ? OR tier_id IN ?", 0, validTierIds)
+	}
+	if err = query.Order("id ASC").Limit(batchSize).Find(&levels).Error; err != nil {
 		return 0, 0, err
 	}
 	if len(levels) == 0 {

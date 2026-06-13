@@ -43,6 +43,7 @@ import {
   Switch,
   Tag,
   TextArea,
+  Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
 import {
@@ -388,12 +389,155 @@ const formatFullNumber = (value) => {
   }
   return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
 };
-const formatBusinessUsd = (value) => `≈ $${formatFullNumber(value)}`;
+const formatBusinessUsd = (value) => `≈$${formatFullNumber(value)}`;
 const formatExactUsd = (value) => `$${formatFullNumber(value)}`;
 const formatTargetAmount = (value) => {
   const amount = Number(value || 0);
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
 };
+
+const usageLogPreviewCache = new Map();
+
+function CommissionLogIdHover({ logId, selfView = false }) {
+  const { t } = useTranslation();
+  const [visible, setVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [log, setLog] = useState(() =>
+    logId
+      ? usageLogPreviewCache.get(`${selfView ? 'self' : 'admin'}:${logId}`)
+      : undefined,
+  );
+  const timerRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const loadLog = useCallback(async () => {
+    if (!logId) return;
+    const cacheKey = `${selfView ? 'self' : 'admin'}:${logId}`;
+    if (usageLogPreviewCache.has(cacheKey)) {
+      setLog(usageLogPreviewCache.get(cacheKey) || null);
+      setVisible(true);
+      return;
+    }
+    setLoading(true);
+    setVisible(true);
+    try {
+      const res = await API.get(selfView ? '/api/log/employee' : '/api/log', {
+        params: { page: 1, page_size: 1, log_id: logId },
+        disableDuplicate: true,
+        skipErrorHandler: true,
+      });
+      const nextLog = res.data?.success
+        ? res.data?.data?.items?.[0] || null
+        : null;
+      usageLogPreviewCache.set(cacheKey, nextLog);
+      setLog(nextLog);
+    } catch {
+      usageLogPreviewCache.set(cacheKey, null);
+      setLog(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [logId, selfView]);
+
+  if (!logId) return '-';
+
+  const hide = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setVisible(false);
+  };
+
+  const content = (
+    <div style={{ width: 520, maxWidth: 'calc(100vw - 32px)', maxHeight: 420, overflowY: 'auto' }}>
+      {loading ? (
+        <div className='flex items-center gap-2'>
+          <Spin size='small' />
+          <Text size='small'>{t('加载中...')}</Text>
+        </div>
+      ) : log ? (
+        <SummaryPanel>
+          <div className='mb-2 flex items-center justify-between gap-2'>
+            <Text strong>{t('Consumption Log')}</Text>
+            <Tag size='small'>#{log.id}</Tag>
+          </div>
+          {[
+            [t('时间'), formatTs(log.created_at)],
+            [t('User ID'), `#${log.user_id}`],
+            [t('Username'), log.username || '-'],
+            [t('Token'), log.token_name || '-'],
+            [t('模型'), log.model_name || '-'],
+            [
+              t('渠道'),
+              log.channel_name || (log.channel ? `#${log.channel}` : '-'),
+            ],
+            [t('Group'), log.group || '-'],
+            [t('Request ID'), log.request_id || '-'],
+          ].map(([label, value]) => (
+            <SummaryItem
+              key={label}
+              label={label}
+              value={
+                <span style={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                  {value}
+                </span>
+              }
+            />
+          ))}
+          <div className='mt-2 border-t pt-2' style={{ borderColor: 'var(--semi-color-border)' }}>
+            <SummaryItem label={t('Quota')} value={log.quota || 0} />
+            <SummaryItem label={t('Prompt')} value={log.prompt_tokens || 0} />
+            <SummaryItem label={t('Completion')} value={log.completion_tokens || 0} />
+          </div>
+        </SummaryPanel>
+      ) : (
+        <Text type='secondary' size='small'>
+          {t('No matching consumption log found')}
+        </Text>
+      )}
+    </div>
+  );
+
+  return (
+    <Tooltip
+      content={content}
+      visible={visible}
+      position='rightTop'
+      style={{
+        background: 'var(--semi-color-bg-2)',
+        color: 'var(--semi-color-text-0)',
+        border: '1px solid var(--semi-color-border)',
+        boxShadow: 'var(--semi-shadow-elevated)',
+        maxWidth: 'calc(100vw - 32px)',
+      }}
+    >
+      <button
+        type='button'
+        className='font-mono text-xs underline-offset-2 hover:underline'
+        style={{ color: 'var(--semi-color-primary)' }}
+        onMouseEnter={() => {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(loadLog, 1000);
+        }}
+        onMouseLeave={hide}
+        onFocus={() => {
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(loadLog, 1000);
+        }}
+        onBlur={hide}
+      >
+        #{logId}
+      </button>
+    </Tooltip>
+  );
+}
 
 const getPerformanceTargetAmount = (row) => {
   const nextTierTarget = Number(row?.next_tier_threshold_usd || 0);
@@ -525,10 +669,12 @@ function BusinessCard({
   children,
   t,
   type = 'type2',
+  className,
 }) {
   return (
     <CardPro
       type={type}
+      className={className}
       statsArea={
         <ClassicDescription
           title={title}
@@ -2033,7 +2179,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
           size='small'
           className='mt-2 block leading-relaxed'
         >
-          {t('将该用户的受邀人设置为此员工，其消费将为员工产生提成')}
+          {t('将该用户的受邀人设置为此员工，其消费将为员工产生提成。')}
         </Text>
       </Field>
     </Modal>
@@ -2741,7 +2887,7 @@ function EmployeesTab({
     <>
       {onFiltersChange ? (
         <form
-          className='mb-3 flex flex-wrap items-center gap-2'
+          className='business-sticky-filter sticky top-0 z-10 flex flex-wrap items-center gap-2'
           style={{ rowGap: 8 }}
           onSubmit={handleFilterSubmit}
         >
@@ -2853,9 +2999,13 @@ function CommissionLogsTable({
   logs: providedLogs,
   filters,
   onFiltersChange,
+  onReadyToolbar,
   showInlinePagination = embedded,
 }) {
   const { t } = useTranslation();
+  const [compactMode, setCompactMode] = useTableCompactMode(
+    selfView ? 'employee-console-commission-logs' : 'employee-commission-logs',
+  );
   const ownLogs = usePagedEndpoint(endpoint, filters || {}, {
     enabled: !providedLogs,
   });
@@ -3014,6 +3164,18 @@ function CommissionLogsTable({
     onFiltersChange?.({});
   };
 
+  useEffect(() => {
+    if (!onReadyToolbar) return undefined;
+    onReadyToolbar(
+      <CompactModeToggle
+        compactMode={compactMode}
+        setCompactMode={setCompactMode}
+        t={t}
+      />,
+    );
+    return () => onReadyToolbar(null);
+  }, [compactMode, onReadyToolbar, setCompactMode, t]);
+
   const columns = [
     {
       title: t('时间'),
@@ -3022,14 +3184,25 @@ function CommissionLogsTable({
       width: 180,
     },
     ...(selfView
-      ? []
+      ? [
+          {
+            title: t('消费日志 ID'),
+            dataIndex: 'log_id',
+            render: (value) => (
+              <CommissionLogIdHover logId={value} selfView={selfView} />
+            ),
+            width: 120,
+          },
+        ]
       : [
           { title: t('员工 UID'), dataIndex: 'employee_user_id', width: 110 },
           { title: t('客户 UID'), dataIndex: 'customer_user_id', width: 110 },
           {
             title: t('消费日志 ID'),
             dataIndex: 'log_id',
-            render: (value) => value || '-',
+            render: (value) => (
+              <CommissionLogIdHover logId={value} selfView={selfView} />
+            ),
             width: 120,
           },
           {
@@ -3100,7 +3273,7 @@ function CommissionLogsTable({
     <>
       {onFiltersChange ? (
         <div
-          className='mb-3 flex flex-wrap items-center gap-2'
+          className='business-sticky-filter sticky top-0 z-10 flex flex-wrap items-center gap-2'
           style={{ rowGap: 8 }}
         >
           {!selfView ? (
@@ -3179,14 +3352,31 @@ function CommissionLogsTable({
           <Button size='small' type='tertiary' onClick={resetFilters}>
             {t('重置')}
           </Button>
+          {!onReadyToolbar ? (
+            <CompactModeToggle
+              compactMode={compactMode}
+              setCompactMode={setCompactMode}
+              t={t}
+            />
+          ) : null}
         </div>
-      ) : null}
+      ) : onReadyToolbar ? null : (
+        <div className='business-sticky-filter sticky top-0 z-10 flex justify-end'>
+          <CompactModeToggle
+            compactMode={compactMode}
+            setCompactMode={setCompactMode}
+            t={t}
+          />
+        </div>
+      )}
       <ClassicBusinessTable
         rowKey='id'
         columns={columns}
         dataSource={logs.items}
         loading={logs.loading}
         empty={<BusinessEmpty description={t('搜索无结果')} />}
+        size={compactMode ? 'small' : 'middle'}
+        className={compactMode ? 'business-commission-logs-compact' : ''}
       />
       {showInlinePagination ? (
         <ClassicInlinePagination paged={logs} t={t} />
@@ -4467,6 +4657,7 @@ export function Employees() {
             title={t('提成记录')}
             embedded
             showInlinePagination={false}
+            onReadyToolbar={setTabToolbar}
           />
         )}
       </BusinessCard>
@@ -5412,7 +5603,23 @@ export function BusinessOverview() {
 
             <BusinessSection
               title={t('渠道盈利（全平台）')}
-              description={t('成本和利润按分组倍率与渠道成本比例估算。')}
+              description={
+                <>
+                  {t('成本和利润按分组倍率与渠道成本比例估算。')}
+                  {(platform.loss_channel_count || 0) > 0 ? (
+                    <Text
+                      component='span'
+                      type='warning'
+                      strong
+                      style={{ marginLeft: 8 }}
+                    >
+                      {t(
+                        '亏损通常因有效分组倍率低于渠道成本比例，或存在退款、冲销等负向记录。',
+                      )}
+                    </Text>
+                  ) : null}
+                </>
+              }
             >
               <div className='mb-3 flex items-center gap-2'>
                 <Input
@@ -5514,3 +5721,5 @@ export function BusinessOverview() {
     </div>
   );
 }
+
+

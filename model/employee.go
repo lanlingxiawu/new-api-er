@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
@@ -734,11 +735,11 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		RecordCount     int64
 	}
 	tx := DB.Model(&EmployeeCommissionDailyStat{}).
-		Select("stat_date, " +
-			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, " +
-			"COALESCE(SUM(cost_quota),0) AS cost_quota, " +
-			"COALESCE(SUM(profit_quota),0) AS profit_quota, " +
-			"COALESCE(SUM(commission_quota),0) AS commission_quota, " +
+		Select("stat_date, "+
+			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, "+
+			"COALESCE(SUM(cost_quota),0) AS cost_quota, "+
+			"COALESCE(SUM(profit_quota),0) AS profit_quota, "+
+			"COALESCE(SUM(commission_quota),0) AS commission_quota, "+
 			"COALESCE(SUM(record_count),0) AS record_count").
 		Where("stat_date >= ? AND stat_date <= ?", statDateStart, statDateEnd)
 	if employeeUserId > 0 {
@@ -829,14 +830,31 @@ func GetCommissionTotals(startTime, endTime int64) (CommissionTotals, error) {
 }
 
 func getCommissionTotalsFromDailyRange(startDate, endDate int64) (CommissionTotals, error) {
+	return getCommissionTotalsFromDailyRangeWithContext(nil, startDate, endDate)
+}
+
+func getCommissionTotalsFromDailyRangeWithContext(ctx context.Context, startDate, endDate int64) (CommissionTotals, error) {
 	var t CommissionTotals
-	err := DB.Model(&EmployeeCommissionDailyStat{}).
+	err := DB.WithContext(safeDBContext(ctx)).Model(&EmployeeCommissionDailyStat{}).
 		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, "+
 			"COALESCE(SUM(cost_quota),0) as total_cost, "+
 			"COALESCE(SUM(profit_quota),0) as total_profit, "+
 			"COALESCE(SUM(commission_quota),0) as total_commission, "+
 			"COALESCE(SUM(record_count),0) as record_count").
 		Where("stat_date >= ? AND stat_date <= ?", startDate, endDate).
+		Scan(&t).Error
+	return t, err
+}
+
+func getCommissionTotalsFromLedgerRange(ctx context.Context, startTime, endTime int64) (CommissionTotals, error) {
+	var t CommissionTotals
+	err := DB.WithContext(safeDBContext(ctx)).Model(&EmployeeCommissionLog{}).
+		Select("COALESCE(SUM(revenue_quota),0) as total_revenue, "+
+			"COALESCE(SUM(cost_quota),0) as total_cost, "+
+			"COALESCE(SUM(profit_quota),0) as total_profit, "+
+			"COALESCE(SUM(commission_quota),0) as total_commission, "+
+			"COUNT(*) as record_count").
+		Where("created_at >= ? AND created_at <= ?", startTime, endTime).
 		Scan(&t).Error
 	return t, err
 }
@@ -862,11 +880,26 @@ func addCommissionTotals(dst *CommissionTotals, src CommissionTotals) {
 	dst.RecordCount += src.RecordCount
 }
 
-// GetCommissionTotalsWithPlan sums commission totals from daily aggregates only.
+// GetCommissionTotalsWithPlan sums commission totals from daily aggregates and
+// ledger ranges according to the resolved business stats query plan.
 func GetCommissionTotalsWithPlan(plan *ResolvedQueryPlan) (CommissionTotals, error) {
 	var totals CommissionTotals
 	for _, r := range plan.CoveredRanges {
-		t, err := getCommissionTotalsFromDailyRange(r.StartDate, r.EndDate)
+		t, err := getCommissionTotalsFromDailyRangeWithContext(plan.Context, r.StartDate, r.EndDate)
+		if err != nil {
+			return CommissionTotals{}, err
+		}
+		addCommissionTotals(&totals, t)
+	}
+	for _, r := range plan.UncoveredRanges {
+		t, err := getCommissionTotalsFromLedgerRange(plan.Context, r.StartDate, unixDayEnd(r.EndDate))
+		if err != nil {
+			return CommissionTotals{}, err
+		}
+		addCommissionTotals(&totals, t)
+	}
+	for _, r := range plan.DetailRanges {
+		t, err := getCommissionTotalsFromLedgerRange(plan.Context, r.StartTime, r.EndTime)
 		if err != nil {
 			return CommissionTotals{}, err
 		}

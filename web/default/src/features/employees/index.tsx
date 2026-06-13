@@ -14,6 +14,7 @@ import {
 } from '@tanstack/react-table'
 import {
   Info,
+  List,
   Pencil,
   PlusIcon,
   RotateCcw,
@@ -52,6 +53,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@/components/ui/hover-card'
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -59,6 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
@@ -90,6 +97,7 @@ import {
   getCommissionCalendarStats,
   getCommissionChannelOptions,
   getCommissionLogs,
+  getUsageLogById,
   getEmployeeTiers,
   getEmployeeTiersPage,
   getEmployees,
@@ -110,6 +118,7 @@ import type {
   EmployeeProfile,
   EmployeeTier,
 } from './types'
+import type { UsageLog } from '@/features/usage-logs/data/schema'
 
 const ASSIGN_USER_PICKER_PAGE_SIZE = 20
 const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20
@@ -1096,6 +1105,146 @@ function StatusBadge({ status }: { status: number }) {
   )
 }
 
+const usageLogPreviewCache = new Map<number, UsageLog | null>()
+
+function UsageLogPreviewContent({
+  log,
+  loading,
+}: {
+  log?: UsageLog | null
+  loading: boolean
+}) {
+  const { t } = useTranslation()
+
+  if (loading) {
+    return (
+      <div className='space-y-2'>
+        <Skeleton className='h-4 w-36' />
+        <Skeleton className='h-3 w-48' />
+        <Skeleton className='h-3 w-40' />
+      </div>
+    )
+  }
+
+  if (!log) {
+    return (
+      <div className='text-muted-foreground text-sm'>
+        {t('No matching consumption log found')}
+      </div>
+    )
+  }
+
+  const fields = [
+    { label: t('Time'), value: formatTs(log.created_at) },
+    { label: t('User ID'), value: `#${log.user_id}` },
+    { label: t('Username'), value: log.username || '-' },
+    { label: t('Token'), value: log.token_name || '-' },
+    { label: t('Model'), value: log.model_name || '-' },
+    {
+      label: t('Channel'),
+      value: log.channel_name || (log.channel ? `#${log.channel}` : '-'),
+    },
+    { label: t('Group'), value: log.group || '-' },
+    { label: t('Request ID'), value: log.request_id || '-' },
+  ]
+
+  return (
+    <div className='max-h-[420px] space-y-2 overflow-y-auto pr-1'>
+      <div className='flex items-center justify-between gap-3'>
+        <div className='font-medium'>{t('Consumption Log')}</div>
+        <Badge variant='outline'>#{log.id}</Badge>
+      </div>
+      <div className='grid gap-1.5 text-xs'>
+        {fields.map((field) => (
+          <div
+            key={field.label}
+            className='grid grid-cols-[88px_minmax(0,1fr)] gap-2'
+          >
+            <span className='text-muted-foreground'>{field.label}</span>
+            <span className='break-words font-mono leading-5'>
+              {field.value}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className='grid grid-cols-3 gap-2 border-t pt-2 text-xs'>
+        <div>
+          <div className='text-muted-foreground'>{t('Quota')}</div>
+          <div className='font-mono'>{log.quota ?? 0}</div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>{t('Prompt')}</div>
+          <div className='font-mono'>{log.prompt_tokens ?? 0}</div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>{t('Completion')}</div>
+          <div className='font-mono'>{log.completion_tokens ?? 0}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UsageLogIdHover({ logId }: { logId?: number | null }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [log, setLog] = useState<UsageLog | null | undefined>(
+    logId ? usageLogPreviewCache.get(logId) : undefined
+  )
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!open || !logId) return
+    if (usageLogPreviewCache.has(logId)) {
+      setLog(usageLogPreviewCache.get(logId) ?? null)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    getUsageLogById(logId)
+      .then((res) => {
+        if (cancelled) return
+        const next = res.success ? (res.data ?? null) : null
+        usageLogPreviewCache.set(logId, next)
+        setLog(next)
+      })
+      .catch(() => {
+        if (!cancelled) setLog(null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [logId, open])
+
+  if (!logId) return <span className='text-muted-foreground'>-</span>
+
+  return (
+    <HoverCard delay={1000} open={open} onOpenChange={setOpen}>
+      <HoverCardTrigger
+        render={
+          <button
+            type='button'
+            className='hover:text-primary inline-flex items-center gap-1 rounded-sm font-mono text-xs underline-offset-2 hover:underline'
+            aria-label={t('View consumption log details')}
+          />
+        }
+      >
+        #{logId}
+        <Info className='size-3' />
+      </HoverCardTrigger>
+      <HoverCardContent
+        align='start'
+        className='bg-popover/100 w-[min(520px,calc(100vw-32px))] border shadow-lg backdrop-blur-none'
+      >
+        <UsageLogPreviewContent log={log} loading={loading} />
+      </HoverCardContent>
+    </HoverCard>
+  )
+}
+
 function EmployeeRowActions({
   row,
   onEdit,
@@ -1443,7 +1592,7 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Log ID')} />
         ),
-        cell: ({ row }) => row.original.log_id ?? '-',
+        cell: ({ row }) => <UsageLogIdHover logId={row.original.log_id} />,
       },
       {
         accessorKey: 'channel_id',
@@ -1828,6 +1977,10 @@ function EmployeesTab() {
 function CommissionLogsTab() {
   const { t } = useTranslation()
   const columns = useCommissionLogColumns()
+  const [compactMode, setCompactMode] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('employee-commission-logs-compact') === 'true'
+  })
   const [filterForm, setFilterForm] = useState({
     employeeUserId: '',
     customerUserId: '',
@@ -1965,6 +2118,13 @@ function CommissionLogsTab() {
     getPaginationRowModel: getPaginationRowModel(),
   })
 
+  useEffect(() => {
+    localStorage.setItem(
+      'employee-commission-logs-compact',
+      String(compactMode)
+    )
+  }, [compactMode])
+
   return (
     <DataTablePage
       table={table}
@@ -1974,123 +2134,141 @@ function CommissionLogsTab() {
       emptyTitle={t('No records')}
       paginationInFooter={false}
       toolbar={
-        <div className='flex flex-wrap items-center gap-2'>
-          <Input
-            type='number'
-            min={1}
-            placeholder={t('Employee UID')}
-            value={filterForm.employeeUserId}
-            onChange={(event) =>
-              setFilterForm((form) => ({
-                ...form,
-                employeeUserId: event.target.value,
-              }))
-            }
-            className='w-[112px]'
-          />
-          <Input
-            type='number'
-            min={1}
-            placeholder={t('Customer UID')}
-            value={filterForm.customerUserId}
-            onChange={(event) =>
-              setFilterForm((form) => ({
-                ...form,
-                customerUserId: event.target.value,
-              }))
-            }
-            className='w-[112px]'
-          />
-          <Input
-            placeholder={t('Model Name')}
-            value={filterForm.modelName}
-            onChange={(event) =>
-              setFilterForm((form) => ({
-                ...form,
-                modelName: event.target.value,
-              }))
-            }
-            className='w-[160px]'
-          />
-          <Select
-            value={filterForm.channelId || 'all'}
-            onValueChange={(value) =>
-              setFilterForm((form) => ({
-                ...form,
-                channelId: !value || value === 'all' ? '' : value,
-              }))
-            }
-          >
-            <SelectTrigger size='sm' className='w-[200px]'>
-              <SelectValue placeholder={t('Channel')} />
-            </SelectTrigger>
-            <SelectContent onScroll={handleChannelOptionsScroll}>
-              <SelectGroup>
-                <SelectItem value='all'>{t('All channels')}</SelectItem>
-                {channelOptions.map((ch) => (
-                  <SelectItem key={ch.channel_id} value={String(ch.channel_id)}>
-                    <span className='flex items-center gap-1'>
-                      <span className='max-w-[180px] truncate'>
-                        {ch.channel_name || `#${ch.channel_id}`}
-                      </span>
-                      {ch.deleted ? (
-                        <span className='text-muted-foreground text-xs'>
-                          {t('(Deleted)')}
-                        </span>
-                      ) : null}
-                    </span>
-                  </SelectItem>
-                ))}
-                {isFetchingNextChannelOptionsPage ? (
-                  <div className='text-muted-foreground px-2 py-1.5 text-xs'>
-                    {t('Loading...')}
-                  </div>
-                ) : null}
-                {!isFetchingChannelOptions && channelOptions.length === 0 ? (
-                  <div className='text-muted-foreground px-2 py-1.5 text-xs'>
-                    {t('No records')}
-                  </div>
-                ) : null}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <Select
-            value={filterForm.lossStatus}
-            onValueChange={(value) =>
-              setFilterForm((form) => ({
-                ...form,
-                lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
-              }))
-            }
-          >
-            <SelectTrigger size='sm' className='w-[132px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>{t('All profit states')}</SelectItem>
-              <SelectItem value='loss'>{t('Loss only')}</SelectItem>
-              <SelectItem value='normal'>{t('Non-loss only')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <div className='w-[300px]'>
-            <CompactDateTimeRangePicker
-              start={filterForm.start}
-              end={filterForm.end}
-              onChange={({ start, end }) =>
-                setFilterForm((form) => ({ ...form, start, end }))
-              }
-            />
+        <div className='space-y-2'>
+          <div className='flex justify-end'>
+            <Button
+              type='button'
+              size='sm'
+              variant={compactMode ? 'default' : 'outline'}
+              onClick={() => setCompactMode((value) => !value)}
+            >
+              <List className='h-4 w-4' />
+              {t('Compact list')}
+            </Button>
           </div>
-          <Button size='sm' onClick={applyFilters}>
-            {t('Search')}
-          </Button>
-          <Button size='sm' variant='outline' onClick={resetFilters}>
-            {t('Reset')}
-          </Button>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Input
+              type='number'
+              min={1}
+              placeholder={t('Employee UID')}
+              value={filterForm.employeeUserId}
+              onChange={(event) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  employeeUserId: event.target.value,
+                }))
+              }
+              className='w-[112px]'
+            />
+            <Input
+              type='number'
+              min={1}
+              placeholder={t('Customer UID')}
+              value={filterForm.customerUserId}
+              onChange={(event) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  customerUserId: event.target.value,
+                }))
+              }
+              className='w-[112px]'
+            />
+            <Input
+              placeholder={t('Model Name')}
+              value={filterForm.modelName}
+              onChange={(event) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  modelName: event.target.value,
+                }))
+              }
+              className='w-[160px]'
+            />
+            <Select
+              value={filterForm.channelId || 'all'}
+              onValueChange={(value) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  channelId: !value || value === 'all' ? '' : value,
+                }))
+              }
+            >
+              <SelectTrigger size='sm' className='w-[200px]'>
+                <SelectValue placeholder={t('Channel')} />
+              </SelectTrigger>
+              <SelectContent onScroll={handleChannelOptionsScroll}>
+                <SelectGroup>
+                  <SelectItem value='all'>{t('All channels')}</SelectItem>
+                  {channelOptions.map((ch) => (
+                    <SelectItem key={ch.channel_id} value={String(ch.channel_id)}>
+                      <span className='flex items-center gap-1'>
+                        <span className='max-w-[180px] truncate'>
+                          {ch.channel_name || `#${ch.channel_id}`}
+                        </span>
+                        {ch.deleted ? (
+                          <span className='text-muted-foreground text-xs'>
+                            {t('(Deleted)')}
+                          </span>
+                        ) : null}
+                      </span>
+                    </SelectItem>
+                  ))}
+                  {isFetchingNextChannelOptionsPage ? (
+                    <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+                      {t('Loading...')}
+                    </div>
+                  ) : null}
+                  {!isFetchingChannelOptions && channelOptions.length === 0 ? (
+                    <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+                      {t('No records')}
+                    </div>
+                  ) : null}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={filterForm.lossStatus}
+              onValueChange={(value) =>
+                setFilterForm((form) => ({
+                  ...form,
+                  lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
+                }))
+              }
+            >
+              <SelectTrigger size='sm' className='w-[132px]'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value='all'>{t('All profit states')}</SelectItem>
+                  <SelectItem value='loss'>{t('Loss only')}</SelectItem>
+                  <SelectItem value='normal'>{t('Non-loss only')}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div className='w-[300px]'>
+              <CompactDateTimeRangePicker
+                start={filterForm.start}
+                end={filterForm.end}
+                onChange={({ start, end }) =>
+                  setFilterForm((form) => ({ ...form, start, end }))
+                }
+              />
+            </div>
+            <Button size='sm' onClick={applyFilters}>
+              {t('Search')}
+            </Button>
+            <Button size='sm' variant='outline' onClick={resetFilters}>
+              {t('Reset')}
+            </Button>
+          </div>
         </div>
       }
       getRowClassName={(row) =>
-        row.original.profit_quota < 0 ? 'opacity-60' : undefined
+        cn(
+          compactMode && '[&_td]:h-8 [&_td]:py-1 [&_td]:text-xs',
+          row.original.profit_quota < 0 && 'opacity-60'
+        )
       }
       skeletonKeyPrefix='commission-logs-skeleton'
       className='flex h-full min-h-0 flex-col overflow-hidden'
@@ -2915,21 +3093,27 @@ export function Employees() {
         <Tabs
           value={activeTab}
           onValueChange={(value) => value && setActiveTab(value)}
-          className='h-full min-h-0 overflow-hidden'
+          className='flex h-full min-h-0 flex-col overflow-hidden'
         >
-          <TabsList>
+          <TabsList className='shrink-0'>
             <TabsTrigger value='employees'>{t('Employees')}</TabsTrigger>
             <TabsTrigger value='tiers'>{t('Commission Tiers')}</TabsTrigger>
             <TabsTrigger value='commission'>{t('Commission Logs')}</TabsTrigger>
             <TabsTrigger value='monthly'>{t('Monthly Stats')}</TabsTrigger>
           </TabsList>
-          <TabsContent value='employees' className='min-h-0 overflow-hidden'>
+          <TabsContent
+            value='employees'
+            className='min-h-0 flex-1 overflow-hidden'
+          >
             {activeTab === 'employees' && <EmployeesTab />}
           </TabsContent>
-          <TabsContent value='tiers' className='min-h-0 overflow-hidden'>
+          <TabsContent value='tiers' className='min-h-0 flex-1 overflow-hidden'>
             {activeTab === 'tiers' && <TiersTab />}
           </TabsContent>
-          <TabsContent value='commission' className='min-h-0 overflow-hidden'>
+          <TabsContent
+            value='commission'
+            className='min-h-0 flex-1 overflow-hidden'
+          >
             {activeTab === 'commission' && <CommissionLogsTab />}
           </TabsContent>
           <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
