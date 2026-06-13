@@ -58,15 +58,15 @@ type EmployeeCustomerCommissionDailyStat struct {
 
 type EmployeeCommissionMonthlyStat struct {
 	Id              int    `json:"id"`
-	PeriodStartAt   int64  `json:"period_start_at" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:1;index"`
+	PeriodStartAt   int64  `json:"period_start_at" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:1;index;index:idx_employee_commission_monthly_period_rank,priority:1;index:idx_employee_commission_monthly_employee_period,priority:2"`
 	PeriodEndAt     int64  `json:"period_end_at" gorm:"index;default:0"`
 	PeriodKey       string `json:"period_key" gorm:"type:varchar(32);default:''"`
 	Timezone        string `json:"timezone" gorm:"type:varchar(64);default:''"`
-	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:2;index"`
+	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:2;index;index:idx_employee_commission_monthly_employee_period,priority:1"`
 	RevenueQuota    int64  `json:"revenue_quota" gorm:"default:0"`
 	CostQuota       int64  `json:"cost_quota" gorm:"default:0"`
 	ProfitQuota     int64  `json:"profit_quota" gorm:"default:0"`
-	CommissionQuota int64  `json:"commission_quota" gorm:"default:0"`
+	CommissionQuota int64  `json:"commission_quota" gorm:"default:0;index:idx_employee_commission_monthly_period_rank,priority:2"`
 	RecordCount     int64  `json:"record_count" gorm:"default:0"`
 	LastCreatedAt   int64  `json:"last_created_at" gorm:"default:0"`
 }
@@ -873,14 +873,13 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 		if err != nil {
 			return nil, 0, err
 		}
-		logChannelNames := GetChannelNameSnapshotsFromLogsWithContext(plan.Context, missingChannelNameIds(rows, channelNames))
 		for _, row := range rows {
 			finalizeConsumptionCostChannelStat(row)
 			if row.ChannelName == "" {
 				row.ChannelName = channelNames[row.ChannelId]
 			}
 			if row.ChannelName == "" {
-				row.ChannelName = logChannelNames[row.ChannelId]
+				row.ChannelName = fallbackChannelDisplayName(row.ChannelId)
 			}
 		}
 		return rows, total, nil
@@ -898,13 +897,12 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 	if err != nil {
 		return nil, 0, err
 	}
-	logChannelNames := GetChannelNameSnapshotsFromLogsWithContext(plan.Context, missingChannelNameIds(items, channelNames))
 	for _, item := range items {
 		if item.ChannelName == "" {
 			item.ChannelName = channelNames[item.ChannelId]
 		}
 		if item.ChannelName == "" {
-			item.ChannelName = logChannelNames[item.ChannelId]
+			item.ChannelName = fallbackChannelDisplayName(item.ChannelId)
 		}
 	}
 	if keyword != "" {
@@ -930,19 +928,11 @@ func GetConsumptionCostByChannelPageWithPlan(plan *ResolvedQueryPlan, page, page
 	return items[start:end], total, nil
 }
 
-func missingChannelNameIds(items []*ConsumptionCostChannelStat, channelNames map[int]string) []int {
-	seen := make(map[int]bool)
-	ids := make([]int, 0)
-	for _, item := range items {
-		if item == nil || item.ChannelName != "" || channelNames[item.ChannelId] != "" {
-			continue
-		}
-		if !seen[item.ChannelId] {
-			seen[item.ChannelId] = true
-			ids = append(ids, item.ChannelId)
-		}
+func fallbackChannelDisplayName(channelId int) string {
+	if channelId <= 0 {
+		return ""
 	}
-	return ids
+	return "#" + strconv.Itoa(channelId)
 }
 
 func mergeConsumptionCostChannelStats(dst map[int]*ConsumptionCostChannelStat, rows []*ConsumptionCostChannelStat) {
