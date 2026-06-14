@@ -181,6 +181,18 @@ const renderQuotaUsage = (text, record, t) => {
  * Render invite information
  */
 const renderInviteInfo = (text, record, t) => {
+  const inviterId = record.inviter_id || 0;
+  const inviterRemark = (record.inviter_remark || '').trim();
+  const inviterLabel =
+    inviterId === 0
+      ? t('无邀请人')
+      : `${t('邀请人')}: ${inviterId}${inviterRemark ? ` | ${inviterRemark}` : ''}`;
+  const inviterTag = (
+    <Tag color='white' shape='circle' className='!text-xs'>
+      {inviterLabel}
+    </Tag>
+  );
+
   return (
     <div>
       <Space spacing={1}>
@@ -190,11 +202,26 @@ const renderInviteInfo = (text, record, t) => {
         <Tag color='white' shape='circle' className='!text-xs'>
           {t('收益')}: {renderQuota(record.aff_history_quota)}
         </Tag>
-        <Tag color='white' shape='circle' className='!text-xs'>
-          {record.inviter_id === 0
-            ? t('无邀请人')
-            : `${t('邀请人')}: ${record.inviter_id}`}
-        </Tag>
+        {inviterRemark ? (
+          <Tooltip
+            content={
+              <div className='text-xs'>
+                <div>
+                  {t('邀请人')}: {inviterId}
+                </div>
+                <div>
+                  {t('备注')}: {inviterRemark}
+                </div>
+              </div>
+            }
+            position='top'
+            showArrow
+          >
+            {inviterTag}
+          </Tooltip>
+        ) : (
+          inviterTag
+        )}
       </Space>
     </div>
   );
