@@ -60,7 +60,17 @@ require (
 	gorm.io/gorm v1.25.2
 )
 
-require github.com/waffo-com/waffo-pancake-sdk-go v0.3.1
+require (
+	github.com/smartwalle/alipay/v3 v3.2.29
+	github.com/waffo-com/waffo-pancake-sdk-go v0.3.1
+	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
+)
+
+require (
+	github.com/smartwalle/ncrypto v1.0.4 // indirect
+	github.com/smartwalle/ngx v1.1.0 // indirect
+	github.com/smartwalle/nsign v1.0.9 // indirect
+)
 
 require (
 	github.com/DmitriyVTitov/size v1.5.0 // indirect
@@ -88,7 +98,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-sql-driver/mysql v1.7.0 // indirect
+	github.com/go-sql-driver/mysql v1.7.0
 	github.com/go-webauthn/x v0.1.25 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/google/go-tpm v0.9.5 // indirect

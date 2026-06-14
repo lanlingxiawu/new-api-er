@@ -23,13 +23,18 @@ import {
   calculateAmount,
   calculateStripeAmount,
   calculateWaffoPancakeAmount,
+  calculateAlipayAmount,
+  calculateWechatAmount,
   requestPayment,
   requestStripePayment,
+  requestAlipayPayment,
   isApiSuccess,
 } from '../api'
 import {
   isStripePayment,
   isWaffoPancakePayment,
+  isAlipayOfficialPayment,
+  isWechatOfficialPayment,
   submitPaymentForm,
 } from '../lib'
 
@@ -50,11 +55,17 @@ export function usePayment() {
 
         const isStripe = isStripePayment(paymentType)
         const isPancake = isWaffoPancakePayment(paymentType)
+        const isAlipayOfficial = isAlipayOfficialPayment(paymentType)
+        const isWechatOfficial = isWechatOfficialPayment(paymentType)
         const response = isStripe
           ? await calculateStripeAmount({ amount: topupAmount })
           : isPancake
             ? await calculateWaffoPancakeAmount({ amount: topupAmount })
-            : await calculateAmount({ amount: topupAmount })
+            : isAlipayOfficial
+              ? await calculateAlipayAmount({ amount: topupAmount })
+              : isWechatOfficial
+                ? await calculateWechatAmount({ amount: topupAmount })
+                : await calculateAmount({ amount: topupAmount })
 
         if (isApiSuccess(response) && response.data) {
           const calculatedAmount = parseFloat(response.data)
@@ -81,33 +92,66 @@ export function usePayment() {
       try {
         setProcessing(true)
 
-        const isStripe = isStripePayment(paymentType)
         const amount = Math.floor(topupAmount)
 
-        const response = isStripe
-          ? await requestStripePayment({
-              amount,
-              payment_method: 'stripe',
-            })
-          : await requestPayment({
-              amount,
-              payment_method: paymentType,
-            })
+        // Handle Stripe payment
+        if (isStripePayment(paymentType)) {
+          const response = await requestStripePayment({
+            amount,
+            payment_method: 'stripe',
+          })
+
+          if (!isApiSuccess(response)) {
+            toast.error(
+              response.message || i18next.t('Payment request failed')
+            )
+            return false
+          }
+
+          if (response.data?.pay_link) {
+            window.open(response.data.pay_link, '_blank')
+            toast.success(i18next.t('Redirecting to payment page...'))
+            return true
+          }
+
+          return false
+        }
+
+        // Handle official Alipay payment
+        if (isAlipayOfficialPayment(paymentType)) {
+          const response = await requestAlipayPayment({ amount })
+
+          if (!isApiSuccess(response)) {
+            toast.error(
+              response.message || i18next.t('Payment request failed')
+            )
+            return false
+          }
+
+          const data = response.data
+          const paymentUrl =
+            data && typeof data === 'object' ? data.payment_url : undefined
+          if (paymentUrl) {
+            window.open(paymentUrl, '_blank')
+            toast.success(i18next.t('Redirecting to payment page...'))
+            return true
+          }
+
+          return false
+        }
+
+        // Handle generic (epay-style form submission) payment
+        const response = await requestPayment({
+          amount,
+          payment_method: paymentType,
+        })
 
         if (!isApiSuccess(response)) {
           toast.error(response.message || i18next.t('Payment request failed'))
           return false
         }
 
-        // Handle Stripe payment
-        if (isStripe && response.data?.pay_link) {
-          window.open(response.data.pay_link as string, '_blank')
-          toast.success(i18next.t('Redirecting to payment page...'))
-          return true
-        }
-
-        // Handle non-Stripe payment
-        if (!isStripe && response.data) {
+        if (response.data) {
           const url = (response as unknown as { url?: string }).url
           if (url) {
             submitPaymentForm(url, response.data)

@@ -16,15 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Wallet Hooks Exports
-// ============================================================================
+package setting
 
-export * from './use-topup-info'
-export * from './use-payment'
-export * from './use-affiliate'
-export * from './use-redemption'
-export * from './use-creem-payment'
-export * from './use-waffo-payment'
-export * from './use-waffo-pancake-payment'
-export * from './use-wechat-payment'
+var (
+	AlipayEnabled    bool
+	AlipayAppId      string
+	AlipayPrivateKey string // 应用私钥（RSA2，PKCS1 或 PKCS8 均可）
+	AlipayPublicKey  string // 支付宝公钥（公钥模式）
+	AlipaySandbox    bool   // 是否使用支付宝沙箱环境
+	AlipayMinTopUp   int    = 1
+	AlipayNotifyUrl  string // 异步通知地址，留空则使用系统默认回调地址
+	AlipayReturnUrl  string // 同步跳转地址，留空则使用系统默认地址
+)
