@@ -3,49 +3,157 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/glebarez/sqlite"
+	"github.com/joho/godotenv"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
+// findProjectRoot walks up from the current file to find the directory containing .env
+func findProjectRoot() string {
+	_, filename, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(filename)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".env")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
 func TestMain(m *testing.M) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		panic("failed to open test db: " + err.Error())
+	// Load .env from project root
+	root := findProjectRoot()
+	if root != "" {
+		_ = godotenv.Load(filepath.Join(root, ".env"))
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		panic("failed to get sql.DB: " + err.Error())
-	}
-	sqlDB.SetMaxOpenConns(1)
 
-	model.DB = db
-	model.LOG_DB = db
-
-	common.UsingSQLite = true
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
 
+	// --- Main DB (MySQL from .env SQL_DSN) ---
+	sqlDSN := os.Getenv("SQL_DSN")
+	if sqlDSN == "" {
+		panic("SQL_DSN not set in .env, cannot connect to database")
+	}
+
+	var db *gorm.DB
+	var err error
+
+	if strings.HasPrefix(sqlDSN, "postgres://") || strings.HasPrefix(sqlDSN, "postgresql://") {
+		common.UsingPostgreSQL = true
+		db, err = gorm.Open(postgres.New(postgres.Config{
+			DSN:                  sqlDSN,
+			PreferSimpleProtocol: true,
+		}), &gorm.Config{})
+	} else {
+		// MySQL
+		common.UsingMySQL = true
+		if !strings.Contains(sqlDSN, "parseTime") {
+			if strings.Contains(sqlDSN, "?") {
+				sqlDSN += "&parseTime=true"
+			} else {
+				sqlDSN += "?parseTime=true"
+			}
+		}
+		db, err = gorm.Open(mysql.Open(sqlDSN), &gorm.Config{})
+	}
+	if err != nil {
+		panic("failed to open main db: " + err.Error())
+	}
+	model.DB = db
+
+	// --- Log DB (PostgreSQL from .env LOG_SQL_DSN, fallback to main DB) ---
+	logDSN := os.Getenv("LOG_SQL_DSN")
+	if logDSN != "" {
+		if strings.HasPrefix(logDSN, "postgres://") || strings.HasPrefix(logDSN, "postgresql://") {
+			common.LogSqlType = common.DatabaseTypePostgreSQL
+			logDB, err := gorm.Open(postgres.New(postgres.Config{
+				DSN:                  logDSN,
+				PreferSimpleProtocol: true,
+			}), &gorm.Config{})
+			if err != nil {
+				panic("failed to open log db: " + err.Error())
+			}
+			model.LOG_DB = logDB
+		} else {
+			common.LogSqlType = common.DatabaseTypeMySQL
+			logDB, err := gorm.Open(mysql.Open(logDSN), &gorm.Config{})
+			if err != nil {
+				panic("failed to open log db: " + err.Error())
+			}
+			model.LOG_DB = logDB
+		}
+	} else {
+		model.LOG_DB = db
+	}
+
+	// AutoMigrate only commission/business-related tables
 	if err := db.AutoMigrate(
-		&model.Task{},
 		&model.User{},
 		&model.Token{},
-		&model.Log{},
 		&model.Channel{},
+		&model.Ability{},
+		&model.Log{},
 		&model.TopUp{},
+		&model.Task{},
+		&model.SubscriptionPlan{},
+		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.PerfMetric{},
+		&model.UserExtension{},
+		&model.EmployeeProfile{},
+		&model.ChannelCostConfig{},
+		&model.EmployeeCommissionLog{},
+		&model.ConsumptionCost{},
+		&model.PlatformChannelDailyStat{},
+		&model.EmployeeCommissionDailyStat{},
+		&model.EmployeeCustomerCommissionDailyStat{},
+		&model.EmployeeCommissionMonthlyStat{},
+		&model.BusinessStatsAppliedBatch{},
+		&model.BusinessDailyStatsCoverage{},
+		&model.EmployeeCommissionTier{},
+		&model.EmployeeTierLevel{},
+		&model.EmployeeTierLog{},
+		&model.CustomerProfile{},
+		&model.CustomerQuotaLog{},
 	); err != nil {
-		panic("failed to migrate: " + err.Error())
+		panic("failed to migrate main db: " + err.Error())
+	}
+	if err := model.LOG_DB.AutoMigrate(&model.Log{}); err != nil {
+		panic("failed to migrate log db: " + err.Error())
+	}
+
+	fmt.Println("[TEST] Main DB connected:", sqlDSN)
+	if logDSN != "" {
+		fmt.Println("[TEST] Log DB connected:", logDSN)
+	} else {
+		fmt.Println("[TEST] Log DB: using main DB")
 	}
 
 	os.Exit(m.Run())
@@ -57,20 +165,33 @@ func TestMain(m *testing.M) {
 
 func truncate(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() {
+	cleanup := func() {
+		if strings.ToLower(os.Getenv("TEST_DB_CLEANUP")) != "true" {
+			return
+		}
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
+		if model.LOG_DB != nil {
+			model.LOG_DB.Exec("DELETE FROM logs")
+		}
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
-	})
+	}
+	t.Cleanup(cleanup)
 }
 
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
-	user := &model.User{Id: id, Username: "test_user", Quota: quota, Status: common.UserStatusEnabled}
+	user := &model.User{
+		Id:       id,
+		Username: "test_user",
+		Quota:    quota,
+		Status:   common.UserStatusEnabled,
+		AffCode:  fmt.Sprintf("aff%d", id),
+	}
 	require.NoError(t, model.DB.Create(user).Error)
 }
 

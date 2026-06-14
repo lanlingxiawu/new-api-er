@@ -233,7 +233,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, constant.MjActionSwapFace)
 			other := service.GenerateMjOtherInfo(info, priceData)
-			model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+			logId := model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 				ChannelId: info.ChannelId,
 				ModelName: modelName,
 				TokenName: tokenName,
@@ -245,6 +245,11 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(info.UserId, priceData.Quota)
 			model.UpdateChannelUsedQuota(info.ChannelId, priceData.Quota)
+			infoCopy := *info
+			quotaCopy := priceData.Quota
+			go func() {
+				service.RecordCostAndSettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
+			}()
 		}
 	}()
 	midjResponse := &mjResp.Response
@@ -539,7 +544,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s，ID %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, midjRequest.Action, midjResponse.Result)
 			other := service.GenerateMjOtherInfo(relayInfo, priceData)
-			model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
+			logId := model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
 				ChannelId: relayInfo.ChannelId,
 				ModelName: modelName,
 				TokenName: tokenName,
@@ -551,6 +556,11 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, priceData.Quota)
 			model.UpdateChannelUsedQuota(relayInfo.ChannelId, priceData.Quota)
+			relayInfoCopy := *relayInfo
+			quotaCopy := priceData.Quota
+			go func() {
+				service.RecordCostAndSettleEmployeeCommission(&relayInfoCopy, quotaCopy, 0, logId)
+			}()
 		}
 	}()
 

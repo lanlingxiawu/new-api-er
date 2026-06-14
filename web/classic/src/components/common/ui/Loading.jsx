@@ -22,7 +22,19 @@ import { Spin } from '@douyinfe/semi-ui';
 
 const Loading = ({ size = 'small' }) => {
   return (
-    <div className='fixed inset-0 w-screen h-screen flex items-center justify-center'>
+    <div
+      className='flex items-center justify-center'
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        width: '100vw',
+        height: '100vh',
+        minHeight: '100dvh',
+        background: 'var(--semi-color-bg-0)',
+      }}
+      aria-busy='true'
+    >
       <Spin size={size} spinning={true} />
     </div>
   );

@@ -66,3 +66,21 @@ export function AdminRoute({ children }) {
 }
 
 export { PrivateRoute };
+
+// xiugai 添加号池节点功能 - 修复路由权限与后端 RootAuth 一致
+export function RootRoute({ children }) {
+  const raw = localStorage.getItem('user');
+  if (!raw) {
+    return <Navigate to='/login' state={{ from: history.location }} />;
+  }
+  try {
+    const user = JSON.parse(raw);
+    if (user && typeof user.role === 'number' && user.role >= 100) {
+      return children;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return <Navigate to='/forbidden' replace />;
+}
+// end

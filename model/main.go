@@ -61,6 +61,10 @@ func initCol() {
 	//common.SysLog("Using Log SQL Type: " + common.LogSqlType)
 }
 
+func InitColumnNames() {
+	initCol()
+}
+
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB
@@ -281,6 +285,22 @@ func migrateDB() error {
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
+		&UserExtension{},
+		&EmployeeProfile{},
+		&ChannelCostConfig{},
+		&EmployeeCommissionLog{},
+		&ConsumptionCost{},
+		&PlatformChannelDailyStat{},
+		&EmployeeCommissionDailyStat{},
+		&EmployeeCustomerCommissionDailyStat{},
+		&EmployeeCommissionMonthlyStat{},
+		&BusinessStatsAppliedBatch{},
+		&BusinessDailyStatsCoverage{},
+		&CustomerProfile{},
+		&CustomerQuotaLog{},
+		&EmployeeCommissionTier{},
+		&EmployeeTierLevel{},
+		&EmployeeTierLog{},
 	)
 	if err != nil {
 		return err
@@ -330,6 +350,20 @@ func migrateDBFast() error {
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&UserExtension{}, "UserExtension"},
+		{&EmployeeProfile{}, "EmployeeProfile"},
+		{&ChannelCostConfig{}, "ChannelCostConfig"},
+		{&EmployeeCommissionLog{}, "EmployeeCommissionLog"},
+		{&ConsumptionCost{}, "ConsumptionCost"},
+		{&PlatformChannelDailyStat{}, "PlatformChannelDailyStat"},
+		{&EmployeeCommissionDailyStat{}, "EmployeeCommissionDailyStat"},
+		{&EmployeeCustomerCommissionDailyStat{}, "EmployeeCustomerCommissionDailyStat"},
+		{&EmployeeCommissionMonthlyStat{}, "EmployeeCommissionMonthlyStat"},
+		{&BusinessStatsAppliedBatch{}, "BusinessStatsAppliedBatch"},
+		{&BusinessDailyStatsCoverage{}, "BusinessDailyStatsCoverage"},
+		{&EmployeeCommissionTier{}, "EmployeeCommissionTier"},
+		{&EmployeeTierLevel{}, "EmployeeTierLevel"},
+		{&EmployeeTierLog{}, "EmployeeTierLog"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -397,6 +431,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`custom_seconds`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`enabled`" + ` numeric DEFAULT 1,
 ` + "`sort_order`" + ` integer DEFAULT 0,
+` + "`allow_balance_pay`" + ` numeric DEFAULT 1,
 ` + "`stripe_price_id`" + ` varchar(128) DEFAULT '',
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`waffo_pancake_product_id`" + ` varchar(128) DEFAULT '',
@@ -431,6 +466,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "custom_seconds", DDL: "`custom_seconds` bigint NOT NULL DEFAULT 0"},
 		{Name: "enabled", DDL: "`enabled` numeric DEFAULT 1"},
 		{Name: "sort_order", DDL: "`sort_order` integer DEFAULT 0"},
+		{Name: "allow_balance_pay", DDL: "`allow_balance_pay` numeric DEFAULT 1"},
 		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "waffo_pancake_product_id", DDL: "`waffo_pancake_product_id` varchar(128) DEFAULT ''"},

@@ -18,23 +18,34 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Activity,
+  BadgeDollarSign,
   Box,
   CreditCard,
   FileText,
   FlaskConical,
   Key,
   LayoutDashboard,
+  LineChart,
   ListTodo,
   MessageSquare,
   Radio,
+  // xiugai 添加号池节点功能
+  Server,
+  // end
   Settings,
   Ticket,
   User,
+  UserCog,
+  UserRoundCheck,
   Users,
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import { type SidebarData } from '@/components/layout/types'
+// xiugai 添加号池节点功能 - 修复侧边栏权限
+import { ROLE } from '@/lib/roles'
+// end
 
 /**
  * Root navigation groups for the application sidebar.
@@ -44,6 +55,7 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const isEmployee = useAuthStore((s) => Boolean(s.auth.user?.is_employee))
 
   return {
     navGroups: [
@@ -110,6 +122,21 @@ export function useSidebarData(): SidebarData {
             url: '/profile',
             icon: User,
           },
+          // 仅员工可见
+          ...(isEmployee
+            ? [
+                {
+                  title: t('My Commission'),
+                  url: '/commission',
+                  icon: BadgeDollarSign,
+                },
+                {
+                  title: t('My Customers'),
+                  url: '/customer-console',
+                  icon: UserRoundCheck,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -140,6 +167,24 @@ export function useSidebarData(): SidebarData {
             title: t('Subscription Management'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          // xiugai 添加号池节点功能 - 修复侧边栏权限，仅超级管理员可见
+          {
+            title: t('Node Pool'),
+            url: '/node-pool',
+            icon: Server,
+            minRole: ROLE.SUPER_ADMIN,
+          },
+          // end
+          {
+            title: t('Employee Management'),
+            url: '/employees',
+            icon: UserCog,
+          },
+          {
+            title: t('Business Overview'),
+            url: '/commission-overview',
+            icon: LineChart,
           },
           {
             title: t('System Settings'),

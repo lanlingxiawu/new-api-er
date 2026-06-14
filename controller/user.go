@@ -251,6 +251,9 @@ func GetAllUsers(c *gin.Context) {
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	excludeEmployees := isTruthyQuery(c.Query("exclude_employee")) || isTruthyQuery(c.Query("exclude_employees"))
+	excludeAdmins := isTruthyQuery(c.Query("exclude_admin")) || isTruthyQuery(c.Query("exclude_admins"))
+	excludeAssignedCustomers := isTruthyQuery(c.Query("exclude_assigned_customer")) || isTruthyQuery(c.Query("exclude_assigned_customers"))
 	var role *int
 	if roleStr := c.Query("role"); roleStr != "" {
 		if parsed, err := strconv.Atoi(roleStr); err == nil {
@@ -264,7 +267,7 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(keyword, group, role, status, excludeEmployees, excludeAdmins, excludeAssignedCustomers, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -274,6 +277,11 @@ func SearchUsers(c *gin.Context) {
 	pageInfo.SetItems(users)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+func isTruthyQuery(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "1" || value == "true" || value == "yes"
 }
 
 func canManageTargetRole(myRole int, targetRole int) bool {
@@ -436,6 +444,7 @@ func GetSelf(c *gin.Context) {
 		"stripe_customer":   user.StripeCustomer,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,                // 新增权限字段
+		"is_employee":       model.IsEmployee(user.Id),  // 是否为启用状态的员工（用于前端控制「我的提成」菜单显隐）
 	}
 
 	c.JSON(http.StatusOK, gin.H{

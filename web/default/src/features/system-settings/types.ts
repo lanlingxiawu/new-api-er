@@ -269,6 +269,9 @@ export type BillingSettings = {
 }
 
 export type OperationsSettings = {
+  // xiugai 添加号池节点功能
+  NodeControlServiceUrl: string
+  // end
   RetryTimes: number
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean

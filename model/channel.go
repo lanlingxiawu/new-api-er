@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -57,6 +58,11 @@ type Channel struct {
 
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
+
+	// CostRatio 渠道成本系数，不持久化到 channels 表（实际存于 ChannelCostConfig）。
+	// 仅用于在渠道增改接口中透传该值，由控制器同步到 ChannelCostConfig；
+	// GetChannel 读取时回填，供前端编辑表单预填。指针区分「未提供(nil)」与「显式设置」。
+	CostRatio *float64 `json:"cost_ratio,omitempty" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -437,13 +443,21 @@ func BatchInsertChannels(channels []Channel) error {
 		}
 	}()
 
-	for _, chunk := range lo.Chunk(channels, 50) {
+	// 使用原生切片分片（共享底层数组），确保 tx.Create 生成的自增 ID
+	// 回写到调用方传入的 channels，便于创建后按渠道 ID 同步成本配置等。
+	const chunkSize = 50
+	for start := 0; start < len(channels); start += chunkSize {
+		end := start + chunkSize
+		if end > len(channels) {
+			end = len(channels)
+		}
+		chunk := channels[start:end]
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
-		for _, channel_ := range chunk {
-			if err := channel_.AddAbilities(tx); err != nil {
+		for i := range chunk {
+			if err := chunk[i].AddAbilities(tx); err != nil {
 				tx.Rollback()
 				return err
 			}
@@ -462,6 +476,10 @@ func BatchDeleteChannels(ids []int) error {
 		return tx.Error
 	}
 	for _, chunk := range lo.Chunk(ids, 200) {
+		if err := snapshotChannelNamesBeforeDeleteTx(tx, chunk); err != nil {
+			tx.Rollback()
+			return err
+		}
 		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -593,13 +611,50 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, []int{channel.Id}); err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = channel.DeleteAbilities()
-	return err
+	if err := tx.Delete(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+
+func snapshotChannelNamesBeforeDeleteTx(tx *gorm.DB, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var channels []Channel
+	if err := tx.Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		name := strings.TrimSpace(channel.Name)
+		if channel.Id == 0 || name == "" {
+			continue
+		}
+		if err := tx.Model(&ConsumptionCost{}).
+			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
+			Update("channel_name", name).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&PlatformChannelDailyStat{}).
+			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
+			Update("channel_name", name).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var channelStatusLock sync.Mutex
@@ -868,13 +923,49 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	result := DB.Where("status = ?", status).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	var ids []int
+	if err := tx.Model(&Channel{}).Where("status = ?", status).Pluck("id", &ids).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	result := tx.Where("status = ?", status).Delete(&Channel{})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, result.Error
+	}
+	return result.RowsAffected, tx.Commit().Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	return result.RowsAffected, result.Error
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	var ids []int
+	if err := tx.Model(&Channel{}).
+		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
+		Pluck("id", &ids).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	result := tx.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, result.Error
+	}
+	return result.RowsAffected, tx.Commit().Error
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
@@ -1020,6 +1111,147 @@ func GetChannelsByIds(ids []int) ([]*Channel, error) {
 	return channels, err
 }
 
+func GetChannelNamesByIds(ids []int) (map[int]string, error) {
+	return GetChannelNamesByIdsWithContext(context.Background(), ids)
+}
+
+func GetChannelNamesByIdsWithContext(ctx context.Context, ids []int) (map[int]string, error) {
+	result := make(map[int]string, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var rows []struct {
+		Id   int
+		Name string
+	}
+	// Unscoped: 已删除渠道的历史消费数据仍需显示渠道名
+	err := DB.WithContext(safeDBContext(ctx)).Unscoped().Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.Id] = row.Name
+	}
+	return result, nil
+}
+
+// ResolveChannelDisplayNames 批量解析渠道显示名称（兼容已删除渠道），仅用于按页展示等小批量场景。
+// 解析链：channels 表 → platform_channel_daily_stats 名称快照 → logs 快照。
+// 渠道删除时 snapshotChannelNamesBeforeDeleteTx 已保证日聚合表留有名称，因此该链路对已删渠道是闭合的。
+func ResolveChannelDisplayNames(ids []int) map[int]string {
+	uniq := make([]int, 0, len(ids))
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	result, err := GetChannelNamesByIds(uniq)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to resolve channel names from channels: %v", err))
+		result = make(map[int]string, len(uniq))
+	}
+	missing := make([]int, 0)
+	for _, id := range uniq {
+		if result[id] == "" {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return result
+	}
+	var rows []struct {
+		ChannelId   int
+		ChannelName string
+	}
+	err = DB.Model(&PlatformChannelDailyStat{}).
+		Select("channel_id, MAX(channel_name) as channel_name").
+		Where("channel_id IN ? AND channel_name <> ''", missing).
+		Group("channel_id").
+		Scan(&rows).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to resolve channel names from daily stats: %v", err))
+	} else {
+		for _, row := range rows {
+			if row.ChannelName != "" {
+				result[row.ChannelId] = row.ChannelName
+			}
+		}
+	}
+	still := make([]int, 0)
+	for _, id := range missing {
+		if result[id] == "" {
+			still = append(still, id)
+		}
+	}
+	if len(still) > 0 {
+		for id, name := range GetChannelNameSnapshotsFromLogs(still) {
+			result[id] = name
+		}
+	}
+	return result
+}
+
+// ChannelDisplayOption 渠道筛选下拉选项（含已删除渠道）。
+type ChannelDisplayOption struct {
+	ChannelId   int    `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	Deleted     bool   `json:"deleted"`
+}
+
+// ListChannelDisplayOptions 列出产生过消费的渠道（含已删除），用于筛选下拉。
+// 数据源为 platform_channel_daily_stats（每渠道每天一行的小表，渠道删除时
+// snapshotChannelNamesBeforeDeleteTx 已把名称快照回填），在世渠道叠加当前名称。
+// 不扫描 logs / consumption_costs / employee_commission_logs 等大表。
+func ListChannelDisplayOptions(page, pageSize int) ([]ChannelDisplayOption, int64, error) {
+	var total int64
+	if err := DB.Model(&PlatformChannelDailyStat{}).
+		Distinct("channel_id").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var rows []struct {
+		ChannelId   int
+		ChannelName string
+	}
+	if err := DB.Model(&PlatformChannelDailyStat{}).
+		Select("channel_id, MAX(channel_name) as channel_name").
+		Group("channel_id").
+		Order("channel_id").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	ids := make([]int, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ChannelId)
+	}
+	liveNames, err := GetChannelNamesByIds(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	options := make([]ChannelDisplayOption, 0, len(rows))
+	for _, row := range rows {
+		opt := ChannelDisplayOption{
+			ChannelId:   row.ChannelId,
+			ChannelName: row.ChannelName,
+		}
+		if liveName, ok := liveNames[row.ChannelId]; ok {
+			if liveName != "" {
+				opt.ChannelName = liveName
+			}
+		} else {
+			opt.Deleted = true
+		}
+		options = append(options, opt)
+	}
+	return options, total, nil
+}
+
 func BatchSetChannelTag(ids []int, tag *string) error {
 	// 开启事务
 	tx := DB.Begin()
@@ -1105,4 +1337,15 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 		counts[r.Type] = r.Count
 	}
 	return counts, nil
+}
+
+// GetChannelsByGroup returns all channels belonging to a specific group
+func GetChannelsByGroup(userGroup string) ([]*Channel, error) {
+	var channels []*Channel
+	userGroup = strings.TrimSpace(userGroup)
+	if userGroup == "" {
+		return channels, nil
+	}
+	err := DB.Where(channelGroupFilterCondition(), channelGroupFilterPattern(userGroup)).Find(&channels).Error
+	return channels, err
 }

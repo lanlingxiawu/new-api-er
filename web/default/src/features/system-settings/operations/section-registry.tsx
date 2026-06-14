@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
+// xiugai 添加号池节点功能
+import { NodeControlServiceSection } from '../integrations/node-control-service-section'
+// end
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
@@ -27,6 +30,19 @@ import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
 const OPERATIONS_SECTIONS = [
+  // xiugai 添加号池节点功能
+  {
+    id: 'node-control',
+    titleKey: 'Node Control Service',
+    build: (settings: OperationsSettings) => (
+      <NodeControlServiceSection
+        defaultValues={{
+          NodeControlServiceUrl: settings.NodeControlServiceUrl,
+        }}
+      />
+    ),
+  },
+  // end
   {
     id: 'behavior',
     titleKey: 'System Behavior',

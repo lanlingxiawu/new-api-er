@@ -53,6 +53,7 @@ export const useChannelsData = () => {
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [channelCount, setChannelCount] = useState(0);
   const [groupOptions, setGroupOptions] = useState([]);
+  const [systemOptions, setSystemOptions] = useState([]);
 
   // UI states
   const [showEdit, setShowEdit] = useState(false);
@@ -100,6 +101,7 @@ export const useChannelsData = () => {
       if (!success || !Array.isArray(data)) {
         return;
       }
+      setSystemOptions(data);
       const option = data.find(
         (item) => item?.key === 'global.pass_through_request_enabled',
       );
@@ -1142,6 +1144,7 @@ export const useChannelsData = () => {
     pageSize,
     channelCount,
     groupOptions,
+    systemOptions,
     idSort,
     enableTagMode,
     enableBatchDelete,

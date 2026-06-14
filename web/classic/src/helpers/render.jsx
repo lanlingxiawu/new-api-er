@@ -80,6 +80,10 @@ import {
   Package,
   Server,
   CalendarClock,
+  BadgeDollarSign,
+  UserCog,
+  UserRoundCheck,
+  LineChart,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -94,7 +98,6 @@ import {
   SiGitlab,
   SiGoogle,
   SiKeycloak,
-  SiLinkedin,
   SiNextcloud,
   SiNotion,
   SiOkta,
@@ -106,6 +109,7 @@ import {
   SiWechat,
   SiX,
 } from 'react-icons/si';
+import { FaLinkedin } from 'react-icons/fa';
 
 // 获取侧边栏Lucide图标组件
 export function getLucideIcon(key, selected = false) {
@@ -147,9 +151,20 @@ export function getLucideIcon(key, selected = false) {
     case 'models':
       return <Package {...commonProps} color={iconColor} />;
     case 'deployment':
+    // xiugai 添加号池节点功能
+    case 'node-pool':
+    // end
       return <Server {...commonProps} color={iconColor} />;
     case 'subscription':
       return <CalendarClock {...commonProps} color={iconColor} />;
+    case 'commission':
+      return <BadgeDollarSign {...commonProps} color={iconColor} />;
+    case 'customerConsole':
+      return <UserRoundCheck {...commonProps} color={iconColor} />;
+    case 'employee':
+      return <UserCog {...commonProps} color={iconColor} />;
+    case 'businessOverview':
+      return <LineChart {...commonProps} color={iconColor} />;
     case 'setting':
       return <Settings {...commonProps} color={iconColor} />;
     default:
@@ -509,7 +524,7 @@ const oauthProviderIconMap = {
   google: SiGoogle,
   discord: SiDiscord,
   facebook: SiFacebook,
-  linkedin: SiLinkedin,
+  linkedin: FaLinkedin,
   x: SiX,
   twitter: SiX,
   slack: SiSlack,

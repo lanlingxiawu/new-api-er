@@ -260,7 +260,10 @@ function buildDetailSegments(
   return segments
 }
 
-export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
+export function useCommonLogsColumns(
+  showAdminFields: boolean,
+  canUseAdminActions = showAdminFields
+): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<UsageLog>[] = [
     {
@@ -298,7 +301,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
   ]
 
-  if (isAdmin) {
+  if (showAdminFields) {
     columns.push(
       {
         id: 'channel',
@@ -343,7 +346,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                       showDot={false}
                       className='font-mono'
                     />
-                    {affinity && (
+                    {affinity && canUseAdminActions && (
                       <button
                         type='button'
                         className='absolute -top-1 -right-1 leading-none text-amber-500'
@@ -422,11 +425,15 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             <button
               type='button'
               className='flex items-center gap-1.5 text-left'
-              onClick={(e) => {
-                e.stopPropagation()
-                setSelectedUserId(log.user_id)
-                setUserInfoDialogOpen(true)
-              }}
+              onClick={
+                canUseAdminActions
+                  ? (e) => {
+                      e.stopPropagation()
+                      setSelectedUserId(log.user_id)
+                      setUserInfoDialogOpen(true)
+                    }
+                  : undefined
+              }
             >
               <Avatar className='ring-border/60 size-6 ring-1 max-sm:hidden'>
                 <AvatarFallback
@@ -812,7 +819,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             </button>
             <DetailsDialog
               log={log}
-              isAdmin={isAdmin}
+              isAdmin={showAdminFields}
               open={dialogOpen}
               onOpenChange={setDialogOpen}
             />

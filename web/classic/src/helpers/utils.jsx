@@ -39,6 +39,13 @@ export function isAdmin() {
   return user.role >= 10;
 }
 
+export function isEmployee() {
+  let user = localStorage.getItem('user');
+  if (!user) return false;
+  user = JSON.parse(user);
+  return !!user.is_employee;
+}
+
 export function isRoot() {
   let user = localStorage.getItem('user');
   if (!user) return false;
@@ -123,7 +130,7 @@ export function showError(error) {
   console.error(error);
   if (error.message) {
     if (error.name === 'AxiosError') {
-      switch (error.response.status) {
+      switch (error.response?.status) {
         case 401:
           // 清除用户状态
           localStorage.removeItem('user');

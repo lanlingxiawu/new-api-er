@@ -41,6 +41,8 @@ import { useLocation } from 'react-router-dom';
 import { normalizeLanguage } from '../../i18n/language';
 const { Sider, Content, Header } = Layout;
 
+const noContentPaddingPaths = [];
+
 const PageLayout = () => {
   const [userState, userDispatch] = useContext(UserContext);
   const [, statusDispatch] = useContext(StatusContext);
@@ -62,16 +64,25 @@ const PageLayout = () => {
     '/pricing',
   ];
 
-  const shouldHideFooter = cardProPages.includes(location.pathname);
+  const isConsoleRoute = location.pathname.startsWith('/console');
+  const isHomeRoute = location.pathname === '/';
+  const shouldHideFooter =
+    isConsoleRoute || cardProPages.includes(location.pathname);
 
   const shouldInnerPadding =
     location.pathname.includes('/console') &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground';
 
-  const isConsoleRoute = location.pathname.startsWith('/console');
-  const isHomeRoute = location.pathname === '/';
+  const shouldContentScroll =
+    location.pathname === '/console/commission-overview' ||
+    location.pathname === '/commission-overview';
+  const shouldRemoveContentPadding = noContentPaddingPaths.includes(
+    location.pathname,
+  );
+
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
+  const isFixedLayout = isConsoleRoute || location.pathname === '/pricing';
 
   useEffect(() => {
     if (isMobile && drawerOpen && collapsed) {
@@ -79,11 +90,29 @@ const PageLayout = () => {
     }
   }, [isMobile, drawerOpen, collapsed, setCollapsed]);
 
+  const applyUser = (data) => {
+    localStorage.setItem('user', JSON.stringify(data));
+    userDispatch({ type: 'login', payload: data });
+  };
+
   const loadUser = () => {
     let user = localStorage.getItem('user');
     if (user) {
       let data = JSON.parse(user);
       userDispatch({ type: 'login', payload: data });
+    }
+  };
+
+  const refreshUser = async () => {
+    if (!localStorage.getItem('user')) return;
+    try {
+      const res = await API.get('/api/user/self');
+      const { success, data } = res.data;
+      if (success && data) {
+        applyUser(data);
+      }
+    } catch (error) {
+      // Keep the cached user; API interceptors handle expired sessions.
     }
   };
 
@@ -104,6 +133,7 @@ const PageLayout = () => {
 
   useEffect(() => {
     loadUser();
+    refreshUser().catch(console.error);
     loadStatus().catch(console.error);
     let systemName = getSystemName();
     if (systemName) {
@@ -147,11 +177,11 @@ const PageLayout = () => {
 
   return (
     <Layout
-      className='app-layout'
+      className={`app-layout${isFixedLayout ? ' app-layout-fixed' : ''}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
-        overflow: isMobile ? 'visible' : 'hidden',
+        overflow: isFixedLayout && !isMobile ? 'hidden' : 'visible',
       }}
     >
       {!isHomeRoute && (
@@ -174,9 +204,10 @@ const PageLayout = () => {
       )}
       <Layout
         style={{
-          overflow: isMobile ? 'visible' : 'auto',
+          overflow: isFixedLayout && !isMobile ? 'auto' : 'visible',
           display: 'flex',
           flexDirection: 'column',
+          flex: '1 1 auto',
         }}
       >
         {showSider && (
@@ -209,14 +240,27 @@ const PageLayout = () => {
             flex: '1 1 auto',
             display: 'flex',
             flexDirection: 'column',
+            minHeight: 0,
           }}
         >
           <Content
+            className={isFixedLayout ? undefined : 'public-page-content'}
             style={{
-              flex: '1 0 auto',
-              overflowY: isMobile ? 'visible' : 'hidden',
+              flex: '1 1 auto',
+              minHeight: 0,
+              overflowY: isMobile
+                ? 'visible'
+                : shouldContentScroll
+                  ? 'auto'
+                  : 'hidden',
               WebkitOverflowScrolling: 'touch',
-              padding: shouldInnerPadding ? (isMobile ? '5px' : '24px') : '0',
+              padding: shouldRemoveContentPadding
+                ? '0'
+                : shouldInnerPadding
+                  ? isMobile
+                    ? '5px'
+                    : '24px'
+                  : '0',
               position: 'relative',
               marginTop: isHomeRoute ? '0' : '64px',
             }}

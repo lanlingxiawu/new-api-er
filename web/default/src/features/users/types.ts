@@ -57,6 +57,9 @@ export const userSchema = z.object({
   last_login_at: z.number().optional(),
   DeletedAt: z.any().nullable().optional(),
   remark: z.string().optional(),
+  is_assigned_customer: z.boolean().optional(),
+  assigned_employee_user_id: z.number().optional(),
+  assigned_employee_name: z.string().optional(),
 })
 export type User = z.infer<typeof userSchema>
 
@@ -94,6 +97,9 @@ export interface SearchUsersParams {
   group?: string
   role?: string
   status?: string
+  exclude_employee?: boolean
+  exclude_admin?: boolean
+  exclude_assigned_customer?: boolean
   p?: number
   page_size?: number
 }

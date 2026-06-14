@@ -86,6 +86,23 @@ func calculateAudioQuota(info QuotaInfo) int {
 	return int(quota.Round(0).IntPart())
 }
 
+func hasAudioTokenDetails(input, output TokenDetails) bool {
+	return input.TextTokens > 0 ||
+		input.AudioTokens > 0 ||
+		output.TextTokens > 0 ||
+		output.AudioTokens > 0
+}
+
+func shouldRecordAudioLedgerQuota(totalTokens int, quota int, usePrice bool, input, output TokenDetails) bool {
+	if totalTokens > 0 {
+		return quota != 0
+	}
+	if quota <= 0 {
+		return false
+	}
+	return usePrice || hasAudioTokenDetails(input, output)
+}
+
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
 	if relayInfo.UsePrice {
 		return nil
@@ -195,6 +212,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		},
 		ModelName:  modelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -205,6 +223,10 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	totalTokens := usage.TotalTokens
+	ledgerQuota := 0
+	if shouldRecordAudioLedgerQuota(totalTokens, quota, usePrice, quotaInfo.InputDetails, quotaInfo.OutputDetails) {
+		ledgerQuota = quota
+	}
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -239,7 +261,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	logId := model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
@@ -252,6 +274,10 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+	})
+	relayInfoCopy := *relayInfo
+	gopool.Go(func() {
+		RecordCostAndSettleEmployeeCommission(&relayInfoCopy, ledgerQuota, 0, logId)
 	})
 }
 
@@ -316,6 +342,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		},
 		ModelName:  relayInfo.OriginModelName,
 		UsePrice:   usePrice,
+		ModelPrice: modelPrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
 	}
@@ -326,6 +353,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	totalTokens := usage.TotalTokens
+	ledgerQuota := 0
+	if shouldRecordAudioLedgerQuota(totalTokens, quota, usePrice, quotaInfo.InputDetails, quotaInfo.OutputDetails) {
+		ledgerQuota = quota
+	}
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -360,7 +391,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	logId := model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
@@ -373,6 +404,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+	})
+	relayInfoCopy2 := *relayInfo
+	gopool.Go(func() {
+		RecordCostAndSettleEmployeeCommission(&relayInfoCopy2, ledgerQuota, 0, logId)
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))

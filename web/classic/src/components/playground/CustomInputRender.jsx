@@ -24,11 +24,12 @@ import { usePlayground } from '../../contexts/PlaygroundContext';
 
 const CustomInputRender = (props) => {
   const { t } = useTranslation();
-  const { onPasteImage, imageEnabled } = usePlayground();
+  const { onPasteImage, imageEnabled, initialPrompt } = usePlayground();
   const { detailProps } = props;
   const { clearContextNode, uploadNode, inputNode, sendNode, onClick } =
     detailProps;
   const containerRef = useRef(null);
+  const initialPromptApplied = useRef(false);
 
   const handlePaste = useCallback(
     async (e) => {
@@ -101,6 +102,28 @@ const CustomInputRender = (props) => {
       container.removeEventListener('paste', handlePaste);
     };
   }, [handlePaste]);
+
+  // 将首页传入的初始 prompt 填写到输入框
+  useEffect(() => {
+    if (!initialPrompt || initialPromptApplied.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const textarea = container.querySelector('textarea');
+    if (!textarea) return;
+    initialPromptApplied.current = true;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    if (nativeSetter) {
+      nativeSetter.call(textarea, initialPrompt);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      textarea.value = initialPrompt;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    textarea.focus();
+  }, [initialPrompt]);
 
   // 清空按钮
   const styledClearNode = clearContextNode

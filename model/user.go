@@ -1,12 +1,15 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -53,6 +56,11 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+
+	// 非持久化：仅在用户搜索（分配客户场景）中填充
+	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
+	AssignedEmployeeUserId int    `json:"assigned_employee_user_id,omitempty" gorm:"-:all"`
+	AssignedEmployeeName   string `json:"assigned_employee_name,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -191,6 +199,60 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
+func fillUserAssignmentInfo(users []*User) {
+	if len(users) == 0 {
+		return
+	}
+
+	userIds := make([]int, 0, len(users))
+	for _, u := range users {
+		userIds = append(userIds, u.Id)
+	}
+
+	type assignRow struct {
+		CustomerUserId      int
+		EmployeeUserId      int
+		EmployeeUsername    string
+		EmployeeDisplayName string
+	}
+	assignMap := make(map[int]assignRow)
+
+	var cpRows []assignRow
+	_ = DB.Table("customer_profiles").
+		Select("customer_profiles.customer_user_id, customer_profiles.employee_user_id, u.username as employee_username, u.display_name as employee_display_name").
+		Joins("JOIN users u ON u.id = customer_profiles.employee_user_id").
+		Where("customer_profiles.customer_user_id IN ?", userIds).
+		Scan(&cpRows).Error
+	for _, row := range cpRows {
+		assignMap[row.CustomerUserId] = row
+	}
+
+	var inviterRows []assignRow
+	_ = DB.Table("users AS cu").
+		Select("cu.id as customer_user_id, eu.id as employee_user_id, eu.username as employee_username, eu.display_name as employee_display_name").
+		Joins("JOIN users eu ON eu.id = cu.inviter_id").
+		Joins("JOIN employee_profiles ep ON ep.user_id = cu.inviter_id AND ep.status = 1").
+		Where("cu.id IN ? AND cu.inviter_id IS NOT NULL AND cu.inviter_id != 0", userIds).
+		Scan(&inviterRows).Error
+	for _, row := range inviterRows {
+		if _, exists := assignMap[row.CustomerUserId]; !exists {
+			assignMap[row.CustomerUserId] = row
+		}
+	}
+
+	for _, u := range users {
+		if row, ok := assignMap[u.Id]; ok {
+			u.IsAssignedCustomer = true
+			u.AssignedEmployeeUserId = row.EmployeeUserId
+			if row.EmployeeDisplayName != "" {
+				u.AssignedEmployeeName = row.EmployeeDisplayName
+			} else {
+				u.AssignedEmployeeName = row.EmployeeUsername
+			}
+		}
+	}
+}
+
 func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
@@ -225,7 +287,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -252,7 +314,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	keywordInt, err := strconv.Atoi(keyword)
 	if err == nil {
 		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
+		likeCondition = "users.id = ? OR " + likeCondition
 		likeArgs = append([]interface{}{keywordInt}, likeArgs...)
 	}
 
@@ -266,6 +328,27 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	if status != nil {
 		query = query.Where("status = ?", *status)
 	}
+	if excludeAdmins {
+		query = query.Where("role < ?", common.RoleAdminUser)
+	}
+	if excludeEmployees {
+		query = query.Where(
+			"users.id NOT IN (?)",
+			DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1),
+		)
+	}
+	if excludeAssignedCustomers {
+		query = query.Where(
+			"users.id NOT IN (?)",
+			DB.Model(&CustomerProfile{}).Select("customer_user_id"),
+		).Where(
+			"users.id NOT IN (?)",
+			DB.Model(&User{}).
+				Select("users.id").
+				Joins("JOIN employee_profiles ON employee_profiles.user_id = users.inviter_id AND employee_profiles.status = ?", 1).
+				Where("users.inviter_id IS NOT NULL AND users.inviter_id != 0"),
+		)
+	}
 
 	// 获取总数
 	err = query.Count(&total).Error
@@ -275,7 +358,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	}
 
 	// 获取分页数据
-	err = query.Omit("password").Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
+	err = query.Omit("password").Order("users.id desc").Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -285,6 +368,8 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+
+	fillUserAssignmentInfo(users)
 
 	return users, total, nil
 }
@@ -301,6 +386,50 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 		err = DB.Omit("password").First(&user, "id = ?", id).Error
 	}
 	return &user, err
+}
+
+// GetUsersByIds 批量查询用户（只取 id/username/display_name），返回 id→User 映射。
+func GetUsersByIds(ids []int) (map[int]*User, error) {
+	if len(ids) == 0 {
+		return map[int]*User{}, nil
+	}
+	var users []*User
+	err := DB.Select("id, username, display_name, email, remark").Where("id IN ?", ids).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]*User, len(users))
+	for _, u := range users {
+		result[u.Id] = u
+	}
+	return result, nil
+}
+
+func UpdateUserRemark(userId int, remark string) error {
+	if err := DB.Model(&User{}).Where("id = ?", userId).Update("remark", remark).Error; err != nil {
+		return err
+	}
+	return invalidateUserCache(userId)
+}
+
+func GetUsersByIdsUnscoped(ids []int) (map[int]*User, error) {
+	return GetUsersByIdsUnscopedWithContext(context.Background(), ids)
+}
+
+func GetUsersByIdsUnscopedWithContext(ctx context.Context, ids []int) (map[int]*User, error) {
+	if len(ids) == 0 {
+		return map[int]*User{}, nil
+	}
+	var users []*User
+	err := DB.WithContext(safeDBContext(ctx)).Unscoped().Select("id, username, display_name").Where("id IN ?", ids).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int]*User, len(users))
+	for _, u := range users {
+		result[u.Id] = u
+	}
+	return result, nil
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {
@@ -387,6 +516,9 @@ func (user *User) Insert(inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
+	if inviterId != 0 && user.InviterId == 0 {
+		user.InviterId = inviterId
+	}
 
 	// 初始化用户设置，包括默认的边栏配置
 	if user.Setting == "" {
@@ -424,9 +556,12 @@ func (user *User) Insert(inviterId int) error {
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+			// 员工邀请的用户不触发注册返佣，员工通过提成机制获得收益
+			if !IsEmployee(inviterId) {
+				//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
+				RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+				_ = inviteUser(inviterId)
+			}
 		}
 	}
 	return nil
@@ -445,6 +580,9 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	}
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
+	if inviterId != 0 && user.InviterId == 0 {
+		user.InviterId = inviterId
+	}
 
 	// 初始化用户设置
 	if user.Setting == "" {
@@ -485,8 +623,11 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+			// 员工邀请的用户不触发注册返佣，员工通过提成机制获得收益
+			if !IsEmployee(inviterId) {
+				RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+				_ = inviteUser(inviterId)
+			}
 		}
 	}
 }
@@ -809,6 +950,77 @@ func GetUserUsedQuota(id int) (quota int, err error) {
 	return quota, err
 }
 
+// inviterIdCache 缓存 userId → inviterId 映射。
+// inviter_id 几乎不变（仅管理员分配客户时修改），适合长期缓存。
+// 值为 0 也缓存（表示无邀请人），避免重复查库。
+// 使用带 TTL 的 map 而非 sync.Map，保证集群部署时其他实例也能自动刷新。
+var (
+	inviterIdCache     = make(map[int]*inviterCacheEntry)
+	inviterIdCacheLock sync.RWMutex
+	inviterIdCacheTTL  = 5 * time.Minute
+)
+
+type inviterCacheEntry struct {
+	inviterId int
+	cachedAt  time.Time
+}
+
+func GetUserInviterIdWithError(userId int) (int, error) {
+	inviterIdCacheLock.RLock()
+	if entry, ok := inviterIdCache[userId]; ok && time.Since(entry.cachedAt) < inviterIdCacheTTL {
+		inviterIdCacheLock.RUnlock()
+		return entry.inviterId, nil
+	}
+	inviterIdCacheLock.RUnlock()
+
+	var inviterId int
+	err := DB.Model(&User{}).Where("id = ?", userId).Select("inviter_id").Scan(&inviterId).Error
+	if err == nil {
+		inviterIdCacheLock.Lock()
+		inviterIdCache[userId] = &inviterCacheEntry{inviterId: inviterId, cachedAt: time.Now()}
+		inviterIdCacheLock.Unlock()
+	}
+	return inviterId, err
+}
+
+// GetUserInviterId 返回指定用户的邀请人 ID，无邀请人返回 0。
+func GetUserInviterId(userId int) int {
+	inviterId, err := GetUserInviterIdWithError(userId)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to get inviter id: user_id=%d, error=%v", userId, err))
+	}
+	return inviterId
+}
+
+// InvalidateInviterIdCache 清除指定用户的邀请人缓存。在修改 inviter_id 后调用。
+func InvalidateInviterIdCache(userId int) {
+	inviterIdCacheLock.Lock()
+	delete(inviterIdCache, userId)
+	inviterIdCacheLock.Unlock()
+}
+
+// IsMutualInvitation reports whether userId and inviterId invite each other.
+// It is used as a guard for employee/customer binding and commission settlement.
+func IsMutualInvitation(userId, inviterId int) (bool, error) {
+	if userId <= 0 || inviterId <= 0 || userId == inviterId {
+		return false, nil
+	}
+	reverseInviterId, err := GetUserInviterIdWithError(inviterId)
+	if err != nil {
+		return false, err
+	}
+	return reverseInviterId == userId, nil
+}
+
+// UpdateUserInviterId 修改指定用户的 inviter_id 字段。
+func UpdateUserInviterId(userId, inviterId int) error {
+	err := DB.Model(&User{}).Where("id = ?", userId).Update("inviter_id", inviterId).Error
+	if err == nil {
+		InvalidateInviterIdCache(userId)
+	}
+	return err
+}
+
 func GetUserEmail(id int) (email string, err error) {
 	err = DB.Model(&User{}).Where("id = ?", id).Select("email").Find(&email).Error
 	return email, err
@@ -982,6 +1194,23 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//if err := invalidateUserCache(id); err != nil {
 	//	common.SysError("failed to invalidate user cache: " + err.Error())
 	//}
+}
+
+func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, requestCount int) {
+	if quota == 0 && usedQuota == 0 && requestCount == 0 {
+		return
+	}
+
+	err := DB.Model(&User{}).Where("id = ?", id).Updates(
+		map[string]interface{}{
+			"quota":         gorm.Expr("quota + ?", quota),
+			"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
+			"request_count": gorm.Expr("request_count + ?", requestCount),
+		},
+	).Error
+	if err != nil {
+		common.SysLog("failed to batch update user quota, used quota and request count: " + err.Error())
+	}
 }
 
 func updateUserUsedQuota(id int, quota int) {

@@ -19,8 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
-import { ArrowLeft, Code2, HeartPulse, Info, Timer } from 'lucide-react'
+import {
+  Activity,
+  ArrowLeft,
+  Code2,
+  HeartPulse,
+  Info,
+  Timer,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { formatTimestampToDate } from '@/lib/format'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -268,8 +276,9 @@ function OverviewSummaryGrid(props: { model: PricingModel }) {
 function ModelHeader(props: { model: PricingModel }) {
   const { t } = useTranslation()
   const model = props.model
-  const vendorIcon = model.vendor_icon
-    ? getLobeIcon(model.vendor_icon, 20)
+  const modelIconKey = model.icon || model.vendor_icon
+  const modelIcon = modelIconKey
+    ? getLobeIcon(modelIconKey, 20)
     : null
   const description = model.description || model.vendor_description || null
   const tags = parseTags(model.tags)
@@ -281,7 +290,7 @@ function ModelHeader(props: { model: PricingModel }) {
   return (
     <header className='pb-4'>
       <div className='flex items-center gap-2.5'>
-        {vendorIcon}
+        {modelIcon}
         <h1 className='font-mono text-xl font-bold tracking-tight sm:text-2xl'>
           {model.model_name}
         </h1>
@@ -939,7 +948,6 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
 
         <TabsContent value='overview' className='space-y-6 outline-none'>
           <OverviewSummaryGrid model={props.model} />
-
           <section className='bg-card/60 space-y-5 rounded-xl border p-4 shadow-sm'>
             <SectionTitle>{t('Pricing')}</SectionTitle>
             <PriceSection

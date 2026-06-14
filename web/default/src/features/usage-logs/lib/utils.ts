@@ -21,6 +21,7 @@ For commercial licensing, please contact support@quantumnous.com
  */
 import {
   getAllLogs,
+  getEmployeeCustomerLogs,
   getUserLogs,
   getAllMidjourneyLogs,
   getUserMidjourneyLogs,
@@ -38,6 +39,7 @@ import type {
   FetchLogsConfig,
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
+  LogsScope,
 } from '../types'
 
 // ============================================================================
@@ -175,9 +177,10 @@ export function buildApiParams(config: {
   pageSize: number
   searchParams: Record<string, unknown>
   columnFilters?: Array<{ id: string; value: unknown }>
-  isAdmin: boolean
+  scope: LogsScope
 }): GetLogsParams {
-  const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
+  const { page, pageSize, searchParams, columnFilters = [], scope } = config
+  const showAdminFields = scope === 'admin' || scope === 'employee'
 
   // Helper to process type parameter (single value from array)
   const processType = (value: unknown): number | undefined => {
@@ -203,11 +206,14 @@ export function buildApiParams(config: {
     ...(searchParams.model ? { model_name: String(searchParams.model) } : {}),
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
-    ...(isAdmin && searchParams.channel
+    ...(showAdminFields && searchParams.channel
       ? { channel: Number(searchParams.channel) || 0 }
       : {}),
-    ...(isAdmin && searchParams.username
+    ...(showAdminFields && searchParams.username
       ? { username: String(searchParams.username) }
+      : {}),
+    ...(scope === 'employee' && searchParams.customerUserId
+      ? { customer_user_id: Number(searchParams.customerUserId) || 0 }
       : {}),
     ...(searchParams.requestId
       ? { request_id: String(searchParams.requestId) }
@@ -237,10 +243,13 @@ export function buildApiParams(config: {
           params.group = String(value)
           break
         case 'channel':
-          if (isAdmin) params.channel = Number(value) || 0
+          if (showAdminFields) params.channel = Number(value) || 0
           break
         case 'username':
-          if (isAdmin) params.username = String(value)
+          if (showAdminFields) params.username = String(value)
+          break
+        case 'customer_user_id':
+          if (scope === 'employee') params.customer_user_id = Number(value) || 0
           break
       }
     })
@@ -259,8 +268,9 @@ export function buildApiParams(config: {
 export async function fetchLogsByCategory(
   config: FetchLogsConfig
 ): Promise<GetLogsResponse> {
-  const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
+  const { logCategory, scope, page, pageSize, searchParams, columnFilters } =
     config
+  const isAdmin = scope === 'admin'
 
   if (logCategory === 'common') {
     const params = buildApiParams({
@@ -268,9 +278,11 @@ export async function fetchLogsByCategory(
       pageSize,
       searchParams,
       columnFilters,
-      isAdmin,
+      scope,
     })
-    return isAdmin ? await getAllLogs(params) : await getUserLogs(params)
+    if (scope === 'admin') return await getAllLogs(params)
+    if (scope === 'employee') return await getEmployeeCustomerLogs(params)
+    return await getUserLogs(params)
   }
 
   // For drawing and task logs

@@ -26,8 +26,17 @@ type PerformanceStats struct {
 	DiskCacheInfo DiskCacheInfo `json:"disk_cache_info"`
 	// 磁盘空间信息
 	DiskSpaceInfo common.DiskSpaceInfo `json:"disk_space_info"`
+	// 主机系统状态（后台监控采样的 CPU/内存/磁盘使用率，百分比）
+	SystemStatus SystemStatusInfo `json:"system_status"`
 	// 配置信息
 	Config PerformanceConfig `json:"config"`
+}
+
+// SystemStatusInfo 主机级资源使用率快照
+type SystemStatusInfo struct {
+	CPUUsage    float64 `json:"cpu_usage"`
+	MemoryUsage float64 `json:"memory_usage"`
+	DiskUsage   float64 `json:"disk_usage"`
 }
 
 // MemoryStats 内存统计
@@ -130,7 +139,12 @@ func GetPerformanceStats(c *gin.Context) {
 		},
 		DiskCacheInfo: diskCacheInfo,
 		DiskSpaceInfo: diskSpaceInfo,
-		Config:        config,
+		SystemStatus: SystemStatusInfo{
+			CPUUsage:    systemStatus.CPUUsage,
+			MemoryUsage: systemStatus.MemoryUsage,
+			DiskUsage:   systemStatus.DiskUsage,
+		},
+		Config: config,
 	}
 
 	c.JSON(http.StatusOK, gin.H{

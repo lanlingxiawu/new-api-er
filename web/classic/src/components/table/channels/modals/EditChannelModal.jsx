@@ -129,6 +129,31 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
 
+function parseGroupRatioMap(value) {
+  if (!value || typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return Object.entries(parsed).reduce((acc, [group, ratio]) => {
+      const normalizedRatio = Number(ratio);
+      if (Number.isFinite(normalizedRatio)) {
+        acc[group] = normalizedRatio;
+      }
+      return acc;
+    }, {});
+  } catch (error) {
+    return {};
+  }
+}
+
+function formatRatio(value) {
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
   1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
@@ -184,6 +209,7 @@ const EditChannelModal = (props) => {
     auto_ban: 1,
     test_model: '',
     groups: ['default'],
+    cost_ratio: undefined,
     priority: 0,
     weight: 0,
     tag: '',
@@ -386,6 +412,23 @@ const EditChannelModal = (props) => {
     useState(false);
   const [paramOverrideEditorVisible, setParamOverrideEditorVisible] =
     useState(false);
+  const groupRatioMap = useMemo(() => {
+    const groupRatioOption = (props.systemOptions || []).find(
+      (option) => option?.key === 'GroupRatio',
+    );
+    return parseGroupRatioMap(groupRatioOption?.value);
+  }, [props.systemOptions]);
+  const lossMakingGroups = useMemo(() => {
+    const costRatio = Number(inputs.cost_ratio);
+    if (!Number.isFinite(costRatio) || costRatio < 0) return [];
+
+    return (inputs.groups || []).flatMap((group) => {
+      const groupRatio = groupRatioMap[group] ?? 1;
+      const profitRatio = groupRatio - costRatio;
+      if (profitRatio >= 0) return [];
+      return [{ group, groupRatio, costRatio, profitRatio }];
+    });
+  }, [groupRatioMap, inputs.cost_ratio, inputs.groups]);
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -975,6 +1018,7 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      data.cost_ratio = data.cost_ratio ?? 1;
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -1745,6 +1789,21 @@ const EditChannelModal = (props) => {
     if (localInputs.type === 18 && localInputs.other === '') {
       localInputs.other = 'v2.1';
     }
+
+    if (
+      localInputs.cost_ratio === undefined ||
+      localInputs.cost_ratio === null ||
+      localInputs.cost_ratio === ''
+    ) {
+      showInfo(t('Cost ratio is required'));
+      return;
+    }
+    const costRatio = Number(localInputs.cost_ratio);
+    if (!Number.isFinite(costRatio) || costRatio < 0) {
+      showInfo(t('Cost ratio must be greater than or equal to 0'));
+      return;
+    }
+    localInputs.cost_ratio = costRatio;
 
     // 生成渠道额外设置JSON
     const channelExtraSettings = {
@@ -2664,6 +2723,43 @@ const EditChannelModal = (props) => {
                       showClear
                       onChange={(value) => handleInputChange('name', value)}
                       autoComplete='new-password'
+                    />
+
+                    <Form.InputNumber
+                      field='cost_ratio'
+                      label={t('Cost Ratio')}
+                      placeholder='1.0'
+                      min={0}
+                      step={0.01}
+                      rules={[
+                        {
+                          required: true,
+                          message: t('Cost ratio is required'),
+                        },
+                      ]}
+                      onNumberChange={(value) =>
+                        handleInputChange('cost_ratio', value)
+                      }
+                      style={{ width: '100%' }}
+                      extraText={
+                        <div>
+                          <div>
+                            {t(
+                              '用倍率表示，填写上游成本或中转站倍率，用于计算成本、利润和员工提成；0 表示 0 成本，0.6 表示成本 0.6 折。',
+                            )}
+                          </div>
+                          {!isEdit && (
+                            <div
+                              className='mt-1 font-medium'
+                              style={{ color: 'var(--semi-color-warning)' }}
+                            >
+                              {t(
+                                'Tip: configure the cost ratio now so employee commission profit is calculated correctly.',
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      }
                     />
 
                     {inputs.type === 33 && (
@@ -3593,6 +3689,24 @@ const EditChannelModal = (props) => {
                     position='top'
                     onChange={(value) => handleInputChange('groups', value)}
                   />
+                  {lossMakingGroups.length > 0 && (
+                    <Banner
+                      type='warning'
+                      closeIcon={null}
+                      description={t(
+                        'Selected group pricing may be loss-making: {{groups}}. Profit ratio = group ratio - cost ratio; negative values indicate loss.',
+                        {
+                          groups: lossMakingGroups
+                            .map(
+                              (item) =>
+                                `${item.group} (${formatRatio(item.groupRatio)}x - ${formatRatio(item.costRatio)}x = ${formatRatio(item.profitRatio)}x)`,
+                            )
+                            .join(', '),
+                        },
+                      )}
+                      style={{ marginTop: 8 }}
+                    />
+                  )}
 
                   {/* Model Mapping - Core Config */}
                   <JSONEditor

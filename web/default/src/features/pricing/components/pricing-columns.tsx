@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
+
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import {
@@ -113,9 +114,13 @@ export function usePricingColumns(
         return (
           <div className='flex min-w-[200px] items-center gap-2'>
             {vendorIcon}
-            <span className='truncate font-mono text-sm font-medium'>
-              {model.model_name}
-            </span>
+            <div className='flex flex-col gap-1'>
+              <div className='flex items-center gap-2'>
+                <span className='truncate font-mono text-sm font-medium'>
+                  {model.model_name}
+                </span>
+              </div>
+            </div>
           </div>
         )
       },

@@ -168,6 +168,8 @@ var SyncFrequency int // unit is second
 var BatchUpdateEnabled = false
 var BatchUpdateInterval int
 
+var BusinessStatsFlushInterval int // unit is second, for cost/commission/quota buffer flush
+
 var RelayTimeout int // unit is second
 
 var RelayMaxIdleConns int

@@ -29,3 +29,8 @@ export function useIsAdmin(): boolean {
   const { user } = useAuthStore((state) => state.auth)
   return (user?.role ?? 0) >= ROLE.ADMIN
 }
+
+export function useIsEmployee(): boolean {
+  const { user } = useAuthStore((state) => state.auth)
+  return Boolean(user?.is_employee)
+}

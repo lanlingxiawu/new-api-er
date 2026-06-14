@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   PaperclipIcon,
   FileIcon,
@@ -64,6 +64,7 @@ interface PlaygroundInputProps {
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
+  initialValue?: string
 }
 
 const suggestions = [
@@ -87,9 +88,15 @@ export function PlaygroundInput({
   groups,
   groupValue,
   onGroupChange,
+  initialValue = '',
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
+
+  useEffect(() => {
+    if (!initialValue) return
+    setText((current) => current || initialValue)
+  }, [initialValue])
 
   const isModelSelectDisabled =
     disabled || isModelLoading || models.length === 0

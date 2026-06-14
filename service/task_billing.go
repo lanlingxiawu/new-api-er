@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -50,7 +51,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
-	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+	logId := model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
@@ -62,6 +63,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+	infoCopy := *info
+	quotaCopy := info.PriceData.Quota
+	go func() {
+		RecordCostAndSettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
+	}()
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +153,58 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
+	modelName := taskModelName(task)
+	groupRatio := ratio_setting.GetGroupRatio(task.Group)
+	modelRatio := float64(0)
+	modelPrice := float64(0)
+	usePrice := false
+	var otherRatios map[string]float64
+
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		groupRatio = bc.GroupRatio
+		modelRatio = bc.ModelRatio
+		modelPrice = bc.ModelPrice
+		usePrice = bc.PerCallBilling
+		if bc.OriginModelName != "" {
+			modelName = bc.OriginModelName
+		}
+		if len(bc.OtherRatios) > 0 {
+			otherRatios = make(map[string]float64, len(bc.OtherRatios))
+			for key, value := range bc.OtherRatios {
+				otherRatios[key] = value
+			}
+		}
+	} else {
+		modelRatio, _, _ = ratio_setting.GetModelRatio(modelName)
+	}
+
+	return &relaycommon.RelayInfo{
+		UserId:          task.UserId,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: task.ChannelId},
+		TokenId:         task.PrivateData.TokenId,
+		UsingGroup:      task.Group,
+		OriginModelName: modelName,
+		PriceData: types.PriceData{
+			ModelPrice:     modelPrice,
+			ModelRatio:     modelRatio,
+			UsePrice:       usePrice,
+			OtherRatios:    otherRatios,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: groupRatio},
+		},
+	}
+}
+
+func recordTaskCostAndCommission(task *model.Task, quota int, logId int) {
+	if task == nil || quota == 0 {
+		return
+	}
+	ledgerInfo := buildTaskLedgerRelayInfo(task)
+	go func() {
+		RecordCostAndSettleEmployeeCommission(ledgerInfo, quota, 0, logId)
+	}()
+}
+
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
@@ -168,7 +226,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
-	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+	logId := model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
 		Content:   "",
@@ -179,6 +237,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		Group:     task.Group,
 		Other:     other,
 	})
+	recordTaskCostAndCommission(task, -quota, logId)
 }
 
 // RecalculateTaskQuota 通用的异步差额结算。
@@ -231,7 +290,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	other["task_id"] = task.TaskID
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
-	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+	logId := model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   logType,
 		Content:   reason,
@@ -242,6 +301,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Group:     task.Group,
 		Other:     other,
 	})
+	recordTaskCostAndCommission(task, quotaDelta, logId)
 }
 
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。

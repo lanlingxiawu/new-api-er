@@ -51,9 +51,16 @@ export function useSidebarView(): ResolvedSidebarView {
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
     const isAdmin = userRole !== undefined && userRole >= ROLE.ADMIN
-    return configFilteredRoot.filter((group) =>
-      group.id === 'admin' ? isAdmin : true
-    )
+    return configFilteredRoot
+      .filter((group) => (group.id === 'admin' ? isAdmin : true))
+      // xiugai 添加号池节点功能 - 修复侧边栏权限，按 minRole 过滤 item
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) => item.minRole === undefined || (userRole !== undefined && userRole >= item.minRole)
+        ),
+      }))
+    // end
   }, [configFilteredRoot, userRole])
 
   const view = resolveSidebarView(pathname)

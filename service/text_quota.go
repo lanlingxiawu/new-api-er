@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -55,6 +54,7 @@ type textQuotaSummary struct {
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
 	ToolCallSurchargeQuota   decimal.Decimal
+	LedgerQuota              int
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -301,9 +301,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	}
 
 	if summary.TotalTokens == 0 {
+		if !summary.ToolCallSurchargeQuota.IsZero() {
+			summary.LedgerQuota = summary.Quota
+		}
 		summary.Quota = 0
 	} else if !ratio.IsZero() && summary.Quota == 0 {
 		summary.Quota = 1
+	}
+	if summary.TotalTokens != 0 {
+		summary.LedgerQuota = summary.Quota
 	}
 
 	return summary
@@ -362,16 +368,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
 
-	if summary.TotalTokens == 0 {
+	countUsage := summary.TotalTokens != 0
+	if !countUsage {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
-		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
-	}
-
-	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
 	logModel := summary.ModelName
@@ -459,19 +459,23 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
-		CompletionTokens: summary.CompletionTokens,
-		ModelName:        logModel,
-		TokenName:        summary.TokenName,
-		Quota:            summary.Quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(summary.UseTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
+	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
+		ChannelId:              relayInfo.ChannelId,
+		PromptTokens:           summary.PromptTokens,
+		CompletionTokens:       summary.CompletionTokens,
+		ModelName:              logModel,
+		TokenName:              summary.TokenName,
+		Quota:                  summary.Quota,
+		Content:                logContent,
+		TokenId:                relayInfo.TokenId,
+		UseTimeSeconds:         int(summary.UseTimeSeconds),
+		IsStream:               relayInfo.IsStream,
+		Group:                  relayInfo.UsingGroup,
+		Other:                  other,
+		CountUsage:             countUsage,
+		AsyncCostAndCommission: true,
+		SurchargeQuota:         int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		LedgerQuota:            summary.LedgerQuota,
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))

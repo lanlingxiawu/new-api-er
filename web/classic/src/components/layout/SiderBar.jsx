@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getLucideIcon } from '../../helpers/render';
@@ -26,6 +26,7 @@ import { useSidebarCollapsed } from '../../hooks/common/useSidebarCollapsed';
 import { useSidebar } from '../../hooks/common/useSidebar';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { isAdmin, isRoot, showError } from '../../helpers';
+import { UserContext } from '../../context/User';
 import SkeletonWrapper from './components/SkeletonWrapper';
 
 import { Nav, Divider, Button } from '@douyinfe/semi-ui';
@@ -49,10 +50,18 @@ const routerMap = {
   deployment: '/console/deployment',
   playground: '/console/playground',
   personal: '/console/personal',
+  // xiugai 添加号池节点功能
+  'node-pool': '/console/node-pool',
+  // end
+  commission: '/console/commission',
+  customerConsole: '/console/customer-console',
+  employee: '/console/employees',
+  businessOverview: '/console/commission-overview',
 };
 
 const SiderBar = ({ onNavigate = () => {} }) => {
   const { t } = useTranslation();
+  const [userState] = useContext(UserContext);
   const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   const {
     isModuleVisible,
@@ -134,6 +143,18 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         itemKey: 'personal',
         to: '/personal',
       },
+      {
+        text: t('我的提成'),
+        itemKey: 'commission',
+        to: '/commission',
+        className: userState?.user?.is_employee ? '' : 'tableHiddle',
+      },
+      {
+        text: t('我的客户'),
+        itemKey: 'customerConsole',
+        to: '/customer-console',
+        className: userState?.user?.is_employee ? '' : 'tableHiddle',
+      },
     ];
 
     // 根据配置过滤项目
@@ -143,7 +164,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
     });
 
     return filteredItems;
-  }, [t, isModuleVisible]);
+  }, [t, isModuleVisible, userState?.user?.is_employee]);
 
   const adminItems = useMemo(() => {
     const items = [
@@ -157,6 +178,18 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         text: t('订阅管理'),
         itemKey: 'subscription',
         to: '/subscription',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('员工管理'),
+        itemKey: 'employee',
+        to: '/employees',
+        className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('业务概览'),
+        itemKey: 'businessOverview',
+        to: '/commission-overview',
         className: isAdmin() ? '' : 'tableHiddle',
       },
       {
@@ -183,6 +216,14 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         to: '/user',
         className: isAdmin() ? '' : 'tableHiddle',
       },
+      // xiugai 添加号池节点功能
+      {
+        text: t('号池节点'),
+        itemKey: 'node-pool',
+        to: '/console/node-pool',
+        className: isRoot() ? '' : 'tableHiddle',
+      },
+      // end
       {
         text: t('系统设置'),
         itemKey: 'setting',
@@ -518,7 +559,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
               />
             }
             onClick={toggleCollapsed}
-            icononly={collapsed}
+            icononly={collapsed ? 'true' : undefined}
             style={
               collapsed
                 ? { width: 36, height: 24, padding: 0 }

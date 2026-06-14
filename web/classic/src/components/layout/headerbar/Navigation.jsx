@@ -60,7 +60,6 @@ const Navigation = ({
       if (link.itemKey === 'pricing' && pricingRequireAuth && !userState.user) {
         targetPath = '/login';
       }
-
       return (
         <Link key={link.itemKey} to={targetPath} className={commonLinkClasses}>
           {linkContent}
@@ -74,7 +73,7 @@ const Navigation = ({
       <SkeletonWrapper
         loading={isLoading}
         type='navigation'
-        count={4}
+        count={5}
         width={60}
         height={16}
         isMobile={isMobile}

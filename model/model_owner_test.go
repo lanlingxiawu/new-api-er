@@ -11,6 +11,9 @@ import (
 
 func clearPreferredOwnerTables(t *testing.T) {
 	t.Helper()
+	if !allowTestDBCleanup() {
+		return
+	}
 	require.NoError(t, DB.Exec("DELETE FROM abilities").Error)
 	require.NoError(t, DB.Exec("DELETE FROM channels").Error)
 }

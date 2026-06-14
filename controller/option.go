@@ -42,6 +42,14 @@ func isPositiveOptionValue(value string) bool {
 	return err == nil && floatValue > 0
 }
 
+func isIntInRange(value string, min, max int) bool {
+	intValue, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	return intValue >= min && intValue <= max
+}
+
 func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}) {
 	if strings.TrimSpace(raw) == "" {
 		return
@@ -138,6 +146,9 @@ func UpdateOption(c *gin.Context) {
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
 	switch option.Key {
+	case "commission_tier_reset_setting.last_reset_at":
+		common.ApiErrorMsg(c, "last_reset_at is maintained by the reset task and cannot be modified manually")
+		return
 	case "QuotaForInviter", "QuotaForInvitee":
 		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
 			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
@@ -328,6 +339,39 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
+			})
+			return
+		}
+	case "commission_tier_reset_setting.reset_day":
+		if !isIntInRange(option.Value.(string), 1, 31) {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "重置日期必须为 1-31 之间的整数",
+			})
+			return
+		}
+	case "commission_tier_reset_setting.reset_hour":
+		if !isIntInRange(option.Value.(string), 0, 23) {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "重置时刻（时）必须为 0-23 之间的整数",
+			})
+			return
+		}
+	case "commission_tier_reset_setting.reset_minute", "commission_tier_reset_setting.reset_second":
+		if !isIntInRange(option.Value.(string), 0, 59) {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "重置时刻（分/秒）必须为 0-59 之间的整数",
+			})
+			return
+		}
+	case "commission_tier_reset_setting.timezone":
+		timezone := strings.TrimSpace(option.Value.(string))
+		if timezone != "Local" && timezone != "Asia/Shanghai" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "重置时区仅支持中国时区或服务器时区",
 			})
 			return
 		}

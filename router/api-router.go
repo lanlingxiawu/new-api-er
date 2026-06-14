@@ -15,7 +15,7 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
-	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
+	apiRouter.Use(middleware.BodyStorageCleanup()) // Clean up request body storage
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -121,6 +121,28 @@ func SetApiRouter(router *gin.Engine) {
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
+
+				// Employee self-query routes
+				selfRoute.GET("/employee/profile", controller.GetMyEmployeeProfile)
+				selfRoute.GET("/employee/commission", controller.GetMyCommissionLogs)
+				selfRoute.GET("/employee/commission/monthly", controller.GetMyCommissionMonthlyStats)
+				selfRoute.GET("/employee/commission/calendar", controller.GetMyCommissionCalendarStats)
+				selfRoute.GET("/employee/commission/summary", controller.GetMyCommissionSummary)
+			}
+
+			// Employee customer management (employee self)
+			employeeCustomerRoute := userRoute.Group("/employee/customers")
+			employeeCustomerRoute.Use(middleware.UserAuth())
+			{
+				employeeCustomerRoute.GET("", controller.EmployeeListCustomers)
+				employeeCustomerRoute.POST("", controller.EmployeeCreateCustomer)
+				employeeCustomerRoute.GET("/quota-logs", controller.EmployeeListQuotaLogs)
+				employeeCustomerRoute.GET("/:id", controller.EmployeeGetCustomer)
+				employeeCustomerRoute.PUT("/:id", controller.EmployeeUpdateCustomer)
+				// Employee user-profile editing is temporarily disabled.
+				// employeeCustomerRoute.PUT("/:id/user", controller.EmployeeUpdateCustomerUser)
+				// Employee quota adjustment is temporarily disabled.
+				// employeeCustomerRoute.POST("/:id/quota", controller.EmployeeTransferQuota)
 			}
 
 			adminRoute := userRoute.Group("/")
@@ -175,11 +197,70 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 		}
 
+		// Employee management (admin)
+		employeeAdminRoute := apiRouter.Group("/admin/employee")
+		employeeAdminRoute.Use(middleware.AdminAuth())
+		{
+			employeeAdminRoute.GET("", controller.AdminListEmployees)
+			employeeAdminRoute.POST("", controller.AdminCreateEmployee)
+			employeeAdminRoute.PUT("/:id", controller.AdminUpdateEmployee)
+			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
+			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
+			employeeAdminRoute.GET("/commission/channels", controller.AdminListCommissionChannelOptions)
+			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionMonthlyStats)
+			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
+			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
+			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
+			// 阶梯提成等级配置
+			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
+			employeeAdminRoute.POST("/tiers", controller.AdminCreateTier)
+			employeeAdminRoute.PUT("/tiers/:id", controller.AdminUpdateTier)
+			employeeAdminRoute.DELETE("/tiers/:id", controller.AdminDeleteTier)
+			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
+			employeeAdminRoute.GET("/tiers/reset-config", controller.AdminGetTierResetConfig)
+			employeeAdminRoute.POST("/tiers/reset-now", controller.AdminTriggerTierReset)
+			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
+			employeeAdminRoute.GET("/:id/customers", controller.AdminListEmployeeCustomers)
+			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)
+			employeeAdminRoute.DELETE("/:id/customer/:user_id", controller.AdminUnassignCustomerFromEmployee)
+		}
+
+		// Customer management (admin)
+		customerAdminRoute := apiRouter.Group("/admin/customer")
+		customerAdminRoute.Use(middleware.AdminAuth())
+		{
+			customerAdminRoute.GET("", controller.AdminListCustomers)
+			customerAdminRoute.POST("", controller.AdminCreateCustomer)
+			customerAdminRoute.GET("/quota-logs", controller.AdminListCustomerQuotaLogs)
+			customerAdminRoute.GET("/:id", controller.AdminGetCustomer)
+			customerAdminRoute.PUT("/:id", controller.AdminUpdateCustomer)
+			customerAdminRoute.PUT("/:id/user", controller.AdminUpdateCustomerUser)
+			customerAdminRoute.DELETE("/:id", controller.AdminDeleteCustomer)
+		}
+
+		// Channel cost config (admin)
+		channelCostRoute := apiRouter.Group("/admin/channel/cost")
+		channelCostRoute.Use(middleware.AdminAuth())
+		{
+			channelCostRoute.GET("", controller.AdminListChannelCosts)
+			channelCostRoute.POST("", controller.AdminUpsertChannelCost)
+			channelCostRoute.DELETE("/:channel_id", controller.AdminDeleteChannelCost)
+		}
+
 		// Subscription payment callbacks (no auth)
 		apiRouter.POST("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", controller.SubscriptionEpayReturn)
+		// xiugai 添加号池节点功能
+		nodePoolRoute := apiRouter.Group("/node-pool")
+		nodePoolRoute.Use(middleware.RootAuth())
+		{
+			nodePoolRoute.GET("/nodes", controller.GetNodePoolNodes)
+			nodePoolRoute.GET("/nodes/:node_name/accounts", controller.GetNodePoolAccounts)
+			nodePoolRoute.DELETE("/nodes/:node_name", controller.DeleteNodePoolNode)
+		}
+		// end
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{
@@ -189,7 +270,7 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // 用于迁移检测的旧键，下个版本会删除
+			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // Legacy key for migration checks; remove in a later version.
 			optionRoute.POST("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
 			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
 			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
@@ -281,6 +362,12 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
 
+		// 分组路由
+		groupRoute := apiRouter.Group("/group")
+		{
+			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup) // 获取分组的可用模型列表
+		}
+
 		usageRoute := apiRouter.Group("/usage")
 		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
 		{
@@ -307,9 +394,11 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.DELETE("/", middleware.AdminAuth(), controller.DeleteHistoryLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
+		logRoute.GET("/employee/stat", middleware.UserAuth(), controller.GetEmployeeCustomerLogsStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
+		logRoute.GET("/employee", middleware.UserAuth(), controller.GetEmployeeCustomerLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
 		dataRoute := apiRouter.Group("/data")
@@ -321,10 +410,10 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
 		}
-		groupRoute := apiRouter.Group("/group")
-		groupRoute.Use(middleware.AdminAuth())
+		groupAdminRoute := apiRouter.Group("/group")
+		groupAdminRoute.Use(middleware.AdminAuth())
 		{
-			groupRoute.GET("/", controller.GetGroups)
+			groupAdminRoute.GET("/", controller.GetGroups)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
@@ -386,7 +475,6 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.POST("/price-estimation", controller.GetPriceEstimation)
 			deploymentsRoute.GET("/check-name", controller.CheckClusterNameAvailability)
 			deploymentsRoute.POST("/", controller.CreateDeployment)
-
 			deploymentsRoute.GET("/:id", controller.GetDeployment)
 			deploymentsRoute.GET("/:id/logs", controller.GetDeploymentLogs)
 			deploymentsRoute.GET("/:id/containers", controller.ListDeploymentContainers)
@@ -396,5 +484,6 @@ func SetApiRouter(router *gin.Engine) {
 			deploymentsRoute.POST("/:id/extend", controller.ExtendDeployment)
 			deploymentsRoute.DELETE("/:id", controller.DeleteDeployment)
 		}
+
 	}
 }

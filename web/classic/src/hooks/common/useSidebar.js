@@ -43,6 +43,8 @@ export const DEFAULT_ADMIN_CONFIG = {
     enabled: true,
     topup: true,
     personal: true,
+    commission: true,
+    customerConsole: true,
   },
   admin: {
     enabled: true,
@@ -52,6 +54,11 @@ export const DEFAULT_ADMIN_CONFIG = {
     redemption: true,
     user: true,
     subscription: true,
+    // xiugai 添加号池节点功能
+    'node-pool': true,
+    // end
+    employee: true,
+    businessOverview: true,
     setting: true,
   },
 };

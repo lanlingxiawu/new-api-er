@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -29,6 +29,11 @@ import type { Message as MessageType } from './types'
 
 export function Playground() {
   const { t } = useTranslation()
+  const initialPromptSentRef = useRef(false)
+  const initialPrompt =
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('prompt')?.trim() || ''
   const {
     config,
     parameterEnabled,
@@ -114,16 +119,42 @@ export function Playground() {
     }
   }, [groupsData, setGroups, config.group, updateConfig])
 
-  const handleSendMessage = (text: string) => {
-    const userMessage = createUserMessage(text)
-    const assistantMessage = createLoadingAssistantMessage()
+  const handleSendMessage = useCallback(
+    (text: string) => {
+      const userMessage = createUserMessage(text)
+      const assistantMessage = createLoadingAssistantMessage()
 
-    const newMessages = [...messages, userMessage, assistantMessage]
-    updateMessages(newMessages)
+      const newMessages = [...messages, userMessage, assistantMessage]
+      updateMessages(newMessages)
 
-    // Send chat request
-    sendChat(newMessages)
-  }
+      // Send chat request
+      sendChat(newMessages)
+    },
+    [messages, sendChat, updateMessages]
+  )
+
+  useEffect(() => {
+    if (
+      !initialPrompt ||
+      initialPromptSentRef.current ||
+      isGenerating ||
+      isLoadingModels ||
+      !config.model
+    ) {
+      return
+    }
+    initialPromptSentRef.current = true
+    handleSendMessage(initialPrompt)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('prompt')
+    window.history.replaceState(null, '', url)
+  }, [
+    config.model,
+    handleSendMessage,
+    initialPrompt,
+    isGenerating,
+    isLoadingModels,
+  ])
 
   const handleCopyMessage = (message: MessageType) => {
     // Copy is handled in MessageActions component
