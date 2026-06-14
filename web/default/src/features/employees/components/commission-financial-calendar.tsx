@@ -296,11 +296,6 @@ function commissionIntensity(amount: number, maxAbsAmount: number) {
   return 1
 }
 
-function commissionBarWidth(amount: number, maxAbsAmount: number) {
-  if (!amount || !maxAbsAmount) return '0%'
-  return `${Math.max(18, Math.round((Math.abs(amount) / maxAbsAmount) * 100))}%`
-}
-
 export function CommissionFinancialCalendar({
   month,
   onMonthChange,
@@ -466,7 +461,7 @@ export function CommissionFinancialCalendar({
       ) : null}
 
       <div className='border-border bg-card overflow-hidden rounded-md border shadow-sm'>
-        <div className='grid grid-cols-7 border-b bg-zinc-900 text-center text-[11px] font-semibold uppercase tracking-normal text-white dark:bg-zinc-100 dark:text-zinc-900'>
+        <div className='bg-muted/50 text-muted-foreground grid grid-cols-7 border-b text-center text-[11px] font-semibold tracking-wider uppercase'>
           {weekdays.map((day) => (
             <div key={day} className='px-2 py-2.5'>
               {day}
@@ -491,7 +486,7 @@ export function CommissionFinancialCalendar({
                 }
                 onClick={() => setSelectedDate(key)}
                 className={cn(
-                  'group relative min-h-[82px] border-r border-b p-2.5 text-left transition-all outline-none [&:nth-child(7n)]:border-r-0 sm:min-h-[104px]',
+                  'group relative flex min-h-[82px] flex-col border-r border-b p-2.5 text-left transition-all outline-none [&:nth-child(7n)]:border-r-0 sm:min-h-[104px]',
                   'border-border/70 hover:z-10 hover:-translate-y-px hover:shadow-md focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset',
                   !inPeriod && 'bg-muted/20 text-muted-foreground opacity-60',
                   inPeriod && !stat && 'bg-card hover:bg-muted/40',
@@ -548,36 +543,25 @@ export function CommissionFinancialCalendar({
                   ) : null}
                 </div>
                 {stat ? (
-                  <div className='mt-3 space-y-1'>
-                    <div
-                      className={cn(
-                        'flex min-w-0 flex-wrap items-center gap-1 text-xs font-bold sm:text-sm',
-                        positive
-                          ? 'text-emerald-700 dark:text-emerald-300'
-                          : 'text-red-700 dark:text-red-300'
-                      )}
-                    >
-                      <span className='min-w-0 truncate'>
-                        {formatBusinessAmount(commission)}
-                      </span>
-                      {!positive ? (
-                        <Badge
-                          variant='outline'
-                          className='border-red-400/40 bg-red-50/80 px-1 py-0 text-[10px] text-red-700 dark:bg-red-950/40 dark:text-red-300'
-                        >
-                          {t('Loss')}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div
-                      className={cn(
-                        'h-1 rounded-full transition-all',
-                        positive
-                          ? 'bg-emerald-500/70'
-                          : 'bg-red-500/70'
-                      )}
-                      style={{ width: commissionBarWidth(commission, maxAbsCommission) }}
-                    />
+                  <div
+                    className={cn(
+                      'mt-auto flex min-w-0 flex-wrap items-center gap-1 pt-2 text-xs font-bold sm:text-sm',
+                      positive
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-red-700 dark:text-red-300'
+                    )}
+                  >
+                    <span className='min-w-0 truncate'>
+                      {formatBusinessAmount(commission)}
+                    </span>
+                    {!positive ? (
+                      <Badge
+                        variant='outline'
+                        className='border-red-400/40 bg-red-50/80 px-1 py-0 text-[10px] text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                      >
+                        {t('Loss')}
+                      </Badge>
+                    ) : null}
                   </div>
                 ) : null}
               </button>

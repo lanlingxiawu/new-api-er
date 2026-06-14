@@ -35,10 +35,7 @@ import {
 } from '@/components/ui/table'
 import { SectionPageLayout } from '@/components/layout'
 import { BusinessAmount } from '@/features/business/amount-display'
-import {
-  formatBusinessAmount,
-  formatBusinessUsd,
-} from '@/features/business/format'
+import { formatBusinessUsd } from '@/features/business/format'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getCommissionOverview,
@@ -87,6 +84,23 @@ function resolveRangeKey(range: OverviewRange): RangeKey {
 function toUnixTimestamp(date?: Date): number | undefined {
   if (!date) return undefined
   return Math.floor(date.getTime() / 1000)
+}
+
+function sortChannelRows(
+  rows: ChannelProfitStat[],
+  sort: { key: string; dir: 'asc' | 'desc' } | null
+): ChannelProfitStat[] {
+  if (!sort) return rows
+  const { key, dir } = sort
+  const sorted = [...rows].sort((a, b) => {
+    const cmp =
+      key === 'channel_name'
+        ? (a.channel_name ?? '').localeCompare(b.channel_name ?? '')
+        : (a[key as keyof ChannelProfitStat] as number) -
+          (b[key as keyof ChannelProfitStat] as number)
+    return dir === 'asc' ? cmp : -cmp
+  })
+  return sorted
 }
 
 const CLASSIC_TABLE_SCROLL_HEIGHT = 223
@@ -312,22 +326,8 @@ export function CommissionOverview() {
   )
   const channelMergeScope = useMemo(
     () =>
-      [
-        range,
-        startTime ?? '',
-        endTime ?? '',
-        channelFilter.trim(),
-        channelSort?.key ?? '',
-        channelSort?.dir ?? '',
-      ].join('|'),
-    [
-      channelFilter,
-      channelSort?.dir,
-      channelSort?.key,
-      endTime,
-      range,
-      startTime,
-    ]
+      [range, startTime ?? '', endTime ?? '', channelFilter.trim()].join('|'),
+    [channelFilter, endTime, range, startTime]
   )
   const employeeMergeScope = useMemo(
     () => [range, startTime ?? '', endTime ?? ''].join('|'),
@@ -343,8 +343,6 @@ export function CommissionOverview() {
       channelPage,
       employeePage,
       channelFilter,
-      channelSort?.key ?? null,
-      channelSort?.dir ?? null,
     ],
     queryFn: () =>
       getCommissionOverview({
@@ -353,8 +351,6 @@ export function CommissionOverview() {
         channel_page: channelPage,
         channel_page_size: OVERVIEW_TABLE_PAGE_SIZE,
         channel_keyword: channelFilter.trim() || undefined,
-        channel_sort_by: channelSort?.key,
-        channel_sort_order: channelSort?.dir,
         employee_page: employeePage,
         employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
       }),
@@ -398,17 +394,21 @@ export function CommissionOverview() {
     [d?.by_channel_platform]
   )
   const employeeRows = useMemo(() => d?.by_employee ?? [], [d?.by_employee])
-  const displayedChannelRows = loadedChannelRows
+  const sortedChannelRows = useMemo(
+    () => sortChannelRows(loadedChannelRows, channelSort),
+    [loadedChannelRows, channelSort]
+  )
+  const displayedChannelRows = sortedChannelRows
   const displayedEmployeeRows = loadedEmployeeRows
   const channelTotal =
     d?.by_channel_platform_total ?? channelPlatformRows.length
-  const hasMoreChannelRows = displayedChannelRows.length < channelTotal
+  const hasMoreChannelRows = loadedChannelRows.length < channelTotal
 
   useEffect(() => {
     setChannelPage(1)
     channelRowsByPageRef.current.clear()
     setLoadedChannelRows([])
-  }, [channelFilter, channelSort])
+  }, [channelFilter])
 
   useEffect(() => {
     if (!d) return
