@@ -87,6 +87,23 @@ export function isWaffoPancakePayment(paymentType: string): boolean {
 }
 
 /**
+ * Check if payment method is official Alipay
+ */
+export function isAlipayOfficialPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.ALIPAY_OFFICIAL
+}
+
+/**
+ * Check if payment method is official WeChat Pay
+ *
+ * WeChat Native pay returns a QR code to scan rather than a redirect URL, so
+ * it must be special-cased in payment dispatch logic.
+ */
+export function isWechatOfficialPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.WECHAT_OFFICIAL
+}
+
+/**
  * Get default payment type from topup info
  */
 export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {
@@ -109,6 +126,14 @@ export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {
 
   if (topupInfo.enable_waffo_pancake_topup) {
     return PAYMENT_TYPES.WAFFO_PANCAKE
+  }
+
+  if (topupInfo.enable_alipay_official_topup) {
+    return PAYMENT_TYPES.ALIPAY_OFFICIAL
+  }
+
+  if (topupInfo.enable_wechat_official_topup) {
+    return PAYMENT_TYPES.WECHAT_OFFICIAL
   }
 
   return DEFAULT_PAYMENT_TYPE
@@ -136,6 +161,14 @@ export function getMinTopupAmount(topupInfo: TopupInfo | null): number {
 
   if (topupInfo.enable_waffo_pancake_topup) {
     return topupInfo.waffo_pancake_min_topup || DEFAULT_MIN_TOPUP
+  }
+
+  if (topupInfo.enable_alipay_official_topup) {
+    return topupInfo.alipay_official_min_topup || DEFAULT_MIN_TOPUP
+  }
+
+  if (topupInfo.enable_wechat_official_topup) {
+    return topupInfo.wechat_official_min_topup || DEFAULT_MIN_TOPUP
   }
 
   return DEFAULT_MIN_TOPUP

@@ -99,6 +99,50 @@ func isEpayTopUpEnabled() bool {
 	return isEpayWebhookConfigured() && len(operation_setting.PayMethods) > 0
 }
 
+func isAlipayTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	if !setting.AlipayEnabled {
+		return false
+	}
+	return isAlipayWebhookConfigured()
+}
+
+func isAlipayWebhookConfigured() bool {
+	return strings.TrimSpace(setting.AlipayAppId) != "" &&
+		strings.TrimSpace(setting.AlipayPrivateKey) != "" &&
+		strings.TrimSpace(setting.AlipayPublicKey) != ""
+}
+
+func isAlipayWebhookEnabled() bool {
+	return isAlipayTopUpEnabled()
+}
+
+func isWechatTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	if !setting.WechatEnabled {
+		return false
+	}
+	if strings.TrimSpace(setting.WechatAppId) == "" {
+		return false
+	}
+	return isWechatWebhookConfigured()
+}
+
+func isWechatWebhookConfigured() bool {
+	return strings.TrimSpace(setting.WechatMchId) != "" &&
+		strings.TrimSpace(setting.WechatApiV3Key) != "" &&
+		strings.TrimSpace(setting.WechatMchPrivateKey) != "" &&
+		strings.TrimSpace(setting.WechatMchCertSerialNo) != ""
+}
+
+func isWechatWebhookEnabled() bool {
+	return isWechatTopUpEnabled()
+}
+
 func isEpayWebhookConfigured() bool {
 	return strings.TrimSpace(operation_setting.PayAddress) != "" &&
 		strings.TrimSpace(operation_setting.EpayId) != "" &&

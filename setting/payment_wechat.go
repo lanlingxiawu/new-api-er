@@ -16,15 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Wallet Hooks Exports
-// ============================================================================
+package setting
 
-export * from './use-topup-info'
-export * from './use-payment'
-export * from './use-affiliate'
-export * from './use-redemption'
-export * from './use-creem-payment'
-export * from './use-waffo-payment'
-export * from './use-waffo-pancake-payment'
-export * from './use-wechat-payment'
+var (
+	WechatEnabled         bool
+	WechatAppId           string // 公众号/小程序/APP AppID（Native 下单必填）
+	WechatMchId           string // 微信支付商户号
+	WechatApiV3Key        string // APIv3 密钥（32 字节）
+	WechatMchPrivateKey   string // 商户 API 私钥（PEM 格式）
+	WechatMchCertSerialNo string // 商户 API 证书序列号
+	WechatMinTopUp        int    = 1
+	WechatNotifyUrl       string // 异步通知地址，留空则使用系统默认回调地址
+)

@@ -38,6 +38,9 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  AlipayPaymentResponse,
+  WechatPaymentResponse,
+  WechatOrderQueryResponse,
 } from './types'
 
 // ============================================================================
@@ -163,6 +166,67 @@ export async function requestWaffoPancakePayment(
   request: WaffoPancakePaymentRequest
 ): Promise<WaffoPancakePaymentResponse> {
   const res = await api.post('/api/user/waffo-pancake/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Calculate payment amount for official Alipay payment
+ */
+export async function calculateAlipayAmount(
+  request: AmountRequest
+): Promise<AmountResponse> {
+  const res = await api.post('/api/user/alipay/amount', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Request official Alipay payment
+ */
+export async function requestAlipayPayment(
+  request: AmountRequest
+): Promise<AlipayPaymentResponse> {
+  const res = await api.post('/api/user/alipay/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Calculate payment amount for official WeChat Pay payment
+ */
+export async function calculateWechatAmount(
+  request: AmountRequest
+): Promise<AmountResponse> {
+  const res = await api.post('/api/user/wechat/amount', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Request official WeChat Pay payment (Native QR code)
+ */
+export async function requestWechatPayment(
+  request: AmountRequest
+): Promise<WechatPaymentResponse> {
+  const res = await api.post('/api/user/wechat/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Query official WeChat Pay order status (used while QR code is displayed)
+ */
+export async function queryWechatOrder(
+  tradeNo: string
+): Promise<WechatOrderQueryResponse> {
+  const res = await api.get('/api/user/wechat/order', {
+    params: { trade_no: tradeNo },
     skipBusinessError: true,
   } as Record<string, unknown>)
   return res.data
