@@ -73,8 +73,6 @@ export async function getCommissionOverview(params?: {
   channel_page?: number
   channel_page_size?: number
   channel_keyword?: string
-  channel_sort_by?: string
-  channel_sort_order?: 'asc' | 'desc'
   employee_page?: number
   employee_page_size?: number
 }): Promise<OverviewResponse> {
@@ -84,9 +82,6 @@ export async function getCommissionOverview(params?: {
   if (params?.channel_page_size)
     q.set('channel_page_size', String(params.channel_page_size))
   if (params?.channel_keyword) q.set('channel_keyword', params.channel_keyword)
-  if (params?.channel_sort_by) q.set('channel_sort_by', params.channel_sort_by)
-  if (params?.channel_sort_order)
-    q.set('channel_sort_order', params.channel_sort_order)
   if (params?.employee_page)
     q.set('employee_page', String(params.employee_page))
   if (params?.employee_page_size)

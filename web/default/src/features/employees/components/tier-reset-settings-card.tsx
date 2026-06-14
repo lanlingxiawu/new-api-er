@@ -21,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -60,9 +59,6 @@ export function TierResetSettingsCard() {
   const [form, setForm] = useState({
     enabled: false,
     resetDay: 10,
-    resetHour: 0,
-    resetMinute: 0,
-    resetSecond: 0,
     timezone: 'Asia/Shanghai',
   })
 
@@ -77,9 +73,6 @@ export function TierResetSettingsCard() {
     setForm({
       enabled: config.enabled,
       resetDay: config.reset_day,
-      resetHour: config.reset_hour,
-      resetMinute: config.reset_minute,
-      resetSecond: config.reset_second,
       timezone: normalizeTimezone(config.timezone),
     })
   }, [config])
@@ -88,9 +81,6 @@ export function TierResetSettingsCard() {
     !!config &&
     (form.enabled !== config.enabled ||
       form.resetDay !== config.reset_day ||
-      form.resetHour !== config.reset_hour ||
-      form.resetMinute !== config.reset_minute ||
-      form.resetSecond !== config.reset_second ||
       form.timezone !== normalizeTimezone(config.timezone))
 
   const saveMutation = useMutation({
@@ -109,30 +99,17 @@ export function TierResetSettingsCard() {
           value: String(form.resetDay),
         })
       }
-      if (form.resetHour !== config.reset_hour) {
-        updates.push({
-          key: 'commission_tier_reset_setting.reset_hour',
-          value: String(form.resetHour),
-        })
-      }
-      if (form.resetMinute !== config.reset_minute) {
-        updates.push({
-          key: 'commission_tier_reset_setting.reset_minute',
-          value: String(form.resetMinute),
-        })
-      }
-      if (form.resetSecond !== config.reset_second) {
-        updates.push({
-          key: 'commission_tier_reset_setting.reset_second',
-          value: String(form.resetSecond),
-        })
-      }
       if (form.timezone !== normalizeTimezone(config.timezone)) {
         updates.push({
           key: 'commission_tier_reset_setting.timezone',
           value: form.timezone,
         })
       }
+      updates.push(
+        { key: 'commission_tier_reset_setting.reset_hour', value: '0' },
+        { key: 'commission_tier_reset_setting.reset_minute', value: '0' },
+        { key: 'commission_tier_reset_setting.reset_second', value: '0' }
+      )
       for (const update of updates) {
         const res = await updateSystemOption(update)
         if (!res.success) throw new Error(res.message)
@@ -233,65 +210,6 @@ export function TierResetSettingsCard() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-              </div>
-              <div className='grid grid-cols-3 gap-2'>
-                <div className='space-y-1.5'>
-                  <Label>{t('Hour')}</Label>
-                  <Input
-                    type='number'
-                    min={0}
-                    max={23}
-                    value={form.resetHour}
-                    onChange={(event) => {
-                      const value = Number(event.target.value)
-                      if (Number.isFinite(value)) {
-                        setForm((f) => ({
-                          ...f,
-                          resetHour: Math.min(23, Math.max(0, value)),
-                        }))
-                      }
-                    }}
-                    disabled={isLoading}
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>{t('Minute')}</Label>
-                  <Input
-                    type='number'
-                    min={0}
-                    max={59}
-                    value={form.resetMinute}
-                    onChange={(event) => {
-                      const value = Number(event.target.value)
-                      if (Number.isFinite(value)) {
-                        setForm((f) => ({
-                          ...f,
-                          resetMinute: Math.min(59, Math.max(0, value)),
-                        }))
-                      }
-                    }}
-                    disabled={isLoading}
-                  />
-                </div>
-                <div className='space-y-1.5'>
-                  <Label>{t('Second')}</Label>
-                  <Input
-                    type='number'
-                    min={0}
-                    max={59}
-                    value={form.resetSecond}
-                    onChange={(event) => {
-                      const value = Number(event.target.value)
-                      if (Number.isFinite(value)) {
-                        setForm((f) => ({
-                          ...f,
-                          resetSecond: Math.min(59, Math.max(0, value)),
-                        }))
-                      }
-                    }}
-                    disabled={isLoading}
-                  />
-                </div>
               </div>
               <div className='space-y-1.5'>
                 <Label>{t('Timezone')}</Label>

@@ -9,7 +9,6 @@ import {
 } from '@tanstack/react-table'
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -336,7 +335,6 @@ function CommissionHistory() {
       columns={columns}
       isLoading={isLoading}
       emptyTitle={t('No commission records yet')}
-      paginationInFooter={false}
       toolbar={
         <div className='flex flex-wrap items-center gap-2'>
           <Input
@@ -449,36 +447,16 @@ export function EmployeeConsole() {
 
   const tierInfo = profileData.data.tier
   const effectiveRate = tierInfo?.tier_rate ?? 0
-  const tierGroup: string = tierInfo?.tier_group || ''
   const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
   const summary = {
     ...profileData.data.extension,
     ...profileData.data.period,
     ...summaryData?.data,
   }
-  const revenueUsd =
-    summary?.current_performance_usd ?? summary?.profit_total_usd ?? 0
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>
-        <span className='flex items-center gap-2'>
-          {t('My Commission')}
-          <Badge variant='default' className='text-xs'>
-            {(effectiveRate * 100).toFixed(1)}% {t('rate')}
-          </Badge>
-          {tierTargetAmount ? (
-            <Badge
-              variant={revenueUsd >= tierTargetAmount ? 'default' : 'outline'}
-              className='text-xs'
-            >
-              {t('Target')}: {formatBusinessTargetAmount(revenueUsd)} /{' '}
-              {formatBusinessTargetAmount(tierTargetAmount)}
-              {revenueUsd >= tierTargetAmount ? ` ${t('Reached')}` : ''}
-            </Badge>
-          ) : null}
-        </span>
-      </SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('My Commission')}</SectionPageLayout.Title>
       <SectionPageLayout.Content className='overflow-hidden'>
         <Tabs
           defaultValue='monthly'

@@ -550,7 +550,6 @@ function MyCustomersTab() {
         columns={columns}
         isLoading={isLoading}
         emptyTitle={t('No customers yet')}
-        paginationInFooter={false}
         toolbar={
           <div className='flex flex-wrap items-center justify-end gap-2'>
             <Input

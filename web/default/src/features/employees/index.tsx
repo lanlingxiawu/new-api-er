@@ -1813,7 +1813,6 @@ function EmployeesTab() {
             {t('Add Employee')}
           </Button>
         }
-        paginationInFooter={false}
         toolbar={
           <form
             className='flex w-full flex-col gap-2 lg:flex-row lg:items-center lg:justify-between'
@@ -2132,7 +2131,6 @@ function CommissionLogsTab() {
       isLoading={isLoading}
       isFetching={isFetching}
       emptyTitle={t('No records')}
-      paginationInFooter={false}
       toolbar={
         <div className='space-y-2'>
           <div className='flex justify-end'>
@@ -2192,6 +2190,13 @@ function CommissionLogsTab() {
                   channelId: !value || value === 'all' ? '' : value,
                 }))
               }
+              items={[
+                { value: 'all', label: t('All channels') },
+                ...channelOptions.map((ch) => ({
+                  value: String(ch.channel_id),
+                  label: ch.channel_name || `#${ch.channel_id}`,
+                })),
+              ]}
             >
               <SelectTrigger size='sm' className='w-[200px]'>
                 <SelectValue placeholder={t('Channel')} />
@@ -2234,6 +2239,11 @@ function CommissionLogsTab() {
                   lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
                 }))
               }
+              items={[
+                { value: 'all', label: t('All profit states') },
+                { value: 'loss', label: t('Loss only') },
+                { value: 'normal', label: t('Non-loss only') },
+              ]}
             >
               <SelectTrigger size='sm' className='w-[132px]'>
                 <SelectValue />
@@ -2750,7 +2760,7 @@ function TierDialog({
               onChange={(event) => setRate(event.target.value)}
             />
             <div className='flex flex-wrap gap-1.5'>
-              {[0.05, 0.1, 0.15, 0.2].map((preset) => (
+              {[0.05, 0.08, 0.1, 0.15, 0.2].map((preset) => (
                 <Button
                   key={preset}
                   type='button'
@@ -3082,7 +3092,7 @@ function TiersTab() {
 
 export function Employees() {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState('employees')
+  const [activeTab, setActiveTab] = useState('monthly')
 
   return (
     <SectionPageLayout>
@@ -3096,11 +3106,14 @@ export function Employees() {
           className='flex h-full min-h-0 flex-col overflow-hidden'
         >
           <TabsList className='shrink-0'>
+            <TabsTrigger value='monthly'>{t('Monthly Stats')}</TabsTrigger>
             <TabsTrigger value='employees'>{t('Employees')}</TabsTrigger>
             <TabsTrigger value='tiers'>{t('Commission Tiers')}</TabsTrigger>
             <TabsTrigger value='commission'>{t('Commission Logs')}</TabsTrigger>
-            <TabsTrigger value='monthly'>{t('Monthly Stats')}</TabsTrigger>
           </TabsList>
+          <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
+            {activeTab === 'monthly' && <CommissionMonthlyStatsTab />}
+          </TabsContent>
           <TabsContent
             value='employees'
             className='min-h-0 flex-1 overflow-hidden'
@@ -3115,9 +3128,6 @@ export function Employees() {
             className='min-h-0 flex-1 overflow-hidden'
           >
             {activeTab === 'commission' && <CommissionLogsTab />}
-          </TabsContent>
-          <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
-            {activeTab === 'monthly' && <CommissionMonthlyStatsTab />}
           </TabsContent>
         </Tabs>
       </SectionPageLayout.Content>
