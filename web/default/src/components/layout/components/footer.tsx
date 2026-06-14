@@ -133,7 +133,7 @@ function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
         rel='noopener noreferrer'
         className='text-foreground/70 hover:text-foreground font-medium transition-colors'
       >
-        {t('N123 API')}
+        {t('LS API')}
       </a>
       . {t(NEW_API_FOOTER_ATTRIBUTION_KEY)}
     </span>
@@ -158,7 +158,7 @@ export function Footer(props: FooterProps) {
   } = useSystemConfig()
 
   const displayLogo = systemLogo || props.logo || '/logo.svg' 
-  const displayName = systemName || props.name || 'N123 API'
+  const displayName = systemName || props.name || 'LS API'
   const isDemoSiteMode = Boolean(demoSiteEnabled)
   const currentYear = new Date().getFullYear()
 
@@ -169,15 +169,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.about.links.aboutProject'),
-            href: 'https://docs.n123.ai/wiki/project-introduction/',
+            href: 'https://docs.ls.ai/wiki/project-introduction/',
           },
           {
             text: t('footer.columns.about.links.contact'),
-            href: 'https://docs.n123.ai/support/community-interaction/',
+            href: 'https://docs.ls.ai/support/community-interaction/',
           },
           {
             text: t('footer.columns.about.links.features'),
-            href: 'https://docs.n123.ai/wiki/features-introduction/',
+            href: 'https://docs.ls.ai/wiki/features-introduction/',
           },
         ],
       },
@@ -186,15 +186,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.docs.links.quickStart'),
-            href: 'https://docs.n123.ai/getting-started/',
+            href: 'https://docs.ls.ai/getting-started/',
           },
           {
             text: t('footer.columns.docs.links.installation'),
-            href: 'https://docs.n123.ai/installation/',
+            href: 'https://docs.ls.ai/installation/',
           },
           {
             text: t('footer.columns.docs.links.apiDocs'),
-            href: 'https://docs.n123.ai/',
+            href: 'https://docs.ls.ai/',
           },
         ],
       },

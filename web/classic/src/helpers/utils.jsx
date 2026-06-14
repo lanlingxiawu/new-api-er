@@ -55,7 +55,7 @@ export function isRoot() {
 
 export function getSystemName() {
   let system_name = localStorage.getItem('system_name');
-  if (!system_name) return 'N123 API';
+  if (!system_name) return 'LS API';
   return system_name;
 }
 

@@ -355,7 +355,7 @@ const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
 const CTA_SNIPPET = `from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://n123.ai/v1",
+    base_url="https://ls.ai/v1",
     api_key="<your-key>",
 )
 
@@ -363,7 +363,7 @@ response = client.chat.completions.create(
     model="gpt-5.5",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "用一句话介绍 N123"},
+        {"role": "user", "content": "用一句话介绍 LS"},
     ],
     stream=True,
 )
@@ -612,7 +612,7 @@ function NavTarget({
 function BrandLogo({
   logo,
   className,
-  alt = 'N123',
+  alt = 'LS',
 }: {
   logo: string
   className?: string
@@ -652,7 +652,7 @@ function MobileMenu({
       <div className='flex items-center justify-between px-[16px] py-4'>
         <span className='flex items-center gap-[10px]'>
           <BrandLogo logo={logo} className='h-[26px] w-auto' />
-          <span className='text-[18px] font-semibold text-[#14201a]'>N123</span>
+          <span className='text-[18px] font-semibold text-[#14201a]'>LS</span>
         </span>
         <button
           type='button'
@@ -782,12 +782,12 @@ function LandingNavbar({
           <div className='flex items-center gap-[36px]'>
             <a
               href='#top'
-              aria-label='N123'
+              aria-label='LS'
               className='flex items-center gap-[8px]'
             >
               <BrandLogo logo={logo} className='h-[26px] w-auto' />
               <span className='text-[19px] font-semibold tracking-tight text-[#14201a]'>
-                N123
+                LS
               </span>
             </a>
 
@@ -1566,7 +1566,7 @@ function HeroDashboard({ logo }: { logo: string }) {
         <span className='h-3 w-3 rounded-full bg-amber-400' />
         <span className='h-3 w-3 rounded-full bg-emerald-400' />
         <div className='ml-3 max-w-md flex-1 rounded-md border border-[#e6e9e3] bg-white px-3 py-1 font-mono text-[11px] text-[#5b6b62]'>
-          {`https://n123.ai/${['analytics', 'logs', 'models'][view]}`}
+          {`https://ls.ai/${['analytics', 'logs', 'models'][view]}`}
         </div>
       </div>
 
@@ -1574,7 +1574,7 @@ function HeroDashboard({ logo }: { logo: string }) {
         <aside className='hidden w-52 shrink-0 flex-col gap-3 border-r border-[#e6e9e3] bg-[#fbfbf9] p-3 md:flex'>
           <div className='flex items-center gap-2 px-1 py-1'>
             <BrandLogo logo={logo} className='h-5 w-auto' />
-            <span className='text-xs font-semibold text-[#14201a]'>N123</span>
+            <span className='text-xs font-semibold text-[#14201a]'>LS</span>
           </div>
           <div className='rounded-xl border border-[#e6e9e3] bg-white px-2.5 py-2'>
             <div className='text-[9px] text-[#5b6b62]'>{t('Balance')}</div>
@@ -1615,7 +1615,7 @@ function HeroDashboard({ logo }: { logo: string }) {
                 className='h-3 w-auto brightness-0 invert'
               />
             </span>
-            <span className='text-[11px] text-[#5b6b62]'>N123</span>
+            <span className='text-[11px] text-[#5b6b62]'>LS</span>
           </div>
         </aside>
 
@@ -2615,7 +2615,7 @@ function LandingFooter({
             <div className='flex items-center gap-[10px]'>
               <BrandLogo logo={logo} className='h-[26px] w-auto' />
               <span className='font-kefaiii-bold text-[19px] font-semibold'>
-                N123
+                LS
               </span>
             </div>
             <p className='mt-[16px] max-w-[280px] text-[14px] leading-[1.7] text-[#eef2ee]/65'>
@@ -2662,7 +2662,7 @@ function LandingFooter({
 
         <div className='mt-[24px] flex flex-col items-center justify-between gap-[16px] md:flex-row'>
           <p className='text-[13px] text-[#eef2ee]/50'>
-            Copyright © {year} N123. All rights reserved.
+            Copyright © {year} LS. All rights reserved.
           </p>
         </div>
       </div>
@@ -2719,7 +2719,7 @@ export function Home() {
   const { t } = useTranslation()
 
   const docsUrl =
-    (status?.docs_link as string | undefined) || 'https://docs.n123.ai'
+    (status?.docs_link as string | undefined) || 'https://docs.ls.ai'
   const isAuthenticated = !!auth.user
 
   useLayoutEffect(() => {
@@ -2765,7 +2765,7 @@ export function Home() {
     <LandingPage
       docsUrl={docsUrl}
       isAuthenticated={isAuthenticated}
-      siteName={systemName || 'N123'}
+      siteName={systemName || 'LS'}
       logo={logo}
     />
   )

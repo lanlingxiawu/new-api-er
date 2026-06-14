@@ -335,7 +335,7 @@ const FOOTER_COLUMNS = (_docsUrl) => [
 const CTA_SNIPPET = `from openai import OpenAI
 
 client = OpenAI(
-    base_url='https://n123.ai/v1',
+    base_url='https://ls.ai/v1',
     api_key='<your-key>',
 )
 
@@ -343,7 +343,7 @@ response = client.chat.completions.create(
     model='gpt-5.5',
     messages=[
         {'role': 'system', 'content': 'You are a helpful assistant.'},
-        {'role': 'user', 'content': '\u7528\u4E00\u53E5\u8BDD\u4ECB\u7ECD N123'},
+        {'role': 'user', 'content': '\u7528\u4E00\u53E5\u8BDD\u4ECB\u7ECD LS'},
     ],
     stream=True,
 )
@@ -584,13 +584,13 @@ function MobileMenu({
             className: 'flex items-center gap-[10px]',
             children: [
               /* @__PURE__ */ jsx('img', {
-                src: '/n123-logo.svg',
-                alt: 'N123',
+                src: '/ls-logo.svg',
+                alt: 'LS',
                 className: 'h-[26px] w-auto',
               }),
               /* @__PURE__ */ jsx('span', {
                 className: 'text-[18px] font-semibold text-[#14201a]',
-                children: 'N123',
+                children: 'LS',
               }),
             ],
           }),
@@ -732,18 +732,18 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
               children: [
                 /* @__PURE__ */ jsxs('a', {
                   href: '#top',
-                  'aria-label': 'N123',
+                  'aria-label': 'LS',
                   className: 'flex items-center gap-[8px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: '/n123-logo.svg',
-                      alt: 'N123',
+                      src: '/ls-logo.svg',
+                      alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
                     /* @__PURE__ */ jsx('span', {
                       className:
                         'text-[19px] font-semibold tracking-tight text-[#14201a]',
-                      children: 'N123',
+                      children: 'LS',
                     }),
                   ],
                 }),
@@ -1767,7 +1767,7 @@ function HeroDashboard() {
           /* @__PURE__ */ jsx('div', {
             className:
               'ml-3 max-w-md flex-1 rounded-md border border-[#e6e9e3] bg-white px-3 py-1 font-mono text-[11px] text-[#5b6b62]',
-            children: `https://n123.ai/${['analytics', 'logs', 'models'][view]}`,
+            children: `https://ls.ai/${['analytics', 'logs', 'models'][view]}`,
           }),
         ],
       }),
@@ -1782,13 +1782,13 @@ function HeroDashboard() {
                 className: 'flex items-center gap-2 px-1 py-1',
                 children: [
                   /* @__PURE__ */ jsx('img', {
-                    src: '/n123-logo.svg',
-                    alt: 'N123',
+                    src: '/ls-logo.svg',
+                    alt: 'LS',
                     className: 'h-5 w-auto',
                   }),
                   /* @__PURE__ */ jsx('span', {
                     className: 'text-xs font-semibold text-[#14201a]',
-                    children: 'N123',
+                    children: 'LS',
                   }),
                 ],
               }),
@@ -1850,14 +1850,14 @@ function HeroDashboard() {
                     className:
                       'flex h-6 w-6 items-center justify-center rounded-full bg-[#2e6b52]',
                     children: /* @__PURE__ */ jsx('img', {
-                      src: '/n123-logo.svg',
-                      alt: 'N123',
+                      src: '/ls-logo.svg',
+                      alt: 'LS',
                       className: 'h-3 w-auto brightness-0 invert',
                     }),
                   }),
                   /* @__PURE__ */ jsx('span', {
                     className: 'text-[11px] text-[#5b6b62]',
-                    children: 'N123',
+                    children: 'LS',
                   }),
                 ],
               }),
@@ -2946,8 +2946,8 @@ function MapCtaSection() {
                 'absolute top-[44%] left-1/2 hidden -translate-x-1/2 flex-col items-center md:flex',
               children: [
                 /* @__PURE__ */ jsx('img', {
-                  src: '/n123-logo.svg',
-                  alt: 'N123',
+                  src: '/ls-logo.svg',
+                  alt: 'LS',
                   className: 'h-[50px] w-auto',
                 }),
                 /* @__PURE__ */ jsx('span', {
@@ -3227,13 +3227,13 @@ function LandingFooter({ docsUrl, siteName }) {
                   className: 'flex items-center gap-[10px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: '/n123-logo.svg',
-                      alt: 'N123',
+                      src: '/ls-logo.svg',
+                      alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
                     /* @__PURE__ */ jsx('span', {
                       className: 'font-kefaiii-bold text-[19px] font-semibold',
-                      children: 'N123',
+                      children: 'LS',
                     }),
                   ],
                 }),
@@ -3287,7 +3287,7 @@ function LandingFooter({ docsUrl, siteName }) {
           children: [
             /* @__PURE__ */ jsx('p', {
               className: 'text-[13px] text-[#eef2ee]/50',
-              children: 'Copyright © 2026 N123. All rights reserved.',
+              children: 'Copyright © 2026 LS. All rights reserved.',
             }),
             /* @__PURE__ */ jsx('div', {
               className: 'flex items-center gap-[12px]',
@@ -3367,9 +3367,9 @@ function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isUrl, setIsUrl] = useState(false);
 
-  const docsUrl = statusState?.status?.docs_link || 'https://docs.n123.ai';
+  const docsUrl = statusState?.status?.docs_link || 'https://docs.ls.ai';
   const isAuthenticated = !!localStorage.getItem('user');
-  const siteName = getSystemName() || 'N123';
+  const siteName = getSystemName() || 'LS';
 
   useLayoutEffect(() => {
     document.body.classList.add('landing-home-page');

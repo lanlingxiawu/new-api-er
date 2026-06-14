@@ -27,7 +27,7 @@ import {
 const defaultSiteSettings: SiteSettings = {
   'theme.frontend': 'default',
   Notice: '',
-  SystemName: 'N123 API',
+  SystemName: 'LS API',
   Logo: '',
   Footer: '',
   About: '',

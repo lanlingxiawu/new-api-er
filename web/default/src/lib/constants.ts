@@ -21,7 +21,7 @@ For commercial licensing, please contact support@quantumnous.com
  */
 
 // System Configuration Defaults
-export const DEFAULT_SYSTEM_NAME = 'N123 API'
+export const DEFAULT_SYSTEM_NAME = 'LS API'
 export const DEFAULT_LOGO = '/logo.svg'
 
 // LocalStorage Keys

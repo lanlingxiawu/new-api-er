@@ -59,7 +59,7 @@ func main() {
 		return
 	}
 
-	common.SysLog("N123 API " + common.Version + " started")
+	common.SysLog("LS API " + common.Version + " started")
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
