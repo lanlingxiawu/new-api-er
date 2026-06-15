@@ -34,6 +34,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/smartwalle/alipay/v3"
 	"github.com/thanhpk/randstr"
 )
@@ -225,6 +226,21 @@ func AlipayNotify(c *gin.Context) {
 	case alipay.TradeStatusSuccess, alipay.TradeStatusFinished:
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
+
+		if expectedAppId := strings.TrimSpace(setting.AlipayAppId); expectedAppId != "" && noti.AppId != "" && noti.AppId != expectedAppId {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 webhook app_id 不匹配 trade_no=%s notify_app_id=%s expected_app_id=%s client_ip=%s", tradeNo, noti.AppId, expectedAppId, c.ClientIP()))
+			c.String(http.StatusOK, "fail")
+			return
+		}
+
+		if topUp := model.GetTopUpByTradeNo(tradeNo); topUp != nil && topUp.Status == common.TopUpStatusPending {
+			notifiedAmount, parseErr := decimal.NewFromString(strings.TrimSpace(noti.TotalAmount))
+			if parseErr != nil || !notifiedAmount.Equal(decimal.NewFromFloat(topUp.Money)) {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 webhook 金额不匹配 trade_no=%s notify_total_amount=%s order_money=%.2f client_ip=%s", tradeNo, noti.TotalAmount, topUp.Money, c.ClientIP()))
+				c.String(http.StatusOK, "fail")
+				return
+			}
+		}
 
 		if err := model.RechargeAlipay(tradeNo, c.ClientIP()); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 充值处理失败 trade_no=%s client_ip=%s error=%q", tradeNo, c.ClientIP(), err.Error()))

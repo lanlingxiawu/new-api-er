@@ -362,6 +362,28 @@ func WechatNotify(c *gin.Context) {
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
 
+		notifiedMchId := ""
+		if transaction.Mchid != nil {
+			notifiedMchId = *transaction.Mchid
+		}
+		if expectedMchId := strings.TrimSpace(setting.WechatMchId); expectedMchId != "" && notifiedMchId != "" && notifiedMchId != expectedMchId {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 webhook mchid 不匹配 trade_no=%s notify_mchid=%s expected_mchid=%s client_ip=%s", tradeNo, notifiedMchId, expectedMchId, c.ClientIP()))
+			c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "mchid mismatch"})
+			return
+		}
+
+		if topUp := model.GetTopUpByTradeNo(tradeNo); topUp != nil && topUp.Status == common.TopUpStatusPending {
+			var notifiedTotal int64
+			if transaction.Amount != nil && transaction.Amount.Total != nil {
+				notifiedTotal = *transaction.Amount.Total
+			}
+			if expectedTotal := wechatAmountToFen(topUp.Money); notifiedTotal != expectedTotal {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 webhook 金额不匹配 trade_no=%s notify_total=%d order_total=%d client_ip=%s", tradeNo, notifiedTotal, expectedTotal, c.ClientIP()))
+				c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "amount mismatch"})
+				return
+			}
+		}
+
 		if err := model.RechargeWechat(tradeNo, c.ClientIP()); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 充值处理失败 trade_no=%s client_ip=%s error=%q", tradeNo, c.ClientIP(), err.Error()))
 			c.JSON(http.StatusInternalServerError, gin.H{"code": "FAIL", "message": "process failed"})
