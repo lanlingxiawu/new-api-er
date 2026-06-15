@@ -74,12 +74,14 @@ func AdminListEmployees(c *gin.Context) {
 		pageSize = 20
 	}
 
+	currentPeriod := model.ResolveCommissionMonthlyPeriod(time.Now().Unix())
 	employeeFilter := model.EmployeeFilter{
-		UserId:    userId,
-		Keyword:   keyword,
-		Status:    status,
-		SortBy:    sortBy,
-		SortOrder: sortOrder,
+		UserId:        userId,
+		Keyword:       keyword,
+		Status:        status,
+		SortBy:        sortBy,
+		SortOrder:     sortOrder,
+		PeriodStartAt: currentPeriod.PeriodStartAt,
 	}
 	employees, total, err := model.GetAllEmployees(page, pageSize, employeeFilter)
 	if err != nil {
@@ -90,18 +92,30 @@ func AdminListEmployees(c *gin.Context) {
 	// Attach user info and current performance metrics.
 	type EmployeeWithUser struct {
 		*model.EmployeeProfile
-		Username              string  `json:"username"`
-		DisplayName           string  `json:"display_name"`
-		Email                 string  `json:"email"`
-		CustomerCount         int     `json:"customer_count"`
-		TotalConsumptionQuota int64   `json:"total_consumption_quota"`
-		TotalConsumptionUsd   float64 `json:"total_consumption_usd"`
-		TotalCostQuota        int64   `json:"total_cost_quota"`
-		TotalCostUsd          float64 `json:"total_cost_usd"`
-		TotalProfitQuota      int64   `json:"total_profit_quota"`
-		TotalProfitUsd        float64 `json:"total_profit_usd"`
-		TotalCommissionQuota  int64   `json:"total_commission_quota"`
-		TotalCommissionUsd    float64 `json:"total_commission_usd"`
+		Username               string  `json:"username"`
+		DisplayName            string  `json:"display_name"`
+		Email                  string  `json:"email"`
+		CustomerCount          int     `json:"customer_count"`
+		TotalConsumptionQuota  int64   `json:"total_consumption_quota"`
+		TotalConsumptionUsd    float64 `json:"total_consumption_usd"`
+		TotalCostQuota         int64   `json:"total_cost_quota"`
+		TotalCostUsd           float64 `json:"total_cost_usd"`
+		TotalProfitQuota       int64   `json:"total_profit_quota"`
+		TotalProfitUsd         float64 `json:"total_profit_usd"`
+		TotalCommissionQuota   int64   `json:"total_commission_quota"`
+		TotalCommissionUsd     float64 `json:"total_commission_usd"`
+		PeriodConsumptionQuota int64   `json:"period_consumption_quota"`
+		PeriodConsumptionUsd   float64 `json:"period_consumption_usd"`
+		PeriodCostQuota        int64   `json:"period_cost_quota"`
+		PeriodCostUsd          float64 `json:"period_cost_usd"`
+		PeriodProfitQuota      int64   `json:"period_profit_quota"`
+		PeriodProfitUsd        float64 `json:"period_profit_usd"`
+		PeriodCommissionQuota  int64   `json:"period_commission_quota"`
+		PeriodCommissionUsd    float64 `json:"period_commission_usd"`
+		PeriodStartAt          int64   `json:"period_start_at"`
+		PeriodEndAt            int64   `json:"period_end_at"`
+		PeriodKey              string  `json:"period_key"`
+		PeriodTimezone         string  `json:"period_timezone"`
 		// CurrentProfitQuota/CurrentCommissionQuota 为"本期"值（自上次月度重置以来的增量，
 		// 重置功能未启用/未触发过时等价于对应累计值），与 TotalProfit/TotalCommission（历史累计）含义不同。
 		CurrentProfitQuota     int64   `json:"current_performance_quota"`
@@ -130,8 +144,8 @@ func AdminListEmployees(c *gin.Context) {
 		customerConsumptionByUserId map[int]int64
 		customerCountsByUserId      map[int]int
 		tierLevelsByUserId          map[int]*model.EmployeeTierLevel
+		currentPeriodStatsByUserId  map[int]model.EmployeeCurrentResetPeriodStat
 		userMap                     map[int]*model.User
-		extByUserId                 map[int]*model.UserExtension
 	)
 	eg, _ := errgroup.WithContext(c.Request.Context())
 	eg.Go(func() error {
@@ -156,12 +170,12 @@ func AdminListEmployees(c *gin.Context) {
 	})
 	eg.Go(func() error {
 		var err error
-		userMap, err = model.GetUsersByIds(employeeUserIds)
+		currentPeriodStatsByUserId, err = model.GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds)
 		return err
 	})
 	eg.Go(func() error {
 		var err error
-		extByUserId, err = model.GetUserExtensionsByUserIds(employeeUserIds)
+		userMap, err = model.GetUsersByIds(employeeUserIds)
 		return err
 	})
 	if err := eg.Wait(); err != nil {
@@ -201,22 +215,23 @@ func AdminListEmployees(c *gin.Context) {
 			totalProfitQuota = stat.TotalProfit
 			totalCommissionQuota = stat.TotalCommission
 		}
-
-		// "本期"业绩/提成 = UserExtension 累计值 - 上次重置基准（默认 0），clamp 到 >=0。
-		var periodProfitQuota, periodCommissionQuota int64
-		if ext, ok := extByUserId[emp.UserId]; ok {
-			periodProfitQuota = ext.ProfitTotalQuota
-			periodCommissionQuota = ext.CommissionTotalQuota
-			if lvl, ok2 := tierLevelsByUserId[emp.UserId]; ok2 {
-				periodProfitQuota -= lvl.BaselineProfitQuota
-				periodCommissionQuota -= lvl.BaselineCommissionQuota
-			}
-			if periodProfitQuota < 0 {
-				periodProfitQuota = 0
-			}
-			if periodCommissionQuota < 0 {
-				periodCommissionQuota = 0
-			}
+		periodConsumptionQuota := int64(0)
+		periodCostQuota := int64(0)
+		periodProfitQuota := int64(0)
+		periodCommissionQuota := int64(0)
+		periodStartAt := currentPeriod.PeriodStartAt
+		periodEndAt := currentPeriod.PeriodEndAt
+		periodKey := currentPeriod.PeriodKey
+		periodTimezone := currentPeriod.Timezone
+		if stat, ok := currentPeriodStatsByUserId[emp.UserId]; ok {
+			periodConsumptionQuota = stat.RevenueQuota
+			periodCostQuota = stat.CostQuota
+			periodProfitQuota = stat.ProfitQuota
+			periodCommissionQuota = stat.CommissionQuota
+			periodStartAt = stat.ResetStartedAt
+			periodEndAt = stat.ResetEndedAt
+			periodKey = stat.PeriodKey
+			periodTimezone = stat.Timezone
 		}
 
 		item := EmployeeWithUser{
@@ -230,6 +245,18 @@ func AdminListEmployees(c *gin.Context) {
 			TotalProfitUsd:         common.QuotaToUSD(totalProfitQuota),
 			TotalCommissionQuota:   totalCommissionQuota,
 			TotalCommissionUsd:     common.QuotaToUSD(totalCommissionQuota),
+			PeriodConsumptionQuota: periodConsumptionQuota,
+			PeriodConsumptionUsd:   common.QuotaToUSD(periodConsumptionQuota),
+			PeriodCostQuota:        periodCostQuota,
+			PeriodCostUsd:          common.QuotaToUSD(periodCostQuota),
+			PeriodProfitQuota:      periodProfitQuota,
+			PeriodProfitUsd:        common.QuotaToUSD(periodProfitQuota),
+			PeriodCommissionQuota:  periodCommissionQuota,
+			PeriodCommissionUsd:    common.QuotaToUSD(periodCommissionQuota),
+			PeriodStartAt:          periodStartAt,
+			PeriodEndAt:            periodEndAt,
+			PeriodKey:              periodKey,
+			PeriodTimezone:         periodTimezone,
 			CurrentProfitQuota:     periodProfitQuota,
 			CurrentProfitUsd:       common.QuotaToUSD(periodProfitQuota),
 			CurrentCommissionQuota: periodCommissionQuota,
@@ -481,23 +508,17 @@ func AdminCommissionSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
 }
 
-// AdminListCommissionMonthlyStats GET /api/admin/employee/commission/monthly
-func AdminListCommissionMonthlyStats(c *gin.Context) {
+// AdminListCommissionResetPeriodStats GET /api/admin/employee/commission/monthly
+func AdminListCommissionResetPeriodStats(c *gin.Context) {
 	page, pageSize := normalizePage(c)
 	employeeUserId, _ := strconv.Atoi(c.Query("employee_user_id"))
-	periodStartAt, err := parseOptionalInt64Query(c, "period_start_at")
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
 	timeRange, err := parseUnixTimeRangeQuery(c)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	items, total, err := model.GetCommissionMonthlyStats(model.CommissionMonthlyStatFilter{
+	items, total, err := model.GetCommissionResetPeriodStats(model.CommissionResetPeriodStatFilter{
 		EmployeeUserId: employeeUserId,
-		PeriodStartAt:  periodStartAt,
 		StartTime:      timeRange.StartTime,
 		EndTime:        timeRange.EndTime,
 		Page:           page,
@@ -557,9 +578,9 @@ func AdminCommissionOverview(c *gin.Context) {
 		channelSortOrder = "desc"
 	}
 
-	// Build one shared mixed query plan: covered full days use daily aggregates,
-	// uncovered full days and partial boundaries use ledger/detail tables.
-	queryPlan, err := model.ResolveBusinessStatsQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
+	// Business overview is intentionally daily-aggregate only. Do not fill gaps
+	// from ledger/detail tables here; those large scans belong to detail views.
+	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -1161,27 +1182,21 @@ func GetMyCommissionSummary(c *gin.Context) {
 	})
 }
 
-// GetMyCommissionMonthlyStats GET /api/user/employee/commission/monthly
-func GetMyCommissionMonthlyStats(c *gin.Context) {
+// GetMyCommissionResetPeriodStats GET /api/user/employee/commission/monthly
+func GetMyCommissionResetPeriodStats(c *gin.Context) {
 	userId := c.GetInt("id")
 	if !model.IsEmployee(userId) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "permission denied"})
 		return
 	}
 	page, pageSize := normalizePage(c)
-	periodStartAt, err := parseOptionalInt64Query(c, "period_start_at")
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
 	timeRange, err := parseUnixTimeRangeQuery(c)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	items, total, err := model.GetCommissionMonthlyStats(model.CommissionMonthlyStatFilter{
+	items, total, err := model.GetCommissionResetPeriodStats(model.CommissionResetPeriodStatFilter{
 		EmployeeUserId: userId,
-		PeriodStartAt:  periodStartAt,
 		StartTime:      timeRange.StartTime,
 		EndTime:        timeRange.EndTime,
 		Page:           page,

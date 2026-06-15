@@ -253,11 +253,12 @@ func GetEmployeeProfileStatusesByUserIds(userIds []int) (map[int]int, error) {
 }
 
 type EmployeeFilter struct {
-	UserId    int
-	Keyword   string
-	Status    int
-	SortBy    string
-	SortOrder string
+	UserId        int
+	Keyword       string
+	Status        int
+	SortBy        string
+	SortOrder     string
+	PeriodStartAt int64
 }
 
 // GetAllEmployees 获取员工列表（分页）。
@@ -280,6 +281,10 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 	}
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
+	}
+	periodStartAt := filter.PeriodStartAt
+	if periodStartAt == 0 {
+		periodStartAt = ResolveCommissionMonthlyPeriod(time.Now().Unix()).PeriodStartAt
 	}
 	orderColumn := "employee_profiles.id"
 	switch filter.SortBy {
@@ -307,6 +312,22 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 	case "total_commission_quota":
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
 		orderColumn = "COALESCE(commission_rollup.total_commission_quota, 0)"
+	case "period_consumption_quota":
+		tx = tx.Joins("LEFT JOIN (SELECT inviter_id AS employee_user_id, COALESCE(SUM(used_quota),0) AS total_consumption_quota FROM users WHERE role = ? GROUP BY inviter_id) period_consumption_rollup ON period_consumption_rollup.employee_user_id = employee_profiles.user_id", common.RoleCommonUser).
+			Joins("LEFT JOIN employee_tier_levels AS period_consumption_levels ON period_consumption_levels.user_id = employee_profiles.user_id")
+		orderColumn = "CASE WHEN COALESCE(period_consumption_rollup.total_consumption_quota, 0) - COALESCE(period_consumption_levels.baseline_consumption_quota, 0) < 0 THEN 0 ELSE COALESCE(period_consumption_rollup.total_consumption_quota, 0) - COALESCE(period_consumption_levels.baseline_consumption_quota, 0) END"
+	case "period_cost_quota":
+		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(cost_quota),0) AS total_cost_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_cost_rollup ON period_cost_rollup.employee_user_id = employee_profiles.user_id").
+			Joins("LEFT JOIN employee_tier_levels AS period_cost_levels ON period_cost_levels.user_id = employee_profiles.user_id")
+		orderColumn = "CASE WHEN COALESCE(period_cost_rollup.total_cost_quota, 0) - COALESCE(period_cost_levels.baseline_cost_quota, 0) < 0 THEN 0 ELSE COALESCE(period_cost_rollup.total_cost_quota, 0) - COALESCE(period_cost_levels.baseline_cost_quota, 0) END"
+	case "period_profit_quota":
+		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_profit_rollup ON period_profit_rollup.employee_user_id = employee_profiles.user_id").
+			Joins("LEFT JOIN employee_tier_levels AS period_profit_levels ON period_profit_levels.user_id = employee_profiles.user_id")
+		orderColumn = "CASE WHEN COALESCE(period_profit_rollup.total_profit_quota, 0) - COALESCE(period_profit_levels.baseline_profit_quota, 0) < 0 THEN 0 ELSE COALESCE(period_profit_rollup.total_profit_quota, 0) - COALESCE(period_profit_levels.baseline_profit_quota, 0) END"
+	case "period_commission_quota":
+		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_commission_rollup ON period_commission_rollup.employee_user_id = employee_profiles.user_id").
+			Joins("LEFT JOIN employee_tier_levels AS period_commission_levels ON period_commission_levels.user_id = employee_profiles.user_id")
+		orderColumn = "CASE WHEN COALESCE(period_commission_rollup.total_commission_quota, 0) - COALESCE(period_commission_levels.baseline_commission_quota, 0) < 0 THEN 0 ELSE COALESCE(period_commission_rollup.total_commission_quota, 0) - COALESCE(period_commission_levels.baseline_commission_quota, 0) END"
 	case "current_performance_quota":
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_profit_rollup ON current_profit_rollup.employee_user_id = employee_profiles.user_id").
 			Joins("LEFT JOIN employee_tier_levels AS current_perf_levels ON current_perf_levels.user_id = employee_profiles.user_id")
@@ -597,17 +618,17 @@ type CommissionSummaryItem struct {
 }
 
 // GetCommissionSummary 按员工汇总提成统计，优先使用日聚合统计。
-type CommissionMonthlyStatFilter struct {
+type CommissionResetPeriodStatFilter struct {
 	EmployeeUserId int
-	PeriodStartAt  int64
+	ResetStartedAt int64
 	StartTime      int64
 	EndTime        int64
 	Page           int
 	PageSize       int
 }
 
-type EmployeeCommissionMonthlyStatItem struct {
-	EmployeeCommissionMonthlyStat
+type EmployeeCommissionResetPeriodStatItem struct {
+	EmployeeCommissionResetPeriodStat
 	TotalRevenueUsd    float64 `json:"total_revenue_usd"`
 	TotalCostUsd       float64 `json:"total_cost_usd"`
 	TotalProfitUsd     float64 `json:"total_profit_usd"`
@@ -640,6 +661,27 @@ type CommissionCalendarSummary struct {
 	CommissionUsd   float64 `json:"commission_usd"`
 }
 
+type resetBaselineSummary struct {
+	BaselineConsumptionQuota int64
+	BaselineCostQuota        int64
+	BaselineProfitQuota      int64
+	BaselineCommissionQuota  int64
+	BaselineResetAt          int64
+}
+
+type EmployeeCurrentResetPeriodStat struct {
+	EmployeeUserId  int
+	ResetStartedAt  int64
+	ResetEndedAt    int64
+	PeriodKey       string
+	Timezone        string
+	RevenueQuota    int64
+	CostQuota       int64
+	ProfitQuota     int64
+	CommissionQuota int64
+	RecordCount     int64
+}
+
 type CommissionCalendarStats struct {
 	Days             []*CommissionCalendarDayStat `json:"days"`
 	Summary          CommissionCalendarSummary    `json:"summary"`
@@ -650,7 +692,7 @@ type CommissionCalendarStats struct {
 	Timezone         string                       `json:"timezone"`
 }
 
-func normalizeCommissionMonthlyStatFilter(filter CommissionMonthlyStatFilter) CommissionMonthlyStatFilter {
+func normalizeCommissionResetPeriodStatFilter(filter CommissionResetPeriodStatFilter) CommissionResetPeriodStatFilter {
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
@@ -660,47 +702,128 @@ func normalizeCommissionMonthlyStatFilter(filter CommissionMonthlyStatFilter) Co
 	return filter
 }
 
-func applyCommissionMonthlyStatFilter(tx *gorm.DB, filter CommissionMonthlyStatFilter) *gorm.DB {
-	if filter.EmployeeUserId != 0 {
-		tx = tx.Where("employee_user_id = ?", filter.EmployeeUserId)
+func loadResetBaselineByEmployeeUserIds(employeeUserIds []int) (map[int]resetBaselineSummary, error) {
+	items := make(map[int]resetBaselineSummary, len(employeeUserIds))
+	if len(employeeUserIds) == 0 {
+		return items, nil
 	}
-	if filter.PeriodStartAt != 0 {
-		tx = tx.Where("period_start_at = ?", filter.PeriodStartAt)
+	var rows []*EmployeeTierLevel
+	if err := DB.Where("user_id IN ?", employeeUserIds).Find(&rows).Error; err != nil {
+		return nil, err
 	}
-	if filter.StartTime != 0 && filter.EndTime != 0 {
-		tx = tx.Where("period_start_at <= ? AND period_end_at >= ?", filter.EndTime, filter.StartTime)
+	for _, row := range rows {
+		items[row.UserId] = resetBaselineSummary{
+			BaselineConsumptionQuota: row.BaselineConsumptionQuota,
+			BaselineCostQuota:        row.BaselineCostQuota,
+			BaselineProfitQuota:      row.BaselineProfitQuota,
+			BaselineCommissionQuota:  row.BaselineCommissionQuota,
+			BaselineResetAt:          row.BaselineResetAt,
+		}
 	}
-	return tx
+	return items, nil
 }
 
-func GetCommissionMonthlyStats(filter CommissionMonthlyStatFilter) ([]*EmployeeCommissionMonthlyStatItem, int64, error) {
-	filter = normalizeCommissionMonthlyStatFilter(filter)
-	base := applyCommissionMonthlyStatFilter(DB.Model(&EmployeeCommissionMonthlyStat{}), filter)
+func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int]EmployeeCurrentResetPeriodStat, error) {
+	items := make(map[int]EmployeeCurrentResetPeriodStat, len(employeeUserIds))
+	if len(employeeUserIds) == 0 {
+		return items, nil
+	}
+	baselinesByUserId, err := loadResetBaselineByEmployeeUserIds(employeeUserIds)
+	if err != nil {
+		return nil, err
+	}
+	resetStartedAtSet := make(map[int64]struct{})
+	for _, employeeUserId := range employeeUserIds {
+		if baseline := baselinesByUserId[employeeUserId]; baseline.BaselineResetAt > 0 {
+			resetStartedAtSet[baseline.BaselineResetAt] = struct{}{}
+		}
+	}
+	if len(resetStartedAtSet) == 0 {
+		return items, nil
+	}
+	resetStartedAts := make([]int64, 0, len(resetStartedAtSet))
+	for resetStartedAt := range resetStartedAtSet {
+		resetStartedAts = append(resetStartedAts, resetStartedAt)
+	}
+	var rows []*EmployeeCommissionResetPeriodStat
+	if err := DB.Where("employee_user_id IN ? AND reset_started_at IN ?", employeeUserIds, resetStartedAts).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		items[row.EmployeeUserId] = EmployeeCurrentResetPeriodStat{
+			EmployeeUserId:  row.EmployeeUserId,
+			ResetStartedAt:  row.ResetStartedAt,
+			ResetEndedAt:    row.ResetEndedAt,
+			PeriodKey:       row.PeriodKey,
+			Timezone:        row.Timezone,
+			RevenueQuota:    row.RevenueQuota,
+			CostQuota:       row.CostQuota,
+			ProfitQuota:     row.ProfitQuota,
+			CommissionQuota: row.CommissionQuota,
+			RecordCount:     row.RecordCount,
+		}
+	}
+	return items, nil
+}
+
+func clampQuotaDelta(total, baseline int64) int64 {
+	delta := total - baseline
+	if delta < 0 {
+		return 0
+	}
+	return delta
+}
+
+func GetCommissionResetPeriodStats(filter CommissionResetPeriodStatFilter) ([]*EmployeeCommissionResetPeriodStatItem, int64, error) {
+	filter = normalizeCommissionResetPeriodStatFilter(filter)
+	base := DB.Model(&EmployeeCommissionResetPeriodStat{}).Where("employee_user_id = ?", filter.EmployeeUserId)
+	if filter.EmployeeUserId != 0 {
+		baselinesByUserId, err := loadResetBaselineByEmployeeUserIds([]int{filter.EmployeeUserId})
+		if err != nil {
+			return nil, 0, err
+		}
+		currentBaseline := baselinesByUserId[filter.EmployeeUserId]
+		if filter.ResetStartedAt != 0 {
+			base = base.Where("reset_started_at = ?", filter.ResetStartedAt)
+		} else if currentBaseline.BaselineResetAt > 0 {
+			base = base.Where("reset_started_at = ?", currentBaseline.BaselineResetAt)
+		} else {
+			return []*EmployeeCommissionResetPeriodStatItem{}, 0, nil
+		}
+	} else if filter.ResetStartedAt != 0 {
+		base = base.Where("reset_started_at = ?", filter.ResetStartedAt)
+	}
+	if filter.StartTime != 0 && filter.EndTime != 0 {
+		base = base.Where("reset_started_at <= ? AND (reset_ended_at = 0 OR reset_ended_at >= ?)", filter.EndTime, filter.StartTime)
+	}
+
 	var total int64
 	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
-	var rows []*EmployeeCommissionMonthlyStat
-	offset := (filter.Page - 1) * filter.PageSize
-	if err := base.Session(&gorm.Session{}).Order("period_start_at DESC, commission_quota DESC").
-		Offset(offset).
-		Limit(filter.PageSize).
-		Find(&rows).Error; err != nil {
-		return nil, 0, err
-	}
-	items := make([]*EmployeeCommissionMonthlyStatItem, 0, len(rows))
-	for _, row := range rows {
-		item := &EmployeeCommissionMonthlyStatItem{
-			EmployeeCommissionMonthlyStat: *row,
-			TotalRevenueUsd:               common.QuotaToUSD(row.RevenueQuota),
-			TotalCostUsd:                  common.QuotaToUSD(row.CostQuota),
-			TotalProfitUsd:                common.QuotaToUSD(row.ProfitQuota),
-			TotalCommissionUsd:            common.QuotaToUSD(row.CommissionQuota),
+	if total > 0 {
+		var rows []*EmployeeCommissionResetPeriodStat
+		offset := (filter.Page - 1) * filter.PageSize
+		if err := base.Session(&gorm.Session{}).Order("reset_started_at DESC, commission_quota DESC").
+			Offset(offset).
+			Limit(filter.PageSize).
+			Find(&rows).Error; err != nil {
+			return nil, 0, err
 		}
-		items = append(items, item)
+		items := make([]*EmployeeCommissionResetPeriodStatItem, 0, len(rows))
+		for _, row := range rows {
+			item := &EmployeeCommissionResetPeriodStatItem{
+				EmployeeCommissionResetPeriodStat: *row,
+				TotalRevenueUsd:                   common.QuotaToUSD(row.RevenueQuota),
+				TotalCostUsd:                      common.QuotaToUSD(row.CostQuota),
+				TotalProfitUsd:                    common.QuotaToUSD(row.ProfitQuota),
+				TotalCommissionUsd:                common.QuotaToUSD(row.CommissionQuota),
+			}
+			items = append(items, item)
+		}
+		return items, total, nil
 	}
-	return items, total, nil
+	return []*EmployeeCommissionResetPeriodStatItem{}, 0, nil
 }
 
 func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*CommissionCalendarStats, error) {
@@ -717,14 +840,8 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		PeriodKey:        period.PeriodKey,
 		Timezone:         period.Timezone,
 	}
-
-	// 员工数 × 31 行（月度统计不要求明细级精确）：
-	// 1. 天桶按 UTC 日划分（写入侧 unixDayStart 语义），与提成时区的本地日
-	//    可能相差一个时区偏移；Date 标签按 UTC 日期格式化，与桶语义一致。
-	// 2. 周期起止落在某 UTC 日中间时，该边界日的数值包含周期外的同日记录。
-	// 3. 数据新鲜度 = 业务统计刷盘间隔（默认 5 秒）。
-	statDateStart := unixDayStart(period.PeriodStartAt)
-	statDateEnd := unixDayStart(period.PeriodEndAt)
+	queryResetStartedAt := period.PeriodStartAt
+	queryEndAt := period.PeriodEndAt
 
 	type calendarDailyRow struct {
 		StatDate        int64
@@ -734,16 +851,52 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		CommissionQuota int64
 		RecordCount     int64
 	}
-	tx := DB.Model(&EmployeeCommissionDailyStat{}).
+	if employeeUserId > 0 {
+		baselinesByUserId, err := loadResetBaselineByEmployeeUserIds([]int{employeeUserId})
+		if err != nil {
+			return nil, err
+		}
+		baseline := baselinesByUserId[employeeUserId]
+		if baseline.BaselineResetAt <= 0 {
+			return stats, nil
+		}
+		queryResetStartedAt = baseline.BaselineResetAt
+		if currentRows, err := GetCurrentResetPeriodStatsByEmployeeUserIds([]int{employeeUserId}); err == nil {
+			if currentRow, ok := currentRows[employeeUserId]; ok {
+				if currentRow.ResetStartedAt > 0 {
+					queryResetStartedAt = currentRow.ResetStartedAt
+				}
+			}
+		} else {
+			return nil, err
+		}
+	}
+	if queryEndAt > endTime {
+		queryEndAt = endTime
+	}
+	tx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
 		Select("stat_date, "+
 			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, "+
 			"COALESCE(SUM(cost_quota),0) AS cost_quota, "+
 			"COALESCE(SUM(profit_quota),0) AS profit_quota, "+
 			"COALESCE(SUM(commission_quota),0) AS commission_quota, "+
-			"COALESCE(SUM(record_count),0) AS record_count").
-		Where("stat_date >= ? AND stat_date <= ?", statDateStart, statDateEnd)
+			"COALESCE(SUM(record_count),0) AS record_count")
 	if employeeUserId > 0 {
-		tx = tx.Where("employee_user_id = ?", employeeUserId)
+		tx = tx.Where(
+			"reset_started_at = ? AND stat_date >= ? AND stat_date <= ? AND employee_user_id = ?",
+			queryResetStartedAt,
+			unixDayStart(queryResetStartedAt),
+			unixDayStart(queryEndAt),
+			employeeUserId,
+		)
+	} else {
+		tx = tx.Joins(
+			"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at",
+		).Where(
+			"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
+			unixDayStart(period.PeriodStartAt),
+			unixDayStart(queryEndAt),
+		)
 	}
 	var aggRows []calendarDailyRow
 	if err := tx.Group("stat_date").Scan(&aggRows).Error; err != nil {

@@ -125,7 +125,7 @@ func SetApiRouter(router *gin.Engine) {
 				// Employee self-query routes
 				selfRoute.GET("/employee/profile", controller.GetMyEmployeeProfile)
 				selfRoute.GET("/employee/commission", controller.GetMyCommissionLogs)
-				selfRoute.GET("/employee/commission/monthly", controller.GetMyCommissionMonthlyStats)
+				selfRoute.GET("/employee/commission/monthly", controller.GetMyCommissionResetPeriodStats)
 				selfRoute.GET("/employee/commission/calendar", controller.GetMyCommissionCalendarStats)
 				selfRoute.GET("/employee/commission/summary", controller.GetMyCommissionSummary)
 			}
@@ -207,7 +207,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
 			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
 			employeeAdminRoute.GET("/commission/channels", controller.AdminListCommissionChannelOptions)
-			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionMonthlyStats)
+			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionResetPeriodStats)
 			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)

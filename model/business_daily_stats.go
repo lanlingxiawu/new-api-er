@@ -56,19 +56,32 @@ type EmployeeCustomerCommissionDailyStat struct {
 	LastCreatedAt   int64 `json:"last_created_at" gorm:"default:0"`
 }
 
-type EmployeeCommissionMonthlyStat struct {
+type EmployeeCommissionResetPeriodStat struct {
 	Id              int    `json:"id"`
-	PeriodStartAt   int64  `json:"period_start_at" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:1;index;index:idx_employee_commission_monthly_period_rank,priority:1;index:idx_employee_commission_monthly_employee_period,priority:2"`
-	PeriodEndAt     int64  `json:"period_end_at" gorm:"index;default:0"`
+	ResetStartedAt  int64  `json:"reset_started_at" gorm:"uniqueIndex:idx_employee_commission_reset_period,priority:1;index;index:idx_employee_commission_reset_period_rank,priority:1"`
+	ResetEndedAt    int64  `json:"reset_ended_at" gorm:"index;default:0"`
 	PeriodKey       string `json:"period_key" gorm:"type:varchar(32);default:''"`
 	Timezone        string `json:"timezone" gorm:"type:varchar(64);default:''"`
-	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_monthly,priority:2;index;index:idx_employee_commission_monthly_employee_period,priority:1"`
+	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_reset_period,priority:2;index;index:idx_employee_commission_reset_period_rank,priority:2"`
 	RevenueQuota    int64  `json:"revenue_quota" gorm:"default:0"`
 	CostQuota       int64  `json:"cost_quota" gorm:"default:0"`
 	ProfitQuota     int64  `json:"profit_quota" gorm:"default:0"`
-	CommissionQuota int64  `json:"commission_quota" gorm:"default:0;index:idx_employee_commission_monthly_period_rank,priority:2"`
+	CommissionQuota int64  `json:"commission_quota" gorm:"default:0"`
 	RecordCount     int64  `json:"record_count" gorm:"default:0"`
 	LastCreatedAt   int64  `json:"last_created_at" gorm:"default:0"`
+}
+
+type EmployeeCommissionResetPeriodDailyStat struct {
+	Id              int   `json:"id"`
+	ResetStartedAt  int64 `json:"reset_started_at" gorm:"uniqueIndex:idx_employee_commission_reset_period_daily,priority:1;index;index:idx_employee_commission_reset_period_daily_rank,priority:1"`
+	StatDate        int64 `json:"stat_date" gorm:"uniqueIndex:idx_employee_commission_reset_period_daily,priority:2;index;index:idx_employee_commission_reset_period_daily_rank,priority:3"`
+	EmployeeUserId  int   `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_reset_period_daily,priority:3;index;index:idx_employee_commission_reset_period_daily_rank,priority:2"`
+	RevenueQuota    int64 `json:"revenue_quota" gorm:"default:0"`
+	CostQuota       int64 `json:"cost_quota" gorm:"default:0"`
+	ProfitQuota     int64 `json:"profit_quota" gorm:"default:0"`
+	CommissionQuota int64 `json:"commission_quota" gorm:"default:0"`
+	RecordCount     int64 `json:"record_count" gorm:"default:0"`
+	LastCreatedAt   int64 `json:"last_created_at" gorm:"default:0"`
 }
 
 type BusinessDailyStatsCoverage struct {
@@ -163,6 +176,23 @@ func ResolveCommissionMonthlyPeriod(createdAt int64) CommissionMonthlyPeriod {
 		PeriodStartAt: start.Unix(),
 		PeriodEndAt:   end.Unix(),
 		PeriodKey:     start.In(loc).Format("2006-01-02"),
+		Timezone:      timezone,
+	}
+}
+
+func ResolveNextCommissionPeriodBoundary(createdAt int64) CommissionMonthlyPeriod {
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, timezone := commissionMonthlyStatLocation(cfg.Timezone)
+	t := time.Unix(createdAt, 0).In(loc)
+	next := commissionMonthlyScheduledTime(t.Year(), t.Month(), cfg, loc)
+	if !t.Before(next) {
+		year, month := nextCommissionMonth(t.Year(), t.Month())
+		next = commissionMonthlyScheduledTime(year, month, cfg, loc)
+	}
+	return CommissionMonthlyPeriod{
+		PeriodStartAt: createdAt,
+		PeriodEndAt:   next.Add(-time.Second).Unix(),
+		PeriodKey:     time.Unix(createdAt, 0).In(loc).Format("2006-01-02"),
 		Timezone:      timezone,
 	}
 }

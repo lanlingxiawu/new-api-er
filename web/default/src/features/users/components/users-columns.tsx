@@ -276,6 +276,10 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const affCount = user.aff_count || 0
         const affHistoryQuota = user.aff_history_quota || 0
         const inviterId = user.inviter_id || 0
+        const inviterRemark = user.inviter_remark?.trim()
+        const inviterLabel = inviterRemark
+          ? `${t('Inviter')}: ${inviterId} | ${inviterRemark}`
+          : `${t('Inviter')}: ${inviterId}`
 
         return (
           <div className='flex items-center gap-1'>
@@ -314,7 +318,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
                 <TooltipTrigger
                   render={
                     <StatusBadge
-                      label={`${t('Inviter')}: ${inviterId}`}
+                      label={inviterLabel}
                       variant='neutral'
                       copyable={false}
                       className='cursor-help'
@@ -322,9 +326,16 @@ export function useUsersColumns(): ColumnDef<User>[] {
                   }
                 />
                 <TooltipContent>
-                  <p className='text-xs'>
-                    {t('Invited by user ID')} {inviterId}
-                  </p>
+                  <div className='space-y-1 text-xs'>
+                    <p>
+                      {t('Invited by user ID')} {inviterId}
+                    </p>
+                    {inviterRemark && (
+                      <p>
+                        {t('Remark')}: {inviterRemark}
+                      </p>
+                    )}
+                  </div>
                 </TooltipContent>
               </Tooltip>
             )}

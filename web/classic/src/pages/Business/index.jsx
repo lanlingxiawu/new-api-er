@@ -264,27 +264,6 @@ const isCurrentDay = (date, timezone) =>
   dateKey(date) ===
   dateKey(calendarDateFromTimestamp(Math.floor(Date.now() / 1000), timezone));
 
-const buildMonthCalendarCells = (monthValue, days = []) => {
-  const [year, month] = String(monthValue || currentMonthValue())
-    .split('-')
-    .map(Number);
-  const first = new Date(Date.UTC(year, month - 1, 1));
-  const gridStart = new Date(first);
-  gridStart.setUTCDate(first.getUTCDate() - first.getUTCDay());
-  const dayMap = new Map(days.map((day) => [day.date, day]));
-  return Array.from({ length: 42 }, (_, index) => {
-    const date = new Date(gridStart);
-    date.setUTCDate(gridStart.getUTCDate() + index);
-    const key = dateKey(date);
-    return {
-      key,
-      date,
-      inMonth: date.getUTCMonth() === month - 1,
-      stat: dayMap.get(key),
-    };
-  });
-};
-
 const monthLabel = (value) => {
   const [year, month] = String(value || currentMonthValue())
     .split('-')
@@ -844,6 +823,43 @@ function AmountText({ value, positive = true }) {
         </Tag>
       ) : null}
     </span>
+  );
+}
+
+function EmployeeTotalsPanel({ row, t }) {
+  const items = [
+    {
+      label: t('客户总消费'),
+      value: <AmountText value={row.total_consumption_quota || 0} positive={false} />,
+    },
+    {
+      label: t('总成本'),
+      value: <AmountText value={row.total_cost_quota || 0} positive={false} />,
+    },
+    {
+      label: t('总利润'),
+      value: <AmountText value={row.total_profit_quota || 0} />,
+    },
+    {
+      label: t('总提成'),
+      value: <AmountText value={row.total_commission_quota || 0} />,
+    },
+  ];
+
+  return (
+    <div className='business-employee-totals-panel w-full px-4 py-3'>
+      <Text type='secondary' size='small' strong>
+        {t('Historical Totals')}
+      </Text>
+      <div className='business-employee-totals-grid mt-2'>
+        {items.map((item) => (
+          <div key={item.label}>
+            <div className='text-xs text-gray-500'>{item.label}</div>
+            <div className='mt-1 font-medium'>{item.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2668,9 +2684,12 @@ function EmployeesTab({
     {
       title: t('用户 ID'),
       dataIndex: 'user_id',
-      width: 100,
+      width: 132,
       sorter: true,
       sortOrder: getSortOrder('user_id'),
+      render: (value) => (
+        <span className='business-employee-id-cell'>{value}</span>
+      ),
     },
     {
       title: t('用户名'),
@@ -2712,36 +2731,36 @@ function EmployeesTab({
       ),
     },
     {
-      title: t('客户总消费'),
-      dataIndex: 'total_consumption_quota',
-      width: 130,
+      title: t('Period Customer Consumption'),
+      dataIndex: 'period_consumption_quota',
+      width: 150,
       sorter: true,
-      sortOrder: getSortOrder('total_consumption_quota'),
-      render: (value) => <AmountText value={value} positive={false} />,
+      sortOrder: getSortOrder('period_consumption_quota'),
+      render: (value) => <AmountText value={value || 0} positive={false} />,
     },
     {
-      title: t('总成本'),
-      dataIndex: 'total_cost_quota',
+      title: t('Period Cost'),
+      dataIndex: 'period_cost_quota',
       width: 120,
       sorter: true,
-      sortOrder: getSortOrder('total_cost_quota'),
-      render: (value) => <AmountText value={value} positive={false} />,
+      sortOrder: getSortOrder('period_cost_quota'),
+      render: (value) => <AmountText value={value || 0} positive={false} />,
     },
     {
-      title: t('总利润'),
-      dataIndex: 'total_profit_quota',
+      title: t('Period Profit'),
+      dataIndex: 'period_profit_quota',
       width: 120,
       sorter: true,
-      sortOrder: getSortOrder('total_profit_quota'),
-      render: (value) => <AmountText value={value} />,
+      sortOrder: getSortOrder('period_profit_quota'),
+      render: (value) => <AmountText value={value || 0} />,
     },
     {
-      title: t('总提成'),
-      dataIndex: 'total_commission_quota',
+      title: t('Period Commission'),
+      dataIndex: 'period_commission_quota',
       width: 120,
       sorter: true,
-      sortOrder: getSortOrder('total_commission_quota'),
-      render: (value) => <AmountText value={value} />,
+      sortOrder: getSortOrder('period_commission_quota'),
+      render: (value) => <AmountText value={value || 0} />,
     },
     {
       title: t('当前等级'),
@@ -2777,14 +2796,6 @@ function EmployeesTab({
       sorter: true,
       sortOrder: getSortOrder('current_performance_quota'),
       render: (value, row) => renderPerformanceProgress(value, row, t),
-    },
-    {
-      title: t('本期提成'),
-      dataIndex: 'current_commission_quota',
-      width: 130,
-      sorter: true,
-      sortOrder: getSortOrder('current_commission_quota'),
-      render: (value) => <AmountText value={value || 0} />,
     },
     {
       title: t('状态'),
@@ -2870,6 +2881,15 @@ function EmployeesTab({
           setCompactMode={setCompactMode}
           t={t}
         />
+        <Button
+          type='tertiary'
+          size='small'
+          icon={<RefreshCw size={14} />}
+          loading={employees.loading}
+          onClick={() => employees.load()}
+        >
+          {t('刷新')}
+        </Button>
         <Button
           type='tertiary'
           size='small'
@@ -2960,6 +2980,8 @@ function EmployeesTab({
         dataSource={employees.items}
         loading={employees.loading}
         onChange={handleTableChange}
+        className='business-employee-list-table'
+        expandedRowRender={(row) => <EmployeeTotalsPanel row={row} t={t} />}
         rowClassName={(record) =>
           Number(record.status) === 2 ? 'opacity-60' : ''
         }
@@ -3405,208 +3427,7 @@ function CommissionLogsTable({
 // 阶梯提成等级配置
 // ============================================================================
 
-function CommissionMonthlyCalendar({
-  endpoint,
-  selfView = false,
-  embedded = false,
-}) {
-  const { t } = useTranslation();
-  const [month, setMonth] = useState(currentMonthValue);
-  const [selectedEmployee, setSelectedEmployee] = useState(undefined);
-  const [selectedDate, setSelectedDate] = useState(undefined);
-  const employeeUserId = selectedEmployee?.user_id;
-  const range = useMemo(() => monthValueToCalendarRange(month), [month]);
-  const params = useMemo(
-    () =>
-      buildParams({
-        ...range,
-        employee_user_id: selfView ? undefined : employeeUserId,
-      }),
-    [employeeUserId, range, selfView],
-  );
-  const stats = useEndpointData(endpoint, params);
-
-  const days = stats.data?.days || [];
-  const periodItems = stats.data?.items || [];
-  const summary = stats.data?.summary || {};
-  const cells = useMemo(() => buildMonthCalendarCells(month, days), [days, month]);
-  const selectedCell = cells.find((cell) => cell.key === selectedDate);
-  const weekdays = [
-    t('Sun'),
-    t('Mon'),
-    t('Tue'),
-    t('Wed'),
-    t('Thu'),
-    t('Fri'),
-    t('Sat'),
-  ];
-
-  useEffect(() => {
-    const selectedInMonth = cells.some(
-      (cell) => cell.key === selectedDate && cell.inMonth,
-    );
-    if (selectedInMonth) return;
-    const today = cells.find((cell) => cell.inMonth && isCurrentDay(cell.date));
-    const firstStat = cells.find((cell) => cell.inMonth && cell.stat);
-    const firstDay = cells.find((cell) => cell.inMonth);
-    setSelectedDate((today || firstStat || firstDay)?.key);
-  }, [cells, selectedDate]);
-
-  const content = (
-    <div className='space-y-4'>
-      <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--semi-color-fill-0)] p-3'>
-        <Space wrap>
-          <Button
-            size='small'
-            type='tertiary'
-            icon={<ChevronLeft size={14} />}
-            aria-label={t('Previous month')}
-            onClick={() => setMonth(shiftMonthValue(month, -1))}
-          />
-          <MonthValueSelector value={month} onChange={setMonth} />
-          <Button
-            size='small'
-            type='tertiary'
-            icon={<ChevronRight size={14} />}
-            aria-label={t('Next month')}
-            onClick={() => setMonth(shiftMonthValue(month, 1))}
-          />
-          <Button
-            size='small'
-            type={month === currentMonthValue() ? 'secondary' : 'tertiary'}
-            onClick={() => setMonth(currentMonthValue())}
-          >
-            {t('Today')}
-          </Button>
-        </Space>
-        {!selfView ? (
-          <div className='flex items-center gap-2'>
-            <Text type='secondary' size='small'>
-              {t('Employee')}
-            </Text>
-            <EmployeeMonthlySelector
-              value={selectedEmployee}
-              onChange={setSelectedEmployee}
-            />
-          </div>
-        ) : null}
-      </div>
-      <Row gutter={[12, 12]}>
-        <Col xs={24} md={12}>
-          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
-            <div className='flex items-center gap-2'>
-              <CalendarDays size={16} color='var(--semi-color-success)' />
-              <Text type='secondary'>{monthLabel(month)}</Text>
-            </div>
-            <div className='mt-2 text-2xl font-semibold'>
-              {stats.loading ? (
-                <Spin size='small' />
-              ) : (
-                <AmountText value={summary.commission_quota || 0} />
-              )}
-            </div>
-            <Text type='secondary' size='small'>
-              {t('Monthly Commission')}
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
-            <Text type='secondary' size='small'>
-              {t('Monthly Performance')}
-            </Text>
-            <div className='mt-2 text-base font-semibold md:text-lg'>
-              <AmountText value={summary.profit_quota || 0} />
-            </div>
-          </Card>
-        </Col>
-        <Col xs={12} md={6}>
-          <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
-            <Text type='secondary' size='small'>
-              {t('Records')}
-            </Text>
-            <div className='mt-2 font-semibold'>
-              {summary.record_count || 0}
-            </div>
-          </Card>
-        </Col>
-      </Row>
-      <Row gutter={[12, 12]}>
-        {periodItems.map((item) => (
-          <Col xs={24} lg={12} key={`${item.period_start_at}-${item.employee_user_id}`}>
-            <Card bodyStyle={{ minHeight: 156, padding: 16 }}>
-              <div className='flex flex-wrap justify-between gap-3'>
-                <div>
-                  <Text strong>{item.period_key || t('统计周期')}</Text>
-                  <div className='mt-1 text-xs text-[var(--semi-color-text-2)]'>
-                    {formatTs(item.period_start_at)} - {formatTs(item.period_end_at)}
-                  </div>
-                </div>
-                <div className='text-right'>
-                  <div className='text-base font-semibold md:text-lg'>
-                    <AmountText value={item.commission_quota || 0} />
-                  </div>
-                  <Text type='secondary' size='small'>
-                    {t('提成')}
-                  </Text>
-                </div>
-              </div>
-              <Row gutter={[12, 12]} className='mt-3'>
-                <Col span={6}>
-                  <Text type='secondary' size='small'>{t('利润')}</Text>
-                  <div className='font-medium'>
-                    <AmountText value={item.profit_quota || 0} />
-                  </div>
-                </Col>
-                <Col span={6}>
-                  <Text type='secondary' size='small'>{t('收入')}</Text>
-                  <div className='font-medium'>
-                    <AmountText value={item.revenue_quota || 0} positive={false} />
-                  </div>
-                </Col>
-                <Col span={6}>
-                  <Text type='secondary' size='small'>{t('成本')}</Text>
-                  <div className='font-medium'>
-                    <AmountText value={item.cost_quota || 0} positive={false} />
-                  </div>
-                </Col>
-                <Col span={6}>
-                  <Text type='secondary' size='small'>{t('记录数')}</Text>
-                  <div className='font-medium'>{item.record_count || 0}</div>
-                </Col>
-              </Row>
-              {!selfView ? (
-                <Text type='tertiary' size='small' className='mt-3 block'>
-                  {t('Employee UID')}: {item.employee_user_id}
-                </Text>
-              ) : null}
-            </Card>
-          </Col>
-        ))}
-      </Row>
-      {!stats.loading && periodItems.length === 0 ? (
-        <BusinessEmpty description={t('暂无数据')} />
-      ) : null}
-    </div>
-  );
-
-  if (embedded) {
-    return content;
-  }
-
-  return (
-    <BusinessCard
-      title={t('月度统计')}
-      icon={BadgeDollarSign}
-      color='var(--semi-color-success)'
-      t={t}
-    >
-      {content}
-    </BusinessCard>
-  );
-}
-
-function CommissionFinancialMonthlyCalendar({
+function CommissionFinancialResetPeriodCalendar({
   endpoint,
   selfView = false,
   embedded = false,
@@ -3736,14 +3557,14 @@ function CommissionFinancialMonthlyCalendar({
               )}
             </div>
             <Text type='secondary' size='small'>
-              {t('Monthly Commission')}
+              {t('Current Period Commission')}
             </Text>
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
             <Text type='secondary' size='small'>
-              {t('Monthly Performance')}
+              {t('Current Period Performance')}
             </Text>
             <div className='mt-2 text-base font-semibold md:text-lg'>
               <AmountText value={summary.profit_quota || 0} />
@@ -4644,7 +4465,7 @@ export function Employees() {
         ) : activeTab === 'tiers' ? (
           <TiersTab tiersPaged={tiers} onReadyToolbar={setTabToolbar} />
         ) : activeTab === 'monthly' ? (
-          <CommissionFinancialMonthlyCalendar
+          <CommissionFinancialResetPeriodCalendar
             endpoint='/api/admin/employee/commission/calendar'
             embedded
           />
@@ -4778,7 +4599,7 @@ export function EmployeeConsole() {
               t={t}
             >
               {activeConsoleTab === 'monthly' ? (
-                <CommissionFinancialMonthlyCalendar
+                <CommissionFinancialResetPeriodCalendar
                   endpoint='/api/user/employee/commission/calendar'
                   selfView
                   embedded
@@ -5143,6 +4964,20 @@ function getPresetRange(range) {
   return { start, end };
 }
 
+function startOfDayDate(value) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfDayDate(value) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
 function rangeToParams(range) {
   if (!range?.start || !range?.end) return {};
   return {
@@ -5427,17 +5262,19 @@ export function BusinessOverview() {
               </Button>
             ))}
             <DatePicker
-              type='dateTimeRange'
+              type='dateRange'
               value={datePickerValue}
               placeholder={[t('开始时间'), t('结束时间')]}
               size='small'
-              style={{ minWidth: 300 }}
+              style={{ minWidth: 220, width: 260 }}
               onChange={(value) => {
                 const [start, end] = Array.isArray(value) ? value : [];
-                if (start && end) {
+                const normalizedStart = startOfDayDate(start);
+                const normalizedEnd = endOfDayDate(end);
+                if (normalizedStart && normalizedEnd) {
                   setCustomRange({
-                    start: start instanceof Date ? start : new Date(start),
-                    end: end instanceof Date ? end : new Date(end),
+                    start: normalizedStart,
+                    end: normalizedEnd,
                   });
                   setRange('custom');
                 }
@@ -5721,5 +5558,3 @@ export function BusinessOverview() {
     </div>
   );
 }
-
-

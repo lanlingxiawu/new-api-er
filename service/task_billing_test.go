@@ -134,7 +134,7 @@ func TestMain(m *testing.M) {
 		&model.PlatformChannelDailyStat{},
 		&model.EmployeeCommissionDailyStat{},
 		&model.EmployeeCustomerCommissionDailyStat{},
-		&model.EmployeeCommissionMonthlyStat{},
+		&model.EmployeeCommissionResetPeriodStat{},
 		&model.BusinessStatsAppliedBatch{},
 		&model.BusinessDailyStatsCoverage{},
 		&model.EmployeeCommissionTier{},

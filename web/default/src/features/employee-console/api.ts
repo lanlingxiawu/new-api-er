@@ -3,7 +3,7 @@ import { appendUnixTimeRangeParams } from '@/lib/query-params'
 import type {
   CommissionLog,
   CommissionCalendarStats,
-  CommissionMonthlyStatItem,
+  CommissionResetPeriodStatItem,
   EmployeeProfile,
 } from '@/features/employees/types'
 
@@ -127,7 +127,7 @@ export async function getMyCommissionCalendarStats(params: {
   return res.data
 }
 
-export async function getMyCommissionMonthlyStats(params: {
+export async function getMyCommissionResetPeriodStats(params: {
   page?: number
   page_size?: number
   start_time?: number
@@ -136,7 +136,7 @@ export async function getMyCommissionMonthlyStats(params: {
   success: boolean
   message?: string
   data?: {
-    items: CommissionMonthlyStatItem[]
+    items: CommissionResetPeriodStatItem[]
     total: number
     page: number
     page_size: number
