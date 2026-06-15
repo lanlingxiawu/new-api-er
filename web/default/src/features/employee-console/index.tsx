@@ -242,7 +242,7 @@ function useMyCommissionColumns() {
   )
 }
 
-function MonthlyStats() {
+function ResetPeriodStats() {
   return (
     <CommissionCalendarSection
       queryKey={['my-commission-calendar-stats']}
@@ -468,7 +468,7 @@ export function EmployeeConsole() {
           </TabsList>
 
           <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
-            <MonthlyStats />
+            <ResetPeriodStats />
           </TabsContent>
 
           <TabsContent

@@ -45,7 +45,9 @@ type EmployeeTierLevel struct {
 	// "本期"值 = 对应累计值 - 基准值（结果 clamp 到 >=0）。默认 0，未发生过重置时
 	// 等价于"本期=累计"，向后兼容。
 	BaselineProfitQuota     int64 `json:"baseline_profit_quota" gorm:"column:baseline_profit_quota;not null;default:0"`
-	BaselineCommissionQuota int64 `json:"baseline_commission_quota" gorm:"column:baseline_commission_quota;not null;default:0"`
+	BaselineConsumptionQuota int64 `json:"baseline_consumption_quota" gorm:"column:baseline_consumption_quota;not null;default:0"`
+	BaselineCostQuota        int64 `json:"baseline_cost_quota" gorm:"column:baseline_cost_quota;not null;default:0"`
+	BaselineCommissionQuota  int64 `json:"baseline_commission_quota" gorm:"column:baseline_commission_quota;not null;default:0"`
 	BaselineResetAt         int64 `json:"baseline_reset_at" gorm:"column:baseline_reset_at;not null;default:0"`
 }
 
@@ -435,6 +437,18 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 		batchSize = 300
 	}
 
+	var employeeUserIds []int
+	if err = DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1).Scan(&employeeUserIds).Error; err != nil {
+		return 0, 0, err
+	}
+	if len(employeeUserIds) > 0 {
+		for _, userId := range employeeUserIds {
+			if _, ensureErr := GetOrCreateTierLevel(userId); ensureErr != nil {
+				return 0, 0, ensureErr
+			}
+		}
+	}
+
 	// Load valid tiers before selecting rows so orphaned tier_id records do not
 	// occupy an entire batch and block valid employees behind them.
 	tiers := GetAllTiersCached()
@@ -465,10 +479,24 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 			if err != nil {
 				return 0, 0, err
 			}
+			customerConsumptionByUserId, err := GetCustomerUsedQuotaTotalsByEmployees(userIds)
+			if err != nil {
+				return 0, 0, err
+			}
+			stats, err := GetCommissionStatsByEmployeeIds(userIds)
+			if err != nil {
+				return 0, 0, err
+			}
+			costByUserId := make(map[int]int64, len(stats))
+			for _, stat := range stats {
+				costByUserId[stat.EmployeeUserId] = stat.TotalCost
+			}
 			err = DB.Transaction(func(tx *gorm.DB) error {
 				for _, level := range orphanLevels {
 					operatedAt := time.Now().Unix()
-					var profitTotal, commissionTotal int64
+					var consumptionTotal, costTotal, profitTotal, commissionTotal int64
+					consumptionTotal = customerConsumptionByUserId[level.UserId]
+					costTotal = costByUserId[level.UserId]
 					if ext, ok := extByUserId[level.UserId]; ok {
 						profitTotal = ext.ProfitTotalQuota
 						commissionTotal = ext.CommissionTotalQuota
@@ -478,10 +506,12 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 						"source":                    "reset",
 						"effective_at":              operatedAt,
 						"remark":                    "鏈堝害鑷姩閲嶇疆",
-						"updated_by":                operatedBy,
-						"baseline_profit_quota":     profitTotal,
-						"baseline_commission_quota": commissionTotal,
-						"baseline_reset_at":         resetAt,
+						"updated_by":                 operatedBy,
+						"baseline_consumption_quota": consumptionTotal,
+						"baseline_cost_quota":        costTotal,
+						"baseline_profit_quota":      profitTotal,
+						"baseline_commission_quota":  commissionTotal,
+						"baseline_reset_at":          resetAt,
 					}
 					res := tx.Model(&EmployeeTierLevel{}).Where("id = ? AND baseline_reset_at = ?", level.Id, level.BaselineResetAt).Updates(updates)
 					if res.Error != nil {
@@ -517,11 +547,25 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 	if err != nil {
 		return 0, selected, err
 	}
+	customerConsumptionByUserId, err := GetCustomerUsedQuotaTotalsByEmployees(userIds)
+	if err != nil {
+		return 0, selected, err
+	}
+	stats, err := GetCommissionStatsByEmployeeIds(userIds)
+	if err != nil {
+		return 0, selected, err
+	}
+	costByUserId := make(map[int]int64, len(stats))
+	for _, stat := range stats {
+		costByUserId[stat.EmployeeUserId] = stat.TotalCost
+	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		for _, level := range levels {
 			operatedAt := time.Now().Unix()
-			var profitTotal, commissionTotal int64
+			var consumptionTotal, costTotal, profitTotal, commissionTotal int64
+			consumptionTotal = customerConsumptionByUserId[level.UserId]
+			costTotal = costByUserId[level.UserId]
 			if ext, ok := extByUserId[level.UserId]; ok {
 				profitTotal = ext.ProfitTotalQuota
 				commissionTotal = ext.CommissionTotalQuota
@@ -543,10 +587,12 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 				"source":                    "reset",
 				"effective_at":              operatedAt,
 				"remark":                    "月度自动重置",
-				"updated_by":                operatedBy,
-				"baseline_profit_quota":     profitTotal,
-				"baseline_commission_quota": commissionTotal,
-				"baseline_reset_at":         resetAt,
+				"updated_by":                 operatedBy,
+				"baseline_consumption_quota": consumptionTotal,
+				"baseline_cost_quota":        costTotal,
+				"baseline_profit_quota":      profitTotal,
+				"baseline_commission_quota":  commissionTotal,
+				"baseline_reset_at":          resetAt,
 			}
 			res := tx.Model(&EmployeeTierLevel{}).Where("id = ? AND baseline_reset_at = ?", level.Id, level.BaselineResetAt).Updates(updates)
 			if res.Error != nil {

@@ -12,6 +12,14 @@ export const employeeProfileSchema = z.object({
   total_cost_quota: z.number().optional(),
   total_profit_quota: z.number().optional(),
   total_commission_quota: z.number().optional(),
+  period_consumption_quota: z.number().optional(),
+  period_cost_quota: z.number().optional(),
+  period_profit_quota: z.number().optional(),
+  period_commission_quota: z.number().optional(),
+  period_start_at: z.number().optional(),
+  period_end_at: z.number().optional(),
+  period_key: z.string().optional(),
+  period_timezone: z.string().optional(),
   current_tier_id: z.number().optional(),
   current_tier_level: z.number().optional(),
   current_tier_group: z.string().optional(),
@@ -118,10 +126,10 @@ export interface CommissionCalendarStats {
   }
 }
 
-export interface CommissionMonthlyStatItem {
+export interface CommissionResetPeriodStatItem {
   id: number
-  period_start_at: number
-  period_end_at: number
+  reset_started_at: number
+  reset_ended_at: number
   period_key: string
   timezone: string
   employee_user_id: number

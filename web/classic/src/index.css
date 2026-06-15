@@ -620,6 +620,67 @@ html.dark .sbg-variant-green {
   max-height: 223px !important;
 }
 
+.business-employee-list-table .semi-table-tbody > .semi-table-row > .semi-table-row-cell {
+  vertical-align: middle;
+}
+
+.business-employee-list-table .semi-table-tbody > .semi-table-row > .semi-table-row-cell:first-child,
+.business-employee-list-table .semi-table-tbody > .semi-table-row > .semi-table-row-cell:nth-child(2) {
+  white-space: nowrap;
+}
+
+.business-employee-list-table .semi-table-column-expand {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.business-employee-list-table .semi-table-expand-icon-cell,
+.business-employee-list-table .semi-table-expand-icon,
+.business-employee-list-table .business-employee-id-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  line-height: 32px;
+  vertical-align: middle;
+}
+
+.business-employee-list-table .semi-table-expand-icon-cell {
+  width: 24px;
+  margin-right: 6px;
+}
+
+.business-employee-list-table .semi-table-expand-icon {
+  width: 18px;
+}
+
+.business-employee-list-table .semi-table-tbody > .semi-table-row-expand > .semi-table-row-cell {
+  padding-left: 0;
+  padding-right: 0;
+  width: 100%;
+}
+
+.business-employee-list-table .semi-table-tbody > .semi-table-row-expand > .semi-table-row-cell > .semi-table-expand-inner,
+.business-employee-totals-panel {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.business-employee-totals-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 16px;
+  row-gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .business-employee-totals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* 侧边抽屉滚动条样式 */
 .semi-sidesheet-body::-webkit-scrollbar {
   width: 6px;

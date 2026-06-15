@@ -7,12 +7,15 @@ import {
 import {
   type ColumnDef,
   type PaginationState,
+  type Row,
   type SortingState,
+  flexRender,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
 import {
+  ChevronDown,
   Info,
   List,
   Pencil,
@@ -52,6 +55,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
+import { TableCell, TableRow } from '@/components/ui/table'
 import {
   HoverCard,
   HoverCardContent,
@@ -93,8 +97,8 @@ import {
   createEmployeeTier,
   deleteEmployee,
   deleteEmployeeTier,
-  getEmployeeCustomers,
   getCommissionCalendarStats,
+  getEmployeeCustomers,
   getCommissionChannelOptions,
   getCommissionLogs,
   getUsageLogById,
@@ -104,7 +108,9 @@ import {
   unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
-import { CommissionCalendarSection } from './components/commission-financial-calendar'
+import {
+  CommissionCalendarSection,
+} from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
 import {
@@ -1319,16 +1325,48 @@ function useEmployeesColumns({
   onDelete,
   onAssign,
   onViewCustomers,
+  expandedTotals,
+  onToggleTotals,
 }: {
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
   onViewCustomers: (row: EmployeeProfile) => void
+  expandedTotals: Record<number, boolean>
+  onToggleTotals: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
   return useMemo(
     (): ColumnDef<EmployeeProfile>[] => [
+      {
+        id: 'expand_totals',
+        enableSorting: false,
+        meta: { mobileHidden: true },
+        header: () => null,
+        cell: ({ row }) => {
+          const expanded = Boolean(expandedTotals[row.original.id])
+          return (
+            <Button
+              type='button'
+              size='icon'
+              variant='ghost'
+              className='size-8'
+              aria-expanded={expanded}
+              aria-label={expanded ? t('Hide Totals') : t('Show Totals')}
+              title={expanded ? t('Hide Totals') : t('Show Totals')}
+              onClick={() => onToggleTotals(row.original)}
+            >
+              <ChevronDown
+                className={cn(
+                  'size-4 transition-transform',
+                  expanded && 'rotate-180'
+                )}
+              />
+            </Button>
+          )
+        },
+      },
       {
         accessorKey: 'user_id',
         meta: { label: t('Employee ID') },
@@ -1382,70 +1420,48 @@ function useEmployeesColumns({
         },
       },
       {
-        accessorKey: 'total_consumption_quota',
-        meta: { label: t('Customer Total Consumption') },
+        accessorKey: 'period_consumption_quota',
+        meta: { label: t('Period Customer Consumption') },
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title={t('Customer Total Consumption')}
+            title={t('Period Customer Consumption')}
           />
         ),
         cell: ({ row }) =>
-          <BusinessAmount value={row.original.total_consumption_quota ?? 0} />,
+          <BusinessAmount value={row.original.period_consumption_quota ?? 0} />,
       },
       {
-        accessorKey: 'total_cost_quota',
-        meta: { label: t('Total Cost') },
+        accessorKey: 'period_cost_quota',
+        meta: { label: t('Period Cost') },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Total Cost')} />
+          <DataTableColumnHeader column={column} title={t('Period Cost')} />
         ),
         cell: ({ row }) =>
-          <BusinessAmount value={row.original.total_cost_quota ?? 0} />,
+          <BusinessAmount value={row.original.period_cost_quota ?? 0} />,
       },
       {
-        accessorKey: 'total_profit_quota',
-        meta: { label: t('Total Profit') },
+        accessorKey: 'period_profit_quota',
+        meta: { label: t('Period Profit') },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Total Profit')} />
+          <DataTableColumnHeader column={column} title={t('Period Profit')} />
         ),
         cell: ({ row }) => (
-          <AmountText value={row.original.total_profit_quota} />
+          <AmountText value={row.original.period_profit_quota ?? 0} />
         ),
       },
       {
-        accessorKey: 'total_commission_quota',
-        meta: { label: t('Total Commission') },
+        accessorKey: 'period_commission_quota',
+        meta: { label: t('Period Commission') },
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title={t('Total Commission')}
+            title={t('Period Commission')}
           />
         ),
         cell: ({ row }) =>
           <BusinessAmount
-            value={row.original.total_commission_quota ?? 0}
-            positiveClassName='text-green-600'
-          />,
-      },
-      {
-        accessorKey: 'current_commission_quota',
-        meta: { label: t('Current Commission') },
-        header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={
-              <ColumnHeaderWithHint
-                title={t('Current Commission')}
-                hint={t(
-                  'Commission accrued since the last monthly reset. It resets to zero on the next scheduled reset and does not affect total commission, settled balances, or commission logs.'
-                )}
-              />
-            }
-          />
-        ),
-        cell: ({ row }) =>
-          <BusinessAmount
-            value={row.original.current_commission_quota ?? 0}
+            value={row.original.period_commission_quota ?? 0}
             positiveClassName='text-green-600'
           />,
       },
@@ -1541,7 +1557,205 @@ function useEmployeesColumns({
         ),
       },
     ],
-    [onAssign, onDelete, onEdit, onViewCustomers, t]
+    [
+      expandedTotals,
+      onAssign,
+      onDelete,
+      onEdit,
+      onToggleTotals,
+      onViewCustomers,
+      t,
+    ]
+  )
+}
+
+function EmployeeTotalsPanel({ row }: { row: EmployeeProfile }) {
+  const { t } = useTranslation()
+  const items = [
+    {
+      label: t('Customer Total Consumption'),
+      value: (
+        <BusinessAmount value={row.total_consumption_quota ?? 0} />
+      ),
+    },
+    {
+      label: t('Total Cost'),
+      value: <BusinessAmount value={row.total_cost_quota ?? 0} />,
+    },
+    {
+      label: t('Total Profit'),
+      value: <AmountText value={row.total_profit_quota ?? 0} />,
+    },
+    {
+      label: t('Total Commission'),
+      value: (
+        <BusinessAmount
+          value={row.total_commission_quota ?? 0}
+          positiveClassName='text-green-600'
+        />
+      ),
+    },
+  ]
+
+  return (
+    <div className='bg-muted/30 border-t px-4 py-3'>
+      <div className='mb-2 text-xs font-medium text-muted-foreground'>
+        {t('Historical Totals')}
+      </div>
+      <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
+        {items.map((item) => (
+          <div key={item.label} className='min-w-0'>
+            <div className='text-muted-foreground text-xs'>{item.label}</div>
+            <div className='mt-1 text-sm font-medium'>{item.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function EmployeeTableRow({
+  row,
+  expanded,
+  className,
+}: {
+  row: Row<EmployeeProfile>
+  expanded: boolean
+  className?: string
+}) {
+  return (
+    <>
+      <TableRow
+        data-state={row.getIsSelected() && 'selected'}
+        className={className}
+      >
+        {row.getVisibleCells().map((cell) => (
+          <TableCell key={cell.id}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
+      </TableRow>
+      {expanded ? (
+        <TableRow>
+          <TableCell colSpan={row.getVisibleCells().length} className='p-0'>
+            <EmployeeTotalsPanel row={row.original} />
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  )
+}
+
+function EmployeeMobileList({
+  rows,
+  expandedTotals,
+  onToggleTotals,
+  getRowClassName,
+}: {
+  rows: Row<EmployeeProfile>[]
+  expandedTotals: Record<number, boolean>
+  onToggleTotals: (row: EmployeeProfile) => void
+  getRowClassName?: (row: Row<EmployeeProfile>) => string | undefined
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='divide-y overflow-hidden rounded-lg border'>
+      {rows.map((row) => {
+        const expanded = Boolean(expandedTotals[row.original.id])
+        const cells = row
+          .getVisibleCells()
+          .filter(
+            (cell) =>
+              cell.column.id !== 'select' &&
+              cell.column.id !== 'expand_totals' &&
+              !(cell.column.columnDef.meta as { mobileHidden?: boolean })
+                ?.mobileHidden
+          )
+        const titleCell = cells.find(
+          (cell) =>
+            (cell.column.columnDef.meta as { mobileTitle?: boolean })
+              ?.mobileTitle
+        )
+        const badgeCell = cells.find(
+          (cell) =>
+            (cell.column.columnDef.meta as { mobileBadge?: boolean })
+              ?.mobileBadge
+        )
+        const actionsCell = cells.find((cell) => cell.column.id === 'actions')
+        const fieldCells = cells.filter(
+          (cell) =>
+            cell !== titleCell && cell !== badgeCell && cell !== actionsCell
+        )
+
+        return (
+          <div
+            key={row.id}
+            className={cn('bg-card px-3 py-2.5', getRowClassName?.(row))}
+          >
+            <div className='flex items-center justify-between gap-2'>
+              {titleCell ? (
+                <div className='min-w-0 flex-1 overflow-hidden text-sm font-medium'>
+                  {flexRender(
+                    titleCell.column.columnDef.cell,
+                    titleCell.getContext()
+                  )}
+                </div>
+              ) : null}
+              {badgeCell ? (
+                <div className='shrink-0'>
+                  {flexRender(
+                    badgeCell.column.columnDef.cell,
+                    badgeCell.getContext()
+                  )}
+                </div>
+              ) : null}
+            </div>
+            <div className='mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1.5'>
+              {fieldCells.map((cell) => (
+                <div key={cell.id} className='min-w-0 overflow-hidden'>
+                  <div className='text-muted-foreground mb-0.5 text-[10px] leading-none select-none'>
+                    {
+                      (cell.column.columnDef.meta as { label?: string })
+                        ?.label
+                    }
+                  </div>
+                  <div className='min-w-0 overflow-hidden text-xs'>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className='mt-2 flex items-center justify-between gap-2'>
+              <Button
+                type='button'
+                size='sm'
+                variant='ghost'
+                className='h-7 px-2 text-xs'
+                aria-expanded={expanded}
+                onClick={() => onToggleTotals(row.original)}
+              >
+                <ChevronDown
+                  className={cn(
+                    'size-3.5 transition-transform',
+                    expanded && 'rotate-180'
+                  )}
+                />
+                {expanded ? t('Hide Totals') : t('Show Totals')}
+              </Button>
+              {actionsCell ? (
+                <div className='-mb-0.5 flex justify-end'>
+                  {flexRender(
+                    actionsCell.column.columnDef.cell,
+                    actionsCell.getContext()
+                  )}
+                </div>
+              ) : null}
+            </div>
+            {expanded ? <EmployeeTotalsPanel row={row.original} /> : null}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1711,14 +1925,25 @@ function EmployeesTab() {
     pageSize: 10,
   })
   const [sorting, setSorting] = useState<SortingState>([])
+  const [expandedTotals, setExpandedTotals] = useState<Record<number, boolean>>(
+    {}
+  )
+  const toggleTotals = (row: EmployeeProfile) => {
+    setExpandedTotals((current) => ({
+      ...current,
+      [row.id]: !current[row.id],
+    }))
+  }
   const columns = useEmployeesColumns({
     onEdit: setEditRow,
     onDelete: setDeleteRow,
     onAssign: setAssignRow,
     onViewCustomers: setCustomerListRow,
+    expandedTotals,
+    onToggleTotals: toggleTotals,
   })
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['employees', filters, sorting, pagination],
     queryFn: () => {
       const activeSort = sorting[0]
@@ -1884,10 +2109,26 @@ function EmployeesTab() {
                 {t('{{count}} employees found', { count: employeeTotal })}
               </span>
             </div>
-            <Button type='button' size='sm' onClick={() => setCreateOpen(true)}>
-              <PlusIcon className='mr-1 h-4 w-4' />
-              {t('Add Employee')}
-            </Button>
+            <div className='flex items-center gap-2'>
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                onClick={() => void refetch()}
+                disabled={isFetching}
+              >
+                <RotateCcw className='mr-1 h-4 w-4' />
+                {t('Refresh')}
+              </Button>
+              <Button
+                type='button'
+                size='sm'
+                onClick={() => setCreateOpen(true)}
+              >
+                <PlusIcon className='mr-1 h-4 w-4' />
+                {t('Add Employee')}
+              </Button>
+            </div>
           </form>
         }
         getRowClassName={(row, ctx) =>
@@ -1896,6 +2137,28 @@ function EmployeesTab() {
               ? DISABLED_ROW_MOBILE
               : DISABLED_ROW_DESKTOP
             : undefined
+        }
+        renderRow={(row) => (
+          <EmployeeTableRow
+            key={row.id}
+            row={row}
+            expanded={Boolean(expandedTotals[row.original.id])}
+            className={
+              row.original.status === 2 ? DISABLED_ROW_DESKTOP : undefined
+            }
+          />
+        )}
+        mobile={
+          !isLoading && table.getRowModel().rows.length > 0 ? (
+            <EmployeeMobileList
+              rows={table.getRowModel().rows}
+              expandedTotals={expandedTotals}
+              onToggleTotals={toggleTotals}
+              getRowClassName={(row) =>
+                row.original.status === 2 ? DISABLED_ROW_MOBILE : undefined
+              }
+            />
+          ) : undefined
         }
         skeletonKeyPrefix='employees-skeleton'
         className='flex h-full min-h-0 flex-col overflow-hidden'

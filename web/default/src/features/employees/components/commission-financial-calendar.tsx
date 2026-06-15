@@ -21,8 +21,6 @@ import type {
   ApiResponse,
   CommissionCalendarDayStat,
   CommissionCalendarStats,
-  CommissionMonthlyStatItem,
-  PagedResponse,
 } from '../types'
 
 export function currentMonthValue() {
@@ -432,12 +430,12 @@ export function CommissionFinancialCalendar({
             </div>
             </div>
             <div className='text-muted-foreground mt-2 text-sm'>
-              {t('Monthly Commission')}
+              {t('Current Period Commission')}
             </div>
           </div>
           <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
             <div className='text-muted-foreground text-sm'>
-              {t('Monthly Performance')}
+              {t('Current Period Performance')}
             </div>
             <div className='mt-1 text-base font-semibold sm:text-lg'>
               {isLoading ? (
@@ -617,6 +615,8 @@ export function CommissionCalendarSection({
   toolbar,
   showSummaryCards,
   showSelectedDetail,
+  month: controlledMonth,
+  onMonthChange,
 }: {
   queryKey: readonly unknown[]
   queryFn: (
@@ -625,8 +625,12 @@ export function CommissionCalendarSection({
   toolbar?: ReactNode
   showSummaryCards?: boolean
   showSelectedDetail?: boolean
+  month?: string
+  onMonthChange?: (month: string) => void
 }) {
-  const [month, setMonth] = useState(currentMonthValue)
+  const [innerMonth, setInnerMonth] = useState(currentMonthValue)
+  const month = controlledMonth ?? innerMonth
+  const setMonth = onMonthChange ?? setInnerMonth
   const range = useMemo(() => monthValueToCalendarRange(month), [month])
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [...queryKey, month],
@@ -648,207 +652,5 @@ export function CommissionCalendarSection({
       showSummaryCards={showSummaryCards}
       showSelectedDetail={showSelectedDetail}
     />
-  )
-}
-
-function unixTimeLabel(value?: number) {
-  if (!value) return '-'
-  return new Date(value * 1000).toLocaleString()
-}
-
-function periodSummary(items: CommissionMonthlyStatItem[]) {
-  return items.reduce(
-    (summary, item) => ({
-      revenue_quota: summary.revenue_quota + (item.revenue_quota || 0),
-      cost_quota: summary.cost_quota + (item.cost_quota || 0),
-      profit_quota: summary.profit_quota + (item.profit_quota || 0),
-      commission_quota:
-        summary.commission_quota + (item.commission_quota || 0),
-      record_count: summary.record_count + (item.record_count || 0),
-    }),
-    {
-      revenue_quota: 0,
-      cost_quota: 0,
-      profit_quota: 0,
-      commission_quota: 0,
-      record_count: 0,
-    }
-  )
-}
-
-export function CommissionMonthlyPeriodSection({
-  queryKey,
-  queryFn,
-  toolbar,
-}: {
-  queryKey: readonly unknown[]
-  queryFn: (
-    range: ReturnType<typeof monthValueToRange>
-  ) => Promise<PagedResponse<CommissionMonthlyStatItem>>
-  toolbar?: ReactNode
-}) {
-  const { t } = useTranslation()
-  const [month, setMonth] = useState(currentMonthValue)
-  const range = useMemo(() => monthValueToRange(month), [month])
-  const { data, isLoading, isFetching } = useQuery({
-    queryKey: [...queryKey, month],
-    queryFn: () => queryFn(range),
-  })
-  const items = data?.data?.items ?? []
-  const summary = useMemo(() => periodSummary(items), [items])
-  const loading = isLoading || isFetching
-  const currentMonth = currentMonthValue()
-
-  return (
-    <div className='space-y-4'>
-      <div className='bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-md p-3'>
-        <div className='flex min-w-0 flex-wrap items-center gap-2'>
-          <Button
-            type='button'
-            variant='outline'
-            size='icon'
-            onClick={() => setMonth(shiftMonthValue(month, -1))}
-            aria-label={t('Previous month')}
-          >
-            <ChevronLeft className='h-4 w-4' />
-          </Button>
-          <MonthValueSelector
-            value={month}
-            onChange={(value) =>
-              setMonth(isMonthValue(value) ? value : currentMonthValue())
-            }
-          />
-          <Button
-            type='button'
-            variant='outline'
-            size='icon'
-            onClick={() => setMonth(shiftMonthValue(month, 1))}
-            aria-label={t('Next month')}
-          >
-            <ChevronRight className='h-4 w-4' />
-          </Button>
-          <Button
-            type='button'
-            variant={month === currentMonth ? 'secondary' : 'outline'}
-            size='sm'
-            onClick={() => setMonth(currentMonth)}
-          >
-            {t('Today')}
-          </Button>
-        </div>
-        {toolbar ? (
-          <div className='flex min-w-0 flex-1 justify-end'>{toolbar}</div>
-        ) : null}
-      </div>
-
-      <div className='grid auto-rows-fr gap-3 md:grid-cols-4'>
-        <div className='border-border bg-card flex min-h-[112px] flex-col justify-between rounded-md border p-4 shadow-xs md:col-span-2'>
-          <div>
-            <div className='text-muted-foreground mb-1 flex items-center gap-2 text-sm'>
-              <CalendarDays className='h-4 w-4' />
-              {monthLabel(month)}
-            </div>
-            <div className='text-xl font-semibold sm:text-2xl'>
-              {loading ? (
-                <Skeleton className='h-8 w-36' />
-              ) : (
-                <BusinessAmount value={summary.commission_quota} />
-              )}
-            </div>
-          </div>
-          <div className='text-muted-foreground mt-2 text-sm'>
-            {t('Monthly Commission')}
-          </div>
-        </div>
-        <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
-          <div className='text-muted-foreground text-sm'>
-            {t('Monthly Performance')}
-          </div>
-          <div className='mt-1 text-base font-semibold sm:text-lg'>
-            {loading ? (
-              <Skeleton className='h-6 w-28' />
-            ) : (
-              <BusinessAmount value={summary.profit_quota} />
-            )}
-          </div>
-        </div>
-        <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
-          <div className='text-muted-foreground text-sm'>{t('Records')}</div>
-          <div className='mt-1 text-base font-semibold sm:text-lg'>
-            {loading ? <Skeleton className='h-6 w-16' /> : summary.record_count}
-          </div>
-        </div>
-      </div>
-
-      <div className='grid gap-3 lg:grid-cols-2'>
-        {loading
-          ? Array.from({ length: 2 }).map((_, index) => (
-              <div
-                key={index}
-                className='border-border bg-card rounded-md border p-4 shadow-xs'
-              >
-                <Skeleton className='h-5 w-44' />
-                <Skeleton className='mt-4 h-8 w-36' />
-                <Skeleton className='mt-4 h-4 w-full' />
-              </div>
-            ))
-          : items.map((item) => (
-              <div
-                key={`${item.period_start_at}-${item.employee_user_id}`}
-                className='border-border bg-card rounded-md border p-4 shadow-xs'
-              >
-                <div className='flex flex-wrap items-start justify-between gap-3'>
-                  <div>
-                    <div className='font-medium'>
-                      {item.period_key || t('统计周期')}
-                    </div>
-                    <div className='text-muted-foreground mt-1 text-xs'>
-                      {unixTimeLabel(item.period_start_at)} -{' '}
-                      {unixTimeLabel(item.period_end_at)}
-                    </div>
-                  </div>
-                  <div className='text-right'>
-                    <div className='text-base font-semibold sm:text-lg'>
-                      <BusinessAmount value={item.commission_quota} />
-                    </div>
-                    <div className='text-muted-foreground text-xs'>
-                      {t('Commission')}
-                    </div>
-                  </div>
-                </div>
-                <div className='mt-4 grid gap-3 text-sm sm:grid-cols-4'>
-                  <CalendarAmount
-                    label={t('Profit')}
-                    value={item.profit_quota}
-                  />
-                  <CalendarAmount
-                    label={t('Revenue')}
-                    value={item.revenue_quota}
-                  />
-                  <CalendarAmount label={t('Cost')} value={item.cost_quota} />
-                  <div>
-                    <div className='text-muted-foreground text-xs'>
-                      {t('Records')}
-                    </div>
-                    <div className='mt-1 font-medium'>
-                      {item.record_count || 0}
-                    </div>
-                  </div>
-                </div>
-                {!queryKey.includes('my-commission-monthly-stats') ? (
-                  <div className='text-muted-foreground mt-3 text-xs'>
-                    {t('Employee UID')}: {item.employee_user_id}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-      </div>
-
-      {!loading && items.length === 0 ? (
-        <div className='border-border bg-card text-muted-foreground rounded-md border p-6 text-center text-sm shadow-xs'>
-          {t('No data')}
-        </div>
-      ) : null}
-    </div>
   )
 }
