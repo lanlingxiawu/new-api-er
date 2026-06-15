@@ -27,6 +27,7 @@ import { BillingHistoryDialog } from './components/dialogs/billing-history-dialo
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { TransferDialog } from './components/dialogs/transfer-dialog'
+import { WechatPayDialog } from './components/dialogs/wechat-pay-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
@@ -39,11 +40,13 @@ import {
   useCreemPayment,
   useWaffoPayment,
   useWaffoPancakePayment,
+  useWechatPayment,
 } from './hooks'
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
   isWaffoPancakePayment,
+  isWechatOfficialPayment,
 } from './lib'
 import type {
   UserWalletData,
@@ -72,6 +75,7 @@ export function Wallet(props: WalletProps) {
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
+  const [wechatDialogOpen, setWechatDialogOpen] = useState(false)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
 
   const { status } = useStatus()
@@ -102,6 +106,14 @@ export function Wallet(props: WalletProps) {
   const { processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
+  const {
+    processing: wechatProcessing,
+    codeUrl: wechatCodeUrl,
+    status: wechatStatus,
+    processWechatPayment,
+    checkOrderStatus: checkWechatOrderStatus,
+    reset: resetWechatPayment,
+  } = useWechatPayment()
 
   // Fetch and refresh user data
   const fetchUser = useCallback(async () => {
@@ -185,6 +197,15 @@ export function Wallet(props: WalletProps) {
   const handlePaymentConfirm = async () => {
     if (!selectedPaymentMethod) return
 
+    if (isWechatOfficialPayment(selectedPaymentMethod.type)) {
+      const success = await processWechatPayment(topupAmount)
+      if (success) {
+        setConfirmDialogOpen(false)
+        setWechatDialogOpen(true)
+      }
+      return
+    }
+
     const isPancake = isWaffoPancakePayment(selectedPaymentMethod.type)
     const success = isPancake
       ? await processWaffoPancakePayment(topupAmount)
@@ -194,6 +215,18 @@ export function Wallet(props: WalletProps) {
       setConfirmDialogOpen(false)
       await fetchUser()
     }
+  }
+
+  // Handle WeChat Pay dialog close / payment success
+  const handleWechatDialogChange = (open: boolean) => {
+    setWechatDialogOpen(open)
+    if (!open) {
+      resetWechatPayment()
+    }
+  }
+
+  const handleWechatPaymentSuccess = async () => {
+    await fetchUser()
   }
 
   // Handle redemption
@@ -335,7 +368,7 @@ export function Wallet(props: WalletProps) {
         paymentAmount={paymentAmount}
         paymentMethod={selectedPaymentMethod}
         calculating={calculating}
-        processing={processing || pancakeProcessing}
+        processing={processing || pancakeProcessing || wechatProcessing}
         discountRate={getDiscountRate()}
         usdExchangeRate={effectiveUsdExchangeRate}
       />
@@ -359,6 +392,16 @@ export function Wallet(props: WalletProps) {
         onConfirm={handleCreemConfirm}
         product={selectedCreemProduct}
         processing={creemProcessing}
+      />
+
+      <WechatPayDialog
+        open={wechatDialogOpen}
+        onOpenChange={handleWechatDialogChange}
+        codeUrl={wechatCodeUrl}
+        status={wechatStatus}
+        paymentAmount={paymentAmount}
+        onCheckStatus={checkWechatOrderStatus}
+        onSuccess={handleWechatPaymentSuccess}
       />
     </>
   )

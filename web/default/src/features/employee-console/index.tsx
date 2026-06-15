@@ -211,7 +211,12 @@ function useMyCommissionColumns() {
             title={t('Employee Performance')}
           />
         ),
-        cell: ({ row }) => <BusinessAmount value={row.original.profit_quota} />,
+        cell: ({ row }) => (
+          <BusinessAmount
+            value={row.original.profit_quota}
+            isReversal={(row.original.revenue_quota ?? 0) < 0}
+          />
+        ),
       },
       {
         accessorKey: 'commission_quota',
@@ -225,6 +230,7 @@ function useMyCommissionColumns() {
             className='font-medium'
             positiveClassName='text-green-600'
             showPositiveSign
+            isReversal={(row.original.revenue_quota ?? 0) < 0}
           />
         ),
       },

@@ -1871,7 +1871,12 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Profit')} />
         ),
-        cell: ({ row }) => <BusinessAmount value={row.original.profit_quota} />,
+        cell: ({ row }) => (
+          <BusinessAmount
+            value={row.original.profit_quota}
+            isReversal={(row.original.revenue_quota ?? 0) < 0}
+          />
+        ),
       },
       {
         accessorKey: 'commission_quota',
@@ -1883,6 +1888,7 @@ function useCommissionLogColumns() {
           <BusinessAmount
             value={row.original.commission_quota}
             positiveClassName='text-green-600'
+            isReversal={(row.original.revenue_quota ?? 0) < 0}
           />
         ),
       },
