@@ -8,7 +8,7 @@ import type {
   ChannelCostConfig,
   CommissionSummaryItem,
   CommissionCalendarStats,
-  CommissionMonthlyStatItem,
+  CommissionResetPeriodStatItem,
   PagedResponse,
   ApiResponse,
   EmployeeTier,
@@ -177,21 +177,18 @@ export async function getCommissionCalendarStats(params: {
   return res.data
 }
 
-export async function getCommissionMonthlyStats(params: {
+export async function getCommissionResetPeriodStats(params: {
   page?: number
   page_size?: number
   employee_user_id?: number
-  period_start_at?: number
   start_time?: number
   end_time?: number
-}): Promise<PagedResponse<CommissionMonthlyStatItem>> {
+}): Promise<PagedResponse<CommissionResetPeriodStatItem>> {
   const q = new URLSearchParams()
   q.set('page', String(params.page ?? 1))
   q.set('page_size', String(params.page_size ?? 100))
   if (params.employee_user_id)
     q.set('employee_user_id', String(params.employee_user_id))
-  if (params.period_start_at)
-    q.set('period_start_at', String(params.period_start_at))
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission/monthly?${q}`)
   return res.data

@@ -61,6 +61,7 @@ type User struct {
 	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
 	AssignedEmployeeUserId int    `json:"assigned_employee_user_id,omitempty" gorm:"-:all"`
 	AssignedEmployeeName   string `json:"assigned_employee_name,omitempty" gorm:"-:all"`
+	InviterRemark          string `json:"inviter_remark,omitempty" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -253,6 +254,42 @@ func fillUserAssignmentInfo(users []*User) {
 	}
 }
 
+func fillUserInviterRemarks(users []*User) {
+	if len(users) == 0 {
+		return
+	}
+
+	inviterIdSet := make(map[int]struct{})
+	for _, u := range users {
+		if u.InviterId > 0 {
+			inviterIdSet[u.InviterId] = struct{}{}
+		}
+	}
+	if len(inviterIdSet) == 0 {
+		return
+	}
+
+	inviterIds := make([]int, 0, len(inviterIdSet))
+	for id := range inviterIdSet {
+		inviterIds = append(inviterIds, id)
+	}
+
+	var inviters []*User
+	if err := DB.Unscoped().Select("id, remark").Where("id IN ?", inviterIds).Find(&inviters).Error; err != nil {
+		common.SysLog(fmt.Sprintf("failed to fill inviter remarks: %v", err))
+		return
+	}
+
+	remarkById := make(map[int]string, len(inviters))
+	for _, inviter := range inviters {
+		remarkById[inviter.Id] = inviter.Remark
+	}
+
+	for _, u := range users {
+		u.InviterRemark = remarkById[u.InviterId]
+	}
+}
+
 func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
@@ -283,6 +320,8 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+
+	fillUserInviterRemarks(users)
 
 	return users, total, nil
 }
@@ -370,6 +409,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	}
 
 	fillUserAssignmentInfo(users)
+	fillUserInviterRemarks(users)
 
 	return users, total, nil
 }
