@@ -108,7 +108,7 @@ func GetTopUpInfo(c *gin.Context) {
 
 		if !hasAlipay {
 			payMethods = append(payMethods, map[string]string{
-				"name":      "Alipay",
+				"name":      "支付宝",
 				"type":      model.PaymentMethodAlipay,
 				"color":     "rgba(var(--semi-blue-5), 1)",
 				"min_topup": strconv.Itoa(setting.AlipayMinTopUp),
@@ -129,7 +129,7 @@ func GetTopUpInfo(c *gin.Context) {
 
 		if !hasWechat {
 			payMethods = append(payMethods, map[string]string{
-				"name":      "WeChat Pay",
+				"name":      "微信",
 				"type":      model.PaymentMethodWechat,
 				"color":     "rgba(var(--semi-green-5), 1)",
 				"min_topup": strconv.Itoa(setting.WechatMinTopUp),

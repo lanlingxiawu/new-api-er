@@ -12,6 +12,7 @@ export function BusinessAmount({
   neutralClassName,
   markNegative = true,
   showPositiveSign = false,
+  isReversal = false,
 }: {
   value: number | null | undefined
   digits?: number
@@ -21,6 +22,7 @@ export function BusinessAmount({
   neutralClassName?: string
   markNegative?: boolean
   showPositiveSign?: boolean
+  isReversal?: boolean
 }) {
   const { t } = useTranslation()
   const amount = Number(value || 0)
@@ -42,12 +44,21 @@ export function BusinessAmount({
         {formatBusinessAmount(amount, digits)}
       </span>
       {markNegative && isNegative ? (
-        <Badge
-          variant='outline'
-          className='border-destructive/30 bg-destructive/5 text-destructive h-5 shrink-0 px-1.5 text-[10px] font-medium'
-        >
-          {t('Loss')}
-        </Badge>
+        isReversal ? (
+          <Badge
+            variant='outline'
+            className='border-muted-foreground/30 bg-muted text-muted-foreground h-5 shrink-0 px-1.5 text-[10px] font-medium'
+          >
+            {t('Refund/Reversal')}
+          </Badge>
+        ) : (
+          <Badge
+            variant='outline'
+            className='border-destructive/30 bg-destructive/5 text-destructive h-5 shrink-0 px-1.5 text-[10px] font-medium'
+          >
+            {t('Loss')}
+          </Badge>
+        )
       ) : null}
     </span>
   )

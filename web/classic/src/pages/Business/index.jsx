@@ -799,7 +799,7 @@ function StatusTag({ status }) {
   );
 }
 
-function AmountText({ value, positive = true }) {
+function AmountText({ value, positive = true, isReversal = false }) {
   const { t } = useTranslation();
   const amount = Number(value || 0);
   const color =
@@ -815,11 +815,11 @@ function AmountText({ value, positive = true }) {
       </span>
       {amount < 0 ? (
         <Tag
-          color='red'
+          color={isReversal ? 'grey' : 'red'}
           size='small'
           style={{ flexShrink: 0, fontSize: 10, lineHeight: '16px' }}
         >
-          {t('亏损')}
+          {isReversal ? t('退款/冲销') : t('亏损')}
         </Tag>
       ) : null}
     </span>
@@ -3277,12 +3277,22 @@ function CommissionLogsTable({
     {
       title: selfView ? t('业绩') : t('利润'),
       dataIndex: 'profit_quota',
-      render: (value) => <AmountText value={value} />,
+      render: (value, record) => (
+        <AmountText
+          value={value}
+          isReversal={Number(record.revenue_quota || 0) < 0}
+        />
+      ),
     },
     {
       title: t('提成'),
       dataIndex: 'commission_quota',
-      render: (value) => <AmountText value={value} />,
+      render: (value, record) => (
+        <AmountText
+          value={value}
+          isReversal={Number(record.revenue_quota || 0) < 0}
+        />
+      ),
     },
     {
       title: t('比例'),
