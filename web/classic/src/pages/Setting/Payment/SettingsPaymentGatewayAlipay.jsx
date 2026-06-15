@@ -152,7 +152,11 @@ export default function SettingsPaymentGatewayAlipay(props) {
         errorResults.forEach((res) => showError(res.data.message));
       } else {
         showSuccess(t('更新成功'));
-        setOriginInputs({ ...inputs, AlipayPrivateKey: '', AlipayPublicKey: '' });
+        setOriginInputs({
+          ...inputs,
+          AlipayPrivateKey: '',
+          AlipayPublicKey: '',
+        });
         props.refresh?.();
       }
     } catch (error) {
@@ -277,9 +281,7 @@ export default function SettingsPaymentGatewayAlipay(props) {
               />
             </Col>
           </Row>
-          <Button onClick={submitAlipaySetting}>
-            {t('更新支付宝设置')}
-          </Button>
+          <Button onClick={submitAlipaySetting}>{t('更新支付宝设置')}</Button>
         </Form.Section>
       </Form>
     </Spin>

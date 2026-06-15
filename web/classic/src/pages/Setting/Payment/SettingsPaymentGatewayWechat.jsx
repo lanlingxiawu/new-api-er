@@ -270,9 +270,7 @@ export default function SettingsPaymentGatewayWechat(props) {
               />
             </Col>
           </Row>
-          <Button onClick={submitWechatSetting}>
-            {t('更新微信支付设置')}
-          </Button>
+          <Button onClick={submitWechatSetting}>{t('更新微信支付设置')}</Button>
         </Form.Section>
       </Form>
     </Spin>
