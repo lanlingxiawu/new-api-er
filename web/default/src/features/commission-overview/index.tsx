@@ -21,10 +21,18 @@ import {
   ArrowDown,
   ArrowUpDown,
   RefreshCw,
+  CalendarDays,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getEndOfDay, getStartOfDay } from '@/lib/time'
+import dayjs from '@/lib/dayjs'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   Table,
   TableBody,
@@ -36,7 +44,6 @@ import {
 import { SectionPageLayout } from '@/components/layout'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessUsd } from '@/features/business/format'
-import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
   getCommissionOverview,
   type ChannelProfitStat,
@@ -84,6 +91,17 @@ function resolveRangeKey(range: OverviewRange): RangeKey {
 function toUnixTimestamp(date?: Date): number | undefined {
   if (!date) return undefined
   return Math.floor(date.getTime() / 1000)
+}
+
+function toDateInputValue(date?: Date): string {
+  return date ? dayjs(date).format('YYYY-MM-DD') : ''
+}
+
+function fromDateInputValue(value: string, boundary: 'start' | 'end') {
+  if (!value) return undefined
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return undefined
+  return boundary === 'start' ? getStartOfDay(date) : getEndOfDay(date)
 }
 
 function sortChannelRows(
@@ -230,6 +248,101 @@ function SortableHead({
         <ArrowUpDown className='size-3 opacity-40' />
       )}
     </button>
+  )
+}
+
+function CompactDateRangePicker({
+  start,
+  end,
+  onChange,
+}: {
+  start?: Date
+  end?: Date
+  onChange: (range: OverviewRange) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [draftStart, setDraftStart] = useState(toDateInputValue(start))
+  const [draftEnd, setDraftEnd] = useState(toDateInputValue(end))
+
+  const label = useMemo(() => {
+    if (!start && !end) return t('Date Range')
+    const startText = start ? dayjs(start).format('YYYY-MM-DD') : '-'
+    const endText = end ? dayjs(end).format('YYYY-MM-DD') : '-'
+    return `${startText} ~ ${endText}`
+  }, [end, start, t])
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setDraftStart(toDateInputValue(start))
+      setDraftEnd(toDateInputValue(end))
+    }
+    setOpen(nextOpen)
+  }
+
+  const applyDraft = () => {
+    onChange({
+      start: fromDateInputValue(draftStart, 'start'),
+      end: fromDateInputValue(draftEnd, 'end'),
+    })
+    setOpen(false)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        render={
+          <Button
+            type='button'
+            variant='outline'
+            className='w-full justify-start gap-2 px-2.5 text-sm leading-5 font-normal tabular-nums'
+          />
+        }
+      >
+        <CalendarDays className='text-muted-foreground size-4 shrink-0' />
+        <span className='truncate'>{label}</span>
+      </PopoverTrigger>
+      <PopoverContent
+        align='start'
+        className='w-[min(420px,calc(100vw-2rem))] p-3'
+      >
+        <div className='space-y-3'>
+          <div className='grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-end'>
+            <div className='space-y-1.5'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Start Date')}
+              </div>
+              <Input
+                type='date'
+                value={draftStart}
+                onChange={(e) => setDraftStart(e.target.value)}
+                className='h-8 text-sm leading-5 tabular-nums'
+              />
+            </div>
+            <span className='text-muted-foreground hidden pb-2 text-xs sm:block'>
+              ~
+            </span>
+            <div className='space-y-1.5'>
+              <div className='text-muted-foreground text-xs'>
+                {t('End Date')}
+              </div>
+              <Input
+                type='date'
+                value={draftEnd}
+                onChange={(e) => setDraftEnd(e.target.value)}
+                className='h-8 text-sm leading-5 tabular-nums'
+              />
+            </div>
+          </div>
+
+          <div className='flex justify-end'>
+            <Button size='sm' className='h-8' onClick={applyDraft}>
+              {t('Confirm')}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -480,8 +593,8 @@ export function CommissionOverview() {
                 {b.label}
               </Button>
             ))}
-            <div className='min-w-[280px] flex-1 sm:max-w-[420px]'>
-              <CompactDateTimeRangePicker
+            <div className='min-w-[220px] flex-1 sm:max-w-[320px]'>
+              <CompactDateRangePicker
                 start={selectedRange.start}
                 end={selectedRange.end}
                 onChange={handleCustomRangeChange}

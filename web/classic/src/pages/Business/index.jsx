@@ -4964,6 +4964,20 @@ function getPresetRange(range) {
   return { start, end };
 }
 
+function startOfDayDate(value) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfDayDate(value) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
 function rangeToParams(range) {
   if (!range?.start || !range?.end) return {};
   return {
@@ -5248,17 +5262,19 @@ export function BusinessOverview() {
               </Button>
             ))}
             <DatePicker
-              type='dateTimeRange'
+              type='dateRange'
               value={datePickerValue}
               placeholder={[t('开始时间'), t('结束时间')]}
               size='small'
-              style={{ minWidth: 300 }}
+              style={{ minWidth: 220, width: 260 }}
               onChange={(value) => {
                 const [start, end] = Array.isArray(value) ? value : [];
-                if (start && end) {
+                const normalizedStart = startOfDayDate(start);
+                const normalizedEnd = endOfDayDate(end);
+                if (normalizedStart && normalizedEnd) {
                   setCustomRange({
-                    start: start instanceof Date ? start : new Date(start),
-                    end: end instanceof Date ? end : new Date(end),
+                    start: normalizedStart,
+                    end: normalizedEnd,
                   });
                   setRange('custom');
                 }

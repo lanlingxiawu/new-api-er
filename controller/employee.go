@@ -578,9 +578,9 @@ func AdminCommissionOverview(c *gin.Context) {
 		channelSortOrder = "desc"
 	}
 
-	// Build one shared mixed query plan: covered full days use daily aggregates,
-	// uncovered full days and partial boundaries use ledger/detail tables.
-	queryPlan, err := model.ResolveBusinessStatsQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
+	// Business overview is intentionally daily-aggregate only. Do not fill gaps
+	// from ledger/detail tables here; those large scans belong to detail views.
+	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
