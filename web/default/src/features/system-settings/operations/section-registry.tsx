@@ -24,6 +24,7 @@ import { NodeControlServiceSection } from '../integrations/node-control-service-
 // end
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
+import { RequestLogSettingsSection } from '../maintenance/request-log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
@@ -116,6 +117,21 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+      />
+    ),
+  },
+  {
+    id: 'request-log',
+    titleKey: 'Request Log',
+    build: (settings: OperationsSettings) => (
+      <RequestLogSettingsSection
+        defaultValues={{
+          RequestLogEnabled: Boolean(settings.RequestLogEnabled),
+          RequestLogUsername: settings.RequestLogUsername ?? '',
+          RequestLogMaxBodyKB: Number(settings.RequestLogMaxBodyKB) || 64,
+          RequestLogMinCount: Number(settings.RequestLogMinCount) || 1000,
+          RequestLogMaxCount: Number(settings.RequestLogMaxCount) || 5000,
+        }}
       />
     ),
   },

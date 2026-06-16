@@ -57,6 +57,7 @@ import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
 // xiugai 添加号池节点功能
 import NodePool from './pages/NodePool';
+import RequestLog from './pages/RequestLog';
 // end
 
 const Home = lazy(() => import('./pages/Home'));
@@ -150,6 +151,14 @@ function App() {
           }
         />
         {/* end */}
+        <Route
+          path='/console/request-log'
+          element={
+            <RootRoute>
+              <RequestLog />
+            </RootRoute>
+          }
+        />
         <Route
           path='/console/employees'
           element={
