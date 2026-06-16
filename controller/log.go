@@ -90,6 +90,9 @@ func exportLogsExcel(c *gin.Context, userId int) {
 	if userId > 0 {
 		username = ""
 	}
+	// 渠道、重试列在前端仅管理员可见，且普通日志接口会剥离 admin_info；
+	// 自助导出必须同样隐藏，避免普通用户拿到内部渠道路由信息。
+	isAdmin := userId == 0
 
 	f := excelize.NewFile()
 	defer func() {
@@ -159,9 +162,16 @@ func exportLogsExcel(c *gin.Context, userId int) {
 				}
 				// 花费换算成美元，四舍五入到 6 位小数，对齐前端 renderQuota(quota, 6)。
 				costUSD := math.Round(common.QuotaToUSD(int64(l.Quota))*1e6) / 1e6
+				// 渠道、重试仅管理员可见，自助导出置空。
+				var channelCell interface{} = ""
+				retryCell := ""
+				if isAdmin {
+					channelCell = l.ChannelId
+					retryCell = retryChainText(l.Other)
+				}
 				row := []interface{}{
 					time.Unix(l.CreatedAt, 0).Format("2006-01-02 15:04:05"),
-					l.ChannelId,
+					channelCell,
 					l.Username,
 					l.TokenName,
 					l.Group,
@@ -172,7 +182,7 @@ func exportLogsExcel(c *gin.Context, userId int) {
 					l.CompletionTokens,
 					costUSD,
 					l.Ip,
-					retryChainText(l.Other),
+					retryCell,
 					l.Content,
 				}
 				if err := sw.SetRow(cell, row); err != nil {
