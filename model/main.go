@@ -408,6 +408,7 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
+	// RequestLog 仅保存在 Redis，不做数据库迁移。
 	return nil
 }
 

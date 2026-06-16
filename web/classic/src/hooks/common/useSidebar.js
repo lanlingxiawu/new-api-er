@@ -59,6 +59,7 @@ export const DEFAULT_ADMIN_CONFIG = {
     // end
     employee: true,
     businessOverview: true,
+    'request-log': true,
     setting: true,
   },
 };
