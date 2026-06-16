@@ -228,6 +228,11 @@ var (
 	SearchRateLimitEnable         = true
 	SearchRateLimitNum            = 10
 	SearchRateLimitDuration int64 = 60
+
+	// Per-user log export rate limit (applies after authentication, keyed by user ID)
+	LogExportRateLimitEnable         = true
+	LogExportRateLimitNum            = 1
+	LogExportRateLimitDuration int64 = 600
 )
 
 var RateLimitKeyExpirationDuration = 20 * time.Minute

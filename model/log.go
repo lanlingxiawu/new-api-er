@@ -463,6 +463,55 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	return logs, total, err
 }
 
+// ExportLogs 流式导出日志：按时间段及过滤条件分批回调，避免一次性加载全部数据进内存。
+// userId > 0 时只导出该用户的日志（普通用户自助导出场景）。
+// fn 在每批数据上被调用，返回 error 会中断后续查询。
+func ExportLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string,
+	tokenName string, channel int, group string, userId int, fn func(batch []*Log) error) error {
+	var tx *gorm.DB
+	if logType == LogTypeUnknown {
+		tx = LOG_DB
+	} else {
+		tx = LOG_DB.Where("logs.type = ?", logType)
+	}
+
+	var err error
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+		return err
+	}
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", username); err != nil {
+		return err
+	}
+	if tokenName != "" {
+		tx = tx.Where("logs.token_name = ?", tokenName)
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if channel != 0 {
+		tx = tx.Where("logs.channel_id = ?", channel)
+	}
+	if group != "" {
+		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	if userId > 0 {
+		tx = tx.Where("logs.user_id = ?", userId)
+	}
+
+	var batch []*Log
+	// FindInBatches 跨 SQLite/MySQL/PostgreSQL 通用，分批查询避免内存溢出。
+	// 注意：不能附加自定义 Order——FindInBatches 内部按主键升序做游标翻页
+	// （WHERE id > 上一批末行主键）。自定义排序会破坏游标导致漏数据/重复数据。
+	// 主键 id 自增，升序即近似时间顺序（旧→新）。
+	return tx.Model(&Log{}).
+		FindInBatches(&batch, 1000, func(_ *gorm.DB, _ int) error {
+			return fn(batch)
+		}).Error
+}
+
 type EmployeeCustomerLogFilter struct {
 	EmployeeUserId    int
 	CustomerUserId    int

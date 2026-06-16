@@ -101,6 +101,70 @@ export async function getUserInfo(
 }
 
 // ============================================================================
+// Log Export (xlsx)
+// ============================================================================
+
+/** Thrown when the export endpoint returns a business error (HTTP 200 + JSON). */
+export class LogExportError extends Error {}
+
+function parseFilename(disposition?: string): string | undefined {
+  if (!disposition) return undefined
+  const match = /filename="?([^"]+)"?/.exec(disposition)
+  return match?.[1]
+}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+/**
+ * Export logs as CSV for the given filters and scope.
+ * Uses a blob request so the caller can catch HTTP 429 (rate limit) and
+ * surface a friendly message. Validation failures come back as HTTP 200 with
+ * a JSON body, which is detected here and rethrown as a LogExportError.
+ */
+export async function exportLogs(
+  params: GetLogsParams,
+  scope: Exclude<LogsScope, 'employee'>
+): Promise<void> {
+  const queryParams = buildQueryParams(
+    params as unknown as Record<string, unknown>
+  )
+  const path = scope === 'admin' ? '/api/log/export' : '/api/log/self/export'
+  const res = await api.get(`${path}?${queryParams}`, {
+    responseType: 'blob',
+    skipErrorHandler: true, // handle 429 ourselves
+    skipBusinessError: true,
+    disableDuplicate: true,
+  })
+
+  const blob = res.data as Blob
+  // Backend validation errors are returned as HTTP 200 + JSON, not CSV.
+  if (blob.type.includes('application/json')) {
+    const text = await blob.text()
+    let message = ''
+    try {
+      message = (JSON.parse(text) as { message?: string }).message ?? ''
+    } catch {
+      /* empty */
+    }
+    throw new LogExportError(message)
+  }
+
+  const filename =
+    parseFilename(res.headers['content-disposition'] as string | undefined) ??
+    `logs_${Date.now()}.xlsx`
+  triggerBlobDownload(blob, filename)
+}
+
+// ============================================================================
 // Midjourney (Drawing) Logs API
 // ============================================================================
 

@@ -77,6 +77,7 @@ export const useLogsData = () => {
   const [logCount, setLogCount] = useState(0);
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [logType, setLogType] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   // User and admin
   const canUseAdminActions = isAdmin();
@@ -824,6 +825,79 @@ export const useLogsData = () => {
     setLoading(false);
   };
 
+  // Export logs to xlsx (admin: all logs; self: own logs)
+  const exportLogs = async () => {
+    if (exporting) return;
+    // 员工场景后端未实现客户日志导出，禁用导出。
+    if (logScope === 'employee') return;
+    setExporting(true);
+    try {
+      const {
+        username,
+        token_name,
+        model_name,
+        start_timestamp,
+        end_timestamp,
+        channel,
+        group,
+        logType: formLogType,
+      } = getFormValues();
+      const currentLogType = formLogType !== undefined ? formLogType : logType;
+      const localStartTimestamp = Date.parse(start_timestamp) / 1000;
+      const localEndTimestamp = Date.parse(end_timestamp) / 1000;
+
+      let url;
+      if (logScope === 'admin') {
+        url = `/api/log/export?type=${currentLogType}&username=${username}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&channel=${channel}&group=${group}`;
+      } else {
+        url = `/api/log/self/export?type=${currentLogType}&token_name=${token_name}&model_name=${model_name}&start_timestamp=${localStartTimestamp}&end_timestamp=${localEndTimestamp}&group=${group}`;
+      }
+      url = encodeURI(url);
+
+      // 用 blob 请求以便捕获 429；skipErrorHandler 跳过全局错误提示自行处理。
+      const res = await API.get(url, {
+        responseType: 'blob',
+        skipErrorHandler: true,
+        disableDuplicate: true,
+      });
+
+      const blob = res.data;
+      // 后端校验失败（如时间超 1 个月）返回 HTTP 200 + JSON，而非 xlsx。
+      if (blob.type && blob.type.includes('application/json')) {
+        const text = await blob.text();
+        let message = '';
+        try {
+          message = JSON.parse(text).message || '';
+        } catch (e) {
+          /* ignore */
+        }
+        showError(message || t('导出失败'));
+        return;
+      }
+
+      const disposition = res.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const filename = (match && match[1]) || `logs_${Date.now()}.xlsx`;
+
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      if (error?.response?.status === 429) {
+        showError(t('下载过于频繁，请 10 分钟后再试'));
+      } else {
+        showError(t('导出失败'));
+      }
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Page handlers
   const handlePageChange = (page) => {
     setActivePage(page);
@@ -936,6 +1010,10 @@ export const useLogsData = () => {
     showParamOverrideModal,
     setShowParamOverrideModal,
     paramOverrideTarget,
+
+    // Export
+    exportLogs,
+    exporting,
 
     // Functions
     loadLogs,

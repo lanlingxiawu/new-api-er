@@ -20,8 +20,10 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQueryClient, useIsFetching } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
+import axios from 'axios'
+import { Download, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useIsAdmin, useIsEmployee } from '@/hooks/use-admin'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,9 +39,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { exportLogs, LogExportError } from '../api'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
-import { getDefaultTimeRange } from '../lib/utils'
+import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
@@ -170,6 +173,47 @@ export function CommonLogsFilterBar<TData>(
     },
     [handleApply]
   )
+
+  const [exporting, setExporting] = useState(false)
+  // Export endpoint only supports admin (all logs) and self (own logs).
+  const exportScope = logsScope === 'admin' ? 'admin' : 'self'
+  const canExport = logsScope !== 'employee'
+
+  const handleExport = useCallback(async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const params = buildApiParams({
+        page: 1,
+        pageSize: 1,
+        searchParams,
+        scope: exportScope,
+      })
+      await exportLogs(params, exportScope)
+    } catch (e) {
+      if (axios.isAxiosError(e) && e.response?.status === 429) {
+        toast.error(t('Downloading too frequently, please try again in 10 minutes.'))
+      } else if (e instanceof LogExportError && e.message) {
+        toast.error(e.message)
+      } else {
+        toast.error(t('Export failed'))
+      }
+    } finally {
+      setExporting(false)
+    }
+  }, [exporting, searchParams, exportScope, t])
+
+  const exportButton = canExport ? (
+    <Button
+      type='button'
+      variant='outline'
+      onClick={handleExport}
+      disabled={exporting}
+    >
+      {exporting ? <Loader2 className='animate-spin' /> : <Download />}
+      {t('Export')}
+    </Button>
+  ) : null
 
   const hasExpandedFilters =
     !!filters.token ||
@@ -351,6 +395,7 @@ export function CommonLogsFilterBar<TData>(
     <LogsFilterToolbar
       table={props.table}
       stats={statsBar}
+      actions={exportButton}
       primaryFilters={
         <>
           {dateRangeFilter}

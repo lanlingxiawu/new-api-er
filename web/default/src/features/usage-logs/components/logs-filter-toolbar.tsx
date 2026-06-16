@@ -44,6 +44,7 @@ interface LogsFilterToolbarProps<TData> {
   mobileFilters?: ReactNode
   mobileFilterCount?: number
   stats?: ReactNode
+  actions?: ReactNode
   hasActiveFilters: boolean
   hasAdvancedActiveFilters?: boolean
   advancedFilterCount?: number
@@ -114,6 +115,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
           <div className='mt-2 flex flex-col gap-2'>
             {props.stats}
             <div className='flex items-center justify-end gap-1.5'>
+              {props.actions}
               <DrawerTrigger asChild>
                 <Button
                   type='button'
@@ -228,6 +230,7 @@ export function LogsFilterToolbar<TData>(props: LogsFilterToolbarProps<TData>) {
             </Button>
           )}
 
+          {props.actions}
           <Button
             type='button'
             variant='outline'
