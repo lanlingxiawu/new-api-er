@@ -24,8 +24,6 @@ import {
   CalendarDays,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { getEndOfDay, getStartOfDay } from '@/lib/time'
-import dayjs from '@/lib/dayjs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -58,11 +56,39 @@ interface OverviewRange {
   end?: Date
 }
 
+function utcStartOfDay(date: Date): Date {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      0,
+      0,
+      0,
+      0
+    )
+  )
+}
+
+function utcEndOfDay(date: Date): Date {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      23,
+      59,
+      59,
+      999
+    )
+  )
+}
+
 function createTrailingDayRange(days: number): OverviewRange {
-  const end = getEndOfDay()
+  const end = utcEndOfDay(new Date())
   const start = new Date(end)
-  start.setDate(end.getDate() - (days - 1))
-  return { start: getStartOfDay(start), end }
+  start.setUTCDate(end.getUTCDate() - (days - 1))
+  return { start: utcStartOfDay(start), end }
 }
 
 function getPresetRange(range: Exclude<RangeKey, 'custom'>): OverviewRange {
@@ -94,14 +120,17 @@ function toUnixTimestamp(date?: Date): number | undefined {
 }
 
 function toDateInputValue(date?: Date): string {
-  return date ? dayjs(date).format('YYYY-MM-DD') : ''
+  return date ? date.toISOString().slice(0, 10) : ''
 }
 
 function fromDateInputValue(value: string, boundary: 'start' | 'end') {
   if (!value) return undefined
-  const date = new Date(`${value}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return undefined
-  return boundary === 'start' ? getStartOfDay(date) : getEndOfDay(date)
+  const parts = value.split('-').map(Number)
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return undefined
+  const [year, month, day] = parts
+  return boundary === 'start'
+    ? new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0))
+    : new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999))
 }
 
 function sortChannelRows(
@@ -129,31 +158,63 @@ function ScrollTable({
   children,
   hasMore,
   onLoadMore,
+  loading,
 }: {
   children: ReactNode
   hasMore?: boolean
   onLoadMore?: () => void
+  loading?: boolean
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const requestLoadMore = useCallback(() => {
+    if (!hasMore || loading || !onLoadMore) return
+    onLoadMore()
+  }, [hasMore, loading, onLoadMore])
+
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
-      if (!hasMore || !onLoadMore) return
       const target = event.currentTarget
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight
       if (distanceToBottom <= 24) {
-        onLoadMore()
+        requestLoadMore()
       }
     },
-    [hasMore, onLoadMore]
+    [requestLoadMore]
   )
+
+  useEffect(() => {
+    const root = rootRef.current
+    const sentinel = sentinelRef.current
+    if (!root || !sentinel) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          requestLoadMore()
+        }
+      },
+      {
+        root,
+        rootMargin: '48px 0px',
+        threshold: 0,
+      }
+    )
+
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [requestLoadMore])
 
   return (
     <div
+      ref={rootRef}
       className='w-full overflow-auto rounded-xl border'
       style={{ height: CLASSIC_TABLE_SCROLL_HEIGHT }}
       onScroll={handleScroll}
     >
       {children}
+      <div ref={sentinelRef} className='h-px w-full' aria-hidden='true' />
     </div>
   )
 }
@@ -267,8 +328,8 @@ function CompactDateRangePicker({
 
   const label = useMemo(() => {
     if (!start && !end) return t('Date Range')
-    const startText = start ? dayjs(start).format('YYYY-MM-DD') : '-'
-    const endText = end ? dayjs(end).format('YYYY-MM-DD') : '-'
+    const startText = start ? toDateInputValue(start) : '-'
+    const endText = end ? toDateInputValue(end) : '-'
     return `${startText} ~ ${endText}`
   }, [end, start, t])
 
@@ -724,6 +785,7 @@ export function CommissionOverview() {
                   <ScrollTable
                     hasMore={hasMoreChannelRows}
                     onLoadMore={loadMoreChannels}
+                    loading={isFetching}
                   >
                     <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>
@@ -743,7 +805,7 @@ export function CommissionOverview() {
                               currentSort={channelSort}
                               onSort={toggleChannelSort}
                             >
-                              {t('Cost Ratio')}
+                              {t('Average Cost Ratio')}
                             </SortableHead>
                           </TableHead>
                           <TableHead>
@@ -803,7 +865,9 @@ export function CommissionOverview() {
                                   id: ch.channel_id,
                                 })}
                             </TableCell>
-                            <TableCell>{ch.cost_ratio}</TableCell>
+                            <TableCell>
+                              {Number(ch.cost_ratio ?? 0).toFixed(2)}
+                            </TableCell>
                             <TableCell>
                               <BusinessAmount value={ch.consumption_quota} />
                             </TableCell>
@@ -868,15 +932,9 @@ export function CommissionOverview() {
                       <TableHeader className='bg-background sticky top-0 z-10'>
                         <TableRow>
                           <TableHead>{t('Employee')}</TableHead>
-                          <TableHead>
-                            {t('Customer consumption')}
-                          </TableHead>
-                          <TableHead>
-                            {t('Customer cost')}
-                          </TableHead>
-                          <TableHead>
-                            {t('Customer profit')}
-                          </TableHead>
+                          <TableHead>{t('Customer consumption')}</TableHead>
+                          <TableHead>{t('Customer cost')}</TableHead>
+                          <TableHead>{t('Customer profit')}</TableHead>
                           <TableHead>{t('Commission')}</TableHead>
                           <TableHead>{t('Records')}</TableHead>
                         </TableRow>
