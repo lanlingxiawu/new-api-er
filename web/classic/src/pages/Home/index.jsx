@@ -670,7 +670,7 @@ function MobileMenu({
               'inline-flex h-[48px] items-center justify-center rounded-full border border-[#4ba97e]/20 bg-white text-[15px] font-medium text-[#14201a]',
             children: isAuthenticated
               ? t('home.actions.goToConsole')
-              : t('Sign in'),
+              : t('home.actions.signIn'),
           }),
           /* @__PURE__ */ jsx(Link, {
             to: primaryTarget,
@@ -784,7 +784,7 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
                   children: [
                     /* @__PURE__ */ jsxs('button', {
                       type: 'button',
-                      'aria-label': t('Change language'),
+                      'aria-label': t('home.language.change'),
                       className:
                         'flex h-[34px] items-center gap-[6px] rounded-[10px] border border-transparent px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:border-[#4ba97e]/15 hover:bg-white/75 hover:text-[#14201a]',
                       children: [
@@ -848,7 +848,9 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
                   children: /* @__PURE__ */ jsx('span', {
                     className:
                       'decoration-[#4ba97e] underline-offset-[5px] group-hover:underline',
-                    children: isAuthenticated ? t('Dashboard') : t('Sign in'),
+                    children: isAuthenticated
+                      ? t('home.actions.dashboard')
+                      : t('home.actions.signIn'),
                   }),
                 }),
                 /* @__PURE__ */ jsx(Link, {
@@ -1798,7 +1800,7 @@ function HeroDashboard() {
                 children: [
                   /* @__PURE__ */ jsx('div', {
                     className: 'text-[9px] text-[#5b6b62]',
-                    children: t('Balance'),
+                    children: t('home.dashboard.balance'),
                   }),
                   /* @__PURE__ */ jsx('div', {
                     className: 'text-sm font-semibold text-[#14201a]',
@@ -1806,7 +1808,7 @@ function HeroDashboard() {
                   }),
                   /* @__PURE__ */ jsxs('button', {
                     className: 'mt-1 text-[10px] font-medium text-[#4ba97e]',
-                    children: ['+ ', t('Recharge')],
+                    children: ['+ ', t('home.dashboard.recharge')],
                   }),
                 ],
               }),
@@ -2308,18 +2310,18 @@ function HeroDashboard() {
                             'grid grid-cols-[80px_1fr_64px_56px] gap-2 border-b border-[#e6e9e3] pb-2 text-[10px] tracking-wider text-[#9aa39d] uppercase',
                           children: [
                             /* @__PURE__ */ jsx('span', {
-                              children: t('Time'),
+                              children: t('home.dashboard.logs.time'),
                             }),
                             /* @__PURE__ */ jsx('span', {
-                              children: t('Model'),
-                            }),
-                            /* @__PURE__ */ jsx('span', {
-                              className: 'text-right',
-                              children: t('Latency'),
+                              children: t('home.dashboard.logs.model'),
                             }),
                             /* @__PURE__ */ jsx('span', {
                               className: 'text-right',
-                              children: t('Cost'),
+                              children: t('home.dashboard.logs.latency'),
+                            }),
+                            /* @__PURE__ */ jsx('span', {
+                              className: 'text-right',
+                              children: t('home.dashboard.logs.cost'),
                             }),
                           ],
                         }),
