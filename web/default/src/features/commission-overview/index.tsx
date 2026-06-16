@@ -24,6 +24,8 @@ import {
   CalendarDays,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import dayjs from '@/lib/dayjs'
+import { getEndOfDay, getStartOfDay } from '@/lib/time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -56,39 +58,11 @@ interface OverviewRange {
   end?: Date
 }
 
-function utcStartOfDay(date: Date): Date {
-  return new Date(
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(),
-      date.getUTCDate(),
-      0,
-      0,
-      0,
-      0
-    )
-  )
-}
-
-function utcEndOfDay(date: Date): Date {
-  return new Date(
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(),
-      date.getUTCDate(),
-      23,
-      59,
-      59,
-      999
-    )
-  )
-}
-
 function createTrailingDayRange(days: number): OverviewRange {
-  const end = utcEndOfDay(new Date())
+  const end = getEndOfDay()
   const start = new Date(end)
-  start.setUTCDate(end.getUTCDate() - (days - 1))
-  return { start: utcStartOfDay(start), end }
+  start.setDate(end.getDate() - (days - 1))
+  return { start: getStartOfDay(start), end }
 }
 
 function getPresetRange(range: Exclude<RangeKey, 'custom'>): OverviewRange {
@@ -120,17 +94,14 @@ function toUnixTimestamp(date?: Date): number | undefined {
 }
 
 function toDateInputValue(date?: Date): string {
-  return date ? date.toISOString().slice(0, 10) : ''
+  return date ? dayjs(date).format('YYYY-MM-DD') : ''
 }
 
 function fromDateInputValue(value: string, boundary: 'start' | 'end') {
   if (!value) return undefined
-  const parts = value.split('-').map(Number)
-  if (parts.length !== 3 || parts.some(Number.isNaN)) return undefined
-  const [year, month, day] = parts
-  return boundary === 'start'
-    ? new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0))
-    : new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999))
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return undefined
+  return boundary === 'start' ? getStartOfDay(date) : getEndOfDay(date)
 }
 
 function sortChannelRows(
@@ -151,7 +122,7 @@ function sortChannelRows(
 }
 
 const CLASSIC_TABLE_SCROLL_HEIGHT = 223
-const OVERVIEW_TABLE_PAGE_SIZE = 20
+const OVERVIEW_TABLE_PAGE_SIZE = 10
 const EMPLOYEE_PERFORMANCE_TOP_LIMIT = 10
 
 function ScrollTable({
