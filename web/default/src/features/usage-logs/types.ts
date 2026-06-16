@@ -19,7 +19,33 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Type definitions for usage logs
  */
-import type { UsageLog } from './data/schema'
+
+export interface UsageLog {
+  [key: string]: unknown
+  id: number
+  user_id: number
+  username?: string
+  token_name?: string
+  model_name: string
+  channel: number
+  channel_name?: string
+  group?: string
+  request_id?: string
+  upstream_request_id?: string
+  quota: number
+  prompt_tokens: number
+  completion_tokens: number
+  use_time?: number
+  is_stream?: boolean
+  other?: string | LogOtherData
+  created_at: number
+  code?: number
+  type?: number
+  status?: number
+  content?: string
+  prompt?: string
+  fail_reason?: string
+}
 
 // ============================================================================
 // Log Category Types
