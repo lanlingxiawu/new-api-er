@@ -548,7 +548,7 @@ function NavTarget({ link, className, children, onClick }) {
     children,
   });
 }
-function BrandLogo({ logo, className, alt = 'N123' }) {
+function BrandLogo({ logo, className, alt = 'LS ' }) {
   return /* @__PURE__ */ jsx('img', { src: logo, alt, className });
 }
 function MobileMenu({
@@ -576,7 +576,7 @@ function MobileMenu({
             className: 'flex items-center gap-[10px]',
             children: [
               /* @__PURE__ */ jsx('img', {
-                src: 'logo',
+                src: logo,
                 alt: 'LS',
                 className: 'h-[26px] w-auto',
               }),
@@ -728,7 +728,7 @@ function LandingNavbar({ docsUrl, isAuthenticated, logo }) {
                   className: 'flex items-center gap-[8px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: 'logo',
+                      src: logo,
                       alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
@@ -1777,7 +1777,7 @@ function HeroDashboard({ logo }) {
                 className: 'flex items-center gap-2 px-1 py-1',
                 children: [
                   /* @__PURE__ */ jsx('img', {
-                    src: 'logo',
+                    src: logo,
                     alt: 'LS',
                     className: 'h-5 w-auto',
                   }),
@@ -1845,7 +1845,7 @@ function HeroDashboard({ logo }) {
                     className:
                       'flex h-6 w-6 items-center justify-center rounded-full bg-[#2e6b52]',
                     children: /* @__PURE__ */ jsx('img', {
-                      src: 'logo',
+                      src: logo,
                       alt: 'LS',
                       className: 'h-3 w-auto brightness-0 invert',
                     }),
@@ -2941,7 +2941,7 @@ function MapCtaSection({ logo }) {
                 'absolute top-[44%] left-1/2 hidden -translate-x-1/2 flex-col items-center md:flex',
               children: [
                 /* @__PURE__ */ jsx('img', {
-                  src: 'logo',
+                  src: logo,
                   alt: 'LS',
                   className: 'h-[50px] w-auto',
                 }),
@@ -3224,7 +3224,7 @@ function LandingFooter({ docsUrl, siteName, logo }) {
                   className: 'flex items-center gap-[10px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: 'logo',
+                      src: logo,
                       alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
@@ -3304,43 +3304,7 @@ function LandingFooter({ docsUrl, siteName, logo }) {
           children: [
             /* @__PURE__ */ jsx('p', {
               className: 'text-[13px] text-[#eef2ee]/50',
-              children: 'Copyright © 2026 LS. All rights reserved.',
-            }),
-            /* @__PURE__ */ jsx('div', {
-              className: 'flex items-center gap-[12px]',
-              children: [
-                {
-                  label: 'Telegram',
-                  icon: /* @__PURE__ */ jsx(Send, {
-                    className: 'h-[15px] w-[15px]',
-                  }),
-                },
-                {
-                  label: 'X',
-                  icon: /* @__PURE__ */ jsx('span', {
-                    className: 'text-[15px] font-semibold',
-                    children: 'X',
-                  }),
-                },
-                {
-                  label: 'Email',
-                  icon: /* @__PURE__ */ jsx(Mail, {
-                    className: 'h-[15px] w-[15px]',
-                  }),
-                },
-              ].map(({ label, icon }) =>
-                /* @__PURE__ */ jsx(
-                  'a',
-                  {
-                    href: '#',
-                    'aria-label': label,
-                    className:
-                      'flex h-[34px] w-[34px] items-center justify-center rounded-full bg-[#eef2ee]/10 text-[#eef2ee]/85 transition-colors hover:bg-[#eef2ee]/20 hover:text-white',
-                    children: icon,
-                  },
-                  label,
-                ),
-              ),
+              children: `Copyright © ${year} LS. All rights reserved.`,
             }),
           ],
         }),
@@ -3391,6 +3355,7 @@ function Home() {
   const docsUrl = statusState?.status?.docs_link || 'https://docs.ls.ai';
   const isAuthenticated = !!localStorage.getItem('user');
   const siteName = getSystemName() || 'LS';
+  const logo = getLogo();
 
   useLayoutEffect(() => {
     document.body.classList.add('landing-home-page');

@@ -3864,7 +3864,7 @@
     "home.why.features.multiTeam.title": "Работа нескольких команд",
     "home.why.features.reliability.description": "Переключайте каналы и сохраняйте обработку продакшен-запросов при сбоях провайдеров.",
     "home.why.features.reliability.title": "Надежность внутри",
-    "home.why.title": "Почему команды выбирают N123",
+    "home.why.title": "Почему команды выбирают LS ",
     "Homepage URL 填": "URL домашней страницы:",
     "ID": "ID",
     "include_obfuscation 用于控制 Responses 流混淆字段。默认关闭以避免客户端关闭该安全保护": "include_obfuscation управляет полями обфускации в потоке Responses. Отключено по умолчанию, чтобы клиенты не отключали эту защиту",

@@ -3813,7 +3813,7 @@
     "home.why.features.multiTeam.title": "複数チーム運用",
     "home.why.features.reliability.description": "プロバイダーが不安定なときもチャネルをフェイルオーバーして本番リクエストを維持します。",
     "home.why.features.reliability.title": "組み込みの信頼性",
-    "home.why.title": "チームが N123 を選ぶ理由",
+    "home.why.title": "チームが LS  を選ぶ理由",
     "Homepage URL 填": "ホームページURLを入力してください",
     "ID": "ID",
     "include_obfuscation 用于控制 Responses 流混淆字段。默认关闭以避免客户端关闭该安全保护": "include_obfuscationはResponsesストリームの難読化フィールドを制御します。クライアントがこのセキュリティ保護を無効にするのを防ぐため、デフォルトで無効です",
