@@ -57,11 +57,6 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { TableCell, TableRow } from '@/components/ui/table'
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from '@/components/ui/hover-card'
-import {
   Select,
   SelectContent,
   SelectGroup,
@@ -69,7 +64,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
@@ -101,7 +95,6 @@ import {
   getEmployeeCustomers,
   getCommissionChannelOptions,
   getCommissionLogs,
-  getUsageLogById,
   getEmployeeTiers,
   getEmployeeTiersPage,
   getEmployees,
@@ -113,6 +106,7 @@ import {
 } from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
+import { UsageLogIdHover } from './components/usage-log-id-hover'
 import {
   getEmployeeTierGroupBadgeClass,
   getEmployeeTierGroupDotClass,
@@ -124,7 +118,6 @@ import type {
   EmployeeProfile,
   EmployeeTier,
 } from './types'
-import type { UsageLog } from '@/features/usage-logs/data/schema'
 
 const ASSIGN_USER_PICKER_PAGE_SIZE = 20
 const EMPLOYEE_MONTHLY_SELECTOR_PAGE_SIZE = 20
@@ -1108,146 +1101,6 @@ function StatusBadge({ status }: { status: number }) {
     <Badge variant='default'>{t('Enabled')}</Badge>
   ) : (
     <Badge variant='secondary'>{t('Disabled')}</Badge>
-  )
-}
-
-const usageLogPreviewCache = new Map<number, UsageLog | null>()
-
-function UsageLogPreviewContent({
-  log,
-  loading,
-}: {
-  log?: UsageLog | null
-  loading: boolean
-}) {
-  const { t } = useTranslation()
-
-  if (loading) {
-    return (
-      <div className='space-y-2'>
-        <Skeleton className='h-4 w-36' />
-        <Skeleton className='h-3 w-48' />
-        <Skeleton className='h-3 w-40' />
-      </div>
-    )
-  }
-
-  if (!log) {
-    return (
-      <div className='text-muted-foreground text-sm'>
-        {t('No matching consumption log found')}
-      </div>
-    )
-  }
-
-  const fields = [
-    { label: t('Time'), value: formatTs(log.created_at) },
-    { label: t('User ID'), value: `#${log.user_id}` },
-    { label: t('Username'), value: log.username || '-' },
-    { label: t('Token'), value: log.token_name || '-' },
-    { label: t('Model'), value: log.model_name || '-' },
-    {
-      label: t('Channel'),
-      value: log.channel_name || (log.channel ? `#${log.channel}` : '-'),
-    },
-    { label: t('Group'), value: log.group || '-' },
-    { label: t('Request ID'), value: log.request_id || '-' },
-  ]
-
-  return (
-    <div className='max-h-[420px] space-y-2 overflow-y-auto pr-1'>
-      <div className='flex items-center justify-between gap-3'>
-        <div className='font-medium'>{t('Consumption Log')}</div>
-        <Badge variant='outline'>#{log.id}</Badge>
-      </div>
-      <div className='grid gap-1.5 text-xs'>
-        {fields.map((field) => (
-          <div
-            key={field.label}
-            className='grid grid-cols-[88px_minmax(0,1fr)] gap-2'
-          >
-            <span className='text-muted-foreground'>{field.label}</span>
-            <span className='break-words font-mono leading-5'>
-              {field.value}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className='grid grid-cols-3 gap-2 border-t pt-2 text-xs'>
-        <div>
-          <div className='text-muted-foreground'>{t('Quota')}</div>
-          <div className='font-mono'>{log.quota ?? 0}</div>
-        </div>
-        <div>
-          <div className='text-muted-foreground'>{t('Prompt')}</div>
-          <div className='font-mono'>{log.prompt_tokens ?? 0}</div>
-        </div>
-        <div>
-          <div className='text-muted-foreground'>{t('Completion')}</div>
-          <div className='font-mono'>{log.completion_tokens ?? 0}</div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function UsageLogIdHover({ logId }: { logId?: number | null }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [log, setLog] = useState<UsageLog | null | undefined>(
-    logId ? usageLogPreviewCache.get(logId) : undefined
-  )
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (!open || !logId) return
-    if (usageLogPreviewCache.has(logId)) {
-      setLog(usageLogPreviewCache.get(logId) ?? null)
-      return
-    }
-    let cancelled = false
-    setLoading(true)
-    getUsageLogById(logId)
-      .then((res) => {
-        if (cancelled) return
-        const next = res.success ? (res.data ?? null) : null
-        usageLogPreviewCache.set(logId, next)
-        setLog(next)
-      })
-      .catch(() => {
-        if (!cancelled) setLog(null)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [logId, open])
-
-  if (!logId) return <span className='text-muted-foreground'>-</span>
-
-  return (
-    <HoverCard delay={1000} open={open} onOpenChange={setOpen}>
-      <HoverCardTrigger
-        render={
-          <button
-            type='button'
-            className='hover:text-primary inline-flex items-center gap-1 rounded-sm font-mono text-xs underline-offset-2 hover:underline'
-            aria-label={t('View consumption log details')}
-          />
-        }
-      >
-        #{logId}
-        <Info className='size-3' />
-      </HoverCardTrigger>
-      <HoverCardContent
-        align='start'
-        className='bg-popover/100 w-[min(520px,calc(100vw-32px))] border shadow-lg backdrop-blur-none'
-      >
-        <UsageLogPreviewContent log={log} loading={loading} />
-      </HoverCardContent>
-    </HoverCard>
   )
 }
 
@@ -2385,6 +2238,12 @@ function CommissionLogsTab() {
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
+  const lossStatusLabel =
+    filterForm.lossStatus === 'loss'
+      ? t('Loss only')
+      : filterForm.lossStatus === 'normal'
+        ? t('Non-loss only')
+        : t('All profit states')
 
   useEffect(() => {
     localStorage.setItem(
@@ -2515,7 +2374,7 @@ function CommissionLogsTab() {
               ]}
             >
               <SelectTrigger size='sm' className='w-[132px]'>
-                <SelectValue />
+                <SelectValue>{lossStatusLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>

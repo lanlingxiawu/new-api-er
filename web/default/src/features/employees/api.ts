@@ -1,6 +1,6 @@
 import { api } from '@/lib/api'
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
-import type { UsageLog } from '@/features/usage-logs/data/schema'
+import type { UsageLog } from '@/features/usage-logs/types'
 import type {
   EmployeeProfile,
   EmployeeCustomer,

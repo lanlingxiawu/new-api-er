@@ -29,6 +29,7 @@ import {
   formatBusinessUsd,
 } from '@/features/business/format'
 import { CommissionCalendarSection } from '@/features/employees/components/commission-financial-calendar'
+import { UsageLogIdHover } from '@/features/employees/components/usage-log-id-hover'
 import type { CommissionLog } from '@/features/employees/types'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import {
@@ -180,6 +181,14 @@ function useMyCommissionColumns() {
         ),
       },
       {
+        accessorKey: 'log_id',
+        meta: { label: t('Log ID') },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Log ID')} />
+        ),
+        cell: ({ row }) => <UsageLogIdHover logId={row.original.log_id} />,
+      },
+      {
         accessorKey: 'model_name',
         meta: { label: t('Model'), mobileTitle: true },
         header: ({ column }) => (
@@ -193,22 +202,19 @@ function useMyCommissionColumns() {
       },
       {
         accessorKey: 'revenue_quota',
-        meta: { label: t('Employee Consumption') },
+        meta: { label: t('Consumption') },
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('Employee Consumption')}
-          />
+          <DataTableColumnHeader column={column} title={t('Consumption')} />
         ),
         cell: ({ row }) => <BusinessAmount value={row.original.revenue_quota} />,
       },
       {
         accessorKey: 'profit_quota',
-        meta: { label: t('Employee Performance') },
+        meta: { label: t('Employee Performance Short') },
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title={t('Employee Performance')}
+            title={t('Employee Performance Short')}
           />
         ),
         cell: ({ row }) => (
@@ -334,6 +340,12 @@ function CommissionHistory() {
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
+  const lossStatusLabel =
+    filterForm.lossStatus === 'loss'
+      ? t('Loss only')
+      : filterForm.lossStatus === 'normal'
+        ? t('Non-loss only')
+        : t('All profit states')
 
   return (
     <DataTablePage
@@ -377,7 +389,7 @@ function CommissionHistory() {
             }
           >
             <SelectTrigger size='sm' className='w-[132px]'>
-              <SelectValue />
+              <SelectValue>{lossStatusLabel}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value='all'>{t('All profit states')}</SelectItem>
