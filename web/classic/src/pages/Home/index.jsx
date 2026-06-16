@@ -36,21 +36,17 @@ import {
   Headset,
   Layers3,
   Link2,
-  Mail,
   Percent,
-  Send,
   ShieldCheck,
   Waypoints,
   Zap,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { API, getSystemName, showError } from '../../helpers';
+import { API, getLogo, getSystemName, showError } from '../../helpers';
 import { StatusContext } from '../../context/Status';
-import { normalizeLanguage } from '../../i18n/language';
 
 const INTERFACE_LANGUAGE_OPTIONS = [
-  { code: 'zh-CN', label: '简体中文' },
-  { code: 'zh-TW', label: '繁體中文' },
+  { code: 'zh', label: '简体中文' },
   { code: 'en', label: 'English' },
   { code: 'fr', label: 'Français' },
   { code: 'ru', label: 'Русский' },
@@ -59,18 +55,25 @@ const INTERFACE_LANGUAGE_OPTIONS = [
 ];
 
 function normalizeInterfaceLanguage(language) {
-  return normalizeLanguage(language);
+  if (!language) {
+    return 'en';
+  }
+  const normalized = language.trim().replace(/_/g, '-').toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return 'zh';
+  }
+  return INTERFACE_LANGUAGE_OPTIONS.some((lang) => lang.code === normalized)
+    ? normalized
+    : 'en';
 }
 
 function cn(...values) {
   return values.filter(Boolean).join(' ');
 }
 const TOP_LINKS = [
-  { labelKey: 'home.nav.models', hasDropdown: true },
-  { labelKey: 'home.nav.pricing' },
-  { labelKey: 'home.nav.docs', hasDropdown: true },
-  { labelKey: 'home.nav.console' },
-  { labelKey: 'home.nav.developers', hasDropdown: true },
+  { labelKey: 'home.nav.models', to: '/pricing' },
+  { labelKey: 'home.nav.docs' },
+  { labelKey: 'home.nav.console', to: '/console/token' },
 ];
 const HERO_STATS = [
   { value: '200+', labelKey: 'home.hero.stats.availableModels' },
@@ -301,34 +304,19 @@ const LANGUAGE_SHORT_LABELS = {
   ja: 'JP',
   vi: 'VI',
 };
-const FOOTER_COLUMNS = (_docsUrl) => [
+const FOOTER_COLUMNS = (docsUrl) => [
   {
     titleKey: 'home.footer.columns.product',
     links: [
-      { labelKey: 'home.footer.links.modelMarket', href: '#' },
-      { labelKey: 'home.footer.links.smartRouting', href: '#' },
-      { labelKey: 'home.footer.links.console', href: '#' },
-      { labelKey: 'home.footer.links.pricing', href: '#' },
-      { labelKey: 'home.footer.links.statusPage', href: '#' },
+      { labelKey: 'home.footer.links.modelMarket', to: '/pricing' },
+      { labelKey: 'home.footer.links.console', to: '/console/token' },
     ],
   },
   {
     titleKey: 'home.footer.columns.developers',
     links: [
-      { labelKey: 'home.footer.links.getStarted', href: '#' },
-      { labelKey: 'home.footer.links.apiDocs', href: '#' },
-      { labelKey: 'home.footer.links.sdk', href: '#' },
-      { labelKey: 'home.footer.links.compatibilityGuide', href: '#' },
-      { labelKey: 'home.footer.links.changelog', href: '#' },
-    ],
-  },
-  {
-    titleKey: 'home.footer.columns.resources',
-    links: [
-      { labelKey: 'home.footer.links.github', href: '#' },
-      { labelKey: 'home.footer.links.blog', href: '#' },
-      { labelKey: 'home.footer.links.cases', href: '#' },
-      { labelKey: 'home.footer.links.helpCenter', href: '#' },
+      { labelKey: 'home.footer.links.getStarted', to: '/console/token' },
+      { labelKey: 'home.footer.links.apiDocs', href: docsUrl, external: true },
     ],
   },
 ];
@@ -560,6 +548,9 @@ function NavTarget({ link, className, children, onClick }) {
     children,
   });
 }
+function BrandLogo({ logo, className, alt = 'N123' }) {
+  return /* @__PURE__ */ jsx('img', { src: logo, alt, className });
+}
 function MobileMenu({
   links,
   open,
@@ -567,6 +558,7 @@ function MobileMenu({
   isAuthenticated,
   loginTarget,
   primaryTarget,
+  logo,
 }) {
   const { t, i18n } = useTranslation();
   const currentLanguage = normalizeInterfaceLanguage(i18n.language);
@@ -584,7 +576,7 @@ function MobileMenu({
             className: 'flex items-center gap-[10px]',
             children: [
               /* @__PURE__ */ jsx('img', {
-                src: '/ls-logo.svg',
+                src: 'logo',
                 alt: 'LS',
                 className: 'h-[26px] w-auto',
               }),
@@ -684,12 +676,12 @@ function MobileMenu({
     ],
   });
 }
-function LandingNavbar({ docsUrl, isAuthenticated }) {
+function LandingNavbar({ docsUrl, isAuthenticated, logo }) {
   const { t, i18n } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const loginTarget = isAuthenticated ? '/console' : '/login';
-  const primaryTarget = isAuthenticated ? '/console' : '/register';
+  const loginTarget = isAuthenticated ? '/console' : '/sign-in';
+  const primaryTarget = isAuthenticated ? '/console/token' : '/sign-up';
   const currentLanguage = normalizeInterfaceLanguage(i18n.language);
   const currentLanguageLabel =
     LANGUAGE_SHORT_LABELS[currentLanguage] ?? currentLanguage.toUpperCase();
@@ -736,7 +728,7 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
                   className: 'flex items-center gap-[8px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: '/ls-logo.svg',
+                      src: 'logo',
                       alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
@@ -786,7 +778,7 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
                       type: 'button',
                       'aria-label': t('home.language.change'),
                       className:
-                        'flex h-[34px] items-center gap-[6px] rounded-[10px] border border-transparent px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:border-[#4ba97e]/15 hover:bg-white/75 hover:text-[#14201a]',
+                        'flex h-[34px] items-center gap-[6px] rounded-[10px] px-[10px] text-[15px] font-medium text-[#14201a]/85 transition-all duration-200 hover:bg-white/75 hover:text-[#14201a]',
                       children: [
                         /* @__PURE__ */ jsx('span', {
                           children: currentLanguageLabel,
@@ -844,19 +836,19 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
                 /* @__PURE__ */ jsx(Link, {
                   to: loginTarget,
                   className:
-                    'group hidden h-[34px] items-center rounded-[10px] border border-[#4ba97e]/15 bg-white px-[16px] text-[14px] font-medium text-[#14201a] transition-colors hover:border-[#4ba97e]/35 sm:inline-flex',
+                    'home-navbar-login group hidden h-[34px] items-center rounded-[10px] border border-[#4ba97e]/15 bg-white px-[16px] text-[14px] font-medium text-[#14201a] transition-colors hover:border-[#4ba97e]/35 sm:inline-flex',
                   children: /* @__PURE__ */ jsx('span', {
                     className:
                       'decoration-[#4ba97e] underline-offset-[5px] group-hover:underline',
                     children: isAuthenticated
-                      ? t('home.actions.dashboard')
-                      : t('home.actions.signIn'),
+                      ? t('Dashboard')
+                      : t('Sign in'),
                   }),
                 }),
                 /* @__PURE__ */ jsx(Link, {
                   to: primaryTarget,
                   className:
-                    'inline-flex h-[34px] items-center rounded-[10px] bg-[#4ba97e] px-[16px] text-[14px] font-semibold text-white shadow-[0_4px_14px_rgba(75,169,126,0.3)] transition-colors hover:bg-[#143c2f]',
+                    'home-navbar-primary inline-flex h-[34px] items-center rounded-[10px] bg-[#4ba97e] px-[16px] text-[14px] font-semibold text-white shadow-[0_4px_14px_rgba(75,169,126,0.3)] transition-colors hover:bg-[#143c2f]',
                   children: /* @__PURE__ */ jsx(WavyText, {
                     text: isAuthenticated
                       ? t('home.actions.openConsole')
@@ -890,6 +882,7 @@ function LandingNavbar({ docsUrl, isAuthenticated }) {
         isAuthenticated,
         loginTarget,
         primaryTarget,
+        logo,
       }),
     ],
   });
@@ -1730,7 +1723,7 @@ function HeroAura() {
     ],
   });
 }
-function HeroDashboard() {
+function HeroDashboard({ logo }) {
   const { t } = useTranslation();
   const [step, setStep] = useState(0);
   const [view, setView] = useState(0);
@@ -1784,7 +1777,7 @@ function HeroDashboard() {
                 className: 'flex items-center gap-2 px-1 py-1',
                 children: [
                   /* @__PURE__ */ jsx('img', {
-                    src: '/ls-logo.svg',
+                    src: 'logo',
                     alt: 'LS',
                     className: 'h-5 w-auto',
                   }),
@@ -1852,7 +1845,7 @@ function HeroDashboard() {
                     className:
                       'flex h-6 w-6 items-center justify-center rounded-full bg-[#2e6b52]',
                     children: /* @__PURE__ */ jsx('img', {
-                      src: '/ls-logo.svg',
+                      src: 'logo',
                       alt: 'LS',
                       className: 'h-3 w-auto brightness-0 invert',
                     }),
@@ -2479,10 +2472,10 @@ function HeroDashboard() {
     ],
   });
 }
-function HeroSection({ docsUrl, isAuthenticated }) {
+function HeroSection({ docsUrl, isAuthenticated, logo }) {
   const { t } = useTranslation();
-  const primaryTarget = isAuthenticated ? '/console' : '/register';
-  const secondaryTarget = isAuthenticated ? '/console' : '/login';
+  const primaryTarget = isAuthenticated ? '/console/token' : '/sign-up';
+  const secondaryTarget = isAuthenticated ? '/console' : '/sign-in';
   return /* @__PURE__ */ jsxs('section', {
     className: 'relative flex flex-1 items-center overflow-hidden',
     children: [
@@ -2593,7 +2586,7 @@ function HeroSection({ docsUrl, isAuthenticated }) {
             }),
             /* @__PURE__ */ jsx('div', {
               className: 'hero-fade-in-up w-full lg:-mr-[340px] xl:-mr-[560px]',
-              children: /* @__PURE__ */ jsx(HeroDashboard, {}),
+              children: /* @__PURE__ */ jsx(HeroDashboard, { logo }),
             }),
           ],
         }),
@@ -2741,7 +2734,7 @@ function FeaturesSection() {
     }),
   });
 }
-function MapCtaSection() {
+function MapCtaSection({ logo }) {
   const { t } = useTranslation();
   return /* @__PURE__ */ jsxs('section', {
     className: 'relative w-full bg-[#fbfbf9] py-16 sm:py-20 lg:py-24',
@@ -2948,7 +2941,7 @@ function MapCtaSection() {
                 'absolute top-[44%] left-1/2 hidden -translate-x-1/2 flex-col items-center md:flex',
               children: [
                 /* @__PURE__ */ jsx('img', {
-                  src: '/ls-logo.svg',
+                  src: 'logo',
                   alt: 'LS',
                   className: 'h-[50px] w-auto',
                 }),
@@ -3125,7 +3118,7 @@ function TypewriterCode({ code, speed = 42 }) {
   }
   return /* @__PURE__ */ jsxs('pre', {
     className:
-      'pointer-events-none absolute inset-0 m-0 overflow-hidden p-6 text-left font-mono text-[12px] leading-relaxed whitespace-pre opacity-50 select-none sm:p-10 sm:text-[13px]',
+      'landing-cta-code pointer-events-none absolute inset-0 m-0 overflow-hidden p-6 text-left font-mono text-[12px] leading-relaxed whitespace-pre opacity-50 select-none sm:p-10 sm:text-[13px]',
     children: [
       rendered,
       /* @__PURE__ */ jsx('span', {
@@ -3137,13 +3130,13 @@ function TypewriterCode({ code, speed = 42 }) {
 }
 function CtaSection({ docsUrl, isAuthenticated }) {
   const { t } = useTranslation();
-  const primaryTarget = isAuthenticated ? '/console' : '/register';
+  const primaryTarget = isAuthenticated ? '/console/token' : '/sign-up';
   const secondaryTarget = isAuthenticated ? '/console' : docsUrl;
   return /* @__PURE__ */ jsx('section', {
     className: 'bg-[#fbfbf9] px-[16px] pb-16 sm:pb-20 lg:pb-24',
     children: /* @__PURE__ */ jsxs('div', {
       className:
-        'relative mx-auto max-w-6xl overflow-hidden rounded-[24px] bg-[#102e24] px-6 py-16 text-center sm:py-20',
+        'home-cta-card relative mx-auto max-w-6xl overflow-hidden rounded-[24px] bg-[#102e24] px-6 py-16 text-center sm:py-20',
       children: [
         /* @__PURE__ */ jsx(TypewriterCode, { code: CTA_SNIPPET }),
         /* @__PURE__ */ jsx('div', {
@@ -3165,12 +3158,12 @@ function CtaSection({ docsUrl, isAuthenticated }) {
           children: [
             /* @__PURE__ */ jsx('h2', {
               className:
-                'font-kefaiii-bold mx-auto max-w-[640px] text-3xl font-bold tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.35)] sm:text-4xl',
+                'home-cta-title font-kefaiii-bold mx-auto max-w-[640px] text-3xl font-bold tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.35)] sm:text-4xl',
               children: t('home.cta.title'),
             }),
             /* @__PURE__ */ jsx('p', {
               className:
-                'mt-4 text-white/80 drop-shadow-[0_1px_8px_rgba(0,0,0,0.3)]',
+                'home-cta-description mt-4 text-white/80 drop-shadow-[0_1px_8px_rgba(0,0,0,0.3)]',
               children: t('home.cta.description'),
             }),
             /* @__PURE__ */ jsxs('div', {
@@ -3189,7 +3182,7 @@ function CtaSection({ docsUrl, isAuthenticated }) {
                   ? /* @__PURE__ */ jsx(Link, {
                       to: secondaryTarget,
                       className:
-                        'inline-flex h-[40px] items-center justify-center rounded-[10px] border border-white/40 px-7 text-[15px] font-medium text-white backdrop-blur-sm transition-colors hover:border-white/70',
+                        'home-cta-secondary inline-flex h-[40px] items-center justify-center rounded-[10px] border border-white/40 px-7 text-[15px] font-medium text-white backdrop-blur-sm transition-colors hover:border-white/70',
                       children: t('home.actions.viewDashboard'),
                     })
                   : /* @__PURE__ */ jsx('a', {
@@ -3197,7 +3190,7 @@ function CtaSection({ docsUrl, isAuthenticated }) {
                       target: '_blank',
                       rel: 'noreferrer',
                       className:
-                        'inline-flex h-[40px] items-center justify-center rounded-[10px] border border-white/40 px-7 text-[15px] font-medium text-white backdrop-blur-sm transition-colors hover:border-white/70',
+                        'home-cta-secondary inline-flex h-[40px] items-center justify-center rounded-[10px] border border-white/40 px-7 text-[15px] font-medium text-white backdrop-blur-sm transition-colors hover:border-white/70',
                       children: t('home.actions.readDocs'),
                     }),
               ],
@@ -3208,10 +3201,12 @@ function CtaSection({ docsUrl, isAuthenticated }) {
     }),
   });
 }
-function LandingFooter({ docsUrl, siteName }) {
+function LandingFooter({ docsUrl, siteName, logo }) {
   const { t } = useTranslation();
   const year = /* @__PURE__ */ new Date().getFullYear();
   const footerColumns = useMemo(() => FOOTER_COLUMNS(docsUrl), [docsUrl]);
+  const businessQrCodeSrc =
+    '/images/28ace230-6aa1-473f-99ee-b30d53a6cf0a.jpg';
   return /* @__PURE__ */ jsx('footer', {
     className: 'mx-[10px] mb-[10px] rounded-[16px] bg-[#102e24] text-[#eef2ee]',
     children: /* @__PURE__ */ jsxs('div', {
@@ -3229,7 +3224,7 @@ function LandingFooter({ docsUrl, siteName }) {
                   className: 'flex items-center gap-[10px]',
                   children: [
                     /* @__PURE__ */ jsx('img', {
-                      src: '/ls-logo.svg',
+                      src: 'logo',
                       alt: 'LS',
                       className: 'h-[26px] w-auto',
                     }),
@@ -3278,6 +3273,26 @@ function LandingFooter({ docsUrl, siteName }) {
                 column.titleKey,
               ),
             ),
+            /* @__PURE__ */ jsx('div', {
+              className: 'col-span-2 md:col-span-1',
+              children: /* @__PURE__ */ jsxs('div', {
+                className:
+                  'flex flex-col items-start gap-[12px] md:items-center',
+                children: [
+                  /* @__PURE__ */ jsx('p', {
+                    className: 'text-[12px] font-medium text-[#eef2ee]/55',
+                    children: '企业合作咨询',
+                  }),
+                  /* @__PURE__ */ jsx('img', {
+                    src: businessQrCodeSrc,
+                    alt: '企业合作咨询二维码',
+                    className:
+                      'h-[104px] w-[104px] rounded-[10px] object-cover',
+                    loading: 'lazy',
+                  }),
+                ],
+              }),
+            }),
           ],
         }),
         /* @__PURE__ */ jsx('div', {
@@ -3333,31 +3348,35 @@ function LandingFooter({ docsUrl, siteName }) {
     }),
   });
 }
-function LandingPage({ docsUrl, isAuthenticated, siteName }) {
+function LandingPage({ docsUrl, isAuthenticated, siteName, logo }) {
   return /* @__PURE__ */ jsx(Fragment, {
     children: /* @__PURE__ */ jsxs('div', {
       className: 'landing-home-root landing-home-shell',
       children: [
         /* @__PURE__ */ jsx(ScrollProgress, {}),
-        /* @__PURE__ */ jsx(LandingNavbar, { docsUrl, isAuthenticated }),
+        /* @__PURE__ */ jsx(LandingNavbar, { docsUrl, isAuthenticated, logo }),
         /* @__PURE__ */ jsxs('main', {
           id: 'top',
           children: [
             /* @__PURE__ */ jsxs('div', {
               className: 'flex min-h-svh flex-col',
               children: [
-                /* @__PURE__ */ jsx(HeroSection, { docsUrl, isAuthenticated }),
+                /* @__PURE__ */ jsx(HeroSection, {
+                  docsUrl,
+                  isAuthenticated,
+                  logo,
+                }),
                 /* @__PURE__ */ jsx(ProviderMarquee, {}),
               ],
             }),
             /* @__PURE__ */ jsx(GlanceSection, {}),
             /* @__PURE__ */ jsx(FeaturesSection, {}),
-            /* @__PURE__ */ jsx(MapCtaSection, {}),
+            /* @__PURE__ */ jsx(MapCtaSection, { logo }),
             /* @__PURE__ */ jsx(WhyChooseSection, {}),
             /* @__PURE__ */ jsx(CtaSection, { docsUrl, isAuthenticated }),
           ],
         }),
-        /* @__PURE__ */ jsx(LandingFooter, { docsUrl, siteName }),
+        /* @__PURE__ */ jsx(LandingFooter, { docsUrl, siteName, logo }),
       ],
     }),
   });
@@ -3463,6 +3482,7 @@ function Home() {
     docsUrl,
     isAuthenticated,
     siteName,
+    logo,
   });
 }
 

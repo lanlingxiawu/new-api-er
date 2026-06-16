@@ -50,4 +50,6 @@ CLAUDE.md
 
 debugmain.go
 new-api.zip
+
 *.zip
+/.tmp-chrome-codex
