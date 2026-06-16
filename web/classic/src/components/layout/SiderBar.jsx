@@ -53,6 +53,7 @@ const routerMap = {
   // xiugai 添加号池节点功能
   'node-pool': '/console/node-pool',
   // end
+  'request-log': '/console/request-log',
   commission: '/console/commission',
   customerConsole: '/console/customer-console',
   employee: '/console/employees',
@@ -224,6 +225,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         className: isRoot() ? '' : 'tableHiddle',
       },
       // end
+      {
+        text: t('请求日志'),
+        itemKey: 'request-log',
+        to: '/request-log',
+        className: isRoot() ? '' : 'tableHiddle',
+      },
       {
         text: t('系统设置'),
         itemKey: 'setting',

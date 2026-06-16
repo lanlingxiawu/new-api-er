@@ -24,6 +24,7 @@ import SettingsHeaderNavModules from '../../pages/Setting/Operation/SettingsHead
 import SettingsSidebarModulesAdmin from '../../pages/Setting/Operation/SettingsSidebarModulesAdmin';
 import SettingsSensitiveWords from '../../pages/Setting/Operation/SettingsSensitiveWords';
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
+import SettingsRequestLog from '../../pages/Setting/Operation/SettingsRequestLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
@@ -63,6 +64,13 @@ const OperationSetting = () => {
 
     /* 日志设置 */
     LogConsumeEnabled: false,
+
+    /* 请求日志设置 */
+    RequestLogEnabled: false,
+    RequestLogUsername: '',
+    RequestLogMaxBodyKB: '64',
+    RequestLogMinCount: '1000',
+    RequestLogMaxCount: '5000',
 
     /* 监控设置 */
     ChannelDisableThreshold: 0,
@@ -141,6 +149,10 @@ const OperationSetting = () => {
         {/* 日志设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsLog options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* 请求日志设置 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsRequestLog options={inputs} refresh={onRefresh} />
         </Card>
         {/* 监控设置 */}
         <Card style={{ marginTop: '10px' }}>

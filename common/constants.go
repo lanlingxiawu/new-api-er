@@ -114,6 +114,14 @@ var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
 
+// 请求日志（记录下游请求体/请求头 与 返回给下游的返回头/返回体）相关配置
+// 注意：请求日志仅保存在 Redis 中，不写数据库。
+var RequestLogEnabled = false   // 是否开启请求日志记录
+var RequestLogUsername = ""     // 仅记录该用户名的请求；为空则记录全部用户
+var RequestLogMaxBodyKB = 64    // 单个字段（请求体/返回体/头部）记录的最大大小，单位 KB，超出截断
+var RequestLogMinCount = 1000   // 触发清理后保留的最新日志条数
+var RequestLogMaxCount = 5000   // 日志条数超过该值时触发清理
+
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

@@ -411,6 +411,15 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/employee", middleware.UserAuth(), controller.GetEmployeeCustomerLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
+		// 请求日志（下游请求体/请求头 与 返回头/返回体），仅超级管理员可查看
+		requestLogRoute := apiRouter.Group("/request-log")
+		requestLogRoute.Use(middleware.RootAuth())
+		{
+			requestLogRoute.GET("/", controller.GetAllRequestLogs)
+			requestLogRoute.GET("/:id", controller.GetRequestLogDetail)
+			requestLogRoute.DELETE("/", controller.DeleteHistoryRequestLogs)
+		}
+
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)

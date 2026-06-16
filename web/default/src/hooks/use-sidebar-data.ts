@@ -21,6 +21,7 @@ import {
   BadgeDollarSign,
   Box,
   CreditCard,
+  FileSearch,
   FileText,
   FlaskConical,
   Key,
@@ -185,6 +186,13 @@ export function useSidebarData(): SidebarData {
             title: t('Business Overview'),
             url: '/commission-overview',
             icon: LineChart,
+          },
+          // 请求日志：仅超级管理员可见
+          {
+            title: t('Request Logs'),
+            url: '/request-logs',
+            icon: FileSearch,
+            minRole: ROLE.SUPER_ADMIN,
           },
           {
             title: t('System Settings'),
