@@ -375,6 +375,11 @@ function CommissionHistory() {
                 lossStatus: (value || 'all') as 'all' | 'loss' | 'normal',
               }))
             }
+            items={[
+              { value: 'all', label: t('All profit states') },
+              { value: 'loss', label: t('Loss only') },
+              { value: 'normal', label: t('Non-loss only') },
+            ]}
           >
             <SelectTrigger size='sm' className='w-[132px]'>
               <SelectValue />
