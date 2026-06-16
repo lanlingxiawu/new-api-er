@@ -277,7 +277,9 @@ const monthLabel = (value) => {
 
 const periodDateLabel = (startAt, endAt, fallback, timezone) => {
   if (!startAt || !endAt) return fallback || '-';
-  const start = formatCalendarDate(calendarDateFromTimestamp(startAt, timezone));
+  const start = formatCalendarDate(
+    calendarDateFromTimestamp(startAt, timezone),
+  );
   const end = formatCalendarDate(calendarDateFromTimestamp(endAt, timezone));
   return `${start} - ${end}`;
 };
@@ -435,7 +437,14 @@ function CommissionLogIdHover({ logId, selfView = false }) {
   };
 
   const content = (
-    <div style={{ width: 520, maxWidth: 'calc(100vw - 32px)', maxHeight: 420, overflowY: 'auto' }}>
+    <div
+      style={{
+        width: 520,
+        maxWidth: 'calc(100vw - 32px)',
+        maxHeight: 420,
+        overflowY: 'auto',
+      }}
+    >
       {loading ? (
         <div className='flex items-center gap-2'>
           <Spin size='small' />
@@ -470,10 +479,16 @@ function CommissionLogIdHover({ logId, selfView = false }) {
               }
             />
           ))}
-          <div className='mt-2 border-t pt-2' style={{ borderColor: 'var(--semi-color-border)' }}>
+          <div
+            className='mt-2 border-t pt-2'
+            style={{ borderColor: 'var(--semi-color-border)' }}
+          >
             <SummaryItem label={t('Quota')} value={log.quota || 0} />
             <SummaryItem label={t('Prompt')} value={log.prompt_tokens || 0} />
-            <SummaryItem label={t('Completion')} value={log.completion_tokens || 0} />
+            <SummaryItem
+              label={t('Completion')}
+              value={log.completion_tokens || 0}
+            />
           </div>
         </SummaryPanel>
       ) : (
@@ -690,23 +705,69 @@ function ClassicBusinessTable({
   size = 'middle',
   hasMore = false,
   onLoadMore,
+  loading = false,
   ...props
 }) {
+  const wrapperRef = useRef(null);
+  const sentinelRef = useRef(null);
+  const requestLoadMore = useCallback(() => {
+    if (!hasMore || loading || !onLoadMore) return;
+    onLoadMore();
+  }, [hasMore, loading, onLoadMore]);
+
   const handleScroll = useCallback(
     (event) => {
-      if (!hasMore || !onLoadMore) return;
       const target = event.currentTarget;
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
       if (distanceToBottom <= 24) {
-        onLoadMore();
+        requestLoadMore();
       }
     },
-    [hasMore, onLoadMore],
+    [requestLoadMore],
   );
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    const sentinel = sentinelRef.current;
+    if (!wrapper || !sentinel) return undefined;
+
+    const tableScrollRoot =
+      wrapper.querySelector('.semi-table-body') ||
+      wrapper.querySelector('.semi-table-fixed-body');
+    const handleNativeScroll = (event) => {
+      const target = event.currentTarget;
+      const distanceToBottom =
+        target.scrollHeight - target.scrollTop - target.clientHeight;
+      if (distanceToBottom <= 24) {
+        requestLoadMore();
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          requestLoadMore();
+        }
+      },
+      {
+        root: wrapper,
+        rootMargin: '48px 0px',
+        threshold: 0,
+      },
+    );
+
+    tableScrollRoot?.addEventListener('scroll', handleNativeScroll);
+    observer.observe(sentinel);
+    return () => {
+      tableScrollRoot?.removeEventListener('scroll', handleNativeScroll);
+      observer.disconnect();
+    };
+  }, [requestLoadMore]);
 
   return (
     <div
+      ref={wrapperRef}
       className={`w-full ${wrapperClassName}`.trim()}
       style={wrapperStyle}
       onScroll={handleScroll}
@@ -720,6 +781,7 @@ function ClassicBusinessTable({
         className={`rounded-xl overflow-hidden ${className}`.trim()}
         size={size}
       />
+      <div ref={sentinelRef} style={{ height: 1 }} aria-hidden='true' />
     </div>
   );
 }
@@ -809,7 +871,10 @@ function AmountText({ value, positive = true, isReversal = false }) {
         ? 'var(--semi-color-danger)'
         : undefined;
   return (
-    <span className='inline-flex min-w-0 items-center gap-1.5' style={{ color }}>
+    <span
+      className='inline-flex min-w-0 items-center gap-1.5'
+      style={{ color }}
+    >
       <span className='min-w-0 truncate tabular-nums'>
         {formatBusinessAmount(amount)}
       </span>
@@ -830,7 +895,9 @@ function EmployeeTotalsPanel({ row, t }) {
   const items = [
     {
       label: t('客户总消费'),
-      value: <AmountText value={row.total_consumption_quota || 0} positive={false} />,
+      value: (
+        <AmountText value={row.total_consumption_quota || 0} positive={false} />
+      ),
     },
     {
       label: t('总成本'),
@@ -1438,7 +1505,9 @@ function EmployeeMonthlySelector({ value, onChange }) {
   return (
     <div ref={containerRef} style={{ position: 'relative', width: 280 }}>
       <Input
-        value={open ? keyword : value ? getEmployeeMonthlyOptionLabel(value) : ''}
+        value={
+          open ? keyword : value ? getEmployeeMonthlyOptionLabel(value) : ''
+        }
         placeholder={allEmployeesLabel}
         autoComplete='off'
         onChange={(nextValue) => {
@@ -1543,7 +1612,8 @@ function EmployeeMonthlySelector({ value, onChange }) {
                   >
                     <div className='flex min-w-0 items-center justify-between gap-3'>
                       <span className='truncate font-medium'>
-                        {employee.remark || getEmployeeMonthlyAccountLabel(employee)}
+                        {employee.remark ||
+                          getEmployeeMonthlyAccountLabel(employee)}
                       </span>
                       {employee.remark ? (
                         <span className='text-xs text-semi-color-text-2 shrink-0 truncate'>
@@ -2063,11 +2133,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
         title: t('确认重新分配'),
         content: (
           <div className='space-y-3'>
-            <Text>
-              {t(
-                '',
-              )}
-            </Text>
+            <Text>{t('')}</Text>
             <SummaryPanel danger>
               <SummaryItem label={t('已选择客户')} value={selectedCount} />
               <SummaryItem
@@ -2183,9 +2249,7 @@ function AssignCustomerModal({ visible, row, onCancel, onSuccess }) {
             </div>
             {isReassignment ? (
               <Text type='warning' size='small' className='mt-2 block'>
-                {t(
-                  '',
-                )}
+                {t('')}
               </Text>
             ) : null}
           </SummaryPanel>
@@ -3620,17 +3684,39 @@ function CommissionFinancialResetPeriodCalendar({
                 onClick={() => setSelectedDate(key)}
                 className={[
                   'group relative min-h-[92px] border-b border-[var(--semi-color-border)] p-2.5 text-left transition-all outline-none hover:z-10 hover:-translate-y-px hover:shadow-md',
-                  isLastColumn ? '' : 'border-r border-[var(--semi-color-border)]',
-                  inPeriod ? 'bg-[var(--semi-color-bg-2)]' : 'bg-[var(--semi-color-fill-0)] text-[var(--semi-color-text-2)] opacity-60',
-                  inPeriod && !stat ? 'hover:bg-[var(--semi-color-fill-0)]' : '',
-                  inPeriod && stat && positive && intensity === 1 ? 'bg-emerald-50/70 hover:bg-emerald-50' : '',
-                  inPeriod && stat && positive && intensity === 2 ? 'bg-emerald-100/80 hover:bg-emerald-100' : '',
-                  inPeriod && stat && positive && intensity === 3 ? 'bg-emerald-200/80 hover:bg-emerald-200' : '',
-                  inPeriod && stat && !positive && intensity === 1 ? 'bg-red-50/70 hover:bg-red-50' : '',
-                  inPeriod && stat && !positive && intensity === 2 ? 'bg-red-100/80 hover:bg-red-100' : '',
-                  inPeriod && stat && !positive && intensity === 3 ? 'bg-red-200/80 hover:bg-red-200' : '',
-                  selected ? 'z-20 ring-2 ring-inset ring-[var(--semi-color-primary)]' : '',
-                ].filter(Boolean).join(' ')}
+                  isLastColumn
+                    ? ''
+                    : 'border-r border-[var(--semi-color-border)]',
+                  inPeriod
+                    ? 'bg-[var(--semi-color-bg-2)]'
+                    : 'bg-[var(--semi-color-fill-0)] text-[var(--semi-color-text-2)] opacity-60',
+                  inPeriod && !stat
+                    ? 'hover:bg-[var(--semi-color-fill-0)]'
+                    : '',
+                  inPeriod && stat && positive && intensity === 1
+                    ? 'bg-emerald-50/70 hover:bg-emerald-50'
+                    : '',
+                  inPeriod && stat && positive && intensity === 2
+                    ? 'bg-emerald-100/80 hover:bg-emerald-100'
+                    : '',
+                  inPeriod && stat && positive && intensity === 3
+                    ? 'bg-emerald-200/80 hover:bg-emerald-200'
+                    : '',
+                  inPeriod && stat && !positive && intensity === 1
+                    ? 'bg-red-50/70 hover:bg-red-50'
+                    : '',
+                  inPeriod && stat && !positive && intensity === 2
+                    ? 'bg-red-100/80 hover:bg-red-100'
+                    : '',
+                  inPeriod && stat && !positive && intensity === 3
+                    ? 'bg-red-200/80 hover:bg-red-200'
+                    : '',
+                  selected
+                    ? 'z-20 ring-2 ring-inset ring-[var(--semi-color-primary)]'
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
               >
                 <div className='flex items-center justify-between gap-1'>
                   <span
@@ -3642,7 +3728,9 @@ function CommissionFinancialResetPeriodCalendar({
                       selected && !isCurrentDay(date, periodTimezone)
                         ? 'bg-[var(--semi-color-primary-light-default)] text-[var(--semi-color-primary)]'
                         : '',
-                    ].filter(Boolean).join(' ')}
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                   >
                     {date.getUTCDate()}
                   </span>
@@ -3667,7 +3755,9 @@ function CommissionFinancialResetPeriodCalendar({
                         'h-1 rounded-full transition-all',
                         positive ? 'bg-emerald-500/70' : 'bg-red-500/70',
                       ].join(' ')}
-                      style={{ width: commissionBarWidth(commission, maxAbsCommission) }}
+                      style={{
+                        width: commissionBarWidth(commission, maxAbsCommission),
+                      }}
                     />
                   </div>
                 ) : null}
@@ -3676,9 +3766,7 @@ function CommissionFinancialResetPeriodCalendar({
           })}
         </div>
       </div>
-      {false ? (
-        <BusinessEmpty description={t('暂无数据')} />
-      ) : null}
+      {false ? <BusinessEmpty description={t('暂无数据')} /> : null}
     </div>
   );
 
@@ -4242,11 +4330,7 @@ function TiersTab({ tiersPaged, onReadyToolbar }) {
       title: t('确认删除'),
       content: (
         <div className='space-y-3'>
-          <Text>
-            {t(
-              '',
-            )}
-          </Text>
+          <Text>{t('')}</Text>
           <SummaryPanel danger>
             <SummaryItem
               label={t('等级')}
@@ -5222,9 +5306,10 @@ export function BusinessOverview() {
         value || t('已删除渠道 #{{id}}', { id: row.channel_id }),
     },
     {
-      title: t('成本比例'),
+      title: t('平均成本系数'),
       dataIndex: 'cost_ratio',
       sorter: (a, b) => a.cost_ratio - b.cost_ratio,
+      render: (value) => Number(value || 0).toFixed(2),
     },
     {
       title: t('累计消费'),
@@ -5487,6 +5572,7 @@ export function BusinessOverview() {
                 scroll={{ x: '100%', y: 223 }}
                 hasMore={hasMoreChannelRows}
                 onLoadMore={loadMoreChannels}
+                loading={loading}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}
               />
             </BusinessSection>
@@ -5526,7 +5612,9 @@ export function BusinessOverview() {
               <div>
                 <StatCard
                   title={t('客户利润')}
-                  value={<AmountText value={commission.total_profit_quota || 0} />}
+                  value={
+                    <AmountText value={commission.total_profit_quota || 0} />
+                  }
                   sub={formatBusinessUsd(commission.total_profit_usd)}
                   icon={TrendingUp}
                   color='var(--semi-color-success)'
@@ -5536,7 +5624,9 @@ export function BusinessOverview() {
                 <StatCard
                   title={t('提成总额')}
                   value={
-                    <AmountText value={commission.total_commission_quota || 0} />
+                    <AmountText
+                      value={commission.total_commission_quota || 0}
+                    />
                   }
                   sub={formatBusinessUsd(commission.total_commission_usd)}
                   icon={BadgeDollarSign}
