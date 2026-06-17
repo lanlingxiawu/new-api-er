@@ -138,6 +138,19 @@ func InitOptionMap() {
 	common.OptionMap["WechatMchCertSerialNo"] = setting.WechatMchCertSerialNo
 	common.OptionMap["WechatMinTopUp"] = strconv.Itoa(setting.WechatMinTopUp)
 	common.OptionMap["WechatNotifyUrl"] = setting.WechatNotifyUrl
+	common.OptionMap["InfiniEnabled"] = strconv.FormatBool(setting.InfiniEnabled)
+	common.OptionMap["InfiniApiKey"] = setting.InfiniApiKey
+	common.OptionMap["InfiniApiSecret"] = setting.InfiniApiSecret
+	common.OptionMap["InfiniWebhookSecret"] = setting.InfiniWebhookSecret
+	common.OptionMap["InfiniSandbox"] = strconv.FormatBool(setting.InfiniSandbox)
+	common.OptionMap["InfiniNotifyUrl"] = setting.InfiniNotifyUrl
+	common.OptionMap["InfiniReturnUrl"] = setting.InfiniReturnUrl
+	common.OptionMap["InfiniFailUrl"] = setting.InfiniFailUrl
+	common.OptionMap["InfiniUnitPrice"] = strconv.FormatFloat(setting.InfiniUnitPrice, 'f', 4, 64)
+	common.OptionMap["InfiniMinTopUp"] = strconv.Itoa(setting.InfiniMinTopUp)
+	common.OptionMap["InfiniCurrency"] = setting.InfiniCurrency
+	common.OptionMap["InfiniCurrencies"] = setting.InfiniCurrencies2JsonString()
+	common.OptionMap["InfiniPayMethods"] = setting.InfiniPayMethods
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
@@ -538,6 +551,32 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.WechatMinTopUp, _ = strconv.Atoi(value)
 	case "WechatNotifyUrl":
 		setting.WechatNotifyUrl = value
+	case "InfiniEnabled":
+		setting.InfiniEnabled = value == "true"
+	case "InfiniApiKey":
+		setting.InfiniApiKey = value
+	case "InfiniApiSecret":
+		setting.InfiniApiSecret = value
+	case "InfiniWebhookSecret":
+		setting.InfiniWebhookSecret = value
+	case "InfiniSandbox":
+		setting.InfiniSandbox = value == "true"
+	case "InfiniNotifyUrl":
+		setting.InfiniNotifyUrl = value
+	case "InfiniReturnUrl":
+		setting.InfiniReturnUrl = value
+	case "InfiniFailUrl":
+		setting.InfiniFailUrl = value
+	case "InfiniUnitPrice":
+		setting.InfiniUnitPrice, _ = strconv.ParseFloat(value, 64)
+	case "InfiniMinTopUp":
+		setting.InfiniMinTopUp, _ = strconv.Atoi(value)
+	case "InfiniCurrency":
+		setting.InfiniCurrency = value
+	case "InfiniCurrencies":
+		setting.InfiniCurrencies = value
+	case "InfiniPayMethods":
+		setting.InfiniPayMethods = value
 	case "TopupGroupRatio":
 		err = common.UpdateTopupGroupRatioByJSONString(value)
 	case "GitHubClientId":

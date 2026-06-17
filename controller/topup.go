@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -137,6 +138,35 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	// 如果启用了 Infini 支付，添加到支付方法列表
+	enableInfini := isInfiniTopUpEnabled()
+	if enableInfini {
+		hasInfini := false
+		for _, method := range payMethods {
+			if method["type"] == model.PaymentMethodInfini {
+				hasInfini = true
+				break
+			}
+		}
+		if !hasInfini {
+			// 取第一个配置币种作为单币种默认值，确保前端收到 currency 字段
+			infiniCurrOpts := setting.GetInfiniCurrencyOptions()
+			infiniDefaultCurrency := "USD"
+			infiniDefaultMinTopUp := setting.InfiniMinTopUp
+			if len(infiniCurrOpts) > 0 {
+				infiniDefaultCurrency = strings.ToUpper(infiniCurrOpts[0].Currency)
+				infiniDefaultMinTopUp = infiniCurrOpts[0].MinTopUp
+			}
+			payMethods = append(payMethods, map[string]string{
+				"name":      "Infini",
+				"type":      model.PaymentMethodInfini,
+				"currency":  infiniDefaultCurrency,
+				"color":     "rgba(var(--semi-blue-6), 1)",
+				"min_topup": strconv.Itoa(infiniDefaultMinTopUp),
+			})
+		}
+	}
+
 	data := gin.H{
 		"enable_online_topup":              isEpayTopUpEnabled(),
 		"enable_stripe_topup":              isStripeTopUpEnabled(),
@@ -145,6 +175,14 @@ func GetTopUpInfo(c *gin.Context) {
 		"enable_waffo_pancake_topup":       enableWaffoPancake,
 		"enable_alipay_official_topup":     enableAlipayOfficial,
 		"enable_wechat_official_topup":     enableWechatOfficial,
+		"enable_infini_topup":              enableInfini,
+		"infini_min_topup":                 setting.InfiniMinTopUp,
+		"infini_currencies": func() interface{} {
+			if enableInfini {
+				return setting.GetInfiniCurrencyOptions()
+			}
+			return nil
+		}(),
 		"enable_redemption":                complianceConfirmed,
 		"payment_compliance_confirmed":     complianceConfirmed,
 		"payment_compliance_terms_version": operation_setting.CurrentComplianceTermsVersion,

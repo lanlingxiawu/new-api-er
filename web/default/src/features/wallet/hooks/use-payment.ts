@@ -25,9 +25,11 @@ import {
   calculateWaffoPancakeAmount,
   calculateAlipayAmount,
   calculateWechatAmount,
+  calculateInfiniAmount,
   requestPayment,
   requestStripePayment,
   requestAlipayPayment,
+  requestInfiniPayment,
   isApiSuccess,
 } from '../api'
 import {
@@ -35,6 +37,8 @@ import {
   isWaffoPancakePayment,
   isAlipayOfficialPayment,
   isWechatOfficialPayment,
+  isInfiniPayment,
+  isSafeHttpCheckoutUrl,
   submitPaymentForm,
 } from '../lib'
 
@@ -48,8 +52,9 @@ export function usePayment() {
   const [processing, setProcessing] = useState(false)
 
   // Calculate payment amount
+  // infiniCurrency: 多币种时由外部（Wallet / Infini 选择器）传入所选币种
   const calculatePaymentAmount = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (topupAmount: number, paymentType: string, infiniCurrency?: string) => {
       try {
         setCalculating(true)
 
@@ -57,6 +62,7 @@ export function usePayment() {
         const isPancake = isWaffoPancakePayment(paymentType)
         const isAlipayOfficial = isAlipayOfficialPayment(paymentType)
         const isWechatOfficial = isWechatOfficialPayment(paymentType)
+        const isInfini = isInfiniPayment(paymentType)
         const response = isStripe
           ? await calculateStripeAmount({ amount: topupAmount })
           : isPancake
@@ -65,7 +71,9 @@ export function usePayment() {
               ? await calculateAlipayAmount({ amount: topupAmount })
               : isWechatOfficial
                 ? await calculateWechatAmount({ amount: topupAmount })
-                : await calculateAmount({ amount: topupAmount })
+                : isInfini
+                  ? await calculateInfiniAmount({ amount: topupAmount, currency: infiniCurrency })
+                  : await calculateAmount({ amount: topupAmount })
 
         if (isApiSuccess(response) && response.data) {
           const calculatedAmount = parseFloat(response.data)
@@ -88,7 +96,7 @@ export function usePayment() {
 
   // Process payment
   const processPayment = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (topupAmount: number, paymentType: string, infiniCurrency?: string) => {
       try {
         setProcessing(true)
 
@@ -132,6 +140,37 @@ export function usePayment() {
           const paymentUrl =
             data && typeof data === 'object' ? data.payment_url : undefined
           if (paymentUrl) {
+            if (!isSafeHttpCheckoutUrl(paymentUrl)) {
+              toast.error(i18next.t('Invalid payment redirect URL'))
+              return false
+            }
+            window.open(paymentUrl, '_blank')
+            toast.success(i18next.t('Redirecting to payment page...'))
+            return true
+          }
+
+          return false
+        }
+
+        // Handle Infini hosted checkout payment
+        if (isInfiniPayment(paymentType)) {
+          const response = await requestInfiniPayment({ amount, currency: infiniCurrency })
+
+          if (!isApiSuccess(response)) {
+            toast.error(
+              response.message || i18next.t('Payment request failed')
+            )
+            return false
+          }
+
+          const data = response.data
+          const paymentUrl =
+            data && typeof data === 'object' ? data.payment_url : undefined
+          if (paymentUrl) {
+            if (!isSafeHttpCheckoutUrl(paymentUrl)) {
+              toast.error(i18next.t('Invalid payment redirect URL'))
+              return false
+            }
             window.open(paymentUrl, '_blank')
             toast.success(i18next.t('Redirecting to payment page...'))
             return true
@@ -141,6 +180,7 @@ export function usePayment() {
         }
 
         // Handle generic (epay-style form submission) payment
+        // Note: Infini payment is handled above via isInfiniPayment check
         const response = await requestPayment({
           amount,
           payment_method: paymentType,

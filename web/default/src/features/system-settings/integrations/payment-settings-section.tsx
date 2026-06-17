@@ -85,6 +85,10 @@ import {
   WechatSettingsSection,
   type WechatSettingsValues,
 } from './wechat-settings-section'
+import {
+  InfiniSettingsSection,
+  type InfiniSettingsValues,
+} from './infini-settings-section'
 
 const paymentSchema = z.object({
   PayAddress: z.string().refine((value) => {
@@ -183,6 +187,19 @@ const paymentSchema = z.object({
   WechatMchCertSerialNo: z.string(),
   WechatMinTopUp: z.coerce.number().min(1),
   WechatNotifyUrl: z.string(),
+  InfiniEnabled: z.boolean(),
+  InfiniApiKey: z.string(),
+  InfiniApiSecret: z.string(),
+  InfiniWebhookSecret: z.string(),
+  InfiniSandbox: z.boolean(),
+  InfiniNotifyUrl: z.string(),
+  InfiniReturnUrl: z.string(),
+  InfiniFailUrl: z.string(),
+  InfiniUnitPrice: z.coerce.number().min(0),
+  InfiniMinTopUp: z.coerce.number().min(1),
+  InfiniCurrency: z.string(),
+  InfiniCurrencies: z.string(),
+  InfiniPayMethods: z.string(),
 })
 
 type PaymentFormValues = z.infer<typeof paymentSchema>
@@ -193,6 +210,7 @@ type PaymentBaseFormValues = Omit<
   | keyof WaffoPancakeSettingsValues
   | keyof AlipaySettingsValues
   | keyof WechatSettingsValues
+  | keyof InfiniSettingsValues
 >
 
 const CURRENT_COMPLIANCE_TERMS_VERSION = 'v1'
@@ -212,6 +230,7 @@ type PaymentSettingsSectionProps = {
   waffoPancakeProvisionedProductID?: string
   alipayDefaultValues: AlipaySettingsValues
   wechatDefaultValues: WechatSettingsValues
+  infiniDefaultValues: InfiniSettingsValues
   complianceDefaults: PaymentComplianceDefaults
 }
 
@@ -232,6 +251,7 @@ export function PaymentSettingsSection({
   waffoPancakeProvisionedProductID,
   alipayDefaultValues,
   wechatDefaultValues,
+  infiniDefaultValues,
   complianceDefaults,
 }: PaymentSettingsSectionProps) {
   const { t } = useTranslation()
@@ -244,6 +264,7 @@ export function PaymentSettingsSection({
       ...waffoPancakeDefaultValues,
       ...alipayDefaultValues,
       ...wechatDefaultValues,
+      ...infiniDefaultValues,
     }),
     [
       defaultValues,
@@ -251,6 +272,7 @@ export function PaymentSettingsSection({
       waffoPancakeDefaultValues,
       alipayDefaultValues,
       wechatDefaultValues,
+      infiniDefaultValues,
     ]
   )
   const initialRef = React.useRef(initialFormValues)
@@ -451,6 +473,19 @@ export function PaymentSettingsSection({
     [setPaymentValue]
   )
 
+  const setInfiniValue = React.useCallback(
+    <K extends keyof InfiniSettingsValues>(
+      key: K,
+      value: InfiniSettingsValues[K]
+    ) => {
+      setPaymentValue(
+        key as keyof PaymentFormValues,
+        value as PaymentFormValues[keyof PaymentFormValues]
+      )
+    },
+    [setPaymentValue]
+  )
+
   React.useEffect(() => {
     const parsedDefaults = JSON.parse(defaultsSignature) as PaymentFormValues
     initialRef.current = parsedDefaults
@@ -520,6 +555,19 @@ export function PaymentSettingsSection({
       WechatMchCertSerialNo: values.WechatMchCertSerialNo.trim(),
       WechatMinTopUp: values.WechatMinTopUp,
       WechatNotifyUrl: removeTrailingSlash(values.WechatNotifyUrl.trim()),
+      InfiniEnabled: values.InfiniEnabled,
+      InfiniApiKey: values.InfiniApiKey.trim(),
+      InfiniApiSecret: values.InfiniApiSecret.trim(),
+      InfiniWebhookSecret: values.InfiniWebhookSecret.trim(),
+      InfiniSandbox: values.InfiniSandbox,
+      InfiniNotifyUrl: removeTrailingSlash(values.InfiniNotifyUrl.trim()),
+      InfiniReturnUrl: removeTrailingSlash(values.InfiniReturnUrl.trim()),
+      InfiniFailUrl: removeTrailingSlash(values.InfiniFailUrl.trim()),
+      InfiniUnitPrice: values.InfiniUnitPrice,
+      InfiniMinTopUp: values.InfiniMinTopUp,
+      InfiniCurrency: values.InfiniCurrency.trim() || 'USD',
+      InfiniCurrencies: values.InfiniCurrencies.trim(),
+      InfiniPayMethods: values.InfiniPayMethods.trim(),
     }
 
     const initial = {
@@ -589,6 +637,25 @@ export function PaymentSettingsSection({
       WechatNotifyUrl: removeTrailingSlash(
         initialRef.current.WechatNotifyUrl.trim()
       ),
+      InfiniEnabled: initialRef.current.InfiniEnabled,
+      InfiniApiKey: initialRef.current.InfiniApiKey.trim(),
+      InfiniApiSecret: initialRef.current.InfiniApiSecret.trim(),
+      InfiniWebhookSecret: initialRef.current.InfiniWebhookSecret.trim(),
+      InfiniSandbox: initialRef.current.InfiniSandbox,
+      InfiniNotifyUrl: removeTrailingSlash(
+        initialRef.current.InfiniNotifyUrl.trim()
+      ),
+      InfiniReturnUrl: removeTrailingSlash(
+        initialRef.current.InfiniReturnUrl.trim()
+      ),
+      InfiniFailUrl: removeTrailingSlash(
+        initialRef.current.InfiniFailUrl.trim()
+      ),
+      InfiniUnitPrice: initialRef.current.InfiniUnitPrice,
+      InfiniMinTopUp: initialRef.current.InfiniMinTopUp,
+      InfiniCurrency: initialRef.current.InfiniCurrency.trim() || 'USD',
+      InfiniCurrencies: initialRef.current.InfiniCurrencies.trim(),
+      InfiniPayMethods: initialRef.current.InfiniPayMethods.trim(),
     }
 
     const updates: Array<{ key: string; value: string | number | boolean }> = []
@@ -859,6 +926,59 @@ export function PaymentSettingsSection({
       updates.push({ key: 'WechatNotifyUrl', value: sanitized.WechatNotifyUrl })
     }
 
+    if (sanitized.InfiniEnabled !== initial.InfiniEnabled) {
+      updates.push({ key: 'InfiniEnabled', value: sanitized.InfiniEnabled })
+    }
+
+    if (sanitized.InfiniApiKey !== initial.InfiniApiKey) {
+      updates.push({ key: 'InfiniApiKey', value: sanitized.InfiniApiKey })
+    }
+
+    if (sanitized.InfiniApiSecret && sanitized.InfiniApiSecret !== initial.InfiniApiSecret) {
+      updates.push({ key: 'InfiniApiSecret', value: sanitized.InfiniApiSecret })
+    }
+
+    if (sanitized.InfiniWebhookSecret && sanitized.InfiniWebhookSecret !== initial.InfiniWebhookSecret) {
+      updates.push({ key: 'InfiniWebhookSecret', value: sanitized.InfiniWebhookSecret })
+    }
+
+    if (sanitized.InfiniSandbox !== initial.InfiniSandbox) {
+      updates.push({ key: 'InfiniSandbox', value: sanitized.InfiniSandbox })
+    }
+
+    if (sanitized.InfiniNotifyUrl !== initial.InfiniNotifyUrl) {
+      updates.push({ key: 'InfiniNotifyUrl', value: sanitized.InfiniNotifyUrl })
+    }
+
+    if (sanitized.InfiniReturnUrl !== initial.InfiniReturnUrl) {
+      updates.push({ key: 'InfiniReturnUrl', value: sanitized.InfiniReturnUrl })
+    }
+
+    if (sanitized.InfiniFailUrl !== initial.InfiniFailUrl) {
+      updates.push({ key: 'InfiniFailUrl', value: sanitized.InfiniFailUrl })
+    }
+
+    if (sanitized.InfiniUnitPrice !== initial.InfiniUnitPrice) {
+      updates.push({ key: 'InfiniUnitPrice', value: sanitized.InfiniUnitPrice })
+    }
+
+    if (sanitized.InfiniMinTopUp !== initial.InfiniMinTopUp) {
+      updates.push({ key: 'InfiniMinTopUp', value: sanitized.InfiniMinTopUp })
+    }
+
+    if (sanitized.InfiniCurrency !== initial.InfiniCurrency) {
+      updates.push({ key: 'InfiniCurrency', value: sanitized.InfiniCurrency })
+    }
+
+    if (sanitized.InfiniCurrencies !== initial.InfiniCurrencies) {
+      updates.push({ key: 'InfiniCurrencies', value: sanitized.InfiniCurrencies })
+    }
+
+    if (sanitized.InfiniPayMethods !== initial.InfiniPayMethods) {
+      updates.push({ key: 'InfiniPayMethods', value: sanitized.InfiniPayMethods })
+    }
+
+
     const hasWaffoPancakeChanges =
       sanitized.WaffoPancakeMerchantID !== initial.WaffoPancakeMerchantID ||
       sanitized.WaffoPancakePrivateKey.length > 0 ||
@@ -972,6 +1092,22 @@ export function PaymentSettingsSection({
     WechatMchCertSerialNo: currentFormValues.WechatMchCertSerialNo,
     WechatMinTopUp: currentFormValues.WechatMinTopUp,
     WechatNotifyUrl: currentFormValues.WechatNotifyUrl,
+  }
+
+  const infiniValues: InfiniSettingsValues = {
+    InfiniEnabled: currentFormValues.InfiniEnabled,
+    InfiniApiKey: currentFormValues.InfiniApiKey,
+    InfiniApiSecret: currentFormValues.InfiniApiSecret,
+    InfiniWebhookSecret: currentFormValues.InfiniWebhookSecret,
+    InfiniSandbox: currentFormValues.InfiniSandbox,
+    InfiniNotifyUrl: currentFormValues.InfiniNotifyUrl,
+    InfiniReturnUrl: currentFormValues.InfiniReturnUrl,
+    InfiniFailUrl: currentFormValues.InfiniFailUrl,
+    InfiniUnitPrice: currentFormValues.InfiniUnitPrice,
+    InfiniMinTopUp: currentFormValues.InfiniMinTopUp,
+    InfiniCurrency: currentFormValues.InfiniCurrency,
+    InfiniCurrencies: currentFormValues.InfiniCurrencies,
+    InfiniPayMethods: currentFormValues.InfiniPayMethods,
   }
 
   return (
@@ -1740,6 +1876,13 @@ export function PaymentSettingsSection({
           <WechatSettingsSection
             values={wechatValues}
             onValueChange={setWechatValue}
+          />
+
+          <Separator />
+
+          <InfiniSettingsSection
+            values={infiniValues}
+            onValueChange={setInfiniValue}
           />
         </SettingsForm>
       </Form>

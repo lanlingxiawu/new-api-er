@@ -58,6 +58,30 @@ function isSafeHttpCheckoutUrl(value) {
   }
 }
 
+// 模块级汇率缓存（5分钟）
+const RATE_CACHE_TTL = 5 * 60 * 1000;
+let _cachedRate = 0;
+let _cacheTime = 0;
+
+async function fetchBinanceRate() {
+  const now = Date.now();
+  if (_cachedRate > 0 && now - _cacheTime < RATE_CACHE_TTL) {
+    return _cachedRate;
+  }
+  try {
+    const res = await API.get('/api/exchange-rate/usd-cny');
+    const rate = res?.data?.data?.rate;
+    if (rate && rate > 0) {
+      _cachedRate = rate;
+      _cacheTime = now;
+      return rate;
+    }
+  } catch {
+    // 静默失败，使用旧缓存
+  }
+  return _cachedRate;
+}
+
 const TopUp = () => {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -67,6 +91,7 @@ const TopUp = () => {
   const [redemptionCode, setRedemptionCode] = useState('');
   const [amount, setAmount] = useState(0.0);
   const [minTopUp, setMinTopUp] = useState(statusState?.status?.min_topup || 1);
+  const [binanceRate, setBinanceRate] = useState(_cachedRate);
   const [topUpCount, setTopUpCount] = useState(
     statusState?.status?.min_topup || 1,
   );
@@ -101,6 +126,9 @@ const TopUp = () => {
   const [enableWechatOfficialTopUp, setEnableWechatOfficialTopUp] =
     useState(false);
   const [wechatOfficialMinTopUp, setWechatOfficialMinTopUp] = useState(1);
+  // Infini 支付相关状态
+  const [enableInfiniTopUp, setEnableInfiniTopUp] = useState(false);
+  const [infiniMinTopUp, setInfiniMinTopUp] = useState(1);
   const [wechatPayOpen, setWechatPayOpen] = useState(false);
   const [wechatCodeUrl, setWechatCodeUrl] = useState(null);
   const [wechatOrderId, setWechatOrderId] = useState(null);
@@ -176,6 +204,10 @@ const TopUp = () => {
     }
     if (payment === 'wechat_official') {
       return getWechatAmount(value);
+    }
+    if (payment === 'infini' || payment.startsWith('infini:')) {
+      const currency = payment.startsWith('infini:') ? payment.split(':')[1] : undefined;
+      return getInfiniAmount(value, currency);
     }
     if (typeof payment === 'string' && payment.startsWith('waffo:')) {
       return getWaffoAmount(value);
@@ -253,6 +285,11 @@ const TopUp = () => {
         showError(t('管理员未开启微信支付充值！'));
         return;
       }
+    } else if (payment === 'infini' || payment.startsWith('infini:')) {
+      if (!enableInfiniTopUp) {
+        showError(t('管理员未开启 Infini 充值！'));
+        return;
+      }
     } else {
       if (!enableOnlineTopUp) {
         showError(t('管理员未开启在线充值！'));
@@ -317,6 +354,18 @@ const TopUp = () => {
       setConfirmLoading(true);
       try {
         await wechatOfficialTopUp();
+      } finally {
+        setOpen(false);
+        setConfirmLoading(false);
+      }
+      return;
+    }
+
+    if (payWay === 'infini' || payWay.startsWith('infini:')) {
+      const infiniCurrency = payWay.startsWith('infini:') ? payWay.split(':')[1] : undefined;
+      setConfirmLoading(true);
+      try {
+        await infiniTopUp(infiniCurrency);
       } finally {
         setOpen(false);
         setConfirmLoading(false);
@@ -638,6 +687,70 @@ const TopUp = () => {
     }
   };
 
+  const getInfiniAmount = async (value, currency) => {
+    if (value === undefined) {
+      value = topUpCount;
+    }
+    setAmountLoading(true);
+    try {
+      const res = await API.post('/api/user/infini/amount', {
+        amount: parseInt(value),
+        currency: currency || undefined,
+      });
+      if (res !== undefined) {
+        const { message, data } = res.data;
+        if (message === 'success') {
+          setAmount(parseFloat(data));
+        } else {
+          setAmount(0);
+        }
+      }
+    } catch (err) {
+      // amount fetch failed silently
+    } finally {
+      setAmountLoading(false);
+    }
+  };
+
+  const infiniTopUp = async (currency) => {
+    const minTopUpValue = Number(infiniMinTopUp || 1);
+    if (topUpCount < minTopUpValue) {
+      showError(t('充值数量不能小于') + minTopUpValue);
+      return;
+    }
+
+    setPaymentLoading(true);
+    try {
+      const res = await API.post('/api/user/infini/pay', {
+        amount: parseInt(topUpCount),
+        currency: currency || undefined,
+      });
+      if (res !== undefined) {
+        const { message, data } = res.data;
+        if (message === 'success') {
+          const paymentUrl = data?.payment_url || '';
+          if (paymentUrl && isSafeHttpCheckoutUrl(paymentUrl)) {
+            window.open(paymentUrl, '_blank');
+          } else if (paymentUrl) {
+            showError(t('支付跳转地址不安全'));
+          } else {
+            showError(t('支付请求失败'));
+          }
+        } else {
+          const errorMsg =
+            typeof data === 'string' ? data : message || t('支付请求失败');
+          showError(errorMsg);
+        }
+      } else {
+        showError(t('支付请求失败'));
+      }
+    } catch (e) {
+      showError(t('支付请求失败'));
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
   const getWechatAmount = async (value) => {
     if (value === undefined) {
       value = topUpCount;
@@ -904,6 +1017,9 @@ const TopUp = () => {
           setAlipayOfficialMinTopUp(data.alipay_official_min_topup || 1);
           setEnableWechatOfficialTopUp(enableWechatOfficialTopUp);
           setWechatOfficialMinTopUp(data.wechat_official_min_topup || 1);
+          const enableInfiniTopUpVal = data.enable_infini_topup || false;
+          setEnableInfiniTopUp(enableInfiniTopUpVal);
+          setInfiniMinTopUp(data.infini_min_topup || 1);
           setMinTopUp(minTopUpValue);
           setTopUpCount(minTopUpValue);
           setTopUpLink(data.topup_link || '');
@@ -1001,6 +1117,10 @@ const TopUp = () => {
     // 始终获取最新用户数据，确保余额等统计信息准确
     getUserQuota().then();
     setTransferAmount(getQuotaPerUnit());
+    // 拉取实时 USD/CNY 汇率（Binance P2P，前端 5 分钟缓存）
+    fetchBinanceRate().then((r) => {
+      if (r > 0) setBinanceRate(r);
+    });
   }, []);
 
   useEffect(() => {
@@ -1159,6 +1279,8 @@ const TopUp = () => {
         payMethods={confirmPayMethods}
         amountNumber={amount}
         discountRate={topupInfo?.discount?.[topUpCount] || 1.0}
+        binanceRate={binanceRate}
+        priceRatio={priceRatio}
       />
 
       {/* 充值账单模态框 */}
@@ -1221,6 +1343,7 @@ const TopUp = () => {
           enableWaffoPancakeTopUp={enableWaffoPancakeTopUp}
           enableAlipayOfficialTopUp={enableAlipayOfficialTopUp}
           enableWechatOfficialTopUp={enableWechatOfficialTopUp}
+          enableInfiniTopUp={enableInfiniTopUp}
           presetAmounts={presetAmounts}
           selectedPreset={selectedPreset}
           selectPresetAmount={selectPresetAmount}

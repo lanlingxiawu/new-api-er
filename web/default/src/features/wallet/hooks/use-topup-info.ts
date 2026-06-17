@@ -29,6 +29,7 @@ import type {
   CreemProduct,
   PaymentMethod,
   WaffoPayMethod,
+  InfiniCurrencyOption,
 } from '../types'
 
 // ============================================================================
@@ -94,6 +95,20 @@ function parseWaffoPayMethods(data: unknown): WaffoPayMethod[] {
         typeof item.payMethodName === 'string' ? item.payMethodName : undefined,
     }))
     .filter((item) => item.name)
+}
+
+function parseInfiniCurrencies(data: unknown): InfiniCurrencyOption[] {
+  return parseJsonArray(data)
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item && typeof item === 'object'
+    )
+    .map((item) => ({
+      currency: typeof item.currency === 'string' ? item.currency.toUpperCase() : '',
+      unit_price: Number(item.unit_price) || 1,
+      min_topup: Number(item.min_topup) || 1,
+    }))
+    .filter((item) => item.currency)
 }
 
 function parseCreemProducts(data: unknown): CreemProduct[] {
@@ -178,18 +193,39 @@ export function useTopupInfo() {
         return
       }
 
+      const infiniCurrencies = parseInfiniCurrencies(response.data.infini_currencies)
+
+      // 将 Infini 多币种展开为独立支付方式，每个币种作为一个选项
+      // 单币种时保持原样（pay_methods 里已有一个 "Infini" 条目）
+      const baseMethods = parsePaymentMethods(
+        response.data.pay_methods,
+        response.data.stripe_min_topup
+      )
+      let payMethods = baseMethods
+      if (response.data.enable_infini_topup && infiniCurrencies.length > 1) {
+        // 多币种：移除原有的 infini 占位条目，替换为每个币种的独立条目
+        payMethods = [
+          ...baseMethods.filter((m) => m.type !== 'infini'),
+          ...infiniCurrencies.map((opt) => ({
+            name: `Infini ${opt.currency}`,
+            type: 'infini' as const,
+            currency: opt.currency,
+            min_topup: opt.min_topup,
+            color: 'rgba(var(--semi-blue-6), 1)',
+          })),
+        ]
+      }
+
       const processedData: TopupInfo = {
         ...response.data,
-        pay_methods: parsePaymentMethods(
-          response.data.pay_methods,
-          response.data.stripe_min_topup
-        ),
+        pay_methods: payMethods,
         amount_options: parseAmountOptions(response.data.amount_options),
         discount: parseDiscountMap(response.data.discount),
         creem_products: parseCreemProducts(response.data.creem_products),
         waffo_pay_methods: parseWaffoPayMethods(
           response.data.waffo_pay_methods
         ),
+        infini_currencies: infiniCurrencies,
       }
 
       setTopupInfo(processedData)
