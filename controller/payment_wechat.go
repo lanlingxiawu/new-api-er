@@ -299,6 +299,44 @@ func RequestWechatOrderQuery(c *gin.Context) {
 	case tradeState == "SUCCESS":
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
+
+		// PAY-004：主动查单与 webhook 路径保持相同校验强度
+		// Mchid 和 Amount.Total 是 SUCCESS 状态下的必要字段，缺失时视为异常响应，拒绝落账
+		respMchid := ""
+		if resp.Mchid != nil {
+			respMchid = *resp.Mchid
+		}
+		if expectedMchId := strings.TrimSpace(setting.WechatMchId); expectedMchId != "" {
+			if respMchid == "" {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 查单响应缺少 mchid trade_no=%s client_ip=%s", tradeNo, c.ClientIP()))
+				c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
+				return
+			}
+			if respMchid != expectedMchId {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 查单 mchid 不匹配 trade_no=%s resp_mchid=%s expected=%s client_ip=%s", tradeNo, respMchid, expectedMchId, c.ClientIP()))
+				c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
+				return
+			}
+		}
+		if resp.Amount == nil || resp.Amount.Total == nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 查单响应缺少 amount.total trade_no=%s client_ip=%s", tradeNo, c.ClientIP()))
+			c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
+			return
+		}
+		if expectedTotal := wechatAmountToFen(topUp.Money); *resp.Amount.Total != expectedTotal {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 查单金额不匹配 trade_no=%s resp_total=%d expected=%d client_ip=%s", tradeNo, *resp.Amount.Total, expectedTotal, c.ClientIP()))
+			c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
+			return
+		}
+		// Appid 存在时校验（非必须字段，但配置了就要匹配）
+		if resp.Appid != nil && *resp.Appid != "" {
+			if expectedAppId := strings.TrimSpace(setting.WechatAppId); expectedAppId != "" && *resp.Appid != expectedAppId {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 查单 appid 不匹配 trade_no=%s resp_appid=%s expected=%s client_ip=%s", tradeNo, *resp.Appid, expectedAppId, c.ClientIP()))
+				c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
+				return
+			}
+		}
+
 		if err := model.RechargeWechat(tradeNo, c.ClientIP()); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 充值处理失败 trade_no=%s client_ip=%s error=%q", tradeNo, c.ClientIP(), err.Error()))
 			c.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"status": topUp.Status}})
@@ -366,10 +404,18 @@ func WechatNotify(c *gin.Context) {
 		if transaction.Mchid != nil {
 			notifiedMchId = *transaction.Mchid
 		}
-		if expectedMchId := strings.TrimSpace(setting.WechatMchId); expectedMchId != "" && notifiedMchId != "" && notifiedMchId != expectedMchId {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 webhook mchid 不匹配 trade_no=%s notify_mchid=%s expected_mchid=%s client_ip=%s", tradeNo, notifiedMchId, expectedMchId, c.ClientIP()))
-			c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "mchid mismatch"})
-			return
+		// 与 PAY-005 保持一致：mchid 必须存在且匹配，缺失时同样拒绝
+		if expectedMchId := strings.TrimSpace(setting.WechatMchId); expectedMchId != "" {
+			if notifiedMchId == "" {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 webhook 缺少 mchid trade_no=%s client_ip=%s", tradeNo, c.ClientIP()))
+				c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "mchid missing"})
+				return
+			}
+			if notifiedMchId != expectedMchId {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("微信支付 webhook mchid 不匹配 trade_no=%s notify_mchid=%s expected_mchid=%s client_ip=%s", tradeNo, notifiedMchId, expectedMchId, c.ClientIP()))
+				c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "mchid mismatch"})
+				return
+			}
 		}
 
 		if topUp := model.GetTopUpByTradeNo(tradeNo); topUp != nil && topUp.Status == common.TopUpStatusPending {

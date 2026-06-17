@@ -156,6 +156,17 @@ export function getPaymentIcon(
           />
         </span>
       )
+    case PAYMENT_TYPES.INFINI:
+      return (
+        <img
+          src='/infini-logo.png'
+          alt='Infini'
+          className={className}
+          style={{ objectFit: 'contain' }}
+          loading='lazy'
+          decoding='async'
+        />
+      )
     default:
       return <CreditCard className={className} />
   }

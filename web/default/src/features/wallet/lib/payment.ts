@@ -104,6 +104,29 @@ export function isWechatOfficialPayment(paymentType: string): boolean {
 }
 
 /**
+ * Check if payment method is Infini (hosted checkout redirect)
+ */
+export function isInfiniPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.INFINI
+}
+
+/**
+ * Validate a backend-provided checkout redirect URL.
+ * Rejects non-navigable schemes (javascript:, data:, etc.) and relative URLs.
+ * Only http/https are permitted.
+ */
+export function isSafeHttpCheckoutUrl(value: string): boolean {
+  const trimmed = (value || '').trim()
+  if (!trimmed) return false
+  try {
+    const u = new URL(trimmed)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
  * Get default payment type from topup info
  */
 export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {

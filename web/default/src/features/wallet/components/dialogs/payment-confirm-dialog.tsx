@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatLocalCurrencyAmount } from '@/lib/currency'
+import { formatLocalCurrencyAmount, formatCurrencyFromUSD } from '@/lib/currency'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +32,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { DEFAULT_DISCOUNT_RATE } from '../../constants'
 import { formatCurrency, getPaymentIcon } from '../../lib'
+import { isInfiniPayment } from '../../lib/payment'
 import type { PaymentMethod } from '../../types'
 
 interface PaymentConfirmDialogProps {
@@ -45,6 +46,10 @@ interface PaymentConfirmDialogProps {
   processing: boolean
   discountRate?: number
   usdExchangeRate?: number
+  /** Binance P2P 实时汇率；为 0 时不显示换算行 */
+  binanceRate?: number
+  /** 系统充值比例 = operation_setting.Price（CNY/额度单位），后台可配置 */
+  priceRatio?: number
 }
 
 export function PaymentConfirmDialog({
@@ -58,11 +63,28 @@ export function PaymentConfirmDialog({
   processing,
   discountRate = DEFAULT_DISCOUNT_RATE,
   usdExchangeRate = 1,
+  binanceRate = 0,
+  priceRatio = 1,
 }: PaymentConfirmDialogProps) {
   const { t } = useTranslation()
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
+
+  // Infini 专属计算
+  const isInfini = isInfiniPayment(paymentMethod?.type ?? '')
+  // Binance 实时汇率，优先实时值，回退系统配置
+  const effectiveRate = binanceRate > 0 ? binanceRate : usdExchangeRate
+  const safePrice = priceRatio > 0 ? priceRatio : 1
+  // 实际到账额度单位数（浮点，用于显示）= 实付USD × Binance汇率 / 充值比例(Price)
+  // 后端精确公式：topUp.Amount = trunc(payMoney × binanceRate / Price × QuotaPerUnit) tokens
+  // 前端此处浮点值用于显示，formatCurrencyFromUSD 会将配额单位换算为系统货币显示
+  const expectedCreditUnits =
+    isInfini && paymentAmount > 0 && effectiveRate > 0
+      ? paymentAmount * effectiveRate / safePrice
+      : 0
+  // CNY 总等值
+  const cnyEquivalent = isInfini && paymentAmount > 0 ? paymentAmount * effectiveRate : 0
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -99,11 +121,30 @@ export function PaymentConfirmDialog({
             ) : (
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
-                  {formatCurrency(paymentAmount)}
+                  {isInfini
+                    ? /* Infini 以 USD 收款，formatCurrency 只出数字，再追加货币码 */
+                      <>
+                        {formatCurrency(paymentAmount)}
+                        <span className='text-muted-foreground ml-1 text-base font-normal'>
+                          {paymentMethod?.currency ?? 'USD'}
+                        </span>
+                      </>
+                    : /* 其他支付方式（支付宝、微信等）以本地货币收款，formatLocalCurrencyAmount 自动带符号 */
+                      formatLocalCurrencyAmount(paymentAmount, {
+                        digitsLarge: 2,
+                        digitsSmall: 2,
+                        abbreviate: false,
+                      })}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
-                    {formatCurrency(originalAmount)}
+                    {isInfini
+                      ? formatCurrency(originalAmount)
+                      : formatLocalCurrencyAmount(originalAmount, {
+                          digitsLarge: 2,
+                          digitsSmall: 2,
+                          abbreviate: false,
+                        })}
                   </span>
                 )}
               </div>
@@ -118,6 +159,38 @@ export function PaymentConfirmDialog({
                   {formatCurrency(discountAmount)}
                 </span>
               </div>
+            </div>
+          )}
+
+          {/* Infini：三行信息 —— 实际到账 / 充值比例 / 汇率（与经典 UI 对齐） */}
+          {isInfini && !calculating && paymentAmount > 0 && (
+            <div className='bg-muted/40 rounded-lg px-3 py-3 space-y-3'>
+              {/* 行1：实际到账 ≈ paymentUSD × binanceRate / Price */}
+              <div className='flex items-center justify-between'>
+                <span className='text-muted-foreground text-sm'>{t('Actual credit')}</span>
+                <span className='text-xl font-bold text-green-600 dark:text-green-400'>
+                  {expectedCreditUnits > 0
+                    ? `≈ ${formatCurrencyFromUSD(expectedCreditUnits, { digitsLarge: 2, digitsSmall: 2, abbreviate: false })}`
+                    : '—'}
+                </span>
+              </div>
+              {/* 行2：充值比例 = 1/Price（后台可配置，精确值） */}
+              <div className='flex items-center justify-between text-xs text-muted-foreground'>
+                <span>{t('Top-up rate')}</span>
+                <span>
+                  {'1 ¥ = '}
+                  {formatCurrencyFromUSD(1 / safePrice, { digitsLarge: 2, digitsSmall: 2, abbreviate: false })}
+                </span>
+              </div>
+              {/* 行3：汇率（Binance 实时） */}
+              {effectiveRate > 0 && (
+                <div className='flex items-center justify-between text-xs text-muted-foreground'>
+                  <span>{t('Exchange rate')}</span>
+                  <span className='font-medium'>
+                    1 {paymentMethod?.currency ?? 'USD'} ≈ ¥{effectiveRate.toFixed(2)}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
