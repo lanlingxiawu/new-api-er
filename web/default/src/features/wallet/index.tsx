@@ -41,6 +41,7 @@ import {
   useWaffoPayment,
   useWaffoPancakePayment,
   useWechatPayment,
+  useBinanceRate,
 } from './hooks'
 import {
   getDefaultPaymentType,
@@ -81,6 +82,7 @@ export function Wallet(props: WalletProps) {
   const { status } = useStatus()
   const { currency } = useSystemConfig()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
+  const { rate: binanceRate } = useBinanceRate()
 
   // Calculate effective exchange rate - when display type is USD, use rate of 1
   const effectiveUsdExchangeRate = useMemo(() => {
@@ -186,7 +188,8 @@ export function Wallet(props: WalletProps) {
       }
 
       // Calculate payment amount and show confirmation dialog
-      await calculatePaymentAmount(topupAmount, method.type)
+      // 多币种 Infini：将选中的 currency 传入计算函数
+      await calculatePaymentAmount(topupAmount, method.type, method.currency)
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -209,7 +212,7 @@ export function Wallet(props: WalletProps) {
     const isPancake = isWaffoPancakePayment(selectedPaymentMethod.type)
     const success = isPancake
       ? await processWaffoPancakePayment(topupAmount)
-      : await processPayment(topupAmount, selectedPaymentMethod.type)
+      : await processPayment(topupAmount, selectedPaymentMethod.type, selectedPaymentMethod.currency)
 
     if (success) {
       setConfirmDialogOpen(false)
@@ -371,6 +374,8 @@ export function Wallet(props: WalletProps) {
         processing={processing || pancakeProcessing || wechatProcessing}
         discountRate={getDiscountRate()}
         usdExchangeRate={effectiveUsdExchangeRate}
+        binanceRate={binanceRate}
+        priceRatio={(status?.price as number) || 1}
       />
 
       <TransferDialog

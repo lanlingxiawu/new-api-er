@@ -220,6 +220,11 @@ func AlipayNotify(c *gin.Context) {
 	}
 
 	tradeNo := noti.OutTradeNo
+	if tradeNo == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("支付宝 webhook 缺少 out_trade_no client_ip=%s", c.ClientIP()))
+		c.String(http.StatusOK, "fail")
+		return
+	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("支付宝 webhook 收到通知 trade_no=%s alipay_trade_no=%s trade_status=%s total_amount=%s client_ip=%s", tradeNo, noti.TradeNo, noti.TradeStatus, noti.TotalAmount, c.ClientIP()))
 
 	switch noti.TradeStatus {
@@ -227,10 +232,19 @@ func AlipayNotify(c *gin.Context) {
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
 
-		if expectedAppId := strings.TrimSpace(setting.AlipayAppId); expectedAppId != "" && noti.AppId != "" && noti.AppId != expectedAppId {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 webhook app_id 不匹配 trade_no=%s notify_app_id=%s expected_app_id=%s client_ip=%s", tradeNo, noti.AppId, expectedAppId, c.ClientIP()))
-			c.String(http.StatusOK, "fail")
-			return
+		// PAY-005：app_id 强制存在且匹配，缺失时同样拒绝
+		expectedAppId := strings.TrimSpace(setting.AlipayAppId)
+		if expectedAppId != "" {
+			if noti.AppId == "" {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 webhook 缺少 app_id trade_no=%s client_ip=%s", tradeNo, c.ClientIP()))
+				c.String(http.StatusOK, "fail")
+				return
+			}
+			if noti.AppId != expectedAppId {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("支付宝 webhook app_id 不匹配 trade_no=%s notify_app_id=%s expected_app_id=%s client_ip=%s", tradeNo, noti.AppId, expectedAppId, c.ClientIP()))
+				c.String(http.StatusOK, "fail")
+				return
+			}
 		}
 
 		if topUp := model.GetTopUpByTradeNo(tradeNo); topUp != nil && topUp.Status == common.TopUpStatusPending {

@@ -232,6 +232,52 @@ export async function queryWechatOrder(
   return res.data
 }
 
+export interface InfiniAmountRequest {
+  amount: number
+  currency?: string
+}
+
+/**
+ * Calculate payment amount for Infini payment
+ */
+export async function calculateInfiniAmount(
+  request: InfiniAmountRequest
+): Promise<AmountResponse> {
+  const res = await api.post('/api/user/infini/amount', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+/**
+ * Request Infini payment (hosted checkout)
+ */
+export async function requestInfiniPayment(
+  request: InfiniAmountRequest
+): Promise<AlipayPaymentResponse> {
+  const res = await api.post('/api/user/infini/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+export interface ExchangeRateResponse {
+  success: boolean
+  data?: {
+    rate: number
+    source: string
+    pair: string
+  }
+}
+
+/**
+ * Get real-time USD/CNY reference rate (Binance P2P, server-side Redis 1h cache)
+ */
+export async function getUSDCNYRate(): Promise<ExchangeRateResponse> {
+  const res = await api.get('/api/exchange-rate/usd-cny')
+  return res.data
+}
+
 /**
  * Get affiliate code
  */

@@ -20,6 +20,7 @@ import { useState, useCallback } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { requestWaffoPancakePayment, isApiSuccess } from '../api'
+import { isSafeHttpCheckoutUrl } from '../lib'
 
 function getCheckoutUrl(data: unknown): string | null {
   if (!data || typeof data !== 'object') {
@@ -33,22 +34,6 @@ function getCheckoutUrl(data: unknown): string | null {
   return null
 }
 
-/**
- * Reject non-navigable schemes (e.g. javascript:, data:) and relative URLs.
- * Only http/https are allowed for backend-provided redirect targets.
- */
-function isSafeHttpCheckoutUrl(value: string): boolean {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return false
-  }
-  try {
-    const u = new URL(trimmed)
-    return u.protocol === 'http:' || u.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
 
 function getErrorMessage(message: string | undefined, data: unknown): string {
   if (typeof data === 'string' && data.trim()) {

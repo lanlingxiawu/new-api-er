@@ -105,6 +105,8 @@ export interface PaymentMethod {
   color?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
+  /** Currency code for Infini multi-currency support */
+  currency?: string
   /** Optional icon URL provided by backend (preferred over built-in icons) */
   icon?: string
 }
@@ -121,6 +123,16 @@ export interface WaffoPayMethod {
   payMethodType?: string
   /** Waffo pay method name */
   payMethodName?: string
+}
+
+/**
+/**
+ * Infini currency option returned by GetTopUpInfo
+ */
+export interface InfiniCurrencyOption {
+  currency: string
+  unit_price: number
+  min_topup: number
 }
 
 /**
@@ -165,6 +177,10 @@ export interface TopupInfo {
   enable_wechat_official_topup?: boolean
   /** Minimum topup amount for official WeChat Pay */
   wechat_official_min_topup?: number
+  /** Whether Infini topup is enabled */
+  enable_infini_topup?: boolean
+  /** Infini currency options (multi-currency) */
+  infini_currencies?: InfiniCurrencyOption[]
   /** Whether redemption code usage is enabled */
   enable_redemption?: boolean
   /** Whether compliance confirmation has been completed */

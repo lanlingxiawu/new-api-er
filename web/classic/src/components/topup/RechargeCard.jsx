@@ -92,6 +92,7 @@ const RechargeCard = ({
   enableWaffoPancakeTopUp,
   enableAlipayOfficialTopUp,
   enableWechatOfficialTopUp,
+  enableInfiniTopUp,
   subscriptionLoading = false,
   subscriptionPlans = [],
   billingPreference,
@@ -238,7 +239,8 @@ const RechargeCard = ({
           enableWaffoTopUp ||
           enableWaffoPancakeTopUp ||
           enableAlipayOfficialTopUp ||
-          enableWechatOfficialTopUp ? (
+          enableWechatOfficialTopUp ||
+          enableInfiniTopUp ? (
           <Form
             getFormApi={(api) => (onlineFormApiRef.current = api)}
             initValues={{ topUpCount: topUpCount }}
@@ -249,7 +251,8 @@ const RechargeCard = ({
                 enableWaffoTopUp ||
                 enableWaffoPancakeTopUp ||
                 enableAlipayOfficialTopUp ||
-                enableWechatOfficialTopUp) && (
+                enableWechatOfficialTopUp ||
+                enableInfiniTopUp) && (
                 <Row gutter={12}>
                   <Col xs={24} sm={24} md={24} lg={10} xl={10}>
                     <Form.InputNumber
@@ -261,7 +264,8 @@ const RechargeCard = ({
                         !enableWaffoTopUp &&
                         !enableWaffoPancakeTopUp &&
                         !enableAlipayOfficialTopUp &&
-                        !enableWechatOfficialTopUp
+                        !enableWechatOfficialTopUp &&
+                        !enableInfiniTopUp
                       }
                       placeholder={
                         t('充值数量，最低 ') + renderQuotaWithAmount(minTopUp)
@@ -331,13 +335,15 @@ const RechargeCard = ({
                               payMethod.type === 'alipay_official';
                             const isWechatOfficial =
                               payMethod.type === 'wechat_official';
+                            const isInfini = payMethod.type === 'infini';
                             const disabled =
                               (!enableOnlineTopUp &&
                                 !isStripe &&
                                 !isWaffo &&
                                 !isWaffoPancake &&
                                 !isAlipayOfficial &&
-                                !isWechatOfficial) ||
+                                !isWechatOfficial &&
+                                !isInfini) ||
                               (!enableStripeTopUp && isStripe) ||
                               (!enableWaffoTopUp && isWaffo) ||
                               (!enableWaffoPancakeTopUp && isWaffoPancake) ||
@@ -345,17 +351,23 @@ const RechargeCard = ({
                                 isAlipayOfficial) ||
                               (!enableWechatOfficialTopUp &&
                                 isWechatOfficial) ||
+                              (!enableInfiniTopUp && isInfini) ||
                               minTopupVal > Number(topUpCount || 0);
 
+                            // Infini 多币种：用 "infini:USD" 格式区分不同币种
+                            const payKey =
+                              isInfini && payMethod.currency
+                                ? `infini:${payMethod.currency}`
+                                : payMethod.type;
                             const buttonEl = (
                               <Button
-                                key={payMethod.type}
+                                key={payKey}
                                 theme='outline'
                                 type='tertiary'
-                                onClick={() => preTopUp(payMethod.type)}
+                                onClick={() => preTopUp(payKey)}
                                 disabled={disabled}
                                 loading={
-                                  paymentLoading && payWay === payMethod.type
+                                  paymentLoading && payWay === payKey
                                 }
                                 icon={
                                   payMethod.type === 'alipay' ||
@@ -366,6 +378,16 @@ const RechargeCard = ({
                                     <SiWechat size={18} color='#07C160' />
                                   ) : payMethod.type === 'stripe' ? (
                                     <SiStripe size={18} color='#635BFF' />
+                                  ) : payMethod.type === 'infini' ? (
+                                    <img
+                                      src='/infini-logo.png'
+                                      alt='Infini'
+                                      style={{
+                                        width: 18,
+                                        height: 18,
+                                        objectFit: 'contain',
+                                      }}
+                                    />
                                   ) : payMethod.icon ? (
                                     <img
                                       src={payMethod.icon}
@@ -414,12 +436,12 @@ const RechargeCard = ({
                                   ' ' +
                                   minTopupVal
                                 }
-                                key={payMethod.type}
+                                key={payKey}
                               >
                                 {buttonEl}
                               </Tooltip>
                             ) : (
-                              <React.Fragment key={payMethod.type}>
+                              <React.Fragment key={payKey}>
                                 {buttonEl}
                               </React.Fragment>
                             );
@@ -436,7 +458,8 @@ const RechargeCard = ({
                 enableWaffoTopUp ||
                 enableWaffoPancakeTopUp ||
                 enableAlipayOfficialTopUp ||
-                enableWechatOfficialTopUp) && (
+                enableWechatOfficialTopUp ||
+                enableInfiniTopUp) && (
                 <Form.Slot
                   label={
                     <div className='flex items-center gap-2'>
