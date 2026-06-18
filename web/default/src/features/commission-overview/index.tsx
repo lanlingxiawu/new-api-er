@@ -8,7 +8,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   TrendingUp,
   TrendingDown,
@@ -130,21 +130,26 @@ function ScrollTable({
   hasMore,
   onLoadMore,
   loading,
+  resetKey,
 }: {
   children: ReactNode
   hasMore?: boolean
   onLoadMore?: () => void
   loading?: boolean
+  resetKey?: string
 }) {
+  const { t } = useTranslation()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const userScrolledRef = useRef(false)
   const requestLoadMore = useCallback(() => {
-    if (!hasMore || loading || !onLoadMore) return
+    if (!userScrolledRef.current || !hasMore || loading || !onLoadMore) return
     onLoadMore()
   }, [hasMore, loading, onLoadMore])
 
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
+      userScrolledRef.current = true
       const target = event.currentTarget
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight
@@ -154,6 +159,11 @@ function ScrollTable({
     },
     [requestLoadMore]
   )
+
+  useEffect(() => {
+    userScrolledRef.current = false
+    if (rootRef.current) rootRef.current.scrollTop = 0
+  }, [resetKey])
 
   useEffect(() => {
     const root = rootRef.current
@@ -185,6 +195,12 @@ function ScrollTable({
       onScroll={handleScroll}
     >
       {children}
+      {loading ? (
+        <div className='text-muted-foreground flex h-9 items-center justify-center gap-2 border-t text-xs'>
+          <RefreshCw className='size-3.5 animate-spin' />
+          <span>{t('Loading...')}</span>
+        </div>
+      ) : null}
       <div ref={sentinelRef} className='h-px w-full' aria-hidden='true' />
     </div>
   )
@@ -499,11 +515,13 @@ export function CommissionOverview() {
         employee_page: employeePage,
         employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
       }),
+    placeholderData: keepPreviousData,
   })
 
   const d = data?.data
   const platform = d?.platform
   const comm = d?.commission
+  const showPageLoading = isFetching && !isLoading
 
   const rangeButtons: { key: Exclude<RangeKey, 'custom'>; label: string }[] = [
     { key: '1d', label: t('Last 1 day') },
@@ -612,7 +630,16 @@ export function CommissionOverview() {
         {t('Business Overview')}
       </SectionPageLayout.Title>
       <SectionPageLayout.Content className='overflow-hidden'>
-        <div className='flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
+        <div className='relative flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
+          {showPageLoading ? (
+            <div className='bg-background/65 absolute inset-0 z-30 flex items-center justify-center backdrop-blur-[1px]'>
+              <div className='bg-background/95 flex items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-sm'>
+                <RefreshCw className='text-muted-foreground size-4 animate-spin' />
+                <span>{t('Loading...')}</span>
+              </div>
+            </div>
+          ) : null}
+
           {/* Range selector */}
           <div className='flex shrink-0 flex-wrap items-center gap-2'>
             {rangeButtons.map((b) => (
@@ -757,6 +784,7 @@ export function CommissionOverview() {
                     hasMore={hasMoreChannelRows}
                     onLoadMore={loadMoreChannels}
                     loading={isFetching}
+                    resetKey={channelMergeScope}
                   >
                     <Table containerClassName='overflow-visible'>
                       <TableHeader className='bg-background sticky top-0 z-10'>

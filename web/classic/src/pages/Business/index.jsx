@@ -706,17 +706,20 @@ function ClassicBusinessTable({
   hasMore = false,
   onLoadMore,
   loading = false,
+  resetKey,
   ...props
 }) {
   const wrapperRef = useRef(null);
   const sentinelRef = useRef(null);
+  const userScrolledRef = useRef(false);
   const requestLoadMore = useCallback(() => {
-    if (!hasMore || loading || !onLoadMore) return;
+    if (!userScrolledRef.current || !hasMore || loading || !onLoadMore) return;
     onLoadMore();
   }, [hasMore, loading, onLoadMore]);
 
   const handleScroll = useCallback(
     (event) => {
+      userScrolledRef.current = true;
       const target = event.currentTarget;
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -728,6 +731,17 @@ function ClassicBusinessTable({
   );
 
   useEffect(() => {
+    userScrolledRef.current = false;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    wrapper.scrollTop = 0;
+    const tableScrollRoot =
+      wrapper.querySelector('.semi-table-body') ||
+      wrapper.querySelector('.semi-table-fixed-body');
+    if (tableScrollRoot) tableScrollRoot.scrollTop = 0;
+  }, [resetKey]);
+
+  useEffect(() => {
     const wrapper = wrapperRef.current;
     const sentinel = sentinelRef.current;
     if (!wrapper || !sentinel) return undefined;
@@ -736,6 +750,7 @@ function ClassicBusinessTable({
       wrapper.querySelector('.semi-table-body') ||
       wrapper.querySelector('.semi-table-fixed-body');
     const handleNativeScroll = (event) => {
+      userScrolledRef.current = true;
       const target = event.currentTarget;
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -5573,6 +5588,7 @@ export function BusinessOverview() {
                 hasMore={hasMoreChannelRows}
                 onLoadMore={loadMoreChannels}
                 loading={loading}
+                resetKey={channelMergeScope}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}
               />
             </BusinessSection>
