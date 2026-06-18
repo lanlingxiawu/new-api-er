@@ -616,7 +616,7 @@ func requeueCommissionResetPeriodDailyStatMem(d *commissionResetPeriodDailyDelta
 
 // BufferPlatformDailyStat 将平台侧日统计增量写入缓冲区（Redis 或内存）。
 func BufferPlatformDailyStat(rec *ConsumptionCost) {
-	statDate := unixDayStart(rec.CreatedAt)
+	statDate := localDayStart(rec.CreatedAt)
 	if common.RedisEnabled {
 		bufferPlatformStatRedis(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
 	} else {
@@ -628,7 +628,7 @@ func BufferPlatformDailyStat(rec *ConsumptionCost) {
 
 // BufferCommissionDailyStat 将员工提成侧日统计增量写入缓冲区（Redis 或内存）。
 func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
-	statDate := unixDayStart(log.CreatedAt)
+	statDate := localDayStart(log.CreatedAt)
 	level, err := GetOrCreateTierLevel(log.EmployeeUserId)
 	if err != nil {
 		common.SysError("BufferCommissionDailyStat: get tier level failed: " + err.Error())

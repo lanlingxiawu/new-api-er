@@ -152,3 +152,19 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
+
+func isInfiniTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	if !setting.InfiniEnabled {
+		return false
+	}
+	return strings.TrimSpace(setting.InfiniApiKey) != "" &&
+		strings.TrimSpace(setting.InfiniApiSecret) != "" &&
+		strings.TrimSpace(setting.InfiniWebhookSecret) != ""
+}
+
+func isInfiniWebhookEnabled() bool {
+	return isInfiniTopUpEnabled()
+}

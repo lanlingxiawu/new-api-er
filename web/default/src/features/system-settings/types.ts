@@ -279,6 +279,21 @@ export type BillingSettings = {
   WechatMchCertSerialNo: string
   WechatMinTopUp: number
   WechatNotifyUrl: string
+  InfiniEnabled: boolean
+  InfiniApiKey: string
+  InfiniApiSecret: string
+  InfiniWebhookSecret: string
+  InfiniSandbox: boolean
+  InfiniNotifyUrl: string
+  InfiniReturnUrl: string
+  InfiniFailUrl: string
+  InfiniUnitPrice: number
+  InfiniMinTopUp: number
+  InfiniCurrency: string
+  // JSON 数组，格式 [{currency,unit_price,min_topup}]，优先于单币种字段
+  InfiniCurrencies: string
+  // JSON 数组，限定 Infini 结账页支付方式，如 [1,2]
+  InfiniPayMethods: string
   'checkin_setting.enabled': boolean
   'checkin_setting.min_quota': number
   'checkin_setting.max_quota': number

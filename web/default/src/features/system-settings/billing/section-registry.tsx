@@ -196,6 +196,21 @@ const BILLING_SECTIONS = [
           WechatMinTopUp: settings.WechatMinTopUp ?? 1,
           WechatNotifyUrl: settings.WechatNotifyUrl ?? '',
         }}
+        infiniDefaultValues={{
+          InfiniEnabled: settings.InfiniEnabled ?? false,
+          InfiniApiKey: settings.InfiniApiKey ?? '',
+          InfiniApiSecret: settings.InfiniApiSecret ?? '',
+          InfiniWebhookSecret: settings.InfiniWebhookSecret ?? '',
+          InfiniSandbox: settings.InfiniSandbox ?? false,
+          InfiniNotifyUrl: settings.InfiniNotifyUrl ?? '',
+          InfiniReturnUrl: settings.InfiniReturnUrl ?? '',
+          InfiniFailUrl: settings.InfiniFailUrl ?? '',
+          InfiniUnitPrice: settings.InfiniUnitPrice ?? 1,
+          InfiniMinTopUp: settings.InfiniMinTopUp ?? 1,
+          InfiniCurrency: settings.InfiniCurrency ?? 'USD',
+          InfiniCurrencies: settings.InfiniCurrencies ?? '',
+          InfiniPayMethods: settings.InfiniPayMethods ?? '',
+        }}
         complianceDefaults={{
           confirmed: settings['payment_setting.compliance_confirmed'] ?? false,
           termsVersion:

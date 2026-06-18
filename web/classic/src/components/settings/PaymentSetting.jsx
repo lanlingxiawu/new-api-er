@@ -26,6 +26,7 @@ import SettingsPaymentGatewayCreem from '../../pages/Setting/Payment/SettingsPay
 import SettingsPaymentGatewayWaffo from '../../pages/Setting/Payment/SettingsPaymentGatewayWaffo';
 import SettingsPaymentGatewayAlipay from '../../pages/Setting/Payment/SettingsPaymentGatewayAlipay';
 import SettingsPaymentGatewayWechat from '../../pages/Setting/Payment/SettingsPaymentGatewayWechat';
+import SettingsPaymentGatewayInfini from '../../pages/Setting/Payment/SettingsPaymentGatewayInfini';
 import { API, showError, showSuccess, toBoolean } from '../../helpers';
 import { useTranslation } from 'react-i18next';
 import RiskAcknowledgementModal from '../common/modals/RiskAcknowledgementModal';
@@ -67,6 +68,20 @@ const PaymentSetting = () => {
     WechatMchCertSerialNo: '',
     WechatMinTopUp: 1,
     WechatNotifyUrl: '',
+
+    InfiniEnabled: false,
+    InfiniApiKey: '',
+    InfiniApiSecret: '',
+    InfiniWebhookSecret: '',
+    InfiniSandbox: false,
+    InfiniNotifyUrl: '',
+    InfiniReturnUrl: '',
+    InfiniFailUrl: '',
+    InfiniUnitPrice: 1.0,
+    InfiniMinTopUp: 1,
+    InfiniCurrency: 'USD',
+    InfiniCurrencies: '',
+    InfiniPayMethods: '',
 
     'payment_setting.compliance_confirmed': false,
     'payment_setting.compliance_terms_version': '',
@@ -329,6 +344,13 @@ const PaymentSetting = () => {
               </Tabs.TabPane>
               <Tabs.TabPane tab={t('微信支付设置')} itemKey='wechat'>
                 <SettingsPaymentGatewayWechat
+                  options={inputs}
+                  refresh={onRefresh}
+                  hideSectionTitle
+                />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('Infini 设置')} itemKey='infini'>
+                <SettingsPaymentGatewayInfini
                   options={inputs}
                   refresh={onRefresh}
                   hideSectionTitle
