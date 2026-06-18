@@ -296,6 +296,8 @@ export interface TopupRecord {
   trade_no: string
   /** Payment method type */
   payment_method: string
+  /** Payment provider type */
+  payment_provider?: string
   /** Creation timestamp */
   create_time: number
   /** Completion timestamp */

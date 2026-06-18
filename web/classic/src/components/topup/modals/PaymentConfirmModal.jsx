@@ -50,14 +50,15 @@ const PaymentConfirmModal = ({
   const discountAmount = hasDiscount ? originalAmount - amountNumber : 0;
 
   const isInfini = payWay === 'infini' || (payWay && payWay.startsWith('infini:'));
+  const normalizedPayWay = isInfini ? 'infini' : payWay;
   const infiniCurrency = isInfini && payWay.startsWith('infini:') ? payWay.split(':')[1] : 'USD';
   // Binance 实时汇率
   const effectiveRate = binanceRate > 0 ? binanceRate : 0;
   const safePrice = priceRatio > 0 ? priceRatio : 1;
-  // 实际到账额度单位 = 实付USD × Binance汇率 / 充值比例(Price)
-  // 与后端 topUp.Amount = round(payMoney × binanceRate / Price) 保持一致
+  const quotaPerUnit = Number(localStorage.getItem('quota_per_unit') || 500000);
+  // 实际到账按 raw quota 快照计算，再换回展示金额，和后端精度一致。
   const expectedCreditUnits = isInfini && amountNumber > 0 && effectiveRate > 0
-    ? amountNumber * effectiveRate / safePrice
+    ? Math.round(amountNumber * effectiveRate * quotaPerUnit / safePrice) / quotaPerUnit
     : 0;
   // CNY 总等值
   const cnyEquivalent = isInfini && effectiveRate > 0 && amountNumber > 0
@@ -148,7 +149,7 @@ const PaymentConfirmModal = ({
                 {effectiveRate > 0 && (
                   <div className='flex justify-between items-center'>
                     <Text size='small' className='text-slate-500'>
-                      {t('汇率')}
+                      {t('实时汇率')}
                     </Text>
                     <Text size='small' className='text-slate-500' strong>
                       {`1 ${infiniCurrency} ≈ ¥${effectiveRate.toFixed(2)}`}
@@ -184,7 +185,7 @@ const PaymentConfirmModal = ({
               <div className='flex items-center'>
                 {(() => {
                   const payMethod = payMethods.find(
-                    (method) => method.type === payWay,
+                    (method) => method.type === normalizedPayWay,
                   );
                   if (payMethod) {
                     return (
@@ -266,6 +267,24 @@ const PaymentConfirmModal = ({
                           />
                           <Text className='text-slate-900 dark:text-slate-100'>
                             Stripe
+                          </Text>
+                        </>
+                      );
+                    } else if (isInfini) {
+                      return (
+                        <>
+                          <img
+                            src='/infini-logo.png'
+                            alt='Infini'
+                            className='mr-2'
+                            style={{
+                              width: 16,
+                              height: 16,
+                              objectFit: 'contain',
+                            }}
+                          />
+                          <Text className='text-slate-900 dark:text-slate-100'>
+                            Infini
                           </Text>
                         </>
                       );

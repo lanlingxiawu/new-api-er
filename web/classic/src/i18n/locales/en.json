@@ -979,6 +979,7 @@
     "回调调用者IP": "Callback Caller IP",
     "回调支付方式": "Callback Payment Method",
     "汇率": "Exchange rate",
+    "实时汇率": "Real-time exchange rate",
     "绘图": "Drawing",
     "绘图任务记录": "Drawing task records",
     "绘图日志": "Drawing Logs",
