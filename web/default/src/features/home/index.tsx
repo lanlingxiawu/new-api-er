@@ -346,7 +346,11 @@ const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
   {
     titleKey: 'home.footer.columns.developers',
     links: [
-      { labelKey: 'home.footer.links.getStarted', to: '/dashboard' },
+      {
+        labelKey: 'home.footer.links.getStarted',
+        href: 'https://docs.lsapi.cn/docs/quickstart/',
+        external: true,
+      },
       { labelKey: 'home.footer.links.apiDocs', href: docsUrl, external: true },
     ],
   },
@@ -2719,7 +2723,7 @@ export function Home() {
   const { t } = useTranslation()
 
   const docsUrl =
-    (status?.docs_link as string | undefined) || 'https://docs.ls.ai'
+    (status?.docs_link as string | undefined) || 'https://docs.lsapi.cn'
   const isAuthenticated = !!auth.user
 
   useLayoutEffect(() => {

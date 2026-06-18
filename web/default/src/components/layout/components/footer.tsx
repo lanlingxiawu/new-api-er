@@ -169,15 +169,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.about.links.aboutProject'),
-            href: 'https://docs.ls.ai/wiki/project-introduction/',
+            href: 'https://docs.lsapi.cn/wiki/project-introduction/',
           },
           {
             text: t('footer.columns.about.links.contact'),
-            href: 'https://docs.ls.ai/support/community-interaction/',
+            href: 'https://docs.lsapi.cn/support/community-interaction/',
           },
           {
             text: t('footer.columns.about.links.features'),
-            href: 'https://docs.ls.ai/wiki/features-introduction/',
+            href: 'https://docs.lsapi.cn/wiki/features-introduction/',
           },
         ],
       },
@@ -186,15 +186,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.docs.links.quickStart'),
-            href: 'https://docs.ls.ai/getting-started/',
+            href: 'https://docs.lsapi.cn/docs/quickstart/',
           },
           {
             text: t('footer.columns.docs.links.installation'),
-            href: 'https://docs.ls.ai/installation/',
+            href: 'https://docs.lsapi.cn/installation/',
           },
           {
             text: t('footer.columns.docs.links.apiDocs'),
-            href: 'https://docs.ls.ai/',
+            href: 'https://docs.lsapi.cn/',
           },
         ],
       },

@@ -63,7 +63,7 @@ const FooterBar = () => {
                 </p>
                 <div className='flex flex-col gap-4'>
                   <a
-                    href='https://docs.ls.ai/wiki/project-introduction/'
+                    href='https://docs.lsapi.cn/wiki/project-introduction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -71,7 +71,7 @@ const FooterBar = () => {
                     {t('关于项目')}
                   </a>
                   <a
-                    href='https://docs.ls.ai/support/community-interaction/'
+                    href='https://docs.lsapi.cn/support/community-interaction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -79,7 +79,7 @@ const FooterBar = () => {
                     {t('联系我们')}
                   </a>
                   <a
-                    href='https://docs.ls.ai/wiki/features-introduction/'
+                    href='https://docs.lsapi.cn/wiki/features-introduction/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -95,7 +95,7 @@ const FooterBar = () => {
                 </p>
                 <div className='flex flex-col gap-4'>
                   <a
-                    href='https://docs.ls.ai/getting-started/'
+                    href='https://docs.lsapi.cn/docs/quickstart/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -103,7 +103,7 @@ const FooterBar = () => {
                     {t('快速开始')}
                   </a>
                   <a
-                    href='https://docs.ls.ai/installation/'
+                    href='https://docs.lsapi.cn/docs/installation/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'
@@ -111,7 +111,7 @@ const FooterBar = () => {
                     {t('安装指南')}
                   </a>
                   <a
-                    href='https://docs.ls.ai/api/'
+                    href='https://docs.lsapi.cn/docs/api-overview/'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='!text-semi-color-text-1'

@@ -3352,7 +3352,7 @@ function Home() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isUrl, setIsUrl] = useState(false);
 
-  const docsUrl = statusState?.status?.docs_link || 'https://docs.ls.ai';
+  const docsUrl = statusState?.status?.docs_link || 'https://docs.lsapi.cn';
   const isAuthenticated = !!localStorage.getItem('user');
   const siteName = getSystemName() || 'LS';
   const logo = getLogo();

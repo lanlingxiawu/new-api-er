@@ -257,7 +257,7 @@ export default function GeneralSettings(props) {
                   field={'general_setting.docs_link'}
                   label={t('文档地址')}
                   initValue={''}
-                  placeholder={t('例如 https://docs.ls.ai')}
+                  placeholder={t('例如 https://docs.lsapi.cn')}
                   onChange={handleFieldChange('general_setting.docs_link')}
                   showClear
                 />

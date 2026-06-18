@@ -1419,7 +1419,7 @@
     "例如": "e.g.",
     "例如 /var/cache/new-api": "e.g. /var/cache/new-api",
     "例如 €, £, Rp, ₩, ₹...": "For example, €, £, Rp, ₩, ₹...",
-    "例如 https://docs.ls.ai": "E.g., https://docs.ls.ai",
+    "例如 https://docs.lsapi.cn": "E.g., https://docs.lsapi.cn",
     "例如 https://example.com/api/waffo/webhook": "",
     "例如：": "For example:",
     "例如: /bin/bash -c \"python app.py\"": "e.g.: /bin/bash -c \"python app.py\"",

@@ -155,7 +155,7 @@ docker run --name new-api -d --restart always \
 > [!WARNING]
 > 将本项目作为面向公众的生成式 AI 服务或 API 转售服务运营时，使用者应先完成备案、内容安全、实名、日志留存、税务、支付和上游授权等合规义务。
 
-📖 更多部署方式请参考 [部署指南](https://docs.ls.ai/zh/docs/installation)
+📖 更多部署方式请参考 [部署指南](https://docs.lsapi.cn/zh/docs/installation)
 
 ---
 
@@ -163,7 +163,7 @@ docker run --name new-api -d --restart always \
 
 <div align="center">
 
-### 📖 [官方文档](https://docs.ls.ai/zh/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+### 📖 [官方文档](https://docs.lsapi.cn/zh/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
 
 </div>
 
@@ -171,17 +171,17 @@ docker run --name new-api -d --restart always \
 
 | 分类 | 链接 |
 |------|------|
-| 🚀 部署指南 | [安装文档](https://docs.ls.ai/zh/docs/installation) |
-| ⚙️ 环境配置 | [环境变量](https://docs.ls.ai/zh/docs/installation/config-maintenance/environment-variables) |
-| 📡 接口文档 | [API 文档](https://docs.ls.ai/zh/docs/api) |
-| ❓ 常见问题 | [FAQ](https://docs.ls.ai/zh/docs/support/faq) |
-| 💬 社区交流 | [交流渠道](https://docs.ls.ai/zh/docs/support/community-interaction) |
+| 🚀 部署指南 | [安装文档](https://docs.lsapi.cn/zh/docs/installation) |
+| ⚙️ 环境配置 | [环境变量](https://docs.lsapi.cn/zh/docs/installation/config-maintenance/environment-variables) |
+| 📡 接口文档 | [API 文档](https://docs.lsapi.cn/zh/docs/api) |
+| ❓ 常见问题 | [FAQ](https://docs.lsapi.cn/zh/docs/support/faq) |
+| 💬 社区交流 | [交流渠道](https://docs.lsapi.cn/zh/docs/support/community-interaction) |
 
 ---
 
 ## ✨ 主要特性
 
-> 详细特性请参考 [特性说明](https://docs.ls.ai/zh/docs/guide/wiki/basic-concepts/features-introduction)
+> 详细特性请参考 [特性说明](https://docs.lsapi.cn/zh/docs/guide/wiki/basic-concepts/features-introduction)
 
 ### 🎨 核心功能
 
@@ -211,11 +211,11 @@ docker run --name new-api -d --restart always \
 ### 🚀 高级功能
 
 **API 格式支持：**
-- ⚡ [OpenAI Responses](https://docs.ls.ai/zh/docs/api/ai-model/chat/openai/create-response)
-- ⚡ [OpenAI Realtime API](https://docs.ls.ai/zh/docs/api/ai-model/realtime/create-realtime-session)（含 Azure）
-- ⚡ [Claude Messages](https://docs.ls.ai/zh/docs/api/ai-model/chat/create-message)
+- ⚡ [OpenAI Responses](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/openai/create-response)
+- ⚡ [OpenAI Realtime API](https://docs.lsapi.cn/zh/docs/api/ai-model/realtime/create-realtime-session)（含 Azure）
+- ⚡ [Claude Messages](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/create-message)
 - ⚡ [Google Gemini](https://doc.newapi.pro/api/google-gemini-chat)
-- 🔄 [Rerank 模型](https://docs.ls.ai/zh/docs/api/ai-model/rerank/create-rerank)（Cohere、Jina）
+- 🔄 [Rerank 模型](https://docs.lsapi.cn/zh/docs/api/ai-model/rerank/create-rerank)（Cohere、Jina）
 
 **智能路由：**
 - ⚖️ 渠道加权随机
@@ -258,17 +258,17 @@ docker run --name new-api -d --restart always \
 
 ## 🤖 模型支持
 
-> 详情请参考 [接口文档 - 网关接口](https://docs.ls.ai/zh/docs/api)
+> 详情请参考 [接口文档 - 网关接口](https://docs.lsapi.cn/zh/docs/api)
 
 | 模型类型 | 说明 | 文档 |
 |---------|------|------|
-| 🤖 OpenAI-Compatible | OpenAI 兼容模型 | [文档](https://docs.ls.ai/zh/docs/api/ai-model/chat/openai/createchatcompletion) |
-| 🤖 OpenAI Responses | OpenAI Responses 格式 | [文档](https://docs.ls.ai/zh/docs/api/ai-model/chat/openai/createresponse) |
+| 🤖 OpenAI-Compatible | OpenAI 兼容模型 | [文档](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/openai/createchatcompletion) |
+| 🤖 OpenAI Responses | OpenAI Responses 格式 | [文档](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/openai/createresponse) |
 | 🎨 Midjourney-Proxy | [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) | [文档](https://doc.newapi.pro/api/midjourney-proxy-image) |
 | 🎵 Suno-API | [Suno API](https://github.com/Suno-API/Suno-API) | [文档](https://doc.newapi.pro/api/suno-music) |
-| 🔄 Rerank | Cohere、Jina | [文档](https://docs.ls.ai/zh/docs/api/ai-model/rerank/create-rerank) |
-| 💬 Claude | Messages 格式 | [文档](https://docs.ls.ai/zh/docs/api/ai-model/chat/createmessage) |
-| 🌐 Gemini | Google Gemini 格式 | [文档](https://docs.ls.ai/zh/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
+| 🔄 Rerank | Cohere、Jina | [文档](https://docs.lsapi.cn/zh/docs/api/ai-model/rerank/create-rerank) |
+| 💬 Claude | Messages 格式 | [文档](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/createmessage) |
+| 🌐 Gemini | Google Gemini 格式 | [文档](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
 | 🔧 Dify | ChatFlow 模式 | - |
 | 🎯 自定义上游 | 支持配置合法授权的上游接口地址 | - |
 
@@ -277,16 +277,16 @@ docker run --name new-api -d --restart always \
 <details>
 <summary>查看完整接口列表</summary>
 
-- [聊天接口 (Chat Completions)](https://docs.ls.ai/zh/docs/api/ai-model/chat/openai/createchatcompletion)
-- [响应接口 (Responses)](https://docs.ls.ai/zh/docs/api/ai-model/chat/openai/createresponse)
-- [图像接口 (Image)](https://docs.ls.ai/zh/docs/api/ai-model/images/openai/post-v1-images-generations)
-- [音频接口 (Audio)](https://docs.ls.ai/zh/docs/api/ai-model/audio/openai/create-transcription)
-- [视频接口 (Video)](https://docs.ls.ai/zh/docs/api/ai-model/audio/openai/createspeech)
-- [嵌入接口 (Embeddings)](https://docs.ls.ai/zh/docs/api/ai-model/embeddings/createembedding)
-- [重排序接口 (Rerank)](https://docs.ls.ai/zh/docs/api/ai-model/rerank/creatererank)
-- [实时对话 (Realtime)](https://docs.ls.ai/zh/docs/api/ai-model/realtime/createrealtimesession)
-- [Claude 聊天](https://docs.ls.ai/zh/docs/api/ai-model/chat/createmessage)
-- [Google Gemini 聊天](https://docs.ls.ai/zh/docs/api/ai-model/chat/gemini/geminirelayv1beta)
+- [聊天接口 (Chat Completions)](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/openai/createchatcompletion)
+- [响应接口 (Responses)](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/openai/createresponse)
+- [图像接口 (Image)](https://docs.lsapi.cn/zh/docs/api/ai-model/images/openai/post-v1-images-generations)
+- [音频接口 (Audio)](https://docs.lsapi.cn/zh/docs/api/ai-model/audio/openai/create-transcription)
+- [视频接口 (Video)](https://docs.lsapi.cn/zh/docs/api/ai-model/audio/openai/createspeech)
+- [嵌入接口 (Embeddings)](https://docs.lsapi.cn/zh/docs/api/ai-model/embeddings/createembedding)
+- [重排序接口 (Rerank)](https://docs.lsapi.cn/zh/docs/api/ai-model/rerank/creatererank)
+- [实时对话 (Realtime)](https://docs.lsapi.cn/zh/docs/api/ai-model/realtime/createrealtimesession)
+- [Claude 聊天](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/createmessage)
+- [Google Gemini 聊天](https://docs.lsapi.cn/zh/docs/api/ai-model/chat/gemini/geminirelayv1beta)
 
 </details>
 
@@ -329,7 +329,7 @@ docker run --name new-api -d --restart always \
 | `PYROSCOPE_BLOCK_RATE` | Pyroscope block 采样率                               | `5` |
 | `HOSTNAME` | Pyroscope 标签里的主机名                                          | `new-api` |
 
-📖 **完整配置：** [环境变量文档](https://docs.ls.ai/zh/docs/installation/config-maintenance/environment-variables)
+📖 **完整配置：** [环境变量文档](https://docs.lsapi.cn/zh/docs/installation/config-maintenance/environment-variables)
 
 </details>
 
@@ -431,10 +431,10 @@ docker run --name new-api -d --restart always \
 
 | 资源 | 链接 |
 |------|------|
-| 📘 常见问题 | [FAQ](https://docs.ls.ai/zh/docs/support/faq) |
-| 💬 社区交流 | [交流渠道](https://docs.ls.ai/zh/docs/support/community-interaction) |
-| 🐛 反馈问题 | [问题反馈](https://docs.ls.ai/zh/docs/support/feedback-issues) |
-| 📚 完整文档 | [官方文档](https://docs.ls.ai/zh/docs) |
+| 📘 常见问题 | [FAQ](https://docs.lsapi.cn/zh/docs/support/faq) |
+| 💬 社区交流 | [交流渠道](https://docs.lsapi.cn/zh/docs/support/community-interaction) |
+| 🐛 反馈问题 | [问题反馈](https://docs.lsapi.cn/zh/docs/support/feedback-issues) |
+| 📚 完整文档 | [官方文档](https://docs.lsapi.cn/zh/docs) |
 
 ### 🤝 贡献指南
 
@@ -473,7 +473,7 @@ docker run --name new-api -d --restart always \
 
 如果这个项目对你有帮助，欢迎给我们一个 ⭐️ Star！
 
-**[官方文档](https://docs.ls.ai/zh/docs)** • **[问题反馈](https://github.com/Calcium-Ion/new-api/issues)** • **[最新发布](https://github.com/Calcium-Ion/new-api/releases)**
+**[官方文档](https://docs.lsapi.cn/zh/docs)** • **[问题反馈](https://github.com/Calcium-Ion/new-api/issues)** • **[最新发布](https://github.com/Calcium-Ion/new-api/releases)**
 
 <sub>Built with ❤️ by QuantumNous</sub>
 
