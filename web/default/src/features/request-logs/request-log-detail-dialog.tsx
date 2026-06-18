@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { Copy, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -62,9 +65,33 @@ function prettify(raw?: string): string {
 }
 
 function Block({ title, content }: { title: string; content?: string }) {
+  const { t } = useTranslation()
+
+  const handleCopy = async () => {
+    if (!content) return
+    try {
+      await navigator.clipboard.writeText(prettify(content))
+      toast.success(t('Copied'))
+    } catch {
+      toast.error(t('Copy failed'))
+    }
+  }
+
   return (
     <div className='space-y-1'>
-      <div className='text-sm font-medium'>{title}</div>
+      <div className='flex items-center justify-between'>
+        <div className='text-sm font-medium'>{title}</div>
+        <Button
+          variant='ghost'
+          size='sm'
+          className='h-7 gap-1 text-xs'
+          disabled={!content}
+          onClick={handleCopy}
+        >
+          <Copy className='h-3.5 w-3.5' />
+          {t('Copy')}
+        </Button>
+      </div>
       <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap break-all'>
         {content ? prettify(content) : '-'}
       </pre>
@@ -74,7 +101,7 @@ function Block({ title, content }: { title: string; content?: string }) {
 
 export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
   const { t } = useTranslation()
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['request-log-detail', id],
     queryFn: () => getRequestLogDetail(id as number),
     enabled: open && id !== null,
@@ -90,8 +117,13 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
         {isLoading ? (
-          <div className='text-muted-foreground py-8 text-center'>
+          <div className='text-muted-foreground flex items-center justify-center gap-2 py-12'>
+            <Loader2 className='h-5 w-5 animate-spin' />
             {t('Loading...')}
+          </div>
+        ) : isError ? (
+          <div className='text-destructive py-12 text-center'>
+            {t('Failed to load')}
           </div>
         ) : (
           <div className='space-y-4'>
