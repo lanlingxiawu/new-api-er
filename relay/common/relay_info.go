@@ -40,6 +40,7 @@ type ClaudeConvertInfo struct {
 	Usage            *dto.Usage
 	FinishReason     string
 	Done             bool
+	MessageStartSent bool
 
 	ToolCallBaseIndex      int
 	ToolCallMaxIndexOffset int
