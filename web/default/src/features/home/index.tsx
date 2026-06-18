@@ -355,7 +355,7 @@ const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
 const CTA_SNIPPET = `from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://ls.ai/v1",
+    base_url="https://lsapi.ai/v1",
     api_key="<your-key>",
 )
 
@@ -1566,7 +1566,7 @@ function HeroDashboard({ logo }: { logo: string }) {
         <span className='h-3 w-3 rounded-full bg-amber-400' />
         <span className='h-3 w-3 rounded-full bg-emerald-400' />
         <div className='ml-3 max-w-md flex-1 rounded-md border border-[#e6e9e3] bg-white px-3 py-1 font-mono text-[11px] text-[#5b6b62]'>
-          {`https://ls.ai/${['analytics', 'logs', 'models'][view]}`}
+          {`https://lsapi.ai/${['analytics', 'logs', 'models'][view]}`}
         </div>
       </div>
 

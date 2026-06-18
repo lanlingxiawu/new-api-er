@@ -47,12 +47,13 @@ type SystemBrandProps = {
 export function SystemBrand(props: SystemBrandProps) {
   const { t } = useTranslation()
   const { status } = useStatus()
-  const { logo } = useSystemConfig()
+  const { logo, logoLoaded } = useSystemConfig()
 
   const variant = props.variant ?? 'sidebar'
   const name = status?.system_name || props.defaultName || 'LS API'
   const version =
     status?.version || props.defaultVersion || t('Unknown version')
+  const showLogo = logoLoaded
 
   if (variant === 'inline') {
     return (
@@ -68,7 +69,13 @@ export function SystemBrand(props: SystemBrandProps) {
           <img
             src={logo}
             alt={t('Logo')}
-            className='size-full object-contain'
+            width={20}
+            height={20}
+            decoding='async'
+            className={cn(
+              'size-5 object-contain transition-opacity duration-200',
+              showLogo ? 'opacity-100' : 'opacity-0'
+            )}
           />
         </div>
         <span className='max-w-[12rem] truncate'>{name}</span>
@@ -88,7 +95,13 @@ export function SystemBrand(props: SystemBrandProps) {
             <img
               src={logo}
               alt={t('Logo')}
-              className='size-full object-contain'
+              width={32}
+              height={32}
+              decoding='async'
+              className={cn(
+                'size-8 object-contain transition-opacity duration-200',
+                showLogo ? 'opacity-100' : 'opacity-0'
+              )}
             />
           </div>
           <div className='grid flex-1 text-start text-sm leading-tight group-data-[collapsible=icon]:hidden'>
