@@ -20,7 +20,7 @@ import { useState } from 'react'
 import { Search, Copy, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatCurrencyFromUSD } from '@/lib/currency'
-import { formatNumber } from '@/lib/format'
+import { formatNumber, formatQuota } from '@/lib/format'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import {
   AlertDialog,
@@ -98,6 +98,9 @@ export function BillingHistoryDialog({
       }
     }
   }
+
+  const isRawQuotaTopup = (record: { payment_method?: string; payment_provider?: string }) =>
+    record.payment_provider === 'infini' || record.payment_method === 'infini'
 
   return (
     <>
@@ -244,11 +247,13 @@ export function BillingHistoryDialog({
                               {t('Amount')}
                             </Label>
                             <div className='text-sm font-semibold'>
-                              {formatCurrencyFromUSD(record.amount, {
-                                digitsLarge: 2,
-                                digitsSmall: 2,
-                                abbreviate: false,
-                              })}
+                              {isRawQuotaTopup(record)
+                                ? formatQuota(record.amount)
+                                : formatCurrencyFromUSD(record.amount, {
+                                    digitsLarge: 2,
+                                    digitsSmall: 2,
+                                    abbreviate: false,
+                                  })}
                             </div>
                           </div>
                           <div className='space-y-1'>

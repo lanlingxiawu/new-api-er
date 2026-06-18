@@ -48,7 +48,6 @@ func infiniSignedHeaders(method, path string, body []byte) map[string]string {
 	mac.Write([]byte(signingString))
 	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 
-
 	headers := map[string]string{
 		"Date": gmt,
 		"Authorization": fmt.Sprintf(
@@ -120,29 +119,67 @@ func resolveInfiniCurrency(requested string) (constant.InfiniCurrencyOption, boo
 }
 
 // formatInfiniAmount 按 Infini 要求格式化金额：零小数位币种取整，其余保留两位小数
-func formatInfiniAmount(amount float64, currency string) string {
+func infiniCurrencyScale(currency string) int32 {
 	if constant.InfiniZeroDecimalCurrencies[strings.ToUpper(currency)] {
-		return fmt.Sprintf("%.0f", amount)
+		return 0
 	}
-	return fmt.Sprintf("%.2f", amount)
+	return 2
 }
 
-func getInfiniPayMoney(amount float64, group string, unitPrice float64) float64 {
-	originalAmount := amount
+func roundInfiniAmount(amount decimal.Decimal, currency string) decimal.Decimal {
+	return amount.Round(infiniCurrencyScale(currency))
+}
+
+func formatInfiniAmount(amount decimal.Decimal, currency string) string {
+	return roundInfiniAmount(amount, currency).StringFixed(infiniCurrencyScale(currency))
+}
+
+func getInfiniPayMoney(amount int64, group string, unitPrice float64, currency string) decimal.Decimal {
+	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
+		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
 	}
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
+	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
 		if ds > 0 {
 			discount = ds
 		}
 	}
-	return amount * unitPrice * topupGroupRatio * discount
+	return roundInfiniAmount(
+		dAmount.
+			Mul(decimal.NewFromFloat(unitPrice)).
+			Mul(decimal.NewFromFloat(topupGroupRatio)).
+			Mul(decimal.NewFromFloat(discount)),
+		currency,
+	)
+}
+
+func infiniRawQuotaFromPayMoney(payMoney decimal.Decimal, exchangeRate float64, systemPrice float64) int64 {
+	if systemPrice <= 0 {
+		systemPrice = 1.0
+	}
+
+	const rateScale int64 = 10000
+	rateInt := decimal.NewFromFloat(exchangeRate).Mul(decimal.NewFromInt(rateScale)).Round(0).IntPart()
+	priceInt := decimal.NewFromFloat(systemPrice).Mul(decimal.NewFromInt(rateScale)).Round(0).IntPart()
+	if rateInt <= 0 || priceInt <= 0 {
+		return 0
+	}
+
+	rawQuota := payMoney.
+		Mul(decimal.NewFromInt(rateInt)).
+		Div(decimal.NewFromInt(priceInt)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Round(0).
+		IntPart()
+	if rawQuota < 1 {
+		return 1
+	}
+	return rawQuota
 }
 
 // ─── 用户接口 ──────────────────────────────────────────────────────────────────
@@ -178,13 +215,14 @@ func RequestInfiniAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getInfiniPayMoney(float64(req.Amount), group, currOpt.UnitPrice)
-	if payMoney <= 0.01 {
+	currency := strings.ToUpper(currOpt.Currency)
+	payMoney := getInfiniPayMoney(req.Amount, group, currOpt.UnitPrice, currency)
+	if payMoney.LessThanOrEqual(decimal.NewFromFloat(0.01)) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(payMoney, 'f', 2, 64)})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "data": formatInfiniAmount(payMoney, currency)})
 }
 
 // RequestInfiniPay 创建 Infini 托管结账订单，返回 checkout_url
@@ -220,38 +258,22 @@ func RequestInfiniPay(c *gin.Context) {
 	}
 
 	group, _ := model.GetUserGroup(id, true)
-	payMoney := getInfiniPayMoney(float64(req.Amount), group, currOpt.UnitPrice)
-	if payMoney < 0.01 {
+	currency := strings.ToUpper(currOpt.Currency)
+	payMoney := getInfiniPayMoney(req.Amount, group, currOpt.UnitPrice, currency)
+	if payMoney.LessThan(decimal.NewFromFloat(0.01)) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
 
-	// 用 decimal 精确运算计算配额单位，避免 float64 累积误差
-	// 配额单位数 = payUSD × binanceRate / Price，floor 取整（用户不超额）
-	// topUp.Amount 存配额单位，RechargeInfini 再乘 QuotaPerUnit 得到 tokens
-	binanceRateForAmount := service.GetUSDCNYRate()
-	systemPrice := operation_setting.Price
-	if systemPrice <= 0 {
-		systemPrice = 1.0
-	}
-	dPayMoney := decimal.NewFromFloat(payMoney)
-	dRate := decimal.NewFromFloat(binanceRateForAmount)
-	dPrice := decimal.NewFromFloat(systemPrice)
-	quotaUnitsDec := dPayMoney.Mul(dRate).Div(dPrice)
-	amount := quotaUnitsDec.Floor().IntPart() // 配额单位（整数）
-	if amount < 1 {
-		amount = 1
-	}
-
-	// 使用服务端解析出的标准化大写币种，不直接使用客户端传入值
-	currency := strings.ToUpper(currOpt.Currency)
+	// Store the final raw quota snapshot, matching the admin amount adjustment precision.
+	amount := infiniRawQuotaFromPayMoney(payMoney, service.GetUSDCNYRate(), operation_setting.Price)
 
 	tradeNo := fmt.Sprintf("INFINI-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 
 	topUp := &model.TopUp{
 		UserId:          id,
 		Amount:          amount,
-		Money:           payMoney,
+		Money:           payMoney.InexactFloat64(),
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodInfini,
 		PaymentProvider: model.PaymentProviderInfini,
@@ -345,8 +367,8 @@ func RequestInfiniPay(c *gin.Context) {
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Infini 充值订单创建成功 user_id=%d trade_no=%s infini_order_id=%s amount=%d money=%.2f currency=%s",
-		id, tradeNo, infiniOrderId, req.Amount, payMoney, currency))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Infini 充值订单创建成功 user_id=%d trade_no=%s infini_order_id=%s amount=%d money=%s currency=%s",
+		id, tradeNo, infiniOrderId, req.Amount, formatInfiniAmount(payMoney, currency), currency))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
@@ -459,7 +481,12 @@ func InfiniWebhook(c *gin.Context) {
 		return
 	}
 	notifiedAmount, parseErr := decimal.NewFromString(strings.TrimSpace(event.Amount))
-	if parseErr != nil || !notifiedAmount.Equal(decimal.NewFromFloat(topUp.Money)) {
+	amountCurrency := topUp.PaymentCurrency
+	if amountCurrency == "" {
+		amountCurrency = event.Currency
+	}
+	expectedAmount := roundInfiniAmount(decimal.NewFromFloat(topUp.Money), amountCurrency)
+	if parseErr != nil || !notifiedAmount.Equal(expectedAmount) {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Infini webhook 金额不匹配 trade_no=%s notify_amount=%s order_money=%.2f client_ip=%s",
 			tradeNo, event.Amount, topUp.Money, c.ClientIP()))
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

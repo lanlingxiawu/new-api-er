@@ -32,6 +32,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { DEFAULT_DISCOUNT_RATE } from '../../constants'
 import { formatCurrency, getPaymentIcon } from '../../lib'
+import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 import { isInfiniPayment } from '../../lib/payment'
 import type { PaymentMethod } from '../../types'
 
@@ -77,11 +78,14 @@ export function PaymentConfirmDialog({
   const effectiveRate = binanceRate > 0 ? binanceRate : usdExchangeRate
   const safePrice = priceRatio > 0 ? priceRatio : 1
   // 实际到账额度单位数（浮点，用于显示）= 实付USD × Binance汇率 / 充值比例(Price)
-  // 后端精确公式：topUp.Amount = trunc(payMoney × binanceRate / Price × QuotaPerUnit) tokens
-  // 前端此处浮点值用于显示，formatCurrencyFromUSD 会将配额单位换算为系统货币显示
+  // 后端精确公式：topUp.Amount = round(payMoney × binanceRate / Price × QuotaPerUnit)
+  // 前端此处展示等价金额，保持和 raw quota 快照的精度模型一致。
   const expectedCreditUnits =
     isInfini && paymentAmount > 0 && effectiveRate > 0
-      ? paymentAmount * effectiveRate / safePrice
+      ? Math.round(
+          (paymentAmount * effectiveRate * DEFAULT_CURRENCY_CONFIG.quotaPerUnit) /
+            safePrice
+        ) / DEFAULT_CURRENCY_CONFIG.quotaPerUnit
       : 0
   // CNY 总等值
   const cnyEquivalent = isInfini && paymentAmount > 0 ? paymentAmount * effectiveRate : 0
@@ -185,7 +189,7 @@ export function PaymentConfirmDialog({
               {/* 行3：汇率（Binance 实时） */}
               {effectiveRate > 0 && (
                 <div className='flex items-center justify-between text-xs text-muted-foreground'>
-                  <span>{t('Exchange rate')}</span>
+                  <span>{t('Real-time exchange rate')}</span>
                   <span className='font-medium'>
                     1 {paymentMethod?.currency ?? 'USD'} ≈ ¥{effectiveRate.toFixed(2)}
                   </span>

@@ -955,6 +955,7 @@
     "回调调用者IP": "IP người gọi callback",
     "回调支付方式": "Phương thức thanh toán callback",
     "汇率": "Tỷ giá hối đoái",
+    "实时汇率": "Tỷ giá thời gian thực",
     "绘图": "Vẽ",
     "绘图 ID": "ID vẽ",
     "绘图任务": "Tác vụ vẽ",
