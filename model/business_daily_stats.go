@@ -128,6 +128,16 @@ func unixDayEnd(ts int64) int64 {
 	return unixDayStart(ts) + businessStatsDaySeconds - 1
 }
 
+// localDayStart 返回 ts 所在本地自然日的起始 Unix 时间戳（00:00:00 本地时间）。
+// 时区取自提成阶梯月度重置设置，默认 Asia/Shanghai。
+func localDayStart(ts int64) int64 {
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, _ := operation_setting.ResolveCommissionTierResetLocation(cfg.Timezone)
+	t := time.Unix(ts, 0).In(loc)
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, loc).Unix()
+}
+
 func commissionResetDaysInMonth(year int, month time.Month) int {
 	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
@@ -401,7 +411,7 @@ func splitCoveredDailyRangesWithContext(ctx context.Context, startDate, endDate 
 }
 
 func addPlatformChannelDailyStatTx(tx *gorm.DB, rec *ConsumptionCost) error {
-	statDate := unixDayStart(rec.CreatedAt)
+	statDate := localDayStart(rec.CreatedAt)
 	row := PlatformChannelDailyStat{
 		StatDate:      statDate,
 		ChannelId:     rec.ChannelId,
@@ -431,7 +441,7 @@ func addPlatformChannelDailyStatTx(tx *gorm.DB, rec *ConsumptionCost) error {
 }
 
 func addEmployeeCommissionDailyStatTx(tx *gorm.DB, log *EmployeeCommissionLog) error {
-	statDate := unixDayStart(log.CreatedAt)
+	statDate := localDayStart(log.CreatedAt)
 	row := EmployeeCommissionDailyStat{
 		StatDate:        statDate,
 		EmployeeUserId:  log.EmployeeUserId,
@@ -531,10 +541,10 @@ func ResolveBusinessStatsDailyOnlyQueryPlanWithContext(ctx context.Context, star
 	startDate := minDate
 	endDate := maxDate
 	if startTime != 0 {
-		startDate = unixDayStart(startTime)
+		startDate = localDayStart(startTime)
 	}
 	if endTime != 0 {
-		endDate = unixDayStart(endTime)
+		endDate = localDayStart(endTime)
 	}
 	if startDate < minDate {
 		startDate = minDate

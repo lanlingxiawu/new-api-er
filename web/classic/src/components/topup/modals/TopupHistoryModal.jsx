@@ -34,7 +34,7 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { Coins } from 'lucide-react';
 import { IconSearch } from '@douyinfe/semi-icons';
-import { API, timestamp2string } from '../../../helpers';
+import { API, renderQuota, timestamp2string } from '../../../helpers';
 import { isAdmin } from '../../../helpers/utils';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 const { Text } = Typography;
@@ -156,6 +156,9 @@ const TopupHistoryModal = ({ visible, onCancel, t }) => {
     return Number(record?.amount || 0) === 0 && tradeNo.startsWith('sub');
   };
 
+  const isRawQuotaTopup = (record) =>
+    record?.payment_provider === 'infini' || record?.payment_method === 'infini';
+
   // 检查是否为管理员
   const userIsAdmin = useMemo(() => isAdmin(), []);
 
@@ -198,7 +201,7 @@ const TopupHistoryModal = ({ visible, onCancel, t }) => {
           return (
             <span className='flex items-center gap-1'>
               <Coins size={16} />
-              <Text>{amount}</Text>
+              <Text>{isRawQuotaTopup(record) ? renderQuota(amount) : amount}</Text>
             </span>
           );
         },
