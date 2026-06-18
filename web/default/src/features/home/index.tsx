@@ -346,8 +346,12 @@ const FOOTER_COLUMNS = (docsUrl: string): FooterColumn[] => [
   {
     titleKey: 'home.footer.columns.developers',
     links: [
-      { labelKey: 'home.footer.links.getStarted', to: '/dashboard' },
-      { labelKey: 'home.footer.links.apiDocs', href: docsUrl, external: true },
+      { labelKey: 'home.footer.links.getStarted', href: 'https://docs.n123.ai/docs/quickstart',external: true,},
+      {
+        labelKey: 'home.footer.links.apiDocs',
+        href: 'https://docs.n123.ai/docs/models-list',
+        external: true,
+      },
     ],
   },
 ]
