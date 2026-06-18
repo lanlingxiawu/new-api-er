@@ -2,10 +2,17 @@ package claude
 
 import (
 	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -277,6 +284,102 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 
 	require.Equal(t, 50, openAIUsage.ClaudeCacheCreation5mTokens)
 	require.Equal(t, 0, openAIUsage.ClaudeCacheCreation1hTokens)
+}
+
+func newClaudeStreamRecorder() (*gin.Context, *httptest.ResponseRecorder) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	return c, recorder
+}
+
+func claudeEventTypesFromBody(body string) []string {
+	var events []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "event: ") {
+			events = append(events, strings.TrimPrefix(line, "event: "))
+		}
+	}
+	return events
+}
+
+func TestForceCloseClaudeStreamClosesOpenBlockAndMessage(t *testing.T) {
+	c, recorder := newClaudeStreamRecorder()
+	openIndex := 0
+	claudeInfo := &ClaudeResponseInfo{
+		HasMessageStart: true,
+		OpenBlockIndex:  &openIndex,
+		Usage: &dto.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 2,
+		},
+	}
+
+	forceCloseClaudeStream(c, &relaycommon.RelayInfo{}, claudeInfo)
+
+	require.Equal(t, []string{"content_block_stop", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
+	require.True(t, claudeInfo.Done)
+	require.True(t, claudeInfo.MessageStopSent)
+	require.Nil(t, claudeInfo.OpenBlockIndex)
+	require.Contains(t, recorder.Body.String(), `"stop_reason":"end_turn"`)
+}
+
+func TestForceCloseClaudeStreamOnlyAddsMessageStopAfterMessageDelta(t *testing.T) {
+	c, recorder := newClaudeStreamRecorder()
+	claudeInfo := &ClaudeResponseInfo{
+		HasMessageStart: true,
+		Done:            true,
+		Usage:           &dto.Usage{PromptTokens: 10, CompletionTokens: 2},
+	}
+
+	forceCloseClaudeStream(c, &relaycommon.RelayInfo{}, claudeInfo)
+
+	require.Equal(t, []string{"message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
+	require.NotContains(t, recorder.Body.String(), "message_delta")
+	require.True(t, claudeInfo.MessageStopSent)
+}
+
+func TestHandleStreamFinalResponseDoesNotDuplicateMessageStop(t *testing.T) {
+	c, recorder := newClaudeStreamRecorder()
+	claudeInfo := &ClaudeResponseInfo{
+		HasMessageStart: true,
+		MessageStopSent: true,
+		Done:            true,
+		Usage:           &dto.Usage{PromptTokens: 10, CompletionTokens: 2},
+	}
+
+	HandleStreamFinalResponse(c, &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	}, claudeInfo)
+
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestClaudeStreamHandlerForceClosesAfterUpstreamErrorEvent(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	c, recorder := newClaudeStreamRecorder()
+	body := strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-test","usage":{"input_tokens":10,"output_tokens":0}}}`,
+		`data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}`,
+	}, "\n")
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, err := ClaudeStreamHandler(c, resp, &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	})
+
+	require.Nil(t, usage)
+	require.NotNil(t, err)
+	require.Equal(t, []string{"message_start", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
 }
 
 func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {

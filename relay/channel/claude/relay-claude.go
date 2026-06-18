@@ -589,6 +589,10 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	// Tracks the native Claude SSE state so truncated upstream streams can be closed safely.
+	HasMessageStart bool
+	MessageStopSent bool
+	OpenBlockIndex  *int
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -803,17 +807,29 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
-		if claudeResponse.Type == "message_start" {
+		switch claudeResponse.Type {
+		case "message_start":
+			claudeInfo.HasMessageStart = true
 			// message_start, 获取usage
 			if claudeResponse.Message != nil {
 				info.UpstreamModelName = claudeResponse.Message.Model
 			}
-		} else if claudeResponse.Type == "message_delta" {
+		case "content_block_start":
+			// 记录当前打开的块，供截断兜底时补发 content_block_stop
+			if claudeResponse.Index != nil {
+				idx := *claudeResponse.Index
+				claudeInfo.OpenBlockIndex = &idx
+			}
+		case "content_block_stop":
+			claudeInfo.OpenBlockIndex = nil
+		case "message_delta":
 			// 确保 message_delta 的 usage 包含完整的 input_tokens 和 cache 相关字段
 			// 解决 AWS Bedrock 等上游返回的 message_delta 缺少这些字段的问题
 			if !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				data = patchClaudeMessageDeltaUsageData(data, buildMessageDeltaPatchUsage(&claudeResponse, claudeInfo))
 			}
+		case "message_stop":
+			claudeInfo.MessageStopSent = true
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
@@ -855,7 +871,11 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
-		//
+		// 上游中途截断（已发 message_start 但未发 message_stop，如账号异常/连接中断）时，
+		// 补发闭合事件，避免下游 Claude 流永远不闭合导致客户端一直挂住。
+		if claudeInfo.HasMessageStart && !claudeInfo.MessageStopSent {
+			forceCloseClaudeStream(c, info, claudeInfo)
+		}
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
@@ -867,6 +887,80 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		}
 		helper.Done(c)
 	}
+}
+
+// forceCloseClaudeStream 在上游中途截断（未发送 message_stop）时，按 Anthropic SSE 状态机
+// 补发闭合事件：content_block_stop（若仍有打开的块）+ message_delta（携带 stop_reason 与已累计 usage）
+// + message_stop，保证下游 Claude 客户端能正常结束，而不是一直等待。
+func forceCloseClaudeStream(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	if common.DebugEnabled {
+		reason := "unknown"
+		if info.StreamStatus != nil {
+			reason = info.StreamStatus.Summary()
+		}
+		common.SysLog("claude stream truncated without message_stop, force closing: " + reason)
+	}
+
+	sendClaudeEvent := func(resp dto.ClaudeResponse) {
+		jsonData, err := common.Marshal(resp)
+		if err != nil {
+			common.SysLog("force close claude stream marshal failed: " + err.Error())
+			return
+		}
+		helper.ClaudeChunkData(c, resp, string(jsonData))
+	}
+
+	// 关闭仍处于打开状态的 content block
+	if claudeInfo.OpenBlockIndex != nil {
+		idx := *claudeInfo.OpenBlockIndex
+		sendClaudeEvent(dto.ClaudeResponse{Type: "content_block_stop", Index: &idx})
+		claudeInfo.OpenBlockIndex = nil
+	}
+
+	// message_delta：携带 stop_reason 与已累计 usage。
+	// 仅在上游未发过 message_delta 时补发（claudeInfo.Done 在收到 message_delta 时置位），
+	// 避免上游已发 message_delta、仅缺 message_stop 时重复下发 message_delta。
+	// 截断没有真实的 stop_reason，使用 end_turn 以保证客户端可正常解析结束。
+	if !claudeInfo.Done {
+		sendClaudeEvent(dto.ClaudeResponse{
+			Type:  "message_delta",
+			Delta: &dto.ClaudeMediaMessage{StopReason: common.GetPointer[string]("end_turn")},
+			Usage: buildFinalClaudeUsage(claudeInfo.Usage),
+		})
+	}
+
+	// message_stop
+	sendClaudeEvent(dto.ClaudeResponse{Type: "message_stop"})
+
+	claudeInfo.Done = true
+	claudeInfo.MessageStopSent = true
+}
+
+// buildFinalClaudeUsage 由内部累计的 dto.Usage 构造下游 message_delta 所需的 ClaudeUsage。
+func buildFinalClaudeUsage(usage *dto.Usage) *dto.ClaudeUsage {
+	if usage == nil {
+		return &dto.ClaudeUsage{}
+	}
+	cacheCreation5m, cacheCreation1h := service.NormalizeCacheCreationSplit(
+		usage.PromptTokensDetails.CachedCreationTokens,
+		usage.ClaudeCacheCreation5mTokens,
+		usage.ClaudeCacheCreation1hTokens,
+	)
+	claudeUsage := &dto.ClaudeUsage{
+		InputTokens:                 usage.PromptTokens,
+		OutputTokens:                usage.CompletionTokens,
+		CacheReadInputTokens:        usage.PromptTokensDetails.CachedTokens,
+		CacheCreationInputTokens:    usage.PromptTokensDetails.CachedCreationTokens,
+		ClaudeCacheCreation5mTokens: cacheCreation5m,
+		ClaudeCacheCreation1hTokens: cacheCreation1h,
+	}
+	if cacheCreation5m > 0 || cacheCreation1h > 0 {
+		claudeUsage.CacheCreation = &dto.ClaudeCacheCreationUsage{
+			Ephemeral5mInputTokens: cacheCreation5m,
+			Ephemeral1hInputTokens: cacheCreation1h,
+		}
+	}
+	return claudeUsage
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
@@ -885,6 +979,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		}
 	})
 	if err != nil {
+		if info.RelayFormat == types.RelayFormatClaude {
+			HandleStreamFinalResponse(c, info, claudeInfo)
+		}
 		return nil, err
 	}
 

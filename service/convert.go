@@ -296,7 +296,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 		info.ClaudeConvertInfo.LastMessagesType = relaycommon.LastMessageTypeNone
 	}
-	if info.SendResponseCount == 1 {
+	if !info.ClaudeConvertInfo.MessageStartSent {
 		msg := &dto.ClaudeMediaMessage{
 			Id:    openAIResponse.Id,
 			Model: openAIResponse.Model,
@@ -312,6 +312,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			Type:    "message_start",
 			Message: msg,
 		})
+		info.ClaudeConvertInfo.MessageStartSent = true
 		//claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 		//	Type: "ping",
 		//})
