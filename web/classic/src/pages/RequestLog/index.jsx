@@ -25,6 +25,7 @@ import {
   Input,
   SideSheet,
   Space,
+  Spin,
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
@@ -34,9 +35,12 @@ import {
 } from '@douyinfe/semi-illustrations';
 import CardPro from '../../components/common/ui/CardPro';
 import CardTable from '../../components/common/ui/CardTable';
+import { IconCopy } from '@douyinfe/semi-icons';
 import {
   API,
   showError,
+  showSuccess,
+  copy,
   timestamp2string,
   createCardProPagination,
 } from '../../helpers';
@@ -87,6 +91,7 @@ const RequestLog = () => {
   });
   const [detail, setDetail] = useState(null);
   const [detailVisible, setDetailVisible] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const loadLogs = async (targetPage = page, targetPageSize = pageSize) => {
     setLoading(true);
@@ -135,6 +140,7 @@ const RequestLog = () => {
   };
 
   const openDetail = async (id) => {
+    setDetailLoading(true);
     try {
       const res = await API.get(`/api/request-log/${id}`);
       const { success, message, data } = res.data;
@@ -146,6 +152,8 @@ const RequestLog = () => {
       }
     } catch (error) {
       showError(error.message);
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -199,9 +207,37 @@ const RequestLog = () => {
     },
   ];
 
+  const handleCopyContent = async (content) => {
+    if (!content) return;
+    const success = await copy(prettify(content));
+    if (success) {
+      showSuccess(t('已复制到剪贴板'));
+    } else {
+      showError(t('复制失败'));
+    }
+  };
+
   const renderBlock = (title, content) => (
     <div style={{ marginBottom: 16 }}>
-      <Title heading={6}>{title}</Title>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <Title heading={6}>{title}</Title>
+        <Button
+          theme='borderless'
+          type='tertiary'
+          size='small'
+          icon={<IconCopy />}
+          disabled={!content}
+          onClick={() => handleCopyContent(content)}
+        >
+          {t('复制')}
+        </Button>
+      </div>
       <pre
         style={{
           background: 'var(--semi-color-fill-0)',
@@ -250,6 +286,21 @@ const RequestLog = () => {
 
   return (
     <div className='mt-[60px] px-2'>
+      {detailLoading && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.35)',
+          }}
+        >
+          <Spin size='large' tip={t('加载中...')} />
+        </div>
+      )}
       <CardPro
         type='type2'
         statsArea={
