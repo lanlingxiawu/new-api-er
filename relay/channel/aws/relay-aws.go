@@ -272,19 +272,28 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 		Usage:        &dto.Usage{},
 	}
 
+	finalizeClaudeOnError := func() {
+		if info.RelayFormat == types.RelayFormatClaude {
+			claude.HandleStreamFinalResponse(c, info, claudeInfo)
+		}
+	}
+
 	for event := range stream.Events() {
 		switch v := event.(type) {
 		case *bedrockruntimeTypes.ResponseStreamMemberChunk:
 			info.SetFirstResponseTime()
 			respErr := claude.HandleStreamResponseData(c, info, claudeInfo, string(v.Value.Bytes))
 			if respErr != nil {
+				finalizeClaudeOnError()
 				return respErr, nil
 			}
 		case *bedrockruntimeTypes.UnknownUnionMember:
 			fmt.Println("unknown tag:", v.Tag)
+			finalizeClaudeOnError()
 			return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
 		default:
 			fmt.Println("union is nil or unknown type")
+			finalizeClaudeOnError()
 			return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
 		}
 	}

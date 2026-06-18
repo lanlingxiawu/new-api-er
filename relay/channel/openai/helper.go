@@ -157,17 +157,35 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		helper.Done(c)
 
 	case types.RelayFormatClaude:
+		if info.ClaudeConvertInfo == nil {
+			info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+		}
+
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			return
+		} else {
+			info.ClaudeConvertInfo.Usage = usage
+
+			claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
+			for _, resp := range claudeResponses {
+				_ = helper.ClaudeData(c, *resp)
+			}
 		}
 
-		info.ClaudeConvertInfo.Usage = usage
-
-		claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
-		for _, resp := range claudeResponses {
-			_ = helper.ClaudeData(c, *resp)
+		// If the upstream stream ends without a finish_reason, close the Claude
+		// stream with the converter's normal stop sequence.
+		if info.ClaudeConvertInfo != nil && info.ClaudeConvertInfo.MessageStartSent && !info.ClaudeConvertInfo.Done {
+			info.ClaudeConvertInfo.Usage = usage
+			finishReason := info.FinishReason
+			if finishReason == "" {
+				finishReason = "stop"
+			}
+			synthetic := helper.GenerateStopResponse(responseId, createAt, model, finishReason)
+			synthetic.Usage = usage
+			for _, resp := range service.StreamResponseOpenAI2Claude(synthetic, info) {
+				_ = helper.ClaudeData(c, *resp)
+			}
 		}
 		info.ClaudeConvertInfo.Done = true
 
