@@ -30,7 +30,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { DEFAULT_DISCOUNT_RATE } from '../../constants'
+import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from '../../constants'
 import { formatCurrency, getPaymentIcon } from '../../lib'
 import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 import { isInfiniPayment } from '../../lib/payment'
@@ -73,7 +73,21 @@ export function PaymentConfirmDialog({
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
 
   // Infini 专属计算
-  const isInfini = isInfiniPayment(paymentMethod?.type ?? '')
+  const paymentType = paymentMethod?.type ?? ''
+  const isInfini = isInfiniPayment(paymentType)
+  const isAlipay =
+    paymentType === PAYMENT_TYPES.ALIPAY ||
+    paymentType === PAYMENT_TYPES.ALIPAY_OFFICIAL
+  const formatCnyPaymentAmount = (amount: number) =>
+    `${formatCurrency(amount)} ${t('CNY')}`
+  const formatPaymentAmount = (amount: number) =>
+    isAlipay
+      ? formatCnyPaymentAmount(amount)
+      : formatLocalCurrencyAmount(amount, {
+          digitsLarge: 2,
+          digitsSmall: 2,
+          abbreviate: false,
+        })
   // Binance 实时汇率，优先实时值，回退系统配置
   const effectiveRate = binanceRate > 0 ? binanceRate : usdExchangeRate
   const safePrice = priceRatio > 0 ? priceRatio : 1
@@ -87,8 +101,6 @@ export function PaymentConfirmDialog({
             safePrice
         ) / DEFAULT_CURRENCY_CONFIG.quotaPerUnit
       : 0
-  // CNY 总等值
-  const cnyEquivalent = isInfini && paymentAmount > 0 ? paymentAmount * effectiveRate : 0
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -133,22 +145,14 @@ export function PaymentConfirmDialog({
                           {paymentMethod?.currency ?? 'USD'}
                         </span>
                       </>
-                    : /* 其他支付方式（支付宝、微信等）以本地货币收款，formatLocalCurrencyAmount 自动带符号 */
-                      formatLocalCurrencyAmount(paymentAmount, {
-                        digitsLarge: 2,
-                        digitsSmall: 2,
-                        abbreviate: false,
-                      })}
+                    : /* Payment gateways may use a fixed settlement currency. */
+                      formatPaymentAmount(paymentAmount)}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
                     {isInfini
                       ? formatCurrency(originalAmount)
-                      : formatLocalCurrencyAmount(originalAmount, {
-                          digitsLarge: 2,
-                          digitsSmall: 2,
-                          abbreviate: false,
-                        })}
+                      : formatPaymentAmount(originalAmount)}
                   </span>
                 )}
               </div>
@@ -160,7 +164,9 @@ export function PaymentConfirmDialog({
               <div className='flex items-center justify-between text-sm'>
                 <span className='text-muted-foreground'>{t('You save')}</span>
                 <span className='font-semibold text-green-600'>
-                  {formatCurrency(discountAmount)}
+                  {isInfini
+                    ? formatCurrency(discountAmount)
+                    : formatPaymentAmount(discountAmount)}
                 </span>
               </div>
             </div>
