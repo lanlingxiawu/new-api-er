@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 // xiugai 添加号池节点功能
 import { useEffect, useState, useCallback, useRef, startTransition } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useRouterState } from '@tanstack/react-router'
 import {
   Activity,
   AlertCircle,
@@ -430,6 +431,11 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
 
 export function NodePool() {
   const { t } = useTranslation()
+  const isNodePoolRoute = useRouterState({
+    select: (state) =>
+      state.location.pathname === '/node-pool' ||
+      state.location.pathname === '/node-pool/',
+  })
   const [nodes, setNodes] = useState<Node[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -477,6 +483,7 @@ export function NodePool() {
   }, [])
 
   const fetchNodes = useCallback(async (skipBulkCache = false) => {
+    if (!isNodePoolRoute) return
     setLoading(true)
     setError(null)
     try {
@@ -507,10 +514,12 @@ export function NodePool() {
     } finally {
       setLoading(false)
     }
-  }, [t, fetchAccounts, fetchAccountsForCache])
+  }, [t, isNodePoolRoute, fetchAccounts, fetchAccountsForCache])
 
   useEffect(() => {
-    startTransition(() => void fetchNodes())
+    // Keep the initial node fetch behavior aligned with the classic UI.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchNodes()
   }, [fetchNodes])
 
   const handleSelectNode = useCallback(
