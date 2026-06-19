@@ -24,19 +24,19 @@ import (
 
 const (
 	// Redis key 前缀
-	platformStatBufferPrefix           = "biz_buf:platform:"            // + {statDate}:{channelId}
-	commissionStatBufferPrefix         = "biz_buf:commission:"          // + {statDate}:{employeeUserId}
-	customerCommissionStatBufferPrefix = "biz_buf:customer_commission:" // + {statDate}:{employeeUserId}:{customerUserId}
-	commissionResetPeriodBufferPrefix  = "biz_buf:commission_reset_period:" // + {resetStartedAt}:{employeeUserId}
+	platformStatBufferPrefix               = "biz_buf:platform:"                      // + {statDate}:{channelId}
+	commissionStatBufferPrefix             = "biz_buf:commission:"                    // + {statDate}:{employeeUserId}
+	customerCommissionStatBufferPrefix     = "biz_buf:customer_commission:"           // + {statDate}:{employeeUserId}:{customerUserId}
+	commissionResetPeriodBufferPrefix      = "biz_buf:commission_reset_period:"       // + {resetStartedAt}:{employeeUserId}
 	commissionResetPeriodDailyBufferPrefix = "biz_buf:commission_reset_period_daily:" // + {resetStartedAt}:{statDate}:{employeeUserId}
-	redisStatProcessingPrefix          = "biz_buf:processing:"
+	redisStatProcessingPrefix              = "biz_buf:processing:"
 
 	// Redis key 的 TTL，防止 flush 失败导致 key 永驻
 	statBufferKeyTTL     = 48 * time.Hour
 	statBufferMaxRetries = 10
 
 	// 默认刷盘间隔（如果配置未指定或无效）
-	DefaultBusinessStatsFlushInterval = 5 // 秒
+	DefaultBusinessStatsFlushInterval = 8 // 秒
 )
 
 var businessStatsFlushMu sync.Mutex
@@ -250,12 +250,12 @@ var (
 	memPlatformBuf  = make(map[string]*platformStatDelta)
 	memPlatformLock sync.Mutex
 
-	memCommissionBuf          = make(map[string]*commissionStatDelta)
-	memCommissionLock         sync.Mutex
-	memCustomerCommissionBuf  = make(map[string]*customerCommissionStatDelta)
-	memCustomerCommissionLock sync.Mutex
-	memCommissionResetPeriodBuf  = make(map[string]*commissionResetPeriodDelta)
-	memCommissionResetPeriodLock sync.Mutex
+	memCommissionBuf                  = make(map[string]*commissionStatDelta)
+	memCommissionLock                 sync.Mutex
+	memCustomerCommissionBuf          = make(map[string]*customerCommissionStatDelta)
+	memCustomerCommissionLock         sync.Mutex
+	memCommissionResetPeriodBuf       = make(map[string]*commissionResetPeriodDelta)
+	memCommissionResetPeriodLock      sync.Mutex
 	memCommissionResetPeriodDailyBuf  = make(map[string]*commissionResetPeriodDailyDelta)
 	memCommissionResetPeriodDailyLock sync.Mutex
 )
@@ -629,7 +629,7 @@ func BufferPlatformDailyStat(rec *ConsumptionCost) {
 // BufferCommissionDailyStat 将员工提成侧日统计增量写入缓冲区（Redis 或内存）。
 func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
 	statDate := localDayStart(log.CreatedAt)
-	level, err := GetOrCreateTierLevel(log.EmployeeUserId)
+	level, err := GetOrCreateTierLevel(log.EmployeeUserId, true)
 	if err != nil {
 		common.SysError("BufferCommissionDailyStat: get tier level failed: " + err.Error())
 		level = nil

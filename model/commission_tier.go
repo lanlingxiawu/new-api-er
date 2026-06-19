@@ -1,6 +1,7 @@
-package model
+﻿package model
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +10,76 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ============================================================================
+// EmployeeTierLevel Redis 缓存
+// ============================================================================
+
+const tierLevelRedisKeyPrefix = "employee_tier_level:"
+
+func tierLevelRedisKey(userId int) string {
+	return fmt.Sprintf("%s%d", tierLevelRedisKeyPrefix, userId)
+}
+
+func getTierLevelFromRedis(userId int) *EmployeeTierLevel {
+	if !common.RedisEnabled {
+		return nil
+	}
+	val, err := common.RedisGet(tierLevelRedisKey(userId))
+	if err != nil {
+		return nil
+	}
+	var level EmployeeTierLevel
+	if err := common.Unmarshal([]byte(val), &level); err != nil {
+		return nil
+	}
+	return &level
+}
+
+func setTierLevelToRedis(level *EmployeeTierLevel) {
+	if !common.RedisEnabled || level == nil {
+		return
+	}
+	data, err := common.Marshal(level)
+	if err != nil {
+		return
+	}
+	if err := common.RedisSet(tierLevelRedisKey(level.UserId), string(data), 0); err != nil {
+		common.SysError("setTierLevelToRedis: " + err.Error())
+	}
+}
+
+// setTierLevelToRedisNX 仅在 key 不存在时写入（缓存回填专用）。
+// 用 Lua 脚本保证 EXISTS + SET 原子执行，防止并发回填覆盖更新侧写入的新值。
+func setTierLevelToRedisNX(level *EmployeeTierLevel) {
+	if !common.RedisEnabled || level == nil {
+		return
+	}
+	data, err := common.Marshal(level)
+	if err != nil {
+		return
+	}
+	lua := `
+		if redis.call("EXISTS", KEYS[1]) == 0 then
+			redis.call("SET", KEYS[1], ARGV[1])
+			return 1
+		end
+		return 0
+	`
+	ctx := context.Background()
+	if err := common.RDB.Eval(ctx, lua, []string{tierLevelRedisKey(level.UserId)}, string(data)).Err(); err != nil {
+		common.SysError(fmt.Sprintf("setTierLevelToRedisNX: userId=%d err=%s", level.UserId, err.Error()))
+	}
+}
+
+func deleteTierLevelFromRedis(userId int) {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := common.RedisDelKey(tierLevelRedisKey(userId)); err != nil {
+		common.SysError(fmt.Sprintf("deleteTierLevelFromRedis: userId=%d err=%s", userId, err.Error()))
+	}
+}
 
 // ============================================================================
 // 数据模型
@@ -44,11 +115,11 @@ type EmployeeTierLevel struct {
 	// UserExtension.ProfitTotalQuota/CommissionTotalQuota 的快照值（quota 单位）。
 	// "本期"值 = 对应累计值 - 基准值（结果 clamp 到 >=0）。默认 0，未发生过重置时
 	// 等价于"本期=累计"，向后兼容。
-	BaselineProfitQuota     int64 `json:"baseline_profit_quota" gorm:"column:baseline_profit_quota;not null;default:0"`
+	BaselineProfitQuota      int64 `json:"baseline_profit_quota" gorm:"column:baseline_profit_quota;not null;default:0"`
 	BaselineConsumptionQuota int64 `json:"baseline_consumption_quota" gorm:"column:baseline_consumption_quota;not null;default:0"`
 	BaselineCostQuota        int64 `json:"baseline_cost_quota" gorm:"column:baseline_cost_quota;not null;default:0"`
 	BaselineCommissionQuota  int64 `json:"baseline_commission_quota" gorm:"column:baseline_commission_quota;not null;default:0"`
-	BaselineResetAt         int64 `json:"baseline_reset_at" gorm:"column:baseline_reset_at;not null;default:0"`
+	BaselineResetAt          int64 `json:"baseline_reset_at" gorm:"column:baseline_reset_at;not null;default:0"`
 }
 
 // EmployeeTierLog 等级变更日志（只追加，用于审计溯源）。
@@ -200,7 +271,13 @@ func TierExists(id int64) (bool, error) {
 // ============================================================================
 
 // GetOrCreateTierLevel 获取员工当前等级记录，不存在则懒创建（tier_id=0）。
-func GetOrCreateTierLevel(userId int) (*EmployeeTierLevel, error) {
+// 读取顺序：Redis → DB（命中 DB 后回写 Redis）。
+func GetOrCreateTierLevel(userId int, readCache bool) (*EmployeeTierLevel, error) {
+	if readCache {
+		if level := getTierLevelFromRedis(userId); level != nil {
+			return level, nil
+		}
+	}
 	var level EmployeeTierLevel
 	err := DB.Where("user_id = ?", userId).First(&level).Error
 	if err == gorm.ErrRecordNotFound {
@@ -215,12 +292,18 @@ func GetOrCreateTierLevel(userId int) (*EmployeeTierLevel, error) {
 				return nil, err2
 			}
 		}
+		setTierLevelToRedisNX(&level)
 		return &level, nil
 	}
-	return &level, err
+	if err != nil {
+		return nil, err
+	}
+	setTierLevelToRedisNX(&level)
+	return &level, nil
 }
 
 // SetTierLevel 更新员工等级（admin/system 调用）并写入变更日志。
+// 先更新 Redis 再写 DB。
 func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, remark string, profitSnapshotUsd float64) error {
 	if newTierId > 0 {
 		exists, err := TierExists(newTierId)
@@ -232,21 +315,48 @@ func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, re
 		}
 	}
 
-	level, err := GetOrCreateTierLevel(userId)
+	level, err := GetOrCreateTierLevel(userId, false)
 	if err != nil {
 		return err
 	}
 	fromTierId := level.TierId
 
 	now := time.Now().Unix()
-	if err := DB.Model(&EmployeeTierLevel{}).Where("user_id = ?", userId).Updates(map[string]interface{}{
+
+	// 先更新 Redis
+	level.TierId = newTierId
+	level.Source = source
+	level.EffectiveAt = now
+	level.Remark = remark
+	level.UpdatedBy = operatedBy
+	setTierLevelToRedis(level)
+
+	// 再写 DB；若记录不存在则创建（防止 GetOrCreateTierLevel 与本次写入之间记录被删除的极端情况）
+	result := DB.Model(&EmployeeTierLevel{}).Where("user_id = ?", userId).Updates(map[string]interface{}{
 		"tier_id":      newTierId,
 		"source":       source,
 		"effective_at": now,
 		"remark":       remark,
 		"updated_by":   operatedBy,
-	}).Error; err != nil {
-		return err
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		newRecord := &EmployeeTierLevel{
+			UserId:      userId,
+			TierId:      newTierId,
+			Source:      source,
+			EffectiveAt: now,
+			Remark:      remark,
+			UpdatedBy:   operatedBy,
+		}
+		if err := DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"tier_id", "source", "effective_at", "remark", "updated_by"}),
+		}).Create(newRecord).Error; err != nil {
+			return err
+		}
 	}
 
 	log := &EmployeeTierLog{
@@ -270,7 +380,7 @@ func TryAutoUpgradeTier(userId int, currentProfit int64) {
 	}
 
 	// 找到当前利润（USD）能达到的最高等级（按 level ASC 已排序）
-	level, err := GetOrCreateTierLevel(userId)
+	level, err := GetOrCreateTierLevel(userId, true)
 	if err != nil {
 		return
 	}
@@ -338,7 +448,7 @@ func getTierThresholdUsd(tiers []*EmployeeCommissionTier, tierId int64) float64 
 // 提成率统一由员工当前等级决定，不再支持自定义比例。
 // 未绑定等级时返回 0（不计提成）。
 func GetEffectiveCommissionRate(userId int) float64 {
-	level, err := GetOrCreateTierLevel(userId)
+	level, err := GetOrCreateTierLevel(userId, true)
 	if err != nil || level.TierId == 0 {
 		return 0
 	}
@@ -381,7 +491,7 @@ func GetTierLogs(filter TierLogFilter) ([]*EmployeeTierLog, int64, error) {
 
 // GetTierLevelByUserId 获取指定员工的当前等级（附带等级信息），用于列表展示。
 func GetTierLevelByUserId(userId int) (*EmployeeTierLevel, *EmployeeCommissionTier) {
-	level, err := GetOrCreateTierLevel(userId)
+	level, err := GetOrCreateTierLevel(userId, true)
 	if err != nil || level.TierId == 0 {
 		return level, nil
 	}
@@ -443,7 +553,7 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 	}
 	if len(employeeUserIds) > 0 {
 		for _, userId := range employeeUserIds {
-			if _, ensureErr := GetOrCreateTierLevel(userId); ensureErr != nil {
+			if _, ensureErr := GetOrCreateTierLevel(userId, true); ensureErr != nil {
 				return 0, 0, ensureErr
 			}
 		}
@@ -502,10 +612,24 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 						commissionTotal = ext.CommissionTotalQuota
 					}
 					common.SysError(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d has orphaned tierId=%d, refreshing baseline only", level.UserId, level.TierId))
+
+					// 先更新 Redis
+					updated := *level
+					updated.Source = "reset"
+					updated.EffectiveAt = operatedAt
+					updated.UpdatedBy = operatedBy
+					updated.BaselineConsumptionQuota = consumptionTotal
+					updated.BaselineCostQuota = costTotal
+					updated.BaselineProfitQuota = profitTotal
+					updated.BaselineCommissionQuota = commissionTotal
+					updated.BaselineResetAt = resetAt
+					setTierLevelToRedis(&updated)
+
+					// 再写 DB
 					updates := map[string]interface{}{
-						"source":                    "reset",
-						"effective_at":              operatedAt,
-						"remark":                    "鏈堝害鑷姩閲嶇疆",
+						"source":                     "reset",
+						"effective_at":               operatedAt,
+						"remark":                     "月度自动重置",
 						"updated_by":                 operatedBy,
 						"baseline_consumption_quota": consumptionTotal,
 						"baseline_cost_quota":        costTotal,
@@ -582,11 +706,26 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 				}
 			}
 
+			// 先更新 Redis
+			updated := *level
+			updated.TierId = targetTierId
+			updated.Source = "reset"
+			updated.EffectiveAt = operatedAt
+			updated.Remark = "月度自动重置"
+			updated.UpdatedBy = operatedBy
+			updated.BaselineConsumptionQuota = consumptionTotal
+			updated.BaselineCostQuota = costTotal
+			updated.BaselineProfitQuota = profitTotal
+			updated.BaselineCommissionQuota = commissionTotal
+			updated.BaselineResetAt = resetAt
+			setTierLevelToRedis(&updated)
+
+			// 再写 DB
 			updates := map[string]interface{}{
-				"tier_id":                   targetTierId,
-				"source":                    "reset",
-				"effective_at":              operatedAt,
-				"remark":                    "月度自动重置",
+				"tier_id":                    targetTierId,
+				"source":                     "reset",
+				"effective_at":               operatedAt,
+				"remark":                     "月度自动重置",
 				"updated_by":                 operatedBy,
 				"baseline_consumption_quota": consumptionTotal,
 				"baseline_cost_quota":        costTotal,
@@ -600,6 +739,8 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 			}
 			if res.RowsAffected == 0 {
 				common.SysLog(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d skipped due to concurrent tier update", level.UserId))
+				// DB 未更新（并发冲突），删除刚写入的 Redis key，避免缓存与实际不符
+				deleteTierLevelFromRedis(level.UserId)
 				continue
 			}
 
