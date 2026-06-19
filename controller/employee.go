@@ -375,7 +375,7 @@ func AdminUpdateEmployee(c *gin.Context) {
 	if req.TierId > 0 {
 		existingEmp, _ := model.GetEmployeeById(id)
 		if existingEmp != nil {
-			currentLevel, _ := model.GetOrCreateTierLevel(existingEmp.UserId)
+			currentLevel, _ := model.GetOrCreateTierLevel(existingEmp.UserId, false)
 			if currentLevel == nil || currentLevel.TierId != req.TierId {
 				operatedBy := c.GetInt("id")
 				if err := model.SetTierLevel(existingEmp.UserId, req.TierId, "manual", operatedBy, "", 0); err != nil {
