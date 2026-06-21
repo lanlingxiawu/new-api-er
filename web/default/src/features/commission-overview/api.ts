@@ -102,6 +102,75 @@ export async function getChannelProfitPage(params?: {
   return res.data
 }
 
+export type LedgerTag = 'reversal' | 'loss' | 'profit' | 'zero_revenue'
+
+export interface LedgerCursor {
+  created_at: number
+  id: number
+}
+
+export interface ConsumptionCostLedgerItem {
+  id: number
+  log_id?: number | null
+  user_id: number
+  channel_id: number
+  channel_name: string
+  group_name: string
+  model_name: string
+  revenue_quota: number
+  cost_quota: number
+  profit_quota: number
+  gross_margin?: number | null
+  group_ratio: number
+  cost_ratio: number
+  created_at: number
+  tags: LedgerTag[]
+}
+
+export interface LedgerListParams {
+  start_time?: number
+  end_time?: number
+  limit?: number
+  cursor_created_at?: number
+  cursor_id?: number
+  id?: number
+  log_id?: number
+  user_id?: number
+  channel_id?: number
+  model_name?: string
+  group_name?: string
+  tag?: LedgerTag
+}
+
+export interface LedgerListResponse {
+  success: boolean
+  message?: string
+  data?: {
+    items: ConsumptionCostLedgerItem[]
+    has_more: boolean
+    next_cursor?: LedgerCursor | null
+  }
+}
+
+export interface LedgerStats {
+  record_count: number
+  total_revenue_quota: number
+  total_cost_quota: number
+  total_profit_quota: number
+  gross_margin?: number | null
+}
+
+export interface LedgerStatsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    stats?: LedgerStats | null
+    stats_status: 'ready' | 'pending' | 'unsupported'
+    stats_running_count?: number
+    stats_running_limit?: number
+  }
+}
+
 export async function getCommissionOverview(params?: {
   start_time?: number
   end_time?: number
@@ -122,5 +191,96 @@ export async function getCommissionOverview(params?: {
   if (params?.employee_page_size)
     q.set('employee_page_size', String(params.employee_page_size))
   const res = await api.get(`/api/admin/employee/overview?${q.toString()}`)
+  return res.data
+}
+
+function appendLedgerParams(q: URLSearchParams, params?: LedgerListParams) {
+  if (!params) return
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    q.set(key, String(value))
+  })
+}
+
+export async function getConsumptionCostLedger(
+  params?: LedgerListParams
+): Promise<LedgerListResponse> {
+  const q = new URLSearchParams()
+  appendLedgerParams(q, params)
+  const res = await api.get(
+    `/api/admin/employee/consumption-cost-ledger?${q.toString()}`,
+    { skipErrorHandler: true, disableDuplicate: true }
+  )
+  return res.data
+}
+
+export interface LedgerExportJob {
+  job_id: string
+  status: 'pending' | 'running' | 'ready' | 'failed'
+  progress: number
+  row_count: number
+  error?: string
+}
+
+export interface LedgerExportCreateResponse {
+  success: boolean
+  message?: string
+  data?: { job_id: string }
+}
+
+export interface LedgerExportStatusResponse {
+  success: boolean
+  message?: string
+  data?: LedgerExportJob
+}
+
+export async function createLedgerExport(
+  params?: LedgerListParams
+): Promise<LedgerExportCreateResponse> {
+  const q = new URLSearchParams()
+  appendLedgerParams(q, params)
+  const res = await api.post(
+    `/api/admin/employee/consumption-cost-ledger/export?${q.toString()}`,
+    null,
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function getLedgerExportStatus(
+  jobId: string
+): Promise<LedgerExportStatusResponse> {
+  const res = await api.get(
+    `/api/admin/employee/consumption-cost-ledger/export/${jobId}`,
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export interface LedgerExportDownloadURLResponse {
+  success: boolean
+  message?: string
+  data?: { url: string }
+}
+
+export async function getLedgerExportDownloadURL(
+  jobId: string
+): Promise<LedgerExportDownloadURLResponse> {
+  const res = await api.get(
+    `/api/admin/employee/consumption-cost-ledger/export/${jobId}/download-url`,
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function getConsumptionCostLedgerStats(
+  params?: LedgerListParams
+): Promise<LedgerStatsResponse> {
+  const q = new URLSearchParams()
+  appendLedgerParams(q, params)
+  const res = await api.get(
+    `/api/admin/employee/consumption-cost-ledger/stats?${q.toString()}`,
+    { skipErrorHandler: true, disableDuplicate: true }
+  )
   return res.data
 }
