@@ -432,6 +432,7 @@ func SetApiRouter(router *gin.Engine) {
 			requestLogRoute.GET("/", controller.GetAllRequestLogs)
 			requestLogRoute.GET("/:id", controller.GetRequestLogDetail)
 			requestLogRoute.DELETE("/", controller.DeleteHistoryRequestLogs)
+			requestLogRoute.DELETE("/all", controller.ClearAllRequestLogs)
 		}
 
 		dataRoute := apiRouter.Group("/data")

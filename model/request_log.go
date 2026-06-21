@@ -90,7 +90,7 @@ func requestLogCtx() context.Context {
 }
 
 func useRedisForRequestLog() bool {
-	return common.RedisEnabled && common.RDB != nil
+	return common.RedisEnabled && common.RequestLogRDB != nil
 }
 
 // cloneRequestLogMeta 返回去除大字段的浅拷贝，用于列表展示。
@@ -135,7 +135,7 @@ func recordRequestLogMemory(log *RequestLog) {
 
 func recordRequestLogRedis(log *RequestLog) {
 	ctx := requestLogCtx()
-	id, err := common.RDB.Incr(ctx, requestLogSeqKey).Result()
+	id, err := common.RequestLogRDB.Incr(ctx, requestLogSeqKey).Result()
 	if err != nil {
 		common.SysLog("failed to gen request log id: " + err.Error())
 		return
@@ -162,7 +162,7 @@ func recordRequestLogRedis(log *RequestLog) {
 	}
 
 	idStr := strconv.FormatInt(id, 10)
-	pipe := common.RDB.Pipeline()
+	pipe := common.RequestLogRDB.Pipeline()
 	pipe.Set(ctx, requestLogMetaKey+idStr, string(metaStr), 0)
 	pipe.Set(ctx, requestLogBodyKey+idStr, string(bodyStr), 0)
 	pipe.LPush(ctx, requestLogIndexKey, idStr)
@@ -177,15 +177,15 @@ func recordRequestLogRedis(log *RequestLog) {
 // trimRequestLogsRedis 当条数超过最大值时，仅保留最新的最小值条数，并删除被淘汰条目的明细。
 func trimRequestLogsRedis(ctx context.Context) {
 	maxCount, minCount := effectiveRequestLogLimits()
-	total, err := common.RDB.LLen(ctx, requestLogIndexKey).Result()
+	total, err := common.RequestLogRDB.LLen(ctx, requestLogIndexKey).Result()
 	if err != nil || total <= int64(maxCount) {
 		return
 	}
-	staleIds, err := common.RDB.LRange(ctx, requestLogIndexKey, int64(minCount), -1).Result()
+	staleIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, int64(minCount), -1).Result()
 	if err != nil {
 		return
 	}
-	pipe := common.RDB.Pipeline()
+	pipe := common.RequestLogRDB.Pipeline()
 	for _, idStr := range staleIds {
 		pipe.Del(ctx, requestLogMetaKey+idStr)
 		pipe.Del(ctx, requestLogBodyKey+idStr)
@@ -236,7 +236,7 @@ func getRequestLogMetaByIds(ctx context.Context, ids []string) []*RequestLog {
 	for i, idStr := range ids {
 		keys[i] = requestLogMetaKey + idStr
 	}
-	values, err := common.RDB.MGet(ctx, keys...).Result()
+	values, err := common.RequestLogRDB.MGet(ctx, keys...).Result()
 	if err != nil {
 		return logs
 	}
@@ -301,14 +301,14 @@ func getAllRequestLogsRedis(username string, modelName string, channel int, requ
 
 	if !hasFilter {
 		// 无过滤：先对 id 分页，再仅加载该页 meta
-		total, err := common.RDB.LLen(ctx, requestLogIndexKey).Result()
+		total, err := common.RequestLogRDB.LLen(ctx, requestLogIndexKey).Result()
 		if err != nil {
 			return logs, 0, err
 		}
 		if int64(startIdx) >= total || num <= 0 {
 			return logs, total, nil
 		}
-		ids, err := common.RDB.LRange(ctx, requestLogIndexKey, int64(startIdx), int64(startIdx+num-1)).Result()
+		ids, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, int64(startIdx), int64(startIdx+num-1)).Result()
 		if err != nil {
 			return logs, total, err
 		}
@@ -316,7 +316,7 @@ func getAllRequestLogsRedis(username string, modelName string, channel int, requ
 	}
 
 	// 有过滤：加载全部 meta（条数受 max 限制，规模可控），过滤后分页
-	allIds, err := common.RDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
+	allIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
 	if err != nil {
 		return logs, 0, err
 	}
@@ -354,7 +354,7 @@ func GetRequestLogById(id int) (*RequestLog, error) {
 
 	ctx := requestLogCtx()
 	idStr := strconv.Itoa(id)
-	metaStr, err := common.RDB.Get(ctx, requestLogMetaKey+idStr).Result()
+	metaStr, err := common.RequestLogRDB.Get(ctx, requestLogMetaKey+idStr).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +362,7 @@ func GetRequestLogById(id int) (*RequestLog, error) {
 	if err := common.UnmarshalJsonStr(metaStr, &log); err != nil {
 		return nil, err
 	}
-	if bodyStr, bErr := common.RDB.Get(ctx, requestLogBodyKey+idStr).Result(); bErr == nil {
+	if bodyStr, bErr := common.RequestLogRDB.Get(ctx, requestLogBodyKey+idStr).Result(); bErr == nil {
 		var body requestLogBody
 		if common.UnmarshalJsonStr(bodyStr, &body) == nil {
 			log.RequestHeaders = body.RequestHeaders
@@ -393,13 +393,13 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 	}
 
 	ctx := requestLogCtx()
-	allIds, err := common.RDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
+	allIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
 	if err != nil {
 		return 0, err
 	}
 	all := getRequestLogMetaByIds(ctx, allIds)
 	var deleted int64
-	pipe := common.RDB.Pipeline()
+	pipe := common.RequestLogRDB.Pipeline()
 	for _, log := range all {
 		if log.CreatedAt < targetTimestamp {
 			idStr := strconv.Itoa(log.Id)
@@ -415,4 +415,50 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 		}
 	}
 	return deleted, nil
+}
+
+// ClearAllRequestLogs 清除 Redis（或内存兜底）中存储的全部请求日志，返回清除条数。
+// 仅删除请求日志自身的键（索引 + 每条的 meta/body），不触碰其他逻辑。
+func ClearAllRequestLogs() (int64, error) {
+	if !useRedisForRequestLog() {
+		memRequestLogMu.Lock()
+		defer memRequestLogMu.Unlock()
+		cleared := int64(len(memRequestLogs))
+		memRequestLogs = nil
+		return cleared, nil
+	}
+
+	ctx := requestLogCtx()
+	ids, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
+	if err != nil {
+		return 0, err
+	}
+	// 先删索引键，使后续查询立即读到空列表，避免读到将被删除的明细。
+	if err = common.RequestLogRDB.Del(ctx, requestLogIndexKey).Err(); err != nil {
+		return 0, err
+	}
+	// 分批删除每条日志的 meta/body，避免单个 pipeline 命令数过大。
+	const clearBatchSize = 1000
+	var cleared int64
+	pipe := common.RequestLogRDB.Pipeline()
+	pending := 0
+	for _, idStr := range ids {
+		pipe.Del(ctx, requestLogMetaKey+idStr)
+		pipe.Del(ctx, requestLogBodyKey+idStr)
+		pending++
+		cleared++
+		if pending >= clearBatchSize {
+			if _, err = pipe.Exec(ctx); err != nil {
+				return cleared, err
+			}
+			pipe = common.RequestLogRDB.Pipeline()
+			pending = 0
+		}
+	}
+	if pending > 0 {
+		if _, err = pipe.Exec(ctx); err != nil {
+			return cleared, err
+		}
+	}
+	return cleared, nil
 }

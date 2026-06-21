@@ -62,6 +62,11 @@ export async function deleteLogsBefore(targetTimestamp: number) {
   return res.data
 }
 
+export async function clearAllRequestLogs() {
+  const res = await api.delete<DeleteLogsResponse>('/api/request-log/all')
+  return res.data
+}
+
 export async function resetModelRatios() {
   const res = await api.post<UpdateOptionResponse>(
     '/api/option/rest_model_ratio'
