@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 import type {
+  BusinessStatsCircuitBreakerStatusResponse,
   ConfirmPaymentComplianceResponse,
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
@@ -35,6 +36,14 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  return res.data
+}
+
+export async function getBusinessStatsCircuitBreakerStatus() {
+  const res = await api.get<BusinessStatsCircuitBreakerStatusResponse>(
+    '/api/option/business-stats-circuit-breaker/status',
+    { disableDuplicate: true }
+  )
   return res.data
 }
 

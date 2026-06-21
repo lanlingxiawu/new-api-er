@@ -724,6 +724,71 @@ func AdminCommissionOverview(c *gin.Context) {
 	})
 }
 
+// AdminChannelProfitPage GET /api/admin/employee/overview/channels
+func AdminChannelProfitPage(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	page, pageSize := normalizePrefixedPage(c, "channel_")
+	keyword := strings.ToLower(strings.TrimSpace(c.Query("channel_keyword")))
+	sortBy := strings.TrimSpace(c.DefaultQuery("channel_sort_by", "est_profit_quota"))
+	sortOrder := strings.ToLower(strings.TrimSpace(c.DefaultQuery("channel_sort_order", "desc")))
+	if sortOrder != "asc" {
+		sortOrder = "desc"
+	}
+
+	queryPlan, err := model.ResolveBusinessStatsDailyOnlyQueryPlanWithContext(ctx, timeRange.StartTime, timeRange.EndTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	stats, total, err := model.GetConsumptionCostByChannelPageWithPlan(queryPlan, page, pageSize, keyword, sortBy, sortOrder)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	type channelProfitItem struct {
+		ChannelId        int     `json:"channel_id"`
+		ChannelName      string  `json:"channel_name"`
+		ConsumptionQuota int64   `json:"consumption_quota"`
+		EstCostQuota     int64   `json:"est_cost_quota"`
+		EstProfitQuota   int64   `json:"est_profit_quota"`
+		EstGrossMargin   float64 `json:"est_gross_margin"`
+		CostRatio        float64 `json:"cost_ratio"`
+	}
+	items := make([]channelProfitItem, 0, len(stats))
+	for _, s := range stats {
+		item := channelProfitItem{
+			ChannelId:        s.ChannelId,
+			ConsumptionQuota: s.TotalRevenue,
+			EstCostQuota:     s.TotalCost,
+			EstProfitQuota:   s.TotalRevenue - s.TotalCost,
+			CostRatio:        s.CostRatio,
+			ChannelName:      s.ChannelName,
+		}
+		if s.TotalRevenue != 0 {
+			item.EstGrossMargin = float64(item.EstProfitQuota) / float64(s.TotalRevenue)
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"items":     items,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		},
+	})
+}
+
 // ============================================================================
 // Admin channel cost configuration
 // ============================================================================
@@ -981,6 +1046,8 @@ func AdminGetTierResetConfig(c *gin.Context) {
 // 并刷新周期基准（不影响历史累计数据、台账明细及待结算/已结算提成余额）。
 func AdminTriggerTierReset(c *gin.Context) {
 	operatedBy := c.GetInt("id")
+	// 用 time.Now() 作为 resetAt，使 BaselineResetAt 取当前时刻，与重置前的 reset_started_at
+	// 形成区别，从而让日历只显示重置后产生的新数据，达到"清空"旧统计的效果。
 	resetAt := time.Now().Unix()
 	processed, err := service.RunCommissionTierResetNow(resetAt, operatedBy)
 	if err != nil {

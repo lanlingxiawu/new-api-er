@@ -67,6 +67,41 @@ export interface OverviewResponse {
   data?: OverviewData
 }
 
+export interface ChannelProfitPageResponse {
+  success: boolean
+  message?: string
+  data?: {
+    items: ChannelProfitStat[]
+    total: number
+    page: number
+    page_size: number
+  }
+}
+
+export async function getChannelProfitPage(params?: {
+  start_time?: number
+  end_time?: number
+  channel_page?: number
+  channel_page_size?: number
+  channel_keyword?: string
+  channel_sort_by?: string
+  channel_sort_order?: string
+}): Promise<ChannelProfitPageResponse> {
+  const q = new URLSearchParams()
+  appendUnixTimeRangeParams(q, params)
+  if (params?.channel_page) q.set('channel_page', String(params.channel_page))
+  if (params?.channel_page_size)
+    q.set('channel_page_size', String(params.channel_page_size))
+  if (params?.channel_keyword) q.set('channel_keyword', params.channel_keyword)
+  if (params?.channel_sort_by) q.set('channel_sort_by', params.channel_sort_by)
+  if (params?.channel_sort_order)
+    q.set('channel_sort_order', params.channel_sort_order)
+  const res = await api.get(
+    `/api/admin/employee/overview/channels?${q.toString()}`
+  )
+  return res.data
+}
+
 export async function getCommissionOverview(params?: {
   start_time?: number
   end_time?: number
