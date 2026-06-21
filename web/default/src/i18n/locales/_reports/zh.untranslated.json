@@ -1,4 +1,7 @@
 {
+  "Downloading ({{progress}}%)": "下载中 ({{progress}}%)",
+  "Export complete — {{count}} rows": "导出完成，共 {{count}} 条",
+  "Exporting ({{progress}}%)": "导出中 ({{progress}}%)",
   "New API": "New API",
   "New API &lt;noreply@example.com&gt;": "New API &lt;noreply@example.com&gt;",
   "Twitter / X": "Twitter / X"

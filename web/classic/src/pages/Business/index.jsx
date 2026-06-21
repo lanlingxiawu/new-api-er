@@ -24,6 +24,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Button,
@@ -58,6 +59,7 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
+  Download,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -371,6 +373,156 @@ const formatTargetAmount = (value) => {
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
 };
 
+const LEDGER_PAGE_SIZE = 100;
+const LEDGER_STATS_AUTO_REFRESH_LIMIT = 100;
+const LEDGER_STATS_AUTO_REFRESH_DELAY_MS = 3000;
+const LEDGER_EXPORT_POLLING_DELAY_MS = 3000;
+const LEDGER_MAX_RANGE_MS = 24 * 60 * 60 * 1000 - 1000;
+const LEDGER_TABLE_SCROLL_X = 1660;
+const LEDGER_EMPTY_PAGE_AUTO_ADVANCE_LIMIT = 5;
+const translateLedgerMessage = (t, message, fallback = 'Request failed') => {
+  if (!message) return t(fallback);
+  if (message === 'context deadline exceeded') {
+    return t('Export timed out. Please narrow the time range and try again.');
+  }
+  const notReady = message.match(/^Export is not ready \(status: (.+)\)\.$/);
+  if (notReady) {
+    return t('Export is not ready (status: {{status}}).', {
+      status: notReady[1],
+    });
+  }
+  if (message.startsWith('invalid ')) {
+    return t('Invalid {{param}}', {
+      param: message.slice('invalid '.length),
+    });
+  }
+  return t(message);
+};
+const clampLedgerDateTimeToNow = (value) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return date;
+  const now = new Date();
+  if (
+    date.toDateString() === now.toDateString() &&
+    date.getTime() > now.getTime()
+  ) {
+    return now;
+  }
+  return date;
+};
+const startOfLedgerDay = (value) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const defaultLedgerFilters = () => {
+  const start = startOfLedgerDay(new Date());
+  const end = start ? new Date(start) : null;
+  if (end) end.setHours(23, 59, 59, 0);
+  return {
+    start_time: start,
+    end_time: end ? clampLedgerDateTimeToNow(end) : end,
+    id: '',
+    log_id: '',
+    user_id: '',
+    channel_id: '',
+    model_name: '',
+    group_name: '',
+    tag: '',
+  };
+};
+
+const ledgerDateToUnix = (value) => {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return Math.floor(date.getTime() / 1000);
+};
+
+const ledgerEndDateToUnix = (value) => {
+  const timestamp = ledgerDateToUnix(value);
+  return timestamp === undefined ? undefined : timestamp + 1;
+};
+
+const ledgerNumber = (value) => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+};
+
+const buildLedgerParams = (filters, cursor) => {
+  const params = buildParams({
+    start_time: ledgerDateToUnix(filters.start_time),
+    end_time: ledgerEndDateToUnix(filters.end_time),
+    limit: LEDGER_PAGE_SIZE,
+    id: ledgerNumber(filters.id),
+    log_id: ledgerNumber(filters.log_id),
+    user_id: ledgerNumber(filters.user_id),
+    channel_id: ledgerNumber(filters.channel_id),
+    model_name: filters.model_name?.trim(),
+    group_name: filters.group_name?.trim(),
+    tag: filters.tag || undefined,
+  });
+  if (cursor) {
+    params.cursor_created_at = cursor.created_at;
+    params.cursor_id = cursor.id;
+  }
+  return params;
+};
+
+const ledgerTagLabel = (tag, t) => {
+  const map = {
+    reversal: t('Reversal'),
+    loss: t('Loss'),
+    profit: t('Profit'),
+    zero_revenue: t('Zero revenue'),
+  };
+  return map[tag] || tag;
+};
+
+const sortLedgerTags = (tags = []) => {
+  const order = {
+    loss: 0,
+    profit: 1,
+    reversal: 2,
+    zero_revenue: 3,
+  };
+  return [...tags].sort((a, b) => (order[a] ?? 99) - (order[b] ?? 99));
+};
+
+const visibleLedgerTags = (row) => Array.isArray(row?.tags) ? row.tags : [];
+
+const ledgerTagColor = (tag) => {
+  switch (tag) {
+    case 'profit': return 'green';
+    case 'loss': return 'red';
+    case 'reversal': return 'orange';
+    case 'zero_revenue': return 'light-blue';
+    default: return undefined;
+  }
+};
+
+const computeLedgerSubtotal = (rows) => {
+  const stats = {
+    record_count: rows.length,
+    total_revenue_quota: 0,
+    total_cost_quota: 0,
+    total_profit_quota: 0,
+    gross_margin: null,
+  };
+  rows.forEach((row) => {
+    stats.total_revenue_quota += Number(row.revenue_quota || 0);
+    stats.total_cost_quota += Number(row.cost_quota || 0);
+    stats.total_profit_quota += Number(row.profit_quota || 0);
+  });
+  if (stats.total_revenue_quota !== 0) {
+    stats.gross_margin = stats.total_profit_quota / stats.total_revenue_quota;
+  }
+  return stats;
+};
+
 const usageLogPreviewCache = new Map();
 
 function CommissionLogIdHover({ logId, selfView = false }) {
@@ -596,13 +748,17 @@ function ClassicDescription({
   description,
   icon: Icon,
   color = 'var(--semi-color-primary)',
+  titleExtra,
 }) {
   return (
     <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
       <div className='flex items-center'>
         {Icon ? <Icon size={16} className='mr-2' color={color} /> : null}
         <div>
-          <Text strong>{title}</Text>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Text strong>{title}</Text>
+            {titleExtra}
+          </div>
           {description ? (
             <div>
               <Text type='secondary' size='small'>
@@ -651,7 +807,9 @@ function BusinessCard({
   description,
   icon,
   color,
+  titleExtra,
   actions,
+  actionsFullWidth = false,
   searchArea,
   pagination,
   children,
@@ -669,6 +827,7 @@ function BusinessCard({
           description={description}
           icon={icon}
           color={color}
+          titleExtra={titleExtra}
         />
       }
       searchArea={
@@ -676,7 +835,9 @@ function BusinessCard({
         (actions ? (
           <div className='flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full'>
             <div />
-            <div className='flex flex-wrap justify-end gap-2 w-full md:w-auto'>
+            <div
+              className={`flex flex-wrap justify-end gap-2 w-full ${actionsFullWidth ? '' : 'md:w-auto'}`}
+            >
               {actions}
             </div>
           </div>
@@ -690,7 +851,7 @@ function BusinessCard({
   );
 }
 
-function ClassicBusinessTable({
+const ClassicBusinessTable = React.memo(function ClassicBusinessTable({
   className = '',
   wrapperClassName = '',
   wrapperStyle,
@@ -706,8 +867,17 @@ function ClassicBusinessTable({
   const wrapperRef = useRef(null);
   const sentinelRef = useRef(null);
   const userScrolledRef = useRef(false);
+  const loadMoreArmedRef = useRef(true);
   const requestLoadMore = useCallback(() => {
-    if (!userScrolledRef.current || !hasMore || loading || !onLoadMore) return;
+    if (
+      !userScrolledRef.current ||
+      !loadMoreArmedRef.current ||
+      !hasMore ||
+      loading ||
+      !onLoadMore
+    )
+      return;
+    loadMoreArmedRef.current = false;
     onLoadMore();
   }, [hasMore, loading, onLoadMore]);
 
@@ -722,6 +892,9 @@ function ClassicBusinessTable({
       const target = event.currentTarget;
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
+      if (distanceToBottom > 96) {
+        loadMoreArmedRef.current = true;
+      }
       if (distanceToBottom <= 24) {
         requestLoadMore();
       }
@@ -731,6 +904,7 @@ function ClassicBusinessTable({
 
   useEffect(() => {
     userScrolledRef.current = false;
+    loadMoreArmedRef.current = true;
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     wrapper.scrollTop = 0;
@@ -753,6 +927,9 @@ function ClassicBusinessTable({
       const target = event.currentTarget;
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
+      if (distanceToBottom > 96) {
+        loadMoreArmedRef.current = true;
+      }
       if (distanceToBottom <= 24) {
         requestLoadMoreRef.current();
       }
@@ -798,7 +975,7 @@ function ClassicBusinessTable({
       <div ref={sentinelRef} style={{ height: 1 }} aria-hidden='true' />
     </div>
   );
-}
+});
 
 function BusinessEmpty({ description }) {
   return (
@@ -5091,8 +5268,714 @@ function rangeToParams(range) {
   };
 }
 
+function formatLoadedLedgerRowsTimeRange(rows) {
+  if (!rows.length) return '-';
+  let start = Number(rows[0]?.created_at || 0);
+  let end = start;
+  rows.forEach((row) => {
+    const createdAt = Number(row.created_at || 0);
+    if (createdAt < start) start = createdAt;
+    if (createdAt > end) end = createdAt;
+  });
+  return `${formatTs(start)} - ${formatTs(end)}`;
+}
+
+function ClassicLedgerStatsStrip({ title, stats, timeRange, t }) {
+  const items = [
+    timeRange ? [t('Date Range'), timeRange] : null,
+    [title, stats?.record_count || 0],
+    [
+      t('Revenue'),
+      <AmountText value={stats?.total_revenue_quota || 0} positive={false} />,
+    ],
+    [
+      t('Cost'),
+      <AmountText value={stats?.total_cost_quota || 0} positive={false} />,
+    ],
+    [t('Profit'), <AmountText value={stats?.total_profit_quota || 0} />],
+    [
+      t('Gross margin'),
+      stats?.gross_margin == null ? '-' : formatPercent(stats.gross_margin),
+    ],
+  ].filter(Boolean);
+  return (
+    <div
+      className='flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border px-4 py-1.5'
+      style={{
+        borderColor: 'var(--semi-color-border)',
+        background: 'var(--semi-color-fill-0)',
+      }}
+    >
+      {items.map(([label, value]) => (
+        <span key={label} className='inline-flex min-w-0 items-center gap-1.5'>
+          <Text type='secondary' size='small' ellipsis>
+            {label}
+          </Text>
+          <span className='text-xs font-semibold tabular-nums'>{value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ClassicLedgerTotalStatsCards({ title, stats, t }) {
+  const items = [
+    [title, stats?.record_count || 0],
+    [
+      t('Revenue'),
+      <AmountText value={stats?.total_revenue_quota || 0} positive={false} />,
+    ],
+    [
+      t('Cost'),
+      <AmountText value={stats?.total_cost_quota || 0} positive={false} />,
+    ],
+    [t('Profit'), <AmountText value={stats?.total_profit_quota || 0} />],
+    [
+      t('Gross margin'),
+      stats?.gross_margin == null ? '-' : formatPercent(stats.gross_margin),
+    ],
+  ].filter(Boolean);
+  return (
+    <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-2'>
+      {items.map(([label, value]) => (
+        <Card
+          key={label}
+          bodyStyle={{ padding: '10px 12px' }}
+          style={{ height: '100%' }}
+        >
+          <div className='min-w-0'>
+            <Text type='secondary' size='small' ellipsis>
+              {label}
+            </Text>
+            <div className='mt-1 min-w-0 truncate text-sm font-semibold tabular-nums'>
+              {value}
+            </div>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function ClassicLedgerDetail({ filterPortalTarget }) {
+  const { t } = useTranslation();
+  const [compactMode, setCompactMode] = useTableCompactMode(
+    'consumptionCostLedger',
+  );
+  const [filters, setFilters] = useState(() => defaultLedgerFilters());
+  const [rows, setRows] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [filterStats, setFilterStats] = useState(null);
+  const [statsStatus, setStatsStatus] = useState('');
+  const [statsRunningCount, setStatsRunningCount] = useState(0);
+  const [statsRunningLimit, setStatsRunningLimit] = useState(2);
+  const [searchKey, setSearchKey] = useState(0);
+  const [exportJob, setExportJob] = useState(null);
+  const [exportLoading, setExportLoading] = useState(false);
+  const exportPollingRef = useRef(null);
+
+  const statsRefreshCountRef = useRef(0);
+  const statsLoadingRef = useRef(false);
+  const loadingRef = useRef(false);
+  const subtotal = useMemo(() => computeLedgerSubtotal(rows), [rows]);
+  const loadedRowsTimeRange = useMemo(
+    () => formatLoadedLedgerRowsTimeRange(rows),
+    [rows],
+  );
+
+  const updateFilter = (key, value) => {
+    setFilters((previous) =>
+      previous[key] === value ? previous : { ...previous, [key]: value },
+    );
+  };
+  const updateTimeFilter = (key, value) => {
+    setFilters((previous) => {
+      if (!value) return { ...previous, [key]: value };
+      const selected = clampLedgerDateTimeToNow(
+        value instanceof Date ? value : new Date(value),
+      );
+      if (Number.isNaN(selected.getTime())) {
+        return { ...previous, [key]: value };
+      }
+      let start =
+        key === 'start_time'
+          ? selected
+          : new Date(previous.start_time || selected);
+      let end =
+        key === 'end_time' ? selected : new Date(previous.end_time || selected);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        return { ...previous, [key]: selected };
+      }
+      start = clampLedgerDateTimeToNow(start);
+      end = clampLedgerDateTimeToNow(end);
+      if (key === 'start_time') {
+        if (end.getTime() < start.getTime()) {
+          end = new Date(start);
+        }
+        if (end.getTime() - start.getTime() > LEDGER_MAX_RANGE_MS) {
+          end = new Date(start.getTime() + LEDGER_MAX_RANGE_MS);
+        }
+      } else {
+        if (start.getTime() > end.getTime()) {
+          start = new Date(end);
+        }
+        if (end.getTime() - start.getTime() > LEDGER_MAX_RANGE_MS) {
+          start = new Date(end.getTime() - LEDGER_MAX_RANGE_MS);
+        }
+      }
+      start = clampLedgerDateTimeToNow(start);
+      end = clampLedgerDateTimeToNow(end);
+      if (
+        previous.start_time?.getTime?.() === start.getTime() &&
+        previous.end_time?.getTime?.() === end.getTime()
+      ) {
+        return previous;
+      }
+      return { ...previous, start_time: start, end_time: end };
+    });
+  };
+
+  const loadLedger = useCallback(
+    async (nextCursor = null, append = false) => {
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoading(true);
+      try {
+        let currentCursor = nextCursor;
+        let res = await API.get('/api/admin/employee/consumption-cost-ledger', {
+          params: buildLedgerParams(filters, currentCursor),
+          disableDuplicate: true,
+          skipErrorHandler: true,
+        });
+        let { success, message, data } = res.data;
+        let advanceCount = 0;
+        while (
+          success &&
+          (data?.items?.length || 0) === 0 &&
+          data?.has_more &&
+          data?.next_cursor &&
+          advanceCount < LEDGER_EMPTY_PAGE_AUTO_ADVANCE_LIMIT
+        ) {
+          currentCursor = data.next_cursor;
+          advanceCount += 1;
+          res = await API.get('/api/admin/employee/consumption-cost-ledger', {
+            params: buildLedgerParams(filters, currentCursor),
+            disableDuplicate: true,
+            skipErrorHandler: true,
+          });
+          ({ success, message, data } = res.data);
+        }
+        if (!success) {
+          showError(translateLedgerMessage(t, message));
+          return;
+        }
+        const nextRows = data?.items || [];
+        setRows((previous) => (append ? [...previous, ...nextRows] : nextRows));
+        setCursor(data?.next_cursor || null);
+        setHasMore(Boolean(data?.has_more));
+      } catch (error) {
+        showError(
+          translateLedgerMessage(
+            t,
+            error?.response?.data?.message || error?.message,
+          ),
+        );
+      } finally {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    },
+    [JSON.stringify(filters), t],
+  );
+
+  const loadStats = useCallback(async (options = {}) => {
+    if (statsLoadingRef.current) return;
+    statsLoadingRef.current = true;
+    try {
+      const res = await API.get(
+        '/api/admin/employee/consumption-cost-ledger/stats',
+        {
+          params: buildLedgerParams(filters),
+          disableDuplicate: true,
+          skipErrorHandler: true,
+        },
+      );
+      const { success, message, data } = res.data;
+      if (!success) {
+        if (!options.silent) showError(translateLedgerMessage(t, message));
+        return;
+      }
+      setFilterStats(data?.stats || null);
+      setStatsStatus(data?.stats_status || '');
+      setStatsRunningCount(data?.stats_running_count || 0);
+      setStatsRunningLimit(data?.stats_running_limit || 2);
+      if (data?.stats_status !== 'pending') {
+        statsRefreshCountRef.current = 0;
+      }
+    } catch (error) {
+      if (options.silent) return;
+      showError(
+        translateLedgerMessage(
+          t,
+          error?.response?.data?.message || error?.message,
+        ),
+      );
+    } finally {
+      statsLoadingRef.current = false;
+    }
+  }, [JSON.stringify(filters), t]);
+
+  useEffect(() => {
+    setRows([]);
+    setCursor(null);
+    setHasMore(false);
+    setFilterStats(null);
+    setStatsStatus('');
+    setStatsRunningCount(0);
+    statsRefreshCountRef.current = 0;
+    loadLedger(null, false);
+    loadStats();
+    return undefined;
+  }, [searchKey]);
+
+  const loadStatsRef = useRef(loadStats);
+  useEffect(() => {
+    loadStatsRef.current = loadStats;
+  });
+
+  useEffect(() => {
+    if (statsStatus !== 'pending') return undefined;
+    if (statsRefreshCountRef.current >= LEDGER_STATS_AUTO_REFRESH_LIMIT)
+      return undefined;
+    const timer = window.setInterval(() => {
+      if (statsRefreshCountRef.current >= LEDGER_STATS_AUTO_REFRESH_LIMIT) {
+        window.clearInterval(timer);
+        return;
+      }
+      statsRefreshCountRef.current += 1;
+      loadStatsRef.current({ silent: true });
+    }, LEDGER_STATS_AUTO_REFRESH_DELAY_MS);
+    return () => window.clearInterval(timer);
+  }, [statsStatus]);
+
+  const applySearch = () => {
+    setRows([]);
+    setCursor(null);
+    setHasMore(false);
+    setFilterStats(null);
+    setStatsStatus('');
+    setStatsRunningCount(0);
+    statsRefreshCountRef.current = 0;
+    setSearchKey((value) => value + 1);
+  };
+
+  const resetFilters = () => {
+    setFilters(defaultLedgerFilters());
+    setRows([]);
+    setCursor(null);
+    setHasMore(false);
+    setFilterStats(null);
+    setStatsStatus('');
+    setStatsRunningCount(0);
+    statsRefreshCountRef.current = 0;
+    setSearchKey((value) => value + 1);
+  };
+
+  const stopExportPolling = useCallback(() => {
+    if (exportPollingRef.current !== null) {
+      clearInterval(exportPollingRef.current);
+      exportPollingRef.current = null;
+    }
+  }, []);
+
+  // Fetch one-time signed URL via axios (with auth headers), then trigger
+  // a native browser download — no blob buffering, no memory spike.
+  // Throws on failure so the caller can show the error and allow retry.
+  const triggerLedgerDownload = useCallback(
+    async (jobId) => {
+      const res = await API.get(
+        `/api/admin/employee/consumption-cost-ledger/export/${jobId}/download-url`,
+        { skipErrorHandler: true },
+      );
+      const { success, message, data } = res.data;
+      if (!success || !data?.url) {
+        throw new Error(translateLedgerMessage(t, message, 'Export failed'));
+      }
+      const a = document.createElement('a');
+      a.href = data.url;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    },
+    [t],
+  );
+
+  const startLedgerExport = useCallback(async () => {
+    if (exportLoading || exportJob?.status === 'pending' || exportJob?.status === 'running') return;
+    if (exportJob?.status === 'ready') {
+      try {
+        await triggerLedgerDownload(exportJob.job_id);
+        showSuccess(t('Download started'));
+        setExportJob(null);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : t('Export failed'));
+        setExportJob(null);
+      }
+      return;
+    }
+    setExportLoading(true);
+    try {
+      const params = buildLedgerParams(filters);
+      delete params.limit;
+      delete params.cursor_created_at;
+      delete params.cursor_id;
+      const res = await API.post(
+        `/api/admin/employee/consumption-cost-ledger/export?${new URLSearchParams(
+          Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))
+        ).toString()}`,
+        null,
+        { skipErrorHandler: true },
+      );
+      const { success, message, data } = res.data;
+      if (!success) {
+        showError(translateLedgerMessage(t, message, 'Export failed'));
+        return;
+      }
+      const jobId = data.job_id;
+      setExportJob({ job_id: jobId, status: 'pending', progress: 0, row_count: 0 });
+      stopExportPolling();
+      exportPollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await API.get(
+            `/api/admin/employee/consumption-cost-ledger/export/${jobId}`,
+            { skipErrorHandler: true },
+          );
+          const { success: ok, data: job } = statusRes.data;
+          if (!ok || !job) return;
+          setExportJob(job);
+          if (job.status === 'ready') {
+            stopExportPolling();
+            try {
+              await triggerLedgerDownload(jobId);
+              showSuccess(t('Export ready. Download started for {{count}} rows.', { count: job.row_count.toLocaleString() }));
+              setExportJob(null);
+            } catch (err) {
+              showError(err instanceof Error ? err.message : t('Export failed'));
+              setExportJob(null);
+            }
+          } else if (job.status === 'failed') {
+            stopExportPolling();
+            showError(translateLedgerMessage(t, job.error, 'Export failed'));
+            setTimeout(() => setExportJob(null), 4000);
+          }
+        } catch {
+          // network/parse errors during polling are silent
+        }
+      }, LEDGER_EXPORT_POLLING_DELAY_MS);
+    } catch (error) {
+      showError(
+        translateLedgerMessage(
+          t,
+          error?.response?.data?.message || error?.message,
+          'Export failed',
+        ),
+      );
+    } finally {
+      setExportLoading(false);
+    }
+  }, [exportJob, exportLoading, filters, showError, showSuccess, stopExportPolling, t, triggerLedgerDownload]);
+
+  useEffect(() => stopExportPolling, [stopExportPolling]);
+
+  const columns = useMemo(
+    () => [
+      {
+        title: t('Time'),
+        dataIndex: 'created_at',
+        render: formatTs,
+        width: 170,
+      },
+      {
+        title: t('Tags'),
+        dataIndex: 'tags',
+        width: 150,
+        render: (tags = [], row) => (
+          <Space wrap>
+            {sortLedgerTags(visibleLedgerTags({ ...row, tags })).map((tag) => (
+              <Tag size='small' key={tag} color={ledgerTagColor(tag)}>
+                {ledgerTagLabel(tag, t)}
+              </Tag>
+            ))}
+          </Space>
+        ),
+      },
+      {
+        title: t('Log ID'),
+        dataIndex: 'log_id',
+        width: 110,
+        render: (value) => <CommissionLogIdHover logId={value} />,
+      },
+      {
+        title: t('User ID'),
+        dataIndex: 'user_id',
+        width: 100,
+        render: (value) => `#${value}`,
+      },
+      {
+        title: t('Channel'),
+        dataIndex: 'channel_name',
+        width: 150,
+        ellipsis: true,
+        render: (value, row) => value || `#${row.channel_id || '-'}`,
+      },
+      {
+        title: t('Model'),
+        dataIndex: 'model_name',
+        width: 160,
+        ellipsis: true,
+        render: (value) => value || '-',
+      },
+      {
+        title: t('Group'),
+        dataIndex: 'group_name',
+        width: 120,
+        ellipsis: true,
+        render: (value) => value || '-',
+      },
+      {
+        title: t('Revenue'),
+        dataIndex: 'revenue_quota',
+        width: 130,
+        render: (value) => <AmountText value={value} positive={false} />,
+      },
+      {
+        title: t('Cost'),
+        dataIndex: 'cost_quota',
+        width: 130,
+        render: (value) => <AmountText value={value} positive={false} />,
+      },
+      {
+        title: t('Profit'),
+        dataIndex: 'profit_quota',
+        width: 130,
+        render: (value) => <AmountText value={value} />,
+      },
+      {
+        title: t('Gross margin'),
+        dataIndex: 'gross_margin',
+        width: 130,
+        render: (value) => (value == null ? '-' : formatPercent(value)),
+      },
+      {
+        title: t('Group ratio'),
+        dataIndex: 'group_ratio',
+        width: 130,
+        render: (value) => Number(value || 0).toFixed(4),
+      },
+      {
+        title: t('Cost ratio'),
+        dataIndex: 'cost_ratio',
+        width: 120,
+        render: (value) => Number(value || 0).toFixed(4),
+      },
+    ],
+    [t],
+  );
+  const ledgerTableScroll = useMemo(
+    () => ({ x: LEDGER_TABLE_SCROLL_X, y: 420 }),
+    [],
+  );
+  const ledgerEmpty = useMemo(
+    () => <BusinessEmpty description={t('No records')} />,
+    [t],
+  );
+  const handleLoadMore = useCallback(() => {
+    loadLedger(cursor, true);
+  }, [cursor, loadLedger]);
+
+  const filterControls = (
+    <div className='w-full flex flex-col gap-2'>
+      <div className='grid grid-cols-1 md:grid-cols-4 xl:grid-cols-8 gap-2'>
+        <DatePicker
+          type='dateTime'
+          value={filters.start_time}
+          size='small'
+          placeholder={t('Start time')}
+          onChange={(value) => updateTimeFilter('start_time', value)}
+        />
+        <DatePicker
+          type='dateTime'
+          value={filters.end_time}
+          size='small'
+          placeholder={t('End time')}
+          onChange={(value) => updateTimeFilter('end_time', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('Log ID')}
+          value={filters.log_id}
+          onChange={(value) => updateFilter('log_id', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('Ledger ID')}
+          value={filters.id}
+          onChange={(value) => updateFilter('id', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('User ID')}
+          value={filters.user_id}
+          onChange={(value) => updateFilter('user_id', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('Channel ID')}
+          value={filters.channel_id}
+          onChange={(value) => updateFilter('channel_id', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('Model')}
+          value={filters.model_name}
+          onChange={(value) => updateFilter('model_name', value)}
+        />
+        <Input
+          size='small'
+          placeholder={t('Group')}
+          value={filters.group_name}
+          onChange={(value) => updateFilter('group_name', value)}
+        />
+        <Select
+          size='small'
+          placeholder={t('Tag')}
+          value={filters.tag}
+          onChange={(value) => updateFilter('tag', value || '')}
+          optionList={[
+            { label: t('All'), value: '' },
+            { label: t('Reversal'), value: 'reversal' },
+            { label: t('Loss'), value: 'loss' },
+            { label: t('Profit'), value: 'profit' },
+            { label: t('Zero revenue'), value: 'zero_revenue' },
+          ]}
+        />
+      </div>
+      <div className='flex flex-wrap justify-between gap-2'>
+        <span />
+        <Space wrap>
+          <CompactModeToggle
+            compactMode={compactMode}
+            setCompactMode={setCompactMode}
+            t={t}
+          />
+          <Button size='small' type='tertiary' onClick={resetFilters}>
+            {t('Reset')}
+          </Button>
+          <Button
+            size='small'
+            type='primary'
+            icon={<Search size={14} />}
+            loading={loading}
+            onClick={applySearch}
+          >
+            {t('Search')}
+          </Button>
+          <Button
+            size='small'
+            type='tertiary'
+            icon={
+              exportJob?.status === 'pending' ||
+              exportJob?.status === 'running' ? (
+                <Spin size='small' />
+              ) : (
+                <Download size={14} />
+              )
+            }
+            loading={exportLoading}
+            disabled={
+              exportLoading ||
+              exportJob?.status === 'pending' ||
+              exportJob?.status === 'running'
+            }
+            onClick={startLedgerExport}
+          >
+            {exportJob?.status === 'pending' || exportJob?.status === 'running'
+              ? t('Exporting ({{progress}}%)', { progress: exportJob.progress })
+              : exportJob?.status === 'ready'
+                ? t('Download')
+              : t('Export')}
+          </Button>
+        </Space>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className='flex flex-col gap-4'>
+      {filterPortalTarget
+        ? createPortal(filterControls, filterPortalTarget)
+        : filterControls}
+      {filterStats ? (
+        <ClassicLedgerTotalStatsCards
+          title={t('Total rows')}
+          stats={filterStats}
+          t={t}
+        />
+      ) : null}
+      {statsStatus === 'pending' ? (
+        <Card bodyStyle={{ padding: '8px 12px' }}>
+          <div className='flex items-start gap-2'>
+            <Spin size='small' />
+            <div className='flex flex-col gap-1'>
+              <Text type='secondary' size='small'>
+                {t(
+                  'Preparing statistics. They will update automatically.',
+                )}
+              </Text>
+              <Text type='secondary' size='small'>
+                {t('Statistics tasks running: {{count}}/{{limit}}', {
+                  count: statsRunningCount,
+                  limit: statsRunningLimit,
+                })}
+              </Text>
+              <Text type='secondary' size='small'>
+                {t(
+                  'Tag filters check each row and may take longer; historical stats are cached for 5 minutes and can be viewed later with the same filters.',
+                )}
+              </Text>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+      {searchKey >= 0 || rows.length > 0 ? (
+        <ClassicLedgerStatsStrip
+          title={t('Loaded rows')}
+          stats={subtotal}
+          timeRange={loadedRowsTimeRange}
+          t={t}
+        />
+      ) : null}
+      <ClassicBusinessTable
+        rowKey='id'
+        columns={columns}
+        dataSource={rows}
+        scroll={ledgerTableScroll}
+        size={compactMode ? 'small' : 'middle'}
+        loading={loading}
+        hasMore={hasMore}
+        onLoadMore={handleLoadMore}
+        resetKey={searchKey}
+        empty={ledgerEmpty}
+      />
+    </div>
+  );
+}
+
 export function BusinessOverview() {
   const { t } = useTranslation();
+  const [view, setView] = useState('overview');
   const [range, setRange] = useState('1d');
   const [customRange, setCustomRange] = useState(() => getPresetRange('1d'));
   const [channelPage, setChannelPage] = useState(1);
@@ -5104,6 +5987,13 @@ export function BusinessOverview() {
   const [channelPageData, setChannelPageData] = useState(null);
   const [loadedChannelRows, setLoadedChannelRows] = useState([]);
   const [loadedEmployeeRows, setLoadedEmployeeRows] = useState([]);
+  const [ledgerFilterPortalTarget, setLedgerFilterPortalTarget] =
+    useState(null);
+  const bindLedgerFilterPortalTarget = useCallback((node) => {
+    setLedgerFilterPortalTarget((previous) =>
+      Object.is(previous, node) ? previous : node,
+    );
+  }, []);
   const channelRowsByPageRef = useRef(new Map());
   const employeeRowsByPageRef = useRef(new Map());
   const selectedRange = useMemo(
@@ -5394,322 +6284,351 @@ export function BusinessOverview() {
   return (
     <div className='business-overview-shell mt-[60px] px-2'>
       <BusinessCard
-        title={t('业务概览')}
+        title={view === 'ledger' ? t('Ledger Detail') : t('Business Overview')}
         icon={TrendingUp}
         color='var(--semi-color-success)'
-        actions={
+        titleExtra={
           <Space wrap>
-            {rangeButtons.map((item) => (
-              <Button
-                key={item.key}
-                type={range === item.key ? 'primary' : 'tertiary'}
-                theme={range === item.key ? 'solid' : 'light'}
-                size='small'
-                onClick={() => { resetPagination(); setRange(item.key); }}
-              >
-                {item.label}
-              </Button>
-            ))}
-            <DatePicker
-              type='dateRange'
-              value={datePickerValue}
-              placeholder={[t('开始时间'), t('结束时间')]}
-              size='small'
-              style={{ minWidth: 220, width: 260 }}
-              onChange={(value) => {
-                const [start, end] = Array.isArray(value) ? value : [];
-                const normalizedStart = startOfDayDate(start);
-                const normalizedEnd = endOfDayDate(end);
-                if (normalizedStart && normalizedEnd) {
-                  resetPagination();
-                  setCustomRange({
-                    start: normalizedStart,
-                    end: normalizedEnd,
-                  });
-                  setRange('custom');
-                }
-              }}
-            />
             <Button
               size='small'
-              type='tertiary'
-              icon={<RefreshCw size={14} />}
-              loading={loading || channelLoading}
-              onClick={() => { loadOverview(); loadChannelPage(); }}
+              type={view === 'overview' ? 'primary' : 'tertiary'}
+              theme={view === 'overview' ? 'solid' : 'light'}
+              onClick={() => setView('overview')}            >
+              {t('Business Overview')}
+            </Button>
+            <Button
+              size='small'
+              type={view === 'ledger' ? 'primary' : 'tertiary'}
+              theme={view === 'ledger' ? 'solid' : 'light'}
+              onClick={() => setView('ledger')}
             >
-              {t('刷新')}
+              {t('Ledger Detail')}
             </Button>
           </Space>
         }
+        actions={
+          view === 'overview' ? (
+            <Space wrap>
+              {rangeButtons.map((item) => (
+                <Button
+                  key={item.key}
+                  type={range === item.key ? 'primary' : 'tertiary'}
+                  theme={range === item.key ? 'solid' : 'light'}
+                  size='small'
+                  onClick={() => { resetPagination(); setRange(item.key); }}
+                >
+                  {item.label}
+                </Button>
+              ))}
+              <DatePicker
+                type='dateRange'
+                value={datePickerValue}
+                placeholder={[t('开始时间'), t('结束时间')]}
+                size='small'
+                style={{ minWidth: 220, width: 260 }}
+                onChange={(value) => {
+                  const [start, end] = Array.isArray(value) ? value : [];
+                  const normalizedStart = startOfDayDate(start);
+                  const normalizedEnd = endOfDayDate(end);
+                  if (normalizedStart && normalizedEnd) {
+                    resetPagination();
+                    setCustomRange({
+                      start: normalizedStart,
+                      end: normalizedEnd,
+                    });
+                    setRange('custom');
+                  }
+                }}
+              />
+              <Button
+                size='small'
+                type='tertiary'
+                icon={<RefreshCw size={14} />}
+                loading={loading || channelLoading}
+                onClick={() => { loadOverview(); loadChannelPage(); }}
+              >
+                {t('刷新')}
+              </Button>
+            </Space>
+          ) : (
+            <div ref={bindLedgerFilterPortalTarget} className='w-full' />
+          )
+        }
+        actionsFullWidth={view === 'ledger'}
         t={t}
       >
-        <Spin spinning={loading}>
-          <div className='flex flex-col gap-4'>
-            {showBackfill ? (
-              <div
-                className='flex items-center gap-3 rounded-xl px-4 py-3'
-                style={{
-                  border: '1px solid var(--semi-color-warning)',
-                  background: 'var(--semi-color-warning-light-default)',
-                }}
-              >
-                <Text className='flex-1' size='small'>
-                  {showBackfillRunning
-                    ? t('正在回填历史数据')
-                    : t(
-                        '检测到历史成本数据尚未迁移，迁移后可获得更准确的统计，数据截止昨天，今天的数据需要明天在进行迁移',
-                      )}
-                </Text>
-                {!showBackfillRunning ? (
-                  <Button
-                    size='small'
-                    type='warning'
-                    theme='solid'
-                    onClick={handleBackfill}
-                  >
-                    {t('立即迁移')}
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-            <Text strong type='secondary'>
-              {t('平台范围（所有用户）')}
-            </Text>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('累计消费')}
-                  value={
-                    <AmountText
-                      value={platform.total_consumption_quota || 0}
-                      positive={false}
-                    />
-                  }
-                  sub={formatBusinessUsd(platform.total_consumption_usd)}
-                  icon={Wallet}
-                  color='var(--semi-color-info)'
-                />
-              </Col>
-              <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('估算成本')}
-                  value={
-                    <AmountText
-                      value={platform.est_cost_quota || 0}
-                      positive={false}
-                    />
-                  }
-                  sub={formatBusinessUsd(platform.est_cost_usd)}
-                  icon={BriefcaseBusiness}
-                  color='var(--semi-color-warning)'
-                />
-              </Col>
-              <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('估算利润')}
-                  value={<AmountText value={platform.est_profit_quota || 0} />}
-                  sub={formatBusinessUsd(platform.est_profit_usd)}
-                  icon={TrendingUp}
-                  color='var(--semi-color-success)'
-                />
-              </Col>
-              <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('平台毛利率')}
-                  value={formatPercent(platform.est_gross_margin || 0)}
-                  icon={DollarSign}
-                />
-              </Col>
-              <Col xs={24} md={12} xl={4}>
-                <StatCard
-                  title={t('请求数')}
-                  value={platform.request_count || 0}
-                  icon={RefreshCw}
-                />
-              </Col>
-              <Col xs={24} md={12} xl={4}>
-                <Card
-                  className='!rounded-2xl border-0'
-                  bodyStyle={{ padding: 16 }}
-                  style={{ height: '100%' }}
+        {view === 'ledger' ? (
+          <ClassicLedgerDetail filterPortalTarget={ledgerFilterPortalTarget} />
+        ) : (
+          <Spin spinning={loading}>
+            <div className='flex flex-col gap-4'>
+              {showBackfill ? (
+                <div
+                  className='flex items-center gap-3 rounded-xl px-4 py-3'
+                  style={{
+                    border: '1px solid var(--semi-color-warning)',
+                    background: 'var(--semi-color-warning-light-default)',
+                  }}
                 >
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: 8,
-                    }}
-                  >
-                    <div>
-                      <div className='flex items-center justify-between gap-3'>
-                        <Text type='secondary' size='small'>
-                          {t('盈利渠道')}
-                        </Text>
-                        <TrendingUp
-                          size={18}
-                          color='var(--semi-color-success)'
-                        />
-                      </div>
-                      <div className='mt-2 text-2xl font-semibold'>
-                        {platform.profitable_channel_count || 0}
-                      </div>
-                      <div
-                        className='mt-1 text-xs'
-                        style={{ minHeight: 16, visibility: 'hidden' }}
-                      >
-                        -
-                      </div>
-                    </div>
-                    <div>
-                      <div className='flex items-center justify-between gap-3'>
-                        <Text type='secondary' size='small'>
-                          {t('亏损渠道')}
-                        </Text>
-                        <TrendingDown
-                          size={18}
-                          color='var(--semi-color-danger)'
-                        />
-                      </div>
-                      <div className='mt-2 text-2xl font-semibold'>
-                        {platform.loss_channel_count || 0}
-                      </div>
-                      <div
-                        className='mt-1 text-xs'
-                        style={{ minHeight: 16, visibility: 'hidden' }}
-                      >
-                        -
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              </Col>
-            </Row>
-            <Text type='secondary' size='small'>
-              {t('成本按交易精确记录。启用此功能前生成的数据没有成本记录。')}
-            </Text>
-
-            <BusinessSection
-              title={t('渠道盈利（全平台）')}
-              description={
-                <>
-                  {t('成本和利润按分组倍率与渠道成本比例估算。')}
-                  {(platform.loss_channel_count || 0) > 0 ? (
-                    <Text
-                      component='span'
+                  <Text className='flex-1' size='small'>
+                    {showBackfillRunning
+                      ? t('正在回填历史数据')
+                      : t(
+                          '检测到历史成本数据尚未迁移，迁移后可获得更准确的统计，数据截止昨天，今天的数据需要明天在进行迁移',
+                        )}
+                  </Text>
+                  {!showBackfillRunning ? (
+                    <Button
+                      size='small'
                       type='warning'
-                      strong
-                      style={{ marginLeft: 8 }}
+                      theme='solid'
+                      onClick={handleBackfill}
                     >
-                      {t(
-                        '亏损通常因有效分组倍率低于渠道成本比例，或存在退款、冲销等负向记录。',
-                      )}
-                    </Text>
+                      {t('立即迁移')}
+                    </Button>
                   ) : null}
-                </>
-              }
-            >
-              <div className='mb-3 flex items-center gap-2'>
-                <Input
-                  size='small'
-                  prefix={<Search size={14} />}
-                  placeholder={t('搜索渠道名称')}
-                  value={channelNameFilter}
-                  onChange={setChannelNameFilter}
-                  style={{ width: 200 }}
-                  showClear
+                </div>
+              ) : null}
+              <Text strong type='secondary'>
+                {t('平台范围（所有用户）')}
+              </Text>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} md={12} xl={4}>
+                  <StatCard
+                    title={t('累计消费')}
+                    value={
+                      <AmountText
+                        value={platform.total_consumption_quota || 0}
+                        positive={false}
+                      />
+                    }
+                    sub={formatBusinessUsd(platform.total_consumption_usd)}
+                    icon={Wallet}
+                    color='var(--semi-color-info)'
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={4}>
+                  <StatCard
+                    title={t('估算成本')}
+                    value={
+                      <AmountText
+                        value={platform.est_cost_quota || 0}
+                        positive={false}
+                      />
+                    }
+                    sub={formatBusinessUsd(platform.est_cost_usd)}
+                    icon={BriefcaseBusiness}
+                    color='var(--semi-color-warning)'
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={4}>
+                  <StatCard
+                    title={t('估算利润')}
+                    value={
+                      <AmountText value={platform.est_profit_quota || 0} />
+                    }
+                    sub={formatBusinessUsd(platform.est_profit_usd)}
+                    icon={TrendingUp}
+                    color='var(--semi-color-success)'
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={4}>
+                  <StatCard
+                    title={t('平台毛利率')}
+                    value={formatPercent(platform.est_gross_margin || 0)}
+                    icon={DollarSign}
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={4}>
+                  <StatCard
+                    title={t('请求数')}
+                    value={platform.request_count || 0}
+                    icon={RefreshCw}
+                  />
+                </Col>
+                <Col xs={24} md={12} xl={4}>
+                  <Card
+                    className='!rounded-2xl border-0'
+                    bodyStyle={{ padding: 16 }}
+                    style={{ height: '100%' }}
+                  >
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: 8,
+                      }}
+                    >
+                      <div>
+                        <div className='flex items-center justify-between gap-3'>
+                          <Text type='secondary' size='small'>
+                            {t('盈利渠道')}
+                          </Text>
+                          <TrendingUp
+                            size={18}
+                            color='var(--semi-color-success)'
+                          />
+                        </div>
+                        <div className='mt-2 text-2xl font-semibold'>
+                          {platform.profitable_channel_count || 0}
+                        </div>
+                        <div
+                          className='mt-1 text-xs'
+                          style={{ minHeight: 16, visibility: 'hidden' }}
+                        >
+                          -
+                        </div>
+                      </div>
+                      <div>
+                        <div className='flex items-center justify-between gap-3'>
+                          <Text type='secondary' size='small'>
+                            {t('亏损渠道')}
+                          </Text>
+                          <TrendingDown
+                            size={18}
+                            color='var(--semi-color-danger)'
+                          />
+                        </div>
+                        <div className='mt-2 text-2xl font-semibold'>
+                          {platform.loss_channel_count || 0}
+                        </div>
+                        <div
+                          className='mt-1 text-xs'
+                          style={{ minHeight: 16, visibility: 'hidden' }}
+                        >
+                          -
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                </Col>
+              </Row>
+              <Text type='secondary' size='small'>
+                {t('成本按交易精确记录。启用此功能前生成的数据没有成本记录。')}
+              </Text>
+              <BusinessSection
+                title={t('渠道盈利（全平台）')}
+                description={
+                  <>
+                    {t('成本和利润按分组倍率与渠道成本比例估算。')}
+                    {(platform.loss_channel_count || 0) > 0 ? (
+                      <Text
+                        component='span'
+                        type='warning'
+                        strong
+                        style={{ marginLeft: 8 }}
+                      >
+                        {t(
+                          '亏损通常因有效分组倍率低于渠道成本比例，或存在退款、冲销等负向记录。',
+                        )}
+                      </Text>
+                    ) : null}
+                  </>
+                }
+              >
+                <div className='mb-3 flex items-center gap-2'>
+                  <Input
+                    size='small'
+                    prefix={<Search size={14} />}
+                    placeholder={t('搜索渠道名称')}
+                    value={channelNameFilter}
+                    onChange={setChannelNameFilter}
+                    style={{ width: 200 }}
+                    showClear
+                  />
+                </div>
+                <ClassicBusinessTable
+                  rowKey='channel_id'
+                  columns={channelProfitColumns}
+                  dataSource={loadedChannelRows}
+                  wrapperClassName='business-channel-profit-table pr-1'
+                  scroll={{ x: '100%', y: 223 }}
+                  hasMore={hasMoreChannelRows}
+                  onLoadMore={loadMoreChannels}
+                  loading={channelLoading}
+                  resetKey={channelMergeScope}
+                  empty={<BusinessEmpty description={t('搜索无结果')} />}
                 />
-              </div>
-              <ClassicBusinessTable
-                rowKey='channel_id'
-                columns={channelProfitColumns}
-                dataSource={loadedChannelRows}
-                wrapperClassName='business-channel-profit-table pr-1'
-                scroll={{ x: '100%', y: 223 }}
-                hasMore={hasMoreChannelRows}
-                onLoadMore={loadMoreChannels}
-                loading={channelLoading}
-                resetKey={channelMergeScope}
-                empty={<BusinessEmpty description={t('搜索无结果')} />}
-              />
-            </BusinessSection>
+              </BusinessSection>
 
-            <Text strong type='secondary'>
-              {t('员工归属业绩')}
-            </Text>
-            <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
-              <div>
-                <StatCard
-                  title={t('客户消费')}
-                  value={
-                    <AmountText
-                      value={commission.total_revenue_quota || 0}
-                      positive={false}
-                    />
-                  }
-                  sub={formatBusinessUsd(commission.total_revenue_usd)}
-                  icon={DollarSign}
-                  color='var(--semi-color-info)'
-                />
+              <Text strong type='secondary'>
+                {t('员工归属业绩')}
+              </Text>
+              <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
+                <div>
+                  <StatCard
+                    title={t('客户消费')}
+                    value={
+                      <AmountText
+                        value={commission.total_revenue_quota || 0}
+                        positive={false}
+                      />
+                    }
+                    sub={formatBusinessUsd(commission.total_revenue_usd)}
+                    icon={DollarSign}
+                    color='var(--semi-color-info)'
+                  />
+                </div>
+                <div>
+                  <StatCard
+                    title={t('客户成本')}
+                    value={
+                      <AmountText
+                        value={commission.total_cost_quota || 0}
+                        positive={false}
+                      />
+                    }
+                    sub={formatBusinessUsd(commission.total_cost_usd)}
+                    icon={BriefcaseBusiness}
+                    color='var(--semi-color-warning)'
+                  />
+                </div>
+                <div>
+                  <StatCard
+                    title={t('客户利润')}
+                    value={
+                      <AmountText value={commission.total_profit_quota || 0} />
+                    }
+                    sub={formatBusinessUsd(commission.total_profit_usd)}
+                    icon={TrendingUp}
+                    color='var(--semi-color-success)'
+                  />
+                </div>
+                <div>
+                  <StatCard
+                    title={t('提成总额')}
+                    value={
+                      <AmountText
+                        value={commission.total_commission_quota || 0}
+                      />
+                    }
+                    sub={formatBusinessUsd(commission.total_commission_usd)}
+                    icon={BadgeDollarSign}
+                  />
+                </div>
+                <div>
+                  <StatCard
+                    title={t('员工毛利率')}
+                    value={formatPercent(commission.gross_margin || 0)}
+                    sub={`${commission.record_count || 0} ${t('条记录')}`}
+                    icon={Wallet}
+                  />
+                </div>
               </div>
-              <div>
-                <StatCard
-                  title={t('客户成本')}
-                  value={
-                    <AmountText
-                      value={commission.total_cost_quota || 0}
-                      positive={false}
-                    />
-                  }
-                  sub={formatBusinessUsd(commission.total_cost_usd)}
-                  icon={BriefcaseBusiness}
-                  color='var(--semi-color-warning)'
+
+              <BusinessSection title={t('员工业绩 Top 10')}>
+                <ClassicBusinessTable
+                  rowKey='employee_user_id'
+                  columns={employeeColumns}
+                  dataSource={loadedEmployeeRows}
+                  wrapperClassName='business-employee-table pr-1'
+                  scroll={{ x: '100%', y: 223 }}
+                  empty={<BusinessEmpty description={t('搜索无结果')} />}
                 />
-              </div>
-              <div>
-                <StatCard
-                  title={t('客户利润')}
-                  value={
-                    <AmountText value={commission.total_profit_quota || 0} />
-                  }
-                  sub={formatBusinessUsd(commission.total_profit_usd)}
-                  icon={TrendingUp}
-                  color='var(--semi-color-success)'
-                />
-              </div>
-              <div>
-                <StatCard
-                  title={t('提成总额')}
-                  value={
-                    <AmountText
-                      value={commission.total_commission_quota || 0}
-                    />
-                  }
-                  sub={formatBusinessUsd(commission.total_commission_usd)}
-                  icon={BadgeDollarSign}
-                />
-              </div>
-              <div>
-                <StatCard
-                  title={t('员工毛利率')}
-                  value={formatPercent(commission.gross_margin || 0)}
-                  sub={`${commission.record_count || 0} ${t('条记录')}`}
-                  icon={Wallet}
-                />
-              </div>
+              </BusinessSection>
             </div>
-
-            <BusinessSection title={t('员工业绩 Top 10')}>
-              <ClassicBusinessTable
-                rowKey='employee_user_id'
-                columns={employeeColumns}
-                dataSource={loadedEmployeeRows}
-                wrapperClassName='business-employee-table pr-1'
-                scroll={{ x: '100%', y: 223 }}
-                empty={<BusinessEmpty description={t('搜索无结果')} />}
-              />
-            </BusinessSection>
-          </div>
-        </Spin>
+          </Spin>
+        )}
       </BusinessCard>
     </div>
   );
