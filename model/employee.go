@@ -186,25 +186,32 @@ type employeeCacheEntry struct {
 
 // GetEmployeeByUserId 根据 user_id 查询启用的员工档案，未找到返回 nil。
 func GetEmployeeByUserId(userId int) *EmployeeProfile {
+	profile, _ := GetEmployeeByUserIdWithContext(context.Background(), userId)
+	return profile
+}
+
+func GetEmployeeByUserIdWithContext(ctx context.Context, userId int) (*EmployeeProfile, error) {
 	employeeByUserIdCacheLock.RLock()
 	if entry, ok := employeeByUserIdCache[userId]; ok && time.Since(entry.cachedAt) < employeeCacheTTL {
 		employeeByUserIdCacheLock.RUnlock()
-		return entry.profile
+		return entry.profile, nil
 	}
 	employeeByUserIdCacheLock.RUnlock()
 
 	var emp EmployeeProfile
-	err := DB.Where("user_id = ? AND status = 1", userId).First(&emp).Error
+	err := DB.WithContext(ctx).Where("user_id = ? AND status = 1", userId).First(&emp).Error
 	var profile *EmployeeProfile
 	if err == nil {
 		profile = &emp
+	} else if err != gorm.ErrRecordNotFound {
+		return nil, err
 	}
 
 	employeeByUserIdCacheLock.Lock()
 	employeeByUserIdCache[userId] = &employeeCacheEntry{profile: profile, cachedAt: time.Now()}
 	employeeByUserIdCacheLock.Unlock()
 
-	return profile
+	return profile, nil
 }
 
 // InvalidateEmployeeCache 清除指定用户的员工缓存。在创建/更新/禁用员工后调用。
@@ -774,6 +781,15 @@ func clampQuotaDelta(total, baseline int64) int64 {
 	return delta
 }
 
+func commissionStatDayStart(ts int64) int64 {
+	return localDayStart(ts)
+}
+
+func commissionStatDateKey(statDate int64, timezone string) string {
+	loc, _ := commissionMonthlyStatLocation(timezone)
+	return time.Unix(statDate, 0).In(loc).Format("2006-01-02")
+}
+
 func GetCommissionResetPeriodStats(filter CommissionResetPeriodStatFilter) ([]*EmployeeCommissionResetPeriodStatItem, int64, error) {
 	filter = normalizeCommissionResetPeriodStatFilter(filter)
 	base := DB.Model(&EmployeeCommissionResetPeriodStat{}).Where("employee_user_id = ?", filter.EmployeeUserId)
@@ -857,45 +873,43 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			return nil, err
 		}
 		baseline := baselinesByUserId[employeeUserId]
-		if baseline.BaselineResetAt <= 0 {
-			return stats, nil
+		if baseline.BaselineResetAt > 0 {
+			// 已执行过重置：用 BaselineResetAt 查询，确保只显示重置后的数据。
+			queryResetStartedAt = baseline.BaselineResetAt
 		}
-		queryResetStartedAt = baseline.BaselineResetAt
-		if currentRows, err := GetCurrentResetPeriodStatsByEmployeeUserIds([]int{employeeUserId}); err == nil {
-			if currentRow, ok := currentRows[employeeUserId]; ok {
-				if currentRow.ResetStartedAt > 0 {
-					queryResetStartedAt = currentRow.ResetStartedAt
-				}
-			}
-		} else {
-			return nil, err
-		}
+		// 若 BaselineResetAt=0（从未重置），queryResetStartedAt 保持 period.PeriodStartAt。
 	}
 	if queryEndAt > endTime {
 		queryEndAt = endTime
 	}
 	tx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
-		Select("stat_date, "+
-			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, "+
-			"COALESCE(SUM(cost_quota),0) AS cost_quota, "+
-			"COALESCE(SUM(profit_quota),0) AS profit_quota, "+
-			"COALESCE(SUM(commission_quota),0) AS commission_quota, "+
+		Select("stat_date, " +
+			"COALESCE(SUM(revenue_quota),0) AS revenue_quota, " +
+			"COALESCE(SUM(cost_quota),0) AS cost_quota, " +
+			"COALESCE(SUM(profit_quota),0) AS profit_quota, " +
+			"COALESCE(SUM(commission_quota),0) AS commission_quota, " +
 			"COALESCE(SUM(record_count),0) AS record_count")
 	if employeeUserId > 0 {
 		tx = tx.Where(
 			"reset_started_at = ? AND stat_date >= ? AND stat_date <= ? AND employee_user_id = ?",
 			queryResetStartedAt,
-			unixDayStart(queryResetStartedAt),
-			unixDayStart(queryEndAt),
+			commissionStatDayStart(queryResetStartedAt),
+			commissionStatDayStart(queryEndAt),
 			employeeUserId,
 		)
 	} else {
+		// 全员模式：匹配两种情形：
+		// 1. 已执行过重置（baseline_reset_at > 0）：reset_started_at = baseline_reset_at
+		// 2. 从未重置（baseline_reset_at = 0）：reset_started_at = period.PeriodStartAt
 		tx = tx.Joins(
-			"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at",
+			"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id"+
+				" AND (employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at"+
+				" OR (employee_tier_levels.baseline_reset_at = 0 AND employee_commission_reset_period_daily_stats.reset_started_at = ?))",
+			period.PeriodStartAt,
 		).Where(
 			"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
-			unixDayStart(period.PeriodStartAt),
-			unixDayStart(queryEndAt),
+			commissionStatDayStart(period.PeriodStartAt),
+			commissionStatDayStart(queryEndAt),
 		)
 	}
 	var aggRows []calendarDailyRow
@@ -905,7 +919,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 
 	dayStats := make(map[string]*CommissionCalendarDayStat, len(aggRows))
 	for _, r := range aggRows {
-		date := time.Unix(r.StatDate, 0).UTC().Format("2006-01-02")
+		date := commissionStatDateKey(r.StatDate, period.Timezone)
 		day := dayStats[date]
 		if day == nil {
 			day = &CommissionCalendarDayStat{

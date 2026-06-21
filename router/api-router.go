@@ -224,6 +224,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionResetPeriodStats)
 			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
+			employeeAdminRoute.GET("/overview/channels", controller.AdminChannelProfitPage)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
 			// 阶梯提成等级配置
 			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
@@ -280,6 +281,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
+			optionRoute.GET("/business-stats-circuit-breaker/status", controller.GetBusinessStatsCircuitBreakerStatus)
 			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)

@@ -1006,6 +1006,10 @@ type inviterCacheEntry struct {
 }
 
 func GetUserInviterIdWithError(userId int) (int, error) {
+	return GetUserInviterIdWithContext(context.Background(), userId)
+}
+
+func GetUserInviterIdWithContext(ctx context.Context, userId int) (int, error) {
 	inviterIdCacheLock.RLock()
 	if entry, ok := inviterIdCache[userId]; ok && time.Since(entry.cachedAt) < inviterIdCacheTTL {
 		inviterIdCacheLock.RUnlock()
@@ -1014,7 +1018,7 @@ func GetUserInviterIdWithError(userId int) (int, error) {
 	inviterIdCacheLock.RUnlock()
 
 	var inviterId int
-	err := DB.Model(&User{}).Where("id = ?", userId).Select("inviter_id").Scan(&inviterId).Error
+	err := DB.WithContext(ctx).Model(&User{}).Where("id = ?", userId).Select("inviter_id").Scan(&inviterId).Error
 	if err == nil {
 		inviterIdCacheLock.Lock()
 		inviterIdCache[userId] = &inviterCacheEntry{inviterId: inviterId, cachedAt: time.Now()}
@@ -1042,10 +1046,14 @@ func InvalidateInviterIdCache(userId int) {
 // IsMutualInvitation reports whether userId and inviterId invite each other.
 // It is used as a guard for employee/customer binding and commission settlement.
 func IsMutualInvitation(userId, inviterId int) (bool, error) {
+	return IsMutualInvitationWithContext(context.Background(), userId, inviterId)
+}
+
+func IsMutualInvitationWithContext(ctx context.Context, userId, inviterId int) (bool, error) {
 	if userId <= 0 || inviterId <= 0 || userId == inviterId {
 		return false, nil
 	}
-	reverseInviterId, err := GetUserInviterIdWithError(inviterId)
+	reverseInviterId, err := GetUserInviterIdWithContext(ctx, inviterId)
 	if err != nil {
 		return false, err
 	}

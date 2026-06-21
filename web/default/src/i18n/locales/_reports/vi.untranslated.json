@@ -1,17 +1,17 @@
 {
-  "When request logs exceed the max count, older logs are purged and only the newest min count is kept (logs are stored in Redis only).": "When request logs exceed the max count, older logs are purged and only the newest min count is kept (logs are stored in Redis only).",
-  "When the request log count exceeds this value, a cleanup is triggered.": "When the request log count exceeds this value, a cleanup is triggered.",
-  "Record downstream request headers/body and the response headers/body returned to the client for relay requests. Increases database writes significantly.": "Record downstream request headers/body and the response headers/body returned to the client for relay requests. Increases database writes significantly.",
-  "Leave empty to record all users": "Leave empty to record all users",
-  "If empty, requests and responses of all users are recorded. If filled, only the specified username is recorded.": "If empty, requests and responses of all users are recorded. If filled, only the specified username is recorded.",
-  "Each field (request/response body and headers) is truncated to this size. Content beyond the limit is dropped and marked as truncated.": "Each field (request/response body and headers) is truncated to this size. Content beyond the limit is dropped and marked as truncated.",
   "Consumption, cost, profit, and commission stats.": "Consumption, cost, profit, and commission stats.",
   "Cost ratio must be greater than or equal to 0": "Cost ratio must be greater than or equal to 0",
+  "Each field (request/response body and headers) is truncated to this size. Content beyond the limit is dropped and marked as truncated.": "Each field (request/response body and headers) is truncated to this size. Content beyond the limit is dropped and marked as truncated.",
+  "If empty, requests and responses of all users are recorded. If filled, only the specified username is recorded.": "If empty, requests and responses of all users are recorded. If filled, only the specified username is recorded.",
+  "Leave empty to record all users": "Leave empty to record all users",
+  "Minimum quota units for this currency. JPY/KRW are zero-decimal currencies and should use whole-number amounts.": "Minimum quota units for this currency. JPY/KRW are zero-decimal currencies and should use whole-number amounts.",
   "No models available. Please configure your groups.": "No models available. Please configure your groups.",
+  "Record downstream request headers/body and the response headers/body returned to the client for relay requests. Increases database writes significantly.": "Record downstream request headers/body and the response headers/body returned to the client for relay requests. Increases database writes significantly.",
+  "Register at business.infini.money, create an API key in the Developer page, and configure the webhook endpoint. Keep all secrets server-side only.": "Register at business.infini.money, create an API key in the Developer page, and configure the webhook endpoint. Keep all secrets server-side only.",
   "The user ID to assign employee status": "The user ID to assign employee status",
   "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.": "This will reset every employee's tier to the lowest level in their group, and start a new period for Current Performance / Current Commission. Historical totals, commission ledgers, and pending/settled commission balances are not affected. This action cannot be undone and will be recorded in the tier change log.",
   "Tip: configure the cost ratio now so employee commission profit is calculated correctly.": "Tip: configure the cost ratio now so employee commission profit is calculated correctly.",
   "View all available models and their status": "View all available models and their status",
-  "Register at business.infini.money, create an API key in the Developer page, and configure the webhook endpoint. Keep all secrets server-side only.": "Register at business.infini.money, create an API key in the Developer page, and configure the webhook endpoint. Keep all secrets server-side only.",
-  "Minimum quota units for this currency. JPY/KRW are zero-decimal currencies and should use whole-number amounts.": "Minimum quota units for this currency. JPY/KRW are zero-decimal currencies and should use whole-number amounts."
+  "When request logs exceed the max count, older logs are purged and only the newest min count is kept (logs are stored in Redis only).": "When request logs exceed the max count, older logs are purged and only the newest min count is kept (logs are stored in Redis only).",
+  "When the request log count exceeds this value, a cleanup is triggered.": "When the request log count exceeds this value, a cleanup is triggered."
 }

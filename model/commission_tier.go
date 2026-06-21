@@ -1,4 +1,4 @@
-﻿package model
+package model
 
 import (
 	"context"
@@ -78,6 +78,46 @@ func deleteTierLevelFromRedis(userId int) {
 	}
 	if err := common.RedisDelKey(tierLevelRedisKey(userId)); err != nil {
 		common.SysError(fmt.Sprintf("deleteTierLevelFromRedis: userId=%d err=%s", userId, err.Error()))
+	}
+}
+
+func refreshTierLevelCacheFromDB(userId int) {
+	refreshTierLevelCacheFromDBByUserIds([]int{userId})
+}
+
+func refreshTierLevelCacheFromDBByUserIds(userIds []int) {
+	if !common.RedisEnabled || len(userIds) == 0 {
+		return
+	}
+	unique := make(map[int]struct{}, len(userIds))
+	ids := make([]int, 0, len(userIds))
+	for _, userId := range userIds {
+		if userId <= 0 {
+			continue
+		}
+		if _, ok := unique[userId]; ok {
+			continue
+		}
+		unique[userId] = struct{}{}
+		ids = append(ids, userId)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var levels []*EmployeeTierLevel
+	if err := DB.Where("user_id IN ?", ids).Find(&levels).Error; err != nil {
+		common.SysError("refreshTierLevelCacheFromDBByUserIds: " + err.Error())
+		return
+	}
+	found := make(map[int]struct{}, len(levels))
+	for _, level := range levels {
+		found[level.UserId] = struct{}{}
+		setTierLevelToRedis(level)
+	}
+	for _, userId := range ids {
+		if _, ok := found[userId]; !ok {
+			deleteTierLevelFromRedis(userId)
+		}
 	}
 }
 
@@ -271,24 +311,29 @@ func TierExists(id int64) (bool, error) {
 // ============================================================================
 
 // GetOrCreateTierLevel 获取员工当前等级记录，不存在则懒创建（tier_id=0）。
-// 读取顺序：Redis → DB（命中 DB 后回写 Redis）。
-func GetOrCreateTierLevel(userId int, readCache bool) (*EmployeeTierLevel, error) {
+// readCache 可选：传 true 时读取顺序为 Redis → DB（命中 DB 后回写 Redis）。
+func GetOrCreateTierLevel(userId int, readCacheOpt ...bool) (*EmployeeTierLevel, error) {
+	return GetOrCreateTierLevelWithContext(context.Background(), userId, readCacheOpt...)
+}
+
+func GetOrCreateTierLevelWithContext(ctx context.Context, userId int, readCacheOpt ...bool) (*EmployeeTierLevel, error) {
+	readCache := len(readCacheOpt) > 0 && readCacheOpt[0]
 	if readCache {
 		if level := getTierLevelFromRedis(userId); level != nil {
 			return level, nil
 		}
 	}
 	var level EmployeeTierLevel
-	err := DB.Where("user_id = ?", userId).First(&level).Error
+	err := DB.WithContext(ctx).Where("user_id = ?", userId).First(&level).Error
 	if err == gorm.ErrRecordNotFound {
 		level = EmployeeTierLevel{UserId: userId}
-		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&level)
+		result := DB.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&level)
 		if result.Error != nil {
 			return nil, result.Error
 		}
 		// 并发插入时 OnConflict DO NOTHING 可能不填充 id，重新查一次
 		if level.Id == 0 {
-			if err2 := DB.Where("user_id = ?", userId).First(&level).Error; err2 != nil {
+			if err2 := DB.WithContext(ctx).Where("user_id = ?", userId).First(&level).Error; err2 != nil {
 				return nil, err2
 			}
 		}
@@ -302,8 +347,29 @@ func GetOrCreateTierLevel(userId int, readCache bool) (*EmployeeTierLevel, error
 	return &level, nil
 }
 
+func ensureTierLevelsForUserIds(userIds []int) error {
+	unique := make(map[int]struct{}, len(userIds))
+	rows := make([]EmployeeTierLevel, 0, len(userIds))
+	for _, userId := range userIds {
+		if userId <= 0 {
+			continue
+		}
+		if _, ok := unique[userId]; ok {
+			continue
+		}
+		unique[userId] = struct{}{}
+		rows = append(rows, EmployeeTierLevel{UserId: userId})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
 // SetTierLevel 更新员工等级（admin/system 调用）并写入变更日志。
-// 先更新 Redis 再写 DB。
 func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, remark string, profitSnapshotUsd float64) error {
 	if newTierId > 0 {
 		exists, err := TierExists(newTierId)
@@ -323,51 +389,56 @@ func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, re
 
 	now := time.Now().Unix()
 
-	// 先更新 Redis
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		// 写 DB；若记录不存在则创建（防止 GetOrCreateTierLevel 与本次写入之间记录被删除的极端情况）
+		result := tx.Model(&EmployeeTierLevel{}).Where("user_id = ?", userId).Updates(map[string]interface{}{
+			"tier_id":      newTierId,
+			"source":       source,
+			"effective_at": now,
+			"remark":       remark,
+			"updated_by":   operatedBy,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			newRecord := &EmployeeTierLevel{
+				UserId:      userId,
+				TierId:      newTierId,
+				Source:      source,
+				EffectiveAt: now,
+				Remark:      remark,
+				UpdatedBy:   operatedBy,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "user_id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"tier_id", "source", "effective_at", "remark", "updated_by"}),
+			}).Create(newRecord).Error; err != nil {
+				return err
+			}
+		}
+
+		log := &EmployeeTierLog{
+			UserId:            userId,
+			FromTierId:        fromTierId,
+			ToTierId:          newTierId,
+			Source:            source,
+			ProfitSnapshotUsd: profitSnapshotUsd,
+			OperatedBy:        operatedBy,
+		}
+		return tx.Create(log).Error
+	}); err != nil {
+		return err
+	}
+
 	level.TierId = newTierId
 	level.Source = source
 	level.EffectiveAt = now
 	level.Remark = remark
 	level.UpdatedBy = operatedBy
-	setTierLevelToRedis(level)
+	refreshTierLevelCacheFromDB(userId)
 
-	// 再写 DB；若记录不存在则创建（防止 GetOrCreateTierLevel 与本次写入之间记录被删除的极端情况）
-	result := DB.Model(&EmployeeTierLevel{}).Where("user_id = ?", userId).Updates(map[string]interface{}{
-		"tier_id":      newTierId,
-		"source":       source,
-		"effective_at": now,
-		"remark":       remark,
-		"updated_by":   operatedBy,
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		newRecord := &EmployeeTierLevel{
-			UserId:      userId,
-			TierId:      newTierId,
-			Source:      source,
-			EffectiveAt: now,
-			Remark:      remark,
-			UpdatedBy:   operatedBy,
-		}
-		if err := DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "user_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"tier_id", "source", "effective_at", "remark", "updated_by"}),
-		}).Create(newRecord).Error; err != nil {
-			return err
-		}
-	}
-
-	log := &EmployeeTierLog{
-		UserId:            userId,
-		FromTierId:        fromTierId,
-		ToTierId:          newTierId,
-		Source:            source,
-		ProfitSnapshotUsd: profitSnapshotUsd,
-		OperatedBy:        operatedBy,
-	}
-	return DB.Create(log).Error
+	return nil
 }
 
 // TryAutoUpgradeTier 检查员工是否应升级等级，若是则自动升级（只升不降）。
@@ -448,17 +519,22 @@ func getTierThresholdUsd(tiers []*EmployeeCommissionTier, tierId int64) float64 
 // 提成率统一由员工当前等级决定，不再支持自定义比例。
 // 未绑定等级时返回 0（不计提成）。
 func GetEffectiveCommissionRate(userId int) float64 {
-	level, err := GetOrCreateTierLevel(userId, true)
+	rate, _ := GetEffectiveCommissionRateWithContext(context.Background(), userId)
+	return rate
+}
+
+func GetEffectiveCommissionRateWithContext(ctx context.Context, userId int) (float64, error) {
+	level, err := GetOrCreateTierLevelWithContext(ctx, userId, true)
 	if err != nil || level.TierId == 0 {
-		return 0
+		return 0, err
 	}
 	tiers := GetAllTiersCached()
 	for _, t := range tiers {
 		if t.Id == level.TierId {
-			return t.Rate
+			return t.Rate, nil
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 // ============================================================================
@@ -551,12 +627,8 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 	if err = DB.Model(&EmployeeProfile{}).Select("user_id").Where("status = ?", 1).Scan(&employeeUserIds).Error; err != nil {
 		return 0, 0, err
 	}
-	if len(employeeUserIds) > 0 {
-		for _, userId := range employeeUserIds {
-			if _, ensureErr := GetOrCreateTierLevel(userId, true); ensureErr != nil {
-				return 0, 0, ensureErr
-			}
-		}
+	if err = ensureTierLevelsForUserIds(employeeUserIds); err != nil {
+		return 0, 0, err
 	}
 
 	// Load valid tiers before selecting rows so orphaned tier_id records do not
@@ -573,10 +645,13 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 		}
 	}
 
-	if len(validTierIds) > 0 {
+	levelsToRefresh := make([]int, 0)
+
+	if len(validTierIds) > 0 && len(employeeUserIds) > 0 {
 		var orphanLevels []*EmployeeTierLevel
-		if err = DB.Where("baseline_reset_at < ? AND tier_id <> ? AND tier_id NOT IN ?", resetAt, 0, validTierIds).
+		if err = DB.Where("user_id IN ? AND baseline_reset_at < ? AND tier_id <> ? AND tier_id NOT IN ?", employeeUserIds, resetAt, 0, validTierIds).
 			Order("id ASC").
+			Limit(batchSize).
 			Find(&orphanLevels).Error; err != nil {
 			return 0, 0, err
 		}
@@ -601,6 +676,7 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 			for _, stat := range stats {
 				costByUserId[stat.EmployeeUserId] = stat.TotalCost
 			}
+			orphanProcessed := 0
 			err = DB.Transaction(func(tx *gorm.DB) error {
 				for _, level := range orphanLevels {
 					operatedAt := time.Now().Unix()
@@ -613,19 +689,17 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 					}
 					common.SysError(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d has orphaned tierId=%d, refreshing baseline only", level.UserId, level.TierId))
 
-					// 先更新 Redis
 					updated := *level
 					updated.Source = "reset"
 					updated.EffectiveAt = operatedAt
+					updated.Remark = "月度自动重置"
 					updated.UpdatedBy = operatedBy
 					updated.BaselineConsumptionQuota = consumptionTotal
 					updated.BaselineCostQuota = costTotal
 					updated.BaselineProfitQuota = profitTotal
 					updated.BaselineCommissionQuota = commissionTotal
 					updated.BaselineResetAt = resetAt
-					setTierLevelToRedis(&updated)
 
-					// 再写 DB
 					updates := map[string]interface{}{
 						"source":                     "reset",
 						"effective_at":               operatedAt,
@@ -641,17 +715,32 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 					if res.Error != nil {
 						return res.Error
 					}
+					if res.RowsAffected == 0 {
+						common.SysLog(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: orphan userId=%d skipped due to concurrent tier update", level.UserId))
+						continue
+					}
+					levelsToRefresh = append(levelsToRefresh, level.UserId)
+					orphanProcessed++
 				}
 				return nil
 			})
 			if err != nil {
 				return 0, 0, err
 			}
+			// orphanProcessed 仅用于日志，不计入 processed（孤儿修复是维护操作，非完整月度重置）
+			if orphanProcessed > 0 {
+				common.SysLog(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: refreshed %d orphan baselines", orphanProcessed))
+			}
+			refreshTierLevelCacheFromDBByUserIds(levelsToRefresh)
+			levelsToRefresh = levelsToRefresh[:0]
 		}
 	}
 
+	if len(employeeUserIds) == 0 {
+		return 0, 0, nil
+	}
 	var levels []*EmployeeTierLevel
-	query := DB.Where("baseline_reset_at < ?", resetAt)
+	query := DB.Where("user_id IN ? AND baseline_reset_at < ?", employeeUserIds, resetAt)
 	if len(validTierIds) > 0 {
 		query = query.Where("tier_id = ? OR tier_id IN ?", 0, validTierIds)
 	}
@@ -706,7 +795,6 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 				}
 			}
 
-			// 先更新 Redis
 			updated := *level
 			updated.TierId = targetTierId
 			updated.Source = "reset"
@@ -718,9 +806,7 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 			updated.BaselineProfitQuota = profitTotal
 			updated.BaselineCommissionQuota = commissionTotal
 			updated.BaselineResetAt = resetAt
-			setTierLevelToRedis(&updated)
 
-			// 再写 DB
 			updates := map[string]interface{}{
 				"tier_id":                    targetTierId,
 				"source":                     "reset",
@@ -739,10 +825,9 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 			}
 			if res.RowsAffected == 0 {
 				common.SysLog(fmt.Sprintf("ResetEmployeeTierLevelsForPeriod: userId=%d skipped due to concurrent tier update", level.UserId))
-				// DB 未更新（并发冲突），删除刚写入的 Redis key，避免缓存与实际不符
-				deleteTierLevelFromRedis(level.UserId)
 				continue
 			}
+			levelsToRefresh = append(levelsToRefresh, level.UserId)
 
 			log := &EmployeeTierLog{
 				UserId:            level.UserId,
@@ -763,6 +848,7 @@ func ResetEmployeeTierLevelsForPeriod(resetAt int64, batchSize int, operatedBy i
 	if err != nil {
 		return 0, selected, err
 	}
+	refreshTierLevelCacheFromDBByUserIds(levelsToRefresh)
 
 	return processed, selected, nil
 }

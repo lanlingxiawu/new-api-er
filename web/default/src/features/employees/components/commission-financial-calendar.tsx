@@ -4,8 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -25,39 +25,37 @@ import type {
 
 export function currentMonthValue() {
   const now = new Date()
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
 export function shiftMonthValue(value: string, offset: number) {
   const [year, month] = value.split('-').map(Number)
   const date = new Date(
-    Date.UTC(
-      year || new Date().getUTCFullYear(),
-      (month || 1) - 1 + offset,
-      1
-    )
+    year || new Date().getFullYear(),
+    (month || 1) - 1 + offset,
+    1
   )
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 export function monthValueToRange(value: string) {
   const [year, month] = value.split('-').map(Number)
-  const start = Date.UTC(
-    year || new Date().getUTCFullYear(),
+  const start = new Date(
+    year || new Date().getFullYear(),
     (month || 1) - 1,
     1,
     0,
     0,
     0
-  )
-  const end = Date.UTC(
-    year || new Date().getUTCFullYear(),
+  ).getTime()
+  const end = new Date(
+    year || new Date().getFullYear(),
     month || 1,
     0,
     23,
     59,
     59
-  )
+  ).getTime()
   return {
     start_time: Math.floor(start / 1000),
     end_time: Math.floor(end / 1000),
@@ -74,11 +72,16 @@ function monthValueToCalendarRange(value: string) {
     }
   }
 
-  const [, month] = value.split('-').map(Number)
-  const range = monthValueToRange(value)
+  const [year, month] = value.split('-').map(Number)
+  const y = year || new Date().getFullYear()
+  const m = (month || 1) - 1
+  // 历史月份：start_time 只用于后端 ResolveCommissionMonthlyPeriod 识别周期，
+  // end_time 只要大于任意月度周期结束时间即可，让后端以 period.PeriodEndAt 为自然上界，
+  // 展示完整周期数据（前端不应截断历史数据）。
+  const start = Math.floor(new Date(Date.UTC(y, m, 15, 12, 0, 0)).getTime() / 1000)
   return {
-    start_time: month ? range.end_time : range.start_time,
-    end_time: month ? range.end_time : range.start_time,
+    start_time: start,
+    end_time: start + 62 * 86400,
   }
 }
 
@@ -95,21 +98,41 @@ function toDateKey(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
 }
 
+function datePartsInTimezone(date: Date, timezone?: string) {
+  if (!timezone || timezone === 'Local') {
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+    }
+  }
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date)
+    const get = (type: string) =>
+      Number(parts.find((part) => part.type === type)?.value)
+    const year = get('year')
+    const month = get('month')
+    const day = get('day')
+    if (year && month && day) return { year, month, day }
+  } catch {
+    // Fall back to local time when the browser cannot resolve the configured timezone.
+  }
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    day: date.getDate(),
+  }
+}
+
 function calendarDateFromTimestamp(value: number, timezone?: string) {
   const date = new Date(value * 1000)
-  if (timezone === 'Asia/Shanghai') {
-    const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-    return new Date(
-      Date.UTC(
-        shifted.getUTCFullYear(),
-        shifted.getUTCMonth(),
-        shifted.getUTCDate()
-      )
-    )
-  }
-  return new Date(
-    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
-  )
+  const parts = datePartsInTimezone(date, timezone)
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
 }
 
 function formatCalendarDate(date: Date) {
@@ -129,7 +152,10 @@ function periodLabel(
 }
 
 function isToday(date: Date, timezone?: string) {
-  const today = calendarDateFromTimestamp(Math.floor(Date.now() / 1000), timezone)
+  const today = calendarDateFromTimestamp(
+    Math.floor(Date.now() / 1000),
+    timezone
+  )
   return toDateKey(date) === toDateKey(today)
 }
 
@@ -146,7 +172,7 @@ function MonthValueSelector({
 }) {
   const { t, i18n } = useTranslation()
   const [selectedYear, selectedMonth] = value.split('-').map(Number)
-  const nowYear = new Date().getUTCFullYear()
+  const nowYear = new Date().getFullYear()
   const years = useMemo(() => {
     const start = Math.min(nowYear - 5, selectedYear || nowYear)
     const end = Math.max(nowYear + 1, selectedYear || nowYear)
@@ -366,7 +392,9 @@ export function CommissionFinancialCalendar({
       (cell) => cell.key === selectedDate && cell.inPeriod
     )
     if (selectedInMonth) return
-    const today = cells.find((cell) => cell.inPeriod && isToday(cell.date, timezone))
+    const today = cells.find(
+      (cell) => cell.inPeriod && isToday(cell.date, timezone)
+    )
     const firstStat = cells.find((cell) => cell.inPeriod && cell.stat)
     const firstDay = cells.find((cell) => cell.inPeriod)
     setSelectedDate((today || firstStat || firstDay)?.key)
@@ -419,15 +447,20 @@ export function CommissionFinancialCalendar({
             <div>
               <div className='text-muted-foreground mb-1 flex items-center gap-2 text-sm'>
                 <CalendarDays className='h-4 w-4' />
-                {periodLabel(periodStartAt, visualPeriodEndAt, monthLabel(month), timezone)}
+                {periodLabel(
+                  periodStartAt,
+                  visualPeriodEndAt,
+                  monthLabel(month),
+                  timezone
+                )}
               </div>
-            <div className='text-xl font-semibold sm:text-2xl'>
-              {isLoading ? (
-                <Skeleton className='h-8 w-36' />
-              ) : (
-                <BusinessAmount value={summary?.commission_quota ?? 0} />
-              )}
-            </div>
+              <div className='text-xl font-semibold sm:text-2xl'>
+                {isLoading ? (
+                  <Skeleton className='h-8 w-36' />
+                ) : (
+                  <BusinessAmount value={summary?.commission_quota ?? 0} />
+                )}
+              </div>
             </div>
             <div className='text-muted-foreground mt-2 text-sm'>
               {t('Current Period Commission')}
@@ -484,8 +517,8 @@ export function CommissionFinancialCalendar({
                 }
                 onClick={() => setSelectedDate(key)}
                 className={cn(
-                  'group relative flex min-h-[82px] flex-col border-r border-b p-2.5 text-left transition-all outline-none [&:nth-child(7n)]:border-r-0 sm:min-h-[104px]',
-                  'border-border/70 hover:z-10 hover:-translate-y-px hover:shadow-md focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-inset',
+                  'group relative flex min-h-[82px] flex-col border-r border-b p-2.5 text-left transition-all outline-none sm:min-h-[104px] [&:nth-child(7n)]:border-r-0',
+                  'border-border/70 focus-visible:ring-ring hover:z-10 hover:-translate-y-px hover:shadow-md focus-visible:ring-2 focus-visible:ring-inset',
                   !inPeriod && 'bg-muted/20 text-muted-foreground opacity-60',
                   inPeriod && !stat && 'bg-card hover:bg-muted/40',
                   inPeriod &&
@@ -535,7 +568,7 @@ export function CommissionFinancialCalendar({
                     {date.getUTCDate()}
                   </span>
                   {stat?.record_count ? (
-                    <span className='rounded-full bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-xs'>
+                    <span className='bg-background/80 text-muted-foreground rounded-full px-1.5 py-0.5 text-[10px] font-medium shadow-xs'>
                       {stat.record_count}
                     </span>
                   ) : null}
@@ -573,7 +606,9 @@ export function CommissionFinancialCalendar({
           <div className='mb-3 flex items-center gap-2 text-sm'>
             <CalendarDays className='text-muted-foreground h-4 w-4' />
             <span className='text-muted-foreground'>
-              {selectedCell ? formatCalendarDate(selectedCell.date) : monthLabel(month)}
+              {selectedCell
+                ? formatCalendarDate(selectedCell.date)
+                : monthLabel(month)}
             </span>
           </div>
           <div className='grid gap-3 sm:grid-cols-3 lg:grid-cols-5'>
@@ -620,7 +655,7 @@ export function CommissionCalendarSection({
 }: {
   queryKey: readonly unknown[]
   queryFn: (
-    range: ReturnType<typeof monthValueToRange>
+    range: ReturnType<typeof monthValueToCalendarRange>
   ) => Promise<ApiResponse<CommissionCalendarStats>>
   toolbar?: ReactNode
   showSummaryCards?: boolean

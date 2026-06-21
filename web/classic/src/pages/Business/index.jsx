@@ -168,18 +168,9 @@ const formatDate = (ts) => {
   return new Date(Number(ts) * 1000).toLocaleDateString();
 };
 
-const monthValueToTimestamp = (value) => {
-  if (!value) return undefined;
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return Math.floor(
-    new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0).getTime() / 1000,
-  );
-};
-
 const currentMonthValue = () => {
   const now = new Date();
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const shiftMonthValue = (value, offset) => {
@@ -187,35 +178,11 @@ const shiftMonthValue = (value, offset) => {
     .split('-')
     .map(Number);
   const date = new Date(
-    Date.UTC(year || new Date().getUTCFullYear(), (month || 1) - 1 + offset, 1),
-  );
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-};
-
-const monthValueToRange = (value) => {
-  const [year, month] = String(value || currentMonthValue())
-    .split('-')
-    .map(Number);
-  const start = Date.UTC(
-    year || new Date().getUTCFullYear(),
-    (month || 1) - 1,
+    year || new Date().getFullYear(),
+    (month || 1) - 1 + offset,
     1,
-    0,
-    0,
-    0,
   );
-  const end = Date.UTC(
-    year || new Date().getUTCFullYear(),
-    month || 1,
-    0,
-    23,
-    59,
-    59,
-  );
-  return {
-    start_time: Math.floor(start / 1000),
-    end_time: Math.floor(end / 1000),
-  };
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const monthValueToCalendarRange = (value) => {
@@ -226,35 +193,62 @@ const monthValueToCalendarRange = (value) => {
       end_time: now,
     };
   }
-  const [, month] = String(value || currentMonthValue())
+  const [year, month] = String(value || currentMonthValue())
     .split('-')
     .map(Number);
-  const range = monthValueToRange(value);
-  const anchor = month ? range.end_time : range.start_time;
+  const y = year || new Date().getFullYear();
+  const m = (month || 1) - 1;
+  // 历史月份：start_time 只用于后端 ResolveCommissionMonthlyPeriod 识别周期，
+  // end_time 只要大于任意月度周期结束时间即可，让后端以 period.PeriodEndAt 为自然上界，
+  // 展示完整周期数据（前端不应截断历史数据）。
+  // 当前月单独处理（上方 now），因为需要截断到今天避免显示未来空数据。
+  const start = Math.floor(
+    new Date(Date.UTC(y, m, 15, 12, 0, 0)).getTime() / 1000,
+  );
   return {
-    start_time: anchor,
-    end_time: anchor,
+    start_time: start,
+    end_time: start + 62 * 86400,
   };
 };
 
 const dateKey = (date) =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 
+const datePartsInTimezone = (date, timezone) => {
+  if (!timezone || timezone === 'Local') {
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+    };
+  }
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const get = (type) =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    if (year && month && day) return { year, month, day };
+  } catch {
+    // Fall back to local time when the browser cannot resolve the configured timezone.
+  }
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    day: date.getDate(),
+  };
+};
+
 const calendarDateFromTimestamp = (value, timezone) => {
   const date = new Date(Number(value) * 1000);
-  if (timezone === 'Asia/Shanghai') {
-    const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
-    return new Date(
-      Date.UTC(
-        shifted.getUTCFullYear(),
-        shifted.getUTCMonth(),
-        shifted.getUTCDate(),
-      ),
-    );
-  }
-  return new Date(
-    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
-  );
+  const parts = datePartsInTimezone(date, timezone);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
 };
 
 const formatCalendarDate = (date) =>
@@ -717,6 +711,11 @@ function ClassicBusinessTable({
     onLoadMore();
   }, [hasMore, loading, onLoadMore]);
 
+  const requestLoadMoreRef = useRef(requestLoadMore);
+  useEffect(() => {
+    requestLoadMoreRef.current = requestLoadMore;
+  });
+
   const handleScroll = useCallback(
     (event) => {
       userScrolledRef.current = true;
@@ -755,14 +754,14 @@ function ClassicBusinessTable({
       const distanceToBottom =
         target.scrollHeight - target.scrollTop - target.clientHeight;
       if (distanceToBottom <= 24) {
-        requestLoadMore();
+        requestLoadMoreRef.current();
       }
     };
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) {
-          requestLoadMore();
+          requestLoadMoreRef.current();
         }
       },
       {
@@ -778,7 +777,7 @@ function ClassicBusinessTable({
       tableScrollRoot?.removeEventListener('scroll', handleNativeScroll);
       observer.disconnect();
     };
-  }, [requestLoadMore]);
+  }, []);
 
   return (
     <div
@@ -1657,7 +1656,7 @@ function MonthValueSelector({ value, onChange }) {
   const [selectedYear, selectedMonth] = String(value || currentMonthValue())
     .split('-')
     .map(Number);
-  const nowYear = new Date().getUTCFullYear();
+  const nowYear = new Date().getFullYear();
   const years = useMemo(() => {
     const start = Math.min(nowYear - 5, selectedYear || nowYear);
     const end = Math.max(nowYear + 1, selectedYear || nowYear);
@@ -5065,12 +5064,9 @@ function getPresetRange(range) {
     return { start: null, end: null };
   }
   const days = { '1d': 1, '7d': 7, '30d': 30, '90d': 90 }[range] || 7;
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
-  const start = new Date(end);
-  start.setDate(end.getDate() - (days - 1));
-  start.setHours(0, 0, 0, 0);
-  return { start, end };
+  const now = new Date();
+  const start = new Date(now.getTime() - (days - 1) * 86400 * 1000);
+  return { start, end: now };
 }
 
 function startOfDayDate(value) {
@@ -5103,7 +5099,9 @@ export function BusinessOverview() {
   const [employeePage, setEmployeePage] = useState(1);
   const [channelNameFilter, setChannelNameFilter] = useState('');
   const [loading, setLoading] = useState(false);
+  const [channelLoading, setChannelLoading] = useState(false);
   const [data, setData] = useState(null);
+  const [channelPageData, setChannelPageData] = useState(null);
   const [loadedChannelRows, setLoadedChannelRows] = useState([]);
   const [loadedEmployeeRows, setLoadedEmployeeRows] = useState([]);
   const channelRowsByPageRef = useRef(new Map());
@@ -5129,15 +5127,21 @@ export function BusinessOverview() {
   const params = useMemo(
     () => ({
       ...rangeToParams(selectedRange),
-      channel_page: channelPage,
-      channel_page_size: PAGE_SIZE,
       employee_page: employeePage,
       employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
+    }),
+    [selectedRange, employeePage],
+  );
+  const channelParams = useMemo(
+    () => ({
+      ...rangeToParams(selectedRange),
+      channel_page: channelPage,
+      channel_page_size: PAGE_SIZE,
       ...(channelNameFilter.trim()
         ? { channel_keyword: channelNameFilter.trim() }
         : {}),
     }),
-    [selectedRange, channelPage, employeePage, channelNameFilter],
+    [selectedRange, channelPage, channelNameFilter],
   );
   const datePickerValue = useMemo(
     () =>
@@ -5167,14 +5171,40 @@ export function BusinessOverview() {
     }
   }, [JSON.stringify(params)]);
 
+  const loadChannelPage = useCallback(async () => {
+    setChannelLoading(true);
+    try {
+      const res = await API.get('/api/admin/employee/overview/channels', {
+        params: channelParams,
+        disableDuplicate: true,
+      });
+      const { success, message, data: pageData } = res.data;
+      if (success) {
+        setChannelPageData(pageData);
+      } else {
+        showError(message);
+      }
+    } catch (error) {
+      showError(error?.message || 'Request failed');
+    } finally {
+      setChannelLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(channelParams)]);
+
   useEffect(() => {
     loadOverview();
   }, [loadOverview]);
 
   useEffect(() => {
+    loadChannelPage();
+  }, [loadChannelPage]);
+
+  useEffect(() => {
     setChannelPage(1);
     channelRowsByPageRef.current.clear();
     setLoadedChannelRows([]);
+    setChannelPageData(null);
   }, [channelNameFilter, selectedRange]);
 
   useEffect(() => {
@@ -5185,7 +5215,6 @@ export function BusinessOverview() {
 
   const platform = data?.platform || {};
   const commission = data?.commission || {};
-  const channelProfitRows = data?.by_channel_platform || [];
   const [backfilling, setBackfilling] = useState(false);
   const [backfillStarted, setBackfillStarted] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -5228,13 +5257,13 @@ export function BusinessOverview() {
     }
   }, [t]);
   const employeeRows = data?.by_employee || [];
-  const channelTotal =
-    data?.by_channel_platform_total || channelProfitRows.length;
+  const channelProfitRows = channelPageData?.items || [];
+  const channelTotal = channelPageData?.total || 0;
   const hasMoreChannelRows = loadedChannelRows.length < channelTotal;
 
   useEffect(() => {
-    if (!data) return;
-    const fetchedChannelPage = data.by_channel_platform_page || channelPage;
+    if (!channelPageData) return;
+    const fetchedChannelPage = channelPageData.page || channelPage;
     channelRowsByPageRef.current.set(
       `${channelMergeScope}|${fetchedChannelPage}`,
       channelProfitRows,
@@ -5248,7 +5277,7 @@ export function BusinessOverview() {
       nextRows.push(...rows);
     }
     setLoadedChannelRows(nextRows);
-  }, [channelMergeScope, channelPage, channelProfitRows, data]);
+  }, [channelMergeScope, channelPage, channelProfitRows, channelPageData]);
 
   useEffect(() => {
     if (!data) return;
@@ -5269,9 +5298,19 @@ export function BusinessOverview() {
   }, [employeeMergeScope, employeePage, employeeRows, data]);
 
   const loadMoreChannels = useCallback(() => {
-    if (loading || !hasMoreChannelRows) return;
+    if (channelLoading || !hasMoreChannelRows) return;
     setChannelPage((page) => page + 1);
-  }, [hasMoreChannelRows, loading]);
+  }, [hasMoreChannelRows, channelLoading]);
+
+  const resetPagination = useCallback(() => {
+    setChannelPage(1);
+    setEmployeePage(1);
+    channelRowsByPageRef.current.clear();
+    employeeRowsByPageRef.current.clear();
+    setLoadedChannelRows([]);
+    setLoadedEmployeeRows([]);
+    setChannelPageData(null);
+  }, []);
 
   const rangeButtons = [
     { key: '1d', label: t('近 1 天') },
@@ -5366,7 +5405,7 @@ export function BusinessOverview() {
                 type={range === item.key ? 'primary' : 'tertiary'}
                 theme={range === item.key ? 'solid' : 'light'}
                 size='small'
-                onClick={() => setRange(item.key)}
+                onClick={() => { resetPagination(); setRange(item.key); }}
               >
                 {item.label}
               </Button>
@@ -5382,6 +5421,7 @@ export function BusinessOverview() {
                 const normalizedStart = startOfDayDate(start);
                 const normalizedEnd = endOfDayDate(end);
                 if (normalizedStart && normalizedEnd) {
+                  resetPagination();
                   setCustomRange({
                     start: normalizedStart,
                     end: normalizedEnd,
@@ -5394,8 +5434,8 @@ export function BusinessOverview() {
               size='small'
               type='tertiary'
               icon={<RefreshCw size={14} />}
-              loading={loading}
-              onClick={loadOverview}
+              loading={loading || channelLoading}
+              onClick={() => { loadOverview(); loadChannelPage(); }}
             >
               {t('刷新')}
             </Button>
@@ -5587,7 +5627,7 @@ export function BusinessOverview() {
                 scroll={{ x: '100%', y: 223 }}
                 hasMore={hasMoreChannelRows}
                 onLoadMore={loadMoreChannels}
-                loading={loading}
+                loading={channelLoading}
                 resetKey={channelMergeScope}
                 empty={<BusinessEmpty description={t('搜索无结果')} />}
               />

@@ -39,6 +39,23 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type BusinessStatsCircuitBreakerStatus = {
+  enabled: boolean
+  manual_disabled: boolean
+  open: boolean
+  hard_disabled: boolean
+  disabled_until: number
+  consecutive_failures: number
+  cooldown_seconds: number
+  last_reason: string
+}
+
+export type BusinessStatsCircuitBreakerStatusResponse = {
+  success: boolean
+  message: string
+  data: BusinessStatsCircuitBreakerStatus
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -332,6 +349,12 @@ export type OperationsSettings = {
   RequestLogMaxBodyKB: number
   RequestLogMinCount: number
   RequestLogMaxCount: number
+  'business_stats_circuit_breaker_setting.enabled': boolean
+  'business_stats_circuit_breaker_setting.manual_disabled': boolean
+  'business_stats_circuit_breaker_setting.failure_threshold': number
+  'business_stats_circuit_breaker_setting.initial_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.max_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number

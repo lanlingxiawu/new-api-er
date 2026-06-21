@@ -46,6 +46,7 @@ import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessUsd } from '@/features/business/format'
 import {
   getCommissionOverview,
+  getChannelProfitPage,
   type ChannelProfitStat,
   type EmployeeStat,
 } from './api'
@@ -59,10 +60,9 @@ interface OverviewRange {
 }
 
 function createTrailingDayRange(days: number): OverviewRange {
-  const end = getEndOfDay()
-  const start = new Date(end)
-  start.setDate(end.getDate() - (days - 1))
-  return { start: getStartOfDay(start), end }
+  const now = new Date()
+  const start = new Date(now.getTime() - (days - 1) * 86400 * 1000)
+  return { start, end: now }
 }
 
 function getPresetRange(range: Exclude<RangeKey, 'custom'>): OverviewRange {
@@ -147,6 +147,11 @@ function ScrollTable({
     onLoadMore()
   }, [hasMore, loading, onLoadMore])
 
+  const requestLoadMoreRef = useRef(requestLoadMore)
+  useEffect(() => {
+    requestLoadMoreRef.current = requestLoadMore
+  })
+
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
       userScrolledRef.current = true
@@ -173,7 +178,7 @@ function ScrollTable({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) {
-          requestLoadMore()
+          requestLoadMoreRef.current()
         }
       },
       {
@@ -185,7 +190,7 @@ function ScrollTable({
 
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [requestLoadMore])
+  }, [])
 
   return (
     <div
@@ -499,26 +504,45 @@ export function CommissionOverview() {
     queryKey: [
       'commission-overview',
       range,
-      startTime ?? null,
-      endTime ?? null,
-      channelPage,
+      range === 'custom' ? (startTime ?? null) : null,
+      range === 'custom' ? (endTime ?? null) : null,
       employeePage,
-      channelFilter,
     ],
     queryFn: () =>
       getCommissionOverview({
         start_time: startTime,
         end_time: endTime,
-        channel_page: channelPage,
-        channel_page_size: OVERVIEW_TABLE_PAGE_SIZE,
-        channel_keyword: channelFilter.trim() || undefined,
         employee_page: employeePage,
         employee_page_size: EMPLOYEE_PERFORMANCE_TOP_LIMIT,
       }),
     placeholderData: keepPreviousData,
   })
 
+  const {
+    data: channelData,
+    isFetching: isChannelFetching,
+    refetch: refetchChannels,
+  } = useQuery({
+    queryKey: [
+      'channel-profit',
+      range,
+      range === 'custom' ? (startTime ?? null) : null,
+      range === 'custom' ? (endTime ?? null) : null,
+      channelPage,
+      channelFilter,
+    ],
+    queryFn: () =>
+      getChannelProfitPage({
+        start_time: startTime,
+        end_time: endTime,
+        channel_page: channelPage,
+        channel_page_size: OVERVIEW_TABLE_PAGE_SIZE,
+        channel_keyword: channelFilter.trim() || undefined,
+      }),
+  })
+
   const d = data?.data
+  const cd = channelData?.data
   const platform = d?.platform
   const comm = d?.commission
   const showPageLoading = isFetching && !isLoading
@@ -552,9 +576,9 @@ export function CommissionOverview() {
     setLoadedEmployeeRows([])
   }
 
-  const channelPlatformRows = useMemo(
-    () => d?.by_channel_platform ?? [],
-    [d?.by_channel_platform]
+  const channelPageItems = useMemo(
+    () => cd?.items ?? [],
+    [cd?.items]
   )
   const employeeRows = useMemo(() => d?.by_employee ?? [], [d?.by_employee])
   const sortedChannelRows = useMemo(
@@ -563,8 +587,7 @@ export function CommissionOverview() {
   )
   const displayedChannelRows = sortedChannelRows
   const displayedEmployeeRows = loadedEmployeeRows
-  const channelTotal =
-    d?.by_channel_platform_total ?? channelPlatformRows.length
+  const channelTotal = cd?.total ?? 0
   const hasMoreChannelRows = loadedChannelRows.length < channelTotal
 
   useEffect(() => {
@@ -574,11 +597,11 @@ export function CommissionOverview() {
   }, [channelFilter])
 
   useEffect(() => {
-    if (!d) return
-    const fetchedChannelPage = d.by_channel_platform_page ?? channelPage
+    if (!cd) return
+    const fetchedChannelPage = cd.page ?? channelPage
     channelRowsByPageRef.current.set(
       `${channelMergeScope}|${fetchedChannelPage}`,
-      channelPlatformRows
+      channelPageItems
     )
     const nextRows: ChannelProfitStat[] = []
     for (let page = 1; ; page += 1) {
@@ -589,7 +612,7 @@ export function CommissionOverview() {
       nextRows.push(...rows)
     }
     setLoadedChannelRows(nextRows)
-  }, [channelMergeScope, channelPage, channelPlatformRows, d])
+  }, [channelMergeScope, channelPage, channelPageItems, cd])
 
   useEffect(() => {
     if (!d) return
@@ -610,9 +633,9 @@ export function CommissionOverview() {
   }, [employeeMergeScope, employeePage, employeeRows, d])
 
   const loadMoreChannels = useCallback(() => {
-    if (isFetching || !hasMoreChannelRows) return
+    if (isChannelFetching || !hasMoreChannelRows) return
     setChannelPage((page) => page + 1)
-  }, [hasMoreChannelRows, isFetching])
+  }, [hasMoreChannelRows, isChannelFetching])
 
   const toggleChannelSort = useCallback((key: string) => {
     setChannelSort((prev) =>
@@ -662,12 +685,12 @@ export function CommissionOverview() {
             <Button
               size='sm'
               variant='outline'
-              onClick={() => refetch()}
-              disabled={isFetching}
+              onClick={() => { void refetch(); void refetchChannels() }}
+              disabled={isFetching || isChannelFetching}
               title={t('Refresh')}
             >
               <RefreshCw
-                className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`}
+                className={`size-3.5 ${isFetching || isChannelFetching ? 'animate-spin' : ''}`}
               />
             </Button>
           </div>
@@ -783,7 +806,7 @@ export function CommissionOverview() {
                   <ScrollTable
                     hasMore={hasMoreChannelRows}
                     onLoadMore={loadMoreChannels}
-                    loading={isFetching}
+                    loading={isChannelFetching}
                     resetKey={channelMergeScope}
                   >
                     <Table containerClassName='overflow-visible'>

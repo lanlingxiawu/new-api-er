@@ -23,9 +23,10 @@ import { MonitoringSettingsSection } from '../integrations/monitoring-settings-s
 import { NodeControlServiceSection } from '../integrations/node-control-service-section'
 // end
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
+import { BusinessStatsCircuitBreakerSection } from '../maintenance/business-stats-circuit-breaker-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
-import { RequestLogSettingsSection } from '../maintenance/request-log-settings-section'
 import { PerformanceSection } from '../maintenance/performance-section'
+import { RequestLogSettingsSection } from '../maintenance/request-log-settings-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
@@ -131,6 +132,38 @@ const OPERATIONS_SECTIONS = [
           RequestLogMaxBodyKB: Number(settings.RequestLogMaxBodyKB) || 64,
           RequestLogMinCount: Number(settings.RequestLogMinCount) || 1000,
           RequestLogMaxCount: Number(settings.RequestLogMaxCount) || 5000,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'settlement-guard',
+    titleKey: 'Settlement Guard',
+    build: (settings: OperationsSettings) => (
+      <BusinessStatsCircuitBreakerSection
+        defaultValues={{
+          'business_stats_circuit_breaker_setting.enabled':
+            settings['business_stats_circuit_breaker_setting.enabled'] ?? true,
+          'business_stats_circuit_breaker_setting.manual_disabled':
+            settings[
+              'business_stats_circuit_breaker_setting.manual_disabled'
+            ] ?? false,
+          'business_stats_circuit_breaker_setting.failure_threshold':
+            settings[
+              'business_stats_circuit_breaker_setting.failure_threshold'
+            ] ?? 3,
+          'business_stats_circuit_breaker_setting.initial_cooldown_seconds':
+            settings[
+              'business_stats_circuit_breaker_setting.initial_cooldown_seconds'
+            ] ?? 60,
+          'business_stats_circuit_breaker_setting.max_cooldown_seconds':
+            settings[
+              'business_stats_circuit_breaker_setting.max_cooldown_seconds'
+            ] ?? 3600,
+          'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms':
+            settings[
+              'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms'
+            ] ?? 800,
         }}
       />
     ),
