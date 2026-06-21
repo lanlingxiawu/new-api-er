@@ -16,10 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -31,7 +44,9 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { clearAllRequestLogs } from '../api'
 import {
+  SettingsControlGroup,
   SettingsForm,
   SettingsSwitchContent,
   SettingsSwitchItem,
@@ -72,6 +87,34 @@ export function RequestLogSettingsSection({
   })
 
   useResetForm(form, defaultValues)
+
+  const [isClearing, setIsClearing] = useState(false)
+  const [showClearDialog, setShowClearDialog] = useState(false)
+
+  const handleClearRequestLogs = async () => {
+    setIsClearing(true)
+    try {
+      const res = await clearAllRequestLogs()
+      if (!res.success) {
+        throw new Error(res.message || t('Failed to clear request logs'))
+      }
+      const count = res.data ?? 0
+      toast.success(
+        count > 0
+          ? t('{{count}} request log entries cleared.', { count })
+          : t('No request logs to clear.')
+      )
+      setShowClearDialog(false)
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t('Failed to clear request logs')
+      toast.error(message)
+    } finally {
+      setIsClearing(false)
+    }
+  }
 
   const onSubmit = async (values: RequestLogFormValues) => {
     const updates: Array<{ key: string; value: string | boolean | number }> = []
@@ -257,8 +300,58 @@ export function RequestLogSettingsSection({
               </FormItem>
             )}
           />
+
+          <SettingsControlGroup className='space-y-3'>
+            <div>
+              <h4 className='text-sm font-medium'>
+                {t('Clear all request logs')}
+              </h4>
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  'Remove all request logs stored in Redis. This action cannot be undone.'
+                )}
+              </p>
+            </div>
+            <div>
+              <Button
+                type='button'
+                variant='destructive'
+                onClick={() => setShowClearDialog(true)}
+                disabled={isClearing}
+              >
+                {isClearing ? t('Clearing...') : t('Clear request logs')}
+              </Button>
+            </div>
+          </SettingsControlGroup>
         </SettingsForm>
       </Form>
+      <AlertDialog open={showClearDialog} onOpenChange={setShowClearDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('Confirm clearing request logs')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('This will permanently remove all request logs stored in Redis.')}{' '}
+              {t('This action cannot be undone.')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isClearing}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                handleClearRequestLogs()
+              }}
+              disabled={isClearing}
+            >
+              {isClearing ? t('Clearing...') : t('Clear request logs')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SettingsSection>
   )
 }

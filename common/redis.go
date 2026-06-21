@@ -14,6 +14,13 @@ import (
 )
 
 var RDB *redis.Client
+
+// RequestLogRDB 是请求日志专用的 Redis 客户端。
+// 当配置了 REQUEST_LOG_REDIS_DB（>=0）时，它指向一个独立逻辑库（SELECT n），
+// 使请求日志的大量 key 与其他数据隔离，避免业绩统计刷盘的 SCAN 被迫遍历这些 key。
+// 未配置时回退为 RDB，与共用主库的旧行为完全一致。
+var RequestLogRDB *redis.Client
+
 var RedisEnabled = true
 
 func RedisKeyCacheSeconds() int {
@@ -50,6 +57,22 @@ func InitRedisClient() (err error) {
 		SysLog(fmt.Sprintf("Redis connected to %s", opt.Addr))
 		SysLog(fmt.Sprintf("Redis database: %d", opt.DB))
 	}
+
+	// 请求日志专用客户端：配置了独立逻辑库时单独连接，否则共用主库。
+	requestLogDB := GetEnvOrDefault("REQUEST_LOG_REDIS_DB", -1)
+	if requestLogDB >= 0 && requestLogDB != opt.DB {
+		logOpt := ParseRedisOption()
+		logOpt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
+		logOpt.DB = requestLogDB
+		RequestLogRDB = redis.NewClient(logOpt)
+		if _, perr := RequestLogRDB.Ping(ctx).Result(); perr != nil {
+			FatalLog("Request-log Redis ping test failed: " + perr.Error())
+		}
+		SysLog(fmt.Sprintf("Request log uses dedicated Redis database: %d", requestLogDB))
+	} else {
+		RequestLogRDB = RDB
+	}
+
 	return err
 }
 

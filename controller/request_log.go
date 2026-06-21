@@ -67,3 +67,13 @@ func DeleteHistoryRequestLogs(c *gin.Context) {
 	}
 	common.ApiSuccess(c, count)
 }
+
+// ClearAllRequestLogs 清除存储的全部请求日志（仅超级管理员）。
+func ClearAllRequestLogs(c *gin.Context) {
+	count, err := model.ClearAllRequestLogs()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, count)
+}
