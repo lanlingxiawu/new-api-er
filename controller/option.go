@@ -120,6 +120,14 @@ func GetOptions(c *gin.Context) {
 	})
 }
 
+func GetBusinessStatsCircuitBreakerStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    model.GetBusinessStatsCircuitBreakerStatus(),
+	})
+}
+
 type OptionUpdateRequest struct {
 	Key   string `json:"key"`
 	Value any    `json:"value"`
@@ -373,6 +381,26 @@ func UpdateOption(c *gin.Context) {
 				"success": false,
 				"message": "重置时区仅支持中国时区或服务器时区",
 			})
+			return
+		}
+	case "business_stats_circuit_breaker_setting.failure_threshold":
+		if !isIntInRange(option.Value.(string), 1, 1000) {
+			common.ApiErrorMsg(c, "failure_threshold must be between 1 and 1000")
+			return
+		}
+	case "business_stats_circuit_breaker_setting.initial_cooldown_seconds":
+		if !isIntInRange(option.Value.(string), 1, 86400) {
+			common.ApiErrorMsg(c, "initial_cooldown_seconds must be between 1 and 86400")
+			return
+		}
+	case "business_stats_circuit_breaker_setting.max_cooldown_seconds":
+		if !isIntInRange(option.Value.(string), 1, 604800) {
+			common.ApiErrorMsg(c, "max_cooldown_seconds must be between 1 and 604800")
+			return
+		}
+	case "business_stats_circuit_breaker_setting.side_effect_db_timeout_ms":
+		if !isIntInRange(option.Value.(string), 50, 30000) {
+			common.ApiErrorMsg(c, "side_effect_db_timeout_ms must be between 50 and 30000")
 			return
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -126,6 +127,7 @@ func bufferPlatformStatRedis(statDate int64, channelId int, channelName string, 
 	pipe.Expire(ctx, key, statBufferKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysError("bufferPlatformStatRedis: pipeline error: " + err.Error())
+		ReportBusinessStatsFailure("platform_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "channel_id": channelId})
 	}
 }
 
@@ -151,6 +153,7 @@ func bufferCommissionStatRedis(statDate int64, employeeUserId int, revenueQuota,
 	pipe.Expire(ctx, key, statBufferKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysError("bufferCommissionStatRedis: pipeline error: " + err.Error())
+		ReportBusinessStatsFailure("commission_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId})
 	}
 }
 
@@ -175,6 +178,7 @@ func bufferCustomerCommissionStatRedis(statDate int64, employeeUserId, customerU
 	pipe.Expire(ctx, key, statBufferKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysError("bufferCustomerCommissionStatRedis: pipeline error: " + err.Error())
+		ReportBusinessStatsFailure("customer_commission_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId, "customer_user_id": customerUserId})
 		bufferCustomerCommissionStatMem(statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
 	}
 }
@@ -339,16 +343,37 @@ func bufferCustomerCommissionStatMem(statDate int64, employeeUserId, customerUse
 	}
 }
 
-func bufferCommissionResetPeriodStatRedis(level *EmployeeTierLevel, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if level == nil || level.BaselineResetAt <= 0 {
+// commissionResetPeriodMeta 返回 reset_started_at 对应的 period_key（配置时区下的日期字符串）
+// 和 timezone 名称，用于写入 EmployeeCommissionResetPeriodStat 的元数据字段。
+func commissionResetPeriodMeta(resetStartedAt int64) (periodKey, timezone string) {
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, tz := commissionMonthlyStatLocation(cfg.Timezone)
+	return time.Unix(resetStartedAt, 0).In(loc).Format("2006-01-02"), tz
+}
+
+// effectiveResetStartedAt 返回该条提成记录应归属的 reset_started_at。
+// 若员工已有明确的 BaselineResetAt（最近一次重置时间），直接使用，使重置前后的数据
+// 落在不同的 reset_started_at 桶中，从而实现"重置清空日历"的语义。
+// 若尚未执行过任何重置（BaselineResetAt=0），退回到 ResolveCommissionMonthlyPeriod
+// 推算出的周期起始时间，保证无重置时的数据也能正常显示。
+func effectiveResetStartedAt(level *EmployeeTierLevel, createdAt int64) int64 {
+	if level != nil && level.BaselineResetAt > 0 {
+		return level.BaselineResetAt
+	}
+	return ResolveCommissionMonthlyPeriod(createdAt).PeriodStartAt
+}
+
+func bufferCommissionResetPeriodStatRedis(resetStartedAt int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	if resetStartedAt <= 0 {
 		return
 	}
-	key := commissionResetPeriodRedisKey(level.BaselineResetAt, employeeUserId)
+	periodKey, periodTimezone := commissionResetPeriodMeta(resetStartedAt)
+	key := commissionResetPeriodRedisKey(resetStartedAt, employeeUserId)
 	ctx := context.Background()
 	pipe := common.RDB.Pipeline()
 	pipe.HSetNX(ctx, key, "reset_ended_at", 0)
-	pipe.HSetNX(ctx, key, "period_key", time.Unix(level.BaselineResetAt, 0).UTC().Format("2006-01-02 15:04:05"))
-	pipe.HSetNX(ctx, key, "timezone", "reset")
+	pipe.HSetNX(ctx, key, "period_key", periodKey)
+	pipe.HSetNX(ctx, key, "timezone", periodTimezone)
 	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
 	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
 	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
@@ -366,15 +391,16 @@ func bufferCommissionResetPeriodStatRedis(level *EmployeeTierLevel, employeeUser
 	pipe.Expire(ctx, key, statBufferKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysError("bufferCommissionResetPeriodStatRedis: pipeline error: " + err.Error())
-		bufferCommissionResetPeriodStatMem(level, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
+		ReportBusinessStatsFailure("commission_reset_period_redis_buffer", err.Error(), map[string]any{"employee_user_id": employeeUserId})
+		bufferCommissionResetPeriodStatMem(resetStartedAt, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
 	}
 }
 
-func bufferCommissionResetPeriodDailyStatRedis(level *EmployeeTierLevel, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if level == nil || level.BaselineResetAt <= 0 {
+func bufferCommissionResetPeriodDailyStatRedis(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	if resetStartedAt <= 0 {
 		return
 	}
-	key := commissionResetPeriodDailyRedisKey(level.BaselineResetAt, statDate, employeeUserId)
+	key := commissionResetPeriodDailyRedisKey(resetStartedAt, statDate, employeeUserId)
 	ctx := context.Background()
 	pipe := common.RDB.Pipeline()
 	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
@@ -394,24 +420,26 @@ func bufferCommissionResetPeriodDailyStatRedis(level *EmployeeTierLevel, statDat
 	pipe.Expire(ctx, key, statBufferKeyTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		common.SysError("bufferCommissionResetPeriodDailyStatRedis: pipeline error: " + err.Error())
-		bufferCommissionResetPeriodDailyStatMem(level, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
+		ReportBusinessStatsFailure("commission_reset_period_daily_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId})
+		bufferCommissionResetPeriodDailyStatMem(resetStartedAt, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
 	}
 }
 
-func bufferCommissionResetPeriodStatMem(level *EmployeeTierLevel, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if level == nil || level.BaselineResetAt <= 0 {
+func bufferCommissionResetPeriodStatMem(resetStartedAt int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	if resetStartedAt <= 0 {
 		return
 	}
-	key := memCommissionResetPeriodKey(level.BaselineResetAt, employeeUserId)
+	key := memCommissionResetPeriodKey(resetStartedAt, employeeUserId)
 	memCommissionResetPeriodLock.Lock()
 	defer memCommissionResetPeriodLock.Unlock()
 	d, ok := memCommissionResetPeriodBuf[key]
 	if !ok {
+		pk, tz := commissionResetPeriodMeta(resetStartedAt)
 		d = &commissionResetPeriodDelta{
-			ResetStartedAt: level.BaselineResetAt,
+			ResetStartedAt: resetStartedAt,
 			ResetEndedAt:   0,
-			PeriodKey:      time.Unix(level.BaselineResetAt, 0).UTC().Format("2006-01-02 15:04:05"),
-			Timezone:       "reset",
+			PeriodKey:      pk,
+			Timezone:       tz,
 			EmployeeUserId: employeeUserId,
 		}
 		memCommissionResetPeriodBuf[key] = d
@@ -426,17 +454,17 @@ func bufferCommissionResetPeriodStatMem(level *EmployeeTierLevel, employeeUserId
 	}
 }
 
-func bufferCommissionResetPeriodDailyStatMem(level *EmployeeTierLevel, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if level == nil || level.BaselineResetAt <= 0 {
+func bufferCommissionResetPeriodDailyStatMem(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
+	if resetStartedAt <= 0 {
 		return
 	}
-	key := memCommissionResetPeriodDailyKey(level.BaselineResetAt, statDate, employeeUserId)
+	key := memCommissionResetPeriodDailyKey(resetStartedAt, statDate, employeeUserId)
 	memCommissionResetPeriodDailyLock.Lock()
 	defer memCommissionResetPeriodDailyLock.Unlock()
 	d, ok := memCommissionResetPeriodDailyBuf[key]
 	if !ok {
 		d = &commissionResetPeriodDailyDelta{
-			ResetStartedAt: level.BaselineResetAt,
+			ResetStartedAt: resetStartedAt,
 			StatDate:       statDate,
 			EmployeeUserId: employeeUserId,
 		}
@@ -459,6 +487,7 @@ func requeuePlatformStatMem(d *platformStatDelta) {
 	d.RetryCount++
 	if d.RetryCount >= statBufferMaxRetries {
 		writeBusinessStatsDeadLetter("platform_daily_stat", "max retries exceeded", d.RetryCount, d)
+		ReportBusinessStatsFailure("platform_daily_stat", "max retries exceeded", d)
 		return
 	}
 	memPlatformLock.Lock()
@@ -492,6 +521,7 @@ func requeueCommissionStatMem(d *commissionStatDelta) {
 	d.RetryCount++
 	if d.RetryCount >= statBufferMaxRetries {
 		writeBusinessStatsDeadLetter("commission_daily_stat", "max retries exceeded", d.RetryCount, d)
+		ReportBusinessStatsFailure("commission_daily_stat", "max retries exceeded", d)
 		return
 	}
 	memCommissionLock.Lock()
@@ -523,6 +553,7 @@ func requeueCustomerCommissionStatMem(d *customerCommissionStatDelta) {
 	d.RetryCount++
 	if d.RetryCount >= statBufferMaxRetries {
 		writeBusinessStatsDeadLetter("customer_commission_daily_stat", "max retries exceeded", d.RetryCount, d)
+		ReportBusinessStatsFailure("customer_commission_daily_stat", "max retries exceeded", d)
 		return
 	}
 	memCustomerCommissionLock.Lock()
@@ -554,6 +585,7 @@ func requeueCommissionResetPeriodStatMem(d *commissionResetPeriodDelta) {
 	d.RetryCount++
 	if d.RetryCount >= statBufferMaxRetries {
 		writeBusinessStatsDeadLetter("commission_reset_period_stat", "max retries exceeded", d.RetryCount, d)
+		ReportBusinessStatsFailure("commission_reset_period_stat", "max retries exceeded", d)
 		return
 	}
 	memCommissionResetPeriodLock.Lock()
@@ -588,6 +620,7 @@ func requeueCommissionResetPeriodDailyStatMem(d *commissionResetPeriodDailyDelta
 	d.RetryCount++
 	if d.RetryCount >= statBufferMaxRetries {
 		writeBusinessStatsDeadLetter("commission_reset_period_daily_stat", "max retries exceeded", d.RetryCount, d)
+		ReportBusinessStatsFailure("commission_reset_period_daily_stat", "max retries exceeded", d)
 		return
 	}
 	memCommissionResetPeriodDailyLock.Lock()
@@ -634,16 +667,17 @@ func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
 		common.SysError("BufferCommissionDailyStat: get tier level failed: " + err.Error())
 		level = nil
 	}
+	resetAt := effectiveResetStartedAt(level, log.CreatedAt)
 	if common.RedisEnabled {
 		bufferCommissionStatRedis(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 		bufferCustomerCommissionStatRedis(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodStatRedis(level, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodDailyStatRedis(level, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionResetPeriodStatRedis(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionResetPeriodDailyStatRedis(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 	} else {
 		bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 		bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodStatMem(level, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodDailyStatMem(level, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionResetPeriodStatMem(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+		bufferCommissionResetPeriodDailyStatMem(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 	}
 }
 
@@ -1387,6 +1421,7 @@ func BufferConsumptionCostRecord(rec *ConsumptionCost) {
 	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		costLedgerBuf = costLedgerBuf[over:]
 		costLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
 	costLedgerLock.Unlock()
 }
@@ -1401,6 +1436,7 @@ func requeueCostLedger(items []*ConsumptionCost) {
 	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		costLedgerBuf = costLedgerBuf[over:]
 		costLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
 	costLedgerLock.Unlock()
 }
@@ -1434,6 +1470,7 @@ func flushConsumptionCostLedger() {
 			DoNothing: true,
 		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			ReportBusinessStatsFailure("consumption_cost_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
 			requeueCostLedger(buf[i:])
 			costLedgerFlushState.onFailure(time.Now())
@@ -1454,6 +1491,7 @@ func bufferCostAndCommissionLedger(cost *ConsumptionCost, log *EmployeeCommissio
 	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
 		pairLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
 	costCommissionLedgerLock.Unlock()
 }
@@ -1468,6 +1506,7 @@ func requeuePairLedger(items []*costCommissionLedgerPair) {
 	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
 		pairLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
 	costCommissionLedgerLock.Unlock()
 }
@@ -1533,6 +1572,7 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 			}).CreateInBatches(commissionBatch, pairedLedgerFlushBatchSize).Error
 		}); err != nil {
 			common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			ReportBusinessStatsFailure("cost_commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			requeuePairLedger(buf[i:])
 			pairLedgerFlushState.onFailure(time.Now())
 			return pairedFlushResult{HadItems: true, Failed: true}
@@ -1578,6 +1618,7 @@ func appendCommissionLedger(log *EmployeeCommissionLog) {
 	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		commissionLedgerBuf = commissionLedgerBuf[over:]
 		commissionLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
 	commissionLedgerLock.Unlock()
 }
@@ -1592,6 +1633,7 @@ func requeueCommissionLedger(items []*EmployeeCommissionLog) {
 	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
 		commissionLedgerBuf = commissionLedgerBuf[over:]
 		commissionLedgerDropped += int64(over)
+		ReportBusinessStatsFailure("commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
 	commissionLedgerLock.Unlock()
 }
@@ -1706,6 +1748,7 @@ func flushCommissionLogLedger() {
 			DoNothing: true,
 		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushCommissionLogLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			ReportBusinessStatsFailure("commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
 			requeueCommissionLedger(buf[i:])
 			commissionLedgerFlushState.onFailure(time.Now())
@@ -1759,6 +1802,7 @@ func BufferCommissionAndProfit(userId int, commissionDelta, profitDelta int64) {
 		pipe.Expire(ctx, key, statBufferKeyTTL)
 		if _, err := pipe.Exec(ctx); err != nil {
 			common.SysError("BufferCommissionAndProfit: redis pipeline error: " + err.Error())
+			ReportBusinessStatsFailure("employee_ext_redis_buffer", err.Error(), map[string]any{"user_id": userId, "commission_delta": commissionDelta, "profit_delta": profitDelta})
 			// Redis 故障降级到内存
 			bufferEmployeeExtMem(userId, commissionDelta, profitDelta)
 		}
@@ -1813,6 +1857,7 @@ func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
 		pipe.Expire(ctx, key, statBufferKeyTTL)
 		if _, err := pipe.Exec(ctx); err != nil {
 			common.SysError("requeueEmployeeExtDelta: redis pipeline error: " + err.Error())
+			ReportBusinessStatsFailure("employee_ext_redis_requeue", err.Error(), map[string]any{"user_id": userId, "delta": d})
 			bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
 		}
 		return
@@ -1929,6 +1974,7 @@ func ensureUserExtensionsBatch(userIds []int) bool {
 	// ON CONFLICT DO NOTHING, 批量插入
 	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
 		common.SysError("ensureUserExtensionsBatch: " + err.Error())
+		ReportBusinessStatsFailure("employee_ext_ensure", err.Error(), userIds)
 		return false
 	}
 	return true
@@ -1950,10 +1996,12 @@ func applyEmployeeExtDelta(userId int, d *employeeExtDelta) bool {
 	result := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
 	if result.Error != nil {
 		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
+		ReportBusinessStatsFailure("employee_ext_apply", result.Error.Error(), map[string]any{"user_id": userId, "delta": d})
 		return false
 	}
 	if result.RowsAffected == 0 {
 		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d no rows affected", userId))
+		ReportBusinessStatsFailure("employee_ext_apply", "no rows affected", map[string]any{"user_id": userId, "delta": d})
 		return false
 	}
 	// 等级升级检查（仅利润有正增量时）
@@ -1961,6 +2009,7 @@ func applyEmployeeExtDelta(userId int, d *employeeExtDelta) bool {
 		var ext UserExtension
 		if err := DB.Select("profit_total_quota").Where("user_id = ?", userId).First(&ext).Error; err != nil {
 			common.SysError(fmt.Sprintf("applyEmployeeExtDelta: read profit failed userId=%d err=%s", userId, err.Error()))
+			ReportBusinessStatsFailure("employee_ext_read_profit", err.Error(), map[string]any{"user_id": userId})
 			return true
 		}
 		TryAutoUpgradeTier(userId, ext.ProfitTotalQuota)
