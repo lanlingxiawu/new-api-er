@@ -418,7 +418,7 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 }
 
 // ClearAllRequestLogs 清除 Redis（或内存兜底）中存储的全部请求日志，返回清除条数。
-// 仅删除请求日志自身的键（索引 + 每条的 meta/body），不触碰其他逻辑。
+// 主路径：RENAME index → 批量删 meta/body（快）；兜底：SCAN 补删孤儿键。
 func ClearAllRequestLogs() (int64, error) {
 	if !useRedisForRequestLog() {
 		memRequestLogMu.Lock()
@@ -429,36 +429,77 @@ func ClearAllRequestLogs() (int64, error) {
 	}
 
 	ctx := requestLogCtx()
-	ids, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
-	if err != nil {
-		return 0, err
-	}
-	// 先删索引键，使后续查询立即读到空列表，避免读到将被删除的明细。
-	if err = common.RequestLogRDB.Del(ctx, requestLogIndexKey).Err(); err != nil {
-		return 0, err
-	}
-	// 分批删除每条日志的 meta/body，避免单个 pipeline 命令数过大。
 	const clearBatchSize = 1000
 	var cleared int64
-	pipe := common.RequestLogRDB.Pipeline()
-	pending := 0
-	for _, idStr := range ids {
-		pipe.Del(ctx, requestLogMetaKey+idStr)
-		pipe.Del(ctx, requestLogBodyKey+idStr)
-		pending++
-		cleared++
-		if pending >= clearBatchSize {
-			if _, err = pipe.Exec(ctx); err != nil {
-				return cleared, err
+
+	batchDelete := func(keys []string) error {
+		pipe := common.RequestLogRDB.Pipeline()
+		pending := 0
+		for _, key := range keys {
+			pipe.Del(ctx, key)
+			pending++
+			cleared++
+			if pending >= clearBatchSize {
+				if _, err := pipe.Exec(ctx); err != nil {
+					return err
+				}
+				pipe = common.RequestLogRDB.Pipeline()
+				pending = 0
 			}
-			pipe = common.RequestLogRDB.Pipeline()
-			pending = 0
 		}
+		if pending > 0 {
+			_, err := pipe.Exec(ctx)
+			return err
+		}
+		return nil
 	}
-	if pending > 0 {
-		if _, err = pipe.Exec(ctx); err != nil {
-			return cleared, err
+
+	// 主路径：RENAME index 原子切断，再按 id 批量删 meta/body。
+	// RENAME 失败说明 index 不存在，跳过主路径直接走 SCAN 兜底。
+	tmpKey := requestLogIndexKey + ":clearing"
+	if err := common.RequestLogRDB.Rename(ctx, requestLogIndexKey, tmpKey).Err(); err == nil {
+		ids, err := common.RequestLogRDB.LRange(ctx, tmpKey, 0, -1).Result()
+		if err == nil {
+			metaKeys := make([]string, len(ids))
+			bodyKeys := make([]string, len(ids))
+			for i, id := range ids {
+				metaKeys[i] = requestLogMetaKey + id
+				bodyKeys[i] = requestLogBodyKey + id
+			}
+			_ = batchDelete(metaKeys)
+			_ = batchDelete(bodyKeys)
 		}
+		common.RequestLogRDB.Del(ctx, tmpKey)
+	}
+
+	// 兜底：SCAN 扫出 index 未记录的孤儿键并删除。
+	// 正常情况下孤儿极少，SCAN 几乎空转；有残留时才有实际删除操作。
+	const scanCount = 100
+	scanAndDelete := func(pattern string) error {
+		var cursor uint64
+		for {
+			keys, next, err := common.RequestLogRDB.Scan(ctx, cursor, pattern, scanCount).Result()
+			if err != nil {
+				return err
+			}
+			if len(keys) > 0 {
+				if err := batchDelete(keys); err != nil {
+					return err
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+		return nil
+	}
+
+	if err := scanAndDelete(requestLogMetaKey + "*"); err != nil {
+		return cleared, err
+	}
+	if err := scanAndDelete(requestLogBodyKey + "*"); err != nil {
+		return cleared, err
 	}
 	return cleared, nil
 }

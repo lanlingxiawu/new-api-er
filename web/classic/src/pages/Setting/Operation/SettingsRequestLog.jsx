@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Col, Form, Row, Spin, Typography } from '@douyinfe/semi-ui';
+import { Button, Col, Form, Modal, Row, Spin, Typography } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import {
   compareObjects,
@@ -42,6 +42,39 @@ export default function SettingsRequestLog(props) {
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
+  const [isClearing, setIsClearing] = useState(false);
+
+  function handleClearRequestLogs() {
+    Modal.confirm({
+      title: t('确认清除请求日志'),
+      content: t('这将永久删除存储在 Redis 中的全部请求日志，此操作无法撤销。'),
+      okText: t('清除请求日志'),
+      okType: 'danger',
+      cancelText: t('取消'),
+      onOk: async () => {
+        setIsClearing(true);
+        try {
+          const res = await API.delete('/api/request-log/all');
+          if (!res) return;
+          const { success, message, data } = res.data;
+          if (!success) {
+            showError(message || t('清除请求日志失败'));
+            return;
+          }
+          const count = data ?? 0;
+          showSuccess(
+            count > 0
+              ? t('已清除 {{count}} 条请求日志', { count })
+              : t('没有可清除的请求日志')
+          );
+        } catch (e) {
+          showError(t('清除请求日志失败'));
+        } finally {
+          setIsClearing(false);
+        }
+      },
+    });
+  }
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
@@ -203,10 +236,22 @@ export default function SettingsRequestLog(props) {
                 </Text>
               </Col>
             </Row>
-            <Row>
-              <Button size='default' onClick={onSubmit}>
-                {t('保存请求日志设置')}
-              </Button>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Button size='default' onClick={onSubmit}>
+                  {t('保存请求日志设置')}
+                </Button>
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Button
+                  type='danger'
+                  size='default'
+                  loading={isClearing}
+                  onClick={handleClearRequestLogs}
+                >
+                  {t('清除请求日志')}
+                </Button>
+              </Col>
             </Row>
           </Form.Section>
         </Form>
