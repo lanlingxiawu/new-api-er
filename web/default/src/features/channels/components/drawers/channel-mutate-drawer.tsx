@@ -106,6 +106,10 @@ import {
   useSecureVerification,
 } from '@/features/auth/secure-verification'
 import {
+  getOptionValue,
+  useSystemOptions,
+} from '@/features/system-settings/hooks/use-system-options'
+import {
   fetchModels,
   getAllModels,
   getChannel,
@@ -318,6 +322,9 @@ export function ChannelMutateDrawer({
     queryFn: getGroups,
   })
 
+  // Fetch system options for group ratio map
+  const { data: systemOptionsData } = useSystemOptions()
+
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['channel_models'],
@@ -377,6 +384,7 @@ export function ChannelMutateDrawer({
     'upstream_model_update_check_enabled'
   )
   const currentSettings = form.watch('settings')
+  const currentCostRatio = form.watch('cost_ratio')
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -433,6 +441,40 @@ export function ChannelMutateDrawer({
       label: group,
     }))
   }, [groupsData, currentGroups])
+
+  // Group ratio map from system options (GroupRatio key)
+  const groupRatioMap = useMemo<Record<string, number>>(() => {
+    const options = getOptionValue(systemOptionsData?.data, { GroupRatio: '' })
+    const raw = options.GroupRatio
+    if (!raw) return {}
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        return {}
+      const map: Record<string, number> = {}
+      for (const [group, ratio] of Object.entries(
+        parsed as Record<string, unknown>
+      )) {
+        const n = Number(ratio)
+        if (Number.isFinite(n)) map[group] = n
+      }
+      return map
+    } catch {
+      return {}
+    }
+  }, [systemOptionsData])
+
+  // Detect loss-making groups (group ratio < cost ratio)
+  const lossMakingGroups = useMemo(() => {
+    const costRatio = Number(currentCostRatio)
+    if (!Number.isFinite(costRatio) || costRatio <= 0) return []
+    return (currentGroups || []).flatMap((group) => {
+      const groupRatio = groupRatioMap[group] ?? 1
+      const profitRatio = groupRatio - costRatio
+      if (profitRatio >= 0) return []
+      return [{ group, groupRatio, costRatio, profitRatio }]
+    })
+  }, [currentGroups, groupRatioMap, currentCostRatio])
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -1117,6 +1159,44 @@ export function ChannelMutateDrawer({
                         )}
                       />
                     </div>
+
+                    <FormField
+                      control={form.control}
+                      name='cost_ratio'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Cost Ratio *')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min='0'
+                              step='0.01'
+                              placeholder='1'
+                              value={field.value ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value
+                                field.onChange(
+                                  val === '' ? undefined : Number(val)
+                                )
+                              }}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Expressed as a multiplier. Fill in the upstream cost ratio to calculate cost, profit, and commissions. 0 means zero cost, 0.6 means 60% of base cost.'
+                            )}
+                            {!isEditing && (
+                              <span className='text-warning mt-1 block'>
+                                {t(
+                                  'It is recommended to configure the cost ratio now to correctly calculate commissions and profit.'
+                                )}
+                              </span>
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
                     <FormField
                       control={form.control}
@@ -2474,6 +2554,23 @@ export function ChannelMutateDrawer({
                                   />
                                 )}
                               </FormControl>
+                              {lossMakingGroups.length > 0 && (
+                                <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                                  <AlertDescription>
+                                    {t(
+                                      'Selected group pricing may be loss-making: {{groups}}. Profit ratio = group ratio - cost ratio; negative values indicate loss.',
+                                      {
+                                        groups: lossMakingGroups
+                                          .map(
+                                            (item) =>
+                                              `${item.group} (${item.groupRatio.toFixed(4)}x - ${item.costRatio.toFixed(4)}x = ${item.profitRatio.toFixed(4)}x)`
+                                          )
+                                          .join(', '),
+                                      }
+                                    )}
+                                  </AlertDescription>
+                                </Alert>
+                              )}
                               <FormMessage />
                             </FormItem>
                           )}
