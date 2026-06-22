@@ -198,7 +198,7 @@ func applyConsumptionCostLedgerFilters(tx *gorm.DB, filter ConsumptionCostLedger
 		tx = tx.Where("created_at >= ?", filter.StartTime)
 	}
 	if filter.EndTime > 0 {
-		tx = tx.Where("created_at < ?", filter.EndTime)
+		tx = tx.Where("created_at <= ?", filter.EndTime)
 	}
 	switch filter.Tag {
 	case "":
