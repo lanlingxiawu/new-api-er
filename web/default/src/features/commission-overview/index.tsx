@@ -24,6 +24,7 @@ import {
   CalendarDays,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import dayjs from '@/lib/dayjs'
 import { getEndOfDay, getStartOfDay } from '@/lib/time'
 import { Button } from '@/components/ui/button'
@@ -764,7 +765,14 @@ export function CommissionOverview() {
                                 {t('Profitable Channels')}
                               </div>
                             </div>
-                            <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
+                            <div
+                              className={cn(
+                                'mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl',
+                                (platform?.profitable_channel_count ?? 0) > 0
+                                  ? 'text-green-600'
+                                  : 'text-foreground'
+                              )}
+                            >
                               {String(platform?.profitable_channel_count ?? 0)}
                             </div>
                           </div>
@@ -775,7 +783,14 @@ export function CommissionOverview() {
                                 {t('Loss Channels')}
                               </div>
                             </div>
-                            <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
+                            <div
+                              className={cn(
+                                'mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl',
+                                (platform?.loss_channel_count ?? 0) > 0
+                                  ? 'text-amber-600'
+                                  : 'text-foreground'
+                              )}
+                            >
                               {String(platform?.loss_channel_count ?? 0)}
                             </div>
                           </div>
@@ -915,10 +930,26 @@ export function CommissionOverview() {
                                   <BusinessAmount value={ch.est_cost_quota} />
                                 </TableCell>
                                 <TableCell>
-                                  <BusinessAmount value={ch.est_profit_quota} />
+                                  <BusinessAmount
+                                    value={ch.est_profit_quota}
+                                    positiveClassName='text-green-600'
+                                  />
                                 </TableCell>
                                 <TableCell>
-                                  {(ch.est_gross_margin * 100).toFixed(1)}%
+                                  <span
+                                    className={cn(
+                                      'tabular-nums',
+                                      ch.est_gross_margin >= 0.1
+                                        ? 'text-green-600'
+                                        : ch.est_gross_margin > 0
+                                          ? 'text-amber-600'
+                                          : ch.est_gross_margin < 0
+                                            ? 'text-destructive'
+                                            : ''
+                                    )}
+                                  >
+                                    {(ch.est_gross_margin * 100).toFixed(1)}%
+                                  </span>
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -1004,7 +1035,10 @@ export function CommissionOverview() {
                                   <BusinessAmount value={e.total_cost} />
                                 </TableCell>
                                 <TableCell>
-                                  <BusinessAmount value={e.total_profit} />
+                                  <BusinessAmount
+                                    value={e.total_profit}
+                                    positiveClassName='text-green-600'
+                                  />
                                 </TableCell>
                                 <TableCell>
                                   <BusinessAmount
