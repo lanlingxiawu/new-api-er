@@ -17,11 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import * as z from 'zod'
+import { useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { getBusinessStatsCircuitBreakerStatus } from '../api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
@@ -43,53 +45,98 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 
+/**
+ * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
+ * paths. If we declare the schema with literal flat keys like
+ * `'business_stats_circuit_breaker_setting.enabled'`, the form state diverges
+ * from what zod validates and saves silently turn into no-ops. So we model the
+ * form internally with a nested object and only flatten back to the server-side
+ * key format right before persisting.
+ */
 const schema = z
   .object({
-    'business_stats_circuit_breaker_setting.enabled': z.boolean(),
-    'business_stats_circuit_breaker_setting.manual_disabled': z.boolean(),
-    'business_stats_circuit_breaker_setting.failure_threshold': z
-      .number()
-      .int()
-      .min(1)
-      .max(1000),
-    'business_stats_circuit_breaker_setting.initial_cooldown_seconds': z
-      .number()
-      .int()
-      .min(1)
-      .max(86400),
-    'business_stats_circuit_breaker_setting.max_cooldown_seconds': z
-      .number()
-      .int()
-      .min(1)
-      .max(604800),
-    'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': z
-      .number()
-      .int()
-      .min(50)
-      .max(30000),
+    business_stats_circuit_breaker_setting: z.object({
+      enabled: z.boolean(),
+      manual_disabled: z.boolean(),
+      failure_threshold: z.number().int().min(1).max(1000),
+      initial_cooldown_seconds: z.number().int().min(1).max(86400),
+      max_cooldown_seconds: z.number().int().min(1).max(604800),
+      side_effect_db_timeout_ms: z.number().int().min(50).max(30000),
+    }),
   })
   .refine(
     (values) =>
-      values['business_stats_circuit_breaker_setting.max_cooldown_seconds'] >=
-      values['business_stats_circuit_breaker_setting.initial_cooldown_seconds'],
+      values.business_stats_circuit_breaker_setting.max_cooldown_seconds >=
+      values.business_stats_circuit_breaker_setting.initial_cooldown_seconds,
     {
-      path: ['business_stats_circuit_breaker_setting.max_cooldown_seconds'],
+      path: [
+        'business_stats_circuit_breaker_setting',
+        'max_cooldown_seconds',
+      ],
       message: 'Max cooldown must be greater than or equal to initial cooldown',
     }
   )
 
 type FormValues = z.infer<typeof schema>
 
-type BusinessStatsCircuitBreakerSectionProps = {
-  defaultValues: FormValues
+type FlatDefaults = {
+  'business_stats_circuit_breaker_setting.enabled': boolean
+  'business_stats_circuit_breaker_setting.manual_disabled': boolean
+  'business_stats_circuit_breaker_setting.failure_threshold': number
+  'business_stats_circuit_breaker_setting.initial_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.max_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': number
 }
 
-const fields: Array<{
-  name: keyof FormValues
+type BusinessStatsCircuitBreakerSectionProps = {
+  defaultValues: FlatDefaults
+}
+
+function buildFormDefaults(defaults: FlatDefaults): FormValues {
+  return {
+    business_stats_circuit_breaker_setting: {
+      enabled: defaults['business_stats_circuit_breaker_setting.enabled'],
+      manual_disabled:
+        defaults['business_stats_circuit_breaker_setting.manual_disabled'],
+      failure_threshold:
+        defaults['business_stats_circuit_breaker_setting.failure_threshold'],
+      initial_cooldown_seconds:
+        defaults[
+          'business_stats_circuit_breaker_setting.initial_cooldown_seconds'
+        ],
+      max_cooldown_seconds:
+        defaults[
+          'business_stats_circuit_breaker_setting.max_cooldown_seconds'
+        ],
+      side_effect_db_timeout_ms:
+        defaults[
+          'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms'
+        ],
+    },
+  }
+}
+
+function normalizeFormValues(values: FormValues): FlatDefaults {
+  const s = values.business_stats_circuit_breaker_setting
+  return {
+    'business_stats_circuit_breaker_setting.enabled': s.enabled,
+    'business_stats_circuit_breaker_setting.manual_disabled': s.manual_disabled,
+    'business_stats_circuit_breaker_setting.failure_threshold':
+      s.failure_threshold,
+    'business_stats_circuit_breaker_setting.initial_cooldown_seconds':
+      s.initial_cooldown_seconds,
+    'business_stats_circuit_breaker_setting.max_cooldown_seconds':
+      s.max_cooldown_seconds,
+    'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms':
+      s.side_effect_db_timeout_ms,
+  }
+}
+
+const numericFields: Array<{
+  name: keyof FormValues['business_stats_circuit_breaker_setting']
   label: string
   description: string
   min: number
@@ -97,7 +144,7 @@ const fields: Array<{
   suffix: string
 }> = [
   {
-    name: 'business_stats_circuit_breaker_setting.failure_threshold',
+    name: 'failure_threshold',
     label: 'Failure threshold',
     description:
       'Open the circuit after this many consecutive post-settlement side-effect failures.',
@@ -106,7 +153,7 @@ const fields: Array<{
     suffix: 'times',
   },
   {
-    name: 'business_stats_circuit_breaker_setting.initial_cooldown_seconds',
+    name: 'initial_cooldown_seconds',
     label: 'Initial cooldown',
     description: 'How long the first automatic circuit-open window lasts.',
     min: 1,
@@ -114,7 +161,7 @@ const fields: Array<{
     suffix: 'seconds',
   },
   {
-    name: 'business_stats_circuit_breaker_setting.max_cooldown_seconds',
+    name: 'max_cooldown_seconds',
     label: 'Max cooldown',
     description:
       'Automatic cooldown doubles after repeated failures and stops at this value.',
@@ -123,7 +170,7 @@ const fields: Array<{
     suffix: 'seconds',
   },
   {
-    name: 'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms',
+    name: 'side_effect_db_timeout_ms',
     label: 'DB timeout',
     description:
       'Short timeout for post-settlement lookup queries before recording a fallback failure.',
@@ -149,31 +196,54 @@ export function BusinessStatsCircuitBreakerSection({
     refetchInterval: 10000,
   })
 
+  const formDefaults = useMemo(
+    () => buildFormDefaults(defaultValues),
+    [defaultValues]
+  )
+
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues,
+    defaultValues: formDefaults,
   })
 
-  useResetForm(form, defaultValues)
+  const baselineRef = useRef<FlatDefaults>(defaultValues)
+  const baselineSerializedRef = useRef<string>(JSON.stringify(defaultValues))
 
-  const enabled = form.watch('business_stats_circuit_breaker_setting.enabled')
+  useEffect(() => {
+    const serialized = JSON.stringify(defaultValues)
+    if (serialized === baselineSerializedRef.current) return
+    baselineRef.current = defaultValues
+    baselineSerializedRef.current = serialized
+    form.reset(buildFormDefaults(defaultValues))
+  }, [defaultValues, form])
+
+  const status = statusQuery.data?.data
+
+  const enabled = form.watch(
+    'business_stats_circuit_breaker_setting.enabled'
+  )
   const manualDisabled = form.watch(
     'business_stats_circuit_breaker_setting.manual_disabled'
   )
-  const status = statusQuery.data?.data
 
   const onSubmit = async (values: FormValues) => {
-    const updates: Array<{ key: string; value: boolean | number }> = []
+    const normalized = normalizeFormValues(values)
+    const changedKeys = (
+      Object.keys(normalized) as Array<keyof FlatDefaults>
+    ).filter((key) => normalized[key] !== baselineRef.current[key])
 
-    for (const key of Object.keys(values) as Array<keyof FormValues>) {
-      if (values[key] !== defaultValues[key]) {
-        updates.push({ key, value: values[key] })
-      }
+    if (changedKeys.length === 0) {
+      toast.info(t('No changes to save'))
+      return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
+    for (const key of changedKeys) {
+      await updateOption.mutateAsync({ key, value: normalized[key] })
     }
+
+    baselineRef.current = normalized
+    baselineSerializedRef.current = JSON.stringify(normalized)
+    form.reset(buildFormDefaults(normalized))
   }
 
   return (
@@ -291,11 +361,11 @@ export function BusinessStatsCircuitBreakerSection({
 
           <Separator />
 
-          {fields.map((item) => (
+          {numericFields.map((item) => (
             <FormField
               key={item.name}
               control={form.control}
-              name={item.name}
+              name={`business_stats_circuit_breaker_setting.${item.name}`}
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t(item.label)}</FormLabel>
