@@ -4970,6 +4970,16 @@
     "Zero-revenue rows": "ゼロ収益行",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "preset.default": "デフォルト",
+    "preset.anthropic": "Anthropic",
+    "preset.simple-large": "シンプル大字",
+    "preset.underground": "アンダーグラウンド",
+    "preset.rose-garden": "バラ園",
+    "preset.lake-view": "湖畔",
+    "preset.sunset-glow": "夕暮れ",
+    "preset.forest-whisper": "森のささやき",
+    "preset.ocean-breeze": "海風",
+    "preset.lavender-dream": "ラベンダーの夢"
   }
 }

@@ -4970,6 +4970,16 @@
     "Zero-revenue rows": "Lignes sans revenu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "preset.default": "Défaut",
+    "preset.anthropic": "Anthropic",
+    "preset.simple-large": "Simple grand",
+    "preset.underground": "Souterrain",
+    "preset.rose-garden": "Jardin de roses",
+    "preset.lake-view": "Vue sur le lac",
+    "preset.sunset-glow": "Coucher de soleil",
+    "preset.forest-whisper": "Murmure de forêt",
+    "preset.ocean-breeze": "Brise océanique",
+    "preset.lavender-dream": "Rêve de lavande"
   }
 }
