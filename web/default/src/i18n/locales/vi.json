@@ -4970,6 +4970,16 @@
     "Zero-revenue rows": "Dòng doanh thu bằng 0",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "preset.default": "Mặc định",
+    "preset.anthropic": "Anthropic",
+    "preset.simple-large": "Đơn giản cỡ lớn",
+    "preset.underground": "Ngầm",
+    "preset.rose-garden": "Vườn hồng",
+    "preset.lake-view": "Hồ cảnh",
+    "preset.sunset-glow": "Hoàng hôn",
+    "preset.forest-whisper": "Thì thầm rừng",
+    "preset.ocean-breeze": "Gió biển",
+    "preset.lavender-dream": "Mơ oải hương"
   }
 }

@@ -4982,6 +4982,17 @@
     "Zero-revenue rows": "零收入行",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Save request log settings": "保存请求日志设置",
+    "preset.default": "默认",
+    "preset.anthropic": "暖陶",
+    "preset.simple-large": "简洁大字",
+    "preset.underground": "地下城",
+    "preset.rose-garden": "玫瑰花园",
+    "preset.lake-view": "湖畔",
+    "preset.sunset-glow": "落日余晖",
+    "preset.forest-whisper": "林语",
+    "preset.ocean-breeze": "海风",
+    "preset.lavender-dream": "薰衣草"
   }
 }

@@ -4970,6 +4970,16 @@
     "Zero-revenue rows": "Строки с нулевой выручкой",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "preset.default": "По умолчанию",
+    "preset.anthropic": "Anthropic",
+    "preset.simple-large": "Простой крупный",
+    "preset.underground": "Подземный",
+    "preset.rose-garden": "Розовый сад",
+    "preset.lake-view": "Вид на озеро",
+    "preset.sunset-glow": "Закатное свечение",
+    "preset.forest-whisper": "Шёпот леса",
+    "preset.ocean-breeze": "Океанский бриз",
+    "preset.lavender-dream": "Лавандовая мечта"
   }
 }
