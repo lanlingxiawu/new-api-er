@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from 'react'
+import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnDef,
@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-table'
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -80,9 +81,17 @@ function SummaryCards({
     data.total_commission_usd ??
     data.commission_total_usd
   const reachedTarget = totalProfitUsd >= targetAmount
-  const targetText = targetAmount
-    ? `${t('Performance')}: ${formatBusinessTargetAmount(totalProfitUsd)} / ${formatBusinessTargetAmount(targetAmount)}${reachedTarget ? ` ${t('Reached')}` : ''}`
-    : `${t('Performance Target')}: ${t('No limit')}`
+  const targetSub: ReactNode = targetAmount ? (
+    <span>
+      {t('Performance')}: {formatBusinessTargetAmount(totalProfitUsd)} /{' '}
+      {formatBusinessTargetAmount(targetAmount)}
+      {reachedTarget ? (
+        <span className='ml-1 font-semibold text-green-600'>{t('Reached')}</span>
+      ) : null}
+    </span>
+  ) : (
+    `${t('Performance Target')}: ${t('No limit')}`
+  )
 
   const cards = [
     {
@@ -93,12 +102,15 @@ function SummaryCards({
           ? undefined
           : formatBusinessUsd(num(totalConsumptionUsd)),
       icon: DollarSign,
+      valueClassName: undefined as string | undefined,
     },
     {
       title: t('Current Performance'),
       value: formatBusinessAmount(totalProfitQuota),
       sub: formatBusinessExactUsd(totalProfitUsd),
       icon: TrendingUp,
+      valueClassName:
+        totalProfitQuota > 0 ? 'text-green-600' : undefined,
     },
     {
       title: t('Commission Amount'),
@@ -108,12 +120,15 @@ function SummaryCards({
           ? undefined
           : formatBusinessUsd(num(totalCommissionUsd)),
       icon: BadgeDollarSign,
+      valueClassName:
+        totalCommissionQuota > 0 ? 'text-green-600' : undefined,
     },
     {
       title: t('Commission Tier'),
       value: formatPercent(commissionRate),
-      sub: targetText,
+      sub: targetSub,
       icon: Wallet,
+      valueClassName: undefined as string | undefined,
     },
   ]
 
@@ -127,6 +142,7 @@ function SummaryCards({
             value={card.value}
             sub={card.sub}
             icon={card.icon}
+            valueClassName={card.valueClassName}
           />
         ))}
       </div>
@@ -139,11 +155,13 @@ function SummaryCard({
   value,
   sub,
   icon: Icon,
+  valueClassName,
 }: {
   title: string
   value: string
-  sub?: string
+  sub?: ReactNode
   icon: ComponentType<{ className?: string }>
+  valueClassName?: string
 }) {
   return (
     <div className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'>
@@ -153,7 +171,12 @@ function SummaryCard({
           {title}
         </div>
       </div>
-      <div className='text-foreground mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl'>
+      <div
+        className={cn(
+          'mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl',
+          valueClassName ?? 'text-foreground'
+        )}
+      >
         {value}
       </div>
       {sub ? (

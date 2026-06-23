@@ -1048,7 +1048,14 @@ function PerformanceProgressCell({ row }: { row: EmployeeProfile }) {
         <span className='font-medium tabular-nums'>
           {formatBusinessAmount(currentQuota)}
         </span>
-        <span className='text-muted-foreground tabular-nums'>
+        <span
+          className={cn(
+            'tabular-nums',
+            rawPercent >= 100
+              ? 'font-semibold text-green-600'
+              : 'text-muted-foreground'
+          )}
+        >
           {percentText}
         </span>
       </div>
@@ -1727,6 +1734,7 @@ function useCommissionLogColumns() {
         cell: ({ row }) => (
           <BusinessAmount
             value={row.original.profit_quota}
+            positiveClassName='text-green-600'
             isReversal={(row.original.revenue_quota ?? 0) < 0}
           />
         ),

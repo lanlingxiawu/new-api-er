@@ -21,6 +21,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
+import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessAmount } from '@/features/business/format'
 import {
   createMyCustomer,
@@ -430,7 +431,7 @@ function useMyCustomerColumns({
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Balance')} />
         ),
-        cell: ({ row }) => formatBusinessAmount(row.original.quota),
+        cell: ({ row }) => <BusinessAmount value={row.original.quota} />,
       },
       {
         accessorKey: 'used_quota',
