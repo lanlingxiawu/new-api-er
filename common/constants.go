@@ -178,6 +178,16 @@ var BatchUpdateInterval int
 
 var BusinessStatsFlushInterval int // unit is second, for cost/commission/quota buffer flush
 
+// LedgerOuterBatchSize controls how many records are pulled from the in-memory
+// ledger buffer per outer loop iteration (error-recovery granularity).
+// Env: LEDGER_OUTER_BATCH_SIZE, default 500.
+var LedgerOuterBatchSize = 500
+
+// LedgerInnerBatchSize controls how many rows are sent per SQL INSERT statement
+// inside CreateInBatches (DB round-trip size).
+// Env: LEDGER_INNER_BATCH_SIZE, default 100.
+var LedgerInnerBatchSize = 100
+
 var RelayTimeout int // unit is second
 
 var RelayMaxIdleConns int

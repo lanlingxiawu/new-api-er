@@ -1454,10 +1454,12 @@ func flushConsumptionCostLedger() {
 	if len(buf) == 0 {
 		return
 	}
+	outerBatch := common.LedgerOuterBatchSize
+	innerBatch := common.LedgerInnerBatchSize
 	start := time.Now()
 	// 分批入库，ON CONFLICT DO NOTHING 保证幂等
-	for i := 0; i < len(buf); i += pairedLedgerFlushBatchSize {
-		end := i + pairedLedgerFlushBatchSize
+	for i := 0; i < len(buf); i += outerBatch {
+		end := i + outerBatch
 		if end > len(buf) {
 			end = len(buf)
 		}
@@ -1468,7 +1470,7 @@ func flushConsumptionCostLedger() {
 		).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "log_id"}},
 			DoNothing: true,
-		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
+		}).CreateInBatches(batch, innerBatch).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("consumption_cost_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
@@ -1539,9 +1541,11 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 	if len(buf) == 0 {
 		return pairedFlushResult{}
 	}
+	outerBatch := common.LedgerOuterBatchSize
+	innerBatch := common.LedgerInnerBatchSize
 	start := time.Now()
-	for i := 0; i < len(buf); i += ledgerFlushBatchSize {
-		end := i + ledgerFlushBatchSize
+	for i := 0; i < len(buf); i += outerBatch {
+		end := i + outerBatch
 		if end > len(buf) {
 			end = len(buf)
 		}
@@ -1559,7 +1563,7 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 			).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "log_id"}},
 				DoNothing: true,
-			}).CreateInBatches(costBatch, pairedLedgerFlushBatchSize).Error; err != nil {
+			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
 				return err
 			}
 			return tx.Select(
@@ -1569,7 +1573,7 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 			).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "log_id"}},
 				DoNothing: true,
-			}).CreateInBatches(commissionBatch, pairedLedgerFlushBatchSize).Error
+			}).CreateInBatches(commissionBatch, innerBatch).Error
 		}); err != nil {
 			common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("cost_commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
@@ -1732,9 +1736,11 @@ func flushCommissionLogLedger() {
 	if len(buf) == 0 {
 		return
 	}
+	outerBatch := common.LedgerOuterBatchSize
+	innerBatch := common.LedgerInnerBatchSize
 	start := time.Now()
-	for i := 0; i < len(buf); i += ledgerFlushBatchSize {
-		end := i + ledgerFlushBatchSize
+	for i := 0; i < len(buf); i += outerBatch {
+		end := i + outerBatch
 		if end > len(buf) {
 			end = len(buf)
 		}
@@ -1746,7 +1752,7 @@ func flushCommissionLogLedger() {
 		).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "log_id"}},
 			DoNothing: true,
-		}).CreateInBatches(batch, ledgerFlushBatchSize).Error; err != nil {
+		}).CreateInBatches(batch, innerBatch).Error; err != nil {
 			common.SysError(fmt.Sprintf("flushCommissionLogLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
@@ -2051,13 +2057,15 @@ func FlushBusinessStatBuffers() {
 }
 
 // StartBusinessStatsFlushLoop 启动后台定时刷盘循环。在 main.go 中调用。
-// 从配置 BUSINESS_STATS_FLUSH_INTERVAL 读取刷盘间隔，默认 5 秒。
+// 从环境变量 BUSINESS_STATS_FLUSH_INTERVAL 读取刷盘间隔（秒）；
+// 若该值 <= 0 则回退到 DefaultBusinessStatsFlushInterval（8 秒）。
 func StartBusinessStatsFlushLoop() {
 	interval := common.BusinessStatsFlushInterval
 	if interval <= 0 {
 		interval = DefaultBusinessStatsFlushInterval
 	}
-	common.SysLog(fmt.Sprintf("business stats flush interval: %d seconds", interval))
+	common.SysLog(fmt.Sprintf("business stats flush interval: %d seconds, ledger batch: outer=%d inner=%d",
+		interval, common.LedgerOuterBatchSize, common.LedgerInnerBatchSize))
 	go func() {
 		// Drain any leftover Redis/mem data from before restart
 		FlushBusinessStatBuffers()
