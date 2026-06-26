@@ -468,7 +468,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		// data: URI — kept in Data, not ResultURL
 	} else if ti.Url != "" {
 		task.PrivateData.ResultURL = ti.Url
-	} else if task.Status == model.TaskStatusSuccess {
+	} else if task.Status == model.TaskStatusSuccess && !isThirdPartySD2Task(task) && strings.TrimSpace(task.PrivateData.ResultURL) == "" {
 		// No URL from adaptor — construct proxy URL using public task ID
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
@@ -490,7 +490,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		"metadata": nil,
 		"status":   mapTaskStatusToSimple(task.Status),
 		"task_id":  task.TaskID,
-		"url":      task.GetResultURL(),
+		"url":      getExternalVideoURL(task),
 	}
 	respBody, _ := common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
@@ -538,6 +538,37 @@ func mapTaskStatusToSimple(status model.TaskStatus) string {
 	}
 }
 
+func getExternalVideoURL(task *model.Task) string {
+	if task == nil {
+		return ""
+	}
+	if isThirdPartySD2Task(task) {
+		if task.Status != model.TaskStatusSuccess || !hasThirdPartySD2UpstreamResultURL(task) {
+			return ""
+		}
+		return taskcommon.BuildProxyURL(task.TaskID)
+	}
+	return task.GetResultURL()
+}
+
+func isThirdPartySD2Task(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+	return task.Platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeThirdPartySD2))
+}
+
+func hasThirdPartySD2UpstreamResultURL(task *model.Task) bool {
+	if !isThirdPartySD2Task(task) {
+		return false
+	}
+	url := strings.TrimSpace(task.GetResultURL())
+	if url == "" {
+		return false
+	}
+	return !strings.Contains(url, "/v1/videos/"+task.TaskID+"/content")
+}
+
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 	return &dto.TaskDto{
 		ID:         task.ID,
@@ -552,7 +583,7 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Action:     task.Action,
 		Status:     string(task.Status),
 		FailReason: task.FailReason,
-		ResultURL:  task.GetResultURL(),
+		ResultURL:  getExternalVideoURL(task),
 		SubmitTime: task.SubmitTime,
 		StartTime:  task.StartTime,
 		FinishTime: task.FinishTime,

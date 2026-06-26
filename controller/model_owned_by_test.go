@@ -36,6 +36,11 @@ func TestChannelOwnerNameUsesAdaptorChannelName(t *testing.T) {
 			channelType: constant.ChannelTypeAzure,
 			expected:    "azure",
 		},
+		{
+			name:        "third party sd2",
+			channelType: constant.ChannelTypeThirdPartySD2,
+			expected:    "third-party-sd2",
+		},
 	}
 
 	for _, tt := range tests {

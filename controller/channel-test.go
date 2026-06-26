@@ -87,6 +87,7 @@ func testChannelWithGroup(channel *model.Channel, testUserID int, testModel stri
 		constant.ChannelTypeKling,
 		constant.ChannelTypeJimeng,
 		constant.ChannelTypeDoubaoVideo,
+		constant.ChannelTypeThirdPartySD2,
 		constant.ChannelTypeVidu,
 	}
 	if lo.Contains(unsupportedTestChannelTypes, channel.Type) {

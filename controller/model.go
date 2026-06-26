@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
 	"github.com/QuantumNous/new-api/relay/channel/minimax"
 	"github.com/QuantumNous/new-api/relay/channel/moonshot"
+	taskthirdpartysd2 "github.com/QuantumNous/new-api/relay/channel/task/thirdpartysd2"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -88,10 +89,6 @@ func init() {
 			OwnedBy: "midjourney",
 		})
 	}
-	openAIModelsMap = make(map[string]dto.OpenAIModels)
-	for _, aiModel := range openAIModels {
-		openAIModelsMap[aiModel.Id] = aiModel
-	}
 	channelId2Models = make(map[int][]string)
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
 		apiType, success := common.ChannelType2APIType(i)
@@ -105,12 +102,28 @@ func init() {
 		adaptor.Init(meta)
 		channelId2Models[i] = adaptor.GetModelList()
 	}
+	channelId2Models[constant.ChannelTypeThirdPartySD2] = append([]string(nil), taskthirdpartysd2.ModelList...)
+	for _, modelName := range taskthirdpartysd2.ModelList {
+		openAIModels = append(openAIModels, dto.OpenAIModels{
+			Id:      modelName,
+			Object:  "model",
+			Created: 1626777600,
+			OwnedBy: taskthirdpartysd2.ChannelName,
+		})
+	}
 	openAIModels = lo.UniqBy(openAIModels, func(m dto.OpenAIModels) string {
 		return m.Id
 	})
+	openAIModelsMap = make(map[string]dto.OpenAIModels)
+	for _, aiModel := range openAIModels {
+		openAIModelsMap[aiModel.Id] = aiModel
+	}
 }
 
 func channelOwnerName(channelType int) string {
+	if channelType == constant.ChannelTypeThirdPartySD2 {
+		return taskthirdpartysd2.ChannelName
+	}
 	apiType, success := common.ChannelType2APIType(channelType)
 	if !success {
 		return strings.ToLower(constant.GetChannelTypeName(channelType))

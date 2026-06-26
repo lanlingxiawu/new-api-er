@@ -175,6 +175,11 @@ export const CHANNEL_OPTIONS = [
     label: '豆包视频',
   },
   {
+    value: 58,
+    color: 'blue',
+    label: '第三方sd2',
+  },
+  {
     value: 55,
     color: 'green',
     label: 'Sora',

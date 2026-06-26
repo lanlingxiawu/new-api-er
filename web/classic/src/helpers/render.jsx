@@ -418,6 +418,8 @@ export function getChannelIcon(channelType) {
       return <Jimeng.Color size={iconSize} />;
     case 54: // 豆包视频 Doubao Video
       return <Doubao.Color size={iconSize} />;
+    case 58: // 第三方 SD2
+      return <Doubao.Color size={iconSize} />;
     case 56: // Replicate
       return <Replicate size={iconSize} />;
     case 8: // 自定义渠道
