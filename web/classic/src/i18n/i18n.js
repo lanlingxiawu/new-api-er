@@ -28,18 +28,49 @@ import zhTWTranslation from './locales/zh-TW.json';
 import ruTranslation from './locales/ru.json';
 import jaTranslation from './locales/ja.json';
 import viTranslation from './locales/vi.json';
-import { supportedLanguages } from './language';
+import {
+  getSystemLanguage,
+  normalizeLanguage,
+  supportedLanguages,
+} from './language';
+
+const detectionOptions = {
+  order: ['querystring', 'localStorage', 'navigator', 'htmlTag'],
+  caches: ['localStorage'],
+  lookupLocalStorage: 'i18nextLng',
+  convertDetectedLanguage: (lng) => normalizeLanguage(lng),
+};
+
+const initialLanguage =
+  normalizeLanguage(
+    typeof window !== 'undefined'
+      ? window.localStorage?.getItem('i18nextLng')
+      : null,
+  ) || getSystemLanguage();
 
 i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
+    lng: initialLanguage,
     load: 'currentOnly',
+    // NOTE: do NOT enable nonExplicitSupportedLngs here. With it on, i18next
+    // strips region codes for the supportedLngs check (zh-CN -> zh); since
+    // supportedLanguages lists only 'zh-CN'/'zh-TW' (no base 'zh'), Chinese
+    // would be rejected, the resolve hierarchy becomes empty, and every
+    // English-source key falls back to its key (renders English) for zh users.
+    // Detected languages are already canonicalized by convertDetectedLanguage
+    // (normalizeLanguage), so explicit matching against supportedLanguages is
+    // both sufficient and correct.
     supportedLngs: supportedLanguages,
+    detection: detectionOptions,
     resources: {
       en: enTranslation,
+      zh: zhCNTranslation,
       'zh-CN': zhCNTranslation,
+      'zh-Hans': zhCNTranslation,
       'zh-TW': zhTWTranslation,
+      'zh-Hant': zhTWTranslation,
       fr: frTranslation,
       ru: ruTranslation,
       ja: jaTranslation,

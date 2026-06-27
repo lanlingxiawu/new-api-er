@@ -48,7 +48,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  numberInputNoSpinnerClassName,
+  safeNumberFieldProps,
+} from '../utils/numeric-field'
 
 const dataDashboardSchema = z.object({
   DataExportEnabled: z.boolean(),
@@ -129,6 +132,7 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
                   <FormLabel>{t('Refresh interval (minutes)')}</FormLabel>
                   <FormControl>
                     <Input
+                      className={numberInputNoSpinnerClassName}
                       type='number'
                       min={1}
                       max={1440}
@@ -138,7 +142,7 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Keep this above 1 minute to avoid heavy database load')}
+                    {t('Keep it above 1 minute to reduce DB load')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -178,9 +182,7 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    {t(
-                      'UI granularity only &mdash; data is still aggregated hourly'
-                    )}
+                    {t('Display only. Stats still aggregate hourly.')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

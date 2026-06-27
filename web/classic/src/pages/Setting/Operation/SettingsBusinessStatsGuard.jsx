@@ -35,23 +35,17 @@ import {
   showSuccess,
   showWarning,
 } from '../../../helpers';
+import { businessStatsGuardDefaults } from './systemTuningDefaults';
 
 const { Text } = Typography;
 
-const defaultInputs = {
-  'business_stats_circuit_breaker_setting.enabled': true,
-  'business_stats_circuit_breaker_setting.manual_disabled': false,
-  'business_stats_circuit_breaker_setting.failure_threshold': 3,
-  'business_stats_circuit_breaker_setting.initial_cooldown_seconds': 60,
-  'business_stats_circuit_breaker_setting.max_cooldown_seconds': 3600,
-  'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': 800,
-};
+const defaultInputs = businessStatsGuardDefaults;
 
 const numericFields = [
   {
     field: 'business_stats_circuit_breaker_setting.failure_threshold',
     label: '失败阈值',
-    extraText: '结算后副逻辑连续失败达到该次数后打开熔断。',
+    extraText: '结算后副逻辑连续失败达到该次数后开启熔断。',
     min: 1,
     max: 1000,
     suffix: '次',
@@ -59,7 +53,7 @@ const numericFields = [
   {
     field: 'business_stats_circuit_breaker_setting.initial_cooldown_seconds',
     label: '初始冷却时间',
-    extraText: '第一次自动熔断打开时持续的时间。',
+    extraText: '首次自动熔断持续时间。',
     min: 1,
     max: 86400,
     suffix: '秒',
@@ -67,7 +61,7 @@ const numericFields = [
   {
     field: 'business_stats_circuit_breaker_setting.max_cooldown_seconds',
     label: '最大冷却时间',
-    extraText: '重复失败后自动冷却时间会翻倍，并在此值停止增长。',
+    extraText: '重复失败时冷却翻倍，并以此为上限。',
     min: 1,
     max: 604800,
     suffix: '秒',
@@ -75,7 +69,7 @@ const numericFields = [
   {
     field: 'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms',
     label: 'DB 短超时',
-    extraText: '结算后查询使用的短超时时间，超时后记录为兜底失败。',
+    extraText: '结算后查询超时时间，超时记为兜底失败。',
     min: 50,
     max: 30000,
     suffix: 'ms',
@@ -218,7 +212,7 @@ export default function SettingsBusinessStatsGuard(props) {
               <div style={{ fontSize: 12, lineHeight: '20px' }}>
                 <div>
                   {t(
-                    '这些设置只影响结算后的成本台账、提成日志和业务统计。主额度结算保持隔离。',
+                    '仅影响结算后成本台账、提成日志和业务统计，不影响主额度结算。',
                   )}
                 </div>
                 {status && (
@@ -282,7 +276,7 @@ export default function SettingsBusinessStatsGuard(props) {
                 style={{ display: 'block', marginTop: 4, marginBottom: 8 }}
               >
                 {t(
-                  '启用后，DB、Redis、内存或文件兜底连续失败时，会临时跳过结算后副逻辑。',
+                  '启用后，DB、Redis、内存或文件兜底连续失败时，会临时跳过副逻辑。',
                 )}
               </Text>
             </Col>
@@ -306,7 +300,7 @@ export default function SettingsBusinessStatsGuard(props) {
                 style={{ display: 'block', marginTop: 4, marginBottom: 8 }}
               >
                 {t(
-                  '启用后，结算会立即跳过成本和提成副逻辑，并将计算后的成本/提成兜底记录写入日志文件。',
+                  '启用后会立即跳过成本和提成副逻辑，并把兜底记录写入日志文件。',
                 )}
               </Text>
             </Col>
@@ -321,9 +315,9 @@ export default function SettingsBusinessStatsGuard(props) {
               description={
                 manualDisabled
                   ? t(
-                      '手动禁用已开启。新的结算后成本和提成将以计算后的兜底记录写入日志文件。',
+                      '手动禁用已开启，新的结算后成本和提成将写入兜底日志文件。',
                     )
-                  : t('自动熔断已关闭，副逻辑将按配置被绕过。')
+                  : t('自动熔断已关闭，副逻辑会按配置被绕过。')
               }
               style={{ marginBottom: 16 }}
             />
@@ -333,6 +327,7 @@ export default function SettingsBusinessStatsGuard(props) {
             {numericFields.map((item) => (
               <Col xs={24} sm={12} md={6} lg={6} xl={6} key={item.field}>
                 <Form.InputNumber
+                  hideButtons
                   field={item.field}
                   label={t(item.label)}
                   min={item.min}

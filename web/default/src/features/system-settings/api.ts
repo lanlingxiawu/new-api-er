@@ -22,6 +22,7 @@ import type {
   ConfirmPaymentComplianceResponse,
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
+  LedgerPipelineStatusResponse,
   SystemOptionsResponse,
   UpdateOptionRequest,
   UpdateOptionResponse,
@@ -42,6 +43,14 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
 export async function getBusinessStatsCircuitBreakerStatus() {
   const res = await api.get<BusinessStatsCircuitBreakerStatusResponse>(
     '/api/option/business-stats-circuit-breaker/status',
+    { disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function getLedgerPipelineStatus() {
+  const res = await api.get<LedgerPipelineStatusResponse>(
+    '/api/admin/system/ledger-pipeline/status',
     { disableDuplicate: true }
   )
   return res.data

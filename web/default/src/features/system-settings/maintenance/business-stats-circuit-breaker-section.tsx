@@ -46,7 +46,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  numberInputNoSpinnerClassName,
+  safeNumberFieldProps,
+} from '../utils/numeric-field'
 
 /**
  * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
@@ -147,7 +150,7 @@ const numericFields: Array<{
     name: 'failure_threshold',
     label: 'Failure threshold',
     description:
-      'Open the circuit after this many consecutive post-settlement side-effect failures.',
+      'Open the circuit after this many consecutive side-effect failures.',
     min: 1,
     max: 1000,
     suffix: 'times',
@@ -155,7 +158,7 @@ const numericFields: Array<{
   {
     name: 'initial_cooldown_seconds',
     label: 'Initial cooldown',
-    description: 'How long the first automatic circuit-open window lasts.',
+    description: 'Length of the first auto circuit-open window.',
     min: 1,
     max: 86400,
     suffix: 'seconds',
@@ -164,7 +167,7 @@ const numericFields: Array<{
     name: 'max_cooldown_seconds',
     label: 'Max cooldown',
     description:
-      'Automatic cooldown doubles after repeated failures and stops at this value.',
+      'Cooldown doubles on repeated failures, capped here.',
     min: 1,
     max: 604800,
     suffix: 'seconds',
@@ -173,7 +176,7 @@ const numericFields: Array<{
     name: 'side_effect_db_timeout_ms',
     label: 'DB timeout',
     description:
-      'Short timeout for post-settlement lookup queries before recording a fallback failure.',
+      'Lookup timeout after settlement. Timeout counts as failure.',
     min: 50,
     max: 30000,
     suffix: 'ms',
@@ -304,7 +307,7 @@ export function BusinessStatsCircuitBreakerSection({
                   <FormLabel>{t('Enable automatic circuit breaker')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'When enabled, repeated DB, Redis, memory, or file fallback failures temporarily skip post-settlement side logic.'
+                      'Temporarily skip side logic after repeated DB/Redis/memory/file fallback failures.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -329,7 +332,7 @@ export function BusinessStatsCircuitBreakerSection({
                   </FormLabel>
                   <FormDescription>
                     {t(
-                      'When enabled, settlement skips cost and commission side logic immediately and writes calculated cost and commission fallback records to the fallback log file instead.'
+                      'Skip cost/commission side logic immediately; calculated fallback records go to the log file.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -372,6 +375,7 @@ export function BusinessStatsCircuitBreakerSection({
                   <FormControl>
                     <div className='flex min-w-0 items-center gap-2'>
                       <Input
+                        className={numberInputNoSpinnerClassName}
                         type='number'
                         inputMode='numeric'
                         min={item.min}

@@ -56,6 +56,35 @@ export type BusinessStatsCircuitBreakerStatusResponse = {
   data: BusinessStatsCircuitBreakerStatus
 }
 
+export type LedgerPipelineQueueStatus = {
+  backlog: number
+  dropped: number
+  last_flush_items: number
+  last_flush_took_ms: number
+  last_flush_at: number
+}
+
+export type LedgerPipelineStatus = {
+  snapshot: {
+    cost: LedgerPipelineQueueStatus
+    pair: LedgerPipelineQueueStatus
+    commission: LedgerPipelineQueueStatus
+  }
+  config: {
+    flush_interval_sec: number
+    paired_flush_max_per_cycle: number
+    full_drain: boolean
+  }
+  theoretical_pair_records_per_sec: number
+  theoretical_pair_rpm: number
+}
+
+export type LedgerPipelineStatusResponse = {
+  success: boolean
+  message: string
+  data: LedgerPipelineStatus
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -349,12 +378,6 @@ export type OperationsSettings = {
   RequestLogMaxBodyKB: number
   RequestLogMinCount: number
   RequestLogMaxCount: number
-  'business_stats_circuit_breaker_setting.enabled': boolean
-  'business_stats_circuit_breaker_setting.manual_disabled': boolean
-  'business_stats_circuit_breaker_setting.failure_threshold': number
-  'business_stats_circuit_breaker_setting.initial_cooldown_seconds': number
-  'business_stats_circuit_breaker_setting.max_cooldown_seconds': number
-  'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number
@@ -367,6 +390,47 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+}
+
+export type SystemTuningSettings = {
+  'business_stats_circuit_breaker_setting.enabled': boolean
+  'business_stats_circuit_breaker_setting.manual_disabled': boolean
+  'business_stats_circuit_breaker_setting.failure_threshold': number
+  'business_stats_circuit_breaker_setting.initial_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.max_cooldown_seconds': number
+  'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': number
+  'ledger_pipeline_setting.flush_interval_sec': number
+  'ledger_pipeline_setting.outer_batch_size': number
+  'ledger_pipeline_setting.inner_batch_size': number
+  'ledger_pipeline_setting.paired_flush_max_per_cycle': number
+  'ledger_pipeline_setting.full_drain': boolean
+  'ledger_pipeline_setting.buf_max_entries': number
+  'ledger_pipeline_setting.dedup_mem_max_entries': number
+  'ledger_pipeline_setting.dedup_use_redis': boolean
+  'ledger_pipeline_setting.dedup_redis_ttl_sec': number
+  'ledger_pipeline_setting.flush_db_timeout_sec': number
+  'payment_setting.user_export_max_rows': number
+  'export_setting.user_export_enabled': boolean
+  'export_setting.rate_limit_cooldown_sec': number
+  'export_setting.hard_ceiling_rows': number
+  'ledger_detail_setting.export_user_cooldown_sec': number
+  'ledger_detail_setting.export_batch_size': number
+  'ledger_detail_setting.export_batch_sleep_ms': number
+  'ledger_detail_setting.export_rows_per_file': number
+  'ledger_detail_setting.export_max_range_sec': number
+  'ledger_detail_setting.export_timeout_sec': number
+  'ledger_detail_setting.list_max_range_sec': number
+  'ledger_detail_setting.list_default_range_sec': number
+  'ledger_detail_setting.list_default_limit': number
+  'ledger_detail_setting.list_max_limit': number
+  'ledger_detail_setting.list_scan_batch_size': number
+  'ledger_detail_setting.list_scan_rows_per_req': number
+  'business_stats_fallback_backfill_setting.enabled': boolean
+  'business_stats_fallback_backfill_setting.status_cache_seconds': number
+  'business_stats_fallback_backfill_setting.max_read_line_bytes': number
+  'business_stats_fallback_backfill_setting.write_batch_size': number
+  'business_stats_fallback_backfill_setting.flush_interval_sec': number
+  'business_stats_fallback_backfill_setting.batch_sleep_ms': number
 }
 
 export type SecuritySettings = {

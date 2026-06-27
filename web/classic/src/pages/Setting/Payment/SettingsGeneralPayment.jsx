@@ -131,7 +131,6 @@ export default function SettingsGeneralPayment(props) {
           value: inputs.AmountDiscount,
         });
       }
-
       const results = await Promise.all(
         options.map((option) =>
           API.put('/api/option/', {

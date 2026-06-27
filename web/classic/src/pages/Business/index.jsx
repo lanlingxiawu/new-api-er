@@ -52,14 +52,17 @@ import {
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
 import {
+  AlertTriangle,
   BadgeDollarSign,
   BriefcaseBusiness,
   CalendarDays,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   DollarSign,
   Download,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -73,6 +76,7 @@ import {
   Users,
   Wallet,
   X,
+  XCircle,
 } from 'lucide-react';
 import { API, renderQuota, showError, showSuccess } from '../../helpers';
 import { getQuotaPerUnit } from '../../helpers/quota';
@@ -372,11 +376,22 @@ const formatTargetAmount = (value) => {
   const amount = Number(value || 0);
   return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : '$0.00';
 };
+const formatFallbackFileSize = (bytes) => {
+  if (!bytes) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+const formatFallbackUnixTime = (value) => {
+  if (!value) return '-';
+  return new Date(Number(value) * 1000).toLocaleString();
+};
 
 const LEDGER_PAGE_SIZE = 100;
 const LEDGER_STATS_AUTO_REFRESH_LIMIT = 100;
 const LEDGER_STATS_AUTO_REFRESH_DELAY_MS = 3000;
 const LEDGER_EXPORT_POLLING_DELAY_MS = 3000;
+const LEDGER_BACKFILL_POLLING_DELAY_MS = 3000;
 const LEDGER_MAX_RANGE_MS = 24 * 60 * 60 * 1000 - 1000;
 const LEDGER_TABLE_SCROLL_X = 1660;
 const LEDGER_EMPTY_PAGE_AUTO_ADVANCE_LIMIT = 5;
@@ -5357,6 +5372,105 @@ function ClassicLedgerTotalStatsCards({ title, stats, t }) {
   );
 }
 
+function ClassicFallbackBackfillBanner({
+  t,
+  hint,
+  triggering,
+  result,
+  onTrigger,
+}) {
+  if (!hint?.has_file) return null;
+
+  const isRunning = result?.running === true;
+  const isDone = result && !result.running;
+  const isSuccess = isDone && result.success;
+  const isFailed = isDone && !result.success;
+
+  let borderColor = 'var(--semi-color-warning)';
+  let background = 'var(--semi-color-warning-light-default)';
+  let color = 'var(--semi-color-warning)';
+  if (isSuccess) {
+    borderColor = 'var(--semi-color-success)';
+    background = 'var(--semi-color-success-light-default)';
+    color = 'var(--semi-color-success)';
+  } else if (isFailed) {
+    borderColor = 'var(--semi-color-danger)';
+    background = 'var(--semi-color-danger-light-default)';
+    color = 'var(--semi-color-danger)';
+  }
+
+  return (
+    <div
+      className='flex items-start gap-3 rounded-xl px-4 py-3'
+      style={{ border: `1px solid ${borderColor}`, background }}
+    >
+      <div className='mt-0.5 shrink-0' style={{ color }}>
+        {isRunning ? (
+          <Loader2 size={16} className='animate-spin' />
+        ) : isSuccess ? (
+          <CheckCircle2 size={16} />
+        ) : isFailed ? (
+          <XCircle size={16} />
+        ) : (
+          <AlertTriangle size={16} />
+        )}
+      </div>
+      <div className='flex min-w-0 flex-1 flex-col gap-1'>
+        {isSuccess ? (
+          <>
+            <Text strong>{t('Backfill completed for {{date}}', { date: result?.date })}</Text>
+            <Text type='secondary' size='small'>
+              {t('{{rows}} records written', { rows: result?.success_count || 0 })}
+            </Text>
+          </>
+        ) : isFailed ? (
+          <>
+            <Text strong>{t('Backfill failed for {{date}}', { date: result?.date })}</Text>
+            {result?.last_error ? (
+              <Text type='secondary' size='small'>{result.last_error}</Text>
+            ) : null}
+          </>
+        ) : isRunning ? (
+          <Text strong>
+            {t('Backfill running for {{date}}...', {
+              date: result?.date || hint.date,
+            })}
+          </Text>
+        ) : (
+          <>
+            <Text strong>
+              {t('Fallback log detected for {{date}}', { date: hint.date })}
+            </Text>
+            <Text type='secondary' size='small'>
+              {t('File: {{name}} ({{size}}, updated {{time}})', {
+                name: hint.file_name || '-',
+                size: formatFallbackFileSize(hint.file_size),
+                time: formatFallbackUnixTime(hint.updated_at),
+              })}
+            </Text>
+            <Text type='secondary' size='small'>
+              {t(
+                'These records were buffered during a circuit-breaker event. Trigger backfill to write them into the ledger.',
+              )}
+            </Text>
+          </>
+        )}
+      </div>
+      {!isRunning && !isSuccess ? (
+        <Button
+          size='small'
+          theme='solid'
+          type={isFailed ? 'danger' : 'warning'}
+          loading={triggering}
+          onClick={onTrigger}
+        >
+          {isFailed ? t('Retry backfill') : t('Trigger backfill')}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function ClassicLedgerDetail({ filterPortalTarget }) {
   const { t } = useTranslation();
   const [compactMode, setCompactMode] = useTableCompactMode(
@@ -5374,7 +5488,11 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
   const [searchKey, setSearchKey] = useState(0);
   const [exportJob, setExportJob] = useState(null);
   const [exportLoading, setExportLoading] = useState(false);
+  const [fallbackHint, setFallbackHint] = useState(null);
+  const [backfillTriggering, setBackfillTriggering] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
   const exportPollingRef = useRef(null);
+  const backfillPollingRef = useRef(null);
 
   const statsRefreshCountRef = useRef(0);
   const statsLoadingRef = useRef(false);
@@ -5475,6 +5593,9 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
         setRows((previous) => (append ? [...previous, ...nextRows] : nextRows));
         setCursor(data?.next_cursor || null);
         setHasMore(Boolean(data?.has_more));
+        if (!append && Object.prototype.hasOwnProperty.call(res.data, 'fallback_hint')) {
+          setFallbackHint(res.data.fallback_hint || null);
+        }
       } catch (error) {
         showError(
           translateLedgerMessage(
@@ -5506,6 +5627,9 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
       if (!success) {
         if (!options.silent) showError(translateLedgerMessage(t, message));
         return;
+      }
+      if (Object.prototype.hasOwnProperty.call(res.data, 'fallback_hint')) {
+        setFallbackHint(res.data.fallback_hint || null);
       }
       setFilterStats(data?.stats || null);
       setStatsStatus(data?.stats_status || '');
@@ -5589,6 +5713,41 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
       exportPollingRef.current = null;
     }
   }, []);
+
+  const stopBackfillPolling = useCallback(() => {
+    if (backfillPollingRef.current !== null) {
+      clearInterval(backfillPollingRef.current);
+      backfillPollingRef.current = null;
+    }
+  }, []);
+
+  const refreshLedgerAfterBackfill = useCallback(() => {
+    loadLedger(null, false);
+    loadStats({ silent: true });
+  }, [loadLedger, loadStats]);
+
+  const startBackfillPolling = useCallback(() => {
+    stopBackfillPolling();
+    backfillPollingRef.current = setInterval(async () => {
+      try {
+        const res = await API.get(
+          '/api/admin/employee/consumption-cost-ledger/fallback/backfill-result',
+          { skipErrorHandler: true },
+        );
+        const { success, data } = res.data || {};
+        if (!success || !data) return;
+        setBackfillResult(data);
+        if (!data.running) {
+          stopBackfillPolling();
+          if (data.success) {
+            refreshLedgerAfterBackfill();
+          }
+        }
+      } catch {
+        // Polling failures are intentionally silent.
+      }
+    }, LEDGER_BACKFILL_POLLING_DELAY_MS);
+  }, [refreshLedgerAfterBackfill, stopBackfillPolling]);
 
   // Fetch one-time signed URL via axios (with auth headers), then trigger
   // a native browser download — no blob buffering, no memory spike.
@@ -5688,6 +5847,46 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
   }, [exportJob, exportLoading, filters, showError, showSuccess, stopExportPolling, t, triggerLedgerDownload]);
 
   useEffect(() => stopExportPolling, [stopExportPolling]);
+
+  useEffect(() => stopBackfillPolling, [stopBackfillPolling]);
+
+  useEffect(() => {
+    API.get(
+      '/api/admin/employee/consumption-cost-ledger/fallback/backfill-result',
+      { skipErrorHandler: true },
+    )
+      .then((res) => {
+        const { success, data } = res.data || {};
+        if (success && data?.running) {
+          setBackfillResult(data);
+          startBackfillPolling();
+        }
+      })
+      .catch(() => {});
+  }, [startBackfillPolling]);
+
+  const handleFallbackBackfill = useCallback(async () => {
+    if (!fallbackHint?.date) return;
+    setBackfillTriggering(true);
+    try {
+      const res = await API.post(
+        '/api/admin/employee/consumption-cost-ledger/fallback/backfill',
+        { date: fallbackHint.date },
+        { skipErrorHandler: true },
+      );
+      const { success, message } = res.data || {};
+      if (!success) {
+        showError(message || t('Request failed'));
+        return;
+      }
+      setBackfillResult({ running: true, date: fallbackHint.date });
+      startBackfillPolling();
+    } catch (error) {
+      showError(error?.response?.data?.message || error?.message || t('Request failed'));
+    } finally {
+      setBackfillTriggering(false);
+    }
+  }, [fallbackHint?.date, startBackfillPolling, t]);
 
   const columns = useMemo(
     () => [
@@ -5917,6 +6116,13 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
       {filterPortalTarget
         ? createPortal(filterControls, filterPortalTarget)
         : filterControls}
+      <ClassicFallbackBackfillBanner
+        t={t}
+        hint={fallbackHint}
+        triggering={backfillTriggering}
+        result={backfillResult}
+        onTrigger={handleFallbackBackfill}
+      />
       {filterStats ? (
         <ClassicLedgerTotalStatsCards
           title={t('Total rows')}
@@ -6218,17 +6424,17 @@ export function BusinessOverview() {
         row.display_name || value || `#${row.employee_user_id}`,
     },
     {
-      title: t('客户消费'),
+      title: t('Customer consumption'),
       dataIndex: 'total_revenue',
       render: (value) => <AmountText value={value} positive={false} />,
     },
     {
-      title: t('客户成本'),
+      title: t('Customer cost'),
       dataIndex: 'total_cost',
       render: (value) => <AmountText value={value} positive={false} />,
     },
     {
-      title: t('客户利润'),
+      title: t('Customer profit'),
       dataIndex: 'total_profit',
       render: (value) => <AmountText value={value} />,
     },
@@ -6390,7 +6596,7 @@ export function BusinessOverview() {
                 </div>
               ) : null}
               <Text strong type='secondary'>
-                {t('平台范围（所有用户）')}
+                {t('Platform-wide (all users)')}
               </Text>
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12} xl={4}>
@@ -6434,14 +6640,14 @@ export function BusinessOverview() {
                 </Col>
                 <Col xs={24} md={12} xl={4}>
                   <StatCard
-                    title={t('平台毛利率')}
+                    title={t('Platform Gross Margin')}
                     value={formatPercent(platform.est_gross_margin || 0)}
                     icon={DollarSign}
                   />
                 </Col>
                 <Col xs={24} md={12} xl={4}>
                   <StatCard
-                    title={t('请求数')}
+                    title={t('Requests')}
                     value={platform.request_count || 0}
                     icon={RefreshCw}
                   />
@@ -6462,7 +6668,7 @@ export function BusinessOverview() {
                       <div>
                         <div className='flex items-center justify-between gap-3'>
                           <Text type='secondary' size='small'>
-                            {t('盈利渠道')}
+                            {t('Profitable Channels')}
                           </Text>
                           <TrendingUp
                             size={18}
@@ -6482,7 +6688,7 @@ export function BusinessOverview() {
                       <div>
                         <div className='flex items-center justify-between gap-3'>
                           <Text type='secondary' size='small'>
-                            {t('亏损渠道')}
+                            {t('Loss Channels')}
                           </Text>
                           <TrendingDown
                             size={18}
@@ -6507,10 +6713,10 @@ export function BusinessOverview() {
                 {t('成本按交易精确记录。启用此功能前生成的数据没有成本记录。')}
               </Text>
               <BusinessSection
-                title={t('渠道盈利（全平台）')}
+                title={t('Channel Profit (platform-wide)')}
                 description={
                   <>
-                    {t('成本和利润按分组倍率与渠道成本比例估算。')}
+                    {t('Cost and profit are estimated from per-group ratios and per-channel cost ratios.')}
                     {(platform.loss_channel_count || 0) > 0 ? (
                       <Text
                         component='span'
@@ -6519,7 +6725,7 @@ export function BusinessOverview() {
                         style={{ marginLeft: 8 }}
                       >
                         {t(
-                          '亏损通常因有效分组倍率低于渠道成本比例，或存在退款、冲销等负向记录。',
+                          'Losses usually come from effective group ratios below channel cost ratios, or refund/reversal records.',
                         )}
                       </Text>
                     ) : null}
@@ -6530,7 +6736,7 @@ export function BusinessOverview() {
                   <Input
                     size='small'
                     prefix={<Search size={14} />}
-                    placeholder={t('搜索渠道名称')}
+                    placeholder={t('Filter channels...')}
                     value={channelNameFilter}
                     onChange={setChannelNameFilter}
                     style={{ width: 200 }}
@@ -6552,12 +6758,12 @@ export function BusinessOverview() {
               </BusinessSection>
 
               <Text strong type='secondary'>
-                {t('员工归属业绩')}
+                {t('Employee-attributed performance')}
               </Text>
               <div className='grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4'>
                 <div>
                   <StatCard
-                    title={t('客户消费')}
+                    title={t('Customer consumption')}
                     value={
                       <AmountText
                         value={commission.total_revenue_quota || 0}
@@ -6571,7 +6777,7 @@ export function BusinessOverview() {
                 </div>
                 <div>
                   <StatCard
-                    title={t('客户成本')}
+                    title={t('Customer cost')}
                     value={
                       <AmountText
                         value={commission.total_cost_quota || 0}
@@ -6585,7 +6791,7 @@ export function BusinessOverview() {
                 </div>
                 <div>
                   <StatCard
-                    title={t('客户利润')}
+                    title={t('Customer profit')}
                     value={
                       <AmountText value={commission.total_profit_quota || 0} />
                     }
@@ -6596,7 +6802,7 @@ export function BusinessOverview() {
                 </div>
                 <div>
                   <StatCard
-                    title={t('提成总额')}
+                    title={t('Total Commission')}
                     value={
                       <AmountText
                         value={commission.total_commission_quota || 0}
@@ -6608,15 +6814,15 @@ export function BusinessOverview() {
                 </div>
                 <div>
                   <StatCard
-                    title={t('员工毛利率')}
+                    title={t('Employee Gross Margin')}
                     value={formatPercent(commission.gross_margin || 0)}
-                    sub={`${commission.record_count || 0} ${t('条记录')}`}
+                    sub={`${commission.record_count || 0} ${t('records')}`}
                     icon={Wallet}
                   />
                 </div>
               </div>
 
-              <BusinessSection title={t('员工业绩 Top 10')}>
+              <BusinessSection title={t('Top 10 employee performance')}>
                 <ClassicBusinessTable
                   rowKey='employee_user_id'
                   columns={employeeColumns}

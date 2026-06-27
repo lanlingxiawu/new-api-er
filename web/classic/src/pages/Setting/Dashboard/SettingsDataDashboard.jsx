@@ -26,28 +26,27 @@ import {
   showSuccess,
   showWarning,
 } from '../../../helpers';
-import { useTranslation } from 'react-i18next';
+import { dashboardContentDefaults } from './dashboardDefaults';
 
 export default function DataDashboard(props) {
-  const { t } = useTranslation();
-
   const optionsDataExportDefaultTime = [
-    { key: 'hour', label: t('小时'), value: 'hour' },
-    { key: 'day', label: t('天'), value: 'day' },
-    { key: 'week', label: t('周'), value: 'week' },
+    { key: 'hour', label: '小时', value: 'hour' },
+    { key: 'day', label: '天', value: 'day' },
+    { key: 'week', label: '周', value: 'week' },
   ];
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
-    DataExportEnabled: false,
-    DataExportInterval: '',
-    DataExportDefaultTime: '',
+    DataExportEnabled: dashboardContentDefaults.DataExportEnabled,
+    DataExportInterval: dashboardContentDefaults.DataExportInterval,
+    DataExportDefaultTime: dashboardContentDefaults.DataExportDefaultTime,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning('没有可保存的修改');
+
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -60,20 +59,22 @@ export default function DataDashboard(props) {
         value,
       });
     });
+
     setLoading(true);
     Promise.all(requestQueue)
       .then((res) => {
         if (requestQueue.length === 1) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
-          if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+          if (res.includes(undefined)) {
+            return showError('部分设置保存失败');
+          }
         }
-        showSuccess(t('保存成功'));
+        showSuccess('保存成功');
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError('保存失败，请重试');
       })
       .finally(() => {
         setLoading(false);
@@ -104,15 +105,15 @@ export default function DataDashboard(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('数据看板设置')}>
+          <Form.Section text='数据看板设置'>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'DataExportEnabled'}
-                  label={t('启用数据看板（实验性）')}
+                  label='启用数据看板'
                   size='default'
-                  checkedText='｜'
-                  uncheckedText='〇'
+                  checkedText='开'
+                  uncheckedText='关'
                   onChange={(value) => {
                     setInputs({
                       ...inputs,
@@ -125,12 +126,13 @@ export default function DataDashboard(props) {
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
-                  label={t('数据看板更新间隔')}
+                  hideButtons
+                  label='刷新间隔'
                   step={1}
                   min={1}
-                  suffix={t('分钟')}
-                  extraText={t('设置过短会影响数据库性能')}
-                  placeholder={t('数据看板更新间隔')}
+                  suffix='分钟'
+                  extraText='建议大于 1 分钟，以降低数据库负载。'
+                  placeholder='刷新间隔'
                   field={'DataExportInterval'}
                   onChange={(value) =>
                     setInputs({
@@ -142,11 +144,11 @@ export default function DataDashboard(props) {
               </Col>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Select
-                  label={t('数据看板默认时间粒度')}
+                  label='默认时间粒度'
                   optionList={optionsDataExportDefaultTime}
                   field={'DataExportDefaultTime'}
-                  extraText={t('仅修改展示粒度，统计精确到小时')}
-                  placeholder={t('数据看板默认时间粒度')}
+                  extraText='仅影响显示，统计仍按小时汇总。'
+                  placeholder='默认时间粒度'
                   style={{ width: 180 }}
                   onChange={(value) =>
                     setInputs({
@@ -159,7 +161,7 @@ export default function DataDashboard(props) {
             </Row>
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存数据看板设置')}
+                保存数据看板设置
               </Button>
             </Row>
           </Form.Section>

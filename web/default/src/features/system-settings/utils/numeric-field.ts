@@ -24,6 +24,14 @@ import type {
 } from 'react-hook-form'
 
 /**
+ * Tailwind classes that hide the native `<input type="number">` spin buttons
+ * (the up/down steppers) across browsers, while keeping the numeric keyboard and
+ * `valueAsNumber` parsing intact. Spread onto the shared `Input`'s `className`.
+ */
+export const numberInputNoSpinnerClassName =
+  '[appearance:textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none'
+
+/**
  * Props produced by {@link safeNumberFieldProps} for a native
  * `<input type="number">`. They are intentionally narrow so consumers can
  * spread them onto our shared `Input` component without leaking the

@@ -47,6 +47,7 @@ const PaymentSetting = () => {
     PayMethods: '',
     AmountOptions: '',
     AmountDiscount: '',
+    UserExportMaxRows: 10000,
 
     StripeApiSecret: '',
     StripeWebhookSecret: '',
@@ -176,6 +177,9 @@ const PaymentSetting = () => {
             } catch (error) {
               newInputs['AmountDiscount'] = item.value;
             }
+            break;
+          case 'payment_setting.user_export_max_rows':
+            newInputs['UserExportMaxRows'] = parseInt(item.value) || 10000;
             break;
           case 'payment_setting.compliance_confirmed':
           case 'AlipaySandbox':
