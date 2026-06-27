@@ -49,6 +49,7 @@ import {
   isWaffoPancakePayment,
   isWechatOfficialPayment,
 } from './lib'
+import { getEnabledPaymentMethods } from './lib/billing'
 import type {
   UserWalletData,
   PaymentMethod,
@@ -389,6 +390,7 @@ export function Wallet(props: WalletProps) {
       <BillingHistoryDialog
         open={billingDialogOpen}
         onOpenChange={setBillingDialogOpen}
+        enabledPaymentMethods={getEnabledPaymentMethods(topupInfo)}
       />
 
       <CreemConfirmDialog

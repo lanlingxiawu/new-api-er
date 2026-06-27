@@ -521,21 +521,16 @@ func RequestAmount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(payMoney, 'f', 2, 64)})
 }
 
+// GetUserTopUps 用户查询本人充值记录（强制限定当前用户 + 30 天窗口）
 func GetUserTopUps(c *gin.Context) {
-	userId := c.GetInt("id")
-	pageInfo := common.GetPageQuery(c)
-	keyword := c.Query("keyword")
-
-	var (
-		topups []*model.TopUp
-		total  int64
-		err    error
-	)
-	if keyword != "" {
-		topups, total, err = model.SearchUserTopUps(userId, keyword, pageInfo)
-	} else {
-		topups, total, err = model.GetUserTopUps(userId, pageInfo)
+	filter, err := parseTopUpListFilter(c, false)
+	if err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
 	}
+	pageInfo := common.GetPageQuery(c)
+
+	topups, total, err := model.ListTopUps(filter, pageInfo)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -546,21 +541,16 @@ func GetUserTopUps(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
-// GetAllTopUps 管理员获取全平台充值记录
+// GetAllTopUps 管理员获取全平台充值记录（支持按用户ID/状态/支付方式/时间范围筛选）
 func GetAllTopUps(c *gin.Context) {
-	pageInfo := common.GetPageQuery(c)
-	keyword := c.Query("keyword")
-
-	var (
-		topups []*model.TopUp
-		total  int64
-		err    error
-	)
-	if keyword != "" {
-		topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
-	} else {
-		topups, total, err = model.GetAllTopUps(pageInfo)
+	filter, err := parseTopUpListFilter(c, true)
+	if err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
 	}
+	pageInfo := common.GetPageQuery(c)
+
+	topups, total, err := model.ListTopUps(filter, pageInfo)
 	if err != nil {
 		common.ApiError(c, err)
 		return

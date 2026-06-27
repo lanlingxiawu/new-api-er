@@ -144,6 +144,10 @@ topup.order_status: "充值订单状态错误"
 topup.failed: "充值失败，请稍后重试"
 topup.invalid_quota: "无效的充值额度"
 
+topup.user_billing_export_disabled: "当前未开放用户账单导出"
+topup.export_failed: "导出失败，请稍后重试"
+topup.export_rate_limited: "导出请求过于频繁，请稍后再试"
+
 # Channel messages
 channel.not_exists: "渠道不存在"
 channel.id_format_error: "渠道ID格式错误"
@@ -270,6 +274,17 @@ distributor.no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 无可
 distributor.invalid_midjourney_request: "无效的midjourney请求，{{.Error}}"
 distributor.invalid_request_parse_model: "无效的请求，无法解析模型"
 
+# 充值账单导出 CSV 列头
+topup_export.col_trade_no: "订单号"
+topup_export.col_user_id: "用户ID"
+topup_export.col_payment_method: "支付方式"
+topup_export.col_amount: "充值额度"
+topup_export.col_money: "支付金额"
+topup_export.col_currency: "支付币种"
+topup_export.col_status: "状态"
+topup_export.col_create_time: "创建时间"
+topup_export.col_complete_time: "完成时间"
+
 # Custom OAuth provider messages
 custom_oauth.not_found: "自定义 OAuth 提供商不存在"
 custom_oauth.slug_empty: "标识符不能为空"
@@ -278,3 +293,9 @@ custom_oauth.name_empty: "提供商名称不能为空"
 custom_oauth.has_bindings: "无法删除已有用户绑定的提供商"
 custom_oauth.binding_not_found: "OAuth 绑定不存在"
 custom_oauth.provider_id_field_invalid: "无法从提供商响应中提取用户 ID"
+
+# Backfill messages
+backfill_date_must_be_historical: "日期必须为历史日期（早于当天）"
+backfill_disabled: "回填功能当前已禁用"
+backfill_already_running: "已有回填任务正在运行，请稍后再试"
+backfill_file_not_found: "指定日期未发现 fallback 日志文件"

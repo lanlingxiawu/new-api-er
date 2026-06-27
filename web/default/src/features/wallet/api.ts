@@ -31,6 +31,7 @@ import type {
   AffiliateCodeResponse,
   AffiliateTransferResponse,
   BillingHistoryResponse,
+  BillingHistoryFilters,
   CompleteOrderRequest,
   CreemPaymentRequest,
   CreemPaymentResponse,
@@ -297,41 +298,159 @@ export async function transferAffiliateQuota(
 }
 
 /**
- * Get billing history for current user
+ * Build common billing query params from filters.
+ * `user_id` is only attached for admin requests (server ignores it otherwise,
+ * but we avoid sending it to keep user requests clean).
+ */
+function buildBillingFilterParams(
+  filters: BillingHistoryFilters,
+  isAdmin: boolean
+): URLSearchParams {
+  const params = new URLSearchParams()
+  if (filters.keyword) params.append('keyword', filters.keyword)
+  if (filters.startTime) params.append('start_time', String(filters.startTime))
+  if (filters.endTime) params.append('end_time', String(filters.endTime))
+  if (filters.status) params.append('status', filters.status)
+  if (filters.paymentMethod)
+    params.append('payment_method', filters.paymentMethod)
+  if (isAdmin && filters.userId && filters.userId > 0)
+    params.append('user_id', String(filters.userId))
+  return params
+}
+
+interface BillingHistoryQueryOptions {
+  pageSize: number
+  filters?: BillingHistoryFilters
+  /** 1-based page number for offset pagination (server computes the offset). */
+  page?: number
+}
+
+/**
+ * Get billing history for current user.
+ * Uses plain offset pagination (`p`); the top-up tables are small enough that
+ * offset paging carries no real cost, and it lets the admin jump to any page with
+ * a single request instead of sequentially prefetching every preceding page.
  */
 export async function getUserBillingHistory(
-  page: number,
-  pageSize: number,
-  keyword?: string
+  options: BillingHistoryQueryOptions
 ): Promise<ApiResponse<BillingHistoryResponse>> {
-  const params = new URLSearchParams({
-    p: page.toString(),
-    page_size: pageSize.toString(),
-  })
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
+  const { pageSize, filters = {}, page } = options
+  const params = buildBillingFilterParams(filters, false)
+  params.append('page_size', pageSize.toString())
+  if (page !== undefined) params.append('p', page.toString())
   const res = await api.get(`/api/user/topup/self?${params.toString()}`)
   return res.data
 }
 
 /**
- * Get billing history for all users (admin only)
+ * Get billing history for all users (admin only). See getUserBillingHistory for
+ * the offset-pagination rationale.
  */
 export async function getAllBillingHistory(
-  page: number,
-  pageSize: number,
-  keyword?: string
+  options: BillingHistoryQueryOptions
 ): Promise<ApiResponse<BillingHistoryResponse>> {
-  const params = new URLSearchParams({
-    p: page.toString(),
-    page_size: pageSize.toString(),
-  })
-  if (keyword) {
-    params.append('keyword', keyword)
-  }
+  const { pageSize, filters = {}, page } = options
+  const params = buildBillingFilterParams(filters, true)
+  params.append('page_size', pageSize.toString())
+  if (page !== undefined) params.append('p', page.toString())
   const res = await api.get(`/api/user/topup?${params.toString()}`)
   return res.data
+}
+
+/**
+ * Result of a billing-history CSV export.
+ */
+export interface BillingExportResult {
+  blob: Blob
+  filename: string
+  /** Whether the export was truncated to the user row limit */
+  truncated: boolean
+  /** The row limit that triggered truncation (when truncated) */
+  maxRows?: number
+}
+
+function parseContentDispositionFilename(
+  header: string | undefined,
+  fallback: string
+): string {
+  if (!header) return fallback
+  const match = /filename="?([^"]+)"?/i.exec(header)
+  return match?.[1] || fallback
+}
+
+/**
+ * Shared CSV export request. Requests a Blob; if the backend returns a JSON
+ * business error (Content-Type application/json) instead of a CSV stream, it is
+ * decoded and thrown so the caller can surface a readable message.
+ */
+async function requestBillingExport(
+  url: string
+): Promise<BillingExportResult> {
+  let res
+  try {
+    res = await api.get(url, {
+      responseType: 'blob',
+      skipBusinessError: true,
+      // Handle errors here (incl. 429 rate limit) so the global interceptor
+      // doesn't also pop a generic toast.
+      skipErrorHandler: true,
+      disableDuplicate: true,
+    } as Record<string, unknown>)
+  } catch (err) {
+    const status = (err as { response?: { status?: number } })?.response?.status
+    if (status === 429) {
+      throw new Error('TOPUP_EXPORT_RATE_LIMITED', { cause: err })
+    }
+    throw err instanceof Error ? err : new Error('Export failed', { cause: err })
+  }
+
+  const headers = (res.headers || {}) as Record<string, string>
+  const contentType = String(headers['content-type'] || '')
+
+  if (contentType.includes('application/json')) {
+    let message = ''
+    try {
+      const text = await (res.data as Blob).text()
+      message = (JSON.parse(text) as { message?: string })?.message || ''
+    } catch {
+      /* ignore parse failure, fall back to generic message */
+    }
+    throw new Error(message || 'Export failed')
+  }
+
+  return {
+    blob: res.data as Blob,
+    filename: parseContentDispositionFilename(
+      headers['content-disposition'],
+      'topup-export.csv'
+    ),
+    truncated: String(headers['x-export-truncated'] || '') === 'true',
+    maxRows: Number(headers['x-export-max-rows']) || undefined,
+  }
+}
+
+/**
+ * Export current user's billing history as CSV (respects filters).
+ */
+export async function exportUserBillingHistory(
+  filters: BillingHistoryFilters = {}
+): Promise<BillingExportResult> {
+  const params = buildBillingFilterParams(filters, false)
+  const qs = params.toString()
+  return requestBillingExport(
+    `/api/user/topup/self/export${qs ? `?${qs}` : ''}`
+  )
+}
+
+/**
+ * Export all users' billing history as CSV (admin only, respects filters).
+ */
+export async function exportAllBillingHistory(
+  filters: BillingHistoryFilters = {}
+): Promise<BillingExportResult> {
+  const params = buildBillingFilterParams(filters, true)
+  const qs = params.toString()
+  return requestBillingExport(`/api/user/topup/export${qs ? `?${qs}` : ''}`)
 }
 
 /**

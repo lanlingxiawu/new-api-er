@@ -12,8 +12,10 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
+	Id int `json:"id"`
+	// 复合索引 idx_topups_user_create(user_id, create_time) 服务「用户维度 + 时间范围/排序」查询；
+	// 保留原单列 index 以兼容历史部署。
+	UserId          int     `json:"user_id" gorm:"index;index:idx_topups_user_create,priority:1"`
 	Amount          int64   `json:"amount"`
 	Money           float64 `json:"money"`
 	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
@@ -23,9 +25,10 @@ type TopUp struct {
 	ProviderOrderId string `json:"provider_order_id" gorm:"type:varchar(255);default:''"`
 	// PaymentCurrency 保存下单时使用的结算币种，供 webhook 校验时与通知币种比对，防止配置变更导致误拒或误充
 	PaymentCurrency string `json:"payment_currency" gorm:"type:varchar(10);default:''"`
-	CreateTime      int64  `json:"create_time"`
-	CompleteTime    int64  `json:"complete_time"`
-	Status          string `json:"status"`
+	// CreateTime 同时参与复合索引（用户维度）与单列索引（管理员全表时间范围扫描）。
+	CreateTime   int64  `json:"create_time" gorm:"index:idx_topups_user_create,priority:2;index:idx_topups_create_time"`
+	CompleteTime int64  `json:"complete_time"`
+	Status       string `json:"status"`
 }
 
 const (
@@ -177,153 +180,120 @@ func topUpQueryCutoff() int64 {
 	return common.GetTimestamp() - topUpQueryWindowSeconds
 }
 
-func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
-	// Start transaction
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return nil, 0, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	cutoff := topUpQueryCutoff()
-
-	// Get total count within transaction
-	err = tx.Model(&TopUp{}).Where("user_id = ? AND create_time >= ?", userId, cutoff).Count(&total).Error
-	if err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-
-	// Get paginated topups within same transaction
-	err = tx.Where("user_id = ? AND create_time >= ?", userId, cutoff).Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error
-	if err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-
-	// Commit transaction
-	if err = tx.Commit().Error; err != nil {
-		return nil, 0, err
-	}
-
-	return topups, total, nil
-}
-
-// GetAllTopUps 获取全平台的充值记录（管理员使用，不限制时间窗口）
-func GetAllTopUps(pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return nil, 0, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	if err = tx.Model(&TopUp{}).Count(&total).Error; err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-
-	if err = tx.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-
-	if err = tx.Commit().Error; err != nil {
-		return nil, 0, err
-	}
-
-	return topups, total, nil
-}
-
-// searchTopUpCountHardLimit 搜索充值记录时 COUNT 的安全上限，
+// searchTopUpCountHardLimit 列表 COUNT 的安全上限，
 // 防止对超大表执行无界 COUNT 触发 DoS。
 const searchTopUpCountHardLimit = 10000
 
-// SearchUserTopUps 按订单号搜索某用户的充值记录
-func SearchUserTopUps(userId int, keyword string, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return nil, 0, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
+// TopUpListFilter 充值记录筛选条件，列表查询与导出共用。
+// 所有字段均为可选；零值表示不限制该维度。调用方负责保证 Status/PaymentMethod 已通过白名单校验。
+type TopUpListFilter struct {
+	UserId        int    // >0 限定单个用户；0 表示全平台（管理员）
+	Keyword       string // 按订单号 LIKE 搜索
+	StartTime     int64  // 创建时间下限（Unix 秒，含）；0 不限
+	EndTime       int64  // 创建时间上限（Unix 秒，含）；0 不限
+	Status        string // 支付状态精确匹配；空不限
+	PaymentMethod string // 支付方式精确匹配；空不限
+	BeforeID      int64  // 可选主键游标，仅返回 id < before_id 的记录
+	EnforceWindow bool   // true 时强制 create_time >= 30 天窗口（普通用户）
+}
 
-	query := tx.Model(&TopUp{}).Where("user_id = ? AND create_time >= ?", userId, topUpQueryCutoff())
-	if keyword != "" {
-		pattern, perr := sanitizeLikePattern(keyword)
+// buildTopUpQuery 按筛选条件构造查询（不含排序/分页/游标）。
+// 所有条件均使用 GORM 参数化占位符，keyword 额外经 sanitizeLikePattern 转义，杜绝 SQL 注入。
+// 列名（user_id/create_time/status/payment_method/trade_no/id）均非保留字，无需跨库引号处理。
+func buildTopUpQuery(tx *gorm.DB, f TopUpListFilter) (*gorm.DB, error) {
+	query := tx.Model(&TopUp{})
+
+	if f.UserId > 0 {
+		query = query.Where("user_id = ?", f.UserId)
+	}
+
+	// 普通用户强制 30 天窗口；与显式 start_time 取较晚者，防止越窗查询。
+	minCreate := int64(0)
+	if f.EnforceWindow {
+		minCreate = topUpQueryCutoff()
+	}
+	if f.StartTime > minCreate {
+		minCreate = f.StartTime
+	}
+	if minCreate > 0 {
+		query = query.Where("create_time >= ?", minCreate)
+	}
+	if f.EndTime > 0 {
+		query = query.Where("create_time <= ?", f.EndTime)
+	}
+
+	if f.Status != "" {
+		query = query.Where("status = ?", f.Status)
+	}
+	if f.PaymentMethod != "" {
+		query = query.Where("payment_method = ?", f.PaymentMethod)
+	}
+
+	if f.Keyword != "" {
+		pattern, perr := sanitizeLikePattern(f.Keyword)
 		if perr != nil {
-			tx.Rollback()
-			return nil, 0, perr
+			return nil, perr
 		}
 		query = query.Where("trade_no LIKE ? ESCAPE '!'", pattern)
 	}
-
-	if err = query.Limit(searchTopUpCountHardLimit).Count(&total).Error; err != nil {
-		tx.Rollback()
-		common.SysError("failed to count search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+	if f.BeforeID > 0 {
+		query = query.Where("id < ?", f.BeforeID)
 	}
 
-	if err = query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
-		tx.Rollback()
-		common.SysError("failed to search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+	return query, nil
+}
+
+func buildTopUpListQuery(tx *gorm.DB, f TopUpListFilter, pageInfo *common.PageInfo) *gorm.DB {
+	query := tx.Order("id desc").Limit(pageInfo.GetPageSize())
+	if f.BeforeID > 0 {
+		return query
+	}
+	return query.Offset(pageInfo.GetStartIdx())
+}
+
+// ListTopUps 按筛选条件分页查询充值记录（列表接口使用）。
+func ListTopUps(f TopUpListFilter, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
+	countFilter := f
+	countFilter.BeforeID = 0
+	countQuery, berr := buildTopUpQuery(DB, countFilter)
+	if berr != nil {
+		return nil, 0, berr
+	}
+	countSubQuery := countQuery.Select("id").Order("id desc").Limit(searchTopUpCountHardLimit)
+	if err = DB.Table("(?) as bounded_topups", countSubQuery).Count(&total).Error; err != nil {
+		common.SysError("failed to count topups: " + err.Error())
+		return nil, 0, errors.New("查询充值记录失败")
 	}
 
-	if err = tx.Commit().Error; err != nil {
-		return nil, 0, err
+	listQuery, berr := buildTopUpQuery(DB, f)
+	if berr != nil {
+		return nil, 0, berr
+	}
+	if err = buildTopUpListQuery(listQuery, f, pageInfo).Find(&topups).Error; err != nil {
+		common.SysError("failed to list topups: " + err.Error())
+		return nil, 0, errors.New("查询充值记录失败")
 	}
 	return topups, total, nil
 }
 
-// SearchAllTopUps 按订单号搜索全平台充值记录（管理员使用，不限制时间窗口）
-func SearchAllTopUps(keyword string, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return nil, 0, tx.Error
+// FetchTopUpExportBatch 以主键游标（keyset）取一批用于导出的记录：
+// 仅返回 id < beforeId 的最多 limit 条，按 id 降序。每批为命中索引的有界查询，
+// 不使用 OFFSET 深翻页、不开长事务，批与批之间归还连接，对 DB 友好（Rule 8.3）。
+// 首批传 beforeId = math.MaxInt64。
+func FetchTopUpExportBatch(f TopUpListFilter, beforeId int64, limit int) ([]*TopUp, error) {
+	if limit <= 0 {
+		return nil, nil
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	query := tx.Model(&TopUp{})
-	if keyword != "" {
-		pattern, perr := sanitizeLikePattern(keyword)
-		if perr != nil {
-			tx.Rollback()
-			return nil, 0, perr
-		}
-		query = query.Where("trade_no LIKE ? ESCAPE '!'", pattern)
+	query, berr := buildTopUpQuery(DB, f)
+	if berr != nil {
+		return nil, berr
 	}
-
-	if err = query.Limit(searchTopUpCountHardLimit).Count(&total).Error; err != nil {
-		tx.Rollback()
-		common.SysError("failed to count search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
+	var batch []*TopUp
+	if err := query.Where("id < ?", beforeId).Order("id desc").Limit(limit).Find(&batch).Error; err != nil {
+		common.SysError("failed to fetch topup export batch: " + err.Error())
+		return nil, errors.New("导出查询失败")
 	}
-
-	if err = query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&topups).Error; err != nil {
-		tx.Rollback()
-		common.SysError("failed to search topups: " + err.Error())
-		return nil, 0, errors.New("搜索充值记录失败")
-	}
-
-	if err = tx.Commit().Error; err != nil {
-		return nil, 0, err
-	}
-	return topups, total, nil
+	return batch, nil
 }
 
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值

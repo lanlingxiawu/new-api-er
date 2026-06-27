@@ -157,11 +157,14 @@ const (
 
 // Topup related messages
 const (
-	MsgTopupNotProvided    = "topup.not_provided"
-	MsgTopupOrderNotExists = "topup.order_not_exists"
-	MsgTopupOrderStatus    = "topup.order_status"
-	MsgTopupFailed         = "topup.failed"
-	MsgTopupInvalidQuota   = "topup.invalid_quota"
+	MsgTopupNotProvided          = "topup.not_provided"
+	MsgTopupOrderNotExists       = "topup.order_not_exists"
+	MsgTopupOrderStatus          = "topup.order_status"
+	MsgTopupFailed               = "topup.failed"
+	MsgTopupInvalidQuota         = "topup.invalid_quota"
+	MsgUserBillingExportDisabled = "topup.user_billing_export_disabled"
+	MsgTopupExportFailed         = "topup.export_failed"
+	MsgTopupExportRateLimited    = "topup.export_rate_limited"
 )
 
 // Channel related messages
@@ -320,6 +323,19 @@ const (
 	MsgDistributorInvalidParseModel       = "distributor.invalid_request_parse_model"
 )
 
+// TopUp export CSV column headers
+const (
+	MsgTopUpExportColTradeNo       = "topup_export.col_trade_no"
+	MsgTopUpExportColUserId        = "topup_export.col_user_id"
+	MsgTopUpExportColPaymentMethod = "topup_export.col_payment_method"
+	MsgTopUpExportColAmount        = "topup_export.col_amount"
+	MsgTopUpExportColMoney         = "topup_export.col_money"
+	MsgTopUpExportColCurrency      = "topup_export.col_currency"
+	MsgTopUpExportColStatus        = "topup_export.col_status"
+	MsgTopUpExportColCreateTime    = "topup_export.col_create_time"
+	MsgTopUpExportColCompleteTime  = "topup_export.col_complete_time"
+)
+
 // Custom OAuth provider related messages
 const (
 	MsgCustomOAuthNotFound          = "custom_oauth.not_found"
@@ -329,4 +345,12 @@ const (
 	MsgCustomOAuthHasBindings       = "custom_oauth.has_bindings"
 	MsgCustomOAuthBindingNotFound   = "custom_oauth.binding_not_found"
 	MsgCustomOAuthProviderIdInvalid = "custom_oauth.provider_id_field_invalid"
+)
+
+// Fallback backfill messages
+const (
+	MsgBackfillDateMustBeHistorical = "backfill_date_must_be_historical"
+	MsgBackfillDisabled             = "backfill_disabled"
+	MsgBackfillAlreadyRunning       = "backfill_already_running"
+	MsgBackfillFileNotFound         = "backfill_file_not_found"
 )

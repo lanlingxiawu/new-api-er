@@ -23,10 +23,25 @@ import { useIsAdmin } from '@/hooks/use-admin'
 import {
   getUserBillingHistory,
   getAllBillingHistory,
+  exportUserBillingHistory,
+  exportAllBillingHistory,
   completeOrder,
   isApiSuccess,
 } from '../api'
-import type { TopupRecord } from '../types'
+import type { TopupRecord, BillingHistoryFilters } from '../types'
+
+const EMPTY_FILTERS: BillingHistoryFilters = {}
+
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
 
 // ============================================================================
 // Billing History Hook
@@ -47,19 +62,41 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(initialPage)
   const [pageSize, setPageSize] = useState(initialPageSize)
-  const [keyword, setKeyword] = useState('')
+  const [filters, setFilters] = useState<BillingHistoryFilters>(EMPTY_FILTERS)
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+
+  const keyword = filters.keyword ?? ''
+
+  const fetchHistoryPage = useCallback(
+    async (
+      currentPage: number,
+      currentPageSize: number,
+      currentFilters: BillingHistoryFilters
+    ) =>
+      isAdmin
+        ? getAllBillingHistory({
+            pageSize: currentPageSize,
+            filters: currentFilters,
+            page: currentPage,
+          })
+        : getUserBillingHistory({
+            pageSize: currentPageSize,
+            filters: currentFilters,
+            page: currentPage,
+          }),
+    [isAdmin]
+  )
 
   /**
-   * Fetch billing history
+   * Fetch billing history. Offset pagination: jumping to any page is a single
+   * request (no sequential cursor prefetch of every preceding page).
    */
   const fetchBillingHistory = useCallback(async () => {
     setLoading(true)
     try {
-      const response = isAdmin
-        ? await getAllBillingHistory(page, pageSize, keyword)
-        : await getUserBillingHistory(page, pageSize, keyword)
+      const response = await fetchHistoryPage(page, pageSize, filters)
 
       if (isApiSuccess(response) && response.data) {
         setRecords(response.data.items || [])
@@ -80,7 +117,52 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     } finally {
       setLoading(false)
     }
-  }, [isAdmin, page, pageSize, keyword])
+  }, [fetchHistoryPage, filters, page, pageSize])
+
+  /**
+   * Export billing history as CSV.
+   * @param useFilters true → export the current filtered view (incl. time range);
+   *                   false → export everything (ignore filters / "export all").
+   */
+  const handleExport = useCallback(
+    async (useFilters: boolean) => {
+      if (exporting) return
+      setExporting(true)
+      try {
+        const exportFilters = useFilters ? filters : EMPTY_FILTERS
+        const result = isAdmin
+          ? await exportAllBillingHistory(exportFilters)
+          : await exportUserBillingHistory(exportFilters)
+
+        triggerBlobDownload(result.blob, result.filename)
+
+        if (result.truncated) {
+          toast.warning(
+            i18next.t(
+              'Export reached the {{count}}-row limit. Some records were not exported — narrow the time range to export the rest.',
+              { count: result.maxRows ?? 0 }
+            )
+          )
+        } else {
+          toast.success(i18next.t('Export started'))
+        }
+      } catch (error) {
+        let message = i18next.t('Failed to export billing history')
+        if (error instanceof Error && error.message) {
+          message =
+            error.message === 'TOPUP_EXPORT_RATE_LIMITED'
+              ? i18next.t(
+                  'Export requests are too frequent, please try again later.'
+                )
+              : error.message
+        }
+        toast.error(message)
+      } finally {
+        setExporting(false)
+      }
+    },
+    [exporting, filters, isAdmin]
+  )
 
   /**
    * Complete a pending order (admin only)
@@ -135,8 +217,27 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
    * Search by keyword
    */
   const handleSearch = useCallback((newKeyword: string) => {
-    setKeyword(newKeyword)
+    setFilters((prev) => ({ ...prev, keyword: newKeyword }))
     setPage(1) // Reset to first page when searching
+  }, [])
+
+  /**
+   * Update one or more filter fields. Resets to the first page.
+   */
+  const handleFilterChange = useCallback(
+    (patch: Partial<BillingHistoryFilters>) => {
+        setFilters((prev) => ({ ...prev, ...patch }))
+      setPage(1)
+    },
+    []
+  )
+
+  /**
+   * Clear all filters.
+   */
+  const handleResetFilters = useCallback(() => {
+    setFilters(EMPTY_FILTERS)
+    setPage(1)
   }, [])
 
   // Fetch data when dependencies change
@@ -150,12 +251,17 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     page,
     pageSize,
     keyword,
+    filters,
     loading,
     completing,
+    exporting,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
+    handleFilterChange,
+    handleResetFilters,
+    handleExport,
     handleCompleteOrder,
     refresh: fetchBillingHistory,
   }

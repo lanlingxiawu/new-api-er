@@ -142,6 +142,9 @@ topup.order_not_exists: "Top-up order does not exist"
 topup.order_status: "Top-up order status error"
 topup.failed: "Top-up failed, please try again later"
 topup.invalid_quota: "Invalid top-up quota"
+topup.user_billing_export_disabled: "User billing export is currently disabled"
+topup.export_failed: "Export failed, please try again later"
+topup.export_rate_limited: "Too many export requests, please try again later"
 
 # Channel messages
 channel.not_exists: "Channel does not exist"
@@ -269,6 +272,17 @@ distributor.no_available_channel: "No available channel for model {{.Model}} und
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 distributor.invalid_request_parse_model: "Invalid request, unable to parse model"
 
+# TopUp export CSV column headers
+topup_export.col_trade_no: "Order No."
+topup_export.col_user_id: "User ID"
+topup_export.col_payment_method: "Payment Method"
+topup_export.col_amount: "Top-up Amount"
+topup_export.col_money: "Paid Amount"
+topup_export.col_currency: "Currency"
+topup_export.col_status: "Status"
+topup_export.col_create_time: "Created At"
+topup_export.col_complete_time: "Completed At"
+
 # Custom OAuth provider messages
 custom_oauth.not_found: "Custom OAuth provider not found"
 custom_oauth.slug_empty: "Slug cannot be empty"
@@ -277,3 +291,9 @@ custom_oauth.name_empty: "Provider name cannot be empty"
 custom_oauth.has_bindings: "Cannot delete provider with existing user bindings"
 custom_oauth.binding_not_found: "OAuth binding not found"
 custom_oauth.provider_id_field_invalid: "Could not extract user ID from provider response"
+
+# Backfill messages
+backfill_date_must_be_historical: "Date must be a historical date (before today)"
+backfill_disabled: "Backfill feature is currently disabled"
+backfill_already_running: "A backfill task is already running, please wait"
+backfill_file_not_found: "No fallback log file found for the specified date"

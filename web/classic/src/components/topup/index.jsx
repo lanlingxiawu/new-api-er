@@ -1288,6 +1288,14 @@ const TopUp = () => {
         visible={openHistory}
         onCancel={handleHistoryCancel}
         t={t}
+        enabledPaymentMethods={[
+          enableStripeTopUp && 'stripe',
+          enableCreemTopUp && 'creem',
+          enableWaffoTopUp && 'waffo',
+          enableAlipayOfficialTopUp && 'alipay_official',
+          enableWechatOfficialTopUp && 'wechat_official',
+          enableInfiniTopUp && 'infini',
+        ].filter(Boolean)}
       />
 
       {/* 微信支付二维码模态框 */}
