@@ -13,10 +13,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
-
-const ledgerExportMaxRangeSeconds = model.LedgerExportMaxRangeSeconds
 
 func AdminCreateLedgerExport(c *gin.Context) {
 	if !ledgerExportRequireRedis(c) {
@@ -299,12 +298,12 @@ func parseConsumptionCostLedgerExportFilter(c *gin.Context) (model.ConsumptionCo
 		}
 		// Unique-ID query: use a wide default range so the cursor scan can find the record.
 		filter.EndTime = time.Now().Unix()
-		filter.StartTime = filter.EndTime - ledgerExportMaxRangeSeconds
+		filter.StartTime = filter.EndTime - operation_setting.GetLedgerDetailSetting().GetExportMaxRangeSec()
 	}
 	if filter.EndTime <= filter.StartTime {
 		return filter, errors.New("end_time must be greater than start_time")
 	}
-	if !hasUniqueFilter && filter.EndTime-filter.StartTime > ledgerExportMaxRangeSeconds {
+	if !hasUniqueFilter && filter.EndTime-filter.StartTime > operation_setting.GetLedgerDetailSetting().GetExportMaxRangeSec() {
 		return filter, errors.New("time range cannot exceed 24 hours")
 	}
 

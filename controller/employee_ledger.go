@@ -11,14 +11,9 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
-)
-
-const (
-	ledgerMaxRangeSeconds     = int64(24 * 3600)
-	ledgerDefaultRangeSeconds = int64(24 * 3600)
-	ledgerDefaultLimit        = 100
-	ledgerMaxLimit            = 200
 )
 
 var (
@@ -48,7 +43,8 @@ func AdminGetConsumptionCostLedgerStats(c *gin.Context) {
 		ledgerJSONError(c, http.StatusInternalServerError, "Ledger stats query failed.")
 		return
 	}
-	ledgerJSONSuccess(c, result)
+	hint := ledgerFallbackHint(filter.StartTime, filter.EndTime)
+	ledgerJSONSuccessWithHint(c, result, hint)
 }
 
 func AdminListConsumptionCostLedger(c *gin.Context) {
@@ -85,7 +81,11 @@ func AdminListConsumptionCostLedger(c *gin.Context) {
 		ledgerJSONError(c, http.StatusInternalServerError, "Ledger query failed.")
 		return
 	}
-	ledgerJSONSuccess(c, page)
+	// 查询时解析渠道名（channels + 日聚合快照，不读流水表的 channel_name 列）。
+	// 单页查询无需跨页缓存，传 nil。
+	model.FillConsumptionCostLedgerChannelNames(page.Items, nil)
+	hint := ledgerFallbackHint(filter.StartTime, filter.EndTime)
+	ledgerJSONSuccessWithHint(c, page, hint)
 }
 
 func parseConsumptionCostLedgerListFilter(c *gin.Context) (model.ConsumptionCostLedgerFilter, error) {
@@ -93,15 +93,16 @@ func parseConsumptionCostLedgerListFilter(c *gin.Context) (model.ConsumptionCost
 	if err != nil {
 		return model.ConsumptionCostLedgerFilter{}, err
 	}
-	limit, err := parseIntQueryWithDefault(c, "limit", ledgerDefaultLimit)
+	ldCfg := operation_setting.GetLedgerDetailSetting()
+	limit, err := parseIntQueryWithDefault(c, "limit", ldCfg.GetListDefaultLimit())
 	if err != nil {
 		return model.ConsumptionCostLedgerFilter{}, err
 	}
 	if limit <= 0 {
-		limit = ledgerDefaultLimit
+		limit = ldCfg.GetListDefaultLimit()
 	}
-	if limit > ledgerMaxLimit {
-		limit = ledgerMaxLimit
+	if limit > ldCfg.GetListMaxLimit() {
+		limit = ldCfg.GetListMaxLimit()
 	}
 	cursorCreated, err := parseOptionalInt64Query(c, "cursor_created_at")
 	if err != nil {
@@ -157,7 +158,7 @@ func parseConsumptionCostLedgerCommonFilter(c *gin.Context) (model.ConsumptionCo
 	hasUniqueFilter := filter.Id > 0 || filter.LogId > 0
 	if filter.StartTime == 0 && filter.EndTime == 0 && !hasUniqueFilter {
 		filter.EndTime = defaultLedgerEndTime()
-		filter.StartTime = filter.EndTime - ledgerDefaultRangeSeconds
+		filter.StartTime = filter.EndTime - operation_setting.GetLedgerDetailSetting().GetListDefaultRangeSec()
 	}
 	if !hasUniqueFilter {
 		if filter.StartTime <= 0 || filter.EndTime <= 0 {
@@ -166,7 +167,7 @@ func parseConsumptionCostLedgerCommonFilter(c *gin.Context) (model.ConsumptionCo
 		if filter.EndTime <= filter.StartTime {
 			return filter, errors.New("end_time must be greater than start_time")
 		}
-		if filter.EndTime-filter.StartTime > ledgerMaxRangeSeconds {
+		if filter.EndTime-filter.StartTime > operation_setting.GetLedgerDetailSetting().GetListMaxRangeSec() {
 			return filter, errors.New("time range cannot exceed 24 hours")
 		}
 	}
@@ -291,6 +292,28 @@ func ledgerJSONSuccess(c *gin.Context, data any) {
 		"message": "",
 		"data":    data,
 	})
+}
+
+// ledgerJSONSuccessWithHint wraps the data and an optional fallback_hint into the
+// response body.  hint is nil when the filter does not qualify for backfill checking.
+func ledgerJSONSuccessWithHint(c *gin.Context, data any, hint *service.FallbackFileStatus) {
+	c.JSON(http.StatusOK, gin.H{
+		"success":       true,
+		"message":       "",
+		"data":          data,
+		"fallback_hint": hint,
+	})
+}
+
+// ledgerFallbackHint returns the FallbackFileStatus for the query's date when it is a
+// single historical day, or nil when the filter does not qualify.
+func ledgerFallbackHint(startTime, endTime int64) *service.FallbackFileStatus {
+	date, ok := service.IsSingleHistoricalDayFilter(startTime, endTime)
+	if !ok {
+		return nil
+	}
+	status := service.GetFallbackFileStatus(date)
+	return &status
 }
 
 func ledgerJSONError(c *gin.Context, status int, message string) {

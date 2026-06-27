@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 )
@@ -21,16 +22,9 @@ import (
 const (
 	ledgerExportJobTTL          = 24 * time.Hour
 	ledgerExportGlobalLockTTL   = 130 * time.Minute // slightly more than export timeout
-	ledgerExportUserCooldown    = 5 * time.Minute
-	ledgerExportBatchSize       = 3000
-	ledgerExportBatchSleepMs    = 100
-	ledgerExportTimeout         = 2 * time.Hour
 	ledgerExportWindowSeconds   = int64(3600)
-	ledgerExportRowsPerFile     = 1000000
 	ledgerExportFilePrefix      = "ledger-export-"
 	ledgerExportPartFilePattern = "ledger-export-%s-part-%04d.csv.gz"
-
-	LedgerExportMaxRangeSeconds = int64(24 * 3600)
 )
 
 const (
@@ -235,7 +229,7 @@ func ReleaseLedgerExportGlobalLock(jobID string) {
 func CheckAndSetLedgerExportUserCooldown(userID int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	ok, err := common.RDB.SetNX(ctx, ledgerExportUserCooldownKey(userID), "1", ledgerExportUserCooldown).Result()
+	ok, err := common.RDB.SetNX(ctx, ledgerExportUserCooldownKey(userID), "1", time.Duration(operation_setting.GetLedgerDetailSetting().GetExportUserCooldownSec())*time.Second).Result()
 	if err != nil {
 		common.SysError("CheckAndSetLedgerExportUserCooldown: " + err.Error())
 		return false
@@ -286,7 +280,7 @@ func runLedgerExport(job *LedgerExportJob, filter ConsumptionCostLedgerCommonFil
 	updateLedgerExportJob(job)
 
 	filePath := LedgerExportFilePath(job.JobID)
-	ctx, cancel := context.WithTimeout(context.Background(), ledgerExportTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(operation_setting.GetLedgerDetailSetting().GetExportTimeoutSec())*time.Second)
 	defer cancel()
 
 	rowCount, filePaths, err := writeLedgerExportCSVSharded(ctx, job.JobID, filter, filePath, func(progress int, rows int64) {
@@ -340,6 +334,9 @@ func writeLedgerExportCSVSharded(
 	exportEnd := filter.EndTime
 	windowEnd := exportEnd
 	hasUniqueFilter := filter.Id > 0 || filter.LogId > 0
+	// 跨整次导出复用的渠道名缓存：每个 channel_id 至多解析一次（含未解析的负缓存），
+	// 后续页全部命中内存，导出对 DB 的额外查询摊销到 ~0。
+	channelNameCache := make(map[int]string, 16)
 
 	for windowEnd > exportStart {
 		windowStart := windowEnd - ledgerExportWindowSeconds
@@ -353,7 +350,7 @@ func writeLedgerExportCSVSharded(
 		var cursor *ConsumptionCostLedgerCursor
 		listFilter := ConsumptionCostLedgerFilter{
 			ConsumptionCostLedgerCommonFilter: windowFilter,
-			Limit:                             ledgerExportBatchSize,
+			Limit:                             operation_setting.GetLedgerDetailSetting().GetExportBatchSize(),
 		}
 
 		for {
@@ -366,9 +363,12 @@ func writeLedgerExportCSVSharded(
 			if err != nil {
 				return rowCount, filePaths, err
 			}
+			// 查询时解析渠道名（channels + 日聚合快照，不读流水表 channel_name 列），
+			// 跨页复用 channelNameCache。
+			FillConsumptionCostLedgerChannelNames(page.Items, channelNameCache)
 
 			for i := range page.Items {
-				if rowCount > 0 && rowCount%ledgerExportRowsPerFile == 0 {
+				if rowCount > 0 && rowCount%int64(operation_setting.GetLedgerDetailSetting().GetExportRowsPerFile()) == 0 {
 					if err := writer.Close(); err != nil {
 						return rowCount, filePaths, err
 					}
@@ -414,7 +414,7 @@ func writeLedgerExportCSVSharded(
 			select {
 			case <-ctx.Done():
 				return rowCount, filePaths, ctx.Err()
-			case <-time.After(ledgerExportBatchSleepMs * time.Millisecond):
+			case <-time.After(time.Duration(operation_setting.GetLedgerDetailSetting().GetExportBatchSleepMs()) * time.Millisecond):
 			}
 		}
 

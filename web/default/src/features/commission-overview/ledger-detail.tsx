@@ -41,12 +41,14 @@ import {
   getLedgerExportDownloadURL,
   getLedgerExportStatus,
   type ConsumptionCostLedgerItem,
+  type FallbackHint,
   type LedgerCursor,
   type LedgerExportJob,
   type LedgerListParams,
   type LedgerStats,
   type LedgerTag,
 } from './api'
+import { FallbackBackfillBanner } from './fallback-backfill-banner'
 
 const LEDGER_PAGE_SIZE = 100
 const LEDGER_STATS_AUTO_REFRESH_LIMIT = 100
@@ -394,6 +396,7 @@ export function ConsumptionCostLedgerDetail() {
   const [exportJob, setExportJob] = useState<LedgerExportJob | null>(null)
   const [exportLoading, setExportLoading] = useState(false)
   const exportPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [fallbackHint, setFallbackHint] = useState<FallbackHint | null>(null)
 
   const statsRefreshCountRef = useRef(0)
   const statsLoadingRef = useRef(false)
@@ -484,6 +487,12 @@ export function ConsumptionCostLedgerDetail() {
         setRows((previous) => (append ? [...previous, ...nextRows] : nextRows))
         setCursor(res.data?.next_cursor ?? null)
         setHasMore(Boolean(res.data?.has_more))
+        // fallback_hint is a top-level sibling of "data" in the JSON body
+        const hint = (res as Record<string, unknown>).fallback_hint as
+          | FallbackHint
+          | null
+          | undefined
+        if (!append && hint !== undefined) setFallbackHint(hint ?? null)
       } catch (error) {
         if (axios.isAxiosError(error)) {
           if (append && error.response?.status === 429) {
@@ -583,6 +592,7 @@ export function ConsumptionCostLedgerDetail() {
     setFilterStats(null)
     setStatsStatus('')
     setStatsRunningCount(0)
+    setFallbackHint(null)
     statsRefreshCountRef.current = 0
     setSearchKey((value) => value + 1)
   }
@@ -596,6 +606,7 @@ export function ConsumptionCostLedgerDetail() {
     setFilterStats(null)
     setStatsStatus('')
     setStatsRunningCount(0)
+    setFallbackHint(null)
     statsRefreshCountRef.current = 0
     setSearchKey((value) => value + 1)
   }
@@ -825,6 +836,11 @@ export function ConsumptionCostLedgerDetail() {
           </Button>
         </div>
       </div>
+
+      <FallbackBackfillBanner
+        hint={fallbackHint}
+        onBackfillComplete={applySearch}
+      />
 
       <div className='flex flex-col gap-1.5'>
         {filterStats ? (

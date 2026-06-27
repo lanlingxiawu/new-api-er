@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -31,9 +32,7 @@ const (
 	consumptionCostLedgerAsyncStatsLockTTL         = 6 * time.Minute
 	consumptionCostLedgerAsyncStatsTimeout         = 5 * time.Minute
 	consumptionCostLedgerAsyncStatsMaxRunning      = 2
-	consumptionCostLedgerStatsSliceSeconds         = int64(3600)
-	consumptionCostLedgerListScanBatchSize         = 2000
-	consumptionCostLedgerListScanRowsPerReq        = 20000
+	consumptionCostLedgerStatsSliceSeconds = int64(3600)
 )
 
 type ConsumptionCostLedgerCommonFilter struct {
@@ -114,6 +113,47 @@ func ValidConsumptionCostLedgerTag(tag string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// FillConsumptionCostLedgerChannelNames 解析并回填明细行的 ChannelName。
+// 名称解析仅经 channels 表 + 日聚合快照（ResolveChannelDisplayNamesWithoutLogs，不扫描 logs）；
+// 解析不到的渠道保持原值不变。
+//
+// 交互式单页查询传 nil cache 即可；导出按页调用时应传一个跨页复用的 map：
+// 同一渠道在成千上万页里反复出现，借助缓存（含未解析的负缓存占位）每个 channel_id 至多解析一次，
+// 后续页全部命中内存，几乎不产生额外 DB 查询。
+func FillConsumptionCostLedgerChannelNames(items []ConsumptionCostLedgerItem, cache map[int]string) {
+	if len(items) == 0 {
+		return
+	}
+	if cache == nil {
+		cache = make(map[int]string, 8)
+	}
+	missing := make([]int, 0)
+	for i := range items {
+		id := items[i].ChannelId
+		if id == 0 {
+			continue
+		}
+		if _, ok := cache[id]; ok {
+			continue
+		}
+		// 先占位空串作为负缓存，避免同页/跨页对同一未解析 id 重复查询
+		cache[id] = ""
+		missing = append(missing, id)
+	}
+	if len(missing) > 0 {
+		for id, name := range ResolveChannelDisplayNamesWithoutLogs(missing) {
+			if name != "" {
+				cache[id] = name
+			}
+		}
+	}
+	for i := range items {
+		if name := cache[items[i].ChannelId]; name != "" {
+			items[i].ChannelName = name
+		}
 	}
 }
 
@@ -270,15 +310,17 @@ func ListConsumptionCostLedger(ctx context.Context, filter ConsumptionCostLedger
 func listConsumptionCostLedgerWithInAppTagFilter(tx *gorm.DB, tag string, limit int) (ConsumptionCostLedgerPage, error) {
 	items := make([]ConsumptionCostLedgerItem, 0, limit)
 	scanned := 0
-	batchLimit := consumptionCostLedgerListScanBatchSize
+	cfg := operation_setting.GetLedgerDetailSetting()
+	batchLimit := cfg.GetListScanBatchSize()
+	scanRowsPerReq := cfg.GetListScanRowsPerReq()
 	if batchLimit < limit+1 {
 		batchLimit = limit + 1
 	}
 	var scanCursorCreated int64
 	var scanCursorId int
 
-	for len(items) <= limit && scanned < consumptionCostLedgerListScanRowsPerReq {
-		remainingScan := consumptionCostLedgerListScanRowsPerReq - scanned
+	for len(items) <= limit && scanned < scanRowsPerReq {
+		remainingScan := scanRowsPerReq - scanned
 		if remainingScan < batchLimit {
 			batchLimit = remainingScan
 		}
@@ -319,7 +361,7 @@ func listConsumptionCostLedgerWithInAppTagFilter(tx *gorm.DB, tag string, limit 
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
 		nextCursor = &ConsumptionCostLedgerCursor{CreatedAt: last.CreatedAt, Id: last.Id}
-	} else if scanned >= consumptionCostLedgerListScanRowsPerReq && scanCursorCreated > 0 && scanCursorId > 0 {
+	} else if scanned >= scanRowsPerReq && scanCursorCreated > 0 && scanCursorId > 0 {
 		hasMore = true
 		nextCursor = &ConsumptionCostLedgerCursor{CreatedAt: scanCursorCreated, Id: scanCursorId}
 	}
