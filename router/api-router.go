@@ -104,6 +104,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
+				selfRoute.GET("/topup/self/export", controller.ExportUserTopUps)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
@@ -167,6 +168,7 @@ func SetApiRouter(router *gin.Engine) {
 			{
 				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
+				adminRoute.GET("/topup/export", controller.ExportAllTopUps)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
 				adminRoute.GET("/search", controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
@@ -234,6 +236,10 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.POST("/consumption-cost-ledger/export", controller.AdminCreateLedgerExport)
 			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id", controller.AdminGetLedgerExport)
 			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id/download-url", controller.AdminGetLedgerExportDownloadURL)
+			// Fallback log backfill
+			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/status", controller.AdminGetFallbackStatus)
+			employeeAdminRoute.POST("/consumption-cost-ledger/fallback/backfill", controller.AdminTriggerBackfill)
+			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/backfill-result", controller.AdminGetBackfillResult)
 			// 阶梯提成等级配置
 			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
 			employeeAdminRoute.POST("/tiers", controller.AdminCreateTier)
@@ -246,6 +252,12 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/:id/customers", controller.AdminListEmployeeCustomers)
 			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)
 			employeeAdminRoute.DELETE("/:id/customer/:user_id", controller.AdminUnassignCustomerFromEmployee)
+		}
+
+		systemAdminRoute := apiRouter.Group("/admin/system")
+		systemAdminRoute.Use(middleware.AdminAuth())
+		{
+			systemAdminRoute.GET("/ledger-pipeline/status", controller.AdminGetLedgerPipelineStatus)
 		}
 
 		// Customer management (admin)
@@ -342,6 +354,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/test/:id", controller.TestChannel)
 			channelRoute.GET("/update_balance", controller.UpdateAllChannelsBalance)
 			channelRoute.GET("/update_balance/:id", controller.UpdateChannelBalance)
+			channelRoute.POST("/:id/account-balance", controller.UpdateChannelAccountBalance)
 			channelRoute.POST("/", middleware.RootAuth(), controller.AddChannel)
 			channelRoute.PUT("/", middleware.RootAuth(), controller.UpdateChannel)
 			channelRoute.DELETE("/disabled", middleware.RootAuth(), controller.DeleteDisabledChannel)
