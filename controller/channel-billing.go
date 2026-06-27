@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -141,6 +143,18 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	if err != nil {
 		return nil, err
 	}
+	return getResponseBodyFromRequest(req, channel, headers)
+}
+
+func GetResponseBodyWithContext(ctx context.Context, method, url string, channel *model.Channel, headers http.Header) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return getResponseBodyFromRequest(req, channel, headers)
+}
+
+func getResponseBodyFromRequest(req *http.Request, channel *model.Channel, headers http.Header) ([]byte, error) {
 	for k := range headers {
 		req.Header.Add(k, headers.Get(k))
 	}
@@ -427,7 +441,7 @@ func UpdateChannelBalance(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	channel, err := model.CacheGetChannel(id)
+	channel, err := getChannelForAccountBalanceRefresh(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -501,5 +515,149 @@ func AutomaticallyUpdateChannels(frequency int) {
 		common.SysLog("updating all channels")
 		_ = updateAllChannelsBalance()
 		common.SysLog("channels update done")
+	}
+}
+
+func isChannelAccountBalanceConfigured(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	setting := channel.GetSetting()
+	return setting.AccountBalanceToken != "" && setting.AccountBalanceUserID != ""
+}
+
+func getChannelForAccountBalanceRefresh(id int) (*model.Channel, error) {
+	channel, err := model.CacheGetChannel(id)
+	if err == nil && channel != nil {
+		return channel, nil
+	}
+	return model.GetChannelById(id, true)
+}
+
+func runScheduledChannelAccountBalanceRefresh(refreshFn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			common.SysLog(fmt.Sprintf("scheduled account balance refresh panic: %v", r))
+		}
+	}()
+	common.SysLog("automatically refreshing channel account balances")
+	refreshFn()
+	common.SysLog("automatically channel account balance refresh finished")
+}
+
+// userSelfResponse 对应 /api/user/self 的响应结构
+type userSelfResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Data    *struct {
+		Group     string `json:"group"`
+		Quota     int64  `json:"quota"`
+		UsedQuota int64  `json:"used_quota"`
+	} `json:"data"`
+}
+
+// updateChannelAccountBalance 调用渠道账号余额查询接口，将结果写入 Redis
+func updateChannelAccountBalance(ctx context.Context, channel *model.Channel) (*model.ChannelAccountBalance, error) {
+	setting := channel.GetSetting()
+	if !isChannelAccountBalanceConfigured(channel) {
+		return nil, fmt.Errorf("account balance not configured for channel %d", channel.Id)
+	}
+	baseURL := setting.AccountBalanceURL
+	if baseURL == "" {
+		baseURL = channel.GetBaseURL()
+	}
+	if baseURL == "" {
+		return nil, fmt.Errorf("no base URL available for channel %d", channel.Id)
+	}
+	url := baseURL + "/api/user/self"
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Authorization", "Bearer "+setting.AccountBalanceToken)
+	if setting.AccountBalanceUserID != "" {
+		headers.Set("New-Api-User", setting.AccountBalanceUserID)
+	}
+	body, err := GetResponseBodyWithContext(ctx, "GET", url, channel, headers)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	var resp userSelfResponse
+	if err := common.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse response failed: %w", err)
+	}
+	if !resp.Success || resp.Data == nil {
+		msg := resp.Message
+		if msg == "" {
+			msg = "查询失败"
+		}
+		return nil, fmt.Errorf("api error: %s", msg)
+	}
+	group := resp.Data.Group
+	if group == "" {
+		group = "默认套餐"
+	}
+	data := model.ChannelAccountBalance{
+		Group:       group,
+		Quota:       resp.Data.Quota,
+		UsedQuota:   resp.Data.UsedQuota,
+		UpdatedTime: time.Now().Unix(),
+	}
+	if err := model.SetChannelAccountBalance(channel.Id, data); err != nil {
+		return nil, fmt.Errorf("save to redis failed: %w", err)
+	}
+	return &data, nil
+}
+
+// UpdateChannelAccountBalance 手动触发单渠道账号余额更新
+func UpdateChannelAccountBalance(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorMsg(c, "无效的渠道 ID")
+		return
+	}
+	channel, err := getChannelForAccountBalanceRefresh(id)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("get channel %d failed: %v", id, err))
+		common.ApiErrorMsg(c, "渠道不存在")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	data, err := updateChannelAccountBalance(ctx, channel)
+	if err != nil {
+		logger.LogWarn(c, fmt.Sprintf("update account balance for channel %d failed: %v", id, err))
+		common.ApiErrorMsg(c, "账号余额查询失败，请检查 Token 和接口地址是否正确")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    data,
+	})
+}
+
+// channelAccountBalanceRefreshTimeout 单渠道余额查询的超时上限，与手动刷新路径一致，
+// 避免某个上游卡死时拖垮整轮定时刷新。
+const channelAccountBalanceRefreshTimeout = 10 * time.Second
+
+// updateAllChannelsAccountBalance 批量更新所有已配置账号余额查询的渠道。
+// 仅加载已启用渠道且省略加密的 key 列（本路径用 AccountBalanceToken 鉴权，不需要 key）。
+func updateAllChannelsAccountBalance() {
+	channels, err := model.GetEnabledChannelsForBalanceRefresh()
+	if err != nil {
+		common.SysLog("failed to get channels for account balance update: " + err.Error())
+		return
+	}
+	for _, channel := range channels {
+		if !isChannelAccountBalanceConfigured(channel) {
+			continue
+		}
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), channelAccountBalanceRefreshTimeout)
+			defer cancel()
+			if _, err := updateChannelAccountBalance(ctx, channel); err != nil {
+				common.SysLog(fmt.Sprintf("failed to update account balance for channel %d: %v", channel.Id, err))
+			}
+		}()
+		time.Sleep(common.RequestInterval)
 	}
 }

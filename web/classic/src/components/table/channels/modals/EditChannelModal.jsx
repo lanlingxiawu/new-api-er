@@ -219,6 +219,9 @@ const EditChannelModal = (props) => {
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
+    account_balance_url: '',
+    account_balance_token: '',
+    account_balance_user_id: '',
     system_prompt: '',
     system_prompt_override: false,
     settings: '',
@@ -913,6 +916,9 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.account_balance_url = parsedSettings.account_balance_url || '';
+          data.account_balance_token = parsedSettings.account_balance_token || '';
+          data.account_balance_user_id = parsedSettings.account_balance_user_id || '';
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -921,6 +927,9 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.account_balance_url = '';
+          data.account_balance_token = '';
+          data.account_balance_user_id = '';
         }
       } else {
         data.force_format = false;
@@ -929,6 +938,9 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.account_balance_url = '';
+        data.account_balance_token = '';
+        data.account_balance_user_id = '';
       }
 
       if (data.settings) {
@@ -1813,6 +1825,11 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
+      ...(localInputs.account_balance_url && { account_balance_url: localInputs.account_balance_url }),
+      // Token 始终写回（含空串）：编辑表单加载的是脱敏占位符 ***，未改动原样回传后端保留；
+      // 用户清空回传空串，后端据此真正清除。省略字段则无法区分"清空"与"未携带"，凭证关不掉。
+      account_balance_token: localInputs.account_balance_token || '',
+      ...(localInputs.account_balance_user_id && { account_balance_user_id: localInputs.account_balance_user_id }),
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -1894,6 +1911,9 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.account_balance_url;
+    delete localInputs.account_balance_token;
+    delete localInputs.account_balance_user_id;
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
@@ -2586,6 +2606,10 @@ const EditChannelModal = (props) => {
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
                   <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
+
+                  <Form.Input field='account_balance_url' label={t('账号余额查询地址')} placeholder={inputs.base_url || t('默认使用渠道 API 地址')} onChange={(value) => handleChannelSettingsChange('account_balance_url', value)} showClear extraText={t('留空则使用渠道 API 地址')} />
+                  <Form.Input field='account_balance_token' label={t('账号余额查询 Token')} placeholder={t('留空将清除已保存的 Token')} onChange={(value) => handleChannelSettingsChange('account_balance_token', value)} showClear extraText={t('用于查询账号余额，敏感信息不显示；清空并保存即可关闭')} />
+                  <Form.Input field='account_balance_user_id' label={t('账号余额查询用户 ID')} placeholder={t('用于查询账号余额的用户 ID')} onChange={(value) => handleChannelSettingsChange('account_balance_user_id', value)} showClear extraText={t('查询账号余额时使用的用户 ID')} />
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />

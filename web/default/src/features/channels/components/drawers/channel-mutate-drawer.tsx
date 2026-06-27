@@ -3372,6 +3372,74 @@ export function ChannelMutateDrawer({
                         )}
                       />
 
+                      <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
+                        <SubHeading
+                          title={t('Account Balance Query')}
+                          icon={<SlidersHorizontal className='h-3.5 w-3.5' />}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='account_balance_url'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Query URL')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder={t(
+                                    'Leave blank to use channel base URL'
+                                  )}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t('Leave empty to use the channel base URL.')}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='account_balance_token'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Access Token')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder={t('Leave empty to remove the saved token')}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t('Used to query account balance. Clear the field and save to disable it.')}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='account_balance_user_id'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('User ID')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder={t(
+                                    'User ID used when querying account balance.'
+                                  )}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t('User ID used when querying account balance.')}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+
                       {MODEL_FETCHABLE_TYPES.has(currentType) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                           <SubHeading

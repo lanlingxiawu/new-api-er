@@ -23,6 +23,7 @@ import type {
   BatchDeleteParams,
   BatchSetTagParams,
   Channel,
+  ChannelAccountBalanceResponse,
   ChannelBalanceResponse,
   ChannelTestResponse,
   CopyChannelParams,
@@ -205,6 +206,20 @@ export async function updateChannelBalance(
 ): Promise<ChannelBalanceResponse> {
   const res = await api.get(
     `/api/channel/update_balance/${id}`,
+    channelActionConfig()
+  )
+  return res.data
+}
+
+/**
+ * Trigger account balance update for a channel (reads from configured /api/user/self)
+ */
+export async function updateChannelAccountBalance(
+  id: number
+): Promise<ChannelAccountBalanceResponse> {
+  const res = await api.post(
+    `/api/channel/${id}/account-balance`,
+    undefined,
     channelActionConfig()
   )
   return res.data

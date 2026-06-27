@@ -68,6 +68,7 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   handleUpdateChannelBalance,
+  handleUpdateChannelAccountBalance,
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
@@ -282,6 +283,7 @@ function WeightCell({ channel }: { channel: Channel }) {
   )
 }
 
+
 /**
  * Balance cell component with click to update
  */
@@ -292,6 +294,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const balance = channel.balance || 0
   const usedQuota = channel.used_quota || 0
   const [isUpdating, setIsUpdating] = useState(false)
+  const [isAccountUpdating, setIsAccountUpdating] = useState(false)
   const [codexUsageOpen, setCodexUsageOpen] = useState(false)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
@@ -347,61 +350,142 @@ function BalanceCell({ channel }: { channel: Channel }) {
     setIsUpdating(false)
   }
 
+  const handleClickAccountUpdate = async () => {
+    if (isAccountUpdating) return
+    setIsAccountUpdating(true)
+    await handleUpdateChannelAccountBalance(channel.id, queryClient)
+    setIsAccountUpdating(false)
+  }
+
+  const accountBalance = channel.account_balance
+  const accountGroup = accountBalance?.group || t('Default Plan')
+  const accountUsedDisplay = accountBalance
+    ? formatQuotaValue(accountBalance.used_quota)
+    : '-'
+  const accountRemainingDisplay = accountBalance
+    ? formatQuotaValue(accountBalance.quota)
+    : '-'
+
   return (
     <TooltipProvider>
-      <div className='flex items-center gap-1'>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <StatusBadge
-                label={usedDisplay}
-                variant='neutral'
-                size='sm'
-                copyable={false}
-                showDot={false}
-                className='cursor-help'
-              />
-            }
-          />
-          <TooltipContent>
-            <p>{usedLabel}</p>
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <StatusBadge
-                label={
-                  isUpdating
-                    ? t('Updating...')
-                    : channel.type === 57
-                      ? t('Account Info')
-                      : remainingDisplay
+      <div className='flex flex-col gap-1'>
+        {/* 行1：内部统计已用 + 供应商余额 */}
+        <div className='flex items-center gap-1'>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <StatusBadge
+                  label={usedDisplay}
+                  variant='neutral'
+                  size='sm'
+                  copyable={false}
+                  showDot={false}
+                  className='cursor-help'
+                />
+              }
+            />
+            <TooltipContent>
+              <p>{usedLabel}</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <StatusBadge
+                  label={
+                    isUpdating
+                      ? t('Updating...')
+                      : channel.type === 57
+                        ? t('Account Info')
+                        : remainingDisplay
+                  }
+                  variant={
+                    channel.type === 57
+                      ? 'info'
+                      : isUpdating
+                        ? 'neutral'
+                        : variant
+                  }
+                  size='sm'
+                  copyable={false}
+                  showDot={false}
+                  className='cursor-pointer'
+                  onClick={handleClickUpdate}
+                />
+              }
+            />
+            <TooltipContent>
+              <p>
+                {channel.type === 57
+                  ? t('Click to view Codex usage')
+                  : remainingLabel}
+              </p>
+              {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
+        {/* 行2：渠道账号余额（已配置即显示，无缓存数据时也提供手动查询入口） */}
+        {(accountBalance || channel.account_balance_configured) && (
+          <div className='flex items-center gap-1'>
+            {accountBalance && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <StatusBadge
+                      label={accountUsedDisplay}
+                      variant='neutral'
+                      size='sm'
+                      copyable={false}
+                      showDot={false}
+                      className='cursor-help'
+                    />
+                  }
+                />
+                <TooltipContent>
+                  <p>{t('Account Used: {{v}}', { v: accountUsedDisplay })}</p>
+                  <p>{t('Plan: {{plan}}', { plan: accountGroup })}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <StatusBadge
+                    label={
+                      isAccountUpdating
+                        ? t('Updating...')
+                        : accountBalance
+                          ? accountRemainingDisplay
+                          : t('Query Balance')
+                    }
+                    variant={isAccountUpdating ? 'neutral' : 'info'}
+                    size='sm'
+                    copyable={false}
+                    showDot={false}
+                    className='cursor-pointer'
+                    onClick={handleClickAccountUpdate}
+                  />
                 }
-                variant={
-                  channel.type === 57
-                    ? 'info'
-                    : isUpdating
-                      ? 'neutral'
-                      : variant
-                }
-                size='sm'
-                copyable={false}
-                showDot={false}
-                className='cursor-pointer'
-                onClick={handleClickUpdate}
               />
-            }
-          />
-          <TooltipContent>
-            <p>
-              {channel.type === 57
-                ? t('Click to view Codex usage')
-                : remainingLabel}
-            </p>
-            {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
-          </TooltipContent>
-        </Tooltip>
+              <TooltipContent>
+                {accountBalance ? (
+                  <>
+                    <p>
+                      {t('Account Remaining: {{v}}', {
+                        v: accountRemainingDisplay,
+                      })}
+                    </p>
+                    <p>{t('Plan: {{plan}}', { plan: accountGroup })}</p>
+                  </>
+                ) : (
+                  <p>{t('Account balance not queried yet')}</p>
+                )}
+                <p>{t('Click to update account balance')}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
       </div>
 
       <CodexUsageDialog

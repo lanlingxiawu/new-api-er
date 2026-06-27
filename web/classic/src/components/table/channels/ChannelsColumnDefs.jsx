@@ -308,6 +308,7 @@ export const getChannelsColumns = ({
   t,
   COLUMN_KEYS,
   updateChannelBalance,
+  updateChannelAccountBalance,
   manageChannel,
   manageTag,
   submitTagEdit,
@@ -528,8 +529,9 @@ export const getChannelsColumns = ({
       dataIndex: 'expired_time',
       render: (text, record, index) => {
         if (record.children === undefined) {
+          const ab = record.account_balance;
           return (
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <Space spacing={1}>
                 <Tooltip content={t('已用额度')}>
                   <Tag color='white' type='ghost' shape='circle'>
@@ -559,6 +561,28 @@ export const getChannelsColumns = ({
                   </Tag>
                 </Tooltip>
               </Space>
+              {(ab || record.account_balance_configured) && (
+                <Space spacing={1}>
+                  {ab && (
+                    <Tooltip content={t('账号已用额度')}>
+                      <Tag color='cyan' type='ghost' shape='circle'>
+                        {renderQuota(ab.used_quota)}
+                      </Tag>
+                    </Tooltip>
+                  )}
+                  <Tooltip content={ab ? t('账号剩余额度，点击更新') : t('尚未查询，点击获取账号余额')}>
+                    <Tag
+                      color='cyan'
+                      type='light'
+                      shape='circle'
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => updateChannelAccountBalance(record)}
+                    >
+                      {ab ? renderQuota(ab.quota) : t('查询余额')}
+                    </Tag>
+                  </Tooltip>
+                </Space>
+              )}
             </div>
           );
         } else {

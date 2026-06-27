@@ -186,6 +186,10 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    // 渠道账号余额查询配置（stored in setting JSON）
+    account_balance_url: z.string().optional(),
+    account_balance_token: z.string().optional(),
+    account_balance_user_id: z.string().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -345,6 +349,9 @@ export function transformChannelToFormDefaults(
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    account_balance_url: '',
+    account_balance_token: '',
+    account_balance_user_id: '',
   }
 
   if (channel.setting) {
@@ -357,6 +364,9 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        account_balance_url: parsed.account_balance_url || '',
+        account_balance_token: parsed.account_balance_token || '',
+        account_balance_user_id: parsed.account_balance_user_id || '',
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -460,13 +470,24 @@ export function transformChannelToFormDefaults(
  * Build the setting JSON string from form extra settings
  */
 function buildSettingJSON(formData: ChannelFormValues): string {
-  const settingObj = {
+  const settingObj: Record<string, unknown> = {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy || '',
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+  }
+  // 账号余额查询配置：URL/UserID 有值才写；
+  // Token 始终写回（含空串）——编辑表单加载的是脱敏占位符 ***，未改动会原样回传 ***
+  // （后端识别为"保留"）；用户清空后回传空串，后端据此真正清除。若省略该字段，
+  // "用户清空"与"未携带"无法区分，凭证将无法关闭。
+  if (formData.account_balance_url?.trim()) {
+    settingObj.account_balance_url = formData.account_balance_url.trim()
+  }
+  settingObj.account_balance_token = formData.account_balance_token?.trim() || ''
+  if (formData.account_balance_user_id?.trim()) {
+    settingObj.account_balance_user_id = formData.account_balance_user_id.trim()
   }
   return JSON.stringify(settingObj)
 }

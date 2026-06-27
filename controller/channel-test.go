@@ -996,6 +996,15 @@ func TestAllChannels(c *gin.Context) {
 
 var autoTestChannelsOnce sync.Once
 
+func runScheduledChannelMaintenance(testFn func() error, refreshFn func()) {
+	common.SysLog("automatically testing all channels")
+	if err := testFn(); err != nil {
+		common.SysLog(fmt.Sprintf("automatically test channels failed: %v", err))
+	}
+	common.SysLog("automatically channel test finished")
+	runScheduledChannelAccountBalanceRefresh(refreshFn)
+}
+
 func AutomaticallyTestChannels() {
 	// 只在Master节点定时测试渠道
 	if !common.IsMasterNode {
@@ -1011,9 +1020,9 @@ func AutomaticallyTestChannels() {
 				frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
 				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
 				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
-				common.SysLog("automatically testing all channels")
-				_ = testAllChannels(false)
-				common.SysLog("automatically channel test finished")
+				runScheduledChannelMaintenance(func() error {
+					return testAllChannels(false)
+				}, updateAllChannelsAccountBalance)
 				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
 					break
 				}

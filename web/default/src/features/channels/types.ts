@@ -34,6 +34,15 @@ export const channelInfoSchema = z.object({
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
+export const channelAccountBalanceSchema = z.object({
+  group: z.string(),
+  quota: z.number(),
+  used_quota: z.number(),
+  updated_time: z.number(),
+})
+
+export type ChannelAccountBalance = z.infer<typeof channelAccountBalanceSchema>
+
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
@@ -72,6 +81,8 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  account_balance: channelAccountBalanceSchema.nullish(),
+  account_balance_configured: z.boolean().default(false),
 })
 
 export type Channel = z.infer<typeof channelSchema>
@@ -155,6 +166,12 @@ export interface ChannelBalanceResponse {
   message?: string
   balance?: number
   currency?: string
+}
+
+export interface ChannelAccountBalanceResponse {
+  success: boolean
+  message?: string
+  data?: ChannelAccountBalance
 }
 
 export interface FetchModelsResponse {

@@ -784,6 +784,21 @@ export const useChannelsData = () => {
     }
   };
 
+  const updateChannelAccountBalance = async (record) => {
+    const res = await API.post(`/api/channel/${record.id}/account-balance`);
+    const { success, message, data } = res.data;
+    if (success && data) {
+      updateChannelProperty(record.id, (channel) => {
+        channel.account_balance = data;
+      });
+      showInfo(
+        t('通道 ${name} 账号余额更新成功！').replace('${name}', record.name),
+      );
+    } else {
+      showError(message || t('账号余额更新失败'));
+    }
+  };
+
   const fixChannelsAbilities = async () => {
     const res = await API.post(`/api/channel/fix`);
     const { success, message, data } = res.data;
@@ -1236,6 +1251,7 @@ export const useChannelsData = () => {
     deleteAllDisabledChannels,
     updateAllChannelsBalance,
     updateChannelBalance,
+    updateChannelAccountBalance,
     fixChannelsAbilities,
     checkOllamaVersion,
     testChannel,

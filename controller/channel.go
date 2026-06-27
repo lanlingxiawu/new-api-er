@@ -22,6 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const maskedChannelSensitiveToken = "***"
+
 type OpenAIModel struct {
 	ID         string         `json:"id"`
 	Object     string         `json:"object"`
@@ -66,6 +68,33 @@ func clearChannelInfo(channel *model.Channel) {
 	if channel.ChannelInfo.IsMultiKey {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
 		channel.ChannelInfo.MultiKeyDisabledTime = nil
+	}
+}
+
+func sanitizeChannelSensitiveSettingsForDisplay(channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	setting := channel.GetSetting()
+	if setting.AccountBalanceToken == "" {
+		return
+	}
+	setting.AccountBalanceToken = maskedChannelSensitiveToken
+	channel.SetSetting(setting)
+}
+
+func preserveSensitiveChannelSettingsForUpdate(channel *model.Channel, originChannel *model.Channel) {
+	if channel == nil || originChannel == nil {
+		return
+	}
+	incomingSetting := channel.GetSetting()
+	originSetting := originChannel.GetSetting()
+	incomingToken := strings.TrimSpace(incomingSetting.AccountBalanceToken)
+	// 仅当提交的是脱敏占位符（编辑表单加载的 ***，用户未改动）时才保留原 Token。
+	// 空串表示用户主动清空，必须真正清除——否则旧 Token 会被悄悄恢复，无法关闭该凭证配置。
+	if incomingToken == maskedChannelSensitiveToken && originSetting.AccountBalanceToken != "" {
+		incomingSetting.AccountBalanceToken = originSetting.AccountBalanceToken
+		channel.SetSetting(incomingSetting)
 	}
 }
 
@@ -159,6 +188,24 @@ func GetAllChannels(c *gin.Context) {
 
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
+		// 列表响应同样脱敏账号余额 Token：setting 字段会随渠道序列化返回，
+		// 不在此处掩码则任何能看渠道列表的管理员都能从响应里拿到原始 Token。
+		sanitizeChannelSensitiveSettingsForDisplay(datum)
+	}
+
+	// 批量从 Redis 拉取账号余额，Pipeline 单次往返，失败静默降级
+	if len(channelData) > 0 {
+		ids := make([]int, 0, len(channelData))
+		for _, ch := range channelData {
+			ids = append(ids, ch.Id)
+		}
+		balances := model.BatchGetChannelAccountBalance(ids)
+		for _, ch := range channelData {
+			if b, ok := balances[ch.Id]; ok {
+				ch.AccountBalance = b
+			}
+			ch.AccountBalanceConfigured = isChannelAccountBalanceConfigured(ch)
+		}
 	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
@@ -365,6 +412,22 @@ func SearchChannels(c *gin.Context) {
 
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
+		// 搜索结果同样脱敏账号余额 Token（setting 字段随渠道序列化返回）。
+		sanitizeChannelSensitiveSettingsForDisplay(datum)
+	}
+
+	if len(pagedData) > 0 {
+		ids := make([]int, 0, len(pagedData))
+		for _, ch := range pagedData {
+			ids = append(ids, ch.Id)
+		}
+		balances := model.BatchGetChannelAccountBalance(ids)
+		for _, ch := range pagedData {
+			if b, ok := balances[ch.Id]; ok {
+				ch.AccountBalance = b
+			}
+			ch.AccountBalanceConfigured = isChannelAccountBalanceConfigured(ch)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -392,9 +455,14 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		sanitizeChannelSensitiveSettingsForDisplay(channel)
 		// 回填成本系数，供前端编辑表单预填
 		ratio := model.GetChannelCostRatio(channel.Id)
 		channel.CostRatio = &ratio
+		channel.AccountBalanceConfigured = isChannelAccountBalanceConfigured(channel)
+		if balance, berr := model.GetChannelAccountBalance(channel.Id); berr == nil {
+			channel.AccountBalance = balance
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -700,6 +768,7 @@ func AddChannel(c *gin.Context) {
 			syncChannelCostRatio(channels[i].Id, addChannelRequest.Channel.CostRatio)
 		}
 	}
+	model.InitChannelCache()
 	service.ResetProxyClientCache()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -909,6 +978,8 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
+
+	preserveSensitiveChannelSettingsForUpdate(&channel.Channel, originChannel)
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo

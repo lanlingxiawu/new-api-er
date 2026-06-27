@@ -35,6 +35,7 @@ import {
   testAllChannels,
   updateAllChannelsBalance,
   updateChannelBalance,
+  updateChannelAccountBalance,
 } from '../api'
 import { CHANNEL_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import type { CopyChannelParams } from '../types'
@@ -313,6 +314,29 @@ export async function handleUpdateChannelBalance(
       _error instanceof Error
         ? _error.message
         : i18next.t('Failed to update balance')
+    )
+  }
+}
+
+export async function handleUpdateChannelAccountBalance(
+  id: number,
+  queryClient?: QueryClient
+): Promise<void> {
+  try {
+    const response = await updateChannelAccountBalance(id)
+    if (response.success) {
+      toast.success(i18next.t('Account balance updated'))
+      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    } else {
+      toast.error(
+        response.message || i18next.t('Failed to update account balance')
+      )
+    }
+  } catch (_error: unknown) {
+    toast.error(
+      _error instanceof Error
+        ? _error.message
+        : i18next.t('Failed to update account balance')
     )
   }
 }

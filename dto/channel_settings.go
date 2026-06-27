@@ -7,6 +7,10 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// 渠道账号余额查询配置（Token + UserID 同时非空时生效）
+	AccountBalanceURL    string `json:"account_balance_url,omitempty"`
+	AccountBalanceToken  string `json:"account_balance_token,omitempty"`
+	AccountBalanceUserID string `json:"account_balance_user_id,omitempty"`
 }
 
 type VertexKeyType string

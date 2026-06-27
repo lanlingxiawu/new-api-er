@@ -59,6 +59,11 @@ type Channel struct {
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
 
+	// AccountBalance 渠道账号余额，从 Redis 按需填充，不持久化到 channels 表
+	AccountBalance *ChannelAccountBalance `json:"account_balance,omitempty" gorm:"-"`
+	// AccountBalanceConfigured 是否已配置账号余额查询（Token+UserID 均非空），控制器填充，不持久化
+	AccountBalanceConfigured bool `json:"account_balance_configured" gorm:"-"`
+
 	// CostRatio 渠道成本系数，不持久化到 channels 表（实际存于 ChannelCostConfig）。
 	// 仅用于在渠道增改接口中透传该值，由控制器同步到 ChannelCostConfig；
 	// GetChannel 读取时回填，供前端编辑表单预填。指针区分「未提供(nil)」与「显式设置」。
@@ -371,6 +376,17 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOpti
 	return channels, err
 }
 
+// GetEnabledChannelsForBalanceRefresh returns enabled channels with the upstream
+// `key` column omitted. The scheduled account-balance refresh authenticates with the
+// per-channel AccountBalanceToken stored in settings, never the upstream key, so the
+// (encrypted) key material is intentionally not loaded into memory. The enabled
+// filter is pushed into SQL to avoid scanning disabled channels.
+func GetEnabledChannelsForBalanceRefresh() ([]*Channel, error) {
+	var channels []*Channel
+	err := DB.Where("status = ?", common.ChannelStatusEnabled).Omit("key").Find(&channels).Error
+	return channels, err
+}
+
 func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
 	order := resolveChannelSortOptions(idSort, sortOptions)
@@ -475,10 +491,11 @@ func BatchDeleteChannels(ids []int) error {
 	if tx.Error != nil {
 		return tx.Error
 	}
+	allNames := make(map[int]string, len(ids))
 	for _, chunk := range lo.Chunk(ids, 200) {
-		if err := snapshotChannelNamesBeforeDeleteTx(tx, chunk); err != nil {
-			tx.Rollback()
-			return err
+		// 删除前捕获该批渠道名，名称快照移到删除后异步处理。
+		for id, name := range captureChannelNamesForSnapshot(tx, chunk) {
+			allNames[id] = name
 		}
 		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
 			tx.Rollback()
@@ -489,7 +506,11 @@ func BatchDeleteChannels(ids []int) error {
 			return err
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	finalizeChannelDeletionAsync(allNames, ids)
+	return nil
 }
 
 func (channel *Channel) GetPriority() int64 {
@@ -615,10 +636,8 @@ func (channel *Channel) Delete() error {
 	if tx.Error != nil {
 		return tx.Error
 	}
-	if err := snapshotChannelNamesBeforeDeleteTx(tx, []int{channel.Id}); err != nil {
-		tx.Rollback()
-		return err
-	}
+	// 删除前捕获渠道名（删后 channels 表已无），名称快照移到删除后异步处理。
+	names := captureChannelNamesForSnapshot(tx, []int{channel.Id})
 	if err := tx.Delete(channel).Error; err != nil {
 		tx.Rollback()
 		return err
@@ -627,34 +646,74 @@ func (channel *Channel) Delete() error {
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit().Error
-}
-
-func snapshotChannelNamesBeforeDeleteTx(tx *gorm.DB, ids []int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	var channels []Channel
-	if err := tx.Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Find(&channels).Error; err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return err
 	}
-	for _, channel := range channels {
-		name := strings.TrimSpace(channel.Name)
-		if channel.Id == 0 || name == "" {
-			continue
-		}
-		if err := tx.Model(&ConsumptionCost{}).
-			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
-			Update("channel_name", name).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&PlatformChannelDailyStat{}).
-			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", channel.Id).
-			Update("channel_name", name).Error; err != nil {
-			return err
+	// 名称快照 + 余额缓存清理移出删除流程，删除成功后异步 best-effort 处理。
+	finalizeChannelDeletionAsync(names, []int{channel.Id})
+	return nil
+}
+
+// captureChannelNamesForSnapshot 在删除前读取 id->name（已 Trim、丢弃空名/0 id）。
+// 必须在渠道行被删除之前调用：渠道是硬删除，删后 channels 表已无此名。
+// 仅只读 SELECT（主键 IN 查询，不加行锁），结果交给删除完成后的异步 finalize 使用。
+func captureChannelNamesForSnapshot(q *gorm.DB, ids []int) map[int]string {
+	result := make(map[int]string, len(ids))
+	if len(ids) == 0 {
+		return result
+	}
+	var rows []struct {
+		Id   int
+		Name string
+	}
+	if err := q.Model(&Channel{}).Select("id, name").Where("id IN ?", ids).Scan(&rows).Error; err != nil {
+		common.SysError(fmt.Sprintf("captureChannelNamesForSnapshot: %v", err))
+		return result
+	}
+	for _, row := range rows {
+		if name := strings.TrimSpace(row.Name); row.Id != 0 && name != "" {
+			result[row.Id] = name
 		}
 	}
-	return nil
+	return result
+}
+
+// finalizeChannelDeletion 渠道删除成功后的非关键收尾，已移出删除主流程/事务：
+//  1. 把删除前捕获的渠道名快照回写日聚合小表 platform_channel_daily_stats，
+//     保住已删渠道在报表/筛选下拉里的名字（在世期间计费刷盘通常已写入，此处是兜底）；
+//  2. 清理 Redis 中该渠道的上游账户余额缓存。
+//
+// 全程 best-effort：单项失败只记日志，不影响（也无法回滚）已提交的删除。
+// 之所以移出删除事务：platform_channel_daily_stats 是 relay 计费刷盘写的共享表，
+// 在删除事务内对它做 UPDATE 会与刷盘抢锁；改为删除后异步处理，删除请求不再为此阻塞。
+func finalizeChannelDeletion(names map[int]string, ids []int) {
+	for id, name := range names {
+		if err := DB.Model(&PlatformChannelDailyStat{}).
+			Where("channel_id = ? AND (channel_name = '' OR channel_name IS NULL)", id).
+			Update("channel_name", name).Error; err != nil {
+			common.SysError(fmt.Sprintf("finalizeChannelDeletion: snapshot channel_id=%d failed: %v", id, err))
+		}
+	}
+	for _, id := range ids {
+		if err := DeleteChannelAccountBalance(id); err != nil {
+			common.SysError(fmt.Sprintf("finalizeChannelDeletion: delete account balance cache channel_id=%d failed: %v", id, err))
+		}
+	}
+}
+
+// finalizeChannelDeletionAsync 是 finalizeChannelDeletion 的 fire-and-forget 包装，带 panic 兜底。
+func finalizeChannelDeletionAsync(names map[int]string, ids []int) {
+	if len(names) == 0 && len(ids) == 0 {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				common.SysError(fmt.Sprintf("finalizeChannelDeletionAsync panic: %v", r))
+			}
+		}()
+		finalizeChannelDeletion(names, ids)
+	}()
 }
 
 var channelStatusLock sync.Mutex
@@ -932,16 +991,18 @@ func DeleteChannelByStatus(status int64) (int64, error) {
 		tx.Rollback()
 		return 0, err
 	}
-	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
-		tx.Rollback()
-		return 0, err
-	}
+	// 删除前捕获渠道名，名称快照移到删除后异步处理。
+	names := captureChannelNamesForSnapshot(tx, ids)
 	result := tx.Where("status = ?", status).Delete(&Channel{})
 	if result.Error != nil {
 		tx.Rollback()
 		return 0, result.Error
 	}
-	return result.RowsAffected, tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	finalizeChannelDeletionAsync(names, ids)
+	return result.RowsAffected, nil
 }
 
 func DeleteDisabledChannel() (int64, error) {
@@ -956,16 +1017,18 @@ func DeleteDisabledChannel() (int64, error) {
 		tx.Rollback()
 		return 0, err
 	}
-	if err := snapshotChannelNamesBeforeDeleteTx(tx, ids); err != nil {
-		tx.Rollback()
-		return 0, err
-	}
+	// 删除前捕获渠道名，名称快照移到删除后异步处理。
+	names := captureChannelNamesForSnapshot(tx, ids)
 	result := tx.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
 	if result.Error != nil {
 		tx.Rollback()
 		return 0, result.Error
 	}
-	return result.RowsAffected, tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	finalizeChannelDeletionAsync(names, ids)
+	return result.RowsAffected, nil
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
@@ -1135,10 +1198,11 @@ func GetChannelNamesByIdsWithContext(ctx context.Context, ids []int) (map[int]st
 	return result, nil
 }
 
-// ResolveChannelDisplayNames 批量解析渠道显示名称（兼容已删除渠道），仅用于按页展示等小批量场景。
-// 解析链：channels 表 → platform_channel_daily_stats 名称快照 → logs 快照。
-// 渠道删除时 snapshotChannelNamesBeforeDeleteTx 已保证日聚合表留有名称，因此该链路对已删渠道是闭合的。
-func ResolveChannelDisplayNames(ids []int) map[int]string {
+// ResolveChannelDisplayNamesWithoutLogs 批量解析渠道显示名称，仅经两层：
+// channels 表（含已软删，Unscoped）→ platform_channel_daily_stats 名称快照。
+// 不回退到 logs 表扫描（logs 的 LIKE '%channel_name%' 是全表过滤，代价高）。
+// 解析不到的 id 不会出现在返回 map 中，调用方应保持原值不变。
+func ResolveChannelDisplayNamesWithoutLogs(ids []int) map[int]string {
 	uniq := make([]int, 0, len(ids))
 	seen := make(map[int]bool, len(ids))
 	for _, id := range ids {
@@ -1180,8 +1244,22 @@ func ResolveChannelDisplayNames(ids []int) map[int]string {
 			}
 		}
 	}
+	return result
+}
+
+// ResolveChannelDisplayNames 批量解析渠道显示名称（兼容已删除渠道），仅用于按页展示等小批量场景。
+// 解析链：channels 表 → platform_channel_daily_stats 名称快照 → logs 快照。
+// 渠道删除后 finalizeChannelDeletion（异步）会把名称快照回写日聚合表（在世期间刷盘通常已写入），
+// 故该链路对已删渠道基本闭合（最终一致；极短窗口内可能短暂取不到名）。
+func ResolveChannelDisplayNames(ids []int) map[int]string {
+	result := ResolveChannelDisplayNamesWithoutLogs(ids)
 	still := make([]int, 0)
-	for _, id := range missing {
+	seen := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
 		if result[id] == "" {
 			still = append(still, id)
 		}
@@ -1203,7 +1281,7 @@ type ChannelDisplayOption struct {
 
 // ListChannelDisplayOptions 列出产生过消费的渠道（含已删除），用于筛选下拉。
 // 数据源为 platform_channel_daily_stats（每渠道每天一行的小表，渠道删除时
-// snapshotChannelNamesBeforeDeleteTx 已把名称快照回填），在世渠道叠加当前名称。
+// 渠道删除后 finalizeChannelDeletion 异步把名称快照回填），在世渠道叠加当前名称。
 // 不扫描 logs / consumption_costs / employee_commission_logs 等大表。
 func ListChannelDisplayOptions(page, pageSize int) ([]ChannelDisplayOption, int64, error) {
 	var total int64
