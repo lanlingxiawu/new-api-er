@@ -739,14 +739,16 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 	if err != nil {
 		return nil, err
 	}
+	currentPeriod := ResolveCommissionMonthlyPeriod(time.Now().Unix())
 	resetStartedAtSet := make(map[int64]struct{})
+	resetStartedAtByUserId := make(map[int]int64, len(employeeUserIds))
 	for _, employeeUserId := range employeeUserIds {
+		resetStartedAt := currentPeriod.PeriodStartAt
 		if baseline := baselinesByUserId[employeeUserId]; baseline.BaselineResetAt > 0 {
-			resetStartedAtSet[baseline.BaselineResetAt] = struct{}{}
+			resetStartedAt = baseline.BaselineResetAt
 		}
-	}
-	if len(resetStartedAtSet) == 0 {
-		return items, nil
+		resetStartedAtByUserId[employeeUserId] = resetStartedAt
+		resetStartedAtSet[resetStartedAt] = struct{}{}
 	}
 	resetStartedAts := make([]int64, 0, len(resetStartedAtSet))
 	for resetStartedAt := range resetStartedAtSet {
@@ -757,6 +759,9 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 		return nil, err
 	}
 	for _, row := range rows {
+		if expectedResetStartedAt := resetStartedAtByUserId[row.EmployeeUserId]; expectedResetStartedAt != row.ResetStartedAt {
+			continue
+		}
 		items[row.EmployeeUserId] = EmployeeCurrentResetPeriodStat{
 			EmployeeUserId:  row.EmployeeUserId,
 			ResetStartedAt:  row.ResetStartedAt,
@@ -804,7 +809,8 @@ func GetCommissionResetPeriodStats(filter CommissionResetPeriodStatFilter) ([]*E
 		} else if currentBaseline.BaselineResetAt > 0 {
 			base = base.Where("reset_started_at = ?", currentBaseline.BaselineResetAt)
 		} else {
-			return []*EmployeeCommissionResetPeriodStatItem{}, 0, nil
+			currentPeriod := ResolveCommissionMonthlyPeriod(time.Now().Unix())
+			base = base.Where("reset_started_at = ?", currentPeriod.PeriodStartAt)
 		}
 	} else if filter.ResetStartedAt != 0 {
 		base = base.Where("reset_started_at = ?", filter.ResetStartedAt)

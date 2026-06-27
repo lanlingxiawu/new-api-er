@@ -26,26 +26,31 @@ type ConsumptionCost struct {
 	CreatedAt    int64   `json:"created_at" gorm:"autoCreateTime;index;index:idx_consumption_cost_created_channel,priority:1"`
 }
 
-// CreateConsumptionCost 幂等写入逐笔成本记录，并同步累加日聚合统计。
+// CreateConsumptionCost 将逐笔成本记录推入内存缓冲区，由后台批量入库。
+// 幂等性由 DB 侧 uniqueIndex(log_id) + ON CONFLICT DO NOTHING 保障；
+// 本路径不做进程内去重——cost 记录量大且无需跨请求关联，直接依赖 DB 约束即可。
 func CreateConsumptionCost(rec *ConsumptionCost) error {
-	_, err := CreateConsumptionCostRecord(rec)
-	return err
+	return CreateConsumptionCostRecord(rec)
 }
 
-func CreateConsumptionCostRecord(rec *ConsumptionCost) (inserted bool, err error) {
+func CreateConsumptionCostRecord(rec *ConsumptionCost) error {
 	if rec.CreatedAt == 0 {
 		rec.CreatedAt = time.Now().Unix()
 	}
 	if rec.LogId == nil || *rec.LogId <= 0 {
 		rec.LogId = nil
 	}
-	// 明细推入缓冲区，由后台批量入库（ON CONFLICT DO NOTHING 保证幂等）
+	// 平台日统计的聚合改到 flushConsumptionCostLedger 入库成功后再做（与成对路径一致）：
+	// 这样缓冲超限丢弃或刷盘永久失败的记录不会被计入，避免 platform_channel_daily_stats
+	// 超前于真正落库的明细而产生偏差。
 	BufferConsumptionCostRecord(rec)
-	// 日统计增量写入缓冲区（Redis 或内存），由后台定时刷盘
-	BufferPlatformDailyStat(rec)
-	return true, nil
+	return nil
 }
 
+// CreateConsumptionCostAndCommissionLog 将成本+提成记录成对入缓冲，进程内按 log_id 去重。
+// 多实例场景下不同进程可能同时通过去重并各自写入 BufferCommissionAndProfit，
+// 导致员工汇总被重复累加；DB 侧 ON CONFLICT 仅保护台账明细行，不保护汇总增量。
+// 单实例或低并发重复请求场景下无此风险。
 func CreateConsumptionCostAndCommissionLog(cost *ConsumptionCost, log *EmployeeCommissionLog) (inserted bool, err error) {
 	now := time.Now().Unix()
 	if cost.CreatedAt == 0 {
@@ -62,10 +67,6 @@ func CreateConsumptionCostAndCommissionLog(cost *ConsumptionCost, log *EmployeeC
 	}
 
 	inserted = CheckAndBufferCostAndCommission(cost, log)
-	if inserted {
-		BufferPlatformDailyStat(cost)
-		BufferCommissionDailyStat(log)
-	}
 	return inserted, nil
 }
 

@@ -3,8 +3,6 @@ package model
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,173 +15,22 @@ import (
 // ============================================================================
 // 日统计缓冲层
 //
-// 写入侧（每笔消费）不再在事务中直接 upsert 日聚合表，而是将增量累加到缓冲区。
-// 后台定时任务将缓冲区的增量批量刷入 DB，减少单条事务的 SQL 数量和锁竞争。
-//
-// Redis 可用时使用 Redis Hash 作为缓冲（集群安全），否则降级为进程内 map。
+// 写入侧（每笔消费）将增量累加到进程内 map，后台定时任务批量刷入 DB，
+// 减少单条事务的 SQL 数量和锁竞争。
 // ============================================================================
 
 const (
-	// Redis key 前缀
-	platformStatBufferPrefix               = "biz_buf:platform:"                      // + {statDate}:{channelId}
-	commissionStatBufferPrefix             = "biz_buf:commission:"                    // + {statDate}:{employeeUserId}
-	customerCommissionStatBufferPrefix     = "biz_buf:customer_commission:"           // + {statDate}:{employeeUserId}:{customerUserId}
-	commissionResetPeriodBufferPrefix      = "biz_buf:commission_reset_period:"       // + {resetStartedAt}:{employeeUserId}
-	commissionResetPeriodDailyBufferPrefix = "biz_buf:commission_reset_period_daily:" // + {resetStartedAt}:{statDate}:{employeeUserId}
-	redisStatProcessingPrefix              = "biz_buf:processing:"
-
-	// Redis key 的 TTL，防止 flush 失败导致 key 永驻
-	statBufferKeyTTL     = 48 * time.Hour
 	statBufferMaxRetries = 10
 
 	// 默认刷盘间隔（如果配置未指定或无效）
-	DefaultBusinessStatsFlushInterval = 8 // 秒
+	DefaultBusinessStatsFlushInterval = 8 // 秒，均衡模式：100k RPM 下 8s×15000/cycle = 112k/min 吞吐
 )
 
 var businessStatsFlushMu sync.Mutex
 
-// ---- Redis 缓冲 ----
-
-func platformStatRedisKey(statDate int64, channelId int) string {
-	return fmt.Sprintf("%s%d:%d", platformStatBufferPrefix, statDate, channelId)
-}
-
-func commissionStatRedisKey(statDate int64, employeeUserId int) string {
-	return fmt.Sprintf("%s%d:%d", commissionStatBufferPrefix, statDate, employeeUserId)
-}
-
-func customerCommissionStatRedisKey(statDate int64, employeeUserId, customerUserId int) string {
-	return fmt.Sprintf("%s%d:%d:%d", customerCommissionStatBufferPrefix, statDate, employeeUserId, customerUserId)
-}
-
-func commissionResetPeriodRedisKey(resetStartedAt int64, employeeUserId int) string {
-	return fmt.Sprintf("%s%d:%d", commissionResetPeriodBufferPrefix, resetStartedAt, employeeUserId)
-}
-
-func commissionResetPeriodDailyRedisKey(resetStartedAt, statDate int64, employeeUserId int) string {
-	return fmt.Sprintf("%s%d:%d:%d", commissionResetPeriodDailyBufferPrefix, resetStartedAt, statDate, employeeUserId)
-}
-
-func redisStatProcessingKey(key string) string {
-	return redisStatProcessingPrefix + key
-}
-
-func redisStatOriginalKey(key string) string {
-	return strings.TrimPrefix(key, redisStatProcessingPrefix)
-}
-
-func prepareRedisStatProcessingKey(ctx context.Context, key string) (string, bool) {
-	if strings.HasPrefix(key, redisStatProcessingPrefix) {
-		return key, true
-	}
-	processingKey := redisStatProcessingKey(key)
-	renamed, err := common.RDB.RenameNX(ctx, key, processingKey).Result()
-	if err != nil {
-		common.SysError("prepareRedisStatProcessingKey: rename failed: " + err.Error())
-		return "", false
-	}
-	return processingKey, renamed
-}
-
-func ensureRedisStatBatchID(ctx context.Context, key string) string {
-	batchID, _ := common.RDB.HGet(ctx, key, "_batch_id").Result()
-	if batchID != "" {
-		return batchID
-	}
-	batchID = fmt.Sprintf("%s:%d", key, time.Now().UnixNano())
-	if ok, err := common.RDB.HSetNX(ctx, key, "_batch_id", batchID).Result(); err != nil {
-		common.SysError("ensureRedisStatBatchID: hsetnx failed: " + err.Error())
-		return ""
-	} else if ok {
-		return batchID
-	}
-	batchID, _ = common.RDB.HGet(ctx, key, "_batch_id").Result()
-	return batchID
-}
-
-// bufferPlatformStatRedis 将平台侧日统计增量累加到 Redis Hash。
-func bufferPlatformStatRedis(statDate int64, channelId int, channelName string, revenueQuota, costQuota int64, costRatio float64, createdAt int64) {
-	key := platformStatRedisKey(statDate, channelId)
-	ctx := context.Background()
-	pipe := common.RDB.Pipeline()
-	if channelName != "" {
-		pipe.HSetNX(ctx, key, "channel_name", channelName)
-	}
-	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
-	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
-	pipe.HIncrBy(ctx, key, "record_count", 1)
-	// cost_ratio_sum 用整数存储（乘以 1e9 精度），避免浮点累加误差
-	pipe.HIncrBy(ctx, key, "cost_ratio_sum_e9", int64(costRatio*1e9))
-	pipe.HIncrBy(ctx, key, "last_created_at", 0) // 确保字段存在
-	// 更新 last_created_at（取最大值，用 Lua 脚本）
-	luaUpdateMax := `
-		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
-		if tonumber(ARGV[1]) > cur then
-			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
-		end
-		return 1
-	`
-	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("bufferPlatformStatRedis: pipeline error: " + err.Error())
-		ReportBusinessStatsFailure("platform_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "channel_id": channelId})
-	}
-}
-
-// bufferCommissionStatRedis 将员工提成侧日统计增量累加到 Redis Hash。
-func bufferCommissionStatRedis(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	key := commissionStatRedisKey(statDate, employeeUserId)
-	ctx := context.Background()
-	pipe := common.RDB.Pipeline()
-	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
-	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
-	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
-	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
-	pipe.HIncrBy(ctx, key, "record_count", 1)
-	pipe.HIncrBy(ctx, key, "last_created_at", 0)
-	luaUpdateMax := `
-		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
-		if tonumber(ARGV[1]) > cur then
-			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
-		end
-		return 1
-	`
-	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("bufferCommissionStatRedis: pipeline error: " + err.Error())
-		ReportBusinessStatsFailure("commission_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId})
-	}
-}
-
-func bufferCustomerCommissionStatRedis(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	key := customerCommissionStatRedisKey(statDate, employeeUserId, customerUserId)
-	ctx := context.Background()
-	pipe := common.RDB.Pipeline()
-	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
-	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
-	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
-	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
-	pipe.HIncrBy(ctx, key, "record_count", 1)
-	pipe.HIncrBy(ctx, key, "last_created_at", 0)
-	luaUpdateMax := `
-		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
-		if tonumber(ARGV[1]) > cur then
-			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
-		end
-		return 1
-	`
-	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("bufferCustomerCommissionStatRedis: pipeline error: " + err.Error())
-		ReportBusinessStatsFailure("customer_commission_stat_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId, "customer_user_id": customerUserId})
-		bufferCustomerCommissionStatMem(statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
-	}
-}
-
-// ---- 内存缓冲（无 Redis 降级） ----
+// ---- 统计累积缓冲 ----
+// 以下 buffer*Mem / requeue*Mem / flush*FromMem 均为进程内 map 实现，
+// 函数名保留 Mem 后缀以区分同名的 DB upsert 和 flush 入口。
 
 type platformStatDelta struct {
 	StatDate      int64
@@ -361,68 +208,6 @@ func effectiveResetStartedAt(level *EmployeeTierLevel, createdAt int64) int64 {
 		return level.BaselineResetAt
 	}
 	return ResolveCommissionMonthlyPeriod(createdAt).PeriodStartAt
-}
-
-func bufferCommissionResetPeriodStatRedis(resetStartedAt int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if resetStartedAt <= 0 {
-		return
-	}
-	periodKey, periodTimezone := commissionResetPeriodMeta(resetStartedAt)
-	key := commissionResetPeriodRedisKey(resetStartedAt, employeeUserId)
-	ctx := context.Background()
-	pipe := common.RDB.Pipeline()
-	pipe.HSetNX(ctx, key, "reset_ended_at", 0)
-	pipe.HSetNX(ctx, key, "period_key", periodKey)
-	pipe.HSetNX(ctx, key, "timezone", periodTimezone)
-	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
-	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
-	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
-	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
-	pipe.HIncrBy(ctx, key, "record_count", 1)
-	pipe.HIncrBy(ctx, key, "last_created_at", 0)
-	luaUpdateMax := `
-		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
-		if tonumber(ARGV[1]) > cur then
-			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
-		end
-		return 1
-	`
-	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("bufferCommissionResetPeriodStatRedis: pipeline error: " + err.Error())
-		ReportBusinessStatsFailure("commission_reset_period_redis_buffer", err.Error(), map[string]any{"employee_user_id": employeeUserId})
-		bufferCommissionResetPeriodStatMem(resetStartedAt, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
-	}
-}
-
-func bufferCommissionResetPeriodDailyStatRedis(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if resetStartedAt <= 0 {
-		return
-	}
-	key := commissionResetPeriodDailyRedisKey(resetStartedAt, statDate, employeeUserId)
-	ctx := context.Background()
-	pipe := common.RDB.Pipeline()
-	pipe.HIncrBy(ctx, key, "revenue_quota", revenueQuota)
-	pipe.HIncrBy(ctx, key, "cost_quota", costQuota)
-	pipe.HIncrBy(ctx, key, "profit_quota", profitQuota)
-	pipe.HIncrBy(ctx, key, "commission_quota", commissionQuota)
-	pipe.HIncrBy(ctx, key, "record_count", 1)
-	pipe.HIncrBy(ctx, key, "last_created_at", 0)
-	luaUpdateMax := `
-		local cur = tonumber(redis.call('HGET', KEYS[1], 'last_created_at') or '0')
-		if tonumber(ARGV[1]) > cur then
-			redis.call('HSET', KEYS[1], 'last_created_at', ARGV[1])
-		end
-		return 1
-	`
-	pipe.Eval(ctx, luaUpdateMax, []string{key}, createdAt)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("bufferCommissionResetPeriodDailyStatRedis: pipeline error: " + err.Error())
-		ReportBusinessStatsFailure("commission_reset_period_daily_redis_buffer", err.Error(), map[string]any{"stat_date": statDate, "employee_user_id": employeeUserId})
-		bufferCommissionResetPeriodDailyStatMem(resetStartedAt, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, createdAt)
-	}
 }
 
 func bufferCommissionResetPeriodStatMem(resetStartedAt int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
@@ -611,6 +396,9 @@ func requeueCommissionResetPeriodStatMem(d *commissionResetPeriodDelta) {
 	if d.LastCreatedAt > existing.LastCreatedAt {
 		existing.LastCreatedAt = d.LastCreatedAt
 	}
+	if d.RetryCount > existing.RetryCount {
+		existing.RetryCount = d.RetryCount
+	}
 }
 
 func requeueCommissionResetPeriodDailyStatMem(d *commissionResetPeriodDailyDelta) {
@@ -647,19 +435,14 @@ func requeueCommissionResetPeriodDailyStatMem(d *commissionResetPeriodDailyDelta
 
 // ---- 公共入口 ----
 
-// BufferPlatformDailyStat 将平台侧日统计增量写入缓冲区（Redis 或内存）。
+// BufferPlatformDailyStat 将平台侧日统计增量写入进程内缓冲区。
 func BufferPlatformDailyStat(rec *ConsumptionCost) {
 	statDate := localDayStart(rec.CreatedAt)
-	if common.RedisEnabled {
-		bufferPlatformStatRedis(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
-	} else {
-		bufferPlatformStatMem(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
-	}
-	// coverage 标记仍走进程内缓存 + 异步 DB upsert（频率极低，不需要缓冲）
-	go ensureDailyCoverageAsync(statDate)
+	bufferPlatformStatMem(statDate, rec.ChannelId, rec.ChannelName, rec.RevenueQuota, rec.CostQuota, rec.CostRatio, rec.CreatedAt)
+	ensureDailyCoverage(statDate)
 }
 
-// BufferCommissionDailyStat 将员工提成侧日统计增量写入缓冲区（Redis 或内存）。
+// BufferCommissionDailyStat 将员工提成侧日统计增量写入进程内缓冲区。
 func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
 	statDate := localDayStart(log.CreatedAt)
 	level, err := GetOrCreateTierLevel(log.EmployeeUserId, true)
@@ -668,34 +451,37 @@ func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
 		level = nil
 	}
 	resetAt := effectiveResetStartedAt(level, log.CreatedAt)
-	if common.RedisEnabled {
-		bufferCommissionStatRedis(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCustomerCommissionStatRedis(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodStatRedis(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodDailyStatRedis(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-	} else {
-		bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodStatMem(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-		bufferCommissionResetPeriodDailyStatMem(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-	}
+	bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+	bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+	bufferCommissionResetPeriodStatMem(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
+	bufferCommissionResetPeriodDailyStatMem(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 }
 
-// ensureDailyCoverageAsync 在非事务上下文中异步标记 coverage。
-func ensureDailyCoverageAsync(statDate int64) {
+// ensureDailyCoverage 确保当日 coverage 记录已落库。
+// 命中进程内缓存（本进程已处理过该天）时为纯内存的 sync.Map 读，热路径零额外开销；
+// 仅本进程首次遇到某天时才异步 upsert 一次，避免每笔消费都新建 goroutine（Rule 8.2）。
+func ensureDailyCoverage(statDate int64) {
 	if _, loaded := coveredDaysCache.LoadOrStore(statDate, struct{}{}); loaded {
 		return
 	}
-	if err := DB.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "stat_date"}},
-		DoUpdates: clause.AssignmentColumns([]string{"completed_at"}),
-	}).Create(&BusinessDailyStatsCoverage{
-		StatDate:    statDate,
-		CompletedAt: time.Now().Unix(),
-	}).Error; err != nil {
-		common.SysError("ensureDailyCoverageAsync: " + err.Error())
-		coveredDaysCache.Delete(statDate) // 失败回退，下次重试
-	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				common.SysError(fmt.Sprintf("ensureDailyCoverage panic: %v", r))
+				coveredDaysCache.Delete(statDate) // panic 也回退缓存，下次重试
+			}
+		}()
+		if err := DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "stat_date"}},
+			DoUpdates: clause.AssignmentColumns([]string{"completed_at"}),
+		}).Create(&BusinessDailyStatsCoverage{
+			StatDate:    statDate,
+			CompletedAt: time.Now().Unix(),
+		}).Error; err != nil {
+			common.SysError("ensureDailyCoverage: " + err.Error())
+			coveredDaysCache.Delete(statDate) // 失败回退，下次重试
+		}
+	}()
 }
 
 func flushPlatformStatsFromMem() {
@@ -783,381 +569,10 @@ func flushCommissionResetPeriodDailyStatsFromMem() {
 	common.SysLog(fmt.Sprintf("flush_business_stats: commission reset period daily mem items=%d", len(buf)))
 }
 
-func flushPlatformStatsFromRedis() {
-	ctx := context.Background()
-	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+platformStatBufferPrefix+"*", flushOnePlatformKey)
-	flushed += flushRedisStatKeys(ctx, platformStatBufferPrefix+"*", flushOnePlatformKey)
-	if flushed > 0 {
-		common.SysLog(fmt.Sprintf("flush_business_stats: platform redis keys=%d", flushed))
-	}
-}
-
-func flushCommissionStatsFromRedis() {
-	ctx := context.Background()
-	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+commissionStatBufferPrefix+"*", flushOneCommissionKey)
-	flushed += flushRedisStatKeys(ctx, commissionStatBufferPrefix+"*", flushOneCommissionKey)
-	if flushed > 0 {
-		common.SysLog(fmt.Sprintf("flush_business_stats: commission redis keys=%d", flushed))
-	}
-}
-
-func flushCustomerCommissionStatsFromRedis() {
-	ctx := context.Background()
-	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+customerCommissionStatBufferPrefix+"*", flushOneCustomerCommissionKey)
-	flushed += flushRedisStatKeys(ctx, customerCommissionStatBufferPrefix+"*", flushOneCustomerCommissionKey)
-	if flushed > 0 {
-		common.SysLog(fmt.Sprintf("flush_business_stats: customer commission redis keys=%d", flushed))
-	}
-}
-
-func flushCommissionResetPeriodStatsFromRedis() {
-	ctx := context.Background()
-	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+commissionResetPeriodBufferPrefix+"*", flushOneCommissionResetPeriodKey)
-	flushed += flushRedisStatKeys(ctx, commissionResetPeriodBufferPrefix+"*", flushOneCommissionResetPeriodKey)
-	if flushed > 0 {
-		common.SysLog(fmt.Sprintf("flush_business_stats: commission reset period redis keys=%d", flushed))
-	}
-}
-
-func flushCommissionResetPeriodDailyStatsFromRedis() {
-	ctx := context.Background()
-	flushed := flushRedisStatKeys(ctx, redisStatProcessingPrefix+commissionResetPeriodDailyBufferPrefix+"*", flushOneCommissionResetPeriodDailyKey)
-	flushed += flushRedisStatKeys(ctx, commissionResetPeriodDailyBufferPrefix+"*", flushOneCommissionResetPeriodDailyKey)
-	if flushed > 0 {
-		common.SysLog(fmt.Sprintf("flush_business_stats: commission reset period daily redis keys=%d", flushed))
-	}
-}
-
-func flushRedisStatKeys(ctx context.Context, pattern string, flush func(context.Context, string) bool) int {
-	var cursor uint64
-	var flushed int
-	for {
-		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 200).Result()
-		if err != nil {
-			common.SysError("flushRedisStatKeys: scan error: " + err.Error())
-			return flushed
-		}
-		for _, key := range keys {
-			if flush(ctx, key) {
-				flushed++
-			}
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
-	}
-	return flushed
-}
-
-func applyRedisStatBatch(batchKey string, apply func(tx *gorm.DB) error) (bool, bool) {
-	if batchKey == "" {
-		return false, false
-	}
-	applied := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		row := BusinessStatsAppliedBatch{BatchKey: batchKey, AppliedAt: time.Now().Unix()}
-		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			applied = false
-			return nil
-		}
-		applied = true
-		return apply(tx)
-	})
-	if err != nil {
-		common.SysError("applyRedisStatBatch: " + err.Error())
-		return false, false
-	}
-	return true, !applied
-}
-
-func flushOnePlatformKey(ctx context.Context, key string) bool {
-	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
-	if !ok {
-		return false
-	}
-	key = processingKey
-	vals, err := common.RDB.HGetAll(ctx, key).Result()
-	if err != nil || len(vals) == 0 {
-		return false
-	}
-	// 解析 key: "biz_buf:platform:{statDate}:{channelId}"
-	originalKey := redisStatOriginalKey(key)
-	parts := strings.TrimPrefix(originalKey, platformStatBufferPrefix)
-	sepIdx := strings.Index(parts, ":")
-	if sepIdx < 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-	statDate, _ := strconv.ParseInt(parts[:sepIdx], 10, 64)
-	channelId, _ := strconv.Atoi(parts[sepIdx+1:])
-	if statDate == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
-	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
-	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
-	costRatioSumE9, _ := strconv.ParseInt(vals["cost_ratio_sum_e9"], 10, 64)
-	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
-	channelName := vals["channel_name"]
-	costRatioSum := float64(costRatioSumE9) / 1e9
-
-	if recordCount == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	batchID := ensureRedisStatBatchID(ctx, key)
-	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
-		return upsertPlatformDailyStatTx(tx, statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt)
-	})
-	if !ok {
-		handleRedisStatFlushFailure(ctx, key, "platform_daily_stat", "db upsert failed", vals)
-		return false
-	}
-	if duplicate {
-		common.SysLog("flushOnePlatformKey: skip duplicate batch " + batchID)
-	}
-	common.RDB.Del(ctx, key)
-	return true
-}
-
-func handleRedisStatFlushFailure(ctx context.Context, key, kind, reason string, vals map[string]string) {
-	retryCount, _ := strconv.Atoi(vals["retry_count"])
-	retryCount++
-	if retryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter(kind, reason, retryCount, map[string]any{
-			"key":    key,
-			"values": vals,
-		})
-		common.RDB.Del(ctx, key)
-		return
-	}
-	pipe := common.RDB.Pipeline()
-	pipe.HSet(ctx, key, "retry_count", retryCount)
-	pipe.Expire(ctx, key, statBufferKeyTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		common.SysError("handleRedisStatFlushFailure: pipeline error: " + err.Error())
-	}
-}
-
-func flushOneCommissionKey(ctx context.Context, key string) bool {
-	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
-	if !ok {
-		return false
-	}
-	key = processingKey
-	vals, err := common.RDB.HGetAll(ctx, key).Result()
-	if err != nil || len(vals) == 0 {
-		return false
-	}
-	originalKey := redisStatOriginalKey(key)
-	parts := strings.TrimPrefix(originalKey, commissionStatBufferPrefix)
-	sepIdx := strings.Index(parts, ":")
-	if sepIdx < 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-	statDate, _ := strconv.ParseInt(parts[:sepIdx], 10, 64)
-	employeeUserId, _ := strconv.Atoi(parts[sepIdx+1:])
-	if statDate == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
-	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
-	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
-	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
-	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
-	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
-
-	if recordCount == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	batchID := ensureRedisStatBatchID(ctx, key)
-	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
-		return upsertCommissionDailyStatTx(tx, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
-	})
-	if !ok {
-		handleRedisStatFlushFailure(ctx, key, "commission_daily_stat", "db upsert failed", vals)
-		return false
-	}
-	if duplicate {
-		common.SysLog("flushOneCommissionKey: skip duplicate batch " + batchID)
-	}
-	common.RDB.Del(ctx, key)
-	return true
-}
-
-func flushOneCustomerCommissionKey(ctx context.Context, key string) bool {
-	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
-	if !ok {
-		return false
-	}
-	key = processingKey
-	vals, err := common.RDB.HGetAll(ctx, key).Result()
-	if err != nil || len(vals) == 0 {
-		return false
-	}
-	originalKey := redisStatOriginalKey(key)
-	parts := strings.TrimPrefix(originalKey, customerCommissionStatBufferPrefix)
-	pieces := strings.Split(parts, ":")
-	if len(pieces) != 3 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-	statDate, _ := strconv.ParseInt(pieces[0], 10, 64)
-	employeeUserId, _ := strconv.Atoi(pieces[1])
-	customerUserId, _ := strconv.Atoi(pieces[2])
-	if statDate == 0 || employeeUserId == 0 || customerUserId == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
-	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
-	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
-	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
-	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
-	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
-
-	if recordCount == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	batchID := ensureRedisStatBatchID(ctx, key)
-	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
-		return upsertCustomerCommissionDailyStatTx(tx, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
-	})
-	if !ok {
-		handleRedisStatFlushFailure(ctx, key, "customer_commission_daily_stat", "db upsert failed", vals)
-		return false
-	}
-	if duplicate {
-		common.SysLog("flushOneCustomerCommissionKey: skip duplicate batch " + batchID)
-	}
-	common.RDB.Del(ctx, key)
-	return true
-}
-
-// ---- DB upsert（批量刷盘时调用）----
-
-func flushOneCommissionResetPeriodKey(ctx context.Context, key string) bool {
-	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
-	if !ok {
-		return false
-	}
-	key = processingKey
-	vals, err := common.RDB.HGetAll(ctx, key).Result()
-	if err != nil || len(vals) == 0 {
-		return false
-	}
-	originalKey := redisStatOriginalKey(key)
-	parts := strings.TrimPrefix(originalKey, commissionResetPeriodBufferPrefix)
-	sepIdx := strings.Index(parts, ":")
-	if sepIdx < 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-	resetStartedAt, _ := strconv.ParseInt(parts[:sepIdx], 10, 64)
-	employeeUserId, _ := strconv.Atoi(parts[sepIdx+1:])
-	if resetStartedAt == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	resetEndedAt, _ := strconv.ParseInt(vals["reset_ended_at"], 10, 64)
-	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
-	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
-	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
-	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
-	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
-	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
-
-	if recordCount == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	batchID := ensureRedisStatBatchID(ctx, key)
-	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
-		return upsertCommissionResetPeriodStatTx(tx, resetStartedAt, resetEndedAt, vals["period_key"], vals["timezone"], employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
-	})
-	if !ok {
-		handleRedisStatFlushFailure(ctx, key, "commission_reset_period_stat", "db upsert failed", vals)
-		return false
-	}
-	if duplicate {
-		common.SysLog("flushOneCommissionResetPeriodKey: skip duplicate batch " + batchID)
-	}
-	common.RDB.Del(ctx, key)
-	return true
-}
-
-func flushOneCommissionResetPeriodDailyKey(ctx context.Context, key string) bool {
-	processingKey, ok := prepareRedisStatProcessingKey(ctx, key)
-	if !ok {
-		return false
-	}
-	key = processingKey
-	vals, err := common.RDB.HGetAll(ctx, key).Result()
-	if err != nil || len(vals) == 0 {
-		return false
-	}
-	originalKey := redisStatOriginalKey(key)
-	parts := strings.TrimPrefix(originalKey, commissionResetPeriodDailyBufferPrefix)
-	pieces := strings.Split(parts, ":")
-	if len(pieces) != 3 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-	resetStartedAt, _ := strconv.ParseInt(pieces[0], 10, 64)
-	statDate, _ := strconv.ParseInt(pieces[1], 10, 64)
-	employeeUserId, _ := strconv.Atoi(pieces[2])
-	if resetStartedAt == 0 || statDate == 0 || employeeUserId == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	revenueQuota, _ := strconv.ParseInt(vals["revenue_quota"], 10, 64)
-	costQuota, _ := strconv.ParseInt(vals["cost_quota"], 10, 64)
-	profitQuota, _ := strconv.ParseInt(vals["profit_quota"], 10, 64)
-	commissionQuota, _ := strconv.ParseInt(vals["commission_quota"], 10, 64)
-	recordCount, _ := strconv.ParseInt(vals["record_count"], 10, 64)
-	lastCreatedAt, _ := strconv.ParseInt(vals["last_created_at"], 10, 64)
-
-	if recordCount == 0 {
-		common.RDB.Del(ctx, key)
-		return false
-	}
-
-	batchID := ensureRedisStatBatchID(ctx, key)
-	ok, duplicate := applyRedisStatBatch(batchID, func(tx *gorm.DB) error {
-		return upsertCommissionResetPeriodDailyStatTx(tx, resetStartedAt, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt)
-	})
-	if !ok {
-		handleRedisStatFlushFailure(ctx, key, "commission_reset_period_daily_stat", "db upsert failed", vals)
-		return false
-	}
-	if duplicate {
-		common.SysLog("flushOneCommissionResetPeriodDailyKey: skip duplicate batch " + batchID)
-	}
-	common.RDB.Del(ctx, key)
-	return true
-}
-
 func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) bool {
-	if err := upsertPlatformDailyStatTx(DB, statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt); err != nil {
+	db, cancel := flushDBWithTimeout()
+	defer cancel()
+	if err := upsertPlatformDailyStatTx(db, statDate, channelId, channelName, revenueQuota, costQuota, recordCount, costRatioSum, lastCreatedAt); err != nil {
 		common.SysError(fmt.Sprintf("upsertPlatformDailyStat: statDate=%d channelId=%d err=%s", statDate, channelId, err.Error()))
 		return false
 	}
@@ -1189,7 +604,9 @@ func upsertPlatformDailyStatTx(tx *gorm.DB, statDate int64, channelId int, chann
 }
 
 func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
-	if err := upsertCommissionDailyStatTx(DB, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+	db, cancel := flushDBWithTimeout()
+	defer cancel()
+	if err := upsertCommissionDailyStatTx(db, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
 		common.SysError(fmt.Sprintf("upsertCommissionDailyStat: statDate=%d empUserId=%d err=%s", statDate, employeeUserId, err.Error()))
 		return false
 	}
@@ -1221,7 +638,9 @@ func upsertCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUserId int
 }
 
 func upsertCustomerCommissionDailyStat(statDate int64, employeeUserId, customerUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
-	if err := upsertCustomerCommissionDailyStatTx(DB, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+	db, cancel := flushDBWithTimeout()
+	defer cancel()
+	if err := upsertCustomerCommissionDailyStatTx(db, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
 		common.SysError(fmt.Sprintf("upsertCustomerCommissionDailyStat: statDate=%d empUserId=%d customerUserId=%d err=%s", statDate, employeeUserId, customerUserId, err.Error()))
 		return false
 	}
@@ -1254,7 +673,9 @@ func upsertCustomerCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUs
 }
 
 func upsertCommissionResetPeriodStat(resetStartedAt, resetEndedAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
-	if err := upsertCommissionResetPeriodStatTx(DB, resetStartedAt, resetEndedAt, periodKey, timezone, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+	db, cancel := flushDBWithTimeout()
+	defer cancel()
+	if err := upsertCommissionResetPeriodStatTx(db, resetStartedAt, resetEndedAt, periodKey, timezone, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
 		common.SysError(fmt.Sprintf("upsertCommissionResetPeriodStat: resetStartedAt=%d empUserId=%d err=%s", resetStartedAt, employeeUserId, err.Error()))
 		return false
 	}
@@ -1262,7 +683,9 @@ func upsertCommissionResetPeriodStat(resetStartedAt, resetEndedAt int64, periodK
 }
 
 func upsertCommissionResetPeriodDailyStat(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
-	if err := upsertCommissionResetPeriodDailyStatTx(DB, resetStartedAt, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
+	db, cancel := flushDBWithTimeout()
+	defer cancel()
+	if err := upsertCommissionResetPeriodDailyStatTx(db, resetStartedAt, statDate, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
 		common.SysError(fmt.Sprintf("upsertCommissionResetPeriodDailyStat: resetStartedAt=%d statDate=%d empUserId=%d err=%s", resetStartedAt, statDate, employeeUserId, err.Error()))
 		return false
 	}
@@ -1329,31 +752,30 @@ func upsertCommissionResetPeriodDailyStatTx(tx *gorm.DB, resetStartedAt, statDat
 //
 // 高并发下避免每笔消费单条 INSERT，攒批后 CreateInBatches + ON CONFLICT DO NOTHING。
 // consumption_costs: 调用方不依赖 inserted，直接缓冲。
-// employee_commission_logs: 调用方依赖 inserted 做后续提成结算，
-//   用 Redis SETNX / 内存 map 对 log_id 做前置去重，保证返回值准确。
+// employee_commission_logs（成对路径）: 入队前做「权威去重」（单实例进程内 / 多实例 Redis SETNX，
+//   开关控制），保证同一 log_id 全局只入队一次；刷盘 cost/commission 均 CreateInBatches 批量入库
+//   并对本批全部聚合，无需逐条 RowsAffected 判重。DB 侧 ON CONFLICT(log_id) 兜底行幂等。
 //
-// 连接占用约束：本层在请求路径上不做任何 DB 访问（Redis 故障时降级为
-// 进程内去重，绝不逐笔直插），所有入库集中在单刷盘协程，峰值占用 1 个连接。
+// 连接占用约束：本层在请求路径上不做任何 DB 访问，所有入库集中在单刷盘协程，峰值占用 1 个连接。
+// 去重在入队时（异步结算协程，非 relay 主协程）完成；Redis 模式为每笔一次 SETNX。
 // 护栏：缓冲条数有上限（超限丢最旧并计数），刷盘失败 requeue + 指数退避。
 // ============================================================================
 
 const (
-	ledgerFlushBatchSize         = 500
-	pairedLedgerFlushBatchSize   = 100
-	pairedLedgerFlushMaxPerCycle = 1000
-	commissionLogDedupPrefix     = "biz_buf:dedup:commission_log_id:"
-	commissionLogDedupTTL        = 24 * time.Hour
-
-	// ledgerBufMaxEntries 台账内存缓冲条数上限。
-	// DB 长时间故障时缓冲会持续积压，超限后丢弃最旧记录并累加丢弃计数，防止 OOM。
-	ledgerBufMaxEntries = 100000
-	// dedupMemSetMaxEntries 内存去重集合条数上限，超限整体重建。
-	// 重建后的重复缓冲由刷盘侧 ON CONFLICT(log_id) DO NOTHING 兜底，不影响幂等。
-	dedupMemSetMaxEntries = 200000
 	// ledgerFlushBackoffMax 刷盘连续失败的最大退避时长。
 	// 上限刻意取小（关闭流程的最终刷盘也受退避约束，过长会扩大丢数窗口）。
 	ledgerFlushBackoffMax = 30 * time.Second
 )
+
+// flushDBWithTimeout 返回带刷盘超时期限的 DB 句柄，调用方必须调用返回的 cancel。
+// 超时时长由后台可调的 LedgerPipelineSetting.FlushDBTimeoutSec 控制（<=0 取默认 30s）；
+// 所有刷盘协程内的 DB 写入都经此入口，保证单条卡死的 SQL 不会无限期占住刷盘协程
+// （Rule 8：后台 worker 的外部调用也必须有超时）。
+func flushDBWithTimeout() (*gorm.DB, context.CancelFunc) {
+	timeout := operation_setting.GetLedgerPipelineSetting().GetFlushDBTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return DB.WithContext(ctx), cancel
+}
 
 // ledgerFlushState 单个台账的刷盘失败退避状态。
 // 仅在刷盘协程内访问（调用方持有 businessStatsFlushMu），无需加锁。
@@ -1373,10 +795,11 @@ func (s *ledgerFlushState) onSuccess() {
 
 func (s *ledgerFlushState) onFailure(now time.Time) {
 	s.consecFailures++
-	base := time.Duration(common.BusinessStatsFlushInterval) * time.Second
-	if base <= 0 {
-		base = DefaultBusinessStatsFlushInterval * time.Second
+	interval := operation_setting.GetLedgerPipelineSetting().FlushIntervalSec
+	if interval <= 0 {
+		interval = DefaultBusinessStatsFlushInterval
 	}
+	base := time.Duration(interval) * time.Second
 	shift := s.consecFailures - 1
 	if shift > 4 {
 		shift = 4
@@ -1393,6 +816,69 @@ var (
 	pairLedgerFlushState       ledgerFlushState
 	commissionLedgerFlushState ledgerFlushState
 )
+
+type ledgerPipelineQueueSnapshot struct {
+	Backlog         int   `json:"backlog"`
+	Dropped         int64 `json:"dropped"`
+	LastFlushItems  int   `json:"last_flush_items"`
+	LastFlushTookMs int64 `json:"last_flush_took_ms"`
+	LastFlushAt     int64 `json:"last_flush_at"`
+}
+
+type LedgerPipelineStatusSnapshot struct {
+	Cost       ledgerPipelineQueueSnapshot `json:"cost"`
+	Pair       ledgerPipelineQueueSnapshot `json:"pair"`
+	Commission ledgerPipelineQueueSnapshot `json:"commission"`
+}
+
+var (
+	ledgerPipelineStatusMu sync.RWMutex
+	ledgerPipelineStatus   LedgerPipelineStatusSnapshot
+)
+
+func updateLedgerPipelineQueueSnapshot(queue string, update func(*ledgerPipelineQueueSnapshot)) {
+	ledgerPipelineStatusMu.Lock()
+	defer ledgerPipelineStatusMu.Unlock()
+
+	var target *ledgerPipelineQueueSnapshot
+	switch queue {
+	case "cost":
+		target = &ledgerPipelineStatus.Cost
+	case "pair":
+		target = &ledgerPipelineStatus.Pair
+	case "commission":
+		target = &ledgerPipelineStatus.Commission
+	default:
+		return
+	}
+	update(target)
+}
+
+func setLedgerPipelineBacklog(queue string, backlog int) {
+	updateLedgerPipelineQueueSnapshot(queue, func(target *ledgerPipelineQueueSnapshot) {
+		target.Backlog = backlog
+	})
+}
+
+func setLedgerPipelineDropped(queue string, dropped int64) {
+	updateLedgerPipelineQueueSnapshot(queue, func(target *ledgerPipelineQueueSnapshot) {
+		target.Dropped = dropped
+	})
+}
+
+func markLedgerPipelineFlush(queue string, items int, took time.Duration) {
+	updateLedgerPipelineQueueSnapshot(queue, func(target *ledgerPipelineQueueSnapshot) {
+		target.LastFlushItems = items
+		target.LastFlushTookMs = took.Milliseconds()
+		target.LastFlushAt = time.Now().Unix()
+	})
+}
+
+func GetLedgerPipelineStatusSnapshot() LedgerPipelineStatusSnapshot {
+	ledgerPipelineStatusMu.RLock()
+	defer ledgerPipelineStatusMu.RUnlock()
+	return ledgerPipelineStatus
+}
 
 // ---- consumption_costs 缓冲 ----
 
@@ -1418,12 +904,16 @@ var (
 func BufferConsumptionCostRecord(rec *ConsumptionCost) {
 	costLedgerLock.Lock()
 	costLedgerBuf = append(costLedgerBuf, rec)
-	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(costLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		costLedgerBuf = costLedgerBuf[over:]
 		costLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(costLedgerBuf)
+	dropped := costLedgerDropped
 	costLedgerLock.Unlock()
+	setLedgerPipelineBacklog("cost", backlog)
+	setLedgerPipelineDropped("cost", dropped)
 }
 
 // requeueCostLedger 刷盘失败时将未入库的记录放回缓冲区头部（保持最旧在前），并执行上限保护。
@@ -1433,12 +923,16 @@ func requeueCostLedger(items []*ConsumptionCost) {
 	}
 	costLedgerLock.Lock()
 	costLedgerBuf = append(items, costLedgerBuf...)
-	if over := len(costLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(costLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		costLedgerBuf = costLedgerBuf[over:]
 		costLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(costLedgerBuf)
+	dropped := costLedgerDropped
 	costLedgerLock.Unlock()
+	setLedgerPipelineBacklog("cost", backlog)
+	setLedgerPipelineDropped("cost", dropped)
 }
 
 func flushConsumptionCostLedger() {
@@ -1450,12 +944,15 @@ func flushConsumptionCostLedger() {
 	costLedgerBuf = nil
 	droppedTotal := costLedgerDropped
 	costLedgerLock.Unlock()
+	setLedgerPipelineBacklog("cost", 0)
+	setLedgerPipelineDropped("cost", droppedTotal)
 
 	if len(buf) == 0 {
 		return
 	}
-	outerBatch := common.LedgerOuterBatchSize
-	innerBatch := common.LedgerInnerBatchSize
+	cfg := operation_setting.GetLedgerPipelineSetting()
+	outerBatch := cfg.GetOuterBatchSize()
+	innerBatch := cfg.GetInnerBatchSize()
 	start := time.Now()
 	// 分批入库，ON CONFLICT DO NOTHING 保证幂等
 	for i := 0; i < len(buf); i += outerBatch {
@@ -1464,13 +961,16 @@ func flushConsumptionCostLedger() {
 			end = len(buf)
 		}
 		batch := buf[i:end]
-		if err := DB.Select(
+		db, cancel := flushDBWithTimeout()
+		err := db.Select(
 			"LogId", "UserId", "ChannelId", "GroupName", "ModelName",
 			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
 		).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "log_id"}},
 			DoNothing: true,
-		}).CreateInBatches(batch, innerBatch).Error; err != nil {
+		}).CreateInBatches(batch, innerBatch).Error
+		cancel()
+		if err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("consumption_cost_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
@@ -1478,8 +978,16 @@ func flushConsumptionCostLedger() {
 			costLedgerFlushState.onFailure(time.Now())
 			return
 		}
+		// 入库成功后再聚合平台日统计（CreateInBatches 默认整批包在单事务里，失败已整体
+		// 回滚，故这里只会聚合确实落库的记录），与成对路径一致，避免超前计数。
+		for _, rec := range batch {
+			if rec != nil {
+				BufferPlatformDailyStat(rec)
+			}
+		}
 	}
 	costLedgerFlushState.onSuccess()
+	markLedgerPipelineFlush("cost", len(buf), time.Since(start))
 	common.SysLog(fmt.Sprintf("flush_business_stats: consumption_costs ledger items=%d took=%dms dropped_total=%d",
 		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 }
@@ -1490,12 +998,16 @@ func bufferCostAndCommissionLedger(cost *ConsumptionCost, log *EmployeeCommissio
 		Cost:       cost,
 		Commission: log,
 	})
-	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(costCommissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
 		pairLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(costCommissionLedgerBuf)
+	dropped := pairLedgerDropped
 	costCommissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("pair", backlog)
+	setLedgerPipelineDropped("pair", dropped)
 }
 
 // requeuePairLedger 刷盘失败时将未入库的成对记录放回缓冲区头部，并执行上限保护。
@@ -1505,45 +1017,45 @@ func requeuePairLedger(items []*costCommissionLedgerPair) {
 	}
 	costCommissionLedgerLock.Lock()
 	costCommissionLedgerBuf = append(items, costCommissionLedgerBuf...)
-	if over := len(costCommissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(costCommissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
 		pairLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(costCommissionLedgerBuf)
+	dropped := pairLedgerDropped
 	costCommissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("pair", backlog)
+	setLedgerPipelineDropped("pair", dropped)
 }
 
-type pairedFlushResult struct {
-	HadItems bool
-	Failed   bool
-}
-
-func flushCostAndCommissionLedger() pairedFlushResult {
+func flushCostAndCommissionLedger() {
 	if !pairLedgerFlushState.canFlush(time.Now()) {
-		// 退避期内不刷盘；若仍有积压，须向调用方报告 Failed，
-		// 阻止日统计/员工汇总超前于明细台账（与刷盘失败同语义）。
-		costCommissionLedgerLock.Lock()
-		pending := len(costCommissionLedgerBuf) > 0
-		costCommissionLedgerLock.Unlock()
-		return pairedFlushResult{HadItems: pending, Failed: pending}
+		return
 	}
+	pairCfg := operation_setting.GetLedgerPipelineSetting()
+	pairedMax := pairCfg.GetPairedFlushMaxPerCycle()
 	costCommissionLedgerLock.Lock()
 	buf := costCommissionLedgerBuf
-	if len(buf) > pairedLedgerFlushMaxPerCycle {
-		costCommissionLedgerBuf = buf[pairedLedgerFlushMaxPerCycle:]
-		buf = buf[:pairedLedgerFlushMaxPerCycle]
+	if !pairCfg.FullDrain && len(buf) > pairedMax {
+		costCommissionLedgerBuf = buf[pairedMax:]
+		buf = buf[:pairedMax]
 	} else {
 		costCommissionLedgerBuf = nil
 	}
+	remainingBacklog := len(costCommissionLedgerBuf)
 	droppedTotal := pairLedgerDropped
 	costCommissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("pair", remainingBacklog)
+	setLedgerPipelineDropped("pair", droppedTotal)
 
 	if len(buf) == 0 {
-		return pairedFlushResult{}
+		return
 	}
-	outerBatch := common.LedgerOuterBatchSize
-	innerBatch := common.LedgerInnerBatchSize
+	outerBatch := pairCfg.GetOuterBatchSize()
+	innerBatch := pairCfg.GetInnerBatchSize()
 	start := time.Now()
+	aggregated := 0
 	for i := 0; i < len(buf); i += outerBatch {
 		end := i + outerBatch
 		if end > len(buf) {
@@ -1551,12 +1063,15 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 		}
 		pairs := buf[i:end]
 		costBatch := make([]*ConsumptionCost, 0, len(pairs))
-		commissionBatch := make([]*EmployeeCommissionLog, 0, len(pairs))
+		commBatch := make([]*EmployeeCommissionLog, 0, len(pairs))
 		for _, pair := range pairs {
 			costBatch = append(costBatch, pair.Cost)
-			commissionBatch = append(commissionBatch, pair.Commission)
+			commBatch = append(commBatch, pair.Commission)
 		}
-		if err := DB.Transaction(func(tx *gorm.DB) error {
+		// cost 与 commission 均批量入库；行幂等由 ON CONFLICT(log_id) DO NOTHING 兜底，
+		// 重复行不会落库，重试重复入库也无害。
+		db, cancel := flushDBWithTimeout()
+		err := db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Select(
 				"LogId", "UserId", "ChannelId", "GroupName", "ModelName",
 				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
@@ -1566,26 +1081,83 @@ func flushCostAndCommissionLedger() pairedFlushResult {
 			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
 				return err
 			}
-			return tx.Select(
+			if err := tx.Select(
 				"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
 				"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
 				"CostRatio", "GroupRatio", "CreatedAt",
 			).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "log_id"}},
 				DoNothing: true,
-			}).CreateInBatches(commissionBatch, innerBatch).Error
-		}); err != nil {
+			}).CreateInBatches(commBatch, innerBatch).Error; err != nil {
+				return err
+			}
+			return nil
+		})
+		cancel()
+		if err != nil {
 			common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("cost_commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			requeuePairLedger(buf[i:])
 			pairLedgerFlushState.onFailure(time.Now())
-			return pairedFlushResult{HadItems: true, Failed: true}
+			return
+		}
+		// 缓冲区内的记录已在入队前经过权威去重（单实例内存 / 多实例 Redis），
+		// 同一 log_id 全局只会被一个进程入队一次，故此处对本批全部聚合即可，无需再判重。
+		// 入库失败时上面已 requeue + return，不会执行到这里，故聚合只发生在成功提交之后。
+		for _, pair := range pairs {
+			if pair.Cost != nil {
+				BufferPlatformDailyStat(pair.Cost)
+			}
+			if pair.Commission != nil {
+				BufferCommissionDailyStat(pair.Commission)
+				if pair.Commission.EmployeeUserId > 0 {
+					BufferCommissionAndProfit(pair.Commission.EmployeeUserId, pair.Commission.CommissionQuota, pair.Commission.ProfitQuota)
+				}
+			}
+			aggregated++
 		}
 	}
 	pairLedgerFlushState.onSuccess()
-	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d took=%dms dropped_total=%d",
-		len(buf), time.Since(start).Milliseconds(), droppedTotal))
-	return pairedFlushResult{HadItems: true, Failed: false}
+	markLedgerPipelineFlush("pair", len(buf), time.Since(start))
+	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d aggregated=%d took=%dms dropped_total=%d",
+		len(buf), aggregated, time.Since(start).Milliseconds(), droppedTotal))
+}
+
+// ---- 入队前权威去重（log_id 维度）----
+
+func ledgerDedupCommissionKey(logId int) string {
+	return fmt.Sprintf("ledger:dedup:commission:%d", logId)
+}
+
+// dedupCommissionLogId 入队前权威去重，返回 true 表示首次出现（应入队 + 后续聚合）。
+// 默认进程内去重（单实例足够权威）；DedupUseRedis=true 时用 Redis SETNX 跨实例去重，
+// 使多实例下同一 log_id 全局只被一个进程放行。Redis 不可用/出错时降级为进程内去重
+// （不丢数据；Redis 故障期间多实例可能短暂重复累加，已在设计中接受）。
+func dedupCommissionLogId(logId int) bool {
+	if operation_setting.GetLedgerPipelineSetting().DedupUseRedis {
+		if first, ok := redisDedupCommissionLogId(logId); ok {
+			return first
+		}
+		common.SysError("dedupCommissionLogId: redis dedup failed, fallback to in-memory")
+		ReportBusinessStatsFailure("cost_commission_dedup_redis", "redis dedup failed, fell back to memory", nil)
+	}
+	return memDedupCommissionLogId(logId)
+}
+
+// redisDedupCommissionLogId 用 SETNX 做跨实例去重：键新建返回 first=true（首次）。
+// ok=false 表示 Redis 不可用/出错，调用方据此降级到进程内去重。
+func redisDedupCommissionLogId(logId int) (first bool, ok bool) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return false, false
+	}
+	ttl := time.Duration(operation_setting.GetLedgerPipelineSetting().GetDedupRedisTTLSec()) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	created, err := common.RDB.SetNX(ctx, ledgerDedupCommissionKey(logId), "1", ttl).Result()
+	if err != nil {
+		return false, false
+	}
+	return created, true
 }
 
 // ---- employee_commission_logs 缓冲 ----
@@ -1594,7 +1166,7 @@ var (
 	commissionLedgerBuf     []*EmployeeCommissionLog
 	commissionLedgerLock    sync.Mutex
 	commissionLedgerDropped int64 // 累计因缓冲超限丢弃的条数，guarded by commissionLedgerLock
-	// 内存去重集合（无 Redis 或 Redis 故障降级时使用），存 log_id
+	// 内存去重集合，存 log_id
 	commissionLogIdSet     = make(map[int]struct{})
 	commissionLogIdSetLock sync.Mutex
 )
@@ -1608,7 +1180,7 @@ func memDedupCommissionLogId(logId int) bool {
 	if _, exists := commissionLogIdSet[logId]; exists {
 		return false
 	}
-	if len(commissionLogIdSet) >= dedupMemSetMaxEntries {
+	if len(commissionLogIdSet) >= operation_setting.GetLedgerPipelineSetting().GetDedupMemMaxEntries() {
 		commissionLogIdSet = make(map[int]struct{})
 	}
 	commissionLogIdSet[logId] = struct{}{}
@@ -1619,12 +1191,16 @@ func memDedupCommissionLogId(logId int) bool {
 func appendCommissionLedger(log *EmployeeCommissionLog) {
 	commissionLedgerLock.Lock()
 	commissionLedgerBuf = append(commissionLedgerBuf, log)
-	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(commissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		commissionLedgerBuf = commissionLedgerBuf[over:]
 		commissionLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(commissionLedgerBuf)
+	dropped := commissionLedgerDropped
 	commissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("commission", backlog)
+	setLedgerPipelineDropped("commission", dropped)
 }
 
 // requeueCommissionLedger 刷盘失败时将未入库的记录放回缓冲区头部，并执行上限保护。
@@ -1634,55 +1210,39 @@ func requeueCommissionLedger(items []*EmployeeCommissionLog) {
 	}
 	commissionLedgerLock.Lock()
 	commissionLedgerBuf = append(items, commissionLedgerBuf...)
-	if over := len(commissionLedgerBuf) - ledgerBufMaxEntries; over > 0 {
+	if over := len(commissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
 		commissionLedgerBuf = commissionLedgerBuf[over:]
 		commissionLedgerDropped += int64(over)
 		ReportBusinessStatsFailure("commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
 	}
+	backlog := len(commissionLedgerBuf)
+	dropped := commissionLedgerDropped
 	commissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("commission", backlog)
+	setLedgerPipelineDropped("commission", dropped)
 }
 
 // CheckAndBufferCommissionLog 检查 log_id 是否重复，若不重复则推入缓冲区。
 // 返回 inserted=true 表示首次写入（调用方据此执行后续提成结算）。
 // log_id 为 nil 时视为无幂等键，始终 inserted=true。
 func CheckAndBufferCommissionLog(log *EmployeeCommissionLog) (inserted bool) {
-	// 无 log_id 的记录没有幂等约束，直接入缓冲
 	if log.LogId == nil || *log.LogId <= 0 {
 		log.LogId = nil
 		appendCommissionLedger(log)
 		return true
 	}
-	logId := *log.LogId
-
-	// 去重检查
-	if common.RedisEnabled {
-		key := fmt.Sprintf("%s%d", commissionLogDedupPrefix, logId)
-		ctx := context.Background()
-		added, err := common.RDB.SetNX(ctx, key, "1", commissionLogDedupTTL).Result()
-		if err != nil {
-			common.SysError("CheckAndBufferCommissionLog: redis SETNX error: " + err.Error())
-			// Redis 故障降级：进程内去重 + 照常入缓冲。
-			// 不再逐笔直插 DB——故障期间高并发直插会放大 DB 连接占用；
-			// 幂等性由刷盘侧 ON CONFLICT(log_id) DO NOTHING 兜底。
-			if !memDedupCommissionLogId(logId) {
-				return false
-			}
-			appendCommissionLedger(log)
-			return true
-		}
-		if !added {
-			return false // 已存在，重复
-		}
-	} else {
-		if !memDedupCommissionLogId(logId) {
-			return false
-		}
+	if !memDedupCommissionLogId(*log.LogId) {
+		return false
 	}
-
 	appendCommissionLedger(log)
 	return true
 }
 
+// CheckAndBufferCostAndCommission 入队前权威去重后将成对记录推入缓冲，由后台刷盘批量入库。
+// 去重权威性：单实例靠进程内集合，多实例靠 Redis SETNX（DedupUseRedis 开关）。去重权威后，
+// 缓冲区里每个 log_id 全局只入队一次，刷盘可直接批量入库 + 全部聚合，无需逐条 RowsAffected 判重。
+// 结算均经 gopool/go func 异步调用，故去重（含 Redis 调用）不在 relay 主协程上（Rule 0）。
+// 返回 inserted=true 表示首次入队；false 表示重复、未入队。log_id 为 nil 时无幂等键，恒入队。
 func CheckAndBufferCostAndCommission(cost *ConsumptionCost, log *EmployeeCommissionLog) (inserted bool) {
 	if log.LogId == nil || *log.LogId <= 0 {
 		log.LogId = nil
@@ -1696,29 +1256,9 @@ func CheckAndBufferCostAndCommission(cost *ConsumptionCost, log *EmployeeCommiss
 	if cost.LogId == nil || *cost.LogId != logId {
 		cost.LogId = common.GetPointer(logId)
 	}
-
-	if common.RedisEnabled {
-		key := fmt.Sprintf("%s%d", commissionLogDedupPrefix, logId)
-		ctx := context.Background()
-		added, err := common.RDB.SetNX(ctx, key, "1", commissionLogDedupTTL).Result()
-		if err != nil {
-			common.SysError("CheckAndBufferCostAndCommission: redis SETNX error: " + err.Error())
-			// Redis 故障降级：进程内去重 + 照常入缓冲（见 CheckAndBufferCommissionLog 同款说明）。
-			if !memDedupCommissionLogId(logId) {
-				return false
-			}
-			bufferCostAndCommissionLedger(cost, log)
-			return true
-		}
-		if !added {
-			return false
-		}
-	} else {
-		if !memDedupCommissionLogId(logId) {
-			return false
-		}
+	if !dedupCommissionLogId(logId) {
+		return false // 重复，不入队（聚合也不会发生）
 	}
-
 	bufferCostAndCommissionLedger(cost, log)
 	return true
 }
@@ -1732,12 +1272,15 @@ func flushCommissionLogLedger() {
 	commissionLedgerBuf = nil
 	droppedTotal := commissionLedgerDropped
 	commissionLedgerLock.Unlock()
+	setLedgerPipelineBacklog("commission", 0)
+	setLedgerPipelineDropped("commission", droppedTotal)
 
 	if len(buf) == 0 {
 		return
 	}
-	outerBatch := common.LedgerOuterBatchSize
-	innerBatch := common.LedgerInnerBatchSize
+	commFlushCfg := operation_setting.GetLedgerPipelineSetting()
+	outerBatch := commFlushCfg.GetOuterBatchSize()
+	innerBatch := commFlushCfg.GetInnerBatchSize()
 	start := time.Now()
 	for i := 0; i < len(buf); i += outerBatch {
 		end := i + outerBatch
@@ -1745,14 +1288,17 @@ func flushCommissionLogLedger() {
 			end = len(buf)
 		}
 		batch := buf[i:end]
-		if err := DB.Select(
+		db, cancel := flushDBWithTimeout()
+		err := db.Select(
 			"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
 			"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
 			"CostRatio", "GroupRatio", "CreatedAt",
 		).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "log_id"}},
 			DoNothing: true,
-		}).CreateInBatches(batch, innerBatch).Error; err != nil {
+		}).CreateInBatches(batch, innerBatch).Error
+		cancel()
+		if err != nil {
 			common.SysError(fmt.Sprintf("flushCommissionLogLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
 			ReportBusinessStatsFailure("commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
 			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
@@ -1762,6 +1308,7 @@ func flushCommissionLogLedger() {
 		}
 	}
 	commissionLedgerFlushState.onSuccess()
+	markLedgerPipelineFlush("commission", len(buf), time.Since(start))
 	common.SysLog(fmt.Sprintf("flush_business_stats: commission_logs ledger items=%d took=%dms dropped_total=%d",
 		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 }
@@ -1769,13 +1316,9 @@ func flushCommissionLogLedger() {
 // ============================================================================
 // 员工汇总缓冲层（user_extensions + tier 升级）
 //
-// AddCommissionQuota / AddProfitStats / TryAutoUpgradeTier 不再即时写 DB，
-// 而是按 userId 累加增量到 Redis Hash / 内存 map，定时批量刷入。
+// 按 userId 累加提成/利润增量到进程内 map，定时批量写入 user_extensions，
+// 避免高并发下每笔请求竞争同一行记录导致锁等待。
 // ============================================================================
-
-const (
-	employeeExtBufferPrefix = "biz_buf:emp_ext:" // + {userId}
-)
 
 // employeeExtDelta 单个员工在一个刷盘周期内的累计增量。
 type employeeExtDelta struct {
@@ -1789,32 +1332,13 @@ var (
 	memEmployeeExtLock sync.Mutex
 )
 
-// BufferCommissionAndProfit 将提成和利润增量写入缓冲区。
+// BufferCommissionAndProfit 将提成和利润增量写入进程内缓冲区。
 // 替代原来的 AddCommissionQuota + AddProfitStats 即时 DB 操作。
 func BufferCommissionAndProfit(userId int, commissionDelta, profitDelta int64) {
 	if commissionDelta == 0 && profitDelta == 0 {
 		return
 	}
-	if common.RedisEnabled {
-		key := fmt.Sprintf("%s%d", employeeExtBufferPrefix, userId)
-		ctx := context.Background()
-		pipe := common.RDB.Pipeline()
-		if commissionDelta != 0 {
-			pipe.HIncrBy(ctx, key, "commission_delta", commissionDelta)
-		}
-		if profitDelta != 0 {
-			pipe.HIncrBy(ctx, key, "profit_delta", profitDelta)
-		}
-		pipe.Expire(ctx, key, statBufferKeyTTL)
-		if _, err := pipe.Exec(ctx); err != nil {
-			common.SysError("BufferCommissionAndProfit: redis pipeline error: " + err.Error())
-			ReportBusinessStatsFailure("employee_ext_redis_buffer", err.Error(), map[string]any{"user_id": userId, "commission_delta": commissionDelta, "profit_delta": profitDelta})
-			// Redis 故障降级到内存
-			bufferEmployeeExtMem(userId, commissionDelta, profitDelta)
-		}
-	} else {
-		bufferEmployeeExtMem(userId, commissionDelta, profitDelta)
-	}
+	bufferEmployeeExtMem(userId, commissionDelta, profitDelta)
 }
 
 func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
@@ -1836,7 +1360,6 @@ func bufferEmployeeExtMemWithRetry(userId int, commissionDelta, profitDelta int6
 	}
 }
 
-// flushEmployeeExtBuffers 批量刷入 user_extensions 并检查等级升级。
 func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
 	if d == nil || (d.CommissionDelta == 0 && d.ProfitDelta == 0) {
 		return
@@ -1849,52 +1372,14 @@ func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
 		})
 		return
 	}
-	if common.RedisEnabled {
-		key := fmt.Sprintf("%s%d", employeeExtBufferPrefix, userId)
-		ctx := context.Background()
-		pipe := common.RDB.Pipeline()
-		if d.CommissionDelta != 0 {
-			pipe.HIncrBy(ctx, key, "commission_delta", d.CommissionDelta)
-		}
-		if d.ProfitDelta != 0 {
-			pipe.HIncrBy(ctx, key, "profit_delta", d.ProfitDelta)
-		}
-		pipe.HSet(ctx, key, "retry_count", d.RetryCount)
-		pipe.Expire(ctx, key, statBufferKeyTTL)
-		if _, err := pipe.Exec(ctx); err != nil {
-			common.SysError("requeueEmployeeExtDelta: redis pipeline error: " + err.Error())
-			ReportBusinessStatsFailure("employee_ext_redis_requeue", err.Error(), map[string]any{"user_id": userId, "delta": d})
-			bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
-		}
-		return
-	}
 	bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
 }
 
 func flushEmployeeExtBuffers() {
-	var items map[int]*employeeExtDelta
-
-	if common.RedisEnabled {
-		items = drainEmployeeExtFromRedis()
-		// 合并内存中的降级数据（Redis 故障期间可能有）
-		memItems := drainEmployeeExtFromMem()
-		for uid, d := range memItems {
-			if existing, ok := items[uid]; ok {
-				existing.CommissionDelta += d.CommissionDelta
-				existing.ProfitDelta += d.ProfitDelta
-			} else {
-				items[uid] = d
-			}
-		}
-	} else {
-		items = drainEmployeeExtFromMem()
-	}
-
+	items := drainEmployeeExtFromMem()
 	if len(items) == 0 {
 		return
 	}
-
-	// 批量确保 user_extensions 记录存在
 	userIds := make([]int, 0, len(items))
 	for uid := range items {
 		userIds = append(userIds, uid)
@@ -1905,14 +1390,11 @@ func flushEmployeeExtBuffers() {
 		}
 		return
 	}
-
-	// 逐个 UPDATE + 等级升级检查
 	for uid, d := range items {
 		if !applyEmployeeExtDelta(uid, d) {
 			requeueEmployeeExtDelta(uid, d)
 		}
 	}
-
 	common.SysLog(fmt.Sprintf("flush_business_stats: employee_ext items=%d", len(items)))
 }
 
@@ -1922,50 +1404,6 @@ func drainEmployeeExtFromMem() map[int]*employeeExtDelta {
 	memEmployeeExtBuf = make(map[int]*employeeExtDelta)
 	memEmployeeExtLock.Unlock()
 	return buf
-}
-
-func drainEmployeeExtFromRedis() map[int]*employeeExtDelta {
-	ctx := context.Background()
-	pattern := employeeExtBufferPrefix + "*"
-	items := make(map[int]*employeeExtDelta)
-	var cursor uint64
-	for {
-		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 200).Result()
-		if err != nil {
-			common.SysError("drainEmployeeExtFromRedis: scan error: " + err.Error())
-			break
-		}
-		for _, key := range keys {
-			uidStr := strings.TrimPrefix(key, employeeExtBufferPrefix)
-			uid, _ := strconv.Atoi(uidStr)
-			if uid == 0 {
-				common.RDB.Del(ctx, key)
-				continue
-			}
-			vals, err := common.RDB.HGetAll(ctx, key).Result()
-			if err != nil {
-				continue
-			}
-			commDelta, _ := strconv.ParseInt(vals["commission_delta"], 10, 64)
-			profitDelta, _ := strconv.ParseInt(vals["profit_delta"], 10, 64)
-			retryCount, _ := strconv.Atoi(vals["retry_count"])
-			if commDelta == 0 && profitDelta == 0 {
-				common.RDB.Del(ctx, key)
-				continue
-			}
-			items[uid] = &employeeExtDelta{
-				CommissionDelta: commDelta,
-				ProfitDelta:     profitDelta,
-				RetryCount:      retryCount,
-			}
-			common.RDB.Del(ctx, key)
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
-		}
-	}
-	return items
 }
 
 // ensureUserExtensionsBatch 批量确保 user_extensions 记录存在。
@@ -2030,46 +1468,41 @@ func FlushBusinessStatBuffers() {
 	businessStatsFlushMu.Lock()
 	defer businessStatsFlushMu.Unlock()
 
-	// 1. 先刷明细台账（顺序保证一致性，但三类台账互不阻塞）
-	paired := flushCostAndCommissionLedger()
+	// 1. 先刷明细台账
+	flushCostAndCommissionLedger()
 	flushConsumptionCostLedger()
 	flushCommissionLogLedger()
-	// 如果本轮有成对台账但写入失败，跳过聚合刷盘，避免日统计/员工汇总超前于明细
-	if paired.HadItems && paired.Failed {
-		return
-	}
-	// 2. 再刷日统计增量
-	if common.RedisEnabled {
-		flushPlatformStatsFromRedis()
-		flushCommissionStatsFromRedis()
-		flushCustomerCommissionStatsFromRedis()
-		flushCommissionResetPeriodStatsFromRedis()
-		flushCommissionResetPeriodDailyStatsFromRedis()
-	} else {
-		flushPlatformStatsFromMem()
-		flushCommissionStatsFromMem()
-		flushCustomerCommissionStatsFromMem()
-		flushCommissionResetPeriodStatsFromMem()
-		flushCommissionResetPeriodDailyStatsFromMem()
-	}
+	// 2. 刷日统计增量
+	// 聚合 delta 仅在 flushCostAndCommissionLedger 确认 RowsAffected=1 后才入 buffer，
+	// 因此聚合永远不会超前于明细，无需在 paired 失败时阻断聚合刷盘。
+	flushPlatformStatsFromMem()
+	flushCommissionStatsFromMem()
+	flushCustomerCommissionStatsFromMem()
+	flushCommissionResetPeriodStatsFromMem()
+	flushCommissionResetPeriodDailyStatsFromMem()
 	// 3. 刷员工汇总（user_extensions + 等级升级）
 	flushEmployeeExtBuffers()
 }
 
 // StartBusinessStatsFlushLoop 启动后台定时刷盘循环。在 main.go 中调用。
-// 从环境变量 BUSINESS_STATS_FLUSH_INTERVAL 读取刷盘间隔（秒）；
+// 刷盘间隔从 LedgerPipelineSetting 动态读取（每次 sleep 前重新取值，支持不重启调整）；
 // 若该值 <= 0 则回退到 DefaultBusinessStatsFlushInterval（8 秒）。
 func StartBusinessStatsFlushLoop() {
-	interval := common.BusinessStatsFlushInterval
-	if interval <= 0 {
-		interval = DefaultBusinessStatsFlushInterval
+	cfg := operation_setting.GetLedgerPipelineSetting()
+	initInterval := cfg.FlushIntervalSec
+	if initInterval <= 0 {
+		initInterval = DefaultBusinessStatsFlushInterval
 	}
 	common.SysLog(fmt.Sprintf("business stats flush interval: %d seconds, ledger batch: outer=%d inner=%d",
-		interval, common.LedgerOuterBatchSize, common.LedgerInnerBatchSize))
+		initInterval, cfg.GetOuterBatchSize(), cfg.GetInnerBatchSize()))
 	go func() {
-		// Drain any leftover Redis/mem data from before restart
+		// Drain any leftover in-memory data from before restart
 		FlushBusinessStatBuffers()
 		for {
+			interval := operation_setting.GetLedgerPipelineSetting().FlushIntervalSec
+			if interval <= 0 {
+				interval = DefaultBusinessStatsFlushInterval
+			}
 			time.Sleep(time.Duration(interval) * time.Second)
 			FlushBusinessStatBuffers()
 		}

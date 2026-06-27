@@ -197,17 +197,14 @@ func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quo
 		GroupRatio:      costRec.GroupRatio,
 		CreatedAt:       createdAt,
 	}
-	inserted, err := model.CreateConsumptionCostAndCommissionLog(costRec, commLog)
+	// BufferCommissionAndProfit 不在此处调用：改为在 flushCostAndCommissionLedger 刷盘时
+	// 根据 DB RowsAffected 判断是否真正写入，确保多实例场景下不重复累计员工汇总。
+	_, err = model.CreateConsumptionCostAndCommissionLog(costRec, commLog)
 	if err != nil {
 		common.SysError("employee_commission: failed to create cost and commission logs: " + err.Error())
 		guard.Fail("cost_commission_create", err, businessStatsCostCommissionFallbackPayload(costRec, commLog, commissionQuota, profitQuota))
 		return
 	}
-	if !inserted {
-		guard.Success()
-		return
-	}
-	model.BufferCommissionAndProfit(emp.UserId, commissionQuota, profitQuota)
 	guard.Success()
 }
 

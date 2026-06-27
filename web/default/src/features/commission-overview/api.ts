@@ -284,3 +284,58 @@ export async function getConsumptionCostLedgerStats(
   )
   return res.data
 }
+
+// ─── Fallback backfill ────────────────────────────────────────────────────────
+
+export interface FallbackHint {
+  has_file: boolean
+  can_backfill: boolean
+  date?: string
+  file_name?: string
+  file_size?: number
+  updated_at?: number
+}
+
+export interface FallbackBackfillResult {
+  running: boolean
+  success?: boolean
+  date?: string
+  started_at?: number
+  finished_at?: number
+  total_lines?: number
+  success_count?: number
+  discard_count?: number
+  file_deleted?: boolean
+  last_error?: string
+}
+
+export interface FallbackBackfillResultResponse {
+  success: boolean
+  message?: string
+  data?: FallbackBackfillResult
+}
+
+export interface FallbackBackfillTriggerResponse {
+  success: boolean
+  message?: string
+  data?: { date: string }
+}
+
+export async function triggerFallbackBackfill(
+  date: string
+): Promise<FallbackBackfillTriggerResponse> {
+  const res = await api.post(
+    '/api/admin/employee/consumption-cost-ledger/fallback/backfill',
+    { date },
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
+
+export async function getFallbackBackfillResult(): Promise<FallbackBackfillResultResponse> {
+  const res = await api.get(
+    '/api/admin/employee/consumption-cost-ledger/fallback/backfill-result',
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
