@@ -54,6 +54,45 @@ interface UseBillingHistoryOptions {
   initialPageSize?: number
 }
 
+function normalizeFilters(filters: BillingHistoryFilters): BillingHistoryFilters {
+  const keyword = filters.keyword?.trim()
+  const userId =
+    typeof filters.userId === 'number' && filters.userId > 0
+      ? filters.userId
+      : undefined
+
+  return {
+    keyword: keyword || undefined,
+    startTime: filters.startTime || undefined,
+    endTime: filters.endTime || undefined,
+    status: filters.status || undefined,
+    paymentMethod: filters.paymentMethod || undefined,
+    userId,
+  }
+}
+
+function hasFilters(filters: BillingHistoryFilters): boolean {
+  const normalized = normalizeFilters(filters)
+  return Boolean(
+    normalized.keyword ||
+      normalized.startTime ||
+      normalized.endTime ||
+      normalized.status ||
+      normalized.paymentMethod ||
+      normalized.userId
+  )
+}
+
+function isSameFilters(
+  left: BillingHistoryFilters,
+  right: BillingHistoryFilters
+): boolean {
+  return (
+    JSON.stringify(normalizeFilters(left)) ===
+    JSON.stringify(normalizeFilters(right))
+  )
+}
+
 export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const { initialPage = 1, initialPageSize = 10 } = options
   const isAdmin = useIsAdmin()
@@ -63,11 +102,16 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [page, setPage] = useState(initialPage)
   const [pageSize, setPageSize] = useState(initialPageSize)
   const [filters, setFilters] = useState<BillingHistoryFilters>(EMPTY_FILTERS)
+  const [draftFilters, setDraftFilters] =
+    useState<BillingHistoryFilters>(EMPTY_FILTERS)
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [exporting, setExporting] = useState(false)
 
-  const keyword = filters.keyword ?? ''
+  const keyword = draftFilters.keyword ?? ''
+  const hasPendingFilterChanges = !isSameFilters(draftFilters, filters)
+  const hasActiveFilters = hasFilters(draftFilters)
+  const hasAppliedFilters = hasFilters(filters)
 
   const fetchHistoryPage = useCallback(
     async (
@@ -120,26 +164,24 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   }, [fetchHistoryPage, filters, page, pageSize])
 
   /**
-   * Export billing history as CSV.
-   * @param useFilters true → export the current filtered view (incl. time range);
-   *                   false → export everything (ignore filters / "export all").
+   * Export the currently applied billing-history view as CSV.
    */
   const handleExport = useCallback(
-    async (useFilters: boolean) => {
+    async () => {
       if (exporting) return
+      if (total <= 0) return
       setExporting(true)
       try {
-        const exportFilters = useFilters ? filters : EMPTY_FILTERS
         const result = isAdmin
-          ? await exportAllBillingHistory(exportFilters)
-          : await exportUserBillingHistory(exportFilters)
+          ? await exportAllBillingHistory(filters)
+          : await exportUserBillingHistory(filters)
 
         triggerBlobDownload(result.blob, result.filename)
 
         if (result.truncated) {
           toast.warning(
             i18next.t(
-              'Export reached the {{count}}-row limit. Some records were not exported — narrow the time range to export the rest.',
+              'Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.',
               { count: result.maxRows ?? 0 }
             )
           )
@@ -161,7 +203,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
         setExporting(false)
       }
     },
-    [exporting, filters, isAdmin]
+    [exporting, filters, isAdmin, total]
   )
 
   /**
@@ -217,25 +259,34 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
    * Search by keyword
    */
   const handleSearch = useCallback((newKeyword: string) => {
-    setFilters((prev) => ({ ...prev, keyword: newKeyword }))
-    setPage(1) // Reset to first page when searching
+    setDraftFilters((prev) => ({ ...prev, keyword: newKeyword }))
   }, [])
 
   /**
-   * Update one or more filter fields. Resets to the first page.
+   * Update one or more draft filter fields without fetching immediately.
    */
   const handleFilterChange = useCallback(
     (patch: Partial<BillingHistoryFilters>) => {
-        setFilters((prev) => ({ ...prev, ...patch }))
-      setPage(1)
+      setDraftFilters((prev) => ({ ...prev, ...patch }))
     },
     []
   )
 
   /**
+   * Apply the current draft filters and fetch the first page.
+   */
+  const handleApplyFilters = useCallback(() => {
+    const normalized = normalizeFilters(draftFilters)
+    setFilters(normalized)
+    setDraftFilters(normalized)
+    setPage(1)
+  }, [draftFilters])
+
+  /**
    * Clear all filters.
    */
   const handleResetFilters = useCallback(() => {
+    setDraftFilters(EMPTY_FILTERS)
     setFilters(EMPTY_FILTERS)
     setPage(1)
   }, [])
@@ -251,15 +302,20 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     page,
     pageSize,
     keyword,
-    filters,
+    filters: draftFilters,
+    appliedFilters: filters,
     loading,
     completing,
     exporting,
     isAdmin,
+    hasActiveFilters,
+    hasAppliedFilters,
+    hasPendingFilterChanges,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleFilterChange,
+    handleApplyFilters,
     handleResetFilters,
     handleExport,
     handleCompleteOrder,

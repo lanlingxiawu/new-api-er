@@ -284,7 +284,7 @@ export default function SettingsLedgerPipeline(props) {
       `结算队列每轮外层循环处理的记录数，内层批次应 ≤ 此值。`,
     'ledger_pipeline_setting.inner_batch_size': innerBatch > outerBatch
       ? `⚠ 须 ≤ 结算队列批次（${outerBatch}）。`
-      : `每条 SQL INSERT 写入的行数，也是事务失败的回滚粒度。推荐约批次大小 ÷ 4 = ${Math.max(1, Math.floor(outerBatch / 4))} 行。`,
+      : `批量写入的行数，也是事务失败的回滚粒度。推荐约批次大小 ÷ 4 = ${Math.max(1, Math.floor(outerBatch / 4))} 行。`,
     // settlement_flush_max_per_cycle 不需要是 outerBatch 整数倍：
     // 刷盘代码先取 buf[:pairedMax]，再以 outerBatch 步长循环，末批直接处理剩余记录，无害。
     'ledger_pipeline_setting.settlement_flush_max_per_cycle': settlementMax % outerBatch !== 0

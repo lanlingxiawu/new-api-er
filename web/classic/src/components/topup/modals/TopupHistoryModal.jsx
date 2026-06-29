@@ -29,7 +29,6 @@ import {
   Tag,
   Select,
   DatePicker,
-  Dropdown,
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
@@ -37,12 +36,16 @@ import {
 } from '@douyinfe/semi-illustrations';
 import { Coins } from 'lucide-react';
 import { IconSearch, IconDownload, IconRefresh } from '@douyinfe/semi-icons';
-import { API, renderQuota, timestamp2string } from '../../../helpers';
+import {
+  API,
+  createCardProPagination,
+  renderQuota,
+  timestamp2string,
+} from '../../../helpers';
 import { isAdmin } from '../../../helpers/utils';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
 const { Text } = Typography;
 
-// 状态映射配置
 const STATUS_CONFIG = {
   success: { type: 'success', key: '成功' },
   pending: { type: 'warning', key: '待支付' },
@@ -50,7 +53,6 @@ const STATUS_CONFIG = {
   expired: { type: 'danger', key: '已过期' },
 };
 
-// 支付方式映射（键为后端存储的 payment_method 原始值，见 model/topup.go）
 const PAYMENT_METHOD_MAP = {
   stripe: 'Stripe',
   creem: 'Creem',
@@ -64,7 +66,6 @@ const PAYMENT_METHOD_MAP = {
   infini: 'Infini',
 };
 
-// 支付方式筛选选项
 const PAYMENT_METHOD_FILTER_OPTIONS = [
   'stripe',
   'creem',
@@ -74,7 +75,6 @@ const PAYMENT_METHOD_FILTER_OPTIONS = [
   'infini',
 ];
 
-// 常见结算币种符号（Infini 多币种）
 const CURRENCY_SYMBOLS = {
   USD: '$',
   CNY: '¥',
@@ -87,7 +87,45 @@ const CURRENCY_SYMBOLS = {
   SGD: 'S$',
 };
 
-const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
+const EMPTY_FILTERS = {
+  keyword: '',
+  startTime: 0,
+  endTime: 0,
+  status: '',
+  paymentMethod: '',
+  userId: '',
+};
+
+function normalizeFilters(filters) {
+  return {
+    keyword: (filters.keyword || '').trim(),
+    startTime: Number(filters.startTime) || 0,
+    endTime: Number(filters.endTime) || 0,
+    status: filters.status || '',
+    paymentMethod: filters.paymentMethod || '',
+    userId: String(filters.userId || '').trim(),
+  };
+}
+
+function hasFilters(filters) {
+  const normalized = normalizeFilters(filters);
+  return Boolean(
+    normalized.keyword ||
+      normalized.startTime ||
+      normalized.endTime ||
+      normalized.status ||
+      normalized.paymentMethod ||
+      normalized.userId
+  );
+}
+
+const TopupHistoryModal = ({
+  visible,
+  onCancel,
+  t,
+  enabledPaymentMethods,
+  userExportEnabled = true,
+}) => {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [topups, setTopups] = useState([]);
@@ -100,23 +138,30 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
   const [status, setStatus] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [userId, setUserId] = useState('');
+  const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
   const isMobile = useIsMobile();
   const userIsAdmin = useMemo(() => isAdmin(), []);
 
-  // 支付方式筛选项：仅显示已开启的支付方式（由父组件传入）；未传入时回退全部。
   const paymentMethodOptions = Array.isArray(enabledPaymentMethods)
     ? enabledPaymentMethods
     : PAYMENT_METHOD_FILTER_OPTIONS;
 
-  // 构造筛选查询参数（列表与导出共用）
-  const buildFilterQuery = () => {
+  // Build query params shared by list loading and export.
+  const buildFilterQuery = (source = appliedFilters) => {
+    const normalized = normalizeFilters(source);
     const params = new URLSearchParams();
-    if (keyword) params.append('keyword', keyword);
-    if (startTime) params.append('start_time', String(startTime));
-    if (endTime) params.append('end_time', String(endTime));
-    if (status) params.append('status', status);
-    if (paymentMethod) params.append('payment_method', paymentMethod);
-    if (userIsAdmin && userId) params.append('user_id', String(userId));
+    if (normalized.keyword) params.append('keyword', normalized.keyword);
+    if (normalized.startTime) {
+      params.append('start_time', String(normalized.startTime));
+    }
+    if (normalized.endTime) params.append('end_time', String(normalized.endTime));
+    if (normalized.status) params.append('status', normalized.status);
+    if (normalized.paymentMethod) {
+      params.append('payment_method', normalized.paymentMethod);
+    }
+    if (userIsAdmin && normalized.userId) {
+      params.append('user_id', String(normalized.userId));
+    }
     return params;
   };
 
@@ -128,7 +173,6 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
     return API.get(`${base}?${params.toString()}`);
   };
 
-  // 偏移分页：跳到任意页只发一次请求，不再从第 1 页顺序补抓游标（避免线性请求风暴）。
   const loadTopups = async (currentPage, currentPageSize) => {
     setLoading(true);
     try {
@@ -152,7 +196,17 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
       loadTopups(page, pageSize);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, page, pageSize, keyword, startTime, endTime, status, paymentMethod, userId]);
+  }, [
+    visible,
+    page,
+    pageSize,
+    appliedFilters.keyword,
+    appliedFilters.startTime,
+    appliedFilters.endTime,
+    appliedFilters.status,
+    appliedFilters.paymentMethod,
+    appliedFilters.userId,
+  ]);
 
   const handlePageChange = (currentPage) => {
     setPage(currentPage);
@@ -165,11 +219,10 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
 
   const handleKeywordChange = (value) => {
     setKeyword(value);
-    setPage(1);
   };
 
   const handleDateRangeChange = (range) => {
-    // Semi dateTimeRange 返回 [Date, Date] 或 null
+    // Semi dateTimeRange returns [Date, Date] or null.
     if (Array.isArray(range) && range.length === 2 && range[0] && range[1]) {
       setStartTime(Math.floor(new Date(range[0]).getTime() / 1000));
       setEndTime(Math.floor(new Date(range[1]).getTime() / 1000));
@@ -177,6 +230,19 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
       setStartTime(0);
       setEndTime(0);
     }
+  };
+
+  const handleApplyFilters = () => {
+    setAppliedFilters(
+      normalizeFilters({
+        keyword,
+        startTime,
+        endTime,
+        status,
+        paymentMethod,
+        userId,
+      }),
+    );
     setPage(1);
   };
 
@@ -187,34 +253,43 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
     setStatus('');
     setPaymentMethod('');
     setUserId('');
+    setAppliedFilters(EMPTY_FILTERS);
     setPage(1);
   };
 
-  const hasActiveFilters =
-    keyword || startTime || endTime || status || paymentMethod || userId;
+  const draftFilters = {
+    keyword,
+    startTime,
+    endTime,
+    status,
+    paymentMethod,
+    userId,
+  };
+  const hasActiveFilters = hasFilters(draftFilters);
+  const hasAppliedFilters = hasFilters(appliedFilters);
+  const hasPendingFilterChanges =
+    JSON.stringify(normalizeFilters(draftFilters)) !==
+    JSON.stringify(normalizeFilters(appliedFilters));
+  const canShowExport = userIsAdmin || userExportEnabled;
+  const canExport = total > 0;
 
-  // CSV 导出。useFilters=true 按当前筛选导出；false 导出全部。
-  const handleExport = async (useFilters) => {
+  const handleExport = async () => {
     if (exporting) return;
+    if (total <= 0) return;
     setExporting(true);
     try {
       const base = userIsAdmin
         ? '/api/user/topup/export'
         : '/api/user/topup/self/export';
-      let url = base;
-      if (useFilters) {
-        const qs = buildFilterQuery().toString();
-        if (qs) url = `${base}?${qs}`;
-      }
+      const qs = buildFilterQuery(appliedFilters).toString();
+      const url = qs ? `${base}?${qs}` : base;
 
-      // skipErrorHandler：自行处理错误（含 429 频控），避免全局拦截器再弹一次通用提示。
       const res = await API.get(url, {
         responseType: 'blob',
         skipErrorHandler: true,
       });
       const blob = res.data;
 
-      // 后端以 JSON 返回业务错误（而非 CSV 流）时，解析并提示
       const contentType = (res.headers?.['content-type'] || '').toString();
       if (contentType.includes('application/json')) {
         const text = await blob.text();
@@ -224,11 +299,10 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
         } catch (e) {
           /* ignore */
         }
-        Toast.error({ content: message || t('导出失败') });
+        Toast.error({ content: message || t('Export failed') });
         return;
       }
 
-      // 解析文件名
       const disposition = (
         res.headers?.['content-disposition'] || ''
       ).toString();
@@ -249,26 +323,22 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
       if (truncated) {
         const maxRows = res.headers?.['x-export-max-rows'] || '';
         Toast.warning({
-          content: t(
-            '已达到 {{count}} 行导出上限，部分记录未导出，请缩小时间范围以导出其余记录。',
-            { count: maxRows },
-          ),
+          content: t('Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.', { count: maxRows }),
         });
       } else {
-        Toast.success({ content: t('导出已开始') });
+        Toast.success({ content: t('Export started') });
       }
     } catch (error) {
       if (error?.response?.status === 429) {
-        Toast.error({ content: t('导出请求过于频繁，请稍后再试') });
+        Toast.error({ content: t('Export request too frequent, please wait 5 minutes.') });
       } else {
-        Toast.error({ content: t('导出失败') });
+        Toast.error({ content: t('Export failed') });
       }
     } finally {
       setExporting(false);
     }
   };
 
-  // 管理员补单
   const handleAdminComplete = async (tradeNo) => {
     try {
       const res = await API.post('/api/user/topup/complete', {
@@ -294,7 +364,6 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
     });
   };
 
-  // 渲染状态徽章
   const renderStatusBadge = (status) => {
     const config = STATUS_CONFIG[status] || { type: 'primary', key: status };
     return (
@@ -305,7 +374,7 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
     );
   };
 
-  // 渲染支付方式
+  // Render payment method label.
   const renderPaymentMethod = (pm) => {
     const displayName = PAYMENT_METHOD_MAP[pm];
     return <Text>{displayName ? t(displayName) : pm || '-'}</Text>;
@@ -319,7 +388,6 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
   const isRawQuotaTopup = (record) =>
     record?.payment_provider === 'infini' || record?.payment_method === 'infini';
 
-  // 渲染支付金额（Infini 等多币种按 payment_currency 显示正确单位，其余沿用 ¥）
   const renderMoney = (money, record) => {
     const value = Number(money) || 0;
     if (isRawQuotaTopup(record)) {
@@ -394,7 +462,6 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
       },
     ];
 
-    // 管理员才显示操作列
     if (userIsAdmin) {
       baseColumns.push({
         title: t('操作'),
@@ -429,19 +496,6 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
     return baseColumns;
   }, [t, userIsAdmin]);
 
-  const exportMenu = [
-    {
-      node: 'item',
-      name: t('按当前筛选导出'),
-      onClick: () => handleExport(true),
-    },
-    {
-      node: 'item',
-      name: t('导出全部'),
-      onClick: () => handleExport(false),
-    },
-  ];
-
   return (
     <Modal
       title={t('充值账单')}
@@ -451,9 +505,14 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
       size={isMobile ? 'full-width' : undefined}
       width={isMobile ? undefined : '90vw'}
       style={isMobile ? undefined : { maxWidth: 1100 }}
-      bodyStyle={{ maxHeight: '72vh', overflowY: 'auto' }}
+      bodyStyle={{
+        height: isMobile ? 'calc(100vh - 140px)' : 720,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
     >
-      {/* 筛选与导出工具栏 */}
+      {/* Filter and export toolbar */}
       <div className='mb-3 flex flex-wrap items-center gap-2'>
         <Input
           prefix={<IconSearch />}
@@ -474,8 +533,7 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
           placeholder={t('状态')}
           value={status || ''}
           onChange={(val) => {
-                    setStatus(val || '');
-            setPage(1);
+            setStatus(val || '');
           }}
           style={{ width: isMobile ? '48%' : 120 }}
         >
@@ -490,8 +548,7 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
           placeholder={t('支付方式')}
           value={paymentMethod || ''}
           onChange={(val) => {
-                    setPaymentMethod(val || '');
-            setPage(1);
+            setPaymentMethod(val || '');
           }}
           style={{ width: isMobile ? '48%' : 140 }}
         >
@@ -508,49 +565,50 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
             placeholder={t('用户ID')}
             value={userId}
             onChange={(val) => {
-                        setUserId(val);
-              setPage(1);
+              setUserId(val);
             }}
             showClear
             style={{ width: isMobile ? '48%' : 110 }}
           />
         )}
-        {hasActiveFilters && (
-          <Button
-            theme='borderless'
-            icon={<IconRefresh />}
-            onClick={handleResetFilters}
-          >
-            {t('重置')}
-          </Button>
-        )}
-        <Dropdown trigger='click' position='bottomRight' menu={exportMenu}>
+        <Button
+          theme='light'
+          type='primary'
+          icon={<IconSearch />}
+          disabled={!hasPendingFilterChanges}
+          onClick={handleApplyFilters}
+        >
+          {t('Filter')}
+        </Button>
+        <Button
+          theme='borderless'
+          icon={<IconRefresh />}
+          disabled={!hasActiveFilters && !hasAppliedFilters}
+          onClick={handleResetFilters}
+        >
+          {t('Reset')}
+        </Button>
+        {canShowExport &&
           <Button
             theme='light'
             type='primary'
             icon={<IconDownload />}
             loading={exporting}
+            disabled={!canExport}
+            onClick={handleExport}
           >
-            {t('导出')}
-          </Button>
-        </Dropdown>
+            {t('Export')}
+          </Button>}
       </div>
-      <Table
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <Table
         columns={columns}
         dataSource={topups}
         loading={loading}
         rowKey='id'
         tableLayout='fixed'
         scroll={{ x: '100%' }}
-        pagination={{
-          currentPage: page,
-          pageSize: pageSize,
-          total: total,
-          showSizeChanger: true,
-          pageSizeOpts: [10, 20, 50, 100],
-          onPageChange: handlePageChange,
-          onPageSizeChange: handlePageSizeChange,
-        }}
+        pagination={false}
         size='small'
         empty={
           <Empty
@@ -562,7 +620,25 @@ const TopupHistoryModal = ({ visible, onCancel, t, enabledPaymentMethods }) => {
             style={{ padding: 30 }}
           />
         }
-      />
+        />
+      </div>
+      {total > 0 && (
+        <div
+          className='mt-3 mb-2 flex flex-wrap items-center justify-between gap-3'
+          style={{ flexShrink: 0 }}
+        >
+          {createCardProPagination({
+            currentPage: page,
+            pageSize,
+            total,
+            pageSizeOpts: [10, 20, 50, 100],
+            showSizeChanger: true,
+            onPageSizeChange: handlePageSizeChange,
+            onPageChange: handlePageChange,
+            t,
+          })}
+        </div>
+      )}
     </Modal>
   );
 };

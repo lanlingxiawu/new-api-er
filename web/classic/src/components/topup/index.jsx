@@ -1288,6 +1288,7 @@ const TopUp = () => {
         visible={openHistory}
         onCancel={handleHistoryCancel}
         t={t}
+        userExportEnabled={statusState?.status?.user_export_enabled !== false}
         enabledPaymentMethods={[
           enableStripeTopUp && 'stripe',
           enableCreemTopUp && 'creem',

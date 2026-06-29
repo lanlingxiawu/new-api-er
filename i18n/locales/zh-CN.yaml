@@ -145,6 +145,7 @@ topup.failed: "充值失败，请稍后重试"
 topup.invalid_quota: "无效的充值额度"
 
 topup.user_billing_export_disabled: "当前未开放用户账单导出"
+topup.export_filter_required: "请至少设置一个筛选条件后再导出账单"
 topup.export_failed: "导出失败，请稍后重试"
 topup.export_rate_limited: "导出请求过于频繁，请稍后再试"
 

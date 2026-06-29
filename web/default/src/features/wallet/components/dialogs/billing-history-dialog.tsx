@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import {
   Search,
+  Filter,
   Copy,
   Check,
   ChevronLeft,
@@ -49,12 +50,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -83,6 +78,7 @@ import {
 interface BillingHistoryDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  userExportEnabled?: boolean
   /**
    * Payment methods currently enabled by the admin. When provided, only these
    * are selectable in the payment-method filter. Falls back to all known
@@ -105,6 +101,7 @@ const dateToSeconds = (date?: Date) =>
 export function BillingHistoryDialog({
   open,
   onOpenChange,
+  userExportEnabled = true,
   enabledPaymentMethods,
 }: BillingHistoryDialogProps) {
   const { t } = useTranslation()
@@ -124,10 +121,14 @@ export function BillingHistoryDialog({
     completing,
     exporting,
     isAdmin,
+    hasActiveFilters,
+    hasAppliedFilters,
+    hasPendingFilterChanges,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleFilterChange,
+    handleApplyFilters,
     handleResetFilters,
     handleExport,
     handleCompleteOrder,
@@ -138,14 +139,8 @@ export function BillingHistoryDialog({
 
   const totalPages = Math.ceil(total / pageSize)
 
-  const hasActiveFilters = Boolean(
-    filters.keyword ||
-      filters.startTime ||
-      filters.endTime ||
-      filters.status ||
-      filters.paymentMethod ||
-      filters.userId
-  )
+  const canShowExport = isAdmin || userExportEnabled
+  const canExport = total > 0
 
   const handleConfirmComplete = async () => {
     if (confirmTradeNo) {
@@ -165,7 +160,7 @@ export function BillingHistoryDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className='flex max-h-[calc(100dvh-2rem)] flex-col max-sm:h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none max-sm:p-4 sm:w-[92vw] sm:max-w-5xl'>
+        <DialogContent className='flex max-h-[calc(100dvh-2rem)] flex-col max-sm:h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none max-sm:p-4 sm:h-[min(820px,calc(100dvh-2rem))] sm:w-[92vw] sm:max-w-5xl'>
           <DialogHeader>
             <DialogTitle>{t('Billing History')}</DialogTitle>
             <DialogDescription>
@@ -174,7 +169,7 @@ export function BillingHistoryDialog({
           </DialogHeader>
 
           <div className='flex min-h-0 flex-1 flex-col gap-3 sm:gap-4'>
-            {/* Search + page size + export */}
+            {/* Search + page size */}
             <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
               <div className='relative flex-1'>
                 <Search className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
@@ -204,40 +199,6 @@ export function BillingHistoryDialog({
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        className='h-9'
-                        disabled={exporting}
-                      />
-                    }
-                  >
-                    {exporting ? (
-                      <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-                    ) : (
-                      <Download className='mr-2 h-4 w-4' />
-                    )}
-                    {t('Export')}
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='end'>
-                    <DropdownMenuItem
-                      onClick={() => handleExport(true)}
-                      disabled={exporting}
-                    >
-                      {t('Export current filter')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => handleExport(false)}
-                      disabled={exporting}
-                    >
-                      {t('Export all')}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
               </div>
             </div>
 
@@ -316,15 +277,42 @@ export function BillingHistoryDialog({
                 />
               )}
 
-              {hasActiveFilters && (
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-9'
+                onClick={handleApplyFilters}
+                disabled={!hasPendingFilterChanges}
+              >
+                <Filter className='mr-1.5 h-3.5 w-3.5' />
+                {t('Filter')}
+              </Button>
+
+              <Button
+                variant='ghost'
+                size='sm'
+                className='h-9'
+                onClick={handleResetFilters}
+                disabled={!hasActiveFilters && !hasAppliedFilters}
+              >
+                <RotateCcw className='mr-1.5 h-3.5 w-3.5' />
+                {t('Reset')}
+              </Button>
+
+              {canShowExport && (
                 <Button
-                  variant='ghost'
+                  variant='outline'
                   size='sm'
                   className='h-9'
-                  onClick={handleResetFilters}
+                  disabled={exporting || !canExport}
+                  onClick={() => handleExport()}
                 >
-                  <RotateCcw className='mr-1.5 h-3.5 w-3.5' />
-                  {t('Reset')}
+                  {exporting ? (
+                    <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                  ) : (
+                    <Download className='mr-2 h-4 w-4' />
+                  )}
+                  {t('Export')}
                 </Button>
               )}
             </div>
@@ -356,7 +344,7 @@ export function BillingHistoryDialog({
                     {t('No billing records found')}
                   </p>
                   <p className='mt-1 text-xs'>
-                    {hasActiveFilters
+                    {hasActiveFilters || hasAppliedFilters
                       ? t('Try adjusting your search')
                       : t('Your transaction history will appear here')}
                   </p>

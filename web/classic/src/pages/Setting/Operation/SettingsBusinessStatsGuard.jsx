@@ -311,13 +311,13 @@ export default function SettingsBusinessStatsGuard(props) {
               type='warning'
               fullMode={false}
               closeIcon={null}
-              title={t('副逻辑当前已被绕过')}
+              title={t('熔断保护已关闭')}
               description={
                 manualDisabled
                   ? t(
                       '手动禁用已开启，新的结算后成本和提成将写入兜底日志文件。',
                     )
-                  : t('自动熔断已关闭，副逻辑会按配置被绕过。')
+                  : t('自动熔断已关闭，不再按条件触发冷却保护，继续按照原逻辑执行。')
               }
               style={{ marginBottom: 16 }}
             />

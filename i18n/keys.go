@@ -163,6 +163,7 @@ const (
 	MsgTopupFailed               = "topup.failed"
 	MsgTopupInvalidQuota         = "topup.invalid_quota"
 	MsgUserBillingExportDisabled = "topup.user_billing_export_disabled"
+	MsgTopupExportFilterRequired = "topup.export_filter_required"
 	MsgTopupExportFailed         = "topup.export_failed"
 	MsgTopupExportRateLimited    = "topup.export_rate_limited"
 )

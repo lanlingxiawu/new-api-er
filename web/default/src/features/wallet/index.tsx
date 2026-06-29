@@ -390,6 +390,7 @@ export function Wallet(props: WalletProps) {
       <BillingHistoryDialog
         open={billingDialogOpen}
         onOpenChange={setBillingDialogOpen}
+        userExportEnabled={status?.user_export_enabled !== false}
         enabledPaymentMethods={getEnabledPaymentMethods(topupInfo)}
       />
 

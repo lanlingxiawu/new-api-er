@@ -1722,6 +1722,7 @@
     "Export ready. Download started for {{count}} rows.": "Export ready. Download started for {{count}} rows.",
     "Export request too frequent, please wait 5 minutes.": "Export request too frequent, please wait 5 minutes.",
     "Export requests are too frequent, please try again later.": "Export requests are too frequent, please try again later.",
+    "Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.": "Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.",
     "Export started": "Export started",
     "Export timed out. Please narrow the time range and try again.": "Export timed out. Please narrow the time range and try again.",
     "Exporting ({{progress}}%)": "导出中 ({{progress}}%)",

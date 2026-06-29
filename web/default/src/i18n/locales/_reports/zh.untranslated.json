@@ -1,7 +1,6 @@
 {
   "{{count}} request log entries cleared.": "已清除 {{count}} 条请求日志。",
   "Absolute row limit for all exports (incl. admin), guarding the database.": "Absolute row limit for all exports (incl. admin), guarding the database.",
-  "All methods": "All methods",
   "All status": "All status",
   "Backfill running for {{date}}…": "Backfill running for {{date}}…",
   "Buffer Max Entries": "Buffer Max Entries",
@@ -15,7 +14,6 @@
   "Export current filter": "Export current filter",
   "Export reached the {{count}}-row limit. Some records were not exported — narrow the time range to export the rest.": "Export reached the {{count}}-row limit. Some records were not exported — narrow the time range to export the rest.",
   "Export requests are too frequent, please try again later.": "Export requests are too frequent, please try again later.",
-  "Export started": "Export started",
   "Exporting ({{progress}}%)": "导出中 ({{progress}}%)",
   "Failed to export billing history": "Failed to export billing history",
   "Full Drain": "Full Drain",

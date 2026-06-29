@@ -143,6 +143,7 @@ topup.order_status: "Top-up order status error"
 topup.failed: "Top-up failed, please try again later"
 topup.invalid_quota: "Invalid top-up quota"
 topup.user_billing_export_disabled: "User billing export is currently disabled"
+topup.export_filter_required: "Please apply at least one filter before exporting billing records"
 topup.export_failed: "Export failed, please try again later"
 topup.export_rate_limited: "Too many export requests, please try again later"
 
