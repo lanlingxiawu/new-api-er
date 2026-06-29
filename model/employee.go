@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ============================================================================
@@ -635,7 +637,15 @@ type CommissionResetPeriodStatFilter struct {
 }
 
 type EmployeeCommissionResetPeriodStatItem struct {
-	EmployeeCommissionResetPeriodStat
+	ResetStartedAt     int64   `json:"reset_started_at"`
+	EmployeeUserId     int     `json:"employee_user_id"`
+	PeriodKey          string  `json:"period_key"`
+	Timezone           string  `json:"timezone"`
+	RevenueQuota       int64   `json:"revenue_quota"`
+	CostQuota          int64   `json:"cost_quota"`
+	ProfitQuota        int64   `json:"profit_quota"`
+	CommissionQuota    int64   `json:"commission_quota"`
+	RecordCount        int64   `json:"record_count"`
 	TotalRevenueUsd    float64 `json:"total_revenue_usd"`
 	TotalCostUsd       float64 `json:"total_cost_usd"`
 	TotalProfitUsd     float64 `json:"total_profit_usd"`
@@ -740,7 +750,6 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 		return nil, err
 	}
 	currentPeriod := ResolveCommissionMonthlyPeriod(time.Now().Unix())
-	resetStartedAtSet := make(map[int64]struct{})
 	resetStartedAtByUserId := make(map[int]int64, len(employeeUserIds))
 	for _, employeeUserId := range employeeUserIds {
 		resetStartedAt := currentPeriod.PeriodStartAt
@@ -748,26 +757,36 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 			resetStartedAt = baseline.BaselineResetAt
 		}
 		resetStartedAtByUserId[employeeUserId] = resetStartedAt
-		resetStartedAtSet[resetStartedAt] = struct{}{}
 	}
-	resetStartedAts := make([]int64, 0, len(resetStartedAtSet))
-	for resetStartedAt := range resetStartedAtSet {
-		resetStartedAts = append(resetStartedAts, resetStartedAt)
+	type aggRow struct {
+		EmployeeUserId  int
+		ResetStartedAt  int64
+		RevenueQuota    int64
+		CostQuota       int64
+		ProfitQuota     int64
+		CommissionQuota int64
+		RecordCount     int64
 	}
-	var rows []*EmployeeCommissionResetPeriodStat
-	if err := DB.Where("employee_user_id IN ? AND reset_started_at IN ?", employeeUserIds, resetStartedAts).Find(&rows).Error; err != nil {
+	var rows []aggRow
+	if err := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
+		Select("employee_user_id, reset_started_at, SUM(revenue_quota) as revenue_quota, SUM(cost_quota) as cost_quota, SUM(profit_quota) as profit_quota, SUM(commission_quota) as commission_quota, SUM(record_count) as record_count").
+		Where("employee_user_id IN ?", employeeUserIds).
+		Group("employee_user_id, reset_started_at").
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, tz := operation_setting.ResolveCommissionTierResetLocation(cfg.Timezone)
 	for _, row := range rows {
-		if expectedResetStartedAt := resetStartedAtByUserId[row.EmployeeUserId]; expectedResetStartedAt != row.ResetStartedAt {
+		if resetStartedAtByUserId[row.EmployeeUserId] != row.ResetStartedAt {
 			continue
 		}
+		periodKey := time.Unix(row.ResetStartedAt, 0).In(loc).Format("2006-01-02")
 		items[row.EmployeeUserId] = EmployeeCurrentResetPeriodStat{
 			EmployeeUserId:  row.EmployeeUserId,
 			ResetStartedAt:  row.ResetStartedAt,
-			ResetEndedAt:    row.ResetEndedAt,
-			PeriodKey:       row.PeriodKey,
-			Timezone:        row.Timezone,
+			PeriodKey:       periodKey,
+			Timezone:        tz,
 			RevenueQuota:    row.RevenueQuota,
 			CostQuota:       row.CostQuota,
 			ProfitQuota:     row.ProfitQuota,
@@ -797,55 +816,82 @@ func commissionStatDateKey(statDate int64, timezone string) string {
 
 func GetCommissionResetPeriodStats(filter CommissionResetPeriodStatFilter) ([]*EmployeeCommissionResetPeriodStatItem, int64, error) {
 	filter = normalizeCommissionResetPeriodStatFilter(filter)
-	base := DB.Model(&EmployeeCommissionResetPeriodStat{}).Where("employee_user_id = ?", filter.EmployeeUserId)
+	type aggRow struct {
+		EmployeeUserId  int
+		ResetStartedAt  int64
+		RevenueQuota    int64
+		CostQuota       int64
+		ProfitQuota     int64
+		CommissionQuota int64
+		RecordCount     int64
+	}
+	base := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
+		Select("employee_user_id, reset_started_at, SUM(revenue_quota) as revenue_quota, SUM(cost_quota) as cost_quota, SUM(profit_quota) as profit_quota, SUM(commission_quota) as commission_quota, SUM(record_count) as record_count").
+		Group("employee_user_id, reset_started_at").
+		Order("reset_started_at DESC, commission_quota DESC")
 	if filter.EmployeeUserId != 0 {
-		baselinesByUserId, err := loadResetBaselineByEmployeeUserIds([]int{filter.EmployeeUserId})
-		if err != nil {
-			return nil, 0, err
-		}
-		currentBaseline := baselinesByUserId[filter.EmployeeUserId]
+		base = base.Where("employee_user_id = ?", filter.EmployeeUserId)
 		if filter.ResetStartedAt != 0 {
 			base = base.Where("reset_started_at = ?", filter.ResetStartedAt)
-		} else if currentBaseline.BaselineResetAt > 0 {
-			base = base.Where("reset_started_at = ?", currentBaseline.BaselineResetAt)
 		} else {
-			currentPeriod := ResolveCommissionMonthlyPeriod(time.Now().Unix())
-			base = base.Where("reset_started_at = ?", currentPeriod.PeriodStartAt)
+			baselinesByUserId, err := loadResetBaselineByEmployeeUserIds([]int{filter.EmployeeUserId})
+			if err != nil {
+				return nil, 0, err
+			}
+			currentBaseline := baselinesByUserId[filter.EmployeeUserId]
+			if currentBaseline.BaselineResetAt > 0 {
+				base = base.Where("reset_started_at = ?", currentBaseline.BaselineResetAt)
+			} else {
+				currentPeriod := ResolveCommissionMonthlyPeriod(time.Now().Unix())
+				base = base.Where("reset_started_at = ?", currentPeriod.PeriodStartAt)
+			}
 		}
 	} else if filter.ResetStartedAt != 0 {
 		base = base.Where("reset_started_at = ?", filter.ResetStartedAt)
 	}
-	if filter.StartTime != 0 && filter.EndTime != 0 {
-		base = base.Where("reset_started_at <= ? AND (reset_ended_at = 0 OR reset_ended_at >= ?)", filter.EndTime, filter.StartTime)
+	if filter.EndTime != 0 {
+		base = base.Where("reset_started_at <= ?", filter.EndTime)
 	}
-
-	var total int64
-	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+	var allRows []aggRow
+	if err := base.Scan(&allRows).Error; err != nil {
 		return nil, 0, err
 	}
-	if total > 0 {
-		var rows []*EmployeeCommissionResetPeriodStat
-		offset := (filter.Page - 1) * filter.PageSize
-		if err := base.Session(&gorm.Session{}).Order("reset_started_at DESC, commission_quota DESC").
-			Offset(offset).
-			Limit(filter.PageSize).
-			Find(&rows).Error; err != nil {
-			return nil, 0, err
-		}
-		items := make([]*EmployeeCommissionResetPeriodStatItem, 0, len(rows))
-		for _, row := range rows {
-			item := &EmployeeCommissionResetPeriodStatItem{
-				EmployeeCommissionResetPeriodStat: *row,
-				TotalRevenueUsd:                   common.QuotaToUSD(row.RevenueQuota),
-				TotalCostUsd:                      common.QuotaToUSD(row.CostQuota),
-				TotalProfitUsd:                    common.QuotaToUSD(row.ProfitQuota),
-				TotalCommissionUsd:                common.QuotaToUSD(row.CommissionQuota),
-			}
-			items = append(items, item)
-		}
-		return items, total, nil
+	total := int64(len(allRows))
+	if total == 0 {
+		return []*EmployeeCommissionResetPeriodStatItem{}, 0, nil
 	}
-	return []*EmployeeCommissionResetPeriodStatItem{}, 0, nil
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	loc, tz := operation_setting.ResolveCommissionTierResetLocation(cfg.Timezone)
+	offset := (filter.Page - 1) * filter.PageSize
+	if offset >= len(allRows) {
+		return []*EmployeeCommissionResetPeriodStatItem{}, total, nil
+	}
+	end := offset + filter.PageSize
+	if end > len(allRows) {
+		end = len(allRows)
+	}
+	items := make([]*EmployeeCommissionResetPeriodStatItem, 0, end-offset)
+	if offset < len(allRows) {
+		for _, row := range allRows[offset:end] {
+			periodKey := time.Unix(row.ResetStartedAt, 0).In(loc).Format("2006-01-02")
+			items = append(items, &EmployeeCommissionResetPeriodStatItem{
+				ResetStartedAt:     row.ResetStartedAt,
+				EmployeeUserId:     row.EmployeeUserId,
+				PeriodKey:          periodKey,
+				Timezone:           tz,
+				RevenueQuota:       row.RevenueQuota,
+				CostQuota:          row.CostQuota,
+				ProfitQuota:        row.ProfitQuota,
+				CommissionQuota:    row.CommissionQuota,
+				RecordCount:        row.RecordCount,
+				TotalRevenueUsd:    common.QuotaToUSD(row.RevenueQuota),
+				TotalCostUsd:       common.QuotaToUSD(row.CostQuota),
+				TotalProfitUsd:     common.QuotaToUSD(row.ProfitQuota),
+				TotalCommissionUsd: common.QuotaToUSD(row.CommissionQuota),
+			})
+		}
+	}
+	return items, total, nil
 }
 
 func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*CommissionCalendarStats, error) {
@@ -1186,11 +1232,23 @@ func CreateCommissionLog(log *EmployeeCommissionLog) (inserted bool, err error) 
 	if log.CreatedAt == 0 {
 		log.CreatedAt = time.Now().Unix()
 	}
-	// 明细推入缓冲区，log_id 去重保证 inserted 返回值准确（调用方据此决定是否执行提成结算）
-	inserted = CheckAndBufferCommissionLog(log)
-	if inserted {
-		// 日统计增量写入缓冲区（Redis 或内存），由后台定时刷盘
-		BufferCommissionDailyStat(log)
+	if log.LogId != nil && *log.LogId > 0 {
+		if !memDedupCommissionLogId(*log.LogId) {
+			return false, nil
+		}
+	} else {
+		log.LogId = nil
 	}
-	return inserted, nil
+	result := DB.Omit("id").Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "log_id"}},
+		DoNothing: true,
+	}).Create(log)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	BufferCommissionDailyStat(log)
+	return true, nil
 }

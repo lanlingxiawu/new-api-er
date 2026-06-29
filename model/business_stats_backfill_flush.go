@@ -39,22 +39,24 @@ func BusinessDayStart(ts int64) int64 {
 // Tier upgrades ARE intentionally applied from backfilled profit: the backfill
 // replays historical settlements and tier progression should reflect them.
 type backfillStatAggregator struct {
-	platform         map[string]*platformStatDelta
-	commission       map[string]*commissionStatDelta
-	customer         map[string]*customerCommissionStatDelta
-	resetPeriod      map[string]*commissionResetPeriodDelta
-	resetPeriodDaily map[string]*commissionResetPeriodDailyDelta
-	employeeExt      map[int]*employeeExtDelta
+	platform           map[string]*platformStatDelta
+	commission         map[string]*commissionStatDelta
+	customerCommission map[string]*customerCommissionStatDelta
+	resetPeriodDaily   map[string]*commissionResetPeriodDailyDelta
+	employeeExt        map[int]*employeeExtDelta
+	// tierLevelCache avoids repeated DB queries for the same employee within
+	// a single flush batch. nil stored as value means "tried, got error/not found".
+	tierLevelCache map[int]*EmployeeTierLevel
 }
 
 func newBackfillStatAggregator() *backfillStatAggregator {
 	return &backfillStatAggregator{
-		platform:         make(map[string]*platformStatDelta),
-		commission:       make(map[string]*commissionStatDelta),
-		customer:         make(map[string]*customerCommissionStatDelta),
-		resetPeriod:      make(map[string]*commissionResetPeriodDelta),
-		resetPeriodDaily: make(map[string]*commissionResetPeriodDailyDelta),
-		employeeExt:      make(map[int]*employeeExtDelta),
+		platform:           make(map[string]*platformStatDelta),
+		commission:         make(map[string]*commissionStatDelta),
+		customerCommission: make(map[string]*customerCommissionStatDelta),
+		resetPeriodDaily:   make(map[string]*commissionResetPeriodDailyDelta),
+		employeeExt:        make(map[int]*employeeExtDelta),
+		tierLevelCache:     make(map[int]*EmployeeTierLevel),
 	}
 }
 
@@ -89,10 +91,15 @@ func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 		return
 	}
 	statDate := localDayStart(log.CreatedAt)
-	level, err := GetOrCreateTierLevel(log.EmployeeUserId, true)
-	if err != nil {
-		common.SysError("backfill addCommission: get tier level failed: " + err.Error())
-		level = nil
+	level, tried := a.tierLevelCache[log.EmployeeUserId]
+	if !tried {
+		var err error
+		level, err = GetOrCreateTierLevel(log.EmployeeUserId, true)
+		if err != nil {
+			common.SysError("backfill addCommission: get tier level failed: " + err.Error())
+			level = nil
+		}
+		a.tierLevelCache[log.EmployeeUserId] = level // nil stored as sentinel: skip re-query
 	}
 	resetAt := effectiveResetStartedAt(level, log.CreatedAt)
 
@@ -112,40 +119,26 @@ func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 		cd.LastCreatedAt = log.CreatedAt
 	}
 
-	// per-customer commission daily stat
-	cuk := memCustomerCommissionKey(statDate, log.EmployeeUserId, log.CustomerUserId)
-	cu := a.customer[cuk]
-	if cu == nil {
-		cu = &customerCommissionStatDelta{StatDate: statDate, EmployeeUserId: log.EmployeeUserId, CustomerUserId: log.CustomerUserId}
-		a.customer[cuk] = cu
-	}
-	cu.RevenueQuota += log.RevenueQuota
-	cu.CostQuota += log.CostQuota
-	cu.ProfitQuota += log.ProfitQuota
-	cu.CommissionQuota += log.CommissionQuota
-	cu.RecordCount++
-	if log.CreatedAt > cu.LastCreatedAt {
-		cu.LastCreatedAt = log.CreatedAt
+	// customer commission daily stat
+	if log.CustomerUserId > 0 {
+		cck := memCustomerCommissionKey(statDate, log.EmployeeUserId, log.CustomerUserId)
+		ccd := a.customerCommission[cck]
+		if ccd == nil {
+			ccd = &customerCommissionStatDelta{StatDate: statDate, EmployeeUserId: log.EmployeeUserId, CustomerUserId: log.CustomerUserId}
+			a.customerCommission[cck] = ccd
+		}
+		ccd.RevenueQuota += log.RevenueQuota
+		ccd.CostQuota += log.CostQuota
+		ccd.ProfitQuota += log.ProfitQuota
+		ccd.CommissionQuota += log.CommissionQuota
+		ccd.RecordCount++
+		if log.CreatedAt > ccd.LastCreatedAt {
+			ccd.LastCreatedAt = log.CreatedAt
+		}
 	}
 
-	// reset-period stats (skipped when reset baseline unknown, mirrors live guard)
+	// reset-period daily stat
 	if resetAt > 0 {
-		rk := memCommissionResetPeriodKey(resetAt, log.EmployeeUserId)
-		rp := a.resetPeriod[rk]
-		if rp == nil {
-			pk, tz := commissionResetPeriodMeta(resetAt)
-			rp = &commissionResetPeriodDelta{ResetStartedAt: resetAt, PeriodKey: pk, Timezone: tz, EmployeeUserId: log.EmployeeUserId}
-			a.resetPeriod[rk] = rp
-		}
-		rp.RevenueQuota += log.RevenueQuota
-		rp.CostQuota += log.CostQuota
-		rp.ProfitQuota += log.ProfitQuota
-		rp.CommissionQuota += log.CommissionQuota
-		rp.RecordCount++
-		if log.CreatedAt > rp.LastCreatedAt {
-			rp.LastCreatedAt = log.CreatedAt
-		}
-
 		rdk := memCommissionResetPeriodDailyKey(resetAt, statDate, log.EmployeeUserId)
 		rd := a.resetPeriodDaily[rdk]
 		if rd == nil {
@@ -178,45 +171,112 @@ func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 // swallowed: the detail rows are already committed and any daily-stat divergence is
 // recoverable by re-running the backfill. ctx carries the backfill's deadline so a
 // stuck statement cannot hang the admin job.
+//
+// DB operation budget per flush call (E = unique employees, N/M/K = unique stat keys):
+//
+//	Before: N+M+K individual autocommit UPSERTs + 2 (ensureUserExtensions) + E×(UPDATE+SELECT)
+//	After:  1 transaction (N+M+K statements) + 2 (ensureUserExtensions) + 1 SELECT + E UPDATEs
 func (a *backfillStatAggregator) flush(ctx context.Context) {
 	db := DB.WithContext(ctx)
-	for _, d := range a.platform {
-		if err := upsertPlatformDailyStatTx(db, d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt); err != nil {
-			common.SysError("backfill flush platform: " + err.Error())
+
+	// Wrap all stat-table upserts in one transaction to reduce round-trip overhead.
+	if len(a.platform) > 0 || len(a.commission) > 0 || len(a.customerCommission) > 0 || len(a.resetPeriodDaily) > 0 {
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			for _, d := range a.platform {
+				if err := upsertPlatformDailyStatTx(tx, d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt); err != nil {
+					return err
+				}
+			}
+			for _, d := range a.commission {
+				if err := upsertCommissionDailyStatTx(tx, d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
+					return err
+				}
+			}
+			for _, d := range a.customerCommission {
+				if err := upsertCustomerCommissionDailyStatTx(tx, d.StatDate, d.EmployeeUserId, d.CustomerUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
+					return err
+				}
+			}
+			for _, d := range a.resetPeriodDaily {
+				if err := upsertCommissionResetPeriodDailyStatTx(tx, d.ResetStartedAt, d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			common.SysError("backfill flush stats tx: " + err.Error())
 		}
-		ensureDailyCoverage(d.StatDate)
-	}
-	for _, d := range a.commission {
-		if err := upsertCommissionDailyStatTx(db, d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
-			common.SysError("backfill flush commission: " + err.Error())
+		// ensureDailyCoverage is in-memory only; called after the transaction commits.
+		for _, d := range a.platform {
+			ensureDailyCoverage(d.StatDate)
 		}
 	}
-	for _, d := range a.customer {
-		if err := upsertCustomerCommissionDailyStatTx(db, d.StatDate, d.EmployeeUserId, d.CustomerUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
-			common.SysError("backfill flush customer commission: " + err.Error())
-		}
-	}
-	for _, d := range a.resetPeriod {
-		if err := upsertCommissionResetPeriodStatTx(db, d.ResetStartedAt, d.ResetEndedAt, d.PeriodKey, d.Timezone, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
-			common.SysError("backfill flush reset-period: " + err.Error())
-		}
-	}
-	for _, d := range a.resetPeriodDaily {
-		if err := upsertCommissionResetPeriodDailyStatTx(db, d.ResetStartedAt, d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt); err != nil {
-			common.SysError("backfill flush reset-period-daily: " + err.Error())
-		}
-	}
-	// employee summary + tier upgrade — written directly to DB (user_extensions),
-	// never through memEmployeeExtBuf, so the live relay buffer is untouched.
+
+	// Employee ext: ensure rows exist, then batch-pre-read current profit totals so
+	// that TryAutoUpgradeTier can be called without a per-employee re-SELECT.
 	if len(a.employeeExt) > 0 {
 		userIds := make([]int, 0, len(a.employeeExt))
 		for uid := range a.employeeExt {
 			userIds = append(userIds, uid)
 		}
 		ensureUserExtensionsBatch(userIds)
+		// 1 batch SELECT replaces the E individual SELECTs that the live-path
+		// applyEmployeeExtDelta issues after each UPDATE.
+		profitBefore := backfillReadProfitTotals(ctx, userIds)
 		for uid, d := range a.employeeExt {
-			applyEmployeeExtDelta(uid, d) // includes TryAutoUpgradeTier; logs on failure
+			backfillApplyEmployeeExtDelta(db, uid, d, profitBefore[uid])
 		}
+	}
+}
+
+// backfillReadProfitTotals returns profit_total_quota for each user in a single query.
+func backfillReadProfitTotals(ctx context.Context, userIds []int) map[int]int64 {
+	result := make(map[int]int64, len(userIds))
+	if len(userIds) == 0 {
+		return result
+	}
+	type profitRow struct {
+		UserId           int
+		ProfitTotalQuota int64
+	}
+	var rows []profitRow
+	DB.WithContext(ctx).Model(&UserExtension{}).
+		Select("user_id, profit_total_quota").
+		Where("user_id IN ?", userIds).
+		Scan(&rows)
+	for _, r := range rows {
+		result[r.UserId] = r.ProfitTotalQuota
+	}
+	return result
+}
+
+// backfillApplyEmployeeExtDelta is the backfill-path variant of applyEmployeeExtDelta.
+// It accepts the pre-fetched currentProfit so that TryAutoUpgradeTier can be called
+// with the projected new total (currentProfit + delta) without issuing a re-SELECT.
+func backfillApplyEmployeeExtDelta(db *gorm.DB, userId int, d *employeeExtDelta, currentProfit int64) {
+	updates := map[string]interface{}{}
+	if d.CommissionDelta != 0 {
+		updates["commission_total_quota"] = gorm.Expr("commission_total_quota + ?", d.CommissionDelta)
+		updates["commission_pending_quota"] = gorm.Expr("commission_pending_quota + ?", d.CommissionDelta)
+	}
+	if d.ProfitDelta != 0 {
+		updates["profit_total_quota"] = gorm.Expr("profit_total_quota + ?", d.ProfitDelta)
+	}
+	if len(updates) == 0 {
+		return
+	}
+	result := db.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
+	if result.Error != nil {
+		common.SysError(fmt.Sprintf("backfillApplyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
+		return
+	}
+	if result.RowsAffected == 0 {
+		common.SysError(fmt.Sprintf("backfillApplyEmployeeExtDelta: userId=%d no rows affected", userId))
+		return
+	}
+	if d.ProfitDelta > 0 {
+		// Derive new total from pre-fetched baseline + this delta; no re-SELECT needed.
+		TryAutoUpgradeTier(userId, currentProfit+d.ProfitDelta)
 	}
 }
 
@@ -427,13 +487,10 @@ func FallbackFilename(date string) string {
 	return fallbackFilename(FallbackFileBasename, date)
 }
 
-// FallbackLogDir returns the directory where fallback files are written.
-// The backfill reader must use this same directory.
+// FallbackLogDir returns the directory where fallback files are written and read.
+// Delegates to resolveFallbackDir so the writer and reader always agree on the path.
 func FallbackLogDir() string {
-	if common.LogDir != nil && *common.LogDir != "" {
-		return *common.LogDir
-	}
-	return "."
+	return resolveFallbackDir()
 }
 
 // BusinessDayDate formats a Unix timestamp as a "2006-01-02" date string in the

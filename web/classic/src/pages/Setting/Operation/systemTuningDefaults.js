@@ -7,14 +7,22 @@ export const systemTuningDefaults = {
   'business_stats_circuit_breaker_setting.side_effect_db_timeout_ms': 800,
   'ledger_pipeline_setting.flush_interval_sec': 8,
   'ledger_pipeline_setting.outer_batch_size': 2000,
+  'ledger_pipeline_setting.cost_outer_batch_size': 0,
   'ledger_pipeline_setting.inner_batch_size': 500,
-  'ledger_pipeline_setting.paired_flush_max_per_cycle': 15000,
+  'ledger_pipeline_setting.settlement_flush_max_per_cycle': 15000,
+  'ledger_pipeline_setting.cost_flush_max_per_cycle': 0,
   'ledger_pipeline_setting.full_drain': false,
   'ledger_pipeline_setting.buf_max_entries': 100000,
   'ledger_pipeline_setting.dedup_mem_max_entries': 200000,
   'ledger_pipeline_setting.dedup_use_redis': false,
   'ledger_pipeline_setting.dedup_redis_ttl_sec': 21600,
   'ledger_pipeline_setting.flush_db_timeout_sec': 30,
+  'ledger_retry_setting.retry_flush_interval_sec': 2,
+  'ledger_retry_setting.stat_upsert_max_retries': 10,
+  'ledger_retry_setting.retry_queue_max_entries': 50000,
+  'ledger_retry_setting.allow_concurrent_flush': false,
+  'ledger_pipeline_setting.fallback_queue_capacity': 10000,
+  'ledger_pipeline_setting.shutdown_timeout_sec': 25,
   'payment_setting.user_export_max_rows': 10000,
   'export_setting.user_export_enabled': true,
   'export_setting.rate_limit_cooldown_sec': 600,
@@ -32,6 +40,7 @@ export const systemTuningDefaults = {
   'ledger_detail_setting.list_scan_batch_size': 2000,
   'ledger_detail_setting.list_scan_rows_per_req': 20000,
   'business_stats_fallback_backfill_setting.enabled': true,
+  'business_stats_fallback_backfill_setting.use_separate_fallback_dir': false,
   'business_stats_fallback_backfill_setting.status_cache_seconds': 15,
   'business_stats_fallback_backfill_setting.max_read_line_bytes': 1048576,
   'business_stats_fallback_backfill_setting.write_batch_size': 200,
@@ -63,10 +72,14 @@ export const ledgerPipelineDefaults = {
     systemTuningDefaults['ledger_pipeline_setting.flush_interval_sec'],
   'ledger_pipeline_setting.outer_batch_size':
     systemTuningDefaults['ledger_pipeline_setting.outer_batch_size'],
+  'ledger_pipeline_setting.cost_outer_batch_size':
+    systemTuningDefaults['ledger_pipeline_setting.cost_outer_batch_size'],
   'ledger_pipeline_setting.inner_batch_size':
     systemTuningDefaults['ledger_pipeline_setting.inner_batch_size'],
-  'ledger_pipeline_setting.paired_flush_max_per_cycle':
-    systemTuningDefaults['ledger_pipeline_setting.paired_flush_max_per_cycle'],
+  'ledger_pipeline_setting.settlement_flush_max_per_cycle':
+    systemTuningDefaults['ledger_pipeline_setting.settlement_flush_max_per_cycle'],
+  'ledger_pipeline_setting.cost_flush_max_per_cycle':
+    systemTuningDefaults['ledger_pipeline_setting.cost_flush_max_per_cycle'],
   'ledger_pipeline_setting.full_drain':
     systemTuningDefaults['ledger_pipeline_setting.full_drain'],
   'ledger_pipeline_setting.buf_max_entries':
@@ -79,6 +92,18 @@ export const ledgerPipelineDefaults = {
     systemTuningDefaults['ledger_pipeline_setting.dedup_redis_ttl_sec'],
   'ledger_pipeline_setting.flush_db_timeout_sec':
     systemTuningDefaults['ledger_pipeline_setting.flush_db_timeout_sec'],
+  'ledger_retry_setting.allow_concurrent_flush':
+    systemTuningDefaults['ledger_retry_setting.allow_concurrent_flush'],
+  'ledger_retry_setting.retry_queue_max_entries':
+    systemTuningDefaults['ledger_retry_setting.retry_queue_max_entries'],
+  'ledger_retry_setting.retry_flush_interval_sec':
+    systemTuningDefaults['ledger_retry_setting.retry_flush_interval_sec'],
+  'ledger_retry_setting.stat_upsert_max_retries':
+    systemTuningDefaults['ledger_retry_setting.stat_upsert_max_retries'],
+  'ledger_pipeline_setting.fallback_queue_capacity':
+    systemTuningDefaults['ledger_pipeline_setting.fallback_queue_capacity'],
+  'ledger_pipeline_setting.shutdown_timeout_sec':
+    systemTuningDefaults['ledger_pipeline_setting.shutdown_timeout_sec'],
 };
 
 export const exportSettingsDefaults = {
@@ -122,6 +147,8 @@ export const ledgerDetailDefaults = {
 export const fallbackBackfillDefaults = {
   'business_stats_fallback_backfill_setting.enabled':
     systemTuningDefaults['business_stats_fallback_backfill_setting.enabled'],
+  'business_stats_fallback_backfill_setting.use_separate_fallback_dir':
+    systemTuningDefaults['business_stats_fallback_backfill_setting.use_separate_fallback_dir'],
   'business_stats_fallback_backfill_setting.status_cache_seconds':
     systemTuningDefaults[
       'business_stats_fallback_backfill_setting.status_cache_seconds'

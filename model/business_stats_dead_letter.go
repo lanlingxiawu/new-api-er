@@ -2,11 +2,13 @@ package model
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 const businessStatsDeadLetterFile = "business_stats_dead_letter"
@@ -36,15 +38,22 @@ type fallbackWriteEntry struct {
 	date     string // "2006-01-02"，入队时捕获
 }
 
-// fallbackQueue 将调用方与文件 I/O 解耦。后台单一 goroutine（init 启动）是唯一消费者。
-// 队列满时 writeBusinessStatsJSONLine 返回 false，触发熔断器 hard-disable。
-var fallbackQueue = make(chan fallbackWriteEntry, 10000)
+// fallbackQueue 将调用方与文件 I/O 解耦。后台单一 goroutine（InitFallbackQueue 启动）是唯一消费者。
+// 容量由配置项 ledger_pipeline_setting.fallback_queue_capacity 在启动时决定。
+// 未初始化时为 nil channel，select/default 会立即走 default 分支（安全地丢弃并记录错误）。
+var fallbackQueue chan fallbackWriteEntry
 
 // fallbackCloseAll 向 goroutine 发送关闭请求，goroutine 将 flush 并关闭所有 fd 后
 // 关闭 done channel 通知调用方。Windows 上 t.TempDir() 清理前必须先释放打开的 fd。
 var fallbackCloseAll = make(chan chan struct{}, 1)
 
-func init() {
+// InitFallbackQueue 按配置容量创建 fallbackQueue 并启动写入 goroutine。
+// 由 StartBusinessStatsFlushLoop 在配置加载后调用，不可重复调用。
+func InitFallbackQueue(capacity int) {
+	if capacity <= 0 {
+		capacity = operation_setting.DefaultLedgerFallbackQueueCapacity
+	}
+	fallbackQueue = make(chan fallbackWriteEntry, capacity)
 	go runFallbackWriteLoop()
 }
 
@@ -64,11 +73,26 @@ func (s *fallbackFileState) close() {
 	}
 }
 
-func openFallbackFile(basename, date string) *fallbackFileState {
+// fallbackSubDir is the subdirectory name used when UseSeparateFallbackDir is enabled.
+const fallbackSubDir = "fallback"
+
+// resolveFallbackDir returns the directory for fallback files.
+// When UseSeparateFallbackDir is true, files go into a "fallback/" subdirectory
+// inside the app log dir, keeping them separate from regular logs.
+// Otherwise falls back to common.LogDir (the default log directory).
+func resolveFallbackDir() string {
 	logDir := "."
 	if common.LogDir != nil && *common.LogDir != "" {
 		logDir = *common.LogDir
 	}
+	if operation_setting.GetBusinessStatsFallbackBackfillSetting().UseSeparateFallbackDir {
+		return filepath.Join(logDir, fallbackSubDir)
+	}
+	return logDir
+}
+
+func openFallbackFile(basename, date string) *fallbackFileState {
+	logDir := resolveFallbackDir()
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		common.SysError("fallback_writer: mkdir failed: " + err.Error())
 		return nil
@@ -190,7 +214,7 @@ func runFallbackWriteLoop() {
 }
 
 // writeBusinessStatsJSONLine 序列化 record，捕获当前日期，并将 JSON 行投入异步写队列。
-// 仅在序列化失败或队列满时返回 false；队列满时触发熔断器 hard-disable。
+// 队列满时（channel full 或未初始化）立即返回 false，由调用方触发熔断器 hard-disable。
 func writeBusinessStatsJSONLine(basename, logPrefix string, record map[string]any) bool {
 	data, err := common.Marshal(record)
 	if err != nil {
@@ -220,7 +244,9 @@ func writeBusinessStatsDeadLetter(kind, reason string, attempts int, payload any
 		"attempts": attempts,
 		"payload":  payload,
 	}
-	writeBusinessStatsJSONLine(businessStatsDeadLetterFile, "writeBusinessStatsDeadLetter", record)
+	if !writeBusinessStatsJSONLine(businessStatsDeadLetterFile, "writeBusinessStatsDeadLetter", record) {
+		common.SysError(fmt.Sprintf("business-stats: dead letter entry permanently lost (kind=%s reason=%s): dead letter queue full", kind, reason))
+	}
 }
 
 func writeBusinessStatsFallback(kind, reason string, payload any) bool {
@@ -231,4 +257,43 @@ func writeBusinessStatsFallback(kind, reason string, payload any) bool {
 		"payload": payload,
 	}
 	return writeBusinessStatsJSONLine(businessStatsFallbackFile, "writeBusinessStatsFallback", record)
+}
+
+// stat-buffer fallback helpers — one per kind string consumed by processBackfillEntry.
+// These are called when a stat delta exhausts StatUpsertMaxRetries; the backfill worker
+// replays them on the next startup.
+
+func writeStatPlatformFallback(reason string, d *platformStatDelta) bool {
+	return writeBusinessStatsFallback("stat_platform", reason, d)
+}
+
+func writeStatCommissionFallback(reason string, d *commissionStatDelta) bool {
+	return writeBusinessStatsFallback("stat_commission", reason, d)
+}
+
+func writeStatCustomerCommissionFallback(reason string, d *customerCommissionStatDelta) bool {
+	return writeBusinessStatsFallback("stat_customer_commission", reason, d)
+}
+
+func writeStatResetDailyFallback(reason string, d *commissionResetPeriodDailyDelta) bool {
+	return writeBusinessStatsFallback("stat_reset_daily", reason, d)
+}
+
+func writeStatEmployeeExtFallback(reason string, userId int, d *employeeExtDelta) bool {
+	return writeBusinessStatsFallback("stat_employee_ext", reason, map[string]any{
+		"user_id":          userId,
+		"commission_delta": d.CommissionDelta,
+		"profit_delta":     d.ProfitDelta,
+	})
+}
+
+// FlushAndCloseFallbackFiles drains the write queue, flushes, and closes every
+// open fallback/dead-letter file descriptor.  On Windows, t.TempDir() cleanup
+// fails if any fd is still open inside the temp directory — call this in
+// t.Cleanup before restoring common.LogDir whenever tests redirect LogDir to a
+// temp directory.
+func FlushAndCloseFallbackFiles() {
+	done := make(chan struct{})
+	fallbackCloseAll <- done
+	<-done
 }

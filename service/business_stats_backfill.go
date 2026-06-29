@@ -340,6 +340,7 @@ func runBackfillTask(date string) {
 		var entry fallbackLogLine
 		if err := common.Unmarshal(line, &entry); err != nil {
 			common.SysLog(fmt.Sprintf("backfill_task: json parse error date=%s line=%d: %s", date, totalLines, err.Error()))
+			model.WriteBackfillDeadLetter(line, err.Error())
 			discardCount++
 			updateBackfillProgress(totalLines, successCount, discardCount)
 			continue
@@ -427,11 +428,40 @@ func processBackfillEntry(
 	switch entry.Kind {
 	case "cost_commission_create":
 		return processExactPairEntry(entry, writer)
-	case "business_stats_skipped":
+	case "business_stats_skipped", "settlement_effective_commission_rate":
+		// Both kinds carry only payload["cost"]; the distinction (circuit-breaker
+		// rejection vs. DB write timeout) is irrelevant for backfill — same
+		// cost-only record that needs to be written + commission re-derived.
 		return processCostOnlyEntry(entry, writer, lookupCache)
+	case "stat_platform", "stat_commission", "stat_customer_commission", "stat_reset_daily", "stat_employee_ext":
+		return processStatFallbackEntry(entry)
 	default:
 		return false, fmt.Sprintf("unsupported kind=%s", entry.Kind)
 	}
+}
+
+func processStatFallbackEntry(entry fallbackLogLine) (bool, string) {
+	payloadBytes, err := common.Marshal(entry.Payload)
+	if err != nil {
+		return false, entry.Kind + ": marshal payload: " + err.Error()
+	}
+	var replayErr error
+	switch entry.Kind {
+	case "stat_platform":
+		replayErr = model.ReplayStatPlatformFallback(payloadBytes)
+	case "stat_commission":
+		replayErr = model.ReplayStatCommissionFallback(payloadBytes)
+	case "stat_customer_commission":
+		replayErr = model.ReplayStatCustomerCommissionFallback(payloadBytes)
+	case "stat_reset_daily":
+		replayErr = model.ReplayStatResetDailyFallback(payloadBytes)
+	case "stat_employee_ext":
+		replayErr = model.ReplayStatEmployeeExtFallback(payloadBytes)
+	}
+	if replayErr != nil {
+		return false, entry.Kind + ": " + replayErr.Error()
+	}
+	return true, ""
 }
 
 // processExactPairEntry handles "cost_commission_create" entries that carry

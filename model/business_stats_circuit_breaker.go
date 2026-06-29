@@ -133,7 +133,7 @@ func GetBusinessStatsCircuitBreakerStatus() BusinessStatsCircuitBreakerStatus {
 	return BusinessStatsCircuitBreakerStatus{
 		Enabled:             cfg.Enabled,
 		ManualDisabled:      cfg.ManualDisabled,
-		Open:                !cfg.Enabled || cfg.ManualDisabled || businessStatsCircuitBreakerStateValue.hardDisabled || businessStatsCircuitBreakerStateValue.disabledUntil > now,
+		Open:                cfg.ManualDisabled || (cfg.Enabled && (businessStatsCircuitBreakerStateValue.hardDisabled || businessStatsCircuitBreakerStateValue.disabledUntil > now)),
 		HardDisabled:        businessStatsCircuitBreakerStateValue.hardDisabled,
 		DisabledUntil:       businessStatsCircuitBreakerStateValue.disabledUntil,
 		ConsecutiveFailures: businessStatsCircuitBreakerStateValue.consecutiveFailures,
@@ -143,11 +143,15 @@ func GetBusinessStatsCircuitBreakerStatus() BusinessStatsCircuitBreakerStatus {
 }
 
 // IsBusinessStatsCircuitOpen 返回 true 表示熔断器当前处于开路状态，侧路记录应被跳过。
-// 以下情况均视为开路：Enabled=false、ManualDisabled=true、hard-disabled、冷却期内。
+// 开路条件：ManualDisabled=true（手动强制跳过）、hard-disabled、或冷却期内自动开路。
+// Enabled=false 时电路视为闭路——副逻辑照常执行，仅关闭自动熔断保护。
 func IsBusinessStatsCircuitOpen() bool {
 	cfg := normalizeBusinessStatsCircuitBreakerSetting()
-	if !cfg.Enabled || cfg.ManualDisabled {
+	if cfg.ManualDisabled {
 		return true
+	}
+	if !cfg.Enabled {
+		return false
 	}
 	now := time.Now().Unix()
 	businessStatsCircuitBreakerLock.Lock()
@@ -159,14 +163,15 @@ func IsBusinessStatsCircuitOpen() bool {
 }
 
 // BusinessStatsCircuitSkipReason 返回当前开路的原因描述，用于 fallback 日志。
-// 熔断器关闭时返回空字符串。
+// 电路闭合时返回空字符串。
 func BusinessStatsCircuitSkipReason() string {
 	cfg := normalizeBusinessStatsCircuitBreakerSetting()
-	if !cfg.Enabled {
-		return "business stats circuit breaker disabled by config"
-	}
 	if cfg.ManualDisabled {
 		return "business stats manually disabled"
+	}
+	if !cfg.Enabled {
+		// Enabled=false 时电路闭合，不会进入此分支
+		return ""
 	}
 	now := time.Now().Unix()
 	businessStatsCircuitBreakerLock.Lock()

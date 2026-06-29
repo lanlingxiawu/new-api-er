@@ -8,10 +8,6 @@ import "time"
 //
 // 单独建表而非写入 logs：logs 还包含大量非消费日志，且成本统计只需消费数据。
 type ConsumptionCost struct {
-	// Two composite indexes are built asynchronously after startup to avoid blocking
-	// InitDB on large historical tables. See ensureConsumptionCostIndexesAsync in main.go:
-	//   idx_consumption_cost_created_at_id  (created_at, id)       — cursor pagination on PG/SQLite
-	//   idx_consumption_cost_created_user   (created_at, user_id)  — user-filtered ledger queries
 	Id           int     `json:"id"`
 	LogId        *int    `json:"log_id" gorm:"uniqueIndex"` // 关联 logs.id，唯一约束保证幂等；无日志时为 NULL
 	UserId       int     `json:"user_id" gorm:"index;default:0"`

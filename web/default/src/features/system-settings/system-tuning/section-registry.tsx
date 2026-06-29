@@ -92,15 +92,25 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings[
               'ledger_pipeline_setting.outer_batch_size'
             ],
+          'ledger_pipeline_setting.cost_outer_batch_size':
+            settings['ledger_pipeline_setting.cost_outer_batch_size'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.cost_outer_batch_size'
+            ],
           'ledger_pipeline_setting.inner_batch_size':
             settings['ledger_pipeline_setting.inner_batch_size'] ??
             systemTuningFallbackSettings[
               'ledger_pipeline_setting.inner_batch_size'
             ],
-          'ledger_pipeline_setting.paired_flush_max_per_cycle':
-            settings['ledger_pipeline_setting.paired_flush_max_per_cycle'] ??
+          'ledger_pipeline_setting.settlement_flush_max_per_cycle':
+            settings['ledger_pipeline_setting.settlement_flush_max_per_cycle'] ??
             systemTuningFallbackSettings[
-              'ledger_pipeline_setting.paired_flush_max_per_cycle'
+              'ledger_pipeline_setting.settlement_flush_max_per_cycle'
+            ],
+          'ledger_pipeline_setting.cost_flush_max_per_cycle':
+            settings['ledger_pipeline_setting.cost_flush_max_per_cycle'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.cost_flush_max_per_cycle'
             ],
           'ledger_pipeline_setting.full_drain':
             settings['ledger_pipeline_setting.full_drain'] ??
@@ -127,6 +137,36 @@ const SYSTEM_TUNING_SECTIONS = [
             settings['ledger_pipeline_setting.flush_db_timeout_sec'] ??
             systemTuningFallbackSettings[
               'ledger_pipeline_setting.flush_db_timeout_sec'
+            ],
+          'ledger_pipeline_setting.fallback_queue_capacity':
+            settings['ledger_pipeline_setting.fallback_queue_capacity'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.fallback_queue_capacity'
+            ],
+          'ledger_pipeline_setting.shutdown_timeout_sec':
+            settings['ledger_pipeline_setting.shutdown_timeout_sec'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.shutdown_timeout_sec'
+            ],
+          'ledger_retry_setting.retry_flush_interval_sec':
+            settings['ledger_retry_setting.retry_flush_interval_sec'] ??
+            systemTuningFallbackSettings[
+              'ledger_retry_setting.retry_flush_interval_sec'
+            ],
+          'ledger_retry_setting.stat_upsert_max_retries':
+            settings['ledger_retry_setting.stat_upsert_max_retries'] ??
+            systemTuningFallbackSettings[
+              'ledger_retry_setting.stat_upsert_max_retries'
+            ],
+          'ledger_retry_setting.retry_queue_max_entries':
+            settings['ledger_retry_setting.retry_queue_max_entries'] ??
+            systemTuningFallbackSettings[
+              'ledger_retry_setting.retry_queue_max_entries'
+            ],
+          'ledger_retry_setting.allow_concurrent_flush':
+            settings['ledger_retry_setting.allow_concurrent_flush'] ??
+            systemTuningFallbackSettings[
+              'ledger_retry_setting.allow_concurrent_flush'
             ],
         }}
       />
@@ -224,6 +264,11 @@ const SYSTEM_TUNING_SECTIONS = [
             settings['business_stats_fallback_backfill_setting.enabled'] ??
             systemTuningFallbackSettings[
               'business_stats_fallback_backfill_setting.enabled'
+            ],
+          'business_stats_fallback_backfill_setting.use_separate_fallback_dir':
+            settings['business_stats_fallback_backfill_setting.use_separate_fallback_dir'] ??
+            systemTuningFallbackSettings[
+              'business_stats_fallback_backfill_setting.use_separate_fallback_dir'
             ],
           'business_stats_fallback_backfill_setting.status_cache_seconds':
             settings[

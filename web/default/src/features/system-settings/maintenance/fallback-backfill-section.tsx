@@ -55,6 +55,7 @@ import {
 const schema = z.object({
   business_stats_fallback_backfill_setting: z.object({
     enabled: z.boolean(),
+    use_separate_fallback_dir: z.boolean(),
     status_cache_seconds: z.number().int().min(1),
     max_read_line_bytes: z.number().int().min(1),
     write_batch_size: z.number().int().min(1),
@@ -67,6 +68,7 @@ type FormValues = z.infer<typeof schema>
 
 type FlatDefaults = {
   'business_stats_fallback_backfill_setting.enabled': boolean
+  'business_stats_fallback_backfill_setting.use_separate_fallback_dir': boolean
   'business_stats_fallback_backfill_setting.status_cache_seconds': number
   'business_stats_fallback_backfill_setting.max_read_line_bytes': number
   'business_stats_fallback_backfill_setting.write_batch_size': number
@@ -82,6 +84,7 @@ function buildFormDefaults(defaults: FlatDefaults): FormValues {
   return {
     business_stats_fallback_backfill_setting: {
       enabled: defaults['business_stats_fallback_backfill_setting.enabled'],
+      use_separate_fallback_dir: defaults['business_stats_fallback_backfill_setting.use_separate_fallback_dir'],
       status_cache_seconds:
         defaults['business_stats_fallback_backfill_setting.status_cache_seconds'],
       max_read_line_bytes:
@@ -100,6 +103,7 @@ function normalizeFormValues(values: FormValues): FlatDefaults {
   const s = values.business_stats_fallback_backfill_setting
   return {
     'business_stats_fallback_backfill_setting.enabled': s.enabled,
+    'business_stats_fallback_backfill_setting.use_separate_fallback_dir': s.use_separate_fallback_dir,
     'business_stats_fallback_backfill_setting.status_cache_seconds':
       s.status_cache_seconds,
     'business_stats_fallback_backfill_setting.max_read_line_bytes':
@@ -245,6 +249,29 @@ export function FallbackBackfillSection({
           />
 
           <Separator />
+
+          <FormField
+            control={form.control}
+            name='business_stats_fallback_backfill_setting.use_separate_fallback_dir'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Use Separate Fallback Directory')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Write fallback files to a dedicated "fallback/" subdirectory inside the app log dir, keeping them separate from regular logs. Off (default): fallback files share the app log directory.'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
 
           {numericFields.map((item) => (
             <FormField

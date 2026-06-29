@@ -26,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -243,7 +244,10 @@ func main() {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 	common.SysLog("received shutdown signal, flushing business stat buffers...")
-	model.FlushBusinessStatBuffers()
+	// Stop flush loop, flush to DB, drain remainder to fallback file.
+	// Budget is configurable via ledger_pipeline_setting.shutdown_timeout_sec (default 25 s),
+	// which must stay below the HTTP server shutdown timeout (30 s).
+	model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

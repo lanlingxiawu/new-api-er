@@ -32,7 +32,7 @@ const (
 	consumptionCostLedgerAsyncStatsLockTTL         = 6 * time.Minute
 	consumptionCostLedgerAsyncStatsTimeout         = 5 * time.Minute
 	consumptionCostLedgerAsyncStatsMaxRunning      = 2
-	consumptionCostLedgerStatsSliceSeconds = int64(3600)
+	consumptionCostLedgerStatsSliceSeconds         = int64(3600)
 )
 
 type ConsumptionCostLedgerCommonFilter struct {
@@ -137,6 +137,11 @@ func FillConsumptionCostLedgerChannelNames(items []ConsumptionCostLedgerItem, ca
 			continue
 		}
 		if _, ok := cache[id]; ok {
+			continue
+		}
+		// 有存储快照直接入缓存，无需额外解析
+		if items[i].ChannelName != "" {
+			cache[id] = items[i].ChannelName
 			continue
 		}
 		// 先占位空串作为负缓存，避免同页/跨页对同一未解析 id 重复查询

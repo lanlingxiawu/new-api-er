@@ -11,6 +11,11 @@ type BusinessStatsFallbackBackfillSetting struct {
 	// backfill trigger endpoint returns an error.
 	Enabled bool `json:"enabled"`
 
+	// UseSeparateFallbackDir switches fallback files to a dedicated subdirectory
+	// ("fallback/") inside the app log directory, separating them from regular logs.
+	// When false (default), fallback files share the app log directory (--log-dir).
+	UseSeparateFallbackDir bool `json:"use_separate_fallback_dir"`
+
 	// StatusCacheSeconds is the TTL (seconds) for the per-date fallback file stat
 	// result cached in process memory. Keeps frequent ledger polls from hitting the FS.
 	StatusCacheSeconds int `json:"status_cache_seconds"`
@@ -36,12 +41,12 @@ type BusinessStatsFallbackBackfillSetting struct {
 }
 
 var businessStatsFallbackBackfillSetting = BusinessStatsFallbackBackfillSetting{
-	Enabled:              true,
-	StatusCacheSeconds:   15,
-	MaxReadLineBytes:     1048576, // 1 MiB
-	WriteBatchSize:   200,
-	FlushIntervalSec: 5,
-	BatchSleepMs:     200,
+	Enabled:            true,
+	StatusCacheSeconds: 15,
+	MaxReadLineBytes:   1048576, // 1 MiB
+	WriteBatchSize:     200,
+	FlushIntervalSec:   5,
+	BatchSleepMs:       200,
 }
 
 func init() {

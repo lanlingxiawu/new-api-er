@@ -1199,7 +1199,7 @@ func GetChannelNamesByIdsWithContext(ctx context.Context, ids []int) (map[int]st
 }
 
 // ResolveChannelDisplayNamesWithoutLogs 批量解析渠道显示名称，仅经两层：
-// channels 表（含已软删，Unscoped）→ platform_channel_daily_stats 名称快照。
+// 进程内缓存（MemoryCacheEnabled 时）或 channels 表（含已软删，Unscoped）→ platform_channel_daily_stats 名称快照。
 // 不回退到 logs 表扫描（logs 的 LIKE '%channel_name%' 是全表过滤，代价高）。
 // 解析不到的 id 不会出现在返回 map 中，调用方应保持原值不变。
 func ResolveChannelDisplayNamesWithoutLogs(ids []int) map[int]string {
@@ -1212,15 +1212,29 @@ func ResolveChannelDisplayNamesWithoutLogs(ids []int) map[int]string {
 		seen[id] = true
 		uniq = append(uniq, id)
 	}
-	result, err := GetChannelNamesByIds(uniq)
-	if err != nil {
-		common.SysLog(fmt.Sprintf("failed to resolve channel names from channels: %v", err))
-		result = make(map[int]string, len(uniq))
-	}
-	missing := make([]int, 0)
-	for _, id := range uniq {
-		if result[id] == "" {
-			missing = append(missing, id)
+	result := make(map[int]string, len(uniq))
+	missing := make([]int, 0, len(uniq))
+	if common.MemoryCacheEnabled {
+		channelSyncLock.RLock()
+		for _, id := range uniq {
+			if ch, ok := channelsIDM[id]; ok && ch.Name != "" {
+				result[id] = ch.Name
+			} else {
+				missing = append(missing, id)
+			}
+		}
+		channelSyncLock.RUnlock()
+	} else {
+		r, err := GetChannelNamesByIds(uniq)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("failed to resolve channel names from channels: %v", err))
+		} else {
+			result = r
+		}
+		for _, id := range uniq {
+			if result[id] == "" {
+				missing = append(missing, id)
+			}
 		}
 	}
 	if len(missing) == 0 {
@@ -1230,12 +1244,11 @@ func ResolveChannelDisplayNamesWithoutLogs(ids []int) map[int]string {
 		ChannelId   int
 		ChannelName string
 	}
-	err = DB.Model(&PlatformChannelDailyStat{}).
+	if err := DB.Model(&PlatformChannelDailyStat{}).
 		Select("channel_id, MAX(channel_name) as channel_name").
 		Where("channel_id IN ? AND channel_name <> ''", missing).
 		Group("channel_id").
-		Scan(&rows).Error
-	if err != nil {
+		Scan(&rows).Error; err != nil {
 		common.SysLog(fmt.Sprintf("failed to resolve channel names from daily stats: %v", err))
 	} else {
 		for _, row := range rows {

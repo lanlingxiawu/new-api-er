@@ -307,7 +307,7 @@ export function BusinessStatsCircuitBreakerSection({
                   <FormLabel>{t('Enable automatic circuit breaker')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'Temporarily skip side logic after repeated DB/Redis/memory/file fallback failures.'
+                      'Off: side logic always runs without circuit protection (no auto-skip on failure). On: consecutive side-effect DB query failures trip the circuit temporarily; auto-recovers after cooldown.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>

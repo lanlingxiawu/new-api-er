@@ -188,6 +188,28 @@ export default function SettingsFallbackBackfill(props) {
           </Row>
 
           <Row gutter={16}>
+            <Col xs={24} sm={12} md={12} lg={12} xl={12}>
+              <Form.Switch
+                field={'business_stats_fallback_backfill_setting.use_separate_fallback_dir'}
+                label={t('使用独立兜底目录')}
+                size='default'
+                checkedText='｜'
+                uncheckedText='〇'
+                onChange={(value) =>
+                  updateInput('business_stats_fallback_backfill_setting.use_separate_fallback_dir', value)
+                }
+              />
+              <Text
+                type='tertiary'
+                size='small'
+                style={{ display: 'block', marginTop: 4, marginBottom: 8 }}
+              >
+                {t('开启后兜底文件写入日志目录下的 fallback/ 子目录，与应用日志分离；关闭（默认）则共用日志目录。')}
+              </Text>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
             {numericFields.map((item) => (
               <Col xs={24} sm={12} md={8} lg={8} xl={8} key={item.field}>
                 <Form.InputNumber

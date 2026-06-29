@@ -276,7 +276,7 @@ export default function SettingsBusinessStatsGuard(props) {
                 style={{ display: 'block', marginTop: 4, marginBottom: 8 }}
               >
                 {t(
-                  '启用后，DB、Redis、内存或文件兜底连续失败时，会临时跳过副逻辑。',
+                  '关闭时副逻辑照常写库（无熔断保护）；启用后，侧路 DB 查询连续超时/失败达到阈值时临时开路，冷却后自动恢复。',
                 )}
               </Text>
             </Col>

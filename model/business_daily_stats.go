@@ -56,21 +56,6 @@ type EmployeeCustomerCommissionDailyStat struct {
 	LastCreatedAt   int64 `json:"last_created_at" gorm:"default:0"`
 }
 
-type EmployeeCommissionResetPeriodStat struct {
-	Id              int    `json:"id"`
-	ResetStartedAt  int64  `json:"reset_started_at" gorm:"uniqueIndex:idx_employee_commission_reset_period,priority:1;index;index:idx_employee_commission_reset_period_rank,priority:1"`
-	ResetEndedAt    int64  `json:"reset_ended_at" gorm:"index;default:0"`
-	PeriodKey       string `json:"period_key" gorm:"type:varchar(32);default:''"`
-	Timezone        string `json:"timezone" gorm:"type:varchar(64);default:''"`
-	EmployeeUserId  int    `json:"employee_user_id" gorm:"uniqueIndex:idx_employee_commission_reset_period,priority:2;index;index:idx_employee_commission_reset_period_rank,priority:2"`
-	RevenueQuota    int64  `json:"revenue_quota" gorm:"default:0"`
-	CostQuota       int64  `json:"cost_quota" gorm:"default:0"`
-	ProfitQuota     int64  `json:"profit_quota" gorm:"default:0"`
-	CommissionQuota int64  `json:"commission_quota" gorm:"default:0"`
-	RecordCount     int64  `json:"record_count" gorm:"default:0"`
-	LastCreatedAt   int64  `json:"last_created_at" gorm:"default:0"`
-}
-
 type EmployeeCommissionResetPeriodDailyStat struct {
 	Id              int   `json:"id"`
 	ResetStartedAt  int64 `json:"reset_started_at" gorm:"uniqueIndex:idx_employee_commission_reset_period_daily,priority:1;index;index:idx_employee_commission_reset_period_daily_rank,priority:1"`
@@ -286,23 +271,13 @@ func getBusinessStatsDailyBoundsWithContext(ctx context.Context) (int64, int64, 
 	if err != nil {
 		return 0, 0, err
 	}
-	customerMin, customerMax, err := getStatDateBoundsWithContext(ctx, &EmployeeCustomerCommissionDailyStat{})
-	if err != nil {
-		return 0, 0, err
-	}
 	minDate := platformMin
 	if minDate == 0 || (employeeMin != 0 && employeeMin < minDate) {
 		minDate = employeeMin
 	}
-	if minDate == 0 || (customerMin != 0 && customerMin < minDate) {
-		minDate = customerMin
-	}
 	maxDate := platformMax
 	if employeeMax > maxDate {
 		maxDate = employeeMax
-	}
-	if customerMax > maxDate {
-		maxDate = customerMax
 	}
 	return minDate, maxDate, nil
 }

@@ -12,6 +12,47 @@ import (
 )
 
 // ============================================================================
+// EmployeeTierLevel 进程内缓存（Redis 未启用时的降级）
+// ============================================================================
+
+type tierLevelMemEntry struct {
+	level     EmployeeTierLevel
+	expiresAt time.Time
+}
+
+const tierLevelMemCacheTTL = 5 * time.Minute
+
+var tierLevelMemCache sync.Map // map[int]tierLevelMemEntry
+
+func getTierLevelFromMem(userId int) *EmployeeTierLevel {
+	v, ok := tierLevelMemCache.Load(userId)
+	if !ok {
+		return nil
+	}
+	entry := v.(tierLevelMemEntry)
+	if time.Now().After(entry.expiresAt) {
+		tierLevelMemCache.Delete(userId)
+		return nil
+	}
+	level := entry.level
+	return &level
+}
+
+func setTierLevelToMem(level *EmployeeTierLevel) {
+	if level == nil {
+		return
+	}
+	tierLevelMemCache.Store(level.UserId, tierLevelMemEntry{
+		level:     *level,
+		expiresAt: time.Now().Add(tierLevelMemCacheTTL),
+	})
+}
+
+func deleteTierLevelFromMem(userId int) {
+	tierLevelMemCache.Delete(userId)
+}
+
+// ============================================================================
 // EmployeeTierLevel Redis 缓存
 // ============================================================================
 
@@ -113,10 +154,12 @@ func refreshTierLevelCacheFromDBByUserIds(userIds []int) {
 	for _, level := range levels {
 		found[level.UserId] = struct{}{}
 		setTierLevelToRedis(level)
+		setTierLevelToMem(level)
 	}
 	for _, userId := range ids {
 		if _, ok := found[userId]; !ok {
 			deleteTierLevelFromRedis(userId)
+			deleteTierLevelFromMem(userId)
 		}
 	}
 }
@@ -319,7 +362,13 @@ func GetOrCreateTierLevel(userId int, readCacheOpt ...bool) (*EmployeeTierLevel,
 func GetOrCreateTierLevelWithContext(ctx context.Context, userId int, readCacheOpt ...bool) (*EmployeeTierLevel, error) {
 	readCache := len(readCacheOpt) > 0 && readCacheOpt[0]
 	if readCache {
+		// L1: 进程内内存缓存（纳秒级），始终优先，避免 Redis 网络开销。
+		if level := getTierLevelFromMem(userId); level != nil {
+			return level, nil
+		}
+		// L2: Redis（跨实例共享），命中后回填内存缓存。
 		if level := getTierLevelFromRedis(userId); level != nil {
+			setTierLevelToMem(level)
 			return level, nil
 		}
 	}
@@ -338,12 +387,14 @@ func GetOrCreateTierLevelWithContext(ctx context.Context, userId int, readCacheO
 			}
 		}
 		setTierLevelToRedisNX(&level)
+		setTierLevelToMem(&level)
 		return &level, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	setTierLevelToRedisNX(&level)
+	setTierLevelToMem(&level)
 	return &level, nil
 }
 
@@ -436,7 +487,13 @@ func SetTierLevel(userId int, newTierId int64, source string, operatedBy int, re
 	level.EffectiveAt = now
 	level.Remark = remark
 	level.UpdatedBy = operatedBy
-	refreshTierLevelCacheFromDB(userId)
+	if common.RedisEnabled {
+		// refreshTierLevelCacheFromDB 从 DB 重新读取并同时写入 Redis 和内存缓存
+		refreshTierLevelCacheFromDB(userId)
+	} else {
+		// 无 Redis 时 refreshTierLevelCacheFromDB 是 no-op，直接用已更新的 level 写内存
+		setTierLevelToMem(level)
+	}
 
 	return nil
 }

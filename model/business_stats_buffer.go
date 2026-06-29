@@ -20,13 +20,24 @@ import (
 // ============================================================================
 
 const (
-	statBufferMaxRetries = 10
-
 	// 默认刷盘间隔（如果配置未指定或无效）
 	DefaultBusinessStatsFlushInterval = 8 // 秒，均衡模式：100k RPM 下 8s×15000/cycle = 112k/min 吞吐
 )
 
 var businessStatsFlushMu sync.Mutex
+
+// retryQueueMu 仅保护 costRetryQueue / pairRetryQueue slice 和对应 flush state，
+// 与 businessStatsFlushMu 解耦，使重试 goroutine 的 DB 写入不阻塞主刷盘循环。
+// 加锁顺序：若需同时持有两锁，必须先 businessStatsFlushMu 再 retryQueueMu。
+var retryQueueMu sync.Mutex
+
+var (
+	flushLoopStopCh = make(chan struct{})
+	flushLoopDoneCh = make(chan struct{})
+	flushLoopOnce   sync.Once // guards close(flushLoopStopCh)
+
+	retryLoopDoneCh = make(chan struct{})
+)
 
 // ---- 统计累积缓冲 ----
 // 以下 buffer*Mem / requeue*Mem / flush*FromMem 均为进程内 map 实现，
@@ -69,21 +80,6 @@ type customerCommissionStatDelta struct {
 	RetryCount      int
 }
 
-type commissionResetPeriodDelta struct {
-	ResetStartedAt  int64
-	ResetEndedAt    int64
-	PeriodKey       string
-	Timezone        string
-	EmployeeUserId  int
-	RevenueQuota    int64
-	CostQuota       int64
-	ProfitQuota     int64
-	CommissionQuota int64
-	RecordCount     int64
-	LastCreatedAt   int64
-	RetryCount      int
-}
-
 type commissionResetPeriodDailyDelta struct {
 	ResetStartedAt  int64
 	StatDate        int64
@@ -105,8 +101,6 @@ var (
 	memCommissionLock                 sync.Mutex
 	memCustomerCommissionBuf          = make(map[string]*customerCommissionStatDelta)
 	memCustomerCommissionLock         sync.Mutex
-	memCommissionResetPeriodBuf       = make(map[string]*commissionResetPeriodDelta)
-	memCommissionResetPeriodLock      sync.Mutex
 	memCommissionResetPeriodDailyBuf  = make(map[string]*commissionResetPeriodDailyDelta)
 	memCommissionResetPeriodDailyLock sync.Mutex
 )
@@ -121,10 +115,6 @@ func memCommissionKey(statDate int64, employeeUserId int) string {
 
 func memCustomerCommissionKey(statDate int64, employeeUserId, customerUserId int) string {
 	return fmt.Sprintf("%d:%d:%d", statDate, employeeUserId, customerUserId)
-}
-
-func memCommissionResetPeriodKey(resetStartedAt int64, employeeUserId int) string {
-	return fmt.Sprintf("%d:%d", resetStartedAt, employeeUserId)
 }
 
 func memCommissionResetPeriodDailyKey(resetStartedAt, statDate int64, employeeUserId int) string {
@@ -190,14 +180,6 @@ func bufferCustomerCommissionStatMem(statDate int64, employeeUserId, customerUse
 	}
 }
 
-// commissionResetPeriodMeta 返回 reset_started_at 对应的 period_key（配置时区下的日期字符串）
-// 和 timezone 名称，用于写入 EmployeeCommissionResetPeriodStat 的元数据字段。
-func commissionResetPeriodMeta(resetStartedAt int64) (periodKey, timezone string) {
-	cfg := operation_setting.GetCommissionTierResetSetting()
-	loc, tz := commissionMonthlyStatLocation(cfg.Timezone)
-	return time.Unix(resetStartedAt, 0).In(loc).Format("2006-01-02"), tz
-}
-
 // effectiveResetStartedAt 返回该条提成记录应归属的 reset_started_at。
 // 若员工已有明确的 BaselineResetAt（最近一次重置时间），直接使用，使重置前后的数据
 // 落在不同的 reset_started_at 桶中，从而实现"重置清空日历"的语义。
@@ -208,35 +190,6 @@ func effectiveResetStartedAt(level *EmployeeTierLevel, createdAt int64) int64 {
 		return level.BaselineResetAt
 	}
 	return ResolveCommissionMonthlyPeriod(createdAt).PeriodStartAt
-}
-
-func bufferCommissionResetPeriodStatMem(resetStartedAt int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
-	if resetStartedAt <= 0 {
-		return
-	}
-	key := memCommissionResetPeriodKey(resetStartedAt, employeeUserId)
-	memCommissionResetPeriodLock.Lock()
-	defer memCommissionResetPeriodLock.Unlock()
-	d, ok := memCommissionResetPeriodBuf[key]
-	if !ok {
-		pk, tz := commissionResetPeriodMeta(resetStartedAt)
-		d = &commissionResetPeriodDelta{
-			ResetStartedAt: resetStartedAt,
-			ResetEndedAt:   0,
-			PeriodKey:      pk,
-			Timezone:       tz,
-			EmployeeUserId: employeeUserId,
-		}
-		memCommissionResetPeriodBuf[key] = d
-	}
-	d.RevenueQuota += revenueQuota
-	d.CostQuota += costQuota
-	d.ProfitQuota += profitQuota
-	d.CommissionQuota += commissionQuota
-	d.RecordCount++
-	if createdAt > d.LastCreatedAt {
-		d.LastCreatedAt = createdAt
-	}
 }
 
 func bufferCommissionResetPeriodDailyStatMem(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota int64, createdAt int64) {
@@ -270,9 +223,10 @@ func requeuePlatformStatMem(d *platformStatDelta) {
 		return
 	}
 	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("platform_daily_stat", "max retries exceeded", d.RetryCount, d)
-		ReportBusinessStatsFailure("platform_daily_stat", "max retries exceeded", d)
+	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
+		if !writeStatPlatformFallback("max_retries_exceeded", d) {
+			common.SysError("business-stats: stat_platform delta permanently lost: fallback write failed")
+		}
 		return
 	}
 	memPlatformLock.Lock()
@@ -304,9 +258,10 @@ func requeueCommissionStatMem(d *commissionStatDelta) {
 		return
 	}
 	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("commission_daily_stat", "max retries exceeded", d.RetryCount, d)
-		ReportBusinessStatsFailure("commission_daily_stat", "max retries exceeded", d)
+	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
+		if !writeStatCommissionFallback("max_retries_exceeded", d) {
+			common.SysError("business-stats: stat_commission delta permanently lost: fallback write failed")
+		}
 		return
 	}
 	memCommissionLock.Lock()
@@ -336,9 +291,10 @@ func requeueCustomerCommissionStatMem(d *customerCommissionStatDelta) {
 		return
 	}
 	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("customer_commission_daily_stat", "max retries exceeded", d.RetryCount, d)
-		ReportBusinessStatsFailure("customer_commission_daily_stat", "max retries exceeded", d)
+	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
+		if !writeStatCustomerCommissionFallback("max_retries_exceeded", d) {
+			common.SysError("business-stats: stat_customer_commission delta permanently lost: fallback write failed")
+		}
 		return
 	}
 	memCustomerCommissionLock.Lock()
@@ -363,52 +319,15 @@ func requeueCustomerCommissionStatMem(d *customerCommissionStatDelta) {
 	}
 }
 
-func requeueCommissionResetPeriodStatMem(d *commissionResetPeriodDelta) {
-	if d == nil {
-		return
-	}
-	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("commission_reset_period_stat", "max retries exceeded", d.RetryCount, d)
-		ReportBusinessStatsFailure("commission_reset_period_stat", "max retries exceeded", d)
-		return
-	}
-	memCommissionResetPeriodLock.Lock()
-	defer memCommissionResetPeriodLock.Unlock()
-	key := memCommissionResetPeriodKey(d.ResetStartedAt, d.EmployeeUserId)
-	existing := memCommissionResetPeriodBuf[key]
-	if existing == nil {
-		copyDelta := *d
-		memCommissionResetPeriodBuf[key] = &copyDelta
-		return
-	}
-	existing.RevenueQuota += d.RevenueQuota
-	existing.CostQuota += d.CostQuota
-	existing.ProfitQuota += d.ProfitQuota
-	existing.CommissionQuota += d.CommissionQuota
-	existing.RecordCount += d.RecordCount
-	if existing.PeriodKey == "" {
-		existing.PeriodKey = d.PeriodKey
-	}
-	if existing.Timezone == "" {
-		existing.Timezone = d.Timezone
-	}
-	if d.LastCreatedAt > existing.LastCreatedAt {
-		existing.LastCreatedAt = d.LastCreatedAt
-	}
-	if d.RetryCount > existing.RetryCount {
-		existing.RetryCount = d.RetryCount
-	}
-}
-
 func requeueCommissionResetPeriodDailyStatMem(d *commissionResetPeriodDailyDelta) {
 	if d == nil {
 		return
 	}
 	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("commission_reset_period_daily_stat", "max retries exceeded", d.RetryCount, d)
-		ReportBusinessStatsFailure("commission_reset_period_daily_stat", "max retries exceeded", d)
+	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
+		if !writeStatResetDailyFallback("max_retries_exceeded", d) {
+			common.SysError("business-stats: stat_reset_daily delta permanently lost: fallback write failed")
+		}
 		return
 	}
 	memCommissionResetPeriodDailyLock.Lock()
@@ -444,16 +363,20 @@ func BufferPlatformDailyStat(rec *ConsumptionCost) {
 
 // BufferCommissionDailyStat 将员工提成侧日统计增量写入进程内缓冲区。
 func BufferCommissionDailyStat(log *EmployeeCommissionLog) {
-	statDate := localDayStart(log.CreatedAt)
 	level, err := GetOrCreateTierLevel(log.EmployeeUserId, true)
 	if err != nil {
 		common.SysError("BufferCommissionDailyStat: get tier level failed: " + err.Error())
 		level = nil
 	}
+	bufferCommissionDailyStatWithLevel(log, level)
+}
+
+// bufferCommissionDailyStatWithLevel 接受调用方已预取的 tier level，避免批量刷盘时逐条查 Redis/DB。
+func bufferCommissionDailyStatWithLevel(log *EmployeeCommissionLog, level *EmployeeTierLevel) {
+	statDate := localDayStart(log.CreatedAt)
 	resetAt := effectiveResetStartedAt(level, log.CreatedAt)
 	bufferCommissionStatMem(statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 	bufferCustomerCommissionStatMem(statDate, log.EmployeeUserId, log.CustomerUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
-	bufferCommissionResetPeriodStatMem(resetAt, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 	bufferCommissionResetPeriodDailyStatMem(resetAt, statDate, log.EmployeeUserId, log.RevenueQuota, log.CostQuota, log.ProfitQuota, log.CommissionQuota, log.CreatedAt)
 }
 
@@ -533,23 +456,6 @@ func flushCustomerCommissionStatsFromMem() {
 		}
 	}
 	common.SysLog(fmt.Sprintf("flush_business_stats: customer commission mem items=%d", len(buf)))
-}
-
-func flushCommissionResetPeriodStatsFromMem() {
-	memCommissionResetPeriodLock.Lock()
-	buf := memCommissionResetPeriodBuf
-	memCommissionResetPeriodBuf = make(map[string]*commissionResetPeriodDelta)
-	memCommissionResetPeriodLock.Unlock()
-
-	if len(buf) == 0 {
-		return
-	}
-	for _, d := range buf {
-		if !upsertCommissionResetPeriodStat(d.ResetStartedAt, d.ResetEndedAt, d.PeriodKey, d.Timezone, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
-			requeueCommissionResetPeriodStatMem(d)
-		}
-	}
-	common.SysLog(fmt.Sprintf("flush_business_stats: commission reset period mem items=%d", len(buf)))
 }
 
 func flushCommissionResetPeriodDailyStatsFromMem() {
@@ -641,7 +547,7 @@ func upsertCustomerCommissionDailyStat(statDate int64, employeeUserId, customerU
 	db, cancel := flushDBWithTimeout()
 	defer cancel()
 	if err := upsertCustomerCommissionDailyStatTx(db, statDate, employeeUserId, customerUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
-		common.SysError(fmt.Sprintf("upsertCustomerCommissionDailyStat: statDate=%d empUserId=%d customerUserId=%d err=%s", statDate, employeeUserId, customerUserId, err.Error()))
+		common.SysError(fmt.Sprintf("upsertCustomerCommissionDailyStat: statDate=%d empUserId=%d custUserId=%d err=%s", statDate, employeeUserId, customerUserId, err.Error()))
 		return false
 	}
 	return true
@@ -672,16 +578,6 @@ func upsertCustomerCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUs
 	}).Create(&row).Error
 }
 
-func upsertCommissionResetPeriodStat(resetStartedAt, resetEndedAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
-	db, cancel := flushDBWithTimeout()
-	defer cancel()
-	if err := upsertCommissionResetPeriodStatTx(db, resetStartedAt, resetEndedAt, periodKey, timezone, employeeUserId, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount, lastCreatedAt); err != nil {
-		common.SysError(fmt.Sprintf("upsertCommissionResetPeriodStat: resetStartedAt=%d empUserId=%d err=%s", resetStartedAt, employeeUserId, err.Error()))
-		return false
-	}
-	return true
-}
-
 func upsertCommissionResetPeriodDailyStat(resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
 	db, cancel := flushDBWithTimeout()
 	defer cancel()
@@ -690,36 +586,6 @@ func upsertCommissionResetPeriodDailyStat(resetStartedAt, statDate int64, employ
 		return false
 	}
 	return true
-}
-
-func upsertCommissionResetPeriodStatTx(tx *gorm.DB, resetStartedAt, resetEndedAt int64, periodKey, timezone string, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) error {
-	row := EmployeeCommissionResetPeriodStat{
-		ResetStartedAt:  resetStartedAt,
-		ResetEndedAt:    resetEndedAt,
-		PeriodKey:       periodKey,
-		Timezone:        timezone,
-		EmployeeUserId:  employeeUserId,
-		RevenueQuota:    revenueQuota,
-		CostQuota:       costQuota,
-		ProfitQuota:     profitQuota,
-		CommissionQuota: commissionQuota,
-		RecordCount:     recordCount,
-		LastCreatedAt:   lastCreatedAt,
-	}
-	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "reset_started_at"}, {Name: "employee_user_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"reset_ended_at":   gorm.Expr("CASE WHEN reset_ended_at = 0 THEN ? ELSE reset_ended_at END", resetEndedAt),
-			"period_key":       gorm.Expr("COALESCE(NULLIF(period_key, ''), ?)", periodKey),
-			"timezone":         gorm.Expr("COALESCE(NULLIF(timezone, ''), ?)", timezone),
-			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
-			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
-			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
-			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
-			"record_count":     gorm.Expr("record_count + ?", recordCount),
-			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
-		}),
-	}).Create(&row).Error
 }
 
 func upsertCommissionResetPeriodDailyStatTx(tx *gorm.DB, resetStartedAt, statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) error {
@@ -767,13 +633,24 @@ const (
 	ledgerFlushBackoffMax = 30 * time.Second
 )
 
+// shutdownParentCtx is set to a deadline context when ShutdownStatsFlush begins,
+// so that all subsequent flushDBWithTimeout calls are also bounded by the shutdown
+// deadline (whichever expires first: config DB timeout or remaining shutdown time).
+var (
+	shutdownParentCtx   = context.Background()
+	shutdownParentCtxMu sync.Mutex
+)
+
 // flushDBWithTimeout 返回带刷盘超时期限的 DB 句柄，调用方必须调用返回的 cancel。
 // 超时时长由后台可调的 LedgerPipelineSetting.FlushDBTimeoutSec 控制（<=0 取默认 30s）；
-// 所有刷盘协程内的 DB 写入都经此入口，保证单条卡死的 SQL 不会无限期占住刷盘协程
-// （Rule 8：后台 worker 的外部调用也必须有超时）。
+// 在 ShutdownStatsFlush 期间，parent 为 shutdown deadline context，因此实际超时取
+// min(configTimeout, remainingShutdownTime)，保证进程退出不会无限期等待 DB。
 func flushDBWithTimeout() (*gorm.DB, context.CancelFunc) {
 	timeout := operation_setting.GetLedgerPipelineSetting().GetFlushDBTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	shutdownParentCtxMu.Lock()
+	parent := shutdownParentCtx
+	shutdownParentCtxMu.Unlock()
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	return DB.WithContext(ctx), cancel
 }
 
@@ -812,9 +689,16 @@ func (s *ledgerFlushState) onFailure(now time.Time) {
 }
 
 var (
-	costLedgerFlushState       ledgerFlushState
-	pairLedgerFlushState       ledgerFlushState
-	commissionLedgerFlushState ledgerFlushState
+	costLedgerFlushState ledgerFlushState
+	pairLedgerFlushState ledgerFlushState
+
+	// 独立重试队列 — 仅在持有 businessStatsFlushMu 时访问，无需单独锁。
+	// 刷盘失败的批次进此队列，由 retryLoop goroutine 每 RetryFlushIntervalSec 秒独立消费，
+	// 避免失败批次堵塞主缓冲新流量。
+	costRetryQueue      []*costLedgerItem
+	pairRetryQueue      []*costCommissionLedgerPair
+	costRetryFlushState ledgerFlushState
+	pairRetryFlushState ledgerFlushState
 )
 
 type ledgerPipelineQueueSnapshot struct {
@@ -829,6 +713,8 @@ type LedgerPipelineStatusSnapshot struct {
 	Cost       ledgerPipelineQueueSnapshot `json:"cost"`
 	Pair       ledgerPipelineQueueSnapshot `json:"pair"`
 	Commission ledgerPipelineQueueSnapshot `json:"commission"`
+	CostRetry  ledgerPipelineQueueSnapshot `json:"cost_retry"`
+	PairRetry  ledgerPipelineQueueSnapshot `json:"pair_retry"`
 }
 
 var (
@@ -848,6 +734,10 @@ func updateLedgerPipelineQueueSnapshot(queue string, update func(*ledgerPipeline
 		target = &ledgerPipelineStatus.Pair
 	case "commission":
 		target = &ledgerPipelineStatus.Commission
+	case "cost_retry":
+		target = &ledgerPipelineStatus.CostRetry
+	case "pair_retry":
+		target = &ledgerPipelineStatus.PairRetry
 	default:
 		return
 	}
@@ -883,7 +773,7 @@ func GetLedgerPipelineStatusSnapshot() LedgerPipelineStatusSnapshot {
 // ---- consumption_costs 缓冲 ----
 
 var (
-	costLedgerBuf     []*ConsumptionCost
+	costLedgerBuf     []*costLedgerItem
 	costLedgerLock    sync.Mutex
 	costLedgerDropped int64 // 累计因缓冲超限丢弃的条数，guarded by costLedgerLock
 )
@@ -891,6 +781,15 @@ var (
 type costCommissionLedgerPair struct {
 	Cost       *ConsumptionCost
 	Commission *EmployeeCommissionLog
+	RetryCount int
+}
+
+// costLedgerItem wraps a ConsumptionCost with a retry counter so that
+// flush failures can be retried a bounded number of times before the
+// record is written to the fallback file rather than silently dropped.
+type costLedgerItem struct {
+	Cost       *ConsumptionCost
+	RetryCount int
 }
 
 var (
@@ -900,58 +799,93 @@ var (
 )
 
 // BufferConsumptionCostRecord 将消费成本记录推入缓冲区，由后台批量入库。
-// 缓冲超限时丢弃最旧记录并计数，防止 DB 长时间故障导致内存无限增长。
+// 缓冲超限时将最旧记录写入 fallback 文件而非静默丢弃，防止 DB 长时间故障导致数据丢失。
 func BufferConsumptionCostRecord(rec *ConsumptionCost) {
+	var evicted []*costLedgerItem
 	costLedgerLock.Lock()
-	costLedgerBuf = append(costLedgerBuf, rec)
+	costLedgerBuf = append(costLedgerBuf, &costLedgerItem{Cost: rec})
 	if over := len(costLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
+		evicted = costLedgerBuf[:over]
 		costLedgerBuf = costLedgerBuf[over:]
 		costLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
 	backlog := len(costLedgerBuf)
 	dropped := costLedgerDropped
 	costLedgerLock.Unlock()
 	setLedgerPipelineBacklog("cost", backlog)
 	setLedgerPipelineDropped("cost", dropped)
+	for _, item := range evicted {
+		if !writeBusinessStatsFallback("business_stats_skipped", "buffer_overflow", map[string]any{"cost": item.Cost}) {
+			common.SysError("business-stats: cost ledger record permanently lost: buffer_overflow fallback write failed")
+		}
+	}
 }
 
-// requeueCostLedger 刷盘失败时将未入库的记录放回缓冲区头部（保持最旧在前），并执行上限保护。
-func requeueCostLedger(items []*ConsumptionCost) {
+// requeueCostLedger 刷盘失败时将未入库记录送入独立重试队列（costRetryQueue）。
+// 超过最大重试次数的记录写入 fallback 文件而非静默丢弃；
+// 重试队列溢出时同样写 fallback 文件并触发熔断计数。
+// 可从主刷盘循环或重试 goroutine 调用，内部持 retryQueueMu。
+func requeueCostLedger(items []*costLedgerItem) {
 	if len(items) == 0 {
 		return
 	}
-	costLedgerLock.Lock()
-	costLedgerBuf = append(items, costLedgerBuf...)
-	if over := len(costLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
-		costLedgerBuf = costLedgerBuf[over:]
-		costLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("consumption_cost_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
+	maxRetries := operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries()
+	toRequeue := items[:0:0]
+	for _, item := range items {
+		item.RetryCount++
+		if item.RetryCount >= maxRetries {
+			if !writeBusinessStatsFallback("business_stats_skipped", "max_retries_exceeded", map[string]any{"cost": item.Cost}) {
+				common.SysError("business-stats: cost ledger record permanently lost: max_retries fallback write failed")
+			}
+			continue
+		}
+		toRequeue = append(toRequeue, item)
 	}
-	backlog := len(costLedgerBuf)
-	dropped := costLedgerDropped
-	costLedgerLock.Unlock()
-	setLedgerPipelineBacklog("cost", backlog)
-	setLedgerPipelineDropped("cost", dropped)
+	if len(toRequeue) == 0 {
+		return
+	}
+	retryQueueMu.Lock()
+	costRetryQueue = append(costRetryQueue, toRequeue...)
+	if over := len(costRetryQueue) - operation_setting.GetLedgerRetryQueueSetting().GetRetryQueueMaxEntries(); over > 0 {
+		evicted := costRetryQueue[:over]
+		costRetryQueue = costRetryQueue[over:]
+		for _, item := range evicted {
+			if !writeBusinessStatsFallback("business_stats_skipped", "retry_overflow", map[string]any{"cost": item.Cost}) {
+				common.SysError("business-stats: cost ledger record permanently lost: retry_overflow fallback write failed")
+			}
+			// 重试队列溢出意味着数据持续丢失，此时才触发熔断计数。
+			ReportBusinessStatsFailure("cost_retry_overflow", "cost retry queue exceeded capacity", nil)
+		}
+	}
+	backlog := len(costRetryQueue)
+	retryQueueMu.Unlock()
+	setLedgerPipelineBacklog("cost_retry", backlog)
 }
 
 func flushConsumptionCostLedger() {
 	if !costLedgerFlushState.canFlush(time.Now()) {
 		return
 	}
+	cfg := operation_setting.GetLedgerPipelineSetting()
+	costMaxPerCycle := cfg.GetCostFlushMaxPerCycle()
 	costLedgerLock.Lock()
 	buf := costLedgerBuf
-	costLedgerBuf = nil
+	if !cfg.FullDrain && costMaxPerCycle > 0 && len(buf) > costMaxPerCycle {
+		costLedgerBuf = buf[costMaxPerCycle:]
+		buf = buf[:costMaxPerCycle]
+	} else {
+		costLedgerBuf = nil
+	}
+	remainingBacklog := len(costLedgerBuf)
 	droppedTotal := costLedgerDropped
 	costLedgerLock.Unlock()
-	setLedgerPipelineBacklog("cost", 0)
+	setLedgerPipelineBacklog("cost", remainingBacklog)
 	setLedgerPipelineDropped("cost", droppedTotal)
 
 	if len(buf) == 0 {
 		return
 	}
-	cfg := operation_setting.GetLedgerPipelineSetting()
-	outerBatch := cfg.GetOuterBatchSize()
+	outerBatch := cfg.GetCostOuterBatchSize()
 	innerBatch := cfg.GetInnerBatchSize()
 	start := time.Now()
 	// 分批入库，ON CONFLICT DO NOTHING 保证幂等
@@ -960,29 +894,33 @@ func flushConsumptionCostLedger() {
 		if end > len(buf) {
 			end = len(buf)
 		}
-		batch := buf[i:end]
+		batchItems := buf[i:end]
+		costBatch := make([]*ConsumptionCost, 0, len(batchItems))
+		for _, item := range batchItems {
+			costBatch = append(costBatch, item.Cost)
+		}
 		db, cancel := flushDBWithTimeout()
 		err := db.Select(
-			"LogId", "UserId", "ChannelId", "GroupName", "ModelName",
+			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
 			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
 		).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "log_id"}},
 			DoNothing: true,
-		}).CreateInBatches(batch, innerBatch).Error
+		}).CreateInBatches(costBatch, innerBatch).Error
 		cancel()
 		if err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
-			ReportBusinessStatsFailure("consumption_cost_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
-			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
+			// 注意：此处不调用 ReportBusinessStatsFailure —— 刷盘 INSERT 失败是后台重试逻辑，
+			// 不代表 relay 结算副作用不可用；误触熔断会导致新记录被跳过。
 			requeueCostLedger(buf[i:])
 			costLedgerFlushState.onFailure(time.Now())
 			return
 		}
 		// 入库成功后再聚合平台日统计（CreateInBatches 默认整批包在单事务里，失败已整体
 		// 回滚，故这里只会聚合确实落库的记录），与成对路径一致，避免超前计数。
-		for _, rec := range batch {
-			if rec != nil {
-				BufferPlatformDailyStat(rec)
+		for _, item := range batchItems {
+			if item.Cost != nil {
+				BufferPlatformDailyStat(item.Cost)
 			}
 		}
 	}
@@ -993,40 +931,73 @@ func flushConsumptionCostLedger() {
 }
 
 func bufferCostAndCommissionLedger(cost *ConsumptionCost, log *EmployeeCommissionLog) {
+	var evicted []*costCommissionLedgerPair
 	costCommissionLedgerLock.Lock()
 	costCommissionLedgerBuf = append(costCommissionLedgerBuf, &costCommissionLedgerPair{
 		Cost:       cost,
 		Commission: log,
 	})
 	if over := len(costCommissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
+		evicted = costCommissionLedgerBuf[:over]
 		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
 		pairLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
 	}
 	backlog := len(costCommissionLedgerBuf)
 	dropped := pairLedgerDropped
 	costCommissionLedgerLock.Unlock()
 	setLedgerPipelineBacklog("pair", backlog)
 	setLedgerPipelineDropped("pair", dropped)
+	for _, p := range evicted {
+		if !writeBusinessStatsFallback("cost_commission_create", "buffer_overflow", map[string]any{
+			"cost": p.Cost, "commission": p.Commission,
+		}) {
+			common.SysError("business-stats: cost+commission pair permanently lost: buffer_overflow fallback write failed")
+		}
+	}
 }
 
-// requeuePairLedger 刷盘失败时将未入库的成对记录放回缓冲区头部，并执行上限保护。
+// requeuePairLedger 刷盘失败时将未入库的成对记录送入独立重试队列（pairRetryQueue）。
+// 超过最大重试次数的记录写入 fallback 文件而非静默丢弃；
+// 重试队列溢出时同样写 fallback 文件并触发熔断计数。
+// 可从主刷盘循环或重试 goroutine 调用，内部持 retryQueueMu。
 func requeuePairLedger(items []*costCommissionLedgerPair) {
 	if len(items) == 0 {
 		return
 	}
-	costCommissionLedgerLock.Lock()
-	costCommissionLedgerBuf = append(items, costCommissionLedgerBuf...)
-	if over := len(costCommissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
-		costCommissionLedgerBuf = costCommissionLedgerBuf[over:]
-		pairLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("cost_commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
+	maxRetries := operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries()
+	toRequeue := items[:0:0]
+	for _, item := range items {
+		item.RetryCount++
+		if item.RetryCount >= maxRetries {
+			if !writeBusinessStatsFallback("cost_commission_create", "max_retries_exceeded", map[string]any{
+				"cost": item.Cost, "commission": item.Commission,
+			}) {
+				common.SysError("business-stats: cost+commission pair permanently lost: max_retries fallback write failed")
+			}
+			continue
+		}
+		toRequeue = append(toRequeue, item)
 	}
-	backlog := len(costCommissionLedgerBuf)
-	dropped := pairLedgerDropped
-	costCommissionLedgerLock.Unlock()
-	setLedgerPipelineBacklog("pair", backlog)
-	setLedgerPipelineDropped("pair", dropped)
+	if len(toRequeue) == 0 {
+		return
+	}
+	retryQueueMu.Lock()
+	pairRetryQueue = append(pairRetryQueue, toRequeue...)
+	if over := len(pairRetryQueue) - operation_setting.GetLedgerRetryQueueSetting().GetRetryQueueMaxEntries(); over > 0 {
+		evicted := pairRetryQueue[:over]
+		pairRetryQueue = pairRetryQueue[over:]
+		for _, p := range evicted {
+			if !writeBusinessStatsFallback("cost_commission_create", "retry_overflow", map[string]any{
+				"cost": p.Cost, "commission": p.Commission,
+			}) {
+				common.SysError("business-stats: cost+commission pair permanently lost: retry_overflow fallback write failed")
+			}
+			ReportBusinessStatsFailure("pair_retry_overflow", "pair retry queue exceeded capacity", nil)
+		}
+	}
+	backlog := len(pairRetryQueue)
+	retryQueueMu.Unlock()
+	setLedgerPipelineBacklog("pair_retry", backlog)
 }
 
 func flushCostAndCommissionLedger() {
@@ -1034,7 +1005,7 @@ func flushCostAndCommissionLedger() {
 		return
 	}
 	pairCfg := operation_setting.GetLedgerPipelineSetting()
-	pairedMax := pairCfg.GetPairedFlushMaxPerCycle()
+	pairedMax := pairCfg.GetSettlementFlushMaxPerCycle()
 	costCommissionLedgerLock.Lock()
 	buf := costCommissionLedgerBuf
 	if !pairCfg.FullDrain && len(buf) > pairedMax {
@@ -1073,7 +1044,7 @@ func flushCostAndCommissionLedger() {
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Select(
-				"LogId", "UserId", "ChannelId", "GroupName", "ModelName",
+				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
 				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
 			).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "log_id"}},
@@ -1096,7 +1067,8 @@ func flushCostAndCommissionLedger() {
 		cancel()
 		if err != nil {
 			common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
-			ReportBusinessStatsFailure("cost_commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
+			// 注意：此处不调用 ReportBusinessStatsFailure —— 刷盘 INSERT 失败是后台重试逻辑，
+			// 不代表 relay 结算副作用不可用；误触熔断会导致新记录被跳过。
 			requeuePairLedger(buf[i:])
 			pairLedgerFlushState.onFailure(time.Now())
 			return
@@ -1104,6 +1076,165 @@ func flushCostAndCommissionLedger() {
 		// 缓冲区内的记录已在入队前经过权威去重（单实例内存 / 多实例 Redis），
 		// 同一 log_id 全局只会被一个进程入队一次，故此处对本批全部聚合即可，无需再判重。
 		// 入库失败时上面已 requeue + return，不会执行到这里，故聚合只发生在成功提交之后。
+
+		// 预取本批次所有唯一员工的 tier level，避免逐条查 Redis/DB（瓶颈：N 条记录 × 1 次 Redis 查询）。
+		tierCache := make(map[int]*EmployeeTierLevel, len(pairs))
+		for _, pair := range pairs {
+			if pair.Commission != nil && pair.Commission.EmployeeUserId > 0 {
+				tierCache[pair.Commission.EmployeeUserId] = nil
+			}
+		}
+		for uid := range tierCache {
+			level, err := GetOrCreateTierLevel(uid, true)
+			if err != nil {
+				common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: get tier level for user %d failed: %s", uid, err.Error()))
+			}
+			tierCache[uid] = level
+		}
+
+		for _, pair := range pairs {
+			if pair.Cost != nil {
+				BufferPlatformDailyStat(pair.Cost)
+			}
+			if pair.Commission != nil {
+				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
+				if pair.Commission.EmployeeUserId > 0 {
+					BufferCommissionAndProfit(pair.Commission.EmployeeUserId, pair.Commission.CommissionQuota, pair.Commission.ProfitQuota)
+				}
+			}
+			aggregated++
+		}
+	}
+	pairLedgerFlushState.onSuccess()
+	markLedgerPipelineFlush("pair", len(buf), time.Since(start))
+	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d aggregated=%d took=%dms dropped_total=%d",
+		len(buf), aggregated, time.Since(start).Milliseconds(), droppedTotal))
+}
+
+// ---- 独立重试队列刷盘 ----
+
+// flushCostRetryQueue 消费 costRetryQueue 中积压的失败记录。
+// flushCostRetryQueue 消费 costRetryQueue 中的失败记录，由重试 goroutine 调用。
+// 仅在 drain/state 更新时持 retryQueueMu；DB 写入期间不持任何大锁，不阻塞主刷盘循环。
+func flushCostRetryQueue() {
+	retryQueueMu.Lock()
+	if !costRetryFlushState.canFlush(time.Now()) || len(costRetryQueue) == 0 {
+		retryQueueMu.Unlock()
+		return
+	}
+	buf := costRetryQueue
+	costRetryQueue = nil
+	retryQueueMu.Unlock()
+
+	cfg := operation_setting.GetLedgerPipelineSetting()
+	outerBatch := cfg.GetCostOuterBatchSize()
+	innerBatch := cfg.GetInnerBatchSize()
+	start := time.Now()
+	for i := 0; i < len(buf); i += outerBatch {
+		end := i + outerBatch
+		if end > len(buf) {
+			end = len(buf)
+		}
+		batchItems := buf[i:end]
+		costBatch := make([]*ConsumptionCost, 0, len(batchItems))
+		for _, item := range batchItems {
+			costBatch = append(costBatch, item.Cost)
+		}
+		db, cancel := flushDBWithTimeout()
+		err := db.Select(
+			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+		).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "log_id"}},
+			DoNothing: true,
+		}).CreateInBatches(costBatch, innerBatch).Error
+		cancel()
+		if err != nil {
+			common.SysError(fmt.Sprintf("flushCostRetryQueue: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			requeueCostLedger(buf[i:]) // 内部持 retryQueueMu
+			retryQueueMu.Lock()
+			costRetryFlushState.onFailure(time.Now())
+			retryQueueMu.Unlock()
+			return
+		}
+		for _, item := range batchItems {
+			if item.Cost != nil {
+				BufferPlatformDailyStat(item.Cost)
+			}
+		}
+	}
+	retryQueueMu.Lock()
+	costRetryFlushState.onSuccess()
+	retryQueueMu.Unlock()
+	setLedgerPipelineBacklog("cost_retry", 0)
+	markLedgerPipelineFlush("cost_retry", len(buf), time.Since(start))
+}
+
+// flushPairRetryQueue 消费 pairRetryQueue 中的失败记录，由重试 goroutine 调用。
+// 仅在 drain/state 更新时持 retryQueueMu；DB 写入期间不持任何大锁，不阻塞主刷盘循环。
+func flushPairRetryQueue() {
+	retryQueueMu.Lock()
+	if !pairRetryFlushState.canFlush(time.Now()) || len(pairRetryQueue) == 0 {
+		retryQueueMu.Unlock()
+		return
+	}
+	buf := pairRetryQueue
+	pairRetryQueue = nil
+	retryQueueMu.Unlock()
+
+	cfg := operation_setting.GetLedgerPipelineSetting()
+	outerBatch := cfg.GetOuterBatchSize()
+	innerBatch := cfg.GetInnerBatchSize()
+	start := time.Now()
+	aggregated := 0
+	for i := 0; i < len(buf); i += outerBatch {
+		end := i + outerBatch
+		if end > len(buf) {
+			end = len(buf)
+		}
+		pairs := buf[i:end]
+		costBatch := make([]*ConsumptionCost, 0, len(pairs))
+		commBatch := make([]*EmployeeCommissionLog, 0, len(pairs))
+		for _, pair := range pairs {
+			costBatch = append(costBatch, pair.Cost)
+			if pair.Commission != nil {
+				commBatch = append(commBatch, pair.Commission)
+			}
+		}
+		db, cancel := flushDBWithTimeout()
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Select(
+				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+			).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "log_id"}},
+				DoNothing: true,
+			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+				return err
+			}
+			if len(commBatch) > 0 {
+				if err := tx.Select(
+					"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName",
+					"ChannelId", "RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota",
+					"CommissionRate", "CostRatio", "GroupRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(commBatch, innerBatch).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		cancel()
+		if err != nil {
+			common.SysError(fmt.Sprintf("flushPairRetryQueue: batch insert error (batch %d-%d): %s", i, end, err.Error()))
+			requeuePairLedger(buf[i:]) // 内部持 retryQueueMu
+			retryQueueMu.Lock()
+			pairRetryFlushState.onFailure(time.Now())
+			retryQueueMu.Unlock()
+			return
+		}
 		for _, pair := range pairs {
 			if pair.Cost != nil {
 				BufferPlatformDailyStat(pair.Cost)
@@ -1117,10 +1248,13 @@ func flushCostAndCommissionLedger() {
 			aggregated++
 		}
 	}
-	pairLedgerFlushState.onSuccess()
-	markLedgerPipelineFlush("pair", len(buf), time.Since(start))
-	common.SysLog(fmt.Sprintf("flush_business_stats: paired cost/commission ledger items=%d aggregated=%d took=%dms dropped_total=%d",
-		len(buf), aggregated, time.Since(start).Milliseconds(), droppedTotal))
+	retryQueueMu.Lock()
+	pairRetryFlushState.onSuccess()
+	retryQueueMu.Unlock()
+	setLedgerPipelineBacklog("pair_retry", 0)
+	markLedgerPipelineFlush("pair_retry", len(buf), time.Since(start))
+	common.SysLog(fmt.Sprintf("flush_business_stats: pair retry queue items=%d aggregated=%d took=%dms",
+		len(buf), aggregated, time.Since(start).Milliseconds()))
 }
 
 // ---- 入队前权威去重（log_id 维度）----
@@ -1163,9 +1297,6 @@ func redisDedupCommissionLogId(logId int) (first bool, ok bool) {
 // ---- employee_commission_logs 缓冲 ----
 
 var (
-	commissionLedgerBuf     []*EmployeeCommissionLog
-	commissionLedgerLock    sync.Mutex
-	commissionLedgerDropped int64 // 累计因缓冲超限丢弃的条数，guarded by commissionLedgerLock
 	// 内存去重集合，存 log_id
 	commissionLogIdSet     = make(map[int]struct{})
 	commissionLogIdSetLock sync.Mutex
@@ -1184,57 +1315,6 @@ func memDedupCommissionLogId(logId int) bool {
 		commissionLogIdSet = make(map[int]struct{})
 	}
 	commissionLogIdSet[logId] = struct{}{}
-	return true
-}
-
-// appendCommissionLedger 入缓冲并执行上限保护。
-func appendCommissionLedger(log *EmployeeCommissionLog) {
-	commissionLedgerLock.Lock()
-	commissionLedgerBuf = append(commissionLedgerBuf, log)
-	if over := len(commissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
-		commissionLedgerBuf = commissionLedgerBuf[over:]
-		commissionLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("commission_ledger_buffer", "buffer overflow dropped entries", map[string]any{"dropped": over})
-	}
-	backlog := len(commissionLedgerBuf)
-	dropped := commissionLedgerDropped
-	commissionLedgerLock.Unlock()
-	setLedgerPipelineBacklog("commission", backlog)
-	setLedgerPipelineDropped("commission", dropped)
-}
-
-// requeueCommissionLedger 刷盘失败时将未入库的记录放回缓冲区头部，并执行上限保护。
-func requeueCommissionLedger(items []*EmployeeCommissionLog) {
-	if len(items) == 0 {
-		return
-	}
-	commissionLedgerLock.Lock()
-	commissionLedgerBuf = append(items, commissionLedgerBuf...)
-	if over := len(commissionLedgerBuf) - operation_setting.GetLedgerPipelineSetting().GetBufMaxEntries(); over > 0 {
-		commissionLedgerBuf = commissionLedgerBuf[over:]
-		commissionLedgerDropped += int64(over)
-		ReportBusinessStatsFailure("commission_ledger_buffer", "requeue overflow dropped entries", map[string]any{"dropped": over})
-	}
-	backlog := len(commissionLedgerBuf)
-	dropped := commissionLedgerDropped
-	commissionLedgerLock.Unlock()
-	setLedgerPipelineBacklog("commission", backlog)
-	setLedgerPipelineDropped("commission", dropped)
-}
-
-// CheckAndBufferCommissionLog 检查 log_id 是否重复，若不重复则推入缓冲区。
-// 返回 inserted=true 表示首次写入（调用方据此执行后续提成结算）。
-// log_id 为 nil 时视为无幂等键，始终 inserted=true。
-func CheckAndBufferCommissionLog(log *EmployeeCommissionLog) (inserted bool) {
-	if log.LogId == nil || *log.LogId <= 0 {
-		log.LogId = nil
-		appendCommissionLedger(log)
-		return true
-	}
-	if !memDedupCommissionLogId(*log.LogId) {
-		return false
-	}
-	appendCommissionLedger(log)
 	return true
 }
 
@@ -1261,56 +1341,6 @@ func CheckAndBufferCostAndCommission(cost *ConsumptionCost, log *EmployeeCommiss
 	}
 	bufferCostAndCommissionLedger(cost, log)
 	return true
-}
-
-func flushCommissionLogLedger() {
-	if !commissionLedgerFlushState.canFlush(time.Now()) {
-		return
-	}
-	commissionLedgerLock.Lock()
-	buf := commissionLedgerBuf
-	commissionLedgerBuf = nil
-	droppedTotal := commissionLedgerDropped
-	commissionLedgerLock.Unlock()
-	setLedgerPipelineBacklog("commission", 0)
-	setLedgerPipelineDropped("commission", droppedTotal)
-
-	if len(buf) == 0 {
-		return
-	}
-	commFlushCfg := operation_setting.GetLedgerPipelineSetting()
-	outerBatch := commFlushCfg.GetOuterBatchSize()
-	innerBatch := commFlushCfg.GetInnerBatchSize()
-	start := time.Now()
-	for i := 0; i < len(buf); i += outerBatch {
-		end := i + outerBatch
-		if end > len(buf) {
-			end = len(buf)
-		}
-		batch := buf[i:end]
-		db, cancel := flushDBWithTimeout()
-		err := db.Select(
-			"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
-			"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
-			"CostRatio", "GroupRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).CreateInBatches(batch, innerBatch).Error
-		cancel()
-		if err != nil {
-			common.SysError(fmt.Sprintf("flushCommissionLogLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
-			ReportBusinessStatsFailure("commission_ledger_flush", err.Error(), map[string]any{"batch_start": i, "batch_end": end})
-			// 失败批次及其后的记录放回缓冲，按退避节奏重试，不再静默丢弃
-			requeueCommissionLedger(buf[i:])
-			commissionLedgerFlushState.onFailure(time.Now())
-			return
-		}
-	}
-	commissionLedgerFlushState.onSuccess()
-	markLedgerPipelineFlush("commission", len(buf), time.Since(start))
-	common.SysLog(fmt.Sprintf("flush_business_stats: commission_logs ledger items=%d took=%dms dropped_total=%d",
-		len(buf), time.Since(start).Milliseconds(), droppedTotal))
 }
 
 // ============================================================================
@@ -1365,11 +1395,10 @@ func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
 		return
 	}
 	d.RetryCount++
-	if d.RetryCount >= statBufferMaxRetries {
-		writeBusinessStatsDeadLetter("employee_ext_delta", "max retries exceeded", d.RetryCount, map[string]any{
-			"user_id": userId,
-			"delta":   d,
-		})
+	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
+		if !writeStatEmployeeExtFallback("max_retries_exceeded", userId, d) {
+			common.SysError("business-stats: stat_employee_ext delta permanently lost: fallback write failed")
+		}
 		return
 	}
 	bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
@@ -1418,6 +1447,8 @@ func ensureUserExtensionsBatch(userIds []int) bool {
 	// ON CONFLICT DO NOTHING, 批量插入
 	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
 		common.SysError("ensureUserExtensionsBatch: " + err.Error())
+		// employee_ext 是结算侧路操作（非台账批量 INSERT）；失败意味着后续提成/利润写入也会失败，
+		// 触发熔断计数是正确的——与"台账 INSERT 失败不触发熔断"策略不矛盾。
 		ReportBusinessStatsFailure("employee_ext_ensure", err.Error(), userIds)
 		return false
 	}
@@ -1471,40 +1502,355 @@ func FlushBusinessStatBuffers() {
 	// 1. 先刷明细台账
 	flushCostAndCommissionLedger()
 	flushConsumptionCostLedger()
-	flushCommissionLogLedger()
 	// 2. 刷日统计增量
 	// 聚合 delta 仅在 flushCostAndCommissionLedger 确认 RowsAffected=1 后才入 buffer，
 	// 因此聚合永远不会超前于明细，无需在 paired 失败时阻断聚合刷盘。
 	flushPlatformStatsFromMem()
 	flushCommissionStatsFromMem()
 	flushCustomerCommissionStatsFromMem()
-	flushCommissionResetPeriodStatsFromMem()
 	flushCommissionResetPeriodDailyStatsFromMem()
 	// 3. 刷员工汇总（user_extensions + 等级升级）
 	flushEmployeeExtBuffers()
 }
 
-// StartBusinessStatsFlushLoop 启动后台定时刷盘循环。在 main.go 中调用。
-// 刷盘间隔从 LedgerPipelineSetting 动态读取（每次 sleep 前重新取值，支持不重启调整）；
-// 若该值 <= 0 则回退到 DefaultBusinessStatsFlushInterval（8 秒）。
+// StartBusinessStatsFlushLoop 启动后台定时刷盘循环和独立重试循环。在 main.go 中调用。
+// 主循环间隔：LedgerPipelineSetting.FlushIntervalSec（默认 8s）。
+// 重试循环间隔：LedgerPipelineSetting.RetryFlushIntervalSec（默认 2s）。
+// 收到 flushLoopStopCh 信号后两个 goroutine 均退出，分别关闭 flushLoopDoneCh / retryLoopDoneCh。
 func StartBusinessStatsFlushLoop() {
 	cfg := operation_setting.GetLedgerPipelineSetting()
+	InitFallbackQueue(cfg.GetFallbackQueueCapacity())
 	initInterval := cfg.FlushIntervalSec
 	if initInterval <= 0 {
 		initInterval = DefaultBusinessStatsFlushInterval
 	}
-	common.SysLog(fmt.Sprintf("business stats flush interval: %d seconds, ledger batch: outer=%d inner=%d",
-		initInterval, cfg.GetOuterBatchSize(), cfg.GetInnerBatchSize()))
+	common.SysLog(fmt.Sprintf("business stats flush interval: %d seconds, retry interval: %d seconds, ledger batch: outer=%d inner=%d",
+		initInterval, operation_setting.GetLedgerRetryQueueSetting().GetRetryFlushIntervalSec(), cfg.GetOuterBatchSize(), cfg.GetInnerBatchSize()))
+
+	// 主刷盘 goroutine
 	go func() {
-		// Drain any leftover in-memory data from before restart
+		defer close(flushLoopDoneCh)
 		FlushBusinessStatBuffers()
 		for {
 			interval := operation_setting.GetLedgerPipelineSetting().FlushIntervalSec
 			if interval <= 0 {
 				interval = DefaultBusinessStatsFlushInterval
 			}
-			time.Sleep(time.Duration(interval) * time.Second)
-			FlushBusinessStatBuffers()
+			select {
+			case <-time.After(time.Duration(interval) * time.Second):
+				FlushBusinessStatBuffers()
+			case <-flushLoopStopCh:
+				return
+			}
 		}
 	}()
+
+	// 独立重试 goroutine — 每 RetryFlushIntervalSec 消费 costRetryQueue / pairRetryQueue。
+	// 通过 TryLock(businessStatsFlushMu) 与主刷盘互斥，避免并发写同一 DB 表竞争连接池：
+	//   主刷盘持锁期间 → 重试跳过本轮，等下一个 retryInterval 再尝试；
+	//   主刷盘空闲时   → 重试持锁写入并释放；若主刷盘此时触发，等待重试完成（写入量小，通常 < 1 s）。
+	// 共享队列 slice / flush state 通过 retryQueueMu 保护。
+	go func() {
+		defer close(retryLoopDoneCh)
+		for {
+			interval := operation_setting.GetLedgerRetryQueueSetting().GetRetryFlushIntervalSec()
+			select {
+			case <-time.After(time.Duration(interval) * time.Second):
+				if operation_setting.GetLedgerRetryQueueSetting().AllowConcurrentFlush {
+					// 允许并发：与主刷盘同时写库，重试吞吐更高，但可能竞争连接池。
+					flushCostRetryQueue()
+					flushPairRetryQueue()
+				} else if businessStatsFlushMu.TryLock() {
+					// 互斥模式（默认）：主刷盘持锁时跳过本轮，避免同时写相同 DB 表。
+					flushCostRetryQueue()
+					flushPairRetryQueue()
+					businessStatsFlushMu.Unlock()
+				}
+			case <-flushLoopStopCh:
+				return
+			}
+		}
+	}()
+}
+
+// ShutdownStatsFlush 是优雅退出的入口：
+//  1. 停止后台 flush loop goroutine；
+//  2. 对所有内存缓冲做最终一次 DB 刷盘；
+//  3. 把 DB 写失败后仍留在内存的数据 drain 到 fallback 文件（与熔断器格式相同，可用 Backfill 恢复）；
+//  4. 刷出并关闭 fallback 文件 fd（Windows 进程退出前必须释放 fd）。
+//
+// timeout 建议传 20–25 s，为后续 HTTP Shutdown 留出时间。
+// timeout 同时作为所有 DB flush 调用的父 context deadline（与 GetFlushDBTimeout 取较小值），
+// 确保单条卡死的 SQL 不会使进程挂死超过 timeout。
+func ShutdownStatsFlush(timeout time.Duration) {
+	defer func() {
+		if r := recover(); r != nil {
+			common.SysError(fmt.Sprintf("ShutdownStatsFlush: panic recovered: %v", r))
+		}
+	}()
+
+	// 将 shutdown deadline 注入 flushDBWithTimeout，使所有 DB 操作受 timeout 约束。
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), timeout)
+	defer shutdownCancel()
+	shutdownParentCtxMu.Lock()
+	shutdownParentCtx = shutdownCtx
+	shutdownParentCtxMu.Unlock()
+	defer func() {
+		shutdownParentCtxMu.Lock()
+		shutdownParentCtx = context.Background()
+		shutdownParentCtxMu.Unlock()
+	}()
+
+	// 1. 通知所有后台 goroutine 退出（sync.Once 防止重复 close）。
+	flushLoopOnce.Do(func() { close(flushLoopStopCh) })
+
+	// 等待两个 goroutine 退出，最多 5 秒或剩余 timeout 的一半（取较小值）。
+	goroutineWait := 5 * time.Second
+	if half := timeout / 2; half < goroutineWait {
+		goroutineWait = half
+	}
+	waitCh := make(chan struct{})
+	go func() {
+		<-flushLoopDoneCh
+		<-retryLoopDoneCh
+		close(waitCh)
+	}()
+	select {
+	case <-waitCh:
+	case <-time.After(goroutineWait):
+		common.SysLog("ShutdownStatsFlush: goroutine stop timeout, proceeding")
+	}
+
+	// 2+3. 最终刷盘 + drain。持有 businessStatsFlushMu 保证与 goroutine 互斥。
+	// TryLock 轮询直至 shutdownCtx 超期，防止 goroutine 意外永久阻塞导致进程挂死。
+	// 正常情况下 goroutine 会在 shutdownCtx 超期前释放锁（其内部 DB 操作均受同一 ctx 约束）。
+	const lockPollInterval = 10 * time.Millisecond
+	lockAcquired := false
+	for {
+		if businessStatsFlushMu.TryLock() {
+			lockAcquired = true
+			break
+		}
+		select {
+		case <-shutdownCtx.Done():
+		case <-time.After(lockPollInterval):
+			continue
+		}
+		break
+	}
+	if !lockAcquired {
+		common.SysError("ShutdownStatsFlush: timed out waiting for flush mutex; remaining in-memory buffer data may be lost")
+		FlushAndCloseFallbackFiles()
+		common.SysLog("ShutdownStatsFlush: complete (timeout)")
+		return
+	}
+	if shutdownCtx.Err() == nil {
+		// 先刷主缓冲明细台账，再消费重试队列（重试队列内容源自主缓冲刷盘失败，顺序一致）。
+		flushCostAndCommissionLedger()
+		flushConsumptionCostLedger()
+		flushPairRetryQueue()
+		flushCostRetryQueue()
+		flushPlatformStatsFromMem()
+		flushCommissionStatsFromMem()
+		flushCustomerCommissionStatsFromMem()
+		flushCommissionResetPeriodDailyStatsFromMem()
+		flushEmployeeExtBuffers()
+	} else {
+		common.SysLog("ShutdownStatsFlush: deadline reached before final flush; draining buffer to fallback file")
+	}
+	drainRemainingToFallbackFile("shutdown_drain")
+	businessStatsFlushMu.Unlock()
+
+	// 4. 刷队列、关闭所有 fallback 文件 fd。
+	FlushAndCloseFallbackFiles()
+	common.SysLog("ShutdownStatsFlush: complete")
+}
+
+// drainRemainingToFallbackFile 将所有内存缓冲中仍有数据的条目序列化并写入
+// fallback 文件，供后续 Backfill 恢复。调用方必须持有 businessStatsFlushMu。
+// kind 与熔断器写文件时一致，Backfill 无需感知数据来源。
+func drainRemainingToFallbackFile(reason string) {
+	// ── cost+commission pairs (主缓冲 + 重试队列) ──────────────────────────
+	costCommissionLedgerLock.Lock()
+	pairs := costCommissionLedgerBuf
+	costCommissionLedgerBuf = nil
+	costCommissionLedgerLock.Unlock()
+	// 调用时重试 goroutine 已停止（ShutdownStatsFlush 等待 retryLoopDoneCh），
+	// retryQueueMu 仍加锁以维持一致的访问规范。
+	retryQueueMu.Lock()
+	pairs = append(pairs, pairRetryQueue...)
+	pairRetryQueue = nil
+	retryQueueMu.Unlock()
+	for _, p := range pairs {
+		if p == nil {
+			continue
+		}
+		if !writeBusinessStatsFallback("cost_commission_create", reason, map[string]any{
+			"cost":       p.Cost,
+			"commission": p.Commission,
+		}) {
+			common.SysError("business-stats: cost+commission pair permanently lost during drain: fallback write failed")
+		}
+	}
+
+	// ── cost-only records (主缓冲 + 重试队列) ────────────────────────────
+	costLedgerLock.Lock()
+	costItems := costLedgerBuf
+	costLedgerBuf = nil
+	costLedgerLock.Unlock()
+	retryQueueMu.Lock()
+	costItems = append(costItems, costRetryQueue...)
+	costRetryQueue = nil
+	retryQueueMu.Unlock()
+	for _, item := range costItems {
+		if item == nil || item.Cost == nil {
+			continue
+		}
+		if !writeBusinessStatsFallback("business_stats_skipped", reason, map[string]any{
+			"cost": item.Cost,
+		}) {
+			common.SysError("business-stats: cost ledger record permanently lost during drain: fallback write failed")
+		}
+	}
+
+	// ── stat buffers ──────────────────────────────────────────────────────
+	memPlatformLock.Lock()
+	platform := memPlatformBuf
+	memPlatformBuf = make(map[string]*platformStatDelta)
+	memPlatformLock.Unlock()
+	for _, d := range platform {
+		if !writeStatPlatformFallback(reason, d) {
+			common.SysError("business-stats: stat_platform delta permanently lost during drain: fallback write failed")
+		}
+	}
+
+	memCommissionLock.Lock()
+	commission := memCommissionBuf
+	memCommissionBuf = make(map[string]*commissionStatDelta)
+	memCommissionLock.Unlock()
+	for _, d := range commission {
+		if !writeStatCommissionFallback(reason, d) {
+			common.SysError("business-stats: stat_commission delta permanently lost during drain: fallback write failed")
+		}
+	}
+
+	memCustomerCommissionLock.Lock()
+	customerCommission := memCustomerCommissionBuf
+	memCustomerCommissionBuf = make(map[string]*customerCommissionStatDelta)
+	memCustomerCommissionLock.Unlock()
+	for _, d := range customerCommission {
+		if !writeStatCustomerCommissionFallback(reason, d) {
+			common.SysError("business-stats: stat_customer_commission delta permanently lost during drain: fallback write failed")
+		}
+	}
+
+	memCommissionResetPeriodDailyLock.Lock()
+	resetDaily := memCommissionResetPeriodDailyBuf
+	memCommissionResetPeriodDailyBuf = make(map[string]*commissionResetPeriodDailyDelta)
+	memCommissionResetPeriodDailyLock.Unlock()
+	for _, d := range resetDaily {
+		if !writeStatResetDailyFallback(reason, d) {
+			common.SysError("business-stats: stat_reset_daily delta permanently lost during drain: fallback write failed")
+		}
+	}
+
+	memEmployeeExtLock.Lock()
+	empExt := memEmployeeExtBuf
+	memEmployeeExtBuf = make(map[int]*employeeExtDelta)
+	memEmployeeExtLock.Unlock()
+	for userId, d := range empExt {
+		if !writeStatEmployeeExtFallback(reason, userId, d) {
+			common.SysError("business-stats: stat_employee_ext delta permanently lost during drain: fallback write failed")
+		}
+	}
+
+	statItems := len(platform) + len(commission) + len(customerCommission) + len(resetDaily) + len(empExt)
+	total := len(pairs) + len(costItems) + statItems
+	if total > 0 {
+		common.SysLog(fmt.Sprintf(
+			"ShutdownStatsFlush: drained %d items to fallback file (pairs=%d costs=%d stats=%d)",
+			total, len(pairs), len(costItems), statItems,
+		))
+	}
+}
+
+// ============================================================================
+// 回填重放 — 由 service/business_stats_backfill 调用
+// ============================================================================
+
+// WriteBackfillDeadLetter 将无法解析的原始日志行写入死信文件。
+func WriteBackfillDeadLetter(rawLine []byte, reason string) {
+	writeBusinessStatsDeadLetter("parse_error", reason, 0, string(rawLine))
+}
+
+type statEmployeeExtPayload struct {
+	UserId          int   `json:"user_id"`
+	CommissionDelta int64 `json:"commission_delta"`
+	ProfitDelta     int64 `json:"profit_delta"`
+}
+
+// ReplayStatPlatformFallback 反序列化 stat_platform payload 并直接 upsert 到 DB。
+func ReplayStatPlatformFallback(payloadBytes []byte) error {
+	var d platformStatDelta
+	if err := common.Unmarshal(payloadBytes, &d); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if !upsertPlatformDailyStat(d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt) {
+		return fmt.Errorf("upsert failed")
+	}
+	return nil
+}
+
+// ReplayStatCommissionFallback 反序列化 stat_commission payload 并直接 upsert 到 DB。
+func ReplayStatCommissionFallback(payloadBytes []byte) error {
+	var d commissionStatDelta
+	if err := common.Unmarshal(payloadBytes, &d); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if !upsertCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+		return fmt.Errorf("upsert failed")
+	}
+	return nil
+}
+
+// ReplayStatCustomerCommissionFallback 反序列化 stat_customer_commission payload 并直接 upsert 到 DB。
+func ReplayStatCustomerCommissionFallback(payloadBytes []byte) error {
+	var d customerCommissionStatDelta
+	if err := common.Unmarshal(payloadBytes, &d); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if !upsertCustomerCommissionDailyStat(d.StatDate, d.EmployeeUserId, d.CustomerUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+		return fmt.Errorf("upsert failed")
+	}
+	return nil
+}
+
+// ReplayStatResetDailyFallback 反序列化 stat_reset_daily payload 并直接 upsert 到 DB。
+func ReplayStatResetDailyFallback(payloadBytes []byte) error {
+	var d commissionResetPeriodDailyDelta
+	if err := common.Unmarshal(payloadBytes, &d); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if !upsertCommissionResetPeriodDailyStat(d.ResetStartedAt, d.StatDate, d.EmployeeUserId, d.RevenueQuota, d.CostQuota, d.ProfitQuota, d.CommissionQuota, d.RecordCount, d.LastCreatedAt) {
+		return fmt.Errorf("upsert failed")
+	}
+	return nil
+}
+
+// ReplayStatEmployeeExtFallback 反序列化 stat_employee_ext payload 并直接 apply 到 DB。
+func ReplayStatEmployeeExtFallback(payloadBytes []byte) error {
+	var p statEmployeeExtPayload
+	if err := common.Unmarshal(payloadBytes, &p); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if p.UserId == 0 {
+		return fmt.Errorf("user_id is zero")
+	}
+	if !ensureUserExtensionsBatch([]int{p.UserId}) {
+		return fmt.Errorf("ensureUserExtensionsBatch failed")
+	}
+	if !applyEmployeeExtDelta(p.UserId, &employeeExtDelta{CommissionDelta: p.CommissionDelta, ProfitDelta: p.ProfitDelta}) {
+		return fmt.Errorf("applyEmployeeExtDelta failed")
+	}
+	return nil
 }
