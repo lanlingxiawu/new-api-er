@@ -31,11 +31,13 @@ export interface EmployeeStat {
   employee_user_id: number
   username?: string
   display_name?: string
+  remark?: string
   total_revenue: number
   total_cost: number
   total_profit: number
   total_commission: number
   record_count: number
+  current_tier_rate?: number
 }
 
 export interface ChannelProfitStat {

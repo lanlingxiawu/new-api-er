@@ -661,8 +661,10 @@ func AdminCommissionOverview(c *gin.Context) {
 	}
 	type EmployeeStatWithUser struct {
 		*model.CommissionEmployeeStat
-		Username    string `json:"username"`
-		DisplayName string `json:"display_name"`
+		Username        string  `json:"username"`
+		DisplayName     string  `json:"display_name"`
+		Remark          string  `json:"remark"`
+		CurrentTierRate float64 `json:"current_tier_rate"`
 	}
 	empItems := make([]EmployeeStatWithUser, 0, len(byEmployee))
 	if len(byEmployee) > 0 {
@@ -671,11 +673,23 @@ func AdminCommissionOverview(c *gin.Context) {
 			empIds = append(empIds, s.EmployeeUserId)
 		}
 		userMap, _ := model.GetUsersByIdsUnscopedWithContext(ctx, empIds)
+		tierLevels, _ := model.GetTierLevelsByUserIds(empIds)
+		allTiers := model.GetAllTiersCached()
+		tierById := make(map[int64]*model.EmployeeCommissionTier, len(allTiers))
+		for _, t := range allTiers {
+			tierById[t.Id] = t
+		}
 		for _, s := range byEmployee {
 			item := EmployeeStatWithUser{CommissionEmployeeStat: s}
 			if u := userMap[s.EmployeeUserId]; u != nil {
 				item.Username = u.Username
 				item.DisplayName = u.DisplayName
+				item.Remark = u.Remark
+			}
+			if lvl, ok := tierLevels[s.EmployeeUserId]; ok && lvl.TierId != 0 {
+				if t, ok2 := tierById[lvl.TierId]; ok2 {
+					item.CurrentTierRate = t.Rate
+				}
 			}
 			empItems = append(empItems, item)
 		}

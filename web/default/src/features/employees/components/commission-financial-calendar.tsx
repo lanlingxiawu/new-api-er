@@ -332,7 +332,7 @@ export function CommissionFinancialCalendar({
   isLoading,
   toolbar,
   showSummaryCards = true,
-  showSelectedDetail = true,
+  overrideCommissionRate,
 }: {
   month: string
   onMonthChange: (month: string) => void
@@ -341,6 +341,7 @@ export function CommissionFinancialCalendar({
     revenue_quota?: number
     profit_quota?: number
     commission_quota?: number
+    recalc_commission_quota?: number
     record_count?: number
   }
   periodStartAt?: number
@@ -350,7 +351,8 @@ export function CommissionFinancialCalendar({
   isLoading?: boolean
   toolbar?: ReactNode
   showSummaryCards?: boolean
-  showSelectedDetail?: boolean
+  /** 前端直接计算提成时传入当前等级费率，优先级高于后端返回的 recalc_commission_quota */
+  overrideCommissionRate?: number
 }) {
   const { t } = useTranslation()
   const visualPeriodEndAt = periodBoundaryAt || periodEndAt
@@ -369,10 +371,10 @@ export function CommissionFinancialCalendar({
   const [selectedDate, setSelectedDate] = useState<string>()
   const selectedCell = cells.find((cell) => cell.key === selectedDate)
   const selectedStat = selectedCell?.stat
-  const maxAbsCommission = useMemo(
+  const maxAbsRevenue = useMemo(
     () =>
       days.reduce(
-        (max, day) => Math.max(max, Math.abs(day.commission_quota || 0)),
+        (max, day) => Math.max(max, Math.abs(day.profit_quota || 0)),
         0
       ),
     [days]
@@ -458,23 +460,29 @@ export function CommissionFinancialCalendar({
                 {isLoading ? (
                   <Skeleton className='h-8 w-36' />
                 ) : (
-                  <BusinessAmount value={summary?.commission_quota ?? 0} />
+                  <BusinessAmount value={summary?.profit_quota ?? 0} />
                 )}
               </div>
             </div>
             <div className='text-muted-foreground mt-2 text-sm'>
-              {t('Current Period Commission')}
+              {t('Current Period Performance')}
             </div>
           </div>
           <div className='border-border bg-card flex min-h-[112px] flex-col rounded-md border p-4 shadow-xs'>
             <div className='text-muted-foreground text-sm'>
-              {t('Current Period Performance')}
+              {t('Current Period Commission')}
             </div>
             <div className='mt-1 text-base font-semibold sm:text-lg'>
               {isLoading ? (
                 <Skeleton className='h-6 w-28' />
               ) : (
-                <BusinessAmount value={summary?.profit_quota ?? 0} />
+                <BusinessAmount
+                  value={
+                    overrideCommissionRate != null && overrideCommissionRate > 0
+                      ? Math.round((summary?.profit_quota ?? 0) * overrideCommissionRate)
+                      : (summary?.recalc_commission_quota ?? summary?.commission_quota ?? 0)
+                  }
+                />
               )}
             </div>
           </div>
@@ -501,10 +509,10 @@ export function CommissionFinancialCalendar({
         </div>
         <div className='grid grid-cols-7'>
           {cells.map(({ key, date, inPeriod, stat }) => {
-            const commission = stat?.commission_quota ?? 0
+            const profit = stat?.profit_quota ?? 0
             const selected = key === selectedDate
-            const intensity = commissionIntensity(commission, maxAbsCommission)
-            const positive = commission >= 0
+            const intensity = commissionIntensity(profit, maxAbsRevenue)
+            const positive = profit >= 0
             return (
               <button
                 key={key}
@@ -512,7 +520,7 @@ export function CommissionFinancialCalendar({
                 aria-pressed={selected}
                 title={
                   stat
-                    ? `${key} ${formatBusinessAmount(commission)} (${stat.record_count || 0})`
+                    ? `${key} ${formatBusinessAmount(profit)} (${stat.record_count || 0})`
                     : key
                 }
                 onClick={() => setSelectedDate(key)}
@@ -583,7 +591,7 @@ export function CommissionFinancialCalendar({
                     )}
                   >
                     <span className='min-w-0 truncate'>
-                      {formatBusinessAmount(commission)}
+                      {formatBusinessAmount(profit)}
                     </span>
                     {!positive ? (
                       <Badge
@@ -600,46 +608,6 @@ export function CommissionFinancialCalendar({
           })}
         </div>
       </div>
-
-      {showSelectedDetail ? (
-        <div className='border-border bg-card rounded-md border p-4 shadow-xs'>
-          <div className='mb-3 flex items-center gap-2 text-sm'>
-            <CalendarDays className='text-muted-foreground h-4 w-4' />
-            <span className='text-muted-foreground'>
-              {selectedCell
-                ? formatCalendarDate(selectedCell.date)
-                : monthLabel(month)}
-            </span>
-          </div>
-          <div className='grid gap-3 sm:grid-cols-3 lg:grid-cols-5'>
-            <CalendarAmount
-              label={t('Commission')}
-              value={selectedStat?.commission_quota}
-              primary
-            />
-            <CalendarAmount
-              label={t('Profit')}
-              value={selectedStat?.profit_quota}
-            />
-            <CalendarAmount
-              label={t('Revenue')}
-              value={selectedStat?.revenue_quota}
-            />
-            <CalendarAmount
-              label={t('Cost')}
-              value={selectedStat?.cost_quota}
-            />
-            <div>
-              <div className='text-muted-foreground text-xs'>
-                {t('Records')}
-              </div>
-              <div className='mt-1 text-sm font-medium'>
-                {selectedStat?.record_count || 0}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }
@@ -649,9 +617,9 @@ export function CommissionCalendarSection({
   queryFn,
   toolbar,
   showSummaryCards,
-  showSelectedDetail,
   month: controlledMonth,
   onMonthChange,
+  overrideCommissionRate,
 }: {
   queryKey: readonly unknown[]
   queryFn: (
@@ -659,9 +627,10 @@ export function CommissionCalendarSection({
   ) => Promise<ApiResponse<CommissionCalendarStats>>
   toolbar?: ReactNode
   showSummaryCards?: boolean
-  showSelectedDetail?: boolean
   month?: string
   onMonthChange?: (month: string) => void
+  /** 前端直接计算提成时传入当前等级费率，优先级高于后端返回的 recalc_commission_quota */
+  overrideCommissionRate?: number
 }) {
   const [innerMonth, setInnerMonth] = useState(currentMonthValue)
   const month = controlledMonth ?? innerMonth
@@ -685,7 +654,7 @@ export function CommissionCalendarSection({
       isLoading={isLoading || isFetching}
       toolbar={toolbar}
       showSummaryCards={showSummaryCards}
-      showSelectedDetail={showSelectedDetail}
+      overrideCommissionRate={overrideCommissionRate}
     />
   )
 }

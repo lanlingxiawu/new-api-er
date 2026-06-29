@@ -277,12 +277,12 @@ function useMyCommissionColumns() {
   )
 }
 
-function ResetPeriodStats() {
+function ResetPeriodStats({ effectiveRate }: { effectiveRate: number }) {
   return (
     <CommissionCalendarSection
       queryKey={['my-commission-calendar-stats']}
       queryFn={(range) => getMyCommissionCalendarStats(range)}
-      showSelectedDetail={false}
+      overrideCommissionRate={effectiveRate > 0 ? effectiveRate : undefined}
     />
   )
 }
@@ -509,7 +509,7 @@ export function EmployeeConsole() {
           </TabsList>
 
           <TabsContent value='monthly' className='min-h-0 flex-1 overflow-auto'>
-            <ResetPeriodStats />
+            <ResetPeriodStats effectiveRate={effectiveRate} />
           </TabsContent>
 
           <TabsContent

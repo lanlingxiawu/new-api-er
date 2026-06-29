@@ -1319,11 +1319,17 @@ function useEmployeesColumns({
             title={t('Period Commission')}
           />
         ),
-        cell: ({ row }) =>
-          <BusinessAmount
-            value={row.original.period_commission_quota ?? 0}
-            positiveClassName='text-green-600'
-          />,
+        cell: ({ row }) => {
+          const profitQuota = row.original.period_profit_quota ?? 0
+          const tierRate = row.original.current_tier_rate ?? 0
+          const value = tierRate > 0 ? Math.round(profitQuota * tierRate) : (row.original.period_commission_quota ?? 0)
+          return (
+            <BusinessAmount
+              value={value}
+              positiveClassName='text-green-600'
+            />
+          )
+        },
       },
       {
         accessorKey: 'current_tier_level',
@@ -2627,7 +2633,6 @@ function CommissionMonthlyStatsTab() {
           employee_user_id: employeeUserId,
         })
       }
-      showSelectedDetail={false}
       toolbar={
         <div className='flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end'>
           <span className='text-muted-foreground shrink-0 text-xs font-medium sm:text-sm'>

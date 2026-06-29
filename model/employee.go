@@ -676,6 +676,9 @@ type CommissionCalendarSummary struct {
 	CostUsd         float64 `json:"cost_usd"`
 	ProfitUsd       float64 `json:"profit_usd"`
 	CommissionUsd   float64 `json:"commission_usd"`
+	// RecalcCommissionQuota 按员工当前等级费率重算的本期提成（= 本期业绩 × 当前等级费率）。
+	// 仅在 employeeUserId > 0 且员工有绑定等级时填充。
+	RecalcCommissionQuota int64 `json:"recalc_commission_quota,omitempty"`
 }
 
 type resetBaselineSummary struct {
@@ -1007,6 +1010,62 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 	stats.Summary.CostUsd = common.QuotaToUSD(stats.Summary.CostQuota)
 	stats.Summary.ProfitUsd = common.QuotaToUSD(stats.Summary.ProfitQuota)
 	stats.Summary.CommissionUsd = common.QuotaToUSD(stats.Summary.CommissionQuota)
+
+	// 按员工当前等级费率重算本期提成：本期业绩 × 当前等级费率（不使用历史日志）。
+	tiers := GetAllTiersCached()
+	tierById := make(map[int64]*EmployeeCommissionTier, len(tiers))
+	for _, t := range tiers {
+		tierById[t.Id] = t
+	}
+	if employeeUserId > 0 {
+		// 单员工：直接用本期业绩合计 × 当前费率。
+		tierLevels, err := GetTierLevelsByUserIds([]int{employeeUserId})
+		if err == nil {
+			if lvl, ok := tierLevels[employeeUserId]; ok && lvl.TierId != 0 {
+				if t, ok2 := tierById[lvl.TierId]; ok2 {
+					stats.Summary.RecalcCommissionQuota = int64(float64(stats.Summary.ProfitQuota) * t.Rate)
+				}
+			}
+		}
+	} else {
+		// 全员模式：按员工分组求各自本期业绩，再乘以各自当前费率后求和。
+		type empProfitRow struct {
+			EmployeeUserId int
+			ProfitQuota    int64
+		}
+		var empProfits []empProfitRow
+		aggTx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
+			Select("employee_user_id, COALESCE(SUM(profit_quota),0) AS profit_quota").
+			Joins(
+				"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id"+
+					" AND (employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at"+
+					" OR (employee_tier_levels.baseline_reset_at = 0 AND employee_commission_reset_period_daily_stats.reset_started_at = ?))",
+				period.PeriodStartAt,
+			).
+			Where(
+				"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
+				commissionStatDayStart(period.PeriodStartAt),
+				commissionStatDayStart(queryEndAt),
+			).
+			Group("employee_commission_reset_period_daily_stats.employee_user_id")
+		if err := aggTx.Scan(&empProfits).Error; err == nil && len(empProfits) > 0 {
+			empIds := make([]int, 0, len(empProfits))
+			for _, ep := range empProfits {
+				empIds = append(empIds, ep.EmployeeUserId)
+			}
+			tierLevels, _ := GetTierLevelsByUserIds(empIds)
+			var totalRecalc int64
+			for _, ep := range empProfits {
+				if lvl, ok := tierLevels[ep.EmployeeUserId]; ok && lvl.TierId != 0 {
+					if t, ok2 := tierById[lvl.TierId]; ok2 {
+						totalRecalc += int64(float64(ep.ProfitQuota) * t.Rate)
+					}
+				}
+			}
+			stats.Summary.RecalcCommissionQuota = totalRecalc
+		}
+	}
+
 	return stats, nil
 }
 

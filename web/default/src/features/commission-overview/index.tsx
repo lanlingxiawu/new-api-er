@@ -1024,9 +1024,18 @@ export function CommissionOverview() {
                             {displayedEmployeeRows.map((e) => (
                               <TableRow key={e.employee_user_id}>
                                 <TableCell>
-                                  {e.display_name ||
-                                    e.username ||
-                                    `#${e.employee_user_id}`}
+                                  <div className='flex flex-col gap-0.5'>
+                                    <span>
+                                      {e.display_name ||
+                                        e.username ||
+                                        `#${e.employee_user_id}`}
+                                    </span>
+                                    {e.remark && (
+                                      <span className='text-muted-foreground text-xs'>
+                                        {e.remark}
+                                      </span>
+                                    )}
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   <BusinessAmount value={e.total_revenue} />
@@ -1042,7 +1051,11 @@ export function CommissionOverview() {
                                 </TableCell>
                                 <TableCell>
                                   <BusinessAmount
-                                    value={e.total_commission}
+                                    value={
+                                      e.current_tier_rate != null && e.current_tier_rate > 0
+                                        ? Math.round(e.total_profit * e.current_tier_rate)
+                                        : e.total_commission
+                                    }
                                     positiveClassName='text-green-600'
                                   />
                                 </TableCell>

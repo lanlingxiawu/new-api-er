@@ -3030,7 +3030,12 @@ function EmployeesTab({
       width: 120,
       sorter: true,
       sortOrder: getSortOrder('period_commission_quota'),
-      render: (value) => <AmountText value={value || 0} />,
+      render: (_, row) => {
+        const profitQuota = row.current_performance_quota ?? 0;
+        const tierRate = row.current_tier_rate ?? 0;
+        const value = tierRate > 0 ? Math.round(profitQuota * tierRate) : (row.period_commission_quota ?? 0);
+        return <AmountText value={value} />;
+      },
     },
     {
       title: t('当前等级'),
@@ -3744,10 +3749,10 @@ function CommissionFinancialResetPeriodCalendar({
       ),
     [days, month, periodStartAt, visualPeriodEndAt, periodTimezone],
   );
-  const maxAbsCommission = useMemo(
+  const maxAbsRevenue = useMemo(
     () =>
       days.reduce(
-        (max, day) => Math.max(max, Math.abs(day.commission_quota || 0)),
+        (max, day) => Math.max(max, Math.abs(day.profit_quota || 0)),
         0,
       ),
     [days],
@@ -3833,21 +3838,23 @@ function CommissionFinancialResetPeriodCalendar({
               {stats.loading ? (
                 <Spin size='small' />
               ) : (
-                <AmountText value={summary.commission_quota || 0} />
+                <AmountText value={summary.profit_quota || 0} />
               )}
             </div>
             <Text type='secondary' size='small'>
-              {t('Current Period Commission')}
+              {t('Current Period Performance')}
             </Text>
           </Card>
         </Col>
         <Col xs={12} md={6}>
           <Card bodyStyle={{ minHeight: 112, padding: 16 }}>
             <Text type='secondary' size='small'>
-              {t('Current Period Performance')}
+              {t('Current Period Commission')}
             </Text>
             <div className='mt-2 text-base font-semibold md:text-lg'>
-              <AmountText value={summary.profit_quota || 0} />
+              <AmountText
+                value={summary.recalc_commission_quota ?? summary.commission_quota ?? 0}
+              />
             </div>
           </Card>
         </Col>
@@ -3872,11 +3879,11 @@ function CommissionFinancialResetPeriodCalendar({
         </div>
         <div className='grid grid-cols-7'>
           {cells.map(({ key, date, inPeriod, stat }, index) => {
-            const commission = stat?.commission_quota || 0;
+            const profit = stat?.profit_quota || 0;
             const selected = key === selectedDate;
             const isLastColumn = (index + 1) % 7 === 0;
-            const intensity = commissionIntensity(commission, maxAbsCommission);
-            const positive = commission >= 0;
+            const intensity = commissionIntensity(profit, maxAbsRevenue);
+            const positive = profit >= 0;
             return (
               <button
                 key={key}
@@ -3884,7 +3891,7 @@ function CommissionFinancialResetPeriodCalendar({
                 aria-pressed={selected}
                 title={
                   stat
-                    ? `${key} ${formatBusinessAmount(commission)} (${stat.record_count || 0})`
+                    ? `${key} ${formatBusinessAmount(profit)} (${stat.record_count || 0})`
                     : key
                 }
                 onClick={() => setSelectedDate(key)}
@@ -3954,7 +3961,7 @@ function CommissionFinancialResetPeriodCalendar({
                         positive ? 'text-emerald-700' : 'text-red-700',
                       ].join(' ')}
                     >
-                      <AmountText value={commission} />
+                      <AmountText value={profit} />
                     </div>
                     <div
                       className={[
@@ -3962,7 +3969,7 @@ function CommissionFinancialResetPeriodCalendar({
                         positive ? 'bg-emerald-500/70' : 'bg-red-500/70',
                       ].join(' ')}
                       style={{
-                        width: commissionBarWidth(commission, maxAbsCommission),
+                        width: commissionBarWidth(profit, maxAbsRevenue),
                       }}
                     />
                   </div>
@@ -6420,8 +6427,14 @@ export function BusinessOverview() {
     {
       title: t('员工'),
       dataIndex: 'username',
-      render: (value, row) =>
-        row.display_name || value || `#${row.employee_user_id}`,
+      render: (value, row) => (
+        <div>
+          <div>{row.display_name || value || `#${row.employee_user_id}`}</div>
+          {row.remark && (
+            <div style={{ color: 'var(--semi-color-text-2)', fontSize: 12 }}>{row.remark}</div>
+          )}
+        </div>
+      ),
     },
     {
       title: t('Customer consumption'),
@@ -6441,7 +6454,12 @@ export function BusinessOverview() {
     {
       title: t('提成'),
       dataIndex: 'total_commission',
-      render: (value) => <AmountText value={value} />,
+      render: (_, row) => {
+        const value = row.current_tier_rate > 0
+          ? Math.round((row.total_profit ?? 0) * row.current_tier_rate)
+          : (row.total_commission ?? 0);
+        return <AmountText value={value} />;
+      },
     },
     { title: t('记录数'), dataIndex: 'record_count' },
   ];

@@ -2,7 +2,6 @@
   "{{count}} request log entries cleared.": "已清除 {{count}} 条请求日志。",
   "1.0 = full cost, 0.6 = 60% of standard price": "1.0 = full cost, 0.6 = 60% of standard price",
   "Absolute row limit for all exports (incl. admin), guarding the database.": "Absolute row limit for all exports (incl. admin), guarding the database.",
-  "All status": "All status",
   "Allowed payment methods (JSON)": "Allowed payment methods (JSON)",
   "API Key (keyId)": "API Key (keyId)",
   "API Secret (signing key)": "API Secret (signing key)",

@@ -104,6 +104,8 @@ export interface CommissionCalendarDayStat {
   cost_usd?: number
   profit_usd?: number
   commission_usd?: number
+  /** 按各日生效等级费率重算的提成（仅员工维度时返回） */
+  recalc_commission_quota?: number
 }
 
 export interface CommissionCalendarStats {
@@ -123,6 +125,8 @@ export interface CommissionCalendarStats {
     cost_usd?: number
     profit_usd?: number
     commission_usd?: number
+    /** 各日重算提成之和（仅员工维度时返回） */
+    recalc_commission_quota?: number
   }
 }
 

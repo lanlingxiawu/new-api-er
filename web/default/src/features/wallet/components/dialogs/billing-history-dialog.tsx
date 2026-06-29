@@ -138,6 +138,12 @@ export function BillingHistoryDialog({
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
 
   const totalPages = Math.ceil(total / pageSize)
+  const selectedStatusLabel = filters.status
+    ? t(getStatusConfig(filters.status as TopupStatus).label)
+    : t('All status')
+  const selectedPaymentMethodLabel = filters.paymentMethod
+    ? getPaymentMethodName(filters.paymentMethod, t)
+    : t('All methods')
 
   const canShowExport = isAdmin || userExportEnabled
   const canExport = total > 0
@@ -227,7 +233,7 @@ export function BillingHistoryDialog({
                 }
               >
                 <SelectTrigger className='h-9 w-[120px]'>
-                  <SelectValue placeholder={t('Status')} />
+                  <SelectValue>{selectedStatusLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectItem value={ALL_VALUE}>{t('All status')}</SelectItem>
@@ -248,7 +254,7 @@ export function BillingHistoryDialog({
                 }
               >
                 <SelectTrigger className='h-9 w-[140px]'>
-                  <SelectValue placeholder={t('Payment Method')} />
+                  <SelectValue>{selectedPaymentMethodLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectItem value={ALL_VALUE}>{t('All methods')}</SelectItem>

@@ -1,7 +1,6 @@
 {
   "{{count}} request log entries cleared.": "已清除 {{count}} 条请求日志。",
   "Absolute row limit for all exports (incl. admin), guarding the database.": "Absolute row limit for all exports (incl. admin), guarding the database.",
-  "All status": "All status",
   "Backfill running for {{date}}…": "Backfill running for {{date}}…",
   "Buffer Max Entries": "Buffer Max Entries",
   "Cooldown doubles on repeated failures, capped here.": "Cooldown doubles on repeated failures, capped here.",
