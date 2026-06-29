@@ -43,6 +43,7 @@ func (e GeneralErrorResponse) TryToOpenAIError() *types.OpenAIError {
 	if len(e.Error) > 0 {
 		err := common.Unmarshal(e.Error, &openAIError)
 		if err == nil && openAIError.Message != "" {
+			openAIError.Message = common.StripRequestIds(openAIError.Message)
 			return &openAIError
 		}
 	}
@@ -56,38 +57,38 @@ func (e GeneralErrorResponse) ToMessage() string {
 			var openAIError types.OpenAIError
 			err := common.Unmarshal(e.Error, &openAIError)
 			if err == nil && openAIError.Message != "" {
-				return openAIError.Message
+				return common.StripRequestIds(openAIError.Message)
 			}
 		case "string":
 			var msg string
 			err := common.Unmarshal(e.Error, &msg)
 			if err == nil && msg != "" {
-				return msg
+				return common.StripRequestIds(msg)
 			}
 		default:
-			return string(e.Error)
+			return common.StripRequestIds(string(e.Error))
 		}
 	}
 	if e.Message != "" {
-		return e.Message
+		return common.StripRequestIds(e.Message)
 	}
 	if e.Msg != "" {
-		return e.Msg
+		return common.StripRequestIds(e.Msg)
 	}
 	if e.Err != "" {
-		return e.Err
+		return common.StripRequestIds(e.Err)
 	}
 	if e.ErrorMsg != "" {
-		return e.ErrorMsg
+		return common.StripRequestIds(e.ErrorMsg)
 	}
 	if e.Detail != "" {
-		return e.Detail
+		return common.StripRequestIds(e.Detail)
 	}
 	if e.Header.Message != "" {
-		return e.Header.Message
+		return common.StripRequestIds(e.Header.Message)
 	}
 	if e.Response.Error.Message != "" {
-		return e.Response.Error.Message
+		return common.StripRequestIds(e.Response.Error.Message)
 	}
 	return ""
 }

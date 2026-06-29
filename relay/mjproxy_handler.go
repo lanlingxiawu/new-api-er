@@ -198,7 +198,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
-			Description: err.Error(),
+			Description: common.StripRequestIds(err.Error()),
 		}
 	}
 
@@ -206,7 +206,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
-			Description: err.Error(),
+			Description: common.StripRequestIds(err.Error()),
 		}
 	}
 
@@ -510,7 +510,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
-			Description: err.Error(),
+			Description: common.StripRequestIds(err.Error()),
 		}
 	}
 
@@ -518,7 +518,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
-			Description: err.Error(),
+			Description: common.StripRequestIds(err.Error()),
 		}
 	}
 

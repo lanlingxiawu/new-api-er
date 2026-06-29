@@ -46,9 +46,13 @@ func GetAPIVersion(c *gin.Context) string {
 }
 
 func createTaskError(err error, code string, statusCode int, localError bool) *dto.TaskError {
+	message := ""
+	if err != nil {
+		message = common.StripRequestIds(err.Error())
+	}
 	return &dto.TaskError{
 		Code:       code,
-		Message:    err.Error(),
+		Message:    message,
 		StatusCode: statusCode,
 		LocalError: localError,
 		Error:      err,

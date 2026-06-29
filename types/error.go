@@ -128,7 +128,7 @@ func (e *NewAPIError) Error() string {
 		// fallback message when underlying error is missing
 		return string(e.errorCode)
 	}
-	return e.Err.Error()
+	return common.StripRequestIds(e.Err.Error())
 }
 
 func (e *NewAPIError) ErrorWithStatusCode() string {
@@ -149,14 +149,11 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	if e == nil {
 		return ""
 	}
-	if e.Err == nil {
-		return string(e.errorCode)
-	}
-	errStr := e.Err.Error()
+	errStr := e.Error()
 	if e.errorCode == ErrorCodeCountTokenFailed {
 		return errStr
 	}
-	return common.MaskSensitiveInfo(errStr)
+	return common.StripRequestIds(common.MaskSensitiveInfo(errStr))
 }
 
 func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
@@ -175,6 +172,34 @@ func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
 
 func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
+	switch rel := e.RelayError.(type) {
+	case OpenAIError:
+		rel.Message = message
+		e.RelayError = rel
+	case ClaudeError:
+		rel.Message = message
+		e.RelayError = rel
+	default:
+		e.RelayError = OpenAIError{
+			Message: message,
+			Type:    string(e.errorType),
+			Code:    e.errorCode,
+		}
+	}
+}
+
+func (e *NewAPIError) relayMessage() string {
+	switch rel := e.RelayError.(type) {
+	case OpenAIError:
+		if rel.Message != "" {
+			return rel.Message
+		}
+	case ClaudeError:
+		if rel.Message != "" {
+			return rel.Message
+		}
+	}
+	return e.Error()
 }
 
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
@@ -187,7 +212,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
 			result = OpenAIError{
-				Message: e.Error(),
+				Message: e.relayMessage(),
 				Type:    claudeError.Type,
 				Param:   "",
 				Code:    e.errorCode,
@@ -195,7 +220,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		}
 	default:
 		result = OpenAIError{
-			Message: e.Error(),
+			Message: e.relayMessage(),
 			Type:    string(e.errorType),
 			Param:   "",
 			Code:    e.errorCode,
@@ -216,7 +241,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	case ErrorTypeOpenAIError:
 		if openAIError, ok := e.RelayError.(OpenAIError); ok {
 			result = ClaudeError{
-				Message: e.Error(),
+				Message: e.relayMessage(),
 				Type:    fmt.Sprintf("%v", openAIError.Code),
 			}
 		}
@@ -226,7 +251,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		}
 	default:
 		result = ClaudeError{
-			Message: e.Error(),
+			Message: e.relayMessage(),
 			Type:    string(e.errorType),
 		}
 	}
@@ -269,7 +294,7 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 	if errors.As(err, &newErr) {
 		if newErr.RelayError == nil {
 			openaiError := OpenAIError{
-				Message: newErr.Error(),
+				Message: common.StripRequestIds(newErr.Error()),
 				Type:    string(errorCode),
 				Code:    errorCode,
 			}
@@ -281,7 +306,7 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		return newErr
 	}
 	openaiError := OpenAIError{
-		Message: err.Error(),
+		Message: errorMessage(err),
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
@@ -300,7 +325,7 @@ func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops 
 	e := &NewAPIError{
 		Err: err,
 		RelayError: OpenAIError{
-			Message: err.Error(),
+			Message: errorMessage(err),
 			Type:    string(errorCode),
 		},
 		errorType:  ErrorTypeNewAPIError,
@@ -315,6 +340,7 @@ func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops 
 }
 
 func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
+	openAIError.Message = common.StripRequestIds(openAIError.Message)
 	code, ok := openAIError.Code.(string)
 	if !ok {
 		if openAIError.Code != nil {
@@ -335,7 +361,7 @@ func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIError
 	}
 	// OpenRouter
 	if len(openAIError.Metadata) > 0 {
-		openAIError.Message = fmt.Sprintf("%s (%s)", openAIError.Message, openAIError.Metadata)
+		openAIError.Message = common.StripRequestIds(fmt.Sprintf("%s (%s)", openAIError.Message, openAIError.Metadata))
 		e.Metadata = openAIError.Metadata
 		e.RelayError = openAIError
 		e.Err = errors.New(openAIError.Message)
@@ -347,6 +373,7 @@ func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIError
 }
 
 func WithClaudeError(claudeError ClaudeError, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
+	claudeError.Message = common.StripRequestIds(claudeError.Message)
 	if claudeError.Type == "" {
 		claudeError.Type = "upstream_error"
 	}
@@ -361,6 +388,13 @@ func WithClaudeError(claudeError ClaudeError, statusCode int, ops ...NewAPIError
 		op(e)
 	}
 	return e
+}
+
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return common.StripRequestIds(err.Error())
 }
 
 func IsChannelError(err *NewAPIError) bool {

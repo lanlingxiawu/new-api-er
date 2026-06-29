@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,6 +121,42 @@ func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 
 	require.NotNil(t, newAPIError)
 	require.Equal(t, message, newAPIError.Error())
+}
+
+func TestRelayErrorHandlerStripsNestedRequestIds(t *testing.T) {
+	body := `{"error":{"message":"upstream failed (request id: upstream-a) (request id: upstream-b)","type":"server_error","code":"server_error"}}`
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, "upstream failed", newAPIError.Error())
+	require.Equal(t, "upstream failed", newAPIError.ToOpenAIError().Message)
+	require.NotContains(t, newAPIError.ErrorWithStatusCode(), "request id:")
+}
+
+func TestRelayErrorHandlerShowBodyStripsNestedRequestIds(t *testing.T) {
+	body := `not json (request id: upstream-a) (request id: upstream-b)`
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, true)
+
+	require.NotNil(t, newAPIError)
+	require.Contains(t, newAPIError.Error(), "bad response status code 400")
+	require.NotContains(t, newAPIError.Error(), "request id:")
+}
+
+func TestTaskErrorWrapperStripsNestedRequestIds(t *testing.T) {
+	taskErr := TaskErrorWrapper(errors.New("task failed (request id: upstream-a) (request id: upstream-b)"), "task_failed", http.StatusBadRequest)
+
+	require.Equal(t, "task failed", taskErr.Message)
+	require.NotContains(t, taskErr.Message, "request id:")
 }
 
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -275,8 +276,18 @@ func Max(a int, b int) int {
 	}
 }
 
+var requestIdSuffixRegex = regexp.MustCompile(`\s*\(request id:\s*[^)]*\)`)
+
+func StripRequestIds(message string) string {
+	return strings.TrimSpace(requestIdSuffixRegex.ReplaceAllString(message, ""))
+}
+
 func MessageWithRequestId(message string, id string) string {
-	return fmt.Sprintf("%s (request id: %s)", message, id)
+	cleaned := StripRequestIds(message)
+	if cleaned == "" {
+		return fmt.Sprintf("(request id: %s)", id)
+	}
+	return fmt.Sprintf("%s (request id: %s)", cleaned, id)
 }
 
 func RandomSleep() {
