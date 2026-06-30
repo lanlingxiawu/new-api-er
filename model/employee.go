@@ -322,29 +322,33 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) commission_rollup ON commission_rollup.employee_user_id = employee_profiles.user_id")
 		orderColumn = "COALESCE(commission_rollup.total_commission_quota, 0)"
 	case "period_consumption_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT inviter_id AS employee_user_id, COALESCE(SUM(used_quota),0) AS total_consumption_quota FROM users WHERE role = ? GROUP BY inviter_id) period_consumption_rollup ON period_consumption_rollup.employee_user_id = employee_profiles.user_id", common.RoleCommonUser).
-			Joins("LEFT JOIN employee_tier_levels AS period_consumption_levels ON period_consumption_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(period_consumption_rollup.total_consumption_quota, 0) - COALESCE(period_consumption_levels.baseline_consumption_quota, 0) < 0 THEN 0 ELSE COALESCE(period_consumption_rollup.total_consumption_quota, 0) - COALESCE(period_consumption_levels.baseline_consumption_quota, 0) END"
+		// 本期消费 = 当前 reset 周期内的 revenue_quota 汇总（与列表展示口径一致）
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.revenue_quota),0) AS period_consumption_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) GROUP BY d.employee_user_id) period_consumption_rollup ON period_consumption_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(period_consumption_rollup.period_consumption_quota, 0)"
 	case "period_cost_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(cost_quota),0) AS total_cost_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_cost_rollup ON period_cost_rollup.employee_user_id = employee_profiles.user_id").
-			Joins("LEFT JOIN employee_tier_levels AS period_cost_levels ON period_cost_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(period_cost_rollup.total_cost_quota, 0) - COALESCE(period_cost_levels.baseline_cost_quota, 0) < 0 THEN 0 ELSE COALESCE(period_cost_rollup.total_cost_quota, 0) - COALESCE(period_cost_levels.baseline_cost_quota, 0) END"
+		// 本期成本 = 当前 reset 周期内的 cost_quota 汇总（与列表展示口径一致）
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.cost_quota),0) AS period_cost_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) GROUP BY d.employee_user_id) period_cost_rollup ON period_cost_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(period_cost_rollup.period_cost_quota, 0)"
 	case "period_profit_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_profit_rollup ON period_profit_rollup.employee_user_id = employee_profiles.user_id").
-			Joins("LEFT JOIN employee_tier_levels AS period_profit_levels ON period_profit_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(period_profit_rollup.total_profit_quota, 0) - COALESCE(period_profit_levels.baseline_profit_quota, 0) < 0 THEN 0 ELSE COALESCE(period_profit_rollup.total_profit_quota, 0) - COALESCE(period_profit_levels.baseline_profit_quota, 0) END"
+		// 本期利润 = 当前 reset 周期内的 profit_quota 汇总（与列表展示口径一致）
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.profit_quota),0) AS period_profit_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) GROUP BY d.employee_user_id) period_profit_rollup ON period_profit_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(period_profit_rollup.period_profit_quota, 0)"
 	case "period_commission_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) period_commission_rollup ON period_commission_rollup.employee_user_id = employee_profiles.user_id").
-			Joins("LEFT JOIN employee_tier_levels AS period_commission_levels ON period_commission_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(period_commission_rollup.total_commission_quota, 0) - COALESCE(period_commission_levels.baseline_commission_quota, 0) < 0 THEN 0 ELSE COALESCE(period_commission_rollup.total_commission_quota, 0) - COALESCE(period_commission_levels.baseline_commission_quota, 0) END"
+		// 本期提成 = 当前 reset 周期内 SUM(profit_quota) × 当前等级利率。
+		// 提成模型为阶梯制全量覆盖：升级后所有本期业绩统一按当前比例重算，
+		// 因此不能累加逐笔 commission_quota，须用 profit × rate 计算。
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.profit_quota),0) * COALESCE(t2.rate,0) AS period_commission_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) LEFT JOIN employee_commission_tiers t2 ON t2.id = l.tier_id GROUP BY d.employee_user_id, t2.rate) period_commission_rollup ON period_commission_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(period_commission_rollup.period_commission_quota, 0)"
 	case "current_performance_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(profit_quota),0) AS total_profit_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_profit_rollup ON current_profit_rollup.employee_user_id = employee_profiles.user_id").
-			Joins("LEFT JOIN employee_tier_levels AS current_perf_levels ON current_perf_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(current_profit_rollup.total_profit_quota, 0) - COALESCE(current_perf_levels.baseline_profit_quota, 0) < 0 THEN 0 ELSE COALESCE(current_profit_rollup.total_profit_quota, 0) - COALESCE(current_perf_levels.baseline_profit_quota, 0) END"
+		// 当前业绩 = 当前 reset 周期内的 profit_quota 汇总（与列表展示口径一致）
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.profit_quota),0) AS current_profit_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) GROUP BY d.employee_user_id) current_perf_rollup ON current_perf_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(current_perf_rollup.current_profit_quota, 0)"
 	case "current_commission_quota":
-		tx = tx.Joins("LEFT JOIN (SELECT employee_user_id, COALESCE(SUM(commission_quota),0) AS total_commission_quota FROM employee_commission_daily_stats GROUP BY employee_user_id) current_commission_rollup ON current_commission_rollup.employee_user_id = employee_profiles.user_id").
-			Joins("LEFT JOIN employee_tier_levels AS current_commission_levels ON current_commission_levels.user_id = employee_profiles.user_id")
-		orderColumn = "CASE WHEN COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) < 0 THEN 0 ELSE COALESCE(current_commission_rollup.total_commission_quota, 0) - COALESCE(current_commission_levels.baseline_commission_quota, 0) END"
+		// 当前提成 = 当前 reset 周期内 SUM(profit_quota) × 当前等级利率。
+		// 提成模型为阶梯制全量覆盖：升级后所有本期业绩统一按当前比例重算，
+		// 因此不能累加逐笔 commission_quota，须用 profit × rate 计算。
+		tx = tx.Joins("LEFT JOIN (SELECT d.employee_user_id, COALESCE(SUM(d.profit_quota),0) * COALESCE(t2.rate,0) AS current_commission_quota FROM employee_commission_reset_period_daily_stats d LEFT JOIN employee_tier_levels l ON l.user_id = d.employee_user_id AND d.reset_started_at = COALESCE(NULLIF(l.baseline_reset_at,0),?) LEFT JOIN employee_commission_tiers t2 ON t2.id = l.tier_id GROUP BY d.employee_user_id, t2.rate) current_commission_rollup ON current_commission_rollup.employee_user_id = employee_profiles.user_id", periodStartAt)
+		orderColumn = "COALESCE(current_commission_rollup.current_commission_quota, 0)"
 	case "current_tier_rate":
 		tx = tx.Joins("LEFT JOIN employee_tier_levels AS tier_levels_sort ON tier_levels_sort.user_id = employee_profiles.user_id").
 			Joins("LEFT JOIN employee_commission_tiers AS tiers_sort ON tiers_sort.id = tier_levels_sort.tier_id")
@@ -682,11 +686,7 @@ type CommissionCalendarSummary struct {
 }
 
 type resetBaselineSummary struct {
-	BaselineConsumptionQuota int64
-	BaselineCostQuota        int64
-	BaselineProfitQuota      int64
-	BaselineCommissionQuota  int64
-	BaselineResetAt          int64
+	BaselineResetAt int64
 }
 
 type EmployeeCurrentResetPeriodStat struct {
@@ -727,17 +727,17 @@ func loadResetBaselineByEmployeeUserIds(employeeUserIds []int) (map[int]resetBas
 	if len(employeeUserIds) == 0 {
 		return items, nil
 	}
-	var rows []*EmployeeTierLevel
-	if err := DB.Where("user_id IN ?", employeeUserIds).Find(&rows).Error; err != nil {
+	type baselineRow struct {
+		UserId          int
+		BaselineResetAt int64
+	}
+	var rows []baselineRow
+	if err := DB.Model(&EmployeeTierLevel{}).Select("user_id, baseline_reset_at").Where("user_id IN ?", employeeUserIds).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
 		items[row.UserId] = resetBaselineSummary{
-			BaselineConsumptionQuota: row.BaselineConsumptionQuota,
-			BaselineCostQuota:        row.BaselineCostQuota,
-			BaselineProfitQuota:      row.BaselineProfitQuota,
-			BaselineCommissionQuota:  row.BaselineCommissionQuota,
-			BaselineResetAt:          row.BaselineResetAt,
+			BaselineResetAt: row.BaselineResetAt,
 		}
 	}
 	return items, nil
@@ -770,10 +770,21 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 		CommissionQuota int64
 		RecordCount     int64
 	}
+	// 收集所有唯一的 reset_started_at 值并下推到 DB，避免跨月扫描历史数据。
+	// 若不过滤 reset_started_at，随月份增加扫描量线性劣化（12 月 = 12 倍数据）。
+	uniqueResets := make([]int64, 0, 2)
+	seenResets := make(map[int64]bool, 2)
+	for _, v := range resetStartedAtByUserId {
+		if !seenResets[v] {
+			seenResets[v] = true
+			uniqueResets = append(uniqueResets, v)
+		}
+	}
+
 	var rows []aggRow
 	if err := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
 		Select("employee_user_id, reset_started_at, SUM(revenue_quota) as revenue_quota, SUM(cost_quota) as cost_quota, SUM(profit_quota) as profit_quota, SUM(commission_quota) as commission_quota, SUM(record_count) as record_count").
-		Where("employee_user_id IN ?", employeeUserIds).
+		Where("employee_user_id IN ? AND reset_started_at IN ?", employeeUserIds, uniqueResets).
 		Group("employee_user_id, reset_started_at").
 		Scan(&rows).Error; err != nil {
 		return nil, err
@@ -798,14 +809,6 @@ func GetCurrentResetPeriodStatsByEmployeeUserIds(employeeUserIds []int) (map[int
 		}
 	}
 	return items, nil
-}
-
-func clampQuotaDelta(total, baseline int64) int64 {
-	delta := total - baseline
-	if delta < 0 {
-		return 0
-	}
-	return delta
 }
 
 func commissionStatDayStart(ts int64) int64 {
@@ -957,6 +960,9 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		// 1. 已执行过重置（baseline_reset_at > 0）：reset_started_at = baseline_reset_at
 		// 2. 从未重置（baseline_reset_at = 0）：reset_started_at = period.PeriodStartAt
 		tx = tx.Joins(
+			"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
+			1,
+		).Joins(
 			"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id"+
 				" AND (employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at"+
 				" OR (employee_tier_levels.baseline_reset_at = 0 AND employee_commission_reset_period_daily_stats.reset_started_at = ?))",

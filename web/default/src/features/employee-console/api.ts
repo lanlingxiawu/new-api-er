@@ -33,6 +33,13 @@ export interface EmployeeExtension {
   current_commission_usd?: number
 }
 
+export interface NextTierInfo {
+  tier_id: number
+  tier_level: number
+  tier_rate: number
+  tier_threshold_usd: number
+}
+
 export interface MyProfileResponse {
   success: boolean
   message?: string
@@ -45,6 +52,7 @@ export interface MyProfileResponse {
       tier_group: string
       tier_rate: number
       tier_threshold_usd: number
+      next_tier?: NextTierInfo
     }
     period?: {
       baseline_reset_at: number

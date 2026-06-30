@@ -257,10 +257,9 @@ func AdminListEmployees(c *gin.Context) {
 			PeriodEndAt:            periodEndAt,
 			PeriodKey:              periodKey,
 			PeriodTimezone:         periodTimezone,
-			CurrentProfitQuota:     periodProfitQuota,
-			CurrentProfitUsd:       common.QuotaToUSD(periodProfitQuota),
-			CurrentCommissionQuota: periodCommissionQuota,
-			CurrentCommissionUsd:   common.QuotaToUSD(periodCommissionQuota),
+			CurrentProfitQuota: periodProfitQuota,
+			CurrentProfitUsd:   common.QuotaToUSD(periodProfitQuota),
+			// CurrentCommissionQuota 在等级利率确定后赋值（提成 = 本期利润 × 当前等级利率）。
 		}
 		currentLevel := 0
 		currentGroup := ""
@@ -275,6 +274,12 @@ func AdminListEmployees(c *gin.Context) {
 				currentGroup = t.Group
 			}
 		}
+		// 提成模型：升级后所有本期业绩统一按当前等级利率重算，commission = profit × rate。
+		correctedCommission := service.CalcCommissionQuota(periodProfitQuota, item.CurrentTierRate)
+		item.CurrentCommissionQuota = correctedCommission
+		item.CurrentCommissionUsd = common.QuotaToUSD(correctedCommission)
+		item.PeriodCommissionQuota = correctedCommission
+		item.PeriodCommissionUsd = common.QuotaToUSD(correctedCommission)
 		if nextTier := findNextTier(currentLevel, currentGroup, item.CurrentProfitUsd); nextTier != nil {
 			item.NextTierId = nextTier.Id
 			item.NextTierLevel = nextTier.Level
@@ -1100,11 +1105,19 @@ func GetMyEmployeeProfile(c *gin.Context) {
 			"tier_rate":          tier.Rate,
 			"tier_threshold_usd": tier.ThresholdUsd,
 		}
-	}
-	var profitTotalQuota, commissionTotalQuota int64
-	if ext != nil {
-		profitTotalQuota = ext.ProfitTotalQuota
-		commissionTotalQuota = ext.CommissionTotalQuota
+		// Find the next tier: same group, level+1. Used by the employee self-service UI.
+		allTiers := model.GetAllTiersCached()
+		for _, t := range allTiers {
+			if t.Group == tier.Group && t.Level == tier.Level+1 {
+				tierInfo["next_tier"] = gin.H{
+					"tier_id":            t.Id,
+					"tier_level":         t.Level,
+					"tier_rate":          t.Rate,
+					"tier_threshold_usd": t.ThresholdUsd,
+				}
+				break
+			}
+		}
 	}
 	var baselineProfitQuota, baselineCommissionQuota, baselineResetAt int64
 	if tierLevel != nil {
@@ -1112,14 +1125,17 @@ func GetMyEmployeeProfile(c *gin.Context) {
 		baselineCommissionQuota = tierLevel.BaselineCommissionQuota
 		baselineResetAt = tierLevel.BaselineResetAt
 	}
-	currentProfitQuota := profitTotalQuota - baselineProfitQuota
-	if currentProfitQuota < 0 {
-		currentProfitQuota = 0
+	// 当期利润/提成从 employee_commission_reset_period_daily_stats 聚合。
+	// 提成模型：升级后所有本期业绩统一按当前等级利率重算（非逐笔累加），
+	// 因此 current_commission_quota = SUM(profit_quota) × current_tier_rate。
+	profilePeriodStats, _ := model.GetCurrentResetPeriodStatsByEmployeeUserIds([]int{userId})
+	currentPeriodStat := profilePeriodStats[userId]
+	currentProfitQuota := currentPeriodStat.ProfitQuota
+	var currentTierRate float64
+	if tier != nil {
+		currentTierRate = tier.Rate
 	}
-	currentCommissionQuota := commissionTotalQuota - baselineCommissionQuota
-	if currentCommissionQuota < 0 {
-		currentCommissionQuota = 0
-	}
+	currentCommissionQuota := service.CalcCommissionQuota(currentProfitQuota, currentTierRate)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -1211,50 +1227,54 @@ func GetMyCommissionSummary(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "permission denied"})
 		return
 	}
-	ext, err := model.GetUserExtension(userId)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
+	ext, _ := model.GetUserExtension(userId)
+
+	_, summaryTier := model.GetTierLevelByUserId(userId)
+	var summaryTierRate float64
+	if summaryTier != nil {
+		summaryTierRate = summaryTier.Rate
 	}
-	tierLevel, _ := model.GetTierLevelByUserId(userId)
-	var baselineProfitQuota, baselineCommissionQuota, baselineResetAt int64
-	if tierLevel != nil {
-		baselineProfitQuota = tierLevel.BaselineProfitQuota
-		baselineCommissionQuota = tierLevel.BaselineCommissionQuota
-		baselineResetAt = tierLevel.BaselineResetAt
+
+	// 当期利润/提成从 employee_commission_reset_period_daily_stats 聚合。
+	// 提成模型：升级后所有本期业绩统一按当前等级利率重算（非逐笔累加），
+	// 因此 current_commission_quota = SUM(profit_quota) × current_tier_rate。
+	summaryPeriodStats, _ := model.GetCurrentResetPeriodStatsByEmployeeUserIds([]int{userId})
+	currentPeriodStat := summaryPeriodStats[userId]
+	currentProfitQuota := currentPeriodStat.ProfitQuota
+	currentCommissionQuota := service.CalcCommissionQuota(currentProfitQuota, summaryTierRate)
+
+	// 全历史累计从 employee_commission_daily_stats 聚合（employee_user_id 有独立索引），
+	// 与管理端"员工管理"历史总计保持同源，无需单独维护快照。
+	var profitTotalQuota, commissionTotalQuota int64
+	if allTimeStats, err2 := model.GetCommissionStatsByEmployeeIds([]int{userId}); err2 == nil && len(allTimeStats) > 0 {
+		profitTotalQuota = allTimeStats[0].TotalProfit
+		commissionTotalQuota = allTimeStats[0].TotalCommission
 	}
-	currentProfitQuota := ext.ProfitTotalQuota - baselineProfitQuota
-	if currentProfitQuota < 0 {
-		currentProfitQuota = 0
-	}
-	currentCommissionQuota := ext.CommissionTotalQuota - baselineCommissionQuota
-	if currentCommissionQuota < 0 {
-		currentCommissionQuota = 0
-	}
+
 	customerConsumptionByUserId, err := model.GetCustomerUsedQuotaTotalsByEmployees([]int{userId})
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 	customerTotalConsumptionQuota := customerConsumptionByUserId[userId]
+
+	var commissionPendingQuota, commissionSettledQuota int64
+	if ext != nil {
+		commissionPendingQuota = ext.CommissionPendingQuota
+		commissionSettledQuota = ext.CommissionSettledQuota
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"commission_total_quota":           ext.CommissionTotalQuota,
-			"commission_pending_quota":         ext.CommissionPendingQuota,
-			"commission_settled_quota":         ext.CommissionSettledQuota,
-			"profit_total_quota":               ext.ProfitTotalQuota,
-			"revenue_customer_count":           ext.RevenueCustomerCount,
+			"commission_total_quota":           commissionTotalQuota,
+			"commission_pending_quota":         commissionPendingQuota,
+			"commission_settled_quota":         commissionSettledQuota,
+			"profit_total_quota":               profitTotalQuota,
 			"customer_total_consumption_quota": customerTotalConsumptionQuota,
-			"commission_total_usd":             common.QuotaToUSD(ext.CommissionTotalQuota),
-			"commission_pending_usd":           common.QuotaToUSD(ext.CommissionPendingQuota),
-			"profit_total_usd":                 common.QuotaToUSD(ext.ProfitTotalQuota),
+			"commission_total_usd":             common.QuotaToUSD(commissionTotalQuota),
+			"commission_pending_usd":           common.QuotaToUSD(commissionPendingQuota),
+			"profit_total_usd":                 common.QuotaToUSD(profitTotalQuota),
 			"customer_total_consumption_usd":   common.QuotaToUSD(customerTotalConsumptionQuota),
-			"baseline_reset_at":                baselineResetAt,
-			"baseline_profit_quota":            baselineProfitQuota,
-			"baseline_profit_usd":              common.QuotaToUSD(baselineProfitQuota),
-			"baseline_commission_quota":        baselineCommissionQuota,
-			"baseline_commission_usd":          common.QuotaToUSD(baselineCommissionQuota),
 			"current_performance_quota":        currentProfitQuota,
 			"current_performance_usd":          common.QuotaToUSD(currentProfitQuota),
 			"current_commission_quota":         currentCommissionQuota,

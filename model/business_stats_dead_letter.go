@@ -279,14 +279,6 @@ func writeStatResetDailyFallback(reason string, d *commissionResetPeriodDailyDel
 	return writeBusinessStatsFallback("stat_reset_daily", reason, d)
 }
 
-func writeStatEmployeeExtFallback(reason string, userId int, d *employeeExtDelta) bool {
-	return writeBusinessStatsFallback("stat_employee_ext", reason, map[string]any{
-		"user_id":          userId,
-		"commission_delta": d.CommissionDelta,
-		"profit_delta":     d.ProfitDelta,
-	})
-}
-
 // FlushAndCloseFallbackFiles drains the write queue, flushes, and closes every
 // open fallback/dead-letter file descriptor.  On Windows, t.TempDir() cleanup
 // fails if any fd is still open inside the temp directory — call this in

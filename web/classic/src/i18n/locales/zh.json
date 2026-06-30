@@ -352,6 +352,10 @@
     "当前时间": "当前时间",
     "当前未开启Midjourney回调，部分项目可能无法获得绘图结果，可在运营设置中开启。": "当前未开启Midjourney回调，部分项目可能无法获得绘图结果，可在运营设置中开启。",
     "当前业绩": "当前业绩",
+    "累计业绩": "累计业绩",
+    "下一等级": "下一等级",
+    "门槛": "门槛",
+    "已达最高等级": "已达最高等级",
     "当前余额": "当前余额",
     "当前员工": "当前员工",
     "当前值": "当前值",
@@ -2730,9 +2734,10 @@
     "Creem Setting Tips": "Creem 只支持预设的固定金额产品，这产品以及价格需要提前在Creem网站内创建配置，所以不支持自定义动态金额充值。在Creem端配置产品的名字以及价格，获取Product Id 后填到下面的产品，在new-api为该产品设置充值额度，以及展示价格。",
     "Current Period Commission": "本期提成",
     "Current Period Performance": "本期业绩",
-"DB 短超时": "DB 短超时",
+    "DB 短超时": "DB 短超时",
     "cursor_created_at and cursor_id must be provided together": "cursor_created_at 和 cursor_id 必须同时提供",
-    "Date Range": "时间范围",    "default为默认设置，可单独设置每个分类的安全等级": "default为默认设置，可单独设置每个分类的安全等级",
+    "Date Range": "时间范围",
+    "default为默认设置，可单独设置每个分类的安全等级": "default为默认设置，可单独设置每个分类的安全等级",
     "default为默认设置，可单独设置每个模型的版本": "default为默认设置，可单独设置每个模型的版本",
     "Dify渠道只适配chatflow和agent，并且agent不支持图片！": "Dify渠道只适配chatflow和agent，并且agent不支持图片！",
     "Discord": "Discord",
@@ -2955,6 +2960,7 @@
     "Worker密钥": "Worker密钥",
     "Yes": "是",
     "Zero revenue": "零收入",
-    "Zero-revenue rows": "零收入行"
+    "Zero-revenue rows": "零收入行",
+    "暂未定级": "暂未定级"
   }
 }

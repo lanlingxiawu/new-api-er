@@ -39,6 +39,7 @@ import {
   getMyCommissionSummary,
   getMyEmployeeProfile,
   type EmployeeExtension,
+  type NextTierInfo,
 } from './api'
 
 function formatTs(ts: number) {
@@ -53,44 +54,37 @@ function formatPercent(value: number | undefined) {
 function SummaryCards({
   data,
   commissionRate,
-  targetAmount,
+  nextTier,
+  hasTier,
 }: {
   data: Partial<EmployeeExtension>
   commissionRate: number
-  targetAmount: number
+  nextTier?: NextTierInfo | null
+  hasTier?: boolean
 }) {
   const { t } = useTranslation()
   const num = (value: number | undefined) => value ?? 0
   const totalConsumptionQuota = num(data.customer_total_consumption_quota)
   const totalConsumptionUsd = data.customer_total_consumption_usd
-  const totalProfitQuota = num(
-    data.current_performance_quota ??
-      data.profit_total_quota ??
-      data.total_profit_quota
-  )
-  const totalProfitUsd = num(
-    data.current_performance_usd ?? data.profit_total_usd ?? data.total_profit_usd
-  )
+  // Use cumulative (all-time) totals, not the current-period snapshot.
+  const totalProfitQuota = num(data.profit_total_quota ?? data.total_profit_quota)
+  const totalProfitUsd = num(data.profit_total_usd ?? data.total_profit_usd ?? 0)
   const totalCommissionQuota = num(
-    data.current_commission_quota ??
-      data.total_commission_quota ??
-      data.commission_total_quota
+    data.commission_total_quota ?? data.total_commission_quota
   )
   const totalCommissionUsd =
-    data.current_commission_usd ??
-    data.total_commission_usd ??
-    data.commission_total_usd
-  const reachedTarget = totalProfitUsd >= targetAmount
-  const targetSub: ReactNode = targetAmount ? (
+    data.commission_total_usd ?? data.total_commission_usd
+
+  // Tier card sub: show next tier info, "highest tier reached", or "no tier assigned"
+  const tierSub: ReactNode = nextTier ? (
     <span>
-      {t('Performance')}: {formatBusinessTargetAmount(totalProfitUsd)} /{' '}
-      {formatBusinessTargetAmount(targetAmount)}
-      {reachedTarget ? (
-        <span className='ml-1 font-semibold text-green-600'>{t('Reached')}</span>
-      ) : null}
+      {t('Next Tier')}: {formatPercent(nextTier.tier_rate)}{' '}
+      ({t('Threshold')}: ${nextTier.tier_threshold_usd.toFixed(2)})
     </span>
+  ) : hasTier ? (
+    <span>{t('Highest tier reached')}</span>
   ) : (
-    `${t('Performance Target')}: ${t('No limit')}`
+    <span>{t('No tier assigned')}</span>
   )
 
   const cards = [
@@ -105,7 +99,7 @@ function SummaryCards({
       valueClassName: undefined as string | undefined,
     },
     {
-      title: t('Current Performance'),
+      title: t('Total Performance'),
       value: formatBusinessAmount(totalProfitQuota),
       sub: formatBusinessExactUsd(totalProfitUsd),
       icon: TrendingUp,
@@ -126,7 +120,7 @@ function SummaryCards({
     {
       title: t('Commission Tier'),
       value: formatPercent(commissionRate),
-      sub: targetSub,
+      sub: tierSub,
       icon: Wallet,
       valueClassName: undefined as string | undefined,
     },
@@ -488,7 +482,7 @@ export function EmployeeConsole() {
 
   const tierInfo = profileData.data.tier
   const effectiveRate = tierInfo?.tier_rate ?? 0
-  const tierTargetAmount = Number(tierInfo?.tier_threshold_usd || 0)
+  const nextTier = tierInfo?.next_tier ?? null
   const summary = {
     ...profileData.data.extension,
     ...profileData.data.period,
@@ -522,7 +516,8 @@ export function EmployeeConsole() {
                   <SummaryCards
                     data={summary}
                     commissionRate={effectiveRate}
-                    targetAmount={tierTargetAmount}
+                    nextTier={nextTier}
+                    hasTier={!!(tierInfo?.tier_id)}
                   />
                 </div>
               ) : null}

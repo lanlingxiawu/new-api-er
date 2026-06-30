@@ -4840,22 +4840,27 @@ export function EmployeeConsole() {
   const profile = profileData?.data?.profile;
   const tierInfo = profileData?.data?.tier;
   const effectiveRate = tierInfo?.tier_rate ?? 0;
-  const tierGroup = tierInfo?.tier_group || '';
+  const nextTier = tierInfo?.next_tier ?? null;
+  const hasTier = !!(tierInfo?.tier_id);
   const extension = summary || profileData?.data?.extension || {};
   const customerTotalConsumptionQuota =
     extension.customer_total_consumption_quota ?? 0;
   const customerTotalConsumptionUsd = extension.customer_total_consumption_usd;
+  // Use cumulative (all-time) totals, not the current-period snapshot.
   const totalProfitQuota =
-    extension.profit_total_quota ?? extension.total_profit_quota ?? 0;
+    extension.profit_total_quota ??
+    extension.total_profit_quota ??
+    0;
   const totalProfitUsd =
-    extension.profit_total_usd ?? extension.total_profit_usd;
+    extension.profit_total_usd ??
+    extension.total_profit_usd;
   const totalCommissionQuota =
-    extension.total_commission_quota ?? extension.commission_total_quota ?? 0;
+    extension.commission_total_quota ??
+    extension.total_commission_quota ??
+    0;
   const totalCommissionUsd =
-    extension.total_commission_usd ?? extension.commission_total_usd;
-  const targetAmount = Number(
-    tierInfo?.tier_threshold_usd || profile?.target_amount || 0,
-  );
+    extension.commission_total_usd ??
+    extension.total_commission_usd;
 
   return (
     <PageShell>
@@ -4927,7 +4932,7 @@ export function EmployeeConsole() {
                     </Col>
                     <Col xs={24} md={12} xl={6}>
                       <StatCard
-                        title={t('当前业绩')}
+                        title={t('累计业绩')}
                         value={formatBusinessAmount(totalProfitQuota)}
                         sub={formatExactUsd(totalProfitUsd)}
                         icon={TrendingUp}
@@ -4948,9 +4953,9 @@ export function EmployeeConsole() {
                         title={t('提成阶梯')}
                         value={formatPercent(effectiveRate)}
                         sub={
-                          targetAmount
-                            ? `${t('业绩')}: $${(totalProfitUsd ?? 0).toFixed(2)} / ${formatTargetAmount(targetAmount)}${(totalProfitUsd ?? 0) >= targetAmount ? ` ${t('已完成')}` : ''}`
-                            : `${t('业绩目标')}: ${t('无限制')}`
+                          nextTier
+                            ? `${t('下一等级')}: ${formatPercent(nextTier.tier_rate)} (${t('门槛')} $${Number(nextTier.tier_threshold_usd).toFixed(2)})`
+                            : hasTier ? t('已达最高等级') : t('暂未定级')
                         }
                         icon={Wallet}
                       />

@@ -513,6 +513,10 @@
     "当前未开启Midjourney回调，部分项目可能无法获得绘图结果，可在运营设置中开启。": "Gọi lại Midjourney hiện tại chưa được bật, một số dự án có thể không nhận được kết quả vẽ, có thể bật trong cài đặt vận hành.",
     "当前未启用，需要时再打开即可。": "Trường này hiện đang tắt. Hãy bật khi cần.",
     "当前业绩": "Hiệu suất hiện tại",
+    "累计业绩": "Tổng hiệu suất",
+    "下一等级": "Cấp tiếp theo",
+    "门槛": "Ngưỡng",
+    "已达最高等级": "Đã đạt cấp cao nhất",
     "当前余额": "Số dư hiện tại",
     "当前员工": "Nhân viên hiện tại",
     "当前值": "Giá trị hiện tại",
@@ -1495,7 +1499,6 @@
     "美国西部": "Miền Tây Hoa Kỳ",
     "美金": "USD",
     "美元": "US Dollar",
-    "门槛": "Ngưỡng",
     "密码": "Mật khẩu",
     "密码管理": "Quản lý mật khẩu",
     "密码修改成功！": "Đổi mật khẩu thành công!",
@@ -4259,6 +4262,7 @@
     "为空则记录所有用户的请求和返回；填写则仅记录该用户名": "",
     "最大日志量": "",
     "最小日志量": "",
-    "Redis 去重键有效期，覆盖重试窗口即可；越大越占内存，仅在启用 Redis 去重时生效。": ""
+    "Redis 去重键有效期，覆盖重试窗口即可；越大越占内存，仅在启用 Redis 去重时生效。": "",
+    "暂未定级": "Chưa có cấp bậc"
   }
 }

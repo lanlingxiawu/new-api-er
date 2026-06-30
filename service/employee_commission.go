@@ -262,6 +262,14 @@ func calcSettlementCommissionQuota(revenueQuota, profitQuota int64, commissionRa
 	return calcCommissionQuota(profitQuota, commissionRate)
 }
 
+// CalcCommissionQuota 计算利润对应的提成额度（decimal 精度）。
+// 提成模型为阶梯制全量覆盖：升级后所有本期业绩统一按当前比例重算，
+// 因此展示层须用 SUM(period_profit) × current_rate，而非累加逐笔 commission_quota。
+// 本函数为展示层统一入口，与结算层逻辑保持一致。
+func CalcCommissionQuota(profitQuota int64, commissionRate float64) int64 {
+	return calcCommissionQuota(profitQuota, commissionRate)
+}
+
 // calcCommissionQuota 用 decimal 精度计算提成额度。
 // 正利润有 1 quota 保底；负利润用于退款冲销，极小负值同样至少冲销 1 quota。
 func calcCommissionQuota(profitQuota int64, commissionRate float64) int64 {

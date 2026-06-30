@@ -505,6 +505,10 @@
     "当前未开启Midjourney回调，部分项目可能无法获得绘图结果，可在运营设置中开启。": "Current Midjourney callback is not enabled, some projects may not be able to obtain drawing results, which can be enabled in the operation settings.",
     "当前未启用，需要时再打开即可。": "This field is currently disabled. Enable it when needed.",
     "当前业绩": "Current Performance",
+    "累计业绩": "Total Performance",
+    "下一等级": "Next Tier",
+    "门槛": "Threshold",
+    "已达最高等级": "Highest tier reached",
     "当前余额": "Current balance",
     "当前员工": "Current Employee",
     "当前值": "Current value",
@@ -4219,6 +4223,7 @@
     "刷盘间隔": "Flush Interval",
     "两次刷盘的最小间隔秒数，设为 0 时仅按批次大小刷盘。": "Minimum seconds between flushes during the task. Set to 0 for size-only mode (flush only when the batch is full).",
     "每次刷盘后休眠毫秒数，用于让出 CPU 并降低瞬时数据库写入压力。": "Milliseconds the task sleeps after each flush to yield CPU and reduce instantaneous DB write pressure.",
-    "{{label}}必须是大于等于 {{min}} 的整数": "{{label}} must be an integer greater than or equal to {{min}}"
+    "{{label}}必须是大于等于 {{min}} 的整数": "{{label}} must be an integer greater than or equal to {{min}}",
+    "暂未定级": "No tier assigned"
   }
 }

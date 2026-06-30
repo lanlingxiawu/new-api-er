@@ -498,6 +498,10 @@
     "当前未开启Midjourney回调，部分项目可能无法获得绘图结果，可在运营设置中开启。": "Le rappel Midjourney actuel n'est pas activé, certains projets peuvent ne pas être en mesure d'obtenir des résultats de dessin, qui peuvent être activés dans les paramètres de fonctionnement.",
     "当前未启用，需要时再打开即可。": "Ce champ est actuellement désactivé. Activez-le si nécessaire.",
     "当前业绩": "Performance actuelle",
+    "累计业绩": "Performance totale",
+    "下一等级": "Niveau suivant",
+    "门槛": "Seuil",
+    "已达最高等级": "Niveau maximum atteint",
     "当前余额": "Solde actuel",
     "当前员工": "Employé actuel",
     "当前值": "Valeur actuelle",
@@ -4100,6 +4104,7 @@
     "为空则记录所有用户的请求和返回；填写则仅记录该用户名": "",
     "最大日志量": "",
     "最小日志量": "",
-    "Redis 去重键有效期，覆盖重试窗口即可；越大越占内存，仅在启用 Redis 去重时生效。": ""
+    "Redis 去重键有效期，覆盖重试窗口即可；越大越占内存，仅在启用 Redis 去重时生效。": "",
+    "暂未定级": "Aucun niveau attribué"
   }
 }

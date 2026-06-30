@@ -28,9 +28,8 @@ func BusinessDayStart(ts int64) int64 {
 	return localDayStart(ts)
 }
 
-// backfillStatAggregator accumulates daily-stat and employee-ext deltas for a single
-// backfill batch in LOCAL maps, fully isolated from the live relay in-memory buffers
-// (memPlatformBuf / memCommissionBuf / memEmployeeExtBuf …).  Writing into those
+// backfillStatAggregator accumulates daily-stat deltas for a single backfill batch in
+// LOCAL maps, fully isolated from the live relay in-memory buffers.  Writing into those
 // shared buffers would make the admin backfill contend on the same locks the relay
 // settlement path uses and have its deltas drained by the live flush loop — a
 // shared-resource violation of Rule 0.  flush() instead writes the accumulated
@@ -38,12 +37,13 @@ func BusinessDayStart(ts int64) int64 {
 //
 // Tier upgrades ARE intentionally applied from backfilled profit: the backfill
 // replays historical settlements and tier progression should reflect them.
+// Upgrade checks are triggered after the reset-period daily stats are committed,
+// by querying SUM(profit_quota) directly from employee_commission_reset_period_daily_stats.
 type backfillStatAggregator struct {
 	platform           map[string]*platformStatDelta
 	commission         map[string]*commissionStatDelta
 	customerCommission map[string]*customerCommissionStatDelta
 	resetPeriodDaily   map[string]*commissionResetPeriodDailyDelta
-	employeeExt        map[int]*employeeExtDelta
 	// tierLevelCache avoids repeated DB queries for the same employee within
 	// a single flush batch. nil stored as value means "tried, got error/not found".
 	tierLevelCache map[int]*EmployeeTierLevel
@@ -55,7 +55,6 @@ func newBackfillStatAggregator() *backfillStatAggregator {
 		commission:         make(map[string]*commissionStatDelta),
 		customerCommission: make(map[string]*customerCommissionStatDelta),
 		resetPeriodDaily:   make(map[string]*commissionResetPeriodDailyDelta),
-		employeeExt:        make(map[int]*employeeExtDelta),
 		tierLevelCache:     make(map[int]*EmployeeTierLevel),
 	}
 }
@@ -84,7 +83,7 @@ func (a *backfillStatAggregator) addPlatform(c *ConsumptionCost) {
 	}
 }
 
-// addCommission mirrors BufferCommissionDailyStat + BufferCommissionAndProfit for a
+// addCommission mirrors BufferCommissionDailyStat + BufferCommissionResetPeriodDailyStat for a
 // backfilled commission log, accumulating into the local maps only.
 func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 	if log == nil {
@@ -155,16 +154,6 @@ func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 		}
 	}
 
-	// employee summary delta (mirrors BufferCommissionAndProfit's zero-skip guard)
-	if log.EmployeeUserId > 0 && (log.CommissionQuota != 0 || log.ProfitQuota != 0) {
-		ed := a.employeeExt[log.EmployeeUserId]
-		if ed == nil {
-			ed = &employeeExtDelta{}
-			a.employeeExt[log.EmployeeUserId] = ed
-		}
-		ed.CommissionDelta += log.CommissionQuota
-		ed.ProfitDelta += log.ProfitQuota
-	}
 }
 
 // flush writes all accumulated deltas directly to DB. Errors are logged and
@@ -172,15 +161,13 @@ func (a *backfillStatAggregator) addCommission(log *EmployeeCommissionLog) {
 // recoverable by re-running the backfill. ctx carries the backfill's deadline so a
 // stuck statement cannot hang the admin job.
 //
-// DB operation budget per flush call (E = unique employees, N/M/K = unique stat keys):
+// DB operation budget per flush call (N/M/K = unique stat keys, E = unique employees with profit):
 //
-//	Before: N+M+K individual autocommit UPSERTs + 2 (ensureUserExtensions) + E×(UPDATE+SELECT)
-//	After:  1 transaction (N+M+K statements) + 2 (ensureUserExtensions) + 1 SELECT + E UPDATEs
+//	1 transaction (N+M+K statements) + 1 tryAutoUpgradeTierBatch call (1 batch SUM query for all E employees)
 func (a *backfillStatAggregator) flush(ctx context.Context) {
-	db := DB.WithContext(ctx)
-
 	// Wrap all stat-table upserts in one transaction to reduce round-trip overhead.
 	if len(a.platform) > 0 || len(a.commission) > 0 || len(a.customerCommission) > 0 || len(a.resetPeriodDaily) > 0 {
+		db := DB.WithContext(ctx)
 		if err := db.Transaction(func(tx *gorm.DB) error {
 			for _, d := range a.platform {
 				if err := upsertPlatformDailyStatTx(tx, d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt); err != nil {
@@ -212,71 +199,20 @@ func (a *backfillStatAggregator) flush(ctx context.Context) {
 		}
 	}
 
-	// Employee ext: ensure rows exist, then batch-pre-read current profit totals so
-	// that TryAutoUpgradeTier can be called without a per-employee re-SELECT.
-	if len(a.employeeExt) > 0 {
-		userIds := make([]int, 0, len(a.employeeExt))
-		for uid := range a.employeeExt {
-			userIds = append(userIds, uid)
-		}
-		ensureUserExtensionsBatch(userIds)
-		// 1 batch SELECT replaces the E individual SELECTs that the live-path
-		// applyEmployeeExtDelta issues after each UPDATE.
-		profitBefore := backfillReadProfitTotals(ctx, userIds)
-		for uid, d := range a.employeeExt {
-			backfillApplyEmployeeExtDelta(db, uid, d, profitBefore[uid])
+	// 对本批有正利润的员工触发等级升级检查（reset period daily stats 已写入后）。
+	// 使用批量版本：1 次 SUM 查询替代 N 次串行查询。
+	upgradeCandidates := make([]int, 0, len(a.resetPeriodDaily))
+	seenUpgrade := make(map[int]struct{}, len(a.resetPeriodDaily))
+	for _, d := range a.resetPeriodDaily {
+		if d.ProfitQuota > 0 && d.EmployeeUserId > 0 {
+			if _, ok := seenUpgrade[d.EmployeeUserId]; !ok {
+				seenUpgrade[d.EmployeeUserId] = struct{}{}
+				upgradeCandidates = append(upgradeCandidates, d.EmployeeUserId)
+			}
 		}
 	}
-}
-
-// backfillReadProfitTotals returns profit_total_quota for each user in a single query.
-func backfillReadProfitTotals(ctx context.Context, userIds []int) map[int]int64 {
-	result := make(map[int]int64, len(userIds))
-	if len(userIds) == 0 {
-		return result
-	}
-	type profitRow struct {
-		UserId           int
-		ProfitTotalQuota int64
-	}
-	var rows []profitRow
-	DB.WithContext(ctx).Model(&UserExtension{}).
-		Select("user_id, profit_total_quota").
-		Where("user_id IN ?", userIds).
-		Scan(&rows)
-	for _, r := range rows {
-		result[r.UserId] = r.ProfitTotalQuota
-	}
-	return result
-}
-
-// backfillApplyEmployeeExtDelta is the backfill-path variant of applyEmployeeExtDelta.
-// It accepts the pre-fetched currentProfit so that TryAutoUpgradeTier can be called
-// with the projected new total (currentProfit + delta) without issuing a re-SELECT.
-func backfillApplyEmployeeExtDelta(db *gorm.DB, userId int, d *employeeExtDelta, currentProfit int64) {
-	updates := map[string]interface{}{}
-	if d.CommissionDelta != 0 {
-		updates["commission_total_quota"] = gorm.Expr("commission_total_quota + ?", d.CommissionDelta)
-		updates["commission_pending_quota"] = gorm.Expr("commission_pending_quota + ?", d.CommissionDelta)
-	}
-	if d.ProfitDelta != 0 {
-		updates["profit_total_quota"] = gorm.Expr("profit_total_quota + ?", d.ProfitDelta)
-	}
-	if len(updates) == 0 {
-		return
-	}
-	result := db.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
-	if result.Error != nil {
-		common.SysError(fmt.Sprintf("backfillApplyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
-		return
-	}
-	if result.RowsAffected == 0 {
-		common.SysError(fmt.Sprintf("backfillApplyEmployeeExtDelta: userId=%d no rows affected", userId))
-		return
-	}
-	if d.ProfitDelta > 0 {
-		// Derive new total from pre-fetched baseline + this delta; no re-SELECT needed.
-		TryAutoUpgradeTier(userId, currentProfit+d.ProfitDelta)
+	if len(upgradeCandidates) > 0 {
+		tryAutoUpgradeTierBatch(upgradeCandidates)
 	}
 }
 

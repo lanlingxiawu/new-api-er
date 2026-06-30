@@ -473,6 +473,19 @@ func flushCommissionResetPeriodDailyStatsFromMem() {
 		}
 	}
 	common.SysLog(fmt.Sprintf("flush_business_stats: commission reset period daily mem items=%d", len(buf)))
+	// 对本批有正利润的员工触发等级升级检查（upsert 完成后再做，避免超前于 daily stats 写入）。
+	// 使用批量版本：1 次 SUM 查询替代 N 次串行查询。
+	upgradeCandidates := make([]int, 0, len(buf))
+	seenUpgrade := make(map[int]bool, len(buf))
+	for _, d := range buf {
+		if d.ProfitQuota > 0 && d.EmployeeUserId > 0 && !seenUpgrade[d.EmployeeUserId] {
+			seenUpgrade[d.EmployeeUserId] = true
+			upgradeCandidates = append(upgradeCandidates, d.EmployeeUserId)
+		}
+	}
+	if len(upgradeCandidates) > 0 {
+		tryAutoUpgradeTierBatch(upgradeCandidates)
+	}
 }
 
 func upsertPlatformDailyStat(statDate int64, channelId int, channelName string, revenueQuota, costQuota, recordCount int64, costRatioSum float64, lastCreatedAt int64) bool {
@@ -1098,9 +1111,6 @@ func flushCostAndCommissionLedger() {
 			}
 			if pair.Commission != nil {
 				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
-				if pair.Commission.EmployeeUserId > 0 {
-					BufferCommissionAndProfit(pair.Commission.EmployeeUserId, pair.Commission.CommissionQuota, pair.Commission.ProfitQuota)
-				}
 			}
 			aggregated++
 		}
@@ -1241,9 +1251,6 @@ func flushPairRetryQueue() {
 			}
 			if pair.Commission != nil {
 				BufferCommissionDailyStat(pair.Commission)
-				if pair.Commission.EmployeeUserId > 0 {
-					BufferCommissionAndProfit(pair.Commission.EmployeeUserId, pair.Commission.CommissionQuota, pair.Commission.ProfitQuota)
-				}
 			}
 			aggregated++
 		}
@@ -1351,147 +1358,6 @@ func CheckAndBufferCostAndCommission(cost *ConsumptionCost, log *EmployeeCommiss
 // ============================================================================
 
 // employeeExtDelta 单个员工在一个刷盘周期内的累计增量。
-type employeeExtDelta struct {
-	CommissionDelta int64
-	ProfitDelta     int64
-	RetryCount      int
-}
-
-var (
-	memEmployeeExtBuf  = make(map[int]*employeeExtDelta)
-	memEmployeeExtLock sync.Mutex
-)
-
-// BufferCommissionAndProfit 将提成和利润增量写入进程内缓冲区。
-// 替代原来的 AddCommissionQuota + AddProfitStats 即时 DB 操作。
-func BufferCommissionAndProfit(userId int, commissionDelta, profitDelta int64) {
-	if commissionDelta == 0 && profitDelta == 0 {
-		return
-	}
-	bufferEmployeeExtMem(userId, commissionDelta, profitDelta)
-}
-
-func bufferEmployeeExtMem(userId int, commissionDelta, profitDelta int64) {
-	bufferEmployeeExtMemWithRetry(userId, commissionDelta, profitDelta, 0)
-}
-
-func bufferEmployeeExtMemWithRetry(userId int, commissionDelta, profitDelta int64, retryCount int) {
-	memEmployeeExtLock.Lock()
-	defer memEmployeeExtLock.Unlock()
-	d, ok := memEmployeeExtBuf[userId]
-	if !ok {
-		d = &employeeExtDelta{}
-		memEmployeeExtBuf[userId] = d
-	}
-	d.CommissionDelta += commissionDelta
-	d.ProfitDelta += profitDelta
-	if retryCount > d.RetryCount {
-		d.RetryCount = retryCount
-	}
-}
-
-func requeueEmployeeExtDelta(userId int, d *employeeExtDelta) {
-	if d == nil || (d.CommissionDelta == 0 && d.ProfitDelta == 0) {
-		return
-	}
-	d.RetryCount++
-	if d.RetryCount >= operation_setting.GetLedgerRetryQueueSetting().GetStatUpsertMaxRetries() {
-		if !writeStatEmployeeExtFallback("max_retries_exceeded", userId, d) {
-			common.SysError("business-stats: stat_employee_ext delta permanently lost: fallback write failed")
-		}
-		return
-	}
-	bufferEmployeeExtMemWithRetry(userId, d.CommissionDelta, d.ProfitDelta, d.RetryCount)
-}
-
-func flushEmployeeExtBuffers() {
-	items := drainEmployeeExtFromMem()
-	if len(items) == 0 {
-		return
-	}
-	userIds := make([]int, 0, len(items))
-	for uid := range items {
-		userIds = append(userIds, uid)
-	}
-	if !ensureUserExtensionsBatch(userIds) {
-		for uid, d := range items {
-			requeueEmployeeExtDelta(uid, d)
-		}
-		return
-	}
-	for uid, d := range items {
-		if !applyEmployeeExtDelta(uid, d) {
-			requeueEmployeeExtDelta(uid, d)
-		}
-	}
-	common.SysLog(fmt.Sprintf("flush_business_stats: employee_ext items=%d", len(items)))
-}
-
-func drainEmployeeExtFromMem() map[int]*employeeExtDelta {
-	memEmployeeExtLock.Lock()
-	buf := memEmployeeExtBuf
-	memEmployeeExtBuf = make(map[int]*employeeExtDelta)
-	memEmployeeExtLock.Unlock()
-	return buf
-}
-
-// ensureUserExtensionsBatch 批量确保 user_extensions 记录存在。
-func ensureUserExtensionsBatch(userIds []int) bool {
-	if len(userIds) == 0 {
-		return true
-	}
-	rows := make([]UserExtension, 0, len(userIds))
-	for _, uid := range userIds {
-		rows = append(rows, UserExtension{UserId: uid})
-	}
-	// ON CONFLICT DO NOTHING, 批量插入
-	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 500).Error; err != nil {
-		common.SysError("ensureUserExtensionsBatch: " + err.Error())
-		// employee_ext 是结算侧路操作（非台账批量 INSERT）；失败意味着后续提成/利润写入也会失败，
-		// 触发熔断计数是正确的——与"台账 INSERT 失败不触发熔断"策略不矛盾。
-		ReportBusinessStatsFailure("employee_ext_ensure", err.Error(), userIds)
-		return false
-	}
-	return true
-}
-
-// applyEmployeeExtDelta 将累计增量写入 DB 并检查等级升级。
-func applyEmployeeExtDelta(userId int, d *employeeExtDelta) bool {
-	updates := map[string]interface{}{}
-	if d.CommissionDelta != 0 {
-		updates["commission_total_quota"] = gorm.Expr("commission_total_quota + ?", d.CommissionDelta)
-		updates["commission_pending_quota"] = gorm.Expr("commission_pending_quota + ?", d.CommissionDelta)
-	}
-	if d.ProfitDelta != 0 {
-		updates["profit_total_quota"] = gorm.Expr("profit_total_quota + ?", d.ProfitDelta)
-	}
-	if len(updates) == 0 {
-		return true
-	}
-	result := DB.Model(&UserExtension{}).Where("user_id = ?", userId).Updates(updates)
-	if result.Error != nil {
-		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d err=%s", userId, result.Error.Error()))
-		ReportBusinessStatsFailure("employee_ext_apply", result.Error.Error(), map[string]any{"user_id": userId, "delta": d})
-		return false
-	}
-	if result.RowsAffected == 0 {
-		common.SysError(fmt.Sprintf("applyEmployeeExtDelta: userId=%d no rows affected", userId))
-		ReportBusinessStatsFailure("employee_ext_apply", "no rows affected", map[string]any{"user_id": userId, "delta": d})
-		return false
-	}
-	// 等级升级检查（仅利润有正增量时）
-	if d.ProfitDelta > 0 {
-		var ext UserExtension
-		if err := DB.Select("profit_total_quota").Where("user_id = ?", userId).First(&ext).Error; err != nil {
-			common.SysError(fmt.Sprintf("applyEmployeeExtDelta: read profit failed userId=%d err=%s", userId, err.Error()))
-			ReportBusinessStatsFailure("employee_ext_read_profit", err.Error(), map[string]any{"user_id": userId})
-			return true
-		}
-		TryAutoUpgradeTier(userId, ext.ProfitTotalQuota)
-	}
-	return true
-}
-
 // ---- 刷盘入口 ----
 
 // FlushBusinessStatBuffers 将缓冲区的增量批量刷入 DB。由后台定时任务调用。
@@ -1508,9 +1374,7 @@ func FlushBusinessStatBuffers() {
 	flushPlatformStatsFromMem()
 	flushCommissionStatsFromMem()
 	flushCustomerCommissionStatsFromMem()
-	flushCommissionResetPeriodDailyStatsFromMem()
-	// 3. 刷员工汇总（user_extensions + 等级升级）
-	flushEmployeeExtBuffers()
+	flushCommissionResetPeriodDailyStatsFromMem() // 包含等级升级检查
 }
 
 // StartBusinessStatsFlushLoop 启动后台定时刷盘循环和独立重试循环。在 main.go 中调用。
@@ -1654,7 +1518,6 @@ func ShutdownStatsFlush(timeout time.Duration) {
 		flushCommissionStatsFromMem()
 		flushCustomerCommissionStatsFromMem()
 		flushCommissionResetPeriodDailyStatsFromMem()
-		flushEmployeeExtBuffers()
 	} else {
 		common.SysLog("ShutdownStatsFlush: deadline reached before final flush; draining buffer to fallback file")
 	}
@@ -1754,17 +1617,7 @@ func drainRemainingToFallbackFile(reason string) {
 		}
 	}
 
-	memEmployeeExtLock.Lock()
-	empExt := memEmployeeExtBuf
-	memEmployeeExtBuf = make(map[int]*employeeExtDelta)
-	memEmployeeExtLock.Unlock()
-	for userId, d := range empExt {
-		if !writeStatEmployeeExtFallback(reason, userId, d) {
-			common.SysError("business-stats: stat_employee_ext delta permanently lost during drain: fallback write failed")
-		}
-	}
-
-	statItems := len(platform) + len(commission) + len(customerCommission) + len(resetDaily) + len(empExt)
+	statItems := len(platform) + len(commission) + len(customerCommission) + len(resetDaily)
 	total := len(pairs) + len(costItems) + statItems
 	if total > 0 {
 		common.SysLog(fmt.Sprintf(
@@ -1781,12 +1634,6 @@ func drainRemainingToFallbackFile(reason string) {
 // WriteBackfillDeadLetter 将无法解析的原始日志行写入死信文件。
 func WriteBackfillDeadLetter(rawLine []byte, reason string) {
 	writeBusinessStatsDeadLetter("parse_error", reason, 0, string(rawLine))
-}
-
-type statEmployeeExtPayload struct {
-	UserId          int   `json:"user_id"`
-	CommissionDelta int64 `json:"commission_delta"`
-	ProfitDelta     int64 `json:"profit_delta"`
 }
 
 // ReplayStatPlatformFallback 反序列化 stat_platform payload 并直接 upsert 到 DB。
@@ -1837,20 +1684,9 @@ func ReplayStatResetDailyFallback(payloadBytes []byte) error {
 	return nil
 }
 
-// ReplayStatEmployeeExtFallback 反序列化 stat_employee_ext payload 并直接 apply 到 DB。
+// ReplayStatEmployeeExtFallback 是历史 fallback 文件中 stat_employee_ext 条目的重放入口。
+// user_extensions 的 profit/commission 累计字段已废弃（不再写入），历史 fallback 条目直接跳过。
 func ReplayStatEmployeeExtFallback(payloadBytes []byte) error {
-	var p statEmployeeExtPayload
-	if err := common.Unmarshal(payloadBytes, &p); err != nil {
-		return fmt.Errorf("unmarshal: %w", err)
-	}
-	if p.UserId == 0 {
-		return fmt.Errorf("user_id is zero")
-	}
-	if !ensureUserExtensionsBatch([]int{p.UserId}) {
-		return fmt.Errorf("ensureUserExtensionsBatch failed")
-	}
-	if !applyEmployeeExtDelta(p.UserId, &employeeExtDelta{CommissionDelta: p.CommissionDelta, ProfitDelta: p.ProfitDelta}) {
-		return fmt.Errorf("applyEmployeeExtDelta failed")
-	}
+	common.SysLog(fmt.Sprintf("ReplayStatEmployeeExtFallback: skipping legacy stat_employee_ext entry (%d bytes)", len(payloadBytes)))
 	return nil
 }
