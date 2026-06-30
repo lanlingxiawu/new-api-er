@@ -1043,6 +1043,10 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		aggTx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
 			Select("employee_user_id, COALESCE(SUM(profit_quota),0) AS profit_quota").
 			Joins(
+				"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
+				1,
+			).
+			Joins(
 				"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id"+
 					" AND (employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at"+
 					" OR (employee_tier_levels.baseline_reset_at = 0 AND employee_commission_reset_period_daily_stats.reset_started_at = ?))",
