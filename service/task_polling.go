@@ -353,6 +353,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
+	logTaskID := formatPollingTaskLogID(task, ch)
 	key := ch.Key
 
 	privateData := task.PrivateData
@@ -413,7 +414,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				taskResult = relaycommon.FailTaskInfo("upstream returned error")
 			} else {
 				// unknown error format, log original response
-				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, response: %s", taskId, string(responseBody)))
+				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, response: %s", logTaskID, string(responseBody)))
 				taskResult = relaycommon.FailTaskInfo("upstream returned unrecognized message")
 			}
 		}
@@ -451,14 +452,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		shouldSettle = true
 	case model.TaskStatusFailure:
-		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
+		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", logTaskID), task)
 		task.Status = model.TaskStatusFailure
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
 		task.FailReason = taskResult.Reason
-		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
+		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", logTaskID, task.FailReason))
 		taskResult.Progress = taskcommon.ProgressComplete
 		if quota != 0 {
 			shouldRefund = true
@@ -474,21 +475,21 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	if isDone && snap.Status != task.Status {
 		won, err := task.UpdateWithStatus(snap.Status)
 		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", task.TaskID, err.Error()))
+			logger.LogError(ctx, fmt.Sprintf("UpdateWithStatus failed for task %s: %s", logTaskID, err.Error()))
 			shouldRefund = false
 			shouldSettle = false
 		} else if !won {
-			logger.LogWarn(ctx, fmt.Sprintf("Task %s already transitioned by another process, skip billing", task.TaskID))
+			logger.LogWarn(ctx, fmt.Sprintf("Task %s already transitioned by another process, skip billing", logTaskID))
 			shouldRefund = false
 			shouldSettle = false
 		}
 	} else if !snap.Equal(task.Snapshot()) {
 		if _, err := task.UpdateWithStatus(snap.Status); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", task.TaskID, err.Error()))
+			logger.LogError(ctx, fmt.Sprintf("Failed to update task %s: %s", logTaskID, err.Error()))
 		}
 	} else {
 		// No changes, skip update
-		logger.LogDebug(ctx, "No update needed for task %s", task.TaskID)
+		logger.LogDebug(ctx, "No update needed for task %s", logTaskID)
 	}
 
 	if shouldSettle {
@@ -499,6 +500,21 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func formatPollingTaskLogID(task *model.Task, ch *model.Channel) string {
+	if task == nil {
+		return ""
+	}
+	taskID := strings.TrimSpace(task.TaskID)
+	if ch == nil || ch.Type != constant.ChannelTypeThirdPartySD2 {
+		return taskID
+	}
+	upstreamID := strings.TrimSpace(task.GetUpstreamTaskID())
+	if upstreamID == "" || upstreamID == taskID {
+		return taskID
+	}
+	return fmt.Sprintf("%s (upstream: %s)", taskID, upstreamID)
 }
 
 func redactVideoResponseBody(body []byte) []byte {
