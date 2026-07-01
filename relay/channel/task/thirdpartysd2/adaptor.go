@@ -17,6 +17,8 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -65,6 +67,47 @@ type responseTask struct {
 	Task *responseTaskData `json:"task"`
 }
 
+type responseTaskError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *responseTaskError) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*e = responseTaskError{}
+		return nil
+	}
+
+	// Upstream may return either a plain string or an object for task.error.
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var message string
+		if err := common.Unmarshal(trimmed, &message); err != nil {
+			return err
+		}
+		*e = responseTaskError{Message: message}
+		return nil
+	}
+
+	type alias responseTaskError
+	var parsed alias
+	if err := common.Unmarshal(trimmed, &parsed); err != nil {
+		return err
+	}
+	*e = responseTaskError(parsed)
+	return nil
+}
+
+func (e *responseTaskError) reason() string {
+	if e == nil {
+		return ""
+	}
+	if message := strings.TrimSpace(e.Message); message != "" {
+		return message
+	}
+	return strings.TrimSpace(e.Code)
+}
+
 type responseTaskData struct {
 	ID              string   `json:"id"`
 	Model           string   `json:"model"`
@@ -76,12 +119,9 @@ type responseTaskData struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
-	Error *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-	CreatedAt   string  `json:"created_at"`
-	CompletedAt *string `json:"completed_at"`
+	Error       *responseTaskError `json:"error"`
+	CreatedAt   string             `json:"created_at"`
+	CompletedAt *string            `json:"completed_at"`
 }
 
 type TaskAdaptor struct {
@@ -91,6 +131,14 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+type resolvedThirdPartySD2PricingContext struct {
+	ModelName     string
+	Resolution    string
+	HasVideoInput bool
+}
+
+const resolvedThirdPartySD2PricingContextKey = "thirdpartysd2_pricing_context"
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
@@ -98,7 +146,42 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	if taskErr := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate); taskErr != nil {
+		return taskErr
+	}
+
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapper(err, "get_task_request_failed", http.StatusBadRequest)
+	}
+
+	modelName := resolveThirdPartySD2ModelName(info, &req)
+	if modelName == "" {
+		return service.TaskErrorWrapperLocal(
+			fmt.Errorf("thirdpartysd2 请求缺少模型名称，无法匹配定价"),
+			"missing_model",
+			http.StatusBadRequest,
+		)
+	}
+	inheritedPricingMetadata := getInheritedThirdPartySD2PricingMetadata(info)
+	resolution := resolveThirdPartySD2Resolution(&req, inheritedPricingMetadata)
+	if resolution == "" {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("thirdpartysd2 请求缺少可识别的分辨率，无法匹配定价"), "invalid_resolution", http.StatusBadRequest)
+	}
+	hasVideoInput := resolveThirdPartySD2HasVideoInput(&req, inheritedPricingMetadata)
+	if _, ok := model_setting.GetThirdPartySD2TokenPrice(modelName, resolution, hasVideoInput); !ok {
+		return service.TaskErrorWrapperLocal(
+			fmt.Errorf("模型 %s 在分辨率 %s 下无定价", modelName, resolution),
+			"resolution_pricing_not_found",
+			http.StatusBadRequest,
+		)
+	}
+	c.Set(resolvedThirdPartySD2PricingContextKey, resolvedThirdPartySD2PricingContext{
+		ModelName:     modelName,
+		Resolution:    resolution,
+		HasVideoInput: hasVideoInput,
+	})
+	return nil
 }
 
 func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
@@ -112,18 +195,67 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 	return nil
 }
 
-// EstimateBilling 检测请求 metadata 中是否包含视频输入，返回视频折扣 OtherRatio。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
-	req, err := relaycommon.GetTaskRequest(c)
-	if err != nil {
+	modelName, resolution, hasVideoInput, ok := getResolvedThirdPartySD2PricingContext(c, info)
+	if !ok {
 		return nil
 	}
-	if hasVideoInMetadata(req.Metadata) {
-		if ratio, ok := GetVideoInputRatio(info.OriginModelName); ok {
-			return map[string]float64{"video_input": ratio}
+	unitPrice, ok := model_setting.GetThirdPartySD2TokenPrice(modelName, resolution, hasVideoInput)
+	if !ok {
+		return nil
+	}
+
+	groupRatio := info.PriceData.GroupRatioInfo.GroupRatio
+	info.PriceData.UsePrice = false
+	info.PriceData.ModelPrice = -1
+	info.PriceData.ModelRatio = model_setting.ThirdPartySD2PriceToModelRatio(unitPrice)
+	info.PriceData.Quota = model_setting.CalculateThirdPartySD2Quota(
+		unitPrice,
+		model_setting.ThirdPartySD2PreConsumedTokenEstimate,
+		groupRatio,
+	)
+	info.PriceData.FreeModel = false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+		if groupRatio == 0 || unitPrice == 0 {
+			info.PriceData.Quota = 0
+			info.PriceData.FreeModel = true
 		}
 	}
+	info.PriceData.PricingMetadata = map[string]string{
+		"channel":      ChannelName,
+		"pricing_mode": "resolution_video_matrix",
+		"resolution":   resolution,
+		"video_input":  strconv.FormatBool(hasVideoInput),
+	}
 	return nil
+}
+
+func getResolvedThirdPartySD2PricingContext(c *gin.Context, info *relaycommon.RelayInfo) (string, string, bool, bool) {
+	if c != nil {
+		if value, exists := c.Get(resolvedThirdPartySD2PricingContextKey); exists {
+			if resolved, ok := value.(resolvedThirdPartySD2PricingContext); ok {
+				return resolved.ModelName, resolved.Resolution, resolved.HasVideoInput, true
+			}
+		}
+	}
+	if c == nil {
+		return "", "", false, false
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return "", "", false, false
+	}
+	inheritedPricingMetadata := getInheritedThirdPartySD2PricingMetadata(info)
+	resolution := resolveThirdPartySD2Resolution(&req, inheritedPricingMetadata)
+	if resolution == "" {
+		return "", "", false, false
+	}
+	modelName := resolveThirdPartySD2ModelName(info, &req)
+	if modelName == "" {
+		return "", "", false, false
+	}
+	hasVideoInput := resolveThirdPartySD2HasVideoInput(&req, inheritedPricingMetadata)
+	return modelName, resolution, hasVideoInput, true
 }
 
 func hasVideoInMetadata(metadata map[string]interface{}) bool {
@@ -153,13 +285,63 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	return false
 }
 
+func getInheritedThirdPartySD2PricingMetadata(info *relaycommon.RelayInfo) map[string]string {
+	if info == nil || info.TaskRelayInfo == nil {
+		return nil
+	}
+	return info.TaskRelayInfo.InheritedPricingMetadata
+}
+
+func resolveThirdPartySD2ModelName(info *relaycommon.RelayInfo, req *relaycommon.TaskSubmitReq) string {
+	if req != nil {
+		if modelName := strings.TrimSpace(req.Model); modelName != "" {
+			return modelName
+		}
+	}
+	if info == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.OriginModelName)
+}
+
+func resolveThirdPartySD2HasVideoInput(req *relaycommon.TaskSubmitReq, inheritedPricingMetadata map[string]string) bool {
+	if req != nil && hasVideoInMetadata(req.Metadata) {
+		return true
+	}
+	if inheritedPricingMetadata == nil {
+		return false
+	}
+	hasVideoInput, err := strconv.ParseBool(strings.TrimSpace(inheritedPricingMetadata["video_input"]))
+	return err == nil && hasVideoInput
+}
+
+func resolveThirdPartySD2Resolution(req *relaycommon.TaskSubmitReq, inheritedPricingMetadata map[string]string) string {
+	inheritedResolution := ""
+	if inheritedPricingMetadata != nil {
+		inheritedResolution = inheritedPricingMetadata["resolution"]
+	}
+	if req == nil {
+		return model_setting.MaxThirdPartySD2Resolution(inheritedResolution)
+	}
+	metadataResolution := ""
+	if req.Metadata != nil {
+		metadataResolution = common.Interface2String(req.Metadata["resolution"])
+	}
+	// Only compare values explicitly declared on the current request. Inherited
+	// resolution is used as a fallback for remix/retry requests that omit both.
+	if currentResolution := model_setting.MaxThirdPartySD2Resolution(metadataResolution, req.Size); currentResolution != "" {
+		return currentResolution
+	}
+	return model_setting.MaxThirdPartySD2Resolution(inheritedResolution)
+}
+
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil, err
 	}
 
-	body, err := a.convertToRequestPayload(&req)
+	body, err := a.convertToRequestPayload(&req, info)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
 	}
@@ -240,9 +422,10 @@ func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
 }
 
-func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*requestPayload, error) {
+func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*requestPayload, error) {
+	modelName := resolveThirdPartySD2ModelName(info, req)
 	r := requestPayload{
-		Model:   req.Model,
+		Model:   modelName,
 		Content: []ContentItem{},
 	}
 
@@ -260,6 +443,9 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	metadata := req.Metadata
 	if err := taskcommon.UnmarshalMetadata(metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	}
+	if resolvedResolution := resolveThirdPartySD2Resolution(req, getInheritedThirdPartySD2PricingMetadata(info)); resolvedResolution != "" {
+		r.Resolution = resolvedResolution
 	}
 
 	duration := req.Duration
@@ -308,8 +494,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	case "failed", "error", "cancelled":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
-		if resTask.Task.Error != nil {
-			taskResult.Reason = resTask.Task.Error.Message
+		if reason := resTask.Task.Error.reason(); reason != "" {
+			taskResult.Reason = reason
 		} else {
 			taskResult.Reason = "task failed"
 		}
@@ -352,8 +538,12 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 		errorMessage := originTask.FailReason
 		errorCode := "task_failed"
 		if dResp.Task.Error != nil {
-			errorMessage = dResp.Task.Error.Message
-			errorCode = dResp.Task.Error.Code
+			if reason := dResp.Task.Error.reason(); reason != "" {
+				errorMessage = reason
+			}
+			if code := strings.TrimSpace(dResp.Task.Error.Code); code != "" {
+				errorCode = code
+			}
 		}
 		openAIVideo.Error = &dto.OpenAIVideoError{
 			Message: errorMessage,

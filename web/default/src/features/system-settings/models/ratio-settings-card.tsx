@@ -30,6 +30,7 @@ import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
+import { ThirdPartySD2PriceSettings } from './thirdpartysd2-price-settings'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
@@ -197,12 +198,18 @@ const groupSchema = z.object({
 
 type ModelFormValues = z.infer<typeof modelSchema>
 type GroupFormValues = z.infer<typeof groupSchema>
-type RatioTabId = 'models' | 'groups' | 'tool-prices' | 'upstream-sync'
+type RatioTabId =
+  | 'models'
+  | 'groups'
+  | 'thirdpartysd2'
+  | 'tool-prices'
+  | 'upstream-sync'
 
 type RatioSettingsCardProps = {
   modelDefaults: ModelFormValues
   groupDefaults: GroupFormValues
   toolPricesDefault: string
+  thirdPartySD2PricingDefault: string
   titleKey?: string
   visibleTabs?: RatioTabId[]
 }
@@ -211,8 +218,15 @@ export function RatioSettingsCard({
   modelDefaults,
   groupDefaults,
   toolPricesDefault,
+  thirdPartySD2PricingDefault,
   titleKey = 'Pricing Ratios',
-  visibleTabs = ['models', 'groups', 'tool-prices', 'upstream-sync'],
+  visibleTabs = [
+    'models',
+    'groups',
+    'thirdpartysd2',
+    'tool-prices',
+    'upstream-sync',
+  ],
 }: RatioSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
@@ -445,6 +459,7 @@ export function RatioSettingsCard({
   const tabLabels: Record<RatioTabId, string> = {
     models: 'Model prices',
     groups: 'Group ratios',
+    thirdpartysd2: 'Third-party SD2 prices',
     'tool-prices': 'Tool prices',
     'upstream-sync': 'Upstream price sync',
   }
@@ -454,7 +469,8 @@ export function RatioSettingsCard({
       2: 'grid-cols-2',
       3: 'grid-cols-3',
       4: 'grid-cols-4',
-    }[visibleTabs.length] ?? 'grid-cols-4'
+      5: 'grid-cols-5',
+    }[visibleTabs.length] ?? 'grid-cols-5'
   const defaultTab = visibleTabs[0] ?? 'models'
 
   const renderTabContent = (tab: RatioTabId) => {
@@ -480,6 +496,13 @@ export function RatioSettingsCard({
     }
     if (tab === 'tool-prices') {
       return <ToolPriceSettings defaultValue={toolPricesDefault} />
+    }
+    if (tab === 'thirdpartysd2') {
+      return (
+        <ThirdPartySD2PriceSettings
+          defaultValue={thirdPartySD2PricingDefault}
+        />
+      )
     }
     return (
       <UpstreamRatioSync

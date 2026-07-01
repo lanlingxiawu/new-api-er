@@ -12,6 +12,7 @@
     ". Please fix the JSON before saving.": "。请在保存前修复 JSON。",
     ". This action cannot be undone.": "。此操作无法撤销。",
     "...": "...",
+    "A duplicate configuration already exists for model {{model}} and resolution {{resolution}}. Saving is blocked.": "模型 {{model}} 与分辨率 {{resolution}} 的配置已存在，无法保存。",
     "\"default\": \"us-central1\", \"claude-3-5-sonnet-20240620\": \"europe-west1\"": "\"default\": \"us-central1\", \"claude-3-5-sonnet-20240620\": \"europe-west1\"",
     "({{total}} total, {{omit}} omitted)": "（共 {{total}} 个，省略 {{omit}} 个）",
     "(Deleted)": "（已删除）",
@@ -1970,7 +1971,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -5011,5 +5012,14 @@
   "Billing Export Settings": "账单导出设置",
   "Save billing export settings": "保存账单导出设置",
   "Used to query account balance.": "Used to query account balance.",
-  "User ID used when querying account balance.": "User ID used when querying account balance."
+  "User ID used when querying account balance.": "User ID used when querying account balance.",
+  "Third-party SD2 prices": "第三方 SD2 定价",
+  "Configure token prices ($/1M tokens) for third-party SD2 models by resolution and whether the request includes video input.": "按分辨率和是否带视频输入配置第三方 SD2 模型的 token 单价（$/1M tokens）。",
+  "These prices override the generic model ratio only for the third-party SD2 task channel.": "这些价格只覆盖 third-party SD2 任务渠道，不影响通用模型倍率。",
+  "Resolution": "分辨率",
+  "Price without video input ($/1M tokens)": "无视频输入价格 ($/1M tokens)",
+  "Price with video input ($/1M tokens)": "带视频输入价格 ($/1M tokens)",
+  "No third-party SD2 prices configured": "暂无第三方 SD2 定价配置",
+  "Save third-party SD2 prices": "保存第三方 SD2 定价",
+  "JSON must be an object of model -> resolution -> price entries": "JSON 必须是 模型 -> 分辨率 -> 价格 的对象结构"
 }

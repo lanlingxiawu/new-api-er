@@ -43,6 +43,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
+	appendTaskPricingMetadata(other, info.PriceData.PricingMetadata)
 	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
@@ -136,6 +137,7 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
+		appendTaskPricingMetadata(other, bc.PricingMetadata)
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
@@ -160,6 +162,7 @@ func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
 	modelPrice := float64(0)
 	usePrice := false
 	var otherRatios map[string]float64
+	var pricingMetadata map[string]string
 
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		groupRatio = bc.GroupRatio
@@ -175,6 +178,12 @@ func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
 				otherRatios[key] = value
 			}
 		}
+		if len(bc.PricingMetadata) > 0 {
+			pricingMetadata = make(map[string]string, len(bc.PricingMetadata))
+			for key, value := range bc.PricingMetadata {
+				pricingMetadata[key] = value
+			}
+		}
 	} else {
 		modelRatio, _, _ = ratio_setting.GetModelRatio(modelName)
 	}
@@ -186,12 +195,24 @@ func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
 		UsingGroup:      task.Group,
 		OriginModelName: modelName,
 		PriceData: types.PriceData{
-			ModelPrice:     modelPrice,
-			ModelRatio:     modelRatio,
-			UsePrice:       usePrice,
-			OtherRatios:    otherRatios,
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: groupRatio},
+			ModelPrice:      modelPrice,
+			ModelRatio:      modelRatio,
+			UsePrice:        usePrice,
+			OtherRatios:     otherRatios,
+			PricingMetadata: pricingMetadata,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: groupRatio},
 		},
+	}
+}
+
+func appendTaskPricingMetadata(other map[string]interface{}, metadata map[string]string) {
+	for key, value := range metadata {
+		trimmedKey := strings.TrimSpace(key)
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedKey == "" || trimmedValue == "" {
+			continue
+		}
+		other["pricing_"+trimmedKey] = trimmedValue
 	}
 }
 
@@ -244,7 +265,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string) {
-	if actualQuota <= 0 {
+	if actualQuota < 0 {
 		return
 	}
 	preConsumedQuota := task.Quota
@@ -313,34 +334,42 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	}
 
 	modelName := taskModelName(task)
+	modelRatio := 0.0
+	finalGroupRatio := 0.0
+	hasBillingSnapshot := task.PrivateData.BillingContext != nil
 
-	// 获取模型价格和倍率
-	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	// 只有配置了倍率(非固定价格)时才按 token 重新计费
-	if !hasRatioSetting || modelRatio <= 0 {
-		return
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		modelRatio = bc.ModelRatio
+		finalGroupRatio = bc.GroupRatio
 	}
 
-	// 获取用户和组的倍率信息
-	group := task.Group
-	if group == "" {
-		user, err := model.GetUserById(task.UserId, false)
-		if err == nil {
-			group = user.Group
+	if !hasBillingSnapshot {
+		var hasRatioSetting bool
+		modelRatio, hasRatioSetting, _ = ratio_setting.GetModelRatio(modelName)
+		if !hasRatioSetting {
+			return
 		}
 	}
-	if group == "" {
-		return
-	}
 
-	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
+	if !hasBillingSnapshot {
+		group := task.Group
+		if group == "" {
+			user, err := model.GetUserById(task.UserId, false)
+			if err == nil {
+				group = user.Group
+			}
+		}
+		if group == "" {
+			return
+		}
 
-	var finalGroupRatio float64
-	if hasUserGroupRatio {
-		finalGroupRatio = userGroupRatio
-	} else {
-		finalGroupRatio = groupRatio
+		groupRatio := ratio_setting.GetGroupRatio(group)
+		userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
+		if hasUserGroupRatio {
+			finalGroupRatio = userGroupRatio
+		} else {
+			finalGroupRatio = groupRatio
+		}
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）

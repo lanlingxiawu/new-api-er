@@ -12,6 +12,7 @@
     ". Please fix the JSON before saving.": ". Please fix the JSON before saving.",
     ". This action cannot be undone.": ". This action cannot be undone.",
     "...": "...",
+    "A duplicate configuration already exists for model {{model}} and resolution {{resolution}}. Saving is blocked.": "A duplicate configuration already exists for model {{model}} and resolution {{resolution}}. Saving is blocked.",
     "\"default\": \"us-central1\", \"claude-3-5-sonnet-20240620\": \"europe-west1\"": "\"default\": \"us-central1\", \"claude-3-5-sonnet-20240620\": \"europe-west1\"",
     "({{total}} total, {{omit}} omitted)": "({{total}} total, {{omit}} omitted)",
     "(Deleted)": "(Deleted)",
@@ -1970,7 +1971,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -5011,5 +5012,14 @@
   "Billing Export Settings": "Billing Export Settings",
   "Save billing export settings": "Save billing export settings",
   "Used to query account balance.": "Used to query account balance.",
-  "User ID used when querying account balance.": "User ID used when querying account balance."
+  "User ID used when querying account balance.": "User ID used when querying account balance.",
+  "Third-party SD2 prices": "Third-party SD2 prices",
+  "Configure token prices ($/1M tokens) for third-party SD2 models by resolution and whether the request includes video input.": "Configure token prices ($/1M tokens) for third-party SD2 models by resolution and whether the request includes video input.",
+  "These prices override the generic model ratio only for the third-party SD2 task channel.": "These prices override the generic model ratio only for the third-party SD2 task channel.",
+  "Resolution": "Resolution",
+  "Price without video input ($/1M tokens)": "Price without video input ($/1M tokens)",
+  "Price with video input ($/1M tokens)": "Price with video input ($/1M tokens)",
+  "No third-party SD2 prices configured": "No third-party SD2 prices configured",
+  "Save third-party SD2 prices": "Save third-party SD2 prices",
+  "JSON must be an object of model -> resolution -> price entries": "JSON must be an object of model -> resolution -> price entries"
 }

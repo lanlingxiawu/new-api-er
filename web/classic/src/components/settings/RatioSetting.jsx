@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 import ModelPricingCombined from '../../pages/Setting/Ratio/ModelPricingCombined';
 import GroupRatioSettings from '../../pages/Setting/Ratio/GroupRatioSettings';
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
+import ThirdPartySD2PricingSettings from '../../pages/Setting/Ratio/ThirdPartySD2PricingSettings';
 import UpstreamRatioSync from '../../pages/Setting/Ratio/UpstreamRatioSync';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
 
@@ -46,6 +47,7 @@ const RatioSetting = () => {
     AutoGroups: '',
     DefaultUseAutoGroup: false,
     ExposeRatioEnabled: false,
+    'thirdpartysd2_pricing.matrix': '',
     UserUsableGroups: '',
     'group_ratio_setting.group_special_usable_group': '',
   });
@@ -111,6 +113,9 @@ const RatioSetting = () => {
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('工具调用定价')} itemKey='tool_price'>
             <ToolPriceSettings options={inputs} />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab={t('第三方 SD2 定价')} itemKey='thirdpartysd2'>
+            <ThirdPartySD2PricingSettings options={inputs} />
           </Tabs.TabPane>
         </Tabs>
       </Card>

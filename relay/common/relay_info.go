@@ -677,6 +677,10 @@ type TaskRelayInfo struct {
 	PublicTaskID string
 
 	ConsumeQuota bool
+	// InheritedPricingMetadata carries pricing context copied from the origin
+	// task for remix/continuation requests that do not repeat the original
+	// billing dimensions in their payload.
+	InheritedPricingMetadata map[string]string
 
 	// LockedChannel holds the full channel object when the request is bound to
 	// a specific channel (e.g., remix on origin task's channel). Stored as any
