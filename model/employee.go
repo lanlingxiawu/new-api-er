@@ -369,6 +369,11 @@ func GetAllEmployees(page, pageSize int, filter EmployeeFilter) ([]*EmployeeProf
 	if strings.EqualFold(filter.SortOrder, "asc") {
 		orderDirection = "ASC"
 	}
+	// 禁用员工（status=2）始终排在最后；显式按状态排序时尊重用户选择。
+	// CASE WHEN 返回整数 0/1，SQLite/MySQL/PostgreSQL 通用。
+	if filter.SortBy != "status" {
+		tx = tx.Order("CASE WHEN employee_profiles.status = 2 THEN 1 ELSE 0 END ASC")
+	}
 	if err := tx.Order(orderColumn + " " + orderDirection).Offset(offset).Limit(pageSize).Find(&employees).Error; err != nil {
 		return nil, 0, err
 	}
