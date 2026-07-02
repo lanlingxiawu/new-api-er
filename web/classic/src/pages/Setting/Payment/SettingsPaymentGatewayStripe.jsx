@@ -33,10 +33,12 @@ export default function SettingsPaymentGateway(props) {
   const sectionTitle = props.hideSectionTitle ? undefined : t('Stripe 设置');
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
+    StripeEnabled: true,
     StripeApiSecret: '',
     StripeWebhookSecret: '',
     StripePriceId: '',
     StripeUnitPrice: 8.0,
+    StripeUseRealtimeRate: true,
     StripeMinTopUp: 1,
     StripePromotionCodesEnabled: false,
   });
@@ -46,6 +48,11 @@ export default function SettingsPaymentGateway(props) {
   useEffect(() => {
     if (props.options && formApiRef.current) {
       const currentInputs = {
+        StripeEnabled:
+          props.options.StripeEnabled !== undefined
+            ? props.options.StripeEnabled === 'true' ||
+              props.options.StripeEnabled === true
+            : true,
         StripeApiSecret: props.options.StripeApiSecret || '',
         StripeWebhookSecret: props.options.StripeWebhookSecret || '',
         StripePriceId: props.options.StripePriceId || '',
@@ -53,6 +60,11 @@ export default function SettingsPaymentGateway(props) {
           props.options.StripeUnitPrice !== undefined
             ? parseFloat(props.options.StripeUnitPrice)
             : 8.0,
+        StripeUseRealtimeRate:
+          props.options.StripeUseRealtimeRate !== undefined
+            ? props.options.StripeUseRealtimeRate === 'true' ||
+              props.options.StripeUseRealtimeRate === true
+            : true,
         StripeMinTopUp:
           props.options.StripeMinTopUp !== undefined
             ? parseFloat(props.options.StripeMinTopUp)
@@ -82,6 +94,15 @@ export default function SettingsPaymentGateway(props) {
     try {
       const options = [];
 
+      if (
+        originInputs['StripeEnabled'] !== inputs.StripeEnabled &&
+        inputs.StripeEnabled !== undefined
+      ) {
+        options.push({
+          key: 'StripeEnabled',
+          value: inputs.StripeEnabled ? 'true' : 'false',
+        });
+      }
       if (inputs.StripeApiSecret && inputs.StripeApiSecret !== '') {
         options.push({ key: 'StripeApiSecret', value: inputs.StripeApiSecret });
       }
@@ -101,6 +122,16 @@ export default function SettingsPaymentGateway(props) {
         options.push({
           key: 'StripeUnitPrice',
           value: inputs.StripeUnitPrice.toString(),
+        });
+      }
+      if (
+        originInputs['StripeUseRealtimeRate'] !==
+          inputs.StripeUseRealtimeRate &&
+        inputs.StripeUseRealtimeRate !== undefined
+      ) {
+        options.push({
+          key: 'StripeUseRealtimeRate',
+          value: inputs.StripeUseRealtimeRate ? 'true' : 'false',
         });
       }
       if (
@@ -197,6 +228,21 @@ export default function SettingsPaymentGateway(props) {
             description='需要包含事件：checkout.session.completed 和 checkout.session.expired'
             style={{ marginBottom: 16 }}
           />
+          <Row
+            gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
+            style={{ marginBottom: 16 }}
+          >
+            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+              <Form.Switch
+                field='StripeEnabled'
+                size='default'
+                checkedText='｜'
+                uncheckedText='〇'
+                label={t('启用 Stripe 支付')}
+                extraText={t('关闭后充值页隐藏 Stripe 且不再受理新下单；已付款订单仍可正常入账')}
+              />
+            </Col>
+          </Row>
           <Row gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}>
             <Col xs={24} sm={24} md={8} lg={8} xl={8}>
               <Form.Input
@@ -231,16 +277,26 @@ export default function SettingsPaymentGateway(props) {
             gutter={{ xs: 8, sm: 16, md: 24, lg: 24, xl: 24, xxl: 24 }}
             style={{ marginTop: 16 }}
           >
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+            <Col xs={24} sm={24} md={6} lg={6} xl={6}>
+              <Form.Switch
+                field='StripeUseRealtimeRate'
+                size='default'
+                checkedText='｜'
+                uncheckedText='〇'
+                label={t('充值价格使用实时汇率')}
+                extraText={t('开启后取实时 USD/CNY 汇率，获取失败时回退到手动汇率')}
+              />
+            </Col>
+            <Col xs={24} sm={24} md={6} lg={6} xl={6}>
               <Form.InputNumber
                 field='StripeUnitPrice'
                 precision={2}
-                label={t('充值价格（x元/美金）')}
-                placeholder={t('例如：7，就是7元/美金')}
-                extraText={t('按 1 美元对应的站内价格填写')}
+                label={t('手动汇率（元/美金）')}
+                placeholder={t('例如：7.3，即 1 美元≈7.3 元')}
+                extraText={t('1 美元折算多少人民币；仅关闭实时汇率或实时获取失败时生效。到账 = 实付美元 × 本汇率 ÷ 系统充值比例')}
               />
             </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+            <Col xs={24} sm={24} md={6} lg={6} xl={6}>
               <Form.InputNumber
                 field='StripeMinTopUp'
                 label={t('最低充值美元数量')}
@@ -248,7 +304,7 @@ export default function SettingsPaymentGateway(props) {
                 extraText={t('用户单次最少可充值的美元数量')}
               />
             </Col>
-            <Col xs={24} sm={24} md={8} lg={8} xl={8}>
+            <Col xs={24} sm={24} md={6} lg={6} xl={6}>
               <Form.Switch
                 field='StripePromotionCodesEnabled'
                 size='default'

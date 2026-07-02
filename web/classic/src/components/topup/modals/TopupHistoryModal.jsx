@@ -385,8 +385,13 @@ const TopupHistoryModal = ({
     return Number(record?.amount || 0) === 0 && tradeNo.startsWith('sub');
   };
 
+  // 动态汇率订单：`amount` 是到账额度快照（raw quota），`money` 以 `payment_currency` 计价。
+  // Infini 与 Stripe 均为动态汇率订单。
   const isRawQuotaTopup = (record) =>
-    record?.payment_provider === 'infini' || record?.payment_method === 'infini';
+    record?.payment_provider === 'infini' ||
+    record?.payment_method === 'infini' ||
+    record?.payment_provider === 'stripe' ||
+    record?.payment_method === 'stripe';
 
   const renderMoney = (money, record) => {
     const value = Number(money) || 0;

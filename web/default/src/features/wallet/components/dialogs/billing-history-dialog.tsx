@@ -157,11 +157,16 @@ export function BillingHistoryDialog({
     }
   }
 
+  // 动态汇率订单：`amount` 是到账额度快照（raw quota），`money` 以 `payment_currency` 计价。
+  // Infini 与 Stripe 均为动态汇率订单。
   const isRawQuotaTopup = (record: {
     payment_method?: string
     payment_provider?: string
   }) =>
-    record.payment_provider === 'infini' || record.payment_method === 'infini'
+    record.payment_provider === 'infini' ||
+    record.payment_method === 'infini' ||
+    record.payment_provider === 'stripe' ||
+    record.payment_method === 'stripe'
 
   return (
     <>

@@ -136,10 +136,12 @@ const paymentSchema = z.object({
       })
     }
   }),
+  StripeEnabled: z.boolean(),
   StripeApiSecret: z.string(),
   StripeWebhookSecret: z.string(),
   StripePriceId: z.string(),
   StripeUnitPrice: z.coerce.number().min(0),
+  StripeUseRealtimeRate: z.boolean(),
   StripeMinTopUp: z.coerce.number().min(0),
   StripePromotionCodesEnabled: z.boolean(),
   CreemApiKey: z.string(),
@@ -509,10 +511,12 @@ export function PaymentSettingsSection({
       PayMethods: values.PayMethods.trim(),
       AmountOptions: values.AmountOptions.trim(),
       AmountDiscount: values.AmountDiscount.trim(),
+      StripeEnabled: values.StripeEnabled,
       StripeApiSecret: values.StripeApiSecret.trim(),
       StripeWebhookSecret: values.StripeWebhookSecret.trim(),
       StripePriceId: values.StripePriceId.trim(),
       StripeUnitPrice: values.StripeUnitPrice,
+      StripeUseRealtimeRate: values.StripeUseRealtimeRate,
       StripeMinTopUp: values.StripeMinTopUp,
       StripePromotionCodesEnabled: values.StripePromotionCodesEnabled,
       CreemApiKey: values.CreemApiKey.trim(),
@@ -582,10 +586,12 @@ export function PaymentSettingsSection({
       PayMethods: initialRef.current.PayMethods.trim(),
       AmountOptions: initialRef.current.AmountOptions.trim(),
       AmountDiscount: initialRef.current.AmountDiscount.trim(),
+      StripeEnabled: initialRef.current.StripeEnabled,
       StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
       StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
       StripePriceId: initialRef.current.StripePriceId.trim(),
       StripeUnitPrice: initialRef.current.StripeUnitPrice,
+      StripeUseRealtimeRate: initialRef.current.StripeUseRealtimeRate,
       StripeMinTopUp: initialRef.current.StripeMinTopUp,
       StripePromotionCodesEnabled:
         initialRef.current.StripePromotionCodesEnabled,
@@ -714,6 +720,10 @@ export function PaymentSettingsSection({
       })
     }
 
+    if (sanitized.StripeEnabled !== initial.StripeEnabled) {
+      updates.push({ key: 'StripeEnabled', value: sanitized.StripeEnabled })
+    }
+
     if (
       sanitized.StripeApiSecret &&
       sanitized.StripeApiSecret !== initial.StripeApiSecret
@@ -737,6 +747,13 @@ export function PaymentSettingsSection({
 
     if (sanitized.StripeUnitPrice !== initial.StripeUnitPrice) {
       updates.push({ key: 'StripeUnitPrice', value: sanitized.StripeUnitPrice })
+    }
+
+    if (sanitized.StripeUseRealtimeRate !== initial.StripeUseRealtimeRate) {
+      updates.push({
+        key: 'StripeUseRealtimeRate',
+        value: sanitized.StripeUseRealtimeRate,
+      })
     }
 
     if (sanitized.StripeMinTopUp !== initial.StripeMinTopUp) {
@@ -1214,7 +1231,7 @@ export function PaymentSettingsSection({
                     </FormControl>
                     <FormDescription>
                       {t(
-                        'How much to charge for each US dollar of balance (Epay)'
+                        'System top-up ratio (local currency per credit unit). For USD payments: credit = paid USD x real-time rate / this value; set to 1 for local-currency 1:1'
                       )}
                     </FormDescription>
                     <FormMessage />
@@ -1557,6 +1574,29 @@ export function PaymentSettingsSection({
               </ul>
             </div>
 
+            <FormField
+              control={form.control}
+              name='StripeEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable Stripe payment')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Show Stripe on the top-up page and accept new orders. Turning it off hides Stripe; already-paid orders are still credited.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
             <div className='grid gap-6 md:grid-cols-3'>
               <FormField
                 control={form.control}
@@ -1631,11 +1671,36 @@ export function PaymentSettingsSection({
             <div className='grid gap-6 md:grid-cols-3'>
               <FormField
                 control={form.control}
+                name='StripeUseRealtimeRate'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>
+                        {t('Use real-time exchange rate')}
+                      </FormLabel>
+                      <FormDescription>
+                        {t(
+                          'Use the live USD/CNY rate; fall back to the manual price below if it is unavailable'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
                 name='StripeUnitPrice'
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      {t('Unit price (local currency / USD)')}
+                      {t('Manual exchange rate (local currency per USD)')}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -1646,7 +1711,9 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('e.g., 8 means 8 local currency per USD')}
+                      {t(
+                        'How much local currency 1 USD converts to; only used when real-time rate is off or unavailable. Credit = paid USD x this rate / system top-up ratio'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

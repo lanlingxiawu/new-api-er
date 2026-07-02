@@ -165,6 +165,7 @@ export default function SettingsPaymentGateway(props) {
                 precision={2}
                 label={t('充值价格（x元/美金）')}
                 placeholder={t('例如：7，就是7元/美金')}
+                extraText={t('系统充值比例（1 系统额度单位对应的人民币价格）。美元支付到账 = 实付美元 × 实时汇率 ÷ 本值；填 1 即人民币 1:1')}
               />
             </Col>
             <Col xs={24} sm={24} md={12} lg={12} xl={12}>

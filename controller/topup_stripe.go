@@ -13,15 +13,21 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/checkout/session"
 	"github.com/stripe/stripe-go/v81/webhook"
 	"github.com/thanhpk/randstr"
 )
+
+// stripeChargeCurrency 是 Stripe 充值下单时向用户收款的币种（ISO 4217，小写）。
+// 用户始终以美元支付；到账再按 USD→CNY 汇率折算，故收款币种固定为 usd。
+const stripeChargeCurrency = "usd"
 
 var stripeAdaptor = &StripeAdaptor{}
 
@@ -58,10 +64,20 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": strconv.FormatFloat(payMoney, 'f', 2, 64)})
+	// 同时返回本次报价锁定的到账折算汇率（元/美金），供前端展示实际到账，
+	// 避免前端用独立的实时汇率重新计算导致与后端到账口径不一致。
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "success",
+		"data":          strconv.FormatFloat(payMoney, 'f', 2, 64),
+		"exchange_rate": stripeExchangeRate(),
+	})
 }
 
 func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
+	if !isStripeTopUpEnabled() {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Stripe 支付未启用"})
+		return
+	}
 	if req.PaymentMethod != model.PaymentMethodStripe {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的支付渠道"})
 		return
@@ -87,12 +103,31 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
-	chargedMoney := GetChargedAmount(float64(req.Amount), *user)
+
+	// 与报价（RequestAmount）一致，使用带缓存的用户实际分组计算实付美元金额。
+	group, err := model.GetUserGroup(id, true)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+
+	// payMoney：本次实际收取的美元金额（含分组倍率与折扣）。
+	payMoney := getStripePayMoney(float64(req.Amount), group)
+	if payMoney <= 0.01 {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+		return
+	}
+	amountCents := stripeAmountCents(payMoney)
+
+	// 按下单时刻的 USD→CNY 汇率（元/美金，实时或手动兜底）把实付美元换算为到账额度快照，落库后由 webhook 到账时发放。
+	// 到账额度 = 实付USD × 汇率 ÷ 系统充值比例(operation_setting.Price) × QuotaPerUnit。
+	exchangeRate := stripeExchangeRate()
+	quotaSnapshot := rawQuotaFromPayMoney(decimal.NewFromFloat(payMoney), exchangeRate, operation_setting.Price)
 
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, req.Amount, req.SuccessURL, req.CancelURL)
+	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, amountCents, req.Amount, req.SuccessURL, req.CancelURL)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
@@ -101,11 +136,12 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          req.Amount,
-		Money:           chargedMoney,
+		Amount:          quotaSnapshot,
+		Money:           payMoney,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
 		PaymentProvider: model.PaymentProviderStripe,
+		PaymentCurrency: strings.ToUpper(stripeChargeCurrency),
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
@@ -115,7 +151,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Stripe 充值订单创建成功 user_id=%d trade_no=%s amount=%d money=%.2f", id, referenceId, req.Amount, chargedMoney))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Stripe 充值订单创建成功 user_id=%d trade_no=%s amount=%d pay_money=%.2f %s quota_snapshot=%d rate=%.4f", id, referenceId, req.Amount, payMoney, stripeChargeCurrency, quotaSnapshot, exchangeRate))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
@@ -255,6 +291,37 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 	logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值订单已标记为失败 trade_no=%s client_ip=%s", referenceId, callerIp))
 }
 
+// stripeSettlementCurrencyAmount 解析 checkout.session 事件，返回「原始（结算）币种与金额」——
+// 即我们下单时使用的口径（本项目固定 USD，金额为最小货币单位/美分）。
+//
+//   - 普通支付：顶层 currency / amount_total 就是原始币种/金额。
+//   - Adaptive Pricing 本地化收款（客户按本地币种付款）：
+//   - 旧模型：顶层 currency/amount_total 是本地化(presentment)币种/金额，
+//     currency_conversion.{source_currency, amount_total} 才是原始（下单）币种/金额，此处以其为准；
+//   - 新模型：顶层已是原始币种/金额，presentment 明细在 presentment_details，无需特殊处理。
+//
+// 用强类型（stripe.CheckoutSession）解析而非 GetObjectValue，规避两处坑：
+//  1. GetObjectValue 把 JSON 数字当 float64，>=100 万分（如 $10000）会被 "%v" 格式成 "1e+06"，ParseInt 失败判 0；
+//  2. GetObjectValue 读取缺失的嵌套字段（currency_conversion）会 panic。
+func stripeSettlementCurrencyAmount(event stripe.Event) (string, int64) {
+	if event.Data == nil {
+		return "", 0
+	}
+	var sess stripe.CheckoutSession
+	if err := common.Unmarshal(event.Data.Raw, &sess); err != nil {
+		// 解析失败兜底：退回顶层字段（小额场景 GetObjectValue 仍可用）
+		amount, _ := strconv.ParseInt(event.GetObjectValue("amount_total"), 10, 64)
+		return event.GetObjectValue("currency"), amount
+	}
+	currency := string(sess.Currency)
+	amount := sess.AmountTotal
+	if cc := sess.CurrencyConversion; cc != nil && cc.SourceCurrency != "" {
+		currency = string(cc.SourceCurrency)
+		amount = cc.AmountTotal
+	}
+	return currency, amount
+}
+
 // fulfillOrder is the shared logic for crediting quota after payment is confirmed.
 func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, customerId string, callerIp string) {
 	if len(referenceId) == 0 {
@@ -264,10 +331,18 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+
+	// 用强类型解析 Checkout Session：
+	//   1) amount_total 是 int64，避免用 GetObjectValue（JSON 数字→float64→"%v" 在 >=100 万分时变成
+	//      科学计数法 "1e+06" 导致 ParseInt 失败、金额被判为 0）；
+	//   2) 安全读取 Adaptive Pricing 的 currency_conversion（GetObjectValue 读缺失的嵌套字段会 panic）。
+	// 到账校验统一使用「原始（结算）币种/金额」= 我们下单时的 USD 口径。
+	notifiedCurrency, notifiedAmountCents := stripeSettlementCurrencyAmount(event)
+
 	payload := map[string]any{
 		"customer":     customerId,
-		"amount_total": event.GetObjectValue("amount_total"),
-		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
+		"amount_total": notifiedAmountCents,
+		"currency":     strings.ToUpper(notifiedCurrency),
 		"event_type":   string(event.Type),
 	}
 	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
@@ -278,15 +353,13 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return
 	}
 
-	err := model.Recharge(referenceId, customerId, callerIp)
+	err := model.Recharge(referenceId, customerId, callerIp, notifiedAmountCents, notifiedCurrency)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Stripe 充值处理失败 trade_no=%s event_type=%s client_ip=%s error=%q", referenceId, string(event.Type), callerIp, err.Error()))
+		logger.LogError(ctx, fmt.Sprintf("Stripe 充值处理失败 trade_no=%s event_type=%s amount_total=%d currency=%s client_ip=%s error=%q", referenceId, string(event.Type), notifiedAmountCents, notifiedCurrency, callerIp, err.Error()))
 		return
 	}
 
-	total, _ := strconv.ParseFloat(event.GetObjectValue("amount_total"), 64)
-	currency := strings.ToUpper(event.GetObjectValue("currency"))
-	logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值成功 trade_no=%s amount_total=%.2f currency=%s event_type=%s client_ip=%s", referenceId, total/100, currency, string(event.Type), callerIp))
+	logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值成功 trade_no=%s amount_total=%.2f currency=%s event_type=%s client_ip=%s", referenceId, float64(notifiedAmountCents)/100, strings.ToUpper(notifiedCurrency), string(event.Type), callerIp))
 }
 
 func sessionExpired(ctx context.Context, event stripe.Event) {
@@ -333,12 +406,17 @@ func sessionExpired(ctx context.Context, event stripe.Event) {
 //   - referenceId: unique reference identifier for the transaction
 //   - customerId: existing Stripe customer ID (empty string if new customer)
 //   - email: customer email address for new customer creation
-//   - amount: quantity of units to purchase
+//   - amountCents: exact amount to charge, in the smallest currency unit (cents)
+//   - credits: number of credits being purchased (used only for the line-item name)
 //   - successURL: custom URL to redirect after successful payment (empty for default)
 //   - cancelURL: custom URL to redirect when payment is canceled (empty for default)
 //
+// The charge uses an inline price_data (dynamic amount, in USD) instead of a fixed
+// StripePriceId, so the exact computed USD amount (amountCents) is charged and can be
+// verified against the order in the webhook. StripePriceId is no longer used here.
+//
 // Returns the checkout session URL or an error if the session creation fails.
-func genStripeLink(referenceId string, customerId string, email string, amount int64, successURL string, cancelURL string) (string, error) {
+func genStripeLink(referenceId string, customerId string, email string, amountCents int64, credits int64, successURL string, cancelURL string) (string, error) {
 	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
 		return "", fmt.Errorf("无效的Stripe API密钥")
 	}
@@ -359,12 +437,21 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 		CancelURL:         stripe.String(cancelURL),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
-				Price:    stripe.String(setting.StripePriceId),
-				Quantity: stripe.Int64(amount),
+				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+					Currency:   stripe.String(stripeChargeCurrency),
+					UnitAmount: stripe.Int64(amountCents),
+					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+						Name: stripe.String(fmt.Sprintf("Credits Top-up x%d", credits)),
+					},
+				},
+				Quantity: stripe.Int64(1),
 			},
 		},
-		Mode:                stripe.String(string(stripe.CheckoutSessionModePayment)),
-		AllowPromotionCodes: stripe.Bool(setting.StripePromotionCodesEnabled),
+		Mode:                 stripe.String(string(stripe.CheckoutSessionModePayment)),
+		AllowPromotionCodes:  stripe.Bool(setting.StripePromotionCodesEnabled),
+		PaymentMethodOptions: stripeCheckoutCard3DSAny(),
+		// 要求填写完整账单地址（姓名/街道/城市/州/邮编/国家）；默认 auto 通常只收国家+邮编。
+		BillingAddressCollection: stripe.String(string(stripe.CheckoutSessionBillingAddressCollectionRequired)),
 	}
 
 	if "" == customerId {
@@ -385,15 +472,41 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 	return result.URL, nil
 }
 
-func GetChargedAmount(count float64, user model.User) float64 {
-	topUpGroupRatio := common.GetTopupGroupRatio(user.Group)
-	if topUpGroupRatio == 0 {
-		topUpGroupRatio = 1
+func stripeCheckoutCard3DSAny() *stripe.CheckoutSessionPaymentMethodOptionsParams {
+	return &stripe.CheckoutSessionPaymentMethodOptionsParams{
+		Card: &stripe.CheckoutSessionPaymentMethodOptionsCardParams{
+			RequestThreeDSecure: stripe.String(string(stripe.CheckoutSessionPaymentMethodOptionsCardRequestThreeDSecureAny)),
+		},
 	}
-
-	return count * topUpGroupRatio
 }
 
+// stripeAmountCents 将美元金额换算为 Stripe 收款所需的最小货币单位（美分），
+// 采用 decimal 四舍五入避免浮点误差；genStripeLink 下单与 webhook 到账校验共用同一取整口径。
+func stripeAmountCents(payMoney float64) int64 {
+	return decimal.NewFromFloat(payMoney).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+}
+
+// stripeExchangeRate 返回 Stripe 到账折算使用的 USD→CNY 汇率（元/美金：1 美元折算多少人民币）。
+//   - 实时模式（StripeUseRealtimeRate=true）：取实时 USD/CNY 汇率；获取失败时回退到手动汇率 StripeUnitPrice。
+//   - 手动模式：始终使用管理员填写的手动汇率 StripeUnitPrice。
+//
+// StripeUnitPrice <= 0 时统一回退到系统兜底汇率，避免到账额度被算成 0。
+func stripeExchangeRate() float64 {
+	manual := setting.StripeUnitPrice
+	if setting.StripeUseRealtimeRate {
+		if rate, ok := service.GetUSDCNYRateWithOK(); ok && rate > 0 {
+			return rate
+		}
+	}
+	if manual > 0 {
+		return manual
+	}
+	return service.GetUSDCNYRate()
+}
+
+// getStripePayMoney 计算本次向用户实际收取的美元金额（USD）：充值美元数量 × 分组倍率 × 折扣。
+// 注意：USD→CNY 汇率（stripeExchangeRate）与系统充值比例（Price）都不参与"实付"计算，
+// 它们只在到账换算里生效：quota = payMoney × 汇率 ÷ Price × QuotaPerUnit。
 func getStripePayMoney(amount float64, group string) float64 {
 	originalAmount := amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
@@ -411,7 +524,7 @@ func getStripePayMoney(amount float64, group string) float64 {
 			discount = ds
 		}
 	}
-	payMoney := amount * setting.StripeUnitPrice * topupGroupRatio * discount
+	payMoney := amount * topupGroupRatio * discount
 	return payMoney
 }
 

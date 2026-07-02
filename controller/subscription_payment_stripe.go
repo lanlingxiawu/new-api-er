@@ -122,7 +122,10 @@ func genStripeSubscriptionLink(referenceId string, customerId string, email stri
 				Quantity: stripe.Int64(1),
 			},
 		},
-		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		Mode:                 stripe.String(string(stripe.CheckoutSessionModeSubscription)),
+		PaymentMethodOptions: stripeCheckoutCard3DSAny(),
+		// 要求填写完整账单地址（姓名/街道/城市/州/邮编/国家）；默认 auto 通常只收国家+邮编。
+		BillingAddressCollection: stripe.String(string(stripe.CheckoutSessionBillingAddressCollectionRequired)),
 	}
 
 	if "" == customerId {

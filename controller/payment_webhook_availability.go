@@ -15,17 +15,26 @@ func isStripeTopUpEnabled() bool {
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
+	// StripeEnabled 为管理员的独立显示/受理开关；关闭即隐藏 Stripe 支付选项。
+	if !setting.StripeEnabled {
+		return false
+	}
+	// 充值下单已改用动态 price_data（见 genStripeLink），不再依赖 StripePriceId；
+	// 启用只需 API 密钥（拉起会话）+ Webhook 签名密钥（回调入账）。
 	return strings.TrimSpace(setting.StripeApiSecret) != "" &&
-		strings.TrimSpace(setting.StripeWebhookSecret) != "" &&
-		strings.TrimSpace(setting.StripePriceId) != ""
+		strings.TrimSpace(setting.StripeWebhookSecret) != ""
 }
 
 func isStripeWebhookConfigured() bool {
 	return strings.TrimSpace(setting.StripeWebhookSecret) != ""
 }
 
+// isStripeWebhookEnabled 仅依赖 Webhook 签名密钥，与充值展示/合规/API 密钥等配置解耦。
+// 原因：已创建并付款成功的 Checkout Session 必须能入账；若把回调入口和这些运行时可变的开关绑定，
+// 管理员一旦改动配置就会让在途订单在回调处被 403 拒收，造成「用户已付款但系统不入账」。
+// 真正的安全边界是下游的 Stripe 签名校验（依赖 StripeWebhookSecret）。
 func isStripeWebhookEnabled() bool {
-	return isStripeTopUpEnabled()
+	return isStripeWebhookConfigured()
 }
 
 func isCreemTopUpEnabled() bool {

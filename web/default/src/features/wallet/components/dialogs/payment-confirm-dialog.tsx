@@ -33,7 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from '../../constants'
 import { formatCurrency, getPaymentIcon } from '../../lib'
 import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
-import { isInfiniPayment } from '../../lib/payment'
+import { isInfiniPayment, isStripePayment } from '../../lib/payment'
 import type { PaymentMethod } from '../../types'
 
 interface PaymentConfirmDialogProps {
@@ -51,6 +51,15 @@ interface PaymentConfirmDialogProps {
   binanceRate?: number
   /** 系统充值比例 = operation_setting.Price（CNY/额度单位），后台可配置 */
   priceRatio?: number
+  /** Stripe 手动汇率（元/美金，USD→CNY）；手动模式或实时汇率获取失败时用作到账折算汇率。非"充值价格" */
+  stripeUnitPrice?: number
+  /** Stripe 是否使用实时汇率（false 时用 stripeUnitPrice 手动值） */
+  stripeUseRealtimeRate?: boolean
+  /**
+   * 后端在本次报价时锁定并返回的到账折算汇率（元/美金）。>0 时优先使用，
+   * 保证展示的实际到账与后端到账口径一致，且不随前端实时汇率异步刷新而跳动。
+   */
+  quoteRate?: number
 }
 
 export function PaymentConfirmDialog({
@@ -66,15 +75,20 @@ export function PaymentConfirmDialog({
   usdExchangeRate = 1,
   binanceRate = 0,
   priceRatio = 1,
+  stripeUnitPrice = 0,
+  stripeUseRealtimeRate = true,
+  quoteRate = 0,
 }: PaymentConfirmDialogProps) {
   const { t } = useTranslation()
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
 
-  // Infini 专属计算
+  // 动态汇率支付（Infini / Stripe）：以外币（USD）收款，到账额度按实时汇率折算
   const paymentType = paymentMethod?.type ?? ''
   const isInfini = isInfiniPayment(paymentType)
+  const isStripe = isStripePayment(paymentType)
+  const isRateDynamic = isInfini || isStripe
   const isAlipay =
     paymentType === PAYMENT_TYPES.ALIPAY ||
     paymentType === PAYMENT_TYPES.ALIPAY_OFFICIAL
@@ -88,14 +102,35 @@ export function PaymentConfirmDialog({
           digitsSmall: 2,
           abbreviate: false,
         })
-  // Binance 实时汇率，优先实时值，回退系统配置
-  const effectiveRate = binanceRate > 0 ? binanceRate : usdExchangeRate
+  // 到账折算汇率（元/美金），与后端保持一致：
+  //   - Infini：始终用 Binance 实时汇率（回退系统配置）。
+  //   - Stripe：实时模式用 Binance（失败回退手动 stripeUnitPrice）；手动模式直接用 stripeUnitPrice。
+  const stripeManualRate = stripeUnitPrice > 0 ? stripeUnitPrice : 0
+  const stripeEffectiveRate = stripeUseRealtimeRate
+    ? binanceRate > 0
+      ? binanceRate
+      : stripeManualRate > 0
+        ? stripeManualRate
+        : usdExchangeRate
+    : stripeManualRate > 0
+      ? stripeManualRate
+      : binanceRate > 0
+        ? binanceRate
+        : usdExchangeRate
+  // 优先使用后端报价锁定的汇率（quoteRate），它随「支付金额」一并返回，稳定且与到账口径一致；
+  // 仅当拿不到（未报价/非动态支付）时才回退到前端汇率推算。
+  const fallbackRate = isStripe
+    ? stripeEffectiveRate
+    : binanceRate > 0
+      ? binanceRate
+      : usdExchangeRate
+  const effectiveRate = quoteRate > 0 ? quoteRate : fallbackRate
   const safePrice = priceRatio > 0 ? priceRatio : 1
-  // 实际到账额度单位数（浮点，用于显示）= 实付USD × Binance汇率 / 充值比例(Price)
-  // 后端精确公式：topUp.Amount = round(payMoney × binanceRate / Price × QuotaPerUnit)
-  // 前端此处展示等价金额，保持和 raw quota 快照的精度模型一致。
+  // 实际到账额度单位数（浮点，用于显示）= 实付USD × 到账折算汇率(effectiveRate) / 系统充值比例(Price)
+  // 后端精确公式：topUp.Amount = round(payMoney × 汇率 / Price × QuotaPerUnit)；
+  // effectiveRate 优先用后端报价锁定的 quoteRate，保证展示与实际到账口径一致。
   const expectedCreditUnits =
-    isInfini && paymentAmount > 0 && effectiveRate > 0
+    isRateDynamic && paymentAmount > 0 && effectiveRate > 0
       ? Math.round(
           (paymentAmount * effectiveRate * DEFAULT_CURRENCY_CONFIG.quotaPerUnit) /
             safePrice
@@ -120,11 +155,19 @@ export function PaymentConfirmDialog({
               {t('Topup Amount')}
             </span>
             <span className='text-lg font-semibold'>
-              {formatLocalCurrencyAmount(topupAmount * usdExchangeRate, {
-                digitsLarge: 2,
-                digitsSmall: 2,
-                abbreviate: false,
-              })}
+              {/* 动态汇率（Infini / Stripe）：此处直接展示实际到账额度（约等于），
+                  普通支付仍展示请求充值数量。 */}
+              {isRateDynamic && !calculating && expectedCreditUnits > 0
+                ? `≈ ${formatCurrencyFromUSD(expectedCreditUnits, {
+                    digitsLarge: 2,
+                    digitsSmall: 2,
+                    abbreviate: false,
+                  })}`
+                : formatLocalCurrencyAmount(topupAmount * usdExchangeRate, {
+                    digitsLarge: 2,
+                    digitsSmall: 2,
+                    abbreviate: false,
+                  })}
             </span>
           </div>
 
@@ -137,8 +180,8 @@ export function PaymentConfirmDialog({
             ) : (
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
-                  {isInfini
-                    ? /* Infini 以 USD 收款，formatCurrency 只出数字，再追加货币码 */
+                  {isRateDynamic
+                    ? /* Infini / Stripe 以 USD 收款，formatCurrency 只出数字，再追加货币码 */
                       <>
                         {formatCurrency(paymentAmount)}
                         <span className='text-muted-foreground ml-1 text-base font-normal'>
@@ -150,7 +193,7 @@ export function PaymentConfirmDialog({
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
-                    {isInfini
+                    {isRateDynamic
                       ? formatCurrency(originalAmount)
                       : formatPaymentAmount(originalAmount)}
                   </span>
@@ -164,7 +207,7 @@ export function PaymentConfirmDialog({
               <div className='flex items-center justify-between text-sm'>
                 <span className='text-muted-foreground'>{t('You save')}</span>
                 <span className='font-semibold text-green-600'>
-                  {isInfini
+                  {isRateDynamic
                     ? formatCurrency(discountAmount)
                     : formatPaymentAmount(discountAmount)}
                 </span>
@@ -172,19 +215,10 @@ export function PaymentConfirmDialog({
             </div>
           )}
 
-          {/* Infini：三行信息 —— 实际到账 / 充值比例 / 汇率（与经典 UI 对齐） */}
-          {isInfini && !calculating && paymentAmount > 0 && (
+          {/* Infini / Stripe：充值比例 / 实时汇率（实际到账已并入上方“充值数量”行） */}
+          {isRateDynamic && !calculating && paymentAmount > 0 && (
             <div className='bg-muted/40 rounded-lg px-3 py-3 space-y-3'>
-              {/* 行1：实际到账 ≈ paymentUSD × binanceRate / Price */}
-              <div className='flex items-center justify-between'>
-                <span className='text-muted-foreground text-sm'>{t('Actual credit')}</span>
-                <span className='text-xl font-bold text-green-600 dark:text-green-400'>
-                  {expectedCreditUnits > 0
-                    ? `≈ ${formatCurrencyFromUSD(expectedCreditUnits, { digitsLarge: 2, digitsSmall: 2, abbreviate: false })}`
-                    : '—'}
-                </span>
-              </div>
-              {/* 行2：充值比例 = 1/Price（后台可配置，精确值） */}
+              {/* 充值比例 = 1/Price（后台可配置，精确值） */}
               <div className='flex items-center justify-between text-xs text-muted-foreground'>
                 <span>{t('Top-up rate')}</span>
                 <span>
@@ -192,7 +226,7 @@ export function PaymentConfirmDialog({
                   {formatCurrencyFromUSD(1 / safePrice, { digitsLarge: 2, digitsSmall: 2, abbreviate: false })}
                 </span>
               </div>
-              {/* 行3：汇率（Binance 实时） */}
+              {/* 汇率（Binance 实时） */}
               {effectiveRate > 0 && (
                 <div className='flex items-center justify-between text-xs text-muted-foreground'>
                   <span>{t('Real-time exchange rate')}</span>

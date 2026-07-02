@@ -90,6 +90,8 @@ const TopUp = () => {
 
   const [redemptionCode, setRedemptionCode] = useState('');
   const [amount, setAmount] = useState(0.0);
+  // 后端报价时锁定并返回的到账折算汇率（元/美金）；仅动态汇率支付（Stripe/Infini）返回
+  const [quoteRate, setQuoteRate] = useState(0);
   const [minTopUp, setMinTopUp] = useState(statusState?.status?.min_topup || 1);
   const [binanceRate, setBinanceRate] = useState(_cachedRate);
   const [topUpCount, setTopUpCount] = useState(
@@ -299,6 +301,8 @@ const TopUp = () => {
 
     setPayWay(payment);
     setPaymentLoading(true);
+    // 清掉上一次的报价汇率，避免切换支付方式时残留旧值
+    setQuoteRate(0);
     try {
       const selectedMinTopUp = getPaymentMinTopUp(payment);
       await requestAmountByPayment(payment);
@@ -698,11 +702,13 @@ const TopUp = () => {
         currency: currency || undefined,
       });
       if (res !== undefined) {
-        const { message, data } = res.data;
+        const { message, data, exchange_rate } = res.data;
         if (message === 'success') {
           setAmount(parseFloat(data));
+          setQuoteRate(Number(exchange_rate) > 0 ? Number(exchange_rate) : 0);
         } else {
           setAmount(0);
+          setQuoteRate(0);
         }
       }
     } catch (err) {
@@ -1187,11 +1193,13 @@ const TopUp = () => {
         amount: parseFloat(value),
       });
       if (res !== undefined) {
-        const { message, data } = res.data;
+        const { message, data, exchange_rate } = res.data;
         if (message === 'success') {
           setAmount(parseFloat(data));
+          setQuoteRate(Number(exchange_rate) > 0 ? Number(exchange_rate) : 0);
         } else {
           setAmount(0);
+          setQuoteRate(0);
           Toast.error({ content: '错误：' + data, id: 'getAmount' });
         }
       } else {
@@ -1281,6 +1289,11 @@ const TopUp = () => {
         discountRate={topupInfo?.discount?.[topUpCount] || 1.0}
         binanceRate={binanceRate}
         priceRatio={priceRatio}
+        stripeUnitPrice={Number(statusState?.status?.stripe_unit_price) || 0}
+        stripeUseRealtimeRate={
+          statusState?.status?.stripe_use_realtime_rate !== false
+        }
+        quoteRate={quoteRate}
       />
 
       {/* 充值账单模态框 */}

@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -119,7 +120,12 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 	})
 }
 
-func Recharge(referenceId string, customerId string, callerIp string) (err error) {
+// Recharge 处理 Stripe 充值到账。
+//
+// notifiedAmountCents / notifiedCurrency 为 Stripe webhook 通知的实付金额（美分）与币种：
+// 币种必须与下单币种一致；实付金额必须落在 (0, 下单快照金额] 区间内（允许 Stripe 促销码带来的更低实付），
+// 校验通过后按下单时锁定的额度快照（topUp.Amount）发放。
+func Recharge(referenceId string, customerId string, callerIp string, notifiedAmountCents int64, notifiedCurrency string) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -146,6 +152,19 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return errors.New("充值订单状态错误")
 		}
 
+		// 到账校验币种与实付金额，按下单时锁定的额度快照发放
+		if !strings.EqualFold(notifiedCurrency, topUp.PaymentCurrency) {
+			return fmt.Errorf("充值币种不匹配 notified=%s expected=%s", notifiedCurrency, topUp.PaymentCurrency)
+		}
+		expectedCents := decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+		if notifiedAmountCents <= 0 || notifiedAmountCents > expectedCents {
+			return fmt.Errorf("充值金额不匹配 notified_cents=%d expected_cents<=%d", notifiedAmountCents, expectedCents)
+		}
+		quota = float64(topUp.Amount)
+		if quota <= 0 {
+			return errors.New("无效的充值额度")
+		}
+
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		err = tx.Save(topUp).Error
@@ -153,7 +172,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return err
 		}
 
-		quota = topUp.Money * common.QuotaPerUnit
 		err = tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(map[string]interface{}{"stripe_customer": customerId, "quota": gorm.Expr("quota + ?", quota)}).Error
 		if err != nil {
 			return err
@@ -167,7 +185,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 		return errors.New("充值失败，请稍后重试")
 	}
 
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(int(quota)), topUp.Amount), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
+	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值额度: %v，支付金额：%.2f", logger.FormatQuota(int(quota)), topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
 
 	return nil
 }
@@ -329,12 +347,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		// 计算应充值额度：
-		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
+		// - Stripe / Infini 动态汇率订单：Amount 为下单时锁定的额度快照，直接使用
 		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
-		if topUp.PaymentProvider == PaymentProviderStripe {
-			dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-			quotaToAdd = int(decimal.NewFromFloat(topUp.Money).Mul(dQuotaPerUnit).IntPart())
-		} else if topUp.PaymentProvider == PaymentProviderInfini {
+		if topUp.PaymentProvider == PaymentProviderStripe || topUp.PaymentProvider == PaymentProviderInfini {
 			quotaToAdd = int(topUp.Amount)
 		} else {
 			dAmount := decimal.NewFromInt(topUp.Amount)

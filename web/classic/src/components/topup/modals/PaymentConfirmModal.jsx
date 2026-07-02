@@ -43,6 +43,12 @@ const PaymentConfirmModal = ({
   binanceRate,
   // 系统充值比例 = operation_setting.Price（CNY/额度单位），后台可配置
   priceRatio,
+  // Stripe 手动汇率（元/美金，USD→CNY）；手动模式或实时汇率获取失败时用作到账折算汇率。非“充值价格”
+  stripeUnitPrice = 0,
+  // Stripe 是否使用实时汇率（false 时用 stripeUnitPrice 手动值）
+  stripeUseRealtimeRate = true,
+  // 后端报价时锁定并返回的到账折算汇率（元/美金）。>0 时优先使用，保证与后端到账口径一致且不跳动
+  quoteRate = 0,
 }) => {
   const hasDiscount =
     discountRate && discountRate > 0 && discountRate < 1 && amountNumber > 0;
@@ -50,18 +56,37 @@ const PaymentConfirmModal = ({
   const discountAmount = hasDiscount ? originalAmount - amountNumber : 0;
 
   const isInfini = payWay === 'infini' || (payWay && payWay.startsWith('infini:'));
+  const isStripe = payWay === 'stripe';
+  // Infini / Stripe：以外币（USD）收款，到账额度按实时汇率折算
+  const isRateDynamic = isInfini || isStripe;
   const normalizedPayWay = isInfini ? 'infini' : payWay;
   const infiniCurrency = isInfini && payWay.startsWith('infini:') ? payWay.split(':')[1] : 'USD';
-  // Binance 实时汇率
-  const effectiveRate = binanceRate > 0 ? binanceRate : 0;
+  // 动态汇率支付的收款币种：Stripe 固定 USD，Infini 取所选币种
+  const dynamicCurrency = isStripe ? 'USD' : infiniCurrency;
+  // 到账折算汇率（元/美金），与后端一致：
+  //   - Infini：始终用 Binance 实时汇率。
+  //   - Stripe：实时模式用 Binance（失败回退手动 stripeUnitPrice）；手动模式直接用 stripeUnitPrice。
+  const stripeManualRate = stripeUnitPrice > 0 ? stripeUnitPrice : 0;
+  const stripeEffectiveRate = stripeUseRealtimeRate
+    ? binanceRate > 0
+      ? binanceRate
+      : stripeManualRate
+    : stripeManualRate;
+  const fallbackRate = isStripe
+    ? stripeEffectiveRate
+    : binanceRate > 0
+      ? binanceRate
+      : 0;
+  // 优先用后端报价锁定的汇率（随支付金额一并返回），稳定且与到账口径一致
+  const effectiveRate = quoteRate > 0 ? quoteRate : fallbackRate;
   const safePrice = priceRatio > 0 ? priceRatio : 1;
   const quotaPerUnit = Number(localStorage.getItem('quota_per_unit') || 500000);
   // 实际到账按 raw quota 快照计算，再换回展示金额，和后端精度一致。
-  const expectedCreditUnits = isInfini && amountNumber > 0 && effectiveRate > 0
+  const expectedCreditUnits = isRateDynamic && amountNumber > 0 && effectiveRate > 0
     ? Math.round(amountNumber * effectiveRate * quotaPerUnit / safePrice) / quotaPerUnit
     : 0;
   // CNY 总等值
-  const cnyEquivalent = isInfini && effectiveRate > 0 && amountNumber > 0
+  const cnyEquivalent = isRateDynamic && effectiveRate > 0 && amountNumber > 0
     ? amountNumber * effectiveRate
     : 0;
   return (
@@ -88,7 +113,11 @@ const PaymentConfirmModal = ({
                 {t('充值数量')}：
               </Text>
               <Text className='text-slate-900 dark:text-slate-100'>
-                {renderQuotaWithAmount(topUpCount)}
+                {/* 动态汇率（Infini / Stripe）：此处直接展示实际到账额度（约等于），
+                    普通支付仍展示请求充值数量。 */}
+                {isRateDynamic && !amountLoading && expectedCreditUnits > 0
+                  ? `≈ ${renderQuotaWithAmount(expectedCreditUnits)}`
+                  : renderQuotaWithAmount(topUpCount)}
               </Text>
             </div>
             <div className='flex justify-between items-center'>
@@ -100,8 +129,8 @@ const PaymentConfirmModal = ({
               ) : (
                 <div className='flex items-baseline space-x-2'>
                   <Text strong className='font-bold' style={{ color: 'red' }}>
-                    {payWay && (payWay === 'infini' || payWay.startsWith('infini:'))
-                      ? `${amountNumber} ${payWay.startsWith('infini:') ? payWay.split(':')[1] : 'USD'}`
+                    {isRateDynamic
+                      ? `${amountNumber} ${dynamicCurrency}`
                       : renderAmount()}
                   </Text>
                   {hasDiscount && (
@@ -112,31 +141,13 @@ const PaymentConfirmModal = ({
                 </div>
               )}
             </div>
-            {/* Infini：到账额度（系统配置单位）+ 充值比例 + CNY 换算 */}
-            {isInfini && !amountLoading && topUpCount > 0 && (
+            {/* Infini / Stripe：充值比例 + 实时汇率（实际到账已并入上方“充值数量”行） */}
+            {isRateDynamic && !amountLoading && topUpCount > 0 && (
               <div
                 className='rounded-lg px-3 py-3 space-y-3'
                 style={{ background: 'var(--semi-color-fill-0)' }}
               >
-                {/* 行1：实际到账 ≈ paymentUSD × binanceRate / Price（浮动汇率，约等于） */}
-                <div className='flex justify-between items-center'>
-                  <Text size='small' className='text-slate-500 dark:text-slate-400'>
-                    {t('实际到账')}
-                  </Text>
-                  <Text
-                    strong
-                    style={{
-                      color: 'var(--semi-color-success)',
-                      fontSize: '18px',
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    {expectedCreditUnits > 0
-                      ? `≈ ${renderQuotaWithAmount(expectedCreditUnits)}`
-                      : '—'}
-                  </Text>
-                </div>
-                {/* 行2：充值比例 1 ¥ = X额度（1/Price，后台配置决定） */}
+                {/* 充值比例 1 ¥ = X额度（1/Price，后台配置决定） */}
                 <div className='flex justify-between items-center'>
                   <Text size='small' className='text-slate-500'>
                     {t('充值比例')}
@@ -145,14 +156,14 @@ const PaymentConfirmModal = ({
                     {`1 ¥ = ${renderQuotaWithAmount(1 / safePrice)}`}
                   </Text>
                 </div>
-                {/* 行3：汇率 1 USD ≈ ¥X（Binance 实时） */}
+                {/* 汇率 1 USD ≈ ¥X（Binance 实时） */}
                 {effectiveRate > 0 && (
                   <div className='flex justify-between items-center'>
                     <Text size='small' className='text-slate-500'>
                       {t('实时汇率')}
                     </Text>
                     <Text size='small' className='text-slate-500' strong>
-                      {`1 ${infiniCurrency} ≈ ¥${effectiveRate.toFixed(2)}`}
+                      {`1 ${dynamicCurrency} ≈ ¥${effectiveRate.toFixed(2)}`}
                     </Text>
                   </div>
                 )}

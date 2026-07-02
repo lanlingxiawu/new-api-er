@@ -158,7 +158,10 @@ func getInfiniPayMoney(amount int64, group string, unitPrice float64, currency s
 	)
 }
 
-func infiniRawQuotaFromPayMoney(payMoney decimal.Decimal, exchangeRate float64, systemPrice float64) int64 {
+// rawQuotaFromPayMoney 按下单时刻的动态汇率把实付外币金额换算为原始额度（raw quota）。
+// 公式：rawQuota = round(payMoney × exchangeRate / systemPrice × QuotaPerUnit)。
+// Infini 与 Stripe 动态汇率充值共用此函数，保证两条链路的换算精度完全一致。
+func rawQuotaFromPayMoney(payMoney decimal.Decimal, exchangeRate float64, systemPrice float64) int64 {
 	if systemPrice <= 0 {
 		systemPrice = 1.0
 	}
@@ -222,7 +225,13 @@ func RequestInfiniAmount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": formatInfiniAmount(payMoney, currency)})
+	// 同时返回本次报价锁定的到账折算汇率（元/美金），供前端展示实际到账，
+	// 避免前端用独立的实时汇率重新计算导致与后端到账口径不一致。
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "success",
+		"data":          formatInfiniAmount(payMoney, currency),
+		"exchange_rate": service.GetUSDCNYRate(),
+	})
 }
 
 // RequestInfiniPay 创建 Infini 托管结账订单，返回 checkout_url
@@ -266,7 +275,7 @@ func RequestInfiniPay(c *gin.Context) {
 	}
 
 	// Store the final raw quota snapshot, matching the admin amount adjustment precision.
-	amount := infiniRawQuotaFromPayMoney(payMoney, service.GetUSDCNYRate(), operation_setting.Price)
+	amount := rawQuotaFromPayMoney(payMoney, service.GetUSDCNYRate(), operation_setting.Price)
 
 	tradeNo := fmt.Sprintf("INFINI-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 

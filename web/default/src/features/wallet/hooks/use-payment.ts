@@ -48,6 +48,9 @@ import {
 
 export function usePayment() {
   const [amount, setAmount] = useState<number>(0)
+  // paymentRate：后端在报价时锁定的到账折算汇率（元/美金），仅动态汇率支付（Stripe/Infini）返回。
+  // 前端确认弹窗用它展示实际到账，保证与后端到账口径一致、且不随前端实时汇率异步刷新而跳动。
+  const [paymentRate, setPaymentRate] = useState<number>(0)
   const [calculating, setCalculating] = useState(false)
   const [processing, setProcessing] = useState(false)
 
@@ -78,14 +81,21 @@ export function usePayment() {
         if (isApiSuccess(response) && response.data) {
           const calculatedAmount = parseFloat(response.data)
           setAmount(calculatedAmount)
+          // 动态汇率支付会附带 exchange_rate（后端锁定的到账折算汇率）；其它支付方式无此字段。
+          const rate = Number(
+            (response as { exchange_rate?: number }).exchange_rate
+          )
+          setPaymentRate(Number.isFinite(rate) && rate > 0 ? rate : 0)
           return calculatedAmount
         }
 
         // Don't show error for calculation, just set to 0
         setAmount(0)
+        setPaymentRate(0)
         return 0
       } catch (_error) {
         setAmount(0)
+        setPaymentRate(0)
         return 0
       } finally {
         setCalculating(false)
@@ -213,6 +223,7 @@ export function usePayment() {
 
   return {
     amount,
+    paymentRate,
     calculating,
     processing,
     calculatePaymentAmount,

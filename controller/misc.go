@@ -93,9 +93,10 @@ func GetStatus(c *gin.Context) {
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
 
-		"usd_exchange_rate": operation_setting.USDExchangeRate,
-		"price":             operation_setting.Price,
-		"stripe_unit_price": setting.StripeUnitPrice,
+		"usd_exchange_rate":        operation_setting.USDExchangeRate,
+		"price":                    operation_setting.Price,
+		"stripe_unit_price":        setting.StripeUnitPrice,
+		"stripe_use_realtime_rate": setting.StripeUseRealtimeRate,
 
 		// 面板启用开关
 		"api_info_enabled":      cs.ApiInfoEnabled,

@@ -25,9 +25,9 @@ const (
 
 // 内存兜底缓存（Redis 未启用时使用）
 var (
-	memExchangeRate      float64
-	memExchangeRateTime  time.Time
-	memExchangeRateLock  sync.RWMutex
+	memExchangeRate     float64
+	memExchangeRateTime time.Time
+	memExchangeRateLock sync.RWMutex
 )
 
 type binanceP2PRequest struct {
@@ -123,14 +123,15 @@ func fetchRateFromBinance() (float64, error) {
 	return rate, nil
 }
 
-// GetUSDCNYRate 获取 USD/CNY 实时参考汇率，优先从 Redis 缓存读取（1h TTL）
-// Redis 不可用时降级到内存缓存；所有来源失败时返回兜底值
-func GetUSDCNYRate() float64 {
+// resolveUSDCNYRate 尝试从实时来源（Redis 缓存 → 内存缓存 → Binance P2P）取 USD/CNY 汇率，
+// 返回 (rate, ok)。ok=false 表示所有实时来源均不可用（未写入任何兜底值），
+// 由调用方决定兜底策略：GetUSDCNYRate 用硬编码兜底值，Stripe 用管理员配置的手动汇率。
+func resolveUSDCNYRate() (float64, bool) {
 	// 1. 尝试 Redis
 	if common.RedisEnabled {
 		if cached, err := common.RedisGet(exchangeRateCacheKey); err == nil && cached != "" {
 			if rate, err := strconv.ParseFloat(cached, 64); err == nil && rate > 0 {
-				return rate
+				return rate, true
 			}
 		}
 	}
@@ -140,15 +141,15 @@ func GetUSDCNYRate() float64 {
 	if memExchangeRate > 0 && time.Since(memExchangeRateTime) < exchangeRateCacheTTL {
 		rate := memExchangeRate
 		memExchangeRateLock.RUnlock()
-		return rate
+		return rate, true
 	}
 	memExchangeRateLock.RUnlock()
 
 	// 3. 从 Binance P2P 拉取
 	rate, err := fetchRateFromBinance()
 	if err != nil {
-		common.SysLog(fmt.Sprintf("exchange_rate: 从 Binance 获取汇率失败，使用兜底值 %.2f error=%v", exchangeRateFallback, err))
-		return exchangeRateFallback
+		common.SysLog(fmt.Sprintf("exchange_rate: 从 Binance 获取汇率失败 error=%v", err))
+		return 0, false
 	}
 
 	common.SysLog(fmt.Sprintf("exchange_rate: 从 Binance P2P 获取 USD/CNY 汇率 %.4f", rate))
@@ -167,7 +168,23 @@ func GetUSDCNYRate() float64 {
 	memExchangeRateTime = time.Now()
 	memExchangeRateLock.Unlock()
 
-	return rate
+	return rate, true
+}
+
+// GetUSDCNYRate 获取 USD/CNY 实时参考汇率，优先从 Redis 缓存读取（1h TTL）
+// Redis 不可用时降级到内存缓存；所有来源失败时返回兜底值
+func GetUSDCNYRate() float64 {
+	if rate, ok := resolveUSDCNYRate(); ok {
+		return rate
+	}
+	common.SysLog(fmt.Sprintf("exchange_rate: 实时汇率不可用，使用兜底值 %.2f", exchangeRateFallback))
+	return exchangeRateFallback
+}
+
+// GetUSDCNYRateWithOK 与 GetUSDCNYRate 相同，但额外返回是否取到实时值。
+// ok=false 表示实时来源均不可用（未套用任何兜底），供调用方自定义兜底（如 Stripe 手动汇率）。
+func GetUSDCNYRateWithOK() (float64, bool) {
+	return resolveUSDCNYRate()
 }
 
 // RefreshUSDCNYRate 强制刷新汇率缓存（可供定时任务或管理接口调用）

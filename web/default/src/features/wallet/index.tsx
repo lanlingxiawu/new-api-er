@@ -93,6 +93,7 @@ export function Wallet(props: WalletProps) {
   }, [currency?.quotaDisplayType, currency?.usdExchangeRate])
   const {
     amount: paymentAmount,
+    paymentRate,
     calculating,
     processing,
     calculatePaymentAmount,
@@ -377,6 +378,9 @@ export function Wallet(props: WalletProps) {
         usdExchangeRate={effectiveUsdExchangeRate}
         binanceRate={binanceRate}
         priceRatio={(status?.price as number) || 1}
+        quoteRate={paymentRate}
+        stripeUnitPrice={(status?.stripe_unit_price as number) || 0}
+        stripeUseRealtimeRate={status?.stripe_use_realtime_rate !== false}
       />
 
       <TransferDialog
