@@ -19,9 +19,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
-	"github.com/stripe/stripe-go/v81"
-	"github.com/stripe/stripe-go/v81/checkout/session"
-	"github.com/stripe/stripe-go/v81/webhook"
+	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v85/checkout/session"
+	"github.com/stripe/stripe-go/v85/webhook"
 	"github.com/thanhpk/randstr"
 )
 
