@@ -419,8 +419,12 @@ export type SystemTuningSettings = {
   'ledger_pipeline_setting.flush_db_timeout_sec': number
   'ledger_retry_setting.retry_flush_interval_sec': number
   'ledger_retry_setting.stat_upsert_max_retries': number
+  'ledger_retry_setting.retry_queue_max_entries': number
+  'ledger_retry_setting.allow_concurrent_flush': boolean
   'ledger_pipeline_setting.fallback_queue_capacity': number
   'ledger_pipeline_setting.shutdown_timeout_sec': number
+  'ledger_pipeline_setting.cache_ttl_secs': number[]
+  'ledger_pipeline_setting.cache_ttl_jitter_percent': number
   'payment_setting.user_export_max_rows': number
   'export_setting.user_export_enabled': boolean
   'export_setting.rate_limit_cooldown_sec': number

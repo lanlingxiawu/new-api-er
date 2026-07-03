@@ -148,6 +148,16 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings[
               'ledger_pipeline_setting.shutdown_timeout_sec'
             ],
+          'ledger_pipeline_setting.cache_ttl_secs':
+            settings['ledger_pipeline_setting.cache_ttl_secs'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.cache_ttl_secs'
+            ],
+          'ledger_pipeline_setting.cache_ttl_jitter_percent':
+            settings['ledger_pipeline_setting.cache_ttl_jitter_percent'] ??
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.cache_ttl_jitter_percent'
+            ],
           'ledger_retry_setting.retry_flush_interval_sec':
             settings['ledger_retry_setting.retry_flush_interval_sec'] ??
             systemTuningFallbackSettings[

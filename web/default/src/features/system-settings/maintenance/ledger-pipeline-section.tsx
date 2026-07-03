@@ -71,6 +71,8 @@ const schema = z.object({
     flush_db_timeout_sec: z.number().int().min(1),
     fallback_queue_capacity: z.number().int().min(1),
     shutdown_timeout_sec: z.number().int().min(1),
+    cache_ttl_secs: z.array(z.number().int().min(1)).length(5),
+    cache_ttl_jitter_percent: z.number().int().min(0).max(100),
   }),
   ledger_retry_setting: z.object({
     retry_flush_interval_sec: z.number().int().min(1),
@@ -97,6 +99,8 @@ type FlatDefaults = {
   'ledger_pipeline_setting.flush_db_timeout_sec': number
   'ledger_pipeline_setting.fallback_queue_capacity': number
   'ledger_pipeline_setting.shutdown_timeout_sec': number
+  'ledger_pipeline_setting.cache_ttl_secs': number[]
+  'ledger_pipeline_setting.cache_ttl_jitter_percent': number
   'ledger_retry_setting.retry_flush_interval_sec': number
   'ledger_retry_setting.stat_upsert_max_retries': number
   'ledger_retry_setting.retry_queue_max_entries': number
@@ -140,6 +144,9 @@ function buildFormDefaults(defaults: FlatDefaults): FormValues {
         defaults['ledger_pipeline_setting.fallback_queue_capacity'],
       shutdown_timeout_sec:
         defaults['ledger_pipeline_setting.shutdown_timeout_sec'],
+      cache_ttl_secs: defaults['ledger_pipeline_setting.cache_ttl_secs'],
+      cache_ttl_jitter_percent:
+        defaults['ledger_pipeline_setting.cache_ttl_jitter_percent'],
     },
     ledger_retry_setting: {
       retry_flush_interval_sec:
@@ -174,6 +181,8 @@ function normalizeFormValues(values: FormValues): FlatDefaults {
     'ledger_pipeline_setting.flush_db_timeout_sec': s.flush_db_timeout_sec,
     'ledger_pipeline_setting.fallback_queue_capacity': s.fallback_queue_capacity,
     'ledger_pipeline_setting.shutdown_timeout_sec': s.shutdown_timeout_sec,
+    'ledger_pipeline_setting.cache_ttl_secs': s.cache_ttl_secs,
+    'ledger_pipeline_setting.cache_ttl_jitter_percent': s.cache_ttl_jitter_percent,
     'ledger_retry_setting.retry_flush_interval_sec': r.retry_flush_interval_sec,
     'ledger_retry_setting.stat_upsert_max_retries': r.stat_upsert_max_retries,
     'ledger_retry_setting.retry_queue_max_entries': r.retry_queue_max_entries,
@@ -267,6 +276,31 @@ const numericFields: Array<{
     description:
       'Covers goroutine stop, final DB flush, and fallback drain. Must be less than the HTTP server shutdown timeout (30 s).',
     min: 1,
+  },
+]
+
+// Labels for the per-cache TTL array. Order MUST match the backend CacheIdx*
+// constants in setting/operation_setting/ledger_setting.go.
+const cacheTtlLabels: Array<{ label: string; description: string }> = [
+  {
+    label: 'Channel Cost Ratio Cache TTL',
+    description: 'Per-settlement channel cost-ratio cache (seconds). L1 memory → Redis → DB. Default 300s.',
+  },
+  {
+    label: 'Inviter Cache TTL',
+    description: 'user → inviter id cache used for commission attribution (seconds). Default 300s.',
+  },
+  {
+    label: 'Employee Profile Cache TTL',
+    description: 'user → employee profile cache used for commission attribution (seconds). Default 300s.',
+  },
+  {
+    label: 'Tier Level Cache TTL',
+    description: 'Per-employee tier-level L1 memory cache, prefetched during the settlement flush (seconds). Default 300s.',
+  },
+  {
+    label: 'Tier Definitions Cache TTL',
+    description: 'Commission tier-definitions cache (seconds). Default 300s.',
   },
 ]
 
@@ -453,7 +487,14 @@ export function LedgerPipelineSection({
     const normalized = normalizeFormValues(values)
     const changedKeys = (
       Object.keys(normalized) as Array<keyof FlatDefaults>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => {
+      const next = normalized[key]
+      const prev = baselineRef.current[key]
+      if (Array.isArray(next) || Array.isArray(prev)) {
+        return JSON.stringify(next) !== JSON.stringify(prev)
+      }
+      return next !== prev
+    })
 
     if (changedKeys.length === 0) {
       toast.info(t('No changes to save'))
@@ -461,7 +502,12 @@ export function LedgerPipelineSection({
     }
 
     for (const key of changedKeys) {
-      await updateOption.mutateAsync({ key, value: normalized[key] })
+      const value = normalized[key]
+      // Array-valued options (e.g. cache TTLs) are stored as a JSON string.
+      await updateOption.mutateAsync({
+        key,
+        value: Array.isArray(value) ? JSON.stringify(value) : value,
+      })
     }
 
     baselineRef.current = normalized
@@ -653,6 +699,67 @@ export function LedgerPipelineSection({
               />
             )
           })}
+
+          <Separator />
+          <div className='text-sm font-medium text-foreground'>
+            {t('Hot-path Cache TTLs')}
+          </div>
+          <FormDescription>
+            {t(
+              'Expiry (seconds) of the caches on the settlement/flush hot path, one per cache. Give them different values so they do not all expire on the same tick — the synchronized expiry causes the periodic flush-latency spike.'
+            )}
+          </FormDescription>
+          {cacheTtlLabels.map((item, idx) => (
+            <FormField
+              key={idx}
+              control={form.control}
+              name={`ledger_pipeline_setting.cache_ttl_secs.${idx}`}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t(item.label)}</FormLabel>
+                  <FormControl>
+                    <Input
+                      className={numberInputNoSpinnerClassName}
+                      type='number'
+                      inputMode='numeric'
+                      min={1}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                    />
+                  </FormControl>
+                  <FormDescription>{t(item.description)}</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ))}
+
+          <FormField
+            control={form.control}
+            name='ledger_pipeline_setting.cache_ttl_jitter_percent'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Cache TTL Jitter (%)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    className={numberInputNoSpinnerClassName}
+                    type='number'
+                    inputMode='numeric'
+                    min={0}
+                    max={100}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Random ±% spread applied to each cache entry’s TTL so entries expire staggered instead of in one synchronized wave. 0 disables jitter. Default 20%.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
           <Separator />
           <div className='text-sm font-medium text-foreground'>{t('Retry Queue')}</div>

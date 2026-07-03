@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -44,7 +45,7 @@ func setTierLevelToMem(level *EmployeeTierLevel) {
 	}
 	tierLevelMemCache.Store(level.UserId, tierLevelMemEntry{
 		level:     *level,
-		expiresAt: time.Now().Add(tierLevelMemCacheTTL),
+		expiresAt: time.Now().Add(operation_setting.GetLedgerPipelineSetting().GetJitteredCacheTTL(operation_setting.CacheIdxTierLevel)),
 	})
 }
 
@@ -221,10 +222,9 @@ type EmployeeTierLog struct {
 // ============================================================================
 
 var (
-	tierCache     []*EmployeeCommissionTier
-	tierCacheLock sync.RWMutex
-	tierCacheTime time.Time
-	tierCacheTTL  = 5 * time.Minute
+	tierCache          []*EmployeeCommissionTier
+	tierCacheLock      sync.RWMutex
+	tierCacheExpiresAt time.Time
 )
 
 const tierCacheRedisKey = "employee_commission_tiers"
@@ -236,14 +236,14 @@ func InvalidateTierCache() {
 	}
 	tierCacheLock.Lock()
 	tierCache = nil
-	tierCacheTime = time.Time{}
+	tierCacheExpiresAt = time.Time{}
 	tierCacheLock.Unlock()
 }
 
 // GetAllTiersCached 返回按 tier_group ASC, level ASC 排序的全量等级列表（带缓存）。
 func GetAllTiersCached() []*EmployeeCommissionTier {
 	tierCacheLock.RLock()
-	if !tierCacheTime.IsZero() && time.Since(tierCacheTime) < tierCacheTTL && tierCache != nil {
+	if tierCache != nil && time.Now().Before(tierCacheExpiresAt) {
 		cached := tierCache
 		tierCacheLock.RUnlock()
 		return cached
@@ -254,7 +254,7 @@ func GetAllTiersCached() []*EmployeeCommissionTier {
 
 	tierCacheLock.Lock()
 	tierCache = tiers
-	tierCacheTime = time.Now()
+	tierCacheExpiresAt = time.Now().Add(operation_setting.GetLedgerPipelineSetting().GetJitteredCacheTTL(operation_setting.CacheIdxTierDefinitions))
 	tierCacheLock.Unlock()
 
 	return tiers
@@ -774,6 +774,49 @@ func GetTierLevelsByUserIds(userIds []int) (map[int]*EmployeeTierLevel, error) {
 		result[l.UserId] = l
 	}
 	return result, nil
+}
+
+// GetTierLevelsByUserIdsCached batch-loads tier levels for the given users: L1 memory
+// hits are served first, the remaining users are loaded in ONE `WHERE user_id IN (...)`
+// query, and the L1 cache is warmed. Unlike GetOrCreateTierLevel it does NOT lazily
+// create missing rows — a missing level yields nil, which effectiveResetStartedAt
+// treats the same as a level with BaselineResetAt=0 (the row is created later by
+// tryAutoUpgradeTierBatch). Used by the settlement flush prefetch to collapse N serial
+// mem/Redis/DB round-trips into a single batched DB query.
+func GetTierLevelsByUserIdsCached(userIds []int) map[int]*EmployeeTierLevel {
+	result := make(map[int]*EmployeeTierLevel, len(userIds))
+	seen := make(map[int]struct{}, len(userIds))
+	miss := make([]int, 0, len(userIds))
+	for _, uid := range userIds {
+		if uid <= 0 {
+			continue
+		}
+		if _, ok := seen[uid]; ok {
+			continue
+		}
+		seen[uid] = struct{}{}
+		if lvl := getTierLevelFromMem(uid); lvl != nil {
+			result[uid] = lvl
+			continue
+		}
+		miss = append(miss, uid)
+	}
+	if len(miss) == 0 {
+		return result
+	}
+	levelMap, err := GetTierLevelsByUserIds(miss)
+	if err != nil {
+		common.SysError("GetTierLevelsByUserIdsCached: batch load failed: " + err.Error())
+		return result
+	}
+	for _, uid := range miss {
+		lvl := levelMap[uid]
+		result[uid] = lvl // may be nil when the user has no tier-level row yet
+		if lvl != nil {
+			setTierLevelToMem(lvl)
+		}
+	}
+	return result
 }
 
 // ============================================================================

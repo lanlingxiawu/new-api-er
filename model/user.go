@@ -997,12 +997,11 @@ func GetUserUsedQuota(id int) (quota int, err error) {
 var (
 	inviterIdCache     = make(map[int]*inviterCacheEntry)
 	inviterIdCacheLock sync.RWMutex
-	inviterIdCacheTTL  = 5 * time.Minute
 )
 
 type inviterCacheEntry struct {
 	inviterId int
-	cachedAt  time.Time
+	expiresAt time.Time
 }
 
 func GetUserInviterIdWithError(userId int) (int, error) {
@@ -1011,7 +1010,7 @@ func GetUserInviterIdWithError(userId int) (int, error) {
 
 func GetUserInviterIdWithContext(ctx context.Context, userId int) (int, error) {
 	inviterIdCacheLock.RLock()
-	if entry, ok := inviterIdCache[userId]; ok && time.Since(entry.cachedAt) < inviterIdCacheTTL {
+	if entry, ok := inviterIdCache[userId]; ok && time.Now().Before(entry.expiresAt) {
 		inviterIdCacheLock.RUnlock()
 		return entry.inviterId, nil
 	}
@@ -1021,7 +1020,7 @@ func GetUserInviterIdWithContext(ctx context.Context, userId int) (int, error) {
 	err := DB.WithContext(ctx).Model(&User{}).Where("id = ?", userId).Select("inviter_id").Scan(&inviterId).Error
 	if err == nil {
 		inviterIdCacheLock.Lock()
-		inviterIdCache[userId] = &inviterCacheEntry{inviterId: inviterId, cachedAt: time.Now()}
+		inviterIdCache[userId] = &inviterCacheEntry{inviterId: inviterId, expiresAt: time.Now().Add(operation_setting.GetLedgerPipelineSetting().GetJitteredCacheTTL(operation_setting.CacheIdxInviterId))}
 		inviterIdCacheLock.Unlock()
 	}
 	return inviterId, err

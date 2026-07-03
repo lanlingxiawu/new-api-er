@@ -40,6 +40,38 @@ const { Text } = Typography;
 
 const defaultInputs = ledgerPipelineDefaults;
 
+// 结算/刷盘热路径缓存 TTL（数组，顺序须与后端 CacheIdx* 常量一致）。
+const CACHE_TTL_KEY = 'ledger_pipeline_setting.cache_ttl_secs';
+const cacheTtlLabels = [
+  '渠道成本系数缓存',
+  '邀请人缓存',
+  '员工档案缓存',
+  '员工等级缓存',
+  '等级定义缓存',
+];
+const cacheTtlExtra = [
+  '每笔结算查询的渠道成本系数缓存（L1 内存 → Redis → DB）。默认 300 秒。',
+  '用于提成归属的 用户→邀请人 缓存。默认 300 秒。',
+  '用于提成归属的 用户→员工档案 缓存。默认 300 秒。',
+  '按员工的等级 L1 内存缓存，结算刷盘时批量预取。默认 300 秒。',
+  '提成等级定义缓存。默认 300 秒。',
+];
+
+function parseCacheTtl(raw) {
+  let arr = raw;
+  if (typeof raw === 'string') {
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      arr = null;
+    }
+  }
+  if (Array.isArray(arr) && arr.length === 5) {
+    return arr.map((x) => Number(x) || 300);
+  }
+  return [300, 300, 300, 300, 300];
+}
+
 const numericFields = [
   // ── 吞吐量控制 ──────────────────────────────────────────
   {
@@ -165,7 +197,10 @@ export default function SettingsLedgerPipeline(props) {
   }
 
   function onSubmit() {
-    const updateArray = compareObjects(inputs, inputsRow);
+    // 合成键（cache_ttl_secs__N）仅用于表单显示，不落库；真实值由 cache_ttl_secs 承载。
+    const updateArray = compareObjects(inputs, inputsRow).filter(
+      (item) => !item.key.includes('cache_ttl_secs__'),
+    );
     if (!updateArray.length) {
       return showWarning(t('你似乎并没有修改什么'));
     }
@@ -211,6 +246,11 @@ export default function SettingsLedgerPipeline(props) {
           currentInputs[key] = props.options[key];
         }
       }
+    }
+    // 把缓存 TTL 数组展开成 5 个合成键，供 Form.InputNumber 表单绑定显示（与其他字段等宽）。
+    const ttlArr = parseCacheTtl(currentInputs[CACHE_TTL_KEY]);
+    for (let i = 0; i < 5; i++) {
+      currentInputs[`ledger_pipeline_setting.cache_ttl_secs__${i}`] = ttlArr[i];
     }
     setInputs(currentInputs);
     setInputsRow(structuredClone(currentInputs));
@@ -275,6 +315,8 @@ export default function SettingsLedgerPipeline(props) {
   const recommendedPairedFlushMaxPerCycle =
     flushIntervalSec > 0 ? Math.ceil((targetRpm / 60) * flushIntervalSec) : 0;
   const recommendedRetryIntervalSec = Math.max(1, Math.floor(flushIntervalSec / 4));
+
+  const cacheTtlJitter = Number(inputs['ledger_pipeline_setting.cache_ttl_jitter_percent']) || 0;
 
   // Dynamic extra text per field, derived from backend execution logic
   const dynamicExtraText = {
@@ -497,6 +539,63 @@ export default function SettingsLedgerPipeline(props) {
                 />
               </Col>
             ))}
+          </Row>
+
+          <div style={{
+            borderTop: '1px solid var(--semi-color-border)',
+            margin: '16px 0 12px',
+            paddingTop: 16,
+          }}>
+            <Text style={{ fontWeight: 600, fontSize: 14 }}>{t('热路径缓存过期时间')}</Text>
+            <Text type='tertiary' size='small' style={{ display: 'block', marginTop: 2, marginBottom: 12 }}>
+              {t('结算/刷盘热路径上各缓存的过期时间，每项对应一个缓存。设成不同的值以避免同时过期——同步过期正是周期性刷盘耗时尖峰的成因。')}
+            </Text>
+          </div>
+          <Row gutter={16}>
+            {cacheTtlLabels.map((lbl, idx) => (
+              <Col xs={24} sm={12} md={12} lg={12} xl={12} key={idx}>
+                <Form.InputNumber
+                  hideButtons
+                  field={`ledger_pipeline_setting.cache_ttl_secs__${idx}`}
+                  label={t(lbl)}
+                  min={1}
+                  step={1}
+                  suffix={t('秒')}
+                  extraText={t(cacheTtlExtra[idx])}
+                  onChange={(value) => {
+                    const v = parseInt(value) || 1;
+                    setInputs((origin) => {
+                      const next = {
+                        ...origin,
+                        [`ledger_pipeline_setting.cache_ttl_secs__${idx}`]: v,
+                      };
+                      const arr = [0, 1, 2, 3, 4].map(
+                        (i) =>
+                          Number(next[`ledger_pipeline_setting.cache_ttl_secs__${i}`]) || 300,
+                      );
+                      next[CACHE_TTL_KEY] = JSON.stringify(arr);
+                      return next;
+                    });
+                  }}
+                />
+              </Col>
+            ))}
+            <Col xs={24} sm={12} md={12} lg={12} xl={12}>
+              <Form.InputNumber
+                hideButtons
+                field={'ledger_pipeline_setting.cache_ttl_jitter_percent'}
+                label={t('缓存过期抖动')}
+                min={0}
+                max={100}
+                step={1}
+                suffix={'%'}
+                extraText={t('为每个缓存条目的过期时间加上随机 ±%，使其错峰过期而非同时失效；0 关闭。默认 20%。')}
+                value={cacheTtlJitter}
+                onChange={(value) => {
+                  updateInput('ledger_pipeline_setting.cache_ttl_jitter_percent', parseInt(value) || 0);
+                }}
+              />
+            </Col>
           </Row>
 
           <div style={{

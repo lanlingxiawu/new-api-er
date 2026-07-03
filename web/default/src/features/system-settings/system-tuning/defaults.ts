@@ -26,6 +26,8 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'ledger_retry_setting.allow_concurrent_flush': false,
   'ledger_pipeline_setting.fallback_queue_capacity': 10000,
   'ledger_pipeline_setting.shutdown_timeout_sec': 25,
+  'ledger_pipeline_setting.cache_ttl_secs': [300, 300, 300, 300, 300],
+  'ledger_pipeline_setting.cache_ttl_jitter_percent': 20,
   'payment_setting.user_export_max_rows': 10000,
   'export_setting.user_export_enabled': true,
   'export_setting.rate_limit_cooldown_sec': 600,

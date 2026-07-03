@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -79,41 +80,45 @@ type EmployeeCommissionLog struct {
 // 缓存：渠道成本系数（避免每次结算都查数据库）
 // ============================================================================
 
-// 渠道成本系数缓存策略：
-//   - 单机部署：使用进程内 map 缓存（5 分钟 TTL）。
-//   - 集群部署（启用 Redis）：以 Redis 为共享缓存，写操作通过 RedisDel 全局失效，
-//     保证各实例读到一致的成本系数；本地 map 缓存被跳过以避免实例间不一致。
+// 渠道成本系数缓存：L1 进程内按 channelId 缓存（带抖动 TTL）→ 集群下 Redis 共享 → DB。
+//   - L1 命中为纳秒级 map 读，避免每次结算都打 Redis/DB；仅 L1 过期时才回源。
+//   - TTL 与抖动来自 ledger_pipeline_setting，写操作通过 RedisDel + L1 Delete 精确失效。
 const channelCostDefaultRatio = 1.0
 
-var (
-	channelCostCache     = make(map[int]float64)
-	channelCostCacheLock sync.RWMutex
-	channelCostCacheTime time.Time
-	channelCostCacheTTL  = 5 * time.Minute
-)
+type channelCostMemEntry struct {
+	ratio     float64
+	expiresAt time.Time
+}
+
+var channelCostMem sync.Map // channelId -> channelCostMemEntry
+
+// channelCostSF coalesces concurrent cold misses on the same channel into one L2/DB
+// load, so a burst of settlements right after the L1/Redis TTL expires does not stampede.
+var channelCostSF singleflight.Group
 
 func channelCostRedisKey(channelId int) string {
 	return "channel_cost_ratio:" + strconv.Itoa(channelId)
 }
 
-// ResetChannelCostCache 清空渠道成本系数内存缓存（测试专用）。
-func ResetChannelCostCache() {
-	channelCostCacheLock.Lock()
-	channelCostCache = make(map[int]float64)
-	channelCostCacheTime = time.Time{}
-	channelCostCacheLock.Unlock()
+func channelCostTTL() time.Duration {
+	return operation_setting.GetLedgerPipelineSetting().GetJitteredCacheTTL(operation_setting.CacheIdxChannelCostRatio)
 }
 
-// invalidateChannelCostCache 清空成本系数缓存。
-// 集群下删除对应 Redis 键以触发全局失效；同时清空本地 map 兜底。
+// ResetChannelCostCache 清空渠道成本系数 L1 内存缓存（测试专用）。
+func ResetChannelCostCache() {
+	channelCostMem.Range(func(k, _ any) bool {
+		channelCostMem.Delete(k)
+		return true
+	})
+}
+
+// invalidateChannelCostCache 失效指定渠道的成本系数缓存。
+// 集群下删除对应 Redis 键触发全局失效；同时删除 L1 内存条目。
 func invalidateChannelCostCache(channelId int) {
 	if common.RedisEnabled {
 		_ = common.RedisDelKey(channelCostRedisKey(channelId))
 	}
-	channelCostCacheLock.Lock()
-	channelCostCache = make(map[int]float64)
-	channelCostCacheTime = time.Time{}
-	channelCostCacheLock.Unlock()
+	channelCostMem.Delete(channelId)
 }
 
 // loadChannelCostRatioFromDB 从数据库读取成本系数，未配置返回默认值 1.0。
@@ -126,36 +131,44 @@ func loadChannelCostRatioFromDB(channelId int) float64 {
 }
 
 // GetChannelCostRatio 返回渠道成本系数，未配置时返回 1.0（标准成本）。
+// L1 内存 → (集群)Redis → DB；每层写入用带抖动的 TTL，避免缓存同时过期踩踏；
+// L2/DB 回源经 single-flight 合并，过期瞬间并发结算只打一次库。
 func GetChannelCostRatio(channelId int) float64 {
-	if common.RedisEnabled {
-		key := channelCostRedisKey(channelId)
-		if val, err := common.RedisGet(key); err == nil {
-			if ratio, perr := strconv.ParseFloat(val, 64); perr == nil {
-				return ratio
+	if v, ok := channelCostMem.Load(channelId); ok {
+		e := v.(channelCostMemEntry)
+		if time.Now().Before(e.expiresAt) {
+			return e.ratio
+		}
+	}
+	v, _, _ := channelCostSF.Do(strconv.Itoa(channelId), func() (interface{}, error) {
+		// 再查一次 L1：可能已被并发的同 key 请求填充。
+		if v, ok := channelCostMem.Load(channelId); ok {
+			e := v.(channelCostMemEntry)
+			if time.Now().Before(e.expiresAt) {
+				return e.ratio, nil
 			}
 		}
-		ratio := loadChannelCostRatioFromDB(channelId)
-		_ = common.RedisSet(key, strconv.FormatFloat(ratio, 'f', -1, 64), channelCostCacheTTL)
-		return ratio
-	}
-
-	channelCostCacheLock.RLock()
-	if !channelCostCacheTime.IsZero() && time.Since(channelCostCacheTime) < channelCostCacheTTL {
-		if ratio, ok := channelCostCache[channelId]; ok {
-			channelCostCacheLock.RUnlock()
-			return ratio
+		var ratio float64
+		if common.RedisEnabled {
+			key := channelCostRedisKey(channelId)
+			if val, err := common.RedisGet(key); err == nil {
+				if r, perr := strconv.ParseFloat(val, 64); perr == nil {
+					ratio = r
+				} else {
+					ratio = loadChannelCostRatioFromDB(channelId)
+					_ = common.RedisSet(key, strconv.FormatFloat(ratio, 'f', -1, 64), channelCostTTL())
+				}
+			} else {
+				ratio = loadChannelCostRatioFromDB(channelId)
+				_ = common.RedisSet(key, strconv.FormatFloat(ratio, 'f', -1, 64), channelCostTTL())
+			}
+		} else {
+			ratio = loadChannelCostRatioFromDB(channelId)
 		}
-	}
-	channelCostCacheLock.RUnlock()
-
-	ratio := loadChannelCostRatioFromDB(channelId)
-
-	channelCostCacheLock.Lock()
-	channelCostCache[channelId] = ratio
-	channelCostCacheTime = time.Now()
-	channelCostCacheLock.Unlock()
-
-	return ratio
+		channelCostMem.Store(channelId, channelCostMemEntry{ratio: ratio, expiresAt: time.Now().Add(channelCostTTL())})
+		return ratio, nil
+	})
+	return v.(float64)
 }
 
 // ============================================================================
@@ -178,12 +191,11 @@ func GetEmployeeById(id int) (*EmployeeProfile, error) {
 var (
 	employeeByUserIdCache     = make(map[int]*employeeCacheEntry)
 	employeeByUserIdCacheLock sync.RWMutex
-	employeeCacheTTL          = 5 * time.Minute
 )
 
 type employeeCacheEntry struct {
-	profile  *EmployeeProfile // nil 表示非员工
-	cachedAt time.Time
+	profile   *EmployeeProfile // nil 表示非员工
+	expiresAt time.Time
 }
 
 // GetEmployeeByUserId 根据 user_id 查询启用的员工档案，未找到返回 nil。
@@ -194,7 +206,7 @@ func GetEmployeeByUserId(userId int) *EmployeeProfile {
 
 func GetEmployeeByUserIdWithContext(ctx context.Context, userId int) (*EmployeeProfile, error) {
 	employeeByUserIdCacheLock.RLock()
-	if entry, ok := employeeByUserIdCache[userId]; ok && time.Since(entry.cachedAt) < employeeCacheTTL {
+	if entry, ok := employeeByUserIdCache[userId]; ok && time.Now().Before(entry.expiresAt) {
 		employeeByUserIdCacheLock.RUnlock()
 		return entry.profile, nil
 	}
@@ -210,7 +222,7 @@ func GetEmployeeByUserIdWithContext(ctx context.Context, userId int) (*EmployeeP
 	}
 
 	employeeByUserIdCacheLock.Lock()
-	employeeByUserIdCache[userId] = &employeeCacheEntry{profile: profile, cachedAt: time.Now()}
+	employeeByUserIdCache[userId] = &employeeCacheEntry{profile: profile, expiresAt: time.Now().Add(operation_setting.GetLedgerPipelineSetting().GetJitteredCacheTTL(operation_setting.CacheIdxEmployeeProfile))}
 	employeeByUserIdCacheLock.Unlock()
 
 	return profile, nil

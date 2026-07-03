@@ -522,6 +522,79 @@ func upsertPlatformDailyStatTx(tx *gorm.DB, statDate int64, channelId int, chann
 	}).Create(&row).Error
 }
 
+// existingCostLogIDsTx returns the set of non-nil log_ids in costs that already exist
+// in consumption_cost, evaluated inside tx. Call it BEFORE inserting the batch so the
+// platform daily-stat aggregate can skip rows that ON CONFLICT(log_id) DO NOTHING will
+// not actually insert — this is what makes the aggregate idempotent under duplicate /
+// re-flushed records. Rows with nil/<=0 log_id have no dedup key and are treated as
+// always-new (they are also re-inserted as fresh detail rows, so both tables move
+// together and stay consistent).
+func existingCostLogIDsTx(tx *gorm.DB, costs []*ConsumptionCost) (map[int]struct{}, error) {
+	ids := make([]int, 0, len(costs))
+	for _, c := range costs {
+		if c != nil && c.LogId != nil && *c.LogId > 0 {
+			ids = append(ids, *c.LogId)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var found []int
+	if err := tx.Model(&ConsumptionCost{}).Where("log_id IN ?", ids).Pluck("log_id", &found).Error; err != nil {
+		return nil, err
+	}
+	existing := make(map[int]struct{}, len(found))
+	for _, id := range found {
+		existing[id] = struct{}{}
+	}
+	return existing, nil
+}
+
+// applyPlatformDailyStatTx aggregates the per-(stat_date, channel_id) platform daily
+// delta over the rows in costs that were NOT already present (per existing, captured
+// before the insert) and upserts them inside tx. Running it in the SAME transaction as
+// the consumption_cost insert keeps platform_channel_daily_stats exactly in step with
+// the detail table: only genuinely-inserted rows are counted, and a rollback drops the
+// detail rows and their aggregate together. Replaces the old async BufferPlatformDailyStat
+// path, which could commit the detail row but lose its delta on crash / upsert-drop.
+func applyPlatformDailyStatTx(tx *gorm.DB, costs []*ConsumptionCost, existing map[int]struct{}) error {
+	deltas := make(map[string]*platformStatDelta)
+	for _, c := range costs {
+		if c == nil {
+			continue
+		}
+		if c.LogId != nil && *c.LogId > 0 {
+			if _, dup := existing[*c.LogId]; dup {
+				continue
+			}
+		}
+		statDate := localDayStart(c.CreatedAt)
+		key := memPlatformKey(statDate, c.ChannelId)
+		d := deltas[key]
+		if d == nil {
+			d = &platformStatDelta{StatDate: statDate, ChannelId: c.ChannelId}
+			deltas[key] = d
+		}
+		d.RevenueQuota += c.RevenueQuota
+		d.CostQuota += c.CostQuota
+		d.RecordCount++
+		d.CostRatioSum += c.CostRatio
+		if d.ChannelName == "" {
+			d.ChannelName = c.ChannelName
+		}
+		if c.CreatedAt > d.LastCreatedAt {
+			d.LastCreatedAt = c.CreatedAt
+		}
+	}
+	for _, d := range deltas {
+		if err := upsertPlatformDailyStatTx(tx, d.StatDate, d.ChannelId, d.ChannelName, d.RevenueQuota, d.CostQuota, d.RecordCount, d.CostRatioSum, d.LastCreatedAt); err != nil {
+			return err
+		}
+		ensureDailyCoverage(d.StatDate)
+	}
+	return nil
+}
+
 func upsertCommissionDailyStat(statDate int64, employeeUserId int, revenueQuota, costQuota, profitQuota, commissionQuota, recordCount int64, lastCreatedAt int64) bool {
 	db, cancel := flushDBWithTimeout()
 	defer cancel()
@@ -913,13 +986,25 @@ func flushConsumptionCostLedger() {
 			costBatch = append(costBatch, item.Cost)
 		}
 		db, cancel := flushDBWithTimeout()
-		err := db.Select(
-			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).CreateInBatches(costBatch, innerBatch).Error
+		// 明细行插入与平台日统计增量放进同一事务：预探已存在的 log_id，只对真正新插入的行
+		// 聚合日统计（ON CONFLICT 跳过的重复行不计），失败整批回滚并整体 requeue。
+		// 这样 consumption_cost 与 platform_channel_daily_stats 永远同增同回滚，不会只写一半。
+		err := db.Transaction(func(tx *gorm.DB) error {
+			existing, err := existingCostLogIDsTx(tx, costBatch)
+			if err != nil {
+				return err
+			}
+			if err := tx.Select(
+				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+			).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "log_id"}},
+				DoNothing: true,
+			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+				return err
+			}
+			return applyPlatformDailyStatTx(tx, costBatch, existing)
+		})
 		cancel()
 		if err != nil {
 			common.SysError(fmt.Sprintf("flushConsumptionCostLedger: batch insert error (batch %d-%d): %s", i, end, err.Error()))
@@ -928,13 +1013,6 @@ func flushConsumptionCostLedger() {
 			requeueCostLedger(buf[i:])
 			costLedgerFlushState.onFailure(time.Now())
 			return
-		}
-		// 入库成功后再聚合平台日统计（CreateInBatches 默认整批包在单事务里，失败已整体
-		// 回滚，故这里只会聚合确实落库的记录），与成对路径一致，避免超前计数。
-		for _, item := range batchItems {
-			if item.Cost != nil {
-				BufferPlatformDailyStat(item.Cost)
-			}
 		}
 	}
 	costLedgerFlushState.onSuccess()
@@ -1056,6 +1134,10 @@ func flushCostAndCommissionLedger() {
 		// 重复行不会落库，重试重复入库也无害。
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
+			existing, err := existingCostLogIDsTx(tx, costBatch)
+			if err != nil {
+				return err
+			}
 			if err := tx.Select(
 				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
 				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
@@ -1075,7 +1157,8 @@ func flushCostAndCommissionLedger() {
 			}).CreateInBatches(commBatch, innerBatch).Error; err != nil {
 				return err
 			}
-			return nil
+			// 平台日统计并入同一事务，只聚合本批真正新插入的成本行（幂等），与明细同增同回滚。
+			return applyPlatformDailyStatTx(tx, costBatch, existing)
 		})
 		cancel()
 		if err != nil {
@@ -1090,25 +1173,18 @@ func flushCostAndCommissionLedger() {
 		// 同一 log_id 全局只会被一个进程入队一次，故此处对本批全部聚合即可，无需再判重。
 		// 入库失败时上面已 requeue + return，不会执行到这里，故聚合只发生在成功提交之后。
 
-		// 预取本批次所有唯一员工的 tier level，避免逐条查 Redis/DB（瓶颈：N 条记录 × 1 次 Redis 查询）。
-		tierCache := make(map[int]*EmployeeTierLevel, len(pairs))
+		// 批量预取本批次员工的 tier level：L1 内存命中优先，未命中的用一次
+		// `WHERE user_id IN (...)` 批量查询，取代旧的逐员工串行 Redis/DB 往返。
+		empIds := make([]int, 0, len(pairs))
 		for _, pair := range pairs {
 			if pair.Commission != nil && pair.Commission.EmployeeUserId > 0 {
-				tierCache[pair.Commission.EmployeeUserId] = nil
+				empIds = append(empIds, pair.Commission.EmployeeUserId)
 			}
 		}
-		for uid := range tierCache {
-			level, err := GetOrCreateTierLevel(uid, true)
-			if err != nil {
-				common.SysError(fmt.Sprintf("flushCostAndCommissionLedger: get tier level for user %d failed: %s", uid, err.Error()))
-			}
-			tierCache[uid] = level
-		}
+		tierCache := GetTierLevelsByUserIdsCached(empIds)
 
+		// 平台日统计已在上面的事务内落库；此处只处理提成侧（保持原有异步聚合）。
 		for _, pair := range pairs {
-			if pair.Cost != nil {
-				BufferPlatformDailyStat(pair.Cost)
-			}
 			if pair.Commission != nil {
 				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
 			}
@@ -1151,13 +1227,22 @@ func flushCostRetryQueue() {
 			costBatch = append(costBatch, item.Cost)
 		}
 		db, cancel := flushDBWithTimeout()
-		err := db.Select(
-			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).CreateInBatches(costBatch, innerBatch).Error
+		err := db.Transaction(func(tx *gorm.DB) error {
+			existing, err := existingCostLogIDsTx(tx, costBatch)
+			if err != nil {
+				return err
+			}
+			if err := tx.Select(
+				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+			).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "log_id"}},
+				DoNothing: true,
+			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+				return err
+			}
+			return applyPlatformDailyStatTx(tx, costBatch, existing)
+		})
 		cancel()
 		if err != nil {
 			common.SysError(fmt.Sprintf("flushCostRetryQueue: batch insert error (batch %d-%d): %s", i, end, err.Error()))
@@ -1166,11 +1251,6 @@ func flushCostRetryQueue() {
 			costRetryFlushState.onFailure(time.Now())
 			retryQueueMu.Unlock()
 			return
-		}
-		for _, item := range batchItems {
-			if item.Cost != nil {
-				BufferPlatformDailyStat(item.Cost)
-			}
 		}
 	}
 	retryQueueMu.Lock()
@@ -1213,6 +1293,10 @@ func flushPairRetryQueue() {
 		}
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
+			existing, err := existingCostLogIDsTx(tx, costBatch)
+			if err != nil {
+				return err
+			}
 			if err := tx.Select(
 				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
 				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
@@ -1234,7 +1318,7 @@ func flushPairRetryQueue() {
 					return err
 				}
 			}
-			return nil
+			return applyPlatformDailyStatTx(tx, costBatch, existing)
 		})
 		cancel()
 		if err != nil {
@@ -1245,12 +1329,18 @@ func flushPairRetryQueue() {
 			retryQueueMu.Unlock()
 			return
 		}
+		// 平台日统计已在上面的事务内落库；此处只处理提成侧（保持原有异步聚合）。
+		// 批量预取 tier level，取代旧的逐条 BufferCommissionDailyStat（每条各查一次）。
+		empIds := make([]int, 0, len(pairs))
 		for _, pair := range pairs {
-			if pair.Cost != nil {
-				BufferPlatformDailyStat(pair.Cost)
+			if pair.Commission != nil && pair.Commission.EmployeeUserId > 0 {
+				empIds = append(empIds, pair.Commission.EmployeeUserId)
 			}
+		}
+		tierCache := GetTierLevelsByUserIdsCached(empIds)
+		for _, pair := range pairs {
 			if pair.Commission != nil {
-				BufferCommissionDailyStat(pair.Commission)
+				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
 			}
 			aggregated++
 		}

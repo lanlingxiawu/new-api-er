@@ -1,6 +1,7 @@
 package operation_setting
 
 import (
+	"math/rand"
 	"time"
 
 	"github.com/QuantumNous/new-api/setting/config"
@@ -61,6 +62,15 @@ type LedgerPipelineSetting struct {
 	// shutdown timeout (default 30 s) to ensure the DB flush completes before
 	// the process exits.  <=0 falls back to DefaultLedgerShutdownTimeoutSec.
 	ShutdownTimeoutSec int `json:"shutdown_timeout_sec"`
+	// CacheTTLSecs is the per-cache expiry (seconds) for the hot settlement/flush caches,
+	// as an array indexed by CacheIdx* (channel-cost, inviter, employee, tier-level,
+	// tier-definitions). A missing/<=0 element falls back to DefaultLedgerCacheTTLSec.
+	// Tuning these de-syncs the caches so they don't all expire on the same tick.
+	CacheTTLSecs []int `json:"cache_ttl_secs"`
+	// CacheTTLJitterPercent adds ±p% random spread to each cached entry's TTL so entries
+	// (and the different caches) expire staggered instead of in one synchronized wave.
+	// Range 0..100; out-of-range falls back to DefaultLedgerCacheTTLJitterPercent.
+	CacheTTLJitterPercent int `json:"cache_ttl_jitter_percent"`
 }
 
 // Default values for the ledger pipeline. The getters below fall back to these on a
@@ -82,6 +92,22 @@ const (
 	DefaultLedgerFallbackQueueCapacity      = 10000
 	DefaultLedgerShutdownTimeoutSec         = 25
 	DefaultLedgerRetryQueueMaxEntries       = 50000
+)
+
+// Cache indices into LedgerPipelineSetting.CacheTTLSecs — one slot per hot settlement/
+// flush cache. Keep in sync with the frontend labels and the model cache call sites.
+const (
+	CacheIdxChannelCostRatio = iota // channel cost ratio (GetChannelCostRatio)
+	CacheIdxInviterId               // user → inviter id (GetUserInviterId)
+	CacheIdxEmployeeProfile         // user → employee profile (GetEmployeeByUserId)
+	CacheIdxTierLevel               // user → tier level L1 mem (GetOrCreateTierLevel)
+	CacheIdxTierDefinitions         // tier definitions (GetAllTiersCached)
+	LedgerCacheTTLCount
+)
+
+const (
+	DefaultLedgerCacheTTLSec           = 300 // 5 min, matches the previous hardcoded TTLs
+	DefaultLedgerCacheTTLJitterPercent = 20
 )
 
 // GetDedupRedisTTLSec returns the Redis dedup key TTL, falling back to default on non-positive.
@@ -180,6 +206,40 @@ func (s *LedgerPipelineSetting) GetShutdownTimeout() time.Duration {
 	return time.Duration(s.ShutdownTimeoutSec) * time.Second
 }
 
+// GetCacheTTLSec returns the base TTL (seconds) for cache idx, falling back to
+// DefaultLedgerCacheTTLSec when the array is short or the element is non-positive.
+func (s *LedgerPipelineSetting) GetCacheTTLSec(idx int) int {
+	if idx >= 0 && idx < len(s.CacheTTLSecs) && s.CacheTTLSecs[idx] > 0 {
+		return s.CacheTTLSecs[idx]
+	}
+	return DefaultLedgerCacheTTLSec
+}
+
+// GetCacheTTLJitterPercent returns the jitter percentage, clamped to [0,100].
+func (s *LedgerPipelineSetting) GetCacheTTLJitterPercent() int {
+	if s.CacheTTLJitterPercent < 0 || s.CacheTTLJitterPercent > 100 {
+		return DefaultLedgerCacheTTLJitterPercent
+	}
+	return s.CacheTTLJitterPercent
+}
+
+// GetJitteredCacheTTL returns the TTL for cache idx with ±jitter% random spread
+// applied, so individual entries (and the different caches) expire staggered rather
+// than in one synchronized wave. Call it once per cache write. Never returns < 1s.
+func (s *LedgerPipelineSetting) GetJitteredCacheTTL(idx int) time.Duration {
+	base := s.GetCacheTTLSec(idx)
+	jp := s.GetCacheTTLJitterPercent()
+	if jp <= 0 {
+		return time.Duration(base) * time.Second
+	}
+	span := float64(base) * float64(jp) / 100.0
+	ttl := float64(base) + (rand.Float64()*2-1)*span // base ± span
+	if ttl < 1 {
+		ttl = 1
+	}
+	return time.Duration(ttl * float64(time.Second))
+}
+
 var ledgerPipelineSetting = LedgerPipelineSetting{
 	FlushIntervalSec:           8,
 	OuterBatchSize:             DefaultLedgerOuterBatchSize,
@@ -194,6 +254,11 @@ var ledgerPipelineSetting = LedgerPipelineSetting{
 	FlushDBTimeoutSec:          DefaultLedgerFlushDBTimeoutSec,
 	FallbackQueueCapacity:      DefaultLedgerFallbackQueueCapacity,
 	ShutdownTimeoutSec:         DefaultLedgerShutdownTimeoutSec,
+	CacheTTLSecs: []int{
+		DefaultLedgerCacheTTLSec, DefaultLedgerCacheTTLSec, DefaultLedgerCacheTTLSec,
+		DefaultLedgerCacheTTLSec, DefaultLedgerCacheTTLSec,
+	},
+	CacheTTLJitterPercent: DefaultLedgerCacheTTLJitterPercent,
 }
 
 func init() {

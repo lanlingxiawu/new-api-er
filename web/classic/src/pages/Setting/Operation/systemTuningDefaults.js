@@ -1,3 +1,22 @@
+/*
+Copyright (C) 2025 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+
 export const systemTuningDefaults = {
   'business_stats_circuit_breaker_setting.enabled': true,
   'business_stats_circuit_breaker_setting.manual_disabled': false,
@@ -23,6 +42,8 @@ export const systemTuningDefaults = {
   'ledger_retry_setting.allow_concurrent_flush': false,
   'ledger_pipeline_setting.fallback_queue_capacity': 10000,
   'ledger_pipeline_setting.shutdown_timeout_sec': 25,
+  'ledger_pipeline_setting.cache_ttl_secs': '[300,300,300,300,300]',
+  'ledger_pipeline_setting.cache_ttl_jitter_percent': 20,
   'payment_setting.user_export_max_rows': 10000,
   'export_setting.user_export_enabled': true,
   'export_setting.rate_limit_cooldown_sec': 600,
@@ -104,6 +125,10 @@ export const ledgerPipelineDefaults = {
     systemTuningDefaults['ledger_pipeline_setting.fallback_queue_capacity'],
   'ledger_pipeline_setting.shutdown_timeout_sec':
     systemTuningDefaults['ledger_pipeline_setting.shutdown_timeout_sec'],
+  'ledger_pipeline_setting.cache_ttl_secs':
+    systemTuningDefaults['ledger_pipeline_setting.cache_ttl_secs'],
+  'ledger_pipeline_setting.cache_ttl_jitter_percent':
+    systemTuningDefaults['ledger_pipeline_setting.cache_ttl_jitter_percent'],
 };
 
 export const exportSettingsDefaults = {
