@@ -257,8 +257,8 @@ func AdminListEmployees(c *gin.Context) {
 			PeriodEndAt:            periodEndAt,
 			PeriodKey:              periodKey,
 			PeriodTimezone:         periodTimezone,
-			CurrentProfitQuota: periodProfitQuota,
-			CurrentProfitUsd:   common.QuotaToUSD(periodProfitQuota),
+			CurrentProfitQuota:     periodProfitQuota,
+			CurrentProfitUsd:       common.QuotaToUSD(periodProfitQuota),
 			// CurrentCommissionQuota 在等级利率确定后赋值（提成 = 本期利润 × 当前等级利率）。
 		}
 		currentLevel := 0
@@ -1049,6 +1049,7 @@ func AdminGetTierResetConfig(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"enabled":       cfg.Enabled,
+			"period_mode":   cfg.PeriodMode,
 			"reset_day":     cfg.ResetDay,
 			"reset_hour":    cfg.ResetHour,
 			"reset_minute":  cfg.ResetMinute,
@@ -1078,6 +1079,46 @@ func AdminTriggerTierReset(c *gin.Context) {
 		"data": gin.H{
 			"processed": processed,
 			"reset_at":  resetAt,
+		},
+	})
+}
+
+// AdminSwitchCommissionPeriod POST /api/admin/employee/tiers/switch-period
+// 在管理员切换统计口径（统计方式 / 每月重置日 / 时区）后调用，把"本期"安全对齐到新口径下
+// 的本期起点 P，并按两个开关分别控制：reset_tiers 是否重置员工等级、include_period_data
+// 是否把按新边界属于本期的数据归并进本期。默认（false/true）= 保留等级 + 数据不丢。
+// 成功后把 last_reset_at arm 到 P，避免定时任务补跑一次重置。
+func AdminSwitchCommissionPeriod(c *gin.Context) {
+	var req struct {
+		ResetTiers        bool  `json:"reset_tiers"`
+		IncludePeriodData *bool `json:"include_period_data"`
+	}
+	// 空 body / 缺省字段视为默认值：不重置等级、纳入本期数据。
+	_ = c.ShouldBindJSON(&req)
+	includePeriodData := true
+	if req.IncludePeriodData != nil {
+		includePeriodData = *req.IncludePeriodData
+	}
+
+	operatedBy := c.GetInt("id")
+	periodStart := model.ResolveCommissionMonthlyPeriod(time.Now().Unix()).PeriodStartAt
+
+	processed, err := model.SwitchCommissionPeriod(periodStart, req.ResetTiers, includePeriodData, operatedBy)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	// 把 last_reset_at 对齐到本期起点，避免定时任务把这次口径切换当成"错过的边界"补跑重置。
+	service.ArmCommissionTierResetAt(periodStart)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"processed":       processed,
+			"period_start_at": periodStart,
+			"reset_tiers":     req.ResetTiers,
+			"include_period":  req.IncludePeriodData,
+			"next_reset_at":   service.NextScheduledResetAt(time.Now()),
 		},
 	})
 }

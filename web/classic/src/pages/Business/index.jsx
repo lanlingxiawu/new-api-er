@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Dropdown,
@@ -99,9 +100,14 @@ const COMMISSION_RATE_PRESETS = [0.05, 0.08, 0.1, 0.15, 0.2];
 const DEFAULT_TIER_GROUP = '通用';
 const RESET_TIMEZONES = ['Asia/Shanghai', 'Local'];
 const RESET_DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => index + 1);
+const PERIOD_MODE_OPTIONS = ['reset_day', 'natural_month'];
 
 function normalizeResetTimezone(timezone) {
   return timezone === 'Local' ? 'Local' : 'Asia/Shanghai';
+}
+
+function normalizePeriodMode(mode) {
+  return mode === 'natural_month' ? 'natural_month' : 'reset_day';
 }
 
 const getTierGroup = (tier) => (tier?.group || '').trim() || DEFAULT_TIER_GROUP;
@@ -3736,7 +3742,12 @@ function CommissionFinancialResetPeriodCalendar({
   const summary = stats.data?.summary || {};
   const periodStartAt = stats.data?.period_start_at;
   const periodEndAt = stats.data?.period_end_at;
-  const visualPeriodEndAt = stats.data?.period_boundary_at || periodEndAt;
+  // period_boundary_at 是下一周期起点（独占上界，= period_end_at + 1s）。直接拿它转自然日做
+  // 闭区间比较会把"下一周期第一天"误判为本期（自然月的 8/1、重置日模式的重置日当天）。
+  // 用 period_end_at（本期最后一秒）做闭区间上界；缺省时用 boundary-1s 回退。
+  const periodBoundaryAt = stats.data?.period_boundary_at;
+  const visualPeriodEndAt =
+    periodEndAt ?? (periodBoundaryAt ? periodBoundaryAt - 1 : undefined);
   const periodTimezone = stats.data?.timezone;
   const cells = useMemo(
     () =>
@@ -4283,9 +4294,13 @@ function TierResetSettingsCard({ onResetSuccess }) {
   const [config, setConfig] = useState(null);
   const [form, setForm] = useState({
     enabled: false,
+    period_mode: 'reset_day',
     reset_day: 10,
     timezone: 'Asia/Shanghai',
   });
+  // 切换口径时的一次性动作选项（不持久化）：默认不重置等级、纳入本期数据。
+  const [resetTiersOnSwitch, setResetTiersOnSwitch] = useState(false);
+  const [includePeriodData, setIncludePeriodData] = useState(true);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -4302,6 +4317,7 @@ function TierResetSettingsCard({ onResetSuccess }) {
       setConfig(nextConfig);
       setForm({
         enabled: Boolean(nextConfig.enabled),
+        period_mode: normalizePeriodMode(nextConfig.period_mode),
         reset_day: Number(nextConfig.reset_day || 10),
         timezone: normalizeResetTimezone(nextConfig.timezone),
       });
@@ -4323,18 +4339,30 @@ function TierResetSettingsCard({ onResetSuccess }) {
     }));
   };
 
+  const isNaturalMonth = form.period_mode === 'natural_month';
+
+  // 影响周期边界的改动（统计方式 / 重置日 / 时区），决定是否需要"安全切换"迁移。
+  const periodBoundaryChanged =
+    !!config &&
+    (form.period_mode !== normalizePeriodMode(config.period_mode) ||
+      form.reset_day !== Number(config.reset_day || 10) ||
+      form.timezone !== normalizeResetTimezone(config.timezone));
+
   const isDirty =
     !!config &&
     (form.enabled !== Boolean(config.enabled) ||
+      form.period_mode !== normalizePeriodMode(config.period_mode) ||
       form.reset_day !== Number(config.reset_day || 10) ||
       form.timezone !== normalizeResetTimezone(config.timezone));
 
   const saveConfig = async () => {
     if (!config) return;
+    const boundaryChanged = periodBoundaryChanged;
     setSaving(true);
     try {
       const updates = [
         ['commission_tier_reset_setting.enabled', String(form.enabled)],
+        ['commission_tier_reset_setting.period_mode', form.period_mode],
         ['commission_tier_reset_setting.reset_day', String(form.reset_day)],
         ['commission_tier_reset_setting.reset_hour', '0'],
         ['commission_tier_reset_setting.reset_minute', '0'],
@@ -4348,8 +4376,23 @@ function TierResetSettingsCard({ onResetSuccess }) {
           throw new Error(message || 'Operation failed');
         }
       }
+      // 口径变化时执行"安全切换"：把本期对齐到新边界，按两个开关分别控制等级与数据。
+      if (boundaryChanged) {
+        const res = await API.post(
+          '/api/admin/employee/tiers/switch-period',
+          {
+            reset_tiers: resetTiersOnSwitch,
+            include_period_data: includePeriodData,
+          },
+        );
+        const { success, message } = res.data;
+        if (!success) {
+          throw new Error(message || 'Operation failed');
+        }
+      }
       showSuccess(t('设置已更新'));
       await loadConfig();
+      onResetSuccess?.();
       setSettingsVisible(false);
     } catch (error) {
       showError(error?.message || 'Operation failed');
@@ -4440,6 +4483,41 @@ function TierResetSettingsCard({ onResetSuccess }) {
           </div>
 
           <Row gutter={[12, 12]}>
+            <Col xs={24}>
+              <Field label={t('统计方式')}>
+                <Select
+                  value={form.period_mode}
+                  onChange={(value) =>
+                    updateForm('period_mode', normalizePeriodMode(value))
+                  }
+                  className='w-full'
+                >
+                  {PERIOD_MODE_OPTIONS.map((mode) => (
+                    <Select.Option key={mode} value={mode}>
+                      {mode === 'natural_month'
+                        ? t('按自然月')
+                        : t('按重置日')}
+                    </Select.Option>
+                  ))}
+                </Select>
+                <Text
+                  type='secondary'
+                  size='small'
+                  className='mt-1 block text-xs'
+                >
+                  {isNaturalMonth
+                    ? t(
+                        '按自然月统计：每月 1 日至当月最后一天为一个周期，重置在每月 1 日进行。',
+                      )
+                    : t(
+                        '按重置日统计：从重置日到下个重置日为一个周期；当月天数不足时取当月最后一天。',
+                      )}
+                </Text>
+              </Field>
+            </Col>
+          </Row>
+
+          <Row gutter={[12, 12]}>
             <Col xs={24} sm={12}>
               <Field label={t('每月重置日')}>
                 <Select
@@ -4448,6 +4526,7 @@ function TierResetSettingsCard({ onResetSuccess }) {
                     updateForm('reset_day', Math.trunc(Number(value) || 1))
                   }
                   className='w-full'
+                  disabled={loading || saving || isNaturalMonth}
                 >
                   {RESET_DAY_OPTIONS.map((day) => (
                     <Select.Option key={day} value={day}>
@@ -4473,6 +4552,43 @@ function TierResetSettingsCard({ onResetSuccess }) {
               </Field>
             </Col>
           </Row>
+
+          {periodBoundaryChanged && (
+            <div className='rounded-md border border-semi-color-border bg-semi-color-fill-0 p-3 space-y-3'>
+              <Text strong>{t('保存此改动时')}</Text>
+              <div>
+                <Checkbox
+                  checked={includePeriodData}
+                  onChange={(e) => setIncludePeriodData(e.target.checked)}
+                >
+                  {t('将本期数据纳入统计')}
+                </Checkbox>
+                <Text
+                  type='secondary'
+                  size='small'
+                  className='mt-1 block text-xs'
+                >
+                  {t('把按新周期属于本期的数据归入本期，避免看起来像丢了数据。')}
+                </Text>
+              </div>
+              <div>
+                <Checkbox
+                  checked={resetTiersOnSwitch}
+                  onChange={(e) => setResetTiersOnSwitch(e.target.checked)}
+                >
+                  {t('重置员工等级')}
+                </Checkbox>
+                <Text
+                  type='secondary'
+                  size='small'
+                  className='mt-1 block text-xs'
+                >
+                  {t('把所有员工降到本组最低等级；不勾选则保留当前等级。')}
+                </Text>
+              </div>
+            </div>
+          )}
+
           <Row gutter={[12, 12]}>
             <Col xs={24} sm={12}>
               <Text type='secondary'>

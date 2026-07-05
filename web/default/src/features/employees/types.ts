@@ -185,8 +185,11 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+export type CommissionPeriodMode = 'reset_day' | 'natural_month'
+
 export interface TierResetConfig {
   enabled: boolean
+  period_mode: CommissionPeriodMode
   reset_day: number
   reset_hour: number
   reset_minute: number

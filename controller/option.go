@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -360,6 +361,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "commission_tier_reset_setting.period_mode":
+		mode := strings.TrimSpace(option.Value.(string))
+		if mode != operation_setting.CommissionPeriodModeResetDay && mode != operation_setting.CommissionPeriodModeNaturalMonth {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "统计方式仅支持按重置日或按自然月",
+			})
+			return
+		}
 	case "commission_tier_reset_setting.reset_day":
 		if !isIntInRange(option.Value.(string), 1, 31) {
 			c.JSON(http.StatusOK, gin.H{
@@ -419,8 +429,30 @@ func UpdateOption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 调度参数（统计方式/重置日/重置时刻/时区）变更后，把 last_reset_at 前移到新调度的
+	// 最近边界，避免仅因边界被重新定义而在下一分钟补跑一次意料之外的重置。
+	if isCommissionTierResetScheduleKey(option.Key) {
+		service.RearmCommissionTierResetScheduleIfNeeded()
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 	})
+}
+
+// isCommissionTierResetScheduleKey 判断该选项键是否属于"会改变重置调度边界"的参数。
+// 注意：enabled 与 last_reset_at 不在其列——首次启用的 arm 由重置任务自身处理，
+// last_reset_at 本就是被 arm 逻辑维护的目标。
+func isCommissionTierResetScheduleKey(key string) bool {
+	switch key {
+	case "commission_tier_reset_setting.period_mode",
+		"commission_tier_reset_setting.reset_day",
+		"commission_tier_reset_setting.reset_hour",
+		"commission_tier_reset_setting.reset_minute",
+		"commission_tier_reset_setting.reset_second",
+		"commission_tier_reset_setting.timezone":
+		return true
+	default:
+		return false
+	}
 }

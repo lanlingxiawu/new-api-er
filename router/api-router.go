@@ -248,6 +248,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
 			employeeAdminRoute.GET("/tiers/reset-config", controller.AdminGetTierResetConfig)
 			employeeAdminRoute.POST("/tiers/reset-now", controller.AdminTriggerTierReset)
+			employeeAdminRoute.POST("/tiers/switch-period", controller.AdminSwitchCommissionPeriod)
 			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
 			employeeAdminRoute.GET("/:id/customers", controller.AdminListEmployeeCustomers)
 			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)

@@ -132,6 +132,10 @@ func commissionMonthlyStatLocation(timezone string) (*time.Location, string) {
 }
 
 func commissionMonthlyScheduledTime(year int, month time.Month, cfg *operation_setting.CommissionTierResetSetting, loc *time.Location) time.Time {
+	// 自然月模式：周期固定以每月 1 日为锚点，与 ResetDay 无关。
+	if cfg.IsNaturalMonthMode() {
+		return time.Date(year, month, 1, cfg.ResetHour, cfg.ResetMinute, cfg.ResetSecond, 0, loc)
+	}
 	day := cfg.ResetDay
 	if day < 1 {
 		day = 1

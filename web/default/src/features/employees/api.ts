@@ -256,6 +256,17 @@ export async function triggerTierReset(): Promise<
   return res.data
 }
 
+export async function switchCommissionPeriod(payload: {
+  reset_tiers: boolean
+  include_period_data: boolean
+}): Promise<ApiResponse<{ processed: number; period_start_at: number }>> {
+  const res = await api.post(
+    '/api/admin/employee/tiers/switch-period',
+    payload
+  )
+  return res.data
+}
+
 export async function getCommissionSummary(params?: {
   start_time?: number
   end_time?: number

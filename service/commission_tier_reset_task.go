@@ -61,6 +61,10 @@ func tierResetLocation(cfg *operation_setting.CommissionTierResetSetting) *time.
 // scheduledTimeInMonth 计算指定年月的调度时刻：cfg.ResetDay 日 cfg.ResetHour:ResetMinute:ResetSecond；
 // 若当月天数小于 ResetDay，自动取该月最后一天。
 func scheduledTimeInMonth(year int, month time.Month, cfg *operation_setting.CommissionTierResetSetting, loc *time.Location) time.Time {
+	// 自然月模式：重置固定发生在每月 1 日（配置时刻），与 ResetDay 无关。
+	if cfg.IsNaturalMonthMode() {
+		return time.Date(year, month, 1, cfg.ResetHour, cfg.ResetMinute, cfg.ResetSecond, 0, loc)
+	}
 	day := cfg.ResetDay
 	if maxDay := daysInMonth(year, month); day > maxDay {
 		day = maxDay
@@ -108,6 +112,24 @@ func NextScheduledResetAt(now time.Time) int64 {
 		candidate = scheduledTimeInMonth(year, month, cfg, now.Location())
 	}
 	return candidate.Unix()
+}
+
+// RearmCommissionTierResetScheduleIfNeeded 在调度参数（统计方式/重置日/重置时刻/时区）
+// 变更后调用：把 last_reset_at 前移到"新调度下、now 之前最近的一个调度边界"，
+// 从而避免仅仅因为边界被重新定义，就在下一分钟 tick 里补跑一次意料之外的重置。
+//
+// 仅在「已启用自动重置」且「已 armed（LastResetAt>0）」时生效；且只在新边界晚于当前
+// LastResetAt 时前移（只 arm 不回退，不影响真正的停机补偿重置）。首次启用（LastResetAt==0）
+// 由 runCommissionTierResetCheck 自身的 arm 逻辑处理，无需在此干预。
+func RearmCommissionTierResetScheduleIfNeeded() {
+	cfg := operation_setting.GetCommissionTierResetSetting()
+	if !cfg.Enabled || cfg.LastResetAt == 0 {
+		return
+	}
+	due := lastScheduledTimeAtOrBefore(time.Now(), cfg)
+	if due > cfg.LastResetAt {
+		persistTierResetLastResetAt(due)
+	}
 }
 
 func runCommissionTierResetCheck() {
@@ -182,6 +204,15 @@ func RunCommissionTierResetNow(resetAt int64, operatedBy int) (processed int, er
 		persistTierResetLastResetAt(resetAt)
 	}
 	return processed, nil
+}
+
+// ArmCommissionTierResetAt 把 last_reset_at 置为指定边界（切换统计口径后由控制器调用），
+// 使下一次定时检查看到 due <= last_reset_at 而不补跑重置，真正的重置留到下个自然边界。
+func ArmCommissionTierResetAt(at int64) {
+	if at <= 0 {
+		return
+	}
+	persistTierResetLastResetAt(at)
 }
 
 // persistTierResetLastResetAt 持久化 commission_tier_reset_setting.last_reset_at

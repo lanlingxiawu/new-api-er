@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -32,17 +33,32 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { updateSystemOption } from '@/features/system-settings/api'
-import { getTierResetConfig, triggerTierReset } from '../api'
+import {
+  getTierResetConfig,
+  switchCommissionPeriod,
+  triggerTierReset,
+} from '../api'
 
 const timezoneOptions = [
   { value: 'Asia/Shanghai', labelKey: 'China Timezone' },
   { value: 'Local', labelKey: 'Server Timezone' },
 ]
 
+const periodModeOptions = [
+  { value: 'reset_day', labelKey: 'By reset day' },
+  { value: 'natural_month', labelKey: 'By natural month' },
+] as const
+
+type PeriodMode = (typeof periodModeOptions)[number]['value']
+
 const resetDayOptions = Array.from({ length: 31 }, (_, index) => index + 1)
 
 function normalizeTimezone(timezone?: string) {
   return timezone === 'Local' ? 'Local' : 'Asia/Shanghai'
+}
+
+function normalizePeriodMode(mode?: string): PeriodMode {
+  return mode === 'natural_month' ? 'natural_month' : 'reset_day'
 }
 
 function formatTs(ts?: number) {
@@ -58,9 +74,13 @@ export function TierResetSettingsCard() {
   const [resetting, setResetting] = useState(false)
   const [form, setForm] = useState({
     enabled: false,
+    periodMode: 'reset_day' as PeriodMode,
     resetDay: 10,
     timezone: 'Asia/Shanghai',
   })
+  // 切换口径时的一次性动作选项（不持久化）：默认不重置等级、纳入本期数据。
+  const [resetTiersOnSwitch, setResetTiersOnSwitch] = useState(false)
+  const [includePeriodData, setIncludePeriodData] = useState(true)
 
   const { data, isLoading } = useQuery({
     queryKey: ['commission-tier-reset-config'],
@@ -72,25 +92,46 @@ export function TierResetSettingsCard() {
     if (!config) return
     setForm({
       enabled: config.enabled,
+      periodMode: normalizePeriodMode(config.period_mode),
       resetDay: config.reset_day,
       timezone: normalizeTimezone(config.timezone),
     })
   }, [config])
 
+  const isNaturalMonth = form.periodMode === 'natural_month'
+
+  // 影响周期边界的改动（统计方式 / 重置日 / 时区），决定是否需要"安全切换"迁移。
+  const periodBoundaryChanged =
+    !!config &&
+    (form.periodMode !== normalizePeriodMode(config.period_mode) ||
+      form.resetDay !== config.reset_day ||
+      form.timezone !== normalizeTimezone(config.timezone))
+
   const isDirty =
     !!config &&
     (form.enabled !== config.enabled ||
+      form.periodMode !== normalizePeriodMode(config.period_mode) ||
       form.resetDay !== config.reset_day ||
       form.timezone !== normalizeTimezone(config.timezone))
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!config) return
+      const boundaryChanged =
+        form.periodMode !== normalizePeriodMode(config.period_mode) ||
+        form.resetDay !== config.reset_day ||
+        form.timezone !== normalizeTimezone(config.timezone)
       const updates: Array<{ key: string; value: string }> = []
       if (form.enabled !== config.enabled) {
         updates.push({
           key: 'commission_tier_reset_setting.enabled',
           value: String(form.enabled),
+        })
+      }
+      if (form.periodMode !== normalizePeriodMode(config.period_mode)) {
+        updates.push({
+          key: 'commission_tier_reset_setting.period_mode',
+          value: form.periodMode,
         })
       }
       if (form.resetDay !== config.reset_day) {
@@ -114,10 +155,19 @@ export function TierResetSettingsCard() {
         const res = await updateSystemOption(update)
         if (!res.success) throw new Error(res.message)
       }
+      // 口径变化时执行"安全切换"：把本期对齐到新边界，按两个开关分别控制等级与数据。
+      if (boundaryChanged) {
+        const res = await switchCommissionPeriod({
+          reset_tiers: resetTiersOnSwitch,
+          include_period_data: includePeriodData,
+        })
+        if (!res.success) throw new Error(res.message)
+      }
     },
     onSuccess: () => {
       toast.success(t('Setting updated successfully'))
       qc.invalidateQueries({ queryKey: ['commission-tier-reset-config'] })
+      qc.invalidateQueries({ queryKey: ['employees'] })
       setSettingsOpen(false)
     },
     onError: (error: unknown) => {
@@ -180,6 +230,47 @@ export function TierResetSettingsCard() {
               />
             </div>
 
+            <div className='space-y-1.5'>
+              <Label>{t('Statistics method')}</Label>
+              <Select
+                items={periodModeOptions.map((option) => ({
+                  value: option.value,
+                  label: t(option.labelKey),
+                }))}
+                value={form.periodMode}
+                onValueChange={(value) => {
+                  if (value)
+                    setForm((f) => ({
+                      ...f,
+                      periodMode: value as PeriodMode,
+                    }))
+                }}
+                disabled={isLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {periodModeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {t(option.labelKey)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className='text-muted-foreground text-xs'>
+                {isNaturalMonth
+                  ? t(
+                      'Count each calendar month from the 1st to the last day; reset runs on the 1st of each month.'
+                    )
+                  : t(
+                      'A period runs from the reset day to the next reset day; if the month has fewer days, the last day is used.'
+                    )}
+              </p>
+            </div>
+
             <div className='grid gap-3 sm:grid-cols-2'>
               <div className='space-y-1.5'>
                 <Label>{t('Monthly reset day')}</Label>
@@ -195,7 +286,7 @@ export function TierResetSettingsCard() {
                       setForm((f) => ({ ...f, resetDay: day }))
                     }
                   }}
-                  disabled={isLoading}
+                  disabled={isLoading || isNaturalMonth}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -239,6 +330,50 @@ export function TierResetSettingsCard() {
                 </Select>
               </div>
             </div>
+
+            {periodBoundaryChanged && (
+              <div className='bg-muted/40 space-y-3 rounded-md border p-3'>
+                <div className='text-sm font-medium'>
+                  {t('On applying this change')}
+                </div>
+                <label className='flex items-start gap-2.5'>
+                  <Checkbox
+                    checked={includePeriodData}
+                    onCheckedChange={(checked) =>
+                      setIncludePeriodData(checked === true)
+                    }
+                    disabled={isLoading}
+                    className='mt-0.5'
+                  />
+                  <span className='text-sm'>
+                    {t('Include current-period data')}
+                    <span className='text-muted-foreground block text-xs'>
+                      {t(
+                        'Fold data that belongs to the new current period into it, so nothing looks lost.'
+                      )}
+                    </span>
+                  </span>
+                </label>
+                <label className='flex items-start gap-2.5'>
+                  <Checkbox
+                    checked={resetTiersOnSwitch}
+                    onCheckedChange={(checked) =>
+                      setResetTiersOnSwitch(checked === true)
+                    }
+                    disabled={isLoading}
+                    className='mt-0.5'
+                  />
+                  <span className='text-sm'>
+                    {t('Reset employee tiers')}
+                    <span className='text-muted-foreground block text-xs'>
+                      {t(
+                        'Reset all employees to the lowest tier of their group. Off keeps current tiers.'
+                      )}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
 
             <div className='text-muted-foreground grid gap-2 text-sm sm:grid-cols-2'>
               <div>

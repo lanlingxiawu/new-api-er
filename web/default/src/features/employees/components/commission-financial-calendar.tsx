@@ -355,7 +355,11 @@ export function CommissionFinancialCalendar({
   overrideCommissionRate?: number
 }) {
   const { t } = useTranslation()
-  const visualPeriodEndAt = periodBoundaryAt || periodEndAt
+  // periodBoundaryAt 是下一周期起点（独占上界，= periodEndAt + 1s）。若直接拿它转成自然日
+  // 再做闭区间比较，会把"下一周期第一天"误判为本期（如自然月的 8/1、重置日模式的重置日当天）。
+  // 用 periodEndAt（本期最后一秒）做闭区间上界；缺省时用 boundary-1s 回退到本期最后一刻。
+  const visualPeriodEndAt =
+    periodEndAt ?? (periodBoundaryAt ? periodBoundaryAt - 1 : undefined)
   const cells = useMemo(
     () =>
       buildCalendarCells(
