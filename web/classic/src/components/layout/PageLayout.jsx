@@ -66,6 +66,9 @@ const PageLayout = () => {
   ];
 
   const isConsoleRoute = location.pathname.startsWith('/console');
+  // 首页自带 JULIANG 营销导航栏（.jl-header，fixed 置顶），此处隐藏全局控制台顶栏，避免两条
+  // 固定导航栏在首页顶部重叠。
+  const isHomeRoute = location.pathname === '/';
   const shouldHideFooter =
     isConsoleRoute || cardProPages.includes(location.pathname);
 
@@ -184,22 +187,24 @@ const PageLayout = () => {
         overflow: isFixedLayout && !isMobile ? 'hidden' : 'visible',
       }}
     >
-      <Header
-        style={{
-          padding: 0,
-          height: 'auto',
-          lineHeight: 'normal',
-          position: 'fixed',
-          width: '100%',
-          top: 0,
-          zIndex: 100,
-        }}
-      >
-        <HeaderBar
-          onMobileMenuToggle={() => setDrawerOpen((prev) => !prev)}
-          drawerOpen={drawerOpen}
-        />
-      </Header>
+      {!isHomeRoute && (
+        <Header
+          style={{
+            padding: 0,
+            height: 'auto',
+            lineHeight: 'normal',
+            position: 'fixed',
+            width: '100%',
+            top: 0,
+            zIndex: 100,
+          }}
+        >
+          <HeaderBar
+            onMobileMenuToggle={() => setDrawerOpen((prev) => !prev)}
+            drawerOpen={drawerOpen}
+          />
+        </Header>
+      )}
       <Layout
         style={{
           overflow: isFixedLayout && !isMobile ? 'auto' : 'visible',

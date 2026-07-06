@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright (C) 2025 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
@@ -17,274 +17,141 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Menu, X } from 'lucide-react';
+import { ArrowRight, Menu, X } from 'lucide-react';
 import {
-  LANGUAGE_PREFERENCE_KEY,
-  languageOptions,
-  normalizeLanguage,
-} from '../../i18n/language';
+  HOME_CONSOLE_PATH,
+  HOME_DOCS_URL,
+  HOME_ABOUT_URL,
+  HOME_GITHUB_URL,
+  BrandMark,
+  GithubIcon,
+} from './figmaHomeShared';
 
-const HOME_PRIMARY_LOGO = '/logo.png';
+const scrollToCapabilities = (event) => {
+  const target = document.getElementById('jl-capabilities');
+  if (!target) return;
+  event.preventDefault();
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
 
-export const figmaHomeNavItems = [
-  {
-    label: 'LLM服务',
-    to: '/console/playground',
-    dropdown: true,
-    children: [
-      { label: '聊天', to: '/console/chat/0' },
-      {
-        label: '绘图',
-        to: 'https://nano.nexaxis.ai/textCreate/',
-        target: '_blank',
-      },
-    ],
-  },
-  { label: '控制台', to: '/console' },
-  { label: '模型广场', to: '/pricing' },
-];
-
-const getVisibleChildren = (children = []) =>
-  children.filter((child) => !child.hidden);
-
-const getLinkRel = (target) =>
-  target === '_blank' ? 'noopener noreferrer' : undefined;
-
-const LogoMark = ({ className = '', src = HOME_PRIMARY_LOGO }) => (
-  <span className={`figma-home-logo ${className}`} aria-hidden='true'>
-    <img src={src} alt='' />
+// Kept for backward-compatible imports elsewhere.
+const LogoMark = ({ className = '' }) => (
+  <span className={`jl-brand-badge ${className}`} aria-hidden='true'>
+    <span className='jl-glyph' />
   </span>
 );
 
 const FigmaHomeHeader = () => {
-  const { t, i18n } = useTranslation();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [mobileExpandedMenu, setMobileExpandedMenu] = useState(null);
+  const { t } = useTranslation();
+  const [scrolled, setScrolled] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const currentLanguage =
-    languageOptions.find(
-      (item) => normalizeLanguage(item.key) === normalizeLanguage(i18n.language),
-    ) || languageOptions[0];
-  const getStartedPath = '/console';
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
-  const handleLanguageSelect = useCallback(
-    (languageKey) => {
-      const nextLanguage = normalizeLanguage(languageKey);
-      setMobileMenuOpen(false);
-      setMobileExpandedMenu(null);
-      i18n.changeLanguage(nextLanguage);
-      localStorage.setItem(LANGUAGE_PREFERENCE_KEY, nextLanguage);
-    },
-    [i18n],
+  useEffect(() => {
+    document.body.style.overflow = drawerOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [drawerOpen]);
+
+  const closeDrawer = () => setDrawerOpen(false);
+
+  const navLinks = (
+    <>
+      <Link to='/' className='is-active'>
+        {t('首页')}
+      </Link>
+      <a href='#jl-capabilities' onClick={scrollToCapabilities}>
+        {t('能力')}
+      </a>
+      <a href={HOME_DOCS_URL} target='_blank' rel='noopener noreferrer'>
+        {t('文档')}
+      </a>
+      <a href={HOME_ABOUT_URL} target='_blank' rel='noopener noreferrer'>
+        {t('关于')}
+      </a>
+    </>
   );
-
-  const mobileMenuItems = useMemo(
-    () => [
-      ...figmaHomeNavItems,
-      {
-        label: '语言',
-        value: currentLanguage.shortLabel,
-        children: languageOptions.map((item) => ({
-          ...item,
-          active:
-            normalizeLanguage(item.key) === normalizeLanguage(i18n.language),
-        })),
-      },
-    ],
-    [i18n.language],
-  );
-
-  const closeMobileMenu = () => {
-    setMobileMenuOpen(false);
-    setMobileExpandedMenu(null);
-  };
 
   return (
     <>
-      <header className='figma-home-header'>
-        <Link to='/' className='figma-home-brand' aria-label={t('首页')}>
-          <LogoMark />
+      <header className={`jl-header${scrolled ? ' is-scrolled' : ''}`}>
+        <Link to='/' className='jl-brand' aria-label={t('首页')}>
+          <BrandMark />
         </Link>
 
-        <Link to='/console' className='figma-home-mobile-console'>
-          {t('控制台')}
-        </Link>
-
-        <nav className='figma-home-nav' aria-label={t('主导航')}>
-          {figmaHomeNavItems.map((item) => {
-            const visibleChildren = getVisibleChildren(item.children);
-            const hasDesktopDropdown = item.dropdown || visibleChildren.length;
-
-            return (
-              <div
-                key={item.label}
-                className={
-                  hasDesktopDropdown
-                    ? 'figma-home-nav-item has-dropdown'
-                    : 'figma-home-nav-item'
-                }
-              >
-                {hasDesktopDropdown ? (
-                  <>
-                    <button type='button' className='figma-home-nav-trigger'>
-                      {t(item.label)}
-                      <ChevronDown size={14} />
-                    </button>
-                    <div className='figma-home-nav-menu'>
-                      {visibleChildren.map((child) => (
-                        <Link
-                          key={child.label}
-                          to={child.to}
-                          target={child.target}
-                          rel={getLinkRel(child.target)}
-                        >
-                          {t(child.label)}
-                        </Link>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <Link
-                    to={item.to}
-                    target={item.target}
-                    rel={getLinkRel(item.target)}
-                  >
-                    {t(item.label)}
-                  </Link>
-                )}
-              </div>
-            );
-          })}
+        <nav className='jl-nav' aria-label={t('主导航')}>
+          {navLinks}
         </nav>
 
-        <div className='figma-home-actions'>
-          <div className='figma-home-language'>
-            <button type='button'>
-              {currentLanguage.shortLabel}
-              <ChevronDown size={14} />
-            </button>
-            <div className='figma-home-language-menu'>
-              {languageOptions.map((item) => (
-                <button
-                  key={item.key}
-                  type='button'
-                  onClick={() => handleLanguageSelect(item.key)}
-                >
-                  {item.fullLabel}
-                </button>
-              ))}
-            </div>
-          </div>
-          <Link to={getStartedPath} className='figma-home-header-cta'>
-            {t('开始使用')}
+        <div className='jl-header-actions'>
+          <a
+            className='jl-github'
+            href={HOME_GITHUB_URL}
+            target='_blank'
+            rel='noopener noreferrer'
+          >
+            <GithubIcon size={17} />
+            GitHub
+          </a>
+          <Link to={HOME_CONSOLE_PATH} className='jl-btn jl-btn-dark'>
+            {t('控制台')}
+            <ArrowRight size={16} className='jl-arrow' />
           </Link>
           <button
-            className='figma-home-menu-button'
             type='button'
+            className='jl-header-menu-btn'
             aria-label={t('切换菜单')}
-            aria-expanded={mobileMenuOpen}
-            onClick={() => setMobileMenuOpen((open) => !open)}
+            aria-expanded={drawerOpen ? 'true' : 'false'}
+            onClick={() => setDrawerOpen((open) => !open)}
           >
-            {mobileMenuOpen ? <X size={18} /> : <Menu size={18} />}
+            <Menu size={20} />
           </button>
         </div>
       </header>
 
-      <div
-        className={`figma-home-mobile-panel${mobileMenuOpen ? ' is-open' : ''}`}
-      >
-        <div className='figma-home-mobile-panel-top'>
-          <img
-            className='figma-home-mobile-logo-image'
-            src={HOME_PRIMARY_LOGO}
-            alt=''
-          />
+      <div className={`jl-drawer${drawerOpen ? ' is-open' : ''}`}>
+        <div className='jl-drawer-top'>
+          <span className='jl-brand'>
+            <BrandMark />
+          </span>
           <button
             type='button'
-            className='figma-home-mobile-close'
+            className='jl-drawer-close'
             aria-label={t('关闭菜单')}
-            onClick={closeMobileMenu}
+            onClick={closeDrawer}
           >
-            <X size={28} strokeWidth={1.8} />
+            <X size={24} />
           </button>
         </div>
-
-        <div className='figma-home-mobile-links'>
-          {mobileMenuItems.map((item) => {
-            const isExpanded = mobileExpandedMenu === item.label;
-            const visibleChildren = getVisibleChildren(item.children);
-            if (item.to && !visibleChildren.length) {
-              return (
-                <div key={item.label} className='figma-home-mobile-menu-item'>
-                  <Link
-                    to={item.to}
-                    target={item.target}
-                    rel={getLinkRel(item.target)}
-                    className='figma-home-mobile-link'
-                    onClick={closeMobileMenu}
-                  >
-                    <span>{t(item.label)}</span>
-                  </Link>
-                </div>
-              );
-            }
-
-            return (
-              <div
-                key={item.label}
-                className={`figma-home-mobile-menu-item${
-                  isExpanded ? ' is-expanded' : ''
-                }`}
-              >
-                <button
-                  type='button'
-                  className='figma-home-mobile-link'
-                  aria-expanded={isExpanded}
-                  onClick={() =>
-                    setMobileExpandedMenu((current) =>
-                      current === item.label ? null : item.label,
-                    )
-                  }
-                >
-                  <span>{t(item.label)}</span>
-                  <span className='figma-home-mobile-link-meta'>
-                    {item.value ? <span>{item.value}</span> : null}
-                    <ChevronDown size={24} strokeWidth={2} />
-                  </span>
-                </button>
-
-                {isExpanded ? (
-                  <div className='figma-home-mobile-submenu'>
-                    {visibleChildren.map((child) =>
-                      child.to ? (
-                        <Link
-                          key={child.label}
-                          to={child.to}
-                          target={child.target}
-                          rel={getLinkRel(child.target)}
-                          onClick={closeMobileMenu}
-                        >
-                          {t(child.label)}
-                        </Link>
-                      ) : (
-                        <button
-                          key={child.key}
-                          type='button'
-                          className={child.active ? 'is-active' : ''}
-                          onClick={() => handleLanguageSelect(child.key)}
-                        >
-                          {child.fullLabel}
-                        </button>
-                      ),
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
+        <nav className='jl-drawer-links' onClick={closeDrawer}>
+          {navLinks}
+          <a
+            href={HOME_GITHUB_URL}
+            target='_blank'
+            rel='noopener noreferrer'
+          >
+            GitHub
+          </a>
+        </nav>
+        <div className='jl-drawer-cta'>
+          <Link
+            to={HOME_CONSOLE_PATH}
+            className='jl-btn jl-btn-dark'
+            onClick={closeDrawer}
+          >
+            {t('控制台')}
+            <ArrowRight size={16} className='jl-arrow' />
+          </Link>
         </div>
       </div>
     </>

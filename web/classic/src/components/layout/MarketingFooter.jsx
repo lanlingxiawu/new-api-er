@@ -19,11 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useContext, useMemo } from 'react';
 import { StatusContext } from '../../context/Status';
-import {
-  DEFAULT_FOOTER_CONFIG,
-  getFooterHTML,
-  parseFooterConfig,
-} from '../../helpers';
+import { getFooterHTML, parseFooterConfig } from '../../helpers';
 import FigmaFooter from './FigmaFooter';
 
 const MarketingFooter = () => {
@@ -31,9 +27,7 @@ const MarketingFooter = () => {
   const footerConfig = useMemo(() => {
     const statusFooter = statusState?.status?.footer_html;
     return (
-      parseFooterConfig(statusFooter) ||
-      parseFooterConfig(getFooterHTML()) ||
-      DEFAULT_FOOTER_CONFIG
+      parseFooterConfig(statusFooter) || parseFooterConfig(getFooterHTML()) || null
     );
   }, [statusState?.status?.footer_html]);
 

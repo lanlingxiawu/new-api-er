@@ -18,32 +18,26 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useContext, useMemo } from 'react';
-import {
-  DEFAULT_FOOTER_CONFIG,
-  getFooterHTML,
-  getSystemName,
-  parseFooterConfig,
-} from '../../helpers';
+import { getFooterHTML, parseFooterConfig } from '../../helpers';
 import { StatusContext } from '../../context/Status';
 import FigmaFooter from './FigmaFooter';
 
 const FooterBar = () => {
   const [statusState] = useContext(StatusContext);
-  const systemName = getSystemName();
   const currentYear = new Date().getFullYear();
+  // Fall back to null (not DEFAULT_FOOTER_CONFIG) so the footer renders the
+  // built-in JULIANG columns unless the admin explicitly configured footer_html.
   const footerConfig = useMemo(() => {
     const statusFooter = statusState?.status?.footer_html;
     return (
-      parseFooterConfig(statusFooter) ||
-      parseFooterConfig(getFooterHTML()) ||
-      DEFAULT_FOOTER_CONFIG
+      parseFooterConfig(statusFooter) || parseFooterConfig(getFooterHTML()) || null
     );
   }, [statusState?.status?.footer_html]);
 
   return (
     <FigmaFooter
       footerConfig={footerConfig}
-      copyrightText={`Copyright ${currentYear} ${systemName}. All rights reserved.`}
+      copyrightText={`© ${currentYear} 巨量词元. All rights reserved.`}
     />
   );
 };
