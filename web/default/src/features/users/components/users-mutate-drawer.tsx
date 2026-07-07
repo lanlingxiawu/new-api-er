@@ -17,10 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil } from 'lucide-react'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
@@ -105,6 +105,12 @@ export function UsersMutateDrawer({
     resolver: zodResolver(userFormSchema),
     defaultValues: USER_FORM_DEFAULT_VALUES,
   })
+
+  const {
+    fields: groupRatioFields,
+    append: appendGroupRatio,
+    remove: removeGroupRatio,
+  } = useFieldArray({ control: form.control, name: 'groupRatios' })
 
   // Load existing data when updating
   useEffect(() => {
@@ -355,6 +361,94 @@ export function UsersMutateDrawer({
                       </FormItem>
                     )}
                   />
+
+                  {/* Per-user exclusive group ratios */}
+                  <FormItem>
+                    <FormLabel>{t('Exclusive Group Ratios')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Override the group ratio for this user on specific groups. Leave empty to use the default group ratio.'
+                      )}
+                    </FormDescription>
+                    <div className='space-y-2'>
+                      {groupRatioFields.map((row, index) => (
+                        <div key={row.id} className='flex items-center gap-2'>
+                          <div className='flex-1'>
+                            <FormField
+                              control={form.control}
+                              name={`groupRatios.${index}.group`}
+                              render={({ field }) => (
+                                <Select
+                                  items={groups.map((g) => ({
+                                    value: g,
+                                    label: g,
+                                  }))}
+                                  onValueChange={field.onChange}
+                                  value={field.value}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue
+                                      placeholder={t('Select a group')}
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent alignItemWithTrigger={false}>
+                                    <SelectGroup>
+                                      {groups.map((g) => (
+                                        <SelectItem key={g} value={g}>
+                                          {g}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            />
+                          </div>
+                          <FormField
+                            control={form.control}
+                            name={`groupRatios.${index}.ratio`}
+                            render={({ field }) => (
+                              <Input
+                                type='number'
+                                step='0.01'
+                                min='0'
+                                className='w-28'
+                                value={field.value ?? ''}
+                                onChange={(e) =>
+                                  field.onChange(
+                                    e.target.value === ''
+                                      ? 0
+                                      : Number(e.target.value)
+                                  )
+                                }
+                                placeholder={t('Ratio')}
+                              />
+                            )}
+                          />
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon-sm'
+                            onClick={() => removeGroupRatio(index)}
+                            aria-label={t('Remove')}
+                          >
+                            <Trash2 className='h-4 w-4' />
+                          </Button>
+                        </div>
+                      ))}
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        onClick={() =>
+                          appendGroupRatio({ group: '', ratio: 1 })
+                        }
+                      >
+                        <Plus className='mr-1 h-4 w-4' />
+                        {t('Add Group')}
+                      </Button>
+                    </div>
+                  </FormItem>
 
                   <FormField
                     control={form.control}

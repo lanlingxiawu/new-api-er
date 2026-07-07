@@ -27,12 +27,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Badge } from '@/components/ui/badge'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { LongText } from '@/components/long-text'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { USER_STATUSES, USER_ROLES, isUserDeleted } from '../constants'
+import { parseGroupRatioRows } from '../lib'
 import { type User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -229,7 +231,16 @@ export function useUsersColumns(): ColumnDef<User>[] {
       ),
       cell: ({ row }) => {
         const group = row.getValue('group') as string
-        return <GroupBadge group={group} />
+        const hasExclusiveRatios =
+          parseGroupRatioRows(row.original.group_ratios).length > 0
+        return (
+          <div className='flex items-center gap-1'>
+            <GroupBadge group={group} />
+            {hasExclusiveRatios && (
+              <Badge variant='secondary'>{t('Exclusive Ratio')}</Badge>
+            )}
+          </div>
+        )
       },
       filterFn: (row, id, value) => {
         const group = String(row.getValue(id) || t('User Group')).toLowerCase()

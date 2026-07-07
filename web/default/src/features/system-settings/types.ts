@@ -266,6 +266,8 @@ export type BillingSettings = {
   GroupGroupRatio: string
   AutoGroups: string
   DefaultUseAutoGroup: boolean
+  UserExclusiveGroupRatioEnabled: boolean
+  UserExclusiveGroupRatioCacheMax: number
   'group_ratio_setting.group_special_usable_group': string
   PayAddress: string
   EpayId: string

@@ -369,7 +369,26 @@ export const getUsersColumns = ({
       title: t('分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
-        return <div>{renderGroup(text)}</div>;
+        let hasExclusiveRatios = false;
+        if (record.group_ratios) {
+          try {
+            const obj = JSON.parse(record.group_ratios);
+            hasExclusiveRatios =
+              obj && typeof obj === 'object' && Object.keys(obj).length > 0;
+          } catch (e) {
+            hasExclusiveRatios = false;
+          }
+        }
+        return (
+          <div className='flex items-center gap-1'>
+            {renderGroup(text)}
+            {hasExclusiveRatios && (
+              <Tag color='purple' shape='circle' size='small'>
+                {t('专属倍率')}
+              </Tag>
+            )}
+          </div>
+        );
       },
     },
     {

@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -599,6 +600,21 @@ func UpdateUser(c *gin.Context) {
 	if !canManageTargetRole(myRole, updatedUser.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
+	}
+	// Validate per-user exclusive group ratios (admin-only field).
+	if updatedUser.GroupRatios != "" && updatedUser.GroupRatios != "{}" {
+		ratios := make(map[string]float64)
+		if err := common.Unmarshal([]byte(updatedUser.GroupRatios), &ratios); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		baseGroups := ratio_setting.GetGroupRatioCopy()
+		for name, r := range ratios {
+			if _, ok := baseGroups[name]; !ok || r < 0 {
+				common.ApiErrorI18n(c, i18n.MsgUserGroupRatiosInvalid, map[string]any{"Group": name})
+				return
+			}
+		}
 	}
 	if updatedUser.Password == "$I_LOVE_U" {
 		updatedUser.Password = "" // rollback to what it should be

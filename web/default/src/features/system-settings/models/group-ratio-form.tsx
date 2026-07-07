@@ -43,6 +43,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -66,6 +67,8 @@ type GroupFormValues = {
   GroupGroupRatio: string
   AutoGroups: string
   DefaultUseAutoGroup: boolean
+  UserExclusiveGroupRatioEnabled: boolean
+  UserExclusiveGroupRatioCacheMax: number
   GroupSpecialUsableGroup: string
 }
 
@@ -173,6 +176,61 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     />
                   </FormControl>
                 </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserExclusiveGroupRatioEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Per-user exclusive group ratios')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserExclusiveGroupRatioCacheMax'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Exclusive ratio parse cache limit')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      value={field.value ?? 0}
+                      onChange={(e) =>
+                        field.onChange(
+                          e.target.value === '' ? 0 : Number(e.target.value)
+                        )
+                      }
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
               )}
             />
           </div>
@@ -315,6 +373,61 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     />
                   </FormControl>
                 </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserExclusiveGroupRatioEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Per-user exclusive group ratios')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserExclusiveGroupRatioCacheMax'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    {t('Exclusive ratio parse cache limit')}
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      value={field.value ?? 0}
+                      onChange={(e) =>
+                        field.onChange(
+                          e.target.value === '' ? 0 : Number(e.target.value)
+                        )
+                      }
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
               )}
             />
           </SettingsForm>

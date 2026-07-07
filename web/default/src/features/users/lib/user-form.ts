@@ -32,10 +32,49 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
+  // Per-user exclusive group ratios, edited as rows and serialized to JSON on submit
+  groupRatios: z
+    .array(
+      z.object({
+        group: z.string(),
+        ratio: z.number(),
+      })
+    )
+    .optional(),
   remark: z.string().optional(),
 })
 
 export type UserFormValues = z.infer<typeof userFormSchema>
+
+export type GroupRatioRow = { group: string; ratio: number }
+
+/** Parse the stored group_ratios JSON ({group: ratio}) into editor rows. */
+export function parseGroupRatioRows(raw?: string): GroupRatioRow[] {
+  if (!raw) return []
+  try {
+    const obj = JSON.parse(raw) as Record<string, number>
+    if (!obj || typeof obj !== 'object') return []
+    return Object.entries(obj).map(([group, ratio]) => ({
+      group,
+      ratio: Number(ratio),
+    }))
+  } catch {
+    return []
+  }
+}
+
+/** Serialize editor rows into the stored group_ratios JSON, dropping blank/invalid rows. */
+export function serializeGroupRatioRows(rows?: GroupRatioRow[]): string {
+  if (!rows || rows.length === 0) return ''
+  const obj: Record<string, number> = {}
+  for (const row of rows) {
+    const group = (row.group || '').trim()
+    const ratio = Number(row.ratio)
+    if (!group || !Number.isFinite(ratio) || ratio < 0) continue
+    obj[group] = ratio
+  }
+  return Object.keys(obj).length > 0 ? JSON.stringify(obj) : ''
+}
 
 // ============================================================================
 // Form Defaults
@@ -48,6 +87,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   role: 1, // Default to common user
   quota_dollars: 0,
   group: DEFAULT_GROUP,
+  groupRatios: [],
   remark: '',
 }
 
@@ -74,6 +114,7 @@ export function transformFormDataToPayload(
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group
+    payload.group_ratios = serializeGroupRatioRows(data.groupRatios)
     payload.remark = data.remark || undefined
     payload.id = userId
   }
@@ -92,6 +133,7 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
+    groupRatios: parseGroupRatioRows(user.group_ratios),
     remark: user.remark || '',
   }
 }

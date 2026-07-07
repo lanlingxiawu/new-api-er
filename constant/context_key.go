@@ -51,6 +51,9 @@ const (
 	ContextKeyUserGroup   ContextKey = "user_group"
 	ContextKeyUsingGroup  ContextKey = "group"
 	ContextKeyUserName    ContextKey = "username"
+	// ContextKeyUserGroupRatios holds the per-user exclusive group ratio overrides
+	// (map[group]ratio), parsed once from the cached user and read on the billing path.
+	ContextKeyUserGroupRatios ContextKey = "user_group_ratios"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 

@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,13 +16,14 @@ import (
 
 // UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
-	Id       int    `json:"id"`
-	Group    string `json:"group"`
-	Email    string `json:"email"`
-	Quota    int    `json:"quota"`
-	Status   int    `json:"status"`
-	Username string `json:"username"`
-	Setting  string `json:"setting"`
+	Id          int    `json:"id"`
+	Group       string `json:"group"`
+	GroupRatios string `json:"group_ratios"`
+	Email       string `json:"email"`
+	Quota       int    `json:"quota"`
+	Status      int    `json:"status"`
+	Username    string `json:"username"`
+	Setting     string `json:"setting"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -31,6 +33,24 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+	// Per-user exclusive group ratios. Only parse when the feature is enabled:
+	// when the flag is off the map is ignored by ResolveGroupRatio anyway, so
+	// this avoids a per-request JSON unmarshal + map allocation on the auth hot
+	// path for every user that has group_ratios stored. When on, the empty/"{}"
+	// fast-path in ParseUserGroupRatios means only configured users pay the parse
+	// (design §8.3). IsUserExclusiveGroupRatioEnabled reads an atomic bool, so a
+	// runtime toggle takes effect on the next request without a restart.
+	if ratio_setting.IsUserExclusiveGroupRatioEnabled() {
+		if ratios := user.GetGroupRatios(); len(ratios) > 0 {
+			common.SetContextKey(c, constant.ContextKeyUserGroupRatios, ratios)
+		}
+	}
+}
+
+// GetGroupRatios parses the per-user exclusive group ratio overrides.
+// Returns nil for empty/invalid content (silent degrade to global ratios).
+func (user *UserBase) GetGroupRatios() map[string]float64 {
+	return ratio_setting.ParseUserGroupRatios(user.GroupRatios)
 }
 
 func (user *UserBase) GetSetting() dto.UserSetting {
@@ -106,13 +126,14 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 
 	// Create cache object from user data
 	userCache = &UserBase{
-		Id:       user.Id,
-		Group:    user.Group,
-		Quota:    user.Quota,
-		Status:   user.Status,
-		Username: user.Username,
-		Setting:  user.Setting,
-		Email:    user.Email,
+		Id:          user.Id,
+		Group:       user.Group,
+		GroupRatios: user.GroupRatios,
+		Quota:       user.Quota,
+		Status:      user.Status,
+		Username:    user.Username,
+		Setting:     user.Setting,
+		Email:       user.Email,
 	}
 
 	return userCache, nil
@@ -141,6 +162,17 @@ func cacheIncrUserQuota(userId int, delta int64) error {
 
 func cacheDecrUserQuota(userId int, delta int64) error {
 	return cacheIncrUserQuota(userId, -delta)
+}
+
+// GetUserGroupRatios returns the user's exclusive per-group ratio overrides,
+// read Redis-first via the existing user cache (DB fallback). For non-hot-path
+// callers (e.g. pricing display, async task settlement). Returns nil on any error.
+func GetUserGroupRatios(userId int) map[string]float64 {
+	cache, err := GetUserCache(userId)
+	if err != nil {
+		return nil
+	}
+	return cache.GetGroupRatios()
 }
 
 // Helper functions to get individual fields if needed

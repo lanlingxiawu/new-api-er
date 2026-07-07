@@ -23,6 +23,7 @@ import {
   Col,
   Collapsible,
   Form,
+  InputNumber,
   Radio,
   RadioGroup,
   Row,
@@ -57,6 +58,8 @@ const OPTION_KEYS = [
   'group_ratio_setting.group_special_usable_group',
   'AutoGroups',
   'DefaultUseAutoGroup',
+  'UserExclusiveGroupRatioEnabled',
+  'UserExclusiveGroupRatioCacheMax',
 ];
 
 function parseJSONSafe(str, fallback) {
@@ -81,6 +84,8 @@ export default function GroupRatioSettings(props) {
     'group_ratio_setting.group_special_usable_group': '',
     AutoGroups: '',
     DefaultUseAutoGroup: false,
+    UserExclusiveGroupRatioEnabled: false,
+    UserExclusiveGroupRatioCacheMax: 4096,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -215,6 +220,46 @@ export default function GroupRatioSettings(props) {
               </div>
               <Text type='tertiary' size='small' style={{ marginTop: 4 }}>
                 {t('开启后创建令牌默认选择auto分组，初始令牌也将设为auto')}
+              </Text>
+            </Form.Slot>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+            <Form.Slot label={t('用户专属分组倍率')}>
+              <div className='flex items-center gap-2'>
+                <Switch
+                  checked={!!inputs.UserExclusiveGroupRatioEnabled}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={(value) =>
+                    setInputs((prev) => ({
+                      ...prev,
+                      UserExclusiveGroupRatioEnabled: value,
+                    }))
+                  }
+                />
+              </div>
+              <Text type='tertiary' size='small' style={{ marginTop: 4 }}>
+                {t('开启后，在编辑用户中为单个用户设置的专属分组倍率将生效')}
+              </Text>
+            </Form.Slot>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+            <Form.Slot label={t('专属倍率解析缓存上限')}>
+              <InputNumber
+                min={0}
+                step={512}
+                style={{ width: '100%' }}
+                value={inputs.UserExclusiveGroupRatioCacheMax}
+                onChange={(value) =>
+                  setInputs((prev) => ({
+                    ...prev,
+                    UserExclusiveGroupRatioCacheMax: value,
+                  }))
+                }
+              />
+              <Text type='tertiary' size='small' style={{ marginTop: 4 }}>
+                {t('缓存不同专属倍率配置的解析结果的最大条数，0 表示不缓存（每次解析）')}
               </Text>
             </Form.Slot>
           </Col>
@@ -411,6 +456,20 @@ export default function GroupRatioSettings(props) {
                 setInputs((prev) => ({
                   ...prev,
                   DefaultUseAutoGroup: value,
+                }))
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={16}>
+            <Form.Switch
+              label={t('启用用户专属分组倍率（在编辑用户中为单个用户设置分组专属倍率）')}
+              field={'UserExclusiveGroupRatioEnabled'}
+              onChange={(value) =>
+                setInputs((prev) => ({
+                  ...prev,
+                  UserExclusiveGroupRatioEnabled: value,
                 }))
               }
             />

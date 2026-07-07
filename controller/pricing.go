@@ -46,11 +46,12 @@ func GetPricing(c *gin.Context) {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
+			// Reuse the already-loaded cache (no extra read) and resolve with the
+			// same priority as billing: per-user exclusive -> group-group -> group,
+			// so the displayed group_ratio matches actual charging (design §5.3).
+			userRatios := user.GetGroupRatios()
 			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
-				}
+				groupRatio[g], _ = ratio_setting.ResolveGroupRatio(userRatios, group, g)
 			}
 		}
 	}

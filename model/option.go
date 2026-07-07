@@ -158,6 +158,8 @@ func InitOptionMap() {
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
+	common.OptionMap["UserExclusiveGroupRatioEnabled"] = strconv.FormatBool(ratio_setting.IsUserExclusiveGroupRatioEnabled())
+	common.OptionMap["UserExclusiveGroupRatioCacheMax"] = strconv.Itoa(ratio_setting.GetUserGroupRatioCacheMax())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
 	common.OptionMap["GitHubClientSecret"] = ""
@@ -400,6 +402,8 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.DefaultUseAutoGroup = boolValue
 		case "ExposeRatioEnabled":
 			ratio_setting.SetExposeRatioEnabled(boolValue)
+		case "UserExclusiveGroupRatioEnabled":
+			ratio_setting.SetUserExclusiveGroupRatioEnabled(boolValue)
 		}
 	}
 	switch key {
@@ -408,6 +412,10 @@ func updateOptionMap(key string, value string) (err error) {
 	case "RequestLogMaxBodyKB":
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue > 0 {
 			common.RequestLogMaxBodyKB = intValue
+		}
+	case "UserExclusiveGroupRatioCacheMax":
+		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {
+			ratio_setting.SetUserGroupRatioCacheMax(intValue)
 		}
 	case "RequestLogMinCount":
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {

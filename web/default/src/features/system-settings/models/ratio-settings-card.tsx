@@ -185,6 +185,8 @@ const groupSchema = z.object({
     }
   }),
   DefaultUseAutoGroup: z.boolean(),
+  UserExclusiveGroupRatioEnabled: z.boolean(),
+  UserExclusiveGroupRatioCacheMax: z.number().min(0),
   GroupSpecialUsableGroup: z.string().superRefine((value, ctx) => {
     const result = validateJsonString(value)
     if (!result.valid) {
@@ -272,6 +274,8 @@ export function RatioSettingsCard({
     GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
     AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+    UserExclusiveGroupRatioEnabled: groupDefaults.UserExclusiveGroupRatioEnabled,
+    UserExclusiveGroupRatioCacheMax: groupDefaults.UserExclusiveGroupRatioCacheMax,
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
@@ -355,6 +359,8 @@ export function RatioSettingsCard({
       GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
       AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
+    UserExclusiveGroupRatioEnabled: groupDefaults.UserExclusiveGroupRatioEnabled,
+    UserExclusiveGroupRatioCacheMax: groupDefaults.UserExclusiveGroupRatioCacheMax,
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -422,6 +428,8 @@ export function RatioSettingsCard({
         GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
         AutoGroups: normalizeJsonString(values.AutoGroups),
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
+        UserExclusiveGroupRatioEnabled: values.UserExclusiveGroupRatioEnabled,
+        UserExclusiveGroupRatioCacheMax: values.UserExclusiveGroupRatioCacheMax,
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
         ),
