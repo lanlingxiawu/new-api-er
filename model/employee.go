@@ -727,6 +727,15 @@ type CommissionCalendarStats struct {
 	PeriodBoundaryAt int64                        `json:"period_boundary_at"`
 	PeriodKey        string                       `json:"period_key"`
 	Timezone         string                       `json:"timezone"`
+	// IsHistorical 标记本次查询是否为历史周期（非当前本期）。历史周期按【当前统计口径】解析出的
+	// 周期边界切片（自然月模式=自然月边界；重置日模式=重置日周期边界），跨所有旧桶按 stat_date 聚合；
+	// 提成用「业绩 × 该期等级费率」重算（历史等级由 employee_tier_logs 还原），而非当前费率。
+	IsHistorical bool `json:"is_historical,omitempty"`
+	// 以下字段仅在按单个员工筛选时填充：该员工在所查周期内生效的等级信息。
+	// 历史周期取当期结束时刻的等级（由 employee_tier_logs 还原），当前周期取现等级。
+	EmployeeTierLevel int     `json:"employee_tier_level,omitempty"`
+	EmployeeTierRate  float64 `json:"employee_tier_rate,omitempty"`
+	EmployeeTierGroup string  `json:"employee_tier_group,omitempty"`
 }
 
 func normalizeCommissionResetPeriodStatFilter(filter CommissionResetPeriodStatFilter) CommissionResetPeriodStatFilter {
@@ -917,12 +926,98 @@ func GetCommissionResetPeriodStats(filter CommissionResetPeriodStatFilter) ([]*E
 	return items, total, nil
 }
 
+// resolveEmployeeTierAt 还原单个员工在时刻 at 生效的 tier_id（见 resolveEmployeeTiersAt）。
+func resolveEmployeeTierAt(userId int, at int64) int64 {
+	return resolveEmployeeTiersAt([]int{userId}, at)[userId]
+}
+
+// resolveEmployeeTiersAt 批量还原一组员工在时刻 at 生效的 tier_id，用于历史周期
+// 「历史业绩 × 历史等级费率」的重算与等级展示。规则（对每个 user）：
+//   - 取 employee_tier_logs 中 operated_at <= at 的最近一条变更的 to_tier_id；
+//   - 若 at 之前没有任何变更记录，则取最早一条变更的 from_tier_id（首次变更前的等级）；
+//   - 仍无记录时退回当前等级。
+//
+// 全过程固定 3 条查询（与员工数无关）：等级变更很少，日志表相对日统计表极小，
+// 拉取候选行后在 Go 内按 user 取首条（已按 operated_at 排序），三库一致（Rule 2）。
+func resolveEmployeeTiersAt(userIds []int, at int64) map[int]int64 {
+	result := make(map[int]int64, len(userIds))
+	if len(userIds) == 0 {
+		return result
+	}
+	type logRow struct {
+		UserId     int
+		ToTierId   int64
+		FromTierId int64
+	}
+	// 1) operated_at <= at 的最近一条变更 → to_tier_id（按 user 取首条）。
+	var recent []logRow
+	if err := DB.Model(&EmployeeTierLog{}).
+		Select("user_id, to_tier_id, from_tier_id").
+		Where("user_id IN ? AND operated_at <= ?", userIds, at).
+		Order("user_id ASC, operated_at DESC, id DESC").
+		Find(&recent).Error; err == nil {
+		for _, r := range recent {
+			if _, ok := result[r.UserId]; !ok && r.ToTierId != 0 {
+				result[r.UserId] = r.ToTierId
+			}
+		}
+	}
+	// 2) at 之前无变更的用户：取其最早一条变更的 from_tier_id。
+	missing := make([]int, 0)
+	for _, uid := range userIds {
+		if _, ok := result[uid]; !ok {
+			missing = append(missing, uid)
+		}
+	}
+	if len(missing) > 0 {
+		var earliest []logRow
+		if err := DB.Model(&EmployeeTierLog{}).
+			Select("user_id, to_tier_id, from_tier_id").
+			Where("user_id IN ?", missing).
+			Order("user_id ASC, operated_at ASC, id ASC").
+			Find(&earliest).Error; err == nil {
+			seen := make(map[int]bool, len(missing))
+			for _, r := range earliest {
+				if !seen[r.UserId] {
+					seen[r.UserId] = true
+					if r.FromTierId != 0 {
+						result[r.UserId] = r.FromTierId
+					}
+				}
+			}
+		}
+	}
+	// 3) 仍缺失：回退当前等级。
+	stillMissing := make([]int, 0)
+	for _, uid := range userIds {
+		if _, ok := result[uid]; !ok {
+			stillMissing = append(stillMissing, uid)
+		}
+	}
+	if len(stillMissing) > 0 {
+		if lvls, err := GetTierLevelsByUserIds(stillMissing); err == nil {
+			for uid, lvl := range lvls {
+				if lvl != nil && lvl.TierId != 0 {
+					result[uid] = lvl.TierId
+				}
+			}
+		}
+	}
+	return result
+}
+
 func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*CommissionCalendarStats, error) {
 	if startTime <= 0 || endTime <= 0 || startTime > endTime {
 		return &CommissionCalendarStats{Days: []*CommissionCalendarDayStat{}}, nil
 	}
 	period := ResolveCommissionMonthlyPeriod(startTime)
 	boundaryAt := period.PeriodEndAt + 1
+	// 是否为历史周期：所查周期起点 != "当前本期"起点。历史周期不再按 baseline 锚定，
+	// 而是按【当前口径】解析出的周期边界（period.PeriodStartAt~PeriodEndAt，自然月模式=自然月、
+	// 重置日模式=重置日周期）跨所有旧桶按 stat_date 聚合，与日历展示的周期边界完全一致——
+	// 这样切换统计方式后，上个月按旧口径落桶的数据仍能按新口径完整重组显示。
+	currentPeriodStart := ResolveCommissionMonthlyPeriod(time.Now().Unix()).PeriodStartAt
+	isHistorical := period.PeriodStartAt != currentPeriodStart
 	stats := &CommissionCalendarStats{
 		Days:             make([]*CommissionCalendarDayStat, 0),
 		PeriodStartAt:    period.PeriodStartAt,
@@ -930,6 +1025,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		PeriodBoundaryAt: boundaryAt,
 		PeriodKey:        period.PeriodKey,
 		Timezone:         period.Timezone,
+		IsHistorical:     isHistorical,
 	}
 	queryResetStartedAt := period.PeriodStartAt
 	queryEndAt := period.PeriodEndAt
@@ -942,7 +1038,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		CommissionQuota int64
 		RecordCount     int64
 	}
-	if employeeUserId > 0 {
+	if !isHistorical && employeeUserId > 0 {
 		baselinesByUserId, err := loadResetBaselineByEmployeeUserIds([]int{employeeUserId})
 		if err != nil {
 			return nil, err
@@ -964,7 +1060,26 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			"COALESCE(SUM(profit_quota),0) AS profit_quota, " +
 			"COALESCE(SUM(commission_quota),0) AS commission_quota, " +
 			"COALESCE(SUM(record_count),0) AS record_count")
-	if employeeUserId > 0 {
+	switch {
+	case isHistorical && employeeUserId > 0:
+		// 历史周期·单员工：按当前口径的周期边界切片，跨所有旧桶按 stat_date 聚合（不限定 reset_started_at）。
+		tx = tx.Where(
+			"employee_user_id = ? AND stat_date >= ? AND stat_date <= ?",
+			employeeUserId,
+			commissionStatDayStart(period.PeriodStartAt),
+			commissionStatDayStart(queryEndAt),
+		)
+	case isHistorical:
+		// 历史周期·全员：仅按当前口径周期边界内的 stat_date 聚合在职员工数据，跨所有旧桶合并。
+		tx = tx.Joins(
+			"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
+			1,
+		).Where(
+			"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
+			commissionStatDayStart(period.PeriodStartAt),
+			commissionStatDayStart(queryEndAt),
+		)
+	case employeeUserId > 0:
 		tx = tx.Where(
 			"reset_started_at = ? AND stat_date >= ? AND stat_date <= ? AND employee_user_id = ?",
 			queryResetStartedAt,
@@ -972,8 +1087,8 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			commissionStatDayStart(queryEndAt),
 			employeeUserId,
 		)
-	} else {
-		// 全员模式：匹配两种情形：
+	default:
+		// 当前本期·全员模式：匹配两种情形：
 		// 1. 已执行过重置（baseline_reset_at > 0）：reset_started_at = baseline_reset_at
 		// 2. 从未重置（baseline_reset_at = 0）：reset_started_at = period.PeriodStartAt
 		tx = tx.Joins(
@@ -1034,57 +1149,91 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 	stats.Summary.ProfitUsd = common.QuotaToUSD(stats.Summary.ProfitQuota)
 	stats.Summary.CommissionUsd = common.QuotaToUSD(stats.Summary.CommissionQuota)
 
-	// 按员工当前等级费率重算本期提成：本期业绩 × 当前等级费率（不使用历史日志）。
 	tiers := GetAllTiersCached()
 	tierById := make(map[int64]*EmployeeCommissionTier, len(tiers))
 	for _, t := range tiers {
 		tierById[t.Id] = t
 	}
+
+	// 提成重算统一为「业绩 × 该期等级费率」，本期与历史仅差在用哪个等级：
+	//   - 当前本期：员工现等级费率；
+	//   - 历史周期：由 employee_tier_logs 还原的当期等级费率（历史业绩 × 历史等级）。
+	// 历史等级取"当期结束时刻"生效的等级。结果写入 RecalcCommissionQuota，
+	// 前端优先展示它（回退 commission_quota）。
 	if employeeUserId > 0 {
-		// 单员工：直接用本期业绩合计 × 当前费率。
-		tierLevels, err := GetTierLevelsByUserIds([]int{employeeUserId})
-		if err == nil {
-			if lvl, ok := tierLevels[employeeUserId]; ok && lvl.TierId != 0 {
-				if t, ok2 := tierById[lvl.TierId]; ok2 {
-					stats.Summary.RecalcCommissionQuota = int64(float64(stats.Summary.ProfitQuota) * t.Rate)
-				}
+		// 单员工：本期业绩合计 × 该期等级费率，并回填等级徽章字段。
+		var tierId int64
+		if isHistorical {
+			tierId = resolveEmployeeTierAt(employeeUserId, period.PeriodEndAt)
+		} else if tierLevels, err := GetTierLevelsByUserIds([]int{employeeUserId}); err == nil {
+			if lvl, ok := tierLevels[employeeUserId]; ok {
+				tierId = lvl.TierId
+			}
+		}
+		if tierId != 0 {
+			if t, ok := tierById[tierId]; ok {
+				stats.Summary.RecalcCommissionQuota = int64(float64(stats.Summary.ProfitQuota) * t.Rate)
+				stats.EmployeeTierLevel = t.Level
+				stats.EmployeeTierRate = t.Rate
+				stats.EmployeeTierGroup = t.Group
 			}
 		}
 	} else {
-		// 全员模式：按员工分组求各自本期业绩，再乘以各自当前费率后求和。
+		// 全员模式：按员工分组求各自本期业绩，再乘以各自「该期等级」费率后求和。
 		type empProfitRow struct {
 			EmployeeUserId int
 			ProfitQuota    int64
 		}
 		var empProfits []empProfitRow
 		aggTx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
-			Select("employee_user_id, COALESCE(SUM(profit_quota),0) AS profit_quota").
-			Joins(
+			Select("employee_commission_reset_period_daily_stats.employee_user_id AS employee_user_id, COALESCE(SUM(profit_quota),0) AS profit_quota")
+		if isHistorical {
+			// 历史周期：按当前口径周期边界内的 stat_date 跨所有旧桶聚合在职员工利润（不限定 reset_started_at）。
+			aggTx = aggTx.Joins(
 				"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
 				1,
-			).
-			Joins(
+			).Where(
+				"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
+				commissionStatDayStart(period.PeriodStartAt),
+				commissionStatDayStart(queryEndAt),
+			)
+		} else {
+			// 当前本期：沿用 baseline 锚定的桶匹配。
+			aggTx = aggTx.Joins(
+				"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
+				1,
+			).Joins(
 				"JOIN employee_tier_levels ON employee_tier_levels.user_id = employee_commission_reset_period_daily_stats.employee_user_id"+
 					" AND (employee_tier_levels.baseline_reset_at = employee_commission_reset_period_daily_stats.reset_started_at"+
 					" OR (employee_tier_levels.baseline_reset_at = 0 AND employee_commission_reset_period_daily_stats.reset_started_at = ?))",
 				period.PeriodStartAt,
-			).
-			Where(
+			).Where(
 				"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ?",
 				commissionStatDayStart(period.PeriodStartAt),
 				commissionStatDayStart(queryEndAt),
-			).
-			Group("employee_commission_reset_period_daily_stats.employee_user_id")
+			)
+		}
+		aggTx = aggTx.Group("employee_commission_reset_period_daily_stats.employee_user_id")
 		if err := aggTx.Scan(&empProfits).Error; err == nil && len(empProfits) > 0 {
 			empIds := make([]int, 0, len(empProfits))
 			for _, ep := range empProfits {
 				empIds = append(empIds, ep.EmployeeUserId)
 			}
-			tierLevels, _ := GetTierLevelsByUserIds(empIds)
+			// 该期等级：历史周期从变更日志还原，本期取现等级。
+			tierIdByUser := make(map[int]int64, len(empIds))
+			if isHistorical {
+				tierIdByUser = resolveEmployeeTiersAt(empIds, period.PeriodEndAt)
+			} else if tierLevels, err := GetTierLevelsByUserIds(empIds); err == nil {
+				for uid, lvl := range tierLevels {
+					if lvl != nil {
+						tierIdByUser[uid] = lvl.TierId
+					}
+				}
+			}
 			var totalRecalc int64
 			for _, ep := range empProfits {
-				if lvl, ok := tierLevels[ep.EmployeeUserId]; ok && lvl.TierId != 0 {
-					if t, ok2 := tierById[lvl.TierId]; ok2 {
+				if tid := tierIdByUser[ep.EmployeeUserId]; tid != 0 {
+					if t, ok := tierById[tid]; ok {
 						totalRecalc += int64(float64(ep.ProfitQuota) * t.Rate)
 					}
 				}

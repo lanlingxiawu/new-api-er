@@ -1723,6 +1723,10 @@
     "Expires": "过期",
     "Export": "导出",
     "Export all": "Export all",
+    "Export current month per-employee data": "导出所选月份各员工的业绩、分红、等级数据",
+    "Export successful": "导出成功",
+    "Exporting...": "导出中...",
+    "No data to export": "没有可导出的数据",
     "Export complete — {{count}} rows": "导出完成，共 {{count}} 条",
     "Export current filter": "Export current filter",
     "Export failed": "导出失败",
@@ -3232,6 +3236,7 @@
     "Period Cost": "本期成本",
     "Period Customer Consumption": "本期客户消耗",
     "Period Profit": "本期利润",
+    "Period Tier": "当期等级",
     "Periodically check for upstream model changes": "定期检查上游模型是否有变更",
     "Periodically send ping frames to keep streaming connections active.": "定期发送 ping 帧以保持流连接处于活动状态。",
     "Permanently delete your account and all data": "永久删除您的帐户和所有数据",
@@ -4954,7 +4959,8 @@
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
     "Zoom": "Zoom",
-    "No tier assigned": "暂未定级"
+    "No tier assigned": "暂未定级",
+    "Commission ratio": "提成比例"
   },
   "Authentication": "Authentication",
   "Billing & Payment": "Billing & Payment",

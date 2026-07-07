@@ -228,6 +228,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/commission/channels", controller.AdminListCommissionChannelOptions)
 			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionResetPeriodStats)
 			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
+			employeeAdminRoute.GET("/commission/monthly-export", controller.AdminCommissionMonthlyExport)
 			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
 			employeeAdminRoute.GET("/overview/channels", controller.AdminChannelProfitPage)
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
