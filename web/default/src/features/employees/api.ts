@@ -8,6 +8,7 @@ import type {
   ChannelCostConfig,
   CommissionSummaryItem,
   CommissionCalendarStats,
+  CommissionMonthlyExport,
   CommissionResetPeriodStatItem,
   PagedResponse,
   ApiResponse,
@@ -173,6 +174,19 @@ export async function getCommissionCalendarStats(params: {
     q.set('employee_user_id', String(params.employee_user_id))
   const res = await api.get(
     `/api/admin/employee/commission/calendar?${q.toString()}`
+  )
+  return res.data
+}
+
+export async function getCommissionMonthlyExport(params: {
+  start_time: number
+  end_time: number
+}): Promise<ApiResponse<CommissionMonthlyExport>> {
+  const q = new URLSearchParams()
+  q.set('start_time', String(params.start_time))
+  q.set('end_time', String(params.end_time))
+  const res = await api.get(
+    `/api/admin/employee/commission/monthly-export?${q.toString()}`
   )
   return res.data
 }

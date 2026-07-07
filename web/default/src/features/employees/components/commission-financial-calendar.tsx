@@ -17,6 +17,10 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessAmount } from '@/features/business/format'
+import {
+  getEmployeeTierGroupBadgeClass,
+  getEmployeeTierLevelBadgeClass,
+} from '../lib/tiers'
 import type {
   ApiResponse,
   CommissionCalendarDayStat,
@@ -62,7 +66,7 @@ export function monthValueToRange(value: string) {
   }
 }
 
-function monthValueToCalendarRange(value: string) {
+export function monthValueToCalendarRange(value: string) {
   const currentMonth = currentMonthValue()
   if (value === currentMonth) {
     const now = Math.floor(Date.now() / 1000)
@@ -333,6 +337,10 @@ export function CommissionFinancialCalendar({
   toolbar,
   showSummaryCards = true,
   overrideCommissionRate,
+  isHistorical,
+  employeeTierLevel,
+  employeeTierRate,
+  employeeTierGroup,
 }: {
   month: string
   onMonthChange: (month: string) => void
@@ -351,8 +359,14 @@ export function CommissionFinancialCalendar({
   isLoading?: boolean
   toolbar?: ReactNode
   showSummaryCards?: boolean
-  /** 前端直接计算提成时传入当前等级费率，优先级高于后端返回的 recalc_commission_quota */
+  /** 前端直接计算提成时传入当前等级费率，优先级高于后端返回的 recalc_commission_quota。仅对当前本期生效 */
   overrideCommissionRate?: number
+  /** 是否为历史周期：历史周期展示已结算的 commission_quota，不套用 overrideCommissionRate */
+  isHistorical?: boolean
+  /** 按单个员工筛选时该员工在所查周期生效的等级，用于展示"当期等级"徽章 */
+  employeeTierLevel?: number
+  employeeTierRate?: number
+  employeeTierGroup?: string
 }) {
   const { t } = useTranslation()
   // periodBoundaryAt 是下一周期起点（独占上界，= periodEndAt + 1s）。若直接拿它转成自然日
@@ -441,6 +455,32 @@ export function CommissionFinancialCalendar({
           >
             {t('Today')}
           </Button>
+          {employeeTierLevel ? (
+            <div className='flex items-center gap-1.5 pl-1'>
+              <span className='text-muted-foreground shrink-0 text-xs'>
+                {t('Period Tier')}
+              </span>
+              <Badge
+                variant='outline'
+                className={getEmployeeTierLevelBadgeClass(employeeTierLevel)}
+              >
+                {t('Tier {{level}}', { level: employeeTierLevel })}
+              </Badge>
+              {employeeTierRate ? (
+                <span className='text-muted-foreground text-xs'>
+                  {`${(employeeTierRate * 100).toFixed(1)}%`}
+                </span>
+              ) : null}
+              {employeeTierGroup ? (
+                <Badge
+                  variant='outline'
+                  className={getEmployeeTierGroupBadgeClass(employeeTierGroup)}
+                >
+                  {employeeTierGroup}
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         {toolbar ? (
           <div className='flex min-w-0 flex-1 justify-end'>{toolbar}</div>
@@ -482,7 +522,9 @@ export function CommissionFinancialCalendar({
               ) : (
                 <BusinessAmount
                   value={
-                    overrideCommissionRate != null && overrideCommissionRate > 0
+                    !isHistorical &&
+                    overrideCommissionRate != null &&
+                    overrideCommissionRate > 0
                       ? Math.round((summary?.profit_quota ?? 0) * overrideCommissionRate)
                       : (summary?.recalc_commission_quota ?? summary?.commission_quota ?? 0)
                   }
@@ -659,6 +701,10 @@ export function CommissionCalendarSection({
       toolbar={toolbar}
       showSummaryCards={showSummaryCards}
       overrideCommissionRate={overrideCommissionRate}
+      isHistorical={data?.data?.is_historical}
+      employeeTierLevel={data?.data?.employee_tier_level}
+      employeeTierRate={data?.data?.employee_tier_rate}
+      employeeTierGroup={data?.data?.employee_tier_group}
     />
   )
 }
