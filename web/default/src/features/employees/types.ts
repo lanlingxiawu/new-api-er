@@ -121,6 +121,11 @@ export interface CommissionCalendarStats {
   employee_tier_level?: number
   employee_tier_rate?: number
   employee_tier_group?: string
+  /** 应达等级提示（仅单员工历史周期）：该期业绩达标的最高等级 */
+  eligible_tier_level?: number
+  eligible_tier_rate?: number
+  /** 该期业绩已达更高等级阈值但历史等级未提升时为 true（纯展示） */
+  tier_underpromoted?: boolean
   summary: {
     revenue_quota: number
     cost_quota: number

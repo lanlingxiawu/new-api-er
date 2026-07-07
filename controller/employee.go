@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
@@ -401,6 +402,101 @@ func AdminDeleteEmployee(c *gin.Context) {
 		return
 	}
 	if err := model.DisableEmployee(id); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ============================================================================
+// Admin manual performance adjustment（手工业绩调整）
+// 设计见 docs/employee-performance-adjustment-design.md。
+// ============================================================================
+
+type AddEmployeePerformanceRequest struct {
+	ProfitUsd     float64 `json:"profit_usd" binding:"required"` // 业绩金额（USD，可负，非 0）
+	Reason        string  `json:"reason"`
+	PeriodStartAt int64   `json:"period_start_at"` // 0=当前周期；>0=补录到该历史周期
+}
+
+// AdminAddEmployeePerformance POST /api/admin/employee/:id/performance
+func AdminAddEmployeePerformance(c *gin.Context) {
+	empId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
+		return
+	}
+	var req AddEmployeePerformanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	emp, err := model.GetEmployeeById(empId)
+	if err != nil || emp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
+		return
+	}
+	// 用户可控金额 → quota：走集中式饱和转换（int32 边界 + NaN 处理），符合项目 billing 安全不变量。
+	// 手工调整是管理员单次操作，越界时显式报错而非静默钳制，避免把一笔巨额调整悄悄截断。
+	profitQuotaInt, clamp := common.QuotaFromDecimalChecked(
+		decimal.NewFromFloat(req.ProfitUsd).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+	)
+	if clamp != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "profit amount out of range"})
+		return
+	}
+	profitQuota := int64(profitQuotaInt)
+	if profitQuota == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "profit amount is too small"})
+		return
+	}
+	operatedBy := c.GetInt("id")
+	result, err := model.AddEmployeePerformance(emp.UserId, profitQuota, strings.TrimSpace(req.Reason), operatedBy, req.PeriodStartAt)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+}
+
+// AdminListPerformanceAdjustments GET /api/admin/employee/:id/performance
+func AdminListPerformanceAdjustments(c *gin.Context) {
+	empId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
+		return
+	}
+	emp, err := model.GetEmployeeById(empId)
+	if err != nil || emp == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
+		return
+	}
+	page, pageSize := normalizePage(c)
+	logs, total, err := model.GetManualPerformanceAdjustments(emp.UserId, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"items":     logs,
+			"total":     total,
+			"page":      page,
+			"page_size": pageSize,
+		},
+	})
+}
+
+// AdminRevertPerformanceAdjustment POST /api/admin/employee/performance/:logId/revert
+func AdminRevertPerformanceAdjustment(c *gin.Context) {
+	logId, err := strconv.Atoi(c.Param("logId"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
+		return
+	}
+	operatedBy := c.GetInt("id")
+	if err := model.RevertEmployeePerformance(logId, operatedBy); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
