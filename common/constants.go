@@ -155,6 +155,10 @@ var QuotaForInvitee = 0
 var ChannelDisableThreshold = 5.0
 var AutomaticDisableChannelEnabled = false
 var AutomaticEnableChannelEnabled = false
+
+// AutomaticDisableUserOnQuotaAnomalyEnabled 开启后，当结算检测到负扣费或额度饱和
+// （quota_saturation）时，实时（离主流程、best-effort）自动禁用该用户。默认关闭。
+var AutomaticDisableUserOnQuotaAnomalyEnabled = false
 var QuotaRemindThreshold = 1000
 var PreConsumedQuota = 500
 

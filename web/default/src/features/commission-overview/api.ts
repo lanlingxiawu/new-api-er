@@ -216,6 +216,30 @@ export async function getConsumptionCostLedger(
   return res.data
 }
 
+export interface LedgerReversalResponse {
+  success: boolean
+  message?: string
+  data?: {
+    ledger_id: number
+    original_log_id: number
+    reversal_log_id: number
+    user_id: number
+    reversed_quota: number
+  }
+}
+
+// reverseLedgerRecord 对某条台账记录执行定向冲销（插入镜像消费记录并重走结算）。
+export async function reverseLedgerRecord(
+  id: number
+): Promise<LedgerReversalResponse> {
+  const res = await api.post(
+    `/api/admin/employee/consumption-cost-ledger/reversal`,
+    { id },
+    { skipErrorHandler: true }
+  )
+  return res.data
+}
+
 export interface LedgerExportJob {
   job_id: string
   status: 'pending' | 'running' | 'ready' | 'failed'

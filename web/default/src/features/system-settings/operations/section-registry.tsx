@@ -69,6 +69,8 @@ const OPERATIONS_SECTIONS = [
           AutomaticDisableChannelEnabled:
             settings.AutomaticDisableChannelEnabled,
           AutomaticEnableChannelEnabled: settings.AutomaticEnableChannelEnabled,
+          AutomaticDisableUserOnQuotaAnomalyEnabled:
+            settings.AutomaticDisableUserOnQuotaAnomalyEnabled,
           AutomaticDisableKeywords: settings.AutomaticDisableKeywords,
           AutomaticDisableStatusCodes: settings.AutomaticDisableStatusCodes,
           AutomaticRetryStatusCodes: settings.AutomaticRetryStatusCodes,

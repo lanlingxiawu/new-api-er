@@ -48,6 +48,7 @@ func InitOptionMap() {
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
+	common.OptionMap["AutomaticDisableUserOnQuotaAnomalyEnabled"] = strconv.FormatBool(common.AutomaticDisableUserOnQuotaAnomalyEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["RequestLogEnabled"] = strconv.FormatBool(common.RequestLogEnabled)
 	common.OptionMap["RequestLogUsername"] = common.RequestLogUsername
@@ -346,6 +347,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.AutomaticDisableChannelEnabled = boolValue
 		case "AutomaticEnableChannelEnabled":
 			common.AutomaticEnableChannelEnabled = boolValue
+		case "AutomaticDisableUserOnQuotaAnomalyEnabled":
+			common.AutomaticDisableUserOnQuotaAnomalyEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
 		case "RequestLogEnabled":

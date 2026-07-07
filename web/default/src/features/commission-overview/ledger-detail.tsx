@@ -8,12 +8,22 @@ import {
   type UIEvent,
 } from 'react'
 import axios from 'axios'
-import { Download, List, Loader2, RefreshCw, Search } from 'lucide-react'
+import { Download, List, Loader2, RefreshCw, Search, Undo2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import dayjs from '@/lib/dayjs'
 import { cn } from '@/lib/utils'
 import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +50,7 @@ import {
   getConsumptionCostLedgerStats,
   getLedgerExportDownloadURL,
   getLedgerExportStatus,
+  reverseLedgerRecord,
   type ConsumptionCostLedgerItem,
   type FallbackHint,
   type LedgerCursor,
@@ -397,6 +408,9 @@ export function ConsumptionCostLedgerDetail() {
   const [exportLoading, setExportLoading] = useState(false)
   const exportPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [fallbackHint, setFallbackHint] = useState<FallbackHint | null>(null)
+  const [reversalTarget, setReversalTarget] =
+    useState<ConsumptionCostLedgerItem | null>(null)
+  const [reversing, setReversing] = useState(false)
 
   const statsRefreshCountRef = useRef(0)
   const statsLoadingRef = useRef(false)
@@ -595,6 +609,29 @@ export function ConsumptionCostLedgerDetail() {
     setFallbackHint(null)
     statsRefreshCountRef.current = 0
     setSearchKey((value) => value + 1)
+  }
+
+  const confirmReverse = async () => {
+    if (!reversalTarget) return
+    setReversing(true)
+    try {
+      const res = await reverseLedgerRecord(reversalTarget.id)
+      if (res?.success) {
+        toast.success(t('Reversal completed'))
+        setReversalTarget(null)
+        applySearch()
+      } else {
+        toast.error(res?.message || t('Reversal failed'))
+      }
+    } catch (e) {
+      const msg =
+        (axios.isAxiosError(e) && e.response?.data?.message) ||
+        (e instanceof Error ? e.message : '') ||
+        t('Reversal failed')
+      toast.error(msg)
+    } finally {
+      setReversing(false)
+    }
   }
 
   const resetFilters = () => {
@@ -906,13 +943,14 @@ export function ConsumptionCostLedgerDetail() {
               <TableHead>{t('Gross margin')}</TableHead>
               <TableHead>{t('Group ratio')}</TableHead>
               <TableHead>{t('Cost ratio')}</TableHead>
+              <TableHead className='text-right'>{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 && !loading ? (
               <TableRow>
                 <TableCell
-                  colSpan={13}
+                  colSpan={14}
                   className='text-muted-foreground text-center'
                 >
                   {t('No records')}
@@ -954,6 +992,22 @@ export function ConsumptionCostLedgerDetail() {
                 <TableCell>{formatPercent(row.gross_margin)}</TableCell>
                 <TableCell>{ratioText(row.group_ratio)}</TableCell>
                 <TableCell>{ratioText(row.cost_ratio)}</TableCell>
+                <TableCell className='text-right whitespace-nowrap'>
+                  {row.log_id != null &&
+                  !visibleLedgerTags(row).includes('reversal') ? (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='outline'
+                      onClick={() => setReversalTarget(row)}
+                    >
+                      <Undo2 data-icon='inline-start' />
+                      {t('Reverse')}
+                    </Button>
+                  ) : (
+                    <span className='text-muted-foreground'>-</span>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -969,6 +1023,52 @@ export function ConsumptionCostLedgerDetail() {
           ) : null}
         </div>
       </div>
+      <AlertDialog
+        open={reversalTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !reversing) setReversalTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('Reverse this record?')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {reversalTarget ? (
+            <div className='text-muted-foreground space-y-1 text-sm'>
+              <div>
+                {t('Log ID')}: #{reversalTarget.log_id} · {t('User ID')}: #
+                {reversalTarget.user_id}
+              </div>
+              <div className='flex items-center gap-1'>
+                {t('Revenue')}:{' '}
+                <BusinessAmount value={reversalTarget.revenue_quota} />
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reversing}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                confirmReverse()
+              }}
+              disabled={reversing}
+            >
+              {reversing ? (
+                <Loader2 className='mr-1 h-4 w-4 animate-spin' />
+              ) : null}
+              {t('Confirm reversal')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

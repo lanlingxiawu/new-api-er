@@ -1,5 +1,13 @@
 {
   "translation": {
+    "Reverse": "冲销",
+    "Reverse this record?": "确认冲销这条记录？",
+    "This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.": "将插入一条镜像冲销记录并重新结算，修正余额、台账与提成。此操作不可撤销。",
+    "Confirm reversal": "确认冲销",
+    "Reversal completed": "冲销完成",
+    "Reversal failed": "冲销失败",
+    "Auto-disable users on billing anomaly": "余额异常时自动禁用用户",
+    "Disable a user in real time when settlement detects a negative charge or a quota saturation clamp": "结算检测到负扣费或额度饱和时，实时禁用该用户",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

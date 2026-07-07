@@ -38,6 +38,7 @@ export default function SettingsMonitoring(props) {
     QuotaRemindThreshold: '',
     AutomaticDisableChannelEnabled: false,
     AutomaticEnableChannelEnabled: false,
+    AutomaticDisableUserOnQuotaAnomalyEnabled: false,
     AutomaticDisableKeywords: '',
     AutomaticDisableStatusCodes: '401',
     AutomaticRetryStatusCodes:
@@ -230,6 +231,24 @@ export default function SettingsMonitoring(props) {
                     setInputs({
                       ...inputs,
                       AutomaticEnableChannelEnabled: value,
+                    })
+                  }
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Switch
+                  field={'AutomaticDisableUserOnQuotaAnomalyEnabled'}
+                  label={t('余额异常时自动禁用用户')}
+                  extraText={t(
+                    '结算检测到负扣费或额度饱和（quota_saturation）时，实时自动禁用该用户',
+                  )}
+                  size='default'
+                  checkedText='｜'
+                  uncheckedText='〇'
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      AutomaticDisableUserOnQuotaAnomalyEnabled: value,
                     })
                   }
                 />

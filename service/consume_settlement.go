@@ -75,6 +75,10 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		CreatedAt:        params.CreatedAt,
 	})
 
+	// 负扣费防御纵深（离主流程）：修复分支上溢出已被饱和为正，仍对任何负额度兜底检测。
+	// 额度饱和信号已在上游 attachQuotaSaturation 处理，此处只补负扣费一路。
+	maybeDisableUserForQuotaAnomaly(relayInfo.UserId, params.Quota, false)
+
 	relayInfoCopy := *relayInfo
 	if relayInfoCopy.ChannelMeta != nil {
 		channelMetaCopy := *relayInfoCopy.ChannelMeta

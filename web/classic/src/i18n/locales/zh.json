@@ -21,6 +21,13 @@
   "查询余额": "查询余额",
   "用倍率表示，填写上游成本或中转站倍率，用于计算成本、利润和员工提成；0 表示 0 成本，0.6 表示成本 0.6 折。": "用倍率表示，填写上游成本或中转站倍率，用于计算成本、利润和员工提成；0 表示 0 成本，0.6 表示成本 0.6 折。",
   "translation": {
+    "Actions": "操作",
+    "Reverse": "冲销",
+    "Reverse this record?": "确认冲销这条记录？",
+    "This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.": "将插入一条镜像冲销记录并重新结算，修正余额、台账与提成。此操作不可撤销。",
+    "Confirm reversal": "确认冲销",
+    "Reversal completed": "冲销完成",
+    "Reversal failed": "冲销失败",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

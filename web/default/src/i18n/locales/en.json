@@ -1,5 +1,13 @@
 {
   "translation": {
+    "Reverse": "Reverse",
+    "Reverse this record?": "Reverse this record?",
+    "This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.": "This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.",
+    "Confirm reversal": "Confirm reversal",
+    "Reversal completed": "Reversal completed",
+    "Reversal failed": "Reversal failed",
+    "Auto-disable users on billing anomaly": "Auto-disable users on billing anomaly",
+    "Disable a user in real time when settlement detects a negative charge or a quota saturation clamp": "Disable a user in real time when settlement detects a negative charge or a quota saturation clamp",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

@@ -57,6 +57,7 @@ const monitoringSchema = z
     QuotaRemindThreshold: numericString,
     AutomaticDisableChannelEnabled: z.boolean(),
     AutomaticEnableChannelEnabled: z.boolean(),
+    AutomaticDisableUserOnQuotaAnomalyEnabled: z.boolean(),
     AutomaticDisableKeywords: z.string(),
     AutomaticDisableStatusCodes: z.string(),
     AutomaticRetryStatusCodes: z.string(),
@@ -105,6 +106,7 @@ type MonitoringSettingsSectionProps = {
     QuotaRemindThreshold: string
     AutomaticDisableChannelEnabled: boolean
     AutomaticEnableChannelEnabled: boolean
+    AutomaticDisableUserOnQuotaAnomalyEnabled: boolean
     AutomaticDisableKeywords: string
     AutomaticDisableStatusCodes: string
     AutomaticRetryStatusCodes: string
@@ -122,6 +124,7 @@ type NormalizedMonitoringValues = {
   QuotaRemindThreshold: string
   AutomaticDisableChannelEnabled: boolean
   AutomaticEnableChannelEnabled: boolean
+  AutomaticDisableUserOnQuotaAnomalyEnabled: boolean
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
@@ -136,6 +139,8 @@ const buildFormDefaults = (
   QuotaRemindThreshold: defaults.QuotaRemindThreshold ?? '',
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: defaults.AutomaticEnableChannelEnabled,
+  AutomaticDisableUserOnQuotaAnomalyEnabled:
+    defaults.AutomaticDisableUserOnQuotaAnomalyEnabled,
   AutomaticDisableKeywords: normalizeLineEndings(
     defaults.AutomaticDisableKeywords ?? ''
   ),
@@ -156,6 +161,8 @@ const normalizeDefaults = (
   QuotaRemindThreshold: (defaults.QuotaRemindThreshold ?? '').trim(),
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: defaults.AutomaticEnableChannelEnabled,
+  AutomaticDisableUserOnQuotaAnomalyEnabled:
+    defaults.AutomaticDisableUserOnQuotaAnomalyEnabled,
   AutomaticDisableKeywords: normalizeLineEndings(
     defaults.AutomaticDisableKeywords ?? ''
   ),
@@ -178,6 +185,8 @@ const normalizeFormValues = (
   QuotaRemindThreshold: values.QuotaRemindThreshold.trim(),
   AutomaticDisableChannelEnabled: values.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: values.AutomaticEnableChannelEnabled,
+  AutomaticDisableUserOnQuotaAnomalyEnabled:
+    values.AutomaticDisableUserOnQuotaAnomalyEnabled,
   AutomaticDisableKeywords: normalizeLineEndings(
     values.AutomaticDisableKeywords
   ),
@@ -393,6 +402,31 @@ export function MonitoringSettingsSection({
                     <FormLabel>{t('Re-enable on success')}</FormLabel>
                     <FormDescription>
                       {t('Bring channels back online after successful checks')}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AutomaticDisableUserOnQuotaAnomalyEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Auto-disable users on billing anomaly')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Disable a user in real time when settlement detects a negative charge or a quota saturation clamp'
+                      )}
                     </FormDescription>
                   </SettingsSwitchContent>
                   <FormControl>

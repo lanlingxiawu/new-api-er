@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // ConsumptionCost 逐笔消费成本台账（覆盖全平台所有消费，不仅员工归属流量）。
 // 在每笔消费结算后异步写入，记录当次真实的分组倍率与渠道成本系数算出的精确成本，
@@ -64,6 +67,18 @@ func CreateConsumptionCostAndCommissionLog(cost *ConsumptionCost, log *EmployeeC
 
 	inserted = CheckAndBufferCostAndCommission(cost, log)
 	return inserted, nil
+}
+
+// GetConsumptionCostById 按主键读取单条台账记录（用于定向冲销）。
+func GetConsumptionCostById(id int) (*ConsumptionCost, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid consumption cost id")
+	}
+	var rec ConsumptionCost
+	if err := DB.Where("id = ?", id).First(&rec).Error; err != nil {
+		return nil, err
+	}
+	return &rec, nil
 }
 
 // ConsumptionCostTotals 时间范围内的精确收入/成本总计。

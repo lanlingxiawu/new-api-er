@@ -280,6 +280,91 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	return logEntry.Id
 }
 
+// GetLogById 按 ID 读取单条日志。
+func GetLogById(id int) (*Log, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid log id")
+	}
+	var log Log
+	if err := LOG_DB.Where("id = ?", id).First(&log).Error; err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+// IsConsumeLogReversed 判断某条消费日志是否已被冲销（other.admin_info.reversed == true）。
+func IsConsumeLogReversed(log *Log) bool {
+	if log == nil || log.Other == "" {
+		return false
+	}
+	otherMap, _ := common.StrToMap(log.Other)
+	if otherMap == nil {
+		return false
+	}
+	adminInfo, ok := otherMap["admin_info"].(map[string]interface{})
+	if !ok || adminInfo == nil {
+		return false
+	}
+	reversed, _ := adminInfo["reversed"].(bool)
+	return reversed
+}
+
+// MarkConsumeLogReversed 在原始消费日志的 other.admin_info 打上冲销标记，防止重复冲销（幂等）。
+// 不新增数据库列，复用现有 other TEXT 字段，天然兼容 SQLite/MySQL/PostgreSQL。
+func MarkConsumeLogReversed(logId int, reversalLogId int, adminId int, adminName string) error {
+	log, err := GetLogById(logId)
+	if err != nil {
+		return err
+	}
+	otherMap, _ := common.StrToMap(log.Other)
+	if otherMap == nil {
+		otherMap = map[string]interface{}{}
+	}
+	adminInfo, ok := otherMap["admin_info"].(map[string]interface{})
+	if !ok || adminInfo == nil {
+		adminInfo = map[string]interface{}{}
+	}
+	adminInfo["reversed"] = true
+	adminInfo["reversal_log_id"] = reversalLogId
+	adminInfo["reversed_by_id"] = adminId
+	adminInfo["reversed_by"] = adminName
+	adminInfo["reversed_at"] = common.GetTimestamp()
+	otherMap["admin_info"] = adminInfo
+	return LOG_DB.Model(&Log{}).Where("id = ?", logId).Update("other", common.MapToJsonStr(otherMap)).Error
+}
+
+// RecordReversalConsumeLog 插入一条冲销镜像消费日志（Quota 取负），返回新日志 ID。
+// 与普通消费日志不同：始终记录（不受 LogConsumeEnabled 影响），保证台账与统计可对账。
+func RecordReversalConsumeLog(userId int, username string, params RecordConsumeLogParams) int {
+	createdAt := params.CreatedAt
+	if createdAt == 0 {
+		createdAt = common.GetTimestamp()
+	}
+	logEntry := &Log{
+		UserId:           userId,
+		Username:         username,
+		CreatedAt:        createdAt,
+		Type:             LogTypeConsume,
+		Content:          params.Content,
+		PromptTokens:     params.PromptTokens,
+		CompletionTokens: params.CompletionTokens,
+		TokenName:        params.TokenName,
+		ModelName:        params.ModelName,
+		Quota:            params.Quota,
+		ChannelId:        params.ChannelId,
+		TokenId:          params.TokenId,
+		UseTime:          params.UseTimeSeconds,
+		IsStream:         params.IsStream,
+		Group:            params.Group,
+		Other:            common.MapToJsonStr(params.Other),
+	}
+	if err := LOG_DB.Create(logEntry).Error; err != nil {
+		common.SysLog("failed to record reversal consume log: " + err.Error())
+		return 0
+	}
+	return logEntry.Id
+}
+
 func GetChannelNameSnapshotsFromLogs(ids []int) map[int]string {
 	return GetChannelNameSnapshotsFromLogsWithContext(context.Background(), ids)
 }

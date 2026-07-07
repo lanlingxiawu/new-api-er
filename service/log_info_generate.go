@@ -47,6 +47,9 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	attachQuotaSaturationToOther(other, clamp)
 	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
+	// 余额异常实时自动禁用（离主流程，best-effort）：额度饱和即视为异常信号。
+	// 该调用内部先做廉价短路，未开开关时不分配 goroutine，不影响主流程。
+	maybeDisableUserForQuotaAnomaly(relayInfo.UserId, 0, true)
 }
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

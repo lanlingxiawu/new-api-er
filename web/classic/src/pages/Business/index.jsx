@@ -5927,6 +5927,46 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
     setSearchKey((value) => value + 1);
   };
 
+  // handleReverse 对某条台账记录执行定向冲销：确认后调用后端接口并刷新列表。
+  // useCallback([t]) 稳定：内部仅调用稳定的 setter / ref，无过期闭包。
+  const handleReverse = useCallback(
+    (row) => {
+      if (!row || row.log_id == null) return;
+      Modal.confirm({
+        title: t('Reverse this record?'),
+        content: t(
+          'This inserts a mirror reversal record and re-runs settlement, correcting the balance, ledger and commission. This cannot be undone.',
+        ),
+        okText: t('Confirm reversal'),
+        cancelText: t('Cancel'),
+        onOk: async () => {
+          try {
+            const res = await API.post(
+              '/api/admin/employee/consumption-cost-ledger/reversal',
+              { id: row.id },
+            );
+            if (res?.data?.success) {
+              showSuccess(t('Reversal completed'));
+              setRows([]);
+              setCursor(null);
+              setHasMore(false);
+              setFilterStats(null);
+              setStatsStatus('');
+              setStatsRunningCount(0);
+              statsRefreshCountRef.current = 0;
+              setSearchKey((value) => value + 1);
+            } else {
+              showError(res?.data?.message || t('Reversal failed'));
+            }
+          } catch (e) {
+            showError(e?.response?.data?.message || t('Reversal failed'));
+          }
+        },
+      });
+    },
+    [t],
+  );
+
   const resetFilters = () => {
     setFilters(defaultLedgerFilters());
     setRows([]);
@@ -6211,8 +6251,28 @@ function ClassicLedgerDetail({ filterPortalTarget }) {
         width: 120,
         render: (value) => Number(value || 0).toFixed(4),
       },
+      {
+        title: t('Actions'),
+        dataIndex: 'actions',
+        width: 110,
+        fixed: 'right',
+        render: (_, record) =>
+          record.log_id != null &&
+          !(Array.isArray(record.tags) && record.tags.includes('reversal')) ? (
+            <Button
+              size='small'
+              theme='borderless'
+              type='tertiary'
+              onClick={() => handleReverse(record)}
+            >
+              {t('Reverse')}
+            </Button>
+          ) : (
+            <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>
+          ),
+      },
     ],
-    [t],
+    [t, handleReverse],
   );
   const ledgerTableScroll = useMemo(
     () => ({ x: LEDGER_TABLE_SCROLL_X, y: 420 }),

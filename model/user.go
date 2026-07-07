@@ -1214,6 +1214,24 @@ func DeltaUpdateUserQuota(id int, delta int) (err error) {
 	}
 }
 
+// DisableUserForQuotaAnomaly 将检测到余额异常（负扣费 / 额度饱和）的用户置为禁用。
+// 采用条件更新（仅当前为启用状态才禁用），因此幂等且不会重复写库；返回是否真正发生了禁用。
+// 供离主流程的 goroutine 调用，本身不返回错误给调用方的业务流程。
+func DisableUserForQuotaAnomaly(id int) (disabled bool, err error) {
+	result := DB.Model(&User{}).
+		Where("id = ? AND status = ?", id, common.UserStatusEnabled).
+		Update("status", common.UserStatusDisabled)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		// 已被禁用 / 用户不存在：无需处理
+		return false, nil
+	}
+	_ = invalidateUserCache(id)
+	return true, nil
+}
+
 //func GetRootUserEmail() (email string) {
 //	DB.Model(&User{}).Where("role = ?", common.RoleRootUser).Select("email").Find(&email)
 //	return email

@@ -796,7 +796,7 @@ export function useCommonLogsColumns(
         const log = row.original
         const other = parseLogOther(log.other)
 
-        const segments = buildDetailSegments(log, other, t, isAdmin)
+        const segments = buildDetailSegments(log, other, t, showAdminFields)
         const primary = segments[0]
         const hasMore = segments.length > 1
 

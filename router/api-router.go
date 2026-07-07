@@ -234,6 +234,7 @@ func SetApiRouter(router *gin.Engine) {
 			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
 			employeeAdminRoute.GET("/consumption-cost-ledger", controller.AdminListConsumptionCostLedger)
 			employeeAdminRoute.GET("/consumption-cost-ledger/stats", controller.AdminGetConsumptionCostLedgerStats)
+			employeeAdminRoute.POST("/consumption-cost-ledger/reversal", controller.AdminReverseConsumptionCostLedger)
 			employeeAdminRoute.POST("/consumption-cost-ledger/export", controller.AdminCreateLedgerExport)
 			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id", controller.AdminGetLedgerExport)
 			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id/download-url", controller.AdminGetLedgerExportDownloadURL)

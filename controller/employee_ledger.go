@@ -88,6 +88,27 @@ func AdminListConsumptionCostLedger(c *gin.Context) {
 	ledgerJSONSuccessWithHint(c, page, hint)
 }
 
+// AdminReverseConsumptionCostLedger 对某条台账记录执行定向冲销：插入一条镜像消费记录、
+// 重新走结算侧效应（余额 + 台账 + 提成），使该笔消费的净影响归零。仅管理员可调用。
+// 台账记录 id 走请求体（避免与同级静态路由 stats/export/fallback 冲突）。
+func AdminReverseConsumptionCostLedger(c *gin.Context) {
+	var req struct {
+		Id int `json:"id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Id <= 0 {
+		ledgerJSONError(c, http.StatusBadRequest, "Invalid ledger id.")
+		return
+	}
+	adminId := c.GetInt("id")
+	adminName := c.GetString("username")
+	result, err := service.ReverseConsumptionCostLedger(c, req.Id, adminId, adminName)
+	if err != nil {
+		ledgerJSONError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	ledgerJSONSuccess(c, result)
+}
+
 func parseConsumptionCostLedgerListFilter(c *gin.Context) (model.ConsumptionCostLedgerFilter, error) {
 	statsFilter, err := parseConsumptionCostLedgerCommonFilter(c)
 	if err != nil {
