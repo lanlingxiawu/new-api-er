@@ -37,7 +37,8 @@ type CommissionMonthlyExport struct {
 // GetCommissionMonthlyEmployeeExport 返回所查月份下【每个在职员工】的业绩/分红/等级/名字，
 // 用于月度统计导出。周期口径与日历一致：
 //   - 当前本期：按各员工 baseline 锚定的桶聚合，等级取现等级；
-//   - 历史周期：按自然月 stat_date 跨所有旧桶聚合，等级由变更日志还原当期结束时刻的等级。
+//   - 历史周期：按当前口径的周期边界（自然月模式=自然月、重置日模式=重置日周期）内的 stat_date
+//     跨所有旧桶聚合，等级由变更日志还原当期结束时刻的等级。
 //
 // 业绩来自日统计表按员工 SUM，分红 = 业绩 × 该期等级费率（四舍五入，与页面口径一致）。
 // 覆盖全部在职员工（无数据者业绩/分红为 0，仍带出名字与等级）。
@@ -94,7 +95,7 @@ func GetCommissionMonthlyEmployeeExport(startTime, endTime int64) (*CommissionMo
 			"COALESCE(SUM(employee_commission_reset_period_daily_stats.profit_quota),0) AS profit_quota, " +
 			"COALESCE(SUM(employee_commission_reset_period_daily_stats.record_count),0) AS record_count")
 	if isHistorical {
-		// 历史周期：自然月切片，跨所有旧桶（不限定 reset_started_at）。
+		// 历史周期：按当前口径的周期边界切片，跨所有旧桶（不限定 reset_started_at）。
 		aggTx = aggTx.Where(
 			"employee_commission_reset_period_daily_stats.stat_date >= ? AND employee_commission_reset_period_daily_stats.stat_date <= ? AND employee_commission_reset_period_daily_stats.employee_user_id IN ?",
 			commissionStatDayStart(period.PeriodStartAt),
