@@ -99,6 +99,23 @@ function splitQuotaDisplay(value: string): { prefix: string; amount: string } {
 function buildDetailSegments(
   log: UsageLog,
   other: LogOtherData | null,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  isAdmin: boolean
+): DetailSegment[] {
+  const segments = buildTypeDetailSegments(log, other, t)
+  // Quota saturation is a rare, admin-only anomaly marker; surface it first
+  // and in danger styling so it stands out on the related billing log. The
+  // backend already strips admin_info for non-admins; gate on isAdmin too as
+  // defense in depth so the marker never leaks if that changes.
+  if (isAdmin && other?.admin_info?.quota_saturation) {
+    return [{ text: t('Quota clamped'), danger: true }, ...segments]
+  }
+  return segments
+}
+
+function buildTypeDetailSegments(
+  log: UsageLog,
+  other: LogOtherData | null,
   t: (key: string, opts?: Record<string, unknown>) => string
 ): DetailSegment[] {
   if (log.type === 6) {
@@ -779,7 +796,7 @@ export function useCommonLogsColumns(
         const log = row.original
         const other = parseLogOther(log.other)
 
-        const segments = buildDetailSegments(log, other, t)
+        const segments = buildDetailSegments(log, other, t, isAdmin)
         const primary = segments[0]
         const hasMore = segments.length > 1
 
