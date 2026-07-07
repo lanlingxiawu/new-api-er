@@ -341,6 +341,8 @@ export function CommissionFinancialCalendar({
   employeeTierLevel,
   employeeTierRate,
   employeeTierGroup,
+  tierUnderpromoted,
+  eligibleTierLevel,
 }: {
   month: string
   onMonthChange: (month: string) => void
@@ -367,6 +369,9 @@ export function CommissionFinancialCalendar({
   employeeTierLevel?: number
   employeeTierRate?: number
   employeeTierGroup?: string
+  /** 该期业绩已达更高等级阈值但历史等级未提升（纯展示提示，不改等级） */
+  tierUnderpromoted?: boolean
+  eligibleTierLevel?: number
 }) {
   const { t } = useTranslation()
   // periodBoundaryAt 是下一周期起点（独占上界，= periodEndAt + 1s）。若直接拿它转成自然日
@@ -477,6 +482,17 @@ export function CommissionFinancialCalendar({
                   className={getEmployeeTierGroupBadgeClass(employeeTierGroup)}
                 >
                   {employeeTierGroup}
+                </Badge>
+              ) : null}
+              {tierUnderpromoted && eligibleTierLevel ? (
+                <Badge
+                  variant='outline'
+                  className='border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'
+                  title={t(
+                    'This period reached a higher tier threshold, but the historical tier was not promoted.'
+                  )}
+                >
+                  {t('Reached Tier {{level}}', { level: eligibleTierLevel })}
                 </Badge>
               ) : null}
             </div>
@@ -705,6 +721,8 @@ export function CommissionCalendarSection({
       employeeTierLevel={data?.data?.employee_tier_level}
       employeeTierRate={data?.data?.employee_tier_rate}
       employeeTierGroup={data?.data?.employee_tier_group}
+      tierUnderpromoted={data?.data?.tier_underpromoted}
+      eligibleTierLevel={data?.data?.eligible_tier_level}
     />
   )
 }

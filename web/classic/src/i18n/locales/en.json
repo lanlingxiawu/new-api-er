@@ -4282,5 +4282,25 @@
     "更新日志": "Changelog",
     "联系": "Contact",
     "邮箱支持": "Email Support"
-  }
+  },
+  "调整业绩": "Adjust Performance",
+  "当前等级费率": "Current tier rate",
+  "业绩金额": "Performance amount (USD)",
+  "负数表示扣减业绩。": "Negative values deduct performance.",
+  "预计提成": "Estimated commission",
+  "归属周期": "Period",
+  "补录到历史周期": "Backfill to a historical period",
+  "选择周期": "Choose a period",
+  "当前周期": "Current period",
+  "历史周期按该周期的等级费率计算，且不会修改等级。": "Historical periods use that period's tier rate and do not change the tier.",
+  "计入当前周期，可能触发等级重新评估。": "Applied to the current period; may trigger tier re-evaluation.",
+  "原因": "Reason",
+  "请选择周期": "Please choose a period",
+  "业绩调整已应用": "Performance adjustment applied",
+  "调整已撤销": "Adjustment reverted",
+  "调整记录": "Adjustment history",
+  "已撤销": "Reverted",
+  "撤销": "Revert",
+  "该周期业绩已达更高等级阈值，但历史等级未提升。": "This period reached a higher tier threshold, but the historical tier was not promoted.",
+  "已达 {{level}} 级": "Reached Tier {{level}}"
 }

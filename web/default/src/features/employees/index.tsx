@@ -16,6 +16,7 @@ import {
 } from '@tanstack/react-table'
 import {
   ChevronDown,
+  CirclePlus,
   Download,
   Info,
   List,
@@ -109,6 +110,7 @@ import {
   monthValueToCalendarRange,
 } from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
+import { PerformanceAdjustDialog } from './components/performance-adjust-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
 import { UsageLogIdHover } from './components/usage-log-id-hover'
 import {
@@ -1121,17 +1123,32 @@ function EmployeeRowActions({
   onDelete,
   onAssign,
   onViewCustomers,
+  onAddPerformance,
 }: {
   row: EmployeeProfile
   onEdit: (row: EmployeeProfile) => void
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
   onViewCustomers: (row: EmployeeProfile) => void
+  onAddPerformance: (row: EmployeeProfile) => void
 }) {
   const { t } = useTranslation()
 
   return (
     <div className='flex flex-nowrap items-center justify-end gap-1'>
+      {row.status === 1 ? (
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='size-8'
+          title={t('Adjust Performance')}
+          aria-label={t('Adjust Performance')}
+          onClick={() => onAddPerformance(row)}
+        >
+          <CirclePlus className='size-4' />
+        </Button>
+      ) : null}
       {row.status === 1 ? (
         <Button
           type='button'
@@ -1189,6 +1206,7 @@ function useEmployeesColumns({
   onDelete,
   onAssign,
   onViewCustomers,
+  onAddPerformance,
   expandedTotals,
   onToggleTotals,
 }: {
@@ -1196,6 +1214,7 @@ function useEmployeesColumns({
   onDelete: (row: EmployeeProfile) => void
   onAssign: (row: EmployeeProfile) => void
   onViewCustomers: (row: EmployeeProfile) => void
+  onAddPerformance: (row: EmployeeProfile) => void
   expandedTotals: Record<number, boolean>
   onToggleTotals: (row: EmployeeProfile) => void
 }) {
@@ -1423,6 +1442,7 @@ function useEmployeesColumns({
             onDelete={onDelete}
             onEdit={onEdit}
             onViewCustomers={onViewCustomers}
+            onAddPerformance={onAddPerformance}
           />
         ),
       },
@@ -1434,6 +1454,7 @@ function useEmployeesColumns({
       onEdit,
       onToggleTotals,
       onViewCustomers,
+      onAddPerformance,
       t,
     ]
   )
@@ -1784,6 +1805,9 @@ function EmployeesTab() {
   const [editRow, setEditRow] = useState<EmployeeProfile | undefined>()
   const [deleteRow, setDeleteRow] = useState<EmployeeProfile | undefined>()
   const [assignRow, setAssignRow] = useState<EmployeeProfile | undefined>()
+  const [performanceRow, setPerformanceRow] = useState<
+    EmployeeProfile | undefined
+  >()
   const [customerListRow, setCustomerListRow] = useState<
     EmployeeProfile | undefined
   >()
@@ -1816,6 +1840,7 @@ function EmployeesTab() {
     onDelete: setDeleteRow,
     onAssign: setAssignRow,
     onViewCustomers: setCustomerListRow,
+    onAddPerformance: setPerformanceRow,
     expandedTotals,
     onToggleTotals: toggleTotals,
   })
@@ -2050,6 +2075,12 @@ function EmployeesTab() {
         open={!!editRow}
         onOpenChange={(open) => !open && setEditRow(undefined)}
         currentRow={editRow}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
+      />
+      <PerformanceAdjustDialog
+        open={!!performanceRow}
+        onOpenChange={(open) => !open && setPerformanceRow(undefined)}
+        employee={performanceRow}
         onSuccess={() => qc.invalidateQueries({ queryKey: ['employees'] })}
       />
       <AlertDialog

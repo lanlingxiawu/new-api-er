@@ -4281,5 +4281,24 @@
     "最小日志量": "",
     "Redis 去重键有效期，覆盖重试窗口即可；越大越占内存，仅在启用 Redis 去重时生效。": "",
     "暂未定级": "Chưa có cấp bậc"
-  }
+  },
+  "调整业绩": "Điều chỉnh hiệu suất",
+  "当前等级费率": "Tỷ lệ bậc hiện tại",
+  "业绩金额": "Số tiền hiệu suất (USD)",
+  "负数表示扣减业绩。": "Giá trị âm sẽ trừ hiệu suất.",
+  "预计提成": "Hoa hồng ước tính",
+  "归属周期": "Kỳ",
+  "补录到历史周期": "Bổ sung vào kỳ trước",
+  "选择周期": "Chọn kỳ",
+  "历史周期按该周期的等级费率计算，且不会修改等级。": "Các kỳ trước dùng tỷ lệ bậc của kỳ đó và không thay đổi bậc.",
+  "计入当前周期，可能触发等级重新评估。": "Áp dụng cho kỳ hiện tại; có thể kích hoạt đánh giá lại bậc.",
+  "原因": "Lý do",
+  "请选择周期": "Vui lòng chọn kỳ",
+  "业绩调整已应用": "Đã áp dụng điều chỉnh hiệu suất",
+  "调整已撤销": "Đã hoàn tác điều chỉnh",
+  "调整记录": "Lịch sử điều chỉnh",
+  "已撤销": "Đã hoàn tác",
+  "撤销": "Hoàn tác",
+  "该周期业绩已达更高等级阈值，但历史等级未提升。": "Kỳ này đã đạt ngưỡng bậc cao hơn, nhưng bậc lịch sử chưa được nâng.",
+  "已达 {{level}} 级": "Đạt bậc {{level}}"
 }
