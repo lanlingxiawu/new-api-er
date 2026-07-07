@@ -115,6 +115,12 @@ export interface CommissionCalendarStats {
   period_boundary_at?: number
   period_key?: string
   timezone?: string
+  /** 是否为历史周期（非当前本期）：历史周期按自然月切片、展示已结算提成 */
+  is_historical?: boolean
+  /** 仅按单个员工筛选时返回：该员工在所查周期生效的等级信息 */
+  employee_tier_level?: number
+  employee_tier_rate?: number
+  employee_tier_group?: string
   summary: {
     revenue_quota: number
     cost_quota: number
@@ -128,6 +134,30 @@ export interface CommissionCalendarStats {
     /** 各日重算提成之和（仅员工维度时返回） */
     recalc_commission_quota?: number
   }
+}
+
+export interface CommissionMonthlyEmployeeRow {
+  employee_user_id: number
+  username: string
+  display_name: string
+  remark: string
+  tier_level: number
+  tier_group: string
+  tier_rate: number
+  profit_quota: number
+  commission_quota: number
+  record_count: number
+  profit_usd?: number
+  commission_usd?: number
+}
+
+export interface CommissionMonthlyExport {
+  period_start_at: number
+  period_end_at: number
+  period_key: string
+  timezone: string
+  is_historical: boolean
+  rows: CommissionMonthlyEmployeeRow[]
 }
 
 export interface CommissionResetPeriodStatItem {

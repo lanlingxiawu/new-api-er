@@ -16,6 +16,7 @@ import {
 } from '@tanstack/react-table'
 import {
   ChevronDown,
+  Download,
   Info,
   List,
   Pencil,
@@ -92,6 +93,7 @@ import {
   deleteEmployee,
   deleteEmployeeTier,
   getCommissionCalendarStats,
+  getCommissionMonthlyExport,
   getEmployeeCustomers,
   getCommissionChannelOptions,
   getCommissionLogs,
@@ -103,6 +105,8 @@ import {
 } from './api'
 import {
   CommissionCalendarSection,
+  currentMonthValue,
+  monthValueToCalendarRange,
 } from './components/commission-financial-calendar'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
@@ -2619,14 +2623,92 @@ function EmployeeMonthlySelector({
   )
 }
 
+function csvCell(value: string | number | undefined) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
+}
+
 function CommissionMonthlyStatsTab() {
   const { t } = useTranslation()
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile>()
+  const [month, setMonth] = useState(currentMonthValue)
+  const [exporting, setExporting] = useState(false)
   const employeeUserId = selectedEmployee?.user_id
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      // 用与日历展示相同的周期范围，保证导出的统计周期与页面所见一致
+      // （非自然月结算配置下 monthValueToRange 会解析到不同周期）。
+      const res = await getCommissionMonthlyExport(
+        monthValueToCalendarRange(month)
+      )
+      if (!res.success || !res.data) {
+        throw new Error(res.message || t('Operation failed'))
+      }
+      const rows = res.data.rows ?? []
+      if (rows.length === 0) {
+        toast.info(t('No data to export'))
+        return
+      }
+      const headers = [
+        t('Employee'),
+        t('Employee ID'),
+        t('Remark'),
+        t('Period Tier'),
+        t('Group'),
+        t('Commission ratio'),
+        t('Current Period Performance'),
+        t('Current Period Commission'),
+        t('Records'),
+      ]
+      const lines = [headers.map(csvCell).join(',')]
+      for (const row of rows) {
+        const account = row.username || `#${row.employee_user_id}`
+        const name = row.display_name
+          ? `${account} (${row.display_name})`
+          : account
+        lines.push(
+          [
+            name,
+            row.employee_user_id,
+            row.remark || '',
+            row.tier_level
+              ? t('Tier {{level}}', { level: row.tier_level })
+              : '-',
+            row.tier_group || '',
+            row.tier_level ? `${(row.tier_rate * 100).toFixed(1)}%` : '',
+            formatBusinessAmount(row.profit_quota),
+            formatBusinessAmount(row.commission_quota),
+            row.record_count,
+          ]
+            .map(csvCell)
+            .join(',')
+        )
+      }
+      const csv = '﻿' + lines.join('\r\n')
+      // 前置 UTF-8 BOM，便于 Excel/WPS 正确识别中文。
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `commission-${res.data.period_key || month}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      toast.success(t('Export successful'))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('Operation failed'))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <CommissionCalendarSection
       queryKey={['admin-commission-calendar-stats', employeeUserId]}
+      month={month}
+      onMonthChange={setMonth}
       queryFn={(range) =>
         getCommissionCalendarStats({
           ...range,
@@ -2642,6 +2724,17 @@ function CommissionMonthlyStatsTab() {
             value={selectedEmployee}
             onChange={setSelectedEmployee}
           />
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={handleExport}
+            disabled={exporting}
+            title={t('Export current month per-employee data')}
+          >
+            <Download className='h-4 w-4' />
+            {exporting ? t('Exporting...') : t('Export')}
+          </Button>
         </div>
       }
     />

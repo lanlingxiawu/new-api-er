@@ -3727,8 +3727,80 @@ function CommissionFinancialResetPeriodCalendar({
   const [month, setMonth] = useState(currentMonthValue);
   const [selectedEmployee, setSelectedEmployee] = useState(undefined);
   const [selectedDate, setSelectedDate] = useState(undefined);
+  const [exporting, setExporting] = useState(false);
   const employeeUserId = selectedEmployee?.user_id;
   const range = useMemo(() => monthValueToCalendarRange(month), [month]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const res = await API.get(
+        '/api/admin/employee/commission/monthly-export',
+        { params: monthValueToCalendarRange(month) },
+      );
+      const body = res.data;
+      if (!body?.success || !body?.data) {
+        showError(body?.message || t('操作失败'));
+        return;
+      }
+      const rows = body.data.rows || [];
+      if (rows.length === 0) {
+        showError(t('No data to export'));
+        return;
+      }
+      const csvCell = (value) =>
+        `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const headers = [
+        t('Employee'),
+        t('Employee UID'),
+        t('Remark'),
+        t('Period Tier'),
+        t('Group'),
+        t('Commission ratio'),
+        t('Current Period Performance'),
+        t('Current Period Commission'),
+        t('Records'),
+      ];
+      const lines = [headers.map(csvCell).join(',')];
+      for (const row of rows) {
+        const account = row.username || `#${row.employee_user_id}`;
+        const name = row.display_name
+          ? `${account} (${row.display_name})`
+          : account;
+        lines.push(
+          [
+            name,
+            row.employee_user_id,
+            row.remark || '',
+            row.tier_level ? `等级 ${row.tier_level}` : '-',
+            row.tier_group || '',
+            row.tier_level ? `${(row.tier_rate * 100).toFixed(1)}%` : '',
+            formatBusinessAmount(row.profit_quota),
+            formatBusinessAmount(row.commission_quota),
+            row.record_count,
+          ]
+            .map(csvCell)
+            .join(','),
+        );
+      }
+      // 前置 UTF-8 BOM，便于 Excel/WPS 正确识别中文。
+      const csv = '﻿' + lines.join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `commission-${body.data.period_key || month}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showSuccess(t('Export successful'));
+    } catch (error) {
+      showError(error?.message || t('操作失败'));
+    } finally {
+      setExporting(false);
+    }
+  };
   const params = useMemo(
     () =>
       buildParams({
@@ -3818,6 +3890,28 @@ function CommissionFinancialResetPeriodCalendar({
           >
             {t('Today')}
           </Button>
+          {stats.data?.employee_tier_level ? (
+            <Space spacing={4} style={{ paddingLeft: 4 }}>
+              <Text type='secondary' size='small'>
+                {t('Period Tier')}
+              </Text>
+              <Tag color={getTierLevelTagColor(stats.data.employee_tier_level)}>
+                {`等级 ${stats.data.employee_tier_level}`}
+              </Tag>
+              {stats.data.employee_tier_rate ? (
+                <Text type='secondary' size='small'>
+                  {formatPercent(stats.data.employee_tier_rate)}
+                </Text>
+              ) : null}
+              {stats.data.employee_tier_group ? (
+                <Tag
+                  color={getTierGroupTagColor(stats.data.employee_tier_group)}
+                >
+                  {stats.data.employee_tier_group}
+                </Tag>
+              ) : null}
+            </Space>
+          ) : null}
         </Space>
         {!selfView ? (
           <div className='flex items-center gap-2'>
@@ -3828,6 +3922,16 @@ function CommissionFinancialResetPeriodCalendar({
               value={selectedEmployee}
               onChange={setSelectedEmployee}
             />
+            <Button
+              size='small'
+              type='tertiary'
+              icon={<Download size={14} />}
+              loading={exporting}
+              onClick={handleExport}
+              title={t('Export current month per-employee data')}
+            >
+              {t('Export')}
+            </Button>
           </div>
         ) : null}
       </div>

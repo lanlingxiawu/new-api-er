@@ -564,6 +564,26 @@ func AdminCommissionCalendarStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": stats})
 }
 
+// AdminCommissionMonthlyExport GET /api/admin/employee/commission/monthly-export
+// 返回所查月份下每个在职员工的业绩/分红/等级/名字（供前端生成 CSV 导出）。
+func AdminCommissionMonthlyExport(c *gin.Context) {
+	timeRange, err := parseUnixTimeRangeQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	if timeRange.StartTime == 0 || timeRange.EndTime == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "start_time and end_time are required"})
+		return
+	}
+	data, err := model.GetCommissionMonthlyEmployeeExport(timeRange.StartTime, timeRange.EndTime)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": data})
+}
+
 // AdminCommissionOverview GET /api/admin/employee/overview
 func AdminCommissionOverview(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
