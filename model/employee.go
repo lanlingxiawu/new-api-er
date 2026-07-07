@@ -727,8 +727,9 @@ type CommissionCalendarStats struct {
 	PeriodBoundaryAt int64                        `json:"period_boundary_at"`
 	PeriodKey        string                       `json:"period_key"`
 	Timezone         string                       `json:"timezone"`
-	// IsHistorical 标记本次查询是否为历史周期（非当前本期）。历史周期按自然月切片、
-	// 直接展示已结算的 commission_quota，不再用当前费率重算。
+	// IsHistorical 标记本次查询是否为历史周期（非当前本期）。历史周期按【当前统计口径】解析出的
+	// 周期边界切片（自然月模式=自然月边界；重置日模式=重置日周期边界），跨所有旧桶按 stat_date 聚合；
+	// 提成用「业绩 × 该期等级费率」重算（历史等级由 employee_tier_logs 还原），而非当前费率。
 	IsHistorical bool `json:"is_historical,omitempty"`
 	// 以下字段仅在按单个员工筛选时填充：该员工在所查周期内生效的等级信息。
 	// 历史周期取当期结束时刻的等级（由 employee_tier_logs 还原），当前周期取现等级。
@@ -1011,9 +1012,10 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 	}
 	period := ResolveCommissionMonthlyPeriod(startTime)
 	boundaryAt := period.PeriodEndAt + 1
-	// 是否为历史周期：所查周期起点早于"当前本期"起点。历史周期不再按 baseline 锚定，
-	// 而是按自然月边界（period.PeriodStartAt~PeriodEndAt）跨所有旧桶按 stat_date 聚合，
-	// 这样切换统计方式（重置日→自然月）后，上个月按旧口径落桶的数据仍能完整显示。
+	// 是否为历史周期：所查周期起点 != "当前本期"起点。历史周期不再按 baseline 锚定，
+	// 而是按【当前口径】解析出的周期边界（period.PeriodStartAt~PeriodEndAt，自然月模式=自然月、
+	// 重置日模式=重置日周期）跨所有旧桶按 stat_date 聚合，与日历展示的周期边界完全一致——
+	// 这样切换统计方式后，上个月按旧口径落桶的数据仍能按新口径完整重组显示。
 	currentPeriodStart := ResolveCommissionMonthlyPeriod(time.Now().Unix()).PeriodStartAt
 	isHistorical := period.PeriodStartAt != currentPeriodStart
 	stats := &CommissionCalendarStats{
@@ -1060,7 +1062,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			"COALESCE(SUM(record_count),0) AS record_count")
 	switch {
 	case isHistorical && employeeUserId > 0:
-		// 历史周期·单员工：按自然月切片，跨所有旧桶按 stat_date 聚合（不限定 reset_started_at）。
+		// 历史周期·单员工：按当前口径的周期边界切片，跨所有旧桶按 stat_date 聚合（不限定 reset_started_at）。
 		tx = tx.Where(
 			"employee_user_id = ? AND stat_date >= ? AND stat_date <= ?",
 			employeeUserId,
@@ -1068,7 +1070,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			commissionStatDayStart(queryEndAt),
 		)
 	case isHistorical:
-		// 历史周期·全员：仅按自然月 stat_date 聚合在职员工数据，跨所有旧桶合并。
+		// 历史周期·全员：仅按当前口径周期边界内的 stat_date 聚合在职员工数据，跨所有旧桶合并。
 		tx = tx.Joins(
 			"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
 			1,
@@ -1186,7 +1188,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		aggTx := DB.Model(&EmployeeCommissionResetPeriodDailyStat{}).
 			Select("employee_commission_reset_period_daily_stats.employee_user_id AS employee_user_id, COALESCE(SUM(profit_quota),0) AS profit_quota")
 		if isHistorical {
-			// 历史周期：按自然月 stat_date 跨所有旧桶聚合在职员工利润（不限定 reset_started_at）。
+			// 历史周期：按当前口径周期边界内的 stat_date 跨所有旧桶聚合在职员工利润（不限定 reset_started_at）。
 			aggTx = aggTx.Joins(
 				"JOIN employee_profiles ON employee_profiles.user_id = employee_commission_reset_period_daily_stats.employee_user_id AND employee_profiles.status = ?",
 				1,
