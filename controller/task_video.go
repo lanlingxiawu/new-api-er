@@ -172,7 +172,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 							finalGroupRatio, _ := ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), group, group)
 
 							// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio（饱和转换，防止溢出成负数）
-							actualQuota := common.QuotaFromFloat(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio)
+							actualQuota, clamp := common.QuotaFromFloatChecked(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio)
+							if clamp != nil {
+								logger.LogWarn(ctx, fmt.Sprintf("quota saturation on video task %s: op=%s kind=%s original=%g clamped=%d user=%d",
+									task.TaskID, clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, task.UserId))
+							}
 
 							// 计算差额
 							preConsumedQuota := task.Quota
@@ -198,7 +202,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 									logContent := fmt.Sprintf("视频任务成功补扣费，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，补扣费 %s",
 										modelRatio, finalGroupRatio, taskResult.TotalTokens,
 										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(quotaDelta))
-									model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+									if clamp != nil {
+										model.RecordLogWithAdminInfo(task.UserId, model.LogTypeSystem, logContent,
+											map[string]interface{}{"quota_saturation": clamp.AuditMap()})
+									} else {
+										model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+									}
 								}
 							} else if quotaDelta < 0 {
 								// 需要退还多扣的费用
@@ -219,7 +228,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 									logContent := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
 										modelRatio, finalGroupRatio, taskResult.TotalTokens,
 										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(refundQuota))
-									model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+									if clamp != nil {
+										model.RecordLogWithAdminInfo(task.UserId, model.LogTypeSystem, logContent,
+											map[string]interface{}{"quota_saturation": clamp.AuditMap()})
+									} else {
+										model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+									}
 								}
 							} else {
 								// quotaDelta == 0, 预扣费刚好准确
