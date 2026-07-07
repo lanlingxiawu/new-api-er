@@ -2788,6 +2788,291 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
   );
 }
 
+// PerformanceModal 手工业绩调整（加/减业绩），对应后端
+// /api/admin/employee/:id/performance（增删查）。见 docs/employee-performance-adjustment-design.md。
+function monthValueToUnix(value) {
+  const [y, m] = String(value || '')
+    .split('-')
+    .map((v) => Number(v));
+  if (!y || !m) return 0;
+  return Math.floor(new Date(y, m - 1, 15, 12, 0, 0).getTime() / 1000);
+}
+
+function PerformanceModal({ visible, row, onCancel, onSuccess }) {
+  const { t } = useTranslation();
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [historical, setHistorical] = useState(false);
+  const [month, setMonth] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [revertingId, setRevertingId] = useState(null);
+  const [adjustments, setAdjustments] = useState([]);
+  const [loadingList, setLoadingList] = useState(false);
+
+  const currentMonth = useMemo(() => currentMonthValue(), []);
+  // 历史周期补录仅提供「过去的自然月」——当前月不属于历史，避免勾选补录却落到当前周期并触发等级重估。
+  const monthOptions = useMemo(
+    () =>
+      Array.from({ length: 12 }, (_, i) =>
+        shiftMonthValue(currentMonth, -(i + 1)),
+      ),
+    [currentMonth],
+  );
+
+  const loadAdjustments = useCallback(async () => {
+    if (!row?.id) return;
+    setLoadingList(true);
+    try {
+      const res = await API.get(
+        `/api/admin/employee/${row.id}/performance`,
+        { params: { page: 1, page_size: 20 } },
+      );
+      if (res.data.success) {
+        setAdjustments(res.data.data?.items || []);
+      }
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setLoadingList(false);
+    }
+  }, [row?.id]);
+
+  useEffect(() => {
+    if (visible) {
+      loadAdjustments();
+    } else {
+      setAmount('');
+      setReason('');
+      setHistorical(false);
+      setMonth('');
+      setAdjustments([]);
+    }
+  }, [visible, loadAdjustments]);
+
+  const amountNum = Number(amount);
+  const amountValid = amount !== '' && !Number.isNaN(amountNum) && amountNum !== 0;
+  const rate = Number(row?.current_tier_rate || 0);
+  const previewCommissionUsd = !historical && amountValid ? amountNum * rate : null;
+
+  const submit = async () => {
+    if (!row?.id || !amountValid) return;
+    if (historical && !month) {
+      showError(t('请选择周期'));
+      return;
+    }
+    setSaving(true);
+    try {
+      const periodStartAt = historical && month ? monthValueToUnix(month) : 0;
+      await mutateRequest('post', `/api/admin/employee/${row.id}/performance`, {
+        profit_usd: amountNum,
+        reason: reason.trim(),
+        period_start_at: periodStartAt,
+      });
+      showSuccess(t('业绩调整已应用'));
+      setAmount('');
+      setReason('');
+      await loadAdjustments();
+      onSuccess?.();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revert = async (logId) => {
+    setRevertingId(logId);
+    try {
+      await mutateRequest(
+        'post',
+        `/api/admin/employee/performance/${logId}/revert`,
+      );
+      showSuccess(t('调整已撤销'));
+      await loadAdjustments();
+      onSuccess?.();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setRevertingId(null);
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      title={t('调整业绩')}
+      onCancel={onCancel}
+      width={560}
+      footer={
+        <Space>
+          <Button onClick={onCancel}>{t('关闭')}</Button>
+          <Button
+            type='primary'
+            loading={saving}
+            disabled={!amountValid}
+            onClick={submit}
+          >
+            {t('应用')}
+          </Button>
+        </Space>
+      }
+    >
+      <div
+        className='mb-4 rounded-lg border px-3 py-2'
+        style={{
+          borderColor: 'var(--semi-color-border)',
+          background: 'var(--semi-color-fill-0)',
+        }}
+      >
+        <div className='flex min-w-0 items-center gap-2'>
+          <Text strong ellipsis>
+            {row?.username || `#${row?.user_id}`}
+          </Text>
+          {row?.display_name ? (
+            <Text type='secondary' ellipsis>
+              {row.display_name}
+            </Text>
+          ) : null}
+          <Tag size='small' color='white' className='ml-auto shrink-0'>
+            #{row?.user_id}
+          </Tag>
+        </div>
+        <Text type='secondary' size='small' className='mt-1 block'>
+          {t('当前等级费率')}: {formatPercent(rate)}
+        </Text>
+      </div>
+
+      <Field label={t('业绩金额')}>
+        <InputNumber
+          value={amount}
+          onChange={(value) => setAmount(value)}
+          placeholder='0.00'
+          hideButtons
+          style={{ width: '100%' }}
+        />
+        <Text type='secondary' size='small' className='mt-1 block'>
+          {t('负数表示扣减业绩。')}
+          {previewCommissionUsd != null
+            ? ` ${t('预计提成')} ≈ $${formatFullNumber(previewCommissionUsd)}`
+            : ''}
+        </Text>
+      </Field>
+
+      <Field label={t('归属周期')}>
+        <Checkbox
+          checked={historical}
+          onChange={(e) => {
+            setHistorical(e.target.checked);
+            if (!e.target.checked) setMonth('');
+          }}
+        >
+          {t('补录到历史周期')}
+        </Checkbox>
+        {historical ? (
+          <>
+            <Select
+              value={month}
+              onChange={(value) => setMonth(value)}
+              placeholder={t('选择周期')}
+              style={{ width: '100%', marginTop: 8 }}
+            >
+              {monthOptions.map((m) => (
+                <Select.Option key={m} value={m}>
+                  {monthLabel(m)}
+                </Select.Option>
+              ))}
+            </Select>
+            <Text type='secondary' size='small' className='mt-1 block'>
+              {t('历史周期按该周期的等级费率计算，且不会修改等级。')}
+            </Text>
+          </>
+        ) : (
+          <Text type='secondary' size='small' className='mt-1 block'>
+            {t('计入当前周期，可能触发等级重新评估。')}
+          </Text>
+        )}
+      </Field>
+
+      <Field label={t('原因')}>
+        <TextArea
+          value={reason}
+          onChange={(value) => setReason(value)}
+          autosize={{ minRows: 2, maxRows: 4 }}
+          placeholder={t('可选')}
+        />
+      </Field>
+
+      {adjustments.length > 0 || loadingList ? (
+        <Field label={t('调整记录')}>
+          {loadingList ? (
+            <div className='flex justify-center py-4'>
+              <Spin />
+            </div>
+          ) : (
+            <div
+              className='divide-y rounded-lg border'
+              style={{ borderColor: 'var(--semi-color-border)' }}
+            >
+              {adjustments.map((adj) => {
+                const reverted = Number(adj.settle_status) === 2;
+                const profitQuota = Number(adj.profit_quota) || 0;
+                return (
+                  <div
+                    key={adj.id}
+                    className='flex items-center gap-2 px-3 py-2'
+                  >
+                    <div className='min-w-0 flex-1'>
+                      {/* 手工调整：正=加业绩、负=扣减；不套用亏损/冲销徽标（那是消费流水语义）。 */}
+                      <Text
+                        strong
+                        style={{
+                          color:
+                            profitQuota > 0
+                              ? 'var(--semi-color-success)'
+                              : profitQuota < 0
+                                ? 'var(--semi-color-danger)'
+                                : undefined,
+                        }}
+                      >
+                        {profitQuota > 0 ? '+' : ''}
+                        {formatBusinessAmount(profitQuota)}
+                      </Text>
+                      <Text
+                        type='secondary'
+                        size='small'
+                        className='mt-0.5 block'
+                      >
+                        {formatTs(adj.created_at)}
+                        {' · '}
+                        {formatPercent(adj.commission_rate)}
+                      </Text>
+                    </div>
+                    {reverted ? (
+                      <Tag size='small' color='grey' className='shrink-0'>
+                        {t('已撤销')}
+                      </Tag>
+                    ) : (
+                      <Button
+                        size='small'
+                        type='tertiary'
+                        theme='borderless'
+                        loading={revertingId === adj.id}
+                        onClick={() => revert(adj.id)}
+                      >
+                        {t('撤销')}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+      ) : null}
+    </Modal>
+  );
+}
+
 function EmployeesTab({
   employees: providedEmployees,
   filters,
@@ -2806,6 +3091,9 @@ function EmployeesTab({
   const [assignModalVisible, setAssignModalVisible] = useState(false);
   const [customerListModalRow, setCustomerListModalRow] = useState(null);
   const [customerListModalVisible, setCustomerListModalVisible] =
+    useState(false);
+  const [performanceModalRow, setPerformanceModalRow] = useState(null);
+  const [performanceModalVisible, setPerformanceModalVisible] =
     useState(false);
   const [filterForm, setFilterForm] = useState(() => ({
     user_id: filters?.user_id || undefined,
@@ -2890,6 +3178,16 @@ function EmployeesTab({
   const openCustomerList = (row) => {
     setCustomerListModalRow(row);
     setCustomerListModalVisible(true);
+  };
+
+  const openPerformance = (row) => {
+    setPerformanceModalRow(row);
+    setPerformanceModalVisible(true);
+  };
+
+  const closePerformanceModal = () => {
+    setPerformanceModalVisible(false);
+    setPerformanceModalRow(null);
   };
 
   const closeModal = () => {
@@ -3102,6 +3400,17 @@ function EmployeesTab({
               size='small'
               type='tertiary'
               theme='borderless'
+              icon={<BadgeDollarSign size={14} />}
+              title={t('调整业绩')}
+              aria-label={t('调整业绩')}
+              onClick={() => openPerformance(row)}
+            />
+          ) : null}
+          {Number(row.status) === 1 ? (
+            <Button
+              size='small'
+              type='tertiary'
+              theme='borderless'
               icon={<UserRoundPlus size={14} />}
               title={t('分配客户')}
               aria-label={t('分配客户')}
@@ -3274,6 +3583,12 @@ function EmployeesTab({
         row={modalRow}
         onCancel={closeModal}
         onSuccess={refreshAfterModal}
+      />
+      <PerformanceModal
+        visible={performanceModalVisible}
+        row={performanceModalRow}
+        onCancel={closePerformanceModal}
+        onSuccess={() => employees.load()}
       />
       <AssignCustomerModal
         visible={assignModalVisible}
@@ -3909,6 +4224,19 @@ function CommissionFinancialResetPeriodCalendar({
                 >
                   {stats.data.employee_tier_group}
                 </Tag>
+              ) : null}
+              {stats.data.tier_underpromoted && stats.data.eligible_tier_level ? (
+                <Tooltip
+                  content={t(
+                    '该周期业绩已达更高等级阈值，但历史等级未提升。',
+                  )}
+                >
+                  <Tag color='amber'>
+                    {t('已达 {{level}} 级', {
+                      level: stats.data.eligible_tier_level,
+                    })}
+                  </Tag>
+                </Tooltip>
               ) : null}
             </Space>
           ) : null}

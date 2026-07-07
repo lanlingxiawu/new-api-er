@@ -4248,6 +4248,25 @@
     "需要添加的额度（支持负数）": "Besoin d'ajouter un quota (prend en charge les nombres négatifs)",
     "顶栏管理": "En-tête",
     "预计结果": "Résultat estimé",
-    "默认补全倍率": "Taux de complétion par défaut"
+    "默认补全倍率": "Taux de complétion par défaut",
+    "调整业绩": "Ajuster la performance",
+    "当前等级费率": "Taux du palier actuel",
+    "业绩金额": "Montant de performance (USD)",
+    "负数表示扣减业绩。": "Les valeurs négatives déduisent la performance.",
+    "预计提成": "Commission estimée",
+    "归属周期": "Période",
+    "补录到历史周期": "Reporter sur une période historique",
+    "选择周期": "Choisir une période",
+    "历史周期按该周期的等级费率计算，且不会修改等级。": "Les périodes historiques utilisent le taux du palier de cette période et ne modifient pas le palier.",
+    "计入当前周期，可能触发等级重新评估。": "Appliqué à la période actuelle ; peut déclencher une réévaluation du palier.",
+    "原因": "Raison",
+    "请选择周期": "Veuillez choisir une période",
+    "业绩调整已应用": "Ajustement de performance appliqué",
+    "调整已撤销": "Ajustement annulé",
+    "调整记录": "Historique des ajustements",
+    "已撤销": "Annulé",
+    "撤销": "Annuler",
+    "该周期业绩已达更高等级阈值，但历史等级未提升。": "Cette période a atteint un seuil de palier supérieur, mais le palier historique n'a pas été promu.",
+    "已达 {{level}} 级": "A atteint le palier {{level}}"
   }
 }

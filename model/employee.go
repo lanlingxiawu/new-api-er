@@ -736,6 +736,13 @@ type CommissionCalendarStats struct {
 	EmployeeTierLevel int     `json:"employee_tier_level,omitempty"`
 	EmployeeTierRate  float64 `json:"employee_tier_rate,omitempty"`
 	EmployeeTierGroup string  `json:"employee_tier_group,omitempty"`
+	// 以下为「应达等级」提示字段（仅单员工历史周期填充，纯只读、不改任何等级）：
+	// 当该期业绩已达更高等级阈值、但历史等级未提升时，TierUnderpromoted=true，前端据此在
+	// 历史等级徽标旁提示「业绩已达 Lx，历史等级未提升」。见
+	// docs/employee-performance-adjustment-design.md。
+	EligibleTierLevel int     `json:"eligible_tier_level,omitempty"`
+	EligibleTierRate  float64 `json:"eligible_tier_rate,omitempty"`
+	TierUnderpromoted bool    `json:"tier_underpromoted,omitempty"`
 }
 
 func normalizeCommissionResetPeriodStatFilter(filter CommissionResetPeriodStatFilter) CommissionResetPeriodStatFilter {
@@ -1176,6 +1183,26 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 				stats.EmployeeTierLevel = t.Level
 				stats.EmployeeTierRate = t.Rate
 				stats.EmployeeTierGroup = t.Group
+
+				// 应达等级提示：在该员工分组内取阈值 <= 本期业绩(USD) 的最高等级。
+				// 仅历史周期且应达等级高于历史等级时标记 under-promoted（纯展示，不改等级）。
+				profitUsd := stats.Summary.ProfitUsd
+				var best *EmployeeCommissionTier
+				for _, cand := range tiers {
+					if cand.Group != t.Group {
+						continue
+					}
+					if profitUsd >= cand.ThresholdUsd {
+						if best == nil || cand.Level > best.Level {
+							best = cand
+						}
+					}
+				}
+				if best != nil {
+					stats.EligibleTierLevel = best.Level
+					stats.EligibleTierRate = best.Rate
+					stats.TierUnderpromoted = isHistorical && best.Level > t.Level
+				}
 			}
 		}
 	} else {
