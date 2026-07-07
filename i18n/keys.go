@@ -87,6 +87,7 @@ const (
 	MsgUserEmailVerificationRequired = "user.email_verification_required"
 	MsgUserVerificationCodeError     = "user.verification_code_error"
 	MsgUserInputInvalid              = "user.input_invalid"
+	MsgUserGroupRatiosInvalid        = "user.group_ratios_invalid"
 	MsgUserNoPermissionSameLevel     = "user.no_permission_same_level"
 	MsgUserNoPermissionHigherLevel   = "user.no_permission_higher_level"
 	MsgUserCannotCreateHigherLevel   = "user.cannot_create_higher_level"

@@ -94,6 +94,8 @@ type RelayInfo struct {
 	UserId            int
 	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
 	UserGroup         string // 用户所在分组
+	// UserGroupRatios 用户专属分组倍率覆盖（map[group]ratio）。只读快照，构造后不得原地改写（设计 §8.5）。
+	UserGroupRatios map[string]float64
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
@@ -463,15 +465,18 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	if reqId == "" {
 		reqId = common.GetTimeString() + common.GetRandomString(8)
 	}
+	userGroupRatios, _ := common.GetContextKeyType[map[string]float64](c, constant.ContextKeyUserGroupRatios)
+
 	info := &RelayInfo{
 		Request: request,
 
-		RequestId:  reqId,
-		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-		UserGroup:  common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
-		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		RequestId:       reqId,
+		UserId:          common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		UsingGroup:      common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		UserGroup:       common.GetContextKeyString(c, constant.ContextKeyUserGroup),
+		UserGroupRatios: userGroupRatios,
+		UserQuota:       common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
+		UserEmail:       common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 

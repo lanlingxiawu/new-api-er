@@ -47,6 +47,8 @@ const RatioSetting = () => {
     AutoGroups: '',
     DefaultUseAutoGroup: false,
     ExposeRatioEnabled: false,
+    UserExclusiveGroupRatioEnabled: false,
+    UserExclusiveGroupRatioCacheMax: 4096,
     'thirdpartysd2_pricing.matrix': '',
     UserUsableGroups: '',
     'group_ratio_setting.group_special_usable_group': '',
@@ -67,8 +69,17 @@ const RatioSetting = () => {
             // 如果后端返回的不是合法 JSON，直接展示
           }
         }
-        if (['DefaultUseAutoGroup', 'ExposeRatioEnabled'].includes(item.key)) {
+        if (
+          [
+            'DefaultUseAutoGroup',
+            'ExposeRatioEnabled',
+            'UserExclusiveGroupRatioEnabled',
+          ].includes(item.key)
+        ) {
           newInputs[item.key] = toBoolean(item.value);
+        } else if (item.key === 'UserExclusiveGroupRatioCacheMax') {
+          const n = parseInt(item.value, 10);
+          newInputs[item.key] = Number.isNaN(n) ? 4096 : n;
         } else {
           newInputs[item.key] = item.value;
         }

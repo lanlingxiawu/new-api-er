@@ -49,16 +49,15 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		// user group special ratio
-		groupRatioInfo.GroupSpecialRatio = userGroupRatio
-		groupRatioInfo.GroupRatio = userGroupRatio
+	// Resolve the effective group ratio with priority:
+	// per-user exclusive (if enabled) -> group-group ratio -> group ratio.
+	// Any anomaly in the per-user branch falls through to the original logic,
+	// so an unconfigured user's result is unchanged (design §5.1 / §7.2).
+	ratio, special := ratio_setting.ResolveGroupRatio(relayInfo.UserGroupRatios, relayInfo.UserGroup, relayInfo.UsingGroup)
+	groupRatioInfo.GroupRatio = ratio
+	if special {
+		groupRatioInfo.GroupSpecialRatio = ratio
 		groupRatioInfo.HasSpecialRatio = true
-	} else {
-		// normal group ratio
-		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	}
 
 	return groupRatioInfo

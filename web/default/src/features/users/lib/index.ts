@@ -27,7 +27,10 @@ export { getUserActionMessage } from './user-actions'
 export {
   userFormSchema,
   type UserFormValues,
+  type GroupRatioRow,
   USER_FORM_DEFAULT_VALUES,
   transformFormDataToPayload,
   transformUserToFormDefaults,
+  parseGroupRatioRows,
+  serializeGroupRatioRows,
 } from './user-form'

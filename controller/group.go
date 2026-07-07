@@ -25,15 +25,23 @@ func GetGroups(c *gin.Context) {
 
 func GetUserGroups(c *gin.Context) {
 	usableGroups := make(map[string]map[string]interface{})
-	userGroup := ""
 	userId := c.GetInt("id")
-	userGroup, _ = model.GetUserGroup(userId, false)
+	// Fetch the user cache once and reuse both the group and the parsed
+	// exclusive ratios across the loop below, instead of re-reading the cache
+	// (and re-resolving) per group.
+	userGroup := ""
+	var userRatios map[string]float64
+	if userCache, err := model.GetUserCache(userId); err == nil {
+		userGroup = userCache.Group
+		userRatios = userCache.GetGroupRatios()
+	}
 	userUsableGroups := service.GetUserUsableGroups(userGroup)
-	for groupName, _ := range ratio_setting.GetGroupRatioCopy() {
+	for groupName := range ratio_setting.GetGroupRatioCopy() {
 		// UserUsableGroups contains the groups that the user can use
 		if desc, ok := userUsableGroups[groupName]; ok {
+			ratio, _ := ratio_setting.ResolveGroupRatio(userRatios, userGroup, groupName)
 			usableGroups[groupName] = map[string]interface{}{
-				"ratio": service.GetUserGroupRatio(userGroup, groupName),
+				"ratio": ratio,
 				"desc":  desc,
 			}
 		}

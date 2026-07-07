@@ -44,6 +44,7 @@ type User struct {
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	GroupRatios      string         `json:"group_ratios" gorm:"type:text"` // 用户专属分组倍率覆盖，JSON: {"group": ratio}；空视为无覆盖
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -66,13 +67,14 @@ type User struct {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:       user.Id,
-		Group:    user.Group,
-		Quota:    user.Quota,
-		Status:   user.Status,
-		Username: user.Username,
-		Setting:  user.Setting,
-		Email:    user.Email,
+		Id:          user.Id,
+		Group:       user.Group,
+		GroupRatios: user.GroupRatios,
+		Quota:       user.Quota,
+		Status:      user.Status,
+		Username:    user.Username,
+		Setting:     user.Setting,
+		Email:       user.Email,
 	}
 	return cache
 }
@@ -704,6 +706,7 @@ func (user *User) Edit(updatePassword bool) error {
 		"username":     newUser.Username,
 		"display_name": newUser.DisplayName,
 		"group":        newUser.Group,
+		"group_ratios": newUser.GroupRatios,
 		"remark":       newUser.Remark,
 	}
 	if updatePassword {
@@ -714,6 +717,17 @@ func (user *User) Edit(updatePassword bool) error {
 	if err = DB.Model(user).Updates(updates).Error; err != nil {
 		return err
 	}
+
+	// GORM's map-based Updates does NOT assign the map values back onto the
+	// model struct, and the DB.First above loaded the pre-update row. Without
+	// re-applying the updated columns here, updateUserCache would write stale
+	// values (e.g. an empty group_ratios) into the Redis user cache and the
+	// per-user exclusive ratio would not take effect until the cache TTL expired.
+	user.Username = newUser.Username
+	user.DisplayName = newUser.DisplayName
+	user.Group = newUser.Group
+	user.GroupRatios = newUser.GroupRatios
+	user.Remark = newUser.Remark
 
 	// Update cache
 	return updateUserCache(*user)

@@ -47,6 +47,7 @@ import {
   InputNumber,
   RadioGroup,
   Radio,
+  Select,
 } from '@douyinfe/semi-ui';
 import {
   IconUser,
@@ -55,6 +56,8 @@ import {
   IconLink,
   IconUserGroup,
   IconEdit,
+  IconDelete,
+  IconPlus,
 } from '@douyinfe/semi-icons';
 import UserBindingManagementModal from './UserBindingManagementModal';
 
@@ -76,8 +79,44 @@ const EditUserModal = (props) => {
   const [showAdjustQuotaRaw, setShowAdjustQuotaRaw] = useState(false);
   const [showQuotaInput, setShowQuotaInput] = useState(false);
   const [inputs, setInputs] = useState(null);
+  const [groupRatioRows, setGroupRatioRows] = useState([]);
 
   const isEdit = Boolean(userId);
+
+  // 专属分组倍率：存储 JSON {group: ratio}，编辑时展开为行
+  const parseGroupRatioRows = (raw) => {
+    if (!raw) return [];
+    try {
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== 'object') return [];
+      return Object.entries(obj).map(([group, ratio]) => ({
+        group,
+        ratio: Number(ratio),
+      }));
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const serializeGroupRatioRows = (rows) => {
+    const obj = {};
+    (rows || []).forEach((r) => {
+      const group = (r.group || '').trim();
+      const ratio = Number(r.ratio);
+      if (!group || !Number.isFinite(ratio) || ratio < 0) return;
+      obj[group] = ratio;
+    });
+    return Object.keys(obj).length ? JSON.stringify(obj) : '';
+  };
+
+  const addGroupRatioRow = () =>
+    setGroupRatioRows((prev) => [...prev, { group: '', ratio: 1 }]);
+  const removeGroupRatioRow = (index) =>
+    setGroupRatioRows((prev) => prev.filter((_, i) => i !== index));
+  const updateGroupRatioRow = (index, key, value) =>
+    setGroupRatioRows((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, [key]: value } : r)),
+    );
 
   const getInitValues = () => ({
     username: '',
@@ -117,6 +156,7 @@ const EditUserModal = (props) => {
       data.quota_amount = Number(
         quotaToDisplayAmount(data.quota || 0).toFixed(6),
       );
+      setGroupRatioRows(parseGroupRatioRows(data.group_ratios));
       setInputs({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -152,6 +192,7 @@ const EditUserModal = (props) => {
     delete payload.quota_amount;
     if (userId) {
       payload.id = parseInt(userId);
+      payload.group_ratios = serializeGroupRatioRows(groupRatioRows);
     }
     const url = userId ? `/api/user/` : `/api/user/self`;
     const res = await API.put(url, payload);
@@ -366,6 +407,59 @@ const EditUserModal = (props) => {
                           search
                           rules={[{ required: true, message: t('请选择分组') }]}
                         />
+                      </Col>
+
+                      <Col span={24}>
+                        <Form.Slot label={t('专属分组倍率')}>
+                          <div className='text-xs text-gray-600 mb-2'>
+                            {t(
+                              '为该用户在指定分组上覆盖分组倍率，留空则使用默认分组倍率。',
+                            )}
+                          </div>
+                          <Space
+                            vertical
+                            align='start'
+                            style={{ width: '100%' }}
+                          >
+                            {groupRatioRows.map((row, index) => (
+                              <Space key={index} align='center'>
+                                <Select
+                                  placeholder={t('请选择分组')}
+                                  optionList={groupOptions}
+                                  value={row.group}
+                                  filter
+                                  onChange={(val) =>
+                                    updateGroupRatioRow(index, 'group', val)
+                                  }
+                                  style={{ width: 200 }}
+                                />
+                                <InputNumber
+                                  placeholder={t('倍率')}
+                                  value={row.ratio}
+                                  min={0}
+                                  step={0.01}
+                                  onChange={(val) =>
+                                    updateGroupRatioRow(index, 'ratio', val)
+                                  }
+                                  style={{ width: 140 }}
+                                />
+                                <Button
+                                  type='danger'
+                                  theme='borderless'
+                                  icon={<IconDelete />}
+                                  onClick={() => removeGroupRatioRow(index)}
+                                />
+                              </Space>
+                            ))}
+                            <Button
+                              theme='light'
+                              icon={<IconPlus />}
+                              onClick={addGroupRatioRow}
+                            >
+                              {t('添加分组')}
+                            </Button>
+                          </Space>
+                        </Form.Slot>
                       </Col>
 
                       <Col span={10}>
