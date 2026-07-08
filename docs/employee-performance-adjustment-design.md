@@ -3,7 +3,6 @@
 > 版本：v1.1
 > 日期：2026-07-08
 > 状态：已实施
-> 关联提交：`507ede9a3`（管理员手动调整业绩）、`30c48d251`（移除一键撤销列表，改为手动撤销）
 > 关联文档：[员工利润提成系统设计文档](employee-commission-design.md)
 
 ---
@@ -21,7 +20,7 @@
 ### 非目标 / 边界
 
 - 不改动 AI 中继链路（本功能是纯管理端操作，见 §8）。
-- 不提供独立的「调整记录列表」接口。原 `507ede9a3` 带有列表 + 一键撤销 UI，`30c48d251` 已将其移除；调整记录统一在既有的**业务概览台账明细**中查看，撤销通过**手动追加相反数**完成（详见 §5.3）。
+- 不提供独立的「调整记录列表」接口：调整记录统一在既有的**业务概览台账明细**中查看，撤销通过**手动追加相反数**完成（详见 §5.3）。
 
 ---
 
@@ -82,8 +81,6 @@
 
 **响应：** 统一 `{"success":bool,"message":string,"data":PerformanceAdjustmentResult}`，HTTP 200（Rule 9）。`data` 含 `log_id / reset_started_at / stat_date / profit_quota / commission_quota / commission_rate / is_historical`。
 
-> `~GET /api/admin/employee/:id/performance~`（列出调整记录）在 `30c48d251` 已删除；对应的 `AdminListPerformanceAdjustments` handler 与 `model.GetManualPerformanceAdjustments` 一并移除。
-
 ---
 
 ## 5. 关键业务逻辑
@@ -111,7 +108,7 @@ add 与 revert 复用同一函数，保证补偿行与原行落在**同桶同天
 
 撤销一笔调整 = 标记原行 `settle_status = 2`（已撤销）+ 插一条**相反数补偿行**（`model_name = 管理员减少业绩`）+ 对两张日聚合表上盘负增量（含 `record_count = -1`），使聚合精确净为 0。并发保护：仅当原行 `settle_status <> 2` 时才翻转，避免重复撤销。
 
-> **当前撤销入口**：`30c48d251` 移除了「调整记录列表 + 一键撤销」UI，两套前端不再调用 revert 接口（`web/default` 的 `revertEmployeePerformance` 为保留导出但无调用方）。管理员当前通过**再追加一笔相反数的业绩调整**来冲销（例如误加 +$10 → 追加 −$10）。`RevertEmployeePerformance` / revert 路由后端保留，供后续或程序化调用；如需重新接入 UI，只需恢复列表 + 撤销按钮。
+> **撤销入口**：UI 不接入 revert 接口；管理员通过**再追加一笔相反数的业绩调整**来冲销（例如误加 +$10 → 追加 −$10）。`RevertEmployeePerformance` / revert 路由作为后端能力保留，供程序化调用。
 
 ### 5.4 等级双向重估（`reevaluateTierByPeriodProfit`）
 
@@ -178,12 +175,14 @@ add 与 revert 复用同一函数，保证补偿行与原行落在**同桶同天
 - **Default**（`web/default`）：`features/employees/components/performance-adjust-dialog.tsx` + `api.ts` 的 `addEmployeePerformance`；员工列表行「调整业绩」入口。
 - **Classic**（`web/classic`）：`pages/Business/index.jsx` 的 `PerformanceModal`，调用 `POST /api/admin/employee/:id/performance`。
 
-交互：输入业绩金额（正/负）、原因、可选「补录到历史周期」（仅过去自然月，当前月不算历史，避免勾选补录却落到当前周期触发等级重估）。预估提成仅当前周期前端试算，历史周期费率由后端还原、前端不试算。i18n key 已同步到两套 UI 全部语言；classic 的新 key 均置于 `translation` 命名空间内。
+交互：输入业绩金额（正/负）、原因、可选「补录到历史周期」（仅过去自然月，当前月不算历史，避免勾选补录却落到当前周期触发等级重估）。预估提成仅当前周期前端试算，历史周期费率由后端还原、前端不试算。i18n key 同步到两套 UI 全部语言。
+
+> **约束（i18n）：** classic 的 locale JSON key 必须置于 `translation` 命名空间内。置于顶层会被 i18next 静默忽略、回退显示原始 key（页面看似正常、文案却是英文键名，难以察觉）。default 为扁平结构（key=英文源串），置于顶层即可。
 
 ---
 
 ## 10. 与既有子系统的交互
 
 - **提成结算**：sentinel 行结构与自动结算一致，`RecordCostAndSettleEmployeeCommission` 等无需感知本功能。
-- **台账/定向冲销**（`813b7d162`）：手工调整的补偿行以独立 `model_name` 区分，与逐笔消费冲销互不干扰。
-- **等级月度重置**（`ResetEmployeeTierLevelsForPeriod`）：本期业绩改由 `reset_period_daily_stats` 动态聚合，手工调整自然纳入当期业绩，重置逻辑无需感知。
+- **台账/定向冲销**：手工调整的补偿行以独立 `model_name` 区分，与逐笔消费冲销互不干扰。
+- **等级月度重置**（`ResetEmployeeTierLevelsForPeriod`）：本期业绩由 `reset_period_daily_stats` 动态聚合，手工调整自然纳入当期业绩，重置逻辑无需感知。
