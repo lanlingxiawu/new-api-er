@@ -160,7 +160,7 @@ func GetCommissionMonthlyEmployeeExport(startTime, endTime int64) (*CommissionMo
 				row.TierLevel = t.Level
 				row.TierGroup = t.Group
 				row.TierRate = t.Rate
-				row.CommissionQuota = int64(float64(profit) * t.Rate)
+				row.CommissionQuota = common.RoundProductToQuota(profit, t.Rate)
 			}
 		}
 		row.CommissionUsd = common.QuotaToUSD(row.CommissionQuota)

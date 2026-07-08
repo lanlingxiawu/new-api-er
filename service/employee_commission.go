@@ -249,8 +249,10 @@ func calcCostQuota(revenueQuota int64, groupRatio, costRatio float64) int64 {
 		dBaseCost = decimal.Zero
 	}
 
-	dCost := dBaseCost.Mul(decimal.NewFromFloat(costRatio)).Round(0)
-	return dCost.IntPart()
+	// Saturate to the int32 quota policy bound (+ SysError log on clamp) so an
+	// oversized cost_ratio / group_ratio can never persist an out-of-range
+	// cost_quota, consistent with the rest of the billing hardening.
+	return int64(common.QuotaFromDecimal(dBaseCost.Mul(decimal.NewFromFloat(costRatio))))
 }
 
 // calcSettlementCommissionQuota 计算单笔结算应产生的佣金增量。
@@ -276,13 +278,15 @@ func calcCommissionQuota(profitQuota int64, commissionRate float64) int64 {
 	if profitQuota == 0 || commissionRate <= 0 {
 		return 0
 	}
-	result := decimal.NewFromInt(profitQuota).Mul(decimal.NewFromFloat(commissionRate)).Round(0)
+	// Saturate to the int32 quota policy bound (+ SysError log on clamp): an
+	// oversized commission rate can never yield an out-of-range commission_quota.
+	result := common.RoundProductToQuota(profitQuota, commissionRate)
 	// 保底 1 quota，避免因精度截断丢失极小提成/冲销
-	if result.IsZero() {
+	if result == 0 {
 		if profitQuota > 0 {
 			return 1
 		}
 		return -1
 	}
-	return result.IntPart()
+	return result
 }

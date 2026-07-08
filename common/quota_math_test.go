@@ -106,3 +106,45 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
 	}
 }
+
+// TestRoundProductToQuota guards the commission/cost settlement invariant: a
+// base quota multiplied by a ratio/rate must round half-away-from-zero with
+// decimal precision AND saturate to the int32 quota policy bound, so an
+// oversized cost_ratio / commission rate can never persist an out-of-range or
+// wrapped commission/cost quota. Shared by the ledger, admin pages, and export
+// so all three round identically.
+func TestRoundProductToQuota(t *testing.T) {
+	// In-range, half-away-from-zero rounding (1000 * 0.0555 = 55.5 -> 56).
+	assert.Equal(t, int64(56), RoundProductToQuota(1000, 0.0555))
+	assert.Equal(t, int64(-56), RoundProductToQuota(-1000, 0.0555))
+	// Exact and zero cases.
+	assert.Equal(t, int64(50), RoundProductToQuota(1000, 0.05))
+	assert.Equal(t, int64(0), RoundProductToQuota(1000, 0))
+	assert.Equal(t, int64(0), RoundProductToQuota(0, 0.05))
+	// Oversized ratio saturates instead of overflowing int32.
+	assert.Equal(t, int64(MaxQuota), RoundProductToQuota(1_000_000_000, 1000))
+	assert.Equal(t, int64(MinQuota), RoundProductToQuota(-1_000_000_000, 1000))
+}
+
+// TestRoundProductToQuotaChecked verifies the settlement helper surfaces the
+// clamp descriptor (Op="QuotaFromDecimal") so billing callers can audit an
+// oversized-ratio saturation event.
+func TestRoundProductToQuotaChecked(t *testing.T) {
+	q, clamp := RoundProductToQuotaChecked(1000, 0.0555)
+	assert.Equal(t, int64(56), q)
+	assert.Nil(t, clamp)
+
+	q, clamp = RoundProductToQuotaChecked(1_000_000_000, 1000)
+	assert.Equal(t, int64(MaxQuota), q)
+	if assert.NotNil(t, clamp) {
+		assert.Equal(t, "QuotaFromDecimal", clamp.Op)
+		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+		assert.Equal(t, MaxQuota, clamp.Clamped)
+	}
+
+	q, clamp = RoundProductToQuotaChecked(-1_000_000_000, 1000)
+	assert.Equal(t, int64(MinQuota), q)
+	if assert.NotNil(t, clamp) {
+		assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+	}
+}

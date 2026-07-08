@@ -35,7 +35,7 @@ type UpdateEmployeeRequest struct {
 
 type UpsertChannelCostRequest struct {
 	ChannelId int     `json:"channel_id" binding:"required"`
-	CostRatio float64 `json:"cost_ratio" binding:"gte=0"`
+	CostRatio float64 `json:"cost_ratio" binding:"gte=0,lte=1000"`
 	Remark    string  `json:"remark"`
 }
 

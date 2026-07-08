@@ -1172,7 +1172,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 		}
 		if tierId != 0 {
 			if t, ok := tierById[tierId]; ok {
-				stats.Summary.RecalcCommissionQuota = int64(float64(stats.Summary.ProfitQuota) * t.Rate)
+				stats.Summary.RecalcCommissionQuota = common.RoundProductToQuota(stats.Summary.ProfitQuota, t.Rate)
 				stats.EmployeeTierLevel = t.Level
 				stats.EmployeeTierRate = t.Rate
 				stats.EmployeeTierGroup = t.Group
@@ -1234,7 +1234,7 @@ func GetCommissionCalendarStats(startTime, endTime int64, employeeUserId int) (*
 			for _, ep := range empProfits {
 				if tid := tierIdByUser[ep.EmployeeUserId]; tid != 0 {
 					if t, ok := tierById[tid]; ok {
-						totalRecalc += int64(float64(ep.ProfitQuota) * t.Rate)
+						totalRecalc += common.RoundProductToQuota(ep.ProfitQuota, t.Rate)
 					}
 				}
 			}

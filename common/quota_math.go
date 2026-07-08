@@ -115,3 +115,20 @@ func QuotaFromDecimalChecked(d decimal.Decimal) (int, *QuotaClamp) {
 	f, _ := d.Round(0).Float64()
 	return saturateQuota(f, "QuotaFromDecimal")
 }
+
+// RoundProductToQuota computes base*rate with decimal precision, rounds half
+// away from zero, and saturates to the int32 quota policy bound (logging on
+// clamp). Shared by the commission/cost settlement path and the display/export
+// layers so the ledger, admin pages, and exports round AND saturate identically
+// — an oversized ratio can never yield an out-of-range or ledger-inconsistent
+// commission/cost quota. Returns int64 for storage, but the value is always
+// within the int32 quota policy range.
+func RoundProductToQuota(base int64, rate float64) int64 {
+	return int64(QuotaFromDecimal(decimal.NewFromInt(base).Mul(decimal.NewFromFloat(rate))))
+}
+
+// RoundProductToQuotaChecked is RoundProductToQuota returning the clamp for audit.
+func RoundProductToQuotaChecked(base int64, rate float64) (int64, *QuotaClamp) {
+	q, clamp := QuotaFromDecimalChecked(decimal.NewFromInt(base).Mul(decimal.NewFromFloat(rate)))
+	return int64(q), clamp
+}

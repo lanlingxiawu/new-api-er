@@ -490,7 +490,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:                  other,
 		CountUsage:             countUsage,
 		AsyncCostAndCommission: true,
-		SurchargeQuota:         int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		SurchargeQuota:         int64(common.QuotaFromDecimal(summary.ToolCallSurchargeQuota)),
 		LedgerQuota:            summary.LedgerQuota,
 	})
 	gopool.Go(func() {

@@ -25,12 +25,42 @@ func usd2q(usd float64) int64 {
 // 辅助：每个测试前清空相关表，避免数据污染
 // ---------------------------------------------------------------------------
 
+// setPeriodStats sets userId's current-period accumulated profit/commission by
+// writing a single reset-period daily-stat row (replacing any existing rows for
+// the period). TryAutoUpgradeTier and the reset logic read these via
+// SUM(profit_quota)/SUM(commission_quota). Replaces the removed AddProfitStats /
+// AddCommissionQuota seeders after TryAutoUpgradeTier became DB-driven.
+func setPeriodStats(t *testing.T, userId int, profitQuota, commissionQuota int64) {
+	t.Helper()
+	// Ensure the user is an active employee so the period reset (which selects
+	// from employee_profiles WHERE status=1) includes them.
+	seedEmployeeProfile(t, userId)
+	level, err := GetOrCreateTierLevel(userId, true)
+	require.NoError(t, err)
+	period := ResolveCommissionMonthlyPeriod(time.Now().Unix()).PeriodStartAt
+	resetStartedAt := level.BaselineResetAt
+	if resetStartedAt == 0 {
+		resetStartedAt = period
+	}
+	require.NoError(t, DB.Where("employee_user_id = ? AND reset_started_at = ?", userId, resetStartedAt).
+		Delete(&EmployeeCommissionResetPeriodDailyStat{}).Error)
+	require.NoError(t, DB.Create(&EmployeeCommissionResetPeriodDailyStat{
+		EmployeeUserId:  userId,
+		ResetStartedAt:  resetStartedAt,
+		StatDate:        period,
+		ProfitQuota:     profitQuota,
+		CommissionQuota: commissionQuota,
+	}).Error)
+}
+
 func cleanTierTables(t *testing.T) {
 	t.Helper()
 	if allowTestDBCleanup() {
 		DB.Exec("DELETE FROM employee_commission_tiers")
 		DB.Exec("DELETE FROM employee_tier_levels")
 		DB.Exec("DELETE FROM employee_tier_logs")
+		DB.Exec("DELETE FROM employee_commission_reset_period_daily_stats")
+		DB.Exec("DELETE FROM employee_profiles")
 		DB.Exec("DELETE FROM user_extensions")
 		DB.Exec("DELETE FROM channel_cost_configs")
 		DB.Exec("DELETE FROM users")
@@ -44,6 +74,8 @@ func cleanTierTables(t *testing.T) {
 		DB.Exec("DELETE FROM employee_commission_tiers")
 		DB.Exec("DELETE FROM employee_tier_levels")
 		DB.Exec("DELETE FROM employee_tier_logs")
+		DB.Exec("DELETE FROM employee_commission_reset_period_daily_stats")
+		DB.Exec("DELETE FROM employee_profiles")
 		DB.Exec("DELETE FROM user_extensions")
 		DB.Exec("DELETE FROM channel_cost_configs")
 		DB.Exec("DELETE FROM users")
@@ -56,6 +88,17 @@ func seedUser(t *testing.T, id int) {
 	t.Helper()
 	u := &User{Id: id, Username: fmt.Sprintf("testuser%d", id), Password: "x", Status: 1, AffCode: fmt.Sprintf("aff%d", id)}
 	require.NoError(t, DB.Create(u).Error)
+}
+
+// seedEmployeeProfile ensures userId has an active (status=1) EmployeeProfile so
+// the period reset — which selects employees from employee_profiles WHERE
+// status=1 — includes them. Idempotent via FirstOrCreate.
+func seedEmployeeProfile(t *testing.T, userId int) {
+	t.Helper()
+	var emp EmployeeProfile
+	require.NoError(t, DB.Where(EmployeeProfile{UserId: userId}).
+		Attrs(EmployeeProfile{Status: 1}).
+		FirstOrCreate(&emp).Error)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,18 +235,21 @@ func TestTryAutoUpgradeTier_NormalUpgrade(t *testing.T) {
 	InvalidateTierCache()
 
 	// profit=$0.5 (250000 quota)，未达到任何等级
-	TryAutoUpgradeTier(3001, usd2q(0.5))
+	setPeriodStats(t, 3001, usd2q(0.5), 0)
+	TryAutoUpgradeTier(3001)
 	lvl, _ := GetOrCreateTierLevel(3001)
 	assert.Equal(t, int64(0), lvl.TierId, "未达门槛，不应升级")
 
 	// profit=$1.0 (500000 quota)，恰好达到等级1
-	TryAutoUpgradeTier(3001, usd2q(1.0))
+	setPeriodStats(t, 3001, usd2q(1.0), 0)
+	TryAutoUpgradeTier(3001)
 	lvl, _ = GetOrCreateTierLevel(3001)
 	assert.Equal(t, t1.Id, lvl.TierId, "应升为等级1")
 	assert.Equal(t, "auto", lvl.Source)
 
 	// profit=$6.0 (3000000 quota)，跨越等级1直接到等级2
-	TryAutoUpgradeTier(3001, usd2q(6.0))
+	setPeriodStats(t, 3001, usd2q(6.0), 0)
+	TryAutoUpgradeTier(3001)
 	lvl, _ = GetOrCreateTierLevel(3001)
 	assert.Equal(t, t2.Id, lvl.TierId, "应升为等级2")
 
@@ -221,12 +267,14 @@ func TestTryAutoUpgradeTier_NoDowngrade(t *testing.T) {
 	InvalidateTierCache()
 
 	// 先升到等级3
-	TryAutoUpgradeTier(3002, usd2q(3.0))
+	setPeriodStats(t, 3002, usd2q(3.0), 0)
+	TryAutoUpgradeTier(3002)
 	lvl, _ := GetOrCreateTierLevel(3002)
 	assert.Equal(t, tier.Id, lvl.TierId)
 
 	// profit 下降（退款场景），不应降级
-	TryAutoUpgradeTier(3002, usd2q(0.4))
+	setPeriodStats(t, 3002, usd2q(0.4), 0)
+	TryAutoUpgradeTier(3002)
 	lvl, _ = GetOrCreateTierLevel(3002)
 	assert.Equal(t, tier.Id, lvl.TierId, "不应自动降级")
 
@@ -248,7 +296,8 @@ func TestTryAutoUpgradeTier_MultiLevelJump(t *testing.T) {
 	InvalidateTierCache()
 
 	// 一次性 profit=$20（远超所有门槛），应直接到等级3
-	TryAutoUpgradeTier(3003, usd2q(20.0))
+	setPeriodStats(t, 3003, usd2q(20.0), 0)
+	TryAutoUpgradeTier(3003)
 	lvl, _ := GetOrCreateTierLevel(3003)
 	assert.Equal(t, t3.Id, lvl.TierId, "应直接升到最高等级3")
 
@@ -263,7 +312,8 @@ func TestTryAutoUpgradeTier_NoTiersConfigured(t *testing.T) {
 	InvalidateTierCache()
 
 	// 无任何等级配置，不应产生任何记录
-	TryAutoUpgradeTier(3004, usd2q(99999.0))
+	setPeriodStats(t, 3004, usd2q(99999.0), 0)
+	TryAutoUpgradeTier(3004)
 	lvl, _ := GetOrCreateTierLevel(3004)
 	assert.Equal(t, int64(0), lvl.TierId)
 }
@@ -296,27 +346,6 @@ func TestGetEffectiveCommissionRate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. AddProfitStats：返回值正确
-// ---------------------------------------------------------------------------
-
-func TestAddProfitStats_ReturnValue(t *testing.T) {
-	cleanTierTables(t)
-	seedUser(t, 5001)
-	require.NoError(t, EnsureUserExtension(5001))
-
-	total, err := AddProfitStats(5001, 300, false)
-	require.NoError(t, err)
-	assert.Equal(t, int64(300), total)
-
-	total, err = AddProfitStats(5001, 200, false)
-	require.NoError(t, err)
-	assert.Equal(t, int64(500), total)
-
-	total, err = AddProfitStats(5001, -100, false)
-	require.NoError(t, err)
-	assert.Equal(t, int64(400), total)
-}
-
 // ---------------------------------------------------------------------------
 // 7. getTierThresholdUsd：内部辅助函数
 // ---------------------------------------------------------------------------
@@ -343,12 +372,13 @@ func TestTryAutoUpgradeTier_Concurrent(t *testing.T) {
 	require.NoError(t, CreateTier(tier))
 	InvalidateTierCache()
 
+	setPeriodStats(t, 6001, usd2q(2.0), 0)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			TryAutoUpgradeTier(6001, usd2q(2.0))
+			TryAutoUpgradeTier(6001)
 		}()
 	}
 	wg.Wait()
@@ -403,7 +433,8 @@ func TestTryAutoUpgradeTier_WithBaseline(t *testing.T) {
 	InvalidateTierCache()
 
 	// 累计利润 $1，升至等级1
-	TryAutoUpgradeTier(3005, usd2q(1.0))
+	setPeriodStats(t, 3005, usd2q(1.0), 0)
+	TryAutoUpgradeTier(3005)
 	lvl, _ := GetOrCreateTierLevel(3005)
 	require.Equal(t, t1.Id, lvl.TierId)
 
@@ -412,12 +443,14 @@ func TestTryAutoUpgradeTier_WithBaseline(t *testing.T) {
 		Update("baseline_profit_quota", usd2q(1.0)).Error)
 
 	// 累计利润增至 $1.5（周期利润 $0.5），未达等级2门槛（$5），不应升级
-	TryAutoUpgradeTier(3005, usd2q(1.5))
+	setPeriodStats(t, 3005, usd2q(1.5), 0)
+	TryAutoUpgradeTier(3005)
 	lvl, _ = GetOrCreateTierLevel(3005)
 	assert.Equal(t, t1.Id, lvl.TierId, "周期利润未达门槛，不应升级")
 
 	// 累计利润增至 $6（周期利润 $5），达到等级2门槛，应升级
-	TryAutoUpgradeTier(3005, usd2q(6.0))
+	setPeriodStats(t, 3005, usd2q(6.0), 0)
+	TryAutoUpgradeTier(3005)
 	lvl, _ = GetOrCreateTierLevel(3005)
 	assert.Equal(t, t2.Id, lvl.TierId, "周期利润达到门槛，应升级到等级2")
 }
@@ -441,20 +474,26 @@ func TestResetEmployeeTierLevelsForPeriod(t *testing.T) {
 	InvalidateTierCache()
 
 	// 8001：升到等级3
-	TryAutoUpgradeTier(8001, usd2q(20.0))
+	setPeriodStats(t, 8001, usd2q(20.0), 0)
+	TryAutoUpgradeTier(8001)
 	lvl, _ := GetOrCreateTierLevel(8001)
 	require.Equal(t, g3.Id, lvl.TierId)
 
 	// 8001 累计业绩/提成
-	_, err := AddProfitStats(8001, usd2q(20.0), false)
-	require.NoError(t, err)
-	require.NoError(t, AddCommissionQuota(8001, usd2q(2.0)))
+	setPeriodStats(t, 8001, usd2q(20.0), usd2q(2.0))
 
 	// 8002：未定级，但已有累计业绩，确保懒创建 EmployeeTierLevel 行
-	_, err = GetOrCreateTierLevel(8002)
+	_, err := GetOrCreateTierLevel(8002)
 	require.NoError(t, err)
-	_, err = AddProfitStats(8002, usd2q(0.5), false)
+	setPeriodStats(t, 8002, usd2q(0.5), 0)
+
+	// 重置前：当期利润/提成从 daily_stats 动态聚合（baseline_reset_at=0 → 当月周期），
+	// 应等于累计业绩，作为重置后清零的对照。
+	preStats, err := GetCurrentResetPeriodStatsByEmployeeUserIds([]int{8001, 8002})
 	require.NoError(t, err)
+	assert.Equal(t, usd2q(20.0), preStats[8001].ProfitQuota, "重置前 8001 当期利润应等于累计业绩")
+	assert.Equal(t, usd2q(2.0), preStats[8001].CommissionQuota, "重置前 8001 当期提成应等于累计提成")
+	assert.Equal(t, usd2q(0.5), preStats[8002].ProfitQuota, "重置前 8002 当期利润应等于累计业绩")
 
 	resetAt := time.Now().Unix() - 100
 
@@ -463,25 +502,31 @@ func TestResetEmployeeTierLevelsForPeriod(t *testing.T) {
 	assert.Equal(t, 2, processed)
 	assert.Equal(t, 2, selected)
 
-	// 8001：重置到本组最低等级（g1），baseline 刷新为当前累计值
+	// 8001：重置到本组最低等级（g1）
 	lvl1, err := GetOrCreateTierLevel(8001)
 	require.NoError(t, err)
 	assert.Equal(t, g1.Id, lvl1.TierId, "应重置到本组最低等级")
 	assert.Equal(t, "reset", lvl1.Source)
 	assert.GreaterOrEqual(t, lvl1.EffectiveAt, resetAt)
 	assert.Equal(t, "月度自动重置", lvl1.Remark)
-	assert.Equal(t, usd2q(20.0), lvl1.BaselineProfitQuota)
-	assert.Equal(t, usd2q(2.0), lvl1.BaselineCommissionQuota)
 	assert.Equal(t, resetAt, lvl1.BaselineResetAt)
 
-	// 8002：tier_id=0 保持不变，但 baseline 仍刷新
+	// baseline_profit_quota / baseline_commission_quota 快照字段已废弃（见
+	// commission_tier.go 中 ResetEmployeeTierLevelsForPeriod 注释）：重置不再写入。
+	// 当期业绩改由 daily_stats 按 baseline_reset_at 动态聚合——重置把 baseline_reset_at
+	// 前移到 resetAt 后，旧周期（reset_started_at=当月起点）业绩被排除，当期利润/提成清零。
+	postStats, err := GetCurrentResetPeriodStatsByEmployeeUserIds([]int{8001, 8002})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), postStats[8001].ProfitQuota, "重置后 8001 当期利润应清零")
+	assert.Equal(t, int64(0), postStats[8001].CommissionQuota, "重置后 8001 当期提成应清零")
+
+	// 8002：tier_id=0 保持不变
 	lvl2, err := GetOrCreateTierLevel(8002)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), lvl2.TierId, "未定级应保持不变")
 	assert.Equal(t, "reset", lvl2.Source)
-	assert.Equal(t, usd2q(0.5), lvl2.BaselineProfitQuota)
-	assert.Equal(t, int64(0), lvl2.BaselineCommissionQuota)
 	assert.Equal(t, resetAt, lvl2.BaselineResetAt)
+	assert.Equal(t, int64(0), postStats[8002].ProfitQuota, "重置后 8002 当期利润应清零")
 
 	// 应各写入一条 source=reset 的日志
 	var resetLogCount int64
@@ -499,6 +544,10 @@ func TestResetEmployeeTierLevelsForPeriodRefreshesOrphanBaselineWithoutBlockingB
 	cleanTierTables(t)
 	seedUser(t, 8101)
 	seedUser(t, 8102)
+	// 重置从 employee_profiles WHERE status=1 选取员工，本用例直接构造 tier_level，
+	// 需显式补齐员工档案，否则不会被选中。
+	seedEmployeeProfile(t, 8101)
+	seedEmployeeProfile(t, 8102)
 
 	tier := &EmployeeCommissionTier{Level: 1, Group: "default", ThresholdUsd: 1.0, Rate: 0.05}
 	require.NoError(t, CreateTier(tier))
@@ -551,8 +600,7 @@ func TestResetEmployeeTierLevelsForPeriodUsesBaselineResetAtNotEffectiveAt(t *te
 		EffectiveAt:     resetAt + 30,
 		BaselineResetAt: 0,
 	}).Error)
-	_, err := AddProfitStats(8201, usd2q(3.0), false)
-	require.NoError(t, err)
+	setPeriodStats(t, 8201, usd2q(3.0), 0)
 
 	processed, selected, err := ResetEmployeeTierLevelsForPeriod(resetAt, 100, 0)
 	require.NoError(t, err)
@@ -562,5 +610,10 @@ func TestResetEmployeeTierLevelsForPeriodUsesBaselineResetAtNotEffectiveAt(t *te
 	var level EmployeeTierLevel
 	require.NoError(t, DB.Where("user_id = ?", 8201).First(&level).Error)
 	assert.Equal(t, resetAt, level.BaselineResetAt)
-	assert.Equal(t, usd2q(3.0), level.BaselineProfitQuota)
+
+	// baseline_profit_quota 快照已废弃；重置把 baseline_reset_at 前移到 resetAt 后，
+	// 当期业绩改由 daily_stats 动态聚合，旧周期业绩被排除，当期利润应清零。
+	postStats, err := GetCurrentResetPeriodStatsByEmployeeUserIds([]int{8201})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), postStats[8201].ProfitQuota, "重置后 8201 当期利润应清零")
 }
