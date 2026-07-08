@@ -6,9 +6,9 @@
   - **chat / 多模态**：OpenAI 兼容 `/v1/chat/completions`、Anthropic Claude `/v1/messages`、Google Gemini `/v1beta/models/{model}:generateContent` / `:streamGenerateContent`；
   - **图片**：`/v1/images/generations`、`/v1/images/edits`、`/v1/edits`；
   - **语音**：TTS `/v1/audio/speech`（二进制音频）、STT `/v1/audio/transcriptions`、`/v1/audio/translations`（`{"text"}`）；
-  - **视频**：异步任务（doubao/volc 格式）submit `/api/v3/contents/generations/tasks` → 轮询 fetch，`-video-process-time` 控制"生成耗时"、`task_id` 内编码提交时刻无状态判定进度。
+  - **视频**：异步任务，两套**创建**接口——doubao/volc `POST /api/v3/contents/generations/tasks`、OpenAI Sora `POST /v1/videos`（+ `/remix`、fetch `GET /v1/videos/{id}`、内容 `GET /v1/videos/{id}/content`）；`-video-process-time` 控制"生成耗时"，`task_id` 内编码提交时刻无状态判定 queued→completed。
 
-  响应时间（TTFB、总时长）与内容（词数、词面）随机；热路径零锁、近零分配，确保 mock 不是瓶颈。
+  **真实可用的媒体**：图片/语音/视频返回真实可播放的字节（默认生成 PNG / WAV / GIF），响应里的 URL 指向 mock 自身（`/media/...` 或 `/v1/videos/{id}/content`）真实可下载。标准库无 MP4 编码器，视频默认用可播放的动图 GIF；需要真实 MP4/MP3/JPEG 等精确格式时用 `-image-file` / `-audio-file` / `-video-file` 指定真实素材文件。响应时间（TTFB、总时长）与内容随机；热路径零锁、近零分配，确保 mock 不是瓶颈。
 - `bench/loadgen`：压测器。闭环并发，流式/非流式按比例混合，SSE 流完整消费；`-format` 切换请求格式（`openai`/`claude`/`gemini`/`image`/`speech`/`transcription`），`-warmup` 预热段不计入统计；输出 p50/p90/p95/p99、流式 TTFB、状态码分布与错误采样。
 
 ## 步骤
@@ -45,7 +45,7 @@ go run ./bench/loadgen -url http://127.0.0.1:18080/v1/chat/completions -c 500 -d
    - **Gemini**：类型 Gemini，模型如 `gemini-2.0-flash`。网关转发到 mock 的 `:generateContent` / `:streamGenerateContent`。
    - **图片**：类型 OpenAI，模型如 `dall-e-3` / `gpt-image-1`。网关转发到 mock 的 `/v1/images/generations`。
    - **语音**：类型 OpenAI，模型如 `tts-1`（TTS）/ `whisper-1`（STT）。网关转发到 mock 的 `/v1/audio/speech` / `/v1/audio/transcriptions`。
-   - **视频**：类型 doubao/volc（走 `/v1/video/generations` 的渠道），模型按渠道要求。网关转发到 mock 的 `/api/v3/contents/generations/tasks`（submit + 轮询）。
+   - **视频**：类型 doubao/volc（网关转发到 mock 的 `/api/v3/contents/generations/tasks`）或 OpenAI Sora（网关 `/v1/videos` → mock 的 `/v1/videos` create + `/content`）。两套"视频创建"上游接口 mock 都已实现，submit 后轮询到 completed，视频内容真实可下载。
 2. 建一个测试用户/令牌，**额度给足**（压测会真实扣费、写日志、跑提成结算）。
 3. 如需压提成链路：给测试用户设置一个员工邀请人。
 

@@ -9,23 +9,11 @@ import (
 )
 
 // OpenAI 语音：
-//   - TTS：POST {base}/v1/audio/speech → 二进制音频（网关按输入文本计费、字节透传）。
+//   - TTS：POST {base}/v1/audio/speech → 二进制音频（真实可播放 WAV，见 media.go）。
 //   - STT：POST {base}/v1/audio/transcriptions | /translations → {"text":"..."}。
 // 生成耗时用 -latency-* 模拟。
 
-// audioBlob 预生成的伪音频字节；内容无需真实可播放，speech 是字节透传。
-var audioBlob []byte
-
-func initAudioBlob() {
-	const n = 8 << 10 // 8KB
-	audioBlob = make([]byte, n)
-	copy(audioBlob, []byte("ID3")) // 假 ID3 头，避免全零
-	for i := 3; i < n; i++ {
-		audioBlob[i] = byte(i * 31)
-	}
-}
-
-// audioSpeechHandler 处理 TTS：返回二进制音频。
+// audioSpeechHandler 处理 TTS：返回真实可播放的音频字节（默认生成的 WAV，或 -audio-file）。
 func audioSpeechHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := readBody(w, r); !ok {
 		return
@@ -37,9 +25,9 @@ func audioSpeechHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	statAudio.served.Add(1)
 	time.Sleep(randDur(*totalMin, *totalMax))
-	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Content-Length", strconv.Itoa(len(audioBlob)))
-	_, _ = w.Write(audioBlob)
+	w.Header().Set("Content-Type", speechAsset.contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(speechAsset.bytes)))
+	_, _ = w.Write(speechAsset.bytes)
 }
 
 // audioTranscriptionHandler 处理 STT（transcriptions/translations）：返回 {"text":...}。

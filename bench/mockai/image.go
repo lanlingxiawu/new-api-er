@@ -10,10 +10,8 @@ import (
 )
 
 // OpenAI 图片生成：POST {base}/v1/images/generations（JSON）、/v1/images/edits、/v1/edits（multipart）。
-// 响应 {"created":ts,"data":[{"url"|"b64_json"} × n]}。生成耗时用 -latency-* 模拟。
-
-// onePxPNGB64 是 1x1 透明 PNG 的 base64，用于 response_format=b64_json 的响应。
-const onePxPNGB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+// 响应 {"created":ts,"data":[{"url"|"b64_json"} × n]}。url 指向 mock 自身、真实可下载的
+// 图片，b64_json 为真实图片的 base64（见 media.go）。生成耗时用 -latency-* 模拟。
 
 type imageRequest struct {
 	Model          string `json:"model"`
@@ -58,15 +56,15 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 			buf.WriteByte(',')
 		}
 		if b64 {
+			// 真实图片的 base64（默认生成的 PNG，或 -image-file 指定的素材）。
 			buf.WriteString(`{"b64_json":"`)
-			buf.WriteString(onePxPNGB64)
+			buf.WriteString(imageB64)
 			buf.WriteString(`"}`)
 		} else {
-			buf.WriteString(`{"url":"http://mockai.local/img/`)
-			buf.WriteString(strconv.FormatInt(id, 10))
-			buf.WriteByte('-')
-			buf.WriteString(strconv.Itoa(i))
-			buf.WriteString(`.png"}`)
+			// 指向 mock 自身、真实可下载的 URL（GET /media/image/...）。
+			buf.WriteString(`{"url":"`)
+			buf.WriteString(mediaURL(r.Host, "image", strconv.FormatInt(id, 10)+"-"+strconv.Itoa(i), imageAsset.ext))
+			buf.WriteString(`"}`)
 		}
 	}
 	buf.WriteString(`]}`)

@@ -6,13 +6,19 @@
 //     或 :streamGenerateContent?alt=sse（gemini.go）
 //   - 图片：POST /v1/images/generations|/images/edits|/edits（image.go）
 //   - 语音：TTS POST /v1/audio/speech（二进制）、STT POST /v1/audio/transcriptions|/translations（audio.go）
-//   - 视频（异步任务，doubao/volc 格式）：submit POST /api/v3/contents/generations/tasks、
-//     fetch GET .../tasks/{id}，无状态按 task_id 内编码的提交时刻判定进度（video.go）
+//   - 视频（异步任务，两套创建接口）：doubao/volc（POST /api/v3/contents/generations/tasks）与
+//     OpenAI Sora（POST /v1/videos + remix/fetch/content）；无状态按 task_id 内编码的提交时刻
+//     判定 queued→completed（video.go）
+//
+// 真实媒体：图片/语音/视频返回真实可用的字节（PNG/WAV/GIF），URL 挂在 mock 自身 /media 或
+// /v1/videos/{id}/content 下、真实可下载；-image-file/-audio-file/-video-file 可替换为真实素材
+// （如真实 MP4——stdlib 无 MP4 编码器）（media.go）。
 //
 // 设计目标：mock 自身绝不能成为压测瓶颈——热路径零锁（math/rand/v2 全局函数 + atomic 计数）、
-// 近零分配（sync.Pool 缓冲 + 预生成 ASCII 词池手工拼接 JSON）、延迟全部用 time.Sleep 模拟。
-// 响应时间（TTFB / 总时长）与内容（词数、词面）均在配置范围内随机；各格式共用同一套延迟 /
-// 词数 / 错误注入参数（见 gen.go）。仅压测用途，不属于业务代码。用法见 bench/README.md。
+// 近零分配（sync.Pool 缓冲 + 预生成 ASCII 词池手工拼接 JSON）、延迟全部用 time.Sleep 模拟；
+// 媒体在启动时生成一次、之后只做字节直写。响应时间（TTFB / 总时长）与内容（词数、词面）均在
+// 配置范围内随机；各格式共用同一套延迟 / 词数 / 错误注入参数（见 gen.go）。仅压测用途，不属于
+// 业务代码。用法见 bench/README.md。
 package main
 
 import (
@@ -39,6 +45,9 @@ var (
 	errorRate    = flag.Float64("error-rate", 0, "随机返回错误状态码的概率 [0,1]，0 关闭")
 	errorsCSV    = flag.String("error-codes", "429:1,500:1,502:1,503:1", "错误码权重表 code:weight,...（避免 401/403，网关可能据此自动禁用渠道）")
 	videoProcess = flag.Duration("video-process-time", 3*time.Second, "视频任务从 submit 到 succeeded 的模拟生成耗时")
+	imageFile    = flag.String("image-file", "", "图片响应用的真实文件（png/jpg/...）；留空则生成 512x512 PNG")
+	audioFile    = flag.String("audio-file", "", "TTS 响应用的真实音频文件（mp3/wav/...）；留空则生成 1s WAV 正弦音")
+	videoFile    = flag.String("video-file", "", "视频响应用的真实文件（mp4/webm/...）；留空则生成可播放动图 GIF（stdlib 无 MP4 编码器）")
 )
 
 // errorCodes 按权重展开后的错误码采样池，rand.IntN 直取即可，无锁。
@@ -135,9 +144,19 @@ func route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	// 视频异步任务（doubao/volc 格式）：submit（POST .../tasks）/ fetch（GET .../tasks/{id}）
 	case r.Method == http.MethodGet && strings.Contains(p, "/contents/generations/tasks/"):
-		videoFetchHandler(w, videoTaskID(p))
+		videoFetchHandler(w, r.Host, videoTaskID(p))
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/contents/generations/tasks"):
 		videoSubmitHandler(w, r)
+	// 视频（OpenAI Sora 格式）：create / remix（POST）、content（GET .../content）、fetch（GET .../videos/{id}）
+	case r.Method == http.MethodGet && strings.Contains(p, "/videos/") && strings.HasSuffix(p, "/content"):
+		serveVideoBytes(w)
+	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/videos") || strings.HasSuffix(p, "/remix")):
+		soraVideoSubmitHandler(w, r)
+	case r.Method == http.MethodGet && strings.Contains(p, "/videos/"):
+		soraVideoFetchHandler(w, soraTaskID(p))
+	// 真实媒体托管：图片 / 语音 / 视频的 URL 指向这里，返回真实可用的字节
+	case r.Method == http.MethodGet && strings.Contains(p, "/media/"):
+		mediaHandler(w, p)
 	// 文本/多模态 chat 三格式
 	case strings.Contains(p, ":streamGenerateContent"):
 		geminiHandler(w, r, true)
@@ -186,7 +205,7 @@ func main() {
 		log.Fatal(err)
 	}
 	initWords()
-	initAudioBlob()
+	initMedia()
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(*port),
