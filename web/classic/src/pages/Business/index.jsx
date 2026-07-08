@@ -2788,8 +2788,9 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
   );
 }
 
-// PerformanceModal 手工业绩调整（加/减业绩），对应后端
-// /api/admin/employee/:id/performance（增删查）。见 docs/employee-performance-adjustment-design.md。
+// PerformanceModal 手工业绩调整（追加正/负业绩），对应后端
+// POST /api/admin/employee/:id/performance。撤销通过再追加一笔相反数完成（列表 + 一键撤销
+// 已于 30c48d251 移除）。见 docs/employee-performance-adjustment-design.md。
 function monthValueToUnix(value) {
   const [y, m] = String(value || '')
     .split('-')

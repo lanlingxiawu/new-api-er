@@ -460,6 +460,8 @@ func AdminAddEmployeePerformance(c *gin.Context) {
 }
 
 // AdminRevertPerformanceAdjustment POST /api/admin/employee/performance/:logId/revert
+// 后端保留、当前两套 UI 均未接入（一键撤销列表已于 30c48d251 移除，改为手动追加相反数撤销）；
+// 供程序化调用或后续重新接入 UI 使用。见 docs/employee-performance-adjustment-design.md。
 func AdminRevertPerformanceAdjustment(c *gin.Context) {
 	logId, err := strconv.Atoi(c.Param("logId"))
 	if err != nil {

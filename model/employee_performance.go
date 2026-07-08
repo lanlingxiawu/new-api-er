@@ -28,8 +28,8 @@ import (
 // ManualPerformanceModelName 手工业绩调整流水行的 model_name sentinel。
 const ManualPerformanceModelName = "管理员添加业绩"
 
-// ManualPerformanceRevertModelName 撤销补偿行的 sentinel：与原调整区分，
-// 使调整记录列表只展示原始调整、不展示内部反向补偿行（补偿行仍进聚合表使净额为 0）。
+// ManualPerformanceRevertModelName 撤销补偿行的 sentinel：与原调整（管理员添加业绩）区分，
+// 便于在佣金流水/台账视图中识别内部反向补偿行；补偿行仍进两张日聚合表使净额为 0。
 const ManualPerformanceRevertModelName = "管理员减少业绩"
 
 // settleStatusReverted 复用 EmployeeCommissionLog.SettleStatus 的「2=已撤销」语义。
