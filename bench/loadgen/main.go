@@ -93,39 +93,39 @@ func writePrompt(b *bytes.Buffer) {
 const multipartBoundary = "loadgenBoundary7f3a9c1e5b2d"
 
 // supportsStream 仅 chat 三格式支持流式；image/speech/transcription 为一次性响应。
-func supportsStream() bool {
-	switch *format {
+func supportsStream(format string) bool {
+	switch format {
 	case "openai", "claude", "gemini":
 		return true
 	}
 	return false
 }
 
-// contentType 返回本 -format 的请求 Content-Type（transcription 为 multipart）。
-func contentType() string {
-	if *format == "transcription" {
+// contentType 返回该格式的请求 Content-Type（transcription 为 multipart）。
+func contentType(format string) string {
+	if format == "transcription" {
 		return "multipart/form-data; boundary=" + multipartBoundary
 	}
 	return "application/json"
 }
 
-// buildBody 按 -format 把请求体写入 buf（复用同一 buffer，减少热路径分配）。
+// buildBody 按 format/model 把请求体写入 buf（复用同一 buffer，减少热路径分配）。
 // gemini 的流式由 URL action 决定，body 不带 stream 字段。
-func buildBody(b *bytes.Buffer, isStream bool) {
+func buildBody(b *bytes.Buffer, format, model string, isStream bool) {
 	b.Reset()
-	switch *format {
+	switch format {
 	case "image":
-		fmt.Fprintf(b, `{"model":"%s","prompt":"`, *model)
+		fmt.Fprintf(b, `{"model":"%s","prompt":"`, model)
 		writePrompt(b)
 		b.WriteString(`","n":1,"size":"1024x1024"}`)
 	case "speech":
-		fmt.Fprintf(b, `{"model":"%s","voice":"alloy","input":"`, *model)
+		fmt.Fprintf(b, `{"model":"%s","voice":"alloy","input":"`, model)
 		writePrompt(b)
 		b.WriteString(`"}`)
 	case "transcription":
 		// 最小 multipart：model 字段 + 伪 file 字段（网关 STT 入口要求 multipart）。
 		b.WriteString("--" + multipartBoundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n")
-		b.WriteString(*model)
+		b.WriteString(model)
 		b.WriteString("\r\n--" + multipartBoundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n")
 		for i := 0; i < *promptWords; i++ {
 			b.WriteString("audiodata")
@@ -133,7 +133,7 @@ func buildBody(b *bytes.Buffer, isStream bool) {
 		b.WriteString("\r\n--" + multipartBoundary + "--\r\n")
 	case "claude":
 		b.WriteString(`{"model":"`)
-		b.WriteString(*model)
+		b.WriteString(model)
 		if isStream {
 			b.WriteString(`","stream":true,`)
 		} else {
@@ -148,7 +148,7 @@ func buildBody(b *bytes.Buffer, isStream bool) {
 		fmt.Fprintf(b, `"}]}],"generationConfig":{"maxOutputTokens":%d}}`, *maxTokens)
 	default: // openai
 		b.WriteString(`{"model":"`)
-		b.WriteString(*model)
+		b.WriteString(model)
 		if isStream {
 			b.WriteString(`","stream":true,"stream_options":{"include_usage":true},`)
 		} else {
@@ -186,11 +186,11 @@ func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat
 	// 每个 worker 复用一个 body 缓冲区：闭环内请求串行，client.Do 返回时请求体已发完，
 	// 下一次 buildBody 前可安全复位，省掉每请求一次的 body 分配。
 	buf := new(bytes.Buffer)
-	streamable := supportsStream()
-	ctype := contentType()
+	streamable := supportsStream(*format)
+	ctype := contentType(*format)
 	for time.Now().Before(deadline) {
 		isStream := streamable && rand.Float64() < *streamRatio
-		buildBody(buf, isStream)
+		buildBody(buf, *format, *model, isStream)
 		req, err := http.NewRequest(http.MethodPost, requestURL(isStream), bytes.NewReader(buf.Bytes()))
 		if err != nil {
 			st.recordErr("build request: " + err.Error())
@@ -772,6 +772,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[warn] -token 为空：仅适用于直压 mock 做基线校准")
 	}
 	initPromptPool()
+
+	// 生产环境模拟模式：并发随昼夜曲线变化、用户带思考间隔、多类型混合，长跑友好。
+	if *simMode {
+		runSim()
+		return
+	}
 
 	transport := &http.Transport{
 		MaxIdleConns:        *conc * 2,

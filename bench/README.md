@@ -9,7 +9,9 @@
   - **视频**：异步任务，覆盖 7 家主流上游的 submit + 轮询 fetch——doubao/volc（`/api/v3/contents/generations/tasks`）、OpenAI Sora（`/v1/videos` + `/remix` + `/content`）、kling（`/v1/videos/{image2video\|text2video}`）、vidu（`/ent/v2/*` + `/ent/v2/tasks/{id}/creations`）、ali/DashScope（`.../video-synthesis` + `/api/v1/tasks/{id}`）、hailuo/MiniMax（`/v1/video_generation` + `/v1/query/video_generation` + 两步 `/v1/files/retrieve`）、jimeng/即梦（volc 签名 `?Action=CVSync2Async{Submit\|GetResult}Task`）；`-video-process-time` 控制"生成耗时"，`task_id` 内编码提交时刻无状态判定 queued→completed。
 
   **真实可用的媒体**：图片/语音/视频返回真实可播放的字节（默认生成 PNG / WAV / GIF），响应里的 URL 指向 mock 自身（`/media/...` 或 `/v1/videos/{id}/content`）真实可下载。标准库无 MP4 编码器，视频默认用可播放的动图 GIF；需要真实 MP4/MP3/JPEG 等精确格式时用 `-image-file` / `-audio-file` / `-video-file` 指定真实素材文件。响应时间（TTFB、总时长）与内容随机；热路径零锁、近零分配，确保 mock 不是瓶颈。
-- `bench/loadgen`：压测器。闭环并发，流式/非流式按比例混合，SSE 流完整消费；`-format` 切换请求格式（`openai`/`claude`/`gemini`/`image`/`speech`/`transcription`），`-warmup` 预热段不计入统计；输出 p50/p90/p95/p99、流式 TTFB、状态码分布与错误采样。
+- `bench/loadgen`：压测器。两种模式：
+  - **闭环基准**（默认）：固定并发，流式/非流式按比例混合，SSE 流完整消费；`-format` 切换请求格式（`openai`/`claude`/`gemini`/`image`/`speech`/`transcription`），`-warmup` 预热段不计入统计；输出 p50/p90/p95/p99、流式 TTFB、状态码分布与错误采样。
+  - **生产环境模拟**（`-sim`）：并发随**昼夜曲线 + 抖动 + 随机突发**变化，每个虚拟用户请求间带**思考间隔**，多种请求类型按权重**混合**；固定内存对数直方图统计（长跑不 OOM），按 `-report-interval` **滚动打印**区间 RPS/p50/p95/p99 与当前并发，适合长时间稳定性观察。
 
 ## 步骤
 
@@ -85,6 +87,25 @@ go run ./bench/loadgen -url http://127.0.0.1:3000/v1/audio/transcriptions -forma
 ```
 
 > **视频**为异步任务（submit → 轮询），mock 已完整支持（`-video-process-time` 控制生成耗时），但 loadgen 暂无 video 驱动；可用 curl 直压 mock 的 `/api/v3/contents/generations/tasks` 验证 submit→running→succeeded 生命周期，或通过网关的 `/v1/video/generations` 走真实任务链路。
+
+### 5. 生产环境模拟（长跑）
+
+模拟真实生产流量：并发随昼夜曲线起伏、叠加随机抖动与突发，用户请求之间有思考间隔，多种请求类型混合。适合跑数小时～数天观察稳定性、内存/连接泄漏、长尾延迟。`-url` 填**网关根地址**（sim 自行拼接各类型 endpoint）。
+
+```
+go run ./bench/loadgen -sim -url http://127.0.0.1:3000 -token sk-xxxx \
+  -c 200 -d 12h -sim-period 1h \
+  -sim-mix "chat-stream:45,chat:35,image:10,speech:7,transcription:3" \
+  -report-interval 60s -report sim.json \
+  -perf-url http://127.0.0.1:3000/api/performance/stats -admin-token <root系统访问令牌>
+```
+
+- `-c`：并发上限（虚拟用户池，绝对天花板）；实际活跃并发随曲线在 `-sim-night-frac`×c 与 `-sim-day-frac`×c 之间起伏，突发时向 c 逼近。
+- `-sim-period`：一个完整昼夜周期时长（低谷→高峰→回落）。`-sim-jitter` 抖动幅度；`-sim-spike-rate` / `-sim-spike-mult` 突发概率与倍数。
+- `-sim-think-min` / `-sim-think-max`：用户两次请求之间的思考间隔（默认 0.5s～8s）。
+- `-sim-mix`：请求类型权重（`chat`/`chat-stream`/`claude`/`claude-stream`/`image`/`speech`/`transcription`）；各类型模型用 `-model`（chat）、`-image-model`、`-tts-model`、`-stt-model`、`-claude-model`。
+- `-report-interval`：滚动报告间隔；终端每隔该时长打印一行「当前并发 + 区间 RPS + p50/p95/p99」，`-report` 的 JSON 含完整 `timeline` 时间序列（可画曲线）。
+- 统计用固定 4096 桶对数直方图（约 32KB，与运行时长无关），长跑不累积内存。`-perf-url` / `-mysql-dsn` 资源采样在 sim 模式同样生效。
 
 加 `-report report.json` 可在结束时输出 JSON 报告文件（含压测配置、吞吐、成功/失败数、分形态 p50/p90/p95/p99/max、流式 TTFB、状态码分布、错误采样），便于存档和多轮对比。
 
