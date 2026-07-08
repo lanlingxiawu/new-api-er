@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>new-api 压测控制台</title>
+<style>
+  :root { --bg:#0f1117; --panel:#171a23; --border:#272b36; --fg:#e6e8ee; --muted:#8b93a7; --acc:#4f8cff; --ok:#3fb950; --err:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,"Segoe UI",Roboto,sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px; }
+  @media (max-width: 980px){ .wrap { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .panel h2 { font-size:14px; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  .panel h2 .dot { width:8px; height:8px; border-radius:50%; background:var(--acc); }
+  fieldset { border:1px solid var(--border); border-radius:8px; margin:0 0 12px; padding:10px 12px; }
+  legend { color:var(--muted); font-size:12px; padding:0 6px; }
+  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px 12px; }
+  .grid.one { grid-template-columns:1fr; }
+  label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  label span code { color:var(--fg); }
+  input, select { background:#0d0f16; border:1px solid var(--border); color:var(--fg); border-radius:6px; padding:6px 8px; font:inherit; }
+  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  input[type=checkbox] { width:16px; height:16px; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
+  button.stop { background:var(--err); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .cmd { background:#0d0f16; border:1px solid var(--border); border-radius:6px; padding:10px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; white-space:pre-wrap; word-break:break-all; color:#cdd3e0; }
+  .log { background:#0a0c11; border:1px solid var(--border); border-radius:6px; padding:10px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; height:260px; overflow:auto; white-space:pre-wrap; color:#c7ceda; }
+  .log .l-err { color:var(--err); }
+  .status { font-size:12px; color:var(--muted); }
+  .status.run { color:var(--ok); }
+  .toggle { display:inline-flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .toggle button { background:transparent; color:var(--muted); border-radius:0; padding:5px 12px; }
+  .toggle button.active { background:var(--acc); color:#fff; }
+  .hint { color:var(--muted); font-size:11px; margin-top:-4px; }
+  .profiles { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .profiles select { min-width:140px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>new-api 压测控制台</h1>
+  <span class="sub">填表 → 生成/复制命令，或直接启动并查看实时输出</span>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ MOCK ============ -->
+  <div class="panel" id="mock">
+    <h2><span class="dot"></span>Mock 上游 <span class="status" id="mock-status">未运行</span></h2>
+    <fieldset><legend>延迟与内容</legend>
+      <div class="grid">
+        <label>监听端口<input data-flag="-port" value="18080"></label>
+        <label>models<input data-flag="-models" value="gpt-4o-mini,gpt-4o"></label>
+        <label>latency-min<input data-flag="-latency-min" value="300ms"></label>
+        <label>latency-max<input data-flag="-latency-max" value="2s"></label>
+        <label>ttfb-min<input data-flag="-ttfb-min" value="50ms"></label>
+        <label>ttfb-max<input data-flag="-ttfb-max" value="300ms"></label>
+        <label>tokens-min<input data-flag="-tokens-min" value="20"></label>
+        <label>tokens-max<input data-flag="-tokens-max" value="200"></label>
+        <label>video-process-time<input data-flag="-video-process-time" value="3s"></label>
+      </div>
+    </fieldset>
+    <fieldset><legend>错误注入 / 真实媒体（可选）</legend>
+      <div class="grid">
+        <label>error-rate<input data-flag="-error-rate" value=""></label>
+        <label>error-codes<input data-flag="-error-codes" value=""></label>
+        <label>image-file<input data-flag="-image-file" value=""></label>
+        <label>audio-file<input data-flag="-audio-file" value=""></label>
+        <label>video-file<input data-flag="-video-file" value=""></label>
+      </div>
+    </fieldset>
+    <div class="cmd" id="mock-cmd"></div>
+    <div class="row">
+      <button class="ghost" onclick="copyCmd('mock')">复制命令</button>
+      <button id="mock-run" onclick="run('mock')">启动 mock</button>
+      <button class="stop" id="mock-stopbtn" onclick="stopJob('mock')" disabled>停止</button>
+    </div>
+    <div class="log" id="mock-log"></div>
+  </div>
+
+  <!-- ============ LOADGEN ============ -->
+  <div class="panel" id="load">
+    <h2><span class="dot"></span>压测器 loadgen <span class="status" id="load-status">未运行</span></h2>
+
+    <fieldset><legend>目标与通用</legend>
+      <div class="grid">
+        <label>url（网关地址 / sim 用根地址）<input data-flag="-url" value="http://127.0.0.1:3000/v1/chat/completions"></label>
+        <label>token（sk-...）<input data-flag="-token" value=""></label>
+        <label>model<input data-flag="-model" value="gpt-4o-mini"></label>
+        <label>并发 -c<input data-flag="-c" value="200"></label>
+        <label>时长 -d<input data-flag="-d" value="120s"></label>
+        <label>timeout<input data-flag="-timeout" value="120s"></label>
+      </div>
+    </fieldset>
+
+    <div class="row">
+      <span class="status">模式：</span>
+      <div class="toggle" id="mode">
+        <button data-mode="closed" class="active" type="button" onclick="setMode('closed')">闭环基准</button>
+        <button data-mode="sim" type="button" onclick="setMode('sim')">生产模拟</button>
+      </div>
+    </div>
+
+    <fieldset id="grp-closed"><legend>闭环基准</legend>
+      <div class="grid">
+        <label>format
+          <select data-flag="-format">
+            <option>openai</option><option>claude</option><option>gemini</option>
+            <option>image</option><option>speech</option><option>transcription</option>
+          </select>
+        </label>
+        <label>stream-ratio<input data-flag="-stream-ratio" value="0.5"></label>
+        <label>warmup<input data-flag="-warmup" value=""></label>
+        <label>max-tokens<input data-flag="-max-tokens" value="256"></label>
+        <label>prompt-words<input data-flag="-prompt-words" value="30"></label>
+      </div>
+    </fieldset>
+
+    <fieldset id="grp-sim" style="display:none"><legend>生产模拟（-sim）</legend>
+      <div class="grid">
+        <label>sim-period<input data-flag="-sim-period" value="1h"></label>
+        <label>report-interval<input data-flag="-report-interval" value="60s"></label>
+        <label>day-frac<input data-flag="-sim-day-frac" value="0.6"></label>
+        <label>night-frac<input data-flag="-sim-night-frac" value="0.1"></label>
+        <label>jitter<input data-flag="-sim-jitter" value="0.15"></label>
+        <label>spike-rate<input data-flag="-sim-spike-rate" value="0.03"></label>
+        <label>spike-mult<input data-flag="-sim-spike-mult" value="2.5"></label>
+        <label>think-min<input data-flag="-sim-think-min" value="500ms"></label>
+        <label>think-max<input data-flag="-sim-think-max" value="8s"></label>
+      </div>
+      <label style="margin-top:8px">sim-mix（kind:weight,...）<input data-flag="-sim-mix" value="chat-stream:45,chat:35,image:10,speech:7,transcription:3"></label>
+      <div class="grid" style="margin-top:8px">
+        <label>image-model<input data-flag="-image-model" value="dall-e-3"></label>
+        <label>tts-model<input data-flag="-tts-model" value="tts-1"></label>
+        <label>stt-model<input data-flag="-stt-model" value="whisper-1"></label>
+        <label>claude-model<input data-flag="-claude-model" value="claude-3-5-sonnet-20241022"></label>
+      </div>
+    </fieldset>
+
+    <fieldset><legend>报告 / 资源采样（可选）</legend>
+      <div class="grid">
+        <label>report（JSON）<input data-flag="-report" value=""></label>
+        <label>report-zh（Markdown，仅闭环）<input data-flag="-report-zh" value=""></label>
+        <label>perf-url<input data-flag="-perf-url" value=""></label>
+        <label>admin-token<input data-flag="-admin-token" value=""></label>
+        <label>admin-user-id<input data-flag="-admin-user-id" value=""></label>
+        <label>mysql-dsn<input data-flag="-mysql-dsn" value=""></label>
+      </div>
+    </fieldset>
+
+    <div class="cmd" id="load-cmd"></div>
+    <div class="row">
+      <button class="ghost" onclick="copyCmd('load')">复制命令</button>
+      <button id="load-run" onclick="run('load')">启动压测</button>
+      <button class="stop" id="load-stopbtn" onclick="stopJob('load')" disabled>停止</button>
+      <span class="profiles">
+        <select id="prof-list" onchange="loadProfile()"><option value="">— 预设 —</option></select>
+        <button class="ghost" onclick="saveProfile()">保存预设</button>
+        <button class="ghost" onclick="delProfile()">删除</button>
+      </span>
+    </div>
+    <div class="log" id="load-log"></div>
+  </div>
+
+</div>
+
+<script>
+const CMDBASE = { mock: "go run ./bench/mockai", load: "go run ./bench/loadgen" };
+let mode = "closed";
+const jobs = { mock: null, load: null }; // id + EventSource
+
+// 收集某面板内、可见且非空的 data-flag 字段 → 参数数组
+function collectArgs(panelId){
+  const args = [];
+  const panel = document.getElementById(panelId);
+  panel.querySelectorAll("[data-flag]").forEach(el=>{
+    // 隐藏的分组（display:none）跳过
+    if (el.closest("fieldset") && el.closest("fieldset").style.display === "none") return;
+    const flag = el.getAttribute("data-flag");
+    const v = (el.value||"").trim();
+    if (v === "") return;
+    args.push(flag, v);
+  });
+  if (panelId === "load" && mode === "sim") args.unshift("-sim");
+  return args;
+}
+
+function quote(s){ return /[\s"']/.test(s) ? '"'+s.replace(/"/g,'\\"')+'"' : s; }
+function cmdString(panelId){
+  const args = collectArgs(panelId);
+  return CMDBASE[panelId] + " " + args.map(quote).join(" ");
+}
+function refresh(){
+  document.getElementById("mock-cmd").textContent = cmdString("mock");
+  document.getElementById("load-cmd").textContent = cmdString("load");
+}
+document.addEventListener("input", refresh);
+
+function setMode(m){
+  mode = m;
+  document.querySelectorAll("#mode button").forEach(b=>b.classList.toggle("active", b.dataset.mode===m));
+  document.getElementById("grp-closed").style.display = m==="closed" ? "" : "none";
+  document.getElementById("grp-sim").style.display = m==="sim" ? "" : "none";
+  refresh();
+}
+
+function copyCmd(panelId){
+  navigator.clipboard.writeText(cmdString(panelId)).then(()=>flash(panelId,"命令已复制"));
+}
+function flash(panelId, msg){
+  const s = document.getElementById(panelId+"-status");
+  const old = s.textContent, cls = s.className;
+  s.textContent = msg;
+  setTimeout(()=>{ if(!jobs[panelId]){ s.textContent = old; s.className = cls; } }, 1200);
+}
+
+function appendLog(panelId, line, isErr){
+  const log = document.getElementById(panelId+"-log");
+  const near = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  const div = document.createElement("div");
+  if (isErr) div.className = "l-err";
+  div.textContent = line;
+  log.appendChild(div);
+  while (log.childNodes.length > 3000) log.removeChild(log.firstChild);
+  if (near) log.scrollTop = log.scrollHeight;
+}
+
+async function run(panelId){
+  if (jobs[panelId]) return;
+  const args = collectArgs(panelId);
+  document.getElementById(panelId+"-log").innerHTML = "";
+  let res;
+  try {
+    res = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({tool: panelId==="mock"?"mockai":"loadgen", args})});
+  } catch(e){ appendLog(panelId, "启动失败: "+e, true); return; }
+  if (!res.ok){ appendLog(panelId, "启动失败: HTTP "+res.status+" "+await res.text(), true); return; }
+  const {id} = await res.json();
+  setRunning(panelId, id);
+  const es = new EventSource("/api/stream/"+id);
+  jobs[panelId] = {id, es};
+  es.onmessage = e => appendLog(panelId, e.data, false);
+  es.addEventListener("stderr", e => appendLog(panelId, e.data, true));
+  es.addEventListener("done", e => { appendLog(panelId, "—— 进程结束（"+e.data+"）——", false); cleanup(panelId); });
+  es.onerror = () => { cleanup(panelId); };
+}
+function setRunning(panelId, id){
+  const s = document.getElementById(panelId+"-status");
+  s.textContent = "运行中 · job "+id; s.className = "status run";
+  document.getElementById(panelId+"-run").disabled = true;
+  document.getElementById(panelId+"-stopbtn").disabled = false;
+}
+function cleanup(panelId){
+  if (jobs[panelId] && jobs[panelId].es) jobs[panelId].es.close();
+  jobs[panelId] = null;
+  const s = document.getElementById(panelId+"-status");
+  s.textContent = "未运行"; s.className = "status";
+  document.getElementById(panelId+"-run").disabled = false;
+  document.getElementById(panelId+"-stopbtn").disabled = true;
+}
+async function stopJob(panelId){
+  if (!jobs[panelId]) return;
+  await fetch("/api/stop/"+jobs[panelId].id, {method:"POST"}).catch(()=>{});
+}
+
+// ---- 预设（localStorage）----
+function formState(){
+  const st = {mode};
+  document.querySelectorAll("#load [data-flag]").forEach(el=> st[el.getAttribute("data-flag")] = el.value);
+  return st;
+}
+function applyState(st){
+  if (st.mode) setMode(st.mode);
+  document.querySelectorAll("#load [data-flag]").forEach(el=>{
+    const f = el.getAttribute("data-flag");
+    if (st[f] !== undefined) el.value = st[f];
+  });
+  refresh();
+}
+function profiles(){ try { return JSON.parse(localStorage.getItem("loadgen-profiles")||"{}"); } catch(e){ return {}; } }
+function renderProfiles(){
+  const sel = document.getElementById("prof-list");
+  const p = profiles();
+  sel.innerHTML = '<option value="">— 预设 —</option>' + Object.keys(p).map(n=>`<option>${n}</option>`).join("");
+}
+function saveProfile(){
+  const name = prompt("预设名称：");
+  if (!name) return;
+  const p = profiles(); p[name] = formState();
+  localStorage.setItem("loadgen-profiles", JSON.stringify(p));
+  renderProfiles(); document.getElementById("prof-list").value = name;
+}
+function loadProfile(){
+  const name = document.getElementById("prof-list").value;
+  if (!name) return;
+  const p = profiles(); if (p[name]) applyState(p[name]);
+}
+function delProfile(){
+  const name = document.getElementById("prof-list").value;
+  if (!name) return;
+  const p = profiles(); delete p[name];
+  localStorage.setItem("loadgen-profiles", JSON.stringify(p));
+  renderProfiles();
+}
+
+renderProfiles();
+setMode("closed");
+refresh();
+</script>
+</body>
+</html>
