@@ -105,19 +105,6 @@ export async function addEmployeePerformance(
   return res.data
 }
 
-export async function getEmployeePerformanceAdjustments(
-  id: number,
-  params?: { page?: number; page_size?: number }
-): Promise<PagedResponse<CommissionLog>> {
-  const q = new URLSearchParams()
-  if (params?.page) q.set('page', String(params.page))
-  if (params?.page_size) q.set('page_size', String(params.page_size))
-  const res = await api.get(
-    `/api/admin/employee/${id}/performance?${q.toString()}`
-  )
-  return res.data
-}
-
 export async function revertEmployeePerformance(
   logId: number
 ): Promise<ApiResponse> {

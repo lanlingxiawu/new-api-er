@@ -459,35 +459,6 @@ func AdminAddEmployeePerformance(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
 }
 
-// AdminListPerformanceAdjustments GET /api/admin/employee/:id/performance
-func AdminListPerformanceAdjustments(c *gin.Context) {
-	empId, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid employee id"})
-		return
-	}
-	emp, err := model.GetEmployeeById(empId)
-	if err != nil || emp == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
-		return
-	}
-	page, pageSize := normalizePage(c)
-	logs, total, err := model.GetManualPerformanceAdjustments(emp.UserId, page, pageSize)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"items":     logs,
-			"total":     total,
-			"page":      page,
-			"page_size": pageSize,
-		},
-	})
-}
-
 // AdminRevertPerformanceAdjustment POST /api/admin/employee/performance/:logId/revert
 func AdminRevertPerformanceAdjustment(c *gin.Context) {
 	logId, err := strconv.Atoi(c.Param("logId"))
