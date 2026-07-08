@@ -32,6 +32,12 @@ type BaseNavItem = {
   /** 显示该项所需的最低 role 值，未设置则默认跟随 group 的可见性规则 */
   minRole?: number
   // end
+  /**
+   * Minimum role required to see this item in the sidebar. When set, the item
+   * is hidden for users whose role is below this threshold (see
+   * `useSidebarView`). Route-level guards still enforce access independently.
+   */
+  requiredRole?: number
 }
 
 /**

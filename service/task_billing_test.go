@@ -3,157 +3,54 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"math"
 	"net/http"
 	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/joho/godotenv"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-
+	"github.com/QuantumNous/new-api/types"
+	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-// findProjectRoot walks up from the current file to find the directory containing .env
-func findProjectRoot() string {
-	_, filename, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(filename)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".env")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
 func TestMain(m *testing.M) {
-	// Load .env from project root
-	root := findProjectRoot()
-	if root != "" {
-		_ = godotenv.Load(filepath.Join(root, ".env"))
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		panic("failed to open test db: " + err.Error())
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		panic("failed to get sql.DB: " + err.Error())
+	}
+	sqlDB.SetMaxOpenConns(1)
 
+	model.DB = db
+	model.LOG_DB = db
+
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
-	if common.OptionMap == nil {
-		common.OptionMap = make(map[string]string)
-	}
 
-	// --- Main DB (MySQL from .env SQL_DSN) ---
-	sqlDSN := os.Getenv("SQL_DSN")
-	if sqlDSN == "" {
-		panic("SQL_DSN not set in .env, cannot connect to database")
-	}
-
-	var db *gorm.DB
-	var err error
-
-	if strings.HasPrefix(sqlDSN, "postgres://") || strings.HasPrefix(sqlDSN, "postgresql://") {
-		common.UsingPostgreSQL = true
-		db, err = gorm.Open(postgres.New(postgres.Config{
-			DSN:                  sqlDSN,
-			PreferSimpleProtocol: true,
-		}), &gorm.Config{})
-	} else {
-		// MySQL
-		common.UsingMySQL = true
-		if !strings.Contains(sqlDSN, "parseTime") {
-			if strings.Contains(sqlDSN, "?") {
-				sqlDSN += "&parseTime=true"
-			} else {
-				sqlDSN += "?parseTime=true"
-			}
-		}
-		db, err = gorm.Open(mysql.Open(sqlDSN), &gorm.Config{})
-	}
-	if err != nil {
-		panic("failed to open main db: " + err.Error())
-	}
-	model.DB = db
-
-	// --- Log DB (PostgreSQL from .env LOG_SQL_DSN, fallback to main DB) ---
-	logDSN := os.Getenv("LOG_SQL_DSN")
-	if logDSN != "" {
-		if strings.HasPrefix(logDSN, "postgres://") || strings.HasPrefix(logDSN, "postgresql://") {
-			common.LogSqlType = common.DatabaseTypePostgreSQL
-			logDB, err := gorm.Open(postgres.New(postgres.Config{
-				DSN:                  logDSN,
-				PreferSimpleProtocol: true,
-			}), &gorm.Config{})
-			if err != nil {
-				panic("failed to open log db: " + err.Error())
-			}
-			model.LOG_DB = logDB
-		} else {
-			common.LogSqlType = common.DatabaseTypeMySQL
-			logDB, err := gorm.Open(mysql.Open(logDSN), &gorm.Config{})
-			if err != nil {
-				panic("failed to open log db: " + err.Error())
-			}
-			model.LOG_DB = logDB
-		}
-	} else {
-		model.LOG_DB = db
-	}
-
-	// AutoMigrate only commission/business-related tables
 	if err := db.AutoMigrate(
+		&model.Task{},
 		&model.User{},
 		&model.Token{},
-		&model.Channel{},
-		&model.Ability{},
 		&model.Log{},
+		&model.Channel{},
 		&model.TopUp{},
-		&model.Task{},
-		&model.SubscriptionPlan{},
-		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
-		&model.SubscriptionPreConsumeRecord{},
-		&model.PerfMetric{},
-		&model.UserExtension{},
-		&model.EmployeeProfile{},
-		&model.ChannelCostConfig{},
-		&model.EmployeeCommissionLog{},
-		&model.ConsumptionCost{},
-		&model.PlatformChannelDailyStat{},
-		&model.EmployeeCommissionDailyStat{},
-		&model.EmployeeCustomerCommissionDailyStat{},
-		&model.EmployeeCommissionResetPeriodStat{},
-		&model.BusinessStatsAppliedBatch{},
-		&model.BusinessDailyStatsCoverage{},
-		&model.EmployeeCommissionTier{},
-		&model.EmployeeTierLevel{},
-		&model.EmployeeTierLog{},
-		&model.CustomerProfile{},
-		&model.CustomerQuotaLog{},
+		&model.SystemTask{},
+		&model.SystemTaskLock{},
 	); err != nil {
-		panic("failed to migrate main db: " + err.Error())
-	}
-	if err := model.LOG_DB.AutoMigrate(&model.Log{}); err != nil {
-		panic("failed to migrate log db: " + err.Error())
-	}
-
-	fmt.Println("[TEST] Main DB connected:", sqlDSN)
-	if logDSN != "" {
-		fmt.Println("[TEST] Log DB connected:", logDSN)
-	} else {
-		fmt.Println("[TEST] Log DB: using main DB")
+		panic("failed to migrate: " + err.Error())
 	}
 
 	os.Exit(m.Run())
@@ -165,33 +62,22 @@ func TestMain(m *testing.M) {
 
 func truncate(t *testing.T) {
 	t.Helper()
-	cleanup := func() {
-		if strings.ToLower(os.Getenv("TEST_DB_CLEANUP")) != "true" {
-			return
-		}
+	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
-		if model.LOG_DB != nil {
-			model.LOG_DB.Exec("DELETE FROM logs")
-		}
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
-	}
-	t.Cleanup(cleanup)
+		model.DB.Exec("DELETE FROM system_task_locks")
+		model.DB.Exec("DELETE FROM system_tasks")
+	})
 }
 
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
-	user := &model.User{
-		Id:       id,
-		Username: "test_user",
-		Quota:    quota,
-		Status:   common.UserStatusEnabled,
-		AffCode:  fmt.Sprintf("aff%d", id),
-	}
+	user := &model.User{Id: id, Username: "test_user", Quota: quota, Status: common.UserStatusEnabled}
 	require.NoError(t, model.DB.Create(user).Error)
 }
 
@@ -254,6 +140,102 @@ func makeTask(userId, channelId, quota, tokenId int, billingSource string, subsc
 			},
 		},
 	}
+}
+
+func TestPriceDataOtherRatiosFilterAndSnapshot(t *testing.T) {
+	priceData := types.PriceData{}
+
+	priceData.AddOtherRatio("zero", 0)
+	priceData.AddOtherRatio("negative", -0.5)
+	priceData.AddOtherRatio("nan", math.NaN())
+	priceData.AddOtherRatio("inf", math.Inf(1))
+	priceData.AddOtherRatio("one", 1)
+	priceData.AddOtherRatio("positive", 2.5)
+
+	ratios := priceData.OtherRatios()
+	require.Len(t, ratios, 2)
+	assert.Equal(t, 1.0, ratios["one"])
+	assert.Equal(t, 2.5, ratios["positive"])
+	assert.True(t, priceData.HasOtherRatio("one"))
+	assert.False(t, priceData.HasOtherRatio("zero"))
+
+	ratios["positive"] = 99
+	ratios["new"] = 3
+	nextSnapshot := priceData.OtherRatios()
+	assert.Equal(t, 2.5, nextSnapshot["positive"])
+	assert.NotContains(t, nextSnapshot, "new")
+}
+
+func TestPriceDataReplaceAndApplyOtherRatios(t *testing.T) {
+	priceData := types.PriceData{}
+
+	replaced := priceData.ReplaceOtherRatios(map[string]float64{
+		"zero":     0,
+		"negative": -3,
+		"nan":      math.NaN(),
+		"inf":      math.Inf(1),
+		"one":      1,
+		"duration": 2,
+		"size":     1.5,
+	})
+
+	require.True(t, replaced)
+	assert.Equal(t, 3.0, priceData.OtherRatioMultiplier())
+	assert.Equal(t, 30.0, priceData.ApplyOtherRatiosToFloat(10))
+	assert.Equal(t, 10.0, priceData.RemoveOtherRatiosFromFloat(30))
+	assert.True(t, decimal.NewFromInt(30).Equal(priceData.ApplyOtherRatiosToDecimal(decimal.NewFromInt(10))))
+
+	replaced = priceData.ReplaceOtherRatios(map[string]float64{
+		"zero": 0,
+		"nan":  math.NaN(),
+	})
+
+	require.False(t, replaced)
+	assert.Nil(t, priceData.OtherRatios())
+	assert.Equal(t, 1.0, priceData.OtherRatioMultiplier())
+}
+
+func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{
+		"seconds":  2,
+		"identity": 1,
+		"zero":     0,
+		"negative": -1,
+		"nan":      math.NaN(),
+		"inf":      math.Inf(1),
+	}
+
+	other := taskBillingOther(task)
+
+	assert.Equal(t, 2.0, other["seconds"])
+	assert.Equal(t, 1.0, other["identity"])
+	assert.NotContains(t, other, "zero")
+	assert.NotContains(t, other, "negative")
+	assert.NotContains(t, other, "nan")
+	assert.NotContains(t, other, "inf")
+}
+
+func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {
+	priceData := taskBillingContextPriceData(&model.TaskBillingContext{
+		OtherRatios: map[string]float64{
+			"seconds":  2,
+			"size":     3,
+			"identity": 1,
+			"zero":     0,
+			"negative": -1,
+			"nan":      math.NaN(),
+			"inf":      math.Inf(1),
+		},
+	})
+
+	require.NotNil(t, priceData)
+	assert.Equal(t, 6.0, priceData.OtherRatioMultiplier())
+	assert.Equal(t, map[string]float64{
+		"seconds":  2,
+		"size":     3,
+		"identity": 1,
+	}, priceData.OtherRatios())
 }
 
 // ---------------------------------------------------------------------------
@@ -805,7 +787,7 @@ func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
-func TestSettle_NonPerCall_AdaptorAdjustWorks(t *testing.T) {
+func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 

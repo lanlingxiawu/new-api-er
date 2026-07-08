@@ -16,13 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo } from 'react'
 import { useLocation } from '@tanstack/react-router'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { ROLE } from '@/lib/roles'
+
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
 import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
+
 import { useSidebarConfig } from './use-sidebar-config'
 import { useSidebarData } from './use-sidebar-data'
 
@@ -50,16 +52,19 @@ export function useSidebarView(): ResolvedSidebarView {
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
-    const isAdmin = userRole !== undefined && userRole >= ROLE.ADMIN
+    const role = userRole ?? ROLE.GUEST
+    const isAdmin = role >= ROLE.ADMIN
     return configFilteredRoot
       .filter((group) => (group.id === 'admin' ? isAdmin : true))
-      // xiugai 添加号池节点功能 - 修复侧边栏权限，按 minRole 过滤 item
-      .map((group) => ({
-        ...group,
-        items: group.items.filter(
-          (item) => item.minRole === undefined || (userRole !== undefined && userRole >= item.minRole)
-        ),
-      }))
+      // xiugai 添加号池节点功能 - 修复侧边栏权限，按 minRole / requiredRole 过滤 item
+      .map((group) => {
+        const items = group.items.filter(
+          (item) =>
+            (item.minRole === undefined || role >= item.minRole) &&
+            (item.requiredRole === undefined || role >= item.requiredRole)
+        )
+        return items.length === group.items.length ? group : { ...group, items }
+      })
     // end
   }, [configFilteredRoot, userRole])
 

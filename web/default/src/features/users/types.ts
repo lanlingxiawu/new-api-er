@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
+
 // ============================================================================
 // User Schema & Types
 // ============================================================================
@@ -62,6 +64,9 @@ export const userSchema = z.object({
   is_assigned_customer: z.boolean().optional(),
   assigned_employee_user_id: z.number().optional(),
   assigned_employee_name: z.string().optional(),
+  admin_permissions: z
+    .record(z.string(), z.record(z.string(), z.boolean()))
+    .optional(),
 })
 export type User = z.infer<typeof userSchema>
 
@@ -115,6 +120,7 @@ export interface UserFormData {
   group?: string // Only used when updating user
   group_ratios?: string // JSON {group: ratio}; only used when updating user
   remark?: string // Only used when updating user
+  admin_permissions?: AdminPermissionMatrix
 }
 
 export type ManageUserAction =

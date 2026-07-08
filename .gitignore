@@ -51,3 +51,8 @@ CLAUDE.md
 debugmain.go
 new-api.zip
 /.tmp-chrome-codex
+
+# Local-only live probes and scratch test workspaces.
+.local-tests/
+service/relayconvert/chat_responses_live_local_test.go
+service/openaicompat/chat_responses_live_local_test.go
