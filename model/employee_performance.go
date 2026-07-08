@@ -277,30 +277,6 @@ func RevertEmployeePerformance(logId int, operatedBy int) error {
 	return nil
 }
 
-// GetManualPerformanceAdjustments 分页查询某员工的手工业绩调整流水（精确匹配 sentinel）。
-func GetManualPerformanceAdjustments(employeeUserId, page, pageSize int) ([]*EmployeeCommissionLog, int64, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	tx := DB.Model(&EmployeeCommissionLog{}).Where("model_name = ?", ManualPerformanceModelName)
-	if employeeUserId != 0 {
-		tx = tx.Where("employee_user_id = ?", employeeUserId)
-	}
-	var total int64
-	if err := tx.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var logs []*EmployeeCommissionLog
-	if err := tx.Order("created_at DESC, id DESC").
-		Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
-		return nil, 0, err
-	}
-	return logs, total, nil
-}
-
 // reevaluateTierByPeriodProfit 依当前周期业绩对员工等级做双向重估（升/降）。
 // 仅用于手工调整路径——组织化结算仍沿用「只升不降」的 TryAutoUpgradeTier。规则：
 //   - 在员工当前分组内，取阈值 <= 本期业绩(USD) 的最高等级为目标；若都不满足则回落到该分组

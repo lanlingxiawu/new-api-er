@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Undo2 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -15,13 +14,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { BusinessAmount } from '@/features/business/amount-display'
-import {
-  addEmployeePerformance,
-  getEmployeePerformanceAdjustments,
-  revertEmployeePerformance,
-} from '../api'
-import type { CommissionLog, EmployeeProfile } from '../types'
+import { addEmployeePerformance } from '../api'
+import type { EmployeeProfile } from '../types'
 
 interface Props {
   open: boolean
@@ -67,7 +61,6 @@ export function PerformanceAdjustDialog({
   const [historical, setHistorical] = useState(false)
   const [month, setMonth] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [revertingId, setRevertingId] = useState<number | null>(null)
 
   // 历史周期补录仅提供「过去的自然月」——当前月不属于历史，避免勾选补录却落到当前周期并触发等级重估。
   const monthOptions = useMemo(() => recentMonths(13).slice(1), [])
@@ -79,20 +72,8 @@ export function PerformanceAdjustDialog({
       setHistorical(false)
       setMonth('')
       setSubmitting(false)
-      setRevertingId(null)
     }
   }, [open])
-
-  const { data: adjData, refetch: refetchAdjustments } = useQuery({
-    queryKey: ['employee-perf-adjustments', employee?.id],
-    queryFn: () =>
-      getEmployeePerformanceAdjustments(employee!.id, {
-        page: 1,
-        page_size: 20,
-      }),
-    enabled: open && !!employee,
-  })
-  const adjustments: CommissionLog[] = adjData?.data?.items ?? []
 
   const amountNum = Number(amount)
   const amountValid = amount.trim() !== '' && !Number.isNaN(amountNum) && amountNum !== 0
@@ -120,29 +101,13 @@ export function PerformanceAdjustDialog({
       toast.success(t('Performance adjustment applied'))
       setAmount('')
       setReason('')
-      await refetchAdjustments()
       qc.invalidateQueries({ queryKey: ['employees'] })
       onSuccess?.()
+      onOpenChange(false)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : t('Operation failed'))
     } finally {
       setSubmitting(false)
-    }
-  }
-
-  const handleRevert = async (logId: number) => {
-    setRevertingId(logId)
-    try {
-      const res = await revertEmployeePerformance(logId)
-      if (!res.success) throw new Error(res.message ?? 'Failed')
-      toast.success(t('Adjustment reverted'))
-      await refetchAdjustments()
-      qc.invalidateQueries({ queryKey: ['employees'] })
-      onSuccess?.()
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : t('Operation failed'))
-    } finally {
-      setRevertingId(null)
     }
   }
 
@@ -252,57 +217,6 @@ export function PerformanceAdjustDialog({
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
-
-        {/* Existing adjustments */}
-        {adjustments.length > 0 ? (
-          <div className='space-y-1.5'>
-            <label className='text-sm font-medium'>
-              {t('Adjustment history')}
-            </label>
-            <div className='divide-y rounded-lg border'>
-              {adjustments.map((adj) => {
-                const reverted = adj.settle_status === 2
-                return (
-                  <div
-                    key={adj.id}
-                    className='flex items-center gap-2 px-3 py-2 text-sm'
-                  >
-                    <div className='min-w-0 flex-1'>
-                      {/* 手工调整：正=加业绩、负=扣减；不套用亏损/冲销徽标（那是消费流水语义）。 */}
-                      <BusinessAmount
-                        value={adj.profit_quota}
-                        showPositiveSign
-                        markNegative={false}
-                      />
-                      <div className='text-muted-foreground text-xs'>
-                        {new Date(adj.created_at * 1000).toLocaleString()}
-                        {' · '}
-                        {(Number(adj.commission_rate || 0) * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                    {reverted ? (
-                      <Badge variant='secondary' className='shrink-0'>
-                        {t('Reverted')}
-                      </Badge>
-                    ) : (
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='ghost'
-                        className='shrink-0'
-                        disabled={revertingId === adj.id}
-                        onClick={() => handleRevert(adj.id)}
-                      >
-                        <Undo2 className='mr-1 size-3.5' />
-                        {t('Revert')}
-                      </Button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ) : null}
 
         <DialogFooter>
           <Button

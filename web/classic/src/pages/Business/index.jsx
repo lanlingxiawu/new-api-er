@@ -2805,9 +2805,6 @@ function PerformanceModal({ visible, row, onCancel, onSuccess }) {
   const [historical, setHistorical] = useState(false);
   const [month, setMonth] = useState('');
   const [saving, setSaving] = useState(false);
-  const [revertingId, setRevertingId] = useState(null);
-  const [adjustments, setAdjustments] = useState([]);
-  const [loadingList, setLoadingList] = useState(false);
 
   const currentMonth = useMemo(() => currentMonthValue(), []);
   // 历史周期补录仅提供「过去的自然月」——当前月不属于历史，避免勾选补录却落到当前周期并触发等级重估。
@@ -2819,35 +2816,14 @@ function PerformanceModal({ visible, row, onCancel, onSuccess }) {
     [currentMonth],
   );
 
-  const loadAdjustments = useCallback(async () => {
-    if (!row?.id) return;
-    setLoadingList(true);
-    try {
-      const res = await API.get(
-        `/api/admin/employee/${row.id}/performance`,
-        { params: { page: 1, page_size: 20 } },
-      );
-      if (res.data.success) {
-        setAdjustments(res.data.data?.items || []);
-      }
-    } catch (error) {
-      showError(error.message);
-    } finally {
-      setLoadingList(false);
-    }
-  }, [row?.id]);
-
   useEffect(() => {
-    if (visible) {
-      loadAdjustments();
-    } else {
+    if (!visible) {
       setAmount('');
       setReason('');
       setHistorical(false);
       setMonth('');
-      setAdjustments([]);
     }
-  }, [visible, loadAdjustments]);
+  }, [visible]);
 
   const amountNum = Number(amount);
   const amountValid = amount !== '' && !Number.isNaN(amountNum) && amountNum !== 0;
@@ -2871,29 +2847,12 @@ function PerformanceModal({ visible, row, onCancel, onSuccess }) {
       showSuccess(t('业绩调整已应用'));
       setAmount('');
       setReason('');
-      await loadAdjustments();
       onSuccess?.();
+      onCancel?.();
     } catch (error) {
       showError(error.message);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const revert = async (logId) => {
-    setRevertingId(logId);
-    try {
-      await mutateRequest(
-        'post',
-        `/api/admin/employee/performance/${logId}/revert`,
-      );
-      showSuccess(t('调整已撤销'));
-      await loadAdjustments();
-      onSuccess?.();
-    } catch (error) {
-      showError(error.message);
-    } finally {
-      setRevertingId(null);
     }
   };
 
@@ -3001,74 +2960,6 @@ function PerformanceModal({ visible, row, onCancel, onSuccess }) {
           placeholder={t('可选')}
         />
       </Field>
-
-      {adjustments.length > 0 || loadingList ? (
-        <Field label={t('调整记录')}>
-          {loadingList ? (
-            <div className='flex justify-center py-4'>
-              <Spin />
-            </div>
-          ) : (
-            <div
-              className='divide-y rounded-lg border'
-              style={{ borderColor: 'var(--semi-color-border)' }}
-            >
-              {adjustments.map((adj) => {
-                const reverted = Number(adj.settle_status) === 2;
-                const profitQuota = Number(adj.profit_quota) || 0;
-                return (
-                  <div
-                    key={adj.id}
-                    className='flex items-center gap-2 px-3 py-2'
-                  >
-                    <div className='min-w-0 flex-1'>
-                      {/* 手工调整：正=加业绩、负=扣减；不套用亏损/冲销徽标（那是消费流水语义）。 */}
-                      <Text
-                        strong
-                        style={{
-                          color:
-                            profitQuota > 0
-                              ? 'var(--semi-color-success)'
-                              : profitQuota < 0
-                                ? 'var(--semi-color-danger)'
-                                : undefined,
-                        }}
-                      >
-                        {profitQuota > 0 ? '+' : ''}
-                        {formatBusinessAmount(profitQuota)}
-                      </Text>
-                      <Text
-                        type='secondary'
-                        size='small'
-                        className='mt-0.5 block'
-                      >
-                        {formatTs(adj.created_at)}
-                        {' · '}
-                        {formatPercent(adj.commission_rate)}
-                      </Text>
-                    </div>
-                    {reverted ? (
-                      <Tag size='small' color='grey' className='shrink-0'>
-                        {t('已撤销')}
-                      </Tag>
-                    ) : (
-                      <Button
-                        size='small'
-                        type='tertiary'
-                        theme='borderless'
-                        loading={revertingId === adj.id}
-                        onClick={() => revert(adj.id)}
-                      >
-                        {t('撤销')}
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Field>
-      ) : null}
     </Modal>
   );
 }
