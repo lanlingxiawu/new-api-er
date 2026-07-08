@@ -28,6 +28,9 @@ var (
 	statOpenAI formatStat
 	statClaude formatStat
 	statGemini formatStat
+	statImage  formatStat // served=生成的图片数
+	statAudio  formatStat // served=语音请求数（TTS/STT）
+	statVideo  formatStat // served=submit 数，stream 复用为 fetch 轮询数
 )
 
 // words 预生成的随机词池：每个词为纯小写 ASCII + 尾随空格，可直接嵌入 JSON 字符串。

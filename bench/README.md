@@ -2,8 +2,14 @@
 
 对 new-api 网关做端到端压测，真实执行鉴权、渠道分发、relay 转发、token 计数、计费、日志、提成结算全链路。包含两个纯标准库程序：
 
-- `bench/mockai`：多格式 mock 上游，按请求 URL 同时模拟三种原生上游格式——OpenAI 兼容（`/v1/chat/completions`）、Anthropic Claude（`/v1/messages`）、Google Gemini（`/v1beta/models/{model}:generateContent` / `:streamGenerateContent`）。一个进程即可同时给 OpenAI / Claude / Gemini 三类渠道当上游。响应时间（TTFB、总时长）与内容（词数、词面）随机；热路径零锁、近零分配，确保 mock 不是瓶颈。
-- `bench/loadgen`：压测器。闭环并发，流式/非流式按比例混合，SSE 流完整消费；`-format` 切换 ingress 格式（openai/claude/gemini），`-warmup` 预热段不计入统计；输出 p50/p90/p95/p99、流式 TTFB、状态码分布与错误采样。
+- `bench/mockai`：多接口 mock 上游，按请求 URL 同时模拟多种上游格式，一个进程即可给不同类型渠道当上游：
+  - **chat / 多模态**：OpenAI 兼容 `/v1/chat/completions`、Anthropic Claude `/v1/messages`、Google Gemini `/v1beta/models/{model}:generateContent` / `:streamGenerateContent`；
+  - **图片**：`/v1/images/generations`、`/v1/images/edits`、`/v1/edits`；
+  - **语音**：TTS `/v1/audio/speech`（二进制音频）、STT `/v1/audio/transcriptions`、`/v1/audio/translations`（`{"text"}`）；
+  - **视频**：异步任务（doubao/volc 格式）submit `/api/v3/contents/generations/tasks` → 轮询 fetch，`-video-process-time` 控制"生成耗时"、`task_id` 内编码提交时刻无状态判定进度。
+
+  响应时间（TTFB、总时长）与内容（词数、词面）随机；热路径零锁、近零分配，确保 mock 不是瓶颈。
+- `bench/loadgen`：压测器。闭环并发，流式/非流式按比例混合，SSE 流完整消费；`-format` 切换请求格式（`openai`/`claude`/`gemini`/`image`/`speech`/`transcription`），`-warmup` 预热段不计入统计；输出 p50/p90/p95/p99、流式 TTFB、状态码分布与错误采样。
 
 ## 步骤
 
@@ -33,10 +39,13 @@ go run ./bench/loadgen -url http://127.0.0.1:18080/v1/chat/completions -c 500 -d
 
 ### 3. 在 new-api 配置渠道与令牌
 
-1. 管理后台新建渠道，Base URL 都填 `http://127.0.0.1:18080`，密钥任意填（mock 不校验），分组按需。按要压的渠道类型选择：
+1. 管理后台新建渠道，Base URL 都填 `http://127.0.0.1:18080`，密钥任意填（mock 不校验），分组按需。按要压的接口类型选择：
    - **OpenAI 兼容**：类型 OpenAI，模型 `gpt-4o-mini`（或 mock `-models` 列表中任意值）。网关转发到 mock 的 `/v1/chat/completions`。
    - **Claude**：类型 Claude/Anthropic，模型如 `claude-3-5-sonnet-20241022`。网关转发到 mock 的 `/v1/messages`。
    - **Gemini**：类型 Gemini，模型如 `gemini-2.0-flash`。网关转发到 mock 的 `:generateContent` / `:streamGenerateContent`。
+   - **图片**：类型 OpenAI，模型如 `dall-e-3` / `gpt-image-1`。网关转发到 mock 的 `/v1/images/generations`。
+   - **语音**：类型 OpenAI，模型如 `tts-1`（TTS）/ `whisper-1`（STT）。网关转发到 mock 的 `/v1/audio/speech` / `/v1/audio/transcriptions`。
+   - **视频**：类型 doubao/volc（走 `/v1/video/generations` 的渠道），模型按渠道要求。网关转发到 mock 的 `/api/v3/contents/generations/tasks`（submit + 轮询）。
 2. 建一个测试用户/令牌，**额度给足**（压测会真实扣费、写日志、跑提成结算）。
 3. 如需压提成链路：给测试用户设置一个员工邀请人。
 
@@ -61,6 +70,21 @@ go run ./bench/loadgen -url http://127.0.0.1:3000/v1/messages -format claude -to
 # Gemini 入口：-url 用网关根地址，loadgen 自动拼 /v1beta/models/{model}:{action}（流式走 :streamGenerateContent）
 go run ./bench/loadgen -url http://127.0.0.1:3000 -format gemini -token sk-xxxx -model gemini-2.0-flash -c 200 -d 120s -stream-ratio 0.5
 ```
+
+**压测图片 / 语音接口**（一次性响应，`-stream-ratio` 忽略）：
+
+```
+# 图片：-url 指向 /v1/images/generations
+go run ./bench/loadgen -url http://127.0.0.1:3000/v1/images/generations -format image -token sk-xxxx -model dall-e-3 -c 50 -d 60s
+
+# 语音 TTS：-url 指向 /v1/audio/speech（响应为二进制音频）
+go run ./bench/loadgen -url http://127.0.0.1:3000/v1/audio/speech -format speech -token sk-xxxx -model tts-1 -c 50 -d 60s
+
+# 语音 STT：-url 指向 /v1/audio/transcriptions（loadgen 发 multipart）
+go run ./bench/loadgen -url http://127.0.0.1:3000/v1/audio/transcriptions -format transcription -token sk-xxxx -model whisper-1 -c 50 -d 60s
+```
+
+> **视频**为异步任务（submit → 轮询），mock 已完整支持（`-video-process-time` 控制生成耗时），但 loadgen 暂无 video 驱动；可用 curl 直压 mock 的 `/api/v3/contents/generations/tasks` 验证 submit→running→succeeded 生命周期，或通过网关的 `/v1/video/generations` 走真实任务链路。
 
 加 `-report report.json` 可在结束时输出 JSON 报告文件（含压测配置、吞吐、成功/失败数、分形态 p50/p90/p95/p99/max、流式 TTFB、状态码分布、错误采样），便于存档和多轮对比。
 

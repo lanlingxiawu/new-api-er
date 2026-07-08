@@ -1,16 +1,18 @@
 // Command mockai 是用于压测 new-api 网关的多格式 mock 上游。
 //
-// 按渠道接入的三种原生上游格式同时模拟，一个进程即可给 OpenAI / Claude / Gemini
-// 三类渠道当上游（按请求 URL 路由）：
-//   - OpenAI 兼容：POST {base}/v1/chat/completions              （openai.go）
-//   - Anthropic Claude：POST {base}/v1/messages                 （claude.go）
-//   - Google Gemini：POST {base}/{ver}/models/{model}:generateContent
-//     或 :streamGenerateContent?alt=sse                          （gemini.go）
+// 按渠道接入的多种上游格式同时模拟，一个进程即可给不同类型渠道当上游（按请求 URL 路由）：
+//   - chat/多模态：OpenAI POST /v1/chat/completions（openai.go）、Anthropic Claude
+//     POST /v1/messages（claude.go）、Gemini POST /{ver}/models/{model}:generateContent
+//     或 :streamGenerateContent?alt=sse（gemini.go）
+//   - 图片：POST /v1/images/generations|/images/edits|/edits（image.go）
+//   - 语音：TTS POST /v1/audio/speech（二进制）、STT POST /v1/audio/transcriptions|/translations（audio.go）
+//   - 视频（异步任务，doubao/volc 格式）：submit POST /api/v3/contents/generations/tasks、
+//     fetch GET .../tasks/{id}，无状态按 task_id 内编码的提交时刻判定进度（video.go）
 //
 // 设计目标：mock 自身绝不能成为压测瓶颈——热路径零锁（math/rand/v2 全局函数 + atomic 计数）、
 // 近零分配（sync.Pool 缓冲 + 预生成 ASCII 词池手工拼接 JSON）、延迟全部用 time.Sleep 模拟。
-// 响应时间（TTFB / 总时长）与内容（词数、词面）均在配置范围内随机。三种格式共用同一套
-// 延迟 / 词数 / 错误注入参数（见 gen.go）。仅压测用途，不属于业务代码。用法见 bench/README.md。
+// 响应时间（TTFB / 总时长）与内容（词数、词面）均在配置范围内随机；各格式共用同一套延迟 /
+// 词数 / 错误注入参数（见 gen.go）。仅压测用途，不属于业务代码。用法见 bench/README.md。
 package main
 
 import (
@@ -26,16 +28,17 @@ import (
 )
 
 var (
-	port      = flag.Int("port", 18080, "监听端口")
-	ttfbMin   = flag.Duration("ttfb-min", 50*time.Millisecond, "流式：首 chunk 最小延迟")
-	ttfbMax   = flag.Duration("ttfb-max", 300*time.Millisecond, "流式：首 chunk 最大延迟")
-	totalMin  = flag.Duration("latency-min", 300*time.Millisecond, "响应总时长下限")
-	totalMax  = flag.Duration("latency-max", 2000*time.Millisecond, "响应总时长上限")
-	tokensMin = flag.Int("tokens-min", 20, "随机补全词数下限")
-	tokensMax = flag.Int("tokens-max", 200, "随机补全词数上限")
-	modelsCSV = flag.String("models", "gpt-4o-mini,gpt-4o,gpt-3.5-turbo", "/v1/models 暴露的模型列表")
-	errorRate = flag.Float64("error-rate", 0, "随机返回错误状态码的概率 [0,1]，0 关闭")
-	errorsCSV = flag.String("error-codes", "429:1,500:1,502:1,503:1", "错误码权重表 code:weight,...（避免 401/403，网关可能据此自动禁用渠道）")
+	port         = flag.Int("port", 18080, "监听端口")
+	ttfbMin      = flag.Duration("ttfb-min", 50*time.Millisecond, "流式：首 chunk 最小延迟")
+	ttfbMax      = flag.Duration("ttfb-max", 300*time.Millisecond, "流式：首 chunk 最大延迟")
+	totalMin     = flag.Duration("latency-min", 300*time.Millisecond, "响应总时长下限")
+	totalMax     = flag.Duration("latency-max", 2000*time.Millisecond, "响应总时长上限")
+	tokensMin    = flag.Int("tokens-min", 20, "随机补全词数下限")
+	tokensMax    = flag.Int("tokens-max", 200, "随机补全词数上限")
+	modelsCSV    = flag.String("models", "gpt-4o-mini,gpt-4o,gpt-3.5-turbo", "/v1/models 暴露的模型列表")
+	errorRate    = flag.Float64("error-rate", 0, "随机返回错误状态码的概率 [0,1]，0 关闭")
+	errorsCSV    = flag.String("error-codes", "429:1,500:1,502:1,503:1", "错误码权重表 code:weight,...（避免 401/403，网关可能据此自动禁用渠道）")
+	videoProcess = flag.Duration("video-process-time", 3*time.Second, "视频任务从 submit 到 succeeded 的模拟生成耗时")
 )
 
 // errorCodes 按权重展开后的错误码采样池，rand.IntN 直取即可，无锁。
@@ -100,18 +103,26 @@ func modelsHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func statsHandler(w http.ResponseWriter, _ *http.Request) {
-	served := statOpenAI.served.Load() + statClaude.served.Load() + statGemini.served.Load()
+	served := statOpenAI.served.Load() + statClaude.served.Load() + statGemini.served.Load() +
+		statImage.served.Load() + statAudio.served.Load() + statVideo.served.Load()
 	stream := statOpenAI.stream.Load() + statClaude.stream.Load() + statGemini.stream.Load()
-	errs := statOpenAI.errs.Load() + statClaude.errs.Load() + statGemini.errs.Load()
+	errs := statOpenAI.errs.Load() + statClaude.errs.Load() + statGemini.errs.Load() +
+		statImage.errs.Load() + statAudio.errs.Load() + statVideo.errs.Load()
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"served_total":%d,"stream_total":%d,"errors_injected":%d,"active":%d,`+
 		`"openai":{"served":%d,"stream":%d,"errors":%d},`+
 		`"claude":{"served":%d,"stream":%d,"errors":%d},`+
-		`"gemini":{"served":%d,"stream":%d,"errors":%d}}`,
+		`"gemini":{"served":%d,"stream":%d,"errors":%d},`+
+		`"image":{"images":%d,"errors":%d},`+
+		`"audio":{"served":%d,"errors":%d},`+
+		`"video":{"submits":%d,"fetches":%d,"errors":%d}}`,
 		served, stream, errs, activeReqs.Load(),
 		statOpenAI.served.Load(), statOpenAI.stream.Load(), statOpenAI.errs.Load(),
 		statClaude.served.Load(), statClaude.stream.Load(), statClaude.errs.Load(),
-		statGemini.served.Load(), statGemini.stream.Load(), statGemini.errs.Load())
+		statGemini.served.Load(), statGemini.stream.Load(), statGemini.errs.Load(),
+		statImage.served.Load(), statImage.errs.Load(),
+		statAudio.served.Load(), statAudio.errs.Load(),
+		statVideo.served.Load(), statVideo.stream.Load(), statVideo.errs.Load())
 }
 
 // route 按请求 URL 路由到对应格式的 handler。Gemini 的流式由 URL action 决定，
@@ -122,6 +133,12 @@ func route(w http.ResponseWriter, r *http.Request) {
 
 	p := r.URL.Path
 	switch {
+	// 视频异步任务（doubao/volc 格式）：submit（POST .../tasks）/ fetch（GET .../tasks/{id}）
+	case r.Method == http.MethodGet && strings.Contains(p, "/contents/generations/tasks/"):
+		videoFetchHandler(w, videoTaskID(p))
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/contents/generations/tasks"):
+		videoSubmitHandler(w, r)
+	// 文本/多模态 chat 三格式
 	case strings.Contains(p, ":streamGenerateContent"):
 		geminiHandler(w, r, true)
 	case strings.Contains(p, ":generateContent"):
@@ -130,14 +147,31 @@ func route(w http.ResponseWriter, r *http.Request) {
 		claudeHandler(w, r)
 	case strings.HasSuffix(p, "/chat/completions") && r.Method == http.MethodPost:
 		openaiHandler(w, r)
+	// 图片
+	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/images/generations") || strings.HasSuffix(p, "/images/edits") || strings.HasSuffix(p, "/edits")):
+		imageHandler(w, r)
+	// 语音：TTS（二进制）/ STT（{"text"}）
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/audio/speech"):
+		audioSpeechHandler(w, r)
+	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/audio/transcriptions") || strings.HasSuffix(p, "/audio/translations")):
+		audioTranscriptionHandler(w, r)
 	case strings.HasSuffix(p, "/models") && r.Method == http.MethodGet:
 		modelsHandler(w, r)
 	case p == "/stats":
 		statsHandler(w, r)
 	default:
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "mockai ok (openai:/v1/chat/completions claude:/v1/messages gemini:/v1beta/models/*:generateContent)\n")
+		_, _ = io.WriteString(w, "mockai ok (chat: openai /v1/chat/completions, claude /v1/messages, gemini /v1beta/models/*:generateContent; image /v1/images/generations; audio /v1/audio/speech|transcriptions; video /api/v3/contents/generations/tasks)\n")
 	}
+}
+
+// videoTaskID 从 .../contents/generations/tasks/{id} 提取 task_id。
+func videoTaskID(p string) string {
+	const marker = "/contents/generations/tasks/"
+	if i := strings.LastIndex(p, marker); i >= 0 {
+		return p[i+len(marker):]
+	}
+	return ""
 }
 
 func main() {
@@ -152,6 +186,7 @@ func main() {
 		log.Fatal(err)
 	}
 	initWords()
+	initAudioBlob()
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(*port),
@@ -161,7 +196,7 @@ func main() {
 		// WriteTimeout 留 0：流式响应时长由 latency 参数控制
 		IdleTimeout: 120 * time.Second,
 	}
-	log.Printf("mockai listening on :%d  formats=[openai,claude,gemini]  ttfb=[%v,%v] total=[%v,%v] tokens=[%d,%d] error-rate=%.2f codes=%s",
-		*port, *ttfbMin, *ttfbMax, *totalMin, *totalMax, *tokensMin, *tokensMax, *errorRate, *errorsCSV)
+	log.Printf("mockai listening on :%d  formats=[openai,claude,gemini,image,audio,video]  ttfb=[%v,%v] total=[%v,%v] tokens=[%d,%d] video-process=%v error-rate=%.2f codes=%s",
+		*port, *ttfbMin, *ttfbMax, *totalMin, *totalMax, *tokensMin, *tokensMax, *videoProcess, *errorRate, *errorsCSV)
 	log.Fatal(srv.ListenAndServe())
 }

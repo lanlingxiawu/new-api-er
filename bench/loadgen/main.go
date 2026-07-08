@@ -89,11 +89,48 @@ func writePrompt(b *bytes.Buffer) {
 	}
 }
 
+// multipartBoundary 是 transcription（STT）multipart 请求体的固定分隔符。
+const multipartBoundary = "loadgenBoundary7f3a9c1e5b2d"
+
+// supportsStream 仅 chat 三格式支持流式；image/speech/transcription 为一次性响应。
+func supportsStream() bool {
+	switch *format {
+	case "openai", "claude", "gemini":
+		return true
+	}
+	return false
+}
+
+// contentType 返回本 -format 的请求 Content-Type（transcription 为 multipart）。
+func contentType() string {
+	if *format == "transcription" {
+		return "multipart/form-data; boundary=" + multipartBoundary
+	}
+	return "application/json"
+}
+
 // buildBody 按 -format 把请求体写入 buf（复用同一 buffer，减少热路径分配）。
 // gemini 的流式由 URL action 决定，body 不带 stream 字段。
 func buildBody(b *bytes.Buffer, isStream bool) {
 	b.Reset()
 	switch *format {
+	case "image":
+		fmt.Fprintf(b, `{"model":"%s","prompt":"`, *model)
+		writePrompt(b)
+		b.WriteString(`","n":1,"size":"1024x1024"}`)
+	case "speech":
+		fmt.Fprintf(b, `{"model":"%s","voice":"alloy","input":"`, *model)
+		writePrompt(b)
+		b.WriteString(`"}`)
+	case "transcription":
+		// 最小 multipart：model 字段 + 伪 file 字段（网关 STT 入口要求 multipart）。
+		b.WriteString("--" + multipartBoundary + "\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n")
+		b.WriteString(*model)
+		b.WriteString("\r\n--" + multipartBoundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n")
+		for i := 0; i < *promptWords; i++ {
+			b.WriteString("audiodata")
+		}
+		b.WriteString("\r\n--" + multipartBoundary + "--\r\n")
 	case "claude":
 		b.WriteString(`{"model":"`)
 		b.WriteString(*model)
@@ -149,8 +186,10 @@ func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat
 	// 每个 worker 复用一个 body 缓冲区：闭环内请求串行，client.Do 返回时请求体已发完，
 	// 下一次 buildBody 前可安全复位，省掉每请求一次的 body 分配。
 	buf := new(bytes.Buffer)
+	streamable := supportsStream()
+	ctype := contentType()
 	for time.Now().Before(deadline) {
-		isStream := rand.Float64() < *streamRatio
+		isStream := streamable && rand.Float64() < *streamRatio
 		buildBody(buf, isStream)
 		req, err := http.NewRequest(http.MethodPost, requestURL(isStream), bytes.NewReader(buf.Bytes()))
 		if err != nil {
@@ -160,7 +199,7 @@ func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat
 		if *token != "" {
 			req.Header.Set("Authorization", "Bearer "+*token)
 		}
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", ctype)
 
 		start := time.Now()
 		resp, err := client.Do(req)
@@ -720,9 +759,9 @@ func main() {
 		os.Exit(1)
 	}
 	switch *format {
-	case "openai", "claude", "gemini":
+	case "openai", "claude", "gemini", "image", "speech", "transcription":
 	default:
-		fmt.Fprintln(os.Stderr, "-format 必须是 openai|claude|gemini")
+		fmt.Fprintln(os.Stderr, "-format 必须是 openai|claude|gemini|image|speech|transcription")
 		os.Exit(1)
 	}
 	if *warmup < 0 {

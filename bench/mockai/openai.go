@@ -152,11 +152,17 @@ func openaiStream(w http.ResponseWriter, req openAIRequest, id, created int64, p
 	bufPool.Put(hb)
 }
 
-// openaiError 返回 OpenAI 形态错误：{"error":{"message","type","code"}}。
-func openaiError(w http.ResponseWriter, code int) {
+// writeOpenAIError 写出 OpenAI 形态错误 {"error":{"message","type","code"}}（不计数）。
+// image/audio/video 等 OpenAI 兼容端点共用此错误形态，各自增自己的 errs 计数。
+func writeOpenAIError(w http.ResponseWriter, code int) {
 	time.Sleep(randDur(*ttfbMin, *ttfbMax)) // 错误也带延迟，接近真实上游故障形态
-	statOpenAI.errs.Add(1)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	fmt.Fprintf(w, `{"error":{"message":"%s","type":"mock_injected_error","code":%d}}`, errorMessage(code), code)
+}
+
+// openaiError 返回 OpenAI 形态错误并计入 openai errs。
+func openaiError(w http.ResponseWriter, code int) {
+	statOpenAI.errs.Add(1)
+	writeOpenAIError(w, code)
 }
