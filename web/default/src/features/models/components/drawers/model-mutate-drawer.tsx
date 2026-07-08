@@ -165,6 +165,7 @@ export function ModelMutateDrawer({
   const modelSettings = useMemo(() => {
     if (!systemOptionsData?.data) return null
     const defaultModelSettings: ModelSettings = {
+      'thirdpartysd2_pricing.matrix': '{}',
       'global.pass_through_request_enabled': false,
       'global.thinking_model_blacklist': '[]',
       'global.chat_completions_to_responses_policy': '{}',

@@ -566,7 +566,7 @@ export function NodePool() {
         <Button
           size='sm'
           variant='outline'
-          onClick={fetchNodes}
+          onClick={() => fetchNodes()}
           disabled={loading}
         >
           {loading ? (

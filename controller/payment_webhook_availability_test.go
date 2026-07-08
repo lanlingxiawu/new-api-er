@@ -21,7 +21,11 @@ func confirmPaymentComplianceForTest(t *testing.T) {
 	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
 }
 
-func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
+// isStripeWebhookEnabled depends ONLY on the webhook signing secret, by design:
+// a paid Checkout Session must still settle even if an admin later toggles other
+// Stripe/top-up config, otherwise the callback would 403 and the user is charged
+// but not credited. See the comment on isStripeWebhookEnabled.
+func TestStripeWebhookEnabledDependsOnlyOnWebhookSecret(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	originalAPISecret := setting.StripeApiSecret
 	originalWebhookSecret := setting.StripeWebhookSecret
@@ -32,16 +36,19 @@ func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 		setting.StripePriceId = originalPriceID
 	})
 
+	// No webhook secret -> disabled, regardless of API/price config.
 	setting.StripeWebhookSecret = ""
 	setting.StripeApiSecret = "sk_test_123"
 	setting.StripePriceId = "price_123"
 	require.False(t, isStripeWebhookEnabled())
 
+	// Webhook secret present -> enabled.
 	setting.StripeWebhookSecret = "whsec_test"
 	require.True(t, isStripeWebhookEnabled())
 
+	// Clearing the price id must NOT disable the webhook (in-flight orders settle).
 	setting.StripePriceId = ""
-	require.False(t, isStripeWebhookEnabled())
+	require.True(t, isStripeWebhookEnabled())
 }
 
 func TestCreemWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {

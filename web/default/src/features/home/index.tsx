@@ -588,7 +588,7 @@ function FigmaHomeHeader() {
         key: item.code,
         fullLabel: item.label,
         shortLabel:
-          item.code === 'zh'
+          item.code.startsWith('zh')
             ? '中文'
             : item.code === 'ja'
               ? '日本語'

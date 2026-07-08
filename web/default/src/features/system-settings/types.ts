@@ -79,6 +79,11 @@ export type LedgerPipelineStatus = {
   }
   theoretical_pair_records_per_sec: number
   theoretical_pair_rpm: number
+  // Runtime capacity/limit fields surfaced by the status endpoint (optional:
+  // absent on older backends, in which case the UI falls back to null).
+  buf_max_entries?: number
+  retry_queue_max_entries?: number
+  stat_upsert_max_retries?: number
 }
 
 export type LedgerPipelineStatusResponse = {

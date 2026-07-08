@@ -88,9 +88,19 @@ var channelReadOnlyFields = map[string]struct{}{
 	"balance":              {},
 	"balance_updated_time": {},
 	"used_quota":           {},
+	// Fork accounting fields: server-managed (gorm:"-"), refreshed only by the
+	// dedicated account-balance endpoint, never by the general channel edit.
+	"account_balance":            {},
+	"account_balance_configured": {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
+	if _, ok := requestData["account_balance"]; ok {
+		channel.AccountBalance = nil
+	}
+	if _, ok := requestData["account_balance_configured"]; ok {
+		channel.AccountBalanceConfigured = false
+	}
 	if _, ok := requestData["created_time"]; ok {
 		channel.CreatedTime = 0
 	}
@@ -133,4 +143,9 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"remark":              {},
 	"channel_info":        {},
 	"multi_key_mode":      {},
+	"max_input_tokens":    {},
+	// Fork pricing field: the default channel edit form always sends cost_ratio,
+	// so a ChannelWrite admin must be able to set it without ChannelSensitiveWrite.
+	// It is business/accounting config, not a credential.
+	"cost_ratio": {},
 }

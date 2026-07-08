@@ -502,7 +502,7 @@ export function ConsumptionCostLedgerDetail() {
         setCursor(res.data?.next_cursor ?? null)
         setHasMore(Boolean(res.data?.has_more))
         // fallback_hint is a top-level sibling of "data" in the JSON body
-        const hint = (res as Record<string, unknown>).fallback_hint as
+        const hint = (res as unknown as Record<string, unknown>).fallback_hint as
           | FallbackHint
           | null
           | undefined

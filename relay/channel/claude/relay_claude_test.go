@@ -425,41 +425,10 @@ func TestClaudeStreamHandlerForceClosesAfterUpstreamErrorEvent(t *testing.T) {
 	require.Equal(t, []string{"message_start", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
 }
 
-func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []dto.Message{
-			{
-				Role: "user",
-				Content: []any{
-					dto.MediaContent{
-						Type: dto.ContentTypeText,
-						Text: "see attachment",
-					},
-					dto.MediaContent{
-						Type: dto.ContentTypeFile,
-						File: &dto.MessageFile{
-							FileName: "blob.bin",
-							FileData: "JVBERi0xLjQK",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
-	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
-
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
-	require.True(t, ok)
-	require.Len(t, content, 1)
-	require.Equal(t, "text", content[0].Type)
-	require.NotNil(t, content[0].Text)
-	require.Equal(t, "see attachment", *content[0].Text)
-}
-
+// NOTE: TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent removed on merge:
+// upstream added Claude file->document/image support (relay-claude.go), superseding
+// the fork behavior of dropping unsupported file content. See git history if the
+// "ignore truly-unsupported types" guard needs to be re-added on top of that support.
 func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",

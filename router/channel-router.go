@@ -47,6 +47,9 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/test/:id", permission: authz.ChannelOperate, handler: controller.TestChannel},
 	{method: http.MethodGet, path: "/update_balance", permission: authz.ChannelOperate, handler: controller.UpdateAllChannelsBalance},
 	{method: http.MethodGet, path: "/update_balance/:id", permission: authz.ChannelOperate, handler: controller.UpdateChannelBalance},
+	// Fork account-balance refresh: queries the upstream with stored channel
+	// credentials, so it is a ChannelOperate action (same class as update_balance).
+	{method: http.MethodPost, path: "/:id/account-balance", permission: authz.ChannelOperate, handler: controller.UpdateChannelAccountBalance},
 	{method: http.MethodPost, path: "/", permission: authz.ChannelSensitiveWrite, handler: controller.AddChannel},
 	{method: http.MethodPut, path: "/", permission: authz.ChannelWrite, handler: controller.UpdateChannel},
 	{method: http.MethodPost, path: "/status/batch", permission: authz.ChannelOperate, handler: controller.BatchUpdateChannelStatus},

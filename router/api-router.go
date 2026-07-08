@@ -349,13 +349,6 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		registerChannelRoutes(apiRouter)
 		registerAuthzRoutes(apiRouter)
-		// Fork-specific channel route not covered by registerChannelRoutes
-		// (account-balance query/refresh feature).
-		forkChannelRoute := apiRouter.Group("/channel")
-		forkChannelRoute.Use(middleware.AdminAuth())
-		{
-			forkChannelRoute.POST("/:id/account-balance", controller.UpdateChannelAccountBalance)
-		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{
