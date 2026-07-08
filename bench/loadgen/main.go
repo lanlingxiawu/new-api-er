@@ -39,6 +39,8 @@ var (
 	timeout     = flag.Duration("timeout", 120*time.Second, "单请求超时")
 	maxTokens   = flag.Int("max-tokens", 256, "请求 max_tokens")
 	promptWords = flag.Int("prompt-words", 30, "随机 prompt 词数")
+	format      = flag.String("format", "openai", "网关 ingress 格式：openai|claude|gemini（决定请求体与 URL 构造）")
+	warmup      = flag.Duration("warmup", 0, "预热时长：这段时间照常发压但不计入统计，消除冷启动抖动")
 	reportPath  = flag.String("report", "", "压测结束后将 JSON 报告写入该文件（留空不输出）")
 
 	perfURL      = flag.String("perf-url", "", "网关性能接口，如 http://127.0.0.1:3000/api/performance/stats（留空不采样）")
@@ -62,6 +64,7 @@ type workerStat struct {
 	errs    []string
 	errN    int64
 	chunks  int64
+	total   int64 // 计入统计的请求数（预热期请求不计）
 }
 
 var promptPool []string
@@ -78,23 +81,61 @@ func initPromptPool() {
 	}
 }
 
-func buildBody(isStream bool) []byte {
-	var b bytes.Buffer
-	b.WriteString(`{"model":"`)
-	b.WriteString(*model)
-	b.WriteString(`","stream":`)
-	if isStream {
-		b.WriteString(`true,"stream_options":{"include_usage":true},`)
-	} else {
-		b.WriteString(`false,`)
-	}
-	fmt.Fprintf(&b, `"max_tokens":%d,"messages":[{"role":"user","content":"`, *maxTokens)
+// writePrompt 向 buf 写入随机 prompt 词（不含外层引号）。
+func writePrompt(b *bytes.Buffer) {
 	for i := 0; i < *promptWords; i++ {
 		b.WriteString(promptPool[rand.IntN(len(promptPool))])
 		b.WriteByte(' ')
 	}
-	b.WriteString(`"}]}`)
-	return b.Bytes()
+}
+
+// buildBody 按 -format 把请求体写入 buf（复用同一 buffer，减少热路径分配）。
+// gemini 的流式由 URL action 决定，body 不带 stream 字段。
+func buildBody(b *bytes.Buffer, isStream bool) {
+	b.Reset()
+	switch *format {
+	case "claude":
+		b.WriteString(`{"model":"`)
+		b.WriteString(*model)
+		if isStream {
+			b.WriteString(`","stream":true,`)
+		} else {
+			b.WriteString(`","stream":false,`)
+		}
+		fmt.Fprintf(b, `"max_tokens":%d,"messages":[{"role":"user","content":"`, *maxTokens)
+		writePrompt(b)
+		b.WriteString(`"}]}`)
+	case "gemini":
+		b.WriteString(`{"contents":[{"role":"user","parts":[{"text":"`)
+		writePrompt(b)
+		fmt.Fprintf(b, `"}]}],"generationConfig":{"maxOutputTokens":%d}}`, *maxTokens)
+	default: // openai
+		b.WriteString(`{"model":"`)
+		b.WriteString(*model)
+		if isStream {
+			b.WriteString(`","stream":true,"stream_options":{"include_usage":true},`)
+		} else {
+			b.WriteString(`","stream":false,`)
+		}
+		fmt.Fprintf(b, `"max_tokens":%d,"messages":[{"role":"user","content":"`, *maxTokens)
+		writePrompt(b)
+		b.WriteString(`"}]}`)
+	}
+}
+
+// requestURL 返回本次请求的目标 URL。openai/claude 直接用 -url（应分别指向
+// /v1/chat/completions、/v1/messages）；gemini 把 -url 当作网关根地址，按
+// {base}/v1beta/models/{model}:{action} 构造，流式走 :streamGenerateContent?alt=sse。
+func requestURL(isStream bool) string {
+	if *format != "gemini" {
+		return *target
+	}
+	base := strings.TrimRight(*target, "/")
+	action := "generateContent"
+	if isStream {
+		action = "streamGenerateContent?alt=sse"
+	}
+	return base + "/v1beta/models/" + *model + ":" + action
 }
 
 func (s *workerStat) recordErr(msg string) {
@@ -104,11 +145,14 @@ func (s *workerStat) recordErr(msg string) {
 	}
 }
 
-func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomic.Int64) {
+func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat, done *atomic.Int64) {
+	// 每个 worker 复用一个 body 缓冲区：闭环内请求串行，client.Do 返回时请求体已发完，
+	// 下一次 buildBody 前可安全复位，省掉每请求一次的 body 分配。
+	buf := new(bytes.Buffer)
 	for time.Now().Before(deadline) {
 		isStream := rand.Float64() < *streamRatio
-		body := buildBody(isStream)
-		req, err := http.NewRequest(http.MethodPost, *target, bytes.NewReader(body))
+		buildBody(buf, isStream)
+		req, err := http.NewRequest(http.MethodPost, requestURL(isStream), bytes.NewReader(buf.Bytes()))
 		if err != nil {
 			st.recordErr("build request: " + err.Error())
 			return
@@ -120,8 +164,13 @@ func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomi
 
 		start := time.Now()
 		resp, err := client.Do(req)
+		// 预热期（start 早于 recordStart）的请求照常发出、照常消费，但不计入统计。
+		record := !start.Before(recordStart)
 		if err != nil {
-			st.recordErr(err.Error())
+			if record {
+				st.total++
+				st.recordErr(err.Error())
+			}
 			done.Add(1)
 			continue
 		}
@@ -137,7 +186,7 @@ func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomi
 						ttfb = float64(time.Since(start)) / 1e6
 						first = false
 					}
-					if strings.HasPrefix(line, "data:") && !strings.Contains(line, "[DONE]") {
+					if record && strings.HasPrefix(line, "data:") && !strings.Contains(line, "[DONE]") {
 						st.chunks++
 					}
 					if strings.Contains(line, "[DONE]") || rerr != nil {
@@ -148,19 +197,24 @@ func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomi
 			} else {
 				_, _ = io.Copy(io.Discard, resp.Body)
 			}
-		} else {
+		} else if record {
 			eb, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			st.recordErr(fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(eb))))
+		} else {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
 		}
 		_ = resp.Body.Close()
 
-		st.codes[resp.StatusCode]++
-		if resp.StatusCode == http.StatusOK {
-			st.samples = append(st.samples, sample{
-				lat:    float64(time.Since(start)) / 1e6,
-				ttfb:   ttfb,
-				stream: isStream,
-			})
+		if record {
+			st.total++
+			st.codes[resp.StatusCode]++
+			if resp.StatusCode == http.StatusOK {
+				st.samples = append(st.samples, sample{
+					lat:    float64(time.Since(start)) / 1e6,
+					ttfb:   ttfb,
+					stream: isStream,
+				})
+			}
 		}
 		done.Add(1)
 	}
@@ -545,9 +599,11 @@ func writeChineseReport(path string, rep report) error {
 	fmt.Fprintf(&b, "## 基本信息\n\n")
 	fmt.Fprintf(&b, "- 生成时间：%s\n", rep.GeneratedAt)
 	fmt.Fprintf(&b, "- 压测接口：%v\n", rep.Config["url"])
+	fmt.Fprintf(&b, "- ingress 格式：%v\n", rep.Config["format"])
 	fmt.Fprintf(&b, "- 模型：%v\n", rep.Config["model"])
 	fmt.Fprintf(&b, "- 并发数：%v\n", rep.Config["concurrency"])
-	fmt.Fprintf(&b, "- 压测时长：%v\n", rep.Config["duration"])
+	fmt.Fprintf(&b, "- 预热时长：%v\n", rep.Config["warmup"])
+	fmt.Fprintf(&b, "- 压测时长（统计窗口）：%v\n", rep.Config["duration"])
 	fmt.Fprintf(&b, "- 流式请求占比：%v\n", rep.Config["stream_ratio"])
 	fmt.Fprintf(&b, "- max_tokens：%v\n", rep.Config["max_tokens"])
 	fmt.Fprintf(&b, "- prompt 词数：%v\n\n", rep.Config["prompt_words"])
@@ -663,6 +719,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-c must be > 0")
 		os.Exit(1)
 	}
+	switch *format {
+	case "openai", "claude", "gemini":
+	default:
+		fmt.Fprintln(os.Stderr, "-format 必须是 openai|claude|gemini")
+		os.Exit(1)
+	}
+	if *warmup < 0 {
+		fmt.Fprintln(os.Stderr, "-warmup 不能为负")
+		os.Exit(1)
+	}
 	if *token == "" {
 		fmt.Fprintln(os.Stderr, "[warn] -token 为空：仅适用于直压 mock 做基线校准")
 	}
@@ -678,10 +744,12 @@ func main() {
 
 	stats := make([]*workerStat, *conc)
 	var done atomic.Int64
-	deadline := time.Now().Add(*dur)
+	startWall := time.Now()
+	recordStart := startWall.Add(*warmup) // 预热结束、开始计入统计的时刻
+	deadline := recordStart.Add(*dur)     // 统计窗口 = -d；总运行 = -warmup + -d
 
-	fmt.Printf("loadgen: url=%s c=%d d=%v stream-ratio=%.2f model=%s\n",
-		*target, *conc, *dur, *streamRatio, *model)
+	fmt.Printf("loadgen: url=%s format=%s c=%d warmup=%v d=%v stream-ratio=%.2f model=%s\n",
+		*target, *format, *conc, *warmup, *dur, *streamRatio, *model)
 
 	// 实时进度
 	stopProgress := make(chan struct{})
@@ -729,15 +797,15 @@ func main() {
 		close(dbDone)
 	}
 
-	startAll := time.Now()
 	var wg sync.WaitGroup
 	for i := 0; i < *conc; i++ {
-		st := &workerStat{codes: make(map[int]int64)}
+		// 预分配 samples 容量，减少长压测中切片增长带来的 GC 抖动。
+		st := &workerStat{codes: make(map[int]int64), samples: make([]sample, 0, 8192)}
 		stats[i] = st
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			worker(client, deadline, st, &done)
+			worker(client, deadline, recordStart, st, &done)
 		}()
 	}
 	wg.Wait()
@@ -746,7 +814,8 @@ func main() {
 	close(stopDB)
 	<-perfDone
 	<-dbDone
-	elapsed := time.Since(startAll)
+	// 统计窗口 = deadline - recordStart（即 -d）；预热请求已在 worker 内被排除。
+	elapsed := deadline.Sub(recordStart)
 
 	// 汇总
 	var streamLats, streamTtfbs, plainLats []float64
@@ -773,7 +842,10 @@ func main() {
 			}
 		}
 	}
-	total := done.Load()
+	var total int64
+	for _, st := range stats {
+		total += st.total
+	}
 	ok := int64(len(streamLats) + len(plainLats))
 
 	plainStats := summarize(plainLats)
@@ -842,8 +914,8 @@ func main() {
 		rep := report{
 			GeneratedAt: time.Now().Format(time.RFC3339),
 			Config: map[string]any{
-				"url": *target, "model": *model, "concurrency": *conc,
-				"duration": dur.String(), "stream_ratio": *streamRatio,
+				"url": *target, "format": *format, "model": *model, "concurrency": *conc,
+				"duration": dur.String(), "warmup": warmup.String(), "stream_ratio": *streamRatio,
 				"max_tokens": *maxTokens, "prompt_words": *promptWords,
 			},
 			ElapsedSec:  float64(int(elapsed.Seconds()*10)) / 10,
