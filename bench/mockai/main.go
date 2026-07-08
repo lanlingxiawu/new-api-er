@@ -6,9 +6,9 @@
 //     或 :streamGenerateContent?alt=sse（gemini.go）
 //   - 图片：POST /v1/images/generations|/images/edits|/edits（image.go）
 //   - 语音：TTS POST /v1/audio/speech（二进制）、STT POST /v1/audio/transcriptions|/translations（audio.go）
-//   - 视频（异步任务，两套创建接口）：doubao/volc（POST /api/v3/contents/generations/tasks）与
-//     OpenAI Sora（POST /v1/videos + remix/fetch/content）；无状态按 task_id 内编码的提交时刻
-//     判定 queued→completed（video.go）
+//   - 视频（异步任务，多厂商上游格式）：doubao/volc、OpenAI Sora（/v1/videos + remix/content）、
+//     kling、vidu、ali(DashScope)、hailuo(MiniMax，两步取回)、jimeng(即梦) 的 submit + 轮询 fetch；
+//     无状态按 task_id 内编码的提交时刻判定 queued→completed（video.go、video_providers.go）
 //
 // 真实媒体：图片/语音/视频返回真实可用的字节（PNG/WAV/GIF），URL 挂在 mock 自身 /media 或
 // /v1/videos/{id}/content 下、真实可下载；-image-file/-audio-file/-video-file 可替换为真实素材
@@ -142,12 +142,40 @@ func route(w http.ResponseWriter, r *http.Request) {
 
 	p := r.URL.Path
 	switch {
-	// 视频异步任务（doubao/volc 格式）：submit（POST .../tasks）/ fetch（GET .../tasks/{id}）
+	// ==== 视频（异步任务，多厂商上游格式）====
+	// jimeng（volc 签名，POST + query Action 区分 submit/fetch）
+	case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "CVSync2AsyncSubmitTask"):
+		jimengSubmitHandler(w, r)
+	case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "CVSync2AsyncGetResult"):
+		jimengFetchHandler(w, r)
+	// doubao/volc：submit POST .../tasks、fetch GET .../tasks/{id}
 	case r.Method == http.MethodGet && strings.Contains(p, "/contents/generations/tasks/"):
 		videoFetchHandler(w, r.Host, videoTaskID(p))
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/contents/generations/tasks"):
 		videoSubmitHandler(w, r)
-	// 视频（OpenAI Sora 格式）：create / remix（POST）、content（GET .../content）、fetch（GET .../videos/{id}）
+	// kling（fetch 必须在 sora 之前判断 /videos/{action}/{id}）
+	case r.Method == http.MethodGet && (strings.Contains(p, "/videos/image2video/") || strings.Contains(p, "/videos/text2video/")):
+		klingFetchHandler(w, r.Host, lastSeg(p))
+	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/image2video") || strings.HasSuffix(p, "/text2video")):
+		klingSubmitHandler(w, r)
+	// vidu：submit POST /ent/v2/{img2video|...}、fetch GET /ent/v2/tasks/{id}/creations
+	case r.Method == http.MethodGet && strings.Contains(p, "/ent/v2/tasks/") && strings.HasSuffix(p, "/creations"):
+		viduFetchHandler(w, r.Host, segAfter(p, "/tasks/"))
+	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/img2video") || strings.HasSuffix(p, "/start-end2video") || strings.HasSuffix(p, "/reference2video")):
+		viduSubmitHandler(w, r)
+	// ali（DashScope）：submit POST .../video-synthesis、fetch GET /api/v1/tasks/{id}
+	case r.Method == http.MethodGet && strings.Contains(p, "/api/v1/tasks/"):
+		aliFetchHandler(w, r.Host, lastSeg(p))
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/video-synthesis"):
+		aliSubmitHandler(w, r)
+	// hailuo（MiniMax）：submit POST /v1/video_generation、query GET .../query/video_generation、file GET .../files/retrieve
+	case r.Method == http.MethodGet && strings.Contains(p, "/query/video_generation"):
+		hailuoQueryHandler(w, r.URL.Query().Get("task_id"))
+	case r.Method == http.MethodGet && strings.Contains(p, "/files/retrieve"):
+		hailuoFileHandler(w, r.Host, r.URL.Query().Get("file_id"))
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/video_generation"):
+		hailuoSubmitHandler(w, r)
+	// sora（OpenAI）：content（GET .../content）/ create·remix（POST）/ fetch（GET .../videos/{id}）
 	case r.Method == http.MethodGet && strings.Contains(p, "/videos/") && strings.HasSuffix(p, "/content"):
 		serveVideoBytes(w)
 	case r.Method == http.MethodPost && (strings.HasSuffix(p, "/videos") || strings.HasSuffix(p, "/remix")):
