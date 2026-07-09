@@ -123,7 +123,7 @@ function UserPicker({
           p: Number(pageParam),
           page_size: USER_PICKER_PAGE_SIZE,
           exclude_employee: true,
-          exclude_admin: true,
+          exclude_root: true,
           exclude_assigned_customer: true,
         }),
       initialPageParam: 1,

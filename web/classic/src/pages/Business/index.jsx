@@ -1333,6 +1333,7 @@ function UserPicker({
   onToggle,
   excludeEmployee = true,
   excludeAdmin = false,
+  excludeRoot = false,
   excludeAssignedCustomer = false,
   employeeUserId,
 }) {
@@ -1389,6 +1390,7 @@ function UserPicker({
             p: nextPage,
             exclude_employee: excludeEmployee,
             exclude_admin: excludeAdmin,
+            exclude_root: excludeRoot,
             exclude_assigned_customer: excludeAssignedCustomer,
           }),
           disableDuplicate: true,
@@ -1423,7 +1425,13 @@ function UserPicker({
         setLoadingMore(false);
       }
     },
-    [debouncedKeyword, excludeAdmin, excludeAssignedCustomer, excludeEmployee],
+    [
+      debouncedKeyword,
+      excludeAdmin,
+      excludeRoot,
+      excludeAssignedCustomer,
+      excludeEmployee,
+    ],
   );
 
   useEffect(() => {
@@ -2668,6 +2676,7 @@ function EmployeeModal({ visible, row, onCancel, onSuccess }) {
               updateField('remark', '');
             }}
             excludeEmployee
+            excludeRoot
             excludeAssignedCustomer
           />
           <Text type='secondary' size='small'>

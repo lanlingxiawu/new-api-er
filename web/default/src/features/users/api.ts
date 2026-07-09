@@ -58,6 +58,7 @@ export async function searchUsers(
     status = '',
     exclude_employee = false,
     exclude_admin = false,
+    exclude_root = false,
     exclude_assigned_customer = false,
     p = 1,
     page_size = 10,
@@ -69,6 +70,7 @@ export async function searchUsers(
   if (status) queryParams.set('status', status)
   if (exclude_employee) queryParams.set('exclude_employee', 'true')
   if (exclude_admin) queryParams.set('exclude_admin', 'true')
+  if (exclude_root) queryParams.set('exclude_root', 'true')
   if (exclude_assigned_customer)
     queryParams.set('exclude_assigned_customer', 'true')
   queryParams.set('p', String(p))
