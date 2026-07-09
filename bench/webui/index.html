@@ -7,8 +7,8 @@
 <style>
   :root { --bg:#0f1117; --panel:#171a23; --border:#272b36; --fg:#e6e8ee; --muted:#8b93a7; --acc:#4f8cff; --ok:#3fb950; --err:#f85149; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,"Segoe UI",Roboto,sans-serif; }
-  header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:600; }
   header .sub { color:var(--muted); font-size:12px; }
   .wrap { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px; }
@@ -21,10 +21,11 @@
   .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px 12px; }
   .grid.one { grid-template-columns:1fr; }
   label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
-  label span code { color:var(--fg); }
-  input, select { background:#0d0f16; border:1px solid var(--border); color:var(--fg); border-radius:6px; padding:6px 8px; font:inherit; }
-  input:focus, select:focus { outline:none; border-color:var(--acc); }
+  label code { color:var(--fg); font-size:11px; opacity:.65; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  input, select, textarea { background:#0d0f16; border:1px solid var(--border); color:var(--fg); border-radius:6px; padding:6px 8px; font:inherit; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--acc); }
   input[type=checkbox] { width:16px; height:16px; }
+  textarea { resize:vertical; min-height:56px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; }
   .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0; }
   button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
   button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
@@ -38,7 +39,7 @@
   .toggle { display:inline-flex; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
   .toggle button { background:transparent; color:var(--muted); border-radius:0; padding:5px 12px; }
   .toggle button.active { background:var(--acc); color:#fff; }
-  .hint { color:var(--muted); font-size:11px; margin-top:-4px; }
+  .hint { color:var(--muted); font-size:11px; margin-top:-2px; }
   .profiles { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
   .profiles select { min-width:140px; }
 </style>
@@ -46,7 +47,7 @@
 <body>
 <header>
   <h1>new-api 压测控制台</h1>
-  <span class="sub">填表 → 生成/复制命令，或直接启动并查看实时输出</span>
+  <span class="sub">填表 → 生成/复制命令，或直接启动并查看实时输出（单二进制，mock 与压测器均由本程序拉起）</span>
 </header>
 
 <div class="wrap">
@@ -56,30 +57,30 @@
     <h2><span class="dot"></span>Mock 上游 <span class="status" id="mock-status">未运行</span></h2>
     <fieldset><legend>延迟与内容</legend>
       <div class="grid">
-        <label>监听端口<input data-flag="-port" value="18080"></label>
-        <label>models<input data-flag="-models" value="gpt-4o-mini,gpt-4o"></label>
-        <label>latency-min<input data-flag="-latency-min" value="300ms"></label>
-        <label>latency-max<input data-flag="-latency-max" value="2s"></label>
-        <label>ttfb-min<input data-flag="-ttfb-min" value="50ms"></label>
-        <label>ttfb-max<input data-flag="-ttfb-max" value="300ms"></label>
-        <label>tokens-min<input data-flag="-tokens-min" value="20"></label>
-        <label>tokens-max<input data-flag="-tokens-max" value="200"></label>
-        <label>video-process-time<input data-flag="-video-process-time" value="3s"></label>
+        <label>监听端口 <code>-port</code><input data-flag="-port" value="18080"></label>
+        <label>暴露模型 <code>-models</code><input data-flag="-models" value="" placeholder="留空=内置约40个常见模型"></label>
+        <label>最小总延迟 <code>-latency-min</code><input data-flag="-latency-min" value="300ms"></label>
+        <label>最大总延迟 <code>-latency-max</code><input data-flag="-latency-max" value="2s"></label>
+        <label>流式首包最小延迟 <code>-ttfb-min</code><input data-flag="-ttfb-min" value="50ms"></label>
+        <label>流式首包最大延迟 <code>-ttfb-max</code><input data-flag="-ttfb-max" value="300ms"></label>
+        <label>最小补全词数 <code>-tokens-min</code><input data-flag="-tokens-min" value="20"></label>
+        <label>最大补全词数 <code>-tokens-max</code><input data-flag="-tokens-max" value="200"></label>
+        <label>视频生成耗时 <code>-video-process-time</code><input data-flag="-video-process-time" value="3s"></label>
       </div>
     </fieldset>
     <fieldset><legend>错误注入 / 真实媒体（可选）</legend>
       <div class="grid">
-        <label>error-rate<input data-flag="-error-rate" value=""></label>
-        <label>error-codes<input data-flag="-error-codes" value=""></label>
-        <label>image-file<input data-flag="-image-file" value=""></label>
-        <label>audio-file<input data-flag="-audio-file" value=""></label>
-        <label>video-file<input data-flag="-video-file" value=""></label>
+        <label>错误注入概率 <code>-error-rate</code><input data-flag="-error-rate" value=""></label>
+        <label>错误码权重 <code>-error-codes</code><input data-flag="-error-codes" value=""></label>
+        <label>图片素材文件 <code>-image-file</code><input data-flag="-image-file" value=""></label>
+        <label>音频素材文件 <code>-audio-file</code><input data-flag="-audio-file" value=""></label>
+        <label>视频素材文件 <code>-video-file</code><input data-flag="-video-file" value=""></label>
       </div>
     </fieldset>
     <div class="cmd" id="mock-cmd"></div>
     <div class="row">
       <button class="ghost" onclick="copyCmd('mock')">复制命令</button>
-      <button id="mock-run" onclick="run('mock')">启动 mock</button>
+      <button id="mock-run" onclick="run('mock')">启动 Mock</button>
       <button class="stop" id="mock-stopbtn" onclick="stopJob('mock')" disabled>停止</button>
     </div>
     <div class="log" id="mock-log"></div>
@@ -91,13 +92,16 @@
 
     <fieldset><legend>目标与通用</legend>
       <div class="grid">
-        <label>url（网关地址 / sim 用根地址）<input data-flag="-url" value="http://127.0.0.1:3000/v1/chat/completions"></label>
-        <label>token（sk-...）<input data-flag="-token" value=""></label>
-        <label>model<input data-flag="-model" value="gpt-4o-mini"></label>
-        <label>并发 -c<input data-flag="-c" value="200"></label>
-        <label>时长 -d<input data-flag="-d" value="120s"></label>
-        <label>timeout<input data-flag="-timeout" value="120s"></label>
+        <label>目标地址 <code>-url</code><input data-flag="-url" value="http://127.0.0.1:3000/v1/chat/completions"></label>
+        <label>模型 <code>-model</code><input data-flag="-model" value="gpt-4o-mini"></label>
+        <label>并发数 <code>-c</code><input data-flag="-c" value="200"></label>
+        <label>压测时长 <code>-d</code><input data-flag="-d" value="120s"></label>
+        <label>单请求超时 <code>-timeout</code><input data-flag="-timeout" value="120s"></label>
       </div>
+      <label style="margin-top:8px">令牌（可填多个，模拟多用户并发） <code>-token</code>
+        <textarea data-flag="-token" rows="3" placeholder="每行或逗号分隔一个令牌，例如：&#10;sk-aaaa&#10;sk-bbbb&#10;sk-cccc&#10;（留空=直压 mock 基线，不带鉴权）"></textarea>
+      </label>
+      <div class="hint">填多个令牌时，各并发 worker（虚拟用户）按顺序轮流使用不同令牌，等价于多个用户同时请求；worker 数多于令牌数时会循环复用。</div>
     </fieldset>
 
     <div class="row">
@@ -110,48 +114,48 @@
 
     <fieldset id="grp-closed"><legend>闭环基准</legend>
       <div class="grid">
-        <label>format
+        <label>请求格式 <code>-format</code>
           <select data-flag="-format">
             <option>openai</option><option>claude</option><option>gemini</option>
             <option>image</option><option>speech</option><option>transcription</option>
           </select>
         </label>
-        <label>stream-ratio<input data-flag="-stream-ratio" value="0.5"></label>
-        <label>warmup<input data-flag="-warmup" value=""></label>
-        <label>max-tokens<input data-flag="-max-tokens" value="256"></label>
-        <label>prompt-words<input data-flag="-prompt-words" value="30"></label>
+        <label>流式请求占比 <code>-stream-ratio</code><input data-flag="-stream-ratio" value="0.5"></label>
+        <label>预热时长 <code>-warmup</code><input data-flag="-warmup" value=""></label>
+        <label>最大生成 token <code>-max-tokens</code><input data-flag="-max-tokens" value="256"></label>
+        <label>prompt 词数 <code>-prompt-words</code><input data-flag="-prompt-words" value="30"></label>
       </div>
     </fieldset>
 
     <fieldset id="grp-sim" style="display:none"><legend>生产模拟（-sim）</legend>
       <div class="grid">
-        <label>sim-period<input data-flag="-sim-period" value="1h"></label>
-        <label>report-interval<input data-flag="-report-interval" value="60s"></label>
-        <label>day-frac<input data-flag="-sim-day-frac" value="0.6"></label>
-        <label>night-frac<input data-flag="-sim-night-frac" value="0.1"></label>
-        <label>jitter<input data-flag="-sim-jitter" value="0.15"></label>
-        <label>spike-rate<input data-flag="-sim-spike-rate" value="0.03"></label>
-        <label>spike-mult<input data-flag="-sim-spike-mult" value="2.5"></label>
-        <label>think-min<input data-flag="-sim-think-min" value="500ms"></label>
-        <label>think-max<input data-flag="-sim-think-max" value="8s"></label>
+        <label>昼夜周期 <code>-sim-period</code><input data-flag="-sim-period" value="1h"></label>
+        <label>报告间隔 <code>-report-interval</code><input data-flag="-report-interval" value="60s"></label>
+        <label>白天并发比例 <code>-sim-day-frac</code><input data-flag="-sim-day-frac" value="0.6"></label>
+        <label>夜间并发比例 <code>-sim-night-frac</code><input data-flag="-sim-night-frac" value="0.1"></label>
+        <label>抖动幅度 <code>-sim-jitter</code><input data-flag="-sim-jitter" value="0.15"></label>
+        <label>突发概率 <code>-sim-spike-rate</code><input data-flag="-sim-spike-rate" value="0.03"></label>
+        <label>突发倍数 <code>-sim-spike-mult</code><input data-flag="-sim-spike-mult" value="2.5"></label>
+        <label>思考间隔下限 <code>-sim-think-min</code><input data-flag="-sim-think-min" value="500ms"></label>
+        <label>思考间隔上限 <code>-sim-think-max</code><input data-flag="-sim-think-max" value="8s"></label>
       </div>
-      <label style="margin-top:8px">sim-mix（kind:weight,...）<input data-flag="-sim-mix" value="chat-stream:45,chat:35,image:10,speech:7,transcription:3"></label>
+      <label style="margin-top:8px">请求类型混合（类型:权重,…） <code>-sim-mix</code><input data-flag="-sim-mix" value="chat-stream:45,chat:35,image:10,speech:7,transcription:3"></label>
       <div class="grid" style="margin-top:8px">
-        <label>image-model<input data-flag="-image-model" value="dall-e-3"></label>
-        <label>tts-model<input data-flag="-tts-model" value="tts-1"></label>
-        <label>stt-model<input data-flag="-stt-model" value="whisper-1"></label>
-        <label>claude-model<input data-flag="-claude-model" value="claude-3-5-sonnet-20241022"></label>
+        <label>图像模型 <code>-image-model</code><input data-flag="-image-model" value="dall-e-3"></label>
+        <label>TTS 模型 <code>-tts-model</code><input data-flag="-tts-model" value="tts-1"></label>
+        <label>STT 模型 <code>-stt-model</code><input data-flag="-stt-model" value="whisper-1"></label>
+        <label>Claude 模型 <code>-claude-model</code><input data-flag="-claude-model" value="claude-3-5-sonnet-20241022"></label>
       </div>
     </fieldset>
 
     <fieldset><legend>报告 / 资源采样（可选）</legend>
       <div class="grid">
-        <label>report（JSON）<input data-flag="-report" value=""></label>
-        <label>report-zh（Markdown，仅闭环）<input data-flag="-report-zh" value=""></label>
-        <label>perf-url<input data-flag="-perf-url" value=""></label>
-        <label>admin-token<input data-flag="-admin-token" value=""></label>
-        <label>admin-user-id<input data-flag="-admin-user-id" value=""></label>
-        <label>mysql-dsn<input data-flag="-mysql-dsn" value=""></label>
+        <label>JSON 报告路径 <code>-report</code><input data-flag="-report" value=""></label>
+        <label>中文报告路径（仅闭环） <code>-report-zh</code><input data-flag="-report-zh" value=""></label>
+        <label>网关性能接口 <code>-perf-url</code><input data-flag="-perf-url" value=""></label>
+        <label>管理员令牌 <code>-admin-token</code><input data-flag="-admin-token" value=""></label>
+        <label>管理员用户 ID <code>-admin-user-id</code><input data-flag="-admin-user-id" value=""></label>
+        <label>MySQL DSN <code>-mysql-dsn</code><input data-flag="-mysql-dsn" value=""></label>
       </div>
     </fieldset>
 
@@ -172,9 +176,13 @@
 </div>
 
 <script>
-const CMDBASE = { mock: "go run ./bench/mockai", load: "go run ./bench/loadgen" };
+// 复制命令用的等价基命令（源码运行）；实际「启动」由控制台用本二进制自身拉起，无需 go 工具链。
+const CMDBASE = { mock: "go run ./bench mockai", load: "go run ./bench loadgen" };
 let mode = "closed";
 const jobs = { mock: null, load: null }; // id + EventSource
+
+// 把 -token 的多行/逗号/空格输入归一为逗号分隔的令牌列表。
+function normTokens(v){ return (v||"").split(/[\s,]+/).filter(Boolean).join(","); }
 
 // 收集某面板内、可见且非空的 data-flag 字段 → 参数数组
 function collectArgs(panelId){
@@ -184,7 +192,8 @@ function collectArgs(panelId){
     // 隐藏的分组（display:none）跳过
     if (el.closest("fieldset") && el.closest("fieldset").style.display === "none") return;
     const flag = el.getAttribute("data-flag");
-    const v = (el.value||"").trim();
+    let v = (el.value||"").trim();
+    if (flag === "-token") v = normTokens(v);
     if (v === "") return;
     args.push(flag, v);
   });
@@ -193,13 +202,26 @@ function collectArgs(panelId){
 }
 
 function quote(s){ return /[\s"']/.test(s) ? '"'+s.replace(/"/g,'\\"')+'"' : s; }
-function cmdString(panelId){
+// 令牌脱敏（仅用于屏幕预览，避免密钥明文常驻页面）
+function maskTokenVal(v){
+  return v.split(",").map(t=>{ t=t.trim(); return t ? (t.length>8 ? t.slice(0,6)+"***" : "***") : ""; }).filter(Boolean).join(",");
+}
+function cmdString(panelId, mask){
   const args = collectArgs(panelId);
-  return CMDBASE[panelId] + " " + args.map(quote).join(" ");
+  const parts = [];
+  for (let i=0;i<args.length;i++){
+    if (mask && args[i]==="-token" && i+1<args.length){
+      parts.push(quote(args[i])); parts.push(quote(maskTokenVal(args[i+1]))); i++;
+    } else {
+      parts.push(quote(args[i]));
+    }
+  }
+  return CMDBASE[panelId] + " " + parts.join(" ");
 }
 function refresh(){
-  document.getElementById("mock-cmd").textContent = cmdString("mock");
-  document.getElementById("load-cmd").textContent = cmdString("load");
+  // 屏幕预览脱敏令牌；复制到剪贴板时用真实值（见 copyCmd）以便可直接运行。
+  document.getElementById("mock-cmd").textContent = cmdString("mock", true);
+  document.getElementById("load-cmd").textContent = cmdString("load", true);
 }
 document.addEventListener("input", refresh);
 
@@ -212,13 +234,13 @@ function setMode(m){
 }
 
 function copyCmd(panelId){
-  navigator.clipboard.writeText(cmdString(panelId)).then(()=>flash(panelId,"命令已复制"));
+  navigator.clipboard.writeText(cmdString(panelId, false)).then(()=>flash(panelId,"命令已复制（含真实令牌）"));
 }
 function flash(panelId, msg){
   const s = document.getElementById(panelId+"-status");
   const old = s.textContent, cls = s.className;
   s.textContent = msg;
-  setTimeout(()=>{ if(!jobs[panelId]){ s.textContent = old; s.className = cls; } }, 1200);
+  setTimeout(()=>{ if(!jobs[panelId]){ s.textContent = old; s.className = cls; } }, 1400);
 }
 
 function appendLog(panelId, line, isErr){
@@ -253,7 +275,7 @@ async function run(panelId){
 }
 function setRunning(panelId, id){
   const s = document.getElementById(panelId+"-status");
-  s.textContent = "运行中 · job "+id; s.className = "status run";
+  s.textContent = "运行中 · 任务 "+id; s.className = "status run";
   document.getElementById(panelId+"-run").disabled = true;
   document.getElementById(panelId+"-stopbtn").disabled = false;
 }
