@@ -11,6 +11,15 @@ const semiUiDir = path.resolve(
   '../..',
 )
 
+// Classic 只通过 Semi 间接使用 date-fns（Semi 需要 date-fns@2 + date-fns-tz@1）。
+// 但工作区里 Default UI 的 base-ui/react-day-picker 把 date-fns@4 提升到了顶层，
+// date-fns-tz@1 在顶层解析到 date-fns@4 后，会去 import v4 已不再导出的 `date-fns/_lib/*`
+// 内部子路径而编译失败。这里仅在 Classic 构建内把 date-fns 别名指向 Semi 自带的
+// date-fns@2.30.0，隔离修复且不影响 Default UI 的 date-fns@4。
+const dateFnsV2Dir = path.dirname(
+  require.resolve('date-fns/package.json', { paths: [semiUiDir] }),
+)
+
 export default defineConfig(({ envMode }) => {
   const env = loadEnv({ mode: envMode, prefixes: ['VITE_'] })
   const clientServerUrl =
@@ -47,6 +56,8 @@ export default defineConfig(({ envMode }) => {
           semiUiDir,
           'dist/css/semi.css',
         ),
+        // 见上方 dateFnsV2Dir 注释：把 date-fns 及其子路径解析到 date-fns@2.30.0。
+        'date-fns': dateFnsV2Dir,
       },
     },
     html: {

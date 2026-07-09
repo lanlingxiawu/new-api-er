@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { useState, useCallback, useEffect } from 'react';
-import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
+import { useActualTheme } from '../../context/Theme';
 import {
   modelColorMap,
   renderNumber,
@@ -607,12 +607,25 @@ export const useDashboardCharts = (
     [dataExportDefaultTime, t],
   );
 
-  // ========== 初始化图表主题 ==========
+  // ========== 图表主题跟随应用亮/暗色 ==========
+  // VChart 2.x 内置 light/dark 主题，通过 ThemeManager 切换（vchart-semi-theme 无 2.x 版本，已移除）。
+  const actualTheme = useActualTheme();
   useEffect(() => {
-    initVChartSemiTheme({
-      isWatchingThemeSwitch: true,
-    });
-  }, []);
+    let cancelled = false;
+    import('@visactor/vchart')
+      .then((m) => {
+        if (cancelled) return;
+        m.ThemeManager.setCurrentTheme(
+          actualTheme === 'dark' ? 'dark' : 'light',
+        );
+      })
+      .catch(() => {
+        // 主题切换失败不应影响图表渲染
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actualTheme]);
 
   return {
     spec_pie,
