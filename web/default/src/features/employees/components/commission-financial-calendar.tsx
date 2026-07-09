@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { toIntlLocale } from '@/i18n/languages'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -184,7 +185,7 @@ function MonthValueSelector({
   }, [nowYear, selectedYear])
   const monthFormatter = useMemo(
     () =>
-      new Intl.DateTimeFormat(i18n.language || undefined, {
+      new Intl.DateTimeFormat(toIntlLocale(i18n.language), {
         month: 'short',
         timeZone: 'UTC',
       }),

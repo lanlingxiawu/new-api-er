@@ -59,7 +59,8 @@ import {
  * form internally with a nested object and only flatten back to the server-side
  * key format right before persisting.
  */
-const schema = z
+const createSchema = (t: (key: string) => string) =>
+  z
   .object({
     business_stats_circuit_breaker_setting: z.object({
       enabled: z.boolean(),
@@ -79,11 +80,11 @@ const schema = z
         'business_stats_circuit_breaker_setting',
         'max_cooldown_seconds',
       ],
-      message: 'Max cooldown must be greater than or equal to initial cooldown',
+      message: t('Max cooldown must be greater than or equal to initial cooldown'),
     }
   )
 
-type FormValues = z.infer<typeof schema>
+type FormValues = z.infer<ReturnType<typeof createSchema>>
 
 type FlatDefaults = {
   'business_stats_circuit_breaker_setting.enabled': boolean
@@ -192,6 +193,7 @@ export function BusinessStatsCircuitBreakerSection({
   defaultValues,
 }: BusinessStatsCircuitBreakerSectionProps) {
   const { t } = useTranslation()
+  const schema = useMemo(() => createSchema(t), [t])
   const updateOption = useUpdateOption()
   const statusQuery = useQuery({
     queryKey: ['business-stats-circuit-breaker-status'],
