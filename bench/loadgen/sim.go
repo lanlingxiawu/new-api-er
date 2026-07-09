@@ -1,10 +1,9 @@
-package main
+package loadgen
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -24,22 +23,22 @@ import (
 // 对数直方图（长压不 OOM），并按 -report-interval 滚动打印区间 RPS / p50 / p95 / p99。
 
 var (
-	simMode      = flag.Bool("sim", false, "生产环境模拟模式：并发随昼夜曲线+抖动+突发变化，用户带思考间隔，多类型请求混合，适合长跑")
-	simPeriod    = flag.Duration("sim-period", 10*time.Minute, "一个完整昼夜周期时长（并发从低谷→高峰→回落）")
-	simDayFrac   = flag.Float64("sim-day-frac", 0.6, "白天高峰并发占 -c 的比例 [0,1]")
-	simNightFrac = flag.Float64("sim-night-frac", 0.1, "夜间低谷并发占 -c 的比例 [0,1]")
-	simJitter    = flag.Float64("sim-jitter", 0.15, "并发随机抖动幅度 [0,1)")
-	simSpikeRate = flag.Float64("sim-spike-rate", 0.03, "每个调节 tick 触发突发流量的概率 [0,1]")
-	simSpikeMult = flag.Float64("sim-spike-mult", 2.5, "突发时并发放大倍数（上限仍为 -c）")
-	simThinkMin  = flag.Duration("sim-think-min", 500*time.Millisecond, "用户两次请求之间的思考间隔下限")
-	simThinkMax  = flag.Duration("sim-think-max", 8*time.Second, "用户思考间隔上限")
-	simMix       = flag.String("sim-mix", "chat-stream:45,chat:35,image:10,speech:7,transcription:3", "请求类型权重 kind:weight,...（kind: chat|chat-stream|claude|claude-stream|image|speech|transcription）")
-	simTick      = flag.Duration("sim-tick", 3*time.Second, "并发调节 tick")
-	reportEvery  = flag.Duration("report-interval", 30*time.Second, "滚动报告间隔")
-	imageModel   = flag.String("image-model", "dall-e-3", "sim 混合中 image 请求用的模型")
-	ttsModel     = flag.String("tts-model", "tts-1", "sim 混合中 speech 请求用的模型")
-	sttModel     = flag.String("stt-model", "whisper-1", "sim 混合中 transcription 请求用的模型")
-	claudeModel  = flag.String("claude-model", "claude-3-5-sonnet-20241022", "sim 混合中 claude 请求用的模型")
+	simMode      = fs.Bool("sim", false, "生产环境模拟模式：并发随昼夜曲线+抖动+突发变化，用户带思考间隔，多类型请求混合，适合长跑")
+	simPeriod    = fs.Duration("sim-period", 10*time.Minute, "一个完整昼夜周期时长（并发从低谷→高峰→回落）")
+	simDayFrac   = fs.Float64("sim-day-frac", 0.6, "白天高峰并发占 -c 的比例 [0,1]")
+	simNightFrac = fs.Float64("sim-night-frac", 0.1, "夜间低谷并发占 -c 的比例 [0,1]")
+	simJitter    = fs.Float64("sim-jitter", 0.15, "并发随机抖动幅度 [0,1)")
+	simSpikeRate = fs.Float64("sim-spike-rate", 0.03, "每个调节 tick 触发突发流量的概率 [0,1]")
+	simSpikeMult = fs.Float64("sim-spike-mult", 2.5, "突发时并发放大倍数（上限仍为 -c）")
+	simThinkMin  = fs.Duration("sim-think-min", 500*time.Millisecond, "用户两次请求之间的思考间隔下限")
+	simThinkMax  = fs.Duration("sim-think-max", 8*time.Second, "用户思考间隔上限")
+	simMix       = fs.String("sim-mix", "chat-stream:45,chat:35,image:10,speech:7,transcription:3", "请求类型权重 kind:weight,...（kind: chat|chat-stream|claude|claude-stream|image|speech|transcription）")
+	simTick      = fs.Duration("sim-tick", 3*time.Second, "并发调节 tick")
+	reportEvery  = fs.Duration("report-interval", 30*time.Second, "滚动报告间隔")
+	imageModel   = fs.String("image-model", "dall-e-3", "sim 混合中 image 请求用的模型")
+	ttsModel     = fs.String("tts-model", "tts-1", "sim 混合中 speech 请求用的模型")
+	sttModel     = fs.String("stt-model", "whisper-1", "sim 混合中 transcription 请求用的模型")
+	claudeModel  = fs.String("claude-model", "claude-3-5-sonnet-20241022", "sim 混合中 claude 请求用的模型")
 )
 
 // ---- 对数直方图（固定内存，适合长跑）----
@@ -253,7 +252,7 @@ func drainResponse(resp *http.Response, isStream bool, start time.Time) float64 
 
 // ---- 虚拟用户 ----
 
-func simWorker(idx int, client *http.Client, deadline time.Time, activeTarget *atomic.Int64, kinds []simKind, pool []int, st *simStats) {
+func simWorker(idx int, client *http.Client, token string, deadline time.Time, activeTarget *atomic.Int64, kinds []simKind, pool []int, st *simStats) {
 	buf := new(bytes.Buffer)
 	for time.Now().Before(deadline) {
 		// 只有序号在当前活跃并发内的用户才发压，其余空闲轮询。
@@ -269,8 +268,8 @@ func simWorker(idx int, client *http.Client, deadline time.Time, activeTarget *a
 			st.recordErr("build request: " + err.Error())
 			return
 		}
-		if *token != "" {
-			req.Header.Set("Authorization", "Bearer "+*token)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		req.Header.Set("Content-Type", contentType(k.format))
 
@@ -484,7 +483,11 @@ func runSim() {
 	var wg sync.WaitGroup
 	for i := 0; i < peak; i++ {
 		wg.Add(1)
-		go func(idx int) { defer wg.Done(); simWorker(idx, client, deadline, &activeTarget, kinds, pool, st) }(i)
+		// 每个虚拟用户固定一个令牌（多令牌轮流），令牌即"用户"，实现多用户并发。
+		go func(idx int) {
+			defer wg.Done()
+			simWorker(idx, client, tokenAt(idx), deadline, &activeTarget, kinds, pool, st)
+		}(i)
 	}
 	wg.Wait()
 	close(stopCtl)

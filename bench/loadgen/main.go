@@ -7,7 +7,7 @@
 //   - 每 5 秒输出实时 RPS。
 //
 // 仅压测用途，不属于业务代码。用法见 bench/README.md。
-package main
+package loadgen
 
 import (
 	"bufio"
@@ -29,28 +29,61 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-var (
-	target      = flag.String("url", "http://127.0.0.1:3000/v1/chat/completions", "目标接口")
-	token       = flag.String("token", "", "API 令牌（sk-...）；直压 mock 做基线时可留空")
-	model       = flag.String("model", "gpt-4o-mini", "请求模型名")
-	conc        = flag.Int("c", 50, "并发 worker 数（闭环）")
-	dur         = flag.Duration("d", 60*time.Second, "压测时长")
-	streamRatio = flag.Float64("stream-ratio", 0.5, "流式请求占比 [0,1]")
-	timeout     = flag.Duration("timeout", 120*time.Second, "单请求超时")
-	maxTokens   = flag.Int("max-tokens", 256, "请求 max_tokens")
-	promptWords = flag.Int("prompt-words", 30, "随机 prompt 词数")
-	format      = flag.String("format", "openai", "网关 ingress 格式：openai|claude|gemini（决定请求体与 URL 构造）")
-	warmup      = flag.Duration("warmup", 0, "预热时长：这段时间照常发压但不计入统计，消除冷启动抖动")
-	reportPath  = flag.String("report", "", "压测结束后将 JSON 报告写入该文件（留空不输出）")
+// fs 是 loadgen 子命令自己的 FlagSet（main.go 与 sim.go 共用）。三个子命令编译进同一二进制，
+// 各用独立 FlagSet 避免全局 flag 名冲突。
+var fs = flag.NewFlagSet("loadgen", flag.ExitOnError)
 
-	perfURL      = flag.String("perf-url", "", "网关性能接口，如 http://127.0.0.1:3000/api/performance/stats（留空不采样）")
-	adminToken   = flag.String("admin-token", "", "root 用户的系统访问令牌（个人设置生成），用于 -perf-url 鉴权")
-	adminUserID  = flag.String("admin-user-id", "", "root 用户 ID，用于性能接口 New-Api-User 鉴权头")
-	perfInterval = flag.Duration("perf-interval", 5*time.Second, "性能采样间隔")
-	reportZhPath = flag.String("report-zh", "", "压测结束后将中文 Markdown 报告写入该文件")
-	mysqlDSN     = flag.String("mysql-dsn", "", "MySQL DSN；配置后报告包含数据库连接与线程采样")
-	dbInterval   = flag.Duration("db-interval", 5*time.Second, "数据库采样间隔")
+var (
+	target      = fs.String("url", "http://127.0.0.1:3000/v1/chat/completions", "目标接口")
+	token       = fs.String("token", "", "API 令牌（sk-...）；可填多个（逗号/换行/空格分隔），worker 轮流使用以模拟多个用户并发；直压 mock 做基线时可留空")
+	model       = fs.String("model", "gpt-4o-mini", "请求模型名")
+	conc        = fs.Int("c", 50, "并发 worker 数（闭环）")
+	dur         = fs.Duration("d", 60*time.Second, "压测时长")
+	streamRatio = fs.Float64("stream-ratio", 0.5, "流式请求占比 [0,1]")
+	timeout     = fs.Duration("timeout", 120*time.Second, "单请求超时")
+	maxTokens   = fs.Int("max-tokens", 256, "请求 max_tokens")
+	promptWords = fs.Int("prompt-words", 30, "随机 prompt 词数")
+	format      = fs.String("format", "openai", "网关 ingress 格式：openai|claude|gemini（决定请求体与 URL 构造）")
+	warmup      = fs.Duration("warmup", 0, "预热时长：这段时间照常发压但不计入统计，消除冷启动抖动")
+	reportPath  = fs.String("report", "", "压测结束后将 JSON 报告写入该文件（留空不输出）")
+
+	perfURL      = fs.String("perf-url", "", "网关性能接口，如 http://127.0.0.1:3000/api/performance/stats（留空不采样）")
+	adminToken   = fs.String("admin-token", "", "root 用户的系统访问令牌（个人设置生成），用于 -perf-url 鉴权")
+	adminUserID  = fs.String("admin-user-id", "", "root 用户 ID，用于性能接口 New-Api-User 鉴权头")
+	perfInterval = fs.Duration("perf-interval", 5*time.Second, "性能采样间隔")
+	reportZhPath = fs.String("report-zh", "", "压测结束后将中文 Markdown 报告写入该文件")
+	mysqlDSN     = fs.String("mysql-dsn", "", "MySQL DSN；配置后报告包含数据库连接与线程采样")
+	dbInterval   = fs.Duration("db-interval", 5*time.Second, "数据库采样间隔")
 )
+
+// tokens 是解析后的令牌列表（-token 支持多值）。worker/虚拟用户按序号轮流选用（tokenAt），
+// 从而用不同令牌模拟多个用户并发；为空表示不带 Authorization（直压 mock 基线）。
+var tokens []string
+
+// parseTokens 把 -token 的原始值按逗号/换行/空格拆成去重去空的令牌列表。
+func parseTokens(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
+	})
+	seen := make(map[string]struct{}, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	return out
+}
+
+// tokenAt 返回第 i 个 worker/虚拟用户使用的令牌（轮流复用）；无令牌时返回空串。
+func tokenAt(i int) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	return tokens[i%len(tokens)]
+}
 
 type sample struct {
 	lat    float64 // ms，整请求耗时
@@ -182,7 +215,7 @@ func (s *workerStat) recordErr(msg string) {
 	}
 }
 
-func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat, done *atomic.Int64) {
+func worker(client *http.Client, token string, deadline, recordStart time.Time, st *workerStat, done *atomic.Int64) {
 	// 每个 worker 复用一个 body 缓冲区：闭环内请求串行，client.Do 返回时请求体已发完，
 	// 下一次 buildBody 前可安全复位，省掉每请求一次的 body 分配。
 	buf := new(bytes.Buffer)
@@ -196,8 +229,8 @@ func worker(client *http.Client, deadline, recordStart time.Time, st *workerStat
 			st.recordErr("build request: " + err.Error())
 			return
 		}
-		if *token != "" {
-			req.Header.Set("Authorization", "Bearer "+*token)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		req.Header.Set("Content-Type", ctype)
 
@@ -752,8 +785,9 @@ func writeChineseReport(path string, rep report) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func main() {
-	flag.Parse()
+// Run 是 loadgen 子命令入口（由 bench 根命令 dispatch，args 为 loadgen 之后的参数）。
+func Run(args []string) {
+	_ = fs.Parse(args)
 	if *conc <= 0 {
 		fmt.Fprintln(os.Stderr, "-c must be > 0")
 		os.Exit(1)
@@ -768,8 +802,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-warmup 不能为负")
 		os.Exit(1)
 	}
-	if *token == "" {
+	tokens = parseTokens(*token)
+	if len(tokens) == 0 {
 		fmt.Fprintln(os.Stderr, "[warn] -token 为空：仅适用于直压 mock 做基线校准")
+	} else {
+		fmt.Fprintf(os.Stderr, "已加载 %d 个令牌，%d 个 worker 将轮流使用以模拟多用户并发\n", len(tokens), *conc)
 	}
 	initPromptPool()
 
@@ -847,10 +884,11 @@ func main() {
 		// 预分配 samples 容量，减少长压测中切片增长带来的 GC 抖动。
 		st := &workerStat{codes: make(map[int]int64), samples: make([]sample, 0, 8192)}
 		stats[i] = st
+		tok := tokenAt(i) // 每个 worker 固定一个令牌（多令牌轮流），模拟不同用户
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			worker(client, deadline, recordStart, st, &done)
+			worker(client, tok, deadline, recordStart, st, &done)
 		}()
 	}
 	wg.Wait()
