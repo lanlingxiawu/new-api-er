@@ -743,7 +743,7 @@ function FigmaHomeHeader() {
       </header>
 
       <div
-        className={`figma-home-mobile-panel${mobileMenuOpen ? 'is-open' : ''}`}
+        className={`figma-home-mobile-panel${mobileMenuOpen ? ' is-open' : ''}`}
       >
         <div className='figma-home-mobile-panel-top'>
           <img
@@ -789,7 +789,7 @@ function FigmaHomeHeader() {
               <div
                 key={item.label}
                 className={`figma-home-mobile-menu-item${
-                  isExpanded ? 'is-expanded' : ''
+                  isExpanded ? ' is-expanded' : ''
                 }`}
               >
                 <button
@@ -1168,7 +1168,7 @@ export function Home() {
       <section
         ref={routingSectionRef}
         className={`figma-home-routing${
-          isRoutingActive ? 'is-route-active' : ''
+          isRoutingActive ? ' is-route-active' : ''
         }`}
       >
         <div className='figma-home-routing-header'>

@@ -812,7 +812,7 @@ function AssignCustomerDialog({
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
-          className='h-[86vh] max-h-[620px] overflow-visible sm:max-w-[560px]'
+          className='max-h-[86vh] overflow-visible sm:max-w-[560px]'
           initialFocus={false}
         >
           <DialogHeader>
@@ -2900,7 +2900,7 @@ function TierDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className='h-[86vh] max-h-[620px] overflow-y-auto sm:max-w-[420px]'
+        className='max-h-[86vh] overflow-y-auto sm:max-w-[420px]'
         initialFocus={false}
       >
         <DialogHeader>
