@@ -1,11 +1,12 @@
 // Command webui 是压测工具的本地控制台：一个网页表单填参数，生成/复制命令，或直接
 // 启动 mockai / loadgen 并把实时输出流式回浏览器（SSE）。仅本地压测用途，非业务代码。
 //
-// 用法：go run ./bench/webui        然后浏览器打开 http://127.0.0.1:18090
-// 默认用 `go run ./bench/mockai` / `go run ./bench/loadgen` 拉起子进程（工作目录为仓库根，
-// 即 -repo）。安全说明：本工具会以配置好的基命令 + 表单参数启动子进程，仅监听本地回环，
-// 请勿绑定到公网。
-package main
+// mockai / loadgen / webui 编译进同一个 bench 二进制（子命令模式）。webui 默认用
+// 本二进制自身（os.Executable()）以 `bench mockai ...` / `bench loadgen ...` 拉起子进程，
+// 因此单文件即可运行，无需 Go 工具链或源码。用 -mockai / -loadgen 可覆盖为其它基命令
+// （如开发期 `go run ./bench mockai`）。安全说明：本工具会以配置好的基命令 + 表单参数
+// 启动子进程，仅监听本地回环，请勿绑定到公网。
+package webui
 
 import (
 	"bufio"
@@ -16,6 +17,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -27,12 +29,15 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
+// fs 是 webui 子命令自己的 FlagSet（避免与 mockai 的 -port 等全局冲突）。
+var fs = flag.NewFlagSet("webui", flag.ExitOnError)
+
 var (
-	port       = flag.Int("port", 18090, "控制台监听端口")
-	bind       = flag.String("bind", "127.0.0.1", "监听地址（默认仅本地回环；勿绑公网）")
-	repo       = flag.String("repo", ".", "工作目录（go run ./bench/... 需在仓库根执行）")
-	loadgenCmd = flag.String("loadgen", "go run ./bench/loadgen", "启动 loadgen 的基命令")
-	mockaiCmd  = flag.String("mockai", "go run ./bench/mockai", "启动 mockai 的基命令")
+	port       = fs.Int("port", 18090, "控制台监听端口")
+	bind       = fs.String("bind", "127.0.0.1", "监听地址（默认仅本地回环；勿绑公网）")
+	repo       = fs.String("repo", ".", "子进程工作目录（相对路径如报告文件在此解析）")
+	loadgenCmd = fs.String("loadgen", "", "启动 loadgen 的基命令；留空=用本二进制自身 `bench loadgen`")
+	mockaiCmd  = fs.String("mockai", "", "启动 mockai 的基命令；留空=用本二进制自身 `bench mockai`")
 )
 
 // job 表示一个运行中的子进程及其输出订阅。
@@ -101,11 +106,60 @@ var (
 	jobSeq  atomic.Int64
 )
 
-var allowedTools = map[string]*string{"loadgen": loadgenCmd, "mockai": mockaiCmd}
-
 type runReq struct {
 	Tool string   `json:"tool"`
 	Args []string `json:"args"`
+}
+
+// toolBase 返回启动某工具的基命令 argv。若 -mockai/-loadgen 显式配置则用之（按空格拆），
+// 否则默认用本二进制自身的子命令（bench <tool>），从而单文件即可拉起子进程。
+func toolBase(tool string) ([]string, bool) {
+	var custom string
+	switch tool {
+	case "mockai":
+		custom = *mockaiCmd
+	case "loadgen":
+		custom = *loadgenCmd
+	default:
+		return nil, false
+	}
+	if strings.TrimSpace(custom) != "" {
+		return strings.Fields(custom), true
+	}
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		return []string{exe, tool}, true
+	}
+	// 兜底：源码运行（无独立可执行文件时）
+	return []string{"go", "run", "./bench", tool}, true
+}
+
+// maskToken 把令牌值脱敏用于命令回显，避免把密钥明文打进浏览器日志。
+func maskToken(v string) string {
+	parts := strings.Split(v, ",")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		switch {
+		case p == "":
+			parts[i] = ""
+		case len(p) > 8:
+			parts[i] = p[:6] + "***"
+		default:
+			parts[i] = "***"
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// maskArgs 回显命令时把 -token 后的值脱敏。
+func maskArgs(args []string) string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "-token" || out[i] == "--token" {
+			out[i+1] = maskToken(out[i+1])
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 func handleRun(w http.ResponseWriter, r *http.Request) {
@@ -114,12 +168,11 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	baseCmd, ok := allowedTools[req.Tool]
+	base, ok := toolBase(req.Tool)
 	if !ok {
 		http.Error(w, "unknown tool", http.StatusBadRequest)
 		return
 	}
-	base := strings.Fields(*baseCmd)
 	if len(base) == 0 {
 		http.Error(w, "empty base command", http.StatusInternalServerError)
 		return
@@ -148,7 +201,7 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	jobsMap[j.id] = j
 	jobsMu.Unlock()
 
-	j.publish(sseMsg{data: "$ " + base[0] + " " + strings.Join(full, " ")})
+	j.publish(sseMsg{data: "$ " + base[0] + " " + maskArgs(full)})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -239,10 +292,9 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func main() {
-	flag.Parse()
-	// allowedTools 在 flag.Parse 后重新绑定指针值（flag 已填充）
-	allowedTools = map[string]*string{"loadgen": loadgenCmd, "mockai": mockaiCmd}
+// Run 是 webui 子命令入口（由 bench 根命令 dispatch，args 为 webui 之后的参数）。
+func Run(args []string) {
+	_ = fs.Parse(args)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +310,13 @@ func main() {
 	mux.HandleFunc("/api/stop/", handleStop)
 
 	addr := *bind + ":" + strconv.Itoa(*port)
-	log.Printf("压测控制台: http://%s   (repo=%s loadgen=%q mockai=%q)", addr, *repo, *loadgenCmd, *mockaiCmd)
+	loadDesc, mockDesc := *loadgenCmd, *mockaiCmd
+	if loadDesc == "" {
+		loadDesc = "self:bench loadgen"
+	}
+	if mockDesc == "" {
+		mockDesc = "self:bench mockai"
+	}
+	log.Printf("压测控制台: http://%s   (repo=%s loadgen=%q mockai=%q)", addr, *repo, loadDesc, mockDesc)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }

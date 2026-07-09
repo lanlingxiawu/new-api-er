@@ -19,7 +19,7 @@
 // 媒体在启动时生成一次、之后只做字节直写。响应时间（TTFB / 总时长）与内容（词数、词面）均在
 // 配置范围内随机；各格式共用同一套延迟 / 词数 / 错误注入参数（见 gen.go）。仅压测用途，不属于
 // 业务代码。用法见 bench/README.md。
-package main
+package mockai
 
 import (
 	"encoding/json"
@@ -33,21 +33,37 @@ import (
 	"time"
 )
 
+// defaultModelsCSV 是 /v1/models 默认暴露的模型清单，覆盖 mock 支持的全部端点
+// （OpenAI/Claude/Gemini 对话、embedding、图像、音频、视频）。mock 对 chat 来者不拒，
+// 未知模型名照常应答；此清单只影响"获取模型列表"的返回，可用 -models 覆盖。
+const defaultModelsCSV = "gpt-4o-mini,gpt-4o,gpt-4o-2024-11-20,gpt-4.1,gpt-4.1-mini,gpt-4-turbo,gpt-4,gpt-3.5-turbo," +
+	"o1,o1-mini,o3,o3-mini,o4-mini," +
+	"text-embedding-3-small,text-embedding-3-large,text-embedding-ada-002," +
+	"dall-e-3,dall-e-2,gpt-image-1," +
+	"whisper-1,tts-1,tts-1-hd," +
+	"claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022,claude-3-opus-20240229,claude-sonnet-4-20250514,claude-opus-4-20250514," +
+	"gemini-1.5-pro,gemini-1.5-flash,gemini-2.0-flash,gemini-2.5-pro,gemini-2.5-flash," +
+	"sora,kling-v1,vidu-2.0,wan-2.1,hailuo-02,jimeng-video-3.0"
+
+// fs 是 mockai 子命令自己的 FlagSet。三个子命令（mockai/loadgen/webui）编译进同一二进制，
+// 各用独立 FlagSet 避免全局 flag 名冲突（如 mockai 与 webui 都有 -port）。
+var fs = flag.NewFlagSet("mockai", flag.ExitOnError)
+
 var (
-	port         = flag.Int("port", 18080, "监听端口")
-	ttfbMin      = flag.Duration("ttfb-min", 50*time.Millisecond, "流式：首 chunk 最小延迟")
-	ttfbMax      = flag.Duration("ttfb-max", 300*time.Millisecond, "流式：首 chunk 最大延迟")
-	totalMin     = flag.Duration("latency-min", 300*time.Millisecond, "响应总时长下限")
-	totalMax     = flag.Duration("latency-max", 2000*time.Millisecond, "响应总时长上限")
-	tokensMin    = flag.Int("tokens-min", 20, "随机补全词数下限")
-	tokensMax    = flag.Int("tokens-max", 200, "随机补全词数上限")
-	modelsCSV    = flag.String("models", "gpt-4o-mini,gpt-4o,gpt-3.5-turbo", "/v1/models 暴露的模型列表")
-	errorRate    = flag.Float64("error-rate", 0, "随机返回错误状态码的概率 [0,1]，0 关闭")
-	errorsCSV    = flag.String("error-codes", "429:1,500:1,502:1,503:1", "错误码权重表 code:weight,...（避免 401/403，网关可能据此自动禁用渠道）")
-	videoProcess = flag.Duration("video-process-time", 3*time.Second, "视频任务从 submit 到 succeeded 的模拟生成耗时")
-	imageFile    = flag.String("image-file", "", "图片响应用的真实文件（png/jpg/...）；留空则生成 512x512 PNG")
-	audioFile    = flag.String("audio-file", "", "TTS 响应用的真实音频文件（mp3/wav/...）；留空则生成 1s WAV 正弦音")
-	videoFile    = flag.String("video-file", "", "视频响应用的真实文件（mp4/webm/...）；留空则生成可播放动图 GIF（stdlib 无 MP4 编码器）")
+	port         = fs.Int("port", 18080, "监听端口")
+	ttfbMin      = fs.Duration("ttfb-min", 50*time.Millisecond, "流式：首 chunk 最小延迟")
+	ttfbMax      = fs.Duration("ttfb-max", 300*time.Millisecond, "流式：首 chunk 最大延迟")
+	totalMin     = fs.Duration("latency-min", 300*time.Millisecond, "响应总时长下限")
+	totalMax     = fs.Duration("latency-max", 2000*time.Millisecond, "响应总时长上限")
+	tokensMin    = fs.Int("tokens-min", 20, "随机补全词数下限")
+	tokensMax    = fs.Int("tokens-max", 200, "随机补全词数上限")
+	modelsCSV    = fs.String("models", defaultModelsCSV, "/v1/models 暴露的模型列表")
+	errorRate    = fs.Float64("error-rate", 0, "随机返回错误状态码的概率 [0,1]，0 关闭")
+	errorsCSV    = fs.String("error-codes", "429:1,500:1,502:1,503:1", "错误码权重表 code:weight,...（避免 401/403，网关可能据此自动禁用渠道）")
+	videoProcess = fs.Duration("video-process-time", 3*time.Second, "视频任务从 submit 到 succeeded 的模拟生成耗时")
+	imageFile    = fs.String("image-file", "", "图片响应用的真实文件（png/jpg/...）；留空则生成 512x512 PNG")
+	audioFile    = fs.String("audio-file", "", "TTS 响应用的真实音频文件（mp3/wav/...）；留空则生成 1s WAV 正弦音")
+	videoFile    = fs.String("video-file", "", "视频响应用的真实文件（mp4/webm/...）；留空则生成可播放动图 GIF（stdlib 无 MP4 编码器）")
 )
 
 // errorCodes 按权重展开后的错误码采样池，rand.IntN 直取即可，无锁。
@@ -221,8 +237,9 @@ func videoTaskID(p string) string {
 	return ""
 }
 
-func main() {
-	flag.Parse()
+// Run 是 mockai 子命令入口（由 bench 根命令 dispatch，args 为 mockai 之后的参数）。
+func Run(args []string) {
+	_ = fs.Parse(args)
 	if *tokensMax < *tokensMin {
 		log.Fatal("tokens-max must be >= tokens-min")
 	}
