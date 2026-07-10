@@ -51,15 +51,12 @@ html.dark .figma-home {
   color: inherit;
 }
 
-/* Brand glyph rendered from the real logo mark via CSS mask, so it stays
-   crisp and recolours to fit each surface. The mask image is provided at
-   runtime through the --jl-logo custom property (set inline in JS) so the
-   bundler never tries to module-resolve a public-root path from CSS. */
-.jl-glyph {
-  display: inline-block;
-  background: currentColor;
-  -webkit-mask: var(--jl-logo) center / contain no-repeat;
-  mask: var(--jl-logo) center / contain no-repeat;
+/* Brand logo, rendered directly from the real logo asset (/logo.png). */
+.jl-brand-logo {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 /* ---------- Header ---------- */
@@ -68,7 +65,9 @@ html.dark .figma-home {
   top: 0;
   right: 0;
   left: 0;
-  z-index: 120;
+  /* Below the overlay layer (dropdowns portal at z-50) so menus render on top,
+     but above all page content (z <= 3). */
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -90,23 +89,6 @@ html.dark .figma-home {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.jl-brand-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 11px;
-  background: linear-gradient(140deg, #4a63ff 0%, #7a5cf6 100%);
-  box-shadow: 0 8px 18px rgba(74, 99, 255, 0.32);
-  color: #ffffff;
-}
-
-.jl-brand-badge .jl-glyph {
-  width: 20px;
-  height: 20px;
 }
 
 .jl-brand-name {
@@ -182,18 +164,40 @@ html.dark .figma-home {
   gap: 20px;
 }
 
-.jl-github {
+.jl-lang {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
   font-size: 14px;
   font-weight: 500;
   color: var(--jl-body);
-  transition: color 0.18s ease;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 
-.jl-github:hover {
+.jl-lang:hover {
   color: var(--jl-heading);
+  background: rgba(20, 26, 46, 0.05);
+}
+
+.jl-lang[aria-expanded='true'] {
+  color: var(--jl-heading);
+  background: rgba(20, 26, 46, 0.06);
+  border-color: var(--jl-line);
+}
+
+.jl-lang-caret {
+  opacity: 0.55;
+  transition: transform 0.2s ease;
+}
+
+.jl-lang[aria-expanded='true'] .jl-lang-caret {
+  transform: rotate(180deg);
 }
 
 .jl-btn {
@@ -304,30 +308,15 @@ html.dark .figma-home {
   gap: 48px;
 }
 
+/* Soft brand glow behind the logo. Bounded to the hero-art (right) column and
+   fading out inside the hero, so it never bleeds left nor hard-cuts at the
+   section boundary below. */
 .jl-hero-art::before {
   content: '';
   position: absolute;
-  inset: -14% -10% -4% -12%;
-  background: radial-gradient(58% 56% at 52% 46%, rgba(150, 162, 246, 0.16), transparent 72%);
+  inset: -34% -24% -20% -8%;
   pointer-events: none;
   z-index: 0;
-}
-
-/* Reserved placeholder for the hero logo/artwork */
-.jl-hero-placeholder {
-  position: absolute;
-  inset: 4%;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 30px;
-  border: 2px dashed rgba(120, 132, 214, 0.4);
-  background: rgba(140, 152, 240, 0.05);
-  color: rgba(108, 120, 198, 0.7);
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
 }
 
 .jl-hero > * {
@@ -420,6 +409,17 @@ html.dark .figma-home {
   aspect-ratio: 1 / 1;
   animation: jl-float 6s ease-in-out infinite;
   transform-style: preserve-3d;
+}
+
+/* Hero logo artwork — the exported design render (/logo.png). */
+.jl-hero-logo {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 22px 44px rgba(80, 84, 200, 0.2));
 }
 
 /* Folded "book" artwork: solid blue leaf + translucent glass leaf */
@@ -826,6 +826,36 @@ html.dark .figma-home {
   border-bottom: 1px solid var(--jl-line);
 }
 
+.jl-drawer-lang {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.jl-drawer-lang-btn {
+  padding: 9px 16px;
+  border: 1px solid var(--jl-line);
+  border-radius: 999px;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--jl-body);
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.jl-drawer-lang-btn:hover {
+  color: var(--jl-heading);
+  border-color: #d7dbe6;
+}
+
+.jl-drawer-lang-btn.is-active {
+  color: #ffffff;
+  background: var(--jl-ink);
+  border-color: var(--jl-ink);
+}
+
 .jl-drawer-cta {
   margin-top: 28px;
 }
@@ -855,6 +885,12 @@ html.dark .figma-home {
   min-height: 100vh;
 }
 
+.home-logo-loading .jl-brand-logo {
+  width: 72px;
+  height: 72px;
+  animation: jl-float 6s ease-in-out infinite;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1180px) {
   .jl-footer-top {
@@ -868,7 +904,7 @@ html.dark .figma-home {
 
 @media (max-width: 900px) {
   .jl-nav,
-  .jl-github {
+  .jl-lang {
     display: none;
   }
   .jl-header-menu-btn {

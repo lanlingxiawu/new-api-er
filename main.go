@@ -60,7 +60,7 @@ func main() {
 		return
 	}
 
-	common.SysLog("NEXAXIS API " + common.Version + " started")
+	common.SysLog("JuLiang API " + common.Version + " started")
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}

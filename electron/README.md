@@ -1,6 +1,6 @@
-# NEXAXIS API Electron Desktop App
+# JuLiang API Electron Desktop App
 
-This directory contains the Electron wrapper for NEXAXIS API, providing a native desktop application with system tray support for Windows, macOS, and Linux.
+This directory contains the Electron wrapper for JuLiang API, providing a native desktop application with system tray support for Windows, macOS, and Linux.
 
 ## Prerequisites
 
@@ -68,6 +68,6 @@ const PORT = 3000; // Change to desired port
 ### Database Location
 - **Development**: `../data/new-api.db` (project directory)
 - **Production**:
-  - macOS: `~/Library/Application Support/NEXAXIS API/data/`
-  - Windows: `%APPDATA%/NEXAXIS API/data/`
-  - Linux: `~/.config/NEXAXIS API/data/`
+  - macOS: `~/Library/Application Support/JuLiang API/data/`
+  - Windows: `%APPDATA%/JuLiang API/data/`
+  - Linux: `~/.config/JuLiang API/data/`

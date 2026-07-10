@@ -684,7 +684,7 @@ export function ChannelMutateDrawer({
     const timer = setTimeout(() => {
       toast.warning(
         t(
-          'Warning: Base URL should not end with /v1. NEXAXIS API will handle it automatically. This may cause request failures.'
+          'Warning: Base URL should not end with /v1. JuLiang API will handle it automatically. This may cause request failures.'
         ),
         { duration: 5000 }
       )

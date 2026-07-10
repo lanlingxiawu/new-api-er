@@ -378,10 +378,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	snap := task.Snapshot()
 
 	taskResult := &relaycommon.TaskInfo{}
-	// try parse as NEXAXIS API response format
+	// try parse as JuLiang API response format
 	var responseItems dto.TaskResponse[model.Task]
 	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
-		logger.LogDebug(ctx, "updateVideoSingleTask parsed as NEXAXIS API response format: %+v", responseItems)
+		logger.LogDebug(ctx, "updateVideoSingleTask parsed as JuLiang API response format: %+v", responseItems)
 		t := responseItems.Data
 		taskResult.TaskID = t.TaskID
 		taskResult.Status = string(t.Status)

@@ -27,7 +27,7 @@ import {
 const defaultSiteSettings: SiteSettings = {
   'theme.frontend': 'default',
   Notice: '',
-  SystemName: 'NEXAXIS API',
+  SystemName: 'JuLiang API',
   Logo: '',
   Footer: '',
   About: '',

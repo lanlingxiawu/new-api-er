@@ -16,22 +16,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Boxes,
+  Check,
+  ChevronDown,
   ChevronRight,
   Code2,
+  Languages,
   Menu,
   X,
   Zap,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { normalizeInterfaceLanguage } from '@/i18n/languages'
+import {
+  INTERFACE_LANGUAGE_OPTIONS,
+  normalizeInterfaceLanguage,
+} from '@/i18n/languages'
 import { useStatus } from '@/hooks/use-status'
+import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/ui/markdown'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useHomePageContent } from './hooks'
 
 // ---- Brand + navigation ----
@@ -40,23 +55,21 @@ const BRAND_ROMAN = 'JULIANG CIYUAN'
 const HOME_CONSOLE_PATH = '/dashboard'
 const HOME_PRICING_PATH = '/pricing'
 const HOME_PRIVACY_PATH = '/privacy-policy'
-const HOME_DOCS_URL = 'https://docs.nexaxis.ai/docs'
-const HOME_ABOUT_URL = 'https://nexaxis.ai'
+const HOME_DOCS_URL = 'https://docs.juliang.io/docs'
+const HOME_ABOUT_URL = 'https://juliang.io'
 const HOME_GITHUB_URL = 'https://github.com/QuantumNous/new-api'
 const HOME_TWITTER_URL = 'https://x.com/NexaxisAI'
 const HOME_DISCORD_URL = 'https://discord.com'
-const HOME_SUPPORT_MAIL = 'mailto:support@nexaxis.ai'
+const HOME_SUPPORT_MAIL = 'mailto:support@juliang.io'
 
 const HOME_PROMO_FALLBACK_ZH =
   '限时，1:1 充值赠送，最高可获 {{$100}} 免费额度！'
 const HOME_PROMO_FALLBACK_EN =
   'Limited time — 1:1 top-up bonus, up to {{$100}} in free credit!'
 
-// Provides the brand-glyph mask image to CSS without a public-root url() in the
-// stylesheet (which the bundler would try to module-resolve).
-const LOGO_MASK_STYLE = {
-  '--jl-logo': 'url(/logo.png)',
-} as React.CSSProperties
+// Brand logo asset (served from the public root). One file drives every logo
+// surface: header, hero, loading, footer, favicon, and PWA icon.
+const BRAND_LOGO_SRC = '/logo.png'
 
 // ---- Footer columns (backend-overridable via status.footer_html) ----
 type FooterLink = {
@@ -133,17 +146,92 @@ const capabilityCards = [
   },
 ] as const
 
-const GithubIcon = ({ size = 17 }: { size?: number }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox='0 0 24 24'
-    fill='currentColor'
-    aria-hidden='true'
-  >
-    <path d='M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z' />
-  </svg>
-)
+// Shared interface-language state for the landing header/drawer. Mirrors the
+// in-app LanguageSwitcher: switch immediately (i18next caches to localStorage)
+// and best-effort persist to the signed-in user's profile.
+function useHomeLanguage() {
+  const { i18n } = useTranslation()
+  const user = useAuthStore((s) => s.auth.user)
+  const currentLanguage = normalizeInterfaceLanguage(i18n.language)
+
+  const changeLanguage = useCallback(
+    async (code: string) => {
+      if (code === currentLanguage) return
+      await i18n.changeLanguage(code)
+      if (user) {
+        try {
+          await api.put('/api/user/self', { language: code })
+        } catch {
+          // Best-effort persistence; don't block the UI on failure
+        }
+      }
+    },
+    [i18n, user, currentLanguage]
+  )
+
+  return { currentLanguage, changeLanguage }
+}
+
+// Desktop header language menu (replaces the old GitHub link).
+function HomeLangSwitcher() {
+  const { t } = useTranslation()
+  const { currentLanguage, changeLanguage } = useHomeLanguage()
+  const [open, setOpen] = useState(false)
+  const currentLabel =
+    INTERFACE_LANGUAGE_OPTIONS.find((lang) => lang.code === currentLanguage)
+      ?.label ?? 'Language'
+
+  // Auto-close on scroll (outside-click and selection already close it).
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('scroll', close, { passive: true })
+    return () => window.removeEventListener('scroll', close)
+  }, [open])
+
+  return (
+    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type='button'
+            className='jl-lang'
+            aria-label={t('Change language')}
+          />
+        }
+      >
+        <Languages size={16} />
+        <span>{currentLabel}</span>
+        <ChevronDown size={14} className='jl-lang-caret' />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align='end'
+        sideOffset={10}
+        className='w-auto min-w-44 p-1.5'
+      >
+        {INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
+          <DropdownMenuItem
+            key={lang.code}
+            onClick={() => changeLanguage(lang.code)}
+            className={cn(
+              'justify-between gap-8 px-2.5 py-1.5',
+              currentLanguage === lang.code && 'text-primary font-medium'
+            )}
+          >
+            {lang.label}
+            <Check
+              size={14}
+              className={cn(
+                'text-primary',
+                currentLanguage !== lang.code && 'invisible'
+              )}
+            />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 // Parse the backend footer config (best-effort) into normalized groups.
 function parseFooterGroups(raw: unknown): FooterGroup[] | null {
@@ -196,9 +284,7 @@ const scrollToCapabilities = (event?: React.MouseEvent) => {
 function BrandMark() {
   return (
     <>
-      <span className='jl-brand-badge' aria-hidden='true'>
-        <span className='jl-glyph' />
-      </span>
+      <img className='jl-brand-logo' src={BRAND_LOGO_SRC} alt='' aria-hidden='true' />
       <span className='jl-brand-name'>
         <strong>{BRAND_NAME}</strong>
         <span>{BRAND_ROMAN}</span>
@@ -212,7 +298,7 @@ function HeroArt() {
     <div className='jl-hero-art jl-reveal' aria-hidden='true'>
       <div className='jl-hero-tilt'>
         <div className='jl-hero-stage'>
-          <div className='jl-hero-placeholder'>LOGO</div>
+          <img className='jl-hero-logo' src={BRAND_LOGO_SRC} alt='' />
         </div>
       </div>
     </div>
@@ -221,6 +307,7 @@ function HeroArt() {
 
 function FigmaHomeHeader() {
   const { t } = useTranslation()
+  const { currentLanguage, changeLanguage } = useHomeLanguage()
   const [scrolled, setScrolled] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
@@ -269,15 +356,7 @@ function FigmaHomeHeader() {
         </nav>
 
         <div className='jl-header-actions'>
-          <a
-            className='jl-github'
-            href={HOME_GITHUB_URL}
-            target='_blank'
-            rel='noopener noreferrer'
-          >
-            <GithubIcon size={17} />
-            GitHub
-          </a>
+          <HomeLangSwitcher />
           <a href={HOME_CONSOLE_PATH} className='jl-btn jl-btn-dark'>
             {t('控制台')}
             <ArrowRight size={16} className='jl-arrow' />
@@ -310,10 +389,24 @@ function FigmaHomeHeader() {
         </div>
         <nav className='jl-drawer-links' onClick={closeDrawer}>
           {navLinks}
-          <a href={HOME_GITHUB_URL} target='_blank' rel='noopener noreferrer'>
-            GitHub
-          </a>
         </nav>
+        <div className='jl-drawer-lang' role='group' aria-label={t('Change language')}>
+          {INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
+            <button
+              key={lang.code}
+              type='button'
+              className={`jl-drawer-lang-btn${
+                currentLanguage === lang.code ? ' is-active' : ''
+              }`}
+              onClick={() => {
+                changeLanguage(lang.code)
+                closeDrawer()
+              }}
+            >
+              {lang.label}
+            </button>
+          ))}
+        </div>
         <div className='jl-drawer-cta'>
           <a
             href={HOME_CONSOLE_PATH}
@@ -578,10 +671,8 @@ export function Home() {
 
   if (!isLoaded) {
     return (
-      <div className='home-logo-loading' style={LOGO_MASK_STYLE}>
-        <span className='jl-brand-badge'>
-          <span className='jl-glyph' />
-        </span>
+      <div className='home-logo-loading'>
+        <img className='jl-brand-logo' src={BRAND_LOGO_SRC} alt='' />
       </div>
     )
   }
@@ -601,7 +692,7 @@ export function Home() {
   }
 
   return (
-    <main className='figma-home' style={LOGO_MASK_STYLE}>
+    <main className='figma-home'>
       <FigmaHomeHeader />
 
       <section className='jl-hero'>

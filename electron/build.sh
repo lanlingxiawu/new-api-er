@@ -2,7 +2,7 @@
 
 set -e
 
-echo "Building NEXAXIS API Electron App..."
+echo "Building JuLiang API Electron App..."
 
 echo "Step 1: Building frontend..."
 cd ../web

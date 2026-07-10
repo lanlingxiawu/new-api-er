@@ -312,7 +312,7 @@ func (a *TaskAdaptor) createJWTToken() (string, error) {
 
 func (a *TaskAdaptor) createJWTTokenWithKey(apiKey string) (string, error) {
 	if isNewAPIRelay(apiKey) {
-		return apiKey, nil // NEXAXIS API relay
+		return apiKey, nil // JuLiang API relay
 	}
 	keyParts := strings.Split(apiKey, "|")
 	if len(keyParts) != 2 {

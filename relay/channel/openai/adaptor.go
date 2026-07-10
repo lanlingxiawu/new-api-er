@@ -217,10 +217,10 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	}
 	if info.ChannelType == constant.ChannelTypeOpenRouter {
 		if header.Get("HTTP-Referer") == "" {
-			header.Set("HTTP-Referer", "https://nexaxis.ai")
+			header.Set("HTTP-Referer", "https://juliang.io")
 		}
 		if header.Get("X-OpenRouter-Title") == "" {
-			header.Set("X-OpenRouter-Title", "NEXAXIS API")
+			header.Set("X-OpenRouter-Title", "JuLiang API")
 		}
 	}
 	return nil

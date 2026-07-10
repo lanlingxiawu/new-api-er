@@ -27,12 +27,12 @@ export const BRAND_ROMAN = 'JULIANG CIYUAN';
 export const HOME_CONSOLE_PATH = '/console';
 export const HOME_PRICING_PATH = '/pricing';
 export const HOME_PRIVACY_PATH = '/privacy-policy';
-export const HOME_DOCS_URL = 'https://docs.nexaxis.ai/docs';
-export const HOME_ABOUT_URL = 'https://nexaxis.ai';
+export const HOME_DOCS_URL = 'https://docs.juliang.io/docs';
+export const HOME_ABOUT_URL = 'https://juliang.io';
 export const HOME_GITHUB_URL = 'https://github.com/QuantumNous/new-api';
 export const HOME_TWITTER_URL = 'https://x.com/NexaxisAI';
 export const HOME_DISCORD_URL = 'https://discord.com';
-export const HOME_SUPPORT_MAIL = 'mailto:support@nexaxis.ai';
+export const HOME_SUPPORT_MAIL = 'mailto:support@juliang.io';
 
 /**
  * Self-contained GitHub mark (lucide dropped its brand icons). Keeps both

@@ -29,7 +29,7 @@ export const DEFAULT_FOOTER_CONFIG = {
         {
           id: 'about-com',
           labelKey: '\u5173\u4e8e\u9879\u76ee',
-          url: 'https://docs.nexaxis.ai/docs',
+          url: 'https://docs.juliang.io/docs',
           target: '_blank',
         },
       ],
@@ -41,13 +41,13 @@ export const DEFAULT_FOOTER_CONFIG = {
         {
           id: 'browse-models',
           labelKey: 'API \u6587\u6863',
-          url: 'https://docs.nexaxis.ai/docs/models-list',
+          url: 'https://docs.juliang.io/docs/models-list',
           target: '_blank',
         },
         {
           id: 'how-it-works',
           labelKey: '\u5e2e\u52a9',
-          url: 'https://docs.nexaxis.ai/docs/cc-switch',
+          url: 'https://docs.juliang.io/docs/cc-switch',
           target: '_blank',
         },
       ],
@@ -65,7 +65,7 @@ export const DEFAULT_FOOTER_CONFIG = {
         {
           id: 'telegram',
           labelKey: 'Telegram',
-          url: 'https://t.me/nexaxis',
+          url: 'https://t.me/juliang',
           target: '_blank',
         },
       ],
