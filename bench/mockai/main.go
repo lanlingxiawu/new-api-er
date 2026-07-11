@@ -169,6 +169,10 @@ func route(w http.ResponseWriter, r *http.Request) {
 		videoFetchHandler(w, r.Host, videoTaskID(p))
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/contents/generations/tasks"):
 		videoSubmitHandler(w, r)
+	case r.Method == http.MethodGet && strings.Contains(p, "/video/generations/"):
+		openaiVideoFetchHandler(w, r.Host, lastSeg(p))
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/video/generations"):
+		openaiVideoSubmitHandler(w, r)
 	// kling（fetch 必须在 sora 之前判断 /videos/{action}/{id}）
 	case r.Method == http.MethodGet && (strings.Contains(p, "/videos/image2video/") || strings.Contains(p, "/videos/text2video/")):
 		klingFetchHandler(w, r.Host, lastSeg(p))

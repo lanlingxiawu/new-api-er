@@ -54,6 +54,51 @@ func videoFetchHandler(w http.ResponseWriter, host, taskID string) {
 		taskID, mediaURL(host, "video", taskID, videoAsset.ext), n, n, submitMs/1000, time.Now().Unix())
 }
 
+// ============================================================================
+// OpenAI 兼容「视频生成」格式（/v1/video/generations）：
+//   submit: POST {base}/v1/video/generations       → {"id":"<task_id>","status":"running"}
+//   fetch:  GET  {base}/v1/video/generations/{id}    → {"id","status","video_url"}
+//           status: running → succeeded；url 置于【顶层 video_url】(契合通用客户端解析,
+//           不放 content.video_url——多数网关/SDK 只认顶层或 data/output/result 下的 url)。
+// 与 chat(/v1/chat/completions)、image(/v1/images/generations)、audio(/v1/audio/speech) 一致：
+// mockai 直接暴露 OpenAI 客户端侧路径,便于 Agent-Studio 等直连联调(video 此前独缺此路径→直连报 6003)。
+// ============================================================================
+
+// openaiVideoSubmitHandler 处理 OpenAI 兼容视频提交，返回内嵌提交时刻的 task_id。
+func openaiVideoSubmitHandler(w http.ResponseWriter, r *http.Request) {
+	if _, ok := readBody(w, r); !ok {
+		return
+	}
+	if code, inject := maybeErrorCode(); inject {
+		statVideo.errs.Add(1)
+		writeOpenAIError(w, code)
+		return
+	}
+	id := reqCounter.Add(1)
+	statVideo.served.Add(1)
+	taskID := fmt.Sprintf("vidmock-%d-%d", time.Now().UnixMilli(), id)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"id":"%s","status":"running","created_at":%d}`, taskID, time.Now().Unix())
+}
+
+// openaiVideoFetchHandler 处理 OpenAI 兼容视频轮询：running → succeeded，url 置顶层 video_url。
+func openaiVideoFetchHandler(w http.ResponseWriter, host, taskID string) {
+	statVideo.stream.Add(1)
+	submitMs, okParse := parseVideoSubmitMs(taskID)
+	done := true
+	if okParse {
+		done = time.Now().UnixMilli()-submitMs >= videoProcess.Milliseconds()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if !done {
+		fmt.Fprintf(w, `{"id":"%s","model":"video-mock","status":"running","created_at":%d}`, taskID, submitMs/1000)
+		return
+	}
+	n := completionWords()
+	fmt.Fprintf(w, `{"id":"%s","model":"video-mock","status":"succeeded","video_url":"%s","usage":{"completion_tokens":%d,"total_tokens":%d},"created_at":%d,"updated_at":%d}`,
+		taskID, mediaURL(host, "video", taskID, videoAsset.ext), n, n, submitMs/1000, time.Now().Unix())
+}
+
 // parseVideoSubmitMs 从 "vidmock-<ms>-<counter>" 解析提交毫秒时刻。
 func parseVideoSubmitMs(taskID string) (int64, bool) {
 	parts := strings.Split(taskID, "-")
