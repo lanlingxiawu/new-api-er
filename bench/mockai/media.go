@@ -2,6 +2,7 @@ package mockai
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"image"
@@ -19,11 +20,17 @@ import (
 // media.go 让图片 / 语音 / 视频返回**真实可用**的媒体，并把媒体挂在 mock 自身的
 // /media/ 路径下，使响应里的 URL 真实可下载（而非指向不存在的地址）。
 //
-// 标准库可编码 PNG / WAV / GIF（均真实可播放），但**无 MP4 编码器**：视频默认用
-// 可播放的动图 GIF 占位。需要真实 MP4/MP3/JPEG 等精确格式时，用 -video-file /
-// -audio-file / -image-file 指定真实素材文件（按扩展名推断 Content-Type）。
+// 标准库可编码 PNG / WAV / GIF（均真实可播放），但**无 MP4 编码器**：视频默认改用
+// 编译期内嵌的真实示例 MP4（sample.mp4，H.264，浏览器 <video> 可播），开箱即真视频；
+// 需要自定义 MP4/MP3/JPEG 等精确素材时，用 -video-file / -audio-file / -image-file 指定文件。
 //
 // 媒体在启动时生成一次，之后只做字节直写，不影响热路径。
+
+// sampleMP4 —— 内嵌的示例视频（320x240 · 2s · H.264 · faststart），作视频默认素材，
+// 免去「标准库无 MP4 编码器→只能返回 GIF」的坑，工作台/preview 默认就有可播 MP4。
+//
+//go:embed sample.mp4
+var sampleMP4 []byte
 
 type mediaAsset struct {
 	bytes       []byte
@@ -41,7 +48,7 @@ var (
 func initMedia() {
 	imageAsset = loadOrGen(*imageFile, "image/png", "png", genPNG)
 	speechAsset = loadOrGen(*audioFile, "audio/wav", "wav", genWAV)
-	videoAsset = loadOrGen(*videoFile, "image/gif", "gif", genGIF)
+	videoAsset = loadOrGen(*videoFile, "video/mp4", "mp4", genVideo)
 	imageB64 = base64.StdEncoding.EncodeToString(imageAsset.bytes)
 }
 
@@ -85,6 +92,15 @@ func ctByExt(ext, def string) string {
 		return "video/quicktime"
 	}
 	return def
+}
+
+// genVideo 默认视频素材：返回内嵌的示例 MP4（真视频、浏览器可播）。编译期 go:embed 注入、恒非空；
+// 极端情况下（embed 缺失）回落到动图 GIF，避免 mock 起不来（此时 content-type 仍标 mp4，仅兜底）。
+func genVideo() []byte {
+	if len(sampleMP4) > 0 {
+		return sampleMP4
+	}
+	return genGIF()
 }
 
 // genPNG 生成 512x512 渐变 PNG（真实可显示）。

@@ -63,7 +63,7 @@ var (
 	videoProcess = fs.Duration("video-process-time", 3*time.Second, "视频任务从 submit 到 succeeded 的模拟生成耗时")
 	imageFile    = fs.String("image-file", "", "图片响应用的真实文件（png/jpg/...）；留空则生成 512x512 PNG")
 	audioFile    = fs.String("audio-file", "", "TTS 响应用的真实音频文件（mp3/wav/...）；留空则生成 1s WAV 正弦音")
-	videoFile    = fs.String("video-file", "", "视频响应用的真实文件（mp4/webm/...）；留空则生成可播放动图 GIF（stdlib 无 MP4 编码器）")
+	videoFile    = fs.String("video-file", "", "视频响应用的真实文件（mp4/webm/...）；留空则用内嵌示例 MP4（H.264，浏览器可播）")
 )
 
 // errorCodes 按权重展开后的错误码采样池，rand.IntN 直取即可，无锁。
