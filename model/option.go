@@ -77,6 +77,12 @@ func InitOptionMap() {
 	common.OptionMap["SystemName"] = common.SystemName
 	common.OptionMap["Logo"] = common.Logo
 	common.OptionMap["ServerAddress"] = ""
+	common.OptionMap["ContactEmail"] = ""
+	common.OptionMap["ContactPhone"] = ""
+	common.OptionMap["ContactWechat"] = ""
+	common.OptionMap["ContactQQ"] = ""
+	common.OptionMap["ContactTelegram"] = ""
+	common.OptionMap["ContactDiscord"] = ""
 	common.OptionMap["WorkerUrl"] = system_setting.WorkerUrl
 	common.OptionMap["WorkerValidKey"] = system_setting.WorkerValidKey
 	common.OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.WorkerAllowHttpImageRequestEnabled)

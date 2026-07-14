@@ -18,11 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useContext, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { StatusContext } from '../../context/Status';
 import { getFooterHTML, parseFooterConfig } from '../../helpers';
 import FigmaFooter from './FigmaFooter';
+import { buildContactGroup } from './figmaHomeShared';
 
 const MarketingFooter = () => {
+  const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const footerConfig = useMemo(() => {
     const statusFooter = statusState?.status?.footer_html;
@@ -31,7 +34,12 @@ const MarketingFooter = () => {
     );
   }, [statusState?.status?.footer_html]);
 
-  return <FigmaFooter footerConfig={footerConfig} />;
+  const contactGroup = useMemo(
+    () => buildContactGroup(statusState?.status, t),
+    [statusState?.status, t],
+  );
+
+  return <FigmaFooter footerConfig={footerConfig} contactGroup={contactGroup} />;
 };
 
 export default MarketingFooter;

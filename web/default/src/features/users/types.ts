@@ -101,6 +101,7 @@ export interface SearchUsersParams {
   status?: string
   exclude_employee?: boolean
   exclude_admin?: boolean
+  exclude_root?: boolean
   exclude_assigned_customer?: boolean
   p?: number
   page_size?: number

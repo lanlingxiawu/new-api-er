@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { ContactInfoSection } from '../general/contact-info-section'
 import { SystemInfoSection } from '../general/system-info-section'
 import {
   parseHeaderNavModules,
@@ -49,6 +50,22 @@ const SITE_SECTIONS = [
             user_agreement: settings['legal.user_agreement'],
             privacy_policy: settings['legal.privacy_policy'],
           },
+        }}
+      />
+    ),
+  },
+  {
+    id: 'contact-info',
+    titleKey: 'Contact Information',
+    build: (settings: SiteSettings) => (
+      <ContactInfoSection
+        defaultValues={{
+          ContactEmail: settings.ContactEmail,
+          ContactPhone: settings.ContactPhone,
+          ContactWechat: settings.ContactWechat,
+          ContactQQ: settings.ContactQQ,
+          ContactTelegram: settings.ContactTelegram,
+          ContactDiscord: settings.ContactDiscord,
         }}
       />
     ),

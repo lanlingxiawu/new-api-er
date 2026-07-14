@@ -213,7 +213,7 @@ function MonthValueSelector({
           label: String(year),
         }))}
         value={String(selectedYear || nowYear)}
-        onValueChange={(year) => updateMonth(year, selectedMonth)}
+        onValueChange={(year) => updateMonth(year ?? '', selectedMonth)}
       >
         <SelectTrigger size='sm' className='w-[92px]'>
           <SelectValue />
@@ -234,7 +234,7 @@ function MonthValueSelector({
           label: month.label,
         }))}
         value={String(selectedMonth || 1)}
-        onValueChange={(month) => updateMonth(selectedYear, month)}
+        onValueChange={(month) => updateMonth(selectedYear, month ?? '')}
       >
         <SelectTrigger size='sm' className='w-[96px]'>
           <SelectValue />
@@ -290,30 +290,6 @@ function buildCalendarCells(
       stat: dayMap.get(key),
     }
   })
-}
-
-function CalendarAmount({
-  label,
-  value,
-  primary,
-}: {
-  label: string
-  value?: number
-  primary?: boolean
-}) {
-  return (
-    <div>
-      <div className='text-muted-foreground text-xs'>{label}</div>
-      <div
-        className={cn(
-          'mt-1 font-medium',
-          primary ? 'text-sm sm:text-base' : 'text-sm'
-        )}
-      >
-        <BusinessAmount value={value ?? 0} />
-      </div>
-    </div>
-  )
 }
 
 function commissionIntensity(amount: number, maxAbsAmount: number) {
@@ -392,8 +368,6 @@ export function CommissionFinancialCalendar({
   )
   const currentMonth = currentMonthValue()
   const [selectedDate, setSelectedDate] = useState<string>()
-  const selectedCell = cells.find((cell) => cell.key === selectedDate)
-  const selectedStat = selectedCell?.stat
   const maxAbsRevenue = useMemo(
     () =>
       days.reduce(

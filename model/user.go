@@ -328,7 +328,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeRoot bool, excludeAssignedCustomers bool, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -371,6 +371,11 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	}
 	if excludeAdmins {
 		query = query.Where("role < ?", common.RoleAdminUser)
+	}
+	// excludeRoot keeps regular admins selectable while still hiding root users
+	// (e.g. the employee picker allows RoleAdminUser but not RoleRootUser).
+	if excludeRoot {
+		query = query.Where("role < ?", common.RoleRootUser)
 	}
 	if excludeEmployees {
 		query = query.Where(

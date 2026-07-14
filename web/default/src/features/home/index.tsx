@@ -55,12 +55,11 @@ const BRAND_ROMAN = 'JULIANG CIYUAN'
 const HOME_CONSOLE_PATH = '/dashboard'
 const HOME_PRICING_PATH = '/pricing'
 const HOME_PRIVACY_PATH = '/privacy-policy'
-const HOME_DOCS_URL = 'https://docs.juliang.io/docs'
-const HOME_ABOUT_URL = 'https://juliang.io'
-const HOME_GITHUB_URL = 'https://github.com/QuantumNous/new-api'
-const HOME_TWITTER_URL = 'https://x.com/NexaxisAI'
-const HOME_DISCORD_URL = 'https://discord.com'
-const HOME_SUPPORT_MAIL = 'mailto:support@juliang.io'
+const HOME_DOCS_URL = 'https://docs.juliang.io/docs/'
+const HOME_DOCS_QUICKSTART_URL = 'https://docs.juliang.io/docs/quickstart/'
+const HOME_DOCS_API_URL = 'https://docs.juliang.io/docs/api-overview/'
+const HOME_DOCS_PRICING_URL = 'https://docs.juliang.io/docs/official-pricing/'
+const HOME_ABOUT_URL = 'https://docs.juliang.io/docs/'
 
 const HOME_PROMO_FALLBACK_ZH =
   '限时，1:1 充值赠送，最高可获 {{$100}} 免费额度！'
@@ -77,6 +76,7 @@ type FooterLink = {
   label: string
   href: string
   internal?: boolean
+  plain?: boolean
 }
 
 type FooterGroup = {
@@ -92,7 +92,7 @@ const HOME_FOOTER_GROUPS: FooterGroup[] = [
     links: [
       { label: '能力', href: '#jl-capabilities' },
       { label: '模型', href: HOME_PRICING_PATH, internal: true },
-      { label: '定价', href: HOME_PRICING_PATH, internal: true },
+      { label: '定价', href: HOME_DOCS_PRICING_URL },
     ],
   },
   {
@@ -100,8 +100,7 @@ const HOME_FOOTER_GROUPS: FooterGroup[] = [
     title: '开发者',
     links: [
       { label: '文档', href: HOME_DOCS_URL },
-      { label: 'API 参考', href: HOME_DOCS_URL },
-      { label: '状态', href: HOME_DOCS_URL },
+      { label: 'API 参考', href: HOME_DOCS_API_URL },
     ],
   },
   {
@@ -109,21 +108,48 @@ const HOME_FOOTER_GROUPS: FooterGroup[] = [
     title: '公司',
     links: [
       { label: '关于我们', href: HOME_ABOUT_URL },
-      { label: '更新日志', href: HOME_DOCS_URL },
       { label: '隐私政策', href: HOME_PRIVACY_PATH, internal: true },
     ],
   },
-  {
-    id: 'contact',
-    title: '联系',
-    links: [
-      { label: 'GitHub', href: HOME_GITHUB_URL },
-      { label: 'X (Twitter)', href: HOME_TWITTER_URL },
-      { label: 'Discord', href: HOME_DISCORD_URL },
-      { label: '邮箱支持', href: HOME_SUPPORT_MAIL },
-    ],
-  },
 ]
+
+// Footer contact methods, admin-configurable via System Settings → Site →
+// Contact Information. Each field only appears when it has a value.
+const HOME_CONTACT_DEFS: Array<{
+  key: string
+  label: string
+  scheme?: 'mailto' | 'tel' | 'url'
+}> = [
+  { key: 'contact_email', label: '邮箱', scheme: 'mailto' },
+  { key: 'contact_phone', label: '电话', scheme: 'tel' },
+  { key: 'contact_wechat', label: '微信' },
+  { key: 'contact_qq', label: 'QQ' },
+  { key: 'contact_telegram', label: 'Telegram', scheme: 'url' },
+  { key: 'contact_discord', label: 'Discord', scheme: 'url' },
+]
+
+function buildContactGroup(
+  status: Record<string, unknown> | null | undefined
+): FooterGroup | null {
+  if (!status) return null
+  const links: FooterLink[] = []
+  for (const def of HOME_CONTACT_DEFS) {
+    const raw = status[def.key]
+    const value = typeof raw === 'string' ? raw.trim() : ''
+    if (!value) continue
+    if (def.scheme === 'mailto') {
+      links.push({ id: def.key, label: `${def.label}：${value}`, href: `mailto:${value}` })
+    } else if (def.scheme === 'tel') {
+      links.push({ id: def.key, label: `${def.label}：${value}`, href: `tel:${value}` })
+    } else if (def.scheme === 'url' && /^https?:\/\//i.test(value)) {
+      links.push({ id: def.key, label: def.label, href: value })
+    } else {
+      links.push({ id: def.key, label: `${def.label}：${value}`, href: '', plain: true })
+    }
+  }
+  if (!links.length) return null
+  return { id: 'contact', title: '联系', links }
+}
 
 const capabilityCards = [
   {
@@ -434,6 +460,13 @@ function FigmaFooter({
   const renderLink = (link: FooterLink, index: number) => {
     const label = t(link.label)
     const key = link.id ?? `${link.label}-${index}`
+    if (link.plain) {
+      return (
+        <span key={key} className='jl-footer-plain'>
+          {label}
+        </span>
+      )
+    }
     if (link.href.startsWith('#')) {
       return (
         <a
@@ -531,17 +564,19 @@ export function Home() {
 
   const showPromo = promoEnabled && promoTextRaw && promoTextRaw.trim() !== ''
 
-  const footerGroups = useMemo(
-    () =>
+  const contactGroup = useMemo(() => buildContactGroup(status), [status])
+
+  const footerGroups = useMemo(() => {
+    const base =
       parseFooterGroups(status?.footer_html) ||
       parseFooterGroups(
         typeof window !== 'undefined'
           ? localStorage.getItem('footer_html')
           : null
       ) ||
-      HOME_FOOTER_GROUPS,
-    [status?.footer_html]
-  )
+      HOME_FOOTER_GROUPS
+    return contactGroup ? [...base, contactGroup] : base
+  }, [status?.footer_html, contactGroup])
 
   const copyrightText = `© ${new Date().getFullYear()} ${BRAND_NAME}. All rights reserved.`
 
@@ -749,7 +784,7 @@ export function Home() {
               <ArrowRight size={17} className='jl-arrow' />
             </a>
             <a
-              href={HOME_DOCS_URL}
+              href={HOME_DOCS_QUICKSTART_URL}
               target='_blank'
               rel='noopener noreferrer'
               className='jl-btn jl-btn-ghost'

@@ -767,6 +767,13 @@ html.dark .figma-home {
   color: var(--jl-accent);
 }
 
+.jl-footer-plain {
+  display: block;
+  margin-bottom: 13px;
+  font-size: 14px;
+  color: var(--jl-body);
+}
+
 .jl-footer-copy {
   margin-top: auto;
   padding-top: 24px;

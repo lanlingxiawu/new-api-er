@@ -18,11 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useContext, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getFooterHTML, parseFooterConfig } from '../../helpers';
 import { StatusContext } from '../../context/Status';
 import FigmaFooter from './FigmaFooter';
+import { buildContactGroup } from './figmaHomeShared';
 
 const FooterBar = () => {
+  const { t } = useTranslation();
   const [statusState] = useContext(StatusContext);
   const currentYear = new Date().getFullYear();
   // Fall back to null (not DEFAULT_FOOTER_CONFIG) so the footer renders the
@@ -34,9 +37,15 @@ const FooterBar = () => {
     );
   }, [statusState?.status?.footer_html]);
 
+  const contactGroup = useMemo(
+    () => buildContactGroup(statusState?.status, t),
+    [statusState?.status, t],
+  );
+
   return (
     <FigmaFooter
       footerConfig={footerConfig}
+      contactGroup={contactGroup}
       copyrightText={`© ${currentYear} 巨量词元. All rights reserved.`}
     />
   );

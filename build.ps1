@@ -72,11 +72,11 @@ try {
     switch ($Target) {
         "win" {
             $env:GOOS = "windows"
-            $output = "new-api.exe"
+            $output = "juliang-api.exe"
         }
         "linux" {
             $env:GOOS = "linux"
-            $output = "new-api"
+            $output = "juliang-api"
         }
     }
 

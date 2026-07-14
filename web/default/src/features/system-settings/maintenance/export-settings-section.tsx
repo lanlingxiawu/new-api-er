@@ -163,9 +163,11 @@ export function ExportSettingsSection({
             render={({ field }) => (
               <SettingsSwitchItem>
                 <SettingsSwitchContent>
-                  <FormLabel>Allow user billing export</FormLabel>
+                  <FormLabel>{t('Allow user billing export')}</FormLabel>
                   <FormDescription>
-                    Turn regular user CSV export on or off. Admin export stays available.
+                    {t(
+                      'Turn regular user CSV export on or off. Admin export stays available.'
+                    )}
                   </FormDescription>
                 </SettingsSwitchContent>
                 <FormControl>

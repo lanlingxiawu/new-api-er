@@ -113,14 +113,38 @@ export const HOME_FOOTER_GROUPS = [
       { label: '隐私政策', href: HOME_PRIVACY_PATH, internal: true },
     ],
   },
-  {
-    id: 'contact',
-    title: '联系',
-    links: [
-      { label: 'GitHub', href: HOME_GITHUB_URL, external: true },
-      { label: 'X (Twitter)', href: HOME_TWITTER_URL, external: true },
-      { label: 'Discord', href: HOME_DISCORD_URL, external: true },
-      { label: '邮箱支持', href: HOME_SUPPORT_MAIL, external: true },
-    ],
-  },
 ];
+
+// Footer contact methods, admin-configurable via 设置 → 个性化设置 → 联系方式.
+// Each field only appears when it has a value. Mirrors the default frontend.
+const HOME_CONTACT_DEFS = [
+  { key: 'contact_email', label: '邮箱', scheme: 'mailto' },
+  { key: 'contact_phone', label: '电话', scheme: 'tel' },
+  { key: 'contact_wechat', label: '微信' },
+  { key: 'contact_qq', label: 'QQ' },
+  { key: 'contact_telegram', label: 'Telegram', scheme: 'url' },
+  { key: 'contact_discord', label: 'Discord', scheme: 'url' },
+];
+
+export const buildContactGroup = (status, t) => {
+  if (!status) return null;
+  const tr = typeof t === 'function' ? t : (s) => s;
+  const links = [];
+  for (const def of HOME_CONTACT_DEFS) {
+    const raw = status[def.key];
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) continue;
+    const name = tr(def.label);
+    if (def.scheme === 'mailto') {
+      links.push({ id: def.key, label: `${name}：${value}`, href: `mailto:${value}` });
+    } else if (def.scheme === 'tel') {
+      links.push({ id: def.key, label: `${name}：${value}`, href: `tel:${value}` });
+    } else if (def.scheme === 'url' && /^https?:\/\//i.test(value)) {
+      links.push({ id: def.key, label: name, href: value });
+    } else {
+      links.push({ id: def.key, label: `${name}：${value}`, plain: true });
+    }
+  }
+  if (!links.length) return null;
+  return { id: 'contact', title: '联系', links };
+};

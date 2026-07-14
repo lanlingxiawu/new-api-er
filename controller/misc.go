@@ -108,6 +108,14 @@ func GetStatus(c *gin.Context) {
 		"HeaderNavModules":    common.OptionMap["HeaderNavModules"],
 		"SidebarModulesAdmin": common.OptionMap["SidebarModulesAdmin"],
 
+		// 页脚联系方式
+		"contact_email":    common.OptionMap["ContactEmail"],
+		"contact_phone":    common.OptionMap["ContactPhone"],
+		"contact_wechat":   common.OptionMap["ContactWechat"],
+		"contact_qq":       common.OptionMap["ContactQQ"],
+		"contact_telegram": common.OptionMap["ContactTelegram"],
+		"contact_discord":  common.OptionMap["ContactDiscord"],
+
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,

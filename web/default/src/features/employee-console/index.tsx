@@ -26,7 +26,6 @@ import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
   formatBusinessExactUsd,
-  formatBusinessTargetAmount,
   formatBusinessUsd,
 } from '@/features/business/format'
 import { CommissionCalendarSection } from '@/features/employees/components/commission-financial-calendar'

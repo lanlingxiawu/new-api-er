@@ -130,6 +130,12 @@ export interface SystemStatus {
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
+    contact_email?: string
+    contact_phone?: string
+    contact_wechat?: string
+    contact_qq?: string
+    contact_telegram?: string
+    contact_discord?: string
     [key: string]: unknown
   }
   // Allow direct access to common properties
@@ -174,6 +180,12 @@ export interface SystemStatus {
   password_login_enabled?: boolean
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
+  contact_email?: string
+  contact_phone?: string
+  contact_wechat?: string
+  contact_qq?: string
+  contact_telegram?: string
+  contact_discord?: string
   [key: string]: unknown
 }
 

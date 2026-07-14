@@ -123,7 +123,7 @@ function UserPicker({
           p: Number(pageParam),
           page_size: USER_PICKER_PAGE_SIZE,
           exclude_employee: true,
-          exclude_admin: true,
+          exclude_root: true,
           exclude_assigned_customer: true,
         }),
       initialPageParam: 1,
@@ -547,7 +547,7 @@ export function EmployeeFormDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className='h-[86vh] max-h-[640px] overflow-visible sm:max-w-120'
+        className='max-h-[86vh] overflow-visible sm:max-w-120'
         initialFocus={false}
       >
         <DialogHeader>

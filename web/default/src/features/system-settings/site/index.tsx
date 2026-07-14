@@ -37,6 +37,12 @@ const defaultSiteSettings: SiteSettings = {
   'legal.privacy_policy': '',
   HeaderNavModules: '',
   SidebarModulesAdmin: '',
+  ContactEmail: '',
+  ContactPhone: '',
+  ContactWechat: '',
+  ContactQQ: '',
+  ContactTelegram: '',
+  ContactDiscord: '',
 }
 
 export function SiteSettings() {

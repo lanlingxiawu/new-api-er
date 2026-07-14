@@ -79,6 +79,9 @@ export type LedgerPipelineStatus = {
   }
   theoretical_pair_records_per_sec: number
   theoretical_pair_rpm: number
+  buf_max_entries: number
+  retry_queue_max_entries: number
+  stat_upsert_max_retries: number
 }
 
 export type LedgerPipelineStatusResponse = {
@@ -117,6 +120,12 @@ export type SiteSettings = {
   'legal.privacy_policy': string
   HeaderNavModules: string
   SidebarModulesAdmin: string
+  ContactEmail: string
+  ContactPhone: string
+  ContactWechat: string
+  ContactQQ: string
+  ContactTelegram: string
+  ContactDiscord: string
 }
 
 export type AuthSettings = {

@@ -35,9 +35,11 @@ const normalizeGroup = (group, index) => ({
   id: group.id || `group-${index}`,
   title: group.title || group.titleKey || '',
   links: (group.links || []).map((link, linkIndex) => {
+    const isPlain = !!link.plain;
     const url = link.href || link.url || '#';
-    const isAnchor = url.startsWith('#');
+    const isAnchor = !isPlain && url.startsWith('#');
     const isInternal =
+      !isPlain &&
       !isAnchor &&
       (link.internal || (link.target === '_self' && url.startsWith('/')));
     return {
@@ -46,6 +48,7 @@ const normalizeGroup = (group, index) => ({
       url,
       isAnchor,
       isInternal,
+      isPlain,
     };
   }),
 });
@@ -59,6 +62,7 @@ const scrollToAnchor = (event, url) => {
 
 const FigmaFooter = ({
   footerConfig,
+  contactGroup = null,
   copyrightText = '© 2026 巨量词元. All rights reserved.',
 }) => {
   const { t } = useTranslation();
@@ -66,7 +70,10 @@ const FigmaFooter = ({
     Array.isArray(footerConfig?.groups) && footerConfig.groups.length
       ? footerConfig.groups
       : HOME_FOOTER_GROUPS;
-  const groups = sourceGroups.map(normalizeGroup);
+  const allGroups = contactGroup
+    ? [...sourceGroups, contactGroup]
+    : sourceGroups;
+  const groups = allGroups.map(normalizeGroup);
 
   return (
     <footer className='jl-footer' style={{ '--jl-logo': 'url(/logo.png)' }}>
@@ -85,6 +92,13 @@ const FigmaFooter = ({
               <h4>{t(group.title)}</h4>
               {group.links.map((link) => {
                 const label = t(link.label);
+                if (link.isPlain) {
+                  return (
+                    <span key={link.id} className='jl-footer-plain'>
+                      {label}
+                    </span>
+                  );
+                }
                 if (link.isAnchor) {
                   return (
                     <a

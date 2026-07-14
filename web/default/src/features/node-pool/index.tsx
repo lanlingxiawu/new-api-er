@@ -112,13 +112,14 @@ function NodeStatusBadge({ status }: { status: string }) {
 }
 
 function AccountStatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
   const cls =
     status === '正常'
       ? 'bg-green-600 text-white hover:bg-green-600'
       : 'bg-gray-400 text-white hover:bg-gray-400'
   return (
     <Badge variant='default' className={cn('text-[10px]', cls)}>
-      {status}
+      {t(status)}
     </Badge>
   )
 }
@@ -566,7 +567,7 @@ export function NodePool() {
         <Button
           size='sm'
           variant='outline'
-          onClick={fetchNodes}
+          onClick={() => fetchNodes()}
           disabled={loading}
         >
           {loading ? (

@@ -48,6 +48,12 @@ const OtherSetting = () => {
     Footer: '',
     About: '',
     HomePageContent: '',
+    ContactEmail: '',
+    ContactPhone: '',
+    ContactWechat: '',
+    ContactQQ: '',
+    ContactTelegram: '',
+    ContactDiscord: '',
   });
   let [loading, setLoading] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -83,6 +89,12 @@ const OtherSetting = () => {
     Footer: false,
     CheckUpdate: false,
     FrontendTheme: false,
+    ContactEmail: false,
+    ContactPhone: false,
+    ContactWechat: false,
+    ContactQQ: false,
+    ContactTelegram: false,
+    ContactDiscord: false,
   });
   const handleInputChange = async (value, e) => {
     const name = e.target.id;
@@ -226,6 +238,20 @@ const OtherSetting = () => {
       showError('页脚内容更新失败');
     } finally {
       setLoadingInput((loadingInput) => ({ ...loadingInput, Footer: false }));
+    }
+  };
+
+  // 个性化设置 - 联系方式
+  const submitContact = async (key) => {
+    try {
+      setLoadingInput((loadingInput) => ({ ...loadingInput, [key]: true }));
+      await updateOption(key, inputs[key]);
+      showSuccess(t('联系方式已更新'));
+    } catch (error) {
+      console.error(t('联系方式更新失败'), error);
+      showError(t('联系方式更新失败'));
+    } finally {
+      setLoadingInput((loadingInput) => ({ ...loadingInput, [key]: false }));
     }
   };
 
@@ -539,6 +565,89 @@ const OtherSetting = () => {
               />
               <Button onClick={submitFooter} loading={loadingInput['Footer']}>
                 {t('设置页脚')}
+              </Button>
+            </Form.Section>
+            <Form.Section text={t('联系方式')}>
+              <Banner
+                fullMode={false}
+                type='info'
+                description={t(
+                  '配置显示在首页页脚的联系方式，留空则不显示该项。',
+                )}
+                closeIcon={null}
+                style={{ marginBottom: 15 }}
+              />
+              <Form.Input
+                label={t('邮箱')}
+                placeholder={'support@example.com'}
+                field={'ContactEmail'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactEmail')}
+                loading={loadingInput['ContactEmail']}
+              >
+                {t('设置邮箱')}
+              </Button>
+              <Form.Input
+                label={t('电话')}
+                placeholder={'+86 400 000 0000'}
+                field={'ContactPhone'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactPhone')}
+                loading={loadingInput['ContactPhone']}
+              >
+                {t('设置电话')}
+              </Button>
+              <Form.Input
+                label={t('微信')}
+                placeholder={t('微信号')}
+                field={'ContactWechat'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactWechat')}
+                loading={loadingInput['ContactWechat']}
+              >
+                {t('设置微信')}
+              </Button>
+              <Form.Input
+                label={'QQ'}
+                placeholder={t('QQ 号或 QQ 群号')}
+                field={'ContactQQ'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactQQ')}
+                loading={loadingInput['ContactQQ']}
+              >
+                {t('设置 QQ')}
+              </Button>
+              <Form.Input
+                label={'Telegram'}
+                placeholder={'https://t.me/yourchannel'}
+                field={'ContactTelegram'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactTelegram')}
+                loading={loadingInput['ContactTelegram']}
+              >
+                {t('设置 Telegram')}
+              </Button>
+              <Form.Input
+                label={'Discord'}
+                placeholder={'https://discord.gg/yourserver'}
+                field={'ContactDiscord'}
+                onChange={handleInputChange}
+              />
+              <Button
+                onClick={() => submitContact('ContactDiscord')}
+                loading={loadingInput['ContactDiscord']}
+              >
+                {t('设置 Discord')}
               </Button>
             </Form.Section>
           </Card>
