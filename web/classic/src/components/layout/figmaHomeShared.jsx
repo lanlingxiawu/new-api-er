@@ -23,12 +23,22 @@ import React from 'react';
 export const BRAND_NAME = '巨量词元';
 export const BRAND_ROMAN = 'JULIANG CIYUAN';
 
+// Brand logo asset (served from the public root). One file drives every logo
+// surface: header, hero, loading, footer, favicon, and PWA icon.
+export const BRAND_LOGO_SRC = '/logo.png';
+
 // ---- Navigation / link targets ----
+// Console is an internal SPA route (classic mounts the app under /console).
+// External docs targets mirror the default frontend so both homepages point
+// to the same pages.
 export const HOME_CONSOLE_PATH = '/console';
 export const HOME_PRICING_PATH = '/pricing';
 export const HOME_PRIVACY_PATH = '/privacy-policy';
-export const HOME_DOCS_URL = 'https://docs.juliang.io/docs';
-export const HOME_ABOUT_URL = 'https://juliang.io';
+export const HOME_DOCS_URL = 'https://docs.juliang.io/docs/';
+export const HOME_DOCS_QUICKSTART_URL = 'https://docs.juliang.io/docs/quickstart/';
+export const HOME_DOCS_API_URL = 'https://docs.juliang.io/docs/api-overview/';
+export const HOME_DOCS_PRICING_URL = 'https://docs.juliang.io/docs/official-pricing/';
+export const HOME_ABOUT_URL = 'https://docs.juliang.io/docs/';
 export const HOME_GITHUB_URL = 'https://github.com/QuantumNous/new-api';
 export const HOME_TWITTER_URL = 'https://x.com/NexaxisAI';
 export const HOME_DISCORD_URL = 'https://discord.com';
@@ -56,9 +66,7 @@ export const GithubIcon = ({ size = 17 }) => (
  */
 export const BrandMark = () => (
   <>
-    <span className='jl-brand-badge' aria-hidden='true'>
-      <span className='jl-glyph' />
-    </span>
+    <img className='jl-brand-logo' src={BRAND_LOGO_SRC} alt='' aria-hidden='true' />
     <span className='jl-brand-name'>
       <strong>{BRAND_NAME}</strong>
       <span>{BRAND_ROMAN}</span>
@@ -67,15 +75,14 @@ export const BrandMark = () => (
 );
 
 /**
- * Hero artwork — the real brand mark rendered large with a blue → violet
- * gradient (via CSS mask) floating over a glass panel, echoing the isometric
- * 3D logo in the reference design.
+ * Hero artwork — the real brand logo (/logo.png) rendered large, floating over
+ * a glass panel with a pointer-driven 3D tilt.
  */
 export const HeroArt = () => (
   <div className='jl-hero-art jl-reveal' aria-hidden='true'>
     <div className='jl-hero-tilt'>
       <div className='jl-hero-stage'>
-        <div className='jl-hero-placeholder'>LOGO</div>
+        <img className='jl-hero-logo' src={BRAND_LOGO_SRC} alt='' />
       </div>
     </div>
   </div>
@@ -92,24 +99,22 @@ export const HOME_FOOTER_GROUPS = [
     links: [
       { label: '能力', href: '#jl-capabilities' },
       { label: '模型', href: HOME_PRICING_PATH, internal: true },
-      { label: '定价', href: HOME_PRICING_PATH, internal: true },
+      { label: '定价', href: HOME_DOCS_PRICING_URL },
     ],
   },
   {
     id: 'developer',
     title: '开发者',
     links: [
-      { label: '文档', href: HOME_DOCS_URL, external: true },
-      { label: 'API 参考', href: HOME_DOCS_URL, external: true },
-      { label: '状态', href: HOME_DOCS_URL, external: true },
+      { label: '文档', href: HOME_DOCS_URL },
+      { label: 'API 参考', href: HOME_DOCS_API_URL },
     ],
   },
   {
     id: 'company',
     title: '公司',
     links: [
-      { label: '关于我们', href: HOME_ABOUT_URL, external: true },
-      { label: '更新日志', href: HOME_DOCS_URL, external: true },
+      { label: '关于我们', href: HOME_ABOUT_URL },
       { label: '隐私政策', href: HOME_PRIVACY_PATH, internal: true },
     ],
   },

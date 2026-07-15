@@ -31,7 +31,7 @@ import {
   BRAND_NAME,
   HeroArt,
   HOME_CONSOLE_PATH,
-  HOME_DOCS_URL,
+  HOME_DOCS_QUICKSTART_URL,
 } from '../../components/layout/figmaHomeShared';
 import LogoLoading from '../../components/common/ui/LogoLoading';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
@@ -376,7 +376,7 @@ const Home = () => {
                 <ArrowRight size={17} className='jl-arrow' />
               </Link>
               <a
-                href={HOME_DOCS_URL}
+                href={HOME_DOCS_QUICKSTART_URL}
                 target='_blank'
                 rel='noopener noreferrer'
                 className='jl-btn jl-btn-ghost'
