@@ -72,6 +72,9 @@ For commercial licensing, please contact support@quantumnous.com
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-overview-accent-1: var(--overview-accent-1);
+  --color-overview-accent-2: var(--overview-accent-2);
+  --color-overview-accent-3: var(--overview-accent-3);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -166,7 +169,7 @@ For commercial licensing, please contact support@quantumnous.com
   --success-foreground: oklch(0.145 0 0);
   --warning: oklch(0.769 0.188 70.08);
   --warning-foreground: oklch(0.145 0 0);
-  --info: oklch(0.68 0.17 237.323);
+  --info: oklch(0.613 0.14 239.919);
   --info-foreground: oklch(0.145 0 0);
   --neutral: #9eb7d7;
   --neutral-foreground: oklch(0.145 0 0);

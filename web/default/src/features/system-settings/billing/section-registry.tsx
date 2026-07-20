@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { parseCurrencyDisplayType } from '@/lib/currency'
+
 import { CheckinSettingsSection } from '../general/checkin-settings-section'
 import { PricingSection } from '../general/pricing-section'
 import { QuotaSettingsSection } from '../general/quota-settings-section'
@@ -112,7 +113,13 @@ const BILLING_SECTIONS = [
         groupDefaults={getGroupDefaults(settings)}
         toolPricesDefault={settings['tool_price_setting.prices']}
         thirdPartySD2PricingDefault={settings['thirdpartysd2_pricing.matrix']}
-        visibleTabs={['models', 'thirdpartysd2', 'tool-prices', 'upstream-sync']}
+        visibleTabs={[
+          'models',
+          'unset-models',
+          'thirdpartysd2',
+          'tool-prices',
+          'upstream-sync',
+        ]}
       />
     ),
   },

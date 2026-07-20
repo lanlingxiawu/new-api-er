@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import { Button } from '@/components/ui/button'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
+
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
@@ -34,6 +36,7 @@ export interface ModelCardGridProps {
   usdExchangeRate?: number
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
+  selectedGroup?: string
 }
 
 export function ModelCardGrid(props: ModelCardGridProps) {
@@ -72,17 +75,18 @@ export function ModelCardGrid(props: ModelCardGridProps) {
     <div className='space-y-4 sm:space-y-5'>
       <div className='grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3'>
         {pagedModels.map((model) => (
-            <ModelCard
-              key={model.id ?? model.model_name}
-              model={model}
-              tokenUnit={tokenUnit}
-              priceRate={props.priceRate}
-              usdExchangeRate={props.usdExchangeRate}
-              showRechargePrice={props.showRechargePrice}
-              perf={perfMap.get(model.model_name || '')}
-              onClick={() => props.onModelClick(model.model_name || '')}
-            />
-          ))}
+          <ModelCard
+            key={model.id ?? model.model_name}
+            model={model}
+            tokenUnit={tokenUnit}
+            priceRate={props.priceRate}
+            usdExchangeRate={props.usdExchangeRate}
+            showRechargePrice={props.showRechargePrice}
+            selectedGroup={props.selectedGroup}
+            perf={perfMap.get(model.model_name || '')}
+            onClick={() => props.onModelClick(model.model_name || '')}
+          />
+        ))}
       </div>
 
       {totalPages > 1 && (

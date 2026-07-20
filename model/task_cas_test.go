@@ -58,13 +58,13 @@ func TestMain(m *testing.M) {
 	var err error
 
 	if strings.HasPrefix(sqlDSN, "postgres://") || strings.HasPrefix(sqlDSN, "postgresql://") {
-		common.UsingPostgreSQL = true
+		common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
 		db, err = gorm.Open(postgres.New(postgres.Config{
 			DSN:                  sqlDSN,
 			PreferSimpleProtocol: true,
 		}), &gorm.Config{})
 	} else {
-		common.UsingMySQL = true
+		common.SetMainDatabaseType(common.DatabaseTypeMySQL)
 		if !strings.Contains(sqlDSN, "parseTime") {
 			if strings.Contains(sqlDSN, "?") {
 				sqlDSN += "&parseTime=true"
@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 	logDSN := os.Getenv("LOG_SQL_DSN")
 	if logDSN != "" {
 		if strings.HasPrefix(logDSN, "postgres://") || strings.HasPrefix(logDSN, "postgresql://") {
-			common.LogSqlType = common.DatabaseTypePostgreSQL
+			common.SetLogDatabaseType(common.DatabaseTypePostgreSQL)
 			logDB, logErr := gorm.Open(postgres.New(postgres.Config{
 				DSN:                  logDSN,
 				PreferSimpleProtocol: true,
@@ -93,7 +93,7 @@ func TestMain(m *testing.M) {
 			}
 			LOG_DB = logDB
 		} else {
-			common.LogSqlType = common.DatabaseTypeMySQL
+			common.SetLogDatabaseType(common.DatabaseTypeMySQL)
 			logDB, logErr := gorm.Open(mysql.Open(logDSN), &gorm.Config{})
 			if logErr != nil {
 				panic("failed to open log db: " + logErr.Error())
@@ -113,6 +113,11 @@ func TestMain(m *testing.M) {
 		&PasskeyCredential{},
 		&Option{},
 		&Redemption{},
+		&Task{},
+		&TwoFA{},
+		&TwoFABackupCode{},
+		&Log{},
+		&QuotaData{},
 		&Ability{},
 		&Log{},
 		&Midjourney{},
@@ -141,7 +146,7 @@ func TestMain(m *testing.M) {
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&EmployeeCustomerCommissionDailyStat{},
-		&EmployeeCommissionResetPeriodStat{},
+		&EmployeeCommissionResetPeriodDailyStat{},
 		&BusinessStatsAppliedBatch{},
 		&BusinessDailyStatsCoverage{},
 		&CustomerProfile{},
@@ -149,6 +154,9 @@ func TestMain(m *testing.M) {
 		&EmployeeCommissionTier{},
 		&EmployeeTierLevel{},
 		&EmployeeTierLog{},
+		&SystemInstance{},
+		&SystemTask{},
+		&SystemTaskLock{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -168,16 +176,24 @@ func truncateTables(t *testing.T) {
 			return
 		}
 		DB.Exec("DELETE FROM tasks")
-		DB.Exec("DELETE FROM users")
+		DB.Exec("DELETE FROM passkey_credentials")
+		DB.Exec("DELETE FROM two_fa_backup_codes")
+		DB.Exec("DELETE FROM two_fas")
 		DB.Exec("DELETE FROM tokens")
+		DB.Exec("DELETE FROM user_oauth_bindings")
+		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM logs")
 		DB.Exec("DELETE FROM channels")
+		DB.Exec("DELETE FROM quota_data")
 		DB.Exec("DELETE FROM abilities")
 		DB.Exec("DELETE FROM top_ups")
 		DB.Exec("DELETE FROM subscription_orders")
 		DB.Exec("DELETE FROM subscription_plans")
 		DB.Exec("DELETE FROM user_subscriptions")
 		DB.Exec("DELETE FROM perf_metrics")
+		DB.Exec("DELETE FROM system_instances")
+		DB.Exec("DELETE FROM system_task_locks")
+		DB.Exec("DELETE FROM system_tasks")
 	})
 }
 

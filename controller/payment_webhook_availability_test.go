@@ -21,7 +21,15 @@ func confirmPaymentComplianceForTest(t *testing.T) {
 	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
 }
 
-func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
+// isStripeWebhookEnabled is intentionally decoupled from the top-up display /
+// compliance / API-key config: it depends only on the Stripe webhook signing
+// secret. An already-created and paid Checkout Session must still be credited on
+// callback; binding the callback entry to runtime-mutable config would let an
+// admin config change 403-reject in-flight orders ("user paid but not credited").
+// The real security boundary is the downstream Stripe signature verification
+// (which needs StripeWebhookSecret). See isStripeWebhookEnabled in
+// payment_webhook_availability.go.
+func TestStripeWebhookEnabledRequiresOnlyWebhookSecret(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	originalAPISecret := setting.StripeApiSecret
 	originalWebhookSecret := setting.StripeWebhookSecret
@@ -32,16 +40,20 @@ func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 		setting.StripePriceId = originalPriceID
 	})
 
+	// No webhook secret → webhook disabled, even when top-up config is present.
 	setting.StripeWebhookSecret = ""
 	setting.StripeApiSecret = "sk_test_123"
 	setting.StripePriceId = "price_123"
 	require.False(t, isStripeWebhookEnabled())
 
+	// Webhook secret present → enabled.
 	setting.StripeWebhookSecret = "whsec_test"
 	require.True(t, isStripeWebhookEnabled())
 
+	// Removing top-up config must NOT disable the webhook: in-flight paid
+	// Checkout Sessions still need to be credited on callback.
 	setting.StripePriceId = ""
-	require.False(t, isStripeWebhookEnabled())
+	require.True(t, isStripeWebhookEnabled())
 }
 
 func TestCreemWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {

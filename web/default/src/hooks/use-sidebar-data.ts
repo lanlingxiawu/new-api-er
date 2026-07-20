@@ -30,9 +30,8 @@ import {
   ListTodo,
   MessageSquare,
   Radio,
-  // xiugai 添加号池节点功能
   Server,
-  // end
+  ServerCog,
   Settings,
   Ticket,
   User,
@@ -42,11 +41,10 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+
 import { useAuthStore } from '@/stores/auth-store'
 import { type SidebarData } from '@/components/layout/types'
-// xiugai 添加号池节点功能 - 修复侧边栏权限
 import { ROLE } from '@/lib/roles'
-// end
 
 /**
  * Root navigation groups for the application sidebar.
@@ -165,18 +163,16 @@ export function useSidebarData(): SidebarData {
             icon: Ticket,
           },
           {
-            title: t('Subscription Management'),
+            title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
           },
-          // xiugai 添加号池节点功能 - 修复侧边栏权限，仅超级管理员可见
           {
             title: t('Node Pool'),
             url: '/node-pool',
             icon: Server,
-            minRole: ROLE.SUPER_ADMIN,
+            requiredRole: ROLE.SUPER_ADMIN,
           },
-          // end
           {
             title: t('Employee Management'),
             url: '/employees',
@@ -192,7 +188,13 @@ export function useSidebarData(): SidebarData {
             title: t('Request Logs'),
             url: '/request-logs',
             icon: FileSearch,
-            minRole: ROLE.SUPER_ADMIN,
+            requiredRole: ROLE.SUPER_ADMIN,
+          },
+          {
+            title: t('System Info'),
+            url: '/system-info',
+            icon: ServerCog,
+            requiredRole: ROLE.SUPER_ADMIN,
           },
           {
             title: t('System Settings'),

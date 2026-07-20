@@ -121,12 +121,27 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export const USAGE_BILLING_PATH = {
+  LOCAL: 'local',
+  UPSTREAM: 'upstream',
+  OPENAI: 'billing-usage-openai',
+  OPENAI_ESTIMATED: 'billing-usage-openai-estimated',
+  ANTHROPIC: 'billing-usage-anthropic',
+  ANTHROPIC_ESTIMATED: 'billing-usage-anthropic-estimated',
+  GEMINI: 'billing-usage-gemini',
+  GEMINI_ESTIMATED: 'billing-usage-gemini-estimated',
+} as const
+
+export type UsageBillingPath =
+  (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
     local_count_tokens?: boolean
+    usage_billing_path?: UsageBillingPath | string
     channel_affinity?: ChannelAffinityInfo
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
@@ -135,7 +150,7 @@ export interface LogOtherData {
     server_ip?: string
     version?: string
     node_name?: string
-    // Manage audit fields (type=3, admin only)
+    // Operator identity for audit logs (type=3, admin only)
     admin_username?: string
     admin_id?: number | string
     admin_role?: number
@@ -150,6 +165,24 @@ export interface LogOtherData {
       clamped: number
     }
   }
+  // Language-independent operation descriptor (audit/login logs).
+  // Frontend renders localized content from action + params via i18n templates.
+  op?: {
+    action?: string
+    params?: Record<string, string | number | boolean | string[]>
+  }
+  // Operation audit details written by the admin-audit fallback in authHelper (type=3, admin only)
+  audit_info?: {
+    method?: string
+    route?: string
+    path?: string
+    status?: number
+    success?: boolean
+    params?: Record<string, string>
+  }
+  // Login audit fields (type=7); visible to the log owner
+  login_method?: string
+  user_agent?: string
   request_path?: string
   request_conversion?: string[]
   ws?: boolean
@@ -241,7 +274,7 @@ export interface LogStatistics {
 }
 
 // ============================================================================
-// Drawing Logs (Midjourney) Types
+// Drawing Logs (MjProxy) Types
 // ============================================================================
 
 export interface MidjourneyLog {

@@ -34,11 +34,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { PageFooterPortal } from '@/components/layout'
-import { MobileCardList } from './mobile-card-list'
-import { DataTablePagination } from './pagination'
-import { TableEmpty } from './table-empty'
-import { TableSkeleton } from './table-skeleton'
-import { DataTableToolbar } from './toolbar'
+import { MobileCardList } from './layout/mobile-card-list'
+import { DataTablePagination } from './core/pagination'
+import { TableEmpty } from './core/table-empty'
+import { TableSkeleton } from './core/table-skeleton'
+import { DataTableToolbar } from './toolbar/toolbar'
 
 /**
  * Pass-through configuration for the default {@link DataTableToolbar}.
