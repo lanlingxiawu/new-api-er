@@ -28,8 +28,14 @@ func ModelRequestRateLimitGroup2JSONString() string {
 }
 
 func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
+	// D7 fix: this reassigns and populates the shared map, so it MUST take the
+	// WRITE lock. The previous RLock let this write run concurrently with relay
+	// readers (GetGroupRateLimit) holding RLock too — a concurrent map read+write
+	// that triggers Go's unrecoverable `fatal error: concurrent map read and map
+	// write` on the hot path. Fires on admin edits AND the periodic option sync.
+	// Matches the correct sibling UpdateUserUsableGroupsByJSONString (Lock()).
+	ModelRequestRateLimitMutex.Lock()
+	defer ModelRequestRateLimitMutex.Unlock()
 
 	ModelRequestRateLimitGroup = make(map[string][2]int)
 	return json.Unmarshal([]byte(jsonStr), &ModelRequestRateLimitGroup)

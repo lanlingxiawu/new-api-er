@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -12,6 +14,55 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+// requestLogInflight bounds the number of concurrent async request-log writes.
+//
+// Main-chain impact (Rule 0): this middleware runs on every relay request. Each
+// async write pins full request+response body snapshots (up to
+// 2*RequestLogMaxBodyKB) in memory until it finishes. The RequestLogRDB writes
+// (recordRequestLogRedis: Incr + 3 pipelined ops) block on that client's
+// connection pool (dedicated db1, pool size REDIS_POOL_SIZE, default 10). The
+// previous unbounded `gopool.Go` per request therefore let goroutines + heap
+// explode (measured: 171k goroutines / 1.5 GB @ c=500) once the pool saturated.
+//
+// Request logging is best-effort OBSERVABILITY (not billing/authoritative), so
+// under overload we DROP rather than grow without bound — graceful degradation
+// (Rule 8). The dispatch below is O(1) and never blocks the relay goroutine.
+// Cap is REQUEST_LOG_MAX_INFLIGHT (default 1000 => memory bounded to
+// ~cap*2*RequestLogMaxBodyKB).
+var (
+	requestLogInflight = make(chan struct{}, requestLogMaxInflight())
+	requestLogDropped  atomic.Int64
+)
+
+func requestLogMaxInflight() int {
+	n := common.GetEnvOrDefault("REQUEST_LOG_MAX_INFLIGHT", 1000)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// enqueueRequestLog fires the async request-log write with a bounded in-flight
+// cap. When the cap is reached it DROPS the entry (fire-and-forget) instead of
+// blocking the relay goroutine or spawning an unbounded goroutine, keeping
+// goroutine count and heap bounded under load.
+func enqueueRequestLog(entry *model.RequestLog) {
+	select {
+	case requestLogInflight <- struct{}{}:
+		gopool.Go(func() {
+			defer func() { <-requestLogInflight }()
+			model.RecordRequestLog(entry)
+		})
+	default:
+		// In-flight cap reached: drop this log (best-effort observability).
+		if dropped := requestLogDropped.Add(1); dropped == 1 || dropped%1000 == 0 {
+			common.SysError(fmt.Sprintf(
+				"request log dropped under overload: in-flight cap %d reached, total dropped=%d",
+				cap(requestLogInflight), dropped))
+		}
+	}
+}
 
 // responseBodyWriter 包装 gin.ResponseWriter，在透传响应的同时把返回体缓存到内存（受 limit 限制）。
 type responseBodyWriter struct {
@@ -107,9 +158,7 @@ func RequestResponseLogger() gin.HandlerFunc {
 			ResponseBody:     appendTruncatedMark(captureResponseBody(c, rbw), rbw.truncated),
 		}
 
-		gopool.Go(func() {
-			model.RecordRequestLog(entry)
-		})
+		enqueueRequestLog(entry)
 	}
 }
 
