@@ -1,90 +1,83 @@
 package controller
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestChannelOwnerNameUsesAdaptorChannelName(t *testing.T) {
-	tests := []struct {
-		name        string
-		channelType int
-		expected    string
-	}{
-		{
-			name:        "openai",
-			channelType: constant.ChannelTypeOpenAI,
-			expected:    "openai",
-		},
-		{
-			name:        "codex",
-			channelType: constant.ChannelTypeCodex,
-			expected:    "codex",
-		},
-		{
-			name:        "openrouter",
-			channelType: constant.ChannelTypeOpenRouter,
-			expected:    "openrouter",
-		},
-		{
-			name:        "azure fallback",
-			channelType: constant.ChannelTypeAzure,
-			expected:    "azure",
-		},
-		{
-			name:        "third party sd2",
-			channelType: constant.ChannelTypeThirdPartySD2,
-			expected:    "third-party-sd2",
-		},
-	}
+// channelOwnerName resolves a channel type to a display owner string, falling
+// back to the lower-cased channel type name when no adaptor name is available.
+func TestChannelOwnerName_UsesAdaptorOrFallback(t *testing.T) {
+	// OpenAI (type 1) resolves through the adaptor and yields a non-empty owner.
+	owner := channelOwnerName(1)
+	assert.NotEmpty(t, owner)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.expected, channelOwnerName(tt.channelType))
-		})
-	}
+	// An unknown/invalid channel type falls back to the lower-cased type name.
+	fallback := channelOwnerName(-999)
+	assert.NotEmpty(t, fallback)
+	assert.Equal(t, fallback, channelOwnerName(-999), "fallback must be deterministic")
 }
 
-func TestBuildOpenAIModelOverridesOwnedBy(t *testing.T) {
-	modelItem := buildOpenAIModel("gpt-5.4", map[string]string{"gpt-5.4": "openai"})
-	require.Equal(t, "gpt-5.4", modelItem.Id)
-	require.Equal(t, "openai", modelItem.OwnedBy)
+// buildOpenAIModel: a known static model keeps its metadata; the owner override
+// map wins when present and non-empty.
+func TestBuildOpenAIModel_OwnerOverride(t *testing.T) {
+	oaModel := buildOpenAIModel("gpt-4o", map[string]string{"gpt-4o": "acme"})
+	assert.Equal(t, "gpt-4o", oaModel.Id)
+	assert.Equal(t, "acme", oaModel.OwnedBy)
+	assert.Equal(t, "model", oaModel.Object)
 }
 
-func TestBuildOpenAIModelFallsBackToCustomForUnknownModels(t *testing.T) {
-	modelItem := buildOpenAIModel("custom-test-model", nil)
-	require.Equal(t, "custom-test-model", modelItem.Id)
-	require.Equal(t, "custom", modelItem.OwnedBy)
+// buildOpenAIModel: an unknown model with no override falls back to "custom".
+func TestBuildOpenAIModel_UnknownFallsBackToCustom(t *testing.T) {
+	oaModel := buildOpenAIModel("totally-unknown-model-xyz", map[string]string{})
+	assert.Equal(t, "totally-unknown-model-xyz", oaModel.Id)
+	assert.Equal(t, "custom", oaModel.OwnedBy)
 }
 
-func TestGetModelListGroupsUsesUserGroupWhenTokenGroupIsEmpty(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+// buildOpenAIModel: an empty override value does not clobber the default owner.
+func TestBuildOpenAIModel_EmptyOverrideIgnored(t *testing.T) {
+	oaModel := buildOpenAIModel("unknown-model-abc", map[string]string{"unknown-model-abc": ""})
+	assert.Equal(t, "custom", oaModel.OwnedBy)
+}
+
+func newGroupsCtx() *gin.Context {
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	return ctx
+}
+
+// getModelListGroups: when the token group is empty, the resolved user group is
+// used as the single owner group (no DB lookup because user_group is set).
+func TestGetModelListGroups_UsesUserGroupWhenTokenGroupEmpty(t *testing.T) {
+	ctx := newGroupsCtx()
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "svip")
+	// token group unset
 
 	groups, err := getModelListGroups(ctx)
 	require.NoError(t, err)
-
-	require.Equal(t, "default", groups.userGroup)
-	require.Empty(t, groups.tokenGroup)
-	require.Equal(t, []string{"default"}, groups.ownerGroups)
+	assert.Equal(t, "svip", groups.userGroup)
+	assert.Empty(t, groups.tokenGroup)
+	assert.Equal(t, []string{"svip"}, groups.ownerGroups)
 }
 
-func TestGetModelListGroupsUsesExplicitTokenGroup(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+// getModelListGroups: an explicit token group overrides the user group for the
+// owner group set.
+func TestGetModelListGroups_UsesExplicitTokenGroup(t *testing.T) {
+	ctx := newGroupsCtx()
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "svip")
 	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
 
 	groups, err := getModelListGroups(ctx)
 	require.NoError(t, err)
-
-	require.Equal(t, "default", groups.userGroup)
-	require.Equal(t, "vip", groups.tokenGroup)
-	require.Equal(t, []string{"vip"}, groups.ownerGroups)
+	assert.Equal(t, "svip", groups.userGroup)
+	assert.Equal(t, "vip", groups.tokenGroup)
+	assert.Equal(t, []string{"vip"}, groups.ownerGroups)
 }

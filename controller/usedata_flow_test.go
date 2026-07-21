@@ -2,134 +2,140 @@ package controller
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type flowQuotaResponse struct {
+// parseFlowQuotaTimeRange: boundary/equivalence over start/end validity.
+func TestParseFlowQuotaTimeRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		query   string
+		wantOK  bool
+		wantMsg string
+	}{
+		{"valid", "start_timestamp=1000&end_timestamp=2000", true, ""},
+		{"bad start", "start_timestamp=x&end_timestamp=2000", false, "invalid start_timestamp"},
+		{"zero start", "start_timestamp=0&end_timestamp=2000", false, "invalid start_timestamp"},
+		{"bad end", "start_timestamp=1000&end_timestamp=x", false, "invalid end_timestamp"},
+		{"end before start", "start_timestamp=2000&end_timestamp=1000", false, "invalid time range"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow?"+tc.query, nil)
+			start, end, ok := parseFlowQuotaTimeRange(ctx)
+			assert.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.EqualValues(t, 1000, start)
+				assert.EqualValues(t, 2000, end)
+			} else {
+				resp := decodeResp(t, rec)
+				assert.False(t, resp.Success)
+				assert.Equal(t, tc.wantMsg, resp.Message)
+			}
+		})
+	}
+}
+
+// GetUserFlowQuotaDates: invalid start_timestamp short-circuits before any DB.
+func TestGetUserFlowQuotaDates_InvalidTimeRange(t *testing.T) {
+	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow/self?start_timestamp=bad&end_timestamp=2000", nil)
+	asUser(ctx, 1)
+	GetUserFlowQuotaDates(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "invalid start_timestamp", resp.Message)
+}
+
+// GetUserFlowQuotaDates: span > 31 days is rejected.
+func TestGetUserFlowQuotaDates_SpanTooLong(t *testing.T) {
+	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow/self?start_timestamp=1&end_timestamp=2592002", nil)
+	asUser(ctx, 1)
+	GetUserFlowQuotaDates(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+type flowData struct {
 	Success bool                  `json:"success"`
 	Message string                `json:"message"`
 	Data    []model.FlowQuotaData `json:"data"`
 }
 
-func setupFlowControllerTestDB(t *testing.T) {
-	t.Helper()
-	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.QuotaData{}))
-	require.NoError(t, model.DB.Create(&model.Channel{Id: 1, Name: "east"}).Error)
-	require.NoError(t, model.DB.Create(&model.Token{Id: 11, UserId: 1, Key: "sk-primary", Name: "primary"}).Error)
-	require.NoError(t, model.DB.Create(&model.Token{Id: 22, UserId: 2, Key: "sk-backup", Name: "backup"}).Error)
-	require.NoError(t, model.DB.Create(&model.QuotaData{
-		UserID:    1,
-		Username:  "alice",
-		NodeName:  "node-a",
-		TokenID:   11,
+// GetUserFlowQuotaDates: self view is scoped to the caller and resolves the
+// token name + use group (DB-backed).
+func TestGetUserFlowQuotaDates_SelfScopedWithTokenName(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.Name = "primary-tok" })
+	seedQuotaData(t, &model.QuotaData{
+		UserID:    u.Id,
+		Username:  u.Username,
+		TokenID:   tk.Id,
 		UseGroup:  "default",
-		ChannelID: 1,
-		ModelName: "gpt-a",
-		CreatedAt: 1100,
+		ModelName: "gpt-flow",
+		CreatedAt: 1500,
 		Count:     2,
 		Quota:     100,
 		TokenUsed: 40,
-	}).Error)
-	require.NoError(t, model.DB.Create(&model.QuotaData{
-		UserID:    2,
-		Username:  "bob",
-		NodeName:  "node-b",
-		TokenID:   22,
+	})
+
+	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow/self?start_timestamp=1000&end_timestamp=2000", nil)
+	asUser(ctx, u.Id)
+	GetUserFlowQuotaDates(ctx)
+
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var out flowData
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
+	require.Len(t, out.Data, 1)
+	assert.Equal(t, "primary-tok", out.Data[0].TokenName)
+	assert.Equal(t, "default", out.Data[0].UseGroup)
+	assert.Empty(t, out.Data[0].Username, "self view must not expose username")
+	assert.Empty(t, out.Data[0].ChannelName, "self view has no channel dimension")
+}
+
+// GetAllFlowQuotaDates: admin view is scoped by username and resolves channel
+// name (DB-backed).
+func TestGetAllFlowQuotaDates_AdminScopedWithChannelName(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	ch := mkChannel(t, func(ch *model.Channel) { ch.Name = "east-1" })
+	seedQuotaData(t, &model.QuotaData{
+		UserID:    u.Id,
+		Username:  u.Username,
+		ChannelID: ch.Id,
 		UseGroup:  "vip",
-		ChannelID: 1,
-		ModelName: "gpt-b",
-		CreatedAt: 1200,
+		ModelName: "gpt-flow",
+		CreatedAt: 1500,
 		Count:     1,
 		Quota:     70,
 		TokenUsed: 30,
-	}).Error)
+	})
+
+	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username="+u.Username, nil)
+	asAdmin(ctx, 1)
+	GetAllFlowQuotaDates(ctx)
+
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var out flowData
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
+	require.Len(t, out.Data, 1)
+	assert.Equal(t, u.Username, out.Data[0].Username)
+	assert.Equal(t, "vip", out.Data[0].UseGroup)
+	assert.Equal(t, "east-1", out.Data[0].ChannelName)
+	assert.Empty(t, out.Data[0].NodeName, "admin view has no node dimension")
 }
 
-func decodeFlowQuotaResponse(t *testing.T, recorder *httptest.ResponseRecorder) flowQuotaResponse {
+func seedQuotaData(t *testing.T, q *model.QuotaData) {
 	t.Helper()
-	require.Equal(t, http.StatusOK, recorder.Code)
-	var payload flowQuotaResponse
-	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
-	require.True(t, payload.Success, payload.Message)
-	return payload
-}
-
-func TestGetAllFlowQuotaDatesUsesAdminDimensions(t *testing.T) {
-	setupFlowControllerTestDB(t)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("role", common.RoleAdminUser)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=bob", nil)
-
-	GetAllFlowQuotaDates(ctx)
-
-	payload := decodeFlowQuotaResponse(t, recorder)
-	require.Len(t, payload.Data, 1)
-	require.Equal(t, "bob", payload.Data[0].Username)
-	require.Equal(t, "vip", payload.Data[0].UseGroup)
-	require.Equal(t, "east", payload.Data[0].ChannelName)
-	require.Empty(t, payload.Data[0].TokenName)
-	require.Empty(t, payload.Data[0].NodeName)
-}
-
-func TestGetAllFlowQuotaDatesUsesRootDimensions(t *testing.T) {
-	setupFlowControllerTestDB(t)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("role", common.RoleRootUser)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=alice", nil)
-
-	GetAllFlowQuotaDates(ctx)
-
-	payload := decodeFlowQuotaResponse(t, recorder)
-	require.Len(t, payload.Data, 1)
-	require.Equal(t, "alice", payload.Data[0].Username)
-	require.Equal(t, "node-a", payload.Data[0].NodeName)
-	require.Equal(t, "primary", payload.Data[0].TokenName)
-	require.Equal(t, "default", payload.Data[0].UseGroup)
-	require.Equal(t, "east", payload.Data[0].ChannelName)
-}
-
-func TestGetUserFlowQuotaDatesRestrictsToAuthenticatedUser(t *testing.T) {
-	setupFlowControllerTestDB(t)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("id", 1)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=1000&end_timestamp=2000", nil)
-
-	GetUserFlowQuotaDates(ctx)
-
-	payload := decodeFlowQuotaResponse(t, recorder)
-	require.Len(t, payload.Data, 1)
-	require.Empty(t, payload.Data[0].Username)
-	require.Equal(t, "primary", payload.Data[0].TokenName)
-	require.Equal(t, "default", payload.Data[0].UseGroup)
-	require.Empty(t, payload.Data[0].ChannelName)
-}
-
-func TestGetUserFlowQuotaDatesRejectsInvalidTimeRange(t *testing.T) {
-	setupFlowControllerTestDB(t)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Set("id", 1)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=bad&end_timestamp=2000", nil)
-
-	GetUserFlowQuotaDates(ctx)
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	var payload flowQuotaResponse
-	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
-	require.False(t, payload.Success)
-	require.Equal(t, "invalid start_timestamp", payload.Message)
+	requireDB(t)
+	q.Id = nextTestID()
+	require.NoError(t, model.DB.Create(q).Error)
+	deleteByID(t, &model.QuotaData{}, q.Id)
 }

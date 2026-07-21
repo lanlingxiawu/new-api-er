@@ -7,32 +7,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-	"gorm.io/gorm/utils/tests"
 )
 
-// lockForUpdate must emit FOR UPDATE on databases that support it and skip
-// it on SQLite, where the syntax does not exist.
-//
-// The dummy dialector is used because SQLite drivers strip locking clauses
-// from the generated SQL, which would mask what the helper itself does.
-func TestLockForUpdateEmitsRowLock(t *testing.T) {
-	dummyDB, err := gorm.Open(tests.DummyDialector{}, &gorm.Config{DryRun: true})
-	require.NoError(t, err)
-	buildSQL := func() string {
-		var rows []Redemption
-		return lockForUpdate(dummyDB).Where("id = ?", 1).Find(&rows).Statement.SQL.String()
-	}
+// lockForUpdate must attach a `FOR UPDATE` clause on non-SQLite dialects and
+// leave the query untouched on SQLite (which has no such syntax). We branch on
+// common.MainDatabaseType() only, so we can exercise both branches by
+// temporarily flipping the configured type (restored after) while inspecting
+// the generated SQL via DryRun.
 
-	t.Cleanup(func() {
-		common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+func lockForUpdateSQL(t *testing.T) string {
+	t.Helper()
+	requireDB(t)
+	return DB.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		tx = tx.Model(&PerfMetric{}).Where("id = ?", 1)
+		tx = lockForUpdate(tx)
+		return tx.Find(&[]PerfMetric{})
 	})
+}
 
-	common.SetDatabaseTypes(common.DatabaseTypeMySQL, common.DatabaseTypeSQLite)
-	assert.Contains(t, buildSQL(), "FOR UPDATE")
+func withMainDBType(t *testing.T, dbType common.DatabaseType) {
+	t.Helper()
+	prev := common.MainDatabaseType()
+	common.SetMainDatabaseType(dbType)
+	t.Cleanup(func() { common.SetMainDatabaseType(prev) })
+}
 
-	common.SetDatabaseTypes(common.DatabaseTypePostgreSQL, common.DatabaseTypeSQLite)
-	assert.Contains(t, buildSQL(), "FOR UPDATE")
+func TestLockForUpdate_SQLiteSkips(t *testing.T) {
+	requireDB(t)
+	withMainDBType(t, common.DatabaseTypeSQLite)
+	sql := lockForUpdateSQL(t)
+	assert.NotContains(t, sql, "FOR UPDATE")
+}
 
-	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	assert.NotContains(t, buildSQL(), "FOR UPDATE")
+func TestLockForUpdate_MySQLLocks(t *testing.T) {
+	requireDB(t)
+	withMainDBType(t, common.DatabaseTypeMySQL)
+	sql := lockForUpdateSQL(t)
+	assert.Contains(t, sql, "FOR UPDATE")
+}
+
+func TestLockForUpdate_PostgresLocks(t *testing.T) {
+	requireDB(t)
+	withMainDBType(t, common.DatabaseTypePostgreSQL)
+	sql := lockForUpdateSQL(t)
+	assert.Contains(t, sql, "FOR UPDATE")
+}
+
+// The SQLite branch returns the exact same *gorm.DB pointer it was given.
+func TestLockForUpdate_SQLiteReturnsSameTx(t *testing.T) {
+	requireDB(t)
+	withMainDBType(t, common.DatabaseTypeSQLite)
+	tx := DB.Session(&gorm.Session{DryRun: true}).Model(&PerfMetric{})
+	got := lockForUpdate(tx)
+	require.Same(t, tx, got)
 }

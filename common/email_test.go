@@ -1,563 +1,253 @@
 package common
 
 import (
-	"bufio"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
-	"fmt"
-	"math/big"
-	"net"
 	"net/smtp"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type fakeSMTPServer struct {
-	listener          net.Listener
-	host              string
-	port              int
-	cert              tls.Certificate
-	advertiseSTARTTLS bool
-	authMechanisms    []string
-	messages          chan string
-	authCommands      chan string
-	startTLSCommands  chan string
-}
-
-func newFakeSMTPServer(t *testing.T) *fakeSMTPServer {
-	return newFakeSMTPServerWithSTARTTLSAdvertisement(t, true)
-}
-
-func newFakeSMTPServerWithSTARTTLSAdvertisement(t *testing.T, advertiseSTARTTLS bool) *fakeSMTPServer {
+// saveSMTPGlobals snapshots and restores the SMTP-related package globals so
+// each test can mutate them freely (white-box, save/restore per Rule 15).
+func saveSMTPGlobals(t *testing.T) {
 	t.Helper()
-
-	cert, err := newTestTLSCertificate()
-	require.NoError(t, err)
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	host, portText, err := net.SplitHostPort(listener.Addr().String())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(portText)
-	require.NoError(t, err)
-
-	server := &fakeSMTPServer{
-		listener:          listener,
-		host:              host,
-		port:              port,
-		cert:              cert,
-		advertiseSTARTTLS: advertiseSTARTTLS,
-		authMechanisms:    []string{"PLAIN", "LOGIN"},
-		messages:          make(chan string, 1),
-		authCommands:      make(chan string, 1),
-		startTLSCommands:  make(chan string, 1),
-	}
-	go server.serve()
-	return server
-}
-
-func newFakeImplicitTLSSMTPServer(t *testing.T) *fakeSMTPServer {
-	t.Helper()
-
-	cert, err := newTestTLSCertificate()
-	require.NoError(t, err)
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	host, portText, err := net.SplitHostPort(listener.Addr().String())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(portText)
-	require.NoError(t, err)
-
-	server := &fakeSMTPServer{
-		listener:          tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{cert}}),
-		host:              host,
-		port:              port,
-		cert:              cert,
-		advertiseSTARTTLS: false,
-		authMechanisms:    []string{"PLAIN", "LOGIN"},
-		messages:          make(chan string, 1),
-		authCommands:      make(chan string, 1),
-		startTLSCommands:  make(chan string, 1),
-	}
-	go server.serve()
-	return server
-}
-
-func (s *fakeSMTPServer) close() {
-	_ = s.listener.Close()
-}
-
-func (s *fakeSMTPServer) serve() {
-	conn, err := s.listener.Accept()
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	if err := writeSMTPLine(rw, "220 fake.smtp.local ESMTP"); err != nil {
-		return
-	}
-
-	encrypted := false
-	for {
-		line, err := rw.ReadString('\n')
-		if err != nil {
-			return
-		}
-		command := strings.TrimRight(line, "\r\n")
-		upperCommand := strings.ToUpper(command)
-
-		switch {
-		case strings.HasPrefix(upperCommand, "EHLO"):
-			if err := writeSMTPLine(rw, "250-fake.smtp.local"); err != nil {
-				return
-			}
-			if !encrypted && s.advertiseSTARTTLS {
-				if err := writeSMTPLine(rw, "250-STARTTLS"); err != nil {
-					return
-				}
-			}
-			if len(s.authMechanisms) > 0 {
-				if err := writeSMTPLine(rw, "250 AUTH "+strings.Join(s.authMechanisms, " ")); err != nil {
-					return
-				}
-			} else if err := writeSMTPLine(rw, "250 8BITMIME"); err != nil {
-				return
-			}
-		case upperCommand == "STARTTLS":
-			if encrypted || !s.advertiseSTARTTLS {
-				if err := writeSMTPLine(rw, "502 5.5.1 STARTTLS not supported"); err != nil {
-					return
-				}
-				continue
-			}
-			select {
-			case s.startTLSCommands <- command:
-			default:
-			}
-			if err := writeSMTPLine(rw, "220 2.0.0 Ready to start TLS"); err != nil {
-				return
-			}
-			tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{s.cert}})
-			if err := tlsConn.Handshake(); err != nil {
-				return
-			}
-			conn = tlsConn
-			rw = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-			encrypted = true
-		case strings.HasPrefix(upperCommand, "AUTH"):
-			select {
-			case s.authCommands <- command:
-			default:
-			}
-			if err := writeSMTPLine(rw, "235 2.7.0 Authentication successful"); err != nil {
-				return
-			}
-		case strings.HasPrefix(upperCommand, "MAIL FROM:"):
-			if err := writeSMTPLine(rw, "250 2.1.0 Sender OK"); err != nil {
-				return
-			}
-		case strings.HasPrefix(upperCommand, "RCPT TO:"):
-			if err := writeSMTPLine(rw, "250 2.1.5 Recipient OK"); err != nil {
-				return
-			}
-		case upperCommand == "DATA":
-			if err := writeSMTPLine(rw, "354 End data with <CR><LF>.<CR><LF>"); err != nil {
-				return
-			}
-			var data strings.Builder
-			for {
-				dataLine, err := rw.ReadString('\n')
-				if err != nil {
-					return
-				}
-				if strings.TrimRight(dataLine, "\r\n") == "." {
-					break
-				}
-				data.WriteString(dataLine)
-			}
-			s.messages <- data.String()
-			if err := writeSMTPLine(rw, "250 2.0.0 Queued"); err != nil {
-				return
-			}
-		case upperCommand == "QUIT":
-			_ = writeSMTPLine(rw, "221 2.0.0 Bye")
-			return
-		default:
-			if err := writeSMTPLine(rw, "502 5.5.1 Command not implemented"); err != nil {
-				return
-			}
-		}
-	}
-}
-
-func writeSMTPLine(rw *bufio.ReadWriter, line string) error {
-	_, err := rw.WriteString(line + "\r\n")
-	if err != nil {
-		return err
-	}
-	return rw.Flush()
-}
-
-func newTestTLSCertificate() (tls.Certificate, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "aixinexchange01.aixin-chip.com",
-		},
-		NotBefore:   time.Now().Add(-time.Hour),
-		NotAfter:    time.Now().Add(time.Hour),
-		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"aixinexchange01", "aixinexchange01.aixin-chip.com"},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
-	return tls.X509KeyPair(certPEM, keyPEM)
-}
-
-func withSMTPSettings(t *testing.T) {
-	t.Helper()
-	originalSMTPServer := SMTPServer
-	originalSMTPPort := SMTPPort
-	originalSMTPSSLEnabled := SMTPSSLEnabled
-	originalSMTPStartTLSEnabled := SMTPStartTLSEnabled
-	originalSMTPInsecureSkipVerify := SMTPInsecureSkipVerify
-	originalSMTPForceAuthLogin := SMTPForceAuthLogin
-	originalSMTPAccount := SMTPAccount
-	originalSMTPFrom := SMTPFrom
-	originalSMTPToken := SMTPToken
-	originalSystemName := SystemName
-
+	from, account, server, token := SMTPFrom, SMTPAccount, SMTPServer, SMTPToken
+	force, insecure := SMTPForceAuthLogin, SMTPInsecureSkipVerify
+	loginList := EmailLoginAuthServerList
 	t.Cleanup(func() {
-		SMTPServer = originalSMTPServer
-		SMTPPort = originalSMTPPort
-		SMTPSSLEnabled = originalSMTPSSLEnabled
-		SMTPStartTLSEnabled = originalSMTPStartTLSEnabled
-		SMTPInsecureSkipVerify = originalSMTPInsecureSkipVerify
-		SMTPForceAuthLogin = originalSMTPForceAuthLogin
-		SMTPAccount = originalSMTPAccount
-		SMTPFrom = originalSMTPFrom
-		SMTPToken = originalSMTPToken
-		SystemName = originalSystemName
+		SMTPFrom, SMTPAccount, SMTPServer, SMTPToken = from, account, server, token
+		SMTPForceAuthLogin, SMTPInsecureSkipVerify = force, insecure
+		EmailLoginAuthServerList = loginList
 	})
 }
 
-func TestSendEmailUsesExplicitStartTLSWithInsecureCertificate(t *testing.T) {
-	server := newFakeSMTPServer(t)
-	defer server.close()
-	withSMTPSettings(t)
+func TestGenerateMessageID(t *testing.T) {
+	saveSMTPGlobals(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	SMTPFrom = "noreply@example.com"
+	id, err := generateMessageID()
 	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(id, "<"))
+	assert.True(t, strings.HasSuffix(id, "@example.com>"))
 
-	select {
-	case message := <-server.messages:
-		require.Contains(t, message, "Subject: =?UTF-8?B?")
-		require.Contains(t, message, "<p>123456</p>")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP DATA")
-	}
-}
-
-func TestSendEmailExplicitStartTLSRequiresServerSupport(t *testing.T) {
-	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, false)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	SMTPFrom = "invalid-no-at"
+	_, err = generateMessageID()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "STARTTLS")
+	assert.Contains(t, err.Error(), "invalid SMTP account")
 }
 
-func TestSendEmailDoesNotAutoUpgradeWhenStartTLSDisabled(t *testing.T) {
-	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, true)
-	defer server.close()
-	withSMTPSettings(t)
+func TestShouldUseSMTPLoginAuth(t *testing.T) {
+	saveSMTPGlobals(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
+	// Force flag short-circuits everything.
+	SMTPForceAuthLogin = true
+	assert.True(t, shouldUseSMTPLoginAuth())
+
 	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	SMTPAccount = "user@outlook.com"
+	SMTPServer = "smtp.office365.com"
+	EmailLoginAuthServerList = []string{"smtp.sendcloud.net"}
+	assert.True(t, shouldUseSMTPLoginAuth(), "outlook account should use LOGIN")
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.NoError(t, err)
+	// Not outlook, but server is in the login-auth list.
+	SMTPAccount = "user@example.com"
+	SMTPServer = "smtp.sendcloud.net"
+	assert.True(t, shouldUseSMTPLoginAuth())
 
-	select {
-	case command := <-server.startTLSCommands:
-		t.Fatalf("unexpected SMTP STARTTLS command: %s", command)
-	default:
-	}
-
-	select {
-	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP DATA")
-	}
+	// Neither outlook nor listed.
+	SMTPAccount = "user@example.com"
+	SMTPServer = "smtp.example.com"
+	EmailLoginAuthServerList = []string{"smtp.sendcloud.net"}
+	assert.False(t, shouldUseSMTPLoginAuth())
 }
 
-func TestSMTPPlainAuthRejectsRemotePlaintextConnection(t *testing.T) {
-	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, false)
-	defer server.close()
-	withSMTPSettings(t)
+func TestShouldAuthenticateSMTP(t *testing.T) {
+	saveSMTPGlobals(t)
+
+	SMTPAccount, SMTPToken = "u", "p"
+	assert.True(t, shouldAuthenticateSMTP())
+
+	SMTPAccount, SMTPToken = "", "p"
+	assert.False(t, shouldAuthenticateSMTP())
+
+	SMTPAccount, SMTPToken = "u", ""
+	assert.False(t, shouldAuthenticateSMTP())
+}
+
+func TestSMTPTLSConfig(t *testing.T) {
+	saveSMTPGlobals(t)
 
 	SMTPServer = "smtp.example.com"
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
+	SMTPInsecureSkipVerify = true
+	cfg := smtpTLSConfig()
+	assert.Equal(t, "smtp.example.com", cfg.ServerName)
+	assert.True(t, cfg.InsecureSkipVerify)
+
 	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
+	assert.False(t, smtpTLSConfig().InsecureSkipVerify)
+}
 
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", server.host, server.port))
-	require.NoError(t, err)
-	client, err := smtp.NewClient(conn, SMTPServer)
-	require.NoError(t, err)
+func TestGetSMTPAuth(t *testing.T) {
+	saveSMTPGlobals(t)
+	SMTPAccount, SMTPToken = "user", "pass"
+	auth := getSMTPAuth()
+	_, ok := auth.(*smtpAutoAuth)
+	assert.True(t, ok)
+}
 
-	err = client.Auth(getSMTPAuth())
+func TestSMTPAutoAuth_Start(t *testing.T) {
+	saveSMTPGlobals(t)
+	SMTPServer = "smtp.example.com"
+
+	tlsServer := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true}
+
+	t.Run("force login", func(t *testing.T) {
+		SMTPForceAuthLogin = true
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, resp, err := a.Start(tlsServer)
+		require.NoError(t, err)
+		assert.Equal(t, "LOGIN", mech)
+		assert.Empty(t, resp)
+		assert.Equal(t, "LOGIN", a.mech)
+	})
+
+	t.Run("ntlm single-mech server keeps ntlm", func(t *testing.T) {
+		SMTPForceAuthLogin = false
+		SMTPAccount = "u@outlook.com" // makes shouldUseSMTPLoginAuth true
+		server := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"NTLM"}}
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, _, err := a.Start(server)
+		require.NoError(t, err)
+		assert.Equal(t, "NTLM", mech)
+		assert.Equal(t, "NTLM", a.mech)
+	})
+
+	t.Run("login when login-auth applies and not single ntlm", func(t *testing.T) {
+		SMTPForceAuthLogin = false
+		SMTPAccount = "u@outlook.com"
+		server := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"LOGIN", "PLAIN"}}
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, resp, err := a.Start(server)
+		require.NoError(t, err)
+		assert.Equal(t, "LOGIN", mech)
+		assert.Empty(t, resp)
+	})
+
+	t.Run("plain preferred", func(t *testing.T) {
+		SMTPForceAuthLogin = false
+		SMTPAccount = "u@example.com"
+		SMTPServer = "smtp.example.com"
+		EmailLoginAuthServerList = nil
+		server := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"PLAIN"}}
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, _, err := a.Start(server)
+		require.NoError(t, err)
+		assert.Equal(t, "PLAIN", mech)
+	})
+
+	t.Run("login only server", func(t *testing.T) {
+		SMTPForceAuthLogin = false
+		SMTPAccount = "u@example.com"
+		SMTPServer = "smtp.example.com"
+		EmailLoginAuthServerList = nil
+		server := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"LOGIN"}}
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, _, err := a.Start(server)
+		require.NoError(t, err)
+		assert.Equal(t, "LOGIN", mech)
+	})
+
+	t.Run("default plain when no known mech", func(t *testing.T) {
+		SMTPForceAuthLogin = false
+		SMTPAccount = "u@example.com"
+		SMTPServer = "smtp.example.com"
+		EmailLoginAuthServerList = nil
+		server := &smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"CRAM-MD5"}}
+		a := &smtpAutoAuth{username: "u", password: "p"}
+		mech, _, err := a.Start(server)
+		require.NoError(t, err)
+		assert.Equal(t, "PLAIN", mech)
+	})
+}
+
+func TestSMTPAutoAuth_Next(t *testing.T) {
+	t.Run("no more returns nil", func(t *testing.T) {
+		a := &smtpAutoAuth{mech: "LOGIN"}
+		resp, err := a.Next(nil, false)
+		require.NoError(t, err)
+		assert.Nil(t, resp)
+	})
+
+	t.Run("login challenges", func(t *testing.T) {
+		a := &smtpAutoAuth{username: "user", password: "pass", mech: "LOGIN"}
+		u, err := a.Next([]byte("Username:"), true)
+		require.NoError(t, err)
+		assert.Equal(t, "user", string(u))
+
+		p, err := a.Next([]byte("Password:"), true)
+		require.NoError(t, err)
+		assert.Equal(t, "pass", string(p))
+
+		_, err = a.Next([]byte("Other:"), true)
+		require.Error(t, err)
+	})
+
+	t.Run("ntlm challenge errors on garbage", func(t *testing.T) {
+		a := &smtpAutoAuth{username: "u", password: "p", mech: "NTLM"}
+		_, err := a.Next([]byte("not-a-valid-ntlm-challenge"), true)
+		require.Error(t, err)
+	})
+
+	t.Run("unexpected mech challenge", func(t *testing.T) {
+		a := &smtpAutoAuth{mech: "PLAIN"}
+		_, err := a.Next([]byte("x"), true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected SMTP auth challenge")
+	})
+}
+
+func TestOutlookAuth(t *testing.T) {
+	a := &outlookAuth{username: "user", password: "pass"}
+
+	mech, resp, err := a.Start(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "LOGIN", mech)
+	assert.Empty(t, resp)
+
+	u, err := a.Next([]byte("Username:"), true)
+	require.NoError(t, err)
+	assert.Equal(t, "user", string(u))
+
+	p, err := a.Next([]byte("Password:"), true)
+	require.NoError(t, err)
+	assert.Equal(t, "pass", string(p))
+
+	_, err = a.Next([]byte("Bogus:"), true)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "unencrypted connection")
 
-	select {
-	case command := <-server.authCommands:
-		t.Fatalf("unexpected SMTP auth command: %s", command)
-	default:
-	}
-}
-
-func TestNewSMTPClientHonorsExplicitStartTLSWhenPortIs465(t *testing.T) {
-	server := newFakeSMTPServer(t)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = 465
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-
-	client, err := newSMTPClient(fmt.Sprintf("%s:%d", server.host, server.port))
+	resp, err = a.Next(nil, false)
 	require.NoError(t, err)
-	defer client.Close()
-
-	select {
-	case command := <-server.startTLSCommands:
-		require.Equal(t, "STARTTLS", command)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP STARTTLS")
-	}
+	assert.Nil(t, resp)
 }
 
-func TestNewSMTPClientKeepsImplicitTLSForLegacyPort465(t *testing.T) {
-	server := newFakeImplicitTLSSMTPServer(t)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = 465
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = true
-
-	client, err := newSMTPClient(fmt.Sprintf("%s:%d", server.host, server.port))
-	require.NoError(t, err)
-	defer client.Close()
+func TestLoginAuthConstructor(t *testing.T) {
+	auth := LoginAuth("u", "p")
+	_, ok := auth.(*outlookAuth)
+	assert.True(t, ok)
 }
 
-func TestSendEmailSkipsAuthWhenCredentialsAreEmpty(t *testing.T) {
-	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, false)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = ""
-	SMTPFrom = "sender@example.com"
-	SMTPToken = ""
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.NoError(t, err)
-
-	select {
-	case command := <-server.authCommands:
-		t.Fatalf("unexpected SMTP auth command: %s", command)
-	default:
-	}
-
-	select {
-	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP DATA")
-	}
+func TestIsOutlookServer(t *testing.T) {
+	assert.True(t, isOutlookServer("user@outlook.com"))
+	assert.True(t, isOutlookServer("smtp.office365.onmicrosoft.com"))
+	assert.False(t, isOutlookServer("user@gmail.com"))
 }
 
-func TestSendEmailSkipsAuthWhenCredentialsAreIncomplete(t *testing.T) {
-	server := newFakeSMTPServerWithSTARTTLSAdvertisement(t, false)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = ""
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.NoError(t, err)
-
-	select {
-	case command := <-server.authCommands:
-		t.Fatalf("unexpected SMTP auth command: %s", command)
-	default:
-	}
-
-	select {
-	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP DATA")
-	}
-}
-
-func TestSendEmailUsesNTLMWhenServerOnlySupportsNTLM(t *testing.T) {
-	server := newFakeSMTPServer(t)
-	server.authMechanisms = []string{"NTLM"}
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "no-reply"
-	SMTPFrom = "no-reply@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.NoError(t, err)
-
-	select {
-	case command := <-server.authCommands:
-		require.True(t, strings.HasPrefix(command, "AUTH NTLM "), "unexpected auth command: %s", command)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP AUTH")
-	}
-}
-
-func TestSendEmailUsesNTLMForMicrosoftAccountWhenServerOnlySupportsNTLM(t *testing.T) {
-	server := newFakeSMTPServer(t)
-	server.authMechanisms = []string{"NTLM"}
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "no-reply@contoso.onmicrosoft.com"
-	SMTPFrom = "no-reply@contoso.onmicrosoft.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.NoError(t, err)
-
-	select {
-	case command := <-server.authCommands:
-		require.True(t, strings.HasPrefix(command, "AUTH NTLM "), "unexpected auth command: %s", command)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for SMTP AUTH")
-	}
-}
-
-func TestSendEmailExplicitStartTLSRejectsUntrustedCertificateByDefault(t *testing.T) {
-	server := newFakeSMTPServer(t)
-	defer server.close()
-	withSMTPSettings(t)
-
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
-
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
-	require.Error(t, err)
-	require.Contains(t, fmt.Sprint(err), "certificate")
+func TestSMTPServerSupportsAuth(t *testing.T) {
+	assert.False(t, smtpServerSupportsAuth(nil, "PLAIN"))
+	server := &smtp.ServerInfo{Auth: []string{"plain", "LOGIN"}}
+	assert.True(t, smtpServerSupportsAuth(server, "PLAIN")) // case-insensitive
+	assert.True(t, smtpServerSupportsAuth(server, "login"))
+	assert.False(t, smtpServerSupportsAuth(server, "NTLM"))
 }

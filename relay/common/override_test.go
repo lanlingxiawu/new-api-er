@@ -1,2304 +1,910 @@
 package common
 
 import (
-	"encoding/json"
-	"fmt"
-	"reflect"
 	"testing"
 
-	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
-
+	commonpkg "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/samber/lo"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestApplyParamOverrideTrimPrefix(t *testing.T) {
-	// trim_prefix example:
-	// {"operations":[{"path":"model","mode":"trim_prefix","value":"openai/"}]}
-	input := []byte(`{"model":"openai/gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "trim_prefix",
-				"value": "openai/",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.7}`, string(out))
+// assertJSONEqual compares two JSON documents ignoring key order/formatting.
+func assertJSONEqual(t *testing.T, expected, actual string) {
+	t.Helper()
+	assert.JSONEq(t, expected, actual)
 }
 
-func TestApplyParamOverrideTrimSuffix(t *testing.T) {
-	// trim_suffix example:
-	// {"operations":[{"path":"model","mode":"trim_suffix","value":"-latest"}]}
-	input := []byte(`{"model":"gpt-4-latest","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "trim_suffix",
-				"value": "-latest",
-			},
-		},
-	}
+// op is a small helper to build an operation map.
+func op(m map[string]interface{}) map[string]interface{} { return m }
 
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
+// ops wraps a list of operations in the {"operations": [...]} envelope.
+func ops(list ...map[string]interface{}) map[string]interface{} {
+	arr := make([]interface{}, len(list))
+	for i, o := range list {
+		arr[i] = o
 	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.7}`, string(out))
+	return map[string]interface{}{"operations": arr}
 }
 
-func TestApplyParamOverrideTrimNoop(t *testing.T) {
-	// trim_prefix no-op example:
-	// {"operations":[{"path":"model","mode":"trim_prefix","value":"openai/"}]}
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "trim_prefix",
-				"value": "openai/",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.7}`, string(out))
+func apply(t *testing.T, input string, override map[string]interface{}, ctx map[string]interface{}) ([]byte, error) {
+	t.Helper()
+	return ApplyParamOverride([]byte(input), override, ctx)
 }
 
-func TestApplyParamOverrideMixedLegacyAndOperations(t *testing.T) {
-	input := []byte(`{"model":"openai/gpt-4","temperature":0.7}`)
+// ---------------------------------------------------------------------------
+// Empty / passthrough
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_Empty(t *testing.T) {
+	out, err := apply(t, `{"a":1}`, nil, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"a":1}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// String transforms
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_TrimPrefixSuffix(t *testing.T) {
+	out, err := apply(t, `{"model":"openai/gpt-4","t":0.7}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "trim_prefix", "value": "openai/",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4","t":0.7}`, string(out))
+
+	out, err = apply(t, `{"model":"gpt-4-latest"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "trim_suffix", "value": "-latest",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
+
+	// no-op when prefix absent
+	out, err = apply(t, `{"model":"gpt-4"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "trim_prefix", "value": "openai/",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
+}
+
+func TestApplyParamOverride_TrimRequiresValue(t *testing.T) {
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "trim_prefix",
+	})), nil)
+	require.Error(t, err)
+}
+
+func TestApplyParamOverride_EnsurePrefixSuffix(t *testing.T) {
+	out, err := apply(t, `{"model":"gpt-4"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "ensure_prefix", "value": "openai/",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"openai/gpt-4"}`, string(out))
+
+	// no-op when already prefixed
+	out, err = apply(t, `{"model":"openai/gpt-4"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "ensure_prefix", "value": "openai/",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"openai/gpt-4"}`, string(out))
+
+	out, err = apply(t, `{"model":"gpt-4"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "ensure_suffix", "value": "-turbo",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4-turbo"}`, string(out))
+}
+
+func TestApplyParamOverride_EnsureRequiresValue(t *testing.T) {
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "ensure_prefix",
+	})), nil)
+	require.Error(t, err)
+}
+
+func TestApplyParamOverride_CaseAndSpace(t *testing.T) {
+	out, err := apply(t, `{"model":"  GpT-4  "}`, ops(
+		op(map[string]interface{}{"path": "model", "mode": "trim_space"}),
+		op(map[string]interface{}{"path": "model", "mode": "to_lower"}),
+	), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
+
+	out, err = apply(t, `{"model":"gpt-4"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "to_upper",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"GPT-4"}`, string(out))
+}
+
+func TestApplyParamOverride_ReplaceAndRegex(t *testing.T) {
+	out, err := apply(t, `{"model":"gpt-4-preview"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "replace", "from": "-preview", "to": "",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
+
+	out, err = apply(t, `{"model":"gpt-4-0613"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "regex_replace", "from": "-\\d+$", "to": "",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
+}
+
+func TestApplyParamOverride_ReplaceRequiresFrom(t *testing.T) {
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "replace", "to": "y",
+	})), nil)
+	require.Error(t, err)
+}
+
+func TestApplyParamOverride_RegexInvalidPattern(t *testing.T) {
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "regex_replace", "from": "[", "to": "y",
+	})), nil)
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// set / delete
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_Set(t *testing.T) {
+	out, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "set", "value": 0.2,
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"x","temperature":0.2}`, string(out))
+}
+
+func TestApplyParamOverride_SetKeepOrigin(t *testing.T) {
+	// keep_origin: existing value not overwritten
+	out, err := apply(t, `{"temperature":0.7}`, ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "set", "value": 0.2, "keep_origin": true,
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
+
+	// keep_origin sets when absent
+	out, err = apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "set", "value": 0.2, "keep_origin": true,
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"x","temperature":0.2}`, string(out))
+}
+
+func TestApplyParamOverride_Delete(t *testing.T) {
+	out, err := apply(t, `{"model":"x","temperature":0.7}`, ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "delete",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"x"}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// move / copy
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_Move(t *testing.T) {
+	out, err := apply(t, `{"a":1,"b":2}`, ops(op(map[string]interface{}{
+		"mode": "move", "from": "a", "to": "c",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"b":2,"c":1}`, string(out))
+}
+
+func TestApplyParamOverride_MoveMissingSource(t *testing.T) {
+	_, err := apply(t, `{"b":2}`, ops(op(map[string]interface{}{
+		"mode": "move", "from": "a", "to": "c",
+	})), nil)
+	require.Error(t, err)
+}
+
+func TestApplyParamOverride_Copy(t *testing.T) {
+	out, err := apply(t, `{"a":1}`, ops(op(map[string]interface{}{
+		"mode": "copy", "from": "a", "to": "b",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"a":1,"b":1}`, string(out))
+}
+
+func TestApplyParamOverride_CopyRequiresFromTo(t *testing.T) {
+	_, err := apply(t, `{"a":1}`, ops(op(map[string]interface{}{
+		"mode": "copy", "from": "a",
+	})), nil)
+	require.Error(t, err)
+}
+
+func TestApplyParamOverride_CopyMissingSource(t *testing.T) {
+	_, err := apply(t, `{"x":1}`, ops(op(map[string]interface{}{
+		"mode": "copy", "from": "a", "to": "b",
+	})), nil)
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// prepend / append
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_PrependAppendString(t *testing.T) {
+	out, err := apply(t, `{"model":"gpt"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "prepend", "value": "openai/",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"openai/gpt"}`, string(out))
+
+	out, err = apply(t, `{"model":"gpt"}`, ops(op(map[string]interface{}{
+		"path": "model", "mode": "append", "value": "-turbo",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-turbo"}`, string(out))
+}
+
+func TestApplyParamOverride_PrependAppendArray(t *testing.T) {
+	out, err := apply(t, `{"stop":["b"]}`, ops(op(map[string]interface{}{
+		"path": "stop", "mode": "prepend", "value": "a",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"stop":["a","b"]}`, string(out))
+
+	out, err = apply(t, `{"stop":["a"]}`, ops(op(map[string]interface{}{
+		"path": "stop", "mode": "append", "value": "b",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"stop":["a","b"]}`, string(out))
+}
+
+func TestApplyParamOverride_AppendObjectMerge(t *testing.T) {
+	// append onto an object merges keys
+	out, err := apply(t, `{"opts":{"a":1}}`, ops(op(map[string]interface{}{
+		"path": "opts", "mode": "append", "value": map[string]interface{}{"b": 2},
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"opts":{"a":1,"b":2}}`, string(out))
+
+	// keep_origin preserves existing keys on conflict
+	out, err = apply(t, `{"opts":{"a":1}}`, ops(op(map[string]interface{}{
+		"path": "opts", "mode": "append", "value": map[string]interface{}{"a": 9, "b": 2}, "keep_origin": true,
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"opts":{"a":1,"b":2}}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// Wildcard paths
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_DeleteWildcard(t *testing.T) {
+	input := `{"messages":[{"role":"user","x":1},{"role":"assistant","x":2}]}`
+	out, err := apply(t, input, ops(op(map[string]interface{}{
+		"path": "messages.*.x", "mode": "delete",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"messages":[{"role":"user"},{"role":"assistant"}]}`, string(out))
+}
+
+func TestApplyParamOverride_SetWildcard(t *testing.T) {
+	input := `{"messages":[{"role":"user"},{"role":"assistant"}]}`
+	out, err := apply(t, input, ops(op(map[string]interface{}{
+		"path": "messages.*.seen", "mode": "set", "value": true,
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"messages":[{"role":"user","seen":true},{"role":"assistant","seen":true}]}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// Negative index
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_NegativeIndex(t *testing.T) {
+	input := `{"messages":[{"role":"user"},{"role":"assistant"}]}`
+	out, err := apply(t, input, ops(op(map[string]interface{}{
+		"path": "messages.-1.role", "mode": "set", "value": "system",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"messages":[{"role":"user"},{"role":"system"}]}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// Conditions
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_ConditionOR(t *testing.T) {
+	input := `{"model":"gpt-4","stream":true}`
+	override := ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "set", "value": 0.1,
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "stream", "mode": "full", "value": true},
+			map[string]interface{}{"path": "model", "mode": "full", "value": "nope"},
+		},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4","stream":true,"temperature":0.1}`, string(out))
+}
+
+func TestApplyParamOverride_ConditionAND_NotMet(t *testing.T) {
+	input := `{"model":"gpt-4","stream":true}`
+	override := ops(op(map[string]interface{}{
+		"path": "temperature", "mode": "set", "value": 0.1, "logic": "AND",
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "stream", "mode": "full", "value": true},
+			map[string]interface{}{"path": "model", "mode": "full", "value": "nope"},
+		},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, input, string(out)) // condition not met -> unchanged
+}
+
+func TestApplyParamOverride_ConditionInvert(t *testing.T) {
+	input := `{"model":"gpt-4"}`
+	override := ops(op(map[string]interface{}{
+		"path": "flag", "mode": "set", "value": true,
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "model", "mode": "full", "value": "gpt-4", "invert": true},
+		},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, input, string(out)) // inverted match -> false -> skip
+}
+
+func TestApplyParamOverride_ConditionPassMissingKey(t *testing.T) {
+	input := `{"model":"gpt-4"}`
+	override := ops(op(map[string]interface{}{
+		"path": "flag", "mode": "set", "value": true,
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "absent", "mode": "full", "value": "x", "pass_missing_key": true},
+		},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4","flag":true}`, string(out))
+}
+
+func TestApplyParamOverride_ConditionNumericComparison(t *testing.T) {
+	input := `{"n":5}`
+	override := ops(op(map[string]interface{}{
+		"path": "big", "mode": "set", "value": true,
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "n", "mode": "gte", "value": 5},
+		},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"n":5,"big":true}`, string(out))
+}
+
+func TestApplyParamOverride_ConditionFromContext(t *testing.T) {
+	input := `{"model":"gpt-4"}`
+	ctx := map[string]interface{}{"is_retry": true}
+	override := ops(op(map[string]interface{}{
+		"path": "retry_flag", "mode": "set", "value": true,
+		"conditions": []interface{}{
+			map[string]interface{}{"path": "is_retry", "mode": "full", "value": true},
+		},
+	}))
+	out, err := apply(t, input, override, ctx)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4","retry_flag":true}`, string(out))
+}
+
+func TestApplyParamOverride_ConditionShorthandObject(t *testing.T) {
+	input := `{"model":"gpt-4"}`
+	override := ops(op(map[string]interface{}{
+		"path": "flag", "mode": "set", "value": true,
+		"conditions": map[string]interface{}{"model": "gpt-4"},
+	}))
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4","flag":true}`, string(out))
+}
+
+// ---------------------------------------------------------------------------
+// return_error
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_ReturnError(t *testing.T) {
+	t.Run("string message", func(t *testing.T) {
+		_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+			"mode": "return_error", "value": "blocked model",
+		})), nil)
+		require.Error(t, err)
+		re, ok := AsParamOverrideReturnError(err)
+		require.True(t, ok)
+		assert.Equal(t, "blocked model", re.Message)
+	})
+	t.Run("object with status and code", func(t *testing.T) {
+		_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+			"mode": "return_error", "value": map[string]interface{}{
+				"message": "no", "status_code": float64(403), "code": "forbidden",
+			},
+		})), nil)
+		require.Error(t, err)
+		re, ok := AsParamOverrideReturnError(err)
+		require.True(t, ok)
+		assert.Equal(t, 403, re.StatusCode)
+		assert.Equal(t, "forbidden", re.Code)
+	})
+	t.Run("only fires when condition met", func(t *testing.T) {
+		out, err := apply(t, `{"model":"ok"}`, ops(op(map[string]interface{}{
+			"mode": "return_error", "value": "blocked",
+			"conditions": []interface{}{
+				map[string]interface{}{"path": "model", "mode": "full", "value": "bad"},
+			},
+		})), nil)
+		require.NoError(t, err)
+		assertJSONEqual(t, `{"model":"ok"}`, string(out))
+	})
+}
+
+// ---------------------------------------------------------------------------
+// prune_objects
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_PruneObjectsByType(t *testing.T) {
+	input := `{"content":[{"type":"text","text":"hi"},{"type":"thinking","text":"secret"}]}`
+	out, err := apply(t, input, ops(op(map[string]interface{}{
+		"path": "content", "mode": "prune_objects", "value": "thinking",
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"content":[{"type":"text","text":"hi"}]}`, string(out))
+}
+
+func TestApplyParamOverride_PruneObjectsWhere(t *testing.T) {
+	input := `{"items":[{"kind":"a","keep":1},{"kind":"b","keep":2}]}`
+	out, err := apply(t, input, ops(op(map[string]interface{}{
+		"path": "items", "mode": "prune_objects",
+		"value": map[string]interface{}{"where": map[string]interface{}{"kind": "b"}},
+	})), nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"items":[{"kind":"a","keep":1}]}`, string(out))
+}
+
+func TestApplyParamOverride_PruneObjectsRequiresValue(t *testing.T) {
+	_, err := apply(t, `{"a":[]}`, ops(op(map[string]interface{}{
+		"path": "a", "mode": "prune_objects",
+	})), nil)
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Unknown mode
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_UnknownMode(t *testing.T) {
+	_, err := apply(t, `{"a":1}`, ops(op(map[string]interface{}{
+		"path": "a", "mode": "frobnicate",
+	})), nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown operation")
+}
+
+// ---------------------------------------------------------------------------
+// Legacy override (no "operations" key)
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_Legacy(t *testing.T) {
+	out, err := apply(t, `{"model":"x","temperature":0.7}`, map[string]interface{}{
+		"temperature": 0.2,
+		"top_p":       0.95,
+	}, nil)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"x","temperature":0.2,"top_p":0.95}`, string(out))
+}
+
+func TestApplyParamOverride_MixedLegacyAndOperations(t *testing.T) {
+	input := `{"model":"openai/gpt-4","temperature":0.7}`
 	override := map[string]interface{}{
 		"temperature": 0.2,
 		"top_p":       0.95,
 		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "trim_prefix",
-				"value": "openai/",
-			},
+			op(map[string]interface{}{"path": "model", "mode": "trim_prefix", "value": "openai/"}),
 		},
 	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
 	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.2,"top_p":0.95}`, string(out))
 }
 
-func TestApplyParamOverrideMixedLegacyAndOperationsConflictPrefersOperations(t *testing.T) {
-	input := []byte(`{"model":"openai/gpt-4","temperature":0.7}`)
+func TestApplyParamOverride_MixedConflictPrefersOperations(t *testing.T) {
+	input := `{"model":"openai/gpt-4","temperature":0.7}`
 	override := map[string]interface{}{
 		"model":       "legacy-model",
 		"temperature": 0.2,
 		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "set",
-				"value": "op-model",
-			},
+			op(map[string]interface{}{"path": "model", "mode": "set", "value": "op-model"}),
 		},
 	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
+	out, err := apply(t, input, override, nil)
+	require.NoError(t, err)
 	assertJSONEqual(t, `{"model":"op-model","temperature":0.2}`, string(out))
 }
 
-func TestApplyParamOverrideTrimRequiresValue(t *testing.T) {
-	// trim_prefix requires value example:
-	// {"operations":[{"path":"model","mode":"trim_prefix"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "trim_prefix",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideReplace(t *testing.T) {
-	// replace example:
-	// {"operations":[{"path":"model","mode":"replace","from":"openai/","to":""}]}
-	input := []byte(`{"model":"openai/gpt-4o-mini","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "replace",
-				"from": "openai/",
-				"to":   "",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4o-mini","temperature":0.7}`, string(out))
-}
-
-func TestApplyParamOverrideRegexReplace(t *testing.T) {
-	// regex_replace example:
-	// {"operations":[{"path":"model","mode":"regex_replace","from":"^gpt-","to":"openai/gpt-"}]}
-	input := []byte(`{"model":"gpt-4o-mini","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "regex_replace",
-				"from": "^gpt-",
-				"to":   "openai/gpt-",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"openai/gpt-4o-mini","temperature":0.7}`, string(out))
-}
-
-func TestApplyParamOverrideReplaceRequiresFrom(t *testing.T) {
-	// replace requires from example:
-	// {"operations":[{"path":"model","mode":"replace"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "replace",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideRegexReplaceRequiresPattern(t *testing.T) {
-	// regex_replace requires from(pattern) example:
-	// {"operations":[{"path":"model","mode":"regex_replace"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "regex_replace",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideDelete(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "temperature",
-				"mode": "delete",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	var got map[string]interface{}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("failed to unmarshal output JSON: %v", err)
-	}
-	if _, exists := got["temperature"]; exists {
-		t.Fatalf("expected temperature to be deleted")
-	}
-}
-
-func TestApplyParamOverrideDeleteWildcardPath(t *testing.T) {
-	input := []byte(`{"tools":[{"type":"bash","custom":{"input_examples":["a"],"other":1}},{"type":"code","custom":{"input_examples":["b"]}},{"type":"noop","custom":{"other":2}}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "tools.*.custom.input_examples",
-				"mode": "delete",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"tools":[{"type":"bash","custom":{"other":1}},{"type":"code","custom":{}},{"type":"noop","custom":{"other":2}}]}`, string(out))
-}
-
-func TestApplyParamOverrideSetWildcardPath(t *testing.T) {
-	input := []byte(`{"tools":[{"custom":{"tag":"A"}},{"custom":{"tag":"B"}},{"custom":{"tag":"C"}}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "tools.*.custom.enabled",
-				"mode":  "set",
-				"value": true,
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	var got struct {
-		Tools []struct {
-			Custom struct {
-				Enabled bool `json:"enabled"`
-			} `json:"custom"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("failed to unmarshal output JSON: %v", err)
-	}
-
-	if !lo.EveryBy(got.Tools, func(item struct {
-		Custom struct {
-			Enabled bool `json:"enabled"`
-		} `json:"custom"`
-	}) bool {
-		return item.Custom.Enabled
-	}) {
-		t.Fatalf("expected wildcard set to enable all tools, got: %s", string(out))
-	}
-}
-
-func TestApplyParamOverrideTrimSpaceWildcardPath(t *testing.T) {
-	input := []byte(`{"tools":[{"custom":{"name":" alpha "}},{"custom":{"name":" beta"}},{"custom":{"name":"gamma "}}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "tools.*.custom.name",
-				"mode": "trim_space",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	var got struct {
-		Tools []struct {
-			Custom struct {
-				Name string `json:"name"`
-			} `json:"custom"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("failed to unmarshal output JSON: %v", err)
-	}
-
-	names := lo.Map(got.Tools, func(item struct {
-		Custom struct {
-			Name string `json:"name"`
-		} `json:"custom"`
-	}, _ int) string {
-		return item.Custom.Name
-	})
-	if !reflect.DeepEqual(names, []string{"alpha", "beta", "gamma"}) {
-		t.Fatalf("unexpected names after wildcard trim_space: %v", names)
-	}
-}
-
-func TestApplyParamOverrideDeleteWildcardEqualsIndexedPaths(t *testing.T) {
-	input := []byte(`{"tools":[{"custom":{"input_examples":["a"],"other":1}},{"custom":{"input_examples":["b"],"other":2}},{"custom":{"input_examples":["c"],"other":3}}]}`)
-
-	wildcardOverride := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "tools.*.custom.input_examples",
-				"mode": "delete",
-			},
-		},
-	}
-
-	indexedOverride := map[string]interface{}{
-		"operations": lo.Map(lo.Range(3), func(index int, _ int) interface{} {
-			return map[string]interface{}{
-				"path": fmt.Sprintf("tools.%d.custom.input_examples", index),
-				"mode": "delete",
-			}
-		}),
-	}
-
-	wildcardOut, err := ApplyParamOverride(input, wildcardOverride, nil)
-	if err != nil {
-		t.Fatalf("wildcard ApplyParamOverride returned error: %v", err)
-	}
-
-	indexedOut, err := ApplyParamOverride(input, indexedOverride, nil)
-	if err != nil {
-		t.Fatalf("indexed ApplyParamOverride returned error: %v", err)
-	}
-
-	assertJSONEqual(t, string(indexedOut), string(wildcardOut))
-}
-
-func TestApplyParamOverrideSetWildcardKeepOrigin(t *testing.T) {
-	input := []byte(`{"tools":[{"custom":{"tag":"A"}},{"custom":{"tag":"B","enabled":false}},{"custom":{"tag":"C"}}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":        "tools.*.custom.enabled",
-				"mode":        "set",
-				"value":       true,
-				"keep_origin": true,
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	var got struct {
-		Tools []struct {
-			Custom struct {
-				Enabled bool `json:"enabled"`
-			} `json:"custom"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("failed to unmarshal output JSON: %v", err)
-	}
-
-	enabledValues := lo.Map(got.Tools, func(item struct {
-		Custom struct {
-			Enabled bool `json:"enabled"`
-		} `json:"custom"`
-	}, _ int) bool {
-		return item.Custom.Enabled
-	})
-	if !reflect.DeepEqual(enabledValues, []bool{true, false, true}) {
-		t.Fatalf("unexpected enabled values after wildcard keep_origin set: %v", enabledValues)
-	}
-}
-
-func TestApplyParamOverrideTrimSpaceMultiWildcardPath(t *testing.T) {
-	input := []byte(`{"tools":[{"custom":{"items":[{"name":" alpha "},{"name":" beta "}]}},{"custom":{"items":[{"name":" gamma"}]}}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "tools.*.custom.items.*.name",
-				"mode": "trim_space",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	var got struct {
-		Tools []struct {
-			Custom struct {
-				Items []struct {
-					Name string `json:"name"`
-				} `json:"items"`
-			} `json:"custom"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("failed to unmarshal output JSON: %v", err)
-	}
-
-	names := lo.FlatMap(got.Tools, func(tool struct {
-		Custom struct {
-			Items []struct {
-				Name string `json:"name"`
-			} `json:"items"`
-		} `json:"custom"`
-	}, _ int) []string {
-		return lo.Map(tool.Custom.Items, func(item struct {
-			Name string `json:"name"`
-		}, _ int) string {
-			return item.Name
-		})
-	})
-	if !reflect.DeepEqual(names, []string{"alpha", "beta", "gamma"}) {
-		t.Fatalf("unexpected names after multi wildcard trim_space: %v", names)
-	}
-}
-
-func TestApplyParamOverrideSet(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideSetWithDescriptionKeepsCompatibility(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	overrideWithoutDesc := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-			},
-		},
-	}
-	overrideWithDesc := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"description": "set temperature for deterministic output",
-				"path":        "temperature",
-				"mode":        "set",
-				"value":       0.1,
-			},
-		},
-	}
-
-	outWithoutDesc, err := ApplyParamOverride(input, overrideWithoutDesc, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride without description returned error: %v", err)
-	}
-
-	outWithDesc, err := ApplyParamOverride(input, overrideWithDesc, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride with description returned error: %v", err)
-	}
-
-	assertJSONEqual(t, string(outWithoutDesc), string(outWithDesc))
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.1}`, string(outWithDesc))
-}
-
-func TestApplyParamOverrideSetKeepOrigin(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":        "temperature",
-				"mode":        "set",
-				"value":       0.1,
-				"keep_origin": true,
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.7}`, string(out))
-}
-
-func TestApplyParamOverrideMove(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","meta":{"x":1}}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "move",
-				"from": "model",
-				"to":   "meta.model",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"meta":{"x":1,"model":"gpt-4"}}`, string(out))
-}
-
-func TestApplyParamOverrideMoveMissingSource(t *testing.T) {
-	input := []byte(`{"meta":{"x":1}}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "move",
-				"from": "model",
-				"to":   "meta.model",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverridePrependAppendString(t *testing.T) {
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "prepend",
-				"value": "openai/",
-			},
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "append",
-				"value": "-latest",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"openai/gpt-4-latest"}`, string(out))
-}
-
-func TestApplyParamOverridePrependAppendArray(t *testing.T) {
-	input := []byte(`{"arr":[1,2]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "arr",
-				"mode":  "prepend",
-				"value": 0,
-			},
-			map[string]interface{}{
-				"path":  "arr",
-				"mode":  "append",
-				"value": []interface{}{3, 4},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"arr":[0,1,2,3,4]}`, string(out))
-}
-
-func TestApplyParamOverrideAppendObjectMergeKeepOrigin(t *testing.T) {
-	input := []byte(`{"obj":{"a":1}}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":        "obj",
-				"mode":        "append",
-				"keep_origin": true,
-				"value": map[string]interface{}{
-					"a": 2,
-					"b": 3,
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"obj":{"a":1,"b":3}}`, string(out))
-}
-
-func TestApplyParamOverrideAppendObjectMergeOverride(t *testing.T) {
-	input := []byte(`{"obj":{"a":1}}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "obj",
-				"mode": "append",
-				"value": map[string]interface{}{
-					"a": 2,
-					"b": 3,
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"obj":{"a":2,"b":3}}`, string(out))
-}
-
-func TestApplyParamOverrideConditionORDefault(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "model",
-						"mode":  "prefix",
-						"value": "gpt",
-					},
-					map[string]interface{}{
-						"path":  "model",
-						"mode":  "prefix",
-						"value": "claude",
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideConditionAND(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"logic": "AND",
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "model",
-						"mode":  "prefix",
-						"value": "gpt",
-					},
-					map[string]interface{}{
-						"path":  "temperature",
-						"mode":  "gt",
-						"value": 0.5,
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideConditionInvert(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":   "model",
-						"mode":   "prefix",
-						"value":  "gpt",
-						"invert": true,
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","temperature":0.7}`, string(out))
-}
-
-func TestApplyParamOverrideConditionPassMissingKey(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":             "model",
-						"mode":             "prefix",
-						"value":            "gpt",
-						"pass_missing_key": true,
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideConditionFromContext(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "model",
-						"mode":  "prefix",
-						"value": "gpt",
-					},
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"model": "gpt-4",
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideNegativeIndexPath(t *testing.T) {
-	input := []byte(`{"arr":[{"model":"a"},{"model":"b"}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "arr.-1.model",
-				"mode":  "set",
-				"value": "c",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"arr":[{"model":"a"},{"model":"c"}]}`, string(out))
-}
-
-func TestApplyParamOverrideRegexReplaceInvalidPattern(t *testing.T) {
-	// regex_replace invalid pattern example:
-	// {"operations":[{"path":"model","mode":"regex_replace","from":"(","to":"x"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "regex_replace",
-				"from": "(",
-				"to":   "x",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideCopy(t *testing.T) {
-	// copy example:
-	// {"operations":[{"mode":"copy","from":"model","to":"original_model"}]}
-	input := []byte(`{"model":"gpt-4","temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "copy",
-				"from": "model",
-				"to":   "original_model",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","original_model":"gpt-4","temperature":0.7}`, string(out))
-}
-
-func TestApplyParamOverrideCopyMissingSource(t *testing.T) {
-	// copy missing source example:
-	// {"operations":[{"mode":"copy","from":"model","to":"original_model"}]}
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "copy",
-				"from": "model",
-				"to":   "original_model",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideCopyRequiresFromTo(t *testing.T) {
-	// copy requires from/to example:
-	// {"operations":[{"mode":"copy"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "copy",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideEnsurePrefix(t *testing.T) {
-	// ensure_prefix example:
-	// {"operations":[{"path":"model","mode":"ensure_prefix","value":"openai/"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "ensure_prefix",
-				"value": "openai/",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"openai/gpt-4"}`, string(out))
-}
-
-func TestApplyParamOverrideEnsurePrefixNoop(t *testing.T) {
-	// ensure_prefix no-op example:
-	// {"operations":[{"path":"model","mode":"ensure_prefix","value":"openai/"}]}
-	input := []byte(`{"model":"openai/gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "ensure_prefix",
-				"value": "openai/",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"openai/gpt-4"}`, string(out))
-}
-
-func TestApplyParamOverrideEnsureSuffix(t *testing.T) {
-	// ensure_suffix example:
-	// {"operations":[{"path":"model","mode":"ensure_suffix","value":"-latest"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "ensure_suffix",
-				"value": "-latest",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4-latest"}`, string(out))
-}
-
-func TestApplyParamOverrideEnsureSuffixNoop(t *testing.T) {
-	// ensure_suffix no-op example:
-	// {"operations":[{"path":"model","mode":"ensure_suffix","value":"-latest"}]}
-	input := []byte(`{"model":"gpt-4-latest"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "model",
-				"mode":  "ensure_suffix",
-				"value": "-latest",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4-latest"}`, string(out))
-}
-
-func TestApplyParamOverrideEnsureRequiresValue(t *testing.T) {
-	// ensure_prefix requires value example:
-	// {"operations":[{"path":"model","mode":"ensure_prefix"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "ensure_prefix",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideTrimSpace(t *testing.T) {
-	// trim_space example:
-	// {"operations":[{"path":"model","mode":"trim_space"}]}
-	input := []byte("{\"model\":\"  gpt-4 \\n\"}")
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "trim_space",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
-}
-
-func TestApplyParamOverrideToLower(t *testing.T) {
-	// to_lower example:
-	// {"operations":[{"path":"model","mode":"to_lower"}]}
-	input := []byte(`{"model":"GPT-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "to_lower",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4"}`, string(out))
-}
-
-func TestApplyParamOverrideToUpper(t *testing.T) {
-	// to_upper example:
-	// {"operations":[{"path":"model","mode":"to_upper"}]}
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "model",
-				"mode": "to_upper",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"GPT-4"}`, string(out))
-}
-
-func TestApplyParamOverrideReturnError(t *testing.T) {
-	input := []byte(`{"model":"gemini-2.5-pro"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "return_error",
-				"value": map[string]interface{}{
-					"message":     "forced bad request by param override",
-					"status_code": 422,
-					"code":        "forced_bad_request",
-					"type":        "invalid_request_error",
-					"skip_retry":  true,
-				},
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "retry.is_retry",
-						"mode":  "full",
-						"value": true,
-					},
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"retry": map[string]interface{}{
-			"index":    1,
-			"is_retry": true,
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, ctx)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	returnErr, ok := AsParamOverrideReturnError(err)
-	if !ok {
-		t.Fatalf("expected ParamOverrideReturnError, got %T: %v", err, err)
-	}
-	if returnErr.StatusCode != 422 {
-		t.Fatalf("expected status 422, got %d", returnErr.StatusCode)
-	}
-	if returnErr.Code != "forced_bad_request" {
-		t.Fatalf("expected code forced_bad_request, got %s", returnErr.Code)
-	}
-	if !returnErr.SkipRetry {
-		t.Fatalf("expected skip_retry true")
-	}
-}
-
-func TestApplyParamOverridePruneObjectsByTypeString(t *testing.T) {
-	input := []byte(`{
-		"messages":[
-			{"role":"assistant","content":[
-				{"type":"output_text","text":"a"},
-				{"type":"redacted_thinking","text":"secret"},
-				{"type":"tool_call","name":"tool_a"}
-			]},
-			{"role":"assistant","content":[
-				{"type":"output_text","text":"b"},
-				{"type":"wrapper","parts":[
-					{"type":"redacted_thinking","text":"secret2"},
-					{"type":"output_text","text":"c"}
-				]}
-			]}
-		]
-	}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode":  "prune_objects",
-				"value": "redacted_thinking",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{
-		"messages":[
-			{"role":"assistant","content":[
-				{"type":"output_text","text":"a"},
-				{"type":"tool_call","name":"tool_a"}
-			]},
-			{"role":"assistant","content":[
-				{"type":"output_text","text":"b"},
-				{"type":"wrapper","parts":[
-					{"type":"output_text","text":"c"}
-				]}
-			]}
-		]
-	}`, string(out))
-}
-
-func TestApplyParamOverridePruneObjectsWhereAndPath(t *testing.T) {
-	input := []byte(`{
-		"a":{"items":[{"type":"redacted_thinking","id":1},{"type":"output_text","id":2}]},
-		"b":{"items":[{"type":"redacted_thinking","id":3},{"type":"output_text","id":4}]}
-	}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path": "a",
-				"mode": "prune_objects",
-				"value": map[string]interface{}{
-					"where": map[string]interface{}{
-						"type": "redacted_thinking",
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{
-		"a":{"items":[{"type":"output_text","id":2}]},
-		"b":{"items":[{"type":"redacted_thinking","id":3},{"type":"output_text","id":4}]}
-	}`, string(out))
-}
-
-func TestApplyParamOverrideNormalizeThinkingSignatureUnsupported(t *testing.T) {
-	input := []byte(`{"items":[{"type":"redacted_thinking"}]}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "normalize_thinking_signature",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideConditionFromRetryAndLastErrorContext(t *testing.T) {
-	info := &RelayInfo{
-		RetryIndex: 1,
-		LastError: types.WithOpenAIError(types.OpenAIError{
-			Message: "invalid thinking signature",
-			Type:    "invalid_request_error",
-			Code:    "bad_thought_signature",
-		}, 400),
-	}
-	ctx := BuildParamOverrideContext(info)
-
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"logic": "AND",
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "is_retry",
-						"mode":  "full",
-						"value": true,
-					},
-					map[string]interface{}{
-						"path":  "last_error.code",
-						"mode":  "contains",
-						"value": "thought_signature",
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideConditionFromRequestHeaders(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "request_headers.authorization",
-						"mode":  "contains",
-						"value": "Bearer ",
-					},
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"authorization": "Bearer token-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideSetHeaderAndUseInLaterCondition(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode":  "set_header",
-				"path":  "X-Debug-Mode",
-				"value": "enabled",
-			},
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "header_override.x-debug-mode",
-						"mode":  "full",
-						"value": "enabled",
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, nil)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideCopyHeaderFromRequestHeaders(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "copy_header",
-				"from": "Authorization",
-				"to":   "X-Upstream-Auth",
-			},
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"conditions": []interface{}{
-					map[string]interface{}{
-						"path":  "header_override.x-upstream-auth",
-						"mode":  "contains",
-						"value": "Bearer ",
-					},
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"authorization": "Bearer token-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverridePassHeadersSkipsMissingHeaders(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode":  "pass_headers",
-				"value": []interface{}{"X-Codex-Beta-Features", "Session_id"},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"session_id": "sess-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["session_id"] != "sess-123" {
-		t.Fatalf("expected session_id to be passed, got: %v", headers["session_id"])
-	}
-	if _, exists := headers["x-codex-beta-features"]; exists {
-		t.Fatalf("expected missing header to be skipped")
-	}
-}
-
-func TestApplyParamOverrideCopyHeaderSkipsMissingSource(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "copy_header",
-				"from": "X-Missing-Header",
-				"to":   "X-Upstream-Auth",
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"authorization": "Bearer token-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	if _, exists := headers["x-upstream-auth"]; exists {
-		t.Fatalf("expected X-Upstream-Auth to be skipped when source header is missing")
-	}
-}
-
-func TestApplyParamOverrideMoveHeaderSkipsMissingSource(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "move_header",
-				"from": "X-Missing-Header",
-				"to":   "X-Upstream-Auth",
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"authorization": "Bearer token-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	if _, exists := headers["x-upstream-auth"]; exists {
-		t.Fatalf("expected X-Upstream-Auth to be skipped when source header is missing")
-	}
-}
-
-func TestApplyParamOverrideSyncFieldsHeaderToJSON(t *testing.T) {
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "sync_fields",
-				"from": "header:session_id",
-				"to":   "json:prompt_cache_key",
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"session_id": "sess-123",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","prompt_cache_key":"sess-123"}`, string(out))
-}
-
-func TestApplyParamOverrideSyncFieldsJSONToHeader(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","prompt_cache_key":"cache-abc"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "sync_fields",
-				"from": "header:session_id",
-				"to":   "json:prompt_cache_key",
-			},
-		},
-	}
-	ctx := map[string]interface{}{}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","prompt_cache_key":"cache-abc"}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["session_id"] != "cache-abc" {
-		t.Fatalf("expected session_id to be synced from prompt_cache_key, got: %v", headers["session_id"])
-	}
-}
-
-func TestApplyParamOverrideSyncFieldsNoChangeWhenBothExist(t *testing.T) {
-	input := []byte(`{"model":"gpt-4","prompt_cache_key":"cache-body"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "sync_fields",
-				"from": "header:session_id",
-				"to":   "json:prompt_cache_key",
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"session_id": "cache-header",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-4","prompt_cache_key":"cache-body"}`, string(out))
-
-	headers, _ := ctx["header_override"].(map[string]interface{})
-	if headers != nil {
-		if _, exists := headers["session_id"]; exists {
-			t.Fatalf("expected no override when both sides already have value")
-		}
-	}
-}
-
-func TestApplyParamOverrideSyncFieldsInvalidTarget(t *testing.T) {
-	input := []byte(`{"model":"gpt-4"}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "sync_fields",
-				"from": "foo:session_id",
-				"to":   "json:prompt_cache_key",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, nil)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-}
-
-func TestApplyParamOverrideSetHeaderKeepOrigin(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode":        "set_header",
-				"path":        "X-Feature-Flag",
-				"value":       "new-value",
-				"keep_origin": true,
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"header_override": map[string]interface{}{
-			"x-feature-flag": "legacy-value",
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["x-feature-flag"] != "legacy-value" {
-		t.Fatalf("expected keep_origin to preserve old value, got: %v", headers["x-feature-flag"])
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapRewritesCommaSeparatedHeader(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"advanced-tool-use-2025-11-20": nil,
-					"computer-use-2025-01-24":      "computer-use-2025-01-24",
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"request_headers": map[string]interface{}{
-			"anthropic-beta": "advanced-tool-use-2025-11-20, computer-use-2025-01-24",
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["anthropic-beta"] != "computer-use-2025-01-24" {
-		t.Fatalf("expected anthropic-beta to keep only mapped value, got: %v", headers["anthropic-beta"])
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapDeleteWholeHeaderWhenAllTokensCleared(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"advanced-tool-use-2025-11-20": nil,
-					"computer-use-2025-01-24":      nil,
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"header_override": map[string]interface{}{
-			"anthropic-beta": "advanced-tool-use-2025-11-20,computer-use-2025-01-24",
-		},
-	}
-
-	_, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if _, exists := headers["anthropic-beta"]; exists {
-		t.Fatalf("expected anthropic-beta to be deleted when all mapped values are null")
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapAppendsTokens(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"$append": []interface{}{"context-1m-2025-08-07", "computer-use-2025-01-24"},
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"header_override": map[string]interface{}{
-			"anthropic-beta": "computer-use-2025-01-24",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
+// ---------------------------------------------------------------------------
+// Header operations (set/delete/copy/move/pass) via context
+// ---------------------------------------------------------------------------
 
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
+func newHeaderContext(reqHeaders map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		paramOverrideContextRequestHeaders: reqHeaders,
+		paramOverrideContextHeaderOverride: map[string]interface{}{},
 	}
-	if headers["anthropic-beta"] != "computer-use-2025-01-24,context-1m-2025-08-07" {
-		t.Fatalf("expected anthropic-beta to append new token without duplicates, got: %v", headers["anthropic-beta"])
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapAppendsTokensWhenHeaderMissing(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"$append": []interface{}{"context-1m-2025-08-07", "computer-use-2025-01-24"},
-				},
-			},
-		},
-	}
-
-	ctx := map[string]interface{}{}
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["anthropic-beta"] != "context-1m-2025-08-07,computer-use-2025-01-24" {
-		t.Fatalf("expected anthropic-beta to be created from appended tokens, got: %v", headers["anthropic-beta"])
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapKeepOnlyDeclaredDropsUndeclaredTokens(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"computer-use-2025-01-24": "computer-use-2025-01-24",
-					"$append":                 []interface{}{"context-1m-2025-08-07"},
-					"$keep_only_declared":     true,
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"header_override": map[string]interface{}{
-			"anthropic-beta": "advanced-tool-use-2025-11-20,computer-use-2025-01-24",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if headers["anthropic-beta"] != "computer-use-2025-01-24,context-1m-2025-08-07" {
-		t.Fatalf("expected anthropic-beta to keep only declared tokens, got: %v", headers["anthropic-beta"])
-	}
-}
-
-func TestApplyParamOverrideSetHeaderMapKeepOnlyDeclaredDeletesHeaderWhenNothingDeclaredMatches(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"mode": "set_header",
-				"path": "anthropic-beta",
-				"value": map[string]interface{}{
-					"computer-use-2025-01-24": "computer-use-2025-01-24",
-					"$keep_only_declared":     true,
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"header_override": map[string]interface{}{
-			"anthropic-beta": "advanced-tool-use-2025-11-20",
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	headers, ok := ctx["header_override"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected header_override context map")
-	}
-	if _, exists := headers["anthropic-beta"]; exists {
-		t.Fatalf("expected anthropic-beta to be deleted when no declared tokens remain, got: %v", headers["anthropic-beta"])
-	}
-}
-
-func TestApplyParamOverrideConditionsObjectShorthand(t *testing.T) {
-	input := []byte(`{"temperature":0.7}`)
-	override := map[string]interface{}{
-		"operations": []interface{}{
-			map[string]interface{}{
-				"path":  "temperature",
-				"mode":  "set",
-				"value": 0.1,
-				"logic": "AND",
-				"conditions": map[string]interface{}{
-					"is_retry":               true,
-					"last_error.status_code": 400.0,
-				},
-			},
-		},
-	}
-	ctx := map[string]interface{}{
-		"is_retry": true,
-		"last_error": map[string]interface{}{
-			"status_code": 400.0,
-		},
-	}
-
-	out, err := ApplyParamOverride(input, override, ctx)
-	if err != nil {
-		t.Fatalf("ApplyParamOverride returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.1}`, string(out))
-}
-
-func TestApplyParamOverrideWithRelayInfoSyncRuntimeHeaders(t *testing.T) {
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode":  "set_header",
-						"path":  "X-Injected-By-Param-Override",
-						"value": "enabled",
-					},
-					map[string]interface{}{
-						"mode": "delete_header",
-						"path": "X-Delete-Me",
-					},
-				},
-			},
-			HeadersOverride: map[string]interface{}{
-				"X-Delete-Me": "legacy",
-				"X-Keep-Me":   "keep",
-			},
-		},
-	}
-
-	input := []byte(`{"temperature":0.7}`)
-	out, err := ApplyParamOverrideWithRelayInfo(input, info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"temperature":0.7}`, string(out))
-
-	if !info.UseRuntimeHeadersOverride {
-		t.Fatalf("expected runtime header override to be enabled")
-	}
-	if info.RuntimeHeadersOverride["x-keep-me"] != "keep" {
-		t.Fatalf("expected x-keep-me header to be preserved, got: %v", info.RuntimeHeadersOverride["x-keep-me"])
-	}
-	if info.RuntimeHeadersOverride["x-injected-by-param-override"] != "enabled" {
-		t.Fatalf("expected x-injected-by-param-override header to be set, got: %v", info.RuntimeHeadersOverride["x-injected-by-param-override"])
-	}
-	if _, exists := info.RuntimeHeadersOverride["x-delete-me"]; exists {
-		t.Fatalf("expected x-delete-me header to be deleted")
-	}
-}
-
-func TestApplyParamOverrideWithRelayInfoMixedLegacyAndOperations(t *testing.T) {
-	info := &RelayInfo{
-		RequestHeaders: map[string]string{
-			"Originator": "Codex CLI",
-		},
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"temperature": 0.2,
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode":  "pass_headers",
-						"value": []interface{}{"Originator"},
-					},
-				},
-			},
-			HeadersOverride: map[string]interface{}{
-				"X-Static": "legacy-static",
-			},
-		},
-	}
-
-	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-5","temperature":0.7}`), info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"model":"gpt-5","temperature":0.2}`, string(out))
-
-	if !info.UseRuntimeHeadersOverride {
-		t.Fatalf("expected runtime header override to be enabled")
-	}
-	if info.RuntimeHeadersOverride["x-static"] != "legacy-static" {
-		t.Fatalf("expected x-static to be preserved, got: %v", info.RuntimeHeadersOverride["x-static"])
-	}
-	if info.RuntimeHeadersOverride["originator"] != "Codex CLI" {
-		t.Fatalf("expected originator header to be passed, got: %v", info.RuntimeHeadersOverride["originator"])
-	}
-}
-
-func TestApplyParamOverrideWithRelayInfoMoveAndCopyHeaders(t *testing.T) {
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode": "move_header",
-						"from": "X-Legacy-Trace",
-						"to":   "X-Trace",
-					},
-					map[string]interface{}{
-						"mode": "copy_header",
-						"from": "X-Trace",
-						"to":   "X-Trace-Backup",
-					},
-				},
-			},
-			HeadersOverride: map[string]interface{}{
-				"X-Legacy-Trace": "trace-123",
-			},
-		},
-	}
-
-	input := []byte(`{"temperature":0.7}`)
-	_, err := ApplyParamOverrideWithRelayInfo(input, info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-	if _, exists := info.RuntimeHeadersOverride["x-legacy-trace"]; exists {
-		t.Fatalf("expected source header to be removed after move")
-	}
-	if info.RuntimeHeadersOverride["x-trace"] != "trace-123" {
-		t.Fatalf("expected x-trace to be set, got: %v", info.RuntimeHeadersOverride["x-trace"])
-	}
-	if info.RuntimeHeadersOverride["x-trace-backup"] != "trace-123" {
-		t.Fatalf("expected x-trace-backup to be copied, got: %v", info.RuntimeHeadersOverride["x-trace-backup"])
-	}
-}
-
-func TestApplyParamOverrideWithRelayInfoSetHeaderMapRewritesAnthropicBeta(t *testing.T) {
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode": "set_header",
-						"path": "anthropic-beta",
-						"value": map[string]interface{}{
-							"advanced-tool-use-2025-11-20": nil,
-							"computer-use-2025-01-24":      "computer-use-2025-01-24",
-						},
-					},
-				},
-			},
-			HeadersOverride: map[string]interface{}{
-				"anthropic-beta": "advanced-tool-use-2025-11-20, computer-use-2025-01-24",
-			},
-		},
-	}
-
-	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"temperature":0.7}`), info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-
-	if !info.UseRuntimeHeadersOverride {
-		t.Fatalf("expected runtime header override to be enabled")
-	}
-	if info.RuntimeHeadersOverride["anthropic-beta"] != "computer-use-2025-01-24" {
-		t.Fatalf("expected anthropic-beta to be rewritten, got: %v", info.RuntimeHeadersOverride["anthropic-beta"])
-	}
-}
-
-func TestGetEffectiveHeaderOverrideUsesRuntimeOverrideAsFinalResult(t *testing.T) {
-	info := &RelayInfo{
-		UseRuntimeHeadersOverride: true,
-		RuntimeHeadersOverride: map[string]interface{}{
-			"x-runtime": "runtime-only",
-		},
-		ChannelMeta: &ChannelMeta{
-			HeadersOverride: map[string]interface{}{
-				"X-Static":  "static-value",
-				"X-Deleted": "should-not-exist",
-			},
-		},
-	}
-
-	effective := GetEffectiveHeaderOverride(info)
-	if effective["x-runtime"] != "runtime-only" {
-		t.Fatalf("expected x-runtime from runtime override, got: %v", effective["x-runtime"])
-	}
-	if _, exists := effective["x-static"]; exists {
-		t.Fatalf("expected runtime override to be final and not merge channel headers")
-	}
-}
-
-func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
-	input := `{
-		"service_tier":"flex",
-		"safety_identifier":"user-123",
-		"store":true,
-		"stream_options":{"include_obfuscation":false}
-	}`
-	settings := dto.ChannelOtherSettings{}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, true)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	assertJSONEqual(t, input, string(out))
-}
-
-func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
-	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
-	t.Cleanup(func() {
-		model_setting.GetGlobalSettings().PassThroughRequestEnabled = original
-	})
-
-	input := `{
-		"service_tier":"flex",
-		"safety_identifier":"user-123",
-		"stream_options":{"include_obfuscation":false}
-	}`
-	settings := dto.ChannelOtherSettings{}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	assertJSONEqual(t, input, string(out))
-}
-
-func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
-	input := `{
-		"service_tier":"flex",
-		"inference_geo":"eu",
-		"speed":"fast",
-		"cache_control":{"type":"ephemeral"},
-		"safety_identifier":"user-123",
-		"store":true,
-		"stream_options":{"include_obfuscation":false}
-	}`
-	settings := dto.ChannelOtherSettings{}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"cache_control":{"type":"ephemeral"},"store":true}`, string(out))
-}
-
-func TestRemoveDisabledFieldsNoControlledFieldsKeepsBody(t *testing.T) {
-	input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
-	settings := dto.ChannelOtherSettings{}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	require.Equal(t, input, string(out))
 }
-
-func TestRemoveDisabledFieldsAllowInferenceGeo(t *testing.T) {
-	input := `{
-		"inference_geo":"eu",
-		"store":true
-	}`
-	settings := dto.ChannelOtherSettings{
-		AllowInferenceGeo: true,
-	}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"inference_geo":"eu","store":true}`, string(out))
-}
-
-func TestRemoveDisabledFieldsAllowSpeed(t *testing.T) {
-	input := `{
-		"speed":"fast",
-		"store":true
-	}`
-	settings := dto.ChannelOtherSettings{
-		AllowSpeed: true,
-	}
-
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
-	if err != nil {
-		t.Fatalf("RemoveDisabledFields returned error: %v", err)
-	}
-	assertJSONEqual(t, `{"speed":"fast","store":true}`, string(out))
-}
-
-func TestApplyParamOverrideWithRelayInfoRecordsOperationAuditInDebugMode(t *testing.T) {
-	originalDebugEnabled := common2.DebugEnabled
-	common2.DebugEnabled = true
-	t.Cleanup(func() {
-		common2.DebugEnabled = originalDebugEnabled
-	})
-
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode": "copy",
-						"from": "metadata.target_model",
-						"to":   "model",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "service_tier",
-						"value": "flex",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "temperature",
-						"value": 0.1,
-					},
-				},
-			},
-		},
-	}
-
-	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{
-		"model":"gpt-4.1",
-		"temperature":0.7,
-		"metadata":{"target_model":"gpt-4.1-mini"}
-	}`), info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-	assertJSONEqual(t, `{
-		"model":"gpt-4.1-mini",
-		"temperature":0.1,
-		"service_tier":"flex",
-		"metadata":{"target_model":"gpt-4.1-mini"}
-	}`, string(out))
-
-	expected := []string{
-		"copy metadata.target_model -> model",
-		"set service_tier = flex",
-		"set temperature = 0.1",
-	}
-	if !reflect.DeepEqual(info.ParamOverrideAudit, expected) {
-		t.Fatalf("unexpected param override audit, got %#v", info.ParamOverrideAudit)
-	}
-}
-
-func TestApplyParamOverrideWithRelayInfoRecordsOnlyKeyOperationsWhenDebugDisabled(t *testing.T) {
-	originalDebugEnabled := common2.DebugEnabled
-	common2.DebugEnabled = false
-	t.Cleanup(func() {
-		common2.DebugEnabled = originalDebugEnabled
-	})
-
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode": "copy",
-						"from": "metadata.target_model",
-						"to":   "model",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "temperature",
-						"value": 0.1,
-					},
-				},
-			},
-		},
-	}
-
-	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{
-		"model":"gpt-4.1",
-		"temperature":0.7,
-		"metadata":{"target_model":"gpt-4.1-mini"}
-	}`), info)
-	if err != nil {
-		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
-	}
-
-	expected := []string{
-		"copy metadata.target_model -> model",
-	}
-	if !reflect.DeepEqual(info.ParamOverrideAudit, expected) {
-		t.Fatalf("unexpected param override audit, got %#v", info.ParamOverrideAudit)
-	}
-}
-
-func TestApplyParamOverrideWithRelayInfoRecordsConversationBodyOperationsWhenDebugDisabled(t *testing.T) {
-	originalDebugEnabled := common2.DebugEnabled
-	common2.DebugEnabled = false
-	t.Cleanup(func() {
-		common2.DebugEnabled = originalDebugEnabled
-	})
-
-	info := &RelayInfo{
-		ChannelMeta: &ChannelMeta{
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{
-						"mode": "replace",
-						"path": "messages.0.content",
-						"from": "hello",
-						"to":   "hi",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "input.0.content.0.text",
-						"value": "rewritten response input",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "instructions",
-						"value": "new instruction",
-					},
-					map[string]interface{}{
-						"mode":  "append",
-						"path":  "contents.0.parts",
-						"value": map[string]interface{}{"text": "new gemini part"},
-					},
-					map[string]interface{}{
-						"mode": "copy",
-						"from": "system",
-						"to":   "metadata.system_copy",
-					},
-					map[string]interface{}{
-						"mode":  "set",
-						"path":  "temperature",
-						"value": 0.1,
-					},
-				},
-			},
-		},
-	}
 
-	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{
-		"messages":[{"role":"user","content":"hello world"}],
-		"input":[{"role":"user","content":[{"type":"input_text","text":"original response input"}]}],
-		"instructions":"old instruction",
-		"system":"old system",
-		"contents":[{"role":"user","parts":[{"text":"hello gemini"}]}],
-		"temperature":0.7
-	}`), info)
+func TestApplyParamOverride_SetHeader(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{})
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "set_header", "path": "X-Custom", "value": "v1",
+	})), ctx)
 	require.NoError(t, err)
-	assertJSONEqual(t, `{
-		"messages":[{"role":"user","content":"hi world"}],
-		"input":[{"role":"user","content":[{"type":"input_text","text":"rewritten response input"}]}],
-		"instructions":"new instruction",
-		"system":"old system",
-		"contents":[{"role":"user","parts":[{"text":"hello gemini"},{"text":"new gemini part"}]}],
-		"temperature":0.1,
-		"metadata":{"system_copy":"old system"}
-	}`, string(out))
-
-	require.Equal(t, []string{
-		"replace messages.0.content from hello to hi",
-		"set input.0.content.0.text = rewritten response input",
-		"set instructions = new instruction",
-		"append contents.0.parts with {\"text\":\"new gemini part\"}",
-		"copy system -> metadata.system_copy",
-	}, info.ParamOverrideAudit)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "v1", ho["x-custom"])
 }
 
-func TestShouldAuditParamPathUsesFieldBoundaryPrefixMatching(t *testing.T) {
-	originalDebugEnabled := common2.DebugEnabled
-	common2.DebugEnabled = false
-	t.Cleanup(func() {
-		common2.DebugEnabled = originalDebugEnabled
+func TestApplyParamOverride_SetHeaderKeepOrigin(t *testing.T) {
+	ctx := map[string]interface{}{
+		paramOverrideContextRequestHeaders: map[string]interface{}{},
+		paramOverrideContextHeaderOverride: map[string]interface{}{"x-custom": "orig"},
+	}
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "set_header", "path": "X-Custom", "value": "new", "keep_origin": true,
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "orig", ho["x-custom"])
+}
+
+func TestApplyParamOverride_DeleteHeader(t *testing.T) {
+	ctx := map[string]interface{}{
+		paramOverrideContextRequestHeaders: map[string]interface{}{},
+		paramOverrideContextHeaderOverride: map[string]interface{}{"x-custom": "v"},
+	}
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "delete_header", "path": "X-Custom",
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	_, exists := ho["x-custom"]
+	assert.False(t, exists)
+}
+
+func TestApplyParamOverride_CopyHeaderFromRequest(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{"authorization": "Bearer abc"})
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "copy_header", "from": "Authorization", "to": "X-Auth",
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "Bearer abc", ho["x-auth"])
+}
+
+func TestApplyParamOverride_CopyHeaderMissingSourceSkipped(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{})
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "copy_header", "from": "Absent", "to": "X-Auth",
+	})), ctx)
+	require.NoError(t, err) // missing source is silently skipped
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	_, exists := ho["x-auth"]
+	assert.False(t, exists)
+}
+
+func TestApplyParamOverride_MoveHeader(t *testing.T) {
+	ctx := map[string]interface{}{
+		paramOverrideContextRequestHeaders: map[string]interface{}{},
+		paramOverrideContextHeaderOverride: map[string]interface{}{"x-from": "v"},
+	}
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "move_header", "from": "X-From", "to": "X-To",
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "v", ho["x-to"])
+	_, exists := ho["x-from"]
+	assert.False(t, exists)
+}
+
+func TestApplyParamOverride_PassHeaders(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{"x-a": "1", "x-b": "2"})
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "pass_headers", "value": []interface{}{"X-A", "X-B", "X-Missing"},
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "1", ho["x-a"])
+	assert.Equal(t, "2", ho["x-b"])
+}
+
+func TestApplyParamOverride_SetHeaderMapRewritesTokens(t *testing.T) {
+	// header token mapping: rewrite one token in a comma-separated header
+	ctx := map[string]interface{}{
+		paramOverrideContextRequestHeaders: map[string]interface{}{},
+		paramOverrideContextHeaderOverride: map[string]interface{}{"anthropic-beta": "old-beta,keep-beta"},
+	}
+	_, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "set_header", "path": "anthropic-beta",
+		"value": map[string]interface{}{"old-beta": "new-beta"},
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "new-beta,keep-beta", ho["anthropic-beta"])
+}
+
+// ---------------------------------------------------------------------------
+// sync_fields
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverride_SyncFieldsHeaderToJSON(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{"x-session": "sess-123"})
+	out, err := apply(t, `{"model":"x"}`, ops(op(map[string]interface{}{
+		"mode": "sync_fields", "from": "header:X-Session", "to": "json:session_id",
+	})), ctx)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"x","session_id":"sess-123"}`, string(out))
+}
+
+func TestApplyParamOverride_SyncFieldsJSONToHeader(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{})
+	_, err := apply(t, `{"session_id":"abc"}`, ops(op(map[string]interface{}{
+		"mode": "sync_fields", "from": "header:X-Session", "to": "json:session_id",
+	})), ctx)
+	require.NoError(t, err)
+	ho := ctx[paramOverrideContextHeaderOverride].(map[string]interface{})
+	assert.Equal(t, "abc", ho["x-session"])
+}
+
+func TestApplyParamOverride_SyncFieldsNoChangeWhenBothExist(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{"x-session": "hdr"})
+	out, err := apply(t, `{"session_id":"body"}`, ops(op(map[string]interface{}{
+		"mode": "sync_fields", "from": "header:X-Session", "to": "json:session_id",
+	})), ctx)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"session_id":"body"}`, string(out))
+}
+
+func TestApplyParamOverride_SyncFieldsInvalidTarget(t *testing.T) {
+	ctx := newHeaderContext(map[string]interface{}{})
+	_, err := apply(t, `{"a":1}`, ops(op(map[string]interface{}{
+		"mode": "sync_fields", "from": "bogus:X", "to": "json:a",
+	})), ctx)
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// ApplyParamOverrideWithRelayInfo
+// ---------------------------------------------------------------------------
+
+func TestApplyParamOverrideWithRelayInfo_Basic(t *testing.T) {
+	info := &RelayInfo{
+		OriginModelName: "gpt-4o",
+		RequestURLPath:  "/v1/chat/completions",
+		ChannelMeta: &ChannelMeta{
+			UpstreamModelName: "gpt-4o",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					op(map[string]interface{}{"path": "temperature", "mode": "set", "value": 0.3}),
+				},
+			},
+		},
+	}
+	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-4o"}`), info)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"model":"gpt-4o","temperature":0.3}`, string(out))
+}
+
+func TestApplyParamOverrideWithRelayInfo_NoOverride(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{}}
+	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{"a":1}`), info)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"a":1}`, string(out))
+}
+
+func TestApplyParamOverrideWithRelayInfo_SyncRuntimeHeaders(t *testing.T) {
+	info := &RelayInfo{
+		OriginModelName: "gpt-4o",
+		RequestHeaders:  map[string]string{"Authorization": "Bearer abc"},
+		ChannelMeta: &ChannelMeta{
+			UpstreamModelName: "gpt-4o",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					op(map[string]interface{}{"mode": "copy_header", "from": "Authorization", "to": "X-Auth"}),
+				},
+			},
+		},
+	}
+	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-4o"}`), info)
+	require.NoError(t, err)
+	assert.True(t, info.UseRuntimeHeadersOverride)
+	assert.Equal(t, "Bearer abc", info.RuntimeHeadersOverride["x-auth"])
+}
+
+func TestApplyParamOverrideWithRelayInfo_AuditRecordsSensitivePath(t *testing.T) {
+	info := &RelayInfo{
+		OriginModelName: "gpt-4o",
+		ChannelMeta: &ChannelMeta{
+			UpstreamModelName: "gpt-4o",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					op(map[string]interface{}{"path": "model", "mode": "set", "value": "gpt-4o-mini"}),
+				},
+			},
+		},
+	}
+	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-4o"}`), info)
+	require.NoError(t, err)
+	require.NotEmpty(t, info.ParamOverrideAudit)
+	assert.Contains(t, info.ParamOverrideAudit[0], "set model")
+}
+
+func TestApplyParamOverrideWithRelayInfo_NoAuditForNonSensitive(t *testing.T) {
+	info := &RelayInfo{
+		OriginModelName: "gpt-4o",
+		ChannelMeta: &ChannelMeta{
+			UpstreamModelName: "gpt-4o",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					op(map[string]interface{}{"path": "temperature", "mode": "set", "value": 0.3}),
+				},
+			},
+		},
+	}
+	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-4o"}`), info)
+	require.NoError(t, err)
+	assert.Empty(t, info.ParamOverrideAudit)
+}
+
+// ---------------------------------------------------------------------------
+// BuildParamOverrideContext / GetEffectiveHeaderOverride
+// ---------------------------------------------------------------------------
+
+func TestBuildParamOverrideContext(t *testing.T) {
+	t.Run("nil info", func(t *testing.T) {
+		assert.Nil(t, BuildParamOverrideContext(nil))
 	})
-
-	require.True(t, shouldAuditParamPath("messages"))
-	require.True(t, shouldAuditParamPath("messages.0.content"))
-	require.True(t, shouldAuditParamPath("systemInstruction.parts.0.text"))
-	require.False(t, shouldAuditParamPath("model_name"))
-	require.False(t, shouldAuditParamPath("message"))
+	t.Run("populates model, path, headers, retry", func(t *testing.T) {
+		info := &RelayInfo{
+			OriginModelName: "gpt-4o",
+			RequestURLPath:  "/v1/chat/completions",
+			RequestHeaders:  map[string]string{"X-Test": "v"},
+			RetryIndex:      2,
+			ChannelMeta:     &ChannelMeta{UpstreamModelName: "gpt-4o-up"},
+			IsChannelTest:   true,
+		}
+		ctx := BuildParamOverrideContext(info)
+		assert.Equal(t, "gpt-4o-up", ctx["model"])
+		assert.Equal(t, "gpt-4o-up", ctx["upstream_model"])
+		assert.Equal(t, "gpt-4o", ctx["original_model"])
+		assert.Equal(t, "/v1/chat/completions", ctx["request_path"])
+		assert.Equal(t, 2, ctx["retry_index"])
+		assert.Equal(t, true, ctx["is_retry"])
+		assert.Equal(t, true, ctx["is_channel_test"])
+		rh := ctx[paramOverrideContextRequestHeaders].(map[string]interface{})
+		assert.Equal(t, "v", rh["x-test"])
+	})
+	t.Run("last error surfaced", func(t *testing.T) {
+		info := &RelayInfo{
+			OriginModelName: "gpt-4o",
+			LastError:       types.NewError(assertErr("boom"), types.ErrorCodeInvalidRequest),
+		}
+		ctx := BuildParamOverrideContext(info)
+		require.Contains(t, ctx, "last_error")
+		le := ctx["last_error"].(map[string]interface{})
+		assert.Contains(t, le["message"], "boom")
+	})
 }
 
-func assertJSONEqual(t *testing.T, want, got string) {
-	t.Helper()
-
-	var wantObj interface{}
-	var gotObj interface{}
-
-	if err := json.Unmarshal([]byte(want), &wantObj); err != nil {
-		t.Fatalf("failed to unmarshal want JSON: %v", err)
-	}
-	if err := json.Unmarshal([]byte(got), &gotObj); err != nil {
-		t.Fatalf("failed to unmarshal got JSON: %v", err)
-	}
-
-	if !reflect.DeepEqual(wantObj, gotObj) {
-		t.Fatalf("json not equal\nwant: %s\ngot:  %s", want, got)
-	}
+func TestGetEffectiveHeaderOverride(t *testing.T) {
+	t.Run("nil info", func(t *testing.T) {
+		assert.Equal(t, map[string]interface{}{}, GetEffectiveHeaderOverride(nil))
+	})
+	t.Run("channel header override sanitized", func(t *testing.T) {
+		info := &RelayInfo{ChannelMeta: &ChannelMeta{HeadersOverride: map[string]interface{}{
+			"X-Custom": "  value  ", "empty": "",
+		}}}
+		got := GetEffectiveHeaderOverride(info)
+		assert.Equal(t, "value", got["x-custom"])
+		_, hasEmpty := got["empty"]
+		assert.False(t, hasEmpty)
+	})
+	t.Run("runtime override takes precedence", func(t *testing.T) {
+		info := &RelayInfo{
+			UseRuntimeHeadersOverride: true,
+			RuntimeHeadersOverride:    map[string]interface{}{"X-Runtime": "rt"},
+			ChannelMeta:               &ChannelMeta{HeadersOverride: map[string]interface{}{"X-Channel": "ch"}},
+		}
+		got := GetEffectiveHeaderOverride(info)
+		assert.Equal(t, "rt", got["x-runtime"])
+		_, hasChannel := got["x-channel"]
+		assert.False(t, hasChannel)
+	})
+	t.Run("passthrough rule key keeps empty value", func(t *testing.T) {
+		info := &RelayInfo{ChannelMeta: &ChannelMeta{HeadersOverride: map[string]interface{}{
+			"*": "", "re:x-.*": "",
+		}}}
+		got := GetEffectiveHeaderOverride(info)
+		v, ok := got["*"]
+		assert.True(t, ok)
+		assert.Equal(t, "", v)
+	})
 }
+
+// ---------------------------------------------------------------------------
+// RemoveDisabledFields / RemoveGeminiDisabledFields
+// ---------------------------------------------------------------------------
+
+func TestRemoveDisabledFields(t *testing.T) {
+	t.Run("channel passthrough keeps body", func(t *testing.T) {
+		body := []byte(`{"service_tier":"flex","model":"x"}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, true)
+		require.NoError(t, err)
+		assert.Equal(t, body, out)
+	})
+	t.Run("default removes service_tier and safety_identifier", func(t *testing.T) {
+		body := []byte(`{"service_tier":"flex","safety_identifier":"user1","model":"x"}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, false)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), "service_tier")
+		assert.NotContains(t, string(out), "safety_identifier")
+		assert.Contains(t, string(out), `"model":"x"`)
+	})
+	t.Run("no controlled fields keeps body", func(t *testing.T) {
+		body := []byte(`{"model":"x","temperature":0.5}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, false)
+		require.NoError(t, err)
+		assert.Equal(t, body, out)
+	})
+	t.Run("allow service_tier keeps it", func(t *testing.T) {
+		body := []byte(`{"service_tier":"flex","model":"x"}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{AllowServiceTier: true, AllowSafetyIdentifier: true}, false)
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "service_tier")
+	})
+	t.Run("global passthrough keeps body", func(t *testing.T) {
+		g := model_setting.GetGlobalSettings()
+		old := g.PassThroughRequestEnabled
+		g.PassThroughRequestEnabled = true
+		t.Cleanup(func() { g.PassThroughRequestEnabled = old })
+		body := []byte(`{"service_tier":"flex"}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, false)
+		require.NoError(t, err)
+		assert.Equal(t, body, out)
+	})
+	t.Run("removes stream_options.include_obfuscation", func(t *testing.T) {
+		body := []byte(`{"model":"x","stream_options":{"include_obfuscation":true,"other":1}}`)
+		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, false)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), "include_obfuscation")
+		assert.Contains(t, string(out), `"other":1`)
+	})
+}
+
+func TestRemoveGeminiDisabledFields(t *testing.T) {
+	t.Run("disabled setting keeps body", func(t *testing.T) {
+		g := model_setting.GetGeminiSettings()
+		old := g.RemoveFunctionResponseIdEnabled
+		g.RemoveFunctionResponseIdEnabled = false
+		t.Cleanup(func() { g.RemoveFunctionResponseIdEnabled = old })
+		body := []byte(`{"contents":[{"parts":[{"functionResponse":{"id":"x","name":"f"}}]}]}`)
+		out, err := RemoveGeminiDisabledFields(body)
+		require.NoError(t, err)
+		assert.Equal(t, body, out)
+	})
+	t.Run("enabled removes functionResponse id", func(t *testing.T) {
+		g := model_setting.GetGeminiSettings()
+		old := g.RemoveFunctionResponseIdEnabled
+		g.RemoveFunctionResponseIdEnabled = true
+		t.Cleanup(func() { g.RemoveFunctionResponseIdEnabled = old })
+		body := []byte(`{"contents":[{"parts":[{"functionResponse":{"id":"x","name":"f"}}]}]}`)
+		out, err := RemoveGeminiDisabledFields(body)
+		require.NoError(t, err)
+		assert.NotContains(t, string(out), `"id":"x"`)
+		assert.Contains(t, string(out), `"name":"f"`)
+	})
+}
+
+// keep imports used
+var _ = commonpkg.Marshal

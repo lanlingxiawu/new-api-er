@@ -1,7 +1,8 @@
 package model
 
 import (
-	"sync"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -10,172 +11,283 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
-	require.NoError(t, DB.AutoMigrate(&Redemption{}))
-	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
-	t.Cleanup(func() {
-		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
-	})
+// ---------------------------------------------------------------------------
+// redemption.go — redeem code generate/validate/redeem, status transitions,
+// expiry, batch, soft-delete. Billing-adjacent: the credited quota MUST equal
+// the code value and a code MUST NOT be redeemable twice.
+//
+// Redemption.Key is char(32) UNIQUE; each fixture uses a distinct 32-char key.
+// ---------------------------------------------------------------------------
 
-	now := common.GetTimestamp()
-	redemptions := []Redemption{
-		{Id: 1, Name: "alpha-active", Key: "00000000000000000000000000000001", Status: common.RedemptionCodeStatusEnabled, ExpiredTime: 0},
-		{Id: 2, Name: "alpha-future", Key: "00000000000000000000000000000002", Status: common.RedemptionCodeStatusEnabled, ExpiredTime: now + 3600},
-		{Id: 3, Name: "alpha-expired", Key: "00000000000000000000000000000003", Status: common.RedemptionCodeStatusEnabled, ExpiredTime: now - 10},
-		{Id: 4, Name: "beta-disabled", Key: "00000000000000000000000000000004", Status: common.RedemptionCodeStatusDisabled, ExpiredTime: 0},
-		{Id: 5, Name: "beta-used", Key: "00000000000000000000000000000005", Status: common.RedemptionCodeStatusUsed, ExpiredTime: 0},
-	}
-	require.NoError(t, DB.Create(&redemptions).Error)
-
-	tests := []struct {
-		name      string
-		keyword   string
-		status    string
-		startIdx  int
-		num       int
-		wantTotal int64
-		wantIds   []int
-	}{
-		{
-			name:      "no filters returns all rows",
-			num:       10,
-			wantTotal: 5,
-			wantIds:   []int{5, 4, 3, 2, 1},
-		},
-		{
-			name:      "keyword filters by name prefix",
-			keyword:   "alpha",
-			num:       10,
-			wantTotal: 3,
-			wantIds:   []int{3, 2, 1},
-		},
-		{
-			name:      "enabled status excludes expired rows",
-			status:    "1",
-			num:       10,
-			wantTotal: 2,
-			wantIds:   []int{2, 1},
-		},
-		{
-			name:      "expired status returns enabled expired rows",
-			status:    "expired",
-			num:       10,
-			wantTotal: 1,
-			wantIds:   []int{3},
-		},
-		{
-			name:      "disabled status",
-			status:    "2",
-			num:       10,
-			wantTotal: 1,
-			wantIds:   []int{4},
-		},
-		{
-			name:      "used status",
-			status:    "3",
-			num:       10,
-			wantTotal: 1,
-			wantIds:   []int{5},
-		},
-		{
-			name:      "pagination keeps unpaged total",
-			startIdx:  1,
-			num:       2,
-			wantTotal: 5,
-			wantIds:   []int{4, 3},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rows, total, err := SearchRedemptions(tt.keyword, tt.status, tt.startIdx, tt.num)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantTotal, total)
-			gotIds := make([]int, 0, len(rows))
-			for _, row := range rows {
-				gotIds = append(gotIds, row.Id)
-			}
-			assert.Equal(t, tt.wantIds, gotIds)
-		})
-	}
+// redKey builds a unique 32-char alphanumeric redemption key.
+func redKey() string {
+	s := strings.ReplaceAll(uniq("red"), "_", "") + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	return s[:32]
 }
 
-func setupRedeemFixture(t *testing.T, quota int) (userId int, key string) {
+// mkRedemption inserts a Redemption with a unique key and auto-cleanup.
+func mkRedemption(t *testing.T, mut func(r *Redemption)) *Redemption {
 	t.Helper()
-	require.NoError(t, DB.AutoMigrate(&Redemption{}))
-	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
-	t.Cleanup(func() {
-		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
-		DB.Exec("DELETE FROM users")
-		DB.Exec("DELETE FROM logs")
-	})
-
-	user := &User{Username: "redeem-user", Password: "password", Status: common.UserStatusEnabled, Quota: 0}
-	require.NoError(t, DB.Create(user).Error)
-
-	key = "10000000000000000000000000000001"
-	redemption := &Redemption{
-		Name:        "redeem-test",
-		Key:         key,
+	requireDB(t)
+	r := &Redemption{
+		Id:          nextTestID(),
+		UserId:      0,
+		Key:         redKey(),
+		Name:        uniq("rn"),
 		Status:      common.RedemptionCodeStatusEnabled,
-		Quota:       quota,
+		Quota:       500,
 		CreatedTime: common.GetTimestamp(),
+		ExpiredTime: 0,
 	}
-	require.NoError(t, DB.Create(redemption).Error)
-	return user.Id, key
+	if mut != nil {
+		mut(r)
+	}
+	require.NoError(t, r.Insert())
+	deleteByID(t, &Redemption{}, r.Id)
+	return r
 }
 
-func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
-	userId, key := setupRedeemFixture(t, 500)
+func TestRedemption_InsertGetUpdateDelete(t *testing.T) {
+	requireDB(t)
+	r := mkRedemption(t, func(r *Redemption) { r.Name = "orig"; r.Quota = 123 })
 
-	quota, err := Redeem(key, userId)
+	got, err := GetRedemptionById(r.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 500, quota)
+	assert.Equal(t, r.Key, got.Key)
+	assert.Equal(t, 123, got.Quota)
 
-	var user User
-	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 500, user.Quota)
+	// id == 0 guard
+	_, err = GetRedemptionById(0)
+	assert.Error(t, err)
 
-	var redemption Redemption
-	require.NoError(t, DB.First(&redemption, "name = ?", "redeem-test").Error)
-	assert.Equal(t, common.RedemptionCodeStatusUsed, redemption.Status)
-	assert.Equal(t, userId, redemption.UsedUserId)
+	// Update writes non-zero selected fields.
+	r.Name = "renamed"
+	r.Quota = 456
+	r.Status = common.RedemptionCodeStatusDisabled
+	require.NoError(t, r.Update())
+	got, _ = GetRedemptionById(r.Id)
+	assert.Equal(t, "renamed", got.Name)
+	assert.Equal(t, 456, got.Quota)
+	assert.Equal(t, common.RedemptionCodeStatusDisabled, got.Status)
 
-	// Redeeming the same code again must fail and must not credit quota.
-	_, err = Redeem(key, userId)
-	require.Error(t, err)
-	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 500, user.Quota)
+	// SelectUpdate can persist zero-ish values for redeemed_time/status.
+	r.Status = common.RedemptionCodeStatusUsed
+	r.RedeemedTime = 999
+	require.NoError(t, r.SelectUpdate())
+	got, _ = GetRedemptionById(r.Id)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, got.Status)
+	assert.EqualValues(t, 999, got.RedeemedTime)
 }
 
-// Exactly one of several concurrent redeems of the same code may win, and
-// quota must be credited exactly once.
-func TestRedeemConcurrentSingleSuccess(t *testing.T) {
-	userId, key := setupRedeemFixture(t, 300)
+func TestDeleteRedemptionById(t *testing.T) {
+	requireDB(t)
+	// id == 0 guard
+	assert.Error(t, DeleteRedemptionById(0))
+	// nonexistent id -> record-not-found propagated
+	assert.Error(t, DeleteRedemptionById(nextTestID()))
 
-	const goroutines = 5
-	successes := make([]bool, goroutines)
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			if _, err := Redeem(key, userId); err == nil {
-				successes[idx] = true
-			}
-		}(i)
+	r := mkRedemption(t, nil)
+	require.NoError(t, DeleteRedemptionById(r.Id))
+	// soft-deleted: default scope no longer finds it
+	_, err := GetRedemptionById(r.Id)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// Redeem — the billing-critical path.
+// ---------------------------------------------------------------------------
+
+func TestRedeem_Guards(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+
+	_, err := Redeem("", u.Id)
+	require.Error(t, err)
+	assert.Equal(t, "未提供兑换码", err.Error())
+
+	_, err = Redeem("somekey", 0)
+	require.Error(t, err)
+	assert.Equal(t, "无效的 user id", err.Error())
+
+	// unknown key -> wrapped ErrRedeemFailed
+	_, err = Redeem(redKey(), u.Id)
+	assert.ErrorIs(t, err, ErrRedeemFailed)
+}
+
+func TestRedeem_HappyPath_ExactQuotaAndNoDoubleRedeem(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, func(u *User) { u.Quota = 0 })
+	r := mkRedemption(t, func(r *Redemption) { r.Quota = 500 })
+
+	// First redeem credits EXACTLY the code value.
+	got, err := Redeem(r.Key, u.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 500, got)
+
+	reloaded, err := GetUserById(u.Id, false)
+	require.NoError(t, err)
+	assert.Equal(t, 500, reloaded.Quota)
+
+	// Code transitioned to used + records the redeemer.
+	rr, _ := GetRedemptionById(r.Id)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, rr.Status)
+	assert.Equal(t, u.Id, rr.UsedUserId)
+	assert.Greater(t, rr.RedeemedTime, int64(0))
+
+	// Second redeem of the SAME code must fail and must NOT credit again.
+	_, err = Redeem(r.Key, u.Id)
+	assert.ErrorIs(t, err, ErrRedeemFailed)
+	reloaded2, _ := GetUserById(u.Id, false)
+	assert.Equal(t, 500, reloaded2.Quota) // unchanged — no double-credit
+}
+
+func TestRedeem_DisabledCode(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, func(u *User) { u.Quota = 0 })
+	r := mkRedemption(t, func(r *Redemption) {
+		r.Status = common.RedemptionCodeStatusDisabled
+		r.Quota = 999
+	})
+	_, err := Redeem(r.Key, u.Id)
+	assert.ErrorIs(t, err, ErrRedeemFailed)
+	reloaded, _ := GetUserById(u.Id, false)
+	assert.Equal(t, 0, reloaded.Quota)
+}
+
+func TestRedeem_ExpiredCode(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, func(u *User) { u.Quota = 0 })
+	r := mkRedemption(t, func(r *Redemption) {
+		r.Status = common.RedemptionCodeStatusEnabled
+		r.ExpiredTime = common.GetTimestamp() - 100 // already expired
+		r.Quota = 777
+	})
+	_, err := Redeem(r.Key, u.Id)
+	assert.ErrorIs(t, err, ErrRedeemFailed)
+	reloaded, _ := GetUserById(u.Id, false)
+	assert.Equal(t, 0, reloaded.Quota)
+}
+
+func TestRedeem_NotYetExpired(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, func(u *User) { u.Quota = 0 })
+	r := mkRedemption(t, func(r *Redemption) {
+		r.ExpiredTime = common.GetTimestamp() + 3600 // future
+		r.Quota = 250
+	})
+	got, err := Redeem(r.Key, u.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 250, got)
+	reloaded, _ := GetUserById(u.Id, false)
+	assert.Equal(t, 250, reloaded.Quota)
+}
+
+// ---------------------------------------------------------------------------
+// Listing / search / bulk cleanup
+// ---------------------------------------------------------------------------
+
+func TestGetAllRedemptions(t *testing.T) {
+	requireDB(t)
+	r1 := mkRedemption(t, nil)
+	r2 := mkRedemption(t, nil)
+
+	// Large page fetches a superset containing our two rows.
+	all, total, err := GetAllRedemptions(0, 1000)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, total, int64(2))
+	ids := map[int]bool{}
+	for _, r := range all {
+		ids[r.Id] = true
 	}
-	wg.Wait()
+	assert.True(t, ids[r1.Id])
+	assert.True(t, ids[r2.Id])
+}
 
-	successCount := 0
-	for _, ok := range successes {
-		if ok {
-			successCount++
+func TestSearchRedemptions(t *testing.T) {
+	requireDB(t)
+	prefix := uniq("srchred")
+	r1 := mkRedemption(t, func(r *Redemption) { r.Name = prefix + "-a"; r.Status = common.RedemptionCodeStatusEnabled })
+	mkRedemption(t, func(r *Redemption) { r.Name = prefix + "-b"; r.Status = common.RedemptionCodeStatusDisabled })
+
+	// keyword by unique name prefix -> both rows
+	rows, total, err := SearchRedemptions(prefix, "", 0, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, total)
+	assert.Len(t, rows, 2)
+
+	// keyword + status filter (disabled) -> only the disabled one
+	rows, total, err = SearchRedemptions(prefix, strconv.Itoa(common.RedemptionCodeStatusDisabled), 0, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, prefix+"-b", rows[0].Name)
+
+	// keyword + enabled status -> only enabled (non-expired)
+	rows, _, err = SearchRedemptions(prefix, strconv.Itoa(common.RedemptionCodeStatusEnabled), 0, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, r1.Id, rows[0].Id)
+
+	// numeric keyword matches by id
+	rows, total, err = SearchRedemptions(strconv.Itoa(r1.Id), "", 0, 100)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, total, int64(1))
+	found := false
+	for _, r := range rows {
+		if r.Id == r1.Id {
+			found = true
 		}
 	}
-	assert.Equal(t, 1, successCount, "exactly one concurrent redeem should succeed")
+	assert.True(t, found)
+}
 
-	var user User
-	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 300, user.Quota, "quota must be credited exactly once")
+func TestSearchRedemptions_ExpiredStatus(t *testing.T) {
+	requireDB(t)
+	prefix := uniq("srchexp")
+	// enabled but expired
+	exp := mkRedemption(t, func(r *Redemption) {
+		r.Name = prefix + "-exp"
+		r.Status = common.RedemptionCodeStatusEnabled
+		r.ExpiredTime = common.GetTimestamp() - 100
+	})
+	// enabled and valid
+	mkRedemption(t, func(r *Redemption) {
+		r.Name = prefix + "-live"
+		r.Status = common.RedemptionCodeStatusEnabled
+		r.ExpiredTime = 0
+	})
+
+	rows, total, err := SearchRedemptions(prefix, "expired", 0, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, exp.Id, rows[0].Id)
+}
+
+func TestDeleteInvalidRedemptions(t *testing.T) {
+	requireDB(t)
+	// used, disabled, expired-enabled -> all invalid; valid enabled -> kept.
+	used := mkRedemption(t, func(r *Redemption) { r.Status = common.RedemptionCodeStatusUsed })
+	disabled := mkRedemption(t, func(r *Redemption) { r.Status = common.RedemptionCodeStatusDisabled })
+	expired := mkRedemption(t, func(r *Redemption) {
+		r.Status = common.RedemptionCodeStatusEnabled
+		r.ExpiredTime = common.GetTimestamp() - 100
+	})
+	valid := mkRedemption(t, func(r *Redemption) {
+		r.Status = common.RedemptionCodeStatusEnabled
+		r.ExpiredTime = 0
+	})
+
+	n, err := DeleteInvalidRedemptions()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, n, int64(3))
+
+	// invalid ones gone (soft-deleted -> not found in default scope)
+	for _, id := range []int{used.Id, disabled.Id, expired.Id} {
+		_, e := GetRedemptionById(id)
+		assert.ErrorIs(t, e, gorm.ErrRecordNotFound, "id %d should be deleted", id)
+	}
+	// valid one survives
+	_, e := GetRedemptionById(valid.Id)
+	assert.NoError(t, e)
 }

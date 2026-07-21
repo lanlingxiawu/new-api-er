@@ -90,6 +90,11 @@ func TestMain(m *testing.M) {
 	}
 	model.DB = db
 
+	// Resolve dialect-specific reserved-word column names (`key`, `group`, ...).
+	// Without this commonKeyCol/commonGroupCol are empty and any raw-SQL query that
+	// quotes those columns (e.g. model.GetTokenByKey) builds invalid SQL.
+	model.InitColumnNames()
+
 	// --- Log DB (PostgreSQL from .env LOG_SQL_DSN, fallback to main DB) ---
 	logDSN := os.Getenv("LOG_SQL_DSN")
 	if logDSN != "" {

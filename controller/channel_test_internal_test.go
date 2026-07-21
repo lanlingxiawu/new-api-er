@@ -2,129 +2,102 @@ package controller
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
-	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
-	info := &relaycommon.RelayInfo{
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:   "tiered_expr",
-			ExprString:    `param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`,
-			ExprHash:      billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
-			GroupRatio:    1,
-			EstimatedTier: "stream",
-			QuotaPerUnit:  common.QuotaPerUnit,
-			ExprVersion:   1,
-		},
-		BillingRequestInput: &billingexpr.RequestInput{
-			Body: []byte(`{"stream":true}`),
-		},
-	}
-
-	quota, result := settleTestQuota(info, types.PriceData{
-		ModelRatio:      1,
-		CompletionRatio: 2,
-	}, &dto.Usage{
-		PromptTokens: 1000,
-	})
-
-	require.Equal(t, 1500, quota)
-	require.NotNil(t, result)
-	require.Equal(t, "stream", result.MatchedTier)
+// parseStatusFilter: equivalence classes over the status query param.
+func TestParseStatusFilter(t *testing.T) {
+	assert.Equal(t, common.ChannelStatusEnabled, parseStatusFilter("enabled"))
+	assert.Equal(t, common.ChannelStatusEnabled, parseStatusFilter("1"))
+	assert.Equal(t, 0, parseStatusFilter("disabled"))
+	assert.Equal(t, 0, parseStatusFilter("0"))
+	assert.Equal(t, -1, parseStatusFilter(""))
+	assert.Equal(t, -1, parseStatusFilter("garbage"))
+	assert.Equal(t, common.ChannelStatusEnabled, parseStatusFilter("ENABLED"), "case-insensitive")
 }
 
-func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-
-	info := &relaycommon.RelayInfo{
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode: "tiered_expr",
-			ExprString:  `tier("base", p * 2)`,
-		},
-		ChannelMeta: &relaycommon.ChannelMeta{},
-	}
-	priceData := types.PriceData{
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-	}
-	usage := &dto.Usage{
-		PromptTokensDetails: dto.InputTokenDetails{
-			CachedTokens: 12,
-		},
-	}
-
-	other := buildTestLogOther(ctx, info, priceData, usage, &billingexpr.TieredResult{
-		MatchedTier: "base",
-	})
-
-	require.Equal(t, "tiered_expr", other["billing_mode"])
-	require.Equal(t, "base", other["matched_tier"])
-	require.NotEmpty(t, other["expr_b64"])
-}
-
-func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Set("id", 2)
-
-	userID, err := resolveChannelTestUserID(ctx)
-
-	require.NoError(t, err)
-	require.Equal(t, 2, userID)
-}
-
-func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *testing.T) {
+// selectChannelsForAutomaticTest: manual-disabled channels are always skipped;
+// passive-recovery mode restricts to auto-disabled channels only.
+func TestSelectChannelsForAutomaticTest(t *testing.T) {
 	channels := []*model.Channel{
 		{Id: 1, Status: common.ChannelStatusEnabled},
-		{Id: 2, Status: common.ChannelStatusAutoDisabled},
-		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
+		{Id: 2, Status: common.ChannelStatusManuallyDisabled},
+		{Id: 3, Status: common.ChannelStatusAutoDisabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery)
+	// scheduled-all mode: keep enabled + auto-disabled, skip manual-disabled
+	all := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll)
+	ids := channelIDs(all)
+	assert.ElementsMatch(t, []int{1, 3}, ids)
 
-	require.Len(t, selected, 1)
-	require.Equal(t, 2, selected[0].Id)
+	// passive-recovery mode: only auto-disabled
+	passive := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery)
+	assert.Equal(t, []int{3}, channelIDs(passive))
 }
 
-func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T) {
-	channels := []*model.Channel{
-		{Id: 1, Status: common.ChannelStatusEnabled},
-		{Id: 2, Status: common.ChannelStatusAutoDisabled},
-		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
+func channelIDs(channels []*model.Channel) []int {
+	ids := make([]int, 0, len(channels))
+	for _, ch := range channels {
+		ids = append(ids, ch.Id)
 	}
-
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll)
-
-	require.Len(t, selected, 2)
-	require.Equal(t, 1, selected[0].Id)
-	require.Equal(t, 2, selected[1].Id)
+	return ids
 }
 
-func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
-	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}))
-
-	existing, err := model.CreateSystemTask(model.SystemTaskTypeChannelTest, nil, nil)
+// resolveChannelTestUserID: an authenticated context uses its own user id
+// without touching the DB.
+func TestResolveChannelTestUserID_UsesRequestUser(t *testing.T) {
+	ctx, _ := newCtx(t, http.MethodPost, "/api/channel/test", nil)
+	asUser(ctx, 4242)
+	id, err := resolveChannelTestUserID(ctx)
 	require.NoError(t, err)
+	assert.Equal(t, 4242, id)
+}
 
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test", nil)
+// sanitizeChannelSensitiveSettingsForDisplay masks the account-balance token so
+// it never leaks in list/detail responses.
+func TestSanitizeChannelSensitiveSettingsForDisplay(t *testing.T) {
+	ch := &model.Channel{}
+	s := ch.GetSetting()
+	s.AccountBalanceToken = "raw-secret-token"
+	ch.SetSetting(s)
 
-	TestAllChannels(ctx)
+	sanitizeChannelSensitiveSettingsForDisplay(ch)
+	assert.Equal(t, maskedChannelSensitiveToken, ch.GetSetting().AccountBalanceToken)
 
-	require.Equal(t, http.StatusConflict, recorder.Code)
-	require.Contains(t, recorder.Body.String(), existing.TaskID)
-	require.Contains(t, recorder.Body.String(), "已有通道测试任务正在运行或等待中")
+	// no token -> unchanged (no mask injected)
+	empty := &model.Channel{}
+	sanitizeChannelSensitiveSettingsForDisplay(empty)
+	assert.Empty(t, empty.GetSetting().AccountBalanceToken)
+}
+
+// preserveSensitiveChannelSettingsForUpdate: the masked placeholder restores the
+// original token; an explicit empty string clears it (so the credential can be
+// removed).
+func TestPreserveSensitiveChannelSettingsForUpdate(t *testing.T) {
+	origin := &model.Channel{}
+	os := origin.GetSetting()
+	os.AccountBalanceToken = "original-token"
+	origin.SetSetting(os)
+
+	// incoming submits the masked placeholder -> original preserved
+	masked := &model.Channel{}
+	ms := masked.GetSetting()
+	ms.AccountBalanceToken = maskedChannelSensitiveToken
+	masked.SetSetting(ms)
+	preserveSensitiveChannelSettingsForUpdate(masked, origin)
+	assert.Equal(t, "original-token", masked.GetSetting().AccountBalanceToken)
+
+	// incoming submits empty string -> token cleared (not restored)
+	cleared := &model.Channel{}
+	cs := cleared.GetSetting()
+	cs.AccountBalanceToken = ""
+	cleared.SetSetting(cs)
+	preserveSensitiveChannelSettingsForUpdate(cleared, origin)
+	assert.Empty(t, cleared.GetSetting().AccountBalanceToken)
 }

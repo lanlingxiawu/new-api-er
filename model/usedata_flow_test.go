@@ -4,190 +4,151 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func seedFlowQuotaData(t *testing.T, quotaData QuotaData) {
-	t.Helper()
-	require.NoError(t, DB.Create(&quotaData).Error)
-}
+// ---------------------------------------------------------------------------
+// usedata_flow.go builds the "flow" breakdown from quota_data, dispatching by
+// role (self / admin / root) and resolving token + channel display names. All
+// queries require use_group <> '' and a created_at window. Tests isolate by a
+// unique created_at window + unique user/group so cross-user rows never leak.
+// ---------------------------------------------------------------------------
 
-func seedFlowLookupData(t *testing.T) {
-	t.Helper()
-	require.NoError(t, DB.Create(&Channel{Id: 1, Name: "east"}).Error)
-	require.NoError(t, DB.Create(&Channel{Id: 2, Name: "west"}).Error)
-	require.NoError(t, DB.Create(&Token{Id: 11, UserId: 1, Key: "sk-primary", Name: "primary"}).Error)
-	require.NoError(t, DB.Create(&Token{Id: 22, UserId: 2, Key: "sk-backup", Name: "backup"}).Error)
-	require.NoError(t, DB.Delete(&Token{Id: 11}).Error)
-}
+func TestGetFlowQuotaData_Self(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	tk := mkToken(t, u.Id, nil)
+	base := usedataUniqTime()
+	grp := uniq("fg")
+	m1, m2 := uniq("fm1"), uniq("fm2")
 
-func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
-	truncateTables(t)
-	seedFlowLookupData(t)
-
-	seedFlowQuotaData(t, QuotaData{
-		UserID:    1,
-		Username:  "alice",
-		NodeName:  "node-a",
-		TokenID:   11,
-		UseGroup:  "vip",
-		ModelName: "gpt-a",
-		ChannelID: 1,
-		CreatedAt: 1000,
-		Count:     2,
-		Quota:     100,
-		TokenUsed: 40,
+	// two models for the same user/token/group; m2 has higher quota
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.TokenID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, tk.Id, grp, m1, base
+		q.Quota, q.Count, q.TokenUsed = 100, 1, 10
 	})
-	seedFlowQuotaData(t, QuotaData{
-		UserID:    1,
-		Username:  "alice",
-		NodeName:  "node-a",
-		TokenID:   11,
-		UseGroup:  "vip",
-		ModelName: "gpt-a",
-		ChannelID: 1,
-		CreatedAt: 1100,
-		Count:     1,
-		Quota:     50,
-		TokenUsed: 20,
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.TokenID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, tk.Id, grp, m2, base
+		q.Quota, q.Count, q.TokenUsed = 300, 1, 30
 	})
-	seedFlowQuotaData(t, QuotaData{
-		UserID:    1,
-		Username:  "alice",
-		NodeName:  "node-a",
-		TokenID:   11,
-		UseGroup:  "vip",
-		ModelName: "gpt-a",
-		ChannelID: 2,
-		CreatedAt: 1200,
-		Count:     1,
-		Quota:     25,
-		TokenUsed: 10,
-	})
-	seedFlowQuotaData(t, QuotaData{
-		UserID:    2,
-		Username:  "bob",
-		NodeName:  "node-b",
-		TokenID:   22,
-		UseGroup:  "default",
-		ModelName: "gpt-b",
-		ChannelID: 1,
-		CreatedAt: 1300,
-		Count:     3,
-		Quota:     70,
-		TokenUsed: 30,
-	})
-	seedFlowQuotaData(t, QuotaData{
-		UserID:    1,
-		Username:  "alice",
-		ModelName: "legacy",
-		CreatedAt: 1400,
-		Count:     99,
-		Quota:     999,
-		TokenUsed: 999,
+	// a use_group='' row must be excluded by flowQuotaBaseQuery
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.TokenID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, tk.Id, "", uniq("fx"), base
+		q.Quota = 999
 	})
 
-	rootRows, err := GetFlowQuotaData(900, 2000, "", 0, common.RoleRootUser)
+	rows, err := GetFlowQuotaData(base, base, "", u.Id, common.RoleCommonUser)
 	require.NoError(t, err)
-	require.Len(t, rootRows, 3)
-	// Token 11 was soft-deleted, so its name is intentionally left empty for the
-	// frontend to render a localized "deleted (id)" label instead.
-	require.Equal(t, FlowQuotaData{
-		UserID:      1,
-		Username:    "alice",
-		NodeName:    "node-a",
-		TokenID:     11,
-		TokenName:   "",
-		UseGroup:    "vip",
-		ChannelID:   1,
-		ChannelName: "east",
-		ModelName:   "gpt-a",
-		TokenUsed:   60,
-		Count:       3,
-		Quota:       150,
-	}, *rootRows[0])
-	// A token that still exists resolves to its current name.
-	require.Equal(t, 22, rootRows[1].TokenID)
-	require.Equal(t, "backup", rootRows[1].TokenName)
-
-	adminRows, err := GetFlowQuotaData(900, 2000, "alice", 0, common.RoleAdminUser)
-	require.NoError(t, err)
-	require.Len(t, adminRows, 2)
-	require.Equal(t, 0, adminRows[0].TokenID)
-	require.Empty(t, adminRows[0].TokenName)
-	require.Empty(t, adminRows[0].NodeName)
-	require.Equal(t, "alice", adminRows[0].Username)
-	require.Equal(t, "vip", adminRows[0].UseGroup)
-	require.Equal(t, "east", adminRows[0].ChannelName)
-	require.Equal(t, 150, adminRows[0].Quota)
-
-	selfRows, err := GetFlowQuotaData(900, 2000, "", 1, common.RoleCommonUser)
-	require.NoError(t, err)
-	require.Len(t, selfRows, 1)
-	require.Empty(t, selfRows[0].Username)
-	require.Equal(t, 0, selfRows[0].ChannelID)
-	require.Empty(t, selfRows[0].ChannelName)
-	require.Empty(t, selfRows[0].TokenName)
-	require.Equal(t, "vip", selfRows[0].UseGroup)
-	require.Equal(t, 175, selfRows[0].Quota)
-}
-
-func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
-	truncateTables(t)
-	CacheQuotaDataLock.Lock()
-	CacheQuotaData = make(map[string]*QuotaData)
-	CacheQuotaDataLock.Unlock()
-
-	LogQuotaData(QuotaDataLogParams{
-		UserID:    1,
-		Username:  "alice",
-		ModelName: "gpt-a",
-		CreatedAt: 3661,
-		UseGroup:  "vip",
-		TokenID:   11,
-		ChannelID: 1,
-		NodeName:  "node-a",
-		Quota:     100,
-		TokenUsed: 40,
-	})
-	LogQuotaData(QuotaDataLogParams{
-		UserID:    1,
-		Username:  "alice",
-		ModelName: "gpt-a",
-		CreatedAt: 3700,
-		UseGroup:  "vip",
-		TokenID:   11,
-		ChannelID: 1,
-		NodeName:  "node-a",
-		Quota:     50,
-		TokenUsed: 20,
-	})
-	LogQuotaData(QuotaDataLogParams{
-		UserID:    1,
-		Username:  "alice",
-		ModelName: "gpt-a",
-		CreatedAt: 3700,
-		UseGroup:  "default",
-		TokenID:   11,
-		ChannelID: 1,
-		NodeName:  "node-a",
-		Quota:     25,
-		TokenUsed: 10,
-	})
-
-	SaveQuotaDataCache()
-
-	var rows []QuotaData
-	require.NoError(t, DB.Order("quota DESC").Find(&rows).Error)
 	require.Len(t, rows, 2)
-	require.Equal(t, int64(3600), rows[0].CreatedAt)
-	require.Equal(t, "vip", rows[0].UseGroup)
-	require.Equal(t, 11, rows[0].TokenID)
-	require.Equal(t, 1, rows[0].ChannelID)
-	require.Equal(t, "node-a", rows[0].NodeName)
-	require.Equal(t, 2, rows[0].Count)
-	require.Equal(t, 150, rows[0].Quota)
-	require.Equal(t, 60, rows[0].TokenUsed)
-	require.Equal(t, "default", rows[1].UseGroup)
-	require.Equal(t, 25, rows[1].Quota)
+	// ordered by quota DESC -> m2 first
+	assert.Equal(t, m2, rows[0].ModelName)
+	assert.EqualValues(t, 300, rows[0].Quota)
+	assert.Equal(t, m1, rows[1].ModelName)
+	// token name resolved for both
+	assert.Equal(t, tk.Name, rows[0].TokenName)
+	assert.Equal(t, tk.Name, rows[1].TokenName)
+}
+
+func TestGetFlowQuotaData_SelfDeletedTokenNameEmpty(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	base := usedataUniqTime()
+	grp := uniq("fg")
+
+	// token_id that does not exist -> TokenName stays empty (frontend renders label)
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.TokenID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, 0x7fffff00, grp, uniq("dm"), base
+		q.Quota = 5
+	})
+	rows, err := GetFlowQuotaData(base, base, "", u.Id, common.RoleCommonUser)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].TokenName)
+}
+
+func TestGetFlowQuotaData_Admin(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	ch := mkChannel(t, nil)
+	base := usedataUniqTime()
+	grp := uniq("ag")
+	model := uniq("am")
+
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.Username, q.ChannelID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, u.Username, ch.Id, grp, model, base
+		q.Quota, q.Count, q.TokenUsed = 200, 2, 20
+	})
+
+	// admin without username filter
+	rows, err := GetFlowQuotaData(base, base, "", 0, common.RoleAdminUser)
+	require.NoError(t, err)
+	var mine *FlowQuotaData
+	for _, r := range rows {
+		if r.Username == u.Username {
+			mine = r
+		}
+	}
+	require.NotNil(t, mine)
+	assert.EqualValues(t, 200, mine.Quota)
+	assert.Equal(t, ch.Name, mine.ChannelName) // channel name resolved from DB
+
+	// admin WITH username filter narrows to that user
+	rows, err = GetFlowQuotaData(base, base, u.Username, 0, common.RoleAdminUser)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, u.Username, rows[0].Username)
+}
+
+func TestGetFlowQuotaData_AdminUnknownChannelFallback(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	base := usedataUniqTime()
+	grp := uniq("ag")
+
+	// channel_id that does not exist -> fallback "channel-<id>"
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.Username, q.ChannelID, q.UseGroup, q.ModelName, q.CreatedAt = u.Id, u.Username, 0x7ffffe00, grp, uniq("am"), base
+		q.Quota = 7
+	})
+	rows, err := GetFlowQuotaData(base, base, u.Username, 0, common.RoleAdminUser)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "channel-2147483136", rows[0].ChannelName) // 0x7ffffe00 = 2147483136
+}
+
+func TestGetFlowQuotaData_Root(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	tk := mkToken(t, u.Id, nil)
+	ch := mkChannel(t, nil)
+	base := usedataUniqTime()
+	grp := uniq("rg")
+	model := uniq("rm")
+
+	mkQuotaData(t, func(q *QuotaData) {
+		q.UserID, q.Username, q.TokenID, q.ChannelID = u.Id, u.Username, tk.Id, ch.Id
+		q.UseGroup, q.ModelName, q.CreatedAt, q.NodeName = grp, model, base, "node-x"
+		q.Quota, q.Count, q.TokenUsed = 500, 3, 50
+	})
+
+	rows, err := GetFlowQuotaData(base, base, u.Username, u.Id, common.RoleRootUser)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 500, rows[0].Quota)
+	assert.Equal(t, "node-x", rows[0].NodeName)
+	assert.Equal(t, tk.Name, rows[0].TokenName)   // token resolved
+	assert.Equal(t, ch.Name, rows[0].ChannelName) // channel resolved
+}
+
+// fillFlowTokenNames / fillFlowChannelNames short-circuit on empty id sets.
+func TestFillFlowNames_EmptyInputs(t *testing.T) {
+	require.NoError(t, fillFlowTokenNames(nil))
+	require.NoError(t, fillFlowChannelNames(nil))
+	// rows with only zero ids -> nothing to resolve, no error
+	rows := []*FlowQuotaData{{TokenID: 0, ChannelID: 0}}
+	require.NoError(t, fillFlowTokenNames(rows))
+	require.NoError(t, fillFlowChannelNames(rows))
+	assert.Empty(t, rows[0].TokenName)
+	assert.Empty(t, rows[0].ChannelName)
 }

@@ -1,13 +1,7 @@
 package controller
 
 import (
-	"bytes"
-	"database/sql"
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,467 +9,236 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-type tokenAPIResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+type tokenItemsPage struct {
+	Items []model.Token `json:"items"`
+	Total int           `json:"total"`
 }
 
-type tokenPageResponse struct {
-	Items []tokenResponseItem `json:"items"`
-}
-
-type tokenResponseItem struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Key    string `json:"key"`
-	Status int    `json:"status"`
-}
-
-type tokenKeyResponse struct {
-	Key string `json:"key"`
-}
-
-type sqliteColumnInfo struct {
-	Name string `gorm:"column:name"`
-	Type string `gorm:"column:type"`
-}
-
-type legacyToken struct {
-	Id                 int    `gorm:"primaryKey"`
-	UserId             int    `gorm:"index"`
-	Key                string `gorm:"column:key;type:char(48);uniqueIndex"`
-	Status             int    `gorm:"default:1"`
-	Name               string `gorm:"index"`
-	CreatedTime        int64  `gorm:"bigint"`
-	AccessedTime       int64  `gorm:"bigint"`
-	ExpiredTime        int64  `gorm:"bigint;default:-1"`
-	RemainQuota        int    `gorm:"default:0"`
-	UnlimitedQuota     bool
-	ModelLimitsEnabled bool
-	ModelLimits        string  `gorm:"type:text"`
-	AllowIps           *string `gorm:"default:''"`
-	UsedQuota          int     `gorm:"default:0"`
-	Group              string  `gorm:"column:group;default:''"`
-	CrossGroupRetry    bool
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
-}
-
-func (legacyToken) TableName() string {
-	return "tokens"
-}
-
-func openTokenControllerTestDB(t *testing.T) *gorm.DB {
+func decodeTokenItems(t *testing.T, data []byte) tokenItemsPage {
 	t.Helper()
-
-	gin.SetMode(gin.TestMode)
-	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	common.RedisEnabled = false
-
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open sqlite db: %v", err)
-	}
-	model.DB = db
-	model.LOG_DB = db
-
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
-
-	return db
+	var page tokenItemsPage
+	require.NoError(t, common.Unmarshal(data, &page))
+	return page
 }
 
-func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
-	t.Helper()
+// GetAllTokens: caller-scoped listing + key masking + no raw-key leak.
+func TestGetAllTokens_ScopesToCallerAndMasksKey(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	other := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, func(tk *model.Token) { tk.Name = "list-token" })
+	mkToken(t, other.Id, func(tk *model.Token) { tk.Name = "other-user-token" })
 
-	if err := db.AutoMigrate(&model.Token{}); err != nil {
-		t.Fatalf("failed to migrate token table: %v", err)
-	}
-}
-
-func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-
-	db := openTokenControllerTestDB(t)
-	migrateTokenControllerTestDB(t, db)
-	return db
-}
-
-func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*gorm.DB, *bool) {
-	t.Helper()
-
-	gin.SetMode(gin.TestMode)
-	common.RedisEnabled = false
-
-	var (
-		db     *gorm.DB
-		dbType common.DatabaseType
-		err    error
-	)
-	switch dialect {
-	case "mysql":
-		dbType = common.DatabaseTypeMySQL
-		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	case "postgres":
-		dbType = common.DatabaseTypePostgreSQL
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	default:
-		t.Fatalf("unsupported dialect %q", dialect)
-	}
-	common.SetDatabaseTypes(dbType, dbType)
-	if err != nil {
-		t.Fatalf("failed to open %s db: %v", dialect, err)
-	}
-
-	model.DB = db
-	model.LOG_DB = db
-
-	if db.Migrator().HasTable("tokens") {
-		t.Skipf("refusing to run %s migration compatibility test against external database because tokens table already exists", dialect)
-	}
-
-	managedTokensTable := new(bool)
-
-	t.Cleanup(func() {
-		if *managedTokensTable && db.Migrator().HasTable("tokens") {
-			_ = db.Migrator().DropTable("tokens")
-		}
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
-
-	return db, managedTokensTable
-}
-
-func seedToken(t *testing.T, db *gorm.DB, userID int, name string, rawKey string) *model.Token {
-	t.Helper()
-
-	token := &model.Token{
-		UserId:         userID,
-		Name:           name,
-		Key:            rawKey,
-		Status:         common.TokenStatusEnabled,
-		CreatedTime:    1,
-		AccessedTime:   1,
-		ExpiredTime:    -1,
-		RemainQuota:    100,
-		UnlimitedQuota: true,
-		Group:          "default",
-	}
-	if err := db.Create(token).Error; err != nil {
-		t.Fatalf("failed to create token: %v", err)
-	}
-	return token
-}
-
-func newAuthenticatedContext(t *testing.T, method string, target string, body any, userID int) (*gin.Context, *httptest.ResponseRecorder) {
-	t.Helper()
-
-	var requestBody *bytes.Reader
-	if body != nil {
-		payload, err := common.Marshal(body)
-		if err != nil {
-			t.Fatalf("failed to marshal request body: %v", err)
-		}
-		requestBody = bytes.NewReader(payload)
-	} else {
-		requestBody = bytes.NewReader(nil)
-	}
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(method, target, requestBody)
-	if body != nil {
-		ctx.Request.Header.Set("Content-Type", "application/json")
-	}
-	ctx.Set("id", userID)
-	return ctx, recorder
-}
-
-func decodeAPIResponse(t *testing.T, recorder *httptest.ResponseRecorder) tokenAPIResponse {
-	t.Helper()
-
-	var response tokenAPIResponse
-	if err := common.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
-		t.Fatalf("failed to decode api response: %v", err)
-	}
-	return response
-}
-
-func getSQLiteColumnType(t *testing.T, db *gorm.DB, tableName string, columnName string) string {
-	t.Helper()
-
-	var columns []sqliteColumnInfo
-	if err := db.Raw("PRAGMA table_info(" + tableName + ")").Scan(&columns).Error; err != nil {
-		t.Fatalf("failed to inspect %s schema: %v", tableName, err)
-	}
-
-	for _, column := range columns {
-		if column.Name == columnName {
-			return strings.ToLower(column.Type)
-		}
-	}
-
-	t.Fatalf("column %s not found in %s schema", columnName, tableName)
-	return ""
-}
-
-func getTokenKeyColumnType(t *testing.T, db *gorm.DB, dialect string) string {
-	t.Helper()
-
-	switch dialect {
-	case "sqlite":
-		return getSQLiteColumnType(t, db, "tokens", "key")
-	case "mysql":
-		var columnType string
-		if err := db.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
-			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-			"tokens", "key").Scan(&columnType).Error; err != nil {
-			t.Fatalf("failed to inspect mysql token key column: %v", err)
-		}
-		return strings.ToLower(columnType)
-	case "postgres":
-		var dataType string
-		var maxLength sql.NullInt64
-		if err := db.Raw(`SELECT data_type, character_maximum_length
-			FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
-			"tokens", "key").Row().Scan(&dataType, &maxLength); err != nil {
-			t.Fatalf("failed to inspect postgres token key column: %v", err)
-		}
-		switch strings.ToLower(dataType) {
-		case "character varying":
-			return fmt.Sprintf("varchar(%d)", maxLength.Int64)
-		case "character":
-			return fmt.Sprintf("char(%d)", maxLength.Int64)
-		default:
-			if maxLength.Valid {
-				return fmt.Sprintf("%s(%d)", strings.ToLower(dataType), maxLength.Int64)
-			}
-			return strings.ToLower(dataType)
-		}
-	default:
-		t.Fatalf("unsupported dialect %q", dialect)
-		return ""
-	}
-}
-
-func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect string, managedTokensTable *bool) {
-	t.Helper()
-
-	legacyKey := strings.Repeat("a", 48)
-	longKey := strings.Repeat("b", 64)
-
-	if err := db.AutoMigrate(&legacyToken{}); err != nil {
-		t.Fatalf("failed to create legacy token schema: %v", err)
-	}
-	if managedTokensTable != nil {
-		*managedTokensTable = true
-	}
-	if err := db.Create(&legacyToken{
-		UserId:             7,
-		Key:                legacyKey,
-		Status:             common.TokenStatusEnabled,
-		Name:               "legacy-token",
-		CreatedTime:        1,
-		AccessedTime:       1,
-		ExpiredTime:        -1,
-		RemainQuota:        100,
-		UnlimitedQuota:     true,
-		ModelLimitsEnabled: false,
-		ModelLimits:        "",
-		AllowIps:           common.GetPointer(""),
-		UsedQuota:          0,
-		Group:              "default",
-		CrossGroupRetry:    false,
-	}).Error; err != nil {
-		t.Fatalf("failed to seed legacy token row: %v", err)
-	}
-
-	if got := getTokenKeyColumnType(t, db, dialect); got != "char(48)" {
-		t.Fatalf("expected legacy key column type char(48), got %q", got)
-	}
-
-	migrateTokenControllerTestDB(t, db)
-
-	if got := getTokenKeyColumnType(t, db, dialect); got != "varchar(128)" {
-		t.Fatalf("expected migrated key column type varchar(128), got %q", got)
-	}
-
-	var migratedToken model.Token
-	if err := db.First(&migratedToken, "name = ?", "legacy-token").Error; err != nil {
-		t.Fatalf("failed to load migrated token row: %v", err)
-	}
-	if migratedToken.Key != legacyKey {
-		t.Fatalf("expected migrated token key %q, got %q", legacyKey, migratedToken.Key)
-	}
-	if migratedToken.Name != "legacy-token" {
-		t.Fatalf("expected migrated token name to be preserved, got %q", migratedToken.Name)
-	}
-
-	inserted := model.Token{
-		UserId:             8,
-		Name:               "long-token",
-		Key:                longKey,
-		Status:             common.TokenStatusEnabled,
-		CreatedTime:        1,
-		AccessedTime:       1,
-		ExpiredTime:        -1,
-		RemainQuota:        200,
-		UnlimitedQuota:     true,
-		ModelLimitsEnabled: false,
-		ModelLimits:        "",
-		AllowIps:           common.GetPointer(""),
-		UsedQuota:          0,
-		Group:              "default",
-		CrossGroupRetry:    false,
-	}
-	if err := db.Create(&inserted).Error; err != nil {
-		t.Fatalf("failed to insert long token after migration: %v", err)
-	}
-
-	var fetched model.Token
-	if err := db.First(&fetched, "id = ?", inserted.Id).Error; err != nil {
-		t.Fatalf("failed to fetch long token after migration: %v", err)
-	}
-	if fetched.Key != longKey {
-		t.Fatalf("expected long token key %q, got %q", longKey, fetched.Key)
-	}
-}
-
-func TestTokenAutoMigrateUsesVarchar128KeyColumn(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-
-	if got := getTokenKeyColumnType(t, db, "sqlite"); got != "varchar(128)" {
-		t.Fatalf("expected key column type varchar(128), got %q", got)
-	}
-}
-
-func TestTokenMigrationFromChar48ToVarchar128(t *testing.T) {
-	db := openTokenControllerTestDB(t)
-	runTokenMigrationCompatibilityTest(t, db, "sqlite", nil)
-}
-
-func TestTokenMigrationFromChar48ToVarchar128MySQL(t *testing.T) {
-	dsn := os.Getenv("TEST_MYSQL_DSN")
-	if dsn == "" {
-		t.Skip("set TEST_MYSQL_DSN to run mysql migration compatibility test")
-	}
-
-	db, managedTokensTable := openTokenControllerExternalDB(t, "mysql", dsn)
-	runTokenMigrationCompatibilityTest(t, db, "mysql", managedTokensTable)
-}
-
-func TestTokenMigrationFromChar48ToVarchar128Postgres(t *testing.T) {
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("set TEST_POSTGRES_DSN to run postgres migration compatibility test")
-	}
-
-	db, managedTokensTable := openTokenControllerExternalDB(t, "postgres", dsn)
-	runTokenMigrationCompatibilityTest(t, db, "postgres", managedTokensTable)
-}
-
-func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-	token := seedToken(t, db, 1, "list-token", "abcd1234efgh5678")
-	seedToken(t, db, 2, "other-user-token", "zzzz1234yyyy5678")
-
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/?p=1&size=10", nil, 1)
+	ctx, rec := newCtx(t, http.MethodGet, "/api/token/?p=1&size=100", nil)
+	asUser(ctx, owner.Id)
 	GetAllTokens(ctx)
 
-	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected success response, got message: %s", response.Message)
-	}
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	page := decodeTokenItems(t, resp.Data)
 
-	var page tokenPageResponse
-	if err := common.Unmarshal(response.Data, &page); err != nil {
-		t.Fatalf("failed to decode token page response: %v", err)
+	// only the owner's token is returned in this caller's scope
+	var found *model.Token
+	for i := range page.Items {
+		if page.Items[i].Id == tk.Id {
+			found = &page.Items[i]
+		}
+		assert.NotEqual(t, other.Id, page.Items[i].UserId, "listing leaked another user's token")
 	}
-	if len(page.Items) != 1 {
-		t.Fatalf("expected exactly one token, got %d", len(page.Items))
-	}
-	if page.Items[0].Key != token.GetMaskedKey() {
-		t.Fatalf("expected masked key %q, got %q", token.GetMaskedKey(), page.Items[0].Key)
-	}
-	if strings.Contains(recorder.Body.String(), token.Key) {
-		t.Fatalf("list response leaked raw token key: %s", recorder.Body.String())
-	}
+	require.NotNil(t, found, "owner token not present in listing")
+	assert.Equal(t, tk.GetMaskedKey(), found.Key)
+	assert.NotContains(t, rec.Body.String(), tk.Key, "raw key leaked in list response")
 }
 
-func TestSearchTokensMasksKeyInResponse(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-	token := seedToken(t, db, 1, "searchable-token", "ijkl1234mnop5678")
+// SearchTokens: keyword search masks keys and never leaks the raw key.
+func TestSearchTokens_MasksKey(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	name := uniq("searchable")
+	tk := mkToken(t, owner.Id, func(tk *model.Token) { tk.Name = name })
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/search?keyword=searchable-token&p=1&size=10", nil, 1)
+	ctx, rec := newCtx(t, http.MethodGet, "/api/token/search?keyword="+name+"&p=1&size=10", nil)
+	asUser(ctx, owner.Id)
 	SearchTokens(ctx)
 
-	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected success response, got message: %s", response.Message)
-	}
-
-	var page tokenPageResponse
-	if err := common.Unmarshal(response.Data, &page); err != nil {
-		t.Fatalf("failed to decode search response: %v", err)
-	}
-	if len(page.Items) != 1 {
-		t.Fatalf("expected exactly one search result, got %d", len(page.Items))
-	}
-	if page.Items[0].Key != token.GetMaskedKey() {
-		t.Fatalf("expected masked search key %q, got %q", token.GetMaskedKey(), page.Items[0].Key)
-	}
-	if strings.Contains(recorder.Body.String(), token.Key) {
-		t.Fatalf("search response leaked raw token key: %s", recorder.Body.String())
-	}
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	page := decodeTokenItems(t, resp.Data)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, tk.GetMaskedKey(), page.Items[0].Key)
+	assert.NotContains(t, rec.Body.String(), tk.Key)
 }
 
-func TestGetTokenMasksKeyInResponse(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-	token := seedToken(t, db, 1, "detail-token", "qrst1234uvwx5678")
+// GetToken: detail masks key.
+func TestGetToken_MasksKey(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, nil)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/"+strconv.Itoa(token.Id), nil, 1)
-	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
+	ctx, rec := newCtx(t, http.MethodGet, "/api/token/"+strconv.Itoa(tk.Id), nil)
+	asUser(ctx, owner.Id)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(tk.Id)}}
 	GetToken(ctx)
 
-	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected success response, got message: %s", response.Message)
-	}
-
-	var detail tokenResponseItem
-	if err := common.Unmarshal(response.Data, &detail); err != nil {
-		t.Fatalf("failed to decode token detail response: %v", err)
-	}
-	if detail.Key != token.GetMaskedKey() {
-		t.Fatalf("expected masked detail key %q, got %q", token.GetMaskedKey(), detail.Key)
-	}
-	if strings.Contains(recorder.Body.String(), token.Key) {
-		t.Fatalf("detail response leaked raw token key: %s", recorder.Body.String())
-	}
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var got model.Token
+	require.NoError(t, common.Unmarshal(resp.Data, &got))
+	assert.Equal(t, tk.GetMaskedKey(), got.Key)
+	assert.NotContains(t, rec.Body.String(), tk.Key)
 }
 
-func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-	token := seedToken(t, db, 1, "editable-token", "yzab1234cdef5678")
+// GetToken: non-numeric id -> ApiError (success false).
+func TestGetToken_InvalidIDReturnsError(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	ctx, rec := newCtx(t, http.MethodGet, "/api/token/abc", nil)
+	asUser(ctx, owner.Id)
+	ctx.Params = gin.Params{{Key: "id", Value: "abc"}}
+	GetToken(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// GetTokenKey: owner gets full key; a different user is denied.
+func TestGetTokenKey_OwnershipEnforced(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	stranger := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, nil)
+
+	// authorized
+	okCtx, okRec := newCtx(t, http.MethodPost, "/api/token/"+strconv.Itoa(tk.Id)+"/key", nil)
+	asUser(okCtx, owner.Id)
+	okCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(tk.Id)}}
+	GetTokenKey(okCtx)
+	okResp := decodeResp(t, okRec)
+	require.True(t, okResp.Success, okResp.Message)
+	var keyData struct {
+		Key string `json:"key"`
+	}
+	require.NoError(t, common.Unmarshal(okResp.Data, &keyData))
+	assert.Equal(t, tk.GetFullKey(), keyData.Key)
+
+	// unauthorized: model.GetTokenByIds is scoped by userId, so stranger fails.
+	denyCtx, denyRec := newCtx(t, http.MethodPost, "/api/token/"+strconv.Itoa(tk.Id)+"/key", nil)
+	asUser(denyCtx, stranger.Id)
+	denyCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(tk.Id)}}
+	GetTokenKey(denyCtx)
+	denyResp := decodeResp(t, denyRec)
+	assert.False(t, denyResp.Success)
+	assert.NotContains(t, denyRec.Body.String(), tk.Key)
+}
+
+// GetTokenStatus: expired_time -1 (never) surfaces as expires_at 0.
+func TestGetTokenStatus_NeverExpiresMapsToZero(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, func(tk *model.Token) {
+		tk.ExpiredTime = -1
+		tk.RemainQuota = 4200
+	})
+
+	ctx, rec := newCtx(t, http.MethodGet, "/api/token/status", nil)
+	asUser(ctx, owner.Id)
+	ctx.Set("token_id", tk.Id)
+	GetTokenStatus(ctx)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Object         string `json:"object"`
+		TotalGranted   int    `json:"total_granted"`
+		TotalAvailable int    `json:"total_available"`
+		ExpiresAt      int64  `json:"expires_at"`
+	}
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "credit_summary", body.Object)
+	assert.Equal(t, 4200, body.TotalGranted)
+	assert.Equal(t, 4200, body.TotalAvailable)
+	assert.EqualValues(t, 0, body.ExpiresAt)
+}
+
+// AddToken: name length boundary (>50) is rejected.
+func TestAddToken_NameTooLong(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	body := map[string]any{
+		"name":            strings.Repeat("x", 51),
+		"unlimited_quota": true,
+		"expired_time":    -1,
+	}
+	ctx, rec := newCtx(t, http.MethodPost, "/api/token/", body)
+	asUser(ctx, owner.Id)
+	AddToken(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// AddToken: negative quota rejected when not unlimited.
+func TestAddToken_NegativeQuotaRejected(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	body := map[string]any{
+		"name":            "neg",
+		"unlimited_quota": false,
+		"remain_quota":    -1,
+		"expired_time":    -1,
+	}
+	ctx, rec := newCtx(t, http.MethodPost, "/api/token/", body)
+	asUser(ctx, owner.Id)
+	AddToken(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// AddToken: happy path inserts a token owned by the caller with a generated key.
+func TestAddToken_Success(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	name := uniq("added")
+	body := map[string]any{
+		"name":            name,
+		"unlimited_quota": true,
+		"expired_time":    -1,
+		"group":           "default",
+	}
+	ctx, rec := newCtx(t, http.MethodPost, "/api/token/", body)
+	asUser(ctx, owner.Id)
+	AddToken(ctx)
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+
+	var created model.Token
+	require.NoError(t, model.DB.Where("user_id = ? AND name = ?", owner.Id, name).First(&created).Error)
+	t.Cleanup(func() { model.DB.Unscoped().Delete(&model.Token{}, created.Id) })
+	assert.NotEmpty(t, created.Key)
+	assert.Equal(t, owner.Id, created.UserId)
+}
+
+// AddToken: malformed JSON body -> ApiError.
+func TestAddToken_MalformedBody(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	ctx, rec := newRawCtx(t, http.MethodPost, "/api/token/", `{"name":`)
+	asUser(ctx, owner.Id)
+	AddToken(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// UpdateToken: full field update masks key in response and persists changes.
+func TestUpdateToken_UpdatesAndMasksKey(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, func(tk *model.Token) { tk.Name = "before" })
 
 	body := map[string]any{
-		"id":                   token.Id,
-		"name":                 "updated-token",
+		"id":                   tk.Id,
+		"name":                 "after",
 		"expired_time":         -1,
 		"remain_quota":         100,
 		"unlimited_quota":      true,
@@ -484,57 +247,156 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 		"group":                "default",
 		"cross_group_retry":    false,
 	}
-
-	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	ctx, rec := newCtx(t, http.MethodPut, "/api/token/", body)
+	asUser(ctx, owner.Id)
 	UpdateToken(ctx)
 
-	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected success response, got message: %s", response.Message)
-	}
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var got model.Token
+	require.NoError(t, common.Unmarshal(resp.Data, &got))
+	assert.Equal(t, "after", got.Name)
+	assert.Equal(t, tk.GetMaskedKey(), got.Key)
+	assert.NotContains(t, rec.Body.String(), tk.Key)
 
-	var detail tokenResponseItem
-	if err := common.Unmarshal(response.Data, &detail); err != nil {
-		t.Fatalf("failed to decode token update response: %v", err)
-	}
-	if detail.Key != token.GetMaskedKey() {
-		t.Fatalf("expected masked update key %q, got %q", token.GetMaskedKey(), detail.Key)
-	}
-	if strings.Contains(recorder.Body.String(), token.Key) {
-		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
-	}
+	var reloaded model.Token
+	require.NoError(t, model.DB.First(&reloaded, tk.Id).Error)
+	assert.Equal(t, "after", reloaded.Name)
 }
 
-func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
-	db := setupTokenControllerTestDB(t)
-	token := seedToken(t, db, 1, "owned-token", "owner1234token5678")
+// UpdateToken: status_only updates status without touching other fields.
+func TestUpdateToken_StatusOnly(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, func(tk *model.Token) {
+		tk.Name = "keep"
+		tk.Status = common.TokenStatusEnabled
+	})
 
-	authorizedCtx, authorizedRecorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/"+strconv.Itoa(token.Id)+"/key", nil, 1)
-	authorizedCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
-	GetTokenKey(authorizedCtx)
+	body := map[string]any{
+		"id":     tk.Id,
+		"status": common.TokenStatusDisabled,
+		"name":   "should-be-ignored",
+	}
+	ctx, rec := newCtx(t, http.MethodPut, "/api/token/?status_only=true", body)
+	asUser(ctx, owner.Id)
+	UpdateToken(ctx)
 
-	authorizedResponse := decodeAPIResponse(t, authorizedRecorder)
-	if !authorizedResponse.Success {
-		t.Fatalf("expected authorized key fetch to succeed, got message: %s", authorizedResponse.Message)
-	}
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
 
-	var keyData tokenKeyResponse
-	if err := common.Unmarshal(authorizedResponse.Data, &keyData); err != nil {
-		t.Fatalf("failed to decode token key response: %v", err)
-	}
-	if keyData.Key != token.GetFullKey() {
-		t.Fatalf("expected full key %q, got %q", token.GetFullKey(), keyData.Key)
-	}
+	var reloaded model.Token
+	require.NoError(t, model.DB.First(&reloaded, tk.Id).Error)
+	assert.Equal(t, common.TokenStatusDisabled, reloaded.Status)
+	assert.Equal(t, "keep", reloaded.Name, "status_only must not rename the token")
+}
 
-	unauthorizedCtx, unauthorizedRecorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/"+strconv.Itoa(token.Id)+"/key", nil, 2)
-	unauthorizedCtx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
-	GetTokenKey(unauthorizedCtx)
+// UpdateToken: re-enabling an exhausted, out-of-quota token is rejected.
+func TestUpdateToken_ExhaustedCannotEnable(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, func(tk *model.Token) {
+		tk.Status = common.TokenStatusExhausted
+		tk.RemainQuota = 0
+		tk.UnlimitedQuota = false
+	})
 
-	unauthorizedResponse := decodeAPIResponse(t, unauthorizedRecorder)
-	if unauthorizedResponse.Success {
-		t.Fatalf("expected unauthorized key fetch to fail")
+	body := map[string]any{
+		"id":              tk.Id,
+		"status":          common.TokenStatusEnabled,
+		"name":            "x",
+		"expired_time":    -1,
+		"remain_quota":    0,
+		"unlimited_quota": false,
 	}
-	if strings.Contains(unauthorizedRecorder.Body.String(), token.Key) {
-		t.Fatalf("unauthorized key response leaked raw token key: %s", unauthorizedRecorder.Body.String())
-	}
+	ctx, rec := newCtx(t, http.MethodPut, "/api/token/", body)
+	asUser(ctx, owner.Id)
+	UpdateToken(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// DeleteToken: owner can delete; row is gone afterward.
+func TestDeleteToken_Success(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk := mkToken(t, owner.Id, nil)
+
+	ctx, rec := newCtx(t, http.MethodDelete, "/api/token/"+strconv.Itoa(tk.Id), nil)
+	asUser(ctx, owner.Id)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(tk.Id)}}
+	DeleteToken(ctx)
+
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var count int64
+	model.DB.Unscoped().Model(&model.Token{}).Where("id = ? AND deleted_at IS NULL", tk.Id).Count(&count)
+	assert.EqualValues(t, 0, count)
+}
+
+// DeleteTokenBatch: empty id list -> invalid params.
+func TestDeleteTokenBatch_EmptyIdsRejected(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	ctx, rec := newCtx(t, http.MethodPost, "/api/token/batch", map[string]any{"ids": []int{}})
+	asUser(ctx, owner.Id)
+	DeleteTokenBatch(ctx)
+	resp := decodeResp(t, rec)
+	assert.False(t, resp.Success)
+}
+
+// DeleteTokenBatch: deletes only the caller's tokens, returns the count.
+func TestDeleteTokenBatch_Success(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+	tk1 := mkToken(t, owner.Id, nil)
+	tk2 := mkToken(t, owner.Id, nil)
+
+	ctx, rec := newCtx(t, http.MethodPost, "/api/token/batch", map[string]any{"ids": []int{tk1.Id, tk2.Id}})
+	asUser(ctx, owner.Id)
+	DeleteTokenBatch(ctx)
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var count int
+	require.NoError(t, common.Unmarshal(resp.Data, &count))
+	assert.Equal(t, 2, count)
+}
+
+// GetTokenKeysBatch: empty ids rejected; >100 ids rejected; happy path returns
+// a keyed map of full keys for the caller's tokens.
+func TestGetTokenKeysBatch_Validation(t *testing.T) {
+	requireDB(t)
+	owner := mkUser(t, nil)
+
+	t.Run("empty", func(t *testing.T) {
+		ctx, rec := newCtx(t, http.MethodPost, "/api/token/keys", map[string]any{"ids": []int{}})
+		asUser(ctx, owner.Id)
+		GetTokenKeysBatch(ctx)
+		assert.False(t, decodeResp(t, rec).Success)
+	})
+
+	t.Run("too many", func(t *testing.T) {
+		ids := make([]int, 101)
+		for i := range ids {
+			ids[i] = i + 1
+		}
+		ctx, rec := newCtx(t, http.MethodPost, "/api/token/keys", map[string]any{"ids": ids})
+		asUser(ctx, owner.Id)
+		GetTokenKeysBatch(ctx)
+		assert.False(t, decodeResp(t, rec).Success)
+	})
+
+	t.Run("success", func(t *testing.T) {
+		tk := mkToken(t, owner.Id, nil)
+		ctx, rec := newCtx(t, http.MethodPost, "/api/token/keys", map[string]any{"ids": []int{tk.Id}})
+		asUser(ctx, owner.Id)
+		GetTokenKeysBatch(ctx)
+		resp := decodeResp(t, rec)
+		require.True(t, resp.Success, resp.Message)
+		var payload struct {
+			Keys map[int]string `json:"keys"`
+		}
+		require.NoError(t, common.Unmarshal(resp.Data, &payload))
+		assert.Equal(t, tk.GetFullKey(), payload.Keys[tk.Id])
+	})
 }

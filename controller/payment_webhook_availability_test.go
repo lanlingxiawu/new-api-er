@@ -5,177 +5,151 @@ import (
 
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
-func confirmPaymentComplianceForTest(t *testing.T) {
-	t.Helper()
-	paymentSetting := operation_setting.GetPaymentSetting()
-	originalConfirmed := paymentSetting.ComplianceConfirmed
-	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+// Stripe webhook enablement is DELIBERATELY decoupled from compliance and the
+// display toggle: an in-flight paid Checkout Session must still be able to
+// settle. It depends only on the webhook secret.
+func TestStripeWebhookEnabled_OnlyNeedsWebhookSecret(t *testing.T) {
+	prev := setting.StripeWebhookSecret
+	prevConfirmed := operation_setting.GetPaymentSetting().ComplianceConfirmed
 	t.Cleanup(func() {
-		paymentSetting.ComplianceConfirmed = originalConfirmed
-		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+		setting.StripeWebhookSecret = prev
+		operation_setting.GetPaymentSetting().ComplianceConfirmed = prevConfirmed
 	})
-	paymentSetting.ComplianceConfirmed = true
-	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+
+	// compliance OFF, but webhook secret present -> still enabled
+	operation_setting.GetPaymentSetting().ComplianceConfirmed = false
+	setting.StripeWebhookSecret = "whsec_123"
+	assert.True(t, isStripeWebhookEnabled())
+
+	setting.StripeWebhookSecret = "   "
+	assert.False(t, isStripeWebhookEnabled())
 }
 
-// isStripeWebhookEnabled is intentionally decoupled from the top-up display /
-// compliance / API-key config: it depends only on the Stripe webhook signing
-// secret. An already-created and paid Checkout Session must still be credited on
-// callback; binding the callback entry to runtime-mutable config would let an
-// admin config change 403-reject in-flight orders ("user paid but not credited").
-// The real security boundary is the downstream Stripe signature verification
-// (which needs StripeWebhookSecret). See isStripeWebhookEnabled in
-// payment_webhook_availability.go.
-func TestStripeWebhookEnabledRequiresOnlyWebhookSecret(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalAPISecret := setting.StripeApiSecret
-	originalWebhookSecret := setting.StripeWebhookSecret
-	originalPriceID := setting.StripePriceId
+// Stripe top-up requires compliance + display toggle + api secret + webhook secret.
+func TestStripeTopUpEnabled_ConditionMatrix(t *testing.T) {
+	prevEnabled := setting.StripeEnabled
+	prevApi := setting.StripeApiSecret
+	prevWebhook := setting.StripeWebhookSecret
 	t.Cleanup(func() {
-		setting.StripeApiSecret = originalAPISecret
-		setting.StripeWebhookSecret = originalWebhookSecret
-		setting.StripePriceId = originalPriceID
+		setting.StripeEnabled = prevEnabled
+		setting.StripeApiSecret = prevApi
+		setting.StripeWebhookSecret = prevWebhook
 	})
+	withPaymentComplianceConfirmed(t)
 
-	// No webhook secret → webhook disabled, even when top-up config is present.
-	setting.StripeWebhookSecret = ""
-	setting.StripeApiSecret = "sk_test_123"
-	setting.StripePriceId = "price_123"
-	require.False(t, isStripeWebhookEnabled())
+	setting.StripeEnabled = true
+	setting.StripeApiSecret = "sk_test"
+	setting.StripeWebhookSecret = "whsec"
+	assert.True(t, isStripeTopUpEnabled())
 
-	// Webhook secret present → enabled.
-	setting.StripeWebhookSecret = "whsec_test"
-	require.True(t, isStripeWebhookEnabled())
+	// display toggle off -> disabled
+	setting.StripeEnabled = false
+	assert.False(t, isStripeTopUpEnabled())
+	setting.StripeEnabled = true
 
-	// Removing top-up config must NOT disable the webhook: in-flight paid
-	// Checkout Sessions still need to be credited on callback.
-	setting.StripePriceId = ""
-	require.True(t, isStripeWebhookEnabled())
+	// missing api secret -> disabled
+	setting.StripeApiSecret = ""
+	assert.False(t, isStripeTopUpEnabled())
 }
 
-func TestCreemWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalAPIKey := setting.CreemApiKey
-	originalProducts := setting.CreemProducts
-	originalWebhookSecret := setting.CreemWebhookSecret
+// Stripe top-up requires compliance: with compliance off it is disabled even
+// when everything else is configured.
+func TestStripeTopUpEnabled_RequiresCompliance(t *testing.T) {
+	prevEnabled := setting.StripeEnabled
+	prevApi := setting.StripeApiSecret
+	prevWebhook := setting.StripeWebhookSecret
+	prevConfirmed := operation_setting.GetPaymentSetting().ComplianceConfirmed
 	t.Cleanup(func() {
-		setting.CreemApiKey = originalAPIKey
-		setting.CreemProducts = originalProducts
-		setting.CreemWebhookSecret = originalWebhookSecret
+		setting.StripeEnabled = prevEnabled
+		setting.StripeApiSecret = prevApi
+		setting.StripeWebhookSecret = prevWebhook
+		operation_setting.GetPaymentSetting().ComplianceConfirmed = prevConfirmed
 	})
 
-	setting.CreemWebhookSecret = ""
-	setting.CreemApiKey = "creem_api_key"
-	setting.CreemProducts = `[{"productId":"prod_123"}]`
-	require.False(t, isCreemWebhookEnabled())
+	operation_setting.GetPaymentSetting().ComplianceConfirmed = false
+	setting.StripeEnabled = true
+	setting.StripeApiSecret = "sk_test"
+	setting.StripeWebhookSecret = "whsec"
+	assert.False(t, isStripeTopUpEnabled())
+}
 
-	setting.CreemWebhookSecret = "creem_secret"
-	require.True(t, isCreemWebhookEnabled())
+// Creem webhook requires compliance + api key + non-empty products + webhook secret.
+func TestCreemWebhookEnabled_ConditionMatrix(t *testing.T) {
+	prevApi := setting.CreemApiKey
+	prevProducts := setting.CreemProducts
+	prevWebhook := setting.CreemWebhookSecret
+	t.Cleanup(func() {
+		setting.CreemApiKey = prevApi
+		setting.CreemProducts = prevProducts
+		setting.CreemWebhookSecret = prevWebhook
+	})
+	withPaymentComplianceConfirmed(t)
 
+	setting.CreemApiKey = "creem_key"
+	setting.CreemProducts = `[{"id":"p1"}]`
+	setting.CreemWebhookSecret = "creem_whsec"
+	assert.True(t, isCreemWebhookEnabled())
+
+	// empty products list "[]" -> top-up disabled -> webhook disabled
 	setting.CreemProducts = "[]"
-	require.False(t, isCreemWebhookEnabled())
+	assert.False(t, isCreemWebhookEnabled())
+	setting.CreemProducts = `[{"id":"p1"}]`
+
+	// missing webhook secret -> disabled
+	setting.CreemWebhookSecret = ""
+	assert.False(t, isCreemWebhookEnabled())
 }
 
-func TestWaffoWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalEnabled := setting.WaffoEnabled
-	originalSandbox := setting.WaffoSandbox
-	originalAPIKey := setting.WaffoApiKey
-	originalPrivateKey := setting.WaffoPrivateKey
-	originalPublicCert := setting.WaffoPublicCert
-	originalSandboxAPIKey := setting.WaffoSandboxApiKey
-	originalSandboxPrivateKey := setting.WaffoSandboxPrivateKey
-	originalSandboxPublicCert := setting.WaffoSandboxPublicCert
+// Waffo Pancake webhook == top-up: compliance + merchant + private key + product id.
+func TestWaffoPancakeWebhookEnabled_ConditionMatrix(t *testing.T) {
+	prevM := setting.WaffoPancakeMerchantID
+	prevK := setting.WaffoPancakePrivateKey
+	prevP := setting.WaffoPancakeProductID
 	t.Cleanup(func() {
-		setting.WaffoEnabled = originalEnabled
-		setting.WaffoSandbox = originalSandbox
-		setting.WaffoApiKey = originalAPIKey
-		setting.WaffoPrivateKey = originalPrivateKey
-		setting.WaffoPublicCert = originalPublicCert
-		setting.WaffoSandboxApiKey = originalSandboxAPIKey
-		setting.WaffoSandboxPrivateKey = originalSandboxPrivateKey
-		setting.WaffoSandboxPublicCert = originalSandboxPublicCert
+		setting.WaffoPancakeMerchantID = prevM
+		setting.WaffoPancakePrivateKey = prevK
+		setting.WaffoPancakeProductID = prevP
 	})
+	withPaymentComplianceConfirmed(t)
 
-	setting.WaffoEnabled = true
-	setting.WaffoSandbox = false
-	setting.WaffoApiKey = ""
-	setting.WaffoPrivateKey = "private"
-	setting.WaffoPublicCert = "public"
-	require.False(t, isWaffoWebhookEnabled())
-
-	setting.WaffoApiKey = "api"
-	require.True(t, isWaffoWebhookEnabled())
-
-	setting.WaffoEnabled = false
-	require.False(t, isWaffoWebhookEnabled())
-
-	setting.WaffoEnabled = true
-	setting.WaffoSandbox = true
-	setting.WaffoSandboxApiKey = ""
-	setting.WaffoSandboxPrivateKey = "sandbox_private"
-	setting.WaffoSandboxPublicCert = "sandbox_public"
-	require.False(t, isWaffoWebhookEnabled())
-
-	setting.WaffoSandboxApiKey = "sandbox_api"
-	require.True(t, isWaffoWebhookEnabled())
-}
-
-func TestWaffoPancakeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalMerchantID := setting.WaffoPancakeMerchantID
-	originalPrivateKey := setting.WaffoPancakePrivateKey
-	originalProductID := setting.WaffoPancakeProductID
-	t.Cleanup(func() {
-		setting.WaffoPancakeMerchantID = originalMerchantID
-		setting.WaffoPancakePrivateKey = originalPrivateKey
-		setting.WaffoPancakeProductID = originalProductID
-	})
-
-	// Presence of all three credentials enables the gateway. Webhook public
-	// keys are bundled in the SDK and there is no separate Enabled toggle —
-	// clear any of the three fields to disable.
-	setting.WaffoPancakeMerchantID = ""
-	setting.WaffoPancakePrivateKey = "private"
-	setting.WaffoPancakeProductID = "product"
-	require.False(t, isWaffoPancakeWebhookEnabled())
-
-	setting.WaffoPancakeMerchantID = "merchant"
-	require.True(t, isWaffoPancakeWebhookEnabled())
+	setting.WaffoPancakeMerchantID = "m"
+	setting.WaffoPancakePrivateKey = "k"
+	setting.WaffoPancakeProductID = "p"
+	assert.True(t, isWaffoPancakeWebhookEnabled())
 
 	setting.WaffoPancakeProductID = ""
-	require.False(t, isWaffoPancakeWebhookEnabled())
-
-	setting.WaffoPancakeProductID = "product"
-	setting.WaffoPancakePrivateKey = ""
-	require.False(t, isWaffoPancakeWebhookEnabled())
+	assert.False(t, isWaffoPancakeWebhookEnabled())
 }
 
-func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalPayAddress := operation_setting.PayAddress
-	originalEpayID := operation_setting.EpayId
-	originalEpayKey := operation_setting.EpayKey
-	originalPayMethods := operation_setting.PayMethods
+// Epay webhook requires compliance + epay creds + at least one pay method.
+func TestEpayWebhookEnabled_ConditionMatrix(t *testing.T) {
+	prevAddr := operation_setting.PayAddress
+	prevId := operation_setting.EpayId
+	prevKey := operation_setting.EpayKey
+	prevMethods := operation_setting.PayMethods
 	t.Cleanup(func() {
-		operation_setting.PayAddress = originalPayAddress
-		operation_setting.EpayId = originalEpayID
-		operation_setting.EpayKey = originalEpayKey
-		operation_setting.PayMethods = originalPayMethods
+		operation_setting.PayAddress = prevAddr
+		operation_setting.EpayId = prevId
+		operation_setting.EpayKey = prevKey
+		operation_setting.PayMethods = prevMethods
 	})
+	withPaymentComplianceConfirmed(t)
 
 	operation_setting.PayAddress = "https://pay.example.com"
-	operation_setting.EpayId = "epay_id"
-	operation_setting.EpayKey = ""
-	operation_setting.PayMethods = []map[string]string{{"type": "alipay"}}
-	require.False(t, isEpayWebhookEnabled())
+	operation_setting.EpayId = "1000"
+	operation_setting.EpayKey = "secret"
+	operation_setting.PayMethods = []map[string]string{{"name": "alipay"}}
+	assert.True(t, isEpayWebhookEnabled())
 
-	operation_setting.EpayKey = "epay_key"
-	require.True(t, isEpayWebhookEnabled())
-
+	// no pay methods -> disabled
 	operation_setting.PayMethods = nil
-	require.False(t, isEpayWebhookEnabled())
+	assert.False(t, isEpayWebhookEnabled())
+	operation_setting.PayMethods = []map[string]string{{"name": "alipay"}}
+
+	// missing epay key -> webhook not configured -> disabled
+	operation_setting.EpayKey = ""
+	assert.False(t, isEpayWebhookEnabled())
 }

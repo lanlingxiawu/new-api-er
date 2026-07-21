@@ -149,6 +149,7 @@ topup.failed: "充值失敗，請稍後重試"
 topup.invalid_quota: "無效的充值額度"
 
 topup.user_billing_export_disabled: "目前未開放使用者帳單匯出"
+topup.export_filter_required: "請至少設定一個篩選條件後再匯出帳單"
 topup.export_failed: "匯出失敗，請稍後重試"
 topup.export_rate_limited: "匯出請求過於頻繁，請稍後再試"
 

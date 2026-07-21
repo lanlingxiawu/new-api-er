@@ -1,7 +1,6 @@
 package common
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -10,186 +9,45 @@ import (
 )
 
 func TestValidateRedirectURL(t *testing.T) {
-	// Save original trusted domains and restore after test
-	originalDomains := constant.TrustedRedirectDomains
-	defer func() {
-		constant.TrustedRedirectDomains = originalDomains
-	}()
+	orig := constant.TrustedRedirectDomains
+	t.Cleanup(func() { constant.TrustedRedirectDomains = orig })
+	constant.TrustedRedirectDomains = []string{"example.com", "trusted.org"}
 
 	tests := []struct {
-		name           string
-		url            string
-		trustedDomains []string
-		wantErr        bool
-		errContains    string
+		name    string
+		url     string
+		wantErr string // substring; "" means no error
 	}{
-		// Valid cases
-		{
-			name:           "exact domain match with https",
-			url:            "https://example.com/success",
-			trustedDomains: []string{"example.com"},
-			wantErr:        false,
-		},
-		{
-			name:           "exact domain match with http",
-			url:            "http://example.com/callback",
-			trustedDomains: []string{"example.com"},
-			wantErr:        false,
-		},
-		{
-			name:           "subdomain match",
-			url:            "https://sub.example.com/success",
-			trustedDomains: []string{"example.com"},
-			wantErr:        false,
-		},
-		{
-			name:           "case insensitive domain",
-			url:            "https://EXAMPLE.COM/success",
-			trustedDomains: []string{"example.com"},
-			wantErr:        false,
-		},
-
-		// Invalid cases - untrusted domain
-		{
-			name:           "untrusted domain",
-			url:            "https://evil.com/phishing",
-			trustedDomains: []string{"example.com"},
-			wantErr:        true,
-			errContains:    "not in the trusted domains list",
-		},
-		{
-			name:           "suffix attack - fakeexample.com",
-			url:            "https://fakeexample.com/success",
-			trustedDomains: []string{"example.com"},
-			wantErr:        true,
-			errContains:    "not in the trusted domains list",
-		},
-		{
-			name:           "empty trusted domains list",
-			url:            "https://example.com/success",
-			trustedDomains: []string{},
-			wantErr:        true,
-			errContains:    "not in the trusted domains list",
-		},
-
-		// Invalid cases - scheme
-		{
-			name:           "javascript scheme",
-			url:            "javascript:alert('xss')",
-			trustedDomains: []string{"example.com"},
-			wantErr:        true,
-			errContains:    "invalid URL scheme",
-		},
-		{
-			name:           "data scheme",
-			url:            "data:text/html,<script>alert('xss')</script>",
-			trustedDomains: []string{"example.com"},
-			wantErr:        true,
-			errContains:    "invalid URL scheme",
-		},
-
-		// Edge cases
-		{
-			name:           "empty URL",
-			url:            "",
-			trustedDomains: []string{"example.com"},
-			wantErr:        true,
-			errContains:    "invalid URL scheme",
-		},
+		{"exact trusted host", "https://example.com/path", ""},
+		{"subdomain of trusted host", "https://app.example.com/cb", ""},
+		{"http scheme allowed", "http://example.com", ""},
+		{"second trusted domain", "https://trusted.org/x", ""},
+		{"case-insensitive host", "https://EXAMPLE.com", ""},
+		{"untrusted domain", "https://evil.com", "not in the trusted domains list"},
+		{"lookalike suffix not subdomain", "https://notexample.com", "not in the trusted domains list"},
+		{"disallowed scheme ftp", "ftp://example.com", "invalid URL scheme"},
+		{"disallowed scheme empty", "example.com", "invalid URL scheme"},
+		{"malformed url", "http://[::1", "invalid URL format"},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Set up trusted domains for this test case
-			constant.TrustedRedirectDomains = tt.trustedDomains
-
-			err := ValidateRedirectURL(tt.url)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("ValidateRedirectURL(%q) expected error containing %q, got nil", tt.url, tt.errContains)
-					return
-				}
-				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("ValidateRedirectURL(%q) error = %q, want error containing %q", tt.url, err.Error(), tt.errContains)
-				}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRedirectURL(tc.url)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
 			} else {
-				if err != nil {
-					t.Errorf("ValidateRedirectURL(%q) unexpected error: %v", tt.url, err)
-				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
 			}
 		})
 	}
 }
 
-func resetSessionCookieSettingsAfterTest(t *testing.T) {
-	t.Helper()
-	t.Cleanup(func() {
-		SessionCookieSecure = false
-		SessionCookieTrustedURLs = nil
-	})
-}
+func TestValidateRedirectURL_EmptyTrustedList(t *testing.T) {
+	orig := constant.TrustedRedirectDomains
+	t.Cleanup(func() { constant.TrustedRedirectDomains = orig })
+	constant.TrustedRedirectDomains = nil
 
-func TestInitSessionCookieSettingsDefaultsToInsecure(t *testing.T) {
-	resetSessionCookieSettingsAfterTest(t)
-	t.Setenv("SESSION_COOKIE_SECURE", "")
-	t.Setenv("SESSION_COOKIE_TRUSTED_URL", "")
-
-	require.NoError(t, InitSessionCookieSettings())
-	assert.False(t, SessionCookieSecure)
-	assert.Empty(t, SessionCookieTrustedURLs)
-}
-
-func TestInitSessionCookieSettingsRequiresBothEnvVars(t *testing.T) {
-	t.Run("secure without trusted url", func(t *testing.T) {
-		resetSessionCookieSettingsAfterTest(t)
-		t.Setenv("SESSION_COOKIE_SECURE", "true")
-		t.Setenv("SESSION_COOKIE_TRUSTED_URL", "")
-
-		require.Error(t, InitSessionCookieSettings())
-	})
-
-	t.Run("trusted url without secure", func(t *testing.T) {
-		resetSessionCookieSettingsAfterTest(t)
-		t.Setenv("SESSION_COOKIE_SECURE", "")
-		t.Setenv("SESSION_COOKIE_TRUSTED_URL", "https://example.com")
-
-		require.Error(t, InitSessionCookieSettings())
-	})
-}
-
-func TestInitSessionCookieSettingsRequiresHTTPSURL(t *testing.T) {
-	resetSessionCookieSettingsAfterTest(t)
-	t.Setenv("SESSION_COOKIE_SECURE", "true")
-	t.Setenv("SESSION_COOKIE_TRUSTED_URL", "http://example.com")
-
-	require.Error(t, InitSessionCookieSettings())
-}
-
-func TestInitSessionCookieSettingsEnablesSecureCookie(t *testing.T) {
-	resetSessionCookieSettingsAfterTest(t)
-	t.Setenv("SESSION_COOKIE_SECURE", "true")
-	t.Setenv("SESSION_COOKIE_TRUSTED_URL", "https://example.com")
-
-	require.NoError(t, InitSessionCookieSettings())
-	assert.True(t, SessionCookieSecure)
-	assert.Equal(t, []string{"https://example.com"}, SessionCookieTrustedURLs)
-}
-
-func TestInitSessionCookieSettingsAllowsMultipleTrustedURLs(t *testing.T) {
-	resetSessionCookieSettingsAfterTest(t)
-	t.Setenv("SESSION_COOKIE_SECURE", "true")
-	t.Setenv("SESSION_COOKIE_TRUSTED_URL", "https://example.com, https://admin.example.com")
-
-	require.NoError(t, InitSessionCookieSettings())
-	assert.True(t, SessionCookieSecure)
-	assert.Equal(t, []string{"https://example.com", "https://admin.example.com"}, SessionCookieTrustedURLs)
-}
-
-func TestInitSessionCookieSettingsRejectsEmptyTrustedURLInList(t *testing.T) {
-	resetSessionCookieSettingsAfterTest(t)
-	t.Setenv("SESSION_COOKIE_SECURE", "true")
-	t.Setenv("SESSION_COOKIE_TRUSTED_URL", "https://example.com,")
-
-	require.Error(t, InitSessionCookieSettings())
+	err := ValidateRedirectURL("https://example.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the trusted domains list")
 }

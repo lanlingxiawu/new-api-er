@@ -1,6 +1,7 @@
 package common
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -9,118 +10,185 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 2000 quota per call * n=18446744073686646784 overflows int64; the constant
-// below reproduces that oversized product for the saturation checks.
-const overflowingProduct = 2000 * 1.8446744073686647e19
+// quota_math is billing-critical: quota columns are int32 in the DB, so an
+// oversized product must SATURATE (clamp to the int32 range) rather than wrap
+// around and flip a charge into a credit. These tests pin the saturation +
+// rounding + strict/error policy at every boundary.
 
-// TestQuotaFromFloat guards the billing invariant that oversized quota
-// products (e.g. price multiplied by a huge user-supplied count) saturate
-// instead of wrapping into a negative charge (credit). QuotaFromFloat
-// truncates toward zero.
+// ---------------------------------------------------------------------------
+// saturateQuota (white-box) — the shared clamp core.
+// ---------------------------------------------------------------------------
+
+func TestSaturateQuota_InRangeTruncatesTowardZero(t *testing.T) {
+	q, clamp := saturateQuota(5.9, "op")
+	assert.Equal(t, 5, q, "in-range value is truncated toward zero via int()")
+	assert.Nil(t, clamp, "no clamp for in-range values")
+
+	q, clamp = saturateQuota(-5.9, "op")
+	assert.Equal(t, -5, q, "truncation toward zero for negatives")
+	assert.Nil(t, clamp)
+}
+
+func TestSaturateQuota_NaN(t *testing.T) {
+	q, clamp := saturateQuota(math.NaN(), "QuotaFromFloat")
+	assert.Equal(t, 0, q, "NaN falls back to 0")
+	require.NotNil(t, clamp)
+	assert.Equal(t, QuotaClampNaN, clamp.Kind)
+	assert.Equal(t, 0, clamp.Clamped)
+	assert.Equal(t, "QuotaFromFloat", clamp.Op)
+}
+
+func TestSaturateQuota_OverflowBoundary(t *testing.T) {
+	// value == MaxQuota triggers the >= overflow branch (inclusive).
+	q, clamp := saturateQuota(float64(MaxQuota), "op")
+	assert.Equal(t, MaxQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+
+	// Just inside the boundary stays un-clamped.
+	q, clamp = saturateQuota(float64(MaxQuota)-1, "op")
+	assert.Equal(t, MaxQuota-1, q)
+	assert.Nil(t, clamp)
+
+	// Far above.
+	q, clamp = saturateQuota(1e18, "op")
+	assert.Equal(t, MaxQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+}
+
+func TestSaturateQuota_UnderflowBoundary(t *testing.T) {
+	q, clamp := saturateQuota(float64(MinQuota), "op")
+	assert.Equal(t, MinQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+
+	q, clamp = saturateQuota(float64(MinQuota)+1, "op")
+	assert.Equal(t, MinQuota+1, q)
+	assert.Nil(t, clamp)
+}
+
+// ---------------------------------------------------------------------------
+// QuotaClamp.Error / AuditMap — nil-safety + shape.
+// ---------------------------------------------------------------------------
+
+func TestQuotaClamp_ErrorNilSafe(t *testing.T) {
+	var c *QuotaClamp
+	assert.Equal(t, "", c.Error())
+}
+
+func TestQuotaClamp_ErrorString(t *testing.T) {
+	c := &QuotaClamp{Op: "QuotaFromFloat", Kind: QuotaClampOverflow, Original: 1e18, Clamped: MaxQuota}
+	msg := c.Error()
+	assert.Contains(t, msg, "QuotaFromFloat")
+	assert.Contains(t, msg, "overflow")
+}
+
+func TestQuotaClamp_AuditMap(t *testing.T) {
+	var nilClamp *QuotaClamp
+	assert.Nil(t, nilClamp.AuditMap())
+
+	c := &QuotaClamp{Op: "QuotaRound", Kind: QuotaClampNaN, Original: math.NaN(), Clamped: 0}
+	m := c.AuditMap()
+	require.NotNil(t, m)
+	assert.Equal(t, "QuotaRound", m["op"])
+	assert.Equal(t, QuotaClampNaN, m["kind"])
+	assert.Equal(t, 0, m["clamped"])
+	_, hasOriginal := m["original"]
+	assert.True(t, hasOriginal)
+}
+
+// ---------------------------------------------------------------------------
+// QuotaFromFloat family — truncation.
+// ---------------------------------------------------------------------------
+
 func TestQuotaFromFloat(t *testing.T) {
-	assert.Equal(t, 42, QuotaFromFloat(42.4))
-	assert.Equal(t, 42, QuotaFromFloat(42.9))
-	assert.Equal(t, -42, QuotaFromFloat(-42.9))
-	assert.Equal(t, MaxQuota, QuotaFromFloat(overflowingProduct))
-	assert.Equal(t, MinQuota, QuotaFromFloat(-overflowingProduct))
-	assert.Equal(t, MaxQuota, QuotaFromFloat(math.Inf(1)))
-	assert.Equal(t, MinQuota, QuotaFromFloat(math.Inf(-1)))
+	assert.Equal(t, 5, QuotaFromFloat(5.9), "truncates toward zero")
+	assert.Equal(t, -5, QuotaFromFloat(-5.9))
+	assert.Equal(t, MaxQuota, QuotaFromFloat(1e18), "overflow saturates, does NOT wrap")
+	assert.Equal(t, MinQuota, QuotaFromFloat(-1e18))
 	assert.Equal(t, 0, QuotaFromFloat(math.NaN()))
 }
 
-// TestQuotaRound checks half-away-from-zero rounding with the same
-// saturation policy.
-func TestQuotaRound(t *testing.T) {
-	assert.Equal(t, 42, QuotaRound(41.5))
-	assert.Equal(t, 43, QuotaRound(42.5))
-	assert.Equal(t, -43, QuotaRound(-42.5))
-	assert.Equal(t, MaxQuota, QuotaRound(overflowingProduct))
-	assert.Equal(t, MinQuota, QuotaRound(-overflowingProduct))
-	assert.Equal(t, 0, QuotaRound(math.NaN()))
-}
-
-// TestQuotaFromDecimal checks the decimal entry point rounds and saturates
-// consistently with the float variants.
-func TestQuotaFromDecimal(t *testing.T) {
-	assert.Equal(t, 43, QuotaFromDecimal(decimal.NewFromFloat(42.5)))
-	assert.Equal(t, 42, QuotaFromDecimal(decimal.NewFromFloat(41.7)))
-	assert.Equal(t, MaxQuota, QuotaFromDecimal(decimal.NewFromInt(2000).Mul(decimal.NewFromFloat(1.8446744073686647e19))))
-	assert.Equal(t, MinQuota, QuotaFromDecimal(decimal.NewFromInt(-2000).Mul(decimal.NewFromFloat(1.8446744073686647e19))))
-}
-
-// TestQuotaFromFloatChecked verifies the clamp descriptor is nil in range and
-// carries the correct kind/clamped value on saturation, so billing callers can
-// audit the event.
 func TestQuotaFromFloatChecked(t *testing.T) {
-	quota, clamp := QuotaFromFloatChecked(42.9)
-	assert.Equal(t, 42, quota)
+	q, clamp := QuotaFromFloatChecked(10.7)
+	assert.Equal(t, 10, q)
 	assert.Nil(t, clamp)
 
-	quota, clamp = QuotaFromFloatChecked(overflowingProduct)
-	assert.Equal(t, MaxQuota, quota)
-	if assert.NotNil(t, clamp) {
-		assert.Equal(t, "QuotaFromFloat", clamp.Op)
-		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-		assert.Equal(t, MaxQuota, clamp.Clamped)
-	}
-
-	quota, clamp = QuotaFromFloatChecked(-overflowingProduct)
-	assert.Equal(t, MinQuota, quota)
-	if assert.NotNil(t, clamp) {
-		assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
-		assert.Equal(t, MinQuota, clamp.Clamped)
-	}
-
-	quota, clamp = QuotaFromFloatChecked(math.NaN())
-	assert.Equal(t, 0, quota)
-	if assert.NotNil(t, clamp) {
-		assert.Equal(t, QuotaClampNaN, clamp.Kind)
-		assert.Equal(t, 0, clamp.Clamped)
-	}
+	q, clamp = QuotaFromFloatChecked(1e18)
+	assert.Equal(t, MaxQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, "QuotaFromFloat", clamp.Op)
 }
 
-func TestQuotaFromFloatStrictReturnsTypedClampError(t *testing.T) {
-	quota, err := QuotaFromFloatStrict(42.9)
+func TestQuotaFromFloatStrict(t *testing.T) {
+	q, err := QuotaFromFloatStrict(10.7)
 	require.NoError(t, err)
-	assert.Equal(t, 42, quota)
+	assert.Equal(t, 10, q)
 
-	quota, err = QuotaFromFloatStrict(overflowingProduct)
-	assert.Zero(t, quota)
+	q, err = QuotaFromFloatStrict(1e18)
+	require.Error(t, err, "clamped value must fail-fast, not reach billing")
+	assert.Equal(t, 0, q, "strict returns 0 on clamp")
+	// The error IS the typed *QuotaClamp.
 	var clamp *QuotaClamp
-	require.ErrorAs(t, err, &clamp)
+	require.True(t, errors.As(err, &clamp))
 	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-	assert.Equal(t, MaxQuota, clamp.Clamped)
-	assert.ErrorContains(t, err, "QuotaFromFloat")
-	assert.ErrorContains(t, err, "overflow")
-	assert.ErrorContains(t, err, "original=")
-	assert.ErrorContains(t, err, "clamped=2147483647")
 }
 
-// TestQuotaRoundChecked verifies the rounding entry point reports clamps the
-// same way.
+// ---------------------------------------------------------------------------
+// QuotaRound family — half-away-from-zero.
+// ---------------------------------------------------------------------------
+
+func TestQuotaRound(t *testing.T) {
+	assert.Equal(t, 5, QuotaRound(5.4))
+	assert.Equal(t, 6, QuotaRound(5.5), "half away from zero rounds up")
+	assert.Equal(t, -6, QuotaRound(-5.5), "half away from zero rounds down for negatives")
+	assert.Equal(t, MaxQuota, QuotaRound(1e18))
+}
+
 func TestQuotaRoundChecked(t *testing.T) {
-	quota, clamp := QuotaRoundChecked(42.5)
-	assert.Equal(t, 43, quota)
+	q, clamp := QuotaRoundChecked(5.5)
+	assert.Equal(t, 6, q)
 	assert.Nil(t, clamp)
 
-	quota, clamp = QuotaRoundChecked(overflowingProduct)
-	assert.Equal(t, MaxQuota, quota)
-	if assert.NotNil(t, clamp) {
-		assert.Equal(t, "QuotaRound", clamp.Op)
-		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-	}
+	q, clamp = QuotaRoundChecked(1e18)
+	assert.Equal(t, MaxQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, "QuotaRound", clamp.Op)
 }
 
-// TestQuotaFromDecimalChecked verifies the decimal entry point reports clamps.
+func TestQuotaRoundStrict(t *testing.T) {
+	q, err := QuotaRoundStrict(5.5)
+	require.NoError(t, err)
+	assert.Equal(t, 6, q)
+
+	q, err = QuotaRoundStrict(-1e18)
+	require.Error(t, err)
+	assert.Equal(t, 0, q)
+	var clamp *QuotaClamp
+	require.True(t, errors.As(err, &clamp))
+	assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+}
+
+// ---------------------------------------------------------------------------
+// QuotaFromDecimal family — decimal rounded (half away from zero) then clamped.
+// ---------------------------------------------------------------------------
+
+func TestQuotaFromDecimal(t *testing.T) {
+	assert.Equal(t, 6, QuotaFromDecimal(decimal.NewFromFloat(5.5)), "decimal rounded half away from zero")
+	assert.Equal(t, 5, QuotaFromDecimal(decimal.NewFromFloat(5.4)))
+	assert.Equal(t, MaxQuota, QuotaFromDecimal(decimal.NewFromInt(1).Shift(18)), "overflow saturates")
+	assert.Equal(t, MinQuota, QuotaFromDecimal(decimal.NewFromInt(-1).Shift(18)))
+}
+
 func TestQuotaFromDecimalChecked(t *testing.T) {
-	quota, clamp := QuotaFromDecimalChecked(decimal.NewFromFloat(41.7))
-	assert.Equal(t, 42, quota)
+	q, clamp := QuotaFromDecimalChecked(decimal.NewFromFloat(2.5))
+	assert.Equal(t, 3, q)
 	assert.Nil(t, clamp)
 
-	quota, clamp = QuotaFromDecimalChecked(decimal.NewFromInt(2000).Mul(decimal.NewFromFloat(1.8446744073686647e19)))
-	assert.Equal(t, MaxQuota, quota)
-	if assert.NotNil(t, clamp) {
-		assert.Equal(t, "QuotaFromDecimal", clamp.Op)
-		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-	}
+	q, clamp = QuotaFromDecimalChecked(decimal.NewFromInt(1).Shift(18))
+	assert.Equal(t, MaxQuota, q)
+	require.NotNil(t, clamp)
+	assert.Equal(t, "QuotaFromDecimal", clamp.Op)
+	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
 }
