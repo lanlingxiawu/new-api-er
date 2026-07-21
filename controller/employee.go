@@ -1324,17 +1324,17 @@ func GetMyCommissionLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	// 注意：员工端不返回渠道名称（渠道名可能包含上游内部信息），仅管理员端展示
+	// 注意：员工端不返回渠道名称（渠道名可能包含上游内部信息），仅管理员端展示。
+	// 客户 user id 对员工端如实展示——员工需要识别自己的客户，不脱敏（产品决定，2026-07-21）。
 	type SafeLog struct {
 		*model.EmployeeCommissionLog
-		CustomerUserIdMasked string `json:"customer_user_id_masked"`
-		CustomerUserId       int    `json:"customer_user_id,omitempty"`
+		CustomerUserId int `json:"customer_user_id"`
 	}
 	safeItems := make([]SafeLog, 0, len(logs))
 	for _, l := range logs {
 		safeItems = append(safeItems, SafeLog{
 			EmployeeCommissionLog: l,
-			CustomerUserIdMasked:  maskUserId(l.CustomerUserId),
+			CustomerUserId:        l.CustomerUserId,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1558,7 +1558,6 @@ func AdminListEmployeeCustomers(c *gin.Context) {
 	})
 }
 
-// maskUserId masks a user ID as #XXXX.
 // AdminUnassignCustomerFromEmployee DELETE /api/admin/employee/:id/customer/:user_id
 func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 	employeeId, err := strconv.Atoi(c.Param("id"))
@@ -1603,10 +1602,3 @@ func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-func maskUserId(id int) string {
-	s := strconv.Itoa(id)
-	if len(s) <= 4 {
-		return "#" + s
-	}
-	return "#****" + s[len(s)-4:]
-}
