@@ -67,6 +67,10 @@ type TaskAdaptor interface {
 	BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error)
 
 	DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error)
+	// DoResponse 只负责读取并解析响应，不负责关闭 resp.Body。
+	// 响应体的排空与关闭由调用方（RelayTaskSubmit）统一通过
+	// defer service.DrainAndCloseResponseBody(resp) 处理，覆盖成功、
+	// 解析失败、非 2xx 等所有路径。适配器内部不要再自行 Close，以免所有权分散。
 	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *dto.TaskError)
 
 	GetModelList() []string

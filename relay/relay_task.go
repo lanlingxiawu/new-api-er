@@ -230,6 +230,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
+	// 统一在此处接管上游响应体的所有权：适配器的 DoResponse 只读取不关闭。
+	// 该 defer 覆盖非 2xx 提前返回、DoResponse 出错、以及正常成功三条路径。
+	// DrainAndCloseResponseBody 自带 nil 保护，resp 为 nil 时安全跳过。
+	defer service.DrainAndCloseResponseBody(resp)
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)

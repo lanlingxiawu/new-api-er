@@ -1173,6 +1173,8 @@ func FetchModels(c *gin.Context) {
 		})
 		return
 	}
+	// 立即接管响应体，覆盖下面非 200 的早退路径（原 defer 注册太晚会漏）。
+	defer service.DrainAndCloseResponseBody(response)
 	//check status code
 	if response.StatusCode != http.StatusOK {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -1181,7 +1183,6 @@ func FetchModels(c *gin.Context) {
 		})
 		return
 	}
-	defer response.Body.Close()
 
 	var result struct {
 		Data []struct {

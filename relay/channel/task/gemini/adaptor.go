@@ -125,7 +125,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 	}
-	_ = resp.Body.Close()
 
 	var s submitResponse
 	if err := common.Unmarshal(responseBody, &s); err != nil {
