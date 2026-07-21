@@ -221,6 +221,17 @@ func shouldFilterConsumptionCostLedgerTagInApp(tag string) bool {
 }
 
 func applyConsumptionCostLedgerFilters(tx *gorm.DB, filter ConsumptionCostLedgerStatsFilter) (*gorm.DB, error) {
+	return applyConsumptionCostLedgerFiltersWithBound(tx, filter, false)
+}
+
+// applyConsumptionCostLedgerFiltersWithBound is the internal variant of
+// applyConsumptionCostLedgerFilters. When endExclusive is true the upper time
+// bound is half-open (created_at < EndTime) instead of inclusive
+// (created_at <= EndTime). This is used by the sliced aggregation so that a row
+// sitting exactly on an internal slice boundary is not counted in both adjacent
+// slices. The last slice (and every non-sliced caller) uses endExclusive=false
+// to keep parity with the non-sliced ground truth.
+func applyConsumptionCostLedgerFiltersWithBound(tx *gorm.DB, filter ConsumptionCostLedgerStatsFilter, endExclusive bool) (*gorm.DB, error) {
 	if filter.Id > 0 {
 		tx = tx.Where("id = ?", filter.Id)
 	}
@@ -243,7 +254,11 @@ func applyConsumptionCostLedgerFilters(tx *gorm.DB, filter ConsumptionCostLedger
 		tx = tx.Where("created_at >= ?", filter.StartTime)
 	}
 	if filter.EndTime > 0 {
-		tx = tx.Where("created_at <= ?", filter.EndTime)
+		if endExclusive {
+			tx = tx.Where("created_at < ?", filter.EndTime)
+		} else {
+			tx = tx.Where("created_at <= ?", filter.EndTime)
+		}
 	}
 	switch filter.Tag {
 	case "":
@@ -619,13 +634,20 @@ func aggregateConsumptionCostLedgerStatsBySlices(ctx context.Context, filter Con
 	merged := &ConsumptionCostLedgerStats{}
 	for start := filter.StartTime; start < filter.EndTime; start += consumptionCostLedgerStatsSliceSeconds {
 		end := start + consumptionCostLedgerStatsSliceSeconds
-		if end > filter.EndTime {
+		isLastSlice := false
+		if end >= filter.EndTime {
 			end = filter.EndTime
+			isLastSlice = true
 		}
 		sliceFilter := filter
 		sliceFilter.StartTime = start
 		sliceFilter.EndTime = end
-		stats, err := aggregateConsumptionCostLedgerStatsRange(ctx, sliceFilter)
+		// Internal slice boundaries are half-open [start, end): a row exactly on
+		// a shared edge is counted only once (by the later slice via its >= start
+		// bound), never in both. The last slice keeps the inclusive upper bound so
+		// a row exactly at EndTime is not dropped, matching the non-sliced ground
+		// truth in aggregateConsumptionCostLedgerStatsRange.
+		stats, err := aggregateConsumptionCostLedgerStatsRangeBounded(ctx, sliceFilter, !isLastSlice)
 		if err != nil {
 			return nil, err
 		}
@@ -657,7 +679,15 @@ func finalizeConsumptionCostLedgerStats(stats *ConsumptionCostLedgerStats) {
 }
 
 func aggregateConsumptionCostLedgerStatsRange(ctx context.Context, filter ConsumptionCostLedgerStatsFilter) (*ConsumptionCostLedgerStats, error) {
-	tx, err := applyConsumptionCostLedgerFilters(DB.WithContext(safeDBContext(ctx)).Model(&ConsumptionCost{}), filter)
+	return aggregateConsumptionCostLedgerStatsRangeBounded(ctx, filter, false)
+}
+
+// aggregateConsumptionCostLedgerStatsRangeBounded aggregates a single time range.
+// When endExclusive is true the upper time bound is half-open (created_at <
+// EndTime); the sliced aggregation uses this for every slice except the last to
+// avoid double-counting rows on internal slice boundaries.
+func aggregateConsumptionCostLedgerStatsRangeBounded(ctx context.Context, filter ConsumptionCostLedgerStatsFilter, endExclusive bool) (*ConsumptionCostLedgerStats, error) {
+	tx, err := applyConsumptionCostLedgerFiltersWithBound(DB.WithContext(safeDBContext(ctx)).Model(&ConsumptionCost{}), filter, endExclusive)
 	if err != nil {
 		return nil, err
 	}

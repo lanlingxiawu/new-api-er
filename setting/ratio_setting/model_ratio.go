@@ -496,6 +496,17 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		return 2, false
 	}
 
+	if strings.HasPrefix(name, "gpt-3.5") {
+		if name == "gpt-3.5-turbo" || strings.HasSuffix(name, "0125") {
+			// https://openai.com/blog/new-embedding-models-and-api-updates
+			// Updated GPT-3.5 Turbo model and lower pricing
+			return 3, true
+		}
+		if strings.HasSuffix(name, "1106") {
+			return 2, true
+		}
+		return 4.0 / 3.0, true
+	}
 	if strings.HasPrefix(name, "gpt-") {
 		if strings.HasPrefix(name, "gpt-4o") {
 			if name == "gpt-4o-2024-05-13" {
@@ -543,17 +554,6 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		return 5, true
 	}
 
-	if strings.HasPrefix(name, "gpt-3.5") {
-		if name == "gpt-3.5-turbo" || strings.HasSuffix(name, "0125") {
-			// https://openai.com/blog/new-embedding-models-and-api-updates
-			// Updated GPT-3.5 Turbo model and lower pricing
-			return 3, true
-		}
-		if strings.HasSuffix(name, "1106") {
-			return 2, true
-		}
-		return 4.0 / 3.0, true
-	}
 	if strings.HasPrefix(name, "mistral-") {
 		return 3, true
 	}
