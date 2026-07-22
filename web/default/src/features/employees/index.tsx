@@ -308,7 +308,7 @@ function AssignUserPicker({
                             </span>
                           ) : null}
                           {user.is_assigned_customer ? (
-                            <span className='rounded border border-amber-400 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-500 dark:text-amber-400'>
+                            <span className='rounded border border-amber-200 px-1 py-0.5 text-[10px] leading-none text-amber-600 dark:border-amber-800 dark:text-amber-400'>
                               {user.assigned_employee_user_id === employeeUserId
                                 ? t('Current employee')
                                 : t('Assigned')}
@@ -857,7 +857,7 @@ function AssignCustomerDialog({
                 className={cn(
                   'rounded-lg border px-3 py-2 text-sm',
                   isReassignment
-                    ? 'border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100'
+                    ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'
                     : 'bg-muted/30'
                 )}
               >
@@ -1015,7 +1015,7 @@ function AmountText({ value }: { value?: number }) {
   return (
     <BusinessAmount
       value={value}
-      positiveClassName='text-green-600'
+      positiveClassName='text-emerald-600 dark:text-emerald-400'
     />
   )
 }
@@ -1058,7 +1058,7 @@ function PerformanceProgressCell({ row }: { row: EmployeeProfile }) {
           className={cn(
             'tabular-nums',
             rawPercent >= 100
-              ? 'font-semibold text-green-600'
+              ? 'font-semibold text-emerald-600 dark:text-emerald-400'
               : 'text-muted-foreground'
           )}
         >
@@ -1349,7 +1349,7 @@ function useEmployeesColumns({
           return (
             <BusinessAmount
               value={value}
-              positiveClassName='text-green-600'
+              positiveClassName='text-emerald-600 dark:text-emerald-400'
             />
           )
         },
@@ -1482,7 +1482,7 @@ function EmployeeTotalsPanel({ row }: { row: EmployeeProfile }) {
       value: (
         <BusinessAmount
           value={row.total_commission_quota ?? 0}
-          positiveClassName='text-green-600'
+          positiveClassName='text-emerald-600 dark:text-emerald-400'
         />
       ),
     },
@@ -1765,7 +1765,7 @@ function useCommissionLogColumns() {
         cell: ({ row }) => (
           <BusinessAmount
             value={row.original.profit_quota}
-            positiveClassName='text-green-600'
+            positiveClassName='text-emerald-600 dark:text-emerald-400'
             isReversal={(row.original.revenue_quota ?? 0) < 0}
           />
         ),
@@ -1779,7 +1779,7 @@ function useCommissionLogColumns() {
         cell: ({ row }) => (
           <BusinessAmount
             value={row.original.commission_quota}
-            positiveClassName='text-green-600'
+            positiveClassName='text-emerald-600 dark:text-emerald-400'
             isReversal={(row.original.revenue_quota ?? 0) < 0}
           />
         ),

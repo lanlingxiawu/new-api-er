@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { toIntlLocale } from '@/i18n/languages'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -184,11 +185,16 @@ function MonthValueSelector({
   }, [nowYear, selectedYear])
   const monthFormatter = useMemo(
     () =>
-      new Intl.DateTimeFormat(i18n.language || undefined, {
-        month: 'short',
-        timeZone: 'UTC',
-      }),
-    [i18n.language]
+      // i18n.language is a non-standard i18next code (e.g. `zhCN`) which throws
+      // `RangeError: Invalid language tag` in Intl.* — normalize via toIntlLocale.
+      new Intl.DateTimeFormat(
+        toIntlLocale(i18n.resolvedLanguage || i18n.language),
+        {
+          month: 'short',
+          timeZone: 'UTC',
+        }
+      ),
+    [i18n.resolvedLanguage, i18n.language]
   )
   const months = useMemo(
     () =>
@@ -199,7 +205,10 @@ function MonthValueSelector({
     [monthFormatter]
   )
 
-  const updateMonth = (year: string | number, month: string | number) => {
+  const updateMonth = (
+    year: string | number | null,
+    month: string | number | null
+  ) => {
     const nextYear = Number(year) || nowYear
     const nextMonth = Number(month) || 1
     onChange(`${nextYear}-${String(nextMonth).padStart(2, '0')}`)
@@ -292,30 +301,6 @@ function buildCalendarCells(
   })
 }
 
-function CalendarAmount({
-  label,
-  value,
-  primary,
-}: {
-  label: string
-  value?: number
-  primary?: boolean
-}) {
-  return (
-    <div>
-      <div className='text-muted-foreground text-xs'>{label}</div>
-      <div
-        className={cn(
-          'mt-1 font-medium',
-          primary ? 'text-sm sm:text-base' : 'text-sm'
-        )}
-      >
-        <BusinessAmount value={value ?? 0} />
-      </div>
-    </div>
-  )
-}
-
 function commissionIntensity(amount: number, maxAbsAmount: number) {
   if (!amount || !maxAbsAmount) return 0
   const ratio = Math.abs(amount) / maxAbsAmount
@@ -392,8 +377,6 @@ export function CommissionFinancialCalendar({
   )
   const currentMonth = currentMonthValue()
   const [selectedDate, setSelectedDate] = useState<string>()
-  const selectedCell = cells.find((cell) => cell.key === selectedDate)
-  const selectedStat = selectedCell?.stat
   const maxAbsRevenue = useMemo(
     () =>
       days.reduce(
@@ -487,7 +470,7 @@ export function CommissionFinancialCalendar({
               {tierUnderpromoted && eligibleTierLevel ? (
                 <Badge
                   variant='outline'
-                  className='border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'
+                  className='border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'
                   title={t(
                     'This period reached a higher tier threshold, but the historical tier was not promoted.'
                   )}
@@ -648,8 +631,8 @@ export function CommissionFinancialCalendar({
                     className={cn(
                       'mt-auto flex min-w-0 flex-wrap items-center gap-1 pt-2 text-xs font-bold sm:text-sm',
                       positive
-                        ? 'text-emerald-700 dark:text-emerald-300'
-                        : 'text-red-700 dark:text-red-300'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-red-600 dark:text-red-400'
                     )}
                   >
                     <span className='min-w-0 truncate'>
@@ -658,7 +641,7 @@ export function CommissionFinancialCalendar({
                     {!positive ? (
                       <Badge
                         variant='outline'
-                        className='border-red-400/40 bg-red-50/80 px-1 py-0 text-[10px] text-red-700 dark:bg-red-950/40 dark:text-red-300'
+                        className='border-red-200 bg-red-50 px-1 py-0 text-[10px] text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400'
                       >
                         {t('Loss')}
                       </Badge>

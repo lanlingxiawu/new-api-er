@@ -26,7 +26,6 @@ import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
   formatBusinessExactUsd,
-  formatBusinessTargetAmount,
   formatBusinessUsd,
 } from '@/features/business/format'
 import { CommissionCalendarSection } from '@/features/employees/components/commission-financial-calendar'
@@ -104,7 +103,7 @@ function SummaryCards({
       sub: formatBusinessExactUsd(totalProfitUsd),
       icon: TrendingUp,
       valueClassName:
-        totalProfitQuota > 0 ? 'text-green-600' : undefined,
+        totalProfitQuota > 0 ? 'text-emerald-600 dark:text-emerald-400' : undefined,
     },
     {
       title: t('Commission Amount'),
@@ -115,7 +114,7 @@ function SummaryCards({
           : formatBusinessUsd(num(totalCommissionUsd)),
       icon: BadgeDollarSign,
       valueClassName:
-        totalCommissionQuota > 0 ? 'text-green-600' : undefined,
+        totalCommissionQuota > 0 ? 'text-emerald-600 dark:text-emerald-400' : undefined,
     },
     {
       title: t('Commission Tier'),
@@ -251,7 +250,7 @@ function useMyCommissionColumns() {
           <BusinessAmount
             value={row.original.commission_quota}
             className='font-medium'
-            positiveClassName='text-green-600'
+            positiveClassName='text-emerald-600 dark:text-emerald-400'
             showPositiveSign
             isReversal={(row.original.revenue_quota ?? 0) < 0}
           />

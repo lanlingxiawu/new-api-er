@@ -448,7 +448,7 @@ function useMyCustomerColumns({
           <DataTableColumnHeader column={column} title={t('Commission')} />
         ),
         cell: ({ row }) => (
-          <span className='font-medium text-green-600'>
+          <span className='font-medium text-emerald-600 dark:text-emerald-400'>
             {row.original.commission_quota
               ? formatBusinessAmount(row.original.commission_quota)
               : '-'}

@@ -66,15 +66,15 @@ function StatCard({
     <div
       className={cn(
         'flex min-w-0 flex-1 flex-col gap-1 rounded-lg border bg-card p-3 shadow-sm',
-        variant === 'online' && 'border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/30',
-        variant === 'offline' && 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30'
+        variant === 'online' && 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40',
+        variant === 'offline' && 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/40'
       )}
     >
       <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
         <Icon
           className={cn(
             'size-3.5',
-            variant === 'online' && 'text-green-600 dark:text-green-400',
+            variant === 'online' && 'text-emerald-600 dark:text-emerald-400',
             variant === 'offline' && 'text-red-600 dark:text-red-400'
           )}
         />
@@ -83,8 +83,8 @@ function StatCard({
       <p
         className={cn(
           'text-xl font-bold tabular-nums',
-          variant === 'online' && 'text-green-700 dark:text-green-300',
-          variant === 'offline' && 'text-red-700 dark:text-red-300'
+          variant === 'online' && 'text-emerald-600 dark:text-emerald-400',
+          variant === 'offline' && 'text-red-600 dark:text-red-400'
         )}
       >
         {value}
@@ -97,7 +97,7 @@ function NodeStatusBadge({ status }: { status: string }) {
   const { t } = useTranslation()
   if (status === 'online') {
     return (
-      <Badge variant='default' className='gap-1 bg-green-600 text-white hover:bg-green-600'>
+      <Badge variant='default' className='gap-1 bg-emerald-600 text-white hover:bg-emerald-600 dark:bg-emerald-500 dark:hover:bg-emerald-500'>
         <CheckCircle2 className='size-3' />
         {t('Online')}
       </Badge>
@@ -114,7 +114,7 @@ function NodeStatusBadge({ status }: { status: string }) {
 function AccountStatusBadge({ status }: { status: string }) {
   const cls =
     status === '正常'
-      ? 'bg-green-600 text-white hover:bg-green-600'
+      ? 'bg-emerald-600 text-white hover:bg-emerald-600 dark:bg-emerald-500 dark:hover:bg-emerald-500'
       : 'bg-gray-400 text-white hover:bg-gray-400'
   return (
     <Badge variant='default' className={cn('text-[10px]', cls)}>
@@ -167,7 +167,7 @@ function NodeListItem({ node, selected, onClick, accountStats }: NodeListItemPro
         {accountStats != null && (
           <span className='col-span-3 mt-0.5 flex items-center gap-1'>
             <Users className='size-3 shrink-0' />
-            <span className='text-green-600 dark:text-green-400'>{accountStats.available}</span>
+            <span className='text-emerald-600 dark:text-emerald-400'>{accountStats.available}</span>
             <span>/</span>
             <span>{accountStats.total}</span>
           </span>
@@ -510,7 +510,8 @@ export function NodePool() {
           .forEach((n) => fetchAccountsForCache(n))
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t('Failed to fetch nodes'))
+      console.error('Failed to fetch nodes', e)
+      setError(t('Node pool is temporarily unavailable, please try again later'))
     } finally {
       setLoading(false)
     }
@@ -543,7 +544,8 @@ export function NodePool() {
       setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n })
       await fetchNodes(true)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t('Failed to delete node'))
+      console.error('Failed to delete node', e)
+      setError(t('Failed to delete node'))
     } finally {
       setDeleting(false)
     }
@@ -566,7 +568,7 @@ export function NodePool() {
         <Button
           size='sm'
           variant='outline'
-          onClick={fetchNodes}
+          onClick={() => fetchNodes()}
           disabled={loading}
         >
           {loading ? (

@@ -224,7 +224,7 @@ export function PerformanceAdjustDialog({
             variant='outline'
             onClick={() => onOpenChange(false)}
           >
-            {t('Close')}
+            {t('Cancel')}
           </Button>
           <Button
             type='button'

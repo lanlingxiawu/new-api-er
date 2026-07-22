@@ -769,7 +769,7 @@ export function CommissionOverview() {
                               className={cn(
                                 'mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl',
                                 (platform?.profitable_channel_count ?? 0) > 0
-                                  ? 'text-green-600'
+                                  ? 'text-emerald-600 dark:text-emerald-400'
                                   : 'text-foreground'
                               )}
                             >
@@ -787,7 +787,7 @@ export function CommissionOverview() {
                               className={cn(
                                 'mt-1.5 font-mono text-base font-bold tracking-tight break-all tabular-nums sm:mt-2 sm:text-xl',
                                 (platform?.loss_channel_count ?? 0) > 0
-                                  ? 'text-amber-600'
+                                  ? 'text-amber-600 dark:text-amber-400'
                                   : 'text-foreground'
                               )}
                             >
@@ -932,7 +932,7 @@ export function CommissionOverview() {
                                 <TableCell>
                                   <BusinessAmount
                                     value={ch.est_profit_quota}
-                                    positiveClassName='text-green-600'
+                                    positiveClassName='text-emerald-600 dark:text-emerald-400'
                                   />
                                 </TableCell>
                                 <TableCell>
@@ -940,9 +940,9 @@ export function CommissionOverview() {
                                     className={cn(
                                       'tabular-nums',
                                       ch.est_gross_margin >= 0.1
-                                        ? 'text-green-600'
+                                        ? 'text-emerald-600 dark:text-emerald-400'
                                         : ch.est_gross_margin > 0
-                                          ? 'text-amber-600'
+                                          ? 'text-amber-600 dark:text-amber-400'
                                           : ch.est_gross_margin < 0
                                             ? 'text-destructive'
                                             : ''
@@ -1046,7 +1046,7 @@ export function CommissionOverview() {
                                 <TableCell>
                                   <BusinessAmount
                                     value={e.total_profit}
-                                    positiveClassName='text-green-600'
+                                    positiveClassName='text-emerald-600 dark:text-emerald-400'
                                   />
                                 </TableCell>
                                 <TableCell>
@@ -1056,7 +1056,7 @@ export function CommissionOverview() {
                                         ? Math.round(e.total_profit * e.current_tier_rate)
                                         : e.total_commission
                                     }
-                                    positiveClassName='text-green-600'
+                                    positiveClassName='text-emerald-600 dark:text-emerald-400'
                                   />
                                 </TableCell>
                                 <TableCell>{e.record_count}</TableCell>
