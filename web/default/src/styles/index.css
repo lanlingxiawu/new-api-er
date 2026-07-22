@@ -55,7 +55,9 @@ For commercial licensing, please contact support@quantumnous.com
     scrollbar-color: var(--border) transparent;
   }
   html {
-    @apply overflow-x-hidden font-sans;
+    /* bg-background (not transparent) so any area html paints below the content
+       shows the themed surface instead of the browser's default white. */
+    @apply bg-background overflow-x-hidden font-sans;
   }
   body {
     @apply bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar min-h-svh w-full;

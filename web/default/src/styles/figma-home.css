@@ -14,6 +14,8 @@
   --figma-home-accent-shadow-strong: rgba(68, 86, 255, 0.22);
   --figma-home-accent-shadow-glow: rgba(68, 86, 255, 0.42);
   color-scheme: light;
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
   overflow: hidden;
   background: var(--figma-home-bg);
@@ -668,8 +670,7 @@ html.dark .figma-home-header {
 }
 
 .figma-home-feature-section {
-  width: min(1128px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
+  width: min(1128px, calc(100% - 48px));
   margin: 0 auto;
 }
 
@@ -771,8 +772,7 @@ html.dark .figma-home-header {
 
 .figma-home-routing {
   position: relative;
-  width: min(1285px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
+  width: min(1285px, calc(100% - 48px));
   margin: 268px auto 0;
   text-align: center;
 }
@@ -1044,6 +1044,7 @@ html.dark .figma-home-header {
   line-height: 25px;
 }
 
+/* Markers anchored to the 1285x492 world map (classic-parity pixel offsets). */
 .figma-home-region-us {
   top: 97px;
   left: 0;
@@ -1171,14 +1172,16 @@ html.dark .figma-home-header {
 }
 
 .figma-home-footer {
+  /* Push to the viewport bottom so no light background shows below it when the
+     content is shorter than the viewport (large/zoomed-out screens). */
+  margin-top: auto;
   background: linear-gradient(180deg, #2f6bff 0%, #2558e6 100%);
   color: #ffffff;
 }
 
 .figma-home-footer-inner {
   position: relative;
-  width: min(1200px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
+  width: min(1200px, calc(100% - 48px));
   min-height: 420px;
   margin: 0 auto;
   padding: 36px 0 52px;

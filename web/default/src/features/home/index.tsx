@@ -516,11 +516,9 @@ const GlobalMap = () => (
 function TypewriterTitle({ text }: { text: string }) {
   const characters = useMemo(() => Array.from(text), [text])
   const [visibleLength, setVisibleLength] = useState(0)
-  const [isDeleting, setIsDeleting] = useState(false)
 
   useEffect(() => {
     setVisibleLength(0)
-    setIsDeleting(false)
   }, [text])
 
   useEffect(() => {
@@ -530,39 +528,21 @@ function TypewriterTitle({ text }: { text: string }) {
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
-    if (prefersReducedMotion) {
+    // Type the title in once, then settle on the full text (no deleting loop) so
+    // the hero H1 always ends up showing the complete title.
+    if (prefersReducedMotion || visibleLength >= characters.length) {
       setVisibleLength(characters.length)
       return undefined
     }
 
-    let delay = isDeleting ? 45 : 90
-
-    if (!isDeleting && visibleLength === characters.length) {
-      delay = 1400
-    } else if (isDeleting && visibleLength === 0) {
-      delay = 500
-    }
-
     const timer = window.setTimeout(() => {
-      if (!isDeleting && visibleLength === characters.length) {
-        setIsDeleting(true)
-        return
-      }
-
-      if (isDeleting && visibleLength === 0) {
-        setIsDeleting(false)
-        return
-      }
-
       setVisibleLength((currentLength) =>
-        isDeleting
-          ? Math.max(currentLength - 1, 0)
-          : Math.min(currentLength + 1, characters.length)
+        Math.min(currentLength + 1, characters.length)
       )
-    }, delay)
+    }, 90)
 
     return () => window.clearTimeout(timer)
-  }, [characters, isDeleting, visibleLength])
+  }, [characters, visibleLength])
 
   return (
     <span className='figma-home-typewriter' aria-hidden='true'>
@@ -588,11 +568,13 @@ function FigmaHomeHeader() {
         key: item.code,
         fullLabel: item.label,
         shortLabel:
-          item.code === 'zh'
-            ? '中文'
-            : item.code === 'ja'
-              ? '日本語'
-              : item.code.toUpperCase(),
+          item.code === 'zhCN'
+            ? '简体'
+            : item.code === 'zhTW'
+              ? '繁體'
+              : item.code === 'ja'
+                ? '日本語'
+                : item.code.toUpperCase(),
       })),
     []
   )
@@ -1168,7 +1150,7 @@ export function Home() {
       <section
         ref={routingSectionRef}
         className={`figma-home-routing${
-          isRoutingActive ? 'is-route-active' : ''
+          isRoutingActive ? ' is-route-active' : ''
         }`}
       >
         <div className='figma-home-routing-header'>
