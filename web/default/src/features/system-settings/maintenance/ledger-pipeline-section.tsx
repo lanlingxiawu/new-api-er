@@ -358,62 +358,82 @@ export function LedgerPipelineSection({
   type FieldHint = { text: string; warn: boolean }
   const fieldHints: Partial<Record<string, FieldHint>> = {
     flush_interval_sec: {
-      text: `Throughput at current config: ${formatQueueNumber(Math.round(theoreticalPerMinute))} settlement records/min`,
+      text: t('Throughput at current config: {{value}} settlement records/min', {
+        value: formatQueueNumber(Math.round(theoreticalPerMinute)),
+      }),
       warn: false,
     },
     inner_batch_size: innerBatch > outerBatch
-      ? { text: `Must be ≤ settlement batch size (${outerBatch})`, warn: true }
-      : { text: `Recommended ≈ batch size ÷ 4 = ${Math.max(1, Math.floor(outerBatch / 4))}`, warn: false },
+      ? { text: t('Must be ≤ settlement batch size ({{value}})', { value: outerBatch }), warn: true }
+      : { text: t('Recommended ≈ batch size ÷ 4 = {{value}}', { value: Math.max(1, Math.floor(outerBatch / 4)) }), warn: false },
     // settlement_flush_max_per_cycle need not be a multiple of outer_batch_size —
     // the flush loop slices buf[:pairedMax] then iterates in outerBatch steps;
     // the last iteration simply processes the remaining records.
     settlement_flush_max_per_cycle: {
       text: settlementMax % outerBatch !== 0
-        ? `Settlement queue: ≈ ${Math.ceil(settlementMax / outerBatch)} batch(es) per cycle (last batch: ${settlementMax % outerBatch} records)`
-        : `Settlement queue: ${settlementMax / outerBatch} batch(es) per flush cycle`,
+        ? t('Settlement queue: ≈ {{count}} batch(es) per cycle (last batch: {{remainder}} records)', {
+            count: Math.ceil(settlementMax / outerBatch),
+            remainder: settlementMax % outerBatch,
+          })
+        : t('Settlement queue: {{count}} batch(es) per flush cycle', { count: settlementMax / outerBatch }),
       warn: false,
     },
     cost_outer_batch_size: costOuterBatch === 0
-      ? { text: `0 = inherit settlement batch size (${outerBatch})`, warn: false }
-      : { text: `Cost queue: ${costOuterBatch} per batch; settlement queue: ${outerBatch}`, warn: false },
+      ? { text: t('0 = inherit settlement batch size ({{value}})', { value: outerBatch }), warn: false }
+      : { text: t('Cost queue: {{cost}} per batch; settlement queue: {{settlement}}', { cost: costOuterBatch, settlement: outerBatch }), warn: false },
     cost_flush_max_per_cycle: costFlushMax === 0
-      ? { text: 'Cost queue: 0 = drain all each cycle (default, no cap)', warn: false }
+      ? { text: t('Cost queue: 0 = drain all each cycle (default, no cap)'), warn: false }
       : {
-          text: `Cost queue: ≈ ${Math.ceil(costFlushMax / effectiveCostOuterBatch)} batch(es) per cycle; remainder deferred to next cycle`,
+          text: t('Cost queue: ≈ {{count}} batch(es) per cycle; remainder deferred to next cycle', {
+            count: Math.ceil(costFlushMax / effectiveCostOuterBatch),
+          }),
           warn: false,
         },
     buf_max_entries: {
-      text: `${Math.floor(bufMax / outerBatch)}× settlement batch size`,
+      text: t('{{value}}× settlement batch size', { value: Math.floor(bufMax / outerBatch) }),
       warn: bufMax < outerBatch * 5,
     },
     dedup_mem_max_entries: dedupMem <= bufMax
       ? {
-          text: `Should exceed buffer max (${formatQueueNumber(bufMax)}) to avoid frequent set rebuilds`,
+          text: t('Should exceed buffer max ({{value}}) to avoid frequent set rebuilds', {
+            value: formatQueueNumber(bufMax),
+          }),
           warn: true,
         }
       : {
-          text: `Covers buffer max (${formatQueueNumber(bufMax)}) ✓`,
+          text: t('Covers buffer max ({{value}}) ✓', { value: formatQueueNumber(bufMax) }),
           warn: false,
         },
     // Formula from code: key is set at entry (T=0); must survive until the last retry attempt.
     // Lifecycle: initial flush (≤ flushSec) + maxRetries retry cycles (× retryInterval each).
     dedup_redis_ttl_sec: {
-      text: `Retry lifecycle: ${flushSec} s flush + ${maxRetries} × ${retryInterval} s = ${minDedupRedisTtl} s min${dedupTtl < minDedupRedisTtl ? ' — current value too short' : ' ✓'}`,
+      text:
+        t('Retry lifecycle: {{flush}} s flush + {{retries}} × {{interval}} s = {{min}} s min', {
+          flush: flushSec,
+          retries: maxRetries,
+          interval: retryInterval,
+          min: minDedupRedisTtl,
+        }) + (dedupTtl < minDedupRedisTtl ? ` — ${t('current value too short')}` : ' ✓'),
       warn: dedupTtl < minDedupRedisTtl,
     },
     flush_db_timeout_sec: dbTimeout >= flushSec
       ? {
-          text: `Recommended < flush interval (${flushSec} s) — a DB stall at this value blocks the next flush cycle`,
+          text: t('Recommended < flush interval ({{value}} s) — a DB stall at this value blocks the next flush cycle', {
+            value: flushSec,
+          }),
           warn: true,
         }
       : {
-          text: `Recommended ≤ ${Math.max(1, flushSec - 2)} s (flush ${flushSec} s − 2)`,
+          text: t('Recommended ≤ {{value}} s (flush {{flush}} s − 2)', {
+            value: Math.max(1, flushSec - 2),
+            flush: flushSec,
+          }),
           warn: false,
         },
     shutdown_timeout_sec: shutdownSec >= 30
-      ? { text: `Must be < HTTP shutdown timeout (30 s)`, warn: true }
+      ? { text: t('Must be < HTTP shutdown timeout (30 s)'), warn: true }
       : {
-          text: `Covers goroutine stop + final DB flush. Recommended 20–25 s to leave room for HTTP shutdown (30 s hard limit)`,
+          text: t('Covers goroutine stop + final DB flush. Recommended 20–25 s to leave room for HTTP shutdown (30 s hard limit)'),
           warn: false,
         },
   }
@@ -526,11 +546,11 @@ export function LedgerPipelineSection({
               item.key === 'pair' && 'border-primary/30'
             )}
           >
-            <div className='font-medium'>{item.label}</div>
-            <div className='mt-1 text-xs text-muted-foreground/70'>{item.description}</div>
+            <div className='font-medium'>{t(item.label)}</div>
+            <div className='mt-1 text-xs text-muted-foreground/70'>{t(item.description)}</div>
               <div className='mt-2 space-y-1 text-muted-foreground'>
                 <div>
-                  Backlog:{' '}
+                  {t('Backlog')}:{' '}
                   {formatQueueNumber(item.data?.backlog ?? 0)}
                   {item.capacity != null && (
                     <span className='text-muted-foreground/60'> / {formatQueueNumber(item.capacity)}</span>
@@ -538,21 +558,21 @@ export function LedgerPipelineSection({
                 </div>
                 {item.showDropped && (
                   <div>
-                    Dropped: {formatQueueNumber(item.data?.dropped ?? 0)}
+                    {t('Dropped')}: {formatQueueNumber(item.data?.dropped ?? 0)}
                   </div>
                 )}
                 <div>
-                  Last flush: {formatQueueNumber(item.data?.last_flush_items ?? 0)}
+                  {t('Last flush')}: {formatQueueNumber(item.data?.last_flush_items ?? 0)}
                 </div>
                 <div>
-                  Flush latency: {formatQueueNumber(item.data?.last_flush_took_ms ?? 0)} ms
+                  {t('Flush latency')}: {formatQueueNumber(item.data?.last_flush_took_ms ?? 0)} ms
                 </div>
                 {item.maxRetries != null && (
-                  <div>Max retries: {item.maxRetries}</div>
+                  <div>{t('Max retries')}: {item.maxRetries}</div>
                 )}
                 {item.showDropped && (
                   <div>
-                    Updated at: {formatUnixTime(item.data?.last_flush_at ?? 0)}
+                    {t('Updated at')}: {formatUnixTime(item.data?.last_flush_at ?? 0)}
                   </div>
                 )}
               </div>
@@ -562,17 +582,17 @@ export function LedgerPipelineSection({
 
       <div className='rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground'>
         <div>
-          Theoretical capacity:{' '}
+          {t('Theoretical capacity')}:{' '}
           {formatQueueNumber(
             Math.round(
               runtimeStatus?.theoretical_pair_rpm ??
                 theoreticalPerMinute
             )
           )}{' '}
-          records/min
+          {t('records/min')}
         </div>
         <div className='mt-1'>
-          Only covers this ledger path. End-to-end RPM can bottleneck elsewhere.
+          {t('Only covers this ledger path. End-to-end RPM can bottleneck elsewhere.')}
         </div>
       </div>
 
@@ -633,7 +653,7 @@ export function LedgerPipelineSection({
           <Separator />
 
           <FormItem>
-            <FormLabel>Target RPM</FormLabel>
+            <FormLabel>{t('Target RPM')}</FormLabel>
             <FormControl>
               <Input
                 className={numberInputNoSpinnerClassName}
@@ -651,13 +671,11 @@ export function LedgerPipelineSection({
               />
             </FormControl>
             <FormDescription>
-              Recommended paired max per cycle:{' '}
+              {t('Recommended paired max per cycle')}:{' '}
               {formatQueueNumber(recommendedSettlementFlushMaxPerCycle)}
             </FormDescription>
             <FormDescription>
-              Tuning tip: raise Paired Flush Max first; if still not enough,
-              lower Flush Interval. When Full Drain is on, this recommendation
-              is only a reference.
+              {t('Tuning tip: raise Paired Flush Max first; if still not enough, lower Flush Interval. When Full Drain is on, this recommendation is only a reference.')}
             </FormDescription>
           </FormItem>
 
@@ -809,7 +827,9 @@ export function LedgerPipelineSection({
                   )}
                 </FormDescription>
                 <FormDescription className='text-primary/70'>
-                  {Math.floor((rWatch.retry_queue_max_entries || 50000) / (pWatch.outer_batch_size || 2000))}× outer batch size
+                  {t('{{value}}× outer batch size', {
+                    value: Math.floor((rWatch.retry_queue_max_entries || 50000) / (pWatch.outer_batch_size || 2000)),
+                  })}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -840,7 +860,7 @@ export function LedgerPipelineSection({
                 <FormDescription className='text-primary/70'>
                   {t('Recommended')}:{' '}
                   <span className='font-medium'>≤ {recommendedRetryIntervalSec} s</span>{' '}
-                  (flush interval {flushSec} s ÷ 4)
+                  ({t('flush interval {{value}} s ÷ 4', { value: flushSec })})
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -869,7 +889,12 @@ export function LedgerPipelineSection({
                   )}
                 </FormDescription>
                 <FormDescription className='text-primary/70'>
-                  Affects Redis dedup TTL: {flushSec} s flush + {maxRetries} × {retryInterval} s = {minDedupRedisTtl} s min
+                  {t('Affects Redis dedup TTL: {{flush}} s flush + {{retries}} × {{interval}} s = {{min}} s min', {
+                    flush: flushSec,
+                    retries: maxRetries,
+                    interval: retryInterval,
+                    min: minDedupRedisTtl,
+                  })}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
