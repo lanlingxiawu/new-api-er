@@ -567,14 +567,14 @@ function FigmaHomeHeader() {
       INTERFACE_LANGUAGE_OPTIONS.map((item) => ({
         key: item.code,
         fullLabel: item.label,
+        // Collapsed switcher shows a short English/region code (EN / CN / TW /
+        // FR / RU / JA / VI); zhCN/zhTW map to region codes to avoid "ZHCN".
         shortLabel:
           item.code === 'zhCN'
-            ? '简体'
+            ? 'CN'
             : item.code === 'zhTW'
-              ? '繁體'
-              : item.code === 'ja'
-                ? '日本語'
-                : item.code.toUpperCase(),
+              ? 'TW'
+              : item.code.toUpperCase(),
       })),
     []
   )
