@@ -325,7 +325,8 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	// 排空并关闭，覆盖下方非 200 提前返回的路径，保证连接归还连接池。
+	defer service.DrainAndCloseResponseBody(response)
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code: %d", response.StatusCode)
 	}

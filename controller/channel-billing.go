@@ -166,14 +166,14 @@ func getResponseBodyFromRequest(req *http.Request, channel *model.Channel, heade
 	if err != nil {
 		return nil, err
 	}
+	// 立即接管响应体所有权，覆盖非 200 早退与 ReadAll 失败等路径。
+	// 该函数被 updateAllChannelsBalance 对所有渠道循环调用，任一渠道
+	// 返回非 2xx（如失效 Key 的 401/403）都会在此泄漏连接，故必须兜底。
+	defer service.DrainAndCloseResponseBody(res)
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code: %d", res.StatusCode)
 	}
 	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-	err = res.Body.Close()
 	if err != nil {
 		return nil, err
 	}

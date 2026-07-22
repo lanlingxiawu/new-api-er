@@ -100,55 +100,11 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 			}
 			continue
 		}
-		requestUrl := fmt.Sprintf("%s/mj/task/list-by-condition", *midjourneyChannel.BaseURL)
-
-		body, err := common.Marshal(map[string]any{
-			"ids": taskIds,
-		})
+		responseItems, err := fetchMidjourneyTasks(ctx, midjourneyChannel, taskIds)
 		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Get Task marshal body error: %v", err))
+			logger.LogError(ctx, fmt.Sprintf("渠道 #%d 获取 MJ 任务失败: %v", channelId, err))
 			continue
 		}
-		timeout := time.Second * 15
-		requestCtx, cancel := context.WithTimeout(ctx, timeout)
-		req, err := http.NewRequestWithContext(requestCtx, "POST", requestUrl, bytes.NewBuffer(body))
-		if err != nil {
-			cancel()
-			logger.LogError(ctx, fmt.Sprintf("Get Task error: %v", err))
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("mj-api-secret", midjourneyChannel.Key)
-		resp, err := service.GetHttpClient().Do(req)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
-			cancel()
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
-			resp.Body.Close()
-			cancel()
-			continue
-		}
-		responseBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error: %v", err))
-			resp.Body.Close()
-			cancel()
-			continue
-		}
-		var responseItems []dto.MidjourneyDto
-		err = common.Unmarshal(responseBody, &responseItems)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error2: %v, body: %s", err, string(responseBody)))
-			resp.Body.Close()
-			cancel()
-			continue
-		}
-		resp.Body.Close()
-		req.Body.Close()
-		cancel()
 
 		for _, responseItem := range responseItems {
 			task := taskM[responseItem.MjId]
@@ -236,6 +192,51 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 		report(totalChannels, totalChannels)
 	}
 	return summary
+}
+
+// fetchMidjourneyTasks 拉取单个渠道下一批任务的最新状态。
+// 抽成独立函数是为了让 defer 生效——外层是永久轮询循环，无法在其中使用 defer。
+// 本函数保证：无论从哪条路径返回，超时 context 都会被 cancel、响应体都会被排空并关闭。
+func fetchMidjourneyTasks(ctx context.Context, mjChannel *model.Channel, taskIds []string) ([]dto.MidjourneyDto, error) {
+	requestURL := fmt.Sprintf("%s/mj/task/list-by-condition", *mjChannel.BaseURL)
+	reqBody, err := common.Marshal(map[string]any{
+		"ids": taskIds,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request body failed: %w", err)
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, requestURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("mj-api-secret", mjChannel.Key)
+
+	resp, err := service.GetHttpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request failed: %w", err)
+	}
+	// 拿到响应后立即注册排空并关闭，覆盖下面非 200 / 读取失败 / 解析失败等所有返回路径。
+	defer service.DrainAndCloseResponseBody(resp)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body failed: %w", err)
+	}
+
+	var responseItems []dto.MidjourneyDto
+	if err := common.Unmarshal(responseBody, &responseItems); err != nil {
+		return nil, fmt.Errorf("unmarshal response body failed: %w, body: %s", err, string(responseBody))
+	}
+	return responseItems, nil
 }
 
 func checkMjTaskNeedUpdate(oldTask *model.Midjourney, newTask dto.MidjourneyDto) bool {

@@ -84,7 +84,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 		return
 	}
-	_ = resp.Body.Close()
 
 	var hResp VideoResponse
 	if err := common.Unmarshal(responseBody, &hResp); err != nil {

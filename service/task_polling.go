@@ -243,11 +243,13 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		common.SysLog(fmt.Sprintf("Get Task Do req error: %v", err))
 		return err
 	}
+	// 获得响应后立即注册排空并关闭，覆盖下方非 200 提前返回的路径，
+	// 保证连接被归还连接池而非因未读完 body 而丢弃。
+	defer DrainAndCloseResponseBody(resp)
 	if resp.StatusCode != http.StatusOK {
 		logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
 		return fmt.Errorf("Get Task status code: %d", resp.StatusCode)
 	}
-	defer resp.Body.Close()
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("Get Suno Task parse body error: %v", err))

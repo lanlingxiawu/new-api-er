@@ -367,7 +367,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 		return
 	}
-	_ = resp.Body.Close()
 
 	var dResp responsePayload
 	if err := common.Unmarshal(responseBody, &dResp); err != nil {
