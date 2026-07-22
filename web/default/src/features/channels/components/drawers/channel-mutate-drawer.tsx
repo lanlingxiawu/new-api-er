@@ -41,6 +41,7 @@ import {
   Route,
   Settings,
   SlidersHorizontal,
+  Wallet,
   Wand2,
 } from 'lucide-react'
 import {
@@ -258,6 +259,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   overrideRules: 'channel-section-advanced-override-rules',
   extraSettings: 'channel-section-advanced-extra-settings',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
+  accountBalance: 'channel-section-advanced-account-balance',
   upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
 } as const
 const ADVANCED_SETTINGS_CHILD_SECTION_IDS: string[] = Object.values(
@@ -749,6 +751,8 @@ export function ChannelMutateDrawer({
   const currentGroups = form.watch('group')
   const currentType = form.watch('type')
   const currentStatus = form.watch('status')
+  const currentAccountBalanceToken = form.watch('account_balance_token')
+  const currentAccountBalanceUserId = form.watch('account_balance_user_id')
   const currentBaseUrl = form.watch('base_url')
   const currentKey = form.watch('key')
   const currentOther = form.watch('other')
@@ -1091,12 +1095,16 @@ export function ChannelMutateDrawer({
     currentUpstreamModelUpdateAutoSyncEnabled ||
     currentUpstreamModelUpdateIgnoredModels?.trim()
   )
+  const accountBalanceConfigured = Boolean(
+    currentAccountBalanceToken?.trim() && currentAccountBalanceUserId?.trim()
+  )
   const advancedConfigured = Boolean(
     routingStrategyConfigured ||
     internalNotesConfigured ||
     overrideRulesConfigured ||
     extraSettingsConfigured ||
     fieldPassthroughConfigured ||
+    accountBalanceConfigured ||
     upstreamModelDetectionConfigured
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
@@ -1128,6 +1136,11 @@ export function ChannelMutateDrawer({
       configured: fieldPassthroughConfigured,
     })
   }
+  advancedNavChildren.push({
+    id: ADVANCED_SETTINGS_SECTION_IDS.accountBalance,
+    title: t('Account Balance Query'),
+    configured: accountBalanceConfigured,
+  })
   if (MODEL_FETCHABLE_TYPES.has(currentType)) {
     advancedNavChildren.push({
       id: ADVANCED_SETTINGS_SECTION_IDS.upstreamModelDetection,
@@ -4602,11 +4615,25 @@ export function ChannelMutateDrawer({
                           </div>
                         )}
 
-                        <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
-                          <SubHeading
+                        <div
+                          id={ADVANCED_SETTINGS_SECTION_IDS.accountBalance}
+                          className={sideDrawerSectionClassName(
+                            configuredAdvancedSectionClassName(
+                              'scroll-mt-4',
+                              accountBalanceConfigured
+                            )
+                          )}
+                        >
+                          <CardHeading
                             title={t('Account Balance Query')}
-                            icon={<SlidersHorizontal className='h-3.5 w-3.5' />}
+                            icon={<Wallet className='h-4 w-4' />}
+                            iconTone='success'
                           />
+                          <p className='text-muted-foreground -mt-2 text-xs'>
+                            {t(
+                              'Queries the remaining quota of an upstream new-api / one-api account. Only needed when this channel’s upstream is itself a gateway; leave blank for direct providers.'
+                            )}
+                          </p>
                           <FormField
                             control={form.control}
                             name='account_balance_url'
@@ -4615,9 +4642,7 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('Query URL')}</FormLabel>
                                 <FormControl>
                                   <Input
-                                    placeholder={t(
-                                      'Leave blank to use channel base URL'
-                                    )}
+                                    placeholder={t('e.g. https://upstream.example.com')}
                                     {...field}
                                   />
                                 </FormControl>
@@ -4636,9 +4661,7 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('Access Token')}</FormLabel>
                                 <FormControl>
                                   <Input
-                                    placeholder={t(
-                                      'Leave empty to remove the saved token'
-                                    )}
+                                    placeholder={t('Upstream account access token')}
                                     {...field}
                                   />
                                 </FormControl>
@@ -4659,15 +4682,13 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('User ID')}</FormLabel>
                                 <FormControl>
                                   <Input
-                                    placeholder={t(
-                                      'User ID used when querying account balance.'
-                                    )}
+                                    placeholder={t('e.g. 1')}
                                     {...field}
                                   />
                                 </FormControl>
                                 <FormDescription>
                                   {t(
-                                    'User ID used when querying account balance.'
+                                    'Sent as the New-Api-User header when querying the upstream account.'
                                   )}
                                 </FormDescription>
                                 <FormMessage />
