@@ -47,6 +47,11 @@ export default defineConfig(({ envMode }) => {
           semiUiDir,
           'dist/css/semi.css',
         ),
+        // workspace 会把 @visactor/react-vchart 提升到 web/node_modules，
+        // 它从根解析 React，与 classic 自己那份形成两个副本，导致
+        // "Invalid hook call / useRef of null"。强制所有 React 引用指向同一份。
+        react: path.resolve(__dirname, './node_modules/react'),
+        'react-dom': path.resolve(__dirname, './node_modules/react-dom'),
       },
     },
     html: {
