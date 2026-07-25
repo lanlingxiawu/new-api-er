@@ -1,5 +1,16 @@
 {
   "translation": {
+    "Assigned Employee": "分配员工",
+    "Owning Employee": "归属员工",
+    "Assign this user to an owning employee for commission attribution. Changes take effect immediately.": "将该用户分配给归属员工，用于业绩提成归属统计；更改立即生效。",
+    "Not assigned": "未分配",
+    "Search by name, email or remark...": "按用户名、邮箱或备注搜索...",
+    "No employee found.": "无匹配员工",
+    "Employee assigned successfully": "分配员工成功",
+    "Failed to assign employee": "分配员工失败",
+    "Employee unassigned successfully": "取消分配员工成功",
+    "Failed to unassign employee": "取消分配员工失败",
+    "Unassign employee": "取消分配员工",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

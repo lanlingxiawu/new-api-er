@@ -72,6 +72,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import { type User } from '../types'
+import { EmployeeAssignField } from './employee-assign-field'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -508,6 +509,29 @@ export function UsersMutateDrawer({
                       </FormItem>
                     )}
                   />
+                </SideDrawerSection>
+              )}
+
+              {/* Assigned Employee (common users only) */}
+              {isUpdate && currentRow && currentRow.role === 1 && (
+                <SideDrawerSection>
+                  <h3 className='text-sm font-medium'>
+                    {t('Assigned Employee')}
+                  </h3>
+                  <FormItem>
+                    <FormLabel>{t('Owning Employee')}</FormLabel>
+                    <EmployeeAssignField
+                      key={currentRow.id}
+                      userId={currentRow.id}
+                      inviterId={currentRow.inviter_id}
+                      onChanged={triggerRefresh}
+                    />
+                    <FormDescription>
+                      {t(
+                        'Assign this user to an owning employee for commission attribution. Changes take effect immediately.'
+                      )}
+                    </FormDescription>
+                  </FormItem>
                 </SideDrawerSection>
               )}
 
