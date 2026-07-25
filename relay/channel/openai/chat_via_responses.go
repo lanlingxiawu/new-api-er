@@ -313,7 +313,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	usage := state.Usage()
 	if usage == nil || usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		usage = service.ResponseText2UsageFromStream(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
 		state.SetUsage(usage)
 	}
 

@@ -143,15 +143,21 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
-	}
-	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	if info.ReceivedResponseCount == 0 {
+		// 上游零响应：HTTP 200 进入了流式分支，但整段流一条 SSE 数据都没发过来
+		// （连接挂起后断开 / 首字超时）。此时既没有 message_start 也没有任何输出，
+		// 绝不能用请求体估算的输入 token 兜底计费——否则会对一个零输出的失败请求
+		// 收取数百万 token 的费用。归零 usage，交由上层按失败/退款处理，
+		// 与 Gemini 通道 (relay-gemini.go: ReceivedResponseCount>0 才估算) 行为对齐。
+		claudeInfo.Usage.PromptTokens = 0
+		claudeInfo.Usage.CompletionTokens = 0
+		claudeInfo.Usage.TotalTokens = 0
+	} else if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
 		if common.DebugEnabled {
 			common.SysLog("claude response usage is not complete, maybe upstream error")
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
-		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		fallback := service.ResponseText2UsageFromStream(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
 		if claudeInfo.Usage.CompletionTokens == 0 ||
 			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
 			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens

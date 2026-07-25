@@ -36,6 +36,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
 	var responseText string
+	receivedResponseCount := 0
 	isFirst := true
 
 	for scanner.Scan() {
@@ -56,6 +57,8 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 			logger.LogError(c, "error_unmarshalling_stream_response: "+err.Error())
 			continue
 		}
+		receivedResponseCount++
+		info.ReceivedResponseCount++
 		for _, choice := range response.Choices {
 			choice.Delta.Role = "assistant"
 			responseText += choice.Delta.GetContentString()
@@ -75,7 +78,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	if err := scanner.Err(); err != nil {
 		logger.LogError(c, "error_scanning_stream_response: "+err.Error())
 	}
-	usage := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	usage := service.ResponseText2UsageFromStream(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens(), receivedResponseCount)
 	if info.ShouldIncludeUsage {
 		response := helper.GenerateFinalUsageResponse(id, info.StartTime.Unix(), info.UpstreamModelName, *usage)
 		err := helper.ObjectData(c, response)

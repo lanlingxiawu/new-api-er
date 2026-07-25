@@ -1,5 +1,13 @@
 {
   "translation": {
+    "分配员工": "Assign Employee",
+    "将该用户分配给归属员工，用于业绩提成归属统计": "Assign this user to an owning employee for commission attribution.",
+    "归属员工": "Owning Employee",
+    "选择后立即生效，清空即取消分配；支持按用户名、备注搜索": "Takes effect immediately; clear to unassign. Search by username or remark.",
+    "未分配": "Not assigned",
+    "无匹配员工": "No matching employee",
+    "分配员工成功": "Employee assigned successfully",
+    "取消分配员工成功": "Employee unassigned successfully",
     "Platform-wide (all users)": "Platform-wide (all users)",
     "Platform Gross Margin": "Platform Gross Margin",
     "Requests": "Requests",

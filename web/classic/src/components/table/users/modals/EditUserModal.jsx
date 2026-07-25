@@ -60,6 +60,7 @@ import {
   IconPlus,
 } from '@douyinfe/semi-icons';
 import UserBindingManagementModal from './UserBindingManagementModal';
+import EmployeeAssignSelect from './EmployeeAssignSelect';
 
 const { Text, Title } = Typography;
 
@@ -504,6 +505,45 @@ const EditUserModal = (props) => {
                             readonly
                           />
                         </div>
+                      </Col>
+                    </Row>
+                  </Card>
+                )}
+
+                {/* 分配员工（仅普通用户） */}
+                {userId && inputs?.role === 1 && (
+                  <Card className='!rounded-2xl shadow-sm border-0'>
+                    <div className='flex items-center mb-2'>
+                      <Avatar
+                        size='small'
+                        color='orange'
+                        className='mr-2 shadow-md'
+                      >
+                        <IconUserGroup size={16} />
+                      </Avatar>
+                      <div>
+                        <Text className='text-lg font-medium'>
+                          {t('分配员工')}
+                        </Text>
+                        <div className='text-xs text-gray-600'>
+                          {t('将该用户分配给归属员工，用于业绩提成归属统计')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Row gutter={12}>
+                      <Col span={24}>
+                        <Form.Slot label={t('归属员工')}>
+                          <EmployeeAssignSelect
+                            key={userId}
+                            userId={userId}
+                            inviterId={inputs?.inviter_id}
+                            onChanged={props.refresh}
+                          />
+                          <div className='text-xs text-gray-600 mt-1'>
+                            {t('选择后立即生效，清空即取消分配；支持按用户名、备注搜索')}
+                          </div>
+                        </Form.Slot>
                       </Col>
                     </Row>
                   </Card>

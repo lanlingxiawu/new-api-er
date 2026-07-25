@@ -28,6 +28,16 @@ func ResponseText2Usage(c *gin.Context, responseText string, modeName string, pr
 	return usage
 }
 
+// ResponseText2UsageFromStream returns zero usage when the upstream stream never
+// yielded any SSE payload. That empty-stream case is a transport failure, not a
+// billable completion, so we must not fall back to the request-body estimate.
+func ResponseText2UsageFromStream(c *gin.Context, responseText string, modeName string, promptTokens int, receivedResponseCount int) *dto.Usage {
+	if receivedResponseCount == 0 {
+		return &dto.Usage{}
+	}
+	return ResponseText2Usage(c, responseText, modeName, promptTokens)
+}
+
 func ValidUsage(usage *dto.Usage) bool {
 	return usage != nil && (usage.PromptTokens != 0 || usage.CompletionTokens != 0)
 }
