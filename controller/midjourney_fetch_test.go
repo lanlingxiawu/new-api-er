@@ -149,6 +149,13 @@ func randomUpstream() http.HandlerFunc {
 //
 //	STRESS_ITER=200000 go test ./controller/ -run StressNoLeak -v -timeout 30m
 func TestFetchMidjourneyTasks_StressNoLeak(t *testing.T) {
+	// 该用例默认 3000 次 / 48 并发，含随机分支、随机 sleep、runtime.GC 与
+	// goroutine 基线阈值判断，结果依赖机器负载与调度，放在常规测试路径中
+	// 既不稳定也拖慢 CI（项目约定禁止随机压力/时序测试）。
+	// 响应体关闭、超时与非 2xx 等确定性契约由本文件其余用例覆盖。
+	if os.Getenv("STRESS_TEST") == "" {
+		t.Skip("stress test disabled by default; set STRESS_TEST=1 to enable")
+	}
 	ensureHTTPClient()
 
 	srv := httptest.NewServer(randomUpstream())
