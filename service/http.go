@@ -34,12 +34,44 @@ const drainResponseBodyLimit = 512 * 1024
 // 与仅关闭的 CloseResponseBodyGracefully 不同：本函数保证连接尽可能可复用。
 // 注意：对 SSE / 流式响应不要使用本函数——那种场景关闭 body 的目的是主动中断上游流，
 // 排空会一直读到上游结束。
+//
+// 字节上限只能挡住"响应体过大"，挡不住"上游慢速涓流"：RELAY_TIMEOUT 默认为 0，
+// 此时 http.Client 不设总超时，若请求本身也没有带 deadline 的 context，
+// 一个持续缓慢发送、总量又不足上限的上游会让排空无限期阻塞。
+// 因此这里先检查请求是否有超时边界：没有边界就不排空，直接关闭（放弃连接复用，
+// 换取绝不阻塞）；有边界时才排空，届时 deadline 到期会中断读取。
 func DrainAndCloseResponseBody(httpResponse *http.Response) {
 	if httpResponse == nil || httpResponse.Body == nil {
 		return
 	}
+	if drainMayBlockIndefinitely(httpResponse) {
+		CloseResponseBodyGracefully(httpResponse)
+		return
+	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(httpResponse.Body, drainResponseBodyLimit))
 	CloseResponseBodyGracefully(httpResponse)
+}
+
+// drainMayBlockIndefinitely 判断排空是否可能永久阻塞。
+// 仅当三者同时成立才算“可能永久阻塞”：全局 RELAY_TIMEOUT 未配置、
+// 响应确实来自一次网络请求、且该请求的 context 没有 deadline。
+// 采取“默认排空、仅在可证明无时间边界时跳过”的策略：
+// Request 为 nil 说明是内存构造的响应（读取不涉及网络，不会阻塞），照常排空。
+func drainMayBlockIndefinitely(httpResponse *http.Response) bool {
+	if common.RelayTimeout > 0 {
+		// http.Client.Timeout 覆盖包括读 body 在内的整个过程。
+		return false
+	}
+	req := httpResponse.Request
+	if req == nil {
+		return false
+	}
+	ctx := req.Context()
+	if ctx == nil {
+		return true
+	}
+	_, hasDeadline := ctx.Deadline()
+	return !hasDeadline
 }
 
 // ShouldCopyUpstreamHeader checks whether a given upstream response header
