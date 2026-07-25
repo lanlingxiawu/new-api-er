@@ -52,7 +52,7 @@ go run ./bench/loadgen -url http://127.0.0.1:3000/v1/chat/completions -token sk-
 - 压测器输出：吞吐、p99、TTFB、非 200 状态码与错误采样（出现 `Error 1040`/超时即连接池见顶）。
 - MySQL：`SHOW PROCESSLIST` 看连接占用与堆积语句类型；`SHOW GLOBAL STATUS LIKE 'Threads_connected'`。
 - 网关日志：`flush_business_stats:` 行的 items/took/dropped（提成台账刷盘健康度）、`batch update` 行。
-- pprof（`ENABLE_PPROF=true` 后 `:8005/debug/pprof/`）：goroutine 数量、阻塞点。
+- pprof（系统设置 → 运维 → 性能 →「性能剖析 (pprof)」，仅 root）：页面上打开开关（热更新，无需重启）后下载 profile 文件，再本地 `go tool pprof -http=:8080 <文件>` 分析。常用的是 `cpu`（按秒数采样，看 CPU 烧在哪）、`heap`（看内存被谁持有）、`goroutine`（看协程堆在哪一行）。压测中途也能开关，不影响正在跑的请求。
 - mock 侧：`curl http://127.0.0.1:18080/stats` 看 active 在途请求数是否与压测并发一致（差值大说明请求堆在网关）。
 
 ## 注意
