@@ -20,6 +20,7 @@ import sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = {"v": "empty"}
+SEQ = []            # 按请求消费的行为队列(用于复现"渠道A失败→渠道B"的重试)
 HANG_SECONDS = 90
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18090
 
@@ -56,6 +57,12 @@ class H(BaseHTTPRequestHandler):
             MODE["v"] = self.path.rsplit('/', 1)[-1]
             self.send_response(200); self.end_headers()
             self.wfile.write(b'{"mode":"%s"}' % MODE["v"].encode()); return
+        if self.path.startswith('/__seq/'):
+            # /__seq/error,normal —— 按请求依次消费,耗尽后回落到 MODE。用于复现重试链路。
+            spec = self.path.rsplit('/', 1)[-1]
+            SEQ[:] = [s for s in spec.split(',') if s] if spec else []
+            self.send_response(200); self.end_headers()
+            self.wfile.write(b'{"seq":"%s"}' % spec.encode()); return
 
         is_claude = self.path.endswith('/v1/messages')
         is_openai = self.path.endswith('/chat/completions') or self.path.endswith('/v1/completions')
@@ -63,7 +70,29 @@ class H(BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers(); return
 
         self._drain()
-        m = MODE["v"]
+        m = SEQ.pop(0) if SEQ else MODE["v"]
+        if m == "error":
+            # 上游可重试错误(500),整段无 SSE、无 usage —— 触发换渠道重试
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json'); self.end_headers()
+            if is_claude:
+                self.wfile.write(b'{"type":"error","error":{"type":"api_error","message":"mock upstream 500"}}')
+            else:
+                self.wfile.write(b'{"error":{"message":"mock upstream 500","type":"server_error"}}')
+            return
+        if m == "partial":
+            # 先发 message_start + 内容(ReceivedResponseCount>0),再发 error 事件 → 可重试
+            # 用于验证:上一尝试已收数据时,本次空流是否仍被误按估算计费(靠 controller 重试归零守住)
+            self._sse_head()
+            if is_claude:
+                for ev, data in CLAUDE_EVENTS[:4]:   # message_start..content_block_delta
+                    self.wfile.write(("event: %s\ndata: %s\n\n" % (ev, data)).encode()); self.wfile.flush(); time.sleep(0.01)
+                err = '{"type":"error","error":{"type":"overloaded_error","message":"mock mid-stream error"}}'
+                self.wfile.write(("event: error\ndata: %s\n\n" % err).encode()); self.wfile.flush()
+            else:
+                self.wfile.write(("data: %s\n\n" % OPENAI_CHUNKS[0]).encode()); self.wfile.flush()
+                self.wfile.write(b'data: {"error":{"message":"mock mid-stream error","type":"server_error"}}\n\n'); self.wfile.flush()
+            return
         if m == "normal":
             self._sse_head()
             if is_claude:
