@@ -34,13 +34,26 @@ $rootDir = $PSScriptRoot
 $webDir = Join-Path $rootDir "web"
 $defaultFrontendDir = Join-Path $webDir "default"
 $classicFrontendDir = Join-Path $webDir "classic"
-$versionContent = Get-Content -Raw -Encoding UTF8 (Join-Path $rootDir "VERSION")
-if ($null -eq $versionContent) {
-    $version = ""
+$versionFile = Join-Path $rootDir "VERSION"
+$version = ""
+if (Test-Path $versionFile) {
+    $versionContent = Get-Content -Raw -Encoding UTF8 $versionFile
+    if ($null -ne $versionContent) {
+        $version = $versionContent.Trim()
+    }
 }
-else {
-    $version = $versionContent.Trim()
+# VERSION 文件为空时回退到 git describe，使版本号始终反映真实提交状态，
+# 无需手动维护 VERSION 文件（对齐 .github/workflows/electron-build.yml 的做法）。
+if ([string]::IsNullOrWhiteSpace($version) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+    $describe = (& git -C $rootDir describe --tags 2>$null)
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($describe)) {
+        $version = $describe.Trim()
+    }
 }
+if ([string]::IsNullOrWhiteSpace($version)) {
+    $version = "v0.0.0"
+}
+Write-Host "Building version: $version"
 
 $oldCgoEnabled = $env:CGO_ENABLED
 $oldGoos = $env:GOOS
@@ -81,7 +94,10 @@ try {
     }
 
     Write-Host "Building $output for $($env:GOOS)/$($env:GOARCH)..."
-    go build -ldflags="-s -w" -o $output main.go
+    # 通过 -X 把版本号注入 common.Version，否则后端会一直报告默认的 v0.0.0
+    # （前端展示的"当前版本"来自后端 /api/status 的 common.Version）。
+    $ldflags = "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$version'"
+    go build -ldflags="$ldflags" -o $output main.go
     Write-Host "Build completed: $output"
 }
 finally {
