@@ -75,6 +75,18 @@ func TestLoginfoGenerateTextOtherInfo_BasicRatios(t *testing.T) {
 	assert.NotContains(t, adminInfo, "local_count_tokens")
 }
 
+func TestLoginfoGenerateTextOtherInfo_DoesNotRecordNegativeFirstResponseTime(t *testing.T) {
+	c := loginfoNewCtx()
+	start := time.Now()
+	ri := loginfoBaseRelayInfo()
+	ri.StartTime = start
+	ri.FirstResponseTime = start.Add(-time.Second)
+
+	other := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1)
+
+	assert.Equal(t, float64(0), other["frt"])
+}
+
 func TestLoginfoGenerateTextOtherInfo_OptionalFields(t *testing.T) {
 	c := loginfoNewCtx()
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
