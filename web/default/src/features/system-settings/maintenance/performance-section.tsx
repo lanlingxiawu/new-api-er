@@ -52,6 +52,8 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 
+import { ProfilingControls } from '@/features/profiling/components/profiling-controls'
+
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -528,6 +530,11 @@ export function PerformanceSection(props: Props) {
           </div>
         </SettingsForm>
       </Form>
+
+      <Separator />
+
+      {/* pprof 开关与 profile 下载：开关即时生效，不跟随上方表单的保存按钮 */}
+      <ProfilingControls />
 
       <Separator />
 

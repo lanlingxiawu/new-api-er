@@ -430,6 +430,11 @@ func SetApiRouter(router *gin.Engine) {
 			systemInfoRoute.GET("/instances", controller.ListSystemInstances)
 			systemInfoRoute.DELETE("/stale-instances", controller.DeleteStaleSystemInstances)
 			systemInfoRoute.DELETE("/instances/:node_name", controller.DeleteStaleSystemInstance)
+
+			// 性能剖析：开关状态 + 原始 profile 下载。
+			// heap / goroutine dump 会带出内存中的凭据与用户数据，只对 root 开放（组已 RootAuth）。
+			systemInfoRoute.GET("/pprof-status", controller.GetPprofStatus)
+			systemInfoRoute.GET("/pprof/*name", controller.ServePprofProfile)
 		}
 
 		dataRoute := apiRouter.Group("/data")

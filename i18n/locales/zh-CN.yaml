@@ -304,3 +304,11 @@ backfill_date_must_be_historical: "日期必须为历史日期（早于当天）
 backfill_disabled: "回填功能当前已禁用"
 backfill_already_running: "已有回填任务正在运行，请稍后再试"
 backfill_file_not_found: "指定日期未发现 fallback 日志文件"
+
+# 性能剖析（pprof）相关
+pprof.disabled: "性能剖析未开启，请先在设置中开启后再下载 profile"
+pprof.busy: "当前已有 CPU 采样任务在进行，请稍后重试"
+pprof.trace_busy: "当前已有 trace 采集在进行，请稍后重试"
+pprof.invalid_seconds: "采样时长需要填写正整数秒"
+pprof.seconds_too_large: "单次采样最长 {{.Max}} 秒"
+pprof.invalid_profile: "未知的采样类型"

@@ -302,3 +302,11 @@ backfill_date_must_be_historical: "Date must be a historical date (before today)
 backfill_disabled: "Backfill feature is currently disabled"
 backfill_already_running: "A backfill task is already running, please wait"
 backfill_file_not_found: "No fallback log file found for the specified date"
+
+# Profiling (pprof) messages
+pprof.disabled: "Profiling is turned off. Enable it in Settings before downloading profiles"
+pprof.busy: "Another CPU sampling task is running, please try again in a moment"
+pprof.trace_busy: "Another trace capture is running, please try again in a moment"
+pprof.invalid_seconds: "Sampling duration must be a positive whole number of seconds"
+pprof.seconds_too_large: "Sampling duration can be at most {{.Max}} seconds"
+pprof.invalid_profile: "Unknown profile type"

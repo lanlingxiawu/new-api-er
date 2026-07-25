@@ -352,6 +352,16 @@ const (
 	MsgCustomOAuthProviderIdInvalid = "custom_oauth.provider_id_field_invalid"
 )
 
+// Profiling (pprof) messages
+const (
+	MsgPprofDisabled        = "pprof.disabled"
+	MsgPprofBusy            = "pprof.busy"
+	MsgPprofTraceBusy       = "pprof.trace_busy"
+	MsgPprofInvalidSeconds  = "pprof.invalid_seconds"
+	MsgPprofSecondsTooLarge = "pprof.seconds_too_large"
+	MsgPprofInvalidProfile  = "pprof.invalid_profile"
+)
+
 // Fallback backfill messages
 const (
 	MsgBackfillDateMustBeHistorical = "backfill_date_must_be_historical"

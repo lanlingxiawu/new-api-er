@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useState } from 'react';
 import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsPerformance from '../../pages/Setting/Performance/SettingsPerformance';
+import SettingsProfiling from '../../pages/Setting/Performance/SettingsProfiling';
 import { API, showError, toBoolean } from '../../helpers';
 
 const PerformanceSetting = () => {
@@ -71,6 +72,10 @@ const PerformanceSetting = () => {
         {/* 性能设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsPerformance options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* pprof 开关与 profile 下载：开关即时生效，不走上方表单的保存按钮 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsProfiling />
         </Card>
       </Spin>
     </>

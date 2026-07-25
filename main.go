@@ -6,7 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,15 +29,13 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
+	"github.com/QuantumNous/new-api/setting/pprof_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-
-	_ "net/http/pprof"
 )
 
 //go:embed web/default/dist
@@ -165,13 +162,9 @@ func main() {
 		model.InitBatchUpdater()
 	}
 
-	if os.Getenv("ENABLE_PPROF") == "true" {
-		gopool.Go(func() {
-			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
-		})
-		go common.Monitor()
-		common.SysLog("pprof enabled")
-	}
+	// pprof 下载开关（pprof_setting.enabled）由配置系统热更新，每个请求现读现判，
+	// 无需在这里启动任何后台 goroutine。ENABLE_PPROF 仅作为启动默认值，已在
+	// InitOptionMap 之前经 pprof_setting.ApplyEnvDefaults() 应用。
 
 	err = common.StartPyroScope()
 	if err != nil {
@@ -357,6 +350,10 @@ func InitResources() error {
 	}
 
 	model.CheckSetup()
+
+	// ENABLE_PPROF=true 只作为 pprof 配置的启动默认值，必须在 InitOptionMap 之前应用：
+	// InitOptionMap 会先导出内置默认值，再用数据库里的值覆盖（DB > env > 内置默认）。
+	pprof_setting.ApplyEnvDefaults()
 
 	// Initialize options, should after model.InitDB()
 	model.InitOptionMap()
