@@ -241,13 +241,17 @@ const RequestLog = () => {
       <pre
         style={{
           background: 'var(--semi-color-fill-0)',
+          border: '1px solid var(--semi-color-border)',
           padding: 12,
-          borderRadius: 4,
+          borderRadius: 8,
           maxHeight: 280,
           overflow: 'auto',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-all',
           fontSize: 12,
+          lineHeight: 1.6,
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         }}
       >
         {content ? prettify(content) : '-'}
@@ -352,7 +356,17 @@ const RequestLog = () => {
       >
         {detail && (
           <div>
-            <Text type='tertiary'>Request ID: {detail.request_id || '-'}</Text>
+            <Text
+              type='tertiary'
+              style={{
+                fontFamily:
+                  'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                fontSize: 12,
+                wordBreak: 'break-all',
+              }}
+            >
+              Request ID: {detail.request_id || '-'}
+            </Text>
             <div style={{ marginTop: 16 }}>
               {renderBlock(t('请求头'), detail.request_headers)}
               {renderBlock(

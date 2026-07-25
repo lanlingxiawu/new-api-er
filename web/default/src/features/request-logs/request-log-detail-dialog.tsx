@@ -78,21 +78,21 @@ function Block({ title, content }: { title: string; content?: string }) {
   }
 
   return (
-    <div className='space-y-1'>
-      <div className='flex items-center justify-between'>
+    <div className='space-y-1.5'>
+      <div className='flex items-center justify-between gap-2'>
         <div className='text-sm font-medium'>{title}</div>
         <Button
           variant='ghost'
           size='sm'
-          className='h-7 gap-1 text-xs'
+          className='h-6 shrink-0 gap-1 px-2 text-xs'
           disabled={!content}
           onClick={handleCopy}
         >
-          <Copy className='h-3.5 w-3.5' />
+          <Copy className='h-3 w-3' />
           {t('Copy')}
         </Button>
       </div>
-      <pre className='bg-muted max-h-72 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap break-all'>
+      <pre className='bg-muted/60 border-border max-h-72 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap'>
         {content ? prettify(content) : '-'}
       </pre>
     </div>
@@ -109,24 +109,24 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='max-h-[90vh] max-w-4xl overflow-y-auto'>
-        <DialogHeader>
+      <DialogContent className='flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 max-sm:h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none sm:w-[92vw] sm:max-w-3xl'>
+        <DialogHeader className='space-y-1 border-b px-5 py-4 pr-12'>
           <DialogTitle>{t('Request Log Detail')}</DialogTitle>
-          <DialogDescription>
-            {data?.request_id ? `Request ID: ${data.request_id}` : ''}
+          <DialogDescription className='font-mono text-xs break-all'>
+            {data?.request_id ? `Request ID: ${data.request_id}` : ' '}
           </DialogDescription>
         </DialogHeader>
         {isLoading ? (
-          <div className='text-muted-foreground flex items-center justify-center gap-2 py-12'>
+          <div className='text-muted-foreground flex flex-1 items-center justify-center gap-2 py-12'>
             <Loader2 className='h-5 w-5 animate-spin' />
             {t('Loading...')}
           </div>
         ) : isError ? (
-          <div className='text-destructive py-12 text-center'>
+          <div className='text-destructive flex flex-1 items-center justify-center py-12 text-center'>
             {t('Failed to load')}
           </div>
         ) : (
-          <div className='space-y-4'>
+          <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4'>
             <Block
               title={t('Request Headers')}
               content={data?.request_headers}
