@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type UIEvent } from 'react'
 import { Check, ChevronsUpDown, Loader2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -70,6 +70,8 @@ function employeeRemark(emp: EmployeeProfile): string {
   return emp.remark?.trim() || ''
 }
 
+const PAGE_SIZE = 20
+
 export function EmployeeAssignField({
   userId,
   inviterId,
@@ -81,8 +83,12 @@ export function EmployeeAssignField({
   const [debounced, setDebounced] = useState('')
   const [options, setOptions] = useState<EmployeeProfile[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [page, setPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
   const [saving, setSaving] = useState(false)
   const [selected, setSelected] = useState<SelectedEmployee | null>(null)
+  const loadSeqRef = useRef(0)
 
   // Debounce the search input.
   useEffect(() => {
@@ -119,25 +125,59 @@ export function EmployeeAssignField({
     }
   }, [inviterId])
 
-  // Load employee options (server-side search) whenever the popover is open.
+  // Load a page of employees (server-side search). replace=true resets the list
+  // for a new search; replace=false appends the next page (infinite scroll).
+  const loadEmployees = useCallback(
+    async (nextPage: number, replace: boolean) => {
+      const seq = ++loadSeqRef.current
+      if (replace) setLoading(true)
+      else setLoadingMore(true)
+      try {
+        const res = await getEmployees(nextPage, PAGE_SIZE, {
+          keyword: debounced || undefined,
+          status: 1,
+        })
+        if (seq !== loadSeqRef.current) return // stale response, ignore
+        const items = res?.data?.items || []
+        const total = res?.data?.total || 0
+        const curPage = res?.data?.page || nextPage
+        setOptions((prev) => {
+          if (replace) return items
+          const ids = new Set(prev.map((e) => e.id))
+          return [...prev, ...items.filter((e) => !ids.has(e.id))]
+        })
+        setPage(curPage)
+        setHasMore(curPage * PAGE_SIZE < total)
+      } catch {
+        if (seq === loadSeqRef.current && replace) {
+          setOptions([])
+          setHasMore(false)
+        }
+      } finally {
+        if (seq === loadSeqRef.current) {
+          setLoading(false)
+          setLoadingMore(false)
+        }
+      }
+    },
+    [debounced]
+  )
+
+  // Reset and reload the first page whenever the popover opens or the search changes.
   useEffect(() => {
     if (!open) return
-    let cancelled = false
-    setLoading(true)
-    getEmployees(1, 20, { keyword: debounced || undefined, status: 1 })
-      .then((res) => {
-        if (!cancelled) setOptions(res?.data?.items || [])
-      })
-      .catch(() => {
-        if (!cancelled) setOptions([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, debounced])
+    setOptions([])
+    setPage(1)
+    setHasMore(false)
+    loadEmployees(1, true)
+  }, [open, debounced, loadEmployees])
+
+  const handleListScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distanceToBottom > 48 || !hasMore || loading || loadingMore) return
+    loadEmployees(page + 1, false)
+  }
 
   const handleAssign = async (emp: EmployeeProfile) => {
     if (selected?.id === emp.id) {
@@ -235,7 +275,7 @@ export function EmployeeAssignField({
               value={search}
               onValueChange={setSearch}
             />
-            <CommandList className='max-h-80'>
+            <CommandList className='max-h-80' onScroll={handleListScroll}>
               {loading ? (
                 <div className='text-muted-foreground flex items-center justify-center gap-2 py-6 text-sm'>
                   <Loader2 className='h-4 w-4 animate-spin' />
@@ -269,6 +309,12 @@ export function EmployeeAssignField({
                       </CommandItem>
                     ))}
                   </CommandGroup>
+                  {loadingMore && (
+                    <div className='text-muted-foreground flex items-center justify-center gap-2 py-2 text-xs'>
+                      <Loader2 className='h-3 w-3 animate-spin' />
+                      {t('Loading...')}
+                    </div>
+                  )}
                 </>
               )}
             </CommandList>
