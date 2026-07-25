@@ -304,8 +304,21 @@ func sanitizeFetchModelsError(err error, key string) error {
 	return errors.New(message)
 }
 
+// fetchModelsTimeout 拉取上游模型列表的整体超时。
+// RELAY_TIMEOUT 默认为 0（AI 对话需要长时间流式，不能设全局超时），
+// 因此这类后台/管理请求必须自带 deadline，否则慢速上游会让读取与排空永久阻塞。
+//
+// 该路径不在 AI 转发主链路上，仅用于：管理员在渠道页手动拉取模型列表
+// （fetch_models 两个接口）与每 30 分钟一轮的后台巡检。
+// 取 120s 是为兼顾慢上游/慢代理：超时后人工操作会报错、巡检跳过该渠道等下轮重试，
+// 好过无边界时请求永久挂起（并拖住整轮巡检）。
+const fetchModelsTimeout = 120 * time.Second
+
 func getFetchModelsResponseBody(method string, requestURL string, channel *model.Channel, headers http.Header) ([]byte, error) {
-	request, err := http.NewRequest(method, requestURL, nil)
+	// 响应体在本函数内读完（return io.ReadAll 先于 defer 执行），故 cancel 可安全 defer。
+	ctx, cancel := context.WithTimeout(context.Background(), fetchModelsTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
