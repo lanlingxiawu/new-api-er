@@ -191,6 +191,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		// relayInfo 在整个重试循环里复用，ReceivedResponseCount 会跨尝试累积。
+		// 必须每次尝试前归零：否则「上一尝试收到过 SSE 数据后报可重试错、本次尝试
+		// 上游返回 200 却零响应」时，计费守卫（service.ResponseText2UsageFromStream /
+		// claude HandleStreamFinalResponse 的 ReceivedResponseCount==0 判断）会误以为
+		// 本次收到过数据，退回请求体估算 token 计费 —— 正是空流零响应要避免的超额扣费。
+		relayInfo.ReceivedResponseCount = 0
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, messageWithCurrentRequestId(c, channelErr.Error()))

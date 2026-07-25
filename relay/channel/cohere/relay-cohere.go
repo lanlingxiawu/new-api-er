@@ -86,6 +86,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
 	responseText := ""
+	receivedResponseCount := 0
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
@@ -124,6 +125,8 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				common.SysLog("error unmarshalling stream response: " + err.Error())
 				return true
 			}
+			receivedResponseCount++
+			info.ReceivedResponseCount++
 			var openaiResp dto.ChatCompletionsStreamResponse
 			openaiResp.Id = responseId
 			openaiResp.Created = createdTime
@@ -167,7 +170,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	})
 	if usage.PromptTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		usage = service.ResponseText2UsageFromStream(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens(), receivedResponseCount)
 	}
 	return usage, nil
 }

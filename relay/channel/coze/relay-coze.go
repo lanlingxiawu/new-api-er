@@ -107,6 +107,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	var currentEvent string
 	var currentData string
 	var usage = &dto.Usage{}
+	receivedResponseCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -114,6 +115,8 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 		if line == "" {
 			if currentEvent != "" && currentData != "" {
 				// handle last event
+				receivedResponseCount++
+				info.ReceivedResponseCount++
 				handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
 				currentEvent = ""
 				currentData = ""
@@ -134,6 +137,8 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 
 	// Last event
 	if currentEvent != "" && currentData != "" {
+		receivedResponseCount++
+		info.ReceivedResponseCount++
 		handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
 	}
 
@@ -143,7 +148,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	helper.Done(c)
 
 	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, c.GetInt("coze_input_count"))
+		usage = service.ResponseText2UsageFromStream(c, responseText, info.UpstreamModelName, c.GetInt("coze_input_count"), receivedResponseCount)
 	}
 
 	return usage, nil

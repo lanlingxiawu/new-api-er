@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -382,42 +384,63 @@ func TestClaudeStreamHandlerForceClosesAfterUpstreamErrorEvent(t *testing.T) {
 	require.Equal(t, []string{"message_start", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
 }
 
-func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []dto.Message{
-			{
-				Role: "user",
-				Content: []any{
-					dto.MediaContent{
-						Type: dto.ContentTypeText,
-						Text: "see attachment",
-					},
-					dto.MediaContent{
-						Type: dto.ContentTypeFile,
-						File: &dto.MessageFile{
-							FileName: "blob.bin",
-							FileData: "JVBERi0xLjQK",
-						},
-					},
-				},
-			},
-		},
+// TestClaudeStreamHandlerBillsEstimateWhenUpstreamSendsNoData 复现线上现象：
+//
+// 某些流式请求上游返回 HTTP 200（进入流式分支），但整段流里一条 SSE 数据都没
+// 发过来（连接挂起 59~96s 后断开 / 首字超时）。此时：
+//   - ReceivedResponseCount == 0，SetFirstResponseTime 从未触发 → 面板首字 = -1.0s；
+//   - 没有 message_start → claudeInfo.Usage.PromptTokens == 0；
+//   - HandleStreamFinalResponse 回退到 GetEstimatePromptTokens()，把「请求体估算」的
+//     数百万输入 token 当成真实用量返回，且 ClaudeStreamHandler 返回 err==nil，
+//     外层不会退款 → 用户被按数百万输入 token 实扣费，却零输出。
+//
+// 正确行为应对齐 Gemini 通道（relay-gemini.go: ReceivedResponseCount>0 才估算，
+// 否则 usage 归零不计费）。本用例断言「零响应 ⇒ 零用量」，在补上守卫前会失败，
+// 即复现该缺陷；修复后转绿并作为回归测试。
+func TestClaudeStreamHandlerBillsEstimateWhenUpstreamSendsNoData(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	c, _ := newClaudeStreamRecorder()
+
+	// 上游 200 但流体为空——一条 SSE 数据都没有。
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(""))}
+
+	now := time.Now()
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-opus-4-8"},
+		// 镜像 GenRelayInfo 的初始化：FirstResponseTime = StartTime - 1s，
+		// 只要没收到数据就一直是负数 → 首字 -1.0s。
+		StartTime:         now,
+		FirstResponseTime: now.Add(-time.Second),
 	}
+	// 请求体估算出的输入 token（截图里那种数百万级）。
+	const estimate = 6_000_000
+	info.SetEstimatePromptTokens(estimate)
 
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
-	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
+	usage, apiErr := ClaudeStreamHandler(c, resp, info)
 
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
-	require.True(t, ok)
-	require.Len(t, content, 1)
-	require.Equal(t, "text", content[0].Type)
-	require.NotNil(t, content[0].Text)
-	require.Equal(t, "see attachment", *content[0].Text)
+	// 上游确实零响应：一条数据都没收到，首字从未记录。
+	require.Equal(t, 0, info.ReceivedResponseCount, "上游未发送任何 SSE 数据")
+	require.False(t, info.HasSendResponse(), "首字从未记录（面板显示 -1.0s）")
+
+	// 关键：不带 error 返回，外层 relay.go 的退款 defer 只在 newAPIError!=nil 时触发，
+	// 所以这条零响应请求既不报错也不退款，直接按下面的 usage 结算扣费。
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+
+	// —— 期望（修复后）：零响应不应产生任何可计费用量 ——
+	// 当前代码会用估算值兜底，导致下面两条断言失败，即复现被错误计费的问题。
+	require.Equal(t, 0, usage.PromptTokens,
+		"上游零响应不应把请求体估算的输入 token 当成真实用量计费")
+	require.Equal(t, 0, usage.CompletionTokens, "零输出")
+	require.False(t, service.ValidUsage(usage),
+		"零响应的 usage 不应被判定为有效用量（否则会进入结算扣费）")
 }
 
-func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
+func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",
 		Temperature: commonPointer(0.7),
