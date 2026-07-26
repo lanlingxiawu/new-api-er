@@ -48,8 +48,8 @@ func TestInitSessionCookieSettings(t *testing.T) {
 			wantErr: "requires SESSION_COOKIE_SECURE=true",
 		},
 		{
-			name:   "secure invalid value",
-			secure: "yes",
+			name:    "secure invalid value",
+			secure:  "yes",
 			wantErr: "must be true or false",
 		},
 		{
@@ -70,7 +70,7 @@ func TestInitSessionCookieSettings(t *testing.T) {
 		{
 			name:   "secure true with host-less url",
 			secure: "true", trustedURLs: "https://",
-			wantErr: "must contain only https URLs",
+			wantErr: "must contain only scheme and host",
 		},
 		{
 			name:   "valid https trusted urls",

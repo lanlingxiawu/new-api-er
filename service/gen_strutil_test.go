@@ -9,7 +9,6 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -327,32 +326,6 @@ func TestStrutil_ValidUsage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// return_path.go
-// ---------------------------------------------------------------------------
-
-func TestStrutil_PaymentReturnURL(t *testing.T) {
-	origAddr := system_setting.ServerAddress
-	origTheme := common.GetTheme()
-	t.Cleanup(func() {
-		system_setting.ServerAddress = origAddr
-		common.SetTheme(origTheme)
-	})
-
-	t.Run("classic theme leaves console path unchanged and trims trailing slash", func(t *testing.T) {
-		common.SetTheme("classic")
-		system_setting.ServerAddress = "https://example.com/"
-		got := PaymentReturnURL("/console/topup")
-		assert.Equal(t, "https://example.com/console/topup", got)
-	})
-	t.Run("default theme rewrites console/topup to wallet", func(t *testing.T) {
-		common.SetTheme("default")
-		system_setting.ServerAddress = "https://example.com"
-		got := PaymentReturnURL("/console/topup")
-		assert.Equal(t, "https://example.com/wallet", got)
-	})
-}
-
-// ---------------------------------------------------------------------------
 // openai_chat_responses_mode.go
 // ---------------------------------------------------------------------------
 
@@ -530,12 +503,12 @@ func TestStrutil_ExtractOutputTextFromResponses(t *testing.T) {
 
 func TestStrutil_NormalizeCacheCreationSplit(t *testing.T) {
 	cases := []struct {
-		name          string
-		total         int
-		t5m           int
-		t1h           int
-		want5m        int
-		want1h        int
+		name   string
+		total  int
+		t5m    int
+		t1h    int
+		want5m int
+		want1h int
 	}{
 		{"remainder folded into 5m bucket", 100, 30, 20, 80, 20},
 		{"exact split no remainder", 50, 30, 20, 30, 20},

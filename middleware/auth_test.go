@@ -1,532 +1,251 @@
 package middleware
 
 import (
-	"encoding/json"
+	"crypto/hmac"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/authz"
-
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-// ---------------------------------------------------------------------------
-// validUserInfo — pure logic
-// ---------------------------------------------------------------------------
+func setupDashboardAuthMiddlewareTest(t *testing.T) {
+	t.Helper()
+	previousDB := model.DB
+	previousType := common.MainDatabaseType()
+	previousRedis := common.RedisEnabled
+	previousSecret := common.SessionSecret
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
+	model.DB = db
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	common.RedisEnabled = false
+	common.SessionSecret = "middleware-auth-test-secret"
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.SetMainDatabaseType(previousType)
+		common.RedisEnabled = previousRedis
+		common.SessionSecret = previousSecret
+	})
+}
 
-func TestValidUserInfo(t *testing.T) {
-	cases := []struct {
-		name     string
-		username string
-		role     int
-		want     bool
-	}{
-		{"valid common", "alice", common.RoleCommonUser, true},
-		{"valid guest role", "bob", common.RoleGuestUser, true},
-		{"valid admin", "carol", common.RoleAdminUser, true},
-		{"valid root", "dave", common.RoleRootUser, true},
-		{"empty username", "", common.RoleCommonUser, false},
-		{"blank username", "   ", common.RoleCommonUser, false},
-		{"invalid role (between valid)", "eve", 5, false},
-		{"invalid role (negative)", "eve", -1, false},
+func issueExpiredDashboardAccessToken(t *testing.T, identity service.AuthIdentity) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"iss":       "new-api",
+		"aud":       []string{"new-api-dashboard"},
+		"sub":       fmt.Sprintf("%d", identity.UserID),
+		"token_use": "access",
+		"sid":       identity.SessionID,
+		"uv":        identity.UserAuthVersion,
+		"sv":        identity.SessionVersion,
+		"exp":       time.Now().Add(-time.Minute).Unix(),
+		"nbf":       time.Now().Add(-2 * time.Minute).Unix(),
+		"iat":       time.Now().Add(-2 * time.Minute).Unix(),
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, validUserInfo(tc.username, tc.role))
+	mac := hmac.New(sha256.New, []byte(common.SessionSecret))
+	_, err := mac.Write([]byte("new-api/auth/access/v1"))
+	require.NoError(t, err)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(mac.Sum(nil))
+	require.NoError(t, err)
+	return token
+}
+
+func tamperDashboardToken(token string) string {
+	tamperAt := len(token) - 2
+	replacement := "x"
+	if token[tamperAt] == 'x' {
+		replacement = "y"
+	}
+	return token[:tamperAt] + replacement + token[tamperAt+1:]
+}
+
+func createMiddlewarePATUser(t *testing.T, username, token string) *model.User {
+	t.Helper()
+	user := &model.User{
+		Username: username, Password: "password-placeholder", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AccessToken: &token, AuthVersion: 1,
+		AffCode: "middleware-aff-" + username,
+	}
+	require.NoError(t, model.DB.Create(user).Error)
+	return user
+}
+
+func TestUserAuthAllowsOpaqueDottedPAT(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	user := createMiddlewarePATUser(t, "dotted-pat-user", "opaque.key.with-dots")
+	router := gin.New()
+	router.GET("/protected", UserAuth(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
+	})
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer opaque.key.with-dots")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	var body struct {
+		ID int `json:"id"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+	assert.Equal(t, user.Id, body.ID)
+}
+
+func TestUserAuthNeverFallsBackForRecognizedInvalidInternalJWT(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	identity := service.AuthIdentity{UserID: 42, SessionID: "session-42", UserAuthVersion: 1, SessionVersion: 1}
+	token, _, err := service.IssueAccessToken(identity)
+	require.NoError(t, err)
+	tampered := tamperDashboardToken(token)
+	createMiddlewarePATUser(t, "jwt-fallback-user", tampered)
+	router := gin.New()
+	router.GET("/protected", UserAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+tampered)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusUnauthorized, response.Code)
+	assert.Contains(t, response.Body.String(), "AUTH_UNAUTHORIZED")
+}
+
+func TestTryUserAuthCredentialClassification(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	gin.SetMode(gin.TestMode)
+
+	patUser := createMiddlewarePATUser(t, "optional-pat-user", "optional.pat.with-dots")
+	internalUser := createMiddlewarePATUser(t, "optional-session-user", "unrelated-pat")
+	now := time.Now().Unix()
+	session := &model.UserSession{
+		SID:             "optional-auth-session",
+		UserID:          internalUser.Id,
+		Version:         1,
+		UserAuthVersion: internalUser.AuthVersion,
+		Status:          model.UserSessionStatusActive,
+		RefreshHash:     "refresh-hash",
+		LoginMethod:     "password",
+		LastActiveAt:    now,
+		ExpiresAt:       now + 3600,
+	}
+	require.NoError(t, model.CreateUserSession(session))
+	identity := service.AuthIdentity{
+		UserID:          internalUser.Id,
+		SessionID:       session.SID,
+		UserAuthVersion: session.UserAuthVersion,
+		SessionVersion:  session.Version,
+	}
+	accessToken, _, err := service.IssueAccessToken(identity)
+	require.NoError(t, err)
+	securityProof, _, err := service.IssueSecurityProof(identity, "2fa", []string{"channel.key.read"})
+	require.NoError(t, err)
+	externalToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"iss": "external-issuer",
+		"aud": "external-audience",
+		"exp": time.Now().Add(time.Minute).Unix(),
+	}).SignedString([]byte("external-secret"))
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/optional", TryUserAuth(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"id":               c.GetInt("id"),
+			"use_access_token": c.GetBool("use_access_token"),
+		})
+	})
+
+	tests := []struct {
+		name          string
+		token         string
+		wantStatus    int
+		wantUserID    int
+		wantPAT       bool
+		wantErrorCode string
+	}{
+		{name: "no authorization header", wantStatus: http.StatusOK},
+		{name: "opaque unmatched credential", token: "opaque-relay-key", wantStatus: http.StatusOK},
+		{name: "dotted unmatched credential", token: "ordinary.key.with-dots", wantStatus: http.StatusOK},
+		{name: "third party jwt", token: externalToken, wantStatus: http.StatusOK},
+		{name: "valid pat", token: "optional.pat.with-dots", wantStatus: http.StatusOK, wantUserID: patUser.Id, wantPAT: true},
+		{name: "valid internal access jwt", token: accessToken, wantStatus: http.StatusOK, wantUserID: internalUser.Id},
+		{name: "expired internal access jwt", token: issueExpiredDashboardAccessToken(t, identity), wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_TOKEN_EXPIRED"},
+		{name: "tampered internal access jwt", token: tamperDashboardToken(accessToken), wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_UNAUTHORIZED"},
+		{name: "security proof used as access", token: securityProof, wantStatus: http.StatusUnauthorized, wantErrorCode: "AUTH_UNAUTHORIZED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/optional", nil)
+			if test.token != "" {
+				request.Header.Set("Authorization", "Bearer "+test.token)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			assert.Equal(t, test.wantStatus, response.Code)
+			if test.wantErrorCode != "" {
+				assert.Contains(t, response.Body.String(), test.wantErrorCode)
+				return
+			}
+			var body struct {
+				ID             int  `json:"id"`
+				UseAccessToken bool `json:"use_access_token"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+			assert.Equal(t, test.wantUserID, body.ID)
+			assert.Equal(t, test.wantPAT, body.UseAccessToken)
 		})
 	}
-}
 
-// ---------------------------------------------------------------------------
-// authHelper via UserAuth/AdminAuth/RootAuth — session path
-// ---------------------------------------------------------------------------
+	requiredRouter := gin.New()
+	requiredRouter.GET("/required", UserAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	requiredRequest := httptest.NewRequest(http.MethodGet, "/required", nil)
+	requiredRequest.Header.Set("Authorization", "Bearer ordinary-unmatched-key")
+	requiredResponse := httptest.NewRecorder()
+	requiredRouter.ServeHTTP(requiredResponse, requiredRequest)
+	assert.Equal(t, http.StatusUnauthorized, requiredResponse.Code, "required dashboard authentication must not adopt optional-auth fallback semantics")
 
-// authRunner wires a session router with the middleware under test plus a
-// terminal handler, performing a request with the given session values and
-// New-Api-User header. Returns the terminal recorder.
-func runAuth(t *testing.T, mw gin.HandlerFunc, sessionValues map[string]interface{}, newApiUser string, accessToken string) *httptest.ResponseRecorder {
-	t.Helper()
-	r := newSessionRouter()
-	var cookies []*http.Cookie
-	if sessionValues != nil {
-		cookies = loginSession(t, r, sessionValues)
-	}
-	r.GET("/protected", mw, func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"success": true})
-	})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-	if newApiUser != "" {
-		req.Header.Set("New-Api-User", newApiUser)
-	}
-	if accessToken != "" {
-		req.Header.Set("Authorization", accessToken)
-	}
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	return rec
-}
-
-func TestAuthHelper_SessionValidCommonUser(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "42", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, "864b7076dbcd0a3c01b5520316720ebf", rec.Header().Get("Auth-Version"))
-}
-
-func TestAuthHelper_NoSessionNoAccessToken(t *testing.T) {
-	// No session and no Authorization header -> 401 not-logged-in.
-	rec := runAuth(t, UserAuth(), nil, "1", "")
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestAuthHelper_MissingNewApiUser(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "", "")
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestAuthHelper_NewApiUserNotNumber(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "not-a-number", "")
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestAuthHelper_NewApiUserMismatch(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "99", "")
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestAuthHelper_UserBanned(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusDisabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "42", "")
-	require.Equal(t, http.StatusOK, rec.Code) // banned -> 200 {success:false}
-	require.Contains(t, rec.Body.String(), "false")
-}
-
-func TestAuthHelper_InsufficientPrivilege(t *testing.T) {
-	// Common user hitting an AdminAuth-guarded route -> role < minRole -> denied.
-	sv := map[string]interface{}{
-		"username": "alice", "role": common.RoleCommonUser,
-		"id": 42, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, AdminAuth(), sv, "42", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "false")
-}
-
-func TestAuthHelper_AdminAllowedForAdmin(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "root", "role": common.RoleAdminUser,
-		"id": 43, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, AdminAuth(), sv, "43", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "true")
-}
-
-func TestAuthHelper_RootDeniedForAdmin(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "admin", "role": common.RoleAdminUser,
-		"id": 44, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, RootAuth(), sv, "44", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "false")
-}
-
-func TestAuthHelper_RootAllowedForRoot(t *testing.T) {
-	sv := map[string]interface{}{
-		"username": "root", "role": common.RoleRootUser,
-		"id": 45, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, RootAuth(), sv, "45", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "true")
-}
-
-func TestAuthHelper_InvalidUserInfoInSession(t *testing.T) {
-	// role passes minRole but username blank -> validUserInfo fails.
-	sv := map[string]interface{}{
-		"username": "   ", "role": common.RoleCommonUser,
-		"id": 46, "status": common.UserStatusEnabled, "group": "default",
-	}
-	rec := runAuth(t, UserAuth(), sv, "46", "")
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "false")
-}
-
-// ---------------------------------------------------------------------------
-// authHelper — access token path (no session)
-// ---------------------------------------------------------------------------
-
-func TestAuthHelper_AccessTokenValid(t *testing.T) {
-	requireDB(t)
-	at := uniqKey()
-	u := mkUser(t, func(u *model.User) {
-		u.Role = common.RoleAdminUser
-		u.AccessToken = &at
-	})
-	rec := runAuth(t, AdminAuth(), nil, jsonInt(u.Id), at)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), "true")
-}
-
-func TestAuthHelper_AccessTokenInvalid(t *testing.T) {
-	requireDB(t)
-	// No user has this access token -> ValidateAccessToken returns (nil,nil) ->
-	// access-token-invalid -> 200 {success:false}.
-	rec := runAuth(t, UserAuth(), nil, "1", uniqKey())
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "false")
-}
-
-func TestAuthHelper_AccessTokenUserIdMismatch(t *testing.T) {
-	requireDB(t)
-	at := uniqKey()
-	u := mkUser(t, func(u *model.User) { u.AccessToken = &at })
-	// New-Api-User header does not match the token's user id.
-	rec := runAuth(t, UserAuth(), nil, jsonInt(u.Id+1), at)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-// ---------------------------------------------------------------------------
-// TryUserAuth — optional auth
-// ---------------------------------------------------------------------------
-
-func TestTryUserAuth_WithSession(t *testing.T) {
-	r := newSessionRouter()
-	cookies := loginSession(t, r, map[string]interface{}{"id": 7})
-	var gotID int
-	var present bool
-	r.GET("/opt", TryUserAuth(), func(c *gin.Context) {
-		v, ok := c.Get("id")
-		present = ok
-		if ok {
-			gotID = v.(int)
+	var patUserQueries int
+	forcedCacheError := errors.New("forced PAT user cache lookup failure")
+	const callbackName = "test:optional-auth-pat-user-cache-failure"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "users" {
+			return
 		}
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/opt", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.True(t, present)
-	require.Equal(t, 7, gotID)
-}
+		patUserQueries++
+		if patUserQueries == 2 {
+			tx.AddError(forcedCacheError)
+		}
+	}))
+	cacheFailureRequest := httptest.NewRequest(http.MethodGet, "/optional", nil)
+	cacheFailureRequest.Header.Set("Authorization", "Bearer optional.pat.with-dots")
+	cacheFailureResponse := httptest.NewRecorder()
+	router.ServeHTTP(cacheFailureResponse, cacheFailureRequest)
+	model.DB.Callback().Query().Remove(callbackName)
+	assert.Equal(t, http.StatusInternalServerError, cacheFailureResponse.Code)
+	assert.Contains(t, cacheFailureResponse.Body.String(), "AUTH_INTERNAL_ERROR")
 
-func TestTryUserAuth_WithoutSession(t *testing.T) {
-	r := newSessionRouter()
-	var present bool
-	r.GET("/opt", TryUserAuth(), func(c *gin.Context) {
-		_, present = c.Get("id")
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/opt", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.False(t, present)
-}
-
-// ---------------------------------------------------------------------------
-// RequirePermission
-// ---------------------------------------------------------------------------
-
-func TestRequirePermission_AllowRoot(t *testing.T) {
-	// Root bypasses RBAC checks (authz.Can returns true for root).
-	r := gin.New()
-	r.GET("/perm", func(c *gin.Context) {
-		c.Set("role", common.RoleRootUser)
-		c.Set("id", 1)
-	}, RequirePermission(authz.ChannelRead), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/perm", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestRequirePermission_DenyGuest(t *testing.T) {
-	r := gin.New()
-	r.GET("/perm", func(c *gin.Context) {
-		c.Set("role", common.RoleGuestUser)
-		c.Set("id", 0)
-	}, RequirePermission(authz.ChannelRead), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/perm", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-// ---------------------------------------------------------------------------
-// TokenAuth — API key path
-// ---------------------------------------------------------------------------
-
-func runTokenAuth(t *testing.T, mw gin.HandlerFunc, method, target string, headers map[string]string) (*httptest.ResponseRecorder, *gin.Context) {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(method, target, nil)
-	for k, v := range headers {
-		ctx.Request.Header.Set(k, v)
-	}
-	mw(ctx)
-	return rec, ctx
-}
-
-func TestTokenAuth_MissingKey(t *testing.T) {
-	rec, _ := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions", nil)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuth_InvalidKey(t *testing.T) {
-	requireDB(t)
-	rec, _ := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer " + uniqKey()})
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuth_ValidTokenEnabledUser(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.UnlimitedQuota = true })
-	rec, ctx := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, u.Id, ctx.GetInt("id"))
-	require.Equal(t, tk.Id, ctx.GetInt("token_id"))
-}
-
-func TestTokenAuth_DisabledToken(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) {
-		tk.Status = common.TokenStatusDisabled
-		tk.UnlimitedQuota = true
-	})
-	rec, _ := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuth_BannedUser(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, func(u *model.User) { u.Status = common.UserStatusDisabled })
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.UnlimitedQuota = true })
-	rec, _ := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-func TestTokenAuth_AnthropicHeaderKey(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.UnlimitedQuota = true })
-	// x-api-key on /v1/messages is promoted to Authorization.
-	rec, ctx := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/messages",
-		map[string]string{"x-api-key": "sk-" + tk.Key})
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, u.Id, ctx.GetInt("id"))
-}
-
-func TestTokenAuth_GeminiQueryKey(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.UnlimitedQuota = true })
-	rec, ctx := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1beta/models/gemini-2.0-flash:generateContent?key=sk-"+tk.Key, nil)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, u.Id, ctx.GetInt("id"))
-}
-
-func TestTokenAuth_IpRestrictionDenied(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	allow := "10.0.0.0/8"
-	tk := mkToken(t, u.Id, func(tk *model.Token) {
-		tk.UnlimitedQuota = true
-		tk.AllowIps = &allow // test client IP is not in this CIDR
-	})
-	rec, _ := runTokenAuth(t, TokenAuth(), http.MethodPost, "/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-// ---------------------------------------------------------------------------
-// TokenAuthReadOnly
-// ---------------------------------------------------------------------------
-
-func TestTokenAuthReadOnly_MissingKey(t *testing.T) {
-	rec, _ := runTokenAuth(t, TokenAuthReadOnly(), http.MethodGet, "/api/log/token", nil)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuthReadOnly_InvalidKey(t *testing.T) {
-	requireDB(t)
-	rec, _ := runTokenAuth(t, TokenAuthReadOnly(), http.MethodGet, "/api/log/token",
-		map[string]string{"Authorization": "Bearer sk-" + uniqKey()})
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuthReadOnly_ExhaustedTokenStillAllowed(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	// Exhausted (not disabled) token is still allowed for read-only queries.
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.Status = common.TokenStatusExhausted })
-	rec, ctx := runTokenAuth(t, TokenAuthReadOnly(), http.MethodGet, "/api/log/token",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, u.Id, ctx.GetInt("id"))
-}
-
-func TestTokenAuthReadOnly_DisabledTokenDenied(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.Status = common.TokenStatusDisabled })
-	rec, _ := runTokenAuth(t, TokenAuthReadOnly(), http.MethodGet, "/api/log/token",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestTokenAuthReadOnly_BannedUser(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, func(u *model.User) { u.Status = common.UserStatusDisabled })
-	tk := mkToken(t, u.Id, nil)
-	rec, _ := runTokenAuth(t, TokenAuthReadOnly(), http.MethodGet, "/api/log/token",
-		map[string]string{"Authorization": "Bearer sk-" + tk.Key})
-	require.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-// ---------------------------------------------------------------------------
-// TokenOrUserAuth
-// ---------------------------------------------------------------------------
-
-func TestTokenOrUserAuth_SessionWins(t *testing.T) {
-	r := newSessionRouter()
-	cookies := loginSession(t, r, map[string]interface{}{
-		"id": 55, "status": common.UserStatusEnabled,
-	})
-	r.GET("/dual", TokenOrUserAuth(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/dual", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "55")
-}
-
-func TestTokenOrUserAuth_FallbackToToken(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	tk := mkToken(t, u.Id, func(tk *model.Token) { tk.UnlimitedQuota = true })
-	// No session cookie -> falls back to TokenAuth.
-	r := newSessionRouter()
-	r.GET("/dual", TokenOrUserAuth(), func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/dual", nil)
-	req.Header.Set("Authorization", "Bearer sk-"+tk.Key)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Contains(t, rec.Body.String(), jsonInt(u.Id))
-}
-
-// ---------------------------------------------------------------------------
-// SetupContextForToken
-// ---------------------------------------------------------------------------
-
-func TestSetupContextForToken_NilToken(t *testing.T) {
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-	err := SetupContextForToken(ctx, nil)
-	require.Error(t, err)
-}
-
-func TestSetupContextForToken_UnlimitedAndModelLimits(t *testing.T) {
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-	tk := &model.Token{
-		Id: 1, UserId: 2, Key: "k", Name: "n",
-		UnlimitedQuota:     false,
-		RemainQuota:        123,
-		ModelLimitsEnabled: true,
-		ModelLimits:        "gpt-4o,gpt-4",
-		Group:              "default",
-	}
-	err := SetupContextForToken(ctx, tk)
+	sqlDB, err := model.DB.DB()
 	require.NoError(t, err)
-	require.Equal(t, 2, ctx.GetInt("id"))
-	require.Equal(t, 123, ctx.GetInt("token_quota"))
-	require.True(t, ctx.GetBool("token_model_limit_enabled"))
-	limits := ctx.MustGet("token_model_limit").(map[string]bool)
-	require.True(t, limits["gpt-4o"])
+	require.NoError(t, sqlDB.Close())
+	databaseFailureRequest := httptest.NewRequest(http.MethodGet, "/optional", nil)
+	databaseFailureRequest.Header.Set("Authorization", "Bearer database-failure-key")
+	databaseFailureResponse := httptest.NewRecorder()
+	router.ServeHTTP(databaseFailureResponse, databaseFailureRequest)
+	assert.Equal(t, http.StatusInternalServerError, databaseFailureResponse.Code)
+	assert.Contains(t, databaseFailureResponse.Body.String(), "AUTH_INTERNAL_ERROR")
 }
-
-func TestSetupContextForToken_CommonUserSpecificChannelForbidden(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil) // common user
-	ctx, rec := newCtx(http.MethodGet, "/", "")
-	tk := &model.Token{Id: 9, UserId: u.Id, Key: "k", Name: "n", UnlimitedQuota: true}
-	// parts has >1 element -> triggers the specific-channel branch; common user denied.
-	err := SetupContextForToken(ctx, tk, "keypart", "5")
-	require.Error(t, err)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-func TestSetupContextForToken_AdminSpecificChannelAllowed(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, func(u *model.User) { u.Role = common.RoleAdminUser })
-	ctx, _ := newCtx(http.MethodGet, "/", "")
-	tk := &model.Token{Id: 9, UserId: u.Id, Key: "k", Name: "n", UnlimitedQuota: true}
-	err := SetupContextForToken(ctx, tk, "keypart", "5")
-	require.NoError(t, err)
-	require.Equal(t, "5", ctx.GetString("specific_channel_id"))
-}
-
-func TestWssAuth_NoOp(t *testing.T) {
-	ctx, _ := newCtx(http.MethodGet, "/", "")
-	require.NotPanics(t, func() { WssAuth(ctx) })
-}
-
-// jsonInt renders an int as its decimal string.
-func jsonInt(i int) string {
-	b, _ := json.Marshal(i)
-	return string(b)
-}
-
-var _ = constant.ContextKeyTokenGroup

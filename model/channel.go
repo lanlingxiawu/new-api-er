@@ -482,35 +482,38 @@ func BatchInsertChannels(channels []Channel) error {
 	return tx.Commit().Error
 }
 
-func BatchDeleteChannels(ids []int) error {
+func BatchDeleteChannels(ids []int) (int64, error) {
 	if len(ids) == 0 {
-		return nil
+		return 0, nil
 	}
 	// 使用事务 分批删除channel表和abilities表
 	tx := DB.Begin()
 	if tx.Error != nil {
-		return tx.Error
+		return 0, tx.Error
 	}
 	allNames := make(map[int]string, len(ids))
+	var deletedCount int64
 	for _, chunk := range lo.Chunk(ids, 200) {
 		// 删除前捕获该批渠道名，名称快照移到删除后异步处理。
 		for id, name := range captureChannelNamesForSnapshot(tx, chunk) {
 			allNames[id] = name
 		}
-		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
+		result := tx.Where("id in (?)", chunk).Delete(&Channel{})
+		if result.Error != nil {
 			tx.Rollback()
-			return err
+			return 0, result.Error
 		}
+		deletedCount += result.RowsAffected
 		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
 			tx.Rollback()
-			return err
+			return 0, err
 		}
 	}
 	if err := tx.Commit().Error; err != nil {
-		return err
+		return 0, err
 	}
 	finalizeChannelDeletionAsync(allNames, ids)
-	return nil
+	return deletedCount, nil
 }
 
 func (channel *Channel) GetPriority() int64 {
@@ -1098,6 +1101,9 @@ func (channel *Channel) ValidateSettings() error {
 		if err != nil {
 			return err
 		}
+	}
+	if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {
+		return fmt.Errorf("invalid channel proxy: %w", err)
 	}
 	channelOtherSettings := &dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {

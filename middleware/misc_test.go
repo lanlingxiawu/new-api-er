@@ -7,15 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 
 	"github.com/andybalholm/brotli"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -278,131 +275,6 @@ func TestReadAnonymousRequestBody_Boundary(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// secure_verification.go
-// ---------------------------------------------------------------------------
-
-func secureRouter(t *testing.T, mw gin.HandlerFunc) *gin.Engine {
-	t.Helper()
-	r := gin.New()
-	r.Use(sessions.Sessions("session", cookie.NewStore(sessionSecret)))
-	return r
-}
-
-func TestSecureVerificationRequired_NotLoggedIn(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/s", SecureVerificationRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-func TestSecureVerificationRequired_NoVerification(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, SecureVerificationRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), "VERIFICATION_REQUIRED")
-}
-
-func TestSecureVerificationRequired_Expired(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/login", func(c *gin.Context) {
-		s := sessions.Default(c)
-		s.Set(SecureVerificationSessionKey, time.Now().Unix()-SecureVerificationTimeout-10)
-		_ = s.Save()
-		c.Status(http.StatusNoContent)
-	})
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, SecureVerificationRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-
-	loginRec := httptest.NewRecorder()
-	r.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/login", nil))
-	cookies := loginRec.Result().Cookies()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), "VERIFICATION_EXPIRED")
-}
-
-func TestSecureVerificationRequired_Valid(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/login", func(c *gin.Context) {
-		s := sessions.Default(c)
-		s.Set(SecureVerificationSessionKey, time.Now().Unix())
-		_ = s.Save()
-		c.Status(http.StatusNoContent)
-	})
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, SecureVerificationRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-
-	loginRec := httptest.NewRecorder()
-	r.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/login", nil))
-	cookies := loginRec.Result().Cookies()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestOptionalSecureVerification_NotLoggedIn(t *testing.T) {
-	r := secureRouter(t, nil)
-	var verified bool
-	r.GET("/s", OptionalSecureVerification(), func(c *gin.Context) {
-		verified = c.GetBool("secure_verified")
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/s", nil))
-	require.False(t, verified)
-}
-
-func TestOptionalSecureVerification_Verified(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/login", func(c *gin.Context) {
-		s := sessions.Default(c)
-		s.Set(SecureVerificationSessionKey, time.Now().Unix())
-		_ = s.Save()
-		c.Status(http.StatusNoContent)
-	})
-	var verified bool
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, OptionalSecureVerification(), func(c *gin.Context) {
-		verified = c.GetBool("secure_verified")
-		c.Status(http.StatusOK)
-	})
-	loginRec := httptest.NewRecorder()
-	r.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/login", nil))
-	cookies := loginRec.Result().Cookies()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.True(t, verified)
-}
-
-func TestClearSecureVerification(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/c", func(c *gin.Context) {
-		require.NotPanics(t, func() { ClearSecureVerification(c) })
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/c", nil))
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-// ---------------------------------------------------------------------------
 // performance.go
 // ---------------------------------------------------------------------------
 
@@ -509,53 +381,6 @@ func TestSetUpLogger(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestOptionalSecureVerification_InvalidType(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/login", func(c *gin.Context) {
-		s := sessions.Default(c)
-		s.Set(SecureVerificationSessionKey, "not-an-int64") // wrong type
-		_ = s.Save()
-		c.Status(http.StatusNoContent)
-	})
-	var verified bool
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, OptionalSecureVerification(), func(c *gin.Context) {
-		verified = c.GetBool("secure_verified")
-		c.Status(http.StatusOK)
-	})
-	loginRec := httptest.NewRecorder()
-	r.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/login", nil))
-	cookies := loginRec.Result().Cookies()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.False(t, verified)
-}
-
-func TestSecureVerificationRequired_InvalidType(t *testing.T) {
-	r := secureRouter(t, nil)
-	r.GET("/login", func(c *gin.Context) {
-		s := sessions.Default(c)
-		s.Set(SecureVerificationSessionKey, "bad")
-		_ = s.Save()
-		c.Status(http.StatusNoContent)
-	})
-	r.GET("/s", func(c *gin.Context) { c.Set("id", 7) }, SecureVerificationRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	loginRec := httptest.NewRecorder()
-	r.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/login", nil))
-	cookies := loginRec.Result().Cookies()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/s", nil)
-	for _, ck := range cookies {
-		req.AddCookie(ck)
-	}
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), "VERIFICATION_INVALID")
 }
 
 func TestDecompress_GzipBodyCloseReleasesReaders(t *testing.T) {

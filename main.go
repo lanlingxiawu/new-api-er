@@ -32,8 +32,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/pprof_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
@@ -43,12 +41,6 @@ var buildFS embed.FS
 
 //go:embed web/default/dist/index.html
 var indexPage []byte
-
-//go:embed web/classic/dist
-var classicBuildFS embed.FS
-
-//go:embed web/classic/dist/index.html
-var classicIndexPage []byte
 
 func main() {
 	startTime := time.Now()
@@ -173,23 +165,8 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
-	trustedProxies := []string{"127.0.0.1", "::1", "199.15.79.186"}
-	if value, ok := os.LookupEnv("TRUSTED_PROXIES"); ok {
-		value = strings.TrimSpace(value)
-		if value == "" || strings.EqualFold(value, "none") {
-			trustedProxies = nil
-		} else {
-			trustedProxies = make([]string, 0)
-			for _, proxy := range strings.Split(value, ",") {
-				proxy = strings.TrimSpace(proxy)
-				if proxy != "" {
-					trustedProxies = append(trustedProxies, proxy)
-				}
-			}
-		}
-	}
-	if err := server.SetTrustedProxies(trustedProxies); err != nil {
-		common.FatalLog("failed to set trusted proxies: " + err.Error())
+	if err := configureTrustedProxies(server); err != nil {
+		common.FatalLog("failed to configure trusted proxies: " + err.Error())
 		return
 	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
@@ -207,26 +184,13 @@ func main() {
 	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
-	// Initialize session store
-	store := cookie.NewStore([]byte(common.SessionSecret))
-	store.Options(sessions.Options{
-		Path:     "/",
-		MaxAge:   2592000, // 30 days
-		HttpOnly: true,
-		Secure:   common.SessionCookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
-	server.Use(sessions.Sessions("session", store))
-
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
 	// 设置路由
-	router.SetRouter(server, router.ThemeAssets{
-		DefaultBuildFS:   buildFS,
-		DefaultIndexPage: indexPage,
-		ClassicBuildFS:   classicBuildFS,
-		ClassicIndexPage: classicIndexPage,
+	router.SetRouter(server, router.WebAssets{
+		BuildFS:   buildFS,
+		IndexPage: indexPage,
 	})
 	var port = os.Getenv("PORT")
 	if port == "" {
@@ -289,7 +253,6 @@ func InjectUmamiAnalytics() {
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--umami-->\n")
 	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
-	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InjectGoogleAnalytics() {
@@ -313,7 +276,6 @@ func InjectGoogleAnalytics() {
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--Google Analytics-->\n")
 	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
-	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
 func InitResources() error {
@@ -356,6 +318,11 @@ func InitResources() error {
 	pprof_setting.ApplyEnvDefaults()
 
 	// Initialize options, should after model.InitDB()
+	if common.IsMasterNode {
+		if err := model.MigrateRetiredFrontendOptions(); err != nil {
+			common.SysError("failed to migrate retired frontend options: " + err.Error())
+		}
+	}
 	model.InitOptionMap()
 
 	// 清理旧的磁盘缓存文件
@@ -395,6 +362,8 @@ func InitResources() error {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
 		// Don't return error, custom OAuth is not critical
 	}
+
+	service.StartAuthArtifactCleanup()
 
 	return nil
 }

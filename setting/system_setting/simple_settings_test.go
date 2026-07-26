@@ -99,7 +99,6 @@ func TestConfig_RegistrationBindsLivePointers(t *testing.T) {
 		"legal":         &defaultLegalSettings,
 		"fetch_setting": &defaultFetchSetting,
 		"passkey":       &defaultPasskeySettings,
-		"theme":         &themeSettings,
 	}
 	for key, want := range cases {
 		got := config.GlobalConfig.Get(key)

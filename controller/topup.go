@@ -54,7 +54,7 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
-	// Waffo Pancake displayed above the legacy Waffo gateway.
+	// Waffo Pancake is displayed above the standard Waffo gateway.
 	enableWaffoPancake := isWaffoPancakeTopUpEnabled()
 	if enableWaffoPancake {
 		hasWaffoPancake := false
@@ -69,7 +69,7 @@ func GetTopUpInfo(c *gin.Context) {
 			payMethods = append(payMethods, map[string]string{
 				"name":      "Waffo Pancake",
 				"type":      model.PaymentMethodWaffoPancake,
-				"color":     "rgba(var(--semi-orange-5), 1)",
+				"color":     "#F97316",
 				"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
 			})
 		}
@@ -90,7 +90,7 @@ func GetTopUpInfo(c *gin.Context) {
 			waffoMethod := map[string]string{
 				"name":      "Waffo (Global Payment)",
 				"type":      model.PaymentMethodWaffo,
-				"color":     "rgba(var(--semi-blue-5), 1)",
+				"color":     "#3B82F6",
 				"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
 			}
 			payMethods = append(payMethods, waffoMethod)
@@ -169,15 +169,15 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"enable_online_topup":              isEpayTopUpEnabled(),
-		"enable_stripe_topup":              isStripeTopUpEnabled(),
-		"enable_creem_topup":               isCreemTopUpEnabled(),
-		"enable_waffo_topup":               enableWaffo,
-		"enable_waffo_pancake_topup":       enableWaffoPancake,
-		"enable_alipay_official_topup":     enableAlipayOfficial,
-		"enable_wechat_official_topup":     enableWechatOfficial,
-		"enable_infini_topup":              enableInfini,
-		"infini_min_topup":                 setting.InfiniMinTopUp,
+		"enable_online_topup":          isEpayTopUpEnabled(),
+		"enable_stripe_topup":          isStripeTopUpEnabled(),
+		"enable_creem_topup":           isCreemTopUpEnabled(),
+		"enable_waffo_topup":           enableWaffo,
+		"enable_waffo_pancake_topup":   enableWaffoPancake,
+		"enable_alipay_official_topup": enableAlipayOfficial,
+		"enable_wechat_official_topup": enableWechatOfficial,
+		"enable_infini_topup":          enableInfini,
+		"infini_min_topup":             setting.InfiniMinTopUp,
 		"infini_currencies": func() interface{} {
 			if enableInfini {
 				return setting.GetInfiniCurrencyOptions()
@@ -301,7 +301,7 @@ func RequestEpay(c *gin.Context) {
 	}
 
 	callBackAddress := service.GetCallbackAddress()
-	returnUrl, _ := url.Parse(paymentReturnPath("/console/log"))
+	returnUrl, _ := url.Parse(paymentReturnPath("/usage-logs"))
 	notifyUrl, _ := url.Parse(callBackAddress + "/api/user/epay/notify")
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)

@@ -59,13 +59,6 @@ func TestGetLogByKey_NoTokenId(t *testing.T) {
 	assert.False(t, resp.Success)
 }
 
-func TestDeleteHistoryLogs_MissingTimestamp(t *testing.T) {
-	ctx, rec := newCtx(t, "DELETE", "/api/log/", nil)
-	DeleteHistoryLogs(ctx)
-	resp := decodeResp(t, rec)
-	assert.False(t, resp.Success)
-}
-
 func TestExportUserLogs_InvalidUser(t *testing.T) {
 	ctx, rec := newCtx(t, "GET", "/api/log/self/export", nil)
 	// no id -> 401 defensive guard

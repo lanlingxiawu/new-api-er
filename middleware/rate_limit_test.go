@@ -1,286 +1,225 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
-
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// runLimiter installs the limiter + a terminal handler on a real engine and
-// issues n sequential requests from the same client IP, returning the status
-// code of each request.
-func runLimiter(t *testing.T, limiter gin.HandlerFunc, n int, setup func(c *gin.Context)) []int {
+func useRateLimitMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	t.Helper()
-	r := gin.New()
-	handlers := []gin.HandlerFunc{}
-	if setup != nil {
-		handlers = append(handlers, setup)
-	}
-	handlers = append(handlers, limiter, func(c *gin.Context) { c.Status(http.StatusOK) })
-	r.GET("/lim", handlers...)
 
-	codes := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/lim", nil)
-		req.RemoteAddr = "203.0.113.7:12345" // stable client IP
-		r.ServeHTTP(rec, req)
-		codes = append(codes, rec.Code)
-	}
-	return codes
-}
+	previousRedisEnabled := common.RedisEnabled
+	previousRedisClient := common.RDB
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	require.NoError(t, redisClient.Ping(context.Background()).Err())
 
-// ---------------------------------------------------------------------------
-// memory backend — rateLimitFactory / memoryRateLimiter
-// ---------------------------------------------------------------------------
-
-func TestMemoryRateLimiter_UnderLimitAllows(t *testing.T) {
-	prev := common.RedisEnabled
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled = prev })
-
-	lim := rateLimitFactory(3, 60, uniq("MEMU"))
-	codes := runLimiter(t, lim, 3, nil)
-	for _, c := range codes {
-		require.Equal(t, http.StatusOK, c)
-	}
-}
-
-func TestMemoryRateLimiter_OverLimitRejects(t *testing.T) {
-	prev := common.RedisEnabled
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled = prev })
-
-	lim := rateLimitFactory(2, 60, uniq("MEMO"))
-	codes := runLimiter(t, lim, 4, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusOK, codes[1])
-	require.Equal(t, http.StatusTooManyRequests, codes[2])
-	require.Equal(t, http.StatusTooManyRequests, codes[3])
-}
-
-// ---------------------------------------------------------------------------
-// redis backend — rateLimitFactory / redisRateLimiter
-// ---------------------------------------------------------------------------
-
-func TestRedisRateLimiter_OverLimitRejects(t *testing.T) {
-	enableRedis(t)
-	lim := rateLimitFactory(2, 60, uniq("REDO"))
-	codes := runLimiter(t, lim, 4, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusOK, codes[1])
-	require.Equal(t, http.StatusTooManyRequests, codes[2])
-}
-
-func TestRedisRateLimiter_UnderLimitAllows(t *testing.T) {
-	enableRedis(t)
-	lim := rateLimitFactory(5, 60, uniq("REDU"))
-	codes := runLimiter(t, lim, 3, nil)
-	for _, c := range codes {
-		require.Equal(t, http.StatusOK, c)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// user-keyed limiter — userRateLimitFactory
-// ---------------------------------------------------------------------------
-
-func TestUserRateLimiter_MemoryUnauthenticated(t *testing.T) {
-	prev := common.RedisEnabled
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled = prev })
-
-	lim := userRateLimitFactory(5, 60, uniq("URU"))
-	// id == 0 -> 401.
-	codes := runLimiter(t, lim, 1, nil)
-	require.Equal(t, http.StatusUnauthorized, codes[0])
-}
-
-func TestUserRateLimiter_MemoryOverLimit(t *testing.T) {
-	prev := common.RedisEnabled
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled = prev })
-
-	lim := userRateLimitFactory(2, 60, uniq("URM"))
-	codes := runLimiter(t, lim, 3, func(c *gin.Context) { c.Set("id", 5551) })
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusOK, codes[1])
-	require.Equal(t, http.StatusTooManyRequests, codes[2])
-}
-
-func TestUserRateLimiter_RedisUnauthenticated(t *testing.T) {
-	enableRedis(t)
-	lim := userRateLimitFactory(5, 60, uniq("URRU"))
-	codes := runLimiter(t, lim, 1, nil)
-	require.Equal(t, http.StatusUnauthorized, codes[0])
-}
-
-func TestUserRateLimiter_RedisOverLimit(t *testing.T) {
-	enableRedis(t)
-	lim := userRateLimitFactory(2, 60, uniq("URR"))
-	uid := nextTestID()
-	codes := runLimiter(t, lim, 3, func(c *gin.Context) { c.Set("id", uid) })
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusOK, codes[1])
-	require.Equal(t, http.StatusTooManyRequests, codes[2])
-}
-
-// ---------------------------------------------------------------------------
-// factory selectors (enabled/disabled config)
-// ---------------------------------------------------------------------------
-
-func TestGlobalWebRateLimit_DisabledIsPassthrough(t *testing.T) {
-	prev := common.GlobalWebRateLimitEnable
-	common.GlobalWebRateLimitEnable = false
-	t.Cleanup(func() { common.GlobalWebRateLimitEnable = prev })
-	// defNext -> always allow.
-	codes := runLimiter(t, GlobalWebRateLimit(), 3, nil)
-	for _, c := range codes {
-		require.Equal(t, http.StatusOK, c)
-	}
-}
-
-func TestGlobalAPIRateLimit_DisabledIsPassthrough(t *testing.T) {
-	prev := common.GlobalApiRateLimitEnable
-	common.GlobalApiRateLimitEnable = false
-	t.Cleanup(func() { common.GlobalApiRateLimitEnable = prev })
-	codes := runLimiter(t, GlobalAPIRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-}
-
-func TestCriticalRateLimit_DisabledIsPassthrough(t *testing.T) {
-	prev := common.CriticalRateLimitEnable
-	common.CriticalRateLimitEnable = false
-	t.Cleanup(func() { common.CriticalRateLimitEnable = prev })
-	codes := runLimiter(t, CriticalRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-}
-
-func TestSearchRateLimit_DisabledIsPassthrough(t *testing.T) {
-	prev := common.SearchRateLimitEnable
-	common.SearchRateLimitEnable = false
-	t.Cleanup(func() { common.SearchRateLimitEnable = prev })
-	codes := runLimiter(t, SearchRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-}
-
-func TestLogExportRateLimit_DisabledIsPassthrough(t *testing.T) {
-	prev := common.LogExportRateLimitEnable
-	common.LogExportRateLimitEnable = false
-	t.Cleanup(func() { common.LogExportRateLimitEnable = prev })
-	codes := runLimiter(t, LogExportRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-}
-
-func TestSearchRateLimit_EnabledPerUser(t *testing.T) {
-	prevRedis := common.RedisEnabled
-	common.RedisEnabled = false
-	prevEn := common.SearchRateLimitEnable
-	prevNum := common.SearchRateLimitNum
-	prevDur := common.SearchRateLimitDuration
-	common.SearchRateLimitEnable = true
-	common.SearchRateLimitNum = 1
-	common.SearchRateLimitDuration = 60
+	common.RedisEnabled = true
+	common.RDB = redisClient
 	t.Cleanup(func() {
-		common.RedisEnabled = prevRedis
-		common.SearchRateLimitEnable = prevEn
-		common.SearchRateLimitNum = prevNum
-		common.SearchRateLimitDuration = prevDur
+		_ = redisClient.Close()
+		common.RedisEnabled = previousRedisEnabled
+		common.RDB = previousRedisClient
 	})
-	codes := runLimiter(t, SearchRateLimit(), 2, func(c *gin.Context) { c.Set("id", 6661) })
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusTooManyRequests, codes[1])
+
+	return redisServer, redisClient
 }
 
-func TestDownloadUploadRateLimitFactoriesBuild(t *testing.T) {
-	prev := common.RedisEnabled
-	common.RedisEnabled = false
-	t.Cleanup(func() { common.RedisEnabled = prev })
-	require.NotNil(t, DownloadRateLimit())
-	require.NotNil(t, UploadRateLimit())
+func performRateLimitRequest(router http.Handler, path string, remoteAddr string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.RemoteAddr = remoteAddr
+	router.ServeHTTP(recorder, request)
+	return recorder
 }
 
-func TestGlobalWebRateLimit_EnabledBuildsLimiter(t *testing.T) {
-	prevRedis := common.RedisEnabled
-	common.RedisEnabled = false
-	prev := common.GlobalWebRateLimitEnable
-	prevNum := common.GlobalWebRateLimitNum
-	prevDur := common.GlobalWebRateLimitDuration
-	common.GlobalWebRateLimitEnable = true
-	common.GlobalWebRateLimitNum = 1
-	common.GlobalWebRateLimitDuration = 60
-	t.Cleanup(func() {
-		common.RedisEnabled = prevRedis
-		common.GlobalWebRateLimitEnable = prev
-		common.GlobalWebRateLimitNum = prevNum
-		common.GlobalWebRateLimitDuration = prevDur
+func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisServer, _ := useRateLimitMiniRedis(t)
+
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.GET("/limited", rateLimitFactory(2, 37, "TEST"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
 	})
-	codes := runLimiter(t, GlobalWebRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusTooManyRequests, codes[1])
+
+	remoteAddr := "192.0.2.10:12345"
+	legacyKey := "rateLimit:TEST192.0.2.10"
+	_, err := redisServer.Push(legacyKey, "legacy-list-entry")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/limited", remoteAddr).Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/limited", remoteAddr).Code)
+	limitedResponse := performRateLimitRequest(router, "/limited", remoteAddr)
+	assert.Equal(t, http.StatusTooManyRequests, limitedResponse.Code)
+	assert.Equal(t, "37", limitedResponse.Header().Get("Retry-After"))
+
+	key := redisIPRateLimitKey("TEST", "192.0.2.10")
+	count, err := redisServer.Get(key)
+	require.NoError(t, err)
+	assert.Equal(t, "3", count)
+	assert.Equal(t, 37*time.Second, redisServer.TTL(key))
+	assert.True(t, redisServer.Exists(legacyKey), "the v2 counter must not touch an old list key")
 }
 
-func TestGlobalAPIRateLimit_EnabledBuildsLimiter(t *testing.T) {
-	prevRedis := common.RedisEnabled
-	common.RedisEnabled = false
-	prev := common.GlobalApiRateLimitEnable
-	prevNum := common.GlobalApiRateLimitNum
-	prevDur := common.GlobalApiRateLimitDuration
-	common.GlobalApiRateLimitEnable = true
-	common.GlobalApiRateLimitNum = 1
-	common.GlobalApiRateLimitDuration = 60
-	t.Cleanup(func() {
-		common.RedisEnabled = prevRedis
-		common.GlobalApiRateLimitEnable = prev
-		common.GlobalApiRateLimitNum = prevNum
-		common.GlobalApiRateLimitDuration = prevDur
-	})
-	codes := runLimiter(t, GlobalAPIRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusTooManyRequests, codes[1])
+func TestRedisUserRateLimiterUsesSharedFixedWindow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisServer, _ := useRateLimitMiniRedis(t)
+
+	router := gin.New()
+	router.GET(
+		"/limited",
+		func(c *gin.Context) { c.Set("id", 42) },
+		userRateLimitFactory(1, 23, "USER"),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/limited", "192.0.2.20:12345").Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/limited", "198.51.100.20:12345").Code)
+
+	key := redisUserRateLimitKey("USER", 42)
+	assert.True(t, redisServer.Exists(key))
+	assert.Equal(t, 23*time.Second, redisServer.TTL(key))
 }
 
-func TestCriticalRateLimit_EnabledBuildsLimiter(t *testing.T) {
-	prevRedis := common.RedisEnabled
-	common.RedisEnabled = false
-	prev := common.CriticalRateLimitEnable
-	prevNum := common.CriticalRateLimitNum
-	prevDur := common.CriticalRateLimitDuration
-	common.CriticalRateLimitEnable = true
-	common.CriticalRateLimitNum = 1
-	common.CriticalRateLimitDuration = 60
-	t.Cleanup(func() {
-		common.RedisEnabled = prevRedis
-		common.CriticalRateLimitEnable = prev
-		common.CriticalRateLimitNum = prevNum
-		common.CriticalRateLimitDuration = prevDur
+func TestRedisEmailVerificationRateLimiterPreservesResponseAndTTL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisServer, _ := useRateLimitMiniRedis(t)
+
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.GET("/verify", EmailVerificationRateLimit(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
 	})
-	codes := runLimiter(t, CriticalRateLimit(), 2, nil)
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusTooManyRequests, codes[1])
+
+	remoteAddr := "192.0.2.30:12345"
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/verify", remoteAddr).Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/verify", remoteAddr).Code)
+	response := performRateLimitRequest(router, "/verify", remoteAddr)
+	assert.Equal(t, http.StatusTooManyRequests, response.Code)
+	assert.JSONEq(t, `{"success":false,"message":"发送过于频繁，请等待 30 秒后再试"}`, response.Body.String())
+
+	key := redisIPRateLimitKey(EmailVerificationRateLimitMark, "192.0.2.30")
+	assert.True(t, redisServer.Exists(key))
+	assert.Equal(t, time.Duration(EmailVerificationDuration)*time.Second, redisServer.TTL(key))
 }
 
-func TestLogExportRateLimit_EnabledPerUser(t *testing.T) {
-	prevRedis := common.RedisEnabled
-	common.RedisEnabled = false
-	prevEn := common.LogExportRateLimitEnable
-	prevNum := common.LogExportRateLimitNum
-	prevDur := common.LogExportRateLimitDuration
-	common.LogExportRateLimitEnable = true
-	common.LogExportRateLimitNum = 1
-	common.LogExportRateLimitDuration = 600
-	t.Cleanup(func() {
-		common.RedisEnabled = prevRedis
-		common.LogExportRateLimitEnable = prevEn
-		common.LogExportRateLimitNum = prevNum
-		common.LogExportRateLimitDuration = prevDur
+func TestRedisFixedWindowIsAtomicUnderConcurrency(t *testing.T) {
+	redisServer, _ := useRateLimitMiniRedis(t)
+	const (
+		requestCount = 20
+		maximumCount = 7
+		duration     = int64(41)
+	)
+	key := redisIPRateLimitKey("CONCURRENT", "192.0.2.40")
+
+	var allowedCount atomic.Int64
+	errorsFound := make(chan error, requestCount)
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(requestCount)
+	for range requestCount {
+		go func() {
+			defer waitGroup.Done()
+			allowed, _, _, err := redisFixedWindowTake(context.Background(), key, maximumCount, duration)
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			if allowed {
+				allowedCount.Add(1)
+			}
+		}()
+	}
+	waitGroup.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, int64(maximumCount), allowedCount.Load())
+	count, err := redisServer.Get(key)
+	require.NoError(t, err)
+	assert.Equal(t, "20", count)
+	assert.Equal(t, time.Duration(duration)*time.Second, redisServer.TTL(key))
+}
+
+func TestRedisFixedWindowResetsAtBoundary(t *testing.T) {
+	redisServer, _ := useRateLimitMiniRedis(t)
+	const duration = int64(10)
+	key := redisIPRateLimitKey("BOUNDARY", "192.0.2.50")
+
+	for range 2 {
+		allowed, _, _, err := redisFixedWindowTake(context.Background(), key, 2, duration)
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	}
+	allowed, _, _, err := redisFixedWindowTake(context.Background(), key, 2, duration)
+	require.NoError(t, err)
+	assert.False(t, allowed)
+
+	// This reset is intentional fixed-window behavior. A client can consume one
+	// full allowance immediately before and another immediately after a boundary.
+	redisServer.FastForward(time.Duration(duration) * time.Second)
+	for range 2 {
+		allowed, _, _, err = redisFixedWindowTake(context.Background(), key, 2, duration)
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	}
+}
+
+func TestRedisFixedWindowRepairsCounterWithoutTTL(t *testing.T) {
+	redisServer, _ := useRateLimitMiniRedis(t)
+	const duration = int64(29)
+	key := redisIPRateLimitKey("MISSING-TTL", "192.0.2.51")
+	redisServer.Set(key, "5")
+
+	allowed, count, ttl, err := redisFixedWindowTake(context.Background(), key, 3, duration)
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	assert.Equal(t, int64(6), count)
+	assert.Equal(t, duration, ttl)
+	assert.Equal(t, time.Duration(duration)*time.Second, redisServer.TTL(key))
+
+	redisServer.FastForward(time.Duration(duration) * time.Second)
+	assert.False(t, redisServer.Exists(key), "a recovered counter must not remain permanently rate-limited")
+}
+
+func TestRedisFailurePolicies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, redisClient := useRateLimitMiniRedis(t)
+	require.NoError(t, redisClient.Close())
+
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.GET("/ip", rateLimitFactory(1, 30, "FAIL-IP"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
 	})
-	codes := runLimiter(t, LogExportRateLimit(), 2, func(c *gin.Context) { c.Set("id", 7771) })
-	require.Equal(t, http.StatusOK, codes[0])
-	require.Equal(t, http.StatusTooManyRequests, codes[1])
+	router.GET(
+		"/user",
+		func(c *gin.Context) { c.Set("id", 7) },
+		userRateLimitFactory(1, 30, "FAIL-USER"),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+	router.GET("/email", EmailVerificationRateLimit(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	ipResponse := performRateLimitRequest(router, "/ip", "192.0.2.60:12345")
+	assert.Equal(t, http.StatusInternalServerError, ipResponse.Code)
+	assert.Empty(t, ipResponse.Body.String())
+	userResponse := performRateLimitRequest(router, "/user", "192.0.2.61:12345")
+	assert.Equal(t, http.StatusInternalServerError, userResponse.Code)
+	assert.Empty(t, userResponse.Body.String())
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", "192.0.2.62:12345").Code)
 }

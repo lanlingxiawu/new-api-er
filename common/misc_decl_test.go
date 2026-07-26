@@ -22,36 +22,6 @@ func TestValidateInitialized(t *testing.T) {
 
 // ---- constants.go helpers ----
 
-func TestThemeGetSet(t *testing.T) {
-	orig := GetTheme()
-	t.Cleanup(func() { SetTheme(orig) })
-
-	SetTheme("default")
-	assert.Equal(t, "default", GetTheme())
-	SetTheme("classic")
-	assert.Equal(t, "classic", GetTheme())
-	// invalid values are silently ignored
-	SetTheme("neon")
-	assert.Equal(t, "classic", GetTheme())
-}
-
-func TestThemeAwarePath(t *testing.T) {
-	orig := GetTheme()
-	t.Cleanup(func() { SetTheme(orig) })
-
-	SetTheme("classic")
-	assert.Equal(t, "/console/topup", ThemeAwarePath("/console/topup"))
-
-	SetTheme("default")
-	assert.Equal(t, "/wallet", ThemeAwarePath("/console/topup"))
-	assert.Equal(t, "/usage-logs", ThemeAwarePath("/console/log"))
-	assert.Equal(t, "/profile", ThemeAwarePath("/console/personal"))
-	// unknown prefixes pass through unchanged
-	assert.Equal(t, "/console/other", ThemeAwarePath("/console/other"))
-	// query/suffix preserved on a known prefix
-	assert.Equal(t, "/wallet?tab=1", ThemeAwarePath("/console/topup?tab=1"))
-}
-
 func TestIsValidateRole(t *testing.T) {
 	assert.True(t, IsValidateRole(RoleGuestUser))
 	assert.True(t, IsValidateRole(RoleCommonUser))
