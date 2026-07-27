@@ -16,6 +16,7 @@ RUN go mod download
 
 COPY . .
 
+# 路径必须与 main.go 的 //go:embed web/dist 一致，否则编译期就失败。
 RUN mkdir -p web/dist && \
     echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/dist/index.html
 

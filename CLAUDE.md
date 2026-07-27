@@ -33,11 +33,9 @@ types/         — Type definitions (relay formats, file sources, errors)
 i18n/          — Backend internationalization (go-i18n, en/zh)
 oauth/         — OAuth provider implementations
 pkg/           — Internal packages (cachex, ionet)
-web/             — Frontend themes container
- web/default/   — Default frontend (React 19, TypeScript, Rsbuild, Base UI, Tailwind)
- web/classic/   — Classic frontend (React 19, JavaScript, Rsbuild, Semi Design)
- web/default/src/i18n/ — Default frontend i18n (i18next, en/zh/fr/ru/ja/vi)
- web/classic/src/i18n/ — Classic frontend i18n (i18next, en/zh-CN/zh-TW/fr/ru/ja/vi)
+web/           — Frontend (React 19, TypeScript, Rsbuild, Base UI, Tailwind)
+ web/src/i18n/ — Frontend i18n (i18next, en/zh/zh-TW/fr/ru/ja/vi)
+ web/dist/     — Build output, embedded into the Go binary via //go:embed
 ```
 
 ## Internationalization (i18n)
@@ -46,19 +44,12 @@ web/             — Frontend themes container
 - Library: `nicksnyder/go-i18n/v2`
 - Languages: en, zh
 
-### Default Frontend (`web/default/src/i18n/`)
+### Frontend (`web/src/i18n/`)
 - Library: `i18next` + `react-i18next` + `i18next-browser-languagedetector`
-- Languages: en (base), zh (fallback), fr, ru, ja, vi
-- Translation files: `web/default/src/i18n/locales/{lang}.json` — flat JSON, keys are English source strings
+- Languages: en (base), zh (fallback), zh-TW, fr, ru, ja, vi
+- Translation files: `web/src/i18n/locales/{lang}.json` — flat JSON, keys are English source strings
 - Usage: `useTranslation()` hook, call `t('English key')` in components
-- CLI tools: `bun run i18n:sync` (from `web/default/`)
-
-### Classic Frontend (`web/classic/src/i18n/`)
-- Library: `i18next` + `react-i18next` + `i18next-browser-languagedetector`
-- Languages: en, zh-CN, zh-TW, fr, ru, ja, vi
-- Translation files: `web/classic/src/i18n/locales/{lang}.json` — flat JSON, same key pattern
-- Usage: `useTranslation()` hook, call `t('English key')` in components
-- CLI tools: `bun run i18n:sync` (from `web/classic/`)
+- CLI tools: `bun run i18n:sync` (from `web/`)
 
 ## Rules
 
@@ -133,7 +124,7 @@ All database code MUST be fully compatible with all three databases simultaneous
 
 ### Rule 3: Frontend — Prefer Bun
 
-Use `bun` as the preferred package manager and script runner for **both** frontend directories (`web/default/` and `web/classic/`):
+Use `bun` as the preferred package manager and script runner for the frontend (`web/`):
 - `bun install` for dependency installation
 - `bun run dev` for development server
 - `bun run build` for production build
@@ -155,24 +146,43 @@ For request structs that are parsed from client JSON and then re-marshaled to up
   - field explicitly set to zero/false => non-`nil` pointer => must still be sent upstream.
 - Avoid using non-pointer scalars with `omitempty` for optional request parameters, because zero values (`0`, `0.0`, `false`) will be silently dropped during marshal.
 
-### Rule 6: Frontend Changes — Both UIs Must Be Updated
+### Rule 6: Frontend Changes
 
-Any change to a frontend page or component MUST be applied to **both** UIs:
+The frontend is a single app at `web/` (React 19, TypeScript, Rsbuild, Base UI, Tailwind CSS; dev port 3002).
+The layout is flat and matches upstream — there is no `default/` or `classic/` subdirectory.
 
-| UI | Directory | Stack | Port |
-|---|---|---|---|
-| Default | `web/default/` | React 19, TypeScript, Base UI, Tailwind CSS | 3002 |
-| Classic | `web/classic/` | React 19, JavaScript (JSX), Semi Design (`@douyinfe/semi-ui`) | 5173 |
+**Upstream-owned files — keep byte-identical to `main`:**
 
-**Styling — follow the theme of each UI:**
-- **Default**: use Tailwind utility classes and Base UI design tokens. Never hardcode colors — use `bg-*`, `text-*`, `border-*` classes that respond to dark/light mode.
-- **Classic**: use Semi Design component props and Semi CSS variables (`var(--semi-color-*)`) for all colors. Never hardcode hex values outside of Semi's token system.
+These files are pure plumbing that upstream actively changes. Any local edit turns every
+future `git merge upstream/main` into a manual conflict in the most failure-prone code path.
+
+| File | Owns |
+|---|---|
+| `web/src/lib/auth-session.ts` | token refresh, session rotation, cross-tab epoch |
+| `web/src/lib/auth-session-sync.ts` | cross-tab login/logout broadcast |
+| `web/src/lib/http-client.ts` | axios instance, auth header, 401 refresh+retry, dedupe |
+| `web/src/lib/api.ts` | re-exports + shared user/system API functions |
+| `web/src/lib/server-error-message.ts` | server error code → i18n key |
+
+Rules:
+- **Never edit them in place.** Put fork-specific behaviour in a separate module and compose it.
+- When syncing upstream, take their version wholesale (`git show main:<path> > <path>`), then re-run
+  `bun run typecheck`.
+- Verify with: `diff <(git show main:web/src/lib/api.ts) web/src/lib/api.ts` — must be empty.
+
+Background: the dashboard uses `Authorization: Bearer <access_token>` + an httpOnly refresh cookie
+(`middleware/auth.go` → `classifyDashboardCredential` reads **only** the Authorization header).
+A merge that keeps a fork copy of these files silently breaks login for the whole dashboard;
+`controller/auth_bearer_contract_test.go` locks the backend half of that contract.
+
+**Styling:**
+- Use Tailwind utility classes and Base UI design tokens. Never hardcode colors — use `bg-*`, `text-*`, `border-*` classes that respond to dark/light mode.
 - **Reuse existing styles first**: before writing new styles for a feature, inspect the existing components in the same module or page. Reuse the same class combinations, component variants, and layout patterns already in use. Do not invent parallel styling solutions for the same UI pattern.
 
-**i18n — add translations to both locale sets:**
-- Default: `web/default/src/i18n/locales/{lang}.json` (key = English source string, `t('English key')`)
-- Classic: `web/classic/src/i18n/locales/{lang}.json` (zh-CN / zh-TW are separate files; `t('English key')` same pattern)
-- Sync command: `bun run i18n:sync` from within each UI directory.
+**i18n:**
+- Translation files: `web/src/i18n/locales/{lang}.json` (key = English source string, `t('English key')`)
+- Languages: en, zh, zh-TW, fr, ru, ja, vi
+- Sync command: `bun run i18n:sync` from `web/`. Note it also backfills unrelated missing keys across locales — when adding keys for one feature, prefer adding them directly to keep the diff scoped.
 
 **Encoding — Windows / UTF-8:**
 - All source files (`.tsx`, `.jsx`, `.ts`, `.js`, `.json`) MUST be saved as **UTF-8 without BOM**.
@@ -180,10 +190,9 @@ Any change to a frontend page or component MUST be applied to **both** UIs:
 - Use the `Write` or `Edit` tools directly for any file containing Chinese text; they emit UTF-8.
 - After writing locale JSON files, verify the file does not start with a BOM (`EF BB BF`) if encoding issues are suspected.
 
-**Classic UI — reuse existing layout patterns, including button areas:**
+**Reuse existing layout patterns, including button areas:**
 - "Reuse existing styles first" applies equally to button areas: before writing any button layout, find the nearest similar button group in the same module and copy its structure exactly.
 - For destructive actions that are minor/secondary, a labelled button is sufficient — do not add a bold section title or description paragraph above it.
-- Confirmation dialogs for destructive actions use `Modal.confirm` from `@douyinfe/semi-ui` with `okType: 'danger'`.
 
 **Interaction design — write from the user's perspective:**
 - All UI interactions (loading states, error messages, empty states, confirmations, feedback) must be designed from the end user's point of view, not the implementation's point of view.
@@ -194,7 +203,7 @@ Any change to a frontend page or component MUST be applied to **both** UIs:
 - Do not silently stub or fake the backend behavior in the frontend.
 - Record the gap as a comment or TODO in the design document (`docs/design/`) and confirm with the user before proceeding — the missing backend may be an intentional trade-off, a deferred scope item, or a design decision that has not been made yet.
 
-**Dev commands (from each UI's directory):**
+**Dev commands (from `web/`):**
 - `bun run dev` — start dev server
 - `bun run build` — production build
 - `bun run i18n:sync` — sync translations

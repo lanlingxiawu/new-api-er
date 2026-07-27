@@ -1,3 +1,5 @@
+# 前端已拍平到 web/（与上游结构一致）；
+
 WEB_DIR = ./web
 API_DIR = .
 DEV_WEB_PORT ?= 5173
@@ -21,7 +23,7 @@ build-all-web: build-web
 
 start-api:
 	@echo "Starting api dev server..."
-	@cd $(API_DIR) && go run main.go &
+	@cd $(API_DIR) && go run . &
 
 dev-api:
 	@echo "Starting api services (docker)..."

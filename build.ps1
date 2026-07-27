@@ -31,9 +31,8 @@ function Invoke-Native {
 }
 
 $rootDir = $PSScriptRoot
+# 前端已拍平到 web/（与上游结构一致），不再有 default / classic 子目录。
 $webDir = Join-Path $rootDir "web"
-$defaultFrontendDir = Join-Path $webDir "default"
-$classicFrontendDir = Join-Path $webDir "classic"
 $versionFile = Join-Path $rootDir "VERSION"
 $version = ""
 if (Test-Path $versionFile) {
@@ -71,13 +70,10 @@ try {
 
     $env:VITE_REACT_APP_VERSION = $version
 
-    Write-Host "Building default frontend..."
+    Write-Host "Building frontend..."
     $env:DISABLE_ESLINT_PLUGIN = "true"
-    Invoke-Native -FilePath "bun" -Arguments @("run", "build") -WorkingDirectory $defaultFrontendDir
-
-    Write-Host "Building classic frontend..."
+    Invoke-Native -FilePath "bun" -Arguments @("run", "build") -WorkingDirectory $webDir
     $env:DISABLE_ESLINT_PLUGIN = $oldDisableEslintPlugin
-    Invoke-Native -FilePath "bun" -Arguments @("run", "build") -WorkingDirectory $classicFrontendDir
 
     $env:CGO_ENABLED = "0"
     $env:GOARCH = "amd64"
@@ -97,7 +93,9 @@ try {
     # 通过 -X 把版本号注入 common.Version，否则后端会一直报告默认的 v0.0.0
     # （前端展示的"当前版本"来自后端 /api/status 的 common.Version）。
     $ldflags = "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$version'"
-    go build -ldflags="$ldflags" -o $output main.go
+    # 必须用 "." 编译整个 package main：包里除了 main.go 还有 trusted_proxies.go，
+    # 写成 main.go 会报 undefined: configureTrustedProxies。
+    go build -ldflags="$ldflags" -o $output .
     Write-Host "Build completed: $output"
 }
 finally {

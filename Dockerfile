@@ -21,6 +21,7 @@ ADD go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+# 路径必须与 main.go 的 //go:embed web/dist 完全一致，否则编译期就会失败。
 COPY --from=builder /build/web/dist ./web/dist
 RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
 
