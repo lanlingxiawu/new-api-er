@@ -60,13 +60,21 @@ func Init() error {
 	return initErr
 }
 
-// GetLocalizer returns a localizer for the specified language
+// GetLocalizer returns a localizer for the specified language.
+// Returns nil when the bundle has not been initialized — Init() failure is
+// non-fatal for the server, so callers must tolerate a missing localizer
+// instead of panicking deep inside go-i18n.
 func GetLocalizer(lang string) *i18n.Localizer {
 	lang = normalizeLang(lang)
 
 	mu.RLock()
 	loc, ok := localizers[lang]
+	bundleReady := bundle != nil
 	mu.RUnlock()
+
+	if !bundleReady {
+		return nil
+	}
 
 	if ok {
 		return loc
@@ -95,6 +103,10 @@ func T(c *gin.Context, key string, args ...map[string]any) string {
 // Translate translates a message key for the specified language
 func Translate(lang, key string, args ...map[string]any) string {
 	loc := GetLocalizer(lang)
+	if loc == nil {
+		// Bundle not initialized: fall back to the key, same as a missing entry.
+		return key
+	}
 
 	config := &i18n.LocalizeConfig{
 		MessageID: key,

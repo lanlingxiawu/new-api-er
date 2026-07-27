@@ -399,3 +399,24 @@ func swapLoader(fn func(userId int) string) func() {
 	userLangLoaderFunc = fn
 	return func() { userLangLoaderFunc = prev }
 }
+
+// Init() failure is non-fatal for the server (main.go logs and continues), so
+// translation must degrade to the key instead of panicking on a nil bundle.
+func TestTranslate_NilBundleFallsBackToKey(t *testing.T) {
+	mu.Lock()
+	prevBundle := bundle
+	prevLocalizers := localizers
+	bundle = nil
+	localizers = nil
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		bundle = prevBundle
+		localizers = prevLocalizers
+		mu.Unlock()
+	})
+
+	assert.Nil(t, GetLocalizer("en"))
+	assert.Equal(t, "log_export.col.created_at", Translate("en", "log_export.col.created_at"))
+	assert.Equal(t, "some.key", Translate("zh-CN", "some.key", map[string]any{"X": 1}))
+}
