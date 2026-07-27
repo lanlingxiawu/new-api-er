@@ -164,6 +164,30 @@ export function NewExportSheet({
     return [...builtin, ...custom]
   }, [catalog, templates, t])
 
+  // 触发器要显示译名，就得让 items 覆盖所有可能的 value —— 包括改动列后
+  // 切到的「自定义」这个伪选项，漏掉它时触发器会退回显示原始值。
+  const templateSelectItems = useMemo(
+    () => [...templateOptions, { value: CUSTOM_TEMPLATE, label: t('Custom') }],
+    [templateOptions, t]
+  )
+
+  const logTypeItems = useMemo(
+    () =>
+      LOG_TYPE_FILTERS.map((item) => ({
+        value: item.value as string,
+        label: t(item.label),
+      })),
+    [t]
+  )
+
+  const formatItems = useMemo(
+    () => [
+      { value: 'csv_gz', label: t('CSV (gzip, recommended)') },
+      { value: 'xlsx', label: t('Excel (.xlsx)') },
+    ],
+    [t]
+  )
+
   // 跨度上限由后端下发，前端不硬编码；用来禁用超限预设并给出提示。
   const maxRangeDays = Math.max(
     1,
@@ -381,7 +405,10 @@ export function NewExportSheet({
             <div className='grid gap-3 sm:grid-cols-2'>
               <div className='space-y-1'>
                 <Label>{t('Type')}</Label>
+                {/* items 是触发器上显示译名的依据：Base UI 的 Select.Value 靠它
+                    把当前 value 映射成 label，不传就只会显示原始值。 */}
                 <Select
+                  items={logTypeItems}
                   value={logType}
                   onValueChange={(v) => setLogType(v ?? LOG_TYPE_ALL_VALUE)}
                 >
@@ -389,9 +416,9 @@ export function NewExportSheet({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
-                    {LOG_TYPE_FILTERS.map((item) => (
+                    {logTypeItems.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
-                        {t(item.label)}
+                        {item.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -434,6 +461,7 @@ export function NewExportSheet({
               <div className='w-64 space-y-1'>
                 <Label className='text-xs'>{t('Template')}</Label>
                 <Select
+                  items={templateSelectItems}
                   value={templateId}
                   onValueChange={(v) => applyTemplate(v ?? "")}
                 >
@@ -505,6 +533,7 @@ export function NewExportSheet({
               <div className='space-y-1'>
                 <Label>{t('File format')}</Label>
                 <Select
+                  items={formatItems}
                   value={format}
                   onValueChange={(v) => setFormat((v ?? "csv_gz") as ExportFormat)}
                 >
