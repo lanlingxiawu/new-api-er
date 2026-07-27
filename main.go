@@ -345,6 +345,9 @@ func InitResources() error {
 	// 启动系统监控
 	common.StartSystemMonitor()
 
+	// 上次进程遗留的导出任务没有 goroutine 继续推进，置为失败并清理半成品文件。
+	go model.RecoverStaleLogExportJobs()
+
 	// Initialize i18n
 	err = i18n.Init()
 	if err != nil {

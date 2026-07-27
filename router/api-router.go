@@ -14,6 +14,8 @@ import (
 func SetApiRouter(router *gin.Engine) {
 	// Token-validated file download: no gzip re-compression, no AdminAuth headers needed.
 	router.GET("/dl/ledger/:token", controller.AdminDownloadLedgerExport)
+	// Log export parts: same pattern, plus Range/resumable download via http.ServeContent.
+	router.GET("/dl/log-export/:token", controller.DownloadLogExport)
 
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
@@ -408,6 +410,23 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/self/export", middleware.UserAuth(), middleware.LogExportRateLimit(), controller.ExportUserLogs)
 		logRoute.GET("/employee", middleware.UserAuth(), controller.GetEmployeeCustomerLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
+
+		// 后台导出（管理员专属）：任务化、分片、断点续传。
+		// 普通用户的自助导出仍走上面的 /log/self/export 同步路径。
+		logExportRoute := apiRouter.Group("/log/export")
+		logExportRoute.Use(middleware.AdminAuth())
+		{
+			logExportRoute.GET("/columns", controller.GetLogExportColumns)
+			logExportRoute.GET("/templates", controller.GetLogExportTemplates)
+			logExportRoute.POST("/templates", controller.CreateLogExportTemplate)
+			logExportRoute.PUT("/templates/:id", controller.UpdateLogExportTemplate)
+			logExportRoute.DELETE("/templates/:id", controller.DeleteLogExportTemplate)
+			logExportRoute.GET("/jobs", controller.GetLogExportJobs)
+			logExportRoute.POST("/jobs", controller.CreateLogExportJob)
+			logExportRoute.GET("/jobs/:job_id", controller.GetLogExportJob)
+			logExportRoute.DELETE("/jobs/:job_id", controller.DeleteLogExportJob)
+			logExportRoute.GET("/jobs/:job_id/download-url", controller.GetLogExportDownloadURL)
+		}
 
 		// 请求日志（下游请求体/请求头 与 返回头/返回体），仅超级管理员可查看
 		requestLogRoute := apiRouter.Group("/request-log")

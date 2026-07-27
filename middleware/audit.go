@@ -94,6 +94,14 @@ var auditRouteActions = map[string]string{
 
 	// 日志
 	"POST /api/system-task/log-cleanup": "log.cleanup_start",
+
+	// 使用日志导出（管理员后台任务）
+	// 注意：创建任务与分片下载在 handler 内手动埋点（带筛选条件/分片信息），
+	// 这里只兜底其余写操作。
+	"DELETE /api/log/export/jobs/:job_id":  "log_export.job_delete",
+	"POST /api/log/export/templates":       "log_export.template_create",
+	"PUT /api/log/export/templates/:id":    "log_export.template_update",
+	"DELETE /api/log/export/templates/:id": "log_export.template_delete",
 }
 
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，

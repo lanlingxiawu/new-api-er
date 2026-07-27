@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/mysql"
@@ -62,6 +63,11 @@ func TestMain(m *testing.M) {
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
+
+	// 导出的 CSV 表头与类型单元格走 i18n，初始化后测试才能断言真实文案。
+	if err := i18n.Init(); err != nil {
+		fmt.Println("[TEST] i18n init failed:", err)
+	}
 
 	sqlDSN := os.Getenv("SQL_DSN")
 	if sqlDSN == "" {
@@ -171,6 +177,7 @@ func TestMain(m *testing.M) {
 		&SystemInstance{},
 		&SystemTask{},
 		&SystemTaskLock{},
+		&LogExportTemplate{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
