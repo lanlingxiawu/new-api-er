@@ -175,6 +175,14 @@ Background: the dashboard uses `Authorization: Bearer <access_token>` + an httpO
 A merge that keeps a fork copy of these files silently breaks login for the whole dashboard;
 `controller/auth_bearer_contract_test.go` locks the backend half of that contract.
 
+**Backend: same discipline for upstream tests.**
+Tests taken from upstream (e.g. `model/user_session_test.go`, `model/user_session_migration_test.go`)
+are kept byte-identical too. When an upstream test needs a helper that lives in an upstream test file
+we do not carry, add the helper to `model/zz_upstream_test_shims_test.go` instead of editing the test.
+Upstream helpers that clash with this repo's rules are not adopted — notably `truncateTables`, which
+globally truncates tables and would wipe the shared dev database (Rule 15.5 requires row-scoped cleanup);
+upstream tests depending on it are simply not carried.
+
 **Styling:**
 - Use Tailwind utility classes and Base UI design tokens. Never hardcode colors — use `bg-*`, `text-*`, `border-*` classes that respond to dark/light mode.
 - **Reuse existing styles first**: before writing new styles for a feature, inspect the existing components in the same module or page. Reuse the same class combinations, component variants, and layout patterns already in use. Do not invent parallel styling solutions for the same UI pattern.
