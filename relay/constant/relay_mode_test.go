@@ -10,7 +10,7 @@ import (
 // TestPath2RelayMode covers every branch of the prefix/suffix dispatch table,
 // including the ordering-sensitive cases (responses/compact before responses,
 // embeddings prefix vs. suffix) and the unknown fall-through.
-func TestPath2RelayMode(t *testing.T) {
+func TestPath2RelayMode_Table(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
@@ -159,5 +159,19 @@ func TestRelayModeConstants_AreDistinct(t *testing.T) {
 	for _, v := range all {
 		assert.Falsef(t, seen[v], "duplicate relay mode value %d", v)
 		seen[v] = true
+	}
+}
+func TestPath2RelayMode(t *testing.T) {
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/v1/alpha/search", want: RelayModeAlphaSearch},
+		{path: "/v1/alpha/search?foo=1", want: RelayModeAlphaSearch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			assert.Equal(t, tt.want, Path2RelayMode(tt.path))
+		})
 	}
 }

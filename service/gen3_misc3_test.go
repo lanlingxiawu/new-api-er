@@ -7,7 +7,8 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestEmployeeCommission_RecordCostAndSettle(t *testing.T) {
 		OriginModelName: "gpt-4o",
 		UsingGroup:      "default",
 		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: chid, ChannelName: "c"},
-		PriceData:       types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		PriceData:       hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
 	}
 	// User has no inviter => cost-only ledger write (or circuit-breaker skip). No panic.
 	RecordCostAndSettleEmployeeCommission(info, 1000, 0, 123)

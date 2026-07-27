@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -284,21 +284,21 @@ func TestTask_InsertAndGet(t *testing.T) {
 		tk.Quota = 4242
 	})
 
-	// GetByOnlyTaskId
-	got, exist, err := GetByOnlyTaskId(tk.TaskID)
+	// GetByTaskId：按 userId + taskId 查询
+	got, exist, err := GetByTaskId(uid, tk.TaskID)
 	require.NoError(t, err)
 	require.True(t, exist)
 	assert.Equal(t, tk.ID, got.ID)
 	assert.Equal(t, 4242, got.Quota)
 
 	// empty task id short-circuits (no error, not exist)
-	got, exist, err = GetByOnlyTaskId("")
+	got, exist, err = GetByTaskId(uid, "")
 	require.NoError(t, err)
 	assert.False(t, exist)
 	assert.Nil(t, got)
 
 	// missing task id -> not exist, no error
-	_, exist, err = GetByOnlyTaskId("missing-task-zzz")
+	_, exist, err = GetByTaskId(uid, "missing-task-zzz")
 	require.NoError(t, err)
 	assert.False(t, exist)
 
@@ -463,13 +463,13 @@ func TestTask_UpdateAndUpdateQuota(t *testing.T) {
 	tk.Status = TaskStatusSuccess
 	require.NoError(t, tk.Update())
 
-	got, _, _ := GetByOnlyTaskId(tk.TaskID)
+	got, _, _ := GetByTaskId(tk.UserId, tk.TaskID)
 	assert.Equal(t, "100%", got.Progress)
 	assert.Equal(t, TaskStatus(TaskStatusSuccess), got.Status)
 
 	tk.Quota = 9999
 	require.NoError(t, tk.UpdateQuota())
-	got, _, _ = GetByOnlyTaskId(tk.TaskID)
+	got, _, _ = GetByTaskId(tk.UserId, tk.TaskID)
 	assert.Equal(t, 9999, got.Quota)
 }
 
@@ -479,17 +479,13 @@ func TestTask_BulkUpdate(t *testing.T) {
 	b := mkTask(t, func(tk *Task) { tk.UserId = uid })
 
 	// empty inputs are no-ops
-	require.NoError(t, TaskBulkUpdate(nil, map[string]any{"status": "x"}))
 	require.NoError(t, TaskBulkUpdateByID(nil, map[string]any{"status": "x"}))
-
-	// bulk update by task_id string
-	require.NoError(t, TaskBulkUpdate([]string{a.TaskID, b.TaskID}, map[string]any{"status": string(TaskStatusFailure)}))
-	got, _, _ := GetByOnlyTaskId(a.TaskID)
-	assert.Equal(t, TaskStatus(TaskStatusFailure), got.Status)
 
 	// bulk update by primary key id
 	require.NoError(t, TaskBulkUpdateByID([]int64{a.ID, b.ID}, map[string]any{"progress": "100%"}))
-	got, _, _ = GetByOnlyTaskId(b.TaskID)
+	got, _, _ := GetByTaskId(uid, a.TaskID)
+	assert.Equal(t, "100%", got.Progress)
+	got, _, _ = GetByTaskId(uid, b.TaskID)
 	assert.Equal(t, "100%", got.Progress)
 }
 

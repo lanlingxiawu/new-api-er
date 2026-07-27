@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/require"
@@ -65,6 +65,8 @@ func TestStreamResponseOpenAI2ClaudeDoesNotRepeatMessageStartOnFinalChunk(t *tes
 
 func TestStreamResponseOpenAI2ClaudeCanForceCloseAfterSingleContentChunk(t *testing.T) {
 	info := newClaudeConvertTestInfo()
+	// 生产路径在调用转换器前已递增该计数；message_start 只在首个已下发响应上产生。
+	info.SendResponseCount = 1
 
 	firstResponses := service.StreamResponseOpenAI2Claude(openAIStreamChunk("hello", nil, nil), info)
 	require.Equal(t, []string{"message_start", "content_block_start", "content_block_delta"}, claudeResponseTypes(firstResponses))

@@ -28,7 +28,7 @@ type TaskSubmitResult struct {
 	TaskData       []byte
 	Platform       constant.TaskPlatform
 	Quota          int
-	//PerCallPrice   types.PriceData
+	//PerCallPrice   hosttypes.PriceData
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：

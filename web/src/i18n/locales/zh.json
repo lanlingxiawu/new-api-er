@@ -2268,6 +2268,7 @@
     "Include Model": "包含模型",
     "Include Rule Name": "包含规则名",
     "Includes request rules": "包含请求规则",
+    "Includes tool-call surcharge": "包含工具调用附加费",
     "Including failed requests, 0 = unlimited": "包括失败的请求，0 = 无限制",
     "Index": "索引",
     "Infini": "Infini",

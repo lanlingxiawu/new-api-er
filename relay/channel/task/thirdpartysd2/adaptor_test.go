@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -77,10 +77,10 @@ func TestEstimateBillingAppliesResolutionMatrixPricing(t *testing.T) {
 
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "dreamina-seedance-2-0-260128",
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelPrice: -1,
 			UsePrice:   true,
-			GroupRatioInfo: types.GroupRatioInfo{
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
 				GroupRatio: 1.5,
 			},
 		},
@@ -115,8 +115,8 @@ func TestEstimateBillingUsesInheritedPricingMetadataForRemix(t *testing.T) {
 				"video_input": "true",
 			},
 		},
-		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{
+		PriceData: hosttypes.PriceData{
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
 				GroupRatio: 1,
 			},
 		},
@@ -146,8 +146,8 @@ func TestEstimateBillingUsesValidatedPricingContext(t *testing.T) {
 
 	info := &relaycommon.RelayInfo{
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
-		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{
+		PriceData: hosttypes.PriceData{
+			GroupRatioInfo: hosttypes.GroupRatioInfo{
 				GroupRatio: 1,
 			},
 		},

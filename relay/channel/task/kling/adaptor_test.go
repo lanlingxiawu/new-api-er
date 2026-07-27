@@ -10,9 +10,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -240,7 +241,7 @@ func TestGetAspectRatio(t *testing.T) {
 // DoResponse
 // ---------------------------------------------------------------------------
 
-func doResp(t *testing.T, body string) (*httptest.ResponseRecorder, string, []byte, *dto.TaskError) {
+func doResp(t *testing.T, body string) (*httptest.ResponseRecorder, string, []byte, *taskdto.TaskError) {
 	t.Helper()
 	c, rec := newCtx(http.MethodPost, "/x", "", "")
 	info := newInfo()
@@ -387,7 +388,7 @@ func TestConvertToOpenAIVideo_Success(t *testing.T) {
 		TaskID:   "task_pub",
 		Status:   model.TaskStatusSuccess,
 		Progress: "100%",
-		Data: []byte(`{"code":0,"data":{"created_at":100,"updated_at":200,"task_result":{"videos":[{"url":"https://v/o.mp4","duration":"5"}]}}}`),
+		Data:     []byte(`{"code":0,"data":{"created_at":100,"updated_at":200,"task_result":{"videos":[{"url":"https://v/o.mp4","duration":"5"}]}}}`),
 	}
 	body, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)
 	require.NoError(t, err)

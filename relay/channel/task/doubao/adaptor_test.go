@@ -10,9 +10,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -258,7 +259,7 @@ func TestBuildRequestBody_NoRequest(t *testing.T) {
 // DoResponse
 // ---------------------------------------------------------------------------
 
-func doResp(t *testing.T, body string) (*httptest.ResponseRecorder, string, []byte, *dto.TaskError) {
+func doResp(t *testing.T, body string) (*httptest.ResponseRecorder, string, []byte, *taskdto.TaskError) {
 	t.Helper()
 	c, rec := newCtx("")
 	info := newInfo()
@@ -365,10 +366,10 @@ func TestFetchTask_MissingTaskID(t *testing.T) {
 
 func TestConvertToOpenAIVideo_Success(t *testing.T) {
 	task := &model.Task{
-		TaskID:   "task_pub",
-		Status:   model.TaskStatusSuccess,
-		Progress: "100%",
-		Data:     []byte(`{"status":"succeeded","content":{"video_url":"https://v/o.mp4"}}`),
+		TaskID:     "task_pub",
+		Status:     model.TaskStatusSuccess,
+		Progress:   "100%",
+		Data:       []byte(`{"status":"succeeded","content":{"video_url":"https://v/o.mp4"}}`),
 		Properties: model.Properties{OriginModelName: "doubao-seedance-2-0-260128"},
 	}
 	body, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(task)

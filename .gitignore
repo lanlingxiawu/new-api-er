@@ -58,3 +58,7 @@ service/openaicompat/chat_responses_live_local_test.go
 # 本地专用工作目录：压测报告与令牌、pprof 采样、临时脚本与二进制。
 # 下划线开头，Go 工具链会自动跳过，不会被 go build/test 编译。
 _local/
+
+# relaykit 拆成独立 module 后，本地多模块开发用的 go.work 不入库。
+go.work
+go.work.sum

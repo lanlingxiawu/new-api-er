@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -42,11 +43,11 @@ func finalizeRelayInfo(uid, tid, chid int, key string) *relaycommon.RelayInfo {
 		FinalRequestRelayFormat: types.RelayFormatOpenAI,
 		StartTime:               time.Now().Add(-2 * time.Second),
 		ChannelMeta:             &relaycommon.ChannelMeta{ChannelId: chid},
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:      1,
 			CompletionRatio: 1,
 			ModelPrice:      0,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
 }
@@ -136,9 +137,9 @@ func TestFinalize_PostAudioConsumeQuota_Deducts(t *testing.T) {
 
 	info := finalizeRelayInfo(uid, tid, chid, "sk-fin-audio")
 	usage := &dto.Usage{
-		PromptTokens:     1000,
-		CompletionTokens: 200,
-		TotalTokens:      1200,
+		PromptTokens:        1000,
+		CompletionTokens:    200,
+		TotalTokens:         1200,
 		PromptTokensDetails: dto.InputTokenDetails{TextTokens: 800, AudioTokens: 200},
 	}
 
@@ -177,9 +178,9 @@ func TestFinalize_PostWssConsumeQuota_Deducts(t *testing.T) {
 
 	info := finalizeRelayInfo(uid, tid, chid, "sk-fin-wss")
 	usage := &dto.RealtimeUsage{
-		InputTokens:  1000,
-		OutputTokens: 500,
-		TotalTokens:  1500,
+		InputTokens:        1000,
+		OutputTokens:       500,
+		TotalTokens:        1500,
 		InputTokenDetails:  dto.InputTokenDetails{TextTokens: 900, AudioTokens: 100},
 		OutputTokenDetails: dto.OutputTokenDetails{TextTokens: 500},
 	}
@@ -205,9 +206,9 @@ func TestFinalize_PreWssConsumeQuota_Deducts(t *testing.T) {
 	info := finalizeRelayInfo(uid, tid, chid, "sk-fin-prewss")
 	info.TokenKey = "sk-fin-prewss"
 	usage := &dto.RealtimeUsage{
-		InputTokens:  1000,
-		OutputTokens: 200,
-		TotalTokens:  1200,
+		InputTokens:        1000,
+		OutputTokens:       200,
+		TotalTokens:        1200,
 		InputTokenDetails:  dto.InputTokenDetails{TextTokens: 900, AudioTokens: 100},
 		OutputTokenDetails: dto.OutputTokenDetails{TextTokens: 200},
 	}
@@ -227,9 +228,9 @@ func TestFinalize_PreWssConsumeQuota_UsePriceNoop(t *testing.T) {
 
 func TestFinalize_CalcOpenRouterCacheCreateTokens(t *testing.T) {
 	// CacheCreationRatio == 1 short-circuits to 0.
-	assert.Equal(t, 0, CalcOpenRouterCacheCreateTokens(dto.Usage{}, types.PriceData{CacheCreationRatio: 1}))
+	assert.Equal(t, 0, CalcOpenRouterCacheCreateTokens(dto.Usage{}, hosttypes.PriceData{CacheCreationRatio: 1}))
 
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		ModelRatio:         2,
 		CompletionRatio:    2,
 		CacheRatio:         0.5,

@@ -9,8 +9,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -157,7 +158,7 @@ func TestEmployeeCommission_RecordTransactionCost(t *testing.T) {
 		OriginModelName: "gpt-4o",
 		UsingGroup:      "default",
 		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: chid, ChannelName: "c"},
-		PriceData:       types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		PriceData:       hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
 	}
 	RecordTransactionCost(info, 1000, 0, 0)
 	t.Cleanup(func() { model.DB.Exec("DELETE FROM consumption_costs WHERE user_id = ?", uid) })

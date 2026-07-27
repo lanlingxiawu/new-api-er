@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -31,146 +32,6 @@ func billmathCtx() *gin.Context {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)
 	return c
-}
-
-// ---------------------------------------------------------------------------
-// tool_billing.go — ComputeToolCallQuota
-// ---------------------------------------------------------------------------
-
-func TestBillmathComputeToolCallQuota_WebSearch(t *testing.T) {
-	// web_search_preview default price = 10.0 $/1K calls (model does not match
-	// any gpt-4o* override prefix). QuotaPerUnit default = 500000.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    3,
-		WebSearchToolName: "web_search_preview",
-	}, 1.0)
-
-	require.Len(t, res.Items, 1)
-	it := res.Items[0]
-	assert.Equal(t, "web_search_preview", it.Name)
-	assert.Equal(t, 3, it.CallCount)
-	assert.InDelta(t, 10.0, it.PricePer1K, 1e-9)
-	assert.InDelta(t, 0.03, it.TotalPrice, 1e-9) // 10 * 3 / 1000
-	// round(0.03 * 500000 * 1) = 15000
-	assert.Equal(t, 15000, it.Quota)
-	assert.Equal(t, 15000, res.TotalQuota)
-}
-
-func TestBillmathComputeToolCallQuota_FileSearch(t *testing.T) {
-	// file_search default price = 2.5 $/1K.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:       "billmath-model",
-		FileSearchCalls: 4,
-	}, 1.0)
-
-	require.Len(t, res.Items, 1)
-	assert.Equal(t, "file_search", res.Items[0].Name)
-	assert.InDelta(t, 2.5, res.Items[0].PricePer1K, 1e-9)
-	assert.InDelta(t, 0.01, res.Items[0].TotalPrice, 1e-9) // 2.5 * 4 / 1000
-	// round(0.01 * 500000) = 5000
-	assert.Equal(t, 5000, res.Items[0].Quota)
-	assert.Equal(t, 5000, res.TotalQuota)
-}
-
-func TestBillmathComputeToolCallQuota_ImageGeneration(t *testing.T) {
-	// low / 1024x1024 => 0.011 per call.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:              "billmath-model",
-		ImageGenerationCall:    true,
-		ImageGenerationQuality: "low",
-		ImageGenerationSize:    "1024x1024",
-	}, 1.0)
-
-	require.Len(t, res.Items, 1)
-	it := res.Items[0]
-	assert.Equal(t, "image_generation", it.Name)
-	assert.Equal(t, 1, it.CallCount)
-	assert.InDelta(t, 0.011, it.PricePer1K, 1e-9)
-	assert.InDelta(t, 0.011, it.TotalPrice, 1e-9)
-	// round(0.011 * 500000) = 5500
-	assert.Equal(t, 5500, it.Quota)
-	assert.Equal(t, 5500, res.TotalQuota)
-}
-
-func TestBillmathComputeToolCallQuota_ImageGeneration_UnknownFallsBackToHigh(t *testing.T) {
-	// Unknown quality/size => GPTImage1High1024x1024 = 0.167.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:              "billmath-model",
-		ImageGenerationCall:    true,
-		ImageGenerationQuality: "unknown",
-		ImageGenerationSize:    "unknown",
-	}, 1.0)
-
-	require.Len(t, res.Items, 1)
-	assert.InDelta(t, 0.167, res.Items[0].PricePer1K, 1e-9)
-	// round(0.167 * 500000) = 83500
-	assert.Equal(t, 83500, res.Items[0].Quota)
-}
-
-func TestBillmathComputeToolCallQuota_ZeroCounts(t *testing.T) {
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    0,
-		WebSearchToolName: "web_search_preview",
-		FileSearchCalls:   0,
-	}, 1.0)
-	assert.Equal(t, 0, res.TotalQuota)
-	assert.Empty(t, res.Items)
-}
-
-func TestBillmathComputeToolCallQuota_WebSearchEmptyToolName(t *testing.T) {
-	// Count > 0 but empty tool name => web search branch guarded out.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    5,
-		WebSearchToolName: "",
-	}, 1.0)
-	assert.Equal(t, 0, res.TotalQuota)
-	assert.Empty(t, res.Items)
-}
-
-func TestBillmathComputeToolCallQuota_ZeroPriceSkipped(t *testing.T) {
-	// Unknown tool name resolves to price 0 => addItem returns early.
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    5,
-		WebSearchToolName: "billmath-unknown-tool",
-	}, 1.0)
-	assert.Equal(t, 0, res.TotalQuota)
-	assert.Empty(t, res.Items)
-}
-
-func TestBillmathComputeToolCallQuota_GroupRatioApplied(t *testing.T) {
-	res2 := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    3,
-		WebSearchToolName: "web_search_preview",
-	}, 2.0)
-	assert.Equal(t, 30000, res2.TotalQuota) // round(0.03 * 500000 * 2)
-
-	resHalf := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:         "billmath-model",
-		WebSearchCalls:    3,
-		WebSearchToolName: "web_search_preview",
-	}, 0.5)
-	assert.Equal(t, 7500, resHalf.TotalQuota) // round(0.03 * 500000 * 0.5)
-}
-
-func TestBillmathComputeToolCallQuota_Combined(t *testing.T) {
-	res := ComputeToolCallQuota(ToolCallUsage{
-		ModelName:              "billmath-model",
-		WebSearchCalls:         3,
-		WebSearchToolName:      "web_search_preview",
-		FileSearchCalls:        4,
-		ImageGenerationCall:    true,
-		ImageGenerationQuality: "low",
-		ImageGenerationSize:    "1024x1024",
-	}, 1.0)
-
-	require.Len(t, res.Items, 3)
-	// 15000 (web) + 5000 (file) + 5500 (image)
-	assert.Equal(t, 15000+5000+5500, res.TotalQuota)
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +299,7 @@ func TestBillmathShouldRecordAudioLedgerQuota(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBillmathCalcOpenRouterCacheCreateTokens_RatioOneShortCircuit(t *testing.T) {
-	got := CalcOpenRouterCacheCreateTokens(dto.Usage{PromptTokens: 500}, types.PriceData{
+	got := CalcOpenRouterCacheCreateTokens(dto.Usage{PromptTokens: 500}, hosttypes.PriceData{
 		CacheCreationRatio: 1,
 	})
 	assert.Equal(t, 0, got)
@@ -450,7 +311,7 @@ func TestBillmathCalcOpenRouterCacheCreateTokens_Computed(t *testing.T) {
 	// completionPrice = 1*4 = 4; denom = 2 - 1 = 1.
 	// num = cost(1000) - prompt(500)*1 + cacheRead(100)*(1-0.5) - completion(50)*4
 	//     = 1000 - 500 + 50 - 200 = 350
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		ModelRatio:         common.QuotaPerUnit, // => quotaPrice 1
 		CacheCreationRatio: 2,
 		CacheRatio:         0.5,
@@ -465,7 +326,7 @@ func TestBillmathCalcOpenRouterCacheCreateTokens_Computed(t *testing.T) {
 func TestBillmathCalcOpenRouterCacheCreateTokens_NonFloatCostIsZero(t *testing.T) {
 	// Cost not a float64 => treated as 0.
 	// num = 0 - 500 + 0 - 0 = -500; denom = 1 => -500.
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		ModelRatio:         common.QuotaPerUnit,
 		CacheCreationRatio: 2,
 		CacheRatio:         0.5,
@@ -615,33 +476,36 @@ func TestBillmathCalculateTextToolCallSurcharge_SearchPreviewSuffix(t *testing.T
 	s := &textQuotaSummary{ModelName: "billmath-search-preview", GroupRatio: 1.0}
 	got := calculateTextToolCallSurcharge(ctx, ri, s)
 
-	assert.Equal(t, 1, s.WebSearchCallCount)
-	assert.InDelta(t, 10.0, s.WebSearchPrice, 1e-9)
+	// 逐工具字段已由 ToolSurchargeItems 统一承载。
+	require.Len(t, s.ToolSurchargeItems, 1)
+	assert.Equal(t, 1, s.ToolSurchargeItems[0].Count)
+	assert.InDelta(t, 10.0, s.ToolSurchargeItems[0].Price, 1e-9)
 	// 10/1000 * 1 * 500000 = 5000
 	assert.InDelta(t, 5000.0, got.InexactFloat64(), 1e-6)
 }
 
-func TestBillmathCalculateTextToolCallSurcharge_ClaudeWebSearchAndImage(t *testing.T) {
+// 图像生成附加费改由 ResponsesUsageInfo 的工具调用计数驱动、单价走可配置工具定价，
+// 不再读 context 里的 image_generation_call。该路径由 text_quota_test.go 的
+// TestComposeTieredTextQuotaKeepsToolCallSurcharges 覆盖，这里只保留 Claude 检索。
+func TestBillmathCalculateTextToolCallSurcharge_ClaudeWebSearch(t *testing.T) {
 	ctx := billmathCtx()
 	ctx.Set("claude_web_search_requests", 2)
-	ctx.Set("image_generation_call", true)
-	// quality/size empty => high fallback 0.167
 	ri := billmathRelayInfo(types.RelayFormatOpenAI)
 	s := &textQuotaSummary{ModelName: "billmath-plain-model", GroupRatio: 1.0}
 	got := calculateTextToolCallSurcharge(ctx, ri, s)
 
-	assert.Equal(t, 2, s.ClaudeWebSearchCallCount)
-	assert.InDelta(t, 10.0, s.ClaudeWebSearchPrice, 1e-9)
-	// claude web search: 10/1000 * 1 * 500000 * 2 = 10000
-	// image gen: 0.167 * 1 * 500000 = 83500
-	assert.InDelta(t, 10000.0+83500.0, got.InexactFloat64(), 1e-6)
+	require.Len(t, s.ToolSurchargeItems, 1)
+	assert.Equal(t, 2, s.ToolSurchargeItems[0].Count)
+	assert.InDelta(t, 10.0, s.ToolSurchargeItems[0].Price, 1e-9)
+	// 10/1000 * 1 * 500000 * 2 = 10000
+	assert.InDelta(t, 10000.0, got.InexactFloat64(), 1e-6)
 }
 
 // ---------------------------------------------------------------------------
 // text_quota.go — calculateTextQuotaSummary
 // ---------------------------------------------------------------------------
 
-func billmathTextRelayInfo(pd types.PriceData, model string, format types.RelayFormat) *relaycommon.RelayInfo {
+func billmathTextRelayInfo(pd hosttypes.PriceData, model string, format types.RelayFormat) *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		OriginModelName: model,
 		StartTime:       time.Now(),
@@ -652,12 +516,12 @@ func billmathTextRelayInfo(pd types.PriceData, model string, format types.RelayF
 
 func TestBillmathCalculateTextQuotaSummary_OpenAIRatio(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:        false,
 		ModelRatio:      2,
 		CompletionRatio: 3,
 		CacheRatio:      0.5,
-		GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-text-model", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 1000, CompletionTokens: 200}
@@ -675,12 +539,12 @@ func TestBillmathCalculateTextQuotaSummary_OpenAIRatio(t *testing.T) {
 
 func TestBillmathCalculateTextQuotaSummary_OpenAICacheCreation(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:           false,
 		ModelRatio:         2,
 		CompletionRatio:    3,
 		CacheCreationRatio: 1.5,
-		GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-text-model", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 1000, CompletionTokens: 0}
@@ -695,12 +559,12 @@ func TestBillmathCalculateTextQuotaSummary_OpenAICacheCreation(t *testing.T) {
 
 func TestBillmathCalculateTextQuotaSummary_ClaudeRatio(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:        false,
 		ModelRatio:      2,
 		CompletionRatio: 3,
 		CacheRatio:      0.5,
-		GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-claude-model", types.RelayFormatClaude)
 	u := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100}
@@ -715,10 +579,10 @@ func TestBillmathCalculateTextQuotaSummary_ClaudeRatio(t *testing.T) {
 
 func TestBillmathCalculateTextQuotaSummary_UsePrice(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:       true,
 		ModelPrice:     2.0,
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.5},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1.5},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-text-model", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 1000, CompletionTokens: 200}
@@ -731,10 +595,10 @@ func TestBillmathCalculateTextQuotaSummary_UsePrice(t *testing.T) {
 
 func TestBillmathCalculateTextQuotaSummary_UsePriceSaturation(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:       true,
 		ModelPrice:     1e6, // 1e6 * 500000 = 5e11 > MaxInt32
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-text-model", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 1, CompletionTokens: 0}
@@ -747,10 +611,10 @@ func TestBillmathCalculateTextQuotaSummary_UsePriceSaturation(t *testing.T) {
 
 func TestBillmathCalculateTextQuotaSummary_TotalTokensZeroNoSurcharge(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:       false,
 		ModelRatio:     2,
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	ri := billmathTextRelayInfo(pd, "billmath-text-model", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 0, CompletionTokens: 0}
@@ -763,21 +627,22 @@ func TestBillmathCalculateTextQuotaSummary_TotalTokensZeroNoSurcharge(t *testing
 
 func TestBillmathCalculateTextQuotaSummary_TotalTokensZeroWithSurcharge(t *testing.T) {
 	ctx := billmathCtx()
-	pd := types.PriceData{
+	pd := hosttypes.PriceData{
 		UsePrice:       false,
 		ModelRatio:     2,
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
 	}
 	// "search-preview" suffix drives a web-search surcharge (price 10).
 	ri := billmathTextRelayInfo(pd, "billmath-search-preview", types.RelayFormatOpenAI)
 	u := &dto.Usage{PromptTokens: 0, CompletionTokens: 0}
 
 	s := calculateTextQuotaSummary(ctx, ri, u)
-	// surcharge = 10/1000 * 1 * 500000 = 5000; computed quota = 5000.
-	// TotalTokens==0 with non-zero surcharge => LedgerQuota keeps quota, Quota->0.
-	assert.Equal(t, 0, s.Quota)
+	// surcharge = 10/1000 * 1 * 500000 = 5000。零 token 但有工具附加费属于可计费
+	// 用量，照常扣费；成本账与实扣一致。
+	assert.Equal(t, 5000, s.Quota)
 	assert.Equal(t, 5000, s.LedgerQuota)
-	assert.Equal(t, 1, s.WebSearchCallCount)
+	require.Len(t, s.ToolSurchargeItems, 1)
+	assert.Equal(t, 1, s.ToolSurchargeItems[0].Count)
 }
 
 // Guard: MaxQuota sanity so pinned saturation asserts stay meaningful.

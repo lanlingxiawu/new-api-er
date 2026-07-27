@@ -2249,6 +2249,7 @@
     "Include Model": "Include Model",
     "Include Rule Name": "Include Rule Name",
     "Includes request rules": "Includes request rules",
+    "Includes tool-call surcharge": "Includes tool-call surcharge",
     "Including failed requests, 0 = unlimited": "Including failed requests, 0 = unlimited",
     "Index": "Index",
     "Infini": "Infini",

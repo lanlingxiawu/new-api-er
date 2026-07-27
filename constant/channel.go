@@ -57,7 +57,12 @@ const (
 	ChannelTypeCodex          = 57
 	ChannelTypeThirdPartySD2  = 58
 	ChannelTypeAdvancedCustom = 59
-	ChannelTypeDummy          // this one is only for count, do not add any channel after this
+	// 上游把 Sub2API/NewAPI 定为 59/60，本仓库 58/59 已被 ThirdPartySD2 与
+	// AdvancedCustom 占用且已落库（channels.type），沿用上游编号会让存量渠道
+	// 被解释成另一种类型。这里顺延到 61/62，编号与上游永久分叉。
+	ChannelTypeSub2API = 60
+	ChannelTypeNewAPI  = 61
+	ChannelTypeDummy   // this one is only for count, do not add any channel after this
 
 )
 
@@ -122,6 +127,8 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 	"https://model.service-inference.ai",        //58
 	"",                                          //59
+	"",                                          //60
+	"",                                          //61
 }
 
 var ChannelTypeNames = map[int]string{
@@ -181,6 +188,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeCodex:          "ChatGPT Subscription (Codex)",
 	ChannelTypeThirdPartySD2:  "ThirdPartySD2",
 	ChannelTypeAdvancedCustom: "Advanced Custom",
+	ChannelTypeSub2API:        "Sub2API",
+	ChannelTypeNewAPI:         "New API",
 }
 
 func GetChannelTypeName(channelType int) string {

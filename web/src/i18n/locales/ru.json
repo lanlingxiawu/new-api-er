@@ -2238,6 +2238,7 @@
     "Include Model": "Включить модель",
     "Include Rule Name": "Включить имя правила",
     "Includes request rules": "Включает правила запросов",
+    "Includes tool-call surcharge": "Включает доплату за вызов инструмента",
     "Including failed requests, 0 = unlimited": "Включая неудачные запросы, 0 = без ограничений",
     "Index": "Индекс",
     "Infini": "Infini",

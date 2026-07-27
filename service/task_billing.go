@@ -11,7 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -148,11 +148,11 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	return other
 }
 
-func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
+func taskBillingContextPriceData(bc *model.TaskBillingContext) *hosttypes.PriceData {
 	if bc == nil || len(bc.OtherRatios) == 0 {
 		return nil
 	}
-	priceData := &types.PriceData{}
+	priceData := &hosttypes.PriceData{}
 	if !priceData.ReplaceOtherRatios(bc.OtherRatios) {
 		return nil
 	}
@@ -206,12 +206,12 @@ func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
 		TokenId:         task.PrivateData.TokenId,
 		UsingGroup:      task.Group,
 		OriginModelName: modelName,
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelPrice:      modelPrice,
 			ModelRatio:      modelRatio,
 			UsePrice:        usePrice,
 			PricingMetadata: pricingMetadata,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: groupRatio},
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: groupRatio},
 		},
 	}
 	info.PriceData.ReplaceOtherRatios(otherRatios)
@@ -241,7 +241,7 @@ func recordTaskCostAndCommission(task *model.Task, quota int, logId int) {
 
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
-// 返回资金来源是否已成功退还；失败时保留 quota 作为后续对账标记。
+// 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -43,10 +43,10 @@ func TestTaskBilling_LogTaskConsumption(t *testing.T) {
 			IsModelMapped:     true,
 			UpstreamModelName: "kling-v1",
 		},
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelPrice:     0.5,
 			ModelRatio:     2,
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
 			Quota:          3000,
 		},
 	}

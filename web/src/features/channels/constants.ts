@@ -21,6 +21,8 @@ For commercial licensing, please contact support@quantumnous.com
 // All label/name values are i18n keys; use t(value) when displaying.
 // ============================================================================
 
+export const CHANNEL_TYPE_NEW_API = 61
+
 export const CHANNEL_TYPES = {
   0: 'Unknown',
   1: 'OpenAI',
@@ -78,12 +80,16 @@ export const CHANNEL_TYPES = {
   57: 'ChatGPT Subscription (Codex)',
   58: 'ThirdPartySD2',
   59: 'Advanced Custom',
+  // 编号须与 constant/channel.go 一致：上游的 Sub2API/New API 是 59/60，
+  // 本仓库 58/59 已被占用，顺延到 60/61。
+  60: 'Sub2API',
+  61: 'New API',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 59, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15, 46,
-  23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22, 21, 44, 2, 5, 36,
-  50, 51, 52, 53, 54, 58, 55, 56,
+  1, 14, 33, 24, 43, 3, 41, 48, 61, 59, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15,
+  46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 60, 22, 21, 44, 2,
+  5, 36, 50, 51, 52, 53, 54, 58, 55, 56,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -379,6 +385,7 @@ export const FIELD_DESCRIPTIONS = {
 
 export const MODEL_FETCHABLE_TYPES = new Set([
   1, 4, 14, 17, 20, 23, 24, 25, 26, 27, 31, 34, 35, 40, 42, 43, 47, 48, 57, 58,
+  60, 61,
 ])
 
 export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
@@ -390,6 +397,8 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is NEXAXIS API)',
   51: 'Format: Access Key ID|Secret Access Key',
   57: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
+  60: 'Enter API key for this channel',
+  61: 'Enter API key for this channel',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {

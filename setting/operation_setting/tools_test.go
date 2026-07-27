@@ -30,9 +30,9 @@ func TestGetToolPriceForModel_DefaultLookup(t *testing.T) {
 func TestGetToolPriceForModel_LongestPrefixWins(t *testing.T) {
 	saveToolPrices(t)
 	toolPriceSetting.Prices = map[string]float64{
-		"web_search_preview":               10.0, // default for the tool
-		"web_search_preview:gpt-4o*":       25.0,
-		"web_search_preview:gpt-4o-mini*":  30.0, // longer prefix
+		"web_search_preview":              10.0, // default for the tool
+		"web_search_preview:gpt-4o*":      25.0,
+		"web_search_preview:gpt-4o-mini*": 30.0, // longer prefix
 	}
 	RebuildToolPriceIndex()
 
@@ -106,39 +106,6 @@ func TestRebuildToolPriceIndex_DefaultOverridesPresent(t *testing.T) {
 	assert.Equal(t, 10.0, GetToolPriceForModel("web_search_preview", "o1"))
 }
 
-// ── GetGPTImage1PriceOnceCall ─────────────────────────────────────────────
-
-func TestGetGPTImage1PriceOnceCall_KnownCombinations(t *testing.T) {
-	cases := []struct {
-		quality, size string
-		want          float64
-	}{
-		{"low", "1024x1024", GPTImage1Low1024x1024},
-		{"low", "1024x1536", GPTImage1Low1024x1536},
-		{"low", "1536x1024", GPTImage1Low1536x1024},
-		{"medium", "1024x1024", GPTImage1Medium1024x1024},
-		{"medium", "1024x1536", GPTImage1Medium1024x1536},
-		{"medium", "1536x1024", GPTImage1Medium1536x1024},
-		{"high", "1024x1024", GPTImage1High1024x1024},
-		{"high", "1024x1536", GPTImage1High1024x1536},
-		{"high", "1536x1024", GPTImage1High1536x1024},
-	}
-	for _, c := range cases {
-		t.Run(c.quality+"_"+c.size, func(t *testing.T) {
-			assert.Equal(t, c.want, GetGPTImage1PriceOnceCall(c.quality, c.size))
-		})
-	}
-}
-
-func TestGetGPTImage1PriceOnceCall_Fallbacks(t *testing.T) {
-	// Unknown quality → fallback to High1024x1024.
-	assert.Equal(t, GPTImage1High1024x1024, GetGPTImage1PriceOnceCall("ultra", "1024x1024"))
-	// Known quality but unknown size → fallback.
-	assert.Equal(t, GPTImage1High1024x1024, GetGPTImage1PriceOnceCall("low", "999x999"))
-	// Both unknown → fallback.
-	assert.Equal(t, GPTImage1High1024x1024, GetGPTImage1PriceOnceCall("", ""))
-}
-
 // ── GetGeminiInputAudioPricePerMillionTokens ──────────────────────────────
 
 func TestGetGeminiInputAudioPricePerMillionTokens_AllPrefixes(t *testing.T) {
@@ -164,8 +131,9 @@ func TestGetGeminiInputAudioPricePerMillionTokens_AllPrefixes(t *testing.T) {
 }
 
 func TestDefaultToolPriceSetting_Shipped(t *testing.T) {
-	// The registered default merges the base prices and the non-reasoning overrides.
+	// Prices 只保存运营覆盖项；出厂兜底价由 seedHardcodedToolPrices 播种进索引，
+	// 所以断言要走查询入口而不是读配置 map。
 	require.NotNil(t, toolPriceSetting.Prices)
-	assert.Equal(t, 10.0, defaultToolPrices["web_search"])
-	assert.Equal(t, 25.0, defaultToolPriceOverrides["web_search_preview:gpt-4o*"])
+	assert.Equal(t, defaultWebSearchToolPrice, GetToolPriceForModel("web_search", ""))
+	assert.Equal(t, defaultSearchPreviewModelPrice, GetToolPriceForModel("web_search_preview", "gpt-4o-2024"))
 }

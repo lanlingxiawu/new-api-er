@@ -9,10 +9,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -220,9 +221,9 @@ func TestLoginfoGenerateWssOtherInfo(t *testing.T) {
 
 func TestLoginfoGenerateMjOtherInfo_WithSpecialRatio(t *testing.T) {
 	ri := &relaycommon.RelayInfo{RequestURLPath: "/mj/submit/imagine?foo=bar"}
-	price := types.PriceData{
+	price := hosttypes.PriceData{
 		ModelPrice: 0.5,
-		GroupRatioInfo: types.GroupRatioInfo{
+		GroupRatioInfo: hosttypes.GroupRatioInfo{
 			GroupRatio:        1.5,
 			GroupSpecialRatio: 0.7,
 			HasSpecialRatio:   true,
@@ -240,9 +241,9 @@ func TestLoginfoGenerateMjOtherInfo_WithSpecialRatio(t *testing.T) {
 
 func TestLoginfoGenerateMjOtherInfo_NoSpecialRatio(t *testing.T) {
 	ri := &relaycommon.RelayInfo{}
-	price := types.PriceData{
+	price := hosttypes.PriceData{
 		ModelPrice:     0.5,
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1.5, HasSpecialRatio: false},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1.5, HasSpecialRatio: false},
 	}
 
 	other := GenerateMjOtherInfo(ri, price)

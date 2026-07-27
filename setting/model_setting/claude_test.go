@@ -178,3 +178,32 @@ func TestNormalizeHeaderListValues_PreservesFirstSeenOrder(t *testing.T) {
 	got := normalizeHeaderListValues([]string{"c", "a", "c", "b", "a"})
 	assert.Equal(t, []string{"c", "a", "b"}, got)
 }
+
+func TestValidateClaudeDefaultMaxTokens(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "positive default", value: `{"default": 8192}`},
+		{name: "zero allowed", value: `{"default": 0}`},
+		{name: "zero model override allowed", value: `{"default": 8192, "claude-test": 0}`},
+		{name: "empty map allowed", value: `{}`},
+		{name: "negative default rejected", value: `{"default": -1}`, wantErr: `negative Claude default max_tokens -1 for "default"`},
+		{name: "negative model override rejected", value: `{"default": 8192, "claude-test": -5}`, wantErr: `negative Claude default max_tokens -5 for "claude-test"`},
+		{name: "non-integer rejected", value: `{"default": "high"}`, wantErr: "JSON map of model to integer"},
+		{name: "null rejected", value: `null`, wantErr: "JSON map of model to integer"},
+		{name: "malformed rejected", value: `{`, wantErr: "JSON map of model to integer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateClaudeDefaultMaxTokens(tt.value)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}

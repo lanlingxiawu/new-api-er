@@ -9,7 +9,7 @@ import (
 
 	commonpkg "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -243,6 +243,6 @@ func TestReturnError_StatusAndMsgKeys(t *testing.T) {
 	assert.Equal(t, 429, re.StatusCode)
 }
 
-func priceDataWithUsePrice() types.PriceData {
-	return types.PriceData{UsePrice: true, ModelPrice: 0.04}
+func priceDataWithUsePrice() hosttypes.PriceData {
+	return hosttypes.PriceData{UsePrice: true, ModelPrice: 0.04}
 }
