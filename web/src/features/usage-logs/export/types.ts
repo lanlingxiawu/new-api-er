@@ -58,6 +58,7 @@ export interface ExportColumnCatalog {
   /** Server-side thresholds, so the UI never hardcodes them. */
   xlsx_max_rows: number
   rows_per_file: number
+  max_range_sec: number
 }
 
 export interface ExportOptions {

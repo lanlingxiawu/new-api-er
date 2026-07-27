@@ -42,13 +42,19 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 
-import { getAllLogs } from '../../api'
-import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../../constants'
+import {
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_FILTERS,
+  TIME_RANGE_PRESETS,
+} from '../../constants'
+import { useDebounce } from '@/hooks'
+
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
 import {
   createExportJob,
   createExportTemplate,
   getExportColumns,
+  getExportEstimate,
   getExportTemplates,
 } from '../api'
 import type { ExportFormat, ExportOptions } from '../types'
@@ -103,6 +109,8 @@ export function NewExportSheet({
   })
 
   const [range, setRange] = useState<{ start?: Date; end?: Date }>({})
+  // 记住是通过哪个预设选的，仅用于高亮；手动改日期后清空。
+  const [presetDays, setPresetDays] = useState<number | null>(null)
   const [logType, setLogType] = useState<string>(LOG_TYPE_ALL_VALUE)
   const [model, setModel] = useState('')
   const [username, setUsername] = useState('')
@@ -156,6 +164,30 @@ export function NewExportSheet({
     return [...builtin, ...custom]
   }, [catalog, templates, t])
 
+  // 跨度上限由后端下发，前端不硬编码；用来禁用超限预设并给出提示。
+  const maxRangeDays = Math.max(
+    1,
+    Math.floor((catalog?.max_range_sec ?? 31 * 86400) / 86400)
+  )
+  const selectedDays =
+    range.start && range.end
+      ? Math.max(
+          1,
+          Math.ceil(
+            (range.end.getTime() - range.start.getTime()) / (24 * 3600 * 1000)
+          )
+        )
+      : 0
+  const rangeTooLong = selectedDays > maxRangeDays
+  const activePresetDays = presetDays
+
+  const applyPreset = (days: number) => {
+    const end = new Date()
+    const start = new Date(end.getTime() - days * 24 * 3600 * 1000)
+    setRange({ start, end })
+    setPresetDays(days)
+  }
+
   const applyTemplate = (value: string) => {
     setTemplateId(value)
     const builtin = catalog?.builtin_templates.find((tpl) => tpl.id === value)
@@ -171,45 +203,53 @@ export function NewExportSheet({
     }
   }
 
-  // 用列表接口的 total 估算行数：一次 page_size=1 的查询，用来判断 xlsx 是否可行
-  // 并给出「预计多少行 / 多少个分片」的提示。查询失败不影响导出——后端在写入
-  // 过程中还会兜底降级。
+  // 行数估算：判断 xlsx 是否可行，并给出「预计多少行 / 多少个分片」。
+  //
+  // 三重防护，避免把日志大表当成打字回调来扫：
+  //   1. 走专用的有界计数接口（数到上限即止），不是列表接口的完整 COUNT；
+  //   2. 文本筛选先 debounce，敲字过程中不发请求；
+  //   3. 超出跨度上限时根本不查——那种范围后端本来就会拒绝导出。
   const rangeReady = Boolean(range.start && range.end)
-  const { data: estRowsData } = useQuery({
+  const debouncedModel = useDebounce(model, 500)
+  const debouncedUsername = useDebounce(username, 500)
+  const debouncedToken = useDebounce(token, 500)
+  const debouncedChannel = useDebounce(channel, 500)
+  const debouncedGroup = useDebounce(group, 500)
+
+  const { data: estimate } = useQuery({
     queryKey: [
       'log-export-estimate',
       range.start?.getTime(),
       range.end?.getTime(),
       logType,
-      model,
-      username,
-      token,
-      channel,
-      group,
+      debouncedModel,
+      debouncedUsername,
+      debouncedToken,
+      debouncedChannel,
+      debouncedGroup,
     ],
-    queryFn: async () => {
-      const res = await getAllLogs({
-        p: 1,
-        page_size: 1,
-        type: logType === LOG_TYPE_ALL_VALUE ? undefined : Number(logType),
+    queryFn: () =>
+      getExportEstimate({
         start_timestamp: Math.floor((range.start as Date).getTime() / 1000),
         end_timestamp: Math.floor((range.end as Date).getTime() / 1000),
-        model_name: model || undefined,
-        username: username || undefined,
-        token_name: token || undefined,
-        channel: channel ? Number(channel) : undefined,
-        group: group || undefined,
-      })
-      return res.data?.total ?? 0
-    },
-    enabled: open && rangeReady,
+        type: logType === LOG_TYPE_ALL_VALUE ? undefined : Number(logType),
+        model_name: debouncedModel || undefined,
+        username: debouncedUsername || undefined,
+        token_name: debouncedToken || undefined,
+        channel: debouncedChannel ? Number(debouncedChannel) : undefined,
+        group: debouncedGroup || undefined,
+      }),
+    enabled: open && rangeReady && !rangeTooLong,
     staleTime: 60 * 1000,
   })
 
   const xlsxLimit = catalog?.xlsx_max_rows ?? 200000
   const rowsPerPart = catalog?.rows_per_file ?? 1000000
-  const estRows = estRowsData ?? 0
-  const xlsxTooLarge = estRows > xlsxLimit
+  const estRows = estimate?.rows ?? 0
+  // capped 表示真实行数 ≥ estRows（计数被上限截断），这对判断「超没超 xlsx 上限」
+  // 已经足够——上限本身就是按 xlsx_max_rows + 1 取的。
+  const estCapped = estimate?.capped ?? false
+  const xlsxTooLarge = estCapped || estRows > xlsxLimit
   const estParts = estRows > 0 ? Math.max(1, Math.ceil(estRows / rowsPerPart)) : 0
   useEffect(() => {
     if (xlsxTooLarge && format === 'xlsx') setFormat('csv_gz')
@@ -262,7 +302,8 @@ export function NewExportSheet({
       toast.error(error.message || t('Could not save the template')),
   })
 
-  const canSubmit = rangeReady && columns.length > 0 && !createJob.isPending
+  const canSubmit =
+    rangeReady && !rangeTooLong && columns.length > 0 && !createJob.isPending
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -285,12 +326,53 @@ export function NewExportSheet({
             <h3 className='text-sm font-semibold'>{t('Filters')}</h3>
             <div className='space-y-1'>
               <Label>{t('Date Range')}</Label>
-              <CompactDateTimeRangePicker
-                start={range.start}
-                end={range.end}
-                onChange={setRange}
-              />
-              {!rangeReady && (
+              <div className='flex flex-wrap items-center gap-2'>
+                <CompactDateTimeRangePicker
+                  start={range.start}
+                  end={range.end}
+                  onChange={(next) => {
+                    setRange(next)
+                    setPresetDays(null)
+                  }}
+                />
+                {/* 导出必须选时间范围，且有跨度上限——给几个常用档位，
+                    比让用户手点日历快得多。超出上限的档位直接禁用。 */}
+                {TIME_RANGE_PRESETS.map((preset) => {
+                  const disabled = preset.days > maxRangeDays
+                  return (
+                    <Button
+                      key={preset.days}
+                      type='button'
+                      size='sm'
+                      variant={
+                        activePresetDays === preset.days ? 'secondary' : 'ghost'
+                      }
+                      disabled={disabled}
+                      onClick={() => applyPreset(preset.days)}
+                    >
+                      {t(preset.label)}
+                    </Button>
+                  )
+                })}
+              </div>
+              {rangeReady ? (
+                <p
+                  className={
+                    rangeTooLong
+                      ? 'text-destructive text-xs'
+                      : 'text-muted-foreground text-xs'
+                  }
+                >
+                  {rangeTooLong
+                    ? t('Please select a range within {{count}} days.', {
+                        count: maxRangeDays,
+                      })
+                    : t('Selected {{days}} days · max {{max}} days', {
+                        days: selectedDays,
+                        max: maxRangeDays,
+                      })}
+                </p>
+              ) : (
                 <p className='text-muted-foreground text-xs'>
                   {t('A time range is required for every export.')}
                 </p>
@@ -479,10 +561,15 @@ export function NewExportSheet({
         <SheetFooter className='flex-row items-center justify-end gap-2'>
           {estRows > 0 && (
             <span className='text-muted-foreground mr-auto text-xs'>
-              {t('About {{rows}} rows · {{parts}} part(s)', {
-                rows: estRows.toLocaleString(),
-                parts: estParts,
-              })}
+              {estCapped
+                ? t('Over {{rows}} rows · {{parts}} part(s) or more', {
+                    rows: estRows.toLocaleString(),
+                    parts: estParts,
+                  })
+                : t('About {{rows}} rows · {{parts}} part(s)', {
+                    rows: estRows.toLocaleString(),
+                    parts: estParts,
+                  })}
             </span>
           )}
           <Button

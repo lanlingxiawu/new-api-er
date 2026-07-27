@@ -302,6 +302,79 @@ func TestEnsureCursorFields_ClickHouseAlwaysSelectsRequestId(t *testing.T) {
 	assert.Equal(t, already, ensureCursorFields(already))
 }
 
+// 估算必须是「数到上限即止」的有界计数：导出弹窗里用户每改一次筛选就估一次，
+// 用完整 COUNT 会随日志表增长把库扫穿。
+func TestEstimateLogExportRows_StopsAtLimit(t *testing.T) {
+	requireLogDB(t)
+	username := uniq("estimate")
+	base := time.Now().Unix() - 12000
+	const total = 12
+	for i := 0; i < total; i++ {
+		i := i
+		mkExportLog(t, func(l *Log) {
+			l.Username = username
+			l.CreatedAt = base + int64(i)
+		})
+	}
+	filter := LogExportFilter{
+		Username:       username,
+		StartTimestamp: base - 10,
+		EndTimestamp:   base + 100,
+	}
+
+	// 上限大于实际行数：拿到精确值，capped=false。
+	rows, capped, err := EstimateLogExportRows(context.Background(), filter, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(total), rows)
+	assert.False(t, capped)
+
+	// 上限小于实际行数：数到上限就停，capped=true。
+	rows, capped, err = EstimateLogExportRows(context.Background(), filter, 5)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), rows, "counting must stop at the cap")
+	assert.True(t, capped, "capped tells the caller the real count is >= rows")
+
+	// 上限非法时不查库。
+	rows, capped, err = EstimateLogExportRows(context.Background(), filter, 0)
+	require.NoError(t, err)
+	assert.Zero(t, rows)
+	assert.False(t, capped)
+}
+
+func TestEstimateLogExportRows_RespectsFilters(t *testing.T) {
+	requireLogDB(t)
+	marker := uniq("est_filter")
+	base := time.Now().Unix() - 13000
+	mkExportLog(t, func(l *Log) {
+		l.Username = marker
+		l.CreatedAt = base
+		l.ModelName = "claude-sonnet-5"
+	})
+	mkExportLog(t, func(l *Log) {
+		l.Username = marker
+		l.CreatedAt = base
+		l.ModelName = "gpt-4o"
+	})
+
+	rows, _, err := EstimateLogExportRows(context.Background(), LogExportFilter{
+		Username:       marker,
+		ModelName:      "claude-sonnet-5",
+		StartTimestamp: base - 5,
+		EndTimestamp:   base + 5,
+	}, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rows)
+
+	// 时间范围之外的不计入。
+	rows, _, err = EstimateLogExportRows(context.Background(), LogExportFilter{
+		Username:       marker,
+		StartTimestamp: base + 1000,
+		EndTimestamp:   base + 2000,
+	}, 100)
+	require.NoError(t, err)
+	assert.Zero(t, rows)
+}
+
 func TestFillLogExportChannelNames_UsesCacheAndNegativeCache(t *testing.T) {
 	requireDB(t)
 	ch := mkChannel(t, nil)

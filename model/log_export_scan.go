@@ -66,7 +66,7 @@ func applyLogExportFilter(tx *gorm.DB, filter LogExportFilter) (*gorm.DB, error)
 // ensureCursorFields 保证游标字段一定出现在 SELECT 里。
 //
 // ClickHouse 的排序键是 (created_at, request_id)，游标也用这一对。如果用户选的列
-// 里没有 request_id，取出的行该字段为空，游标条件 `created_at = ? AND request_id < ''`
+// 里没有 request_id，取出的行该字段为空，游标条件 `created_at = ? AND request_id < ”`
 // 永远不成立，翻页会直接跳过该秒剩余的行——静默丢数据。SQL 库用 id 做次键，
 // id 本来就无条件选取，不受影响。
 func ensureCursorFields(fields []string) []string {
@@ -203,4 +203,41 @@ func fillLogExportChannelNames(ctx context.Context, logs []*Log, cache map[int]s
 // logExportQueryTimeout 单批查询的超时，热更新即时生效。
 func logExportQueryTimeout(sec int) time.Duration {
 	return time.Duration(sec) * time.Second
+}
+
+// EstimateLogExportRows 估算某组筛选条件命中的行数，用于导出前的可行性判断
+// （xlsx 是否可用、预计多少个分片）。
+//
+// 关键点：**不做全表 COUNT**。COUNT 的代价随命中行数线性增长，而导出弹窗里
+// 用户每改一次筛选就要估一次，直接 COUNT 会把日志大表反复扫穿。这里改成
+// 「数到 limit 就停」的有界计数：
+//
+//	SELECT count(*) FROM (SELECT 1 FROM logs WHERE ... LIMIT n) t
+//
+// 代价被 limit 钉死，与实际数据量无关。返回 capped=true 表示真实行数 ≥ rows，
+// 这对「是否超过 xlsx 行数上限」这类判断已经足够。
+//
+// **LIMIT 限住的是结果不是工作量**：当过滤条件命中很少或为零时（用户敲了个
+// 不存在的用户名，或用了 `%xx%` 通配），数据库要扫完整段时间范围才能确定凑不
+// 满 limit。EXPLAIN ANALYZE 实测：50 万行的表、过滤条件无匹配时
+// `Rows Removed by Filter: 500000`，整段被扫穿。因此调用方必须给一个**短**超时，
+// 让最坏情况退化成「几秒后放弃估算」而不是「扫穿日志表」——估算只是提示，
+// 失败不影响导出。
+func EstimateLogExportRows(ctx context.Context, filter LogExportFilter, limit int) (rows int64, capped bool, err error) {
+	if limit <= 0 {
+		return 0, false, nil
+	}
+	sub := LOG_DB.WithContext(ctx).Model(&Log{}).
+		Select("1").
+		Where("logs.created_at >= ? AND logs.created_at <= ?", filter.StartTimestamp, filter.EndTimestamp)
+	if sub, err = applyLogExportFilter(sub, filter); err != nil {
+		return 0, false, err
+	}
+	sub = sub.Limit(limit)
+
+	// 子查询必须带别名，PostgreSQL 才接受。
+	if err = LOG_DB.WithContext(ctx).Table("(?) as t", sub).Count(&rows).Error; err != nil {
+		return 0, false, err
+	}
+	return rows, rows >= int64(limit), nil
 }

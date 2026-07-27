@@ -2,6 +2,7 @@ package controller
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,7 @@ func GetLogExportColumns(c *gin.Context) {
 		// 下发给前端做可行性判断与预估提示，避免前端硬编码这些阈值。
 		"xlsx_max_rows": setting.GetXlsxMaxRows(),
 		"rows_per_file": setting.GetRowsPerFile(),
+		"max_range_sec": setting.GetAdminMaxRangeSec(),
 	})
 }
 
@@ -187,6 +189,69 @@ func respondLogExportTemplateError(c *gin.Context, err error) {
 
 func isRootRequest(c *gin.Context) bool {
 	return c.GetInt("role") >= common.RoleRootUser
+}
+
+// logExportEstimateTimeout 估算查询的硬超时。
+//
+// 不做成配置项：这是交互提示的响应预算，不是运营旋钮；调大它只会让最坏情况
+// （过滤条件无匹配 → 扫完整段时间范围）在日志大表上跑得更久。
+const logExportEstimateTimeout = 3 * time.Second
+
+// GetLogExportEstimate 估算某组筛选条件命中的行数，供新建导出弹窗判断
+// xlsx 是否可行、预计几个分片。
+//
+// 走有界计数（数到上限即止），不复用日志列表接口——那个接口每次都会对
+// 命中集做完整 COUNT，而这个估算会随用户敲筛选条件被反复触发。
+func GetLogExportEstimate(c *gin.Context) {
+	setting := operation_setting.GetLogExportSetting()
+
+	start, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	end, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	if start <= 0 || end <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgLogExportRangeRequired)
+		return
+	}
+	if end < start {
+		common.ApiErrorI18n(c, i18n.MsgLogExportRangeInvalid)
+		return
+	}
+	maxRange := setting.GetAdminMaxRangeSec()
+	if end-start > maxRange {
+		// 超限的范围后端本来就会拒绝导出，没必要再为它扫库。
+		common.ApiErrorI18n(c, i18n.MsgLogExportRangeTooLong,
+			map[string]any{"Days": maxRange / 86400})
+		return
+	}
+
+	logType, _ := strconv.Atoi(c.Query("type"))
+	channel, _ := strconv.Atoi(c.Query("channel"))
+	filter := model.LogExportFilter{
+		LogType:        logType,
+		StartTimestamp: start,
+		EndTimestamp:   end,
+		ModelName:      c.Query("model_name"),
+		Username:       c.Query("username"),
+		TokenName:      c.Query("token_name"),
+		ChannelId:      channel,
+		Group:          c.Query("group"),
+	}
+
+	// 数到「xlsx 上限 + 1」就够：再多也只是用来判断超没超限。
+	limit := setting.GetXlsxMaxRows() + 1
+	// 超时刻意取得很短：LIMIT 限住的是结果不是工作量，过滤条件无匹配时
+	// 数据库要扫完整段范围才知道凑不满。估算只是提示，宁可放弃也不该让它
+	// 在日志大表上跑几十秒。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), logExportEstimateTimeout)
+	defer cancel()
+
+	rows, capped, err := model.EstimateLogExportRows(ctx, filter, limit)
+	if err != nil {
+		// 估算只影响提示，失败不该挡住导出。
+		common.SysError("log export: estimate failed: " + err.Error())
+		common.ApiSuccess(c, gin.H{"rows": 0, "capped": false, "available": false})
+		return
+	}
+	common.ApiSuccess(c, gin.H{"rows": rows, "capped": capped, "available": true})
 }
 
 // ── 任务 ─────────────────────────────────────────────────────────

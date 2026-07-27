@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -94,6 +95,88 @@ func TestGetLogExportColumns_ReturnsCatalogAndDefaultTemplate(t *testing.T) {
 		}
 	}
 	assert.True(t, hasAdminOnly)
+}
+
+// 估算接口必须自己挡住超限范围：那种范围导出本来就会被拒，没必要为它扫库。
+func TestGetLogExportEstimate_ValidatesRange(t *testing.T) {
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.AdminMaxRangeSec = 86400
+	})
+	now := time.Now().Unix()
+
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"missing_range", ""},
+		{"reversed", fmt.Sprintf("?start_timestamp=%d&end_timestamp=%d", now, now-100)},
+		{"too_long", fmt.Sprintf("?start_timestamp=%d&end_timestamp=%d", now-200000, now)},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, rec := newCtx(t, http.MethodGet, "/api/log/export/estimate"+tc.query, nil)
+			GetLogExportEstimate(asAdmin(ctx, nextTestID()))
+			resp := decodeResp(t, rec)
+			assert.False(t, resp.Success)
+			assert.NotEmpty(t, resp.Message)
+		})
+	}
+}
+
+func TestGetLogExportEstimate_ReturnsBoundedCount(t *testing.T) {
+	requireLogDB(t)
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.AdminMaxRangeSec = 86400
+		// 上限取 xlsx_max_rows + 1，这里压到 2 让 capped 可观察。
+		s.XlsxMaxRows = 2
+	})
+
+	username := uniq("est_api")
+	base := time.Now().Unix() - 3600
+	for i := 0; i < 5; i++ {
+		i := i
+		mkCtrlExportLog(t, func(l *model.Log) {
+			l.Username = username
+			l.CreatedAt = base + int64(i)
+		})
+	}
+
+	target := fmt.Sprintf("/api/log/export/estimate?start_timestamp=%d&end_timestamp=%d&username=%s",
+		base-10, base+100, username)
+	ctx, rec := newCtx(t, http.MethodGet, target, nil)
+	GetLogExportEstimate(asAdmin(ctx, nextTestID()))
+
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+	var data struct {
+		Rows      int64 `json:"rows"`
+		Capped    bool  `json:"capped"`
+		Available bool  `json:"available"`
+	}
+	require.NoError(t, common.Unmarshal(resp.Data, &data))
+	assert.True(t, data.Available)
+	assert.Equal(t, int64(3), data.Rows, "counting stops at xlsx_max_rows + 1")
+	assert.True(t, data.Capped)
+}
+
+// mkCtrlExportLog 往 LOG_DB 插一条日志并注册清理。
+func mkCtrlExportLog(t *testing.T, mut func(l *model.Log)) *model.Log {
+	t.Helper()
+	l := &model.Log{
+		UserId:    nextTestID(),
+		CreatedAt: time.Now().Unix(),
+		Type:      model.LogTypeConsume,
+		Username:  uniq("ctrlexp"),
+		ModelName: "gpt-4o",
+	}
+	if mut != nil {
+		mut(l)
+	}
+	require.NoError(t, model.LOG_DB.Create(l).Error)
+	id := l.Id
+	t.Cleanup(func() { model.LOG_DB.Unscoped().Delete(&model.Log{}, id) })
+	return l
 }
 
 func TestCreateLogExportJob_RejectsWhenDisabled(t *testing.T) {

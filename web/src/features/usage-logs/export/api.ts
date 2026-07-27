@@ -91,6 +91,43 @@ export async function downloadExportPart(
   link.remove()
 }
 
+/**
+ * Bounded row estimate for the current filters.
+ *
+ * Deliberately NOT the log list endpoint: that one runs a full COUNT over the
+ * matched set on every call, and this estimate re-runs whenever the admin edits
+ * a filter. The dedicated endpoint stops counting at a cap, so its cost does not
+ * grow with the log table.
+ */
+export async function getExportEstimate(params: {
+  start_timestamp: number
+  end_timestamp: number
+  type?: number
+  model_name?: string
+  username?: string
+  token_name?: string
+  channel?: number
+  group?: string
+}): Promise<{ rows: number; capped: boolean; available: boolean }> {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '') continue
+    query.set(key, String(value))
+  }
+  const res = await api.get(`${BASE}/estimate?${query.toString()}`, {
+    // 估算失败只影响提示，不该弹错误提示打断用户填表。
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
+  const body = res.data as Envelope<{
+    rows: number
+    capped: boolean
+    available: boolean
+  }>
+  if (!body.success) return { rows: 0, capped: false, available: false }
+  return body.data
+}
+
 export async function getExportTemplates(): Promise<ExportTemplate[]> {
   const res = await api.get(`${BASE}/templates`)
   const body = res.data as Envelope<ExportTemplate[] | null>
