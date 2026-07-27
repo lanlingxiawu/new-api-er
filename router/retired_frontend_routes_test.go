@@ -22,6 +22,7 @@ func TestRetiredFrontendAPIRoutes(t *testing.T) {
 	_, hasConsoleMigration := routes[http.MethodPost+" /api/option/migrate_console_setting"]
 	assert.True(t, hasAsyncCleanup)
 	assert.False(t, hasDirectDelete)
-	// fork 保留了 console 设置迁移路由（迁移历史 console 配置），未随上游一起退役。
-	assert.True(t, hasConsoleMigration)
+	// console 设置迁移路由已随上游一起退役：前端无调用点，且其实现会重载全量
+	// option 污染进程状态、收尾的 DELETE 未对保留字 key 加引号。
+	assert.False(t, hasConsoleMigration)
 }

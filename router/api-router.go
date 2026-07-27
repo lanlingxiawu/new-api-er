@@ -320,7 +320,6 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // Legacy key for migration checks; remove in a later version.
 			optionRoute.GET("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
 			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
 			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
@@ -417,6 +416,7 @@ func SetApiRouter(router *gin.Engine) {
 		logExportRoute.Use(middleware.AdminAuth())
 		{
 			logExportRoute.GET("/columns", controller.GetLogExportColumns)
+			logExportRoute.GET("/estimate", controller.GetLogExportEstimate)
 			logExportRoute.GET("/templates", controller.GetLogExportTemplates)
 			logExportRoute.POST("/templates", controller.CreateLogExportTemplate)
 			logExportRoute.PUT("/templates/:id", controller.UpdateLogExportTemplate)

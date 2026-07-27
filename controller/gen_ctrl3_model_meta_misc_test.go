@@ -164,16 +164,6 @@ func TestEnrichModels_Empty(t *testing.T) {
 	enrichModels([]*model.Model{})
 }
 
-// NOTE: console_migrate.go :: MigrateConsoleSetting is intentionally NOT tested.
-// Two reasons documented during batch 4:
-//   1. It calls model.InitOptionMap() which reloads ALL in-memory options from
-//      the DB, clobbering process-global state (e.g. seeded group ratios) and
-//      polluting unrelated tests such as TestGetUserGroups in the shared binary.
-//   2. Its final `DELETE FROM options WHERE key IN (...)` uses an unquoted
-//      reserved word `key`; on MySQL/PostgreSQL this raises a syntax error
-//      (Error 1064) that the handler swallows (return value unchecked). See the
-//      batch-4 report / docs for the bug note. Should use commonKeyCol (Rule 2).
-
 // ---------------------------------------------------------------------------
 // codex_usage.go — channel validation paths (no upstream network needed).
 // ---------------------------------------------------------------------------
