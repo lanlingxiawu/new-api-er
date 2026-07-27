@@ -29,7 +29,7 @@ import {
   getDynamicDisplayGroupRatio,
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
+import { parseTags, prioritizeSelected } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import { formatPrice, formatRequestPrice } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
@@ -44,6 +44,8 @@ export interface ModelCardProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
+  selectedEndpointType?: string
+  selectedTag?: string
   perf?: ModelPerfBadgeData
 }
 
@@ -56,9 +58,23 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const showRechargePrice = props.showRechargePrice ?? false
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
-  const tags = parseTags(props.model.tags)
-  const groups = props.model.enable_groups || []
-  const endpoints = props.model.supported_endpoint_types || []
+  // Surface whatever the user is filtering by first — these lists get truncated
+  // below, so the active filter value must not fall into the "+N" overflow.
+  const tags = prioritizeSelected(
+    parseTags(props.model.tags),
+    props.selectedTag,
+    {
+      caseInsensitive: true,
+    }
+  )
+  const groups = prioritizeSelected(
+    props.model.enable_groups || [],
+    props.selectedGroup
+  )
+  const endpoints = prioritizeSelected(
+    props.model.supported_endpoint_types || [],
+    props.selectedEndpointType
+  )
   const modelIconKey = props.model.icon || props.model.vendor_icon
   const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 28) : null
   const initial = props.model.model_name?.charAt(0).toUpperCase() || '?'

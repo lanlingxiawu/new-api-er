@@ -39,6 +39,8 @@ export interface PricingTableProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
+  selectedEndpointType?: string
+  selectedTag?: string
   onModelClick?: (modelName: string) => void
 }
 
@@ -52,6 +54,8 @@ export function PricingTable(props: PricingTableProps) {
     tokenUnit = DEFAULT_TOKEN_UNIT,
     showRechargePrice = false,
     selectedGroup,
+    selectedEndpointType,
+    selectedTag,
     onModelClick,
   } = props
 
@@ -66,6 +70,8 @@ export function PricingTable(props: PricingTableProps) {
     usdExchangeRate,
     showRechargePrice,
     selectedGroup,
+    selectedEndpointType,
+    selectedTag,
   })
 
   const { table } = useDataTable({
