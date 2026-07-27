@@ -20,6 +20,7 @@ import { BusinessStatsCircuitBreakerSection } from '../maintenance/business-stat
 import { LedgerPipelineSection } from '../maintenance/ledger-pipeline-section'
 import { ExportSettingsSection } from '../maintenance/export-settings-section'
 import { LedgerDetailSection } from '../maintenance/ledger-detail-section'
+import { LogExportSection } from '../maintenance/log-export-section'
 import { FallbackBackfillSection } from '../maintenance/fallback-backfill-section'
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
@@ -200,6 +201,94 @@ const SYSTEM_TUNING_SECTIONS = [
           'export_setting.hard_ceiling_rows':
             settings['export_setting.hard_ceiling_rows'] ??
             systemTuningFallbackSettings['export_setting.hard_ceiling_rows'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'log-export',
+    titleKey: 'Usage Log Export Settings',
+    build: (settings: SystemTuningSettings) => (
+      <LogExportSection
+        defaultValues={{
+          'log_export_setting.enabled':
+            settings['log_export_setting.enabled'] ??
+            systemTuningFallbackSettings['log_export_setting.enabled'],
+          'log_export_setting.offpeak_only':
+            settings['log_export_setting.offpeak_only'] ??
+            systemTuningFallbackSettings['log_export_setting.offpeak_only'],
+          'log_export_setting.user_cooldown_sec':
+            settings['log_export_setting.user_cooldown_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.user_cooldown_sec'],
+          'log_export_setting.max_concurrent_jobs':
+            settings['log_export_setting.max_concurrent_jobs'] ??
+            systemTuningFallbackSettings['log_export_setting.max_concurrent_jobs'],
+          'log_export_setting.max_active_jobs_per_user':
+            settings['log_export_setting.max_active_jobs_per_user'] ??
+            systemTuningFallbackSettings['log_export_setting.max_active_jobs_per_user'],
+          'log_export_setting.admin_max_range_sec':
+            settings['log_export_setting.admin_max_range_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.admin_max_range_sec'],
+          'log_export_setting.timeout_sec':
+            settings['log_export_setting.timeout_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.timeout_sec'],
+          'log_export_setting.job_ttl_hours':
+            settings['log_export_setting.job_ttl_hours'] ??
+            systemTuningFallbackSettings['log_export_setting.job_ttl_hours'],
+          'log_export_setting.max_templates_per_user':
+            settings['log_export_setting.max_templates_per_user'] ??
+            systemTuningFallbackSettings['log_export_setting.max_templates_per_user'],
+          'log_export_setting.batch_size':
+            settings['log_export_setting.batch_size'] ??
+            systemTuningFallbackSettings['log_export_setting.batch_size'],
+          'log_export_setting.batch_sleep_ms':
+            settings['log_export_setting.batch_sleep_ms'] ??
+            systemTuningFallbackSettings['log_export_setting.batch_sleep_ms'],
+          'log_export_setting.batch_query_timeout_sec':
+            settings['log_export_setting.batch_query_timeout_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.batch_query_timeout_sec'],
+          'log_export_setting.window_sec':
+            settings['log_export_setting.window_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.window_sec'],
+          'log_export_setting.max_rows_per_sec':
+            settings['log_export_setting.max_rows_per_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.max_rows_per_sec'],
+          'log_export_setting.cpu_soft_limit':
+            settings['log_export_setting.cpu_soft_limit'] ??
+            systemTuningFallbackSettings['log_export_setting.cpu_soft_limit'],
+          'log_export_setting.cpu_hard_limit':
+            settings['log_export_setting.cpu_hard_limit'] ??
+            systemTuningFallbackSettings['log_export_setting.cpu_hard_limit'],
+          'log_export_setting.cpu_check_interval_ms':
+            settings['log_export_setting.cpu_check_interval_ms'] ??
+            systemTuningFallbackSettings['log_export_setting.cpu_check_interval_ms'],
+          'log_export_setting.gzip_level':
+            settings['log_export_setting.gzip_level'] ??
+            systemTuningFallbackSettings['log_export_setting.gzip_level'],
+          'log_export_setting.rows_per_file':
+            settings['log_export_setting.rows_per_file'] ??
+            systemTuningFallbackSettings['log_export_setting.rows_per_file'],
+          'log_export_setting.max_parts':
+            settings['log_export_setting.max_parts'] ??
+            systemTuningFallbackSettings['log_export_setting.max_parts'],
+          'log_export_setting.xlsx_max_rows':
+            settings['log_export_setting.xlsx_max_rows'] ??
+            systemTuningFallbackSettings['log_export_setting.xlsx_max_rows'],
+          'log_export_setting.min_free_disk_mb':
+            settings['log_export_setting.min_free_disk_mb'] ??
+            systemTuningFallbackSettings['log_export_setting.min_free_disk_mb'],
+          'log_export_setting.download_token_ttl_sec':
+            settings['log_export_setting.download_token_ttl_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.download_token_ttl_sec'],
+          'log_export_setting.download_session_ttl_sec':
+            settings['log_export_setting.download_session_ttl_sec'] ??
+            systemTuningFallbackSettings['log_export_setting.download_session_ttl_sec'],
+          'log_export_setting.max_concurrent_downloads_per_user':
+            settings['log_export_setting.max_concurrent_downloads_per_user'] ??
+            systemTuningFallbackSettings['log_export_setting.max_concurrent_downloads_per_user'],
+          'log_export_setting.offpeak_window':
+            settings['log_export_setting.offpeak_window'] ??
+            systemTuningFallbackSettings['log_export_setting.offpeak_window'],
         }}
       />
     ),

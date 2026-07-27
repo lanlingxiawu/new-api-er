@@ -144,6 +144,103 @@ func TestLogExportSetting_RangeAndWindowGetters(t *testing.T) {
 	assert.Equal(t, int64(600), s.GetWindowSec())
 }
 
+// 这些旋钮暴露在管理后台设置页，填个极大值不该能绕过保护阀：
+// 批大小决定单批取回多少行，行速率决定令牌桶放行速度，分片/xlsx 行数决定单文件写入量。
+func TestLogExportSetting_GettersClampUpperBounds(t *testing.T) {
+	const huge = 1 << 30
+	cases := []struct {
+		name string
+		want int
+		get  func(s *LogExportSetting) int
+		set  func(s *LogExportSetting, v int)
+	}{
+		{"BatchSize", MaxLogExportBatchSize,
+			func(s *LogExportSetting) int { return s.GetBatchSize() },
+			func(s *LogExportSetting, v int) { s.BatchSize = v }},
+		{"MaxRowsPerSec", MaxLogExportMaxRowsPerSec,
+			func(s *LogExportSetting) int { return s.GetMaxRowsPerSec() },
+			func(s *LogExportSetting, v int) { s.MaxRowsPerSec = v }},
+		{"RowsPerFile", MaxLogExportRowsPerFile,
+			func(s *LogExportSetting) int { return s.GetRowsPerFile() },
+			func(s *LogExportSetting, v int) { s.RowsPerFile = v }},
+		{"MaxParts", MaxLogExportMaxParts,
+			func(s *LogExportSetting) int { return s.GetMaxParts() },
+			func(s *LogExportSetting, v int) { s.MaxParts = v }},
+		{"XlsxMaxRows", MaxLogExportXlsxMaxRows,
+			func(s *LogExportSetting) int { return s.GetXlsxMaxRows() },
+			func(s *LogExportSetting, v int) { s.XlsxMaxRows = v }},
+		{"BatchSleepMs", MaxLogExportBatchSleepMs,
+			func(s *LogExportSetting) int { return s.GetBatchSleepMs() },
+			func(s *LogExportSetting, v int) { s.BatchSleepMs = v }},
+		{"BatchQueryTimeoutSec", MaxLogExportBatchQueryTimeoutSec,
+			func(s *LogExportSetting) int { return s.GetBatchQueryTimeoutSec() },
+			func(s *LogExportSetting, v int) { s.BatchQueryTimeoutSec = v }},
+		{"CPUCheckIntervalMs", MaxLogExportCPUCheckIntervalMs,
+			func(s *LogExportSetting) int { return s.GetCPUCheckIntervalMs() },
+			func(s *LogExportSetting, v int) { s.CPUCheckIntervalMs = v }},
+		{"MinFreeDiskMB", MaxLogExportMinFreeDiskMB,
+			func(s *LogExportSetting) int { return s.GetMinFreeDiskMB() },
+			func(s *LogExportSetting, v int) { s.MinFreeDiskMB = v }},
+		{"TimeoutSec", MaxLogExportTimeoutSec,
+			func(s *LogExportSetting) int { return s.GetTimeoutSec() },
+			func(s *LogExportSetting, v int) { s.TimeoutSec = v }},
+		{"UserCooldownSec", MaxLogExportUserCooldownSec,
+			func(s *LogExportSetting) int { return s.GetUserCooldownSec() },
+			func(s *LogExportSetting, v int) { s.UserCooldownSec = v }},
+		{"MaxConcurrentJobs", MaxLogExportConcurrentJobs,
+			func(s *LogExportSetting) int { return s.GetMaxConcurrentJobs() },
+			func(s *LogExportSetting, v int) { s.MaxConcurrentJobs = v }},
+		{"MaxActiveJobsPerUser", MaxLogExportActiveJobsPerUser,
+			func(s *LogExportSetting) int { return s.GetMaxActiveJobsPerUser() },
+			func(s *LogExportSetting, v int) { s.MaxActiveJobsPerUser = v }},
+		{"MaxTemplatesPerUser", MaxLogExportTemplatesPerUser,
+			func(s *LogExportSetting) int { return s.GetMaxTemplatesPerUser() },
+			func(s *LogExportSetting, v int) { s.MaxTemplatesPerUser = v }},
+		{"MaxConcurrentDownloadsPerUser", MaxLogExportConcurrentDownloadsPerUser,
+			func(s *LogExportSetting) int { return s.GetMaxConcurrentDownloadsPerUser() },
+			func(s *LogExportSetting, v int) { s.MaxConcurrentDownloadsPerUser = v }},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			s := &LogExportSetting{}
+			tc.set(s, huge)
+			assert.Equal(t, tc.want, tc.get(s), "an absurd value must be clamped to the cap")
+			tc.set(s, tc.want)
+			assert.Equal(t, tc.want, tc.get(s), "the cap itself must be accepted")
+		})
+	}
+}
+
+// xlsx 行数上限不能配得超过 Excel 单表的硬上限，否则写到一半必然失败。
+func TestLogExportSetting_XlsxCapStaysBelowExcelHardLimit(t *testing.T) {
+	const excelSheetRowLimit = 1048576
+	assert.Less(t, MaxLogExportXlsxMaxRows, excelSheetRowLimit)
+}
+
+func TestLogExportSetting_DurationGettersClamp(t *testing.T) {
+	s := &LogExportSetting{JobTTLHours: 1 << 20}
+	assert.Equal(t, time.Duration(MaxLogExportJobTTLHours)*time.Hour, s.GetJobTTL())
+
+	s = &LogExportSetting{DownloadTokenTTLSec: 1 << 20}
+	assert.Equal(t,
+		time.Duration(MaxLogExportDownloadTokenTTLSec)*time.Second,
+		s.GetDownloadTokenTTL())
+
+	s = &LogExportSetting{DownloadSessionTTLSec: 1 << 20}
+	assert.Equal(t,
+		time.Duration(MaxLogExportDownloadSessionTTLSec)*time.Second,
+		s.GetDownloadSessionTTL())
+}
+
+func TestLogExportSetting_RangeAndWindowClamp(t *testing.T) {
+	s := &LogExportSetting{AdminMaxRangeSec: 1 << 30}
+	assert.Equal(t, int64(MaxLogExportAdminRangeSec), s.GetAdminMaxRangeSec())
+
+	s = &LogExportSetting{WindowSec: 1 << 30}
+	assert.Equal(t, int64(MaxLogExportWindowSec), s.GetWindowSec())
+}
+
 // 窗口过小会把一次跨月导出拆成上百万个几乎全空的查询，必须有下限兜底。
 func TestLogExportSetting_WindowSecHasFloor(t *testing.T) {
 	s := &LogExportSetting{WindowSec: 1}

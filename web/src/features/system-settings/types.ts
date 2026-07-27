@@ -507,6 +507,34 @@ export type SystemTuningSettings = {
   'ledger_detail_setting.list_max_limit': number
   'ledger_detail_setting.list_scan_batch_size': number
   'ledger_detail_setting.list_scan_rows_per_req': number
+
+  // 使用日志导出（管理员后台任务）
+  'log_export_setting.enabled': boolean
+  'log_export_setting.offpeak_only': boolean
+  'log_export_setting.user_cooldown_sec': number
+  'log_export_setting.max_concurrent_jobs': number
+  'log_export_setting.max_active_jobs_per_user': number
+  'log_export_setting.admin_max_range_sec': number
+  'log_export_setting.timeout_sec': number
+  'log_export_setting.job_ttl_hours': number
+  'log_export_setting.max_templates_per_user': number
+  'log_export_setting.batch_size': number
+  'log_export_setting.batch_sleep_ms': number
+  'log_export_setting.batch_query_timeout_sec': number
+  'log_export_setting.window_sec': number
+  'log_export_setting.max_rows_per_sec': number
+  'log_export_setting.cpu_soft_limit': number
+  'log_export_setting.cpu_hard_limit': number
+  'log_export_setting.cpu_check_interval_ms': number
+  'log_export_setting.gzip_level': number
+  'log_export_setting.rows_per_file': number
+  'log_export_setting.max_parts': number
+  'log_export_setting.xlsx_max_rows': number
+  'log_export_setting.min_free_disk_mb': number
+  'log_export_setting.download_token_ttl_sec': number
+  'log_export_setting.download_session_ttl_sec': number
+  'log_export_setting.max_concurrent_downloads_per_user': number
+  'log_export_setting.offpeak_window': string
   'business_stats_fallback_backfill_setting.enabled': boolean
   'business_stats_fallback_backfill_setting.use_separate_fallback_dir': boolean
   'business_stats_fallback_backfill_setting.status_cache_seconds': number

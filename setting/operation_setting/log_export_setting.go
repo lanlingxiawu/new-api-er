@@ -87,22 +87,81 @@ const (
 	DefaultLogExportBatchQueryTimeoutSec = 10
 	DefaultLogExportWindowSec            = 3600
 	// MinLogExportWindowSec 扫描窗口下限，防止误配置把导出拆成海量空查询。
-	MinLogExportWindowSec = 60
-	DefaultLogExportMaxRowsPerSec        = 20000
-	DefaultLogExportCPUSoftLimit         = 70
-	DefaultLogExportCPUHardLimit         = 85
-	DefaultLogExportCPUCheckIntervalMs   = 1000
-	DefaultLogExportGzipLevel            = 1
-	DefaultLogExportRowsPerFile          = 1000000
-	DefaultLogExportMaxParts             = 100
-	DefaultLogExportXlsxMaxRows          = 200000
-	DefaultLogExportMinFreeDiskMB        = 2048
-	DefaultLogExportOffpeakWindow        = "02:00-06:00"
+	MinLogExportWindowSec              = 60
+	DefaultLogExportMaxRowsPerSec      = 20000
+	DefaultLogExportCPUSoftLimit       = 70
+	DefaultLogExportCPUHardLimit       = 85
+	DefaultLogExportCPUCheckIntervalMs = 1000
+	DefaultLogExportGzipLevel          = 1
+	DefaultLogExportRowsPerFile        = 1000000
+	DefaultLogExportMaxParts           = 100
+	DefaultLogExportXlsxMaxRows        = 200000
+	DefaultLogExportMinFreeDiskMB      = 2048
+	DefaultLogExportOffpeakWindow      = "02:00-06:00"
 
 	DefaultLogExportDownloadTokenTTLSec           = 60
 	DefaultLogExportDownloadSessionTTLSec         = 1800
 	DefaultLogExportMaxConcurrentDownloadsPerUser = 2
 )
+
+// 上限。这些旋钮已经暴露在管理后台设置页，手滑填个极大值不该能绕过保护阀：
+// 批大小直接决定单次查询取回多少行（内存与 DB 压力），行速率决定令牌桶放行的
+// 速度，分片行数与 xlsx 行数决定单文件的写入量。getter 层统一 clamp，前端表单
+// 的 max 与这里保持一致。
+const (
+	// MaxLogExportBatchSize 单批最多取多少行。再大就是单次查询把内存和 DB 一起顶穿。
+	MaxLogExportBatchSize = 50000
+	// MaxLogExportBatchSleepMs 批间休眠上限（1 分钟），再大等同于挂起。
+	MaxLogExportBatchSleepMs = 60000
+	// MaxLogExportBatchQueryTimeoutSec 单批查询超时上限（5 分钟）。
+	MaxLogExportBatchQueryTimeoutSec = 300
+	// MaxLogExportWindowSec 扫描窗口上限（1 天），避免退化成一次跨月大范围扫描。
+	MaxLogExportWindowSec = 86400
+	// MaxLogExportMaxRowsPerSec 行速率上限，超过这个量级已经谈不上「限速」了。
+	MaxLogExportMaxRowsPerSec = 500000
+	// MaxLogExportCPUCheckIntervalMs CPU 水位检查间隔上限（1 分钟）。
+	MaxLogExportCPUCheckIntervalMs = 60000
+	// MaxLogExportRowsPerFile 单分片行数上限。
+	MaxLogExportRowsPerFile = 5000000
+	// MaxLogExportMaxParts 分片数上限。
+	MaxLogExportMaxParts = 1000
+	// MaxLogExportXlsxMaxRows xlsx 行数上限。Excel 单表硬上限是 1048576（含表头），
+	// 不能配得比它还大，否则写到一半必然失败。
+	MaxLogExportXlsxMaxRows = 1000000
+	// MaxLogExportMinFreeDiskMB 磁盘余量下限的上限（1 TB），再大等于永远拒绝导出。
+	MaxLogExportMinFreeDiskMB = 1024 * 1024
+	// MaxLogExportTimeoutSec 单任务超时上限（24 小时）。
+	MaxLogExportTimeoutSec = 86400
+	// MaxLogExportJobTTLHours 任务保留时长上限（30 天）。
+	MaxLogExportJobTTLHours = 24 * 30
+	// MaxLogExportUserCooldownSec 冷却上限（1 天）。
+	MaxLogExportUserCooldownSec = 86400
+	// MaxLogExportConcurrentJobs 并发任务数上限——导出是 CPU 密集的后台作业。
+	MaxLogExportConcurrentJobs = 16
+	// MaxLogExportActiveJobsPerUser 单用户在途任务上限。
+	MaxLogExportActiveJobsPerUser = 20
+	// MaxLogExportTemplatesPerUser 单用户模板数上限。
+	MaxLogExportTemplatesPerUser = 500
+	// MaxLogExportAdminRangeSec 单次导出时间跨度上限（1 年）。
+	MaxLogExportAdminRangeSec = 366 * 86400
+	// MaxLogExportDownloadTokenTTLSec 下载令牌有效期上限（1 小时）。
+	MaxLogExportDownloadTokenTTLSec = 3600
+	// MaxLogExportDownloadSessionTTLSec 续传窗口上限（12 小时）。
+	MaxLogExportDownloadSessionTTLSec = 12 * 3600
+	// MaxLogExportConcurrentDownloadsPerUser 单用户并发下载上限。
+	MaxLogExportConcurrentDownloadsPerUser = 16
+)
+
+// clampInt 把配置值夹在 [min, max] 内；非法值（<=0）由调用方先行回退默认值。
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
 
 var logExportSetting = LogExportSetting{
 	Enabled:              true,
@@ -139,7 +198,7 @@ func (s *LogExportSetting) GetUserCooldownSec() int {
 	if s.UserCooldownSec <= 0 {
 		return DefaultLogExportUserCooldownSec
 	}
-	return s.UserCooldownSec
+	return clampInt(s.UserCooldownSec, 0, MaxLogExportUserCooldownSec)
 }
 
 // GetMaxConcurrentJobs 允许为 0：运营可用它停止接受新任务（不中断运行中的任务）。
@@ -147,28 +206,29 @@ func (s *LogExportSetting) GetMaxConcurrentJobs() int {
 	if s.MaxConcurrentJobs < 0 {
 		return DefaultLogExportMaxConcurrentJobs
 	}
-	return s.MaxConcurrentJobs
+	// 0 有意义（停止接受新任务），所以下限是 0 而不是 1。
+	return clampInt(s.MaxConcurrentJobs, 0, MaxLogExportConcurrentJobs)
 }
 
 func (s *LogExportSetting) GetMaxActiveJobsPerUser() int {
 	if s.MaxActiveJobsPerUser <= 0 {
 		return DefaultLogExportMaxActiveJobsPerUser
 	}
-	return s.MaxActiveJobsPerUser
+	return clampInt(s.MaxActiveJobsPerUser, 1, MaxLogExportActiveJobsPerUser)
 }
 
 func (s *LogExportSetting) GetAdminMaxRangeSec() int64 {
 	if s.AdminMaxRangeSec <= 0 {
 		return DefaultLogExportAdminMaxRangeSec
 	}
-	return int64(s.AdminMaxRangeSec)
+	return int64(clampInt(s.AdminMaxRangeSec, 1, MaxLogExportAdminRangeSec))
 }
 
 func (s *LogExportSetting) GetTimeoutSec() int {
 	if s.TimeoutSec <= 0 {
 		return DefaultLogExportTimeoutSec
 	}
-	return s.TimeoutSec
+	return clampInt(s.TimeoutSec, 1, MaxLogExportTimeoutSec)
 }
 
 func (s *LogExportSetting) GetJobTTL() time.Duration {
@@ -176,35 +236,36 @@ func (s *LogExportSetting) GetJobTTL() time.Duration {
 	if hours <= 0 {
 		hours = DefaultLogExportJobTTLHours
 	}
-	return time.Duration(hours) * time.Hour
+	return time.Duration(clampInt(hours, 1, MaxLogExportJobTTLHours)) * time.Hour
 }
 
 func (s *LogExportSetting) GetMaxTemplatesPerUser() int {
 	if s.MaxTemplatesPerUser <= 0 {
 		return DefaultLogExportMaxTemplatesPerUser
 	}
-	return s.MaxTemplatesPerUser
+	return clampInt(s.MaxTemplatesPerUser, 1, MaxLogExportTemplatesPerUser)
 }
 
 func (s *LogExportSetting) GetBatchSize() int {
 	if s.BatchSize <= 0 {
 		return DefaultLogExportBatchSize
 	}
-	return s.BatchSize
+	return clampInt(s.BatchSize, 1, MaxLogExportBatchSize)
 }
 
 func (s *LogExportSetting) GetBatchSleepMs() int {
 	if s.BatchSleepMs < 0 {
 		return DefaultLogExportBatchSleepMs
 	}
-	return s.BatchSleepMs
+	// 0 有意义（不额外休眠），下限取 0。
+	return clampInt(s.BatchSleepMs, 0, MaxLogExportBatchSleepMs)
 }
 
 func (s *LogExportSetting) GetBatchQueryTimeoutSec() int {
 	if s.BatchQueryTimeoutSec <= 0 {
 		return DefaultLogExportBatchQueryTimeoutSec
 	}
-	return s.BatchQueryTimeoutSec
+	return clampInt(s.BatchQueryTimeoutSec, 1, MaxLogExportBatchQueryTimeoutSec)
 }
 
 // GetWindowSec 返回扫描窗口大小，并施加一个下限。
@@ -214,17 +275,14 @@ func (s *LogExportSetting) GetWindowSec() int64 {
 	if s.WindowSec <= 0 {
 		return DefaultLogExportWindowSec
 	}
-	if s.WindowSec < MinLogExportWindowSec {
-		return MinLogExportWindowSec
-	}
-	return int64(s.WindowSec)
+	return int64(clampInt(s.WindowSec, MinLogExportWindowSec, MaxLogExportWindowSec))
 }
 
 func (s *LogExportSetting) GetMaxRowsPerSec() int {
 	if s.MaxRowsPerSec <= 0 {
 		return DefaultLogExportMaxRowsPerSec
 	}
-	return s.MaxRowsPerSec
+	return clampInt(s.MaxRowsPerSec, 1, MaxLogExportMaxRowsPerSec)
 }
 
 func (s *LogExportSetting) GetCPUSoftLimit() float64 {
@@ -247,7 +305,7 @@ func (s *LogExportSetting) GetCPUCheckIntervalMs() int {
 	if s.CPUCheckIntervalMs <= 0 {
 		return DefaultLogExportCPUCheckIntervalMs
 	}
-	return s.CPUCheckIntervalMs
+	return clampInt(s.CPUCheckIntervalMs, 1, MaxLogExportCPUCheckIntervalMs)
 }
 
 func (s *LogExportSetting) GetGzipLevel() int {
@@ -261,28 +319,28 @@ func (s *LogExportSetting) GetRowsPerFile() int {
 	if s.RowsPerFile <= 0 {
 		return DefaultLogExportRowsPerFile
 	}
-	return s.RowsPerFile
+	return clampInt(s.RowsPerFile, 1, MaxLogExportRowsPerFile)
 }
 
 func (s *LogExportSetting) GetMaxParts() int {
 	if s.MaxParts <= 0 {
 		return DefaultLogExportMaxParts
 	}
-	return s.MaxParts
+	return clampInt(s.MaxParts, 1, MaxLogExportMaxParts)
 }
 
 func (s *LogExportSetting) GetXlsxMaxRows() int {
 	if s.XlsxMaxRows <= 0 {
 		return DefaultLogExportXlsxMaxRows
 	}
-	return s.XlsxMaxRows
+	return clampInt(s.XlsxMaxRows, 1, MaxLogExportXlsxMaxRows)
 }
 
 func (s *LogExportSetting) GetMinFreeDiskMB() int {
 	if s.MinFreeDiskMB <= 0 {
 		return DefaultLogExportMinFreeDiskMB
 	}
-	return s.MinFreeDiskMB
+	return clampInt(s.MinFreeDiskMB, 1, MaxLogExportMinFreeDiskMB)
 }
 
 func (s *LogExportSetting) GetDownloadTokenTTL() time.Duration {
@@ -290,7 +348,7 @@ func (s *LogExportSetting) GetDownloadTokenTTL() time.Duration {
 	if sec <= 0 {
 		sec = DefaultLogExportDownloadTokenTTLSec
 	}
-	return time.Duration(sec) * time.Second
+	return time.Duration(clampInt(sec, 1, MaxLogExportDownloadTokenTTLSec)) * time.Second
 }
 
 func (s *LogExportSetting) GetDownloadSessionTTL() time.Duration {
@@ -298,14 +356,14 @@ func (s *LogExportSetting) GetDownloadSessionTTL() time.Duration {
 	if sec <= 0 {
 		sec = DefaultLogExportDownloadSessionTTLSec
 	}
-	return time.Duration(sec) * time.Second
+	return time.Duration(clampInt(sec, 1, MaxLogExportDownloadSessionTTLSec)) * time.Second
 }
 
 func (s *LogExportSetting) GetMaxConcurrentDownloadsPerUser() int {
 	if s.MaxConcurrentDownloadsPerUser <= 0 {
 		return DefaultLogExportMaxConcurrentDownloadsPerUser
 	}
-	return s.MaxConcurrentDownloadsPerUser
+	return clampInt(s.MaxConcurrentDownloadsPerUser, 1, MaxLogExportConcurrentDownloadsPerUser)
 }
 
 // GetOffpeakWindow 解析低峰时段，返回起止的「当日分钟数」。
