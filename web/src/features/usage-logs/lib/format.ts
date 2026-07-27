@@ -451,7 +451,6 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'log_export.job_create':
     'Started a log export ({{columns}} columns, {{format}}) for {{start}}–{{end}}',
   'log_export.job_delete': 'Canceled or deleted a log export job',
-  'log_export.download': 'Downloaded log export {{job_id}} ({{rows}} rows)',
   'log_export.template_create': 'Created a log export template',
   'log_export.template_update': 'Updated a log export template',
   'log_export.template_delete': 'Deleted a log export template',

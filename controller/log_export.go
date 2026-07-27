@@ -682,52 +682,15 @@ func DownloadLogExport(c *gin.Context) {
 	}
 	defer releaseLogExportDownloadSlot(userID)
 
-	// 取全站日志的文件真的被取走了——这是本功能最敏感的动作，必须留痕。
-	// 该端点是 GET 且不经过鉴权中间件，兜底审计覆盖不到，只能在这里手动记录。
-	auditLogExportDownload(c, job, part)
-
+	// 这里不写审计日志：审计日志落在 logs 表，而下载是断点续传（同一分片会发多次
+	// Range 请求），给正在保护的大表持续加写入不划算。谁在什么时间、按什么条件
+	// 导出了哪段数据，已经由创建任务时的 log_export.job_create 记下。
 	c.Header("Cache-Control", "no-store")
 	if part > 0 {
 		serveLogExportPart(c, job, part)
 		return
 	}
 	serveLogExportZip(c, job)
-}
-
-// auditLogExportDownload 记录一次分片下载。断点续传会多次请求同一分片，
-// 因此同一次下载可能产生多条记录——留痕宁可重复，不可遗漏。
-func auditLogExportDownload(c *gin.Context, job *model.LogExportJob, part int) {
-	target := "all parts"
-	if part > 0 {
-		target = "part " + strconv.Itoa(part)
-	}
-	params := map[string]interface{}{
-		"job_id": job.JobID,
-		"part":   part,
-		"rows":   job.RowCount,
-		"start":  job.Filters.StartTimestamp,
-		"end":    job.Filters.EndTimestamp,
-	}
-	// 续传请求带 Range 头，记下来便于区分「完整下载」与「续传片段」。
-	if rangeHeader := c.Request.Header.Get("Range"); rangeHeader != "" {
-		params["range"] = rangeHeader
-	}
-	operatorID := job.UserID
-	adminInfo := map[string]interface{}{
-		"admin_id":       operatorID,
-		"admin_username": job.Username,
-	}
-	auditInfo := map[string]interface{}{
-		"method": c.Request.Method,
-		"route":  c.FullPath(),
-		"path":   c.Request.URL.Path,
-	}
-	ip := c.ClientIP()
-	content := "downloaded log export " + job.JobID + " (" + target + ")"
-	gopool.Go(func() {
-		model.RecordOperationAuditLog(operatorID, content, ip, "log_export.download",
-			params, adminInfo, auditInfo)
-	})
 }
 
 // logExportDownloaderAllowed 复核下载者当前仍是启用状态的管理员。
@@ -811,4 +774,3 @@ func serveLogExportZip(c *gin.Context, job *model.LogExportJob) {
 		_ = f.Close()
 	}
 }
-

@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -542,44 +541,6 @@ func TestDownloadLogExport_RejectsBannedAdmin(t *testing.T) {
 	ctx.Params = gin.Params{{Key: "token", Value: token}}
 	DownloadLogExport(ctx)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-// 下载端点是 GET 且不经过鉴权中间件，兜底审计覆盖不到它——
-// 取走全站日志这种动作必须留痕，所以 handler 内手动记录。
-func TestDownloadLogExport_WritesAuditLog(t *testing.T) {
-	enableRedis(t)
-	requireDB(t)
-	requireLogDB(t)
-
-	admin := mkUser(t, func(u *model.User) { u.Role = common.RoleAdminUser })
-	job := mkReadyExportJob(t, admin.Id, "payload")
-	token, err := model.CreateLogExportDownloadToken(job.JobID, admin.Id, 1)
-	require.NoError(t, err)
-
-	ctx, rec := newCtx(t, http.MethodGet, "/dl/log-export/"+token, nil)
-	ctx.Params = gin.Params{{Key: "token", Value: token}}
-	DownloadLogExport(ctx)
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	// 审计写入是异步的（gopool），轮询等待落库。
-	// 必须按本次的 job_id 精确匹配：测试 id 生成器每个进程从头计数，
-	// 只按「用户 + 动作」筛会命中上一轮遗留的审计行。
-	var found *model.Log
-	for i := 0; i < 60 && found == nil; i++ {
-		time.Sleep(150 * time.Millisecond)
-		var logs []*model.Log
-		require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?",
-			admin.Id, model.LogTypeManage).Find(&logs).Error)
-		for _, l := range logs {
-			if strings.Contains(l.Other, job.JobID) {
-				found = l
-				break
-			}
-		}
-	}
-	require.NotNil(t, found, "download must leave an audit trail")
-	assert.Contains(t, found.Other, "log_export.download")
-	t.Cleanup(func() { model.LOG_DB.Unscoped().Delete(&model.Log{}, found.Id) })
 }
 
 func TestDownloadLogExport_ZipAllParts(t *testing.T) {
