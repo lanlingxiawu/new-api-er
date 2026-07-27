@@ -99,6 +99,29 @@ export function filterByEndpointType(
 }
 
 /**
+ * Move the active filter value to the front of a display list.
+ *
+ * Cards and table cells truncate these lists (groups to 1, endpoints/tags to 2),
+ * so without this the value the user filtered by is often hidden behind "+N".
+ * Returns the list unchanged when nothing is selected or no item matches.
+ */
+export function prioritizeSelected(
+  items: string[],
+  selected?: string,
+  options: { caseInsensitive?: boolean } = {}
+): string[] {
+  if (!selected || selected === FILTER_ALL) return items
+
+  const target = options.caseInsensitive ? selected.toLowerCase() : selected
+  const index = items.findIndex((item) =>
+    options.caseInsensitive ? item.toLowerCase() === target : item === target
+  )
+  if (index <= 0) return items
+
+  return [items[index], ...items.slice(0, index), ...items.slice(index + 1)]
+}
+
+/**
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number {

@@ -131,6 +131,8 @@ export function Pricing() {
           tokenUnit={tokenUnit}
           showRechargePrice={showRechargePrice}
           selectedGroup={groupFilter}
+          selectedEndpointType={endpointTypeFilter}
+          selectedTag={tagFilter}
         />
       )
     }
@@ -143,6 +145,8 @@ export function Pricing() {
         tokenUnit={tokenUnit}
         showRechargePrice={showRechargePrice}
         selectedGroup={groupFilter}
+        selectedEndpointType={endpointTypeFilter}
+        selectedTag={tagFilter}
         onModelClick={handleModelClick}
       />
     )

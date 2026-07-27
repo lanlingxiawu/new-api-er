@@ -37,6 +37,8 @@ export interface ModelCardGridProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
+  selectedEndpointType?: string
+  selectedTag?: string
 }
 
 export function ModelCardGrid(props: ModelCardGridProps) {
@@ -83,6 +85,8 @@ export function ModelCardGrid(props: ModelCardGridProps) {
             usdExchangeRate={props.usdExchangeRate}
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
+            selectedEndpointType={props.selectedEndpointType}
+            selectedTag={props.selectedTag}
             perf={perfMap.get(model.model_name || '')}
             onClick={() => props.onModelClick(model.model_name || '')}
           />

@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
-
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -34,7 +33,7 @@ import {
   getDynamicDisplayGroupRatio,
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
+import { parseTags, prioritizeSelected } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import {
   formatPrice,
@@ -54,6 +53,8 @@ export interface PricingColumnsOptions {
   usdExchangeRate?: number
   showRechargePrice?: boolean
   selectedGroup?: string
+  selectedEndpointType?: string
+  selectedTag?: string
 }
 
 export function usePricingColumns(
@@ -66,6 +67,8 @@ export function usePricingColumns(
     usdExchangeRate = 1,
     showRechargePrice = false,
     selectedGroup,
+    selectedEndpointType,
+    selectedTag,
   } = options
 
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
@@ -349,7 +352,11 @@ export function usePricingColumns(
       accessorKey: 'tags',
       header: t('Tags'),
       cell: ({ row }) => {
-        const tags = parseTags(row.original.tags)
+        const tags = prioritizeSelected(
+          parseTags(row.original.tags),
+          selectedTag,
+          { caseInsensitive: true }
+        )
         return (
           <BadgeListCell
             items={tags.map((tag) => (
@@ -373,7 +380,10 @@ export function usePricingColumns(
       accessorKey: 'supported_endpoint_types',
       header: t('Endpoints'),
       cell: ({ row }) => {
-        const endpoints = row.original.supported_endpoint_types || []
+        const endpoints = prioritizeSelected(
+          row.original.supported_endpoint_types || [],
+          selectedEndpointType
+        )
         return (
           <BadgeListCell
             items={endpoints.map((ep) => (
@@ -397,7 +407,10 @@ export function usePricingColumns(
       accessorKey: 'enable_groups',
       header: t('Groups'),
       cell: ({ row }) => {
-        const groups = row.original.enable_groups || []
+        const groups = prioritizeSelected(
+          row.original.enable_groups || [],
+          selectedGroup
+        )
         return (
           <BadgeListCell
             items={groups.map((group) => (
