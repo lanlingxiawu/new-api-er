@@ -56,7 +56,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.4.3
 	gorm.io/driver/postgres v1.5.2
-	gorm.io/gorm v1.25.12
+	gorm.io/gorm v1.25.2
 )
 
 require (
@@ -102,7 +102,7 @@ require (
 require (
 	github.com/Azure/go-ntlmssp v0.1.1
 	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/gin-contrib/sessions v1.1.0
+	github.com/gin-contrib/sessions v0.0.5
 	github.com/stripe/stripe-go/v85 v85.2.0
 )
 

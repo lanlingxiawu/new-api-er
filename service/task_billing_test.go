@@ -131,6 +131,7 @@ func TestMain(m *testing.M) {
 		&model.Task{},
 		&model.SubscriptionPlan{},
 		&model.SubscriptionOrder{},
+		&model.UserSubscription{},
 		&model.SubscriptionPreConsumeRecord{},
 		&model.PerfMetric{},
 		&model.UserExtension{},

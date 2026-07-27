@@ -98,8 +98,7 @@ func TestUserCache_RedisDisabledNoOps(t *testing.T) {
 	assert.NoError(t, updateUserStatusCache(1, true))
 	assert.NoError(t, updateUserStatusCache(1, false))
 	assert.NoError(t, updateUserQuotaCache(1, 10))
-	assert.NoError(t, updateUserGroupCache(1, "g"))
-	assert.NoError(t, UpdateUserGroupCache(1, "g"))
+	assert.NoError(t, RefreshUserGroupCache(1))
 	assert.NoError(t, updateUserEmailCache(1, "e"))
 	assert.NoError(t, updateUserNameCache(1, "n"))
 	assert.NoError(t, updateUserSettingCache(1, "s"))
@@ -179,9 +178,11 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1000+250-50, base.Quota)
 
-	// field-level updates
+	// field-level updates. Group cache is refreshed from the DB (upstream #6329
+	// replaced the direct set with RefreshUserGroupCache), so update the row first.
 	require.NoError(t, updateUserQuotaCache(u.Id, 7777))
-	require.NoError(t, updateUserGroupCache(u.Id, "newg"))
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", u.Id).Update("group", "newg").Error)
+	require.NoError(t, RefreshUserGroupCache(u.Id))
 	require.NoError(t, updateUserEmailCache(u.Id, "new@e.com"))
 	require.NoError(t, updateUserNameCache(u.Id, "newname"))
 	require.NoError(t, updateUserStatusCache(u.Id, false))

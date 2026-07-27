@@ -965,15 +965,19 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
-	// 执行查询
+	// 执行查询。GORM v1.25.12 起 Scan 会清零目标结构体中未匹配的字段，
+	// 因此 rpm/tpm 必须扫进独立结构体再合并，否则会把已取到的 quota 覆盖为 0。
 	if err := tx.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	var rpmTpm Stat
+	if err := rpmTpmQuery.Scan(&rpmTpm).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = rpmTpm.Rpm
+	stat.Tpm = rpmTpm.Tpm
 
 	return stat, nil
 }
@@ -1010,10 +1014,14 @@ func SumEmployeeCustomerUsedQuota(filter EmployeeCustomerLogFilter) (stat Stat, 
 		common.SysError("failed to query employee customer log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	// GORM v1.25.12 起 Scan 会清零未匹配字段，rpm/tpm 需扫进独立结构体再合并。
+	var rpmTpm Stat
+	if err := rpmTpmQuery.Scan(&rpmTpm).Error; err != nil {
 		common.SysError("failed to query employee customer rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = rpmTpm.Rpm
+	stat.Tpm = rpmTpm.Tpm
 	return stat, nil
 }
 

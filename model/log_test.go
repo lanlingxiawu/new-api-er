@@ -844,11 +844,16 @@ func TestDeleteOldLog(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, total, int64(3))
 
-	// DeleteOldLogBatch limit defaulting: limit<=0 -> 100; delete just ours by
-	// using a threshold that only ours fall under is not possible globally, so
-	// delete in a loop and confirm our rows are gone.
-	deleted, err := DeleteOldLog(ctx, oldTs+1, 2)
-	require.NoError(t, err)
+	// Delete in a loop over DeleteOldLogBatch and confirm our rows are gone.
+	var deleted int64
+	for {
+		n, err := DeleteOldLogBatch(ctx, oldTs+1, 2)
+		require.NoError(t, err)
+		deleted += n
+		if n < 2 {
+			break
+		}
+	}
 	assert.GreaterOrEqual(t, deleted, int64(3))
 	remaining, err := countScopedOld(uid, oldTs+1)
 	require.NoError(t, err)
@@ -858,8 +863,6 @@ func TestDeleteOldLog(t *testing.T) {
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = DeleteOldLogBatch(cancelledCtx, oldTs, 10)
-	assert.Error(t, err)
-	_, err = DeleteOldLog(cancelledCtx, oldTs, 10)
 	assert.Error(t, err)
 }
 

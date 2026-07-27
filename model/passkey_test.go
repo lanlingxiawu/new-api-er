@@ -91,32 +91,6 @@ func TestPasskey_FromWebAuthnAndBack(t *testing.T) {
 	assert.Equal(t, cred.Transport, back.Transport)
 }
 
-func TestPasskey_ApplyValidatedCredential(t *testing.T) {
-	p := &PasskeyCredential{UserID: 5, SignCount: 1}
-
-	// nil credential is a no-op (no panic)
-	p.ApplyValidatedCredential(nil)
-	assert.EqualValues(t, 1, p.SignCount)
-
-	// nil receiver is a no-op
-	var nilp *PasskeyCredential
-	nilp.ApplyValidatedCredential(&webauthn.Credential{})
-
-	cred := &webauthn.Credential{
-		ID:        []byte("new-cred"),
-		PublicKey: []byte("new-pub"),
-		Authenticator: webauthn.Authenticator{
-			AAGUID:    []byte("g"),
-			SignCount: 99,
-		},
-		Flags: webauthn.CredentialFlags{UserVerified: true},
-	}
-	p.ApplyValidatedCredential(cred)
-	assert.EqualValues(t, 99, p.SignCount)
-	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("new-cred")), p.CredentialID)
-	assert.True(t, p.UserVerified)
-}
-
 // ---------------------------------------------------------------------------
 // DB: CRUD, per-user lookup, counter update, delete
 // ---------------------------------------------------------------------------
@@ -183,7 +157,7 @@ func TestPasskey_GetByCredentialID(t *testing.T) {
 
 func TestPasskey_UpsertCreatesAndReplaces(t *testing.T) {
 	// nil credential -> error
-	assert.Error(t, UpsertPasskeyCredential(nil))
+	assert.Error(t, UpsertPasskeyCredentialWithAuthVersion(nil))
 
 	u := mkUser(t, nil)
 	first := &PasskeyCredential{
@@ -192,8 +166,8 @@ func TestPasskey_UpsertCreatesAndReplaces(t *testing.T) {
 		PublicKey:    base64.StdEncoding.EncodeToString([]byte("p1")),
 		SignCount:    1,
 	}
-	require.NoError(t, UpsertPasskeyCredential(first))
-	t.Cleanup(func() { _ = DeletePasskeyByUserID(u.Id) })
+	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(first))
+	t.Cleanup(func() { _ = DeletePasskeyByUserIDWithAuthVersion(u.Id) })
 
 	got, err := GetPasskeyByUserID(u.Id)
 	require.NoError(t, err)
@@ -206,7 +180,7 @@ func TestPasskey_UpsertCreatesAndReplaces(t *testing.T) {
 		PublicKey:    base64.StdEncoding.EncodeToString([]byte("p2")),
 		SignCount:    2,
 	}
-	require.NoError(t, UpsertPasskeyCredential(second))
+	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(second))
 
 	got, err = GetPasskeyByUserID(u.Id)
 	require.NoError(t, err)
@@ -229,18 +203,12 @@ func TestPasskey_SignCounterUpdateViaUpsert(t *testing.T) {
 			SignCount: 10,
 		},
 	})
-	require.NoError(t, UpsertPasskeyCredential(cred))
-	t.Cleanup(func() { _ = DeletePasskeyByUserID(u.Id) })
+	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(cred))
+	t.Cleanup(func() { _ = DeletePasskeyByUserIDWithAuthVersion(u.Id) })
 
 	// simulate a validated assertion advancing the sign counter
-	cred.ApplyValidatedCredential(&webauthn.Credential{
-		ID:        rawID,
-		PublicKey: []byte("pub"),
-		Authenticator: webauthn.Authenticator{
-			SignCount: 11,
-		},
-	})
-	require.NoError(t, UpsertPasskeyCredential(cred))
+	cred.SignCount = 11
+	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(cred))
 
 	got, err := GetPasskeyByCredentialID(rawID)
 	require.NoError(t, err)
@@ -249,17 +217,17 @@ func TestPasskey_SignCounterUpdateViaUpsert(t *testing.T) {
 
 func TestPasskey_DeleteByUserID(t *testing.T) {
 	// 0 -> error
-	assert.Error(t, DeletePasskeyByUserID(0))
+	assert.Error(t, DeletePasskeyByUserIDWithAuthVersion(0))
 
 	u := mkUser(t, nil)
 	pkMake(t, u.Id, 1)
 
-	require.NoError(t, DeletePasskeyByUserID(u.Id))
+	require.NoError(t, DeletePasskeyByUserIDWithAuthVersion(u.Id))
 	_, err := GetPasskeyByUserID(u.Id)
 	assert.ErrorIs(t, err, ErrPasskeyNotFound)
 
-	// deleting again is a no-op success (hard delete, no rows)
-	require.NoError(t, DeletePasskeyByUserID(u.Id))
+	// deleting again errors: upstream #6329 变体在找不到凭据时返回 ErrPasskeyNotFound
+	assert.ErrorIs(t, DeletePasskeyByUserIDWithAuthVersion(u.Id), ErrPasskeyNotFound)
 }
 
 // sanity: the two passkey sentinel errors are distinct.

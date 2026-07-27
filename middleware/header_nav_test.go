@@ -3,9 +3,11 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -115,23 +117,21 @@ func TestGetHeaderNavAccess_ModuleDisabled(t *testing.T) {
 // optionally carrying a valid user session.
 func runHeaderNav(t *testing.T, handler gin.HandlerFunc, authenticated bool) *httptest.ResponseRecorder {
 	t.Helper()
-	r := newSessionRouter()
-	var cookies []*http.Cookie
-	if authenticated {
-		cookies = loginSession(t, r, map[string]interface{}{
-			"username": "tester", "role": common.RoleCommonUser,
-			"id": 1, "status": common.UserStatusEnabled, "group": "default",
-		})
-	}
+	r := gin.New()
 	r.GET("/api/test", handler, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"success": true}) })
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 	if authenticated {
-		req.Header.Set("New-Api-User", "1")
-		for _, ck := range cookies {
-			req.AddCookie(ck)
+		// 上游 #6329 改为无状态鉴权：authHelper 的 PAT 回退校验 users.access_token。
+		// 造一个带 32 位 access_token 的用户，用它作 Bearer 模拟已登录。
+		accessToken := strings.ReplaceAll(uniq("hn"), "_", "")
+		for len(accessToken) < 32 {
+			accessToken += "0"
 		}
+		accessToken = accessToken[:32]
+		mkUser(t, func(u *model.User) { u.SetAccessToken(accessToken) })
+		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 	r.ServeHTTP(rec, req)
 	return rec

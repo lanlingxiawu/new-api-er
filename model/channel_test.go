@@ -346,7 +346,8 @@ func TestBatchInsertChannels(t *testing.T) {
 
 func TestBatchDeleteChannels(t *testing.T) {
 	requireDB(t)
-	require.NoError(t, BatchDeleteChannels(nil))
+	_, err := BatchDeleteChannels(nil)
+	require.NoError(t, err)
 
 	c1 := mkChannel(t, nil)
 	c2 := mkChannel(t, nil)
@@ -355,8 +356,9 @@ func TestBatchDeleteChannels(t *testing.T) {
 	cleanupAbilities(t, c1.Id)
 	cleanupAbilities(t, c2.Id)
 
-	require.NoError(t, BatchDeleteChannels([]int{c1.Id, c2.Id}))
-	_, err := GetChannelById(c1.Id, false)
+	_, err = BatchDeleteChannels([]int{c1.Id, c2.Id})
+	require.NoError(t, err)
+	_, err = GetChannelById(c1.Id, false)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	assert.EqualValues(t, 0, countAbilities(t, c1.Id))
 	assert.EqualValues(t, 0, countAbilities(t, c2.Id))
