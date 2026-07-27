@@ -43,6 +43,7 @@ func (a *sunoAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo
 
 func seedSunoChannel(t *testing.T, id int) {
 	t.Helper()
+	svcCleanupRow(t, &model.Channel{}, id)
 	base := "http://suno.local"
 	ch := &model.Channel{
 		Id:      id,

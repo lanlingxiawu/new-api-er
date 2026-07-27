@@ -132,6 +132,7 @@ func (a *taskPollingFetchAdaptor) fetchedTaskIDs() []string {
 
 func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
 	t.Helper()
+	svcCleanupRow(t, &model.Channel{}, id)
 	ch := &model.Channel{
 		Id:     id,
 		Type:   constant.ChannelTypeKling,

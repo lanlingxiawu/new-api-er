@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -175,6 +176,32 @@ func TestMain(m *testing.M) {
 
 func truncate(t *testing.T) {
 	t.Helper()
+
+	// 无条件的行级清理：只删本用例开始之后新建的系统任务。
+	// system_tasks.active_key 有唯一索引，用例留下的活跃任务会让后续运行直接撞索引；
+	// 而下面的全表 DELETE 受 TEST_DB_CLEANUP 门控（默认关闭，因为它会清空共享的
+	// 开发库），指望不上。按时间窗口删既能自清理，也不会碰到既有的生产任务。
+	// 按起始最大 id 划界，而不是按 created_at：SystemTask.CreatedAt 不是
+	// autoCreateTime，用例直接 DB.Create 出来的行该字段为 0，时间窗口会漏掉它们。
+	var maxTaskID int64
+	var lockTypes []string
+	if model.DB != nil {
+		model.DB.Model(&model.SystemTask{}).Select("COALESCE(MAX(id), 0)").Scan(&maxTaskID)
+		// SystemTaskLock 以 type 为主键，没有自增 id，改用起始快照的 type 集合划界。
+		model.DB.Model(&model.SystemTaskLock{}).Pluck("type", &lockTypes)
+	}
+	t.Cleanup(func() {
+		if model.DB == nil {
+			return
+		}
+		model.DB.Unscoped().Where("id > ?", maxTaskID).Delete(&model.SystemTask{})
+		q := model.DB.Unscoped()
+		if len(lockTypes) > 0 {
+			q = q.Where("type NOT IN ?", lockTypes)
+		}
+		q.Delete(&model.SystemTaskLock{})
+	})
+
 	cleanup := func() {
 		if strings.ToLower(os.Getenv("TEST_DB_CLEANUP")) != "true" {
 			return
@@ -195,15 +222,37 @@ func truncate(t *testing.T) {
 	t.Cleanup(cleanup)
 }
 
+// svcUniq 生成进程内唯一的短标识，用于带唯一索引的列（users.username、
+// users.aff_code 等）。多个用例在同一次运行里播种不同 id 的用户，若共用同一个
+// 用户名就会撞唯一索引。
+func svcUniq(prefix string) string {
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano()%1_000_000,
+		atomic.AddInt64(&svcTestSeq, 1))
+}
+
+var svcTestSeq int64
+
+// svcCleanupRow 注册行级清理：只删本用例创建的那一行。
+// 不依赖 TEST_DB_CLEANUP，也不做全表 truncate——否则会清空共享的开发库。
+func svcCleanupRow(t *testing.T, dst any, id any) {
+	t.Helper()
+	t.Cleanup(func() {
+		if model.DB != nil {
+			model.DB.Unscoped().Delete(dst, id)
+		}
+	})
+}
+
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
 	user := &model.User{
 		Id:       id,
-		Username: "test_user",
+		Username: svcUniq("test_user"),
 		Quota:    quota,
 		Status:   common.UserStatusEnabled,
-		AffCode:  fmt.Sprintf("aff%d", id),
+		AffCode:  svcUniq("aff"),
 	}
+	svcCleanupRow(t, &model.User{}, id)
 	require.NoError(t, model.DB.Create(user).Error)
 }
 
@@ -218,6 +267,7 @@ func seedToken(t *testing.T, id int, userId int, key string, remainQuota int) {
 		RemainQuota: remainQuota,
 		UsedQuota:   0,
 	}
+	svcCleanupRow(t, &model.Token{}, id)
 	require.NoError(t, model.DB.Create(token).Error)
 }
 
@@ -232,12 +282,14 @@ func seedSubscription(t *testing.T, id int, userId int, amountTotal int64, amoun
 		StartTime:   time.Now().Unix(),
 		EndTime:     time.Now().Add(30 * 24 * time.Hour).Unix(),
 	}
+	svcCleanupRow(t, &model.UserSubscription{}, id)
 	require.NoError(t, model.DB.Create(sub).Error)
 }
 
 func seedChannel(t *testing.T, id int) {
 	t.Helper()
 	ch := &model.Channel{Id: id, Name: "test_channel", Key: "sk-test", Status: common.ChannelStatusEnabled}
+	svcCleanupRow(t, &model.Channel{}, id)
 	require.NoError(t, model.DB.Create(ch).Error)
 }
 
@@ -428,7 +480,8 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	const userID, tokenID, channelID = 1, 1, 1
+	// 高位 id：低位 id 会撞真实数据（id=1 是管理员账号）。
+	const userID, tokenID, channelID = 942001, 942001, 942001
 	const initQuota, preConsumed = 10000, 3000
 	const tokenRemain = 5000
 
