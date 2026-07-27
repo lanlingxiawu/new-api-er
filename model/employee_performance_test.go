@@ -288,12 +288,24 @@ func TestReevaluateTierByPeriodProfit_OrphanAndUnbound(t *testing.T) {
 	reevaluateTierByPeriodProfit(u.Id)
 	assert.Equal(t, orphan, reloadTierLevel(t, u.Id).TierId)
 
-	// unbound (tier_id=0) -> delegates to auto-upgrade; my group isn't 通用 so
-	// it stays unbound (no 通用 ladder created by this test).
+	// unbound (tier_id=0) -> 委派给自动升级。
+	//
+	// 这里断言的是"委派"本身，而不是某个具体等级：未绑定用户按 通用 组解析，
+	// 落到哪一级取决于库里配置了什么阶梯（例如一条门槛为 0 的通用阶梯会让任何
+	// 员工立即达标）。用两个配置完全相同的用户对照——一个走被测函数，一个直接
+	// 调 TryAutoUpgradeTier——结果必须一致，这样用例不依赖环境里有没有通用阶梯。
 	u2 := mkUser(t, nil)
 	ctMkEmployeeProfile(t, u2.Id, 1)
 	empCleanupStats(t, u2.Id)
 	ctMkTierLevel(t, u2.Id, 0, B)
+
+	u3 := mkUser(t, nil)
+	ctMkEmployeeProfile(t, u3.Id, 1)
+	empCleanupStats(t, u3.Id)
+	ctMkTierLevel(t, u3.Id, 0, B)
+
 	reevaluateTierByPeriodProfit(u2.Id)
-	assert.EqualValues(t, 0, reloadTierLevel(t, u2.Id).TierId)
+	TryAutoUpgradeTier(u3.Id)
+	assert.EqualValues(t, reloadTierLevel(t, u3.Id).TierId, reloadTierLevel(t, u2.Id).TierId,
+		"未绑定用户应原样委派给自动升级")
 }
