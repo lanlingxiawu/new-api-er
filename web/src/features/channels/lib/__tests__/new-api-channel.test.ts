@@ -36,6 +36,8 @@ function newAPIForm(baseUrl: string) {
     base_url: baseUrl,
     key: 'test-key',
     models: 'gpt-5',
+    // 本仓库的成本倍率为必填且无默认值，补上才能隔离出 base_url 的校验结果。
+    cost_ratio: 1,
   }
 }
 
@@ -49,11 +51,13 @@ describe('New API channel', () => {
       value: CHANNEL_TYPE_NEW_API,
       label: 'New API',
     })
+    // 紧邻 Advanced Custom。上游的 Advanced Custom 是 58，本仓库 58 已被
+    // ThirdPartySD2 占用，Advanced Custom 顺延到 59。
     assert.equal(
       CHANNEL_TYPE_OPTIONS.findIndex(
         (item) => item.value === CHANNEL_TYPE_NEW_API
       ) + 1,
-      CHANNEL_TYPE_OPTIONS.findIndex((item) => item.value === 58)
+      CHANNEL_TYPE_OPTIONS.findIndex((item) => item.value === 59)
     )
     assert.equal(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_NEW_API), true)
     assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'NewAPI')
@@ -89,7 +93,8 @@ describe('New API channel', () => {
   test('keeps Sub2API Base URL validation unchanged', () => {
     const result = channelFormSchema.safeParse({
       ...newAPIForm(''),
-      type: 59,
+      // 上游的 Sub2API 是 59，本仓库顺延到 60。
+      type: 60,
     })
 
     assert.equal(result.success, true)
