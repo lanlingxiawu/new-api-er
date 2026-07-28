@@ -560,7 +560,12 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
-	err = tx.Model(&Log{}).Count(&total).Error
+	// 无筛选（类型除外）时走小时缓存分解：命中后只需扫两端各 ≤1 小时。
+	// 总数仍然精确，翻页深度不受影响。带筛选时回落原查询。
+	hasNonTypeFilter := modelName != "" || username != "" || tokenName != "" ||
+		channel != 0 || logId > 0 || group != "" || requestId != "" || upstreamRequestId != ""
+	total, err = countLogsWithHourCache(logType, startTimestamp, endTimestamp, hasNonTypeFilter,
+		func() *gorm.DB { return tx.Model(&Log{}) })
 	if err != nil {
 		return nil, 0, err
 	}
@@ -965,9 +970,23 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
+	// 额度是整个区间的聚合，无筛选时走小时缓存分解：命中后只需扫两端各 ≤1 小时。
+	// rpm/tpm 只看最近 60 秒，本来就便宜，维持实时查询。
+	// 注意这里不看 logType：本函数历来恒按 LogTypeConsume 统计（见下方 where），
+	// 而缓存里的 Quota 也只累加消费类日志，两者口径一致。
+	hasNonTypeFilter := username != "" || tokenName != "" || modelName != "" ||
+		channel != 0 || group != ""
+	cachedQuota, quotaFromCache := sumConsumeQuotaWithHourCache(startTimestamp, endTimestamp, hasNonTypeFilter)
+
 	// 执行查询。GORM v1.25.12 起 Scan 会清零目标结构体中未匹配的字段，
 	// 因此 rpm/tpm 必须扫进独立结构体再合并，否则会把已取到的 quota 覆盖为 0。
-	if err := tx.Scan(&stat).Error; err != nil {
+	// 回落到整段 SUM 时同样挂超时：那条查询要扫全区间，是最可能长时间占住
+	// LOG_DB 连接的一条，而连接占用正是本次改造要解决的问题。
+	statCtx, cancelStat := logStatQueryContext()
+	defer cancelStat()
+	if quotaFromCache {
+		stat.Quota = int(cachedQuota)
+	} else if err := tx.WithContext(statCtx).Scan(&stat).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}

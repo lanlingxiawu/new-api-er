@@ -764,6 +764,11 @@ func handleConfigUpdate(key, value string) bool {
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
+	} else if configName == "log_query_setting" {
+		// 其余字段都是每次读取，改完即刻生效；只有进程内 LRU 的容量与默认 TTL
+		// 是在首次构造时定死的（sync.Once），不重建就永远用旧值。
+		// 丢掉实例即可：下次使用时按最新配置重建，Redis 侧的值不受影响。
+		resetLogStatCache()
 	}
 
 	return true // 已处理

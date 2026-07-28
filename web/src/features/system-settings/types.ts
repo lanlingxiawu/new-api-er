@@ -508,6 +508,14 @@ export type SystemTuningSettings = {
   'ledger_detail_setting.list_scan_batch_size': number
   'ledger_detail_setting.list_scan_rows_per_req': number
 
+  // 使用日志列表/统计的查询加速（按整点缓存行数与额度）
+  'log_query_setting.stat_cache_enabled': boolean
+  'log_query_setting.stat_cache_ttl_hours': number
+  'log_query_setting.current_hour_ttl_sec': number
+  'log_query_setting.warm_enabled': boolean
+  'log_query_setting.warm_hours': number
+  'log_query_setting.query_timeout_ms': number
+
   // 使用日志导出（管理员后台任务）
   'log_export_setting.enabled': boolean
   'log_export_setting.offpeak_only': boolean

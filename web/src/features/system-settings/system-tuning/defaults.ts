@@ -45,6 +45,13 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'ledger_detail_setting.list_scan_batch_size': 2000,
   'ledger_detail_setting.list_scan_rows_per_req': 20000,
 
+  'log_query_setting.stat_cache_enabled': true,
+  'log_query_setting.stat_cache_ttl_hours': 48,
+  'log_query_setting.current_hour_ttl_sec': 15,
+  'log_query_setting.warm_enabled': true,
+  'log_query_setting.warm_hours': 48,
+  'log_query_setting.query_timeout_ms': 10000,
+
   'log_export_setting.enabled': true,
   'log_export_setting.offpeak_only': false,
   'log_export_setting.user_cooldown_sec': 300,

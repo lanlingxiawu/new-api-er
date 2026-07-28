@@ -21,6 +21,7 @@ import { LedgerPipelineSection } from '../maintenance/ledger-pipeline-section'
 import { ExportSettingsSection } from '../maintenance/export-settings-section'
 import { LedgerDetailSection } from '../maintenance/ledger-detail-section'
 import { LogExportSection } from '../maintenance/log-export-section'
+import { LogQuerySection } from '../maintenance/log-query-section'
 import { FallbackBackfillSection } from '../maintenance/fallback-backfill-section'
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
@@ -201,6 +202,34 @@ const SYSTEM_TUNING_SECTIONS = [
           'export_setting.hard_ceiling_rows':
             settings['export_setting.hard_ceiling_rows'] ??
             systemTuningFallbackSettings['export_setting.hard_ceiling_rows'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'log-query',
+    titleKey: 'Usage Log Query Acceleration',
+    build: (settings: SystemTuningSettings) => (
+      <LogQuerySection
+        defaultValues={{
+          'log_query_setting.stat_cache_enabled':
+            settings['log_query_setting.stat_cache_enabled'] ??
+            systemTuningFallbackSettings['log_query_setting.stat_cache_enabled'],
+          'log_query_setting.stat_cache_ttl_hours':
+            settings['log_query_setting.stat_cache_ttl_hours'] ??
+            systemTuningFallbackSettings['log_query_setting.stat_cache_ttl_hours'],
+          'log_query_setting.current_hour_ttl_sec':
+            settings['log_query_setting.current_hour_ttl_sec'] ??
+            systemTuningFallbackSettings['log_query_setting.current_hour_ttl_sec'],
+          'log_query_setting.warm_enabled':
+            settings['log_query_setting.warm_enabled'] ??
+            systemTuningFallbackSettings['log_query_setting.warm_enabled'],
+          'log_query_setting.warm_hours':
+            settings['log_query_setting.warm_hours'] ??
+            systemTuningFallbackSettings['log_query_setting.warm_hours'],
+          'log_query_setting.query_timeout_ms':
+            settings['log_query_setting.query_timeout_ms'] ??
+            systemTuningFallbackSettings['log_query_setting.query_timeout_ms'],
         }}
       />
     ),

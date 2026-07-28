@@ -115,6 +115,10 @@ func main() {
 	// 业务概览日统计缓冲刷盘（成本/提成/配额，使用 BUSINESS_STATS_FLUSH_INTERVAL 配置）
 	model.StartBusinessStatsFlushLoop()
 
+	// 使用日志列表/统计的整点预热（master 独占，每小时约 1 条查询）。
+	// 让管理后台的默认视图直接命中缓存，而不是每次开页都对 logs 做全区间扫描。
+	model.StartLogStatWarmLoop()
+
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
 		if err != nil {
