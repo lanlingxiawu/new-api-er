@@ -199,6 +199,15 @@ export function CommonLogsFilterBar<TData>(
     [searchState]
   )
 
+  // 「所有类型」不写进 URL。type=0 与不传 type 对后端是同一个查询
+  // （LogTypeUnknown 不加类型过滤），但两者是不同的 react-query key，
+  // 写进去会让初次加载和随后的搜索各跑一轮列表 + 统计这两条重查询。
+  const logTypeSearch = useCallback(
+    (value: LogTypeValue) =>
+      value === LOG_TYPE_ALL_VALUE ? {} : { type: [value] },
+    []
+  )
+
   const handleApply = useCallback(() => {
     const filterParams = buildSearchParams(filters, 'common')
     navigate({
@@ -206,19 +215,19 @@ export function CommonLogsFilterBar<TData>(
       params: { section: 'common' },
       search: {
         ...filterParams,
-        type: [logType],
+        ...logTypeSearch(logType),
         page: 1,
       },
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [filters, logType, navigate, queryClient])
+  }, [filters, logType, logTypeSearch, navigate, queryClient])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
     const resetFilters: CommonLogFilters = { startTime: start, endTime: end }
     const resetSearch = {
-      type: [LOG_TYPE_ALL_VALUE],
+      ...logTypeSearch(LOG_TYPE_ALL_VALUE),
       startTime: start.getTime(),
       endTime: end.getTime(),
     }
@@ -238,7 +247,7 @@ export function CommonLogsFilterBar<TData>(
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [navigate, queryClient])
+  }, [logTypeSearch, navigate, queryClient])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

@@ -398,6 +398,9 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 		logRoute := apiRouter.Group("/log")
+		// 前端请求的是 /api/log（无尾斜杠）。只注册 "/" 会让 Gin 回 301 再重定向到
+		// "/api/log/"，每次列表都白付一个 RTT。两条路径注册到同一 handler 消除重定向。
+		logRoute.GET("", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
