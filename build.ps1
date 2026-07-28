@@ -42,9 +42,14 @@ if (Test-Path $versionFile) {
     }
 }
 # VERSION 文件为空时回退到 git describe，使版本号始终反映真实提交状态，
-# 无需手动维护 VERSION 文件（对齐 .github/workflows/electron-build.yml 的做法）。
+# 无需手动维护 VERSION 文件。
+#
+# --match 'v[0-9]*' 只认应用自己的版本标签。仓库里还存在别的标签命名空间——
+# relaykit 拆成独立 Go module 后带来了 relaykit/v0.1.x，临时锚点标签也可能出现——
+# 不加约束时 describe 会挑到这些标签，版本号就会显示成 relaykit/v0.1.1-153-gxxxx
+# 这种看起来"倒退"的字符串。
 if ([string]::IsNullOrWhiteSpace($version) -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    $describe = (& git -C $rootDir describe --tags 2>$null)
+    $describe = (& git -C $rootDir describe --tags --match 'v[0-9]*' 2>$null)
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($describe)) {
         $version = $describe.Trim()
     }
