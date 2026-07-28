@@ -75,11 +75,16 @@ type LogExportJob struct {
 	Filters          LogExportFilter  `json:"filters"`
 	Options          LogExportOptions `json:"options"`
 	Lang             string           `json:"lang"`
-	Parts            []LogExportPart  `json:"parts"`
+	// NodeName 执行该任务的节点（common.NodeName）。任务状态存共享 Redis、
+	// 分片文件却写在执行节点本地，重启回收必须只认自己的任务，否则一个节点重启
+	// 会把另一个节点正在跑的导出标记为失败并删掉分片。
+	// 升级前创建的任务该字段为空，按旧行为回收。
+	NodeName string          `json:"node_name,omitempty"`
+	Parts    []LogExportPart `json:"parts"`
 	// ThrottledMs 因资源闸门累计让出的毫秒数，供运维观察。
 	ThrottledMs int64  `json:"throttled_ms"`
-	Error     string `json:"error,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	Error       string `json:"error,omitempty"`
+	CreatedAt   int64  `json:"created_at"`
 	// CreatedAtMs 仅用作任务索引的排序分值。用秒会让同一秒内创建的任务在
 	// ZSET 里分值相同，ZRevRange 退化成按成员名（UUID）排序，列表顺序随机。
 	CreatedAtMs int64 `json:"created_at_ms,omitempty"`
@@ -161,6 +166,7 @@ func saveLogExportJob(job *LogExportJob) error {
 // CreateLogExportJob 落盘一个 pending 任务。
 func CreateLogExportJob(job *LogExportJob) error {
 	job.Status = LogExportStatusPending
+	job.NodeName = common.NodeName
 	now := time.Now()
 	job.CreatedAt = now.Unix()
 	job.CreatedAtMs = now.UnixMilli()
@@ -428,8 +434,19 @@ func jobIDFromExportFileName(base string) string {
 	return ""
 }
 
-// RecoverStaleLogExportJobs 启动时把上次进程遗留的 running 任务置为失败。
+// isOwnLogExportJob 报告任务是否由本节点创建。
+// NodeName 为空的是升级前创建的存量任务，按旧行为（本节点回收）处理，
+// 避免升级瞬间遗留的任务永远卡在 running。
+func isOwnLogExportJob(job *LogExportJob) bool {
+	return job.NodeName == "" || job.NodeName == common.NodeName
+}
+
+// RecoverStaleLogExportJobs 启动时把本节点上次进程遗留的 running 任务置为失败。
 // 半成品文件的续写正确性代价高于让管理员重试，因此不做自动续跑。
+//
+// 只回收本节点的任务：任务状态存共享 Redis，多实例部署下这里能看到所有节点的任务，
+// 而分片文件在执行节点本地。不加节点过滤的话，本节点启动会把另一个节点正在跑的
+// 导出标记为失败并删掉它的分片文件。
 func RecoverStaleLogExportJobs() {
 	if !LogExportAvailable() {
 		return
@@ -440,6 +457,9 @@ func RecoverStaleLogExportJobs() {
 	}
 	for _, job := range jobs {
 		if job.IsTerminal() {
+			continue
+		}
+		if !isOwnLogExportJob(job) {
 			continue
 		}
 		job.Status = LogExportStatusFailed

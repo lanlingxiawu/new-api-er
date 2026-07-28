@@ -338,6 +338,67 @@ func TestRecoverStaleLogExportJobs(t *testing.T) {
 	assert.Equal(t, LogExportStatusReady, untouched.Status)
 }
 
+// 多实例部署下任务状态存共享 Redis，分片文件却在执行节点本地。
+// 回收必须只认本节点的任务，否则一个节点重启会把另一个节点正在跑的导出
+// 标记为失败并删掉它的分片文件。
+func TestRecoverStaleLogExportJobs_SkipsOtherNodes(t *testing.T) {
+	enableRedis(t)
+	user := nextTestID()
+
+	// 另一节点正在跑的任务：必须原样保留，分片文件也不能被删。
+	foreign := mkExportJob(t, user, nil)
+	foreign.Status = LogExportStatusRunning
+	foreign.NodeName = common.NodeName + "-other"
+	foreignPart := filepath.Join(t.TempDir(), "foreign-part-0001.csv.gz")
+	require.NoError(t, os.WriteFile(foreignPart, []byte("keep me"), 0o600))
+	foreign.Parts = []LogExportPart{{Index: 1, Path: foreignPart}}
+	UpdateLogExportJob(foreign)
+
+	// 本节点遗留的任务：必须置为失败。
+	own := mkExportJob(t, user, nil)
+	own.Status = LogExportStatusRunning
+	UpdateLogExportJob(own)
+
+	// 升级前创建的存量任务（NodeName 为空）：按旧行为回收，不能永远卡在 running。
+	legacy := mkExportJob(t, user, nil)
+	legacy.Status = LogExportStatusRunning
+	legacy.NodeName = ""
+	UpdateLogExportJob(legacy)
+
+	RecoverStaleLogExportJobs()
+
+	reloadedForeign, err := GetLogExportJob(foreign.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, reloadedForeign)
+	assert.Equal(t, LogExportStatusRunning, reloadedForeign.Status,
+		"另一节点正在跑的任务不能被标记为失败")
+	assert.Empty(t, reloadedForeign.Error)
+	assert.FileExists(t, foreignPart, "另一节点的分片文件不能被删除")
+
+	reloadedOwn, err := GetLogExportJob(own.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, reloadedOwn)
+	assert.Equal(t, LogExportStatusFailed, reloadedOwn.Status)
+
+	reloadedLegacy, err := GetLogExportJob(legacy.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, reloadedLegacy)
+	assert.Equal(t, LogExportStatusFailed, reloadedLegacy.Status)
+}
+
+// CreateLogExportJob 必须打上本节点标记，否则回收过滤无从判断归属。
+func TestCreateLogExportJob_StampsNodeName(t *testing.T) {
+	enableRedis(t)
+	job := mkExportJob(t, nextTestID(), nil)
+
+	assert.Equal(t, common.NodeName, job.NodeName)
+
+	reloaded, err := GetLogExportJob(job.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	assert.Equal(t, common.NodeName, reloaded.NodeName, "节点标记必须能从 Redis 往返")
+}
+
 func TestCheckLogExportDiskSpace(t *testing.T) {
 	s := operation_setting.GetLogExportSetting()
 	prev := s.MinFreeDiskMB
