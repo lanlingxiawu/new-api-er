@@ -222,24 +222,51 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
-	common.SysLog("received shutdown signal, flushing business stat buffers...")
-	// Stop flush loop, flush to DB, drain remainder to fallback file.
-	// Budget is configurable via ledger_pipeline_setting.shutdown_timeout_sec (default 25 s),
-	// which must stay below the HTTP server shutdown timeout.
-	model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
 
 	// SSE streams may run for minutes; give them time to finish before forced exit
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		common.SysError("server shutdown error: " + err.Error())
-	}
+
+	shutdownSequence(
+		func() error {
+			common.SysLog("received shutdown signal, draining in-flight requests...")
+			return srv.Shutdown(shutdownCtx)
+		},
+		func() {
+			// Stop flush loop, flush to DB, drain remainder to fallback file.
+			// Budget 来自 ledger_pipeline_setting.shutdown_timeout_sec（默认 25 s）。
+			// systemd 的 TimeoutStopSec 必须 >= SHUTDOWN_TIMEOUT_SECONDS 加上这个预算，
+			// 否则 SIGKILL 会落在刷盘之前。
+			common.SysLog("requests drained, flushing business stat buffers...")
+			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
+		},
+	)
+
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {
 		model.SaveQuotaDataCache()
 	}
 	common.SysLog("server exited")
+}
+
+// shutdownSequence 执行关停：先排空 HTTP 在途请求（drain），再刷台账缓冲（flush）。
+//
+// 顺序不可颠倒。在途请求是在 drain 期间陆续结束的，每个结束的请求才把成本/提成记录
+// 写进内存缓冲；而 flush 会把刷盘 goroutine 永久关掉。若 flush 排在前面，排空窗口
+// （SHUTDOWN_TIMEOUT_SECONDS，默认 120 s）内完成的请求写入缓冲后再无人落库，
+// 进程退出即静默丢失 —— 不报错，也不会落兜底文件，因为兜底文件是 flush 自己执行
+// 期间写的，那时这些记录还没产生。
+//
+// 按现在的顺序，drain 期间刷盘 goroutine 仍按 FlushIntervalSec 正常工作，即使进程
+// 被 SIGKILL 打断，暴露面也只有最后一个刷盘间隔，而不是整个排空窗口。
+//
+// 抽成独立函数是为了让 TestShutdownSequence_DrainsBeforeFlush 能锁住这个顺序。
+func shutdownSequence(drain func() error, flush func()) {
+	if err := drain(); err != nil {
+		common.SysError("server shutdown error: " + err.Error())
+	}
+	flush()
 }
 
 func InjectUmamiAnalytics() {
