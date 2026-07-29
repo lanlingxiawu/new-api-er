@@ -26,7 +26,6 @@ import {
   DataTableRow,
   useDataTable,
 } from '@/components/data-table'
-import { useMediaQuery } from '@/hooks'
 import { useIsEmployee } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { cn } from '@/lib/utils'
@@ -79,7 +78,6 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
   const showAdminFields =
     isAdmin || (logsScope === 'employee' && logCategory === 'common')
-  const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
 
   const {
@@ -91,7 +89,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   } = useTableUrlState({
     search: route.useSearch(),
     navigate: route.useNavigate(),
-    pagination: { defaultPage: 1, defaultPageSize: isMobile ? 20 : 100 },
+    pagination: { defaultPage: 1, defaultPageSize: 20 },
     globalFilter: { enabled: false },
     columnFilters: [
       {
