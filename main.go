@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -181,7 +182,10 @@ func main() {
 		return
 	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
+		// 堆栈是必须的：这是全站唯一生效的 panic 兜底，relay 在内的所有路由都靠它。
+		// 只打一行 "panic detected" 无法定位是哪个 adaptor / handler 出的问题。
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
+		common.SysError(fmt.Sprintf("stacktrace from panic: %s", string(debug.Stack())))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),

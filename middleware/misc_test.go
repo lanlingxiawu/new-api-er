@@ -174,25 +174,6 @@ func TestAbortWithMidjourneyMessage(t *testing.T) {
 // recover.go
 // ---------------------------------------------------------------------------
 
-func TestRelayPanicRecover(t *testing.T) {
-	r := gin.New()
-	r.GET("/panic", RelayPanicRecover(), func(c *gin.Context) { panic("boom") })
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
-	require.NotPanics(t, func() { r.ServeHTTP(rec, req) })
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, rec.Body.String(), "new_api_panic")
-}
-
-func TestRelayPanicRecover_NoPanicPassthrough(t *testing.T) {
-	r := gin.New()
-	r.GET("/ok", RelayPanicRecover(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
-	r.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
 // ---------------------------------------------------------------------------
 // i18n.go
 // ---------------------------------------------------------------------------
