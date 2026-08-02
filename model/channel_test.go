@@ -74,6 +74,10 @@ func TestChannel_GetBaseURL(t *testing.T) {
 	// empty string -> falls back to the type's default base URL constant
 	c = &Channel{Type: 1, BaseURL: common.GetPointer[string]("")}
 	assert.Equal(t, constant.ChannelBaseURLs[1], c.GetBaseURL())
+	// Corrupt or forward-version channel types must not panic while management
+	// APIs enumerate historical rows.
+	assert.Equal(t, "", (&Channel{Type: -1, BaseURL: common.GetPointer[string]("")}).GetBaseURL())
+	assert.Equal(t, "", (&Channel{Type: len(constant.ChannelBaseURLs), BaseURL: common.GetPointer[string]("")}).GetBaseURL())
 }
 
 func TestChannel_OtherInfoRoundTrip(t *testing.T) {

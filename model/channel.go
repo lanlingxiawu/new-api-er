@@ -536,6 +536,9 @@ func (channel *Channel) GetBaseURL() string {
 	}
 	url := *channel.BaseURL
 	if url == "" {
+		if channel.Type < 0 || channel.Type >= len(constant.ChannelBaseURLs) {
+			return ""
+		}
 		url = constant.ChannelBaseURLs[channel.Type]
 	}
 	return url
