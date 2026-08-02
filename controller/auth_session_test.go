@@ -117,7 +117,10 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
 	model.DB = db
 	common.RedisEnabled = false
-	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{1, 100, 86400, 7, 5000})
+	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{
+		ActiveLimit: 1, IssuanceLimit: 100, IssuanceWindowSec: 86400,
+		RevokedRetentionDays: 7, HourlyAlertThreshold: 5000,
+	})
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.RedisEnabled = previousRedis

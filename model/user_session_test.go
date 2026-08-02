@@ -48,7 +48,10 @@ func setupUserSessionTest(t *testing.T) {
 	oldRedisEnabled := common.RedisEnabled
 	oldSetting := operation_setting.GetUserSessionSetting()
 	common.RedisEnabled = false
-	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{50, 100, 86400, 7, 5000})
+	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{
+		ActiveLimit: 50, IssuanceLimit: 100, IssuanceWindowSec: 86400,
+		RevokedRetentionDays: 7, HourlyAlertThreshold: 5000,
+	})
 	t.Cleanup(func() {
 		common.RedisEnabled = oldRedisEnabled
 		operation_setting.ReplaceUserSessionSetting(oldSetting)
