@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -50,6 +51,8 @@ import {
   saveAffiliateCode,
 } from '@/features/auth/lib/storage'
 import { useStatus } from '@/hooks/use-status'
+import { isAuthBundle } from '@/lib/api'
+import { getServerErrorMessageKey } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 export function SignUpForm({
@@ -63,6 +66,7 @@ export function SignUpForm({
   const [wechatCode, setWeChatCode] = useState('')
   const [isWeChatDialogOpen, setIsWeChatDialogOpen] = useState(false)
   const [isWeChatSubmitting, setIsWeChatSubmitting] = useState(false)
+  const [turnstileWidgetKey, setTurnstileWidgetKey] = useState(0)
   const legalConsentErrorMessage = t('Please agree to the legal terms first')
 
   const { status } = useStatus()
@@ -180,7 +184,10 @@ export function SignUpForm({
   }
 
   async function handleSendVerificationCode() {
-    await sendCode(emailValue || '')
+    if (await sendCode(emailValue || '')) {
+      setTurnstileToken('')
+      setTurnstileWidgetKey((current) => current + 1)
+    }
   }
 
   const handleOpenWeChatDialog = () => {
@@ -209,18 +216,29 @@ export function SignUpForm({
     setIsWeChatSubmitting(true)
     try {
       const res = await wechatLoginByCode(wechatCode)
-      if (res?.success) {
-        await handleLoginSuccess(res.data as { id?: number } | null)
+      if (res?.success && isAuthBundle(res.data)) {
+        await handleLoginSuccess(res.data)
         toast.success(t('Signed in via WeChat'))
         handleWeChatDialogChange(false)
       } else {
+        if (getServerErrorMessageKey(res)) return
         toast.error(res?.message || t('Login failed'))
       }
-    } catch {
+    } catch (error: unknown) {
+      if (getServerErrorMessageKey(error)) return
       toast.error(t('Login failed'))
     } finally {
       setIsWeChatSubmitting(false)
     }
+  }
+
+  let verificationCodeAction: ReactNode = t('Send code')
+  if (isActive) {
+    verificationCodeAction = t('Resend ({{seconds}}s)', {
+      seconds: secondsLeft,
+    })
+  } else if (isSendingCode) {
+    verificationCodeAction = <Loader2 className='h-4 w-4 animate-spin' />
   }
 
   return (
@@ -323,13 +341,7 @@ export function SignUpForm({
                 }
                 onClick={handleSendVerificationCode}
               >
-                {isActive ? (
-                  t('Resend ({{seconds}}s)', { seconds: secondsLeft })
-                ) : isSendingCode ? (
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                ) : (
-                  t('Send code')
-                )}
+                {verificationCodeAction}
               </Button>
             </div>
           </>
@@ -339,6 +351,7 @@ export function SignUpForm({
         {isTurnstileEnabled && (
           <div className='mt-2'>
             <Turnstile
+              key={turnstileWidgetKey}
               siteKey={turnstileSiteKey}
               onVerify={setTurnstileToken}
             />

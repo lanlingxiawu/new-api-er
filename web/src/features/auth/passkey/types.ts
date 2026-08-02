@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -32,6 +33,8 @@ export interface PasskeyStatus {
 
 export interface PasskeyOptionsPayload {
   options?: unknown
+  flow_token?: string
+  expires_at?: number
   publicKey?: unknown
   response?: unknown
   Response?: unknown

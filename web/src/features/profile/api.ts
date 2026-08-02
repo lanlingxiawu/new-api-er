@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -47,7 +48,9 @@ export async function getUserProfile(): Promise<ApiResponse<UserProfile>> {
 export async function updateUserProfile(
   data: UpdateUserRequest
 ): Promise<ApiResponse> {
-  const res = await api.put('/api/user/self', data)
+  const res = await api.put('/api/user/self', data, {
+    acceptAuthRotation: Boolean(data.password),
+  })
   return res.data
 }
 
@@ -126,12 +129,24 @@ export async function bindEmail(
  * Bind WeChat account
  */
 export async function bindWeChat(code: string): Promise<ApiResponse> {
-  // 后端注册的是 POST + JSON body（router/api-router.go），用 GET 会 404/405。
   const res = await api.post(
     '/api/oauth/wechat/bind',
     { code },
     { skipBusinessError: true, skipErrorHandler: true }
   )
+  return res.data
+}
+
+export interface TelegramBindFlow {
+  flow_token: string
+  callback_url: string
+  expires_at: number
+}
+
+export async function startTelegramBind(): Promise<
+  ApiResponse<TelegramBindFlow>
+> {
+  const res = await api.post('/api/oauth/telegram/bind/start')
   return res.data
 }
 

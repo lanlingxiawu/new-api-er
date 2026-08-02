@@ -1441,9 +1441,10 @@ export function ChannelMutateDrawer({
   const handleRevealKey = useCallback(async () => {
     if (!channelId) return
 
-    try {
-      await withVerification(fetchChannelKey, {
-        preferredMethod: 'passkey',
+      try {
+        await withVerification(fetchChannelKey, {
+          scope: 'channel.key.read',
+          preferredMethod: 'passkey',
         title: 'Verify to view channel key',
         description:
           'Use Passkey or 2FA to confirm your identity before revealing this channel key.',

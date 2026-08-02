@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -64,12 +65,13 @@ export interface BindEmailPayload {
 export interface LoginResponse {
   success: boolean
   message: string
-  data?: {
-    require_2fa?: boolean
-    flow_token?: string
-    expires_at?: number
-    id?: number
-  }
+  data?:
+    | AuthBundle
+    | {
+        require_2fa?: boolean
+        flow_token?: string
+        expires_at?: number
+      }
 }
 
 export interface Login2FAResponse {
@@ -78,10 +80,10 @@ export interface Login2FAResponse {
   data?: AuthBundle
 }
 
-export interface ApiResponse {
+export interface ApiResponse<T = unknown> {
   success: boolean
   message: string
-  data?: unknown
+  data?: T
 }
 
 // ============================================================================
@@ -106,6 +108,7 @@ export interface SystemStatus {
     linuxdo_oauth?: boolean
     linuxdo_client_id?: string
     telegram_oauth?: boolean
+    telegram_bot_name?: string
     passkey_login?: boolean
     wechat_login?: boolean
     wechat_qrcode?: string
@@ -126,7 +129,6 @@ export interface SystemStatus {
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
     demo_site_enabled?: boolean
-    user_export_enabled?: boolean
     user_agreement_enabled?: boolean
     privacy_policy_enabled?: boolean
     oauth_register_enabled?: boolean
@@ -151,6 +153,7 @@ export interface SystemStatus {
   linuxdo_oauth?: boolean
   linuxdo_client_id?: string
   telegram_oauth?: boolean
+  telegram_bot_name?: string
   passkey_login?: boolean
   wechat_login?: boolean
   wechat_qrcode?: string
@@ -171,7 +174,6 @@ export interface SystemStatus {
   custom_currency_symbol?: string
   custom_currency_exchange_rate?: number
   demo_site_enabled?: boolean
-  user_export_enabled?: boolean
   user_agreement_enabled?: boolean
   privacy_policy_enabled?: boolean
   oauth_register_enabled?: boolean

@@ -1,3 +1,4 @@
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -21,6 +22,8 @@ import axios from 'axios'
 import { api, refreshAuthentication, type RefreshOutcome } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { getAffiliateCode } from './lib/storage'
+import type { TelegramAuthorization } from './lib/telegram-login'
 import type {
   LoginPayload,
   LoginResponse,
@@ -47,7 +50,6 @@ export async function login(payload: LoginPayload) {
       username: payload.username,
       password: payload.password,
     },
-    // 登录本身失败时不要再去刷新 token：此刻本就没有会话可刷。
     { skipAuthRefresh: true }
   )
   return res.data
@@ -57,7 +59,6 @@ export async function login(payload: LoginPayload) {
 export async function login2fa(payload: TwoFAPayload) {
   const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload, {
     skipAuthRefresh: true,
-    skipBusinessError: true,
   })
   return res.data
 }
@@ -68,9 +69,6 @@ interface LogoutRuntime {
   refresh: () => Promise<RefreshOutcome>
 }
 
-/**
- * 登出。会话不匹配（并发换 token）时先刷新再重试一次，避免退不掉。
- */
 export async function executeLogout(
   runtime: LogoutRuntime,
   allowMismatchRecovery = true
@@ -79,7 +77,7 @@ export async function executeLogout(
     return await runtime.request(runtime.getExpectedSID())
   } catch (error: unknown) {
     const code = axios.isAxiosError(error)
-      ? (error.response?.data as { code?: string } | undefined)?.code
+      ? error.response?.data?.code
       : undefined
     if (
       allowMismatchRecovery &&
@@ -100,10 +98,6 @@ export async function executeLogout(
 }
 
 // User logout
-//
-// 后端登出接口在合并上游后改成了 POST /api/user/auth/logout（旧的
-// GET /api/user/logout 已不存在，会落到 GET /api/user/:id 上）。
-// 必须走这个接口，否则服务端会话和 refresh cookie 都不会被吊销。
 export async function logout(): Promise<ApiResponse> {
   return executeLogout({
     getExpectedSID: () => useAuthStore.getState().auth.session?.sid,
@@ -145,17 +139,41 @@ export async function githubOAuthStart(clientId: string, state: string) {
 }
 
 // Get OAuth state for CSRF protection
-export async function getOAuthState(): Promise<string> {
-  const aff =
-    typeof window !== 'undefined' ? (localStorage.getItem('aff') ?? '') : ''
-  const res = await api.get('/api/oauth/state', { params: { aff } })
-  if (res.data?.success) return res.data.data
-  return ''
+export async function createOAuthFlow(
+  provider: string,
+  intent: 'login' | 'bind'
+): Promise<string> {
+  const aff = intent === 'login' ? getAffiliateCode() : ''
+  const res = await api.post(
+    '/api/oauth/state',
+    { provider, intent, aff: aff || undefined },
+    { skipAuthRefresh: intent === 'login' }
+  )
+  if (res.data?.success) {
+    if (typeof res.data.data === 'string') return res.data.data
+    if (typeof res.data.data?.flow_token === 'string') {
+      return res.data.data.flow_token
+    }
+  }
+  throw new Error(res.data?.message || 'Failed to initialize OAuth')
 }
 
 // WeChat login by authorization code
 export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
   const res = await api.get('/api/oauth/wechat', { params: { code } })
+  return res.data
+}
+
+export async function telegramLogin(
+  authorization: TelegramAuthorization
+): Promise<ApiResponse> {
+  const res = await api.get('/api/oauth/telegram/login', {
+    params: authorization,
+    disableDuplicate: true,
+    skipAuthRefresh: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 
