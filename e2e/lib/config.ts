@@ -1,5 +1,7 @@
-export const DEFAULT_BASE = 'http://127.0.0.1:3002'
-export const CLASSIC_BASE = 'http://127.0.0.1:5173'
+export const DEFAULT_BASE =
+  process.env.E2E_DEFAULT_BASE_URL ?? 'http://127.0.0.1:5177'
+export const CLASSIC_BASE =
+  process.env.E2E_CLASSIC_BASE_URL ?? 'http://127.0.0.1:5173'
 
 export type Role = 'root' | 'admin' | 'common' | 'employee' | 'guest'
 
