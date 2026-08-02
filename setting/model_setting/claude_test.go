@@ -14,8 +14,10 @@ import (
 func withClaudeSettings(t *testing.T, s ClaudeSettings) {
 	t.Helper()
 	original := claudeSettings
-	t.Cleanup(func() { claudeSettings = original })
-	claudeSettings = s
+	t.Cleanup(func() { ReplaceClaudeSettings(original) })
+	// 必须走 Replace：直接改包级变量不会重新发布快照，
+	// 而 GetClaudeSettings 读的是快照。
+	ReplaceClaudeSettings(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -45,9 +47,24 @@ func TestGetClaudeSettings_KeepsExistingDefault(t *testing.T) {
 	assert.Equal(t, 1234, got.DefaultMaxTokens["default"])
 }
 
-func TestGetClaudeSettings_ReturnsPointerToGlobal(t *testing.T) {
+// GetClaudeSettings 返回的是不可变快照，不再是可变全局的指针。
+// 原来的契约（返回 &claudeSettings）意味着 relay 热路径上的每个读者都在读一块
+// 会被配置更新原地改写的内存；而 getter 自身还会往 DefaultMaxTokens 里写键，
+// 并发命中就是 fatal error: concurrent map writes。
+func TestGetClaudeSettings_ReturnsImmutableSnapshot(t *testing.T) {
 	got := GetClaudeSettings()
-	require.Same(t, &claudeSettings, got)
+	require.NotNil(t, got)
+	require.NotSame(t, &claudeSettings, got, "不能再把可变全局的指针交出去")
+
+	// 已经拿到手的快照不会被后续配置变更改写
+	before := GetClaudeSettings()
+	beforeEnabled := before.ThinkingAdapterEnabled
+	withClaudeSettings(t, ClaudeSettings{
+		DefaultMaxTokens:       map[string]int{"default": 99},
+		ThinkingAdapterEnabled: !beforeEnabled,
+	})
+	assert.Equal(t, beforeEnabled, before.ThinkingAdapterEnabled, "旧快照必须保持不变")
+	assert.Equal(t, !beforeEnabled, GetClaudeSettings().ThinkingAdapterEnabled, "新快照要反映新值")
 }
 
 // ---------------------------------------------------------------------------

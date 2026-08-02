@@ -134,7 +134,8 @@ func TestGetBusinessStatsFallbackBackfillSetting(t *testing.T) {
 func TestGetChannelAffinitySetting(t *testing.T) {
 	got := GetChannelAffinitySetting()
 	require.NotNil(t, got)
-	assert.Same(t, &channelAffinitySetting, got)
+	// 返回不可变快照，不再是可变全局的指针。
+	assert.NotSame(t, &channelAffinitySetting, got)
 	assert.True(t, got.Enabled)
 	assert.True(t, got.SwitchOnSuccess)
 	assert.Equal(t, 100_000, got.MaxEntries)
@@ -178,7 +179,8 @@ func TestBuildCodexPassHeaderTemplate_ContainsKnownHeader(t *testing.T) {
 func TestGetCommissionTierResetSetting(t *testing.T) {
 	got := GetCommissionTierResetSetting()
 	require.NotNil(t, got)
-	assert.Same(t, &commissionTierResetSetting, got)
+	// 返回不可变快照，不再是可变全局的指针。
+	assert.NotSame(t, &commissionTierResetSetting, got)
 }
 
 // IsNaturalMonthMode: nil receiver, natural-month, and reset-day equivalence classes.

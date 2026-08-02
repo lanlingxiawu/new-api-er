@@ -10,12 +10,16 @@ import (
 func withGeminiSettings(t *testing.T, s GeminiSettings) {
 	t.Helper()
 	original := geminiSettings
-	t.Cleanup(func() { geminiSettings = original })
-	geminiSettings = s
+	t.Cleanup(func() { ReplaceGeminiSettings(original) })
+	// 必须走 Replace：直接改包级变量不会重新发布快照。
+	ReplaceGeminiSettings(s)
 }
 
-func TestGetGeminiSettings_ReturnsPointerToGlobal(t *testing.T) {
-	require.Same(t, &geminiSettings, GetGeminiSettings())
+// 返回不可变快照，而不是可变全局的指针。
+func TestGetGeminiSettings_ReturnsImmutableSnapshot(t *testing.T) {
+	got := GetGeminiSettings()
+	require.NotNil(t, got)
+	require.NotSame(t, &geminiSettings, got)
 }
 
 func TestGetGeminiSettings_Defaults(t *testing.T) {

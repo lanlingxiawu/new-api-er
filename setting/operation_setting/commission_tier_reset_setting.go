@@ -44,12 +44,29 @@ func (s *CommissionTierResetSetting) IsNaturalMonthMode() bool {
 	return s != nil && s.PeriodMode == CommissionPeriodModeNaturalMonth
 }
 
+var commissionTierResetSnapshot config.Snapshot[CommissionTierResetSetting]
+
 func init() {
-	config.GlobalConfig.Register("commission_tier_reset_setting", &commissionTierResetSetting)
+	config.GlobalConfig.RegisterSnapshot("commission_tier_reset_setting", &commissionTierResetSetting, publishCommissionTierResetSetting)
 }
 
+// publishCommissionTierResetSetting 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+func publishCommissionTierResetSetting() {
+	commissionTierResetSnapshot.Publish(commissionTierResetSetting)
+}
+
+// GetCommissionTierResetSetting 返回不可变快照。通过它写入不会生效——
+// 配置变更必须走管理接口，由 ConfigManager 改草稿后重新发布。
 func GetCommissionTierResetSetting() *CommissionTierResetSetting {
-	return &commissionTierResetSetting
+	return commissionTierResetSnapshot.Load()
+}
+
+// ReplaceCommissionTierResetSetting 整体替换配置并立即重新发布快照（供测试使用）。
+func ReplaceCommissionTierResetSetting(s CommissionTierResetSetting) {
+	config.WithConfigDraft(func() {
+		commissionTierResetSetting = s
+		publishCommissionTierResetSetting()
+	})
 }
 
 func ResolveCommissionTierResetLocation(timezone string) (*time.Location, string) {

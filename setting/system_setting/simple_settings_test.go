@@ -54,11 +54,26 @@ func TestGetLegalSettings_ReturnsLivePointerAndDefaults(t *testing.T) {
 	assert.Equal(t, "", got.PrivacyPolicy)
 }
 
-func TestGetFetchSetting_ReturnsLivePointerAndDefaults(t *testing.T) {
+// GetFetchSetting 现在返回不可变快照，不再是可写的全局指针。
+//
+// 这份配置的三个 []string 是 SSRF 防护的域名/IP/端口名单，切片头有 3 个字长；
+// 反射原地替换时读侧可能读到"新指针配旧长度"，也就是放行本该拦截的地址。
+func TestGetFetchSetting_ReturnsImmutableSnapshotAndDefaults(t *testing.T) {
 	got := GetFetchSetting()
 	require.NotNil(t, got)
-	assert.Same(t, &defaultFetchSetting, got)
-	assert.Same(t, got, GetFetchSetting())
+	assert.NotSame(t, &defaultFetchSetting, got, "不能再把可写的草稿指针交出去")
+	assert.Equal(t, defaultFetchSetting, *got, "快照内容必须与草稿一致")
+
+	// 已持有的快照不受后续变更影响——名单被换掉时正在鉴权的请求仍看到完整旧名单
+	before := GetFetchSetting()
+	beforePorts := before.AllowedPorts
+	restore := defaultFetchSetting
+	t.Cleanup(func() { ReplaceFetchSetting(restore) })
+	ReplaceFetchSetting(FetchSetting{AllowedPorts: []string{"9999"}})
+	assert.Equal(t, beforePorts, before.AllowedPorts, "旧快照被改写了")
+	assert.Equal(t, []string{"9999"}, GetFetchSetting().AllowedPorts)
+	ReplaceFetchSetting(restore)
+	got = GetFetchSetting()
 
 	// Defaults per fetch_setting.go: SSRF protection on, private IP off,
 	// blacklist modes, empty domain/ip lists, a fixed allowed-ports set,

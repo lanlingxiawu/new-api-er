@@ -56,14 +56,30 @@ var defaultGeminiSettings = GeminiSettings{
 // 全局实例
 var geminiSettings = defaultGeminiSettings
 
+var geminiSnapshot config.Snapshot[GeminiSettings]
+
 func init() {
-	// 注册到全局配置管理器
-	config.GlobalConfig.Register("gemini", &geminiSettings)
+	// 注册到全局配置管理器，并登记快照发布函数。
+	// 这个模块几乎全是 map/slice 字段且被 relay 路径读取，
+	// 原地改写时读侧可能拿到半个值。
+	config.GlobalConfig.RegisterSnapshot("gemini", &geminiSettings, publishGeminiSettings)
 }
 
-// GetGeminiSettings 获取Gemini配置
+// publishGeminiSettings 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+func publishGeminiSettings() { geminiSnapshot.Publish(geminiSettings) }
+
+// GetGeminiSettings 返回不可变快照。通过它写入不会生效——
+// 配置变更必须走管理接口，由 ConfigManager 改草稿后重新发布。
 func GetGeminiSettings() *GeminiSettings {
-	return &geminiSettings
+	return geminiSnapshot.Load()
+}
+
+// ReplaceGeminiSettings 整体替换配置并立即重新发布快照（供测试使用）。
+func ReplaceGeminiSettings(s GeminiSettings) {
+	config.WithConfigDraft(func() {
+		geminiSettings = s
+		publishGeminiSettings()
+	})
 }
 
 // GetGeminiSafetySetting 获取安全设置

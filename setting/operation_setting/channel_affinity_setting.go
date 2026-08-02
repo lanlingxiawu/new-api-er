@@ -149,10 +149,27 @@ var channelAffinitySetting = ChannelAffinitySetting{
 	},
 }
 
+var channelAffinitySnapshot config.Snapshot[ChannelAffinitySetting]
+
 func init() {
-	config.GlobalConfig.Register("channel_affinity_setting", &channelAffinitySetting)
+	// 注册到全局配置管理器，并登记快照发布函数。
+	// 这个模块被 relay 路径读取且含 slice 字段，原地改写时读侧可能拿到半个值。
+	config.GlobalConfig.RegisterSnapshot("channel_affinity_setting", &channelAffinitySetting, publishChannelAffinitySetting)
 }
 
+// publishChannelAffinitySetting 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+func publishChannelAffinitySetting() { channelAffinitySnapshot.Publish(channelAffinitySetting) }
+
+// GetChannelAffinitySetting 返回不可变快照。通过它写入不会生效——
+// 配置变更必须走管理接口，由 ConfigManager 改草稿后重新发布。
 func GetChannelAffinitySetting() *ChannelAffinitySetting {
-	return &channelAffinitySetting
+	return channelAffinitySnapshot.Load()
+}
+
+// ReplaceChannelAffinitySetting 整体替换配置并立即重新发布快照（供测试使用）。
+func ReplaceChannelAffinitySetting(s ChannelAffinitySetting) {
+	config.WithConfigDraft(func() {
+		channelAffinitySetting = s
+		publishChannelAffinitySetting()
+	})
 }

@@ -38,10 +38,49 @@ func (cm *ConfigManager) Get(name string) interface{} {
 	return cm.configs[name]
 }
 
+// configDraftMutex 是配置草稿结构体字段的唯一同步边界（设计文档
+// env-hot-config-migration.md §5.2.4）。
+//
+// cm.mutex 保护的是 configs map 本身，不是 map 里那些结构体指针指向的字段。
+// LoadFromDB / SaveToDB / ExportAllConfigs 都通过反射读写这些字段，而整体替换草稿
+// （ReplaceRateLimitSetting 之类）根本不经过 cm.mutex，两者互不排斥。借用 cm.mutex
+// 只会把这个混淆固化下来，所以字段级同步单独用这把锁。
+//
+// 它只出现在低频的管理与同步路径上，绝不出现在任何请求路径——请求路径读的是
+// atomic.Pointer 快照。嵌套调用会自死锁：临界区内不得再调用自身加锁的配置 API。
+var configDraftMutex sync.Mutex
+
+// WithConfigDraft 在草稿临界区内执行 fn，用于整体替换或读取配置草稿。
+func WithConfigDraft(fn func()) {
+	configDraftMutex.Lock()
+	defer configDraftMutex.Unlock()
+	fn()
+}
+
+// UpdateFromMap 在草稿临界区内把扁平配置项应用到已注册的模块，
+// 供 model 层的选项同步链路使用，避免和上面的反射读写并发。
+func (cm *ConfigManager) UpdateFromMap(name string, configMap map[string]string) error {
+	config := cm.Get(name)
+	if config == nil {
+		return nil
+	}
+	configDraftMutex.Lock()
+	defer configDraftMutex.Unlock()
+	if err := updateConfigFromMap(config, configMap); err != nil {
+		return err
+	}
+	// 草稿改完立刻在同一临界区内重发快照，读侧不会看到"改了一半"的中间态。
+	republishSnapshotLocked(name)
+	return nil
+}
+
 // LoadFromDB 从数据库加载配置
 func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
+	// 锁序固定为 cm.mutex -> configDraftMutex，见 configDraftMutex 的说明。
+	configDraftMutex.Lock()
+	defer configDraftMutex.Unlock()
 
 	for name, config := range cm.configs {
 		prefix := name + "."
@@ -61,6 +100,7 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 				common.SysError("failed to update config " + name + ": " + err.Error())
 				continue
 			}
+			republishSnapshotLocked(name)
 		}
 	}
 
@@ -71,6 +111,8 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 func (cm *ConfigManager) SaveToDB(updateFunc func(key, value string) error) error {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
+	configDraftMutex.Lock()
+	defer configDraftMutex.Unlock()
 
 	for name, config := range cm.configs {
 		configMap, err := configToMap(config)
@@ -286,6 +328,8 @@ func UpdateConfigFromMap(config interface{}, configMap map[string]string) error 
 func (cm *ConfigManager) ExportAllConfigs() map[string]string {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
+	configDraftMutex.Lock()
+	defer configDraftMutex.Unlock()
 
 	result := make(map[string]string)
 

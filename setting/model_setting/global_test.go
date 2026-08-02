@@ -10,12 +10,16 @@ import (
 func withGlobalSettings(t *testing.T, s GlobalSettings) {
 	t.Helper()
 	original := globalSettings
-	t.Cleanup(func() { globalSettings = original })
-	globalSettings = s
+	t.Cleanup(func() { ReplaceGlobalSettings(original) })
+	// 必须走 Replace：直接改包级变量不会重新发布快照。
+	ReplaceGlobalSettings(s)
 }
 
-func TestGetGlobalSettings_ReturnsPointerToGlobal(t *testing.T) {
-	require.Same(t, &globalSettings, GetGlobalSettings())
+// 返回不可变快照，而不是可变全局的指针。
+func TestGetGlobalSettings_ReturnsImmutableSnapshot(t *testing.T) {
+	got := GetGlobalSettings()
+	require.NotNil(t, got)
+	require.NotSame(t, &globalSettings, got)
 }
 
 // ---------------------------------------------------------------------------

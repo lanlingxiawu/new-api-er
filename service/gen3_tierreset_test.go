@@ -17,13 +17,17 @@ import (
 
 // withTierResetSetting snapshots and restores the whole setting struct so the
 // persisted last_reset_at side effect does not leak across tests.
-func withTierResetSetting(t *testing.T, mutate func(cfg *operation_setting.CommissionTierResetSetting)) *operation_setting.CommissionTierResetSetting {
+// 必须走 Replace：GetCommissionTierResetSetting 返回的是不可变快照，
+// 通过它写字段不会被后续读者看到。返回的取值函数每次都重新 Load，
+// 这样用例才能观察到被测代码通过配置接口写回的 LastResetAt。
+func withTierResetSetting(t *testing.T, mutate func(cfg *operation_setting.CommissionTierResetSetting)) func() *operation_setting.CommissionTierResetSetting {
 	t.Helper()
-	cfg := operation_setting.GetCommissionTierResetSetting()
-	orig := *cfg
-	mutate(cfg)
-	t.Cleanup(func() { *cfg = orig })
-	return cfg
+	orig := *operation_setting.GetCommissionTierResetSetting()
+	draft := orig
+	mutate(&draft)
+	operation_setting.ReplaceCommissionTierResetSetting(draft)
+	t.Cleanup(func() { operation_setting.ReplaceCommissionTierResetSetting(orig) })
+	return operation_setting.GetCommissionTierResetSetting
 }
 
 func TestTierReset_CheckFirstArm(t *testing.T) {
@@ -33,7 +37,7 @@ func TestTierReset_CheckFirstArm(t *testing.T) {
 	})
 	runCommissionTierResetCheck()
 	// After first arm, LastResetAt is set to the most recent schedule boundary.
-	assert.Greater(t, cfg.LastResetAt, int64(0))
+	assert.Greater(t, cfg().LastResetAt, int64(0))
 }
 
 func TestTierReset_CheckDueRunsReset(t *testing.T) {
@@ -43,7 +47,7 @@ func TestTierReset_CheckDueRunsReset(t *testing.T) {
 	})
 	runCommissionTierResetCheck()
 	// With no employees the reset loop processes 0 but still advances LastResetAt.
-	assert.Greater(t, cfg.LastResetAt, int64(1))
+	assert.Greater(t, cfg().LastResetAt, int64(1))
 }
 
 func TestTierReset_CheckNotDue(t *testing.T) {
@@ -54,7 +58,7 @@ func TestTierReset_CheckNotDue(t *testing.T) {
 		cfg.LastResetAt = future
 	})
 	runCommissionTierResetCheck()
-	assert.Equal(t, future, cfg.LastResetAt)
+	assert.Equal(t, future, cfg().LastResetAt)
 }
 
 func TestTierReset_Rearm(t *testing.T) {
@@ -64,7 +68,7 @@ func TestTierReset_Rearm(t *testing.T) {
 		cfg.LastResetAt = 5
 	})
 	RearmCommissionTierResetScheduleIfNeeded()
-	assert.EqualValues(t, 5, cfgDisabled.LastResetAt)
+	assert.EqualValues(t, 5, cfgDisabled().LastResetAt)
 
 	// Enabled + armed + old boundary => moves forward.
 	cfg := withTierResetSetting(t, func(cfg *operation_setting.CommissionTierResetSetting) {
@@ -72,7 +76,7 @@ func TestTierReset_Rearm(t *testing.T) {
 		cfg.LastResetAt = 1
 	})
 	RearmCommissionTierResetScheduleIfNeeded()
-	assert.Greater(t, cfg.LastResetAt, int64(1))
+	assert.Greater(t, cfg().LastResetAt, int64(1))
 }
 
 func TestTierReset_ArmAt(t *testing.T) {
@@ -81,12 +85,12 @@ func TestTierReset_ArmAt(t *testing.T) {
 	})
 	// at <= 0 => no-op.
 	ArmCommissionTierResetAt(0)
-	assert.EqualValues(t, 0, cfg.LastResetAt)
+	assert.EqualValues(t, 0, cfg().LastResetAt)
 
 	// at > 0 => persisted.
 	target := time.Now().Unix()
 	ArmCommissionTierResetAt(target)
-	assert.EqualValues(t, target, cfg.LastResetAt)
+	assert.EqualValues(t, target, cfg().LastResetAt)
 }
 
 var _ = require.NoError

@@ -24,11 +24,33 @@ var defaultFetchSetting = FetchSetting{
 	ApplyIPFilterForDomain: true,
 }
 
+var fetchSettingSnapshot config.Snapshot[FetchSetting]
+
 func init() {
-	// 注册到全局配置管理器
-	config.GlobalConfig.Register("fetch_setting", &defaultFetchSetting)
+	// 注册到全局配置管理器，并登记快照发布函数。
+	//
+	// 这个模块必须走快照：三个 []string 字段的切片头有 3 个字长，反射原地替换时
+	// 读侧可能读到"新指针配旧长度"这类非法组合。而它是 SSRF 防护的域名/IP/端口
+	// 白名单——读出坏值意味着放行本该拦截的地址。
+	config.GlobalConfig.RegisterSnapshot("fetch_setting", &defaultFetchSetting, publishFetchSetting)
 }
 
+// publishFetchSetting 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+//
+// 快照复制的是结构体，切片字段与草稿共享底层数组；但配置写入是整体替换切片头
+// （指向新数组），不会原地改动旧数组，所以旧快照持有的切片始终是一致且不可变的。
+func publishFetchSetting() { fetchSettingSnapshot.Publish(defaultFetchSetting) }
+
+// GetFetchSetting 返回不可变快照。通过它写入不会生效。
 func GetFetchSetting() *FetchSetting {
-	return &defaultFetchSetting
+	return fetchSettingSnapshot.Load()
+}
+
+// ReplaceFetchSetting 整体替换配置并立即重新发布快照。
+// 供需要在运行时改这份配置的调用方使用（目前只有测试）。
+func ReplaceFetchSetting(s FetchSetting) {
+	config.WithConfigDraft(func() {
+		defaultFetchSetting = s
+		publishFetchSetting()
+	})
 }

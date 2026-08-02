@@ -48,8 +48,7 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 	previousType := common.MainDatabaseType()
 	previousRedis := common.RedisEnabled
 	previousSecret := common.SessionSecret
-	settings := system_setting.GetPasskeySettings()
-	previousSettings := *settings
+	previousSettings := *system_setting.GetPasskeySettings()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
@@ -58,13 +57,13 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.SessionSecret = "passkey-register-proof-test-secret"
-	*settings = system_setting.PasskeySettings{Enabled: true}
+	system_setting.ReplacePasskeySettings(system_setting.PasskeySettings{Enabled: true})
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.SetMainDatabaseType(previousType)
 		common.RedisEnabled = previousRedis
 		common.SessionSecret = previousSecret
-		*settings = previousSettings
+		system_setting.ReplacePasskeySettings(previousSettings)
 		sqlDB, dbErr := db.DB()
 		if dbErr == nil {
 			_ = sqlDB.Close()

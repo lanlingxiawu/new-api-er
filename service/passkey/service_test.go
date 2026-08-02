@@ -18,24 +18,26 @@ import (
 
 // configurePasskey resets the live passkey settings + ServerAddress to a known
 // clean state, applies the mutation, and restores the originals on cleanup.
-// GetPasskeySettings returns a live pointer and lazily writes derived RPID /
-// Origins back into it, so full snapshot/restore is mandatory to avoid
-// cross-test pollution.
+//
+// 必须走 ReplacePasskeySettings：GetPasskeySettings 返回的是不可变快照，
+// 直接写返回值不会被后续读者看到。RPID / Origins 的推导现在在 getter 里按快照
+// 纯计算、不回写，所以只要恢复存储值和 ServerAddress 就不会污染其他用例。
 func configurePasskey(t *testing.T, serverAddr string, mutate func(s *system_setting.PasskeySettings)) *system_setting.PasskeySettings {
 	t.Helper()
-	s := system_setting.GetPasskeySettings()
-	orig := *s
+	orig := *system_setting.GetPasskeySettings()
 	origAddr := system_setting.ServerAddress
 	t.Cleanup(func() {
-		*s = orig
+		system_setting.ReplacePasskeySettings(orig)
 		system_setting.ServerAddress = origAddr
 	})
-	*s = system_setting.PasskeySettings{}
-	system_setting.ServerAddress = serverAddr
+
+	draft := system_setting.PasskeySettings{}
 	if mutate != nil {
-		mutate(s)
+		mutate(&draft)
 	}
-	return s
+	system_setting.ReplacePasskeySettings(draft)
+	system_setting.ServerAddress = serverAddr
+	return system_setting.GetPasskeySettings()
 }
 
 func plainRequest(t *testing.T, host string) *http.Request {

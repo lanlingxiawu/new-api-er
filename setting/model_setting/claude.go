@@ -36,18 +36,41 @@ var defaultClaudeSettings = ClaudeSettings{
 // 全局实例
 var claudeSettings = defaultClaudeSettings
 
+var claudeSnapshot config.Snapshot[ClaudeSettings]
+
 func init() {
-	// 注册到全局配置管理器
-	config.GlobalConfig.Register("claude", &claudeSettings)
+	// 注册到全局配置管理器，并登记快照发布函数。
+	config.GlobalConfig.RegisterSnapshot("claude", &claudeSettings, publishClaudeSettings)
 }
 
-// GetClaudeSettings 获取Claude配置
-func GetClaudeSettings() *ClaudeSettings {
-	// check default max tokens must have default key
+// publishClaudeSettings 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+//
+// 补 default 兜底放在这里而不是 getter 里：原来的 GetClaudeSettings 每次调用都可能
+// 往 DefaultMaxTokens 里写一个键，而它在 relay 热路径上被并发调用——一旦数据库里存
+// 的配置没有 default 键，两个请求同时进来就是 fatal error: concurrent map writes，
+// 整个进程直接崩。放到发布时只在草稿锁内写一次。
+func publishClaudeSettings() {
+	if claudeSettings.DefaultMaxTokens == nil {
+		claudeSettings.DefaultMaxTokens = map[string]int{}
+	}
 	if _, ok := claudeSettings.DefaultMaxTokens["default"]; !ok {
 		claudeSettings.DefaultMaxTokens["default"] = 8192
 	}
-	return &claudeSettings
+	claudeSnapshot.Publish(claudeSettings)
+}
+
+// GetClaudeSettings 返回不可变快照。通过它写入不会生效——
+// 配置变更必须走管理接口，由 ConfigManager 改草稿后重新发布。
+func GetClaudeSettings() *ClaudeSettings {
+	return claudeSnapshot.Load()
+}
+
+// ReplaceClaudeSettings 整体替换配置并立即重新发布快照（供测试使用）。
+func ReplaceClaudeSettings(s ClaudeSettings) {
+	config.WithConfigDraft(func() {
+		claudeSettings = s
+		publishClaudeSettings()
+	})
 }
 
 func (c *ClaudeSettings) WriteHeaders(originModel string, httpHeader *http.Header) {

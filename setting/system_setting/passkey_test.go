@@ -17,15 +17,24 @@ func savePasskeyState(t *testing.T) {
 	origSettings := defaultPasskeySettings
 	origServer := ServerAddress
 	t.Cleanup(func() {
-		defaultPasskeySettings = origSettings
 		ServerAddress = origServer
+		setPasskeySettingsForTest(origSettings)
 	})
+}
+
+// setPasskeySettingsForTest 替换存储值并重新发布快照，同时清掉推导缓存。
+// 直接给 defaultPasskeySettings 赋值不会更新 GetPasskeySettings 读的快照，
+// 也不会重置 RPID 的一次性推导结果。
+func setPasskeySettingsForTest(s PasskeySettings) {
+	derivedPasskeyRPID.Store(nil)
+	ReplacePasskeySettings(s)
+	derivedPasskeyRPID.Store(nil)
 }
 
 func TestGetPasskeySettings_Defaults(t *testing.T) {
 	savePasskeyState(t)
 	// Force a clean baseline independent of package init side effects.
-	defaultPasskeySettings = PasskeySettings{
+	setPasskeySettingsForTest(PasskeySettings{
 		Enabled:              false,
 		RPDisplayName:        common.SystemName,
 		RPID:                 "example.rp", // non-empty so derivation is skipped
@@ -33,12 +42,13 @@ func TestGetPasskeySettings_Defaults(t *testing.T) {
 		AllowInsecureOrigin:  false,
 		UserVerification:     "preferred",
 		AttachmentPreference: "",
-	}
+	})
 	ServerAddress = "https://server.example"
 
 	got := GetPasskeySettings()
 	require.NotNil(t, got)
-	assert.Same(t, &defaultPasskeySettings, got)
+	// 返回不可变快照，不再是可变全局的指针。
+	assert.NotSame(t, &defaultPasskeySettings, got)
 	// Neither RPID nor Origins was empty, so nothing is derived.
 	assert.Equal(t, "example.rp", got.RPID)
 	assert.Equal(t, "https://set.example", got.Origins)
@@ -105,10 +115,10 @@ func TestGetPasskeySettings_RPIDDerivation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			savePasskeyState(t)
-			defaultPasskeySettings = PasskeySettings{
+			setPasskeySettingsForTest(PasskeySettings{
 				RPID:    tc.rpid,
 				Origins: "https://origins.set", // non-empty: isolate RPID logic
-			}
+			})
 			ServerAddress = tc.serverAddress
 
 			got := GetPasskeySettings()
@@ -122,10 +132,10 @@ func TestGetPasskeySettings_RPIDDerivation(t *testing.T) {
 // ServerAddress!="" false).
 func TestGetPasskeySettings_RPIDNotDerivedWhenServerAddressEmpty(t *testing.T) {
 	savePasskeyState(t)
-	defaultPasskeySettings = PasskeySettings{
+	setPasskeySettingsForTest(PasskeySettings{
 		RPID:    "",
 		Origins: "https://origins.set",
-	}
+	})
 	ServerAddress = ""
 
 	got := GetPasskeySettings()
@@ -171,10 +181,10 @@ func TestGetPasskeySettings_OriginsFallback(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			savePasskeyState(t)
-			defaultPasskeySettings = PasskeySettings{
+			setPasskeySettingsForTest(PasskeySettings{
 				RPID:    "preset.rp", // non-empty: isolate Origins logic
 				Origins: tc.origins,
-			}
+			})
 			ServerAddress = tc.serverAddress
 
 			got := GetPasskeySettings()
@@ -187,7 +197,7 @@ func TestGetPasskeySettings_OriginsFallback(t *testing.T) {
 // the full function with both if-blocks taken.
 func TestGetPasskeySettings_BothDerivationsTogether(t *testing.T) {
 	savePasskeyState(t)
-	defaultPasskeySettings = PasskeySettings{RPID: "", Origins: ""}
+	setPasskeySettingsForTest(PasskeySettings{RPID: "", Origins: ""})
 	ServerAddress = "https://combined.example"
 
 	got := GetPasskeySettings()
@@ -199,7 +209,7 @@ func TestGetPasskeySettings_BothDerivationsTogether(t *testing.T) {
 // and no longer re-derives (RPID now non-empty).
 func TestGetPasskeySettings_DerivationPersistsAcrossCalls(t *testing.T) {
 	savePasskeyState(t)
-	defaultPasskeySettings = PasskeySettings{RPID: "", Origins: ""}
+	setPasskeySettingsForTest(PasskeySettings{RPID: "", Origins: ""})
 	ServerAddress = "https://first.example"
 	assert.Equal(t, "first.example", GetPasskeySettings().RPID)
 

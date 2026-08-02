@@ -48,15 +48,39 @@ func init() {
 		GroupGroupRatio:         groupGroupRatioMap,
 	}
 
-	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)
+	config.GlobalConfig.RegisterSnapshot("group_ratio_setting", &groupRatioSetting, publishGroupRatioSetting)
 }
 
-func GetGroupRatioSetting() *GroupRatioSetting {
+// publishGroupRatioSetting 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
+//
+// GroupSpecialUsableGroup 的懒初始化放在这里而不是 getter 里：原来的
+// GetGroupRatioSetting 在字段为 nil 时会往包级变量写一个新 map，而它被并发调用，
+// 两个请求同时命中就是对同一块内存的并发写。放到发布时只在草稿锁内写一次。
+func publishGroupRatioSetting() {
 	if groupRatioSetting.GroupSpecialUsableGroup == nil {
 		groupRatioSetting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
 		groupRatioSetting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
 	}
-	return &groupRatioSetting
+	groupRatioSnapshot.Publish(groupRatioSetting)
+}
+
+var groupRatioSnapshot config.Snapshot[GroupRatioSetting]
+
+// GetGroupRatioSetting 返回不可变快照。
+//
+// 注意：结构体里的字段是 types.RWMap 句柄，它们本身是并发安全容器，
+// 快照复制的是句柄而不是内容——通过快照对 RWMap 的读写仍然作用于同一份共享数据，
+// 这正是既有调用方期望的行为。快照消除的是**结构体字段**被原地改写的竞争。
+func GetGroupRatioSetting() *GroupRatioSetting {
+	return groupRatioSnapshot.Load()
+}
+
+// ReplaceGroupRatioSetting 整体替换配置并立即重新发布快照（供测试使用）。
+func ReplaceGroupRatioSetting(s GroupRatioSetting) {
+	config.WithConfigDraft(func() {
+		groupRatioSetting = s
+		publishGroupRatioSetting()
+	})
 }
 
 func GetGroupRatioCopy() map[string]float64 {
