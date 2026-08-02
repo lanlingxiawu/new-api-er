@@ -28,7 +28,13 @@ const STORAGE_KEYS = {
   USER_ID: 'uid',
   AFFILIATE: 'aff',
   STATUS: 'status',
+  PENDING_TWO_FA_FLOW: 'auth:pending-2fa:v1',
 } as const
+
+export interface PendingTwoFAFlow {
+  flowToken: string
+  expiresAt: number
+}
 
 // ============================================================================
 // User ID Storage
@@ -71,6 +77,84 @@ export function removeUserId(): void {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to remove user ID:', error)
+  }
+}
+
+// ============================================================================
+// Pending Two-Factor Login Flow
+// ============================================================================
+
+export function savePendingTwoFAFlow(
+  flowToken: string,
+  expiresAt: number
+): boolean {
+  if (
+    typeof window === 'undefined' ||
+    !flowToken.trim() ||
+    !Number.isFinite(expiresAt)
+  ) {
+    return false
+  }
+
+  try {
+    const flow: PendingTwoFAFlow = {
+      flowToken: flowToken.trim(),
+      expiresAt,
+    }
+    window.sessionStorage.setItem(
+      STORAGE_KEYS.PENDING_TWO_FA_FLOW,
+      JSON.stringify(flow)
+    )
+    return true
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to save pending 2FA login flow:', error)
+    return false
+  }
+}
+
+export function getPendingTwoFAFlow(): PendingTwoFAFlow | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEYS.PENDING_TWO_FA_FLOW)
+    if (!raw) return null
+
+    const value = JSON.parse(raw) as Partial<PendingTwoFAFlow>
+    if (
+      typeof value.flowToken !== 'string' ||
+      !value.flowToken.trim() ||
+      typeof value.expiresAt !== 'number' ||
+      !Number.isFinite(value.expiresAt)
+    ) {
+      window.sessionStorage.removeItem(STORAGE_KEYS.PENDING_TWO_FA_FLOW)
+      return null
+    }
+
+    return {
+      flowToken: value.flowToken,
+      expiresAt: value.expiresAt,
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to read pending 2FA login flow:', error)
+    try {
+      window.sessionStorage.removeItem(STORAGE_KEYS.PENDING_TWO_FA_FLOW)
+    } catch {
+      // Storage is unavailable; there is nothing else to clean up.
+    }
+    return null
+  }
+}
+
+export function removePendingTwoFAFlow(): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.sessionStorage.removeItem(STORAGE_KEYS.PENDING_TWO_FA_FLOW)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to remove pending 2FA login flow:', error)
   }
 }
 

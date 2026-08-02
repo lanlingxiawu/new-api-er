@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -48,17 +48,17 @@ import {
   BACKUP_CODE_LENGTH,
 } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
-import { saveUserId } from '@/features/auth/lib/storage'
-import { applyAuthBundle, isAuthBundle } from '@/lib/api'
+import {
+  getPendingTwoFAFlow,
+  removePendingTwoFAFlow,
+} from '@/features/auth/lib/storage'
 import {
   isValidOTP,
   isValidBackupCode,
   formatBackupCode,
   cleanBackupCode,
 } from '@/features/auth/lib/validation'
-import type { User } from '@/features/users/types'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 type OtpFormProps = React.HTMLAttributes<HTMLFormElement>
 
@@ -66,9 +66,9 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [useBackupCode, setUseBackupCode] = useState(false)
+  const [pendingFlow] = useState(getPendingTwoFAFlow)
 
-  const { auth } = useAuthStore()
-  const { redirectToLogin } = useAuthRedirect()
+  const { handleLoginSuccess, redirectToLogin } = useAuthRedirect()
 
   const form = useForm<z.infer<typeof otpFormSchema>>({
     resolver: zodResolver(otpFormSchema),
@@ -76,6 +76,13 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   })
 
   const otp = form.watch('otp')
+
+  useEffect(() => {
+    if (!pendingFlow) {
+      toast.error(t('Session expired!'))
+      redirectToLogin()
+    }
+  }, [pendingFlow, redirectToLogin, t])
 
   async function onSubmit(data: z.infer<typeof otpFormSchema>) {
     // Validate based on mode
@@ -93,39 +100,32 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
 
     setIsLoading(true)
     try {
+      const activeFlow = getPendingTwoFAFlow()
+      if (!activeFlow) {
+        toast.error(t('Session expired!'))
+        redirectToLogin()
+        return
+      }
+
       // Remove all hyphens from backup code before sending to backend
       const code = useBackupCode ? cleanBackupCode(data.otp) : data.otp
-      const res = await login2fa({ code })
+      const res = await login2fa({
+        code,
+        flow_token: activeFlow.flowToken,
+      })
 
       if (!res.success) {
         toast.error(res.message || t('Invalid code'))
         return
       }
 
-      // Handle user data from 2FA login response
-      const userData = res.data
-      if (!userData) {
+      if (!res.data) {
         throw new Error('No user data received from login')
       }
 
-      // 2FA 通过后后端才下发正式凭证，和普通登录一样必须存下来，
-      // 否则后续接口没有 Authorization 头会全部 401。
-      if (isAuthBundle(userData)) {
-        applyAuthBundle(userData)
-      } else {
-        auth.setUser(userData as User)
-      }
-
-      // Store user ID in localStorage for compatibility
-      const userId =
-        (userData as { id?: number }).id ??
-        (userData as { user?: { id?: number } }).user?.id
-      if (userId) {
-        saveUserId(userId)
-      }
-
+      removePendingTwoFAFlow()
+      await handleLoginSuccess(res.data)
       toast.success(t('Signed in'))
-      redirectToLogin() // This will redirect to dashboard via the redirect logic
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('2FA verification error:', error)
@@ -143,6 +143,7 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   }
 
   function handleBackToLogin() {
+    removePendingTwoFAFlow()
     redirectToLogin()
   }
 

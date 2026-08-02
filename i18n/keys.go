@@ -235,6 +235,7 @@ const (
 	MsgTwoFAAlreadyExists = "twofa.already_exists"
 	MsgTwoFARecordIdEmpty = "twofa.record_id_empty"
 	MsgTwoFACodeInvalid   = "twofa.code_invalid"
+	MsgTwoFALoginExpired  = "twofa.login_expired"
 )
 
 // Rate limit related messages

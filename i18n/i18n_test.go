@@ -420,3 +420,9 @@ func TestTranslate_NilBundleFallsBackToKey(t *testing.T) {
 	assert.Equal(t, "log_export.col.created_at", Translate("en", "log_export.col.created_at"))
 	assert.Equal(t, "some.key", Translate("zh-CN", "some.key", map[string]any{"X": 1}))
 }
+
+func TestTranslateTwoFALoginExpired(t *testing.T) {
+	assert.Equal(t, "Your verification session has expired. Please sign in again.", Translate(LangEn, MsgTwoFALoginExpired))
+	assert.Equal(t, "验证会话已过期，请重新登录。", Translate(LangZhCN, MsgTwoFALoginExpired))
+	assert.Equal(t, "驗證工作階段已過期，請重新登入。", Translate(LangZhTW, MsgTwoFALoginExpired))
+}

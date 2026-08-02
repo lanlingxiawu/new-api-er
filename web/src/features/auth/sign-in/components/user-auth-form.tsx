@@ -44,6 +44,7 @@ import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import { savePendingTwoFAFlow } from '@/features/auth/lib/storage'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
@@ -161,6 +162,16 @@ export function UserAuthForm({
 
       if (res.success) {
         if (res.data?.require_2fa) {
+          const flowToken = res.data.flow_token
+          const expiresAt = res.data.expires_at
+          if (
+            typeof flowToken !== 'string' ||
+            typeof expiresAt !== 'number' ||
+            !savePendingTwoFAFlow(flowToken, expiresAt)
+          ) {
+            toast.error(t('Login failed'))
+            return
+          }
           redirectTo2FA()
           return
         }
@@ -168,7 +179,7 @@ export function UserAuthForm({
         await handleLoginSuccess(res.data as { id?: number } | null, redirectTo)
         toast.success(t('Welcome back!'))
       }
-    } catch (_error) {
+    } catch {
       // Errors are handled by global interceptor
     } finally {
       setIsLoading(false)
@@ -208,7 +219,7 @@ export function UserAuthForm({
       } else {
         toast.error(res?.message || loginFailedMessage)
       }
-    } catch (_error) {
+    } catch {
       toast.error(loginFailedMessage)
     } finally {
       setIsWeChatSubmitting(false)

@@ -201,6 +201,7 @@ twofa.user_id_empty: "User ID cannot be empty"
 twofa.already_exists: "User already has 2FA configured"
 twofa.record_id_empty: "2FA record ID cannot be empty"
 twofa.code_invalid: "Verification code or backup code is incorrect"
+twofa.login_expired: "Your verification session has expired. Please sign in again."
 
 # Rate limit messages
 rate_limit.reached: "You have reached the request limit: maximum {{.Max}} requests in {{.Minutes}} minutes"

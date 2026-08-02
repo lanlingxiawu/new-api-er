@@ -57,6 +57,7 @@ export async function login(payload: LoginPayload) {
 export async function login2fa(payload: TwoFAPayload) {
   const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload, {
     skipAuthRefresh: true,
+    skipBusinessError: true,
   })
   return res.data
 }

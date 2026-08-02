@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -427,57 +429,43 @@ func RegenerateBackupCodes(c *gin.Context) {
 func Verify2FALogin(c *gin.Context) {
 	var req Verify2FARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "参数错误",
-		})
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 
 	flow, err := model.GetAuthFlow(req.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeTwoFALogin})
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
+		logger.LogError(c, "failed to load 2FA login flow: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgTwoFALoginExpired)
 		return
 	}
 	// 获取用户信息
 	user, err := model.GetUserById(flow.UserId, false)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户不存在",
-		})
+		logger.LogError(c, "failed to load user for 2FA login: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
 		return
 	}
 	if user.Status != common.UserStatusEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户已被禁用",
-		})
+		common.ApiErrorI18n(c, i18n.MsgUserDisabled)
 		return
 	}
 	var flowPayload twoFALoginFlowPayload
 	if err := common.UnmarshalJsonStr(flow.Payload, &flowPayload); err != nil || flowPayload.AuthVersion <= 0 || flowPayload.AuthVersion != user.AuthVersion {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
+		logger.LogWarn(c, "rejected stale or invalid 2FA login flow")
+		common.ApiErrorI18n(c, i18n.MsgTwoFALoginExpired)
 		return
 	}
 
 	// 获取2FA记录
 	twoFA, err := model.GetTwoFAByUserId(user.Id)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "failed to load 2FA settings during login: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	if twoFA == nil || !twoFA.IsEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户未启用2FA",
-		})
+		common.ApiErrorI18n(c, i18n.MsgTwoFANotEnabled)
 		return
 	}
 
@@ -495,19 +483,14 @@ func Verify2FALogin(c *gin.Context) {
 		// 尝试验证备用码
 		isValidBackup, err = twoFA.ValidateBackupCodeAndUpdateUsage(req.Code)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+			logger.LogError(c, "failed to validate 2FA backup code: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgTwoFACodeInvalid)
 			return
 		}
 	}
 
 	if !isValidTOTP && !isValidBackup {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "验证码或备用码错误，请重试",
-		})
+		common.ApiErrorI18n(c, i18n.MsgTwoFACodeInvalid)
 		return
 	}
 
@@ -515,10 +498,8 @@ func Verify2FALogin(c *gin.Context) {
 		Purpose: model.AuthFlowPurposeTwoFALogin,
 		UserId:  user.Id,
 	}); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
+		logger.LogError(c, "failed to consume 2FA login flow: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgTwoFALoginExpired)
 		return
 	}
 
