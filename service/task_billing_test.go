@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +19,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	"github.com/shopspring/decimal"
 	"gorm.io/driver/mysql"
@@ -64,9 +68,15 @@ func TestMain(m *testing.M) {
 	if sqlDSN == "" {
 		panic("SQL_DSN not set in .env, cannot connect to database")
 	}
+	sqlDSN, cleanupMainDB, err := isolatedServiceTestDSN(sqlDSN, "main")
+	if err != nil {
+		panic("failed to create isolated main test database: " + err.Error())
+	}
+	// The database/schema above is unique to this process, so per-test full
+	// cleanup is safe and keeps tests independent without touching shared data.
+	_ = os.Setenv("TEST_DB_CLEANUP", "true")
 
 	var db *gorm.DB
-	var err error
 
 	if strings.HasPrefix(sqlDSN, "postgres://") || strings.HasPrefix(sqlDSN, "postgresql://") {
 		common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
@@ -98,7 +108,14 @@ func TestMain(m *testing.M) {
 
 	// --- Log DB (PostgreSQL from .env LOG_SQL_DSN, fallback to main DB) ---
 	logDSN := os.Getenv("LOG_SQL_DSN")
+	cleanupLogDB := func() {}
 	if logDSN != "" {
+		var isolateErr error
+		logDSN, cleanupLogDB, isolateErr = isolatedServiceTestDSN(logDSN, "log")
+		if isolateErr != nil {
+			cleanupMainDB()
+			panic("failed to create isolated log test database: " + isolateErr.Error())
+		}
 		if strings.HasPrefix(logDSN, "postgres://") || strings.HasPrefix(logDSN, "postgresql://") {
 			common.SetLogDatabaseType(common.DatabaseTypePostgreSQL)
 			logDB, err := gorm.Open(postgres.New(postgres.Config{
@@ -124,10 +141,12 @@ func TestMain(m *testing.M) {
 	// AutoMigrate only commission/business-related tables
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.Option{},
 		&model.Token{},
 		&model.Channel{},
 		&model.Ability{},
 		&model.Log{},
+		&model.QuotaData{},
 		&model.TopUp{},
 		&model.Task{},
 		&model.SubscriptionPlan{},
@@ -135,6 +154,7 @@ func TestMain(m *testing.M) {
 		&model.UserSubscription{},
 		&model.SubscriptionPreConsumeRecord{},
 		&model.PerfMetric{},
+		&model.QuotaData{},
 		&model.UserExtension{},
 		&model.EmployeeProfile{},
 		&model.ChannelCostConfig{},
@@ -160,22 +180,114 @@ func TestMain(m *testing.M) {
 		panic("failed to migrate log db: " + err.Error())
 	}
 
-	fmt.Println("[TEST] Main DB connected:", sqlDSN)
+	fmt.Println("[TEST] Main DB connected (isolated schema)")
 	if logDSN != "" {
-		fmt.Println("[TEST] Log DB connected:", logDSN)
+		fmt.Println("[TEST] Log DB connected (isolated schema)")
 	} else {
 		fmt.Println("[TEST] Log DB: using main DB")
 	}
 
-	os.Exit(m.Run())
+	// 消费日志已改为异步入库，不开启管道的话 relay 侧的 enqueue 会被直接丢弃。
+	// 把周期拉到上限，让落库时机完全由 drainRelayLogs 决定，用例才是确定性的。
+	operation_setting.GetRelayLogPipelineSetting().FlushIntervalMs = 60_000
+	model.StartRelayLogFlushLoop()
+
+	exitCode := m.Run()
+	model.DrainRelayLogsSync(5 * time.Second)
+	if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
+		_ = sqlDB.Close()
+	}
+	if model.LOG_DB != nil && model.LOG_DB != model.DB {
+		if logSQLDB, dbErr := model.LOG_DB.DB(); dbErr == nil {
+			_ = logSQLDB.Close()
+		}
+	}
+	cleanupLogDB()
+	cleanupMainDB()
+	os.Exit(exitCode)
+}
+
+func isolatedServiceTestDSN(rawDSN string, role string) (string, func(), error) {
+	suffix := fmt.Sprintf("newapi_service_%s_%d_%d", role, os.Getpid(), time.Now().UnixNano())
+	if strings.HasPrefix(rawDSN, "postgres://") || strings.HasPrefix(rawDSN, "postgresql://") {
+		baseDB, err := gorm.Open(postgres.New(postgres.Config{
+			DSN:                  rawDSN,
+			PreferSimpleProtocol: true,
+		}), &gorm.Config{})
+		if err != nil {
+			return "", func() {}, err
+		}
+		if err := baseDB.Exec(`CREATE SCHEMA "` + suffix + `"`).Error; err != nil {
+			return "", func() {}, err
+		}
+		parsed, err := url.Parse(rawDSN)
+		if err != nil {
+			_ = baseDB.Exec(`DROP SCHEMA IF EXISTS "` + suffix + `" CASCADE`).Error
+			return "", func() {}, err
+		}
+		query := parsed.Query()
+		query.Set("search_path", suffix)
+		parsed.RawQuery = query.Encode()
+		cleanup := func() {
+			_ = baseDB.Exec(`DROP SCHEMA IF EXISTS "` + suffix + `" CASCADE`).Error
+			if sqlDB, dbErr := baseDB.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+		}
+		return parsed.String(), cleanup, nil
+	}
+
+	cfg, err := mysqldriver.ParseDSN(rawDSN)
+	if err != nil {
+		return "", func() {}, err
+	}
+	baseCfg := *cfg
+	baseCfg.DBName = ""
+	baseSQL, err := sql.Open("mysql", baseCfg.FormatDSN())
+	if err != nil {
+		return "", func() {}, err
+	}
+	if _, err := baseSQL.Exec("CREATE DATABASE `" + suffix + "`"); err != nil {
+		_ = baseSQL.Close()
+		return "", func() {}, err
+	}
+	cfg.DBName = suffix
+	cleanup := func() {
+		_, _ = baseSQL.Exec("DROP DATABASE IF EXISTS `" + suffix + "`")
+		_ = baseSQL.Close()
+	}
+	return cfg.FormatDSN(), cleanup, nil
 }
 
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------
 
+// drainRelayLogs 把异步管道里积压的消费/错误日志同步落库。
+// 断言日志行之前必须先调用，否则读到的是上一批还没刷盘的缓冲。
+func drainRelayLogs() {
+	model.DrainRelayLogsSync(5 * time.Second)
+}
+
 func truncate(t *testing.T) {
 	t.Helper()
+
+	// 先把上一个用例遗留在缓冲里的日志刷掉再清表，否则它们会在本用例窗口内落库。
+	drainRelayLogs()
+	if strings.EqualFold(os.Getenv("TEST_DB_CLEANUP"), "true") {
+		model.DB.Exec("DELETE FROM tasks")
+		model.DB.Exec("DELETE FROM users")
+		model.DB.Exec("DELETE FROM tokens")
+		model.DB.Exec("DELETE FROM logs")
+		if model.LOG_DB != nil {
+			model.LOG_DB.Exec("DELETE FROM logs")
+		}
+		model.DB.Exec("DELETE FROM channels")
+		model.DB.Exec("DELETE FROM top_ups")
+		model.DB.Exec("DELETE FROM user_subscriptions")
+		model.DB.Exec("DELETE FROM system_task_locks")
+		model.DB.Exec("DELETE FROM system_tasks")
+	}
 
 	// 无条件的行级清理：只删本用例开始之后新建的系统任务。
 	// system_tasks.active_key 有唯一索引，用例留下的活跃任务会让后续运行直接撞索引；
@@ -457,6 +569,7 @@ func getTaskQuota(t *testing.T, id int64) int {
 
 func getLastLog(t *testing.T) *model.Log {
 	t.Helper()
+	drainRelayLogs()
 	var log model.Log
 	err := model.LOG_DB.Order("id desc").First(&log).Error
 	if err != nil {
@@ -467,6 +580,7 @@ func getLastLog(t *testing.T) *model.Log {
 
 func countLogs(t *testing.T) int64 {
 	t.Helper()
+	drainRelayLogs()
 	var count int64
 	model.LOG_DB.Model(&model.Log{}).Count(&count)
 	return count

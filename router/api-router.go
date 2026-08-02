@@ -272,6 +272,8 @@ func SetApiRouter(router *gin.Engine) {
 		systemAdminRoute.Use(middleware.AdminAuth())
 		{
 			systemAdminRoute.GET("/ledger-pipeline/status", controller.AdminGetLedgerPipelineStatus)
+			systemAdminRoute.GET("/relay-log-pipeline/status", controller.AdminGetRelayLogPipelineStatus)
+			systemAdminRoute.POST("/relay-log-pipeline/replay", controller.AdminStartRelayLogFallbackReplay)
 		}
 
 		// Customer management (admin)

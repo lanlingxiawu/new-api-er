@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -287,12 +289,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
-		}
-	}
+	needRecordIp := contextWantsIPLog(c)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
@@ -319,10 +316,29 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
-	if err != nil {
-		logger.LogError(c, "failed to record log: "+err.Error())
+	_ = enqueueAsyncRelayLog(relayLogKindError, log, nil, nil)
+}
+
+// EnqueueConsumeLog builds and non-blockingly appends a consume log to the
+// bounded relay-log buffer. continuation is executed by a fixed background
+// worker after the INSERT has produced the existing logs.id.
+func EnqueueConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams, accounting *RelayLogAccountingPayload) bool {
+	if !common.LogConsumeEnabled {
+		dispatchRelayLogContinuation(&relayLogEvent{Accounting: accounting}, 0)
+		return true
 	}
+	logEntry := buildConsumeLog(c, userId, params)
+	dataExport := common.DataExportEnabled
+	quotaData := QuotaDataLogParams{
+		UserID: userId, Username: logEntry.Username, ModelName: params.ModelName, Quota: params.Quota,
+		CreatedAt: logEntry.CreatedAt, TokenUsed: params.PromptTokens + params.CompletionTokens,
+		UseGroup: params.Group, TokenID: params.TokenId, ChannelID: params.ChannelId, NodeName: common.NodeName,
+	}
+	var quotaDataPtr *QuotaDataLogParams
+	if dataExport {
+		quotaDataPtr = &quotaData
+	}
+	return enqueueAsyncRelayLog(relayLogKindConsume, logEntry, accounting, quotaDataPtr)
 }
 
 type RecordConsumeLogParams struct {
@@ -347,24 +363,33 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		return 0
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
-	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
-	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := common.MapToJsonStr(params.Other)
+	logEntry := buildConsumeLog(c, userId, params)
+	username := logEntry.Username
+	createdAt := logEntry.CreatedAt
+	err := createLog(logEntry)
+	if err != nil {
+		logger.LogError(c, "failed to record log: "+err.Error())
+		return 0
+	}
+	if common.DataExportEnabled {
+		LogQuotaData(QuotaDataLogParams{
+			UserID: userId, Username: username, ModelName: params.ModelName, Quota: params.Quota,
+			CreatedAt: createdAt, TokenUsed: params.PromptTokens + params.CompletionTokens,
+			UseGroup: params.Group, TokenID: params.TokenId, ChannelID: params.ChannelId, NodeName: common.NodeName,
+		})
+	}
+	return logEntry.Id
+}
+
+func buildConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) *Log {
 	createdAt := params.CreatedAt
 	if createdAt == 0 {
 		createdAt = common.GetTimestamp()
 	}
-	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
-		}
-	}
-	logEntry := &Log{
+	needRecordIp := contextWantsIPLog(c)
+	return &Log{
 		UserId:           userId,
-		Username:         username,
+		Username:         c.GetString("username"),
 		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
@@ -384,30 +409,20 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			}
 			return ""
 		}(),
-		RequestId:         requestId,
-		UpstreamRequestId: upstreamRequestId,
-		Other:             otherStr,
+		RequestId:         c.GetString(common.RequestIdKey),
+		UpstreamRequestId: c.GetString(common.UpstreamRequestIdKey),
+		Other:             common.MapToJsonStr(params.Other),
 	}
-	err := createLog(logEntry)
-	if err != nil {
-		logger.LogError(c, "failed to record log: "+err.Error())
-		return 0
+}
+
+// contextWantsIPLog uses only the user-setting snapshot installed by auth
+// middleware. It must never fall back to the main database on the relay path.
+func contextWantsIPLog(c *gin.Context) bool {
+	if c == nil {
+		return false
 	}
-	if common.DataExportEnabled {
-		LogQuotaData(QuotaDataLogParams{
-			UserID:    userId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			TokenUsed: params.PromptTokens + params.CompletionTokens,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  common.NodeName,
-		})
-	}
-	return logEntry.Id
+	settingMap, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
+	return ok && settingMap.RecordIpLog
 }
 
 func GetChannelNameSnapshotsFromLogs(ids []int) map[int]string {

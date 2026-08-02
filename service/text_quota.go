@@ -531,22 +531,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
-		ChannelId:              relayInfo.ChannelId,
-		PromptTokens:           summary.PromptTokens,
-		CompletionTokens:       summary.CompletionTokens,
-		ModelName:              logModel,
-		TokenName:              summary.TokenName,
-		Quota:                  summary.Quota,
-		Content:                logContent,
-		TokenId:                relayInfo.TokenId,
-		UseTimeSeconds:         int(summary.UseTimeSeconds),
-		IsStream:               relayInfo.IsStream,
-		Group:                  relayInfo.UsingGroup,
-		Other:                  other,
-		CountUsage:             countUsage,
-		AsyncCostAndCommission: true,
-		SurchargeQuota:         int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
-		LedgerQuota:            summary.LedgerQuota,
+		ChannelId:        relayInfo.ChannelId,
+		PromptTokens:     summary.PromptTokens,
+		CompletionTokens: summary.CompletionTokens,
+		ModelName:        logModel,
+		TokenName:        summary.TokenName,
+		Quota:            summary.Quota,
+		Content:          logContent,
+		TokenId:          relayInfo.TokenId,
+		UseTimeSeconds:   int(summary.UseTimeSeconds),
+		IsStream:         relayInfo.IsStream,
+		Group:            relayInfo.UsingGroup,
+		Other:            other,
+		CountUsage:       countUsage,
+		SurchargeQuota:   int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		LedgerQuota:      summary.LedgerQuota,
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))

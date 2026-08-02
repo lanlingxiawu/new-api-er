@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -184,6 +185,13 @@ func firstUserLog(t *testing.T, userID int) *Log {
 	return &l
 }
 
+func flushRelayErrorLogsForTest(t *testing.T) {
+	t.Helper()
+	events := takeRelayLogBatch(relayLogKindError)
+	require.NotEmpty(t, events)
+	persistRelayLogEvents(events)
+}
+
 func TestRecordLog_ConsumeDisabledSkips(t *testing.T) {
 	requireLogDB(t)
 	u := mkUser(t, nil)
@@ -289,6 +297,12 @@ func TestRecordTopupLog(t *testing.T) {
 
 func TestRecordErrorLog(t *testing.T) {
 	requireLogDB(t)
+	resetRelayLogPipelineForTest()
+	relayLogAccepting.Store(true)
+	t.Cleanup(func() {
+		relayLogAccepting.Store(false)
+		resetRelayLogPipelineForTest()
+	})
 	u := mkUser(t, nil)
 	logCleanupUser(t, u.Id)
 
@@ -300,6 +314,7 @@ func TestRecordErrorLog(t *testing.T) {
 	// default user setting -> RecordIpLog false -> ip stays empty
 	RecordErrorLog(c, u.Id, 42, "gpt-4o", "tok-1", "boom", 7, 3, true, "grpA",
 		map[string]interface{}{"detail": "x"})
+	flushRelayErrorLogsForTest(t)
 
 	l := firstUserLog(t, u.Id)
 	assert.Equal(t, LogTypeError, l.Type)
@@ -313,6 +328,12 @@ func TestRecordErrorLog(t *testing.T) {
 
 func TestRecordErrorLog_RecordsIpWhenEnabled(t *testing.T) {
 	requireLogDB(t)
+	resetRelayLogPipelineForTest()
+	relayLogAccepting.Store(true)
+	t.Cleanup(func() {
+		relayLogAccepting.Store(false)
+		resetRelayLogPipelineForTest()
+	})
 	u := mkUser(t, func(usr *User) {
 		usr.SetSetting(dto.UserSetting{RecordIpLog: true})
 	})
@@ -323,8 +344,10 @@ func TestRecordErrorLog_RecordsIpWhenEnabled(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/v1/chat", nil)
 	c.Request.RemoteAddr = "203.0.113.7:5555"
 	c.Set("username", u.Username)
+	common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{RecordIpLog: true})
 
 	RecordErrorLog(c, u.Id, 1, "m", "tk", "err", 0, 0, false, "g", nil)
+	flushRelayErrorLogsForTest(t)
 	l := firstUserLog(t, u.Id)
 	assert.NotEmpty(t, l.Ip) // ClientIP recorded because record_ip_log=true
 }
@@ -429,7 +452,7 @@ func TestGetChannelNameSnapshotsFromLogs(t *testing.T) {
 
 	// older snapshot then newer snapshot; newest (by created_at desc) wins
 	mkLogRow(t, func(l *Log) {
-		l.UserId, l.ChannelId, l.CreatedAt = uid, chID, common.GetTimestamp() - 100
+		l.UserId, l.ChannelId, l.CreatedAt = uid, chID, common.GetTimestamp()-100
 		l.Other = common.MapToJsonStr(map[string]interface{}{"channel_name": "OldName"})
 	})
 	mkLogRow(t, func(l *Log) {
@@ -469,10 +492,10 @@ func TestGetAllLogs(t *testing.T) {
 	})
 	mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.ModelName, l.TokenName, l.Group = uid, uname, "claude-3", "tkB", grp
-		l.ChannelId, l.Quota, l.CreatedAt, l.UpstreamRequestId = ch.Id, 20, now + 1, "urid-9"
+		l.ChannelId, l.Quota, l.CreatedAt, l.UpstreamRequestId = ch.Id, 20, now+1, "urid-9"
 	})
 	mkLogRow(t, func(l *Log) {
-		l.UserId, l.Username, l.Type, l.CreatedAt = uid, uname, LogTypeManage, now + 2
+		l.UserId, l.Username, l.Type, l.CreatedAt = uid, uname, LogTypeManage, now+2
 		l.Content = "mgmt"
 	})
 
@@ -557,7 +580,7 @@ func TestExportLogs(t *testing.T) {
 	now := common.GetTimestamp()
 	for i := 0; i < 3; i++ {
 		mkLogRow(t, func(l *Log) {
-			l.UserId, l.Username, l.CreatedAt, l.ModelName = uid, uname, now + int64(i), "gpt-4o"
+			l.UserId, l.Username, l.CreatedAt, l.ModelName = uid, uname, now+int64(i), "gpt-4o"
 		})
 	}
 
@@ -608,7 +631,7 @@ func TestGetUserLogs(t *testing.T) {
 		l.Other = common.MapToJsonStr(map[string]interface{}{"admin_info": map[string]interface{}{"a": 1}, "keep": "y"})
 	})
 	mkLogRow(t, func(l *Log) {
-		l.UserId, l.Username, l.Type, l.CreatedAt = uid, uname, LogTypeManage, now + 1
+		l.UserId, l.Username, l.Type, l.CreatedAt = uid, uname, LogTypeManage, now+1
 	})
 
 	// all types
@@ -768,7 +791,9 @@ func TestGetEmployeeCustomerLogs(t *testing.T) {
 		l.UserId, l.Username, l.Quota, l.CreatedAt, l.PromptTokens = cust1.Id, cust1.Username, 10, now, 3
 		l.ChannelId = ch.Id // exercises fillLogChannelNames DB path
 	})
-	mkLogRow(t, func(l *Log) { l.UserId, l.Username, l.Quota, l.CreatedAt, l.CompletionTokens = cust2.Id, cust2.Username, 20, now, 4 })
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.Username, l.Quota, l.CreatedAt, l.CompletionTokens = cust2.Id, cust2.Username, 20, now, 4
+	})
 	mkLogRow(t, func(l *Log) { l.UserId, l.Username, l.Quota, l.CreatedAt = excluded.Id, excluded.Username, 999, now })
 	mkLogRow(t, func(l *Log) { l.UserId, l.Username, l.Quota, l.CreatedAt = employee.Id, employee.Username, 5, now })
 

@@ -53,7 +53,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
 	attachQuotaSaturation(c, info, other)
-	logId := model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+	EnqueueConsumeLogWithCost(c, info, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
@@ -62,14 +62,9 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		TokenId:   info.TokenId,
 		Group:     info.UsingGroup,
 		Other:     other,
-	})
+	}, info.PriceData.Quota, 0)
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
-	infoCopy := *info
-	quotaCopy := info.PriceData.Quota
-	go func() {
-		RecordCostAndSettleEmployeeCommission(&infoCopy, quotaCopy, 0, logId)
-	}()
 }
 
 // ---------------------------------------------------------------------------

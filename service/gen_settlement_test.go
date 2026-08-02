@@ -18,10 +18,12 @@ import (
 
 // --- FinalizeConsumptionSettlement -----------------------------------------
 
-func TestSettleflow_Finalize_NilRelayInfoReturnsZero(t *testing.T) {
+func TestSettleflow_Finalize_NilRelayInfoWritesNothing(t *testing.T) {
+	truncate(t)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(nil)
-	assert.Equal(t, 0, FinalizeConsumptionSettlement(c, nil, ConsumptionSettlementParams{}))
+	FinalizeConsumptionSettlement(c, nil, ConsumptionSettlementParams{})
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestSettleflow_Finalize_DefaultsFromRelayInfoAndLogs(t *testing.T) {
@@ -36,17 +38,15 @@ func TestSettleflow_Finalize_DefaultsFromRelayInfoAndLogs(t *testing.T) {
 		OriginModelName: "gpt-4o",
 		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 88},
 	}
-	// Quota 0 + CountUsage false + async commission => no wallet/token mutation and
-	// the async commission is a no-op (quota==0). We only assert log defaulting.
-	logID := FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{
-		PromptTokens:           10,
-		CompletionTokens:       5,
-		Quota:                  0,
-		CountUsage:             false,
-		AsyncCostAndCommission: true,
-		Other:                  map[string]interface{}{},
+	// Quota 0 + CountUsage false => no wallet/token mutation and the async
+	// commission is a no-op (quota==0). We only assert log defaulting.
+	FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		Quota:            0,
+		CountUsage:       false,
+		Other:            map[string]interface{}{},
 	})
-	require.Greater(t, logID, 0)
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
@@ -76,13 +76,14 @@ func TestSettleflow_Finalize_CountUsageChargesWallet(t *testing.T) {
 	}
 	// CountUsage true => used-quota counters; SettleBilling fallback (no session,
 	// FinalPreConsumedQuota 0) deducts the full quota from wallet+token.
-	logID := FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{
-		Quota:                  1200,
-		CountUsage:             true,
-		AsyncCostAndCommission: true,
-		Other:                  map[string]interface{}{},
+	FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{
+		Quota:      1200,
+		CountUsage: true,
+		Other:      map[string]interface{}{},
 	})
-	require.Greater(t, logID, 0)
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, 1200, log.Quota)
 	assert.Equal(t, 8800, getUserQuota(t, uid))
 	assert.Equal(t, 6800, getTokenRemainQuota(t, tid))
 }

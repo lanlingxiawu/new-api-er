@@ -23,6 +23,10 @@ import { LedgerDetailSection } from '../maintenance/ledger-detail-section'
 import { LedgerPipelineSection } from '../maintenance/ledger-pipeline-section'
 import { LogExportSection } from '../maintenance/log-export-section'
 import { LogQuerySection } from '../maintenance/log-query-section'
+import {
+  RelayLogPipelineSection,
+  type RelayLogPipelineFlatDefaults,
+} from '../maintenance/relay-log-pipeline-section'
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { systemTuningFallbackSettings } from './defaults'
@@ -213,6 +217,40 @@ const SYSTEM_TUNING_SECTIONS = [
         }}
       />
     ),
+  },
+  {
+    id: 'relay-log-pipeline',
+    titleKey: 'Relay Log Pipeline',
+    build: (settings: SystemTuningSettings) => {
+      const keys = [
+        'relay_log_pipeline_setting.enabled',
+        'relay_log_pipeline_setting.consume_buf_max_entries',
+        'relay_log_pipeline_setting.error_buf_max_entries',
+        'relay_log_pipeline_setting.continuation_buf_max_entries',
+        'relay_log_pipeline_setting.outer_batch_size',
+        'relay_log_pipeline_setting.inner_batch_size',
+        'relay_log_pipeline_setting.flush_max_per_cycle',
+        'relay_log_pipeline_setting.full_drain',
+        'relay_log_pipeline_setting.flush_interval_ms',
+        'relay_log_pipeline_setting.write_timeout_sec',
+        'relay_log_pipeline_setting.fallback_queue_capacity',
+        'relay_log_pipeline_setting.fallback_max_file_size_mb',
+        'relay_log_pipeline_setting.fallback_max_files',
+        'relay_log_pipeline_setting.shutdown_timeout_sec',
+        'relay_log_retry_setting.retry_flush_interval_ms',
+        'relay_log_retry_setting.max_retries',
+        'relay_log_retry_setting.retry_buf_max_entries',
+        'relay_log_retry_setting.allow_concurrent_flush',
+        'relay_log_retry_setting.circuit_failure_threshold',
+        'relay_log_retry_setting.circuit_open_sec',
+      ] as const
+      const defaultValues = {} as RelayLogPipelineFlatDefaults
+      for (const key of keys) {
+        ;(defaultValues as Record<string, boolean | number>)[key] =
+          settings[key] ?? systemTuningFallbackSettings[key]
+      }
+      return <RelayLogPipelineSection defaultValues={defaultValues} />
+    },
   },
   {
     id: 'export-settings',

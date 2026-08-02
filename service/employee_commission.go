@@ -208,6 +208,65 @@ func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quo
 	guard.Success()
 }
 
+// costCommissionSnapshot is deliberately pointer/map/interface free. Relay log
+// queues may retain it for seconds; keeping RelayInfo there would also retain
+// websocket connections, credentials, request headers and billing sessions.
+type costCommissionSnapshot struct {
+	UserID          int
+	ChannelID       int
+	ChannelName     string
+	UsingGroup      string
+	OriginModelName string
+	GroupRatio      float64
+	Quota           int
+	SurchargeQuota  int64
+}
+
+func init() {
+	model.RegisterRelayLogAccountingHandler(func(payload model.RelayLogAccountingPayload, logID int) {
+		costCommissionSnapshot{
+			UserID: payload.UserID, ChannelID: payload.ChannelID, ChannelName: payload.ChannelName,
+			UsingGroup: payload.UsingGroup, OriginModelName: payload.OriginModelName,
+			GroupRatio: payload.GroupRatio, Quota: payload.Quota, SurchargeQuota: payload.SurchargeQuota,
+		}.record(logID)
+	})
+}
+
+func (s costCommissionSnapshot) accountingPayload() model.RelayLogAccountingPayload {
+	return model.RelayLogAccountingPayload{
+		Version: 1, UserID: s.UserID, ChannelID: s.ChannelID, ChannelName: s.ChannelName,
+		UsingGroup: s.UsingGroup, OriginModelName: s.OriginModelName,
+		GroupRatio: s.GroupRatio, Quota: s.Quota, SurchargeQuota: s.SurchargeQuota,
+	}
+}
+
+func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64) costCommissionSnapshot {
+	if relayInfo == nil {
+		return costCommissionSnapshot{Quota: quota, SurchargeQuota: surchargeQuota}
+	}
+	snapshot := costCommissionSnapshot{
+		UserID: relayInfo.UserId, UsingGroup: relayInfo.UsingGroup, OriginModelName: relayInfo.OriginModelName,
+		GroupRatio: relayInfo.PriceData.GroupRatioInfo.GroupRatio, Quota: quota, SurchargeQuota: surchargeQuota,
+	}
+	// ChannelId/ChannelName are promoted from the embedded *ChannelMeta, which
+	// stays nil until InitChannelMeta runs. Reading them unguarded panics on the
+	// relay goroutine, so the channel columns are simply left empty instead.
+	if relayInfo.ChannelMeta != nil {
+		snapshot.ChannelID = relayInfo.ChannelId
+		snapshot.ChannelName = relayInfo.ChannelName
+	}
+	return snapshot
+}
+
+func (s costCommissionSnapshot) record(logID int) {
+	info := &relaycommon.RelayInfo{
+		UserId: s.UserID, UsingGroup: s.UsingGroup, OriginModelName: s.OriginModelName,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: s.ChannelID, ChannelName: s.ChannelName},
+	}
+	info.PriceData.GroupRatioInfo.GroupRatio = s.GroupRatio
+	RecordCostAndSettleEmployeeCommission(info, s.Quota, s.SurchargeQuota, logID)
+}
+
 // RecordTransactionCost 在每笔消费结算后异步调用，记录逐笔精确成本到 consumption_costs。
 // 覆盖全平台所有消费（不仅员工归属流量），用于平台级成本/利润精确统计。
 // 成本算法与提成一致：全部收入统一套用渠道成本系数。

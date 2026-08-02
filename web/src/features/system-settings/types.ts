@@ -124,6 +124,62 @@ export type LedgerPipelineStatusResponse = {
   data: LedgerPipelineStatus
 }
 
+export type RelayLogQueueStatus = {
+  backlog: number
+  capacity: number
+  dropped: number
+}
+
+export type RelayLogReplayState =
+  | 'idle'
+  | 'running'
+  | 'succeeded'
+  | 'partial_failed'
+  | 'failed'
+
+export type RelayLogReplayStatus = {
+  state: RelayLogReplayState
+  pending_files: number
+  running_file: string
+  processed_total: number
+  failed_total: number
+  started_at: number
+  finished_at: number
+  last_error: string
+}
+
+export type RelayLogPipelineStatus = {
+  enabled: boolean
+  circuit_state: 'closed' | 'open' | 'half_open'
+  consume: RelayLogQueueStatus
+  error: RelayLogQueueStatus
+  retry: RelayLogQueueStatus
+  persisted_total: number
+  fallback_total: number
+  db_timeout_total: number
+  last_success_at: number
+  last_error_at: number
+  continuation_backlog: number
+  continuation_dropped: number
+  fallback_backlog: number
+  fallback_errors: number
+  replay: RelayLogReplayStatus
+}
+
+export type RelayLogPipelineStatusResponse = {
+  success: boolean
+  message: string
+  data: RelayLogPipelineStatus
+}
+
+export type RelayLogReplayStartResponse = {
+  success: boolean
+  message: string
+  data?: {
+    started: boolean
+  }
+}
+
 export type DeleteLogsResponse = {
   success: boolean
   message: string
@@ -558,6 +614,26 @@ export type SystemTuningSettings = {
   'user_session_setting.issuance_window_sec': number
   'user_session_setting.revoked_retention_days': number
   'user_session_setting.hourly_alert_threshold': number
+  'relay_log_pipeline_setting.enabled': boolean
+  'relay_log_pipeline_setting.consume_buf_max_entries': number
+  'relay_log_pipeline_setting.error_buf_max_entries': number
+  'relay_log_pipeline_setting.continuation_buf_max_entries': number
+  'relay_log_pipeline_setting.outer_batch_size': number
+  'relay_log_pipeline_setting.inner_batch_size': number
+  'relay_log_pipeline_setting.flush_max_per_cycle': number
+  'relay_log_pipeline_setting.full_drain': boolean
+  'relay_log_pipeline_setting.flush_interval_ms': number
+  'relay_log_pipeline_setting.write_timeout_sec': number
+  'relay_log_pipeline_setting.fallback_queue_capacity': number
+  'relay_log_pipeline_setting.fallback_max_file_size_mb': number
+  'relay_log_pipeline_setting.fallback_max_files': number
+  'relay_log_pipeline_setting.shutdown_timeout_sec': number
+  'relay_log_retry_setting.retry_flush_interval_ms': number
+  'relay_log_retry_setting.max_retries': number
+  'relay_log_retry_setting.retry_buf_max_entries': number
+  'relay_log_retry_setting.allow_concurrent_flush': boolean
+  'relay_log_retry_setting.circuit_failure_threshold': number
+  'relay_log_retry_setting.circuit_open_sec': number
   'payment_setting.user_export_max_rows': number
   'export_setting.user_export_enabled': boolean
   'export_setting.rate_limit_cooldown_sec': number

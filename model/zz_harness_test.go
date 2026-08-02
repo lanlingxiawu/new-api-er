@@ -64,6 +64,18 @@ func TestMain(m *testing.M) {
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
 
+	// relayLogFallbackDir 默认是相对路径 data/relay-log-fallback，对线上进程指的是
+	// 部署目录，但在测试里会落到 model/data/ —— 也就是仓库工作区内。任何触发缓冲
+	// 溢出的用例都会往那里写 JSONL，既污染工作区，又可能被 git add -A 一起提交。
+	// 在包级统一重定向，逐个用例去隔离必然会漏。
+	// 个别用例仍会自己保存/恢复该变量，与这里不冲突。
+	// 临时目录交给操作系统回收：本函数以 os.Exit 结束，defer 不会执行。
+	if fallbackDir, tempErr := os.MkdirTemp("", "relay-log-fallback-test-"); tempErr != nil {
+		fmt.Println("[TEST] failed to isolate relay log fallback dir:", tempErr)
+	} else {
+		relayLogFallbackDir = fallbackDir
+	}
+
 	// 导出的 CSV 表头与类型单元格走 i18n，初始化后测试才能断言真实文案。
 	if err := i18n.Init(); err != nil {
 		fmt.Println("[TEST] i18n init failed:", err)

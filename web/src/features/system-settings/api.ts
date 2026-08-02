@@ -25,6 +25,8 @@ import type {
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
   LedgerPipelineStatusResponse,
+  RelayLogPipelineStatusResponse,
+  RelayLogReplayStartResponse,
   LogCleanupTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
@@ -77,6 +79,22 @@ export async function getLedgerPipelineStatus() {
   const res = await api.get<LedgerPipelineStatusResponse>(
     '/api/admin/system/ledger-pipeline/status',
     { disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function getRelayLogPipelineStatus() {
+  const res = await api.get<RelayLogPipelineStatusResponse>(
+    '/api/admin/system/relay-log-pipeline/status',
+    { disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function startRelayLogFallbackReplay() {
+  const res = await api.post<RelayLogReplayStartResponse>(
+    '/api/admin/system/relay-log-pipeline/replay',
+    {}
   )
   return res.data
 }

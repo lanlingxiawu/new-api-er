@@ -115,6 +115,7 @@ func main() {
 
 	// 业务概览日统计缓冲刷盘（成本/提成/配额，使用 BUSINESS_STATS_FLUSH_INTERVAL 配置）
 	model.StartBusinessStatsFlushLoop()
+	model.StartRelayLogFlushLoop()
 
 	// 使用日志列表/统计的整点预热（master 独占，每小时约 1 条查询）。
 	// 让管理后台的默认视图直接命中缓存，而不是每次开页都对 logs 做全区间扫描。
@@ -248,6 +249,7 @@ func main() {
 			// 否则 SIGKILL 会落在刷盘之前。
 			common.SysLog("requests drained, flushing business stat buffers...")
 			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
+			model.ShutdownRelayLogFlush(operation_setting.GetRelayLogPipelineSetting().GetShutdownTimeout())
 		},
 	)
 
@@ -372,6 +374,9 @@ func InitResources() error {
 	operation_setting.PublishRateLimitSetting()
 	operation_setting.PublishDBPoolSetting()
 	operation_setting.PublishUserSessionSetting()
+	if err := model.ApplyRelayLogAuxQueueCapacities(); err != nil {
+		common.SysError("failed to apply relay log auxiliary queue capacities: " + err.Error())
+	}
 	if err := model.ApplyDBPoolSetting(); err != nil {
 		common.SysError("failed to apply database pool settings: " + err.Error())
 	}
