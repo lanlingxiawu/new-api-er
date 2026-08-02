@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -110,23 +111,17 @@ func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	previousDB := model.DB
 	previousRedis := common.RedisEnabled
-	previousActiveLimit := common.UserSessionActiveLimit
-	previousIssuanceLimit := common.UserSessionIssuanceLimit
-	previousIssuanceWindow := common.UserSessionIssuanceWindowSeconds
+	previousSessionSetting := operation_setting.GetUserSessionSetting()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
 	model.DB = db
 	common.RedisEnabled = false
-	common.UserSessionActiveLimit = 1
-	common.UserSessionIssuanceLimit = 100
-	common.UserSessionIssuanceWindowSeconds = int64(common.DefaultUserSessionIssuanceWindowSeconds)
+	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{1, 100, 86400, 7, 5000})
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.RedisEnabled = previousRedis
-		common.UserSessionActiveLimit = previousActiveLimit
-		common.UserSessionIssuanceLimit = previousIssuanceLimit
-		common.UserSessionIssuanceWindowSeconds = previousIssuanceWindow
+		operation_setting.ReplaceUserSessionSetting(previousSessionSetting)
 	})
 
 	const previousLastLoginAt = int64(123)

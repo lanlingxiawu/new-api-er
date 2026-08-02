@@ -17,17 +17,43 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { BusinessStatsCircuitBreakerSection } from '../maintenance/business-stats-circuit-breaker-section'
-import { LedgerPipelineSection } from '../maintenance/ledger-pipeline-section'
 import { ExportSettingsSection } from '../maintenance/export-settings-section'
+import { FallbackBackfillSection } from '../maintenance/fallback-backfill-section'
 import { LedgerDetailSection } from '../maintenance/ledger-detail-section'
+import { LedgerPipelineSection } from '../maintenance/ledger-pipeline-section'
 import { LogExportSection } from '../maintenance/log-export-section'
 import { LogQuerySection } from '../maintenance/log-query-section'
-import { FallbackBackfillSection } from '../maintenance/fallback-backfill-section'
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { systemTuningFallbackSettings } from './defaults'
+import {
+  DBPoolHotConfigSection,
+  RateLimitHotConfigSection,
+  UserSessionHotConfigSection,
+} from './hot-config-sections'
 
 const SYSTEM_TUNING_SECTIONS = [
+  {
+    id: 'gateway-rate-limit',
+    titleKey: 'Gateway Rate Limiting',
+    build: (settings: SystemTuningSettings) => (
+      <RateLimitHotConfigSection settings={settings} />
+    ),
+  },
+  {
+    id: 'database-pool',
+    titleKey: 'Database Connection Pool',
+    build: (settings: SystemTuningSettings) => (
+      <DBPoolHotConfigSection settings={settings} />
+    ),
+  },
+  {
+    id: 'login-session-policy',
+    titleKey: 'Login Session Policy',
+    build: (settings: SystemTuningSettings) => (
+      <UserSessionHotConfigSection settings={settings} />
+    ),
+  },
   {
     id: 'settlement-guard',
     titleKey: 'Settlement Guard',
@@ -105,7 +131,9 @@ const SYSTEM_TUNING_SECTIONS = [
               'ledger_pipeline_setting.inner_batch_size'
             ],
           'ledger_pipeline_setting.settlement_flush_max_per_cycle':
-            settings['ledger_pipeline_setting.settlement_flush_max_per_cycle'] ??
+            settings[
+              'ledger_pipeline_setting.settlement_flush_max_per_cycle'
+            ] ??
             systemTuningFallbackSettings[
               'ledger_pipeline_setting.settlement_flush_max_per_cycle'
             ],
@@ -119,7 +147,9 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['ledger_pipeline_setting.full_drain'],
           'ledger_pipeline_setting.buf_max_entries':
             settings['ledger_pipeline_setting.buf_max_entries'] ??
-            systemTuningFallbackSettings['ledger_pipeline_setting.buf_max_entries'],
+            systemTuningFallbackSettings[
+              'ledger_pipeline_setting.buf_max_entries'
+            ],
           'ledger_pipeline_setting.dedup_mem_max_entries':
             settings['ledger_pipeline_setting.dedup_mem_max_entries'] ??
             systemTuningFallbackSettings[
@@ -192,13 +222,17 @@ const SYSTEM_TUNING_SECTIONS = [
         defaultValues={{
           'payment_setting.user_export_max_rows':
             settings['payment_setting.user_export_max_rows'] ??
-            systemTuningFallbackSettings['payment_setting.user_export_max_rows'],
+            systemTuningFallbackSettings[
+              'payment_setting.user_export_max_rows'
+            ],
           'export_setting.user_export_enabled':
             settings['export_setting.user_export_enabled'] ??
             systemTuningFallbackSettings['export_setting.user_export_enabled'],
           'export_setting.rate_limit_cooldown_sec':
             settings['export_setting.rate_limit_cooldown_sec'] ??
-            systemTuningFallbackSettings['export_setting.rate_limit_cooldown_sec'],
+            systemTuningFallbackSettings[
+              'export_setting.rate_limit_cooldown_sec'
+            ],
           'export_setting.hard_ceiling_rows':
             settings['export_setting.hard_ceiling_rows'] ??
             systemTuningFallbackSettings['export_setting.hard_ceiling_rows'],
@@ -214,13 +248,19 @@ const SYSTEM_TUNING_SECTIONS = [
         defaultValues={{
           'log_query_setting.stat_cache_enabled':
             settings['log_query_setting.stat_cache_enabled'] ??
-            systemTuningFallbackSettings['log_query_setting.stat_cache_enabled'],
+            systemTuningFallbackSettings[
+              'log_query_setting.stat_cache_enabled'
+            ],
           'log_query_setting.stat_cache_ttl_hours':
             settings['log_query_setting.stat_cache_ttl_hours'] ??
-            systemTuningFallbackSettings['log_query_setting.stat_cache_ttl_hours'],
+            systemTuningFallbackSettings[
+              'log_query_setting.stat_cache_ttl_hours'
+            ],
           'log_query_setting.current_hour_ttl_sec':
             settings['log_query_setting.current_hour_ttl_sec'] ??
-            systemTuningFallbackSettings['log_query_setting.current_hour_ttl_sec'],
+            systemTuningFallbackSettings[
+              'log_query_setting.current_hour_ttl_sec'
+            ],
           'log_query_setting.warm_enabled':
             settings['log_query_setting.warm_enabled'] ??
             systemTuningFallbackSettings['log_query_setting.warm_enabled'],
@@ -248,16 +288,24 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['log_export_setting.offpeak_only'],
           'log_export_setting.user_cooldown_sec':
             settings['log_export_setting.user_cooldown_sec'] ??
-            systemTuningFallbackSettings['log_export_setting.user_cooldown_sec'],
+            systemTuningFallbackSettings[
+              'log_export_setting.user_cooldown_sec'
+            ],
           'log_export_setting.max_concurrent_jobs':
             settings['log_export_setting.max_concurrent_jobs'] ??
-            systemTuningFallbackSettings['log_export_setting.max_concurrent_jobs'],
+            systemTuningFallbackSettings[
+              'log_export_setting.max_concurrent_jobs'
+            ],
           'log_export_setting.max_active_jobs_per_user':
             settings['log_export_setting.max_active_jobs_per_user'] ??
-            systemTuningFallbackSettings['log_export_setting.max_active_jobs_per_user'],
+            systemTuningFallbackSettings[
+              'log_export_setting.max_active_jobs_per_user'
+            ],
           'log_export_setting.admin_max_range_sec':
             settings['log_export_setting.admin_max_range_sec'] ??
-            systemTuningFallbackSettings['log_export_setting.admin_max_range_sec'],
+            systemTuningFallbackSettings[
+              'log_export_setting.admin_max_range_sec'
+            ],
           'log_export_setting.timeout_sec':
             settings['log_export_setting.timeout_sec'] ??
             systemTuningFallbackSettings['log_export_setting.timeout_sec'],
@@ -266,7 +314,9 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['log_export_setting.job_ttl_hours'],
           'log_export_setting.max_templates_per_user':
             settings['log_export_setting.max_templates_per_user'] ??
-            systemTuningFallbackSettings['log_export_setting.max_templates_per_user'],
+            systemTuningFallbackSettings[
+              'log_export_setting.max_templates_per_user'
+            ],
           'log_export_setting.batch_size':
             settings['log_export_setting.batch_size'] ??
             systemTuningFallbackSettings['log_export_setting.batch_size'],
@@ -275,7 +325,9 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['log_export_setting.batch_sleep_ms'],
           'log_export_setting.batch_query_timeout_sec':
             settings['log_export_setting.batch_query_timeout_sec'] ??
-            systemTuningFallbackSettings['log_export_setting.batch_query_timeout_sec'],
+            systemTuningFallbackSettings[
+              'log_export_setting.batch_query_timeout_sec'
+            ],
           'log_export_setting.window_sec':
             settings['log_export_setting.window_sec'] ??
             systemTuningFallbackSettings['log_export_setting.window_sec'],
@@ -290,7 +342,9 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['log_export_setting.cpu_hard_limit'],
           'log_export_setting.cpu_check_interval_ms':
             settings['log_export_setting.cpu_check_interval_ms'] ??
-            systemTuningFallbackSettings['log_export_setting.cpu_check_interval_ms'],
+            systemTuningFallbackSettings[
+              'log_export_setting.cpu_check_interval_ms'
+            ],
           'log_export_setting.gzip_level':
             settings['log_export_setting.gzip_level'] ??
             systemTuningFallbackSettings['log_export_setting.gzip_level'],
@@ -308,13 +362,19 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings['log_export_setting.min_free_disk_mb'],
           'log_export_setting.download_token_ttl_sec':
             settings['log_export_setting.download_token_ttl_sec'] ??
-            systemTuningFallbackSettings['log_export_setting.download_token_ttl_sec'],
+            systemTuningFallbackSettings[
+              'log_export_setting.download_token_ttl_sec'
+            ],
           'log_export_setting.download_session_ttl_sec':
             settings['log_export_setting.download_session_ttl_sec'] ??
-            systemTuningFallbackSettings['log_export_setting.download_session_ttl_sec'],
+            systemTuningFallbackSettings[
+              'log_export_setting.download_session_ttl_sec'
+            ],
           'log_export_setting.max_concurrent_downloads_per_user':
             settings['log_export_setting.max_concurrent_downloads_per_user'] ??
-            systemTuningFallbackSettings['log_export_setting.max_concurrent_downloads_per_user'],
+            systemTuningFallbackSettings[
+              'log_export_setting.max_concurrent_downloads_per_user'
+            ],
           'log_export_setting.offpeak_window':
             settings['log_export_setting.offpeak_window'] ??
             systemTuningFallbackSettings['log_export_setting.offpeak_window'],
@@ -335,7 +395,9 @@ const SYSTEM_TUNING_SECTIONS = [
             ],
           'ledger_detail_setting.export_batch_size':
             settings['ledger_detail_setting.export_batch_size'] ??
-            systemTuningFallbackSettings['ledger_detail_setting.export_batch_size'],
+            systemTuningFallbackSettings[
+              'ledger_detail_setting.export_batch_size'
+            ],
           'ledger_detail_setting.export_batch_sleep_ms':
             settings['ledger_detail_setting.export_batch_sleep_ms'] ??
             systemTuningFallbackSettings[
@@ -353,10 +415,14 @@ const SYSTEM_TUNING_SECTIONS = [
             ],
           'ledger_detail_setting.export_timeout_sec':
             settings['ledger_detail_setting.export_timeout_sec'] ??
-            systemTuningFallbackSettings['ledger_detail_setting.export_timeout_sec'],
+            systemTuningFallbackSettings[
+              'ledger_detail_setting.export_timeout_sec'
+            ],
           'ledger_detail_setting.list_max_range_sec':
             settings['ledger_detail_setting.list_max_range_sec'] ??
-            systemTuningFallbackSettings['ledger_detail_setting.list_max_range_sec'],
+            systemTuningFallbackSettings[
+              'ledger_detail_setting.list_max_range_sec'
+            ],
           'ledger_detail_setting.list_default_range_sec':
             settings['ledger_detail_setting.list_default_range_sec'] ??
             systemTuningFallbackSettings[
@@ -364,10 +430,14 @@ const SYSTEM_TUNING_SECTIONS = [
             ],
           'ledger_detail_setting.list_default_limit':
             settings['ledger_detail_setting.list_default_limit'] ??
-            systemTuningFallbackSettings['ledger_detail_setting.list_default_limit'],
+            systemTuningFallbackSettings[
+              'ledger_detail_setting.list_default_limit'
+            ],
           'ledger_detail_setting.list_max_limit':
             settings['ledger_detail_setting.list_max_limit'] ??
-            systemTuningFallbackSettings['ledger_detail_setting.list_max_limit'],
+            systemTuningFallbackSettings[
+              'ledger_detail_setting.list_max_limit'
+            ],
           'ledger_detail_setting.list_scan_batch_size':
             settings['ledger_detail_setting.list_scan_batch_size'] ??
             systemTuningFallbackSettings[
@@ -394,7 +464,9 @@ const SYSTEM_TUNING_SECTIONS = [
               'business_stats_fallback_backfill_setting.enabled'
             ],
           'business_stats_fallback_backfill_setting.use_separate_fallback_dir':
-            settings['business_stats_fallback_backfill_setting.use_separate_fallback_dir'] ??
+            settings[
+              'business_stats_fallback_backfill_setting.use_separate_fallback_dir'
+            ] ??
             systemTuningFallbackSettings[
               'business_stats_fallback_backfill_setting.use_separate_fallback_dir'
             ],
@@ -439,7 +511,8 @@ const SYSTEM_TUNING_SECTIONS = [
   },
 ] as const
 
-export type SystemTuningSectionId = (typeof SYSTEM_TUNING_SECTIONS)[number]['id']
+export type SystemTuningSectionId =
+  (typeof SYSTEM_TUNING_SECTIONS)[number]['id']
 
 const systemTuningRegistry = createSectionRegistry<
   SystemTuningSectionId,

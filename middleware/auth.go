@@ -61,6 +61,10 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 	}
 	setDashboardAuthContext(c, user, identity, useAccessToken)
+	applyAPIUserRateLimit(c)
+	if c.IsAborted() {
+		return
+	}
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
 	// 的写接口都会自动留痕（无需在路由上单独挂审计中间件，避免漏挂）。

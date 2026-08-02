@@ -203,34 +203,17 @@ var (
 
 // All duration's unit is seconds
 // Shouldn't larger then RateLimitKeyExpirationDuration
+//
+// Only the upload/download buckets live here. Every other limiter is
+// hot-reloadable and owned by setting/operation_setting/rate_limit_setting.go,
+// which is also where the corresponding environment variables are read — keeping
+// a second copy here would silently do nothing.
 var (
-	GlobalApiRateLimitEnable   bool
-	GlobalApiRateLimitNum      int
-	GlobalApiRateLimitDuration int64
-
-	GlobalWebRateLimitEnable   bool
-	GlobalWebRateLimitNum      int
-	GlobalWebRateLimitDuration int64
-
-	CriticalRateLimitEnable   bool
-	CriticalRateLimitNum            = 20
-	CriticalRateLimitDuration int64 = 20 * 60
-
 	UploadRateLimitNum            = 10
 	UploadRateLimitDuration int64 = 60
 
 	DownloadRateLimitNum            = 10
 	DownloadRateLimitDuration int64 = 60
-
-	// Per-user search rate limit (applies after authentication, keyed by user ID)
-	SearchRateLimitEnable         = true
-	SearchRateLimitNum            = 10
-	SearchRateLimitDuration int64 = 60
-
-	// Per-user log export rate limit (applies after authentication, keyed by user ID)
-	LogExportRateLimitEnable         = true
-	LogExportRateLimitNum            = 1
-	LogExportRateLimitDuration int64 = 600
 )
 
 var RateLimitKeyExpirationDuration = 20 * time.Minute

@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 const authArtifactCleanupInterval = time.Hour
@@ -28,14 +29,15 @@ func StartAuthArtifactCleanup() {
 
 func cleanupAuthArtifacts() {
 	now := time.Now()
+	sessionSetting := operation_setting.GetUserSessionSnapshot()
 	count, err := model.CountUserSessionsCreatedSince(0, now.Add(-time.Hour).Unix())
 	if err != nil {
 		common.SysError("failed to count hourly user session issuance: " + err.Error())
-	} else if count > int64(common.UserSessionHourlyAlertThreshold) {
+	} else if count > int64(sessionSetting.HourlyAlertThreshold) {
 		common.SysError(fmt.Sprintf(
 			"hourly user session issuance exceeded alert threshold: count=%d threshold=%d window_seconds=%d",
 			count,
-			common.UserSessionHourlyAlertThreshold,
+			sessionSetting.HourlyAlertThreshold,
 			int64(time.Hour/time.Second),
 		))
 	}

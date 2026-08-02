@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -136,6 +137,31 @@ func GetBusinessStatsCircuitBreakerStatus(c *gin.Context) {
 type OptionUpdateRequest struct {
 	Key   string `json:"key"`
 	Value any    `json:"value"`
+}
+
+type OptionGroupUpdateRequest struct {
+	Module string            `json:"module"`
+	Values map[string]string `json:"values"`
+}
+
+func UpdateOptionGroup(c *gin.Context) {
+	var request OptionGroupUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	applied, err := model.SaveConfigGroup(request.Module, request.Values)
+	if err != nil {
+		logger.LogError(c, "failed to update configuration group: "+err.Error())
+		if !applied {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"applied": false, "apply_error": "config.apply_failed_restart_required"}})
+		return
+	}
+	recordManageAudit(c, "option.group.update", map[string]interface{}{"module": request.Module})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"applied": true}})
 }
 
 func UpdateOption(c *gin.Context) {
@@ -454,7 +480,11 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
-	err = model.UpdateOption(option.Key, option.Value.(string))
+	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting") {
+		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)})
+	} else {
+		err = model.UpdateOption(option.Key, option.Value.(string))
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return

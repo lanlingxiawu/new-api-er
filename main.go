@@ -358,6 +358,9 @@ func InitResources() error {
 	// ENABLE_PPROF=true 只作为 pprof 配置的启动默认值，必须在 InitOptionMap 之前应用：
 	// InitOptionMap 会先导出内置默认值，再用数据库里的值覆盖（DB > env > 内置默认）。
 	pprof_setting.ApplyEnvDefaults()
+	operation_setting.ApplyRateLimitEnvDefaults()
+	operation_setting.ApplyDBPoolEnvDefaults()
+	operation_setting.ApplyUserSessionEnvDefaults()
 
 	// Initialize options, should after model.InitDB()
 	if common.IsMasterNode {
@@ -366,15 +369,27 @@ func InitResources() error {
 		}
 	}
 	model.InitOptionMap()
+	operation_setting.PublishRateLimitSetting()
+	operation_setting.PublishDBPoolSetting()
+	operation_setting.PublishUserSessionSetting()
+	if err := model.ApplyDBPoolSetting(); err != nil {
+		common.SysError("failed to apply database pool settings: " + err.Error())
+	}
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
 
 	// Initialize SQL Database
+	logDBStartedAt := time.Now()
+	common.SysLog("log database initialization started")
 	err = model.InitLogDB()
 	if err != nil {
 		return err
 	}
+	if err := model.ApplyDBPoolSetting(); err != nil {
+		common.SysError("failed to apply log database pool settings: " + err.Error())
+	}
+	common.SysLog(fmt.Sprintf("log database initialization completed in %s", time.Since(logDBStartedAt)))
 
 	// Initialize Redis
 	err = common.InitRedisClient()

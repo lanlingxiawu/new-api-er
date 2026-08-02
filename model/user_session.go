@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"gorm.io/gorm"
 )
@@ -777,11 +778,12 @@ func DeleteExpiredUserSessions(now int64) error {
 	if now <= 0 {
 		now = time.Now().Unix()
 	}
-	if common.UserSessionRevokedRetentionDays <= 0 || common.UserSessionIssuanceWindowSeconds <= 0 {
+	setting := operation_setting.GetUserSessionSnapshot()
+	if setting.RevokedRetentionDays <= 0 || setting.IssuanceWindowSeconds <= 0 {
 		return ErrUserSessionInvalid
 	}
-	issuanceCutoff := now - common.UserSessionIssuanceWindowSeconds
-	revokedBefore := now - int64(common.UserSessionRevokedRetentionDays)*24*60*60
+	issuanceCutoff := now - setting.IssuanceWindowSeconds
+	revokedBefore := now - int64(setting.RevokedRetentionDays)*24*60*60
 	return deleteExpiredUserSessionsBefore(now, issuanceCutoff, revokedBefore)
 }
 
@@ -789,11 +791,12 @@ func DeleteOldRevokedUserSessions(now int64) error {
 	if now <= 0 {
 		now = time.Now().Unix()
 	}
-	if common.UserSessionRevokedRetentionDays <= 0 || common.UserSessionIssuanceWindowSeconds <= 0 {
+	setting := operation_setting.GetUserSessionSnapshot()
+	if setting.RevokedRetentionDays <= 0 || setting.IssuanceWindowSeconds <= 0 {
 		return ErrUserSessionInvalid
 	}
-	issuanceCutoff := now - common.UserSessionIssuanceWindowSeconds
-	revokedBefore := now - int64(common.UserSessionRevokedRetentionDays)*24*60*60
+	issuanceCutoff := now - setting.IssuanceWindowSeconds
+	revokedBefore := now - int64(setting.RevokedRetentionDays)*24*60*60
 	return deleteRevokedUserSessionsBefore(revokedBefore, issuanceCutoff)
 }
 

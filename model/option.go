@@ -229,6 +229,8 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	configGroupMu.Lock()
+	defer configGroupMu.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
 		err := updateOptionMap(option.Key, option.Value)
@@ -380,8 +382,12 @@ func updateOptionMap(key string, value string) (err error) {
 			if !boolValue {
 				newVal = "TOKENS"
 			}
-			if cfg := config.GlobalConfig.Get("general_setting"); cfg != nil {
-				_ = config.UpdateConfigFromMap(cfg, map[string]string{"quota_display_type": newVal})
+			// 必须走 UpdateFromMap：它在草稿锁内改字段并重新发布快照。
+			// 直接调包级 UpdateConfigFromMap 会绕过这两步——既与配置导出/加载
+			// 的反射读构成竞争，又因为快照没重发而让这次修改对读侧完全不可见。
+			if err := config.GlobalConfig.UpdateFromMap("general_setting",
+				map[string]string{"quota_display_type": newVal}); err != nil {
+				common.SysError("failed to sync DisplayInCurrencyEnabled to general_setting: " + err.Error())
 			}
 		case "DisplayTokenStatEnabled":
 			common.DisplayTokenStatEnabled = boolValue
@@ -748,11 +754,24 @@ func handleConfigUpdate(key, value string) bool {
 		return false // 未注册的配置
 	}
 
-	// 更新配置
+	// 更新配置。走 ConfigManager 的写锁，否则会和 SaveToDB / ExportAllConfigs
+	// 的反射读并发访问同一块内存。
 	configMap := map[string]string{
 		configKey: value,
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	if err := config.GlobalConfig.UpdateFromMap(configName, configMap); err != nil {
+		common.SysError("failed to update config " + key + ": " + err.Error())
+	}
+	if configName == "rate_limit_setting" {
+		operation_setting.PublishRateLimitSetting()
+	} else if configName == "db_pool_setting" {
+		operation_setting.PublishDBPoolSetting()
+		if applyErr := ApplyDBPoolSetting(); applyErr != nil {
+			common.SysError("failed to apply database pool settings: " + applyErr.Error())
+		}
+	} else if configName == "user_session_setting" {
+		operation_setting.PublishUserSessionSetting()
+	}
 
 	// 特定配置的后处理
 	if configName == "performance_setting" {

@@ -39,6 +39,40 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type UpdateOptionGroupRequest = {
+  module: 'rate_limit_setting' | 'db_pool_setting' | 'user_session_setting'
+  values: Record<string, string>
+}
+
+export type UpdateOptionGroupResponse = {
+  success: boolean
+  message: string
+  data?: { applied: boolean; apply_error?: string }
+}
+
+export type DatabasePoolStats = {
+  max_open_connections: number
+  open_connections: number
+  in_use: number
+  idle: number
+  wait_count: number
+  wait_duration_ms: number
+  max_idle_closed: number
+  max_idle_time_closed: number
+  max_lifetime_closed: number
+}
+
+export type DatabasePoolRuntimeStatusResponse = {
+  success: boolean
+  message: string
+  data: {
+    sampled_at: number
+    main: DatabasePoolStats
+    log: DatabasePoolStats | null
+    log_reuses_main: boolean
+  }
+}
+
 export type BusinessStatsCircuitBreakerStatus = {
   enabled: boolean
   manual_disabled: boolean
@@ -491,6 +525,39 @@ export type SystemTuningSettings = {
   'ledger_pipeline_setting.shutdown_timeout_sec': number
   'ledger_pipeline_setting.cache_ttl_secs': number[]
   'ledger_pipeline_setting.cache_ttl_jitter_percent': number
+  'rate_limit_setting.global_api_enabled': boolean
+  'rate_limit_setting.global_api_num': number
+  'rate_limit_setting.global_api_duration_sec': number
+  'rate_limit_setting.global_api_user_enabled': boolean
+  'rate_limit_setting.global_api_user_num': number
+  'rate_limit_setting.global_api_user_duration_sec': number
+  'rate_limit_setting.global_web_enabled': boolean
+  'rate_limit_setting.global_web_num': number
+  'rate_limit_setting.global_web_duration_sec': number
+  'rate_limit_setting.critical_enabled': boolean
+  'rate_limit_setting.critical_num': number
+  'rate_limit_setting.critical_duration_sec': number
+  'rate_limit_setting.auth_refresh_enabled': boolean
+  'rate_limit_setting.auth_refresh_num': number
+  'rate_limit_setting.auth_refresh_ip_num': number
+  'rate_limit_setting.auth_refresh_duration_sec': number
+  'rate_limit_setting.search_enabled': boolean
+  'rate_limit_setting.search_num': number
+  'rate_limit_setting.search_duration_sec': number
+  'rate_limit_setting.log_export_enabled': boolean
+  'rate_limit_setting.log_export_num': number
+  'rate_limit_setting.log_export_duration_sec': number
+  'rate_limit_setting.redis_timeout_ms': number
+  'db_pool_setting.max_idle_conns': number
+  'db_pool_setting.max_open_conns': number
+  'db_pool_setting.max_lifetime_sec': number
+  'db_pool_setting.log_max_idle_conns': number
+  'db_pool_setting.log_max_open_conns': number
+  'user_session_setting.active_limit': number
+  'user_session_setting.issuance_limit': number
+  'user_session_setting.issuance_window_sec': number
+  'user_session_setting.revoked_retention_days': number
+  'user_session_setting.hourly_alert_threshold': number
   'payment_setting.user_export_max_rows': number
   'export_setting.user_export_enabled': boolean
   'export_setting.rate_limit_cooldown_sec': number

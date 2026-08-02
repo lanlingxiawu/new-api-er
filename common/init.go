@@ -117,26 +117,10 @@ func InitEnv() {
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
 	CohereSafetySetting = GetEnvOrDefaultString("COHERE_SAFETY_SETTING", "NONE")
 
-	// Initialize rate limit variables
-	GlobalApiRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_API_RATE_LIMIT_ENABLE", true)
-	GlobalApiRateLimitNum = GetEnvOrDefault("GLOBAL_API_RATE_LIMIT", 360)
-	GlobalApiRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_API_RATE_LIMIT_DURATION", 180))
-
-	GlobalWebRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_WEB_RATE_LIMIT_ENABLE", true)
-	GlobalWebRateLimitNum = GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT", 120)
-	GlobalWebRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT_DURATION", 180))
-
-	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
-	CriticalRateLimitNum = GetEnvOrDefault("CRITICAL_RATE_LIMIT", 20)
-	CriticalRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", 20*60))
-
-	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
-	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
-	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
-
-	LogExportRateLimitEnable = GetEnvOrDefaultBool("LOG_EXPORT_RATE_LIMIT_ENABLE", true)
-	LogExportRateLimitNum = GetEnvOrDefault("LOG_EXPORT_RATE_LIMIT", 1)
-	LogExportRateLimitDuration = int64(GetEnvOrDefault("LOG_EXPORT_RATE_LIMIT_DURATION", 600))
+	// The gateway rate-limit buckets are hot-reloadable; their environment
+	// variables are read by operation_setting.ApplyRateLimitEnvDefaults so the
+	// env value seeds the same struct the admin UI edits. Do not re-read them
+	// here — a second copy would never be consulted.
 	initConstantEnv()
 }
 

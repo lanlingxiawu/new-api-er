@@ -204,7 +204,7 @@ func TestEmailVerificationRateLimit_RedisOverLimit(t *testing.T) {
 	enableRedis(t)
 	r := gin.New()
 	r.GET("/ev", EmailVerificationRateLimit(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	key := "emailVerification:" + EmailVerificationRateLimitMark + ":203.0.113.44"
+	key := redisIPRateLimitKey(EmailVerificationRateLimitMark, "203.0.113.44")
 	common.RDB.Del(context.Background(), key) // clear stale counter
 	codes := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {

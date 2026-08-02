@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -22,11 +23,7 @@ import (
 func setupAuthSessionTestDB(t *testing.T) *model.User {
 	t.Helper()
 	previousDB, previousRedis := model.DB, common.RedisEnabled
-	previousActiveLimit := common.UserSessionActiveLimit
-	previousIssuanceLimit := common.UserSessionIssuanceLimit
-	previousIssuanceWindow := common.UserSessionIssuanceWindowSeconds
-	previousRevokedRetention := common.UserSessionRevokedRetentionDays
-	previousAlertThreshold := common.UserSessionHourlyAlertThreshold
+	previousSessionSetting := operation_setting.GetUserSessionSetting()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
@@ -35,19 +32,11 @@ func setupAuthSessionTestDB(t *testing.T) *model.User {
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.AuthFlow{}))
 	model.DB = db
 	common.RedisEnabled = false
-	common.UserSessionActiveLimit = common.DefaultUserSessionActiveLimit
-	common.UserSessionIssuanceLimit = common.DefaultUserSessionIssuanceLimit
-	common.UserSessionIssuanceWindowSeconds = int64(common.DefaultUserSessionIssuanceWindowSeconds)
-	common.UserSessionRevokedRetentionDays = common.DefaultUserSessionRevokedRetentionDays
-	common.UserSessionHourlyAlertThreshold = common.DefaultUserSessionHourlyAlertThreshold
+	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{50, 100, 86400, 7, 5000})
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.RedisEnabled = previousRedis
-		common.UserSessionActiveLimit = previousActiveLimit
-		common.UserSessionIssuanceLimit = previousIssuanceLimit
-		common.UserSessionIssuanceWindowSeconds = previousIssuanceWindow
-		common.UserSessionRevokedRetentionDays = previousRevokedRetention
-		common.UserSessionHourlyAlertThreshold = previousAlertThreshold
+		operation_setting.ReplaceUserSessionSetting(previousSessionSetting)
 		_ = sqlDB.Close()
 	})
 	user := &model.User{
@@ -60,6 +49,12 @@ func setupAuthSessionTestDB(t *testing.T) *model.User {
 	}
 	require.NoError(t, db.Create(user).Error)
 	return user
+}
+
+func replaceUserSessionTestSetting(update func(*operation_setting.UserSessionSetting)) {
+	setting := operation_setting.GetUserSessionSetting()
+	update(&setting)
+	operation_setting.ReplaceUserSessionSetting(setting)
 }
 
 func useIndependentAuthSessionRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client, *miniredis.Miniredis, *redis.Client) {
@@ -98,8 +93,9 @@ func cachedLoginSessionKey(t *testing.T, server *miniredis.Miniredis) string {
 func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
-	common.UserSessionActiveLimit = 50
-	common.UserSessionIssuanceLimit = 100
+	replaceUserSessionTestSetting(func(setting *operation_setting.UserSessionSetting) {
+		setting.ActiveLimit, setting.IssuanceLimit = 50, 100
+	})
 	now := time.Now().Unix()
 	rows := make([]model.UserSession, 0, 49)
 	for i := 0; i < 49; i++ {
@@ -135,9 +131,9 @@ func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
 func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
-	common.UserSessionActiveLimit = 10
-	common.UserSessionIssuanceLimit = 3
-	common.UserSessionIssuanceWindowSeconds = 60
+	replaceUserSessionTestSetting(func(setting *operation_setting.UserSessionSetting) {
+		setting.ActiveLimit, setting.IssuanceLimit, setting.IssuanceWindowSec = 10, 3, 60
+	})
 	now := time.Now().Unix()
 	rows := []model.UserSession{
 		{
@@ -171,8 +167,9 @@ func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) 
 func TestPasswordResetDoesNotClearSessionIssuanceHistory(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
-	common.UserSessionActiveLimit = 50
-	common.UserSessionIssuanceLimit = 1
+	replaceUserSessionTestSetting(func(setting *operation_setting.UserSessionSetting) {
+		setting.ActiveLimit, setting.IssuanceLimit = 50, 1
+	})
 	email := "session-reset@example.com"
 	require.NoError(t, model.DB.Model(user).Update("email", email).Error)
 
@@ -212,8 +209,9 @@ func TestCreateLoginSessionFailsClosedWhenLimitCountFails(t *testing.T) {
 
 func TestCleanupAuthArtifactsAlertsBeforeDeletingHourlyIssuance(t *testing.T) {
 	setupAuthSessionTestDB(t)
-	common.UserSessionHourlyAlertThreshold = 2
-	common.UserSessionIssuanceWindowSeconds = 1
+	replaceUserSessionTestSetting(func(setting *operation_setting.UserSessionSetting) {
+		setting.HourlyAlertThreshold, setting.IssuanceWindowSec = 2, 1
+	})
 	now := time.Now()
 	boundaryRows := make([]model.UserSession, 0, 2)
 	for i := 0; i < 2; i++ {

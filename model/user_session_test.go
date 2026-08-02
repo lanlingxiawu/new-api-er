@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -45,21 +46,12 @@ func setupUserSessionTest(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&User{}, &UserSession{}))
 	require.NoError(t, DB.Exec("DELETE FROM user_sessions").Error)
 	oldRedisEnabled := common.RedisEnabled
-	oldActiveLimit := common.UserSessionActiveLimit
-	oldIssuanceLimit := common.UserSessionIssuanceLimit
-	oldIssuanceWindow := common.UserSessionIssuanceWindowSeconds
-	oldRevokedRetention := common.UserSessionRevokedRetentionDays
+	oldSetting := operation_setting.GetUserSessionSetting()
 	common.RedisEnabled = false
-	common.UserSessionActiveLimit = common.DefaultUserSessionActiveLimit
-	common.UserSessionIssuanceLimit = common.DefaultUserSessionIssuanceLimit
-	common.UserSessionIssuanceWindowSeconds = int64(common.DefaultUserSessionIssuanceWindowSeconds)
-	common.UserSessionRevokedRetentionDays = common.DefaultUserSessionRevokedRetentionDays
+	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{50, 100, 86400, 7, 5000})
 	t.Cleanup(func() {
 		common.RedisEnabled = oldRedisEnabled
-		common.UserSessionActiveLimit = oldActiveLimit
-		common.UserSessionIssuanceLimit = oldIssuanceLimit
-		common.UserSessionIssuanceWindowSeconds = oldIssuanceWindow
-		common.UserSessionRevokedRetentionDays = oldRevokedRetention
+		operation_setting.ReplaceUserSessionSetting(oldSetting)
 	})
 }
 
@@ -501,8 +493,10 @@ func TestRevokeUserSessionsReturnsCumulativeProgressAndSupportsRetry(t *testing.
 func TestDeleteExpiredUserSessionsLoopsInChunksAndRechecksPredicate(t *testing.T) {
 	setupUserSessionTest(t)
 	now := time.Now().Unix()
-	common.UserSessionRevokedRetentionDays = 7
-	common.UserSessionIssuanceWindowSeconds = 3600
+	setting := operation_setting.GetUserSessionSetting()
+	setting.RevokedRetentionDays = 7
+	setting.IssuanceWindowSec = 3600
+	operation_setting.ReplaceUserSessionSetting(setting)
 	oldCreatedAt := now - 7200
 	rows := make([]UserSession, 0, userSessionCleanupScanLimit+5)
 	race := newTestUserSession("cleanup-race", 1009, now-1000)

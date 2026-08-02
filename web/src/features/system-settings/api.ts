@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type {
   BusinessStatsCircuitBreakerStatusResponse,
   ConfirmPaymentComplianceResponse,
+  DatabasePoolRuntimeStatusResponse,
   DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
   LedgerPipelineStatusResponse,
@@ -29,6 +30,8 @@ import type {
   SystemTaskListResponse,
   SystemTaskResponse,
   UpdateOptionRequest,
+  UpdateOptionGroupRequest,
+  UpdateOptionGroupResponse,
   UpdateOptionResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
@@ -41,6 +44,24 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  return res.data
+}
+
+export async function updateSystemOptionGroup(
+  request: UpdateOptionGroupRequest
+) {
+  const res = await api.put<UpdateOptionGroupResponse>(
+    '/api/option/group',
+    request
+  )
+  return res.data
+}
+
+export async function getDatabasePoolRuntimeStatus() {
+  const res = await api.get<DatabasePoolRuntimeStatusResponse>(
+    '/api/option/db-pool/stats',
+    { disableDuplicate: true }
+  )
   return res.data
 }
 

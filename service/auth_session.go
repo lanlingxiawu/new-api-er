@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -65,18 +66,19 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 		return nil, ErrLoginSessionRevoked
 	}
 	now := time.Now().Unix()
+	sessionSetting := operation_setting.GetUserSessionSnapshot()
 	activeCount, err := model.CountActiveUserSessions(userID, now)
 	if err != nil {
 		return nil, err
 	}
-	if activeCount >= int64(common.UserSessionActiveLimit) {
+	if activeCount >= int64(sessionSetting.ActiveLimit) {
 		return nil, model.ErrUserSessionLimit
 	}
-	issuanceCount, err := model.CountUserSessionsCreatedSince(userID, now-common.UserSessionIssuanceWindowSeconds)
+	issuanceCount, err := model.CountUserSessionsCreatedSince(userID, now-sessionSetting.IssuanceWindowSeconds)
 	if err != nil {
 		return nil, err
 	}
-	if issuanceCount >= int64(common.UserSessionIssuanceLimit) {
+	if issuanceCount >= int64(sessionSetting.IssuanceLimit) {
 		return nil, model.ErrUserSessionIssuanceLimit
 	}
 	refreshSecret, err := common.GenerateRandomCharsKey(64)
