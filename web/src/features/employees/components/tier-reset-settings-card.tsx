@@ -240,10 +240,10 @@ export function TierResetSettingsCard() {
                 value={form.periodMode}
                 onValueChange={(value) => {
                   if (value)
-                    setForm((f) => ({
+                    {setForm((f) => ({
                       ...f,
                       periodMode: value as PeriodMode,
-                    }))
+                    }))}
                 }}
                 disabled={isLoading}
               >

@@ -261,7 +261,7 @@ function TierSelectField({
       if (!map.has(group)) map.set(group, [])
       map.get(group)!.push(tier)
     })
-    return Array.from(map.entries())
+    return [...map.entries()]
       .sort((a, b) =>
         a[0].localeCompare(b[0], undefined, {
           numeric: true,

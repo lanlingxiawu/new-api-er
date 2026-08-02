@@ -43,7 +43,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { useAuthStore } from '@/stores/auth-store'
-import { type SidebarData } from '@/components/layout/types'
+import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
 
 /**

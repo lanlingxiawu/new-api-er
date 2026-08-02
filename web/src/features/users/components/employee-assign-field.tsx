@@ -40,7 +40,7 @@ import {
   getEmployees,
   unassignCustomerFromEmployee,
 } from '@/features/employees/api'
-import { type EmployeeProfile } from '@/features/employees/types'
+import type { EmployeeProfile } from '@/features/employees/types'
 
 type SelectedEmployee = {
   /** employee_profiles.id — used by the assign/unassign endpoints */

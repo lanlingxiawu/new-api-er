@@ -313,9 +313,9 @@ function buildBillingFilterParams(
   if (filters.endTime) params.append('end_time', String(filters.endTime))
   if (filters.status) params.append('status', filters.status)
   if (filters.paymentMethod)
-    params.append('payment_method', filters.paymentMethod)
+    {params.append('payment_method', filters.paymentMethod)}
   if (isAdmin && filters.userId && filters.userId > 0)
-    params.append('user_id', String(filters.userId))
+    {params.append('user_id', String(filters.userId))}
   return params
 }
 

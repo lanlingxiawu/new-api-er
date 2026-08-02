@@ -412,8 +412,7 @@ export async function handleUpdateChannelAccountBalance(
         response.message || i18next.t('Failed to update account balance')
       )
     }
-  } catch (_error: unknown) {
-    console.error('Failed to update channel account balance', _error)
+  } catch {
     toast.error(i18next.t('Failed to update account balance'))
   }
 }

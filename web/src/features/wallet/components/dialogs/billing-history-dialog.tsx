@@ -195,7 +195,7 @@ export function BillingHistoryDialog({
                 <Select
                   value={pageSize.toString()}
                   onValueChange={(value) =>
-                    value !== null && handlePageSizeChange(parseInt(value))
+                    value !== null && handlePageSizeChange(Number.parseInt(value))
                   }
                 >
                   <SelectTrigger className='h-9 w-[92px] sm:w-32'>
@@ -279,7 +279,7 @@ export function BillingHistoryDialog({
                   placeholder={t('User ID')}
                   value={filters.userId ? String(filters.userId) : ''}
                   onChange={(e) => {
-                    const v = parseInt(e.target.value, 10)
+                    const v = Number.parseInt(e.target.value, 10)
                     handleFilterChange({
                       userId: Number.isNaN(v) || v <= 0 ? undefined : v,
                     })

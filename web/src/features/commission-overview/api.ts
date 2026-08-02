@@ -93,11 +93,11 @@ export async function getChannelProfitPage(params?: {
   appendUnixTimeRangeParams(q, params)
   if (params?.channel_page) q.set('channel_page', String(params.channel_page))
   if (params?.channel_page_size)
-    q.set('channel_page_size', String(params.channel_page_size))
+    {q.set('channel_page_size', String(params.channel_page_size))}
   if (params?.channel_keyword) q.set('channel_keyword', params.channel_keyword)
   if (params?.channel_sort_by) q.set('channel_sort_by', params.channel_sort_by)
   if (params?.channel_sort_order)
-    q.set('channel_sort_order', params.channel_sort_order)
+    {q.set('channel_sort_order', params.channel_sort_order)}
   const res = await api.get(
     `/api/admin/employee/overview/channels?${q.toString()}`
   )
@@ -186,12 +186,12 @@ export async function getCommissionOverview(params?: {
   appendUnixTimeRangeParams(q, params)
   if (params?.channel_page) q.set('channel_page', String(params.channel_page))
   if (params?.channel_page_size)
-    q.set('channel_page_size', String(params.channel_page_size))
+    {q.set('channel_page_size', String(params.channel_page_size))}
   if (params?.channel_keyword) q.set('channel_keyword', params.channel_keyword)
   if (params?.employee_page)
-    q.set('employee_page', String(params.employee_page))
+    {q.set('employee_page', String(params.employee_page))}
   if (params?.employee_page_size)
-    q.set('employee_page_size', String(params.employee_page_size))
+    {q.set('employee_page_size', String(params.employee_page_size))}
   const res = await api.get(`/api/admin/employee/overview?${q.toString()}`)
   return res.data
 }

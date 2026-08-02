@@ -65,7 +65,7 @@ export function useWechatPayment() {
 
       toast.error(getErrorMessage(response.message, response.data))
       return false
-    } catch (_error) {
+    } catch {
       toast.error(i18next.t('Payment request failed'))
       return false
     } finally {
@@ -83,7 +83,7 @@ export function useWechatPayment() {
         setStatus(response.data.status)
         return response.data.status
       }
-    } catch (_error) {
+    } catch {
       // Ignore transient polling errors and try again on the next tick
     }
 

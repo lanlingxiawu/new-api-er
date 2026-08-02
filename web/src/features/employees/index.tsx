@@ -2655,7 +2655,7 @@ function EmployeeMonthlySelector({
 }
 
 function csvCell(value: string | number | undefined) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`
+  return `"${String(value ?? '').replaceAll(/"/g, '""')}"`
 }
 
 function CommissionMonthlyStatsTab() {
@@ -2716,7 +2716,7 @@ function CommissionMonthlyStatsTab() {
             .join(',')
         )
       }
-      const csv = '﻿' + lines.join('\r\n')
+      const csv = `﻿${  lines.join('\r\n')}`
       // 前置 UTF-8 BOM，便于 Excel/WPS 正确识别中文。
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
@@ -2816,14 +2816,14 @@ function TierDialog({
     tiers.forEach((t) => {
       if (t.group) seen.add(t.group)
     })
-    return Array.from(seen)
+    return [...seen]
   }, [tiers])
 
   const allGroups = useMemo(() => {
     const seen = new Set<string>(baseGroups)
     extraGroups.forEach((g) => seen.add(g))
     if (group && !seen.has(group)) seen.add(group)
-    return Array.from(seen)
+    return [...seen]
   }, [baseGroups, extraGroups, group])
 
   useEffect(() => {

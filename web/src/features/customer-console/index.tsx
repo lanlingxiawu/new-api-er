@@ -530,11 +530,9 @@ function MyCustomersTab() {
   })
 
   const applyFilters = () => {
-    setFilters({
-      ...(filterForm.keyword.trim()
+    setFilters((filterForm.keyword.trim()
         ? { keyword: filterForm.keyword.trim() }
-        : {}),
-    })
+        : {}))
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
 

@@ -509,8 +509,7 @@ export function NodePool() {
           .filter((n) => n.node_name !== nodeToSelect!.node_name)
           .forEach((n) => fetchAccountsForCache(n))
       }
-    } catch (e: unknown) {
-      console.error('Failed to fetch nodes', e)
+    } catch {
       setError(t('Node pool is temporarily unavailable, please try again later'))
     } finally {
       setLoading(false)
@@ -543,8 +542,7 @@ export function NodePool() {
       setAccounts([])
       setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n })
       await fetchNodes(true)
-    } catch (e: unknown) {
-      console.error('Failed to delete node', e)
+    } catch {
       setError(t('Failed to delete node'))
     } finally {
       setDeleting(false)

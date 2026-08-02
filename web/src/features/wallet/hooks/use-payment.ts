@@ -80,7 +80,7 @@ export function usePayment() {
                   : await calculateAmount({ amount: topupAmount })
 
         if (isApiSuccess(response) && response.data) {
-          const calculatedAmount = parseFloat(response.data)
+          const calculatedAmount = Number.parseFloat(response.data)
           setAmount(calculatedAmount)
           // 动态汇率支付会附带 exchange_rate（后端锁定的到账折算汇率）；其它支付方式无此字段。
           const rate = Number(
@@ -94,7 +94,7 @@ export function usePayment() {
         setAmount(0)
         setPaymentRate(0)
         return 0
-      } catch (_error) {
+      } catch {
         setAmount(0)
         setPaymentRate(0)
         return 0
@@ -212,7 +212,7 @@ export function usePayment() {
         }
 
         return false
-      } catch (_error) {
+      } catch {
         toast.error(i18next.t('Payment request failed'))
         return false
       } finally {

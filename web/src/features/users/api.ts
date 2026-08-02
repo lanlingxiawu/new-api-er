@@ -79,7 +79,7 @@ export async function searchUsers(
   if (exclude_employee) queryParams.set('exclude_employee', 'true')
   if (exclude_admin) queryParams.set('exclude_admin', 'true')
   if (exclude_assigned_customer)
-    queryParams.set('exclude_assigned_customer', 'true')
+    {queryParams.set('exclude_assigned_customer', 'true')}
   queryParams.set('p', String(p))
   queryParams.set('page_size', String(page_size))
   if (sort_by) queryParams.set('sort_by', sort_by)

@@ -310,8 +310,9 @@ function isPresent<T>(value: T | null | undefined): value is T {
 }
 
 function normalizeFigmaFooterConfig(config: unknown): FigmaFooterConfig | null {
-  if (!config || typeof config !== 'object' || Array.isArray(config))
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
     return null
+  }
 
   const input = config as {
     groups?: unknown
@@ -514,7 +515,7 @@ const GlobalMap = () => (
 )
 
 function TypewriterTitle({ text }: { text: string }) {
-  const characters = useMemo(() => Array.from(text), [text])
+  const characters = useMemo(() => [...text], [text])
   const [visibleLength, setVisibleLength] = useState(0)
 
   useEffect(() => {

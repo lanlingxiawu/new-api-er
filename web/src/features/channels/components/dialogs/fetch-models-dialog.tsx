@@ -49,9 +49,7 @@ import {
 import { useChannels } from '../channels-provider'
 
 function normalizeModelNameList(models: readonly string[]): string[] {
-  return Array.from(
-    new Set(models.map((m) => normalizeModelName(m)).filter(Boolean))
-  )
+  return [...new Set(models.map((m) => normalizeModelName(m)).filter(Boolean))]
 }
 
 type FetchModelsDialogProps = {
@@ -345,7 +343,7 @@ export function FetchModelsDialog({
                     <Tooltip>
                       <TooltipTrigger
                         render={<Info className='h-3.5 w-3.5 text-amber-500' />}
-                      ></TooltipTrigger>
+                       />
                       <TooltipContent>
                         {t('From model redirect, not yet added to models list')}
                       </TooltipContent>
@@ -420,8 +418,7 @@ export function FetchModelsDialog({
           </Button>
         </div>
       ) : (
-        <>
-          <div className='space-y-4'>
+        <div className='space-y-4'>
             {/* Search Bar */}
             <div className='relative'>
               <Search className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
@@ -505,7 +502,6 @@ export function FetchModelsDialog({
               {t('{{n}} model(s) selected', { n: selectedModels.length })}
             </div>
           </div>
-        </>
       )}
     </Dialog>
   )

@@ -185,7 +185,7 @@ function normalizeLedgerTag(tag: string) {
   return tag
     .trim()
     .toLowerCase()
-    .replace(/[\s-]+/g, '_')
+    .replaceAll(/[\s-]+/g, '_')
 }
 
 function tagBadgeClass(tag: string): string {
@@ -721,7 +721,7 @@ export function ConsumptionCostLedgerDetail() {
         loading ||
         !cursor
       )
-        return
+        {return}
       loadMoreArmedRef.current = false
       loadPage(cursor, true)
     },

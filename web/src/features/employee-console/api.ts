@@ -104,7 +104,7 @@ export async function getMyCommissionLogs(params: {
   if (params.page) q.set('page', String(params.page))
   if (params.page_size) q.set('page_size', String(params.page_size))
   if (params.customer_user_id)
-    q.set('customer_user_id', String(params.customer_user_id))
+    {q.set('customer_user_id', String(params.customer_user_id))}
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
   if (params.loss_status) q.set('loss_status', params.loss_status)

@@ -149,9 +149,9 @@ export async function getCommissionLogs(params: {
   if (params.page) q.set('page', String(params.page))
   if (params.page_size) q.set('page_size', String(params.page_size))
   if (params.employee_user_id)
-    q.set('employee_user_id', String(params.employee_user_id))
+    {q.set('employee_user_id', String(params.employee_user_id))}
   if (params.customer_user_id)
-    q.set('customer_user_id', String(params.customer_user_id))
+    {q.set('customer_user_id', String(params.customer_user_id))}
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
   if (params.loss_status) q.set('loss_status', params.loss_status)
@@ -205,7 +205,7 @@ export async function getCommissionCalendarStats(params: {
   q.set('start_time', String(params.start_time))
   q.set('end_time', String(params.end_time))
   if (params.employee_user_id)
-    q.set('employee_user_id', String(params.employee_user_id))
+    {q.set('employee_user_id', String(params.employee_user_id))}
   const res = await api.get(
     `/api/admin/employee/commission/calendar?${q.toString()}`
   )
@@ -236,7 +236,7 @@ export async function getCommissionResetPeriodStats(params: {
   q.set('page', String(params.page ?? 1))
   q.set('page_size', String(params.page_size ?? 100))
   if (params.employee_user_id)
-    q.set('employee_user_id', String(params.employee_user_id))
+    {q.set('employee_user_id', String(params.employee_user_id))}
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission/monthly?${q}`)
   return res.data
