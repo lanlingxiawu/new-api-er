@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -443,8 +443,9 @@ func TestGettersAndUnimplemented(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, rr)
 
-	// ConvertClaudeRequest is an intentional panic stub.
-	assert.Panics(t, func() {
+	_, err = a.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{})
+	assert.ErrorIs(t, err, relaycommon.ErrLegacyAdaptorNotImplemented)
+	assert.NotPanics(t, func() {
 		_, _ = a.ConvertClaudeRequest(c, info, &dto.ClaudeRequest{})
 	})
 }

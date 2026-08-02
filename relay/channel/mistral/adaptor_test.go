@@ -3,8 +3,8 @@ package mistral
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -129,8 +129,10 @@ func TestGetRequestURL(t *testing.T) {
 	assert.Equal(t, "https://api.mistral.ai/v1/chat/completions", url)
 }
 
-func TestConvertClaudeRequestPanics(t *testing.T) {
-	assert.Panics(t, func() {
+func TestConvertClaudeRequestReturnsError(t *testing.T) {
+	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, nil, nil)
+	assert.ErrorIs(t, err, relaycommon.ErrLegacyAdaptorNotImplemented)
+	assert.NotPanics(t, func() {
 		_, _ = (&Adaptor{}).ConvertClaudeRequest(nil, nil, nil)
 	})
 }
