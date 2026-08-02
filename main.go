@@ -374,9 +374,6 @@ func InitResources() error {
 	operation_setting.PublishRateLimitSetting()
 	operation_setting.PublishDBPoolSetting()
 	operation_setting.PublishUserSessionSetting()
-	if err := model.ApplyRelayLogAuxQueueCapacities(); err != nil {
-		common.SysError("failed to apply relay log auxiliary queue capacities: " + err.Error())
-	}
 	if err := model.ApplyDBPoolSetting(); err != nil {
 		common.SysError("failed to apply database pool settings: " + err.Error())
 	}

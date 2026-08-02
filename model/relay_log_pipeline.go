@@ -110,23 +110,26 @@ type relayLogFallbackJob struct {
 }
 
 var (
-	relayLogConsumeMu        sync.Mutex
-	relayLogConsumeBuf       []*relayLogEvent
-	relayLogErrorMu          sync.Mutex
-	relayLogErrorBuf         []*relayLogEvent
-	relayLogRetryMu          sync.Mutex
-	relayLogRetryBuf         []*relayLogEvent
-	relayLogPendingConsume   []*relayLogEvent
-	relayLogPendingError     []*relayLogEvent
-	relayLogFlushMu          sync.Mutex
-	relayLogWakeCh           = make(chan struct{}, 1)
-	relayLogStopCh           = make(chan struct{})
-	relayLogDoneCh           = make(chan struct{})
-	relayLogRetryDoneCh      = make(chan struct{})
-	relayLogContinuationCh   = make(chan relayLogContinuationJob, operation_setting.GetRelayLogPipelineSetting().GetContinuationBufMaxEntries())
-	relayLogFallbackCh       = make(chan relayLogFallbackJob, operation_setting.GetRelayLogPipelineSetting().GetFallbackQueueCapacity())
+	relayLogConsumeMu      sync.Mutex
+	relayLogConsumeBuf     []*relayLogEvent
+	relayLogErrorMu        sync.Mutex
+	relayLogErrorBuf       []*relayLogEvent
+	relayLogRetryMu        sync.Mutex
+	relayLogRetryBuf       []*relayLogEvent
+	relayLogPendingConsume []*relayLogEvent
+	relayLogPendingError   []*relayLogEvent
+	relayLogFlushMu        sync.Mutex
+	relayLogWakeCh         = make(chan struct{}, 1)
+	relayLogStopCh         = make(chan struct{})
+	relayLogDoneCh         = make(chan struct{})
+	relayLogRetryDoneCh    = make(chan struct{})
+	// 物理容量取常量而非配置值：Go channel 不能原地扩缩，按启动配置分配的话，
+	// 运行中调大只能等下次启动，而后台已经显示成新值——运维在故障中扩容、以为
+	// 立即生效、实际仍按旧容量丢弃。配置值恒不超过这两个常量（见 operation_setting
+	// 的 bounded 钳制），因此它纯粹是投递时的软上限，双向调整都即时生效。
+	relayLogContinuationCh   = make(chan relayLogContinuationJob, operation_setting.MaxRelayLogContinuationBufMaxEntries)
+	relayLogFallbackCh       = make(chan relayLogFallbackJob, operation_setting.MaxRelayLogFallbackQueueCapacity)
 	relayLogWorkerOnce       sync.Once
-	relayLogAuxStarted       atomic.Bool
 	relayLogAuxStopOnce      sync.Once
 	relayLogAuxWG            sync.WaitGroup
 	relayLogAuxSendMu        sync.RWMutex
@@ -257,13 +260,9 @@ func dispatchRelayLogContinuation(event *relayLogEvent, id int) {
 		event.continuationOnce.Do(func() {
 			startRelayLogAuxWorkers()
 			job := relayLogContinuationJob{event: event, id: id}
-			// Decreases apply immediately. Increases require restart because a Go
-			// channel cannot grow; cap at the physical size so the configured
-			// admission limit can never promise capacity the channel does not have.
+			// 每次投递重新读软上限，调大调小都即时生效。它由配置钳制保证不超过
+			// 物理容量，所以这里不需要再 clamp。
 			softCap := operation_setting.GetRelayLogPipelineSetting().GetContinuationBufMaxEntries()
-			if physicalCap := cap(relayLogContinuationCh); softCap > physicalCap {
-				softCap = physicalCap
-			}
 			if len(relayLogContinuationCh) >= softCap {
 				relayLogContinuationDrop.Add(1)
 				dispatchRelayLogFallbackJob(event, true)
@@ -283,7 +282,6 @@ func dispatchRelayLogContinuation(event *relayLogEvent, id int) {
 
 func startRelayLogAuxWorkers() {
 	relayLogWorkerOnce.Do(func() {
-		relayLogAuxStarted.Store(true)
 		for i := 0; i < 2; i++ {
 			relayLogAuxWG.Add(1)
 			go relayLogContinuationWorker()
@@ -293,19 +291,6 @@ func startRelayLogAuxWorkers() {
 		relayLogAuxWG.Add(1)
 		go relayLogAlertWorker()
 	})
-}
-
-// ApplyRelayLogAuxQueueCapacities rebuilds the auxiliary queues from the
-// persisted startup configuration before any worker can hold a channel
-// reference. Go channels cannot be resized safely after workers start.
-func ApplyRelayLogAuxQueueCapacities() error {
-	if relayLogAuxStarted.Load() {
-		return fmt.Errorf("relay log auxiliary workers already started")
-	}
-	setting := operation_setting.GetRelayLogPipelineSetting()
-	relayLogContinuationCh = make(chan relayLogContinuationJob, setting.GetContinuationBufMaxEntries())
-	relayLogFallbackCh = make(chan relayLogFallbackJob, setting.GetFallbackQueueCapacity())
-	return nil
 }
 
 func relayLogContinuationWorker() {
@@ -340,12 +325,8 @@ func dispatchRelayLogFallbackJob(event *relayLogEvent, executeContinuation bool)
 		return
 	}
 	startRelayLogAuxWorkers()
-	// Decreases apply immediately; increases are capped by the startup-applied
-	// physical channel size until restart.
+	// 同 continuation：软上限每次投递重新读取，双向即时生效。
 	softCap := operation_setting.GetRelayLogPipelineSetting().GetFallbackQueueCapacity()
-	if physicalCap := cap(relayLogFallbackCh); softCap > physicalCap {
-		softCap = physicalCap
-	}
 
 	// 错误日志在通道用掉 1/N 之后就不再入队，把余量留给消费日志。
 	// 这里直接丢弃而不是走下面的软/硬上限分支：错误日志没有记账负载，

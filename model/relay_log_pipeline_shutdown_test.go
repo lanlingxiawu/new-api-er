@@ -423,3 +423,81 @@ func TestFlushDrainsConsumeLogsBeforeErrorLogs(t *testing.T) {
 	assert.Len(t, relayLogPendingConsume, 0, "消费日志应当被优先取空")
 	assert.Len(t, relayLogPendingError, 3, "错误日志应当留到下一轮")
 }
+
+// TestRelayLogAuxQueuePhysicalCapacityIsIndependentOfConfig 钉住本次改造的核心
+// 不变量（设计文档 §21.1）：两条 aux channel 的物理容量是常量，配置值只做软上限。
+//
+// 改造前物理容量按启动时的配置值分配，投递时还要把软上限 clamp 回 cap(ch)——
+// 于是"后台把容量调大并显示成功、实际仍按旧容量丢弃"。这个用例保证配置的任何
+// 合法取值都不会超过物理容量，clamp 因此恒等，那种偏差不可能再出现。
+func TestRelayLogAuxQueuePhysicalCapacityIsIndependentOfConfig(t *testing.T) {
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	old := *cfg
+	t.Cleanup(func() { *cfg = old })
+
+	require.Equal(t, operation_setting.MaxRelayLogContinuationBufMaxEntries, cap(relayLogContinuationCh))
+	require.Equal(t, operation_setting.MaxRelayLogFallbackQueueCapacity, cap(relayLogFallbackCh))
+
+	cfg.ContinuationBufMaxEntries = operation_setting.MaxRelayLogContinuationBufMaxEntries
+	cfg.FallbackQueueCapacity = operation_setting.MaxRelayLogFallbackQueueCapacity
+	require.Equal(t, cap(relayLogContinuationCh), cfg.GetContinuationBufMaxEntries(),
+		"配到上界时软上限必须完全可达，否则又回到「配了用不上」")
+	require.Equal(t, cap(relayLogFallbackCh), cfg.GetFallbackQueueCapacity())
+
+	cfg.ContinuationBufMaxEntries = operation_setting.MaxRelayLogContinuationBufMaxEntries * 2
+	cfg.FallbackQueueCapacity = operation_setting.MaxRelayLogFallbackQueueCapacity * 2
+	require.LessOrEqual(t, cfg.GetContinuationBufMaxEntries(), cap(relayLogContinuationCh))
+	require.LessOrEqual(t, cfg.GetFallbackQueueCapacity(), cap(relayLogFallbackCh))
+}
+
+// TestFallbackSoftCapacityGrowsWithoutRestart 钉住"调大即时生效"：
+// 软上限在每次投递时重新读取，扩容不需要重启进程。
+func TestFallbackSoftCapacityGrowsWithoutRestart(t *testing.T) {
+	useRelayLogFallbackDir(t)
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	old := *cfg
+	cfg.FallbackQueueCapacity = 4
+	t.Cleanup(func() { *cfg = old; resetRelayLogPipelineForTest() })
+	resetRelayLogPipelineForTest()
+
+	// 闸门堵住 fallback worker，让通道能积压到软上限。
+	// 清理顺序（LIFO）：先放闸，再等排空，否则失败路径会卡满超时。
+	blocked := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() { unblockOnce.Do(func() { close(blocked) }) }
+	previousHandler := relayLogAccountingHandler
+	RegisterRelayLogAccountingHandler(func(RelayLogAccountingPayload, int) { <-blocked })
+	t.Cleanup(func() {
+		drainRelayLogAux(t, 30*time.Second)
+		RegisterRelayLogAccountingHandler(previousHandler)
+	})
+	t.Cleanup(unblock)
+
+	fill := func(requestID string) {
+		dispatchRelayLogFallbackJob(&relayLogEvent{
+			Kind:       relayLogKindConsume,
+			Log:        &Log{RequestId: requestID},
+			Accounting: &RelayLogAccountingPayload{Version: 1, UserID: 1, Quota: 1},
+		}, true)
+	}
+
+	// 不假设投递多少条才会碰到软上限：worker 会先取走一批再阻塞，取走的条数
+	// 与调度时序有关。一直投到出现拒绝为止，上限给足以免死循环。
+	rejectedBefore := relayLogFallbackErrors.Load()
+	rejected := false
+	for i := 0; i < relayLogFallbackBatchMax+64 && !rejected; i++ {
+		fill("filler")
+		rejected = relayLogFallbackErrors.Load() > rejectedBefore
+	}
+	require.True(t, rejected, "软上限之上的投递必须被拒绝")
+
+	// 运行中调大：无需重启，下一次投递立即被接收。
+	// 通道此刻的积压不超过旧软上限，远小于新软上限。
+	cfg.FallbackQueueCapacity = operation_setting.MaxRelayLogFallbackQueueCapacity
+	rejectedAfterGrow := relayLogFallbackErrors.Load()
+	fill("after-grow")
+	require.Equal(t, rejectedAfterGrow, relayLogFallbackErrors.Load(),
+		"扩容在下一次投递就该生效，不需要重启")
+
+	unblock()
+}

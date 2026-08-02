@@ -57,14 +57,14 @@ const pipelineSchema = z.object({
   enabled: z.boolean(),
   consume_buf_max_entries: z.number().int().min(1).max(1_000_000),
   error_buf_max_entries: z.number().int().min(1).max(1_000_000),
-  continuation_buf_max_entries: z.number().int().min(1),
+  continuation_buf_max_entries: z.number().int().min(1).max(100_000),
   outer_batch_size: z.number().int().min(1).max(10_000),
   inner_batch_size: z.number().int().min(1).max(10_000),
   flush_max_per_cycle: z.number().int().min(1).max(100_000),
   full_drain: z.boolean(),
   flush_interval_ms: z.number().int().min(1).max(60_000),
   write_timeout_sec: z.number().int().min(1).max(30),
-  fallback_queue_capacity: z.number().int().min(1),
+  fallback_queue_capacity: z.number().int().min(1).max(100_000),
   fallback_max_file_size_mb: z.number().int().min(1),
   fallback_max_files: z.number().int().min(1),
   shutdown_timeout_sec: z.number().int().min(1),
@@ -208,8 +208,9 @@ const fields: NumberField[] = [
     name: "continuation_buf_max_entries",
     label: "Accounting Continuation Buffer",
     description:
-      "Capacity for deferred accounting work after a log event is accepted or degraded. Increasing it requires a restart and uses more memory.",
+      "Capacity for deferred accounting work after a log event is accepted or degraded. Takes effect immediately; a larger value holds more events in memory.",
     min: 1,
+    max: 100000,
   },
   {
     group: "pipeline",
@@ -226,8 +227,9 @@ const fields: NumberField[] = [
     name: "fallback_queue_capacity",
     label: "Fallback Queue Capacity",
     description:
-      "Capacity of the queue that writes failed records to fallback files. Increasing it requires a restart and uses more memory.",
+      "Capacity of the queue that writes failed records to fallback files. Takes effect immediately; a larger value holds more events in memory.",
     min: 1,
+    max: 100000,
   },
   {
     group: "pipeline",
