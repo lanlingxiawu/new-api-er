@@ -257,7 +257,6 @@ func migrateDB() error {
 		&Option{},
 		&Redemption{},
 		&Ability{},
-		&Log{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -301,6 +300,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateMainLogTableIfNeeded(); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -319,107 +321,18 @@ func migrateDB() error {
 	return nil
 }
 
-func migrateDBFast() error {
-
-	var wg sync.WaitGroup
-
-	migrations := []struct {
-		model interface{}
-		name  string
-	}{
-		{&Channel{}, "Channel"},
-		{&Token{}, "Token"},
-		{&User{}, "User"},
-		{&UserSession{}, "UserSession"},
-		{&AuthFlow{}, "AuthFlow"},
-		{&ExternalIdentityClaim{}, "ExternalIdentityClaim"},
-		{&PasskeyCredential{}, "PasskeyCredential"},
-		{&Option{}, "Option"},
-		{&Redemption{}, "Redemption"},
-		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
-		{&Midjourney{}, "Midjourney"},
-		{&TopUp{}, "TopUp"},
-		{&QuotaData{}, "QuotaData"},
-		{&Task{}, "Task"},
-		{&Model{}, "Model"},
-		{&Vendor{}, "Vendor"},
-		{&PrefillGroup{}, "PrefillGroup"},
-		{&Setup{}, "Setup"},
-		{&TwoFA{}, "TwoFA"},
-		{&TwoFABackupCode{}, "TwoFABackupCode"},
-		{&Checkin{}, "Checkin"},
-		{&SubscriptionOrder{}, "SubscriptionOrder"},
-		{&UserSubscription{}, "UserSubscription"},
-		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
-		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
-		{&UserOAuthBinding{}, "UserOAuthBinding"},
-		{&PerfMetric{}, "PerfMetric"},
-		{&UserExtension{}, "UserExtension"},
-		{&EmployeeProfile{}, "EmployeeProfile"},
-		{&ChannelCostConfig{}, "ChannelCostConfig"},
-		{&EmployeeCommissionLog{}, "EmployeeCommissionLog"},
-		{&ConsumptionCost{}, "ConsumptionCost"},
-		{&PlatformChannelDailyStat{}, "PlatformChannelDailyStat"},
-		{&EmployeeCommissionDailyStat{}, "EmployeeCommissionDailyStat"},
-		{&EmployeeCommissionResetPeriodDailyStat{}, "EmployeeCommissionResetPeriodDailyStat"},
-		{&BusinessStatsAppliedBatch{}, "BusinessStatsAppliedBatch"},
-		{&BusinessDailyStatsCoverage{}, "BusinessDailyStatsCoverage"},
-		{&EmployeeCommissionTier{}, "EmployeeCommissionTier"},
-		{&EmployeeTierLevel{}, "EmployeeTierLevel"},
-		{&EmployeeTierLog{}, "EmployeeTierLog"},
-		{&SystemInstance{}, "SystemInstance"},
-		{&SystemTask{}, "SystemTask"},
-		{&SystemTaskLock{}, "SystemTaskLock"},
-		{&LogExportTemplate{}, "LogExportTemplate"},
+func migrateMainLogTableIfNeeded() error {
+	if os.Getenv("LOG_SQL_DSN") != "" {
+		return nil
 	}
-	// 动态计算migration数量，确保errChan缓冲区足够大
-	errChan := make(chan error, len(migrations))
-
-	for _, m := range migrations {
-		wg.Add(1)
-		go func(model interface{}, name string) {
-			defer wg.Done()
-			if err := DB.AutoMigrate(model); err != nil {
-				errChan <- fmt.Errorf("failed to migrate %s: %v", name, err)
-			}
-		}(m.model, m.name)
-	}
-
-	// Wait for all migrations to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	if err := InitializeUserAuthVersions(); err != nil {
-		return err
-	}
-	if err := InitializeExternalIdentityClaims(); err != nil {
-		return err
-	}
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
-		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
-			return err
-		}
-	} else {
-		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
-			return err
-		}
-	}
-	common.SysLog("database migrated")
-	return nil
+	return migrateLogTable(DB)
 }
 
 func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return migrateLogTable(LOG_DB)
 }
 
 func migrateClickHouseLogDB() error {
