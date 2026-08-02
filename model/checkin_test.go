@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -8,6 +9,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// pickTwoDaysOtherThanToday 返回当月两个不等于今天的日期号。
+// 取 1..28 保证任何月份都存在，避开 today 保证 checked_in_today 断言稳定。
+func pickTwoDaysOtherThanToday(today int) [2]int {
+	days := make([]int, 0, 2)
+	for day := 1; day <= 28 && len(days) < 2; day++ {
+		if day != today {
+			days = append(days, day)
+		}
+	}
+	return [2]int{days[0], days[1]}
+}
 
 // ---------------------------------------------------------------------------
 // checkin.go — daily check-in reward, once-per-day guard, stats.
@@ -155,11 +168,15 @@ func TestGetUserCheckinStats(t *testing.T) {
 	u := mkUser(t, func(u *User) { u.Quota = 0 })
 	cleanupCheckins(t, u.Id)
 
-	month := time.Now().Format("2006-01")
-	// Seed two rows in the current month via direct insert (deterministic quota).
+	now := time.Now()
+	month := now.Format("2006-01")
+	// Seed two rows in the current month, deliberately avoiding today: the test
+	// asserts checked_in_today == false. Hardcoding "-02"/"-03" made this fail on
+	// the 2nd and 3rd of every month.
+	seedDays := pickTwoDaysOtherThanToday(now.Day())
 	seed := []Checkin{
-		{UserId: u.Id, CheckinDate: month + "-02", QuotaAwarded: 500, CreatedAt: time.Now().Unix()},
-		{UserId: u.Id, CheckinDate: month + "-03", QuotaAwarded: 700, CreatedAt: time.Now().Unix()},
+		{UserId: u.Id, CheckinDate: fmt.Sprintf("%s-%02d", month, seedDays[0]), QuotaAwarded: 500, CreatedAt: now.Unix()},
+		{UserId: u.Id, CheckinDate: fmt.Sprintf("%s-%02d", month, seedDays[1]), QuotaAwarded: 700, CreatedAt: now.Unix()},
 	}
 	for i := range seed {
 		require.NoError(t, DB.Create(&seed[i]).Error)
@@ -168,10 +185,10 @@ func TestGetUserCheckinStats(t *testing.T) {
 	stats, err := GetUserCheckinStats(u.Id, month)
 	require.NoError(t, err)
 
-	assert.EqualValues(t, 1200, stats["total_quota"])   // 500 + 700
-	assert.EqualValues(t, 2, stats["total_checkins"])   // all-time count
-	assert.Equal(t, 2, stats["checkin_count"])          // this month
-	assert.Equal(t, false, stats["checked_in_today"])   // no row for "today"
+	assert.EqualValues(t, 1200, stats["total_quota"]) // 500 + 700
+	assert.EqualValues(t, 2, stats["total_checkins"]) // all-time count
+	assert.Equal(t, 2, stats["checkin_count"])        // this month
+	assert.Equal(t, false, stats["checked_in_today"]) // no row for "today"
 	records, ok := stats["records"].([]CheckinRecord)
 	require.True(t, ok)
 	assert.Len(t, records, 2)
