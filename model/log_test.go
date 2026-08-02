@@ -116,7 +116,9 @@ func TestFormatUserLogs(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, m, "admin_info")
 	assert.NotContains(t, m, "audit_info")
-	assert.NotContains(t, m, "stream_status")
+	// stream_status stays visible to the log owner: it describes their own
+	// request, not operator activity.
+	assert.Equal(t, "done", m["stream_status"])
 	assert.Equal(t, "visible", m["keep"])
 }
 

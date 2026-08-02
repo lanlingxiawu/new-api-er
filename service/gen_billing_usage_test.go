@@ -29,40 +29,79 @@ func TestBillusage_PathForLog_NilUsageUpstream(t *testing.T) {
 	assert.Equal(t, usageBillingPathUpstream, usageBillingPathForLog(false, &dto.Usage{}))
 }
 
+// payloadKind selects which provider-specific usage body the case carries.
+// A source/semantic marker alone is not enough — see
+// TestBillusage_Effective_MismatchedInnerReturnsOriginal.
+type billingPayloadKind int
+
+const (
+	payloadNone billingPayloadKind = iota
+	payloadOpenAI
+	payloadClaude
+	payloadGemini
+)
+
+func billingUsageWithPayload(
+	source string,
+	semantic string,
+	estimated bool,
+	kind billingPayloadKind,
+) *dto.Usage {
+	billingUsage := &dto.BillingUsage{
+		Source:    source,
+		Semantic:  semantic,
+		Estimated: estimated,
+	}
+	switch kind {
+	case payloadOpenAI:
+		billingUsage.OpenAIUsage = &dto.Usage{InputTokens: 10, OutputTokens: 5}
+	case payloadClaude:
+		billingUsage.ClaudeUsage = &dto.ClaudeUsage{InputTokens: 10, OutputTokens: 5}
+	case payloadGemini:
+		billingUsage.GeminiUsageMetadata = &dto.GeminiUsageMetadata{
+			PromptTokenCount:     10,
+			CandidatesTokenCount: 5,
+		}
+	case payloadNone:
+	}
+	return &dto.Usage{BillingUsage: billingUsage}
+}
+
 func TestBillusage_PathForLog_SourceMatrix(t *testing.T) {
 	cases := []struct {
 		name      string
 		source    string
 		semantic  string
 		estimated bool
+		payload   billingPayloadKind
 		want      string
 	}{
-		{"oai-chat", dto.BillingUsageSourceOAIChat, "", false, usageBillingPathOpenAI},
-		{"oai-responses", dto.BillingUsageSourceOAIResponses, "", false, usageBillingPathOpenAI},
-		{"oai-semantic", "", dto.BillingUsageSemanticOpenAI, false, usageBillingPathOpenAI},
-		{"oai-estimated", dto.BillingUsageSourceOAIChat, "", true, usageBillingPathOpenAIEstimated},
-		{"claude-source", dto.BillingUsageSourceClaudeMessages, "", false, usageBillingPathAnthropic},
-		{"claude-semantic", "", dto.BillingUsageSemanticAnthropic, false, usageBillingPathAnthropic},
-		{"claude-estimated", dto.BillingUsageSourceClaudeMessages, "", true, usageBillingPathAnthropicEstimated},
-		{"gemini-source", dto.BillingUsageSourceGeminiChat, "", false, usageBillingPathGemini},
-		{"gemini-semantic", "", dto.BillingUsageSemanticGemini, false, usageBillingPathGemini},
-		{"gemini-estimated", dto.BillingUsageSourceGeminiChat, "", true, usageBillingPathGeminiEstimated},
-		{"unknown", "something-else", "", false, usageBillingPathUpstream},
+		{"oai-chat", dto.BillingUsageSourceOAIChat, "", false, payloadOpenAI, usageBillingPathOpenAI},
+		{"oai-responses", dto.BillingUsageSourceOAIResponses, "", false, payloadOpenAI, usageBillingPathOpenAI},
+		{"oai-semantic", "", dto.BillingUsageSemanticOpenAI, false, payloadOpenAI, usageBillingPathOpenAI},
+		{"oai-estimated", dto.BillingUsageSourceOAIChat, "", true, payloadOpenAI, usageBillingPathOpenAIEstimated},
+		{"claude-source", dto.BillingUsageSourceClaudeMessages, "", false, payloadClaude, usageBillingPathAnthropic},
+		{"claude-semantic", "", dto.BillingUsageSemanticAnthropic, false, payloadClaude, usageBillingPathAnthropic},
+		{"claude-estimated", dto.BillingUsageSourceClaudeMessages, "", true, payloadClaude, usageBillingPathAnthropicEstimated},
+		{"gemini-source", dto.BillingUsageSourceGeminiChat, "", false, payloadGemini, usageBillingPathGemini},
+		{"gemini-semantic", "", dto.BillingUsageSemanticGemini, false, payloadGemini, usageBillingPathGemini},
+		{"gemini-estimated", dto.BillingUsageSourceGeminiChat, "", true, payloadGemini, usageBillingPathGeminiEstimated},
+		{"unknown", "something-else", "", false, payloadNone, usageBillingPathUpstream},
+		// A marker without its payload cannot be trusted as that provider's path.
+		{"oai-marker-without-payload", dto.BillingUsageSourceOAIChat, "", false, payloadNone, usageBillingPathUpstream},
+		{"claude-marker-without-payload", dto.BillingUsageSourceClaudeMessages, "", false, payloadNone, usageBillingPathUpstream},
+		{"gemini-marker-without-payload", dto.BillingUsageSourceGeminiChat, "", false, payloadNone, usageBillingPathUpstream},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			u := &dto.Usage{BillingUsage: &dto.BillingUsage{
-				Source:    c.source,
-				Semantic:  c.semantic,
-				Estimated: c.estimated,
-			}}
+			u := billingUsageWithPayload(c.source, c.semantic, c.estimated, c.payload)
 			assert.Equal(t, c.want, usageBillingPathForLog(false, u))
 		})
 	}
 }
 
 func TestBillusage_PathForLog_CaseInsensitiveAndTrimmed(t *testing.T) {
-	u := &dto.Usage{BillingUsage: &dto.BillingUsage{Source: "  OAI_CHAT  "}}
+	u := billingUsageWithPayload("  OAI_CHAT  ", "", false, payloadOpenAI)
 	assert.Equal(t, usageBillingPathOpenAI, usageBillingPathForLog(false, u))
 }
 
@@ -84,7 +123,11 @@ func TestBillusage_AppendPath_PreservesExistingAdminInfo(t *testing.T) {
 	other := map[string]interface{}{
 		"admin_info": map[string]interface{}{"foo": "bar"},
 	}
-	appendUsageBillingPathForLog(other, false, &dto.Usage{BillingUsage: &dto.BillingUsage{Source: dto.BillingUsageSourceGeminiChat}})
+	appendUsageBillingPathForLog(
+		other,
+		false,
+		billingUsageWithPayload(dto.BillingUsageSourceGeminiChat, "", false, payloadGemini),
+	)
 	admin := other["admin_info"].(map[string]interface{})
 	assert.Equal(t, "bar", admin["foo"])
 	assert.Equal(t, usageBillingPathGemini, admin["usage_billing_path"])

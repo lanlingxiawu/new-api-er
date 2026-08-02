@@ -11,7 +11,10 @@ package controller
 // 两个 helper 与上游逐字节一致，只是换了个文件。
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -90,4 +93,114 @@ func initModelListColumnNames(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// controller/token_test.go 的助手。
+//
+// 与 model_list 同一情况：上游把它们放在 token_test.go 里，而那个文件的其余部分
+// （跨 MySQL/PostgreSQL 的迁移兼容测试）会替换 model.DB 并在 cleanup 里关闭，
+// 与本仓 harness 的共享连接冲突，因此没有携带；token_auto_groups_test.go 仍要
+// 用这几个助手，按 Rule 6 放在这里而不是去改上游测试。
+//
+// 与上游的唯一差异：openTokenControllerTestDB 前后成对保存/还原 model.DB 和
+// model.LOG_DB。上游版本换掉全局句柄后不还原，后续用 harness 连接的测试会拿到
+// 已关闭的句柄（表现为 "sql: database is closed"）。
+// ---------------------------------------------------------------------------
+
+type tokenAPIResponse struct {
+	Success bool            `json:"success"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+}
+
+func openTokenControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	prevDB, prevLogDB := model.DB, model.LOG_DB
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = prevDB, prevLogDB
+	})
+
+	gin.SetMode(gin.TestMode)
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.RedisEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	model.LOG_DB = db
+
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	return db
+}
+
+func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	require.NoError(t, db.AutoMigrate(&model.Token{}))
+}
+
+func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	db := openTokenControllerTestDB(t)
+	migrateTokenControllerTestDB(t, db)
+	return db
+}
+
+func seedToken(t *testing.T, db *gorm.DB, userID int, name string, rawKey string) *model.Token {
+	t.Helper()
+
+	token := &model.Token{
+		UserId:         userID,
+		Name:           name,
+		Key:            rawKey,
+		Status:         common.TokenStatusEnabled,
+		CreatedTime:    1,
+		AccessedTime:   1,
+		ExpiredTime:    -1,
+		RemainQuota:    100,
+		UnlimitedQuota: true,
+		Group:          "default",
+	}
+	require.NoError(t, db.Create(token).Error)
+	return token
+}
+
+func newAuthenticatedContext(t *testing.T, method string, target string, body any, userID int) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+
+	var requestBody *bytes.Reader
+	if body != nil {
+		payload, err := common.Marshal(body)
+		require.NoError(t, err)
+		requestBody = bytes.NewReader(payload)
+	} else {
+		requestBody = bytes.NewReader(nil)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(method, target, requestBody)
+	if body != nil {
+		ctx.Request.Header.Set("Content-Type", "application/json")
+	}
+	ctx.Set("id", userID)
+	return ctx, recorder
+}
+
+func decodeAPIResponse(t *testing.T, recorder *httptest.ResponseRecorder) tokenAPIResponse {
+	t.Helper()
+
+	var response tokenAPIResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	return response
 }

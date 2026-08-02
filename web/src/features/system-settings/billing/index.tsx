@@ -57,6 +57,7 @@ const defaultBillingSettings: BillingSettings = {
   UserUsableGroups: '',
   GroupGroupRatio: '',
   AutoGroups: '',
+  MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
   UserExclusiveGroupRatioEnabled: false,
   UserExclusiveGroupRatioCacheMax: 4096,
