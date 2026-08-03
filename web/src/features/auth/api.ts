@@ -50,7 +50,11 @@ export async function login(payload: LoginPayload) {
       username: payload.username,
       password: payload.password,
     },
-    { skipAuthRefresh: true }
+    {
+      skipAuthRefresh: true,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
   )
   return res.data
 }

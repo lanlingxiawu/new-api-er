@@ -46,6 +46,7 @@ import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import { showAuthServerErrorToast } from '@/features/auth/lib/server-error-toast'
 import { savePendingTwoFAFlow } from '@/features/auth/lib/storage'
 import { persistTwoFALoginFlow } from '@/features/auth/lib/twofa-login'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
@@ -179,9 +180,16 @@ export function UserAuthForm({
         }
         await handleLoginSuccess(res.data, redirectTo)
         toast.success(t('Welcome back!'))
+      } else if (!showAuthServerErrorToast(res)) {
+        toast.error(res.message || loginFailedMessage)
       }
     } catch (error: unknown) {
-      if (axios.isAxiosError(error)) return
+      if (axios.isAxiosError(error)) {
+        if (!showAuthServerErrorToast(error)) {
+          toast.error(error.response?.data?.message || loginFailedMessage)
+        }
+        return
+      }
       toast.error(error instanceof Error ? error.message : loginFailedMessage)
     } finally {
       setIsLoading(false)
