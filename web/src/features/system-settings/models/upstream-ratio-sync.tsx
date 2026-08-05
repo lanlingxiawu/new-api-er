@@ -62,6 +62,8 @@ import {
 } from './upstream-ratio-sync-helpers'
 import { UpstreamRatioSyncTable } from './upstream-ratio-sync-table'
 
+const MODEL_PRICING_SCOPE = 'billing.model-pricing'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -195,12 +197,14 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
     mutationFn: async (updates: Array<{ key: string; value: string }>) => {
       for (const update of updates) {
-        await updateSystemOption(update)
+        await updateSystemOption({ ...update, scope: MODEL_PRICING_SCOPE })
       }
     },
     onSuccess: () => {
       toast.success(t('Prices synced successfully'))
-      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      queryClient.invalidateQueries({
+        queryKey: ['system-options', MODEL_PRICING_SCOPE],
+      })
 
       setDifferences((prevDiffs) => {
         const newDiffs = { ...prevDiffs }

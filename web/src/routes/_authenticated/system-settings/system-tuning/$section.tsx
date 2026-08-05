@@ -16,24 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+
+import { requireSystemSettingsSection } from '@/features/system-settings/route-access'
 import { SystemTuningSettings } from '@/features/system-settings/system-tuning'
-import {
-  SYSTEM_TUNING_DEFAULT_SECTION,
-  SYSTEM_TUNING_SECTION_IDS,
-} from '@/features/system-settings/system-tuning/section-registry.tsx'
+import { SYSTEM_TUNING_SECTION_IDS } from '@/features/system-settings/system-tuning/section-registry.tsx'
 
 export const Route = createFileRoute(
   '/_authenticated/system-settings/system-tuning/$section'
 )({
   beforeLoad: ({ params }) => {
-    const validSections = SYSTEM_TUNING_SECTION_IDS as unknown as string[]
-    if (!validSections.includes(params.section)) {
-      throw redirect({
-        to: '/system-settings/system-tuning/$section',
-        params: { section: SYSTEM_TUNING_DEFAULT_SECTION },
-      })
-    }
+    requireSystemSettingsSection(
+      'system-tuning',
+      params.section,
+      SYSTEM_TUNING_SECTION_IDS
+    )
   },
   component: SystemTuningSettings,
 })

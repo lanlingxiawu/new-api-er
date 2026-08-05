@@ -22,6 +22,15 @@ import { useTranslation } from 'react-i18next'
 
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
 import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import {
+  firstVisibleSettingsSection,
+  scopeFromSystemSettingsUrl,
+} from '@/features/system-settings/access'
+import { adminMenuFromUrl } from '@/lib/admin-menu-access'
+import {
+  canViewAdminMenu,
+  canViewSystemSettingsScope,
+} from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -48,6 +57,7 @@ export function useSidebarView(): ResolvedSidebarView {
   const { t } = useTranslation()
   const pathname = useLocation({ select: (l) => l.pathname })
   const userRole = useAuthStore((s) => s.auth.user?.role)
+  const user = useAuthStore((s) => s.auth.user)
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
@@ -57,20 +67,56 @@ export function useSidebarView(): ResolvedSidebarView {
     return configFilteredRoot
       .filter((group) => (group.id === 'admin' ? isAdmin : true))
       .map((group) => {
-        const items = group.items.filter(
-          (item) => item.requiredRole === undefined || role >= item.requiredRole
-        )
-        return items.length === group.items.length ? group : { ...group, items }
+        const firstVisibleSettings = firstVisibleSettingsSection(user)
+        const items = group.items
+          .filter((item) => {
+            const menu = adminMenuFromUrl(String(item.url))
+            return (
+              (item.requiredRole === undefined || role >= item.requiredRole) &&
+              (!menu || canViewAdminMenu(user, menu)) &&
+              (item.url !== '/system-settings/site' || firstVisibleSettings)
+            )
+          })
+          .map((item) =>
+            item.url === '/system-settings/site' && firstVisibleSettings
+              ? {
+                  ...item,
+                  url: `/system-settings/${firstVisibleSettings.group}/${firstVisibleSettings.section}`,
+                }
+              : item
+          )
+        return { ...group, items }
       })
-  }, [configFilteredRoot, userRole])
+  }, [configFilteredRoot, user, userRole])
 
   const view = resolveSidebarView(pathname)
 
   if (view) {
+    const navGroups = view.getNavGroups(t)
+    const visibleNavGroups =
+      view.id === 'system-settings'
+        ? navGroups
+            .map((group) => ({
+              ...group,
+              items: group.items
+                .map((item) => {
+                  if (!item.items) return item
+                  const items = item.items.filter((child) => {
+                    const scope = scopeFromSystemSettingsUrl(String(child.url))
+                    return scope
+                      ? canViewSystemSettingsScope(user, scope)
+                      : false
+                  })
+                  return { ...item, items }
+                })
+                .filter((item) => !item.items || item.items.length > 0),
+            }))
+            .filter((group) => group.items.length > 0)
+        : navGroups
     return {
       key: view.id,
       view,
-      navGroups: view.getNavGroups(t),
+      navGroups: visibleNavGroups,
     }
   }
 

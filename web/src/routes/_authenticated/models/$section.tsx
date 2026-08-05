@@ -24,8 +24,7 @@ import {
   MODELS_SECTION_IDS,
   MODELS_DEFAULT_SECTION,
 } from '@/features/models/section-registry'
-import { ROLE } from '@/lib/roles'
-import { useAuthStore } from '@/stores/auth-store'
+import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 const modelsSearchSchema = z.object({
   page: z.number().optional().catch(1),
@@ -42,13 +41,7 @@ const modelsSearchSchema = z.object({
 
 export const Route = createFileRoute('/_authenticated/models/$section')({
   beforeLoad: ({ params }) => {
-    const { auth } = useAuthStore.getState()
-
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
-      throw redirect({
-        to: '/403',
-      })
-    }
+    requireAdminMenu(ADMIN_MENU_IDS.MODELS)
 
     const validSections = MODELS_SECTION_IDS as unknown as string[]
     if (!validSections.includes(params.section)) {

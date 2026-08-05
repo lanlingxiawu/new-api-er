@@ -27,6 +27,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 
 import { getDatabasePoolRuntimeStatus, updateSystemOptionGroup } from '../api'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsSection } from '../components/settings-section'
 import type { DatabasePoolStats, SystemTuningSettings } from '../types'
 
@@ -69,18 +70,20 @@ function ConfigGroupSection({
 }: ConfigGroupSectionProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const { scope } = useSettingsPageAccess()
   const [values, setValues] = useState(defaults)
 
   useEffect(() => setValues(defaults), [defaults])
 
   const mutation = useMutation({
-    mutationFn: updateSystemOptionGroup,
+    mutationFn: (request: Parameters<typeof updateSystemOptionGroup>[0]) =>
+      updateSystemOptionGroup({ ...request, scope }),
     onSuccess: (response) => {
       if (!response.success) {
         toast.error(response.message)
         return
       }
-      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      queryClient.invalidateQueries({ queryKey: ['system-options', scope] })
       if (module === 'db_pool_setting') {
         queryClient.invalidateQueries({ queryKey: ['database-pool-stats'] })
       }

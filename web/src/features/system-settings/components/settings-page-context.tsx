@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { RotateCcw, Save } from 'lucide-react'
 import {
-  createContext,
   useContext,
   type ComponentProps,
   type ReactNode,
@@ -29,23 +28,15 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
-type SettingsPageContextValue = {
-  actionsContainer: HTMLDivElement | null
-  titleStatusContainer: HTMLSpanElement | null
-  suppressSectionHeader: boolean
-}
-
-const SettingsPageContext = createContext<SettingsPageContextValue>({
-  actionsContainer: null,
-  titleStatusContainer: null,
-  suppressSectionHeader: false,
-})
+import { SettingsPageContext } from './settings-page-access-context'
 
 type SettingsPageProviderProps = {
   actionsContainer: HTMLDivElement | null
   titleStatusContainer?: HTMLSpanElement | null
   children: ReactNode
   suppressSectionHeader?: boolean
+  scope: string
+  canEdit: boolean
 }
 
 export function SettingsPageProvider(props: SettingsPageProviderProps) {
@@ -55,6 +46,8 @@ export function SettingsPageProvider(props: SettingsPageProviderProps) {
         actionsContainer: props.actionsContainer,
         titleStatusContainer: props.titleStatusContainer ?? null,
         suppressSectionHeader: props.suppressSectionHeader ?? true,
+        scope: props.scope,
+        canEdit: props.canEdit,
       }}
     >
       {props.children}
@@ -114,6 +107,8 @@ type SettingsPageFormActionsProps = {
 
 export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
   const { t } = useTranslation()
+  const { canEdit } = useContext(SettingsPageContext)
+  if (!canEdit) return null
   const saveLabel = props.isSaving
     ? (props.savingLabel ?? 'Saving...')
     : (props.saveLabel ?? 'Save Changes')

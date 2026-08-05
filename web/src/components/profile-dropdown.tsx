@@ -31,11 +31,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { firstVisibleSettingsSection } from '@/features/system-settings/access'
 import useDialogState from '@/hooks/use-dialog'
 import { useIsSidebarModuleVisible } from '@/hooks/use-sidebar-config'
 import { useUserDisplay } from '@/hooks/use-user-display'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 const avatarFallbackClassName = 'font-semibold text-white'
@@ -46,7 +46,7 @@ export function ProfileDropdown() {
   const [open, setOpen] = useDialogState()
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
-  const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
+  const firstVisibleSystemSettings = firstVisibleSettingsSection(user)
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
   const avatarName = user?.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
@@ -114,12 +114,11 @@ export function ProfileDropdown() {
             </DropdownMenuItem>
           )}
 
-          {isSuperAdmin && (
+          {firstVisibleSystemSettings && (
             <DropdownMenuItem
               onClick={() =>
                 navigate({
-                  to: '/system-settings/site/$section',
-                  params: { section: 'system-info' },
+                  href: `/system-settings/${firstVisibleSystemSettings.group}/${firstVisibleSystemSettings.section}`,
                 })
               }
             >

@@ -16,12 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+
+import { redirectToFirstVisibleSystemSettings } from '@/features/system-settings/route-access'
 
 export const Route = createFileRoute('/_authenticated/system-settings/')({
   beforeLoad: () => {
-    throw redirect({
-      to: '/system-settings/site',
-    })
+    redirectToFirstVisibleSystemSettings()
   },
 })

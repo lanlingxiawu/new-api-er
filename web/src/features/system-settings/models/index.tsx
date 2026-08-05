@@ -88,6 +88,7 @@ const defaultModelSettings: ModelSettings = {
 export function ModelSettings() {
   return (
     <SettingsPage
+      group='models'
       routePath='/_authenticated/system-settings/models/$section'
       defaultSettings={defaultModelSettings}
       defaultSection={MODELS_DEFAULT_SECTION}

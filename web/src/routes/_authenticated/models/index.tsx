@@ -19,18 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { MODELS_DEFAULT_SECTION } from '@/features/models/section-registry'
-import { ROLE } from '@/lib/roles'
-import { useAuthStore } from '@/stores/auth-store'
+import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 export const Route = createFileRoute('/_authenticated/models/')({
   beforeLoad: () => {
-    const { auth } = useAuthStore.getState()
-
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
-      throw redirect({
-        to: '/403',
-      })
-    }
+    requireAdminMenu(ADMIN_MENU_IDS.MODELS)
 
     throw redirect({
       to: '/models/$section',

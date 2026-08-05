@@ -7,6 +7,8 @@ export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
+  ADMIN_MENU_PREFIX: 'admin_menu.',
+  SYSTEM_SETTINGS_PREFIX: 'system_settings.',
 } as const
 
 export const ADMIN_PERMISSION_ACTIONS = {
@@ -15,6 +17,8 @@ export const ADMIN_PERMISSION_ACTIONS = {
   WRITE: 'write',
   SENSITIVE_WRITE: 'sensitive_write',
   SECRET_VIEW: 'secret_view',
+  VIEW: 'view',
+  EDIT: 'edit',
 } as const
 
 // The role whose baseline grants are used as defaults in the permission editor.
@@ -33,6 +37,9 @@ export interface PermissionActionDef {
 export interface PermissionResourceDef {
   resource: string
   label_key: string
+  group?: string
+  group_label_key?: string
+  sort?: number
   actions: PermissionActionDef[]
 }
 
@@ -64,6 +71,60 @@ export function hasPermission(
   return user.permissions?.admin_permissions?.[resource]?.[action] === true
 }
 
+export function systemSettingsResource(scope: string): string {
+  return `${ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX}${scope}`
+}
+
+export function adminMenuResource(menu: string): string {
+  return `${ADMIN_PERMISSION_RESOURCES.ADMIN_MENU_PREFIX}${menu}`
+}
+
+export function canViewAdminMenu(
+  user: AuthUser | null | undefined,
+  menu: string
+): boolean {
+  return hasPermission(
+    user,
+    adminMenuResource(menu),
+    ADMIN_PERMISSION_ACTIONS.VIEW
+  )
+}
+
+export function canViewSystemSettingsScope(
+  user: AuthUser | null | undefined,
+  scope: string
+): boolean {
+  return hasPermission(
+    user,
+    systemSettingsResource(scope),
+    ADMIN_PERMISSION_ACTIONS.VIEW
+  )
+}
+
+export function canEditSystemSettingsScope(
+  user: AuthUser | null | undefined,
+  scope: string
+): boolean {
+  return hasPermission(
+    user,
+    systemSettingsResource(scope),
+    ADMIN_PERMISSION_ACTIONS.EDIT
+  )
+}
+
+export function canViewAnySystemSettings(
+  user: AuthUser | null | undefined
+): boolean {
+  if (!user) return false
+  if (user.role === ROLE.SUPER_ADMIN) return true
+  const permissions = user.permissions?.admin_permissions ?? {}
+  return Object.entries(permissions).some(
+    ([resource, actions]) =>
+      resource.startsWith(ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX) &&
+      actions[ADMIN_PERMISSION_ACTIONS.VIEW] === true
+  )
+}
+
 // roleGrants returns the baseline grant matrix for the given role key.
 export function roleGrants(
   catalog: PermissionCatalog,
@@ -87,6 +148,17 @@ export function normalizeAdminPermissions(
         value?.[resource.resource]?.[action.action] ??
         baseline[resource.resource]?.[action.action] ??
         false
+    }
+    if (
+      resource.resource.startsWith(
+        ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
+      )
+    ) {
+      if (actions[ADMIN_PERMISSION_ACTIONS.VIEW] === false) {
+        actions[ADMIN_PERMISSION_ACTIONS.EDIT] = false
+      } else if (actions[ADMIN_PERMISSION_ACTIONS.EDIT] === true) {
+        actions[ADMIN_PERMISSION_ACTIONS.VIEW] = true
+      }
     }
     normalized[resource.resource] = actions
   }

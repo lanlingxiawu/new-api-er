@@ -19,28 +19,29 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
-import { Badge } from '@/components/ui/badge'
+import { canViewSystemSettingsScope } from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { SystemInstancesPanel } from './components/system-instances-panel'
 import { SystemTasksPanel } from './components/system-tasks-panel'
 
 export function SystemInfo() {
   const { t } = useTranslation()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  // 系统任务面板复用日志维护分区的查看权限：拥有该分区权限的管理员才需要看到
+  // 后台任务执行状态，避免把无关的运维细节暴露给所有能进入本页的管理员。
+  const canViewSystemTasks = canViewSystemSettingsScope(
+    currentUser,
+    'operations.logs'
+  )
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>
-        <span className='inline-flex min-w-0 items-center gap-2'>
-          <span className='truncate'>{t('System Info')}</span>
-          <Badge variant='outline' className='shrink-0'>
-            Root
-          </Badge>
-        </span>
-      </SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('System Info')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='space-y-4'>
           <SystemInstancesPanel />
-          <SystemTasksPanel />
+          {canViewSystemTasks && <SystemTasksPanel />}
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

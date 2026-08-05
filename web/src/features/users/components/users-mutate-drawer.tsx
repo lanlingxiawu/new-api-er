@@ -18,8 +18,19 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  CheckCircle2,
+  Circle,
+  CreditCard,
+  Link2,
+  Pencil,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  UserRound,
+  UsersRound,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -32,7 +43,6 @@ import {
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -67,11 +77,11 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   EMPTY_PERMISSION_CATALOG,
   hasPermission,
-  normalizeAdminPermissions,
 } from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -90,6 +100,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import type { User } from '../types'
+import { AdminPermissionsEditor } from './admin-permissions-editor'
 import { EmployeeAssignField } from './employee-assign-field'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
@@ -99,6 +110,19 @@ type UsersMutateDrawerProps = {
   onOpenChange: (open: boolean) => void
   currentRow?: User
 }
+
+const USER_SECTION_IDS = {
+  BASIC: 'user-basic-information',
+  GROUP_QUOTA: 'user-group-quota',
+  EMPLOYEE: 'user-assigned-employee',
+  BINDINGS: 'user-binding-information',
+} as const
+
+const ADMIN_PERMISSION_SECTION_IDS = [
+  'admin-permissions-menu',
+  'admin-permissions-channel',
+  'admin-permissions-settings',
+] as const
 
 export function UsersMutateDrawer({
   open,
@@ -111,6 +135,9 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [activeSection, setActiveSection] = useState<string>(
+    USER_SECTION_IDS.BASIC
+  )
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -143,16 +170,18 @@ export function UsersMutateDrawer({
   useEffect(() => {
     if (open && isUpdate && currentRow) {
       // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformUserToFormDefaults(result.data))
-        }
-      })
+      getUser(currentRow.id)
+        .then((result) => {
+          if (result.success && result.data) {
+            form.reset(transformUserToFormDefaults(result.data))
+          }
+        })
+        .catch(() => toast.error(t(ERROR_MESSAGES.LOAD_FAILED)))
     } else if (open && !isUpdate) {
       // For create, reset to defaults
       form.reset(USER_FORM_DEFAULT_VALUES)
     }
-  }, [open, isUpdate, currentRow, form])
+  }, [open, isUpdate, currentRow, form, t])
 
   const { meta: currencyMeta } = getCurrencyDisplay()
   const currencyLabel = getCurrencyLabel()
@@ -162,6 +191,104 @@ export function UsersMutateDrawer({
   const selectedRole = form.watch('role')
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
   const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
+  const showAdminPermissions =
+    canEditAdminPermissions &&
+    targetIsAdmin &&
+    permissionCatalog.resources.length > 0
+  const showEmployeeAssignment = isUpdate && currentRow?.role === ROLE.USER
+
+  const navigationSections = useMemo(
+    () => [
+      {
+        id: USER_SECTION_IDS.BASIC,
+        label: t('Basic Information'),
+        icon: <UserRound className='size-4' aria-hidden='true' />,
+      },
+      ...(isUpdate
+        ? [
+            {
+              id: USER_SECTION_IDS.GROUP_QUOTA,
+              label: t('Group & Quota'),
+              icon: <CreditCard className='size-4' aria-hidden='true' />,
+            },
+          ]
+        : []),
+      ...(showAdminPermissions
+        ? [
+            {
+              id: ADMIN_PERMISSION_SECTION_IDS[0],
+              label: t('Menu access'),
+              icon: <ShieldCheck className='size-4' aria-hidden='true' />,
+            },
+            {
+              id: ADMIN_PERMISSION_SECTION_IDS[1],
+              label: t('Channel permissions'),
+              icon: <ShieldCheck className='size-4' aria-hidden='true' />,
+            },
+            {
+              id: ADMIN_PERMISSION_SECTION_IDS[2],
+              label: t('System settings'),
+              icon: <ShieldCheck className='size-4' aria-hidden='true' />,
+            },
+          ]
+        : []),
+      ...(showEmployeeAssignment
+        ? [
+            {
+              id: USER_SECTION_IDS.EMPLOYEE,
+              label: t('Assigned Employee'),
+              icon: <UsersRound className='size-4' aria-hidden='true' />,
+            },
+          ]
+        : []),
+      ...(isUpdate
+        ? [
+            {
+              id: USER_SECTION_IDS.BINDINGS,
+              label: t('Binding Information'),
+              icon: <Link2 className='size-4' aria-hidden='true' />,
+            },
+          ]
+        : []),
+    ],
+    [isUpdate, showAdminPermissions, showEmployeeAssignment, t]
+  )
+
+  const scrollToSection = useCallback((id: string) => {
+    setActiveSection(id)
+    document
+      .querySelector<HTMLElement>(`#${id}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const form = document.querySelector<HTMLElement>('#user-form')
+    if (!form) return
+    const updateActiveSection = () => {
+      const activationY = form.getBoundingClientRect().top + 80
+      let nextActive = navigationSections[0]?.id ?? USER_SECTION_IDS.BASIC
+      for (const section of navigationSections) {
+        const element = document.querySelector<HTMLElement>(`#${section.id}`)
+        if (!element) continue
+        if (element.getBoundingClientRect().top <= activationY) {
+          nextActive = section.id
+        } else {
+          break
+        }
+      }
+      setActiveSection((current) =>
+        current === nextActive ? current : nextActive
+      )
+    }
+    updateActiveSection()
+    form.addEventListener('scroll', updateActiveSection, { passive: true })
+    window.addEventListener('resize', updateActiveSection)
+    return () => {
+      form.removeEventListener('scroll', updateActiveSection)
+      window.removeEventListener('resize', updateActiveSection)
+    }
+  }, [navigationSections, open])
 
   const onSubmit = async (data: UserFormValues) => {
     if (!isUpdate) {
@@ -229,9 +356,7 @@ export function UsersMutateDrawer({
           }
         }}
       >
-        <SheetContent
-          className={sideDrawerContentClassName('sm:max-w-[600px]')}
-        >
+        <SheetContent className={sideDrawerContentClassName('sm:max-w-5xl')}>
           <SheetHeader className={sideDrawerHeaderClassName()}>
             <SheetTitle>
               {isUpdate ? t('Update') : t('Create')} {t('User')}
@@ -248,445 +373,484 @@ export function UsersMutateDrawer({
               onSubmit={form.handleSubmit(onSubmit)}
               className={sideDrawerFormClassName()}
             >
-              {/* Basic Information */}
-              <SideDrawerSection>
-                <h3 className='text-sm font-medium'>
-                  {t('Basic Information')}
-                </h3>
+              <div className='grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start'>
+                <aside className='hidden self-start lg:sticky lg:top-4 lg:z-20 lg:block'>
+                  <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
+                    <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
+                      <div className='flex min-w-0 items-center gap-2'>
+                        <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
+                          <UserRound className='size-4' aria-hidden='true' />
+                        </span>
+                        <div className='min-w-0'>
+                          <p className='truncate text-sm font-medium'>
+                            {form.watch('display_name') ||
+                              form.watch('username') ||
+                              t('User')}
+                          </p>
+                          <p className='text-muted-foreground truncate text-xs'>
+                            {t('Quick navigation')}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <nav
+                      className='border-border/60 bg-background rounded-lg border p-1'
+                      aria-label={t('Quick navigation')}
+                    >
+                      {navigationSections.map((section) => {
+                        const isActive = activeSection === section.id
+                        return (
+                          <button
+                            key={section.id}
+                            type='button'
+                            className={cn(
+                              'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
+                              isActive && 'bg-muted/70'
+                            )}
+                            onClick={() => scrollToSection(section.id)}
+                            aria-current={isActive ? 'true' : undefined}
+                          >
+                            <span className='bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md'>
+                              {section.icon}
+                            </span>
+                            <span className='min-w-0 flex-1 truncate text-sm font-medium'>
+                              {section.label}
+                            </span>
+                            {isActive ? (
+                              <CheckCircle2
+                                className='text-primary mt-1 size-3.5 shrink-0'
+                                aria-hidden='true'
+                              />
+                            ) : (
+                              <Circle
+                                className='text-muted-foreground mt-1 size-3.5 shrink-0'
+                                aria-hidden='true'
+                              />
+                            )}
+                          </button>
+                        )
+                      })}
+                    </nav>
+                  </div>
+                </aside>
+                <div className='flex min-w-0 flex-col gap-6'>
+                  {/* Basic Information */}
+                  <div id={USER_SECTION_IDS.BASIC} className='scroll-mt-4'>
+                    <SideDrawerSection>
+                      <h3 className='text-sm font-medium'>
+                        {t('Basic Information')}
+                      </h3>
 
-                <FormField
-                  control={form.control}
-                  name='username'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Username')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          placeholder={t('Enter username')}
-                          disabled={isUpdate}
+                      <FormField
+                        control={form.control}
+                        name='username'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Username')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                placeholder={t('Enter username')}
+                                disabled={isUpdate}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {!isUpdate && (
+                        <FormField
+                          control={form.control}
+                          name='role'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Role')}</FormLabel>
+                              <Select
+                                items={[
+                                  { value: '1', label: t('Common User') },
+                                  { value: '10', label: t('Admin') },
+                                ]}
+                                onValueChange={(value) =>
+                                  value !== null &&
+                                  field.onChange(Number.parseInt(value))
+                                }
+                                value={String(field.value)}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue
+                                      placeholder={t('Select a role')}
+                                    />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent alignItemWithTrigger={false}>
+                                  <SelectGroup>
+                                    <SelectItem value='1'>
+                                      {t('Common User')}
+                                    </SelectItem>
+                                    <SelectItem value='10'>
+                                      {t('Admin')}
+                                    </SelectItem>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <FormDescription>
+                                {t("Set the user's role (cannot be Root)")}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
                         />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                {!isUpdate && (
-                  <FormField
-                    control={form.control}
-                    name='role'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Role')}</FormLabel>
-                        <Select
-                          items={[
-                            { value: '1', label: t('Common User') },
-                            { value: '10', label: t('Admin') },
-                          ]}
-                          onValueChange={(value) =>
-                            value !== null && field.onChange(Number.parseInt(value))
-                          }
-                          value={String(field.value)}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('Select a role')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              <SelectItem value='1'>
-                                {t('Common User')}
-                              </SelectItem>
-                              <SelectItem value='10'>{t('Admin')}</SelectItem>
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        <FormDescription>
-                          {t("Set the user's role (cannot be Root)")}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                )}
-
-                <FormField
-                  control={form.control}
-                  name='display_name'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Display Name')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          placeholder={t('Enter display name')}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t('Leave empty to use username')}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name='password'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Password')}</FormLabel>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          type='password'
-                          placeholder={
-                            isUpdate
-                              ? t('Leave empty to keep unchanged')
-                              : t('Enter password (8-20 characters)')
-                          }
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </SideDrawerSection>
-
-              {/* Group & Quota Settings (Update only) */}
-              {isUpdate && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>{t('Group & Quota')}</h3>
-
-                  <FormField
-                    control={form.control}
-                    name='group'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Group')}</FormLabel>
-                        <Select
-                          items={groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            }))}
-                          onValueChange={field.onChange}
-                          value={field.value}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('Select a group')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {groups.map((group) => (
-                                <SelectItem key={group} value={group}>
-                                  {group}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  {/* Per-user exclusive group ratios */}
-                  <FormItem>
-                    <FormLabel>{t('Exclusive Group Ratios')}</FormLabel>
-                    <FormDescription>
-                      {t(
-                        'Override the group ratio for this user on specific groups. Leave empty to use the default group ratio.'
                       )}
-                    </FormDescription>
-                    <div className='space-y-2'>
-                      {groupRatioFields.map((row, index) => (
-                        <div key={row.id} className='flex items-center gap-2'>
-                          <div className='flex-1'>
-                            <FormField
-                              control={form.control}
-                              name={`groupRatios.${index}.group`}
-                              render={({ field }) => (
-                                <Select
-                                  items={groups.map((g) => ({
-                                    value: g,
-                                    label: g,
-                                  }))}
-                                  onValueChange={field.onChange}
-                                  value={field.value}
-                                >
+
+                      <FormField
+                        control={form.control}
+                        name='display_name'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Display Name')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                placeholder={t('Enter display name')}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t('Leave empty to use username')}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='password'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Password')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                {...field}
+                                type='password'
+                                placeholder={
+                                  isUpdate
+                                    ? t('Leave empty to keep unchanged')
+                                    : t('Enter password (8-20 characters)')
+                                }
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </SideDrawerSection>
+                  </div>
+
+                  {/* Group & Quota Settings (Update only) */}
+                  {isUpdate && (
+                    <div
+                      id={USER_SECTION_IDS.GROUP_QUOTA}
+                      className='scroll-mt-4'
+                    >
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>
+                          {t('Group & Quota')}
+                        </h3>
+
+                        <FormField
+                          control={form.control}
+                          name='group'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Group')}</FormLabel>
+                              <Select
+                                items={groups.map((group) => ({
+                                  value: group,
+                                  label: group,
+                                }))}
+                                onValueChange={field.onChange}
+                                value={field.value}
+                              >
+                                <FormControl>
                                   <SelectTrigger>
                                     <SelectValue
                                       placeholder={t('Select a group')}
                                     />
                                   </SelectTrigger>
-                                  <SelectContent alignItemWithTrigger={false}>
-                                    <SelectGroup>
-                                      {groups.map((g) => (
-                                        <SelectItem key={g} value={g}>
-                                          {g}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectGroup>
-                                  </SelectContent>
-                                </Select>
-                              )}
-                            />
-                          </div>
-                          <FormField
-                            control={form.control}
-                            name={`groupRatios.${index}.ratio`}
-                            render={({ field }) => (
-                              <Input
-                                type='number'
-                                step='0.01'
-                                min='0'
-                                className='w-28'
-                                value={field.value ?? ''}
-                                onChange={(e) =>
-                                  field.onChange(
-                                    e.target.value === ''
-                                      ? 0
-                                      : Number(e.target.value)
-                                  )
-                                }
-                                placeholder={t('Ratio')}
-                              />
-                            )}
-                          />
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            size='icon-sm'
-                            onClick={() => removeGroupRatio(index)}
-                            aria-label={t('Remove')}
-                          >
-                            <Trash2 className='h-4 w-4' />
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        onClick={() =>
-                          appendGroupRatio({ group: '', ratio: 1 })
-                        }
-                      >
-                        <Plus className='mr-1 h-4 w-4' />
-                        {t('Add Group')}
-                      </Button>
-                    </div>
-                  </FormItem>
-
-                  <FormField
-                    control={form.control}
-                    name='quota_dollars'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          {t('Remaining Quota ({{currency}})', {
-                            currency: currencyLabel,
-                          })}
-                        </FormLabel>
-                        <div className='flex gap-2'>
-                          <FormControl>
-                            <Input
-                              value={
-                                tokensOnly
-                                  ? String(field.value || 0)
-                                  : (field.value || 0).toFixed(6)
-                              }
-                              readOnly
-                              className='flex-1'
-                            />
-                          </FormControl>
-                          <Button
-                            type='button'
-                            variant='outline'
-                            onClick={() => setQuotaDialogOpen(true)}
-                          >
-                            <Pencil className='mr-1 h-4 w-4' />
-                            {t('Adjust Quota')}
-                          </Button>
-                        </div>
-                        <FormDescription>
-                          {formatQuota(parseQuotaFromDollars(field.value || 0))}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name='remark'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Remark')}</FormLabel>
-                        <FormControl>
-                          <Textarea
-                            {...field}
-                            placeholder={t(
-                              'Admin notes (only visible to admins)'
-                            )}
-                            rows={3}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </SideDrawerSection>
-              )}
-
-              {canEditAdminPermissions &&
-                targetIsAdmin &&
-                permissionCatalog.resources.length > 0 && (
-                  <SideDrawerSection>
-                    <h3 className='text-sm font-medium'>
-                      {t('Admin Permissions')}
-                    </h3>
-                    <p className='text-muted-foreground text-xs'>
-                      {t(
-                        'Default administrator permissions can be overridden for this user.'
-                      )}
-                    </p>
-                    <FormField
-                      control={form.control}
-                      name='admin_permissions'
-                      render={({ field }) => {
-                        const selected = normalizeAdminPermissions(
-                          field.value,
-                          permissionCatalog
-                        )
-                        return (
-                          <FormItem>
-                            <div className='space-y-3'>
-                              {permissionCatalog.resources.map((resource) => (
-                                <div
-                                  key={resource.resource}
-                                  className='space-y-2 rounded-md border p-3'
-                                >
-                                  <div className='text-sm font-medium'>
-                                    {t(resource.label_key)}
-                                  </div>
-                                  <div className='space-y-2'>
-                                    {resource.actions.map((option) => (
-                                      <label
-                                        key={option.action}
-                                        className='flex items-start gap-3'
-                                      >
-                                        <Checkbox
-                                          checked={
-                                            selected[resource.resource]?.[
-                                              option.action
-                                            ] === true
-                                          }
-                                          onCheckedChange={(checked) => {
-                                            field.onChange({
-                                              ...selected,
-                                              [resource.resource]: {
-                                                ...selected[resource.resource],
-                                                [option.action]:
-                                                  checked === true,
-                                              },
-                                            })
-                                          }}
-                                        />
-                                        <span className='flex flex-col gap-1'>
-                                          <span className='text-sm font-medium'>
-                                            {t(option.label_key)}
-                                          </span>
-                                          <span className='text-muted-foreground text-xs'>
-                                            {t(option.description_key)}
-                                          </span>
-                                        </span>
-                                      </label>
+                                </FormControl>
+                                <SelectContent alignItemWithTrigger={false}>
+                                  <SelectGroup>
+                                    {groups.map((group) => (
+                                      <SelectItem key={group} value={group}>
+                                        {group}
+                                      </SelectItem>
                                     ))}
-                                  </div>
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        {/* Per-user exclusive group ratios */}
+                        <FormItem>
+                          <FormLabel>{t('Exclusive Group Ratios')}</FormLabel>
+                          <FormDescription>
+                            {t(
+                              'Override the group ratio for this user on specific groups. Leave empty to use the default group ratio.'
+                            )}
+                          </FormDescription>
+                          <div className='space-y-2'>
+                            {groupRatioFields.map((row, index) => (
+                              <div
+                                key={row.id}
+                                className='flex items-center gap-2'
+                              >
+                                <div className='flex-1'>
+                                  <FormField
+                                    control={form.control}
+                                    name={`groupRatios.${index}.group`}
+                                    render={({ field }) => (
+                                      <Select
+                                        items={groups.map((g) => ({
+                                          value: g,
+                                          label: g,
+                                        }))}
+                                        onValueChange={field.onChange}
+                                        value={field.value}
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue
+                                            placeholder={t('Select a group')}
+                                          />
+                                        </SelectTrigger>
+                                        <SelectContent
+                                          alignItemWithTrigger={false}
+                                        >
+                                          <SelectGroup>
+                                            {groups.map((g) => (
+                                              <SelectItem key={g} value={g}>
+                                                {g}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                    )}
+                                  />
                                 </div>
-                              ))}
-                            </div>
+                                <FormField
+                                  control={form.control}
+                                  name={`groupRatios.${index}.ratio`}
+                                  render={({ field }) => (
+                                    <Input
+                                      type='number'
+                                      step='0.01'
+                                      min='0'
+                                      className='w-28'
+                                      value={field.value ?? ''}
+                                      onChange={(e) =>
+                                        field.onChange(
+                                          e.target.value === ''
+                                            ? 0
+                                            : Number(e.target.value)
+                                        )
+                                      }
+                                      placeholder={t('Ratio')}
+                                    />
+                                  )}
+                                />
+                                <Button
+                                  type='button'
+                                  variant='ghost'
+                                  size='icon-sm'
+                                  onClick={() => removeGroupRatio(index)}
+                                  aria-label={t('Remove')}
+                                >
+                                  <Trash2 className='h-4 w-4' />
+                                </Button>
+                              </div>
+                            ))}
+                            <Button
+                              type='button'
+                              variant='outline'
+                              size='sm'
+                              onClick={() =>
+                                appendGroupRatio({ group: '', ratio: 1 })
+                              }
+                            >
+                              <Plus className='mr-1 h-4 w-4' />
+                              {t('Add Group')}
+                            </Button>
+                          </div>
+                        </FormItem>
+
+                        <FormField
+                          control={form.control}
+                          name='quota_dollars'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Remaining Quota ({{currency}})', {
+                                  currency: currencyLabel,
+                                })}
+                              </FormLabel>
+                              <div className='flex gap-2'>
+                                <FormControl>
+                                  <Input
+                                    value={
+                                      tokensOnly
+                                        ? String(field.value || 0)
+                                        : (field.value || 0).toFixed(6)
+                                    }
+                                    readOnly
+                                    className='flex-1'
+                                  />
+                                </FormControl>
+                                <Button
+                                  type='button'
+                                  variant='outline'
+                                  onClick={() => setQuotaDialogOpen(true)}
+                                >
+                                  <Pencil className='mr-1 h-4 w-4' />
+                                  {t('Adjust Quota')}
+                                </Button>
+                              </div>
+                              <FormDescription>
+                                {formatQuota(
+                                  parseQuotaFromDollars(field.value || 0)
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name='remark'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Remark')}</FormLabel>
+                              <FormControl>
+                                <Textarea
+                                  {...field}
+                                  placeholder={t(
+                                    'Admin notes (only visible to admins)'
+                                  )}
+                                  rows={3}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </SideDrawerSection>
+                    </div>
+                  )}
+
+                  {canEditAdminPermissions &&
+                    targetIsAdmin &&
+                    permissionCatalog.resources.length > 0 && (
+                      <FormField
+                        control={form.control}
+                        name='admin_permissions'
+                        render={({ field }) => (
+                          <FormItem>
+                            <AdminPermissionsEditor
+                              embedded
+                              catalog={permissionCatalog}
+                              value={field.value}
+                              onChange={field.onChange}
+                              administratorLabel={
+                                form.getValues('display_name') ||
+                                form.getValues('username')
+                              }
+                            />
+                            {currentUser && (
+                              <p className='text-muted-foreground text-xs'>
+                                {hasPermission(
+                                  currentUser,
+                                  ADMIN_PERMISSION_RESOURCES.CHANNEL,
+                                  ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+                                )
+                                  ? t(
+                                      'Your account can edit sensitive channel settings.'
+                                    )
+                                  : t(
+                                      'Your account cannot edit sensitive channel settings.'
+                                    )}
+                              </p>
+                            )}
                             <FormMessage />
                           </FormItem>
-                        )
-                      }}
-                    />
-                    {currentUser && (
-                      <p className='text-muted-foreground text-xs'>
-                        {hasPermission(
-                          currentUser,
-                          ADMIN_PERMISSION_RESOURCES.CHANNEL,
-                          ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
-                        )
-                          ? t(
-                              'Your account can edit sensitive channel settings.'
-                            )
-                          : t(
-                              'Your account cannot edit sensitive channel settings.'
+                        )}
+                      />
+                    )}
+
+                  {/* Assigned Employee (common users only) */}
+                  {showEmployeeAssignment && currentRow && (
+                    <div id={USER_SECTION_IDS.EMPLOYEE} className='scroll-mt-4'>
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>
+                          {t('Assigned Employee')}
+                        </h3>
+                        <FormItem>
+                          <FormLabel>{t('Owning Employee')}</FormLabel>
+                          <EmployeeAssignField
+                            key={currentRow.id}
+                            userId={currentRow.id}
+                            inviterId={currentRow.inviter_id}
+                            onChanged={triggerRefresh}
+                          />
+                          <FormDescription>
+                            {t(
+                              'Assign this user to an owning employee for commission attribution. Changes take effect immediately.'
                             )}
-                      </p>
-                    )}
-                  </SideDrawerSection>
-                )}
+                          </FormDescription>
+                        </FormItem>
+                      </SideDrawerSection>
+                    </div>
+                  )}
 
-              {/* Assigned Employee (common users only) */}
-              {isUpdate && currentRow && currentRow.role === 1 && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>
-                    {t('Assigned Employee')}
-                  </h3>
-                  <FormItem>
-                    <FormLabel>{t('Owning Employee')}</FormLabel>
-                    <EmployeeAssignField
-                      key={currentRow.id}
-                      userId={currentRow.id}
-                      inviterId={currentRow.inviter_id}
-                      onChanged={triggerRefresh}
-                    />
-                    <FormDescription>
-                      {t(
-                        'Assign this user to an owning employee for commission attribution. Changes take effect immediately.'
-                      )}
-                    </FormDescription>
-                  </FormItem>
-                </SideDrawerSection>
-              )}
+                  {/* Binding Information (Read-only) */}
+                  {isUpdate && (
+                    <div id={USER_SECTION_IDS.BINDINGS} className='scroll-mt-4'>
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>
+                          {t('Binding Information')}
+                        </h3>
+                        <p className='text-muted-foreground text-xs'>
+                          {t(
+                            'Third-party account bindings (read-only, managed by user in profile settings)'
+                          )}
+                        </p>
 
-              {/* Binding Information (Read-only) */}
-              {isUpdate && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>
-                    {t('Binding Information')}
-                  </h3>
-                  <p className='text-muted-foreground text-xs'>
-                    {t(
-                      'Third-party account bindings (read-only, managed by user in profile settings)'
-                    )}
-                  </p>
-
-                  <div className='flex flex-col gap-3'>
-                    {BINDING_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <Label className='text-muted-foreground text-xs'>
-                          {t(label)}
-                        </Label>
-                        <Input
-                          value={
-                            (currentRow?.[key as keyof User] as string) || '-'
-                          }
-                          disabled
-                          className='mt-1'
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </SideDrawerSection>
-              )}
+                        <div className='flex flex-col gap-3'>
+                          {BINDING_FIELDS.map(({ key, label }) => (
+                            <div key={key}>
+                              <Label className='text-muted-foreground text-xs'>
+                                {t(label)}
+                              </Label>
+                              <Input
+                                value={
+                                  (currentRow?.[key as keyof User] as string) ||
+                                  '-'
+                                }
+                                disabled
+                                className='mt-1'
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </SideDrawerSection>
+                    </div>
+                  )}
+                </div>
+              </div>
             </form>
           </Form>
           <SheetFooter className={sideDrawerFooterClassName()}>

@@ -47,6 +47,7 @@ const defaultSecuritySettings: SecuritySettings = {
 export function SecuritySettings() {
   return (
     <SettingsPage
+      group='security'
       routePath='/_authenticated/system-settings/security/$section'
       defaultSettings={defaultSecuritySettings}
       defaultSection={SECURITY_DEFAULT_SECTION}

@@ -183,18 +183,18 @@ export function useSidebarData(): SidebarData {
             url: '/commission-overview',
             icon: LineChart,
           },
-          // 请求日志：仅超级管理员可见
+          // 请求日志和系统信息：可见性由 admin_menu.request_logs /
+          // admin_menu.system_info 权限决定（见 useSidebarView 里的
+          // adminMenuFromUrl 过滤），默认对普通管理员关闭，由超级管理员按人授予。
           {
             title: t('Request Logs'),
             url: '/request-logs',
             icon: FileSearch,
-            requiredRole: ROLE.SUPER_ADMIN,
           },
           {
             title: t('System Info'),
             url: '/system-info',
             icon: ServerCog,
-            requiredRole: ROLE.SUPER_ADMIN,
           },
           {
             title: t('System Settings'),

@@ -39,8 +39,10 @@ import type {
   UpstreamRatiosResponse,
 } from './types'
 
-export async function getSystemOptions() {
-  const res = await api.get<SystemOptionsResponse>('/api/option/')
+export async function getScopedSystemOptions(scope: string) {
+  const res = await api.get<SystemOptionsResponse>('/api/option/', {
+    params: { scope },
+  })
   return res.data
 }
 

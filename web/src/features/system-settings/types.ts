@@ -30,6 +30,7 @@ export type SystemOptionsResponse = {
 }
 
 export type UpdateOptionRequest = {
+  scope?: string
   key: string
   value: string | boolean | number
 }
@@ -40,6 +41,7 @@ export type UpdateOptionResponse = {
 }
 
 export type UpdateOptionGroupRequest = {
+  scope?: string
   module: 'rate_limit_setting' | 'db_pool_setting' | 'user_session_setting'
   values: Record<string, string>
 }

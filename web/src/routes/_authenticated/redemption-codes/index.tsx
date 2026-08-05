@@ -16,13 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import z from 'zod'
 
 import { Redemptions } from '@/features/redemption-codes'
 import { REDEMPTION_FILTER_VALUES } from '@/features/redemption-codes/constants'
-import { ROLE } from '@/lib/roles'
-import { useAuthStore } from '@/stores/auth-store'
+import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 const redemptionsSearchSchema = z.object({
   page: z.number().optional().catch(1),
@@ -33,13 +32,7 @@ const redemptionsSearchSchema = z.object({
 
 export const Route = createFileRoute('/_authenticated/redemption-codes/')({
   beforeLoad: () => {
-    const { auth } = useAuthStore.getState()
-
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
-      throw redirect({
-        to: '/403',
-      })
-    }
+    requireAdminMenu(ADMIN_MENU_IDS.REDEMPTION_CODES)
   },
   validateSearch: redemptionsSearchSchema,
   component: Redemptions,

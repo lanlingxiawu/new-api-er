@@ -56,8 +56,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { toIntlLocale } from '@/i18n/languages'
+import { canEditSystemSettingsScope } from '@/lib/admin-permissions'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   deleteStaleSystemInstance,
@@ -229,6 +231,7 @@ type SystemInstancesTableProps = {
   instances: SystemInstance[]
   deletingNodeName: string | null
   isDeletingInstance: boolean
+  canManageInstances: boolean
   onDeleteStaleInstance: (instance: SystemInstance) => void
 }
 
@@ -442,7 +445,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                   )}
                 </TableCell>
                 <TableCell className='py-2.5 pr-4 text-right align-middle'>
-                  {instance.status === 'stale' ? (
+                  {instance.status === 'stale' && props.canManageInstances ? (
                     <TooltipProvider delay={100}>
                       <Tooltip>
                         <TooltipTrigger
@@ -492,6 +495,11 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
 export function SystemInstancesPanel() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const canManageInstances = canEditSystemSettingsScope(
+    currentUser,
+    'operations.node-control'
+  )
   const [deleteTarget, setDeleteTarget] = useState<SystemInstance | null>(null)
   const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false)
   const [deletingNodeName, setDeletingNodeName] = useState<string | null>(null)
@@ -620,6 +628,7 @@ export function SystemInstancesPanel() {
           isDeletingInstance={
             isMutatingInstance || deleteStaleInstancesMutation.isPending
           }
+          canManageInstances={canManageInstances}
           onDeleteStaleInstance={setDeleteTarget}
         />
       </div>
@@ -651,7 +660,7 @@ export function SystemInstancesPanel() {
                 seconds: INSTANCE_POLL_INTERVAL_MS / 1000,
               })}
             </span>
-            {hasStaleInstances ? (
+            {hasStaleInstances && canManageInstances ? (
               <Button
                 type='button'
                 variant='destructive'

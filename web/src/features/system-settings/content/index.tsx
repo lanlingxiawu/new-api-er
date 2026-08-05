@@ -18,12 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
 import type { ContentSettings, SystemOption } from '../types'
+import { contentFallbackSettings } from './defaults'
 import {
   CONTENT_DEFAULT_SECTION,
   getContentSectionContent,
   getContentSectionMeta,
 } from './section-registry.tsx'
-import { contentFallbackSettings } from './defaults'
 
 function resolveContentSettings(
   settings: ContentSettings,
@@ -65,6 +65,7 @@ function resolveContentSettings(
 export function ContentSettings() {
   return (
     <SettingsPage
+      group='content'
       routePath='/_authenticated/system-settings/content/$section'
       defaultSettings={contentFallbackSettings}
       defaultSection={CONTENT_DEFAULT_SECTION}

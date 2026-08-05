@@ -111,12 +111,14 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
-import { getSystemOptions } from '@/features/system-settings/api'
+import { getScopedSystemOptions } from '@/features/system-settings/api'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
+import { ADMIN_MENU_IDS } from '@/lib/admin-menu-access'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
+  canViewAdminMenu,
   hasPermission,
 } from '@/lib/admin-permissions'
 import {
@@ -648,6 +650,8 @@ export function ChannelMutateDrawer({
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
   const canRevealChannelKey = currentUser?.role === ROLE.SUPER_ADMIN
+  const canViewGroupPricing = canEditSensitive
+  const canViewModelsMenu = canViewAdminMenu(currentUser, ADMIN_MENU_IDS.MODELS)
   const [fetchModelsDialogOpen, setFetchModelsDialogOpen] = useState(false)
   const [channelKey, setChannelKey] = useState<string | null>(null)
   const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
@@ -700,9 +704,14 @@ export function ChannelMutateDrawer({
     queryFn: getGroups,
   })
 
-  const { data: systemOptionsData } = useQuery({
+  const {
+    data: systemOptionsData,
+    isError: isGroupPricingError,
+    isSuccess: isGroupPricingLoaded,
+  } = useQuery({
     queryKey: ['system-options', 'channel-group-profit-warning'],
-    queryFn: getSystemOptions,
+    queryFn: () => getScopedSystemOptions('channel.profit-preview'),
+    enabled: open && canViewGroupPricing,
   })
 
   // Fetch all available models
@@ -715,6 +724,7 @@ export function ChannelMutateDrawer({
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
     queryFn: () => getPrefillGroups('model'),
+    enabled: open && canViewModelsMenu,
   })
 
   const { copyToClipboard } = useCopyToClipboard()
@@ -960,6 +970,7 @@ export function ChannelMutateDrawer({
   }, [systemOptionsData])
 
   const lossMakingGroups = useMemo(() => {
+    if (!canViewGroupPricing || !isGroupPricingLoaded) return []
     const costRatio = Number(currentCostRatio)
     if (!Number.isFinite(costRatio) || costRatio < 0) return []
 
@@ -969,7 +980,13 @@ export function ChannelMutateDrawer({
       if (profitRatio >= 0) return []
       return [{ group, groupRatio, costRatio, profitRatio }]
     })
-  }, [currentCostRatio, currentGroups, groupRatioMap])
+  }, [
+    canViewGroupPricing,
+    currentCostRatio,
+    currentGroups,
+    groupRatioMap,
+    isGroupPricingLoaded,
+  ])
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -1441,10 +1458,10 @@ export function ChannelMutateDrawer({
   const handleRevealKey = useCallback(async () => {
     if (!channelId) return
 
-      try {
-        await withVerification(fetchChannelKey, {
-          scope: 'channel.key.read',
-          preferredMethod: 'passkey',
+    try {
+      await withVerification(fetchChannelKey, {
+        scope: 'channel.key.read',
+        preferredMethod: 'passkey',
         title: 'Verify to view channel key',
         description:
           'Use Passkey or 2FA to confirm your identity before revealing this channel key.',
@@ -3703,6 +3720,25 @@ export function ChannelMutateDrawer({
                                       />
                                     )}
                                   </FormControl>
+                                  {!canViewGroupPricing && (
+                                    <Alert>
+                                      <AlertDescription>
+                                        {t(
+                                          'Permission to edit sensitive channel settings is required to view the profit estimate.'
+                                        )}
+                                      </AlertDescription>
+                                    </Alert>
+                                  )}
+                                  {canViewGroupPricing &&
+                                    isGroupPricingError && (
+                                      <Alert>
+                                        <AlertDescription>
+                                          {t(
+                                            'Profit estimate unavailable because group pricing could not be loaded.'
+                                          )}
+                                        </AlertDescription>
+                                      </Alert>
+                                    )}
                                   {lossMakingGroups.length > 0 && (
                                     <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
                                       <AlertDescription>
@@ -4368,9 +4404,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}
@@ -4775,12 +4809,16 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('Query URL')}</FormLabel>
                                 <FormControl>
                                   <Input
-                                    placeholder={t('e.g. https://upstream.example.com')}
+                                    placeholder={t(
+                                      'e.g. https://upstream.example.com'
+                                    )}
                                     {...field}
                                   />
                                 </FormControl>
                                 <FormDescription>
-                                  {t('Leave empty to use the channel base URL.')}
+                                  {t(
+                                    'Leave empty to use the channel base URL.'
+                                  )}
                                 </FormDescription>
                                 <FormMessage />
                               </FormItem>
@@ -4794,7 +4832,9 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('Access Token')}</FormLabel>
                                 <FormControl>
                                   <Input
-                                    placeholder={t('Upstream account access token')}
+                                    placeholder={t(
+                                      'Upstream account access token'
+                                    )}
                                     {...field}
                                   />
                                 </FormControl>
@@ -4814,10 +4854,7 @@ export function ChannelMutateDrawer({
                               <FormItem>
                                 <FormLabel>{t('User ID')}</FormLabel>
                                 <FormControl>
-                                  <Input
-                                    placeholder={t('e.g. 1')}
-                                    {...field}
-                                  />
+                                  <Input placeholder={t('e.g. 1')} {...field} />
                                 </FormControl>
                                 <FormDescription>
                                   {t(

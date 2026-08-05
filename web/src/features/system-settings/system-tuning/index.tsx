@@ -17,16 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
+import { systemTuningFallbackSettings } from './defaults'
 import {
   SYSTEM_TUNING_DEFAULT_SECTION,
   getSystemTuningSectionContent,
   getSystemTuningSectionMeta,
 } from './section-registry.tsx'
-import { systemTuningFallbackSettings } from './defaults'
 
 export function SystemTuningSettings() {
   return (
     <SettingsPage
+      group='system-tuning'
       routePath='/_authenticated/system-settings/system-tuning/$section'
       defaultSettings={systemTuningFallbackSettings}
       defaultSection={SYSTEM_TUNING_DEFAULT_SECTION}

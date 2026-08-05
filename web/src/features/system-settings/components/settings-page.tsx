@@ -21,6 +21,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { canEditSystemSettingsScope } from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import type { SystemOption } from '../types'
@@ -32,6 +34,7 @@ type SettingsPageProps<
   TExtraArgs extends unknown[] = [],
 > = {
   routePath: string
+  group: string
   defaultSettings: TSettings
   defaultSection: TSectionId
   getSectionContent: (
@@ -52,6 +55,8 @@ type SettingsPageProps<
 
 type SettingsPageFrameProps = {
   title: ReactNode
+  scope: string
+  canEdit: boolean
   children: ReactNode
 }
 
@@ -65,6 +70,8 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
     <SettingsPageProvider
       actionsContainer={actionsContainer}
       titleStatusContainer={titleStatusContainer}
+      scope={props.scope}
+      canEdit={props.canEdit}
     >
       <SectionPageLayout>
         <SectionPageLayout.Title>
@@ -83,9 +90,12 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
           />
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <div className='flex h-full min-h-0 w-full flex-col gap-4'>
+          <fieldset
+            disabled={!props.canEdit}
+            className='flex h-full min-h-0 w-full flex-col gap-4 disabled:opacity-80'
+          >
             {props.children}
-          </div>
+          </fieldset>
         </SectionPageLayout.Content>
       </SectionPageLayout>
     </SettingsPageProvider>
@@ -102,6 +112,7 @@ export function SettingsPage<
   TExtraArgs extends unknown[] = [],
 >({
   routePath,
+  group,
   defaultSettings,
   defaultSection,
   getSectionContent,
@@ -111,10 +122,13 @@ export function SettingsPage<
   resolveSettings,
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
-  const { data, isLoading } = useSystemOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = useParams({ from: routePath as any })
   const activeSection = (params?.section ?? defaultSection) as TSectionId
+  const scope = `${group}.${activeSection}`
+  const user = useAuthStore((state) => state.auth.user)
+  const canEdit = canEditSystemSettingsScope(user, scope)
+  const { data, isLoading } = useSystemOptions(scope)
   const sectionMeta = getSectionMeta(activeSection)
 
   const settings = useMemo(() => {
@@ -129,7 +143,11 @@ export function SettingsPage<
 
   if (isLoading) {
     return (
-      <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+      <SettingsPageFrame
+        title={t(sectionMeta.titleKey)}
+        scope={scope}
+        canEdit={canEdit}
+      >
         <div className='text-muted-foreground flex min-h-40 items-center justify-center text-sm'>
           {t(loadingMessage)}
         </div>
@@ -144,7 +162,11 @@ export function SettingsPage<
   )
 
   return (
-    <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+    <SettingsPageFrame
+      title={t(sectionMeta.titleKey)}
+      scope={scope}
+      canEdit={canEdit}
+    >
       {sectionContent}
     </SettingsPageFrame>
   )

@@ -145,6 +145,7 @@ const defaultBillingSettings: BillingSettings = {
 export function BillingSettings() {
   return (
     <SettingsPage
+      group='billing'
       routePath='/_authenticated/system-settings/billing/$section'
       defaultSettings={defaultBillingSettings}
       defaultSection={BILLING_DEFAULT_SECTION}

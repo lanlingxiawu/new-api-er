@@ -20,6 +20,7 @@ import { useMemo } from 'react'
 
 import type { NavGroup, NavItem } from '@/components/layout/types'
 import { useStatus } from '@/hooks/use-status'
+import { adminMenuFromUrl } from '@/lib/admin-menu-access'
 import { useAuthStore } from '@/stores/auth-store'
 
 type SidebarSectionConfig = {
@@ -181,6 +182,9 @@ function isModuleEnabled(
   adminConfig: SidebarModulesAdminConfig,
   userConfig: SidebarModulesUserConfig
 ): boolean {
+  if (adminMenuFromUrl(url) || url.startsWith('/system-settings')) {
+    return true
+  }
   const mapping = URL_TO_CONFIG_MAP[url]
   if (!mapping) {
     // No mapping config, default to visible (e.g. system settings and new features)
@@ -270,7 +274,11 @@ function filterNavItems(
 /**
  * Filter sidebar navigation groups by admin × user sidebar_modules config.
  *
- * Two layers, AND-combined:
+ * Presentation-only routes use two layers, AND-combined. Administrator routes
+ * controlled by authz menu permissions, plus system settings whose visibility
+ * is derived from section permissions, bypass these legacy presentation flags.
+ *
+ * For the remaining routes:
  *   1. Admin (status.SidebarModulesAdmin) — authoritative, falls back to
  *      DEFAULT_SIDEBAR_MODULES when empty/invalid. Disabling here hides the
  *      item for everyone regardless of user preference.

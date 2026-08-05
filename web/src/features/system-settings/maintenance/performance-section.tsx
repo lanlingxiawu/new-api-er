@@ -51,6 +51,8 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ProfilingControls } from '@/features/profiling/components/profiling-controls'
 
@@ -189,6 +191,9 @@ type PerformanceStats = {
 export function PerformanceSection(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const isRoot = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
   const [stats, setStats] = useState<PerformanceStats | null>(null)
 
   const formDefaults = useMemo(
@@ -531,10 +536,15 @@ export function PerformanceSection(props: Props) {
         </SettingsForm>
       </Form>
 
-      <Separator />
-
-      {/* pprof 开关与 profile 下载：开关即时生效，不跟随上方表单的保存按钮 */}
-      <ProfilingControls />
+      {/* pprof 开关与 profile 下载：开关即时生效，不跟随上方表单的保存按钮。
+          heap/goroutine dump 可能带出内存中的上游凭据与用户数据，仅对 root 可见，
+          普通管理员即使拥有性能设置权限也不渲染该区域、不请求 pprof 状态接口。 */}
+      {isRoot && (
+        <>
+          <Separator />
+          <ProfilingControls />
+        </>
+      )}
 
       <Separator />
 

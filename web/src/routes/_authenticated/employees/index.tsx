@@ -1,14 +1,11 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
-import { useAuthStore } from '@/stores/auth-store'
-import { ROLE } from '@/lib/roles'
+import { createFileRoute } from '@tanstack/react-router'
+
 import { Employees } from '@/features/employees'
+import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 export const Route = createFileRoute('/_authenticated/employees/')({
   beforeLoad: () => {
-    const { auth } = useAuthStore.getState()
-    if (!auth.user || auth.user.role < ROLE.ADMIN) {
-      throw redirect({ to: '/403' })
-    }
+    requireAdminMenu(ADMIN_MENU_IDS.EMPLOYEES)
   },
   component: Employees,
 })

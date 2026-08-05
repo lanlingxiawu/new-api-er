@@ -71,6 +71,7 @@ export function OperationsSettings() {
 
   return (
     <SettingsPage
+      group='operations'
       routePath='/_authenticated/system-settings/operations/$section'
       defaultSettings={defaultOperationsSettings}
       defaultSection={OPERATIONS_DEFAULT_SECTION}

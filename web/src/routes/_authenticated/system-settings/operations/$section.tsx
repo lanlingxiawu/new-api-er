@@ -19,10 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { OperationsSettings } from '@/features/system-settings/operations'
-import {
-  OPERATIONS_DEFAULT_SECTION,
-  OPERATIONS_SECTION_IDS,
-} from '@/features/system-settings/operations/section-registry.tsx'
+import { OPERATIONS_SECTION_IDS } from '@/features/system-settings/operations/section-registry.tsx'
+import { requireSystemSettingsSection } from '@/features/system-settings/route-access'
 
 export const Route = createFileRoute(
   '/_authenticated/system-settings/operations/$section'
@@ -35,13 +33,11 @@ export const Route = createFileRoute(
       })
     }
 
-    const validSections = OPERATIONS_SECTION_IDS as unknown as string[]
-    if (!validSections.includes(params.section)) {
-      throw redirect({
-        to: '/system-settings/operations/$section',
-        params: { section: OPERATIONS_DEFAULT_SECTION },
-      })
-    }
+    requireSystemSettingsSection(
+      'operations',
+      params.section,
+      OPERATIONS_SECTION_IDS
+    )
   },
   component: OperationsSettings,
 })

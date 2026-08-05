@@ -16,21 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 
 import { SystemInfo } from '@/features/system-info'
-import { ROLE } from '@/lib/roles'
-import { useAuthStore } from '@/stores/auth-store'
+import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 export const Route = createFileRoute('/_authenticated/system-info/')({
   beforeLoad: () => {
-    const { auth } = useAuthStore.getState()
-
-    if (auth.user?.role !== ROLE.SUPER_ADMIN) {
-      throw redirect({
-        to: '/403',
-      })
-    }
+    requireAdminMenu(ADMIN_MENU_IDS.SYSTEM_INFO)
   },
   component: SystemInfo,
 })
