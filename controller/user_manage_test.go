@@ -159,3 +159,43 @@ func TestManageUserDeleteReturnsImmediatelyAndUnknownActionFails(t *testing.T) {
 	assert.EqualValues(t, 1, unchanged.AuthVersion)
 	assert.Equal(t, common.UserStatusEnabled, unchanged.Status)
 }
+
+func TestUpdateUserPermissionChangeAdvancesAuthVersionAndRevokesSessions(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = false
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	require.NoError(t, authz.Init(db))
+
+	now := time.Now().Unix()
+	user := model.User{
+		Username: "perm-admin", Password: "password", Role: common.RoleAdminUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserSession{
+		SID: "permission-update-session", UserID: user.Id, Version: 1, UserAuthVersion: 1,
+		Status: model.UserSessionStatusActive, RefreshHash: "permission-refresh", LoginMethod: "password",
+		LastActiveAt: now, ExpiresAt: now + 3600,
+	}).Error)
+
+	ctx, recorder := newCtx(t, http.MethodPut, "/api/user/", map[string]any{
+		"id": user.Id, "username": user.Username, "display_name": user.Username,
+		"role": user.Role, "group": user.Group,
+		"admin_permissions": map[string]map[string]bool{
+			authz.SystemSettingsResource("site.notice"): {authz.ActionView: true, authz.ActionEdit: false},
+		},
+	})
+	asRoot(ctx, 9999)
+	ctx.Set("username", "root-operator")
+	UpdateUser(ctx)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.EqualValues(t, 2, updated.AuthVersion)
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", "permission-update-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+}

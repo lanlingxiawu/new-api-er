@@ -126,6 +126,30 @@ func TestSetUserPermissionsInTx_VisibleAfterReload(t *testing.T) {
 	assert.True(t, Can(80, common.RoleAdminUser, ChannelSensitiveWrite))
 }
 
+func TestUpdateUserPermissionsInTx_ReportsOnlyEffectivePolicyChanges(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+	permissions := PermissionsMap{
+		ResourceChannel: {ActionSensitiveWrite: true},
+	}
+
+	var changed bool
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		changed, err = UpdateUserPermissionsInTx(tx, 801, permissions)
+		return err
+	}))
+	assert.True(t, changed)
+	require.NoError(t, ReloadPolicy())
+
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		changed, err = UpdateUserPermissionsInTx(tx, 801, permissions)
+		return err
+	}))
+	assert.False(t, changed)
+}
+
 func TestSetUserPermissionsInTx_RollbackLeavesNothing(t *testing.T) {
 	db := newAuthzTestDB(t)
 	require.NoError(t, Init(db))
@@ -292,7 +316,7 @@ func TestExplicitUserPermissions_ReflectsBaselinePlusOverrides(t *testing.T) {
 		ResourceChannel: {ActionSensitiveWrite: true},
 	}))
 	perms := ExplicitUserPermissions(100)
-	assert.True(t, perms[ResourceChannel][ActionRead])          // baseline
+	assert.True(t, perms[ResourceChannel][ActionRead])           // baseline
 	assert.True(t, perms[ResourceChannel][ActionSensitiveWrite]) // override
 	assert.False(t, perms[ResourceChannel][ActionSecretView])    // baseline deny
 }

@@ -63,6 +63,7 @@ func TestCatalog_ReturnsDeepCopy(t *testing.T) {
 	origLen := len(catalog[idx].Actions)
 	catalog[idx].Actions = append(catalog[idx].Actions, ActionDefinition{Action: "tampered"})
 	catalog[idx].LabelKey = "tampered-label"
+	catalog[idx].Group = "tampered-group"
 
 	// Registry must be untouched.
 	assert.Len(t, catalogActions(ResourceChannel), origLen)
@@ -109,8 +110,9 @@ func TestAllPermissions_EnumeratesEveryAction(t *testing.T) {
 	assert.True(t, set[ChannelSecretView])
 }
 
-// PermissionsForRole filters actions by their DefaultRoles. Admin gets exactly
-// read/operate/write; the sensitive actions are NOT baseline for admin.
+// PermissionsForRole filters actions by their DefaultRoles. Admin gets the
+// channel operational baseline plus the currently assignable admin menus; the
+// sensitive channel actions are NOT baseline for admin.
 func TestPermissionsForRole_AdminBaseline(t *testing.T) {
 	perms := PermissionsForRole(BuiltInRoleAdmin)
 
@@ -124,7 +126,23 @@ func TestPermissionsForRole_AdminBaseline(t *testing.T) {
 	// SECURITY: these must NOT be part of the admin baseline.
 	assert.False(t, set[ChannelSensitiveWrite], "admin baseline must NOT include sensitive_write")
 	assert.False(t, set[ChannelSecretView], "admin baseline must NOT include secret_view")
-	assert.Len(t, perms, 3)
+	// Request logs and system info are sensitive enough that they are NOT part
+	// of the ordinary-administrator baseline; root must grant them per user.
+	notBaselineForAdmin := map[string]bool{
+		ResourceAdminMenuRequestLogs: true,
+		ResourceAdminMenuSystemInfo:  true,
+	}
+	baselineMenuCount := 0
+	for _, resource := range AdminMenuResources() {
+		permission := Permission{Resource: resource, Action: ActionView}
+		if notBaselineForAdmin[resource] {
+			assert.False(t, set[permission], "%s must NOT be part of the admin baseline", resource)
+			continue
+		}
+		assert.True(t, set[permission], "%s must be part of the admin baseline", resource)
+		baselineMenuCount++
+	}
+	assert.Len(t, perms, 3+baselineMenuCount)
 }
 
 // root is a superuser and receives NO explicit DefaultRoles entries — its access

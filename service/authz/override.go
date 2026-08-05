@@ -27,6 +27,7 @@ func SetUserPermissions(userID int, permissions PermissionsMap) error {
 		if !isKnownResource(resource) {
 			continue
 		}
+		actions = normalizePermissionActions(resource, actions)
 		if _, err := e.RemoveFilteredPolicy(0, UserSubject(userID), resource); err != nil {
 			return err
 		}
@@ -40,19 +41,55 @@ func SetUserPermissions(userID int, permissions PermissionsMap) error {
 }
 
 func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap) error {
+	_, err := UpdateUserPermissionsInTx(tx, userID, permissions)
+	return err
+}
+
+// UpdateUserPermissionsInTx replaces submitted per-user permission resources
+// and reports whether their persisted override policies actually changed.
+func UpdateUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap) (bool, error) {
 	e := currentEnforcer()
 	if e == nil {
-		return fmt.Errorf("authz enforcer is not initialized")
+		return false, fmt.Errorf("authz enforcer is not initialized")
 	}
 
+	changed := false
 	for resource, actions := range permissions {
 		if !isKnownResource(resource) {
 			continue
 		}
-		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource).Delete(&model.CasbinRule{}).Error; err != nil {
-			return err
-		}
+		actions = normalizePermissionActions(resource, actions)
 		policies := userOverridePolicies(e, resource, actions)
+		var existing []model.CasbinRule
+		if err := tx.Select("v2", "v3").Where(
+			"ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource,
+		).Find(&existing).Error; err != nil {
+			return false, err
+		}
+		matches := len(existing) == len(policies)
+		if matches {
+			existingPolicies := make(map[string]string, len(existing))
+			for _, rule := range existing {
+				effect := rule.V3
+				if effect == "" {
+					effect = EffectAllow
+				}
+				existingPolicies[rule.V2] = effect
+			}
+			for _, policy := range policies {
+				if existingPolicies[policy.Action] != policy.Effect {
+					matches = false
+					break
+				}
+			}
+		}
+		if matches {
+			continue
+		}
+		changed = true
+		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource).Delete(&model.CasbinRule{}).Error; err != nil {
+			return false, err
+		}
 		if len(policies) == 0 {
 			continue
 		}
@@ -61,10 +98,10 @@ func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap)
 			rules = append(rules, newRule("p", []string{UserSubject(userID), policy.Resource, policy.Action, policy.Effect}))
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rules).Error; err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 func ClearUserPermissions(userID int) error {

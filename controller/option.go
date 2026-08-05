@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/settingsaccess"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -87,12 +88,28 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 }
 
 func GetOptions(c *gin.Context) {
+	scope := strings.TrimSpace(c.Query("scope"))
+	var allowedKeys map[string]struct{}
+	if scope != "" {
+		var ok bool
+		allowedKeys, ok = settingsaccess.OptionKeys(scope)
+		if !ok {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+	}
+
 	var options []*model.Option
 	optionValues := make(map[string]string)
-	common.OptionMapRWMutex.Lock()
+	common.OptionMapRWMutex.RLock()
 	for k, v := range common.OptionMap {
 		if k == "theme.frontend" {
 			continue
+		}
+		if allowedKeys != nil {
+			if _, allowed := allowedKeys[k]; !allowed {
+				continue
+			}
 		}
 		value := common.Interface2String(v)
 		isSensitiveKey := strings.HasSuffix(k, "Token") ||
@@ -114,11 +131,12 @@ func GetOptions(c *gin.Context) {
 			}
 		}
 	}
-	common.OptionMapRWMutex.Unlock()
-	options = append(options, &model.Option{
-		Key:   "CompletionRatioMeta",
-		Value: buildCompletionRatioMetaValue(optionValues),
-	})
+	common.OptionMapRWMutex.RUnlock()
+	if allowedKeys == nil {
+		options = append(options, &model.Option{Key: "CompletionRatioMeta", Value: buildCompletionRatioMetaValue(optionValues)})
+	} else if _, allowed := allowedKeys["CompletionRatioMeta"]; allowed {
+		options = append(options, &model.Option{Key: "CompletionRatioMeta", Value: buildCompletionRatioMetaValue(optionValues)})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -135,11 +153,13 @@ func GetBusinessStatsCircuitBreakerStatus(c *gin.Context) {
 }
 
 type OptionUpdateRequest struct {
+	Scope string `json:"scope"`
 	Key   string `json:"key"`
 	Value any    `json:"value"`
 }
 
 type OptionGroupUpdateRequest struct {
+	Scope  string            `json:"scope"`
 	Module string            `json:"module"`
 	Values map[string]string `json:"values"`
 }
@@ -147,6 +167,11 @@ type OptionGroupUpdateRequest struct {
 func UpdateOptionGroup(c *gin.Context) {
 	var request OptionGroupUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	request.Scope = strings.TrimSpace(request.Scope)
+	if request.Scope != "" && !settingsaccess.AllowsGroup(request.Scope, request.Module, request.Values) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -160,7 +185,7 @@ func UpdateOptionGroup(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"applied": false, "apply_error": "config.apply_failed_restart_required"}})
 		return
 	}
-	recordManageAudit(c, "option.group.update", map[string]interface{}{"module": request.Module})
+	recordManageAudit(c, "option.group.update", map[string]interface{}{"scope": request.Scope, "module": request.Module})
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"applied": true}})
 }
 
@@ -172,6 +197,11 @@ func UpdateOption(c *gin.Context) {
 			"success": false,
 			"message": "无效的参数",
 		})
+		return
+	}
+	option.Scope = strings.TrimSpace(option.Scope)
+	if option.Scope != "" && !settingsaccess.AllowsOption(option.Scope, option.Key) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	switch option.Value.(type) {
@@ -496,7 +526,8 @@ func UpdateOption(c *gin.Context) {
 	}
 	// 出于安全考虑只记录被修改的配置项名称，不记录配置值（可能含密钥等敏感信息）。
 	recordManageAudit(c, "option.update", map[string]interface{}{
-		"key": option.Key,
+		"scope": option.Scope,
+		"key":   option.Key,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

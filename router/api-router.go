@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/service/authz"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/QuantumNous/new-api/oauth"
@@ -172,7 +173,7 @@ func SetApiRouter(router *gin.Engine) {
 			}
 
 			adminRoute := userRoute.Group("/")
-			adminRoute.Use(middleware.AdminAuth())
+			adminRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuUsersView))
 			{
 				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
@@ -209,7 +210,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/waffo-pancake/pay", middleware.UserCriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
 		}
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
-		subscriptionAdminRoute.Use(middleware.AdminAuth())
+		subscriptionAdminRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuSubscriptionsView))
 		{
 			subscriptionAdminRoute.GET("/plans", controller.AdminListSubscriptionPlans)
 			subscriptionAdminRoute.POST("/plans", controller.AdminCreateSubscriptionPlan)
@@ -230,50 +231,50 @@ func SetApiRouter(router *gin.Engine) {
 		employeeAdminRoute := apiRouter.Group("/admin/employee")
 		employeeAdminRoute.Use(middleware.AdminAuth())
 		{
-			employeeAdminRoute.GET("", controller.AdminListEmployees)
-			employeeAdminRoute.POST("", controller.AdminCreateEmployee)
-			employeeAdminRoute.PUT("/:id", controller.AdminUpdateEmployee)
-			employeeAdminRoute.DELETE("/:id", controller.AdminDeleteEmployee)
-			employeeAdminRoute.GET("/commission", controller.AdminListCommissionLogs)
-			employeeAdminRoute.GET("/commission/channels", controller.AdminListCommissionChannelOptions)
-			employeeAdminRoute.GET("/commission/monthly", controller.AdminListCommissionResetPeriodStats)
-			employeeAdminRoute.GET("/commission/calendar", controller.AdminCommissionCalendarStats)
-			employeeAdminRoute.GET("/commission/monthly-export", controller.AdminCommissionMonthlyExport)
-			employeeAdminRoute.GET("/commission/summary", controller.AdminCommissionSummary)
-			employeeAdminRoute.GET("/overview/channels", controller.AdminChannelProfitPage)
-			employeeAdminRoute.GET("/overview", controller.AdminCommissionOverview)
-			employeeAdminRoute.GET("/consumption-cost-ledger", controller.AdminListConsumptionCostLedger)
-			employeeAdminRoute.GET("/consumption-cost-ledger/stats", controller.AdminGetConsumptionCostLedgerStats)
-			employeeAdminRoute.POST("/consumption-cost-ledger/export", controller.AdminCreateLedgerExport)
-			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id", controller.AdminGetLedgerExport)
-			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id/download-url", controller.AdminGetLedgerExportDownloadURL)
+			employeeAdminRoute.GET("", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListEmployees)
+			employeeAdminRoute.POST("", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminCreateEmployee)
+			employeeAdminRoute.PUT("/:id", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminUpdateEmployee)
+			employeeAdminRoute.DELETE("/:id", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminDeleteEmployee)
+			employeeAdminRoute.GET("/commission", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListCommissionLogs)
+			employeeAdminRoute.GET("/commission/channels", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListCommissionChannelOptions)
+			employeeAdminRoute.GET("/commission/monthly", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListCommissionResetPeriodStats)
+			employeeAdminRoute.GET("/commission/calendar", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminCommissionCalendarStats)
+			employeeAdminRoute.GET("/commission/monthly-export", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminCommissionMonthlyExport)
+			employeeAdminRoute.GET("/commission/summary", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminCommissionSummary)
+			employeeAdminRoute.GET("/overview/channels", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminChannelProfitPage)
+			employeeAdminRoute.GET("/overview", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminCommissionOverview)
+			employeeAdminRoute.GET("/consumption-cost-ledger", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminListConsumptionCostLedger)
+			employeeAdminRoute.GET("/consumption-cost-ledger/stats", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminGetConsumptionCostLedgerStats)
+			employeeAdminRoute.POST("/consumption-cost-ledger/export", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminCreateLedgerExport)
+			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminGetLedgerExport)
+			employeeAdminRoute.GET("/consumption-cost-ledger/export/:job_id/download-url", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminGetLedgerExportDownloadURL)
 			// Fallback log backfill
-			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/status", controller.AdminGetFallbackStatus)
-			employeeAdminRoute.POST("/consumption-cost-ledger/fallback/backfill", controller.AdminTriggerBackfill)
-			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/backfill-result", controller.AdminGetBackfillResult)
+			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/status", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminGetFallbackStatus)
+			employeeAdminRoute.POST("/consumption-cost-ledger/fallback/backfill", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminTriggerBackfill)
+			employeeAdminRoute.GET("/consumption-cost-ledger/fallback/backfill-result", middleware.RequirePermission(authz.AdminMenuBusinessOverviewView), controller.AdminGetBackfillResult)
 			// 阶梯提成等级配置
-			employeeAdminRoute.GET("/tiers", controller.AdminListTiers)
-			employeeAdminRoute.POST("/tiers", controller.AdminCreateTier)
-			employeeAdminRoute.PUT("/tiers/:id", controller.AdminUpdateTier)
-			employeeAdminRoute.DELETE("/tiers/:id", controller.AdminDeleteTier)
-			employeeAdminRoute.GET("/tiers/logs", controller.AdminListTierLogs)
-			employeeAdminRoute.GET("/tiers/reset-config", controller.AdminGetTierResetConfig)
-			employeeAdminRoute.POST("/tiers/reset-now", controller.AdminTriggerTierReset)
-			employeeAdminRoute.POST("/tiers/switch-period", controller.AdminSwitchCommissionPeriod)
-			employeeAdminRoute.POST("/:id/tier", controller.AdminSetEmployeeTier)
-			employeeAdminRoute.POST("/:id/performance", controller.AdminAddEmployeePerformance)
-			employeeAdminRoute.POST("/performance/:logId/revert", controller.AdminRevertPerformanceAdjustment)
-			employeeAdminRoute.GET("/:id/customers", controller.AdminListEmployeeCustomers)
-			employeeAdminRoute.POST("/:id/assign-customer", controller.AdminAssignCustomerToEmployee)
-			employeeAdminRoute.DELETE("/:id/customer/:user_id", controller.AdminUnassignCustomerFromEmployee)
+			employeeAdminRoute.GET("/tiers", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListTiers)
+			employeeAdminRoute.POST("/tiers", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminCreateTier)
+			employeeAdminRoute.PUT("/tiers/:id", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminUpdateTier)
+			employeeAdminRoute.DELETE("/tiers/:id", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminDeleteTier)
+			employeeAdminRoute.GET("/tiers/logs", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListTierLogs)
+			employeeAdminRoute.GET("/tiers/reset-config", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminGetTierResetConfig)
+			employeeAdminRoute.POST("/tiers/reset-now", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminTriggerTierReset)
+			employeeAdminRoute.POST("/tiers/switch-period", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminSwitchCommissionPeriod)
+			employeeAdminRoute.POST("/:id/tier", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminSetEmployeeTier)
+			employeeAdminRoute.POST("/:id/performance", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminAddEmployeePerformance)
+			employeeAdminRoute.POST("/performance/:logId/revert", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminRevertPerformanceAdjustment)
+			employeeAdminRoute.GET("/:id/customers", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminListEmployeeCustomers)
+			employeeAdminRoute.POST("/:id/assign-customer", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminAssignCustomerToEmployee)
+			employeeAdminRoute.DELETE("/:id/customer/:user_id", middleware.RequirePermission(authz.AdminMenuEmployeesView), controller.AdminUnassignCustomerFromEmployee)
 		}
 
 		systemAdminRoute := apiRouter.Group("/admin/system")
 		systemAdminRoute.Use(middleware.AdminAuth())
 		{
-			systemAdminRoute.GET("/ledger-pipeline/status", controller.AdminGetLedgerPipelineStatus)
-			systemAdminRoute.GET("/relay-log-pipeline/status", controller.AdminGetRelayLogPipelineStatus)
-			systemAdminRoute.POST("/relay-log-pipeline/replay", controller.AdminStartRelayLogFallbackReplay)
+			systemAdminRoute.GET("/ledger-pipeline/status", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.ledger-pipeline")), controller.AdminGetLedgerPipelineStatus)
+			systemAdminRoute.GET("/relay-log-pipeline/status", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.relay-log-pipeline")), controller.AdminGetRelayLogPipelineStatus)
+			systemAdminRoute.POST("/relay-log-pipeline/replay", middleware.RequirePermission(authz.SystemSettingsEdit("system-tuning.relay-log-pipeline")), controller.AdminStartRelayLogFallbackReplay)
 		}
 
 		// Customer management (admin)
@@ -291,7 +292,7 @@ func SetApiRouter(router *gin.Engine) {
 
 		// Channel cost config (admin)
 		channelCostRoute := apiRouter.Group("/admin/channel/cost")
-		channelCostRoute.Use(middleware.AdminAuth())
+		channelCostRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuEmployeesView))
 		{
 			channelCostRoute.GET("", controller.AdminListChannelCosts)
 			channelCostRoute.POST("", controller.AdminUpsertChannelCost)
@@ -313,50 +314,54 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		// end
 		optionRoute := apiRouter.Group("/option")
-		optionRoute.Use(middleware.RootAuth())
+		optionRoute.Use(middleware.AdminAuth())
 		{
-			optionRoute.GET("/", controller.GetOptions)
-			optionRoute.GET("/db-pool/stats", controller.GetDBPoolRuntimeStatus)
-			optionRoute.PUT("/", controller.UpdateOption)
-			optionRoute.PUT("/group", controller.UpdateOptionGroup)
-			optionRoute.GET("/business-stats-circuit-breaker/status", controller.GetBusinessStatsCircuitBreakerStatus)
-			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
-			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
-			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
-			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.GET("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
-			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
-			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
-			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
-			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
+			optionRoute.GET("/", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetOptions)
+			optionRoute.PUT("/", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOption)
+			optionRoute.PUT("/group", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOptionGroup)
+		}
+		optionRootRoute := apiRouter.Group("/option")
+		optionRootRoute.Use(middleware.AdminAuth())
+		{
+			optionRootRoute.GET("/db-pool/stats", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.database-pool")), controller.GetDBPoolRuntimeStatus)
+			optionRootRoute.GET("/business-stats-circuit-breaker/status", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.settlement-guard")), controller.GetBusinessStatsCircuitBreakerStatus)
+			optionRootRoute.POST("/payment_compliance", middleware.RequirePermission(authz.SystemSettingsEdit("billing.quota")), controller.ConfirmPaymentCompliance)
+			optionRootRoute.GET("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsView("models.channel-affinity")), controller.GetChannelAffinityCacheStats)
+			optionRootRoute.DELETE("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsEdit("models.channel-affinity")), controller.ClearChannelAffinityCache)
+			optionRootRoute.POST("/rest_model_ratio", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.ResetModelRatio)
+			optionRootRoute.GET("/waffo-pancake/catalog", middleware.RequirePermission(authz.SystemSettingsView("billing.payment")), controller.ListWaffoPancakeCatalog)
+			optionRootRoute.POST("/waffo-pancake/pair", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.CreateWaffoPancakePair)
+			optionRootRoute.POST("/waffo-pancake/save", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.SaveWaffoPancake)
+			optionRootRoute.POST("/waffo-pancake/subscription-product", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.CreateWaffoPancakeSubscriptionProduct)
+			optionRootRoute.GET("/waffo-pancake/subscription-product-options", middleware.RequirePermission(authz.SystemSettingsView("billing.payment")), controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
 
-		// Custom OAuth provider management (root only)
+		// Custom OAuth provider management.
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
-		customOAuthRoute.Use(middleware.RootAuth())
+		customOAuthRoute.Use(middleware.AdminAuth())
 		{
-			customOAuthRoute.POST("/discovery", controller.FetchCustomOAuthDiscovery)
-			customOAuthRoute.GET("/", controller.GetCustomOAuthProviders)
-			customOAuthRoute.GET("/:id", controller.GetCustomOAuthProvider)
-			customOAuthRoute.POST("/", controller.CreateCustomOAuthProvider)
-			customOAuthRoute.PUT("/:id", controller.UpdateCustomOAuthProvider)
-			customOAuthRoute.DELETE("/:id", controller.DeleteCustomOAuthProvider)
+			customOAuthRoute.POST("/discovery", middleware.RequirePermission(authz.SystemSettingsEdit("auth.custom-oauth")), controller.FetchCustomOAuthDiscovery)
+			customOAuthRoute.GET("/", middleware.RequirePermission(authz.SystemSettingsView("auth.custom-oauth")), controller.GetCustomOAuthProviders)
+			customOAuthRoute.GET("/:id", middleware.RequirePermission(authz.SystemSettingsView("auth.custom-oauth")), controller.GetCustomOAuthProvider)
+			customOAuthRoute.POST("/", middleware.RequirePermission(authz.SystemSettingsEdit("auth.custom-oauth")), controller.CreateCustomOAuthProvider)
+			customOAuthRoute.PUT("/:id", middleware.RequirePermission(authz.SystemSettingsEdit("auth.custom-oauth")), controller.UpdateCustomOAuthProvider)
+			customOAuthRoute.DELETE("/:id", middleware.RequirePermission(authz.SystemSettingsEdit("auth.custom-oauth")), controller.DeleteCustomOAuthProvider)
 		}
 		performanceRoute := apiRouter.Group("/performance")
-		performanceRoute.Use(middleware.RootAuth())
+		performanceRoute.Use(middleware.AdminAuth())
 		{
-			performanceRoute.GET("/stats", controller.GetPerformanceStats)
-			performanceRoute.DELETE("/disk_cache", controller.ClearDiskCache)
-			performanceRoute.POST("/reset_stats", controller.ResetPerformanceStats)
-			performanceRoute.POST("/gc", controller.ForceGC)
-			performanceRoute.GET("/logs", controller.GetLogFiles)
-			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
+			performanceRoute.GET("/stats", middleware.RequirePermission(authz.SystemSettingsView("operations.performance")), controller.GetPerformanceStats)
+			performanceRoute.DELETE("/disk_cache", middleware.RequirePermission(authz.SystemSettingsEdit("operations.performance")), controller.ClearDiskCache)
+			performanceRoute.POST("/reset_stats", middleware.RequirePermission(authz.SystemSettingsEdit("operations.performance")), controller.ResetPerformanceStats)
+			performanceRoute.POST("/gc", middleware.RequirePermission(authz.SystemSettingsEdit("operations.performance")), controller.ForceGC)
+			performanceRoute.GET("/logs", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.GetLogFiles)
+			performanceRoute.DELETE("/logs", middleware.RequirePermission(authz.SystemSettingsEdit("operations.logs")), controller.CleanupLogFiles)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
-		ratioSyncRoute.Use(middleware.RootAuth())
+		ratioSyncRoute.Use(middleware.AdminAuth())
 		{
-			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
-			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
+			ratioSyncRoute.GET("/channels", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), controller.GetSyncableChannels)
+			ratioSyncRoute.POST("/fetch", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.FetchUpstreamRatios)
 		}
 		registerChannelRoutes(apiRouter)
 		registerAuthzRoutes(apiRouter)
@@ -392,7 +397,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		redemptionRoute := apiRouter.Group("/redemption")
-		redemptionRoute.Use(middleware.AdminAuth())
+		redemptionRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuRedemptionCodesView))
 		{
 			redemptionRoute.GET("/", controller.GetAllRedemptions)
 			redemptionRoute.GET("/search", controller.SearchRedemptions)
@@ -410,7 +415,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/employee/stat", middleware.UserAuth(), controller.GetEmployeeCustomerLogsStat)
-		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
+		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), middleware.RequirePermission(authz.SystemSettingsView("models.channel-affinity")), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/export", middleware.AdminAuth(), middleware.LogExportRateLimit(), controller.ExportAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
@@ -436,35 +441,20 @@ func SetApiRouter(router *gin.Engine) {
 			logExportRoute.GET("/jobs/:job_id/download-url", controller.GetLogExportDownloadURL)
 		}
 
-		// 请求日志（下游请求体/请求头 与 返回头/返回体），仅超级管理员可查看
-		requestLogRoute := apiRouter.Group("/request-log")
-		requestLogRoute.Use(middleware.RootAuth())
-		{
-			requestLogRoute.GET("/", controller.GetAllRequestLogs)
-			requestLogRoute.GET("/:id", controller.GetRequestLogDetail)
-			requestLogRoute.DELETE("/", controller.DeleteHistoryRequestLogs)
-			requestLogRoute.DELETE("/all", controller.ClearAllRequestLogs)
-		}
+		// 请求日志（下游请求体/请求头 与 返回头/返回体）：菜单可见性由
+		// admin_menu.request_logs 控制，默认对普通管理员关闭，由 root 按人授予。
+		registerRequestLogRoutes(apiRouter)
 		systemTaskRoute := apiRouter.Group("/system-task")
-		systemTaskRoute.Use(middleware.RootAuth())
+		systemTaskRoute.Use(middleware.AdminAuth())
 		{
-			systemTaskRoute.POST("/log-cleanup", controller.CreateLogCleanupSystemTask)
-			systemTaskRoute.GET("/list", controller.ListSystemTasks)
-			systemTaskRoute.GET("/current", controller.GetCurrentSystemTask)
-			systemTaskRoute.GET("/:task_id", controller.GetSystemTask)
+			systemTaskRoute.POST("/log-cleanup", middleware.RequirePermission(authz.SystemSettingsEdit("operations.logs")), controller.CreateLogCleanupSystemTask)
+			systemTaskRoute.GET("/list", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.ListSystemTasks)
+			systemTaskRoute.GET("/current", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.GetCurrentSystemTask)
+			systemTaskRoute.GET("/:task_id", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.GetSystemTask)
 		}
-		systemInfoRoute := apiRouter.Group("/system-info")
-		systemInfoRoute.Use(middleware.RootAuth())
-		{
-			systemInfoRoute.GET("/instances", controller.ListSystemInstances)
-			systemInfoRoute.DELETE("/stale-instances", controller.DeleteStaleSystemInstances)
-			systemInfoRoute.DELETE("/instances/:node_name", controller.DeleteStaleSystemInstance)
-
-			// 性能剖析：开关状态 + 原始 profile 下载。
-			// heap / goroutine dump 会带出内存中的凭据与用户数据，只对 root 开放（组已 RootAuth）。
-			systemInfoRoute.GET("/pprof-status", controller.GetPprofStatus)
-			systemInfoRoute.GET("/pprof/*name", controller.ServePprofProfile)
-		}
+		// 系统信息：菜单可见性由 admin_menu.system_info 控制，默认对普通管理员关闭；
+		// pprof 剖析数据仍始终只对 root 开放（见 registerSystemInfoRoutes）。
+		registerSystemInfoRoutes(apiRouter)
 
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)
@@ -484,7 +474,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
-		prefillGroupRoute.Use(middleware.AdminAuth())
+		prefillGroupRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuModelsView))
 		{
 			prefillGroupRoute.GET("/", controller.GetPrefillGroups)
 			prefillGroupRoute.POST("/", controller.CreatePrefillGroup)
@@ -503,7 +493,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		vendorRoute := apiRouter.Group("/vendors")
-		vendorRoute.Use(middleware.AdminAuth())
+		vendorRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuModelsView))
 		{
 			vendorRoute.GET("/", controller.GetAllVendors)
 			vendorRoute.GET("/search", controller.SearchVendors)
@@ -514,7 +504,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		modelsRoute := apiRouter.Group("/models")
-		modelsRoute.Use(middleware.AdminAuth())
+		modelsRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuModelsView))
 		{
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)
@@ -528,11 +518,15 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		// Deployments (model deployment management)
-		deploymentsRoute := apiRouter.Group("/deployments")
-		deploymentsRoute.Use(middleware.AdminAuth())
+		deploymentSettingsRoute := apiRouter.Group("/deployments")
+		deploymentSettingsRoute.Use(middleware.AdminAuth())
 		{
-			deploymentsRoute.GET("/settings", controller.GetModelDeploymentSettings)
-			deploymentsRoute.POST("/settings/test-connection", controller.TestIoNetConnection)
+			deploymentSettingsRoute.GET("/settings", middleware.RequirePermission(authz.SystemSettingsView("models.model-deployment")), controller.GetModelDeploymentSettings)
+			deploymentSettingsRoute.POST("/settings/test-connection", middleware.RequirePermission(authz.SystemSettingsEdit("models.model-deployment")), controller.TestIoNetConnection)
+		}
+		deploymentsRoute := apiRouter.Group("/deployments")
+		deploymentsRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuModelsView))
+		{
 			deploymentsRoute.GET("/", controller.GetAllDeployments)
 			deploymentsRoute.GET("/search", controller.SearchDeployments)
 			deploymentsRoute.POST("/test-connection", controller.TestIoNetConnection)

@@ -743,6 +743,12 @@ func UpdateUser(c *gin.Context) {
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
+		if err != nil {
+			return err
+		}
+		if authzTouched && updatedUser.AuthVersion <= originUser.AuthVersion {
+			updatedUser.AuthVersion, err = model.IncrementUserAuthVersionWithTx(tx, updatedUser.Id)
+		}
 		return err
 	}); err != nil {
 		common.ApiError(c, err)
@@ -1107,7 +1113,7 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 	if userRole < common.RoleAdminUser {
 		return true, authz.ClearUserAuthorizationInTx(tx, userID)
 	}
-	return true, authz.SetUserPermissionsInTx(tx, userID, permissions)
+	return authz.UpdateUserPermissionsInTx(tx, userID, permissions)
 }
 
 type ManageRequest struct {

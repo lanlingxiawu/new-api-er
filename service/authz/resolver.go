@@ -45,7 +45,7 @@ func Capabilities(userID int, systemRole int) PermissionsMap {
 				Action:   action.Action,
 			})
 		}
-		result[resource.Resource] = actions
+		result[resource.Resource] = normalizePermissionActions(resource.Resource, actions)
 	}
 	return result
 }

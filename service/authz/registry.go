@@ -11,9 +11,12 @@ type ActionDefinition struct {
 
 // ResourceDefinition describes a resource and the actions it exposes.
 type ResourceDefinition struct {
-	Resource string             `json:"resource"`
-	LabelKey string             `json:"label_key"`
-	Actions  []ActionDefinition `json:"actions"`
+	Resource      string             `json:"resource"`
+	LabelKey      string             `json:"label_key"`
+	Group         string             `json:"group,omitempty"`
+	GroupLabelKey string             `json:"group_label_key,omitempty"`
+	Sort          int                `json:"sort,omitempty"`
+	Actions       []ActionDefinition `json:"actions"`
 }
 
 var registry []ResourceDefinition
@@ -28,9 +31,12 @@ func Catalog() []ResourceDefinition {
 	result := make([]ResourceDefinition, 0, len(registry))
 	for _, resource := range registry {
 		result = append(result, ResourceDefinition{
-			Resource: resource.Resource,
-			LabelKey: resource.LabelKey,
-			Actions:  append([]ActionDefinition(nil), resource.Actions...),
+			Resource:      resource.Resource,
+			LabelKey:      resource.LabelKey,
+			Group:         resource.Group,
+			GroupLabelKey: resource.GroupLabelKey,
+			Sort:          resource.Sort,
+			Actions:       append([]ActionDefinition(nil), resource.Actions...),
 		})
 	}
 	return result
