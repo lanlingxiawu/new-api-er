@@ -615,6 +615,35 @@ func TestFlushRelayLogsPersistsConsumeAndErrorBuffers(t *testing.T) {
 	require.Zero(t, relayLogBacklog())
 }
 
+func TestFlushRelayLogsMakesSameSecondConsumptionVisibleFirst(t *testing.T) {
+	db := useRelayLogPipelineSQLite(t)
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	previousCfg := *cfg
+	cfg.FullDrain = true
+	cfg.OuterBatchSize = 100
+	cfg.InnerBatchSize = 100
+	t.Cleanup(func() { *cfg = previousCfg })
+
+	createdAt := time.Now().Unix()
+	require.True(t, enqueueRelayLog(relayLogKindConsume, &relayLogEvent{Log: &Log{
+		RequestId: "consume-one", Type: LogTypeConsume, CreatedAt: createdAt,
+	}}))
+	require.True(t, enqueueRelayLog(relayLogKindConsume, &relayLogEvent{Log: &Log{
+		RequestId: "consume-two", Type: LogTypeConsume, CreatedAt: createdAt,
+	}}))
+	require.True(t, enqueueRelayLog(relayLogKindError, &relayLogEvent{Log: &Log{
+		RequestId: "error-one", Type: LogTypeError, CreatedAt: createdAt,
+	}}))
+	flushRelayLogs()
+
+	var displayed []Log
+	require.NoError(t, db.Order("created_at DESC, id DESC").Find(&displayed).Error)
+	require.Len(t, displayed, 3)
+	require.Equal(t, LogTypeConsume, displayed[0].Type,
+		"the unchanged indexed list order must show consumption before the same-second error batch")
+	require.Equal(t, LogTypeError, displayed[2].Type)
+}
+
 func TestFlushRelayLogRetriesPersistsEligibleAndFallsBackExhausted(t *testing.T) {
 	db := useRelayLogPipelineSQLite(t)
 	previousDir := relayLogFallbackDir

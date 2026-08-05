@@ -669,7 +669,34 @@ func flushRelayLogs() {
 		if n > len(events) {
 			n = len(events)
 		}
-		persistRelayLogEvents(events[:n])
+		batch := events[:n]
+		errorCount := 0
+		for _, event := range batch {
+			if event.Kind == relayLogKindError {
+				errorCount++
+			}
+		}
+		if errorCount > 0 && errorCount < len(batch) {
+			// List queries keep their existing indexed order (created_at DESC,
+			// id DESC). Put same-cycle errors first inside a mixed DB batch so
+			// consumption rows receive the newer ids and appear first without
+			// adding a sort expression to the read path. Dequeue budgeting and
+			// outer-batch processing remain consumption-first; this partition is
+			// done only after selection, outside the relay-facing buffer locks.
+			ordered := make([]*relayLogEvent, 0, len(batch))
+			for _, event := range batch {
+				if event.Kind == relayLogKindError {
+					ordered = append(ordered, event)
+				}
+			}
+			for _, event := range batch {
+				if event.Kind != relayLogKindError {
+					ordered = append(ordered, event)
+				}
+			}
+			batch = ordered
+		}
+		persistRelayLogEvents(batch)
 		events = events[n:]
 	}
 }
