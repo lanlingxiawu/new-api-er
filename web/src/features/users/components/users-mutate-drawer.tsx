@@ -102,6 +102,7 @@ import {
 import type { User } from '../types'
 import { AdminPermissionsEditor } from './admin-permissions-editor'
 import { EmployeeAssignField } from './employee-assign-field'
+import { GroupCombobox } from './group-combobox'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -565,31 +566,12 @@ export function UsersMutateDrawer({
                           render={({ field }) => (
                             <FormItem>
                               <FormLabel>{t('Group')}</FormLabel>
-                              <Select
-                                items={groups.map((group) => ({
-                                  value: group,
-                                  label: group,
-                                }))}
-                                onValueChange={field.onChange}
+                              <GroupCombobox
+                                groups={groups}
                                 value={field.value}
-                              >
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue
-                                      placeholder={t('Select a group')}
-                                    />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent alignItemWithTrigger={false}>
-                                  <SelectGroup>
-                                    {groups.map((group) => (
-                                      <SelectItem key={group} value={group}>
-                                        {group}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
+                                onValueChange={field.onChange}
+                                placeholder={t('Select a group')}
+                              />
                               <FormMessage />
                             </FormItem>
                           )}
@@ -614,31 +596,12 @@ export function UsersMutateDrawer({
                                     control={form.control}
                                     name={`groupRatios.${index}.group`}
                                     render={({ field }) => (
-                                      <Select
-                                        items={groups.map((g) => ({
-                                          value: g,
-                                          label: g,
-                                        }))}
-                                        onValueChange={field.onChange}
+                                      <GroupCombobox
+                                        groups={groups}
                                         value={field.value}
-                                      >
-                                        <SelectTrigger>
-                                          <SelectValue
-                                            placeholder={t('Select a group')}
-                                          />
-                                        </SelectTrigger>
-                                        <SelectContent
-                                          alignItemWithTrigger={false}
-                                        >
-                                          <SelectGroup>
-                                            {groups.map((g) => (
-                                              <SelectItem key={g} value={g}>
-                                                {g}
-                                              </SelectItem>
-                                            ))}
-                                          </SelectGroup>
-                                        </SelectContent>
-                                      </Select>
+                                        onValueChange={field.onChange}
+                                        placeholder={t('Select a group')}
+                                      />
                                     )}
                                   />
                                 </div>
