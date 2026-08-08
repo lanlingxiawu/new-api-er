@@ -43,7 +43,8 @@ AGENTS.md
 CLAUDE.md
 /.tmp-go-cache
 /test
-/docs
+/docs/*
+!/docs/design/
 /.agents
 
 debugmain.go
@@ -62,3 +63,4 @@ _local/
 # relaykit 拆成独立 module 后，本地多模块开发用的 go.work 不入库。
 go.work
 go.work.sum
+/relay_log
