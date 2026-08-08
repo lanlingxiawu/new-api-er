@@ -1,55 +1,46 @@
 package model
 
 import (
-	"context"
 	"errors"
-	"strconv"
+	"fmt"
+	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 )
 
 // RequestLog 记录中转(relay)请求的下游请求体/请求头 以及 返回给下游的返回头/返回体。
 // 仅供超级管理员排查使用，写入受 common.RequestLogEnabled / RequestLogUsername 控制。
-// 注意：请求日志不写数据库。优先保存在 Redis；未启用 Redis 时退化为进程内内存存储（重启丢失）。
+//
+// 存储分两层：列表所需的元字段常驻进程内存（本文件的索引），完整正文写本机磁盘
+// （request_log_store.go）。不写数据库，也不再写 Redis —— Redis 只在进程首尾各用
+// 一次做索引快照（request_log_snapshot.go）。
 type RequestLog struct {
-	Id               int    `json:"id"`
-	CreatedAt        int64  `json:"created_at"`
-	UserId           int    `json:"user_id"`
-	Username         string `json:"username"`
-	TokenName        string `json:"token_name"`
-	ModelName        string `json:"model_name"`
-	ChannelId        int    `json:"channel_id"`
-	Method           string `json:"method"`
-	Url              string `json:"url"`
-	StatusCode       int    `json:"status_code"`
-	Ip               string `json:"ip"`
-	RequestId        string `json:"request_id"`
-	UseTime          int    `json:"use_time"`
-	IsStream         bool   `json:"is_stream"`
-	RequestBodySize  int64  `json:"request_body_size"`
-	ResponseBodySize int64  `json:"response_body_size"`
+	Id         int    `json:"id"`
+	CreatedAt  int64  `json:"created_at"`
+	UserId     int    `json:"user_id"`
+	Username   string `json:"username"`
+	TokenName  string `json:"token_name"`
+	ModelName  string `json:"model_name"`
+	ChannelId  int    `json:"channel_id"`
+	Method     string `json:"method"`
+	Url        string `json:"url"`
+	StatusCode int    `json:"status_code"`
+	Ip         string `json:"ip"`
+	RequestId  string `json:"request_id"`
+	// UseTimeMs 是中间件测得的端到端耗时（毫秒）。单位与消费日志 logs.use_time（秒）
+	// 不同，因此字段名带 _ms 后缀，避免两边混用。
+	UseTimeMs        int64 `json:"use_time_ms"`
+	IsStream         bool  `json:"is_stream"`
+	RequestBodySize  int64 `json:"request_body_size"`
+	ResponseBodySize int64 `json:"response_body_size"`
 	// 大字段仅在详情接口返回
 	RequestHeaders  string `json:"request_headers,omitempty"`
 	RequestBody     string `json:"request_body,omitempty"`
 	ResponseHeaders string `json:"response_headers,omitempty"`
 	ResponseBody    string `json:"response_body,omitempty"`
 }
-
-// requestLogBody 拆分出大字段单独存储，使列表查询无需加载请求/返回体。
-type requestLogBody struct {
-	RequestHeaders  string `json:"request_headers"`
-	RequestBody     string `json:"request_body"`
-	ResponseHeaders string `json:"response_headers"`
-	ResponseBody    string `json:"response_body"`
-}
-
-const (
-	requestLogSeqKey   = "request_log:seq"
-	requestLogIndexKey = "request_log:index"
-	requestLogMetaKey  = "request_log:meta:"
-	requestLogBodyKey  = "request_log:body:"
-)
 
 // 清理阈值的兜底默认值，当配置错误时退化使用，避免清理被静默跳过导致无限增长。
 const (
@@ -78,20 +69,22 @@ func effectiveRequestLogLimits() (maxCount int, minCount int) {
 
 var errRequestLogNotFound = errors.New("request log not found")
 
-// 内存兜底存储（Redis 未启用时使用），memRequestLogs 头部为最新。
+// requestLogIndexEntry 是内存索引的一条：去掉大字段的元数据 + 正文文件的相对路径。
+//
+// 存 rel 而不是每次由 created_at/request_id 重新推导，是为了让"索引 ↔ 文件"的对应
+// 关系只有一处真值；净化规则或目录分层将来调整也不会让老条目失联。
+type requestLogIndexEntry struct {
+	meta *RequestLog
+	rel  string
+}
+
 var (
-	memRequestLogMu sync.Mutex
-	memRequestLogs  []*RequestLog
-	memRequestSeq   int
+	reqLogMu    sync.Mutex
+	reqLogItems []requestLogIndexEntry // 尾部为最新
+	reqLogSeq   int64
+
+	requestLogWriteFailures atomic.Int64
 )
-
-func requestLogCtx() context.Context {
-	return context.Background()
-}
-
-func useRedisForRequestLog() bool {
-	return common.RedisEnabled && common.RequestLogRDB != nil
-}
 
 // cloneRequestLogMeta 返回去除大字段的浅拷贝，用于列表展示。
 func cloneRequestLogMeta(log *RequestLog) *RequestLog {
@@ -103,8 +96,11 @@ func cloneRequestLogMeta(log *RequestLog) *RequestLog {
 	return &m
 }
 
-// RecordRequestLog 持久化一条请求日志，并按 min/max 阈值触发清理。
-// 应在请求结束后异步调用。
+// RecordRequestLog 落盘一条请求日志并登记索引，按 min/max 阈值触发索引淘汰。
+// 由写盘 worker 调用，绝不能在 relay goroutine 上执行。
+//
+// 顺序是"先写文件、成功后才进索引"：这保证索引 ⊆ 磁盘，详情接口永远不会拿到指向
+// 缺失文件的条目；反过来则会让清理协程在两步之间把刚写的文件当孤儿删掉。
 func RecordRequestLog(log *RequestLog) {
 	if log == nil {
 		return
@@ -112,94 +108,63 @@ func RecordRequestLog(log *RequestLog) {
 	if log.CreatedAt == 0 {
 		log.CreatedAt = common.GetTimestamp()
 	}
-	if !useRedisForRequestLog() {
-		recordRequestLogMemory(log)
+	if !RequestLogStoreReady() {
 		return
 	}
-	recordRequestLogRedis(log)
-}
-
-func recordRequestLogMemory(log *RequestLog) {
-	memRequestLogMu.Lock()
-	defer memRequestLogMu.Unlock()
-	memRequestSeq++
-	log.Id = memRequestSeq
-	// 头部为最新
-	memRequestLogs = append([]*RequestLog{log}, memRequestLogs...)
-
-	maxCount, minCount := effectiveRequestLogLimits()
-	if len(memRequestLogs) > maxCount {
-		memRequestLogs = memRequestLogs[:minCount]
-	}
-}
-
-func recordRequestLogRedis(log *RequestLog) {
-	ctx := requestLogCtx()
-	id, err := common.RequestLogRDB.Incr(ctx, requestLogSeqKey).Result()
-	if err != nil {
-		common.SysLog("failed to gen request log id: " + err.Error())
-		return
-	}
+	id := atomic.AddInt64(&reqLogSeq, 1)
 	log.Id = int(id)
-
-	body := requestLogBody{
-		RequestHeaders:  log.RequestHeaders,
-		RequestBody:     log.RequestBody,
-		ResponseHeaders: log.ResponseHeaders,
-		ResponseBody:    log.ResponseBody,
-	}
-	meta := cloneRequestLogMeta(log)
-
-	metaStr, err := common.Marshal(meta)
-	if err != nil {
-		common.SysLog("failed to marshal request log meta: " + err.Error())
+	rel := requestLogRelPath(log.CreatedAt, log.RequestId, id)
+	if err := writeRequestLogFile(rel, log); err != nil {
+		reportRequestLogWriteFailure(err)
 		return
 	}
-	bodyStr, err := common.Marshal(body)
-	if err != nil {
-		common.SysLog("failed to marshal request log body: " + err.Error())
-		return
-	}
-
-	idStr := strconv.FormatInt(id, 10)
-	pipe := common.RequestLogRDB.Pipeline()
-	pipe.Set(ctx, requestLogMetaKey+idStr, string(metaStr), 0)
-	pipe.Set(ctx, requestLogBodyKey+idStr, string(bodyStr), 0)
-	pipe.LPush(ctx, requestLogIndexKey, idStr)
-	if _, err = pipe.Exec(ctx); err != nil {
-		common.SysLog("failed to store request log: " + err.Error())
-		return
-	}
-
-	trimRequestLogsRedis(ctx)
+	appendRequestLogIndex(cloneRequestLogMeta(log), rel)
 }
 
-// trimRequestLogsRedis 当条数超过最大值时，仅保留最新的最小值条数，并删除被淘汰条目的明细。
-func trimRequestLogsRedis(ctx context.Context) {
+// reportRequestLogWriteFailure 限流打印写盘失败，避免磁盘故障时刷屏。
+func reportRequestLogWriteFailure(err error) {
+	if n := requestLogWriteFailures.Add(1); n == 1 || n%1000 == 0 {
+		common.SysError(fmt.Sprintf("request log write failed (total=%d): %s", n, err.Error()))
+	}
+}
+
+func appendRequestLogIndex(meta *RequestLog, rel string) {
 	maxCount, minCount := effectiveRequestLogLimits()
-	total, err := common.RequestLogRDB.LLen(ctx, requestLogIndexKey).Result()
-	if err != nil || total <= int64(maxCount) {
+	reqLogMu.Lock()
+	defer reqLogMu.Unlock()
+	reqLogItems = append(reqLogItems, requestLogIndexEntry{meta: meta, rel: rel})
+	if len(reqLogItems) > maxCount {
+		trimRequestLogIndexLocked(minCount)
+	}
+}
+
+// trimRequestLogIndexLocked 只丢弃索引，不删除磁盘文件——被淘汰条目的正文由清理
+// 协程统一回收，写入路径因此不含任何删除 IO。
+func trimRequestLogIndexLocked(minCount int) {
+	if minCount <= 0 {
+		reqLogItems = nil
 		return
 	}
-	staleIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, int64(minCount), -1).Result()
-	if err != nil {
+	if len(reqLogItems) <= minCount {
 		return
 	}
-	pipe := common.RequestLogRDB.Pipeline()
-	for _, idStr := range staleIds {
-		pipe.Del(ctx, requestLogMetaKey+idStr)
-		pipe.Del(ctx, requestLogBodyKey+idStr)
+	drop := len(reqLogItems) - minCount
+	copy(reqLogItems, reqLogItems[drop:])
+	// 清掉尾部残留引用，否则被淘汰条目的 meta 会被底层数组一直持有而无法回收。
+	for i := minCount; i < len(reqLogItems); i++ {
+		reqLogItems[i] = requestLogIndexEntry{}
 	}
-	if minCount == 0 {
-		// LTRIM key 0 -1 会保留整个 list，无法清空；minCount==0 时须直接删除索引键，
-		// 否则索引会残留全部 id 而其明细键已被删除，形成孤儿索引并无限增长。
-		pipe.Del(ctx, requestLogIndexKey)
-	} else {
-		pipe.LTrim(ctx, requestLogIndexKey, 0, int64(minCount)-1)
-	}
-	if _, err = pipe.Exec(ctx); err != nil {
-		common.SysLog("failed to trim request logs: " + err.Error())
-	}
+	reqLogItems = reqLogItems[:minCount]
+}
+
+// requestLogIndexSnapshot 持锁复制一份条目切片（只复制指针与字符串头），
+// 让过滤、分页、清理比对都在锁外进行。
+func requestLogIndexSnapshot() []requestLogIndexEntry {
+	reqLogMu.Lock()
+	defer reqLogMu.Unlock()
+	out := make([]requestLogIndexEntry, len(reqLogItems))
+	copy(out, reqLogItems)
+	return out
 }
 
 func matchRequestLog(log *RequestLog, username, modelName string, channel int, requestId string, statusCode int, startTimestamp, endTimestamp int64) bool {
@@ -227,279 +192,102 @@ func matchRequestLog(log *RequestLog, username, modelName string, channel int, r
 	return true
 }
 
-func getRequestLogMetaByIds(ctx context.Context, ids []string) []*RequestLog {
-	logs := make([]*RequestLog, 0, len(ids))
-	if len(ids) == 0 {
-		return logs
-	}
-	keys := make([]string, len(ids))
-	for i, idStr := range ids {
-		keys[i] = requestLogMetaKey + idStr
-	}
-	values, err := common.RequestLogRDB.MGet(ctx, keys...).Result()
-	if err != nil {
-		return logs
-	}
-	for _, v := range values {
-		str, ok := v.(string)
-		if !ok || str == "" {
-			continue
-		}
-		var log RequestLog
-		if err := common.UnmarshalJsonStr(str, &log); err != nil {
-			continue
-		}
-		logs = append(logs, &log)
-	}
-	return logs
-}
-
-// GetAllRequestLogs 分页查询请求日志（按创建时间从新到旧）。
+// GetAllRequestLogs 分页查询请求日志（按创建时间从新到旧）。全程内存操作，无 IO。
 func GetAllRequestLogs(username string, modelName string, channel int, requestId string, statusCode int,
 	startTimestamp int64, endTimestamp int64, startIdx int, num int) (logs []*RequestLog, total int64, err error) {
-	if !useRedisForRequestLog() {
-		return getAllRequestLogsMemory(username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp, startIdx, num)
+	logs = make([]*RequestLog, 0, requestLogPageCapacity(num))
+	pageStart, pageEnd := startIdx, startIdx+num
+	wantsPage := startIdx >= 0 && num > 0
+
+	// 持锁过滤并只物化当前页，而不是先整表复制再切片：复制会在每次翻页产生一次
+	// 与索引等大的分配，而 total 又要求必须走完全表。这把锁只和写盘 worker 竞争，
+	// relay goroutine 从不参与，扫描期间短暂持有可以接受。
+	matched := 0
+	reqLogMu.Lock()
+	// 索引尾部为最新，倒序遍历即得到"最新在前"。
+	for i := len(reqLogItems) - 1; i >= 0; i-- {
+		meta := reqLogItems[i].meta
+		if !matchRequestLog(meta, username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp) {
+			continue
+		}
+		if wantsPage && matched >= pageStart && matched < pageEnd {
+			logs = append(logs, meta)
+		}
+		matched++
 	}
-	return getAllRequestLogsRedis(username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp, startIdx, num)
+	reqLogMu.Unlock()
+
+	return logs, int64(matched), nil
 }
 
-func getAllRequestLogsMemory(username string, modelName string, channel int, requestId string, statusCode int,
-	startTimestamp int64, endTimestamp int64, startIdx int, num int) ([]*RequestLog, int64, error) {
-	logs := make([]*RequestLog, 0)
-	memRequestLogMu.Lock()
-	snapshot := make([]*RequestLog, len(memRequestLogs))
-	copy(snapshot, memRequestLogs)
-	memRequestLogMu.Unlock()
-
-	filtered := make([]*RequestLog, 0, len(snapshot))
-	for _, log := range snapshot {
-		if matchRequestLog(log, username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp) {
-			filtered = append(filtered, log)
-		}
+// requestLogPageCapacity 预分配一页的容量，同时挡住异常大的 num 造成的一次性大分配。
+func requestLogPageCapacity(num int) int {
+	const maxPrealloc = 1000
+	if num <= 0 {
+		return 0
 	}
-	total := int64(len(filtered))
-	if startIdx >= len(filtered) || num <= 0 {
-		return logs, total, nil
+	if num > maxPrealloc {
+		return maxPrealloc
 	}
-	end := startIdx + num
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-	for _, log := range filtered[startIdx:end] {
-		logs = append(logs, cloneRequestLogMeta(log))
-	}
-	return logs, total, nil
+	return num
 }
 
-func getAllRequestLogsRedis(username string, modelName string, channel int, requestId string, statusCode int,
-	startTimestamp int64, endTimestamp int64, startIdx int, num int) ([]*RequestLog, int64, error) {
-	logs := make([]*RequestLog, 0)
-	ctx := requestLogCtx()
-
-	hasFilter := username != "" || modelName != "" || channel != 0 || requestId != "" ||
-		statusCode != 0 || startTimestamp != 0 || endTimestamp != 0
-
-	if !hasFilter {
-		// 无过滤：先对 id 分页，再仅加载该页 meta
-		total, err := common.RequestLogRDB.LLen(ctx, requestLogIndexKey).Result()
-		if err != nil {
-			return logs, 0, err
-		}
-		if int64(startIdx) >= total || num <= 0 {
-			return logs, total, nil
-		}
-		ids, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, int64(startIdx), int64(startIdx+num-1)).Result()
-		if err != nil {
-			return logs, total, err
-		}
-		return getRequestLogMetaByIds(ctx, ids), total, nil
-	}
-
-	// 有过滤：加载全部 meta（条数受 max 限制，规模可控），过滤后分页
-	allIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
-	if err != nil {
-		return logs, 0, err
-	}
-	all := getRequestLogMetaByIds(ctx, allIds)
-	filtered := make([]*RequestLog, 0, len(all))
-	for _, log := range all {
-		if matchRequestLog(log, username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp) {
-			filtered = append(filtered, log)
-		}
-	}
-	total := int64(len(filtered))
-	if startIdx >= len(filtered) || num <= 0 {
-		return logs, total, nil
-	}
-	end := startIdx + num
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-	return filtered[startIdx:end], total, nil
-}
-
-// GetRequestLogById 获取单条请求日志（含完整请求/返回体）。
+// GetRequestLogById 获取单条请求日志（含完整请求/返回体），从磁盘文件读取。
 func GetRequestLogById(id int) (*RequestLog, error) {
-	if !useRedisForRequestLog() {
-		memRequestLogMu.Lock()
-		defer memRequestLogMu.Unlock()
-		for _, log := range memRequestLogs {
-			if log.Id == id {
-				cp := *log
-				return &cp, nil
-			}
+	var rel string
+	reqLogMu.Lock()
+	for i := len(reqLogItems) - 1; i >= 0; i-- {
+		if reqLogItems[i].meta.Id == id {
+			rel = reqLogItems[i].rel
+			break
+		}
+	}
+	reqLogMu.Unlock()
+
+	if rel == "" {
+		return nil, errRequestLogNotFound
+	}
+	log, err := readRequestLogFile(rel)
+	if err != nil {
+		// 文件被外部删除属于正常淘汰结果，不必刷日志；其余（权限、损坏）需要留痕。
+		if !os.IsNotExist(err) {
+			common.SysError("failed to read request log body " + rel + ": " + err.Error())
 		}
 		return nil, errRequestLogNotFound
 	}
-
-	ctx := requestLogCtx()
-	idStr := strconv.Itoa(id)
-	metaStr, err := common.RequestLogRDB.Get(ctx, requestLogMetaKey+idStr).Result()
-	if err != nil {
-		return nil, err
-	}
-	var log RequestLog
-	if err := common.UnmarshalJsonStr(metaStr, &log); err != nil {
-		return nil, err
-	}
-	if bodyStr, bErr := common.RequestLogRDB.Get(ctx, requestLogBodyKey+idStr).Result(); bErr == nil {
-		var body requestLogBody
-		if common.UnmarshalJsonStr(bodyStr, &body) == nil {
-			log.RequestHeaders = body.RequestHeaders
-			log.RequestBody = body.RequestBody
-			log.ResponseHeaders = body.ResponseHeaders
-			log.ResponseBody = body.ResponseBody
-		}
-	}
-	return &log, nil
+	return log, nil
 }
 
-// DeleteOldRequestLog 删除 targetTimestamp 之前的请求日志，返回删除条数。
+// DeleteOldRequestLog 删除 targetTimestamp 之前的请求日志索引，返回删除条数。
+// 磁盘正文由清理协程回收，这里只触发一次立即扫描。
 func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
-	if !useRedisForRequestLog() {
-		memRequestLogMu.Lock()
-		defer memRequestLogMu.Unlock()
-		kept := make([]*RequestLog, 0, len(memRequestLogs))
-		var deleted int64
-		for _, log := range memRequestLogs {
-			if log.CreatedAt < targetTimestamp {
-				deleted++
-				continue
-			}
-			kept = append(kept, log)
-		}
-		memRequestLogs = kept
-		return deleted, nil
-	}
-
-	ctx := requestLogCtx()
-	allIds, err := common.RequestLogRDB.LRange(ctx, requestLogIndexKey, 0, -1).Result()
-	if err != nil {
-		return 0, err
-	}
-	all := getRequestLogMetaByIds(ctx, allIds)
+	reqLogMu.Lock()
+	kept := make([]requestLogIndexEntry, 0, len(reqLogItems))
 	var deleted int64
-	pipe := common.RequestLogRDB.Pipeline()
-	for _, log := range all {
-		if log.CreatedAt < targetTimestamp {
-			idStr := strconv.Itoa(log.Id)
-			pipe.LRem(ctx, requestLogIndexKey, 0, idStr)
-			pipe.Del(ctx, requestLogMetaKey+idStr)
-			pipe.Del(ctx, requestLogBodyKey+idStr)
+	for _, entry := range reqLogItems {
+		if entry.meta.CreatedAt < targetTimestamp {
 			deleted++
+			continue
 		}
+		kept = append(kept, entry)
 	}
+	reqLogItems = kept
+	reqLogMu.Unlock()
+
 	if deleted > 0 {
-		if _, err = pipe.Exec(ctx); err != nil {
-			return 0, err
-		}
+		TriggerRequestLogSweep()
 	}
 	return deleted, nil
 }
 
-// ClearAllRequestLogs 清除 Redis（或内存兜底）中存储的全部请求日志，返回清除条数。
-// 主路径：RENAME index → 批量删 meta/body（快）；兜底：SCAN 补删孤儿键。
+// ClearAllRequestLogs 清空请求日志索引，返回清除的条目数（不是文件数）。
+// 正文文件由清理协程异步回收。
 func ClearAllRequestLogs() (int64, error) {
-	if !useRedisForRequestLog() {
-		memRequestLogMu.Lock()
-		defer memRequestLogMu.Unlock()
-		cleared := int64(len(memRequestLogs))
-		memRequestLogs = nil
-		return cleared, nil
-	}
+	reqLogMu.Lock()
+	cleared := int64(len(reqLogItems))
+	reqLogItems = nil
+	reqLogMu.Unlock()
 
-	ctx := requestLogCtx()
-	const clearBatchSize = 1000
-	var cleared int64
-
-	batchDelete := func(keys []string) error {
-		pipe := common.RequestLogRDB.Pipeline()
-		pending := 0
-		for _, key := range keys {
-			pipe.Del(ctx, key)
-			pending++
-			cleared++
-			if pending >= clearBatchSize {
-				if _, err := pipe.Exec(ctx); err != nil {
-					return err
-				}
-				pipe = common.RequestLogRDB.Pipeline()
-				pending = 0
-			}
-		}
-		if pending > 0 {
-			_, err := pipe.Exec(ctx)
-			return err
-		}
-		return nil
-	}
-
-	// 主路径：RENAME index 原子切断，再按 id 批量删 meta/body。
-	// RENAME 失败说明 index 不存在，跳过主路径直接走 SCAN 兜底。
-	tmpKey := requestLogIndexKey + ":clearing"
-	if err := common.RequestLogRDB.Rename(ctx, requestLogIndexKey, tmpKey).Err(); err == nil {
-		ids, err := common.RequestLogRDB.LRange(ctx, tmpKey, 0, -1).Result()
-		if err == nil {
-			metaKeys := make([]string, len(ids))
-			bodyKeys := make([]string, len(ids))
-			for i, id := range ids {
-				metaKeys[i] = requestLogMetaKey + id
-				bodyKeys[i] = requestLogBodyKey + id
-			}
-			_ = batchDelete(metaKeys)
-			_ = batchDelete(bodyKeys)
-		}
-		common.RequestLogRDB.Del(ctx, tmpKey)
-	}
-
-	// 兜底：SCAN 扫出 index 未记录的孤儿键并删除。
-	// 正常情况下孤儿极少，SCAN 几乎空转；有残留时才有实际删除操作。
-	const scanCount = 100
-	scanAndDelete := func(pattern string) error {
-		var cursor uint64
-		for {
-			keys, next, err := common.RequestLogRDB.Scan(ctx, cursor, pattern, scanCount).Result()
-			if err != nil {
-				return err
-			}
-			if len(keys) > 0 {
-				if err := batchDelete(keys); err != nil {
-					return err
-				}
-			}
-			cursor = next
-			if cursor == 0 {
-				break
-			}
-		}
-		return nil
-	}
-
-	if err := scanAndDelete(requestLogMetaKey + "*"); err != nil {
-		return cleared, err
-	}
-	if err := scanAndDelete(requestLogBodyKey + "*"); err != nil {
-		return cleared, err
-	}
+	TriggerRequestLogSweep()
 	return cleared, nil
 }

@@ -29,7 +29,8 @@ export interface RequestLogItem {
   status_code: number
   ip: string
   request_id: string
-  use_time: number
+  /** 端到端耗时（毫秒）。注意与消费日志 logs.use_time（秒）单位不同。 */
+  use_time_ms: number
   is_stream: boolean
   request_body_size: number
   response_body_size: number

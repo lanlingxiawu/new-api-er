@@ -250,6 +250,11 @@ func main() {
 			common.SysLog("requests drained, flushing business stat buffers...")
 			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
 			model.ShutdownRelayLogFlush(operation_setting.GetRelayLogPipelineSetting().GetShutdownTimeout())
+
+			// 请求日志：先排空写队列让在途条目落盘并进索引，快照才是完整的。
+			// 预算 3 s——这些数据允许丢失，不值得再拖长关停。
+			middleware.DrainRequestLogQueue(3 * time.Second)
+			model.SnapshotRequestLogs()
 		},
 	)
 
@@ -398,6 +403,16 @@ func InitResources() error {
 	if err != nil {
 		return err
 	}
+
+	// 请求日志：环境变量必须在 godotenv.Load 之后读，因此这里显式初始化而不是靠包级变量
+	// （包级变量在 main() 之前求值，那时 .env 还没进环境，配置会被静默忽略）。
+	// 三步顺序不可颠倒：先恢复索引快照，再拉起写盘 worker 与磁盘清理——清理以内存索引
+	// 为唯一真值，若排在恢复之前，首轮就会把有效正文文件当孤儿删掉。
+	model.InitRequestLogStore()
+	model.RestoreRequestLogs()
+	middleware.StartRequestLogWriters()
+	model.StartRequestLogSweeper()
+	model.StartLegacyRequestLogCleanup()
 
 	perfmetrics.Init()
 

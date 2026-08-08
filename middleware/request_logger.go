@@ -6,60 +6,169 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
-// requestLogInflight bounds the number of concurrent async request-log writes.
+// 请求日志的写入侧。
 //
-// Main-chain impact (Rule 0): this middleware runs on every relay request. Each
-// async write pins full request+response body snapshots (up to
-// 2*RequestLogMaxBodyKB) in memory until it finishes. The RequestLogRDB writes
-// (recordRequestLogRedis: Incr + 3 pipelined ops) block on that client's
-// connection pool (dedicated db1, pool size REDIS_POOL_SIZE, default 10). The
-// previous unbounded `gopool.Go` per request therefore let goroutines + heap
-// explode (measured: 171k goroutines / 1.5 GB @ c=500) once the pool saturated.
+// Main-chain impact (Rule 0): 本中间件挂在每一条 relay 路由上。relay goroutine 只做
+// "组装结构体 + 一次非阻塞 channel 发送"，落盘与索引登记全部交给固定数量的常驻
+// worker。worker 数即稳态峰值文件句柄数，与 RPM 完全解耦——早期"每条一个 goroutine"
+// 的模型在磁盘存储下会让 fd 与并发同阶（实测 c=500 时 goroutine 曾涨到 17 万）。
 //
-// Request logging is best-effort OBSERVABILITY (not billing/authoritative), so
-// under overload we DROP rather than grow without bound — graceful degradation
-// (Rule 8). The dispatch below is O(1) and never blocks the relay goroutine.
-// Cap is REQUEST_LOG_MAX_INFLIGHT (default 1000 => memory bounded to
-// ~cap*2*RequestLogMaxBodyKB).
-var (
-	requestLogInflight = make(chan struct{}, requestLogMaxInflight())
-	requestLogDropped  atomic.Int64
-)
-
-func requestLogMaxInflight() int {
-	n := common.GetEnvOrDefault("REQUEST_LOG_MAX_INFLIGHT", 1000)
-	if n < 1 {
-		n = 1
-	}
-	return n
+// 请求日志是尽力而为的可观测性数据（不参与计费/审计），因此过载时**丢弃**而不是
+// 阻塞或无界增长（Rule 8 优雅降级）。
+type requestLogTask struct {
+	entry *model.RequestLog
+	// resolveUserId > 0 表示同步阶段拿不到用户名，需要 worker 侧查缓存补齐。
+	// 这一步刻意不在 relay goroutine 上做：缓存未命中会退化成一次 DB 查询。
+	resolveUserId int
 }
 
-// enqueueRequestLog fires the async request-log write with a bounded in-flight
-// cap. When the cap is reached it DROPS the entry (fire-and-forget) instead of
-// blocking the relay goroutine or spawning an unbounded goroutine, keeping
-// goroutine count and heap bounded under load.
-func enqueueRequestLog(entry *model.RequestLog) {
+type requestLogQueueHandle struct {
+	ch   chan requestLogTask
+	done chan struct{}
+	// pending 在投递成功时 +1、worker 处理完 -1，覆盖"已出队但尚未写完"的窗口。
+	// 不能改成 worker 收到任务后才 +1：出队与自增之间存在空隙，排空逻辑会在那一刻
+	// 看到"队列空且无在途"而提前返回，导致关停快照漏掉最后几条。
+	pending atomic.Int64
+	// workers 让 StopRequestLogWriters 能等 worker 真正退出后再清点残留任务。
+	workers sync.WaitGroup
+}
+
+var (
+	requestLogQueue   atomic.Pointer[requestLogQueueHandle]
+	requestLogDropped atomic.Int64
+)
+
+// StartRequestLogWriters 构建写队列并拉起写盘 worker。
+// 必须在 model.InitRequestLogStore() 之后调用：队列深度与 worker 数由它从环境变量解析。
+func StartRequestLogWriters() {
+	StopRequestLogWriters()
+	handle := &requestLogQueueHandle{
+		ch:   make(chan requestLogTask, model.RequestLogQueueSize()),
+		done: make(chan struct{}),
+	}
+	handle.workers.Add(model.RequestLogWriterCount())
+	for i := 0; i < model.RequestLogWriterCount(); i++ {
+		go requestLogWriterLoop(handle)
+	}
+	requestLogQueue.Store(handle)
+}
+
+// StopRequestLogWriters 停止 worker。队列 channel 永不关闭，保证并发的
+// enqueueRequestLog 不会向已关闭的 channel 发送而 panic。
+func StopRequestLogWriters() {
+	handle := requestLogQueue.Swap(nil)
+	if handle == nil {
+		return
+	}
+	close(handle.done)
+	handle.workers.Wait()
+	drainResidualRequestLogTasks(handle)
+}
+
+// drainResidualRequestLogTasks 清点 worker 退出后仍留在队列里的任务。
+// 这些任务永远不会被写盘——可能是 enqueueRequestLog 取出 handle 之后才投递进来的。
+// 记进丢弃计数，而不是让它们连同 pending 一起被无声吞掉。
+func drainResidualRequestLogTasks(handle *requestLogQueueHandle) {
+	for {
+		select {
+		case <-handle.ch:
+			handle.pending.Add(-1)
+			requestLogDropped.Add(1)
+		default:
+			return
+		}
+	}
+}
+
+// DrainRequestLogQueue 在关停时等待队列排空，让在途条目落盘并进索引，
+// 随后的索引快照才是完整的。返回未能处理的剩余条数。
+func DrainRequestLogQueue(timeout time.Duration) int {
+	handle := requestLogQueue.Load()
+	if handle == nil {
+		return 0
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := handle.pending.Load()
+		if pending <= 0 {
+			return 0
+		}
+		if !time.Now().Before(deadline) {
+			common.SysLog(fmt.Sprintf("request log drain timeout, %d entries dropped", pending))
+			return int(pending)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func requestLogWriterLoop(handle *requestLogQueueHandle) {
+	defer handle.workers.Done()
+	process := func(task requestLogTask) {
+		defer handle.pending.Add(-1)
+		runRequestLogTask(task)
+	}
+	for {
+		select {
+		case task := <-handle.ch:
+			process(task)
+		case <-handle.done:
+			// 退出前尽量把队列里剩下的处理完。
+			for {
+				select {
+				case task := <-handle.ch:
+					process(task)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+func runRequestLogTask(task requestLogTask) {
+	defer func() {
+		if r := recover(); r != nil {
+			common.SysError(fmt.Sprintf("request log writer panic recovered: %v", r))
+		}
+	}()
+	if task.entry == nil {
+		return
+	}
+	if task.resolveUserId > 0 {
+		task.entry.Username = resolveRequestLogUsername(task.resolveUserId)
+	}
+	if !requestLogUsernameMatches(task.entry.Username) {
+		return
+	}
+	model.RecordRequestLog(task.entry)
+}
+
+// enqueueRequestLog 非阻塞投递。队列满即丢弃并限流告警——绝不阻塞 relay goroutine。
+func enqueueRequestLog(task requestLogTask) {
+	handle := requestLogQueue.Load()
+	if handle == nil {
+		return
+	}
+	// 先记账再投递，保证 pending 永远不低于真实的未完成量。
+	handle.pending.Add(1)
 	select {
-	case requestLogInflight <- struct{}{}:
-		gopool.Go(func() {
-			defer func() { <-requestLogInflight }()
-			model.RecordRequestLog(entry)
-		})
+	case handle.ch <- task:
 	default:
-		// In-flight cap reached: drop this log (best-effort observability).
+		handle.pending.Add(-1)
 		if dropped := requestLogDropped.Add(1); dropped == 1 || dropped%1000 == 0 {
 			common.SysError(fmt.Sprintf(
-				"request log dropped under overload: in-flight cap %d reached, total dropped=%d",
-				cap(requestLogInflight), dropped))
+				"request log dropped under overload: queue depth %d reached, total dropped=%d",
+				cap(handle.ch), dropped))
 		}
 	}
 }
@@ -111,13 +220,14 @@ func RequestResponseLogger() gin.HandlerFunc {
 			return
 		}
 
+		started := time.Now()
 		maxBytes := common.RequestLogMaxBodyKB * 1024
 		if maxBytes <= 0 {
 			maxBytes = 64 * 1024
 		}
 
 		// 捕获下游请求头与请求体快照（请求体读取后会复位，供后续 relay 复用）
-		requestHeaders := headersToString(http.Header(c.Request.Header))
+		requestHeaders := headersToString(http.Header(c.Request.Header), maxBytes)
 		requestBody, reqTruncated, reqBodySize := captureRequestBody(c, maxBytes)
 
 		// 包装 writer 以捕获返回体
@@ -128,55 +238,100 @@ func RequestResponseLogger() gin.HandlerFunc {
 		}
 		c.Writer = rbw
 
+		// 用 defer 而不是 c.Next() 之后的顺序代码：下游 panic 时栈展开会跳过顺序代码，
+		// 而 panic 请求恰恰是最需要看请求体的。这里不 recover，panic 继续上交给顶层
+		// Recovery，原始堆栈不受影响；completed 用来区分正常返回与栈展开。
+		completed := false
+		defer func() {
+			recordRequestLogEntry(c, requestLogCapture{
+				started:        started,
+				requestHeaders: requestHeaders,
+				requestBody:    requestBody,
+				reqTruncated:   reqTruncated,
+				reqBodySize:    reqBodySize,
+				maxBytes:       maxBytes,
+				writer:         rbw,
+				completed:      completed,
+			})
+		}()
+
 		c.Next()
-
-		// 用户名过滤：RequestLogUsername 为空记录全部，否则仅记录匹配的登录用户名
-		// （比较的是账号的登录用户名 username，不是显示名/邮箱）。大小写不敏感、去除首尾空白。
-		username, matched := matchRequestLogUsername(c)
-		if !matched {
-			return
-		}
-
-		entry := &model.RequestLog{
-			CreatedAt:        common.GetTimestamp(),
-			UserId:           c.GetInt("id"),
-			Username:         username,
-			TokenName:        c.GetString("token_name"),
-			ModelName:        c.GetString("original_model"),
-			ChannelId:        c.GetInt("channel_id"),
-			Method:           c.Request.Method,
-			Url:              truncateString(c.Request.URL.RequestURI(), 2000),
-			StatusCode:       c.Writer.Status(),
-			Ip:               c.ClientIP(),
-			RequestId:        c.GetString(common.RequestIdKey),
-			IsStream:         c.GetBool("is_stream"),
-			RequestBodySize:  reqBodySize,
-			ResponseBodySize: rbw.totalSize,
-			RequestHeaders:   requestHeaders,
-			RequestBody:      appendTruncatedMark(requestBody, reqTruncated),
-			ResponseHeaders:  headersToString(http.Header(rbw.Header())),
-			ResponseBody:     appendTruncatedMark(captureResponseBody(c, rbw), rbw.truncated),
-		}
-
-		enqueueRequestLog(entry)
+		completed = true
 	}
 }
 
-func matchRequestLogUsername(c *gin.Context) (string, bool) {
-	username := getRequestLogUsername(c)
+type requestLogCapture struct {
+	started        time.Time
+	requestHeaders string
+	requestBody    string
+	reqTruncated   bool
+	reqBodySize    int64
+	maxBytes       int
+	writer         *responseBodyWriter
+	completed      bool
+}
+
+func recordRequestLogEntry(c *gin.Context, snap requestLogCapture) {
+	defer func() {
+		if r := recover(); r != nil {
+			common.SysError(fmt.Sprintf("request log capture panic recovered: %v", r))
+		}
+	}()
+
+	// 用户名过滤：RequestLogUsername 为空记录全部，否则仅记录匹配的登录用户名
+	// （比较的是账号的登录用户名 username，不是显示名/邮箱）。大小写不敏感、去除首尾空白。
+	username := strings.TrimSpace(c.GetString("username"))
+	userId := c.GetInt("id")
+	resolveUserId := 0
+	if username == "" && userId > 0 {
+		// 鉴权中间件没往 context 写 username 的少数路径：推迟到 worker 里查缓存。
+		resolveUserId = userId
+	} else if !requestLogUsernameMatches(username) {
+		return
+	}
+
+	status := c.Writer.Status()
+	if !snap.completed {
+		// 栈展开中：顶层 Recovery 还没来得及写 500，这里按最终结果记录。
+		status = http.StatusInternalServerError
+	}
+
+	entry := &model.RequestLog{
+		CreatedAt:        common.GetTimestamp(),
+		UserId:           userId,
+		Username:         username,
+		TokenName:        c.GetString("token_name"),
+		ModelName:        c.GetString("original_model"),
+		ChannelId:        c.GetInt("channel_id"),
+		Method:           c.Request.Method,
+		Url:              truncateString(c.Request.URL.RequestURI(), 2000),
+		StatusCode:       status,
+		Ip:               c.ClientIP(),
+		RequestId:        c.GetString(common.RequestIdKey),
+		UseTimeMs:        time.Since(snap.started).Milliseconds(),
+		IsStream:         c.GetBool("is_stream"),
+		RequestBodySize:  snap.reqBodySize,
+		ResponseBodySize: snap.writer.totalSize,
+		RequestHeaders:   snap.requestHeaders,
+		RequestBody:      appendTruncatedMark(snap.requestBody, snap.reqTruncated),
+		ResponseHeaders:  headersToString(http.Header(snap.writer.Header()), snap.maxBytes),
+		ResponseBody:     appendTruncatedMark(captureResponseBody(c, snap.writer), snap.writer.truncated),
+	}
+
+	enqueueRequestLog(requestLogTask{entry: entry, resolveUserId: resolveUserId})
+}
+
+// requestLogUsernameMatches 判定用户名是否命中过滤器。纯函数，不触碰缓存/DB。
+func requestLogUsernameMatches(username string) bool {
 	filterUser := strings.TrimSpace(common.RequestLogUsername)
 	if filterUser == "" {
-		return username, true
+		return true
 	}
-	return username, strings.EqualFold(username, filterUser)
+	return strings.EqualFold(strings.TrimSpace(username), filterUser)
 }
 
-func getRequestLogUsername(c *gin.Context) string {
-	username := strings.TrimSpace(c.GetString("username"))
-	if username != "" {
-		return username
-	}
-	userId := c.GetInt("id")
+// resolveRequestLogUsername 在 worker goroutine 上按用户 id 补齐用户名。
+func resolveRequestLogUsername(userId int) string {
 	if userId <= 0 {
 		return ""
 	}
@@ -251,13 +406,19 @@ func isTextualContentType(contentType string) bool {
 		strings.Contains(ct, "xml")
 }
 
-func headersToString(h http.Header) string {
+// headersToString 序列化头部，并按与正文相同的上限截断。
+// 头部原本不受限，与"每个字段都截断到该大小"的设置文案不符，也让单条日志的内存
+// 上限无法估算（恶意的超大 Cookie/自定义头会撑爆）。
+func headersToString(h http.Header, limit int) string {
 	if len(h) == 0 {
 		return ""
 	}
 	str, err := common.Marshal(h)
 	if err != nil {
 		return ""
+	}
+	if limit > 0 && len(str) > limit {
+		return appendTruncatedMark(string(str[:limit]), true)
 	}
 	return string(str)
 }

@@ -51,6 +51,12 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
+function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return '-'
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(2)} s`
+}
+
 function statusVariant(
   status: number
 ): 'default' | 'secondary' | 'destructive' {
@@ -69,7 +75,7 @@ export function RequestLogs() {
   const [draft, setDraft] = useState<RequestLogFilters>({})
   const [detailId, setDetailId] = useState<number | null>(null)
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError } = useQuery({
     queryKey: [
       'request-logs',
       pagination.pageIndex,
@@ -140,6 +146,15 @@ export function RequestLogs() {
                 {t('Stream')}
               </Badge>
             )}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'use_time_ms',
+        header: t('Duration'),
+        cell: ({ row }) => (
+          <span className='whitespace-nowrap text-xs'>
+            {formatDuration(row.original.use_time_ms)}
           </span>
         ),
       },
@@ -250,10 +265,16 @@ export function RequestLogs() {
           columns={columns}
           isLoading={isLoading}
           isFetching={isFetching}
-          emptyTitle={t('No Logs Found')}
-          emptyDescription={t(
-            'No request logs available. Logs will appear here once relay requests are made.'
-          )}
+          emptyTitle={
+            isError ? t('Failed to load request logs') : t('No Logs Found')
+          }
+          emptyDescription={
+            isError
+              ? t('Please retry. If the problem persists, check the server logs.')
+              : t(
+                  'No request logs available. Logs will appear here once relay requests are made.'
+                )
+          }
           toolbar={toolbar}
           hideMobile
           tableHeaderClassName='bg-muted/30 sticky top-0 z-10'

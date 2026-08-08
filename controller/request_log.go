@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"net/http"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -36,15 +36,14 @@ func GetAllRequestLogs(c *gin.Context) {
 func GetRequestLogDetail(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "invalid id",
-		})
+		common.ApiErrorI18n(c, i18n.MsgInvalidId)
 		return
 	}
 	log, err := model.GetRequestLogById(id)
 	if err != nil {
-		common.ApiError(c, err)
+		// 索引被淘汰或正文文件已被清理都归为"不可用"。底层错误不外泄，
+		// 也不把 go-redis / os 的错误串直接当成用户可读信息。
+		common.ApiErrorI18n(c, i18n.MsgRequestLogNotFound)
 		return
 	}
 	common.ApiSuccess(c, log)
@@ -54,10 +53,7 @@ func GetRequestLogDetail(c *gin.Context) {
 func DeleteHistoryRequestLogs(c *gin.Context) {
 	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)
 	if targetTimestamp == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "target_timestamp is required",
-		})
+		common.ApiErrorI18n(c, i18n.MsgRequestLogTimestampRequired)
 		return
 	}
 	count, err := model.DeleteOldRequestLog(targetTimestamp)
@@ -68,7 +64,8 @@ func DeleteHistoryRequestLogs(c *gin.Context) {
 	common.ApiSuccess(c, count)
 }
 
-// ClearAllRequestLogs 清除存储的全部请求日志（仅超级管理员）。
+// ClearAllRequestLogs 清除存储的全部请求日志索引（仅超级管理员）。
+// 返回被清除的条目数；对应的正文文件由后台清理协程回收。
 func ClearAllRequestLogs(c *gin.Context) {
 	count, err := model.ClearAllRequestLogs()
 	if err != nil {

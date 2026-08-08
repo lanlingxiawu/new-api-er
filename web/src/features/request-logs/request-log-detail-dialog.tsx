@@ -101,11 +101,46 @@ function Block({ title, content }: { title: string; content?: string }) {
 
 export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
   const { t } = useTranslation()
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['request-log-detail', id],
     queryFn: () => getRequestLogDetail(id as number),
     enabled: open && id !== null,
   })
+
+  const renderBody = () => {
+    if (isLoading) {
+      return (
+        <div className='text-muted-foreground flex flex-1 items-center justify-center gap-2 py-12'>
+          <Loader2 className='h-5 w-5 animate-spin' />
+          {t('Loading...')}
+        </div>
+      )
+    }
+    if (isError) {
+      // 后端已经把日志被清理之类的原因翻译好了，直接展示比通用文案有用
+      return (
+        <div className='text-destructive flex flex-1 items-center justify-center px-5 py-12 text-center'>
+          {error instanceof Error && error.message
+            ? error.message
+            : t('Failed to load')}
+        </div>
+      )
+    }
+    return (
+      <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4'>
+        <Block title={t('Request Headers')} content={data?.request_headers} />
+        <Block
+          title={`${t('Request Body')} (${formatBytes(data?.request_body_size)})`}
+          content={data?.request_body}
+        />
+        <Block title={t('Response Headers')} content={data?.response_headers} />
+        <Block
+          title={`${t('Response Body')} (${formatBytes(data?.response_body_size)})`}
+          content={data?.response_body}
+        />
+      </div>
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -113,38 +148,10 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
         <DialogHeader className='space-y-1 border-b px-5 py-4 pr-12'>
           <DialogTitle>{t('Request Log Detail')}</DialogTitle>
           <DialogDescription className='font-mono text-xs break-all'>
-            {data?.request_id ? `Request ID: ${data.request_id}` : ' '}
+            {data?.request_id ? `Request ID: ${data.request_id}` : ' '}
           </DialogDescription>
         </DialogHeader>
-        {isLoading ? (
-          <div className='text-muted-foreground flex flex-1 items-center justify-center gap-2 py-12'>
-            <Loader2 className='h-5 w-5 animate-spin' />
-            {t('Loading...')}
-          </div>
-        ) : isError ? (
-          <div className='text-destructive flex flex-1 items-center justify-center py-12 text-center'>
-            {t('Failed to load')}
-          </div>
-        ) : (
-          <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4'>
-            <Block
-              title={t('Request Headers')}
-              content={data?.request_headers}
-            />
-            <Block
-              title={`${t('Request Body')} (${formatBytes(data?.request_body_size)})`}
-              content={data?.request_body}
-            />
-            <Block
-              title={t('Response Headers')}
-              content={data?.response_headers}
-            />
-            <Block
-              title={`${t('Response Body')} (${formatBytes(data?.response_body_size)})`}
-              content={data?.response_body}
-            />
-          </div>
-        )}
+        {renderBody()}
       </DialogContent>
     </Dialog>
   )

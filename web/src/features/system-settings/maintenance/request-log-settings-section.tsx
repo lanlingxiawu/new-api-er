@@ -173,7 +173,12 @@ export function RequestLogSettingsSection({
                   <FormLabel>{t('Enable Request Log')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'Record downstream request headers/body and the response headers/body returned to the client for relay requests. Increases database writes significantly.'
+                      'Record downstream request headers/body and the response headers/body of relay requests. Each request writes one JSON file under the relay_log directory on this machine.'
+                    )}
+                  </FormDescription>
+                  <FormDescription className='text-destructive'>
+                    {t(
+                      'Request headers are recorded verbatim, including credentials such as Authorization. Keep this off unless you are actively troubleshooting.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -263,7 +268,7 @@ export function RequestLogSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'When request logs exceed the max count, older logs are purged and only the newest min count is kept (logs are stored in Redis only).'
+                    'When request logs exceed the max count, older entries are dropped and only the newest min count is kept. The list index lives in memory and body files live in the relay_log directory; without Redis the index is lost on restart.'
                   )}
                 </FormDescription>
                 <FormMessage />
@@ -308,7 +313,7 @@ export function RequestLogSettingsSection({
               </h4>
               <p className='text-muted-foreground text-sm'>
                 {t(
-                  'Remove all request logs stored in Redis. This action cannot be undone.'
+                  'Clear the in-memory request log index. The matching body files are removed by the background sweep.'
                 )}
               </p>
             </div>
@@ -332,7 +337,9 @@ export function RequestLogSettingsSection({
               {t('Confirm clearing request logs')}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {t('This will permanently remove all request logs stored in Redis.')}{' '}
+              {t(
+                'This will clear every request log entry. Their body files are removed by the background sweep.'
+              )}{' '}
               {t('This action cannot be undone.')}
             </AlertDialogDescription>
           </AlertDialogHeader>

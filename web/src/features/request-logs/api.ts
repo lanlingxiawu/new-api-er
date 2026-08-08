@@ -47,9 +47,12 @@ export async function getRequestLogs(
   const res = await api.get<ApiResponse<RequestLogsPage>>(
     `/api/request-log/?${query}`
   )
-  return (
-    res.data.data ?? { page, page_size: pageSize, total: 0, items: [] }
-  )
+  // 后端的业务错误走 HTTP 200 + success:false，不抛也不会进 react-query 的 isError；
+  // 不显式判断就会把失败渲染成"暂无日志"，让人以为真的没有数据。
+  if (res.data.success === false) {
+    throw new Error(res.data.message)
+  }
+  return res.data.data ?? { page, page_size: pageSize, total: 0, items: [] }
 }
 
 export async function getRequestLogDetail(
@@ -58,5 +61,8 @@ export async function getRequestLogDetail(
   const res = await api.get<ApiResponse<RequestLogItem>>(
     `/api/request-log/${id}`
   )
+  if (res.data.success === false) {
+    throw new Error(res.data.message)
+  }
   return res.data.data
 }

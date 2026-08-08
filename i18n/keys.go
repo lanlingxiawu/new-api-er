@@ -503,3 +503,9 @@ const (
 	MsgLogExportColAuditStatus           = "log_export.col.audit_status"
 	MsgLogExportColAuditSuccess          = "log_export.col.audit_success"
 )
+
+// Request log (relay 请求日志)
+const (
+	MsgRequestLogNotFound          = "request_log.not_found"
+	MsgRequestLogTimestampRequired = "request_log.timestamp_required"
+)

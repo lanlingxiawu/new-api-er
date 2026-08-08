@@ -1,6 +1,11 @@
 package model
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,28 +14,37 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// request_log.go stores relay request logs in Redis (primary) or an in-process
-// memory slice (fallback when Redis is disabled). No DB is involved. Tests must
-// isolate the shared global memory slice / Redis keys; both are cleaned up.
+// request_log.go 现在把列表字段放进程内存索引、正文放本机磁盘，不再走数据库或
+// Redis（Redis 只在进程首尾做一次索引快照）。测试必须隔离共享的全局索引与目录。
 // ---------------------------------------------------------------------------
 
-// requestLogResetMemory clears the shared in-memory slice + seq so a test starts
-// from a known-empty state and does not leak rows into sibling tests.
-func requestLogResetMemory(t *testing.T) {
+// requestLogTestStore 把正文根目录指到 t.TempDir()，并关闭后台清理协程
+// （清理由测试显式调用 SweepRequestLogFiles 触发，避免定时器带来的不确定性）。
+func requestLogTestStore(t *testing.T) string {
 	t.Helper()
-	memRequestLogMu.Lock()
-	memRequestLogs = nil
-	memRequestSeq = 0
-	memRequestLogMu.Unlock()
-	t.Cleanup(func() {
-		memRequestLogMu.Lock()
-		memRequestLogs = nil
-		memRequestSeq = 0
-		memRequestLogMu.Unlock()
-	})
+	dir := t.TempDir()
+	t.Setenv("REQUEST_LOG_DIR", dir)
+	t.Setenv("REQUEST_LOG_SWEEP_INTERVAL_SEC", "0")
+	InitRequestLogStore()
+	require.True(t, RequestLogStoreReady())
+	requestLogResetIndex(t)
+	return dir
 }
 
-// requestLogWithLimits temporarily overrides the global min/max cleanup limits.
+// requestLogResetIndex 清空共享索引与自增序号，前后各一次。
+func requestLogResetIndex(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		reqLogMu.Lock()
+		reqLogItems = nil
+		reqLogMu.Unlock()
+		atomic.StoreInt64(&reqLogSeq, 0)
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// requestLogWithLimits 临时覆盖全局的 min/max 清理阈值。
 func requestLogWithLimits(t *testing.T, minC, maxC int) {
 	t.Helper()
 	prevMin, prevMax := common.RequestLogMinCount, common.RequestLogMaxCount
@@ -42,8 +56,31 @@ func requestLogWithLimits(t *testing.T, minC, maxC int) {
 	})
 }
 
+func requestLogIndexLen() int {
+	reqLogMu.Lock()
+	defer reqLogMu.Unlock()
+	return len(reqLogItems)
+}
+
+// countRequestLogFiles 统计根目录下所有 .json 正文文件。
+func countRequestLogFiles(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(info.Name()) == ".json" {
+			count++
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return count
+}
+
 // ---------------------------------------------------------------------------
-// Pure logic: effectiveRequestLogLimits normalisation
+// 纯逻辑：effectiveRequestLogLimits 归一化
 // ---------------------------------------------------------------------------
 
 func TestEffectiveRequestLogLimits(t *testing.T) {
@@ -52,17 +89,12 @@ func TestEffectiveRequestLogLimits(t *testing.T) {
 		minC, maxC       int
 		wantMax, wantMin int
 	}{
-		// normal, well-ordered config passes through unchanged
 		{"normal", 1000, 5000, 5000, 1000},
-		// maxCount <= 0 -> default max, min(0) stays 0 (< default max)
 		{"max zero -> default", 0, 0, defaultRequestLogMaxCount, 0},
 		{"max negative -> default", 10, -5, defaultRequestLogMaxCount, 10},
-		// minCount < 0 -> clamped to 0
 		{"min negative -> 0", -100, 200, 200, 0},
-		// minCount >= maxCount -> retain half of max
 		{"min == max", 200, 200, 200, 100},
 		{"min > max", 400, 200, 200, 100},
-		// boundary: min just below max stays
 		{"min just below max", 199, 200, 200, 199},
 	}
 	for _, c := range cases {
@@ -71,7 +103,7 @@ func TestEffectiveRequestLogLimits(t *testing.T) {
 			gotMax, gotMin := effectiveRequestLogLimits()
 			assert.Equal(t, c.wantMax, gotMax, "maxCount")
 			assert.Equal(t, c.wantMin, gotMin, "minCount")
-			// invariant the function guarantees: 0 <= min < max
+			// 函数保证的不变量：0 <= min < max
 			assert.GreaterOrEqual(t, gotMin, 0)
 			assert.Less(t, gotMin, gotMax)
 		})
@@ -79,7 +111,7 @@ func TestEffectiveRequestLogLimits(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Pure logic: matchRequestLog filter matrix
+// 纯逻辑：matchRequestLog 过滤矩阵
 // ---------------------------------------------------------------------------
 
 func TestMatchRequestLog(t *testing.T) {
@@ -91,27 +123,26 @@ func TestMatchRequestLog(t *testing.T) {
 		StatusCode: 200,
 		CreatedAt:  1000,
 	}
-	// no filters -> match
 	assert.True(t, matchRequestLog(base, "", "", 0, "", 0, 0, 0))
-	// each filter matches its own value
 	assert.True(t, matchRequestLog(base, "alice", "gpt-4o", 7, "req-1", 200, 500, 1500))
-	// each filter independently rejects a mismatch (condition coverage)
+	// 每个条件独立否决（条件覆盖）
 	assert.False(t, matchRequestLog(base, "bob", "", 0, "", 0, 0, 0))
 	assert.False(t, matchRequestLog(base, "", "gpt-3", 0, "", 0, 0, 0))
 	assert.False(t, matchRequestLog(base, "", "", 8, "", 0, 0, 0))
 	assert.False(t, matchRequestLog(base, "", "", 0, "req-2", 0, 0, 0))
 	assert.False(t, matchRequestLog(base, "", "", 0, "", 500, 0, 0))
-	// time range boundaries: created_at=1000
-	assert.False(t, matchRequestLog(base, "", "", 0, "", 0, 1001, 0)) // start after
-	assert.True(t, matchRequestLog(base, "", "", 0, "", 0, 1000, 0))  // start == createdAt
-	assert.False(t, matchRequestLog(base, "", "", 0, "", 0, 0, 999))  // end before
-	assert.True(t, matchRequestLog(base, "", "", 0, "", 0, 0, 1000))  // end == createdAt
+	// 时间边界：created_at = 1000
+	assert.False(t, matchRequestLog(base, "", "", 0, "", 0, 1001, 0))
+	assert.True(t, matchRequestLog(base, "", "", 0, "", 0, 1000, 0))
+	assert.False(t, matchRequestLog(base, "", "", 0, "", 0, 0, 999))
+	assert.True(t, matchRequestLog(base, "", "", 0, "", 0, 0, 1000))
 }
 
 func TestCloneRequestLogMeta(t *testing.T) {
 	log := &RequestLog{
 		Id:              5,
 		Username:        "u",
+		UseTimeMs:       42,
 		RequestHeaders:  "h",
 		RequestBody:     "b",
 		ResponseHeaders: "rh",
@@ -120,288 +151,330 @@ func TestCloneRequestLogMeta(t *testing.T) {
 	m := cloneRequestLogMeta(log)
 	assert.Equal(t, 5, m.Id)
 	assert.Equal(t, "u", m.Username)
-	// big fields stripped in the meta copy
+	assert.EqualValues(t, 42, m.UseTimeMs)
+	// 元数据副本剥掉大字段
 	assert.Empty(t, m.RequestHeaders)
 	assert.Empty(t, m.RequestBody)
 	assert.Empty(t, m.ResponseHeaders)
 	assert.Empty(t, m.ResponseBody)
-	// original untouched
+	// 原对象不受影响
 	assert.Equal(t, "h", log.RequestHeaders)
 }
 
 // ---------------------------------------------------------------------------
-// Memory-backed path (Redis disabled)
+// 写入：先落盘、成功后才进索引
 // ---------------------------------------------------------------------------
 
-func TestRecordRequestLog_Memory(t *testing.T) {
-	require.False(t, common.RedisEnabled)
-	requestLogResetMemory(t)
+func TestRecordRequestLog_WritesFileThenIndexes(t *testing.T) {
+	root := requestLogTestStore(t)
+	requestLogWithLimits(t, 1000, 5000)
 
-	// nil guard is a no-op
+	// nil 直接返回
 	RecordRequestLog(nil)
-	memRequestLogMu.Lock()
-	assert.Empty(t, memRequestLogs)
-	memRequestLogMu.Unlock()
+	assert.Zero(t, requestLogIndexLen())
 
-	// CreatedAt=0 gets defaulted; Id assigned; newest at head
-	l1 := &RequestLog{Username: "a"}
-	RecordRequestLog(l1)
-	assert.Equal(t, 1, l1.Id)
-	assert.NotZero(t, l1.CreatedAt)
-
-	l2 := &RequestLog{Username: "b", CreatedAt: 42}
-	RecordRequestLog(l2)
-	assert.Equal(t, 2, l2.Id)
-	assert.EqualValues(t, 42, l2.CreatedAt)
-
-	got, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, total)
-	require.Len(t, got, 2)
-	assert.Equal(t, "b", got[0].Username) // newest first
-}
-
-func TestRecordRequestLogMemory_Trim(t *testing.T) {
-	requestLogResetMemory(t)
-	requestLogWithLimits(t, 1, 3) // min=1, max=3
-
-	for i := 0; i < 3; i++ {
-		RecordRequestLog(&RequestLog{Username: "u"})
-	}
-	memRequestLogMu.Lock()
-	assert.Len(t, memRequestLogs, 3) // exactly at max, no trim yet
-	memRequestLogMu.Unlock()
-
-	// 4th record exceeds max -> trim to min (1)
-	RecordRequestLog(&RequestLog{Username: "u"})
-	memRequestLogMu.Lock()
-	assert.Len(t, memRequestLogs, 1)
-	memRequestLogMu.Unlock()
-}
-
-func TestGetAllRequestLogs_Memory_FilterAndPaging(t *testing.T) {
-	requestLogResetMemory(t)
-	requestLogWithLimits(t, 1000, 5000)
-
-	RecordRequestLog(&RequestLog{Username: "alice", ModelName: "m1", CreatedAt: 100})
-	RecordRequestLog(&RequestLog{Username: "bob", ModelName: "m2", CreatedAt: 200})
-	RecordRequestLog(&RequestLog{Username: "alice", ModelName: "m1", CreatedAt: 300})
-
-	// filter by username -> 2 rows, big fields stripped (clone path)
-	got, total, err := GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, total)
-	assert.Len(t, got, 2)
-
-	// pagination on filtered set: page size 1
-	page1, total, err := GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 0, 1)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, total)
-	require.Len(t, page1, 1)
-	page2, _, err := GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 1, 1)
-	require.NoError(t, err)
-	require.Len(t, page2, 1)
-	assert.NotEqual(t, page1[0].CreatedAt, page2[0].CreatedAt)
-
-	// startIdx beyond range -> empty, total still counted
-	got, total, err = GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 99, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, total)
-	assert.Empty(t, got)
-
-	// num <= 0 -> empty slice
-	got, _, err = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 0)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
-func TestGetRequestLogById_Memory(t *testing.T) {
-	requestLogResetMemory(t)
-	l := &RequestLog{Username: "z", RequestBody: "body"}
-	RecordRequestLog(l)
-
-	got, err := GetRequestLogById(l.Id)
-	require.NoError(t, err)
-	assert.Equal(t, "z", got.Username)
-	assert.Equal(t, "body", got.RequestBody) // full record includes big fields
-
-	_, err = GetRequestLogById(999999)
-	assert.ErrorIs(t, err, errRequestLogNotFound)
-}
-
-func TestDeleteOldRequestLog_Memory(t *testing.T) {
-	requestLogResetMemory(t)
-	RecordRequestLog(&RequestLog{Username: "old", CreatedAt: 100})
-	RecordRequestLog(&RequestLog{Username: "new", CreatedAt: 500})
-
-	deleted, err := DeleteOldRequestLog(300)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, deleted)
-
-	_, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, total)
-}
-
-func TestClearAllRequestLogs_Memory(t *testing.T) {
-	requestLogResetMemory(t)
-	RecordRequestLog(&RequestLog{Username: "a"})
-	RecordRequestLog(&RequestLog{Username: "b"})
-
-	cleared, err := ClearAllRequestLogs()
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, cleared)
-
-	_, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 0, total)
-}
-
-// ---------------------------------------------------------------------------
-// Redis-backed path. Uses a DISTINCT key namespace (request_log:*) from the
-// relay token cache, so it cannot collide with the main relay chain.
-// Each test clears the namespace before and after.
-// ---------------------------------------------------------------------------
-
-func requestLogClearRedis(t *testing.T) {
-	t.Helper()
-	_, _ = ClearAllRequestLogs()
-	t.Cleanup(func() { _, _ = ClearAllRequestLogs() })
-}
-
-func TestRequestLog_RedisRoundTrip(t *testing.T) {
-	enableRedis(t)
-	require.True(t, useRedisForRequestLog())
-	requestLogClearRedis(t)
-	requestLogWithLimits(t, 1000, 5000)
-
-	l := &RequestLog{
-		Username:     "ralice",
+	log := &RequestLog{
+		Username:     "alice",
 		ModelName:    "gpt-4o",
 		ChannelId:    3,
-		RequestId:    "rr-1",
+		RequestId:    "rid-1",
 		StatusCode:   200,
+		UseTimeMs:    123,
+		CreatedAt:    1000,
 		RequestBody:  "reqbody",
 		ResponseBody: "respbody",
-		CreatedAt:    1000,
 	}
-	RecordRequestLog(l)
-	assert.NotZero(t, l.Id)
+	RecordRequestLog(log)
 
-	// list (no filter) returns meta only (big fields stripped)
-	got, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	assert.NotZero(t, log.Id)
+	assert.Equal(t, 1, requestLogIndexLen())
+	assert.Equal(t, 1, countRequestLogFiles(t, root))
+
+	// 索引里只有元数据
+	list, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
-	require.Len(t, got, 1)
-	assert.Equal(t, "ralice", got[0].Username)
-	assert.Empty(t, got[0].RequestBody)
+	require.Len(t, list, 1)
+	assert.Empty(t, list[0].RequestBody)
+	assert.EqualValues(t, 123, list[0].UseTimeMs)
 
-	// detail returns full body
-	detail, err := GetRequestLogById(l.Id)
+	// 详情从磁盘读回完整正文
+	detail, err := GetRequestLogById(log.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "reqbody", detail.RequestBody)
 	assert.Equal(t, "respbody", detail.ResponseBody)
-
-	// filtered path (username set) exercises the load-all-then-filter branch
-	got, total, err = GetAllRequestLogs("ralice", "gpt-4o", 3, "rr-1", 200, 500, 1500, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, total)
-	require.Len(t, got, 1)
-
-	// filter that matches nothing
-	_, total, err = GetAllRequestLogs("nobody", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 0, total)
-
-	// missing id -> redis error propagated
-	_, err = GetRequestLogById(987654321)
-	assert.Error(t, err)
+	assert.EqualValues(t, 123, detail.UseTimeMs)
 }
 
-func TestRequestLog_RedisPagingNoFilter(t *testing.T) {
-	enableRedis(t)
-	requestLogClearRedis(t)
-	requestLogWithLimits(t, 1000, 5000)
+func TestRecordRequestLog_FillsCreatedAt(t *testing.T) {
+	requestLogTestStore(t)
+	RecordRequestLog(&RequestLog{Username: "u"})
+	list, _, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.NotZero(t, list[0].CreatedAt)
+}
 
-	for i := 0; i < 3; i++ {
-		RecordRequestLog(&RequestLog{Username: "rp", CreatedAt: int64(100 + i)})
+// 写盘失败必须不留索引：否则详情点开是空的，比没有日志更误导。
+func TestRecordRequestLog_WriteFailureLeavesNoIndex(t *testing.T) {
+	requestLogTestStore(t)
+	// 把根目录换成普通文件，MkdirAll 必然失败
+	require.NoError(t, os.RemoveAll(requestLogRoot))
+	require.NoError(t, os.WriteFile(requestLogRoot, []byte("x"), 0o644))
+
+	RecordRequestLog(&RequestLog{Username: "u", CreatedAt: 1000, RequestId: "rid"})
+	assert.Zero(t, requestLogIndexLen())
+}
+
+// 存储不可用时整条丢弃。
+func TestRecordRequestLog_StoreNotReady(t *testing.T) {
+	requestLogResetIndex(t)
+	prev := requestLogReady
+	requestLogReady = false
+	t.Cleanup(func() { requestLogReady = prev })
+
+	RecordRequestLog(&RequestLog{Username: "u", CreatedAt: 1000})
+	assert.Zero(t, requestLogIndexLen())
+}
+
+// ---------------------------------------------------------------------------
+// 索引淘汰边界
+// ---------------------------------------------------------------------------
+
+func TestRequestLogIndexTrimBoundaries(t *testing.T) {
+	cases := []struct {
+		name       string
+		minC, maxC int
+		insert     int
+		wantIndex  int
+	}{
+		{"below max", 2, 5, 4, 4},
+		{"at max", 2, 5, 5, 5},
+		// 只有超过 max 才触发截断，且结果恰好是 min
+		{"above max", 2, 5, 6, 2},
+		{"min zero clears", 0, 3, 4, 0},
+		// 错配同样必须发生截断（退化为 max/2）
+		{"min equals max", 4, 4, 5, 2},
+		{"min greater than max", 9, 4, 5, 2},
 	}
-	// page size 2 then 1
-	page1, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 2)
-	require.NoError(t, err)
-	assert.EqualValues(t, 3, total)
-	assert.Len(t, page1, 2)
-	page2, _, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 2, 2)
-	require.NoError(t, err)
-	assert.Len(t, page2, 1)
-
-	// startIdx beyond total -> empty
-	got, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 99, 2)
-	require.NoError(t, err)
-	assert.EqualValues(t, 3, total)
-	assert.Empty(t, got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := requestLogTestStore(t)
+			requestLogWithLimits(t, c.minC, c.maxC)
+			for i := 0; i < c.insert; i++ {
+				RecordRequestLog(&RequestLog{Username: "u", CreatedAt: int64(1000 + i), RequestId: "rid-" + strconv.Itoa(i)})
+			}
+			assert.Equal(t, c.wantIndex, requestLogIndexLen(), "index size")
+			// 淘汰只动索引，磁盘文件一个都不能少
+			assert.Equal(t, c.insert, countRequestLogFiles(t, root), "files must survive index eviction")
+		})
+	}
 }
 
-func TestRequestLog_RedisTrim(t *testing.T) {
-	enableRedis(t)
-	requestLogClearRedis(t)
-	requestLogWithLimits(t, 2, 3) // min=2, max=3
+func TestRequestLogIndexTrimKeepsNewest(t *testing.T) {
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 2, 4)
+	for i := 0; i < 5; i++ {
+		RecordRequestLog(&RequestLog{Username: "u", CreatedAt: int64(1000 + i), RequestId: "rid-" + strconv.Itoa(i)})
+	}
+	list, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, total)
+	require.Len(t, list, 2)
+	// 最新在前
+	assert.EqualValues(t, 1004, list[0].CreatedAt)
+	assert.EqualValues(t, 1003, list[1].CreatedAt)
+}
+
+// ---------------------------------------------------------------------------
+// 查询：排序、过滤、分页
+// ---------------------------------------------------------------------------
+
+func TestGetAllRequestLogs_OrderFilterPaging(t *testing.T) {
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
 
 	for i := 0; i < 5; i++ {
-		RecordRequestLog(&RequestLog{Username: "rt", CreatedAt: int64(i)})
+		RecordRequestLog(&RequestLog{
+			Username:   "alice",
+			ModelName:  "gpt-4o",
+			ChannelId:  1,
+			StatusCode: 200,
+			CreatedAt:  int64(1000 + i),
+			RequestId:  "rid-" + strconv.Itoa(i),
+		})
 	}
-	// Trim fires only when count EXCEEDS max(3): the 4th insert (count 4>3)
-	// trims to min(2); the 5th brings it back to 3 (==max, not over). So the
-	// steady-state count sits at max, never unbounded.
-	_, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 100)
+	RecordRequestLog(&RequestLog{Username: "bob", ModelName: "claude", ChannelId: 2, StatusCode: 500, CreatedAt: 2000, RequestId: "rid-bob"})
+
+	// 无过滤：严格倒序
+	list, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, total)
-}
-
-func TestRequestLog_RedisTrimMinZero(t *testing.T) {
-	enableRedis(t)
-	requestLogClearRedis(t)
-	// min=0 forces the "delete index key entirely" branch in trimRequestLogsRedis
-	requestLogWithLimits(t, 0, 2)
-
-	for i := 0; i < 4; i++ {
-		RecordRequestLog(&RequestLog{Username: "rz", CreatedAt: int64(i)})
+	assert.EqualValues(t, 6, total)
+	require.Len(t, list, 6)
+	for i := 1; i < len(list); i++ {
+		assert.GreaterOrEqual(t, list[i-1].CreatedAt, list[i].CreatedAt, "must be newest-first")
 	}
-	_, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 100)
-	require.NoError(t, err)
-	// index deleted on the record that crossed max -> only records added after
-	// the last trim remain. Assert it never exceeds max (no unbounded growth).
-	assert.LessOrEqual(t, total, int64(2))
-}
 
-func TestRequestLog_RedisDeleteOldAndClear(t *testing.T) {
-	enableRedis(t)
-	requestLogClearRedis(t)
-	requestLogWithLimits(t, 1000, 5000)
-
-	RecordRequestLog(&RequestLog{Username: "rold", CreatedAt: 100})
-	RecordRequestLog(&RequestLog{Username: "rnew", CreatedAt: 500})
-
-	deleted, err := DeleteOldRequestLog(300)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, deleted)
-	_, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
+	// 每个过滤条件
+	_, total, _ = GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 0, 10)
+	assert.EqualValues(t, 5, total)
+	_, total, _ = GetAllRequestLogs("", "claude", 0, "", 0, 0, 0, 0, 10)
 	assert.EqualValues(t, 1, total)
+	_, total, _ = GetAllRequestLogs("", "", 2, "", 0, 0, 0, 0, 10)
+	assert.EqualValues(t, 1, total)
+	_, total, _ = GetAllRequestLogs("", "", 0, "rid-bob", 0, 0, 0, 0, 10)
+	assert.EqualValues(t, 1, total)
+	_, total, _ = GetAllRequestLogs("", "", 0, "", 500, 0, 0, 0, 10)
+	assert.EqualValues(t, 1, total)
+	_, total, _ = GetAllRequestLogs("", "", 0, "", 0, 1002, 1003, 0, 10)
+	assert.EqualValues(t, 2, total)
+	// 组合过滤
+	_, total, _ = GetAllRequestLogs("alice", "gpt-4o", 1, "rid-0", 200, 0, 0, 0, 10)
+	assert.EqualValues(t, 1, total)
+	// 无命中
+	list, total, _ = GetAllRequestLogs("nobody", "", 0, "", 0, 0, 0, 0, 10)
+	assert.EqualValues(t, 0, total)
+	assert.Empty(t, list)
 
-	// DeleteOldRequestLog with nothing matching -> 0 deleted
+	// 分页边界
+	page, total, _ := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 2)
+	assert.EqualValues(t, 6, total)
+	assert.Len(t, page, 2)
+	page, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 4, 10) // 跨越末尾
+	assert.Len(t, page, 2)
+	page, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 6, 10) // startIdx == 总数
+	assert.Empty(t, page)
+	page, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 99, 10) // 越界
+	assert.Empty(t, page)
+	page, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 0) // num <= 0
+	assert.Empty(t, page)
+	page, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, -1, 10) // 负 startIdx
+	assert.Empty(t, page)
+
+	// 中间页：只物化窗口内的条目，total 仍是全量命中数
+	page, total, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 2, 2)
+	assert.EqualValues(t, 6, total)
+	require.Len(t, page, 2)
+	assert.Equal(t, "rid-3", page[0].RequestId, "offset 2 must start at the third newest")
+	assert.Equal(t, "rid-2", page[1].RequestId)
+
+	// 过滤 + 分页组合：窗口相对的是过滤后的结果集
+	page, total, _ = GetAllRequestLogs("alice", "", 0, "", 0, 0, 0, 1, 2)
+	assert.EqualValues(t, 5, total)
+	require.Len(t, page, 2)
+	assert.Equal(t, "rid-3", page[0].RequestId)
+	assert.Equal(t, "rid-2", page[1].RequestId)
+}
+
+func TestGetAllRequestLogs_EmptyIndex(t *testing.T) {
+	requestLogTestStore(t)
+	list, total, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, total)
+	assert.Empty(t, list)
+}
+
+// ---------------------------------------------------------------------------
+// 详情
+// ---------------------------------------------------------------------------
+
+func TestGetRequestLogById_NotFound(t *testing.T) {
+	requestLogTestStore(t)
+	_, err := GetRequestLogById(123456)
+	assert.ErrorIs(t, err, errRequestLogNotFound)
+}
+
+// 正文文件被外部删除后，详情必须返回"不可用"而不是半条数据。
+func TestGetRequestLogById_FileMissing(t *testing.T) {
+	root := requestLogTestStore(t)
+	log := &RequestLog{Username: "u", CreatedAt: 1000, RequestId: "rid", RequestBody: "b"}
+	RecordRequestLog(log)
+
+	require.NoError(t, os.RemoveAll(root))
+	_, err := GetRequestLogById(log.Id)
+	assert.ErrorIs(t, err, errRequestLogNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// 按时间删除 / 清空
+// ---------------------------------------------------------------------------
+
+func TestDeleteOldRequestLog(t *testing.T) {
+	root := requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
+	for i := 0; i < 5; i++ {
+		RecordRequestLog(&RequestLog{Username: "u", CreatedAt: int64(1000 + i), RequestId: "rid-" + strconv.Itoa(i)})
+	}
+
+	deleted, err := DeleteOldRequestLog(1003)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, deleted)
+	assert.Equal(t, 2, requestLogIndexLen())
+	// 文件回收交给清理协程，删除操作本身不碰磁盘
+	assert.Equal(t, 5, countRequestLogFiles(t, root))
+
+	// 边界：目标时间早于所有条目 -> 0
 	deleted, err = DeleteOldRequestLog(1)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, deleted)
+	assert.Equal(t, 2, requestLogIndexLen())
+}
+
+// 清空返回的必须是条目数，不是文件/键数——UI 文案是"已清除 N 条请求日志"。
+func TestClearAllRequestLogs_ReturnsEntryCount(t *testing.T) {
+	root := requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
+	for i := 0; i < 3; i++ {
+		RecordRequestLog(&RequestLog{Username: "u", CreatedAt: int64(1000 + i), RequestId: "rid-" + strconv.Itoa(i)})
+	}
 
 	cleared, err := ClearAllRequestLogs()
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, cleared, int64(1))
-	_, total, err = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
-	require.NoError(t, err)
-	assert.EqualValues(t, 0, total)
+	assert.EqualValues(t, 3, cleared)
+	assert.Zero(t, requestLogIndexLen())
+	assert.Equal(t, 3, countRequestLogFiles(t, root), "files are reclaimed by the sweeper, not by clear")
 
-	// clearing an already-empty namespace succeeds (RENAME miss -> SCAN fallback)
-	_, err = ClearAllRequestLogs()
+	// 空索引再清一次 -> 0
+	cleared, err = ClearAllRequestLogs()
 	require.NoError(t, err)
+	assert.EqualValues(t, 0, cleared)
+}
+
+// ---------------------------------------------------------------------------
+// 并发
+// ---------------------------------------------------------------------------
+
+func TestRecordRequestLog_Concurrent(t *testing.T) {
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 40, 80)
+
+	const goroutines, perGoroutine = 8, 25
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				RecordRequestLog(&RequestLog{
+					Username:  "u",
+					CreatedAt: int64(1000 + g*perGoroutine + i),
+					RequestId: "rid-" + strconv.Itoa(g) + "-" + strconv.Itoa(i),
+				})
+			}
+		}(g)
+	}
+	// 并发读不得 panic 或读到撕裂的切片
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			_, _, _ = GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+		}
+	}()
+	wg.Wait()
+	<-done
+
+	size := requestLogIndexLen()
+	assert.LessOrEqual(t, size, 80, "index must respect max")
+	assert.GreaterOrEqual(t, size, 40, "index must not drop below min after a trim")
 }
