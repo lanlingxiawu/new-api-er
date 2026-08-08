@@ -664,39 +664,31 @@ func flushRelayLogs() {
 	if remaining := max - len(events); remaining > 0 {
 		events = append(events, takeRelayLogPending(relayLogKindError, remaining)...)
 	}
+	// 按响应完成顺序落库。
+	//
+	// 两类日志各有独立缓冲，上面的选批把它们首尾相接，插入序因此天然是"一段消费 +
+	// 一段错误"。而 created_at 只有秒级精度，列表排序 (created_at DESC, id DESC)
+	// 在同一秒内只能靠 id 分先后，id 就是插入序——于是同一秒内成功与失败各自成块
+	// 显示。按 EnqueuedAt 排序后 id 与真实响应顺序单调对应，同秒内自然交错，读路径
+	// 不需要新增任何排序表达式，也不动索引。
+	//
+	// 用排序而不是双路归并：EnqueuedAt 在抢缓冲锁之前打戳（见 enqueueRelayLog），
+	// 锁一有争用，先打戳的就可能后入列，所以单条缓冲内部并非严格有序，归并会把这层
+	// 倒挂原样带到 id 上。把打戳挪进锁内可以让归并成立，但那是往 relay goroutine
+	// 争用的临界区里加活；排序跑在 flush goroutine 上，与主链路无关。
+	//
+	// 排序只作用于已选出的这批，不影响上面消费优先的预算分配：积压时错误日志照旧
+	// 让位，只是不再人为把它们挤成一块。
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].EnqueuedAt.Before(events[j].EnqueuedAt)
+	})
+
 	for outer := cfg.GetOuterBatchSize(); len(events) > 0; {
 		n := outer
 		if n > len(events) {
 			n = len(events)
 		}
-		batch := events[:n]
-		errorCount := 0
-		for _, event := range batch {
-			if event.Kind == relayLogKindError {
-				errorCount++
-			}
-		}
-		if errorCount > 0 && errorCount < len(batch) {
-			// List queries keep their existing indexed order (created_at DESC,
-			// id DESC). Put same-cycle errors first inside a mixed DB batch so
-			// consumption rows receive the newer ids and appear first without
-			// adding a sort expression to the read path. Dequeue budgeting and
-			// outer-batch processing remain consumption-first; this partition is
-			// done only after selection, outside the relay-facing buffer locks.
-			ordered := make([]*relayLogEvent, 0, len(batch))
-			for _, event := range batch {
-				if event.Kind == relayLogKindError {
-					ordered = append(ordered, event)
-				}
-			}
-			for _, event := range batch {
-				if event.Kind != relayLogKindError {
-					ordered = append(ordered, event)
-				}
-			}
-			batch = ordered
-		}
-		persistRelayLogEvents(batch)
+		persistRelayLogEvents(events[:n])
 		events = events[n:]
 	}
 }

@@ -615,7 +615,7 @@ func TestFlushRelayLogsPersistsConsumeAndErrorBuffers(t *testing.T) {
 	require.Zero(t, relayLogBacklog())
 }
 
-func TestFlushRelayLogsMakesSameSecondConsumptionVisibleFirst(t *testing.T) {
+func TestFlushRelayLogsInsertsSameSecondEventsInResponseOrder(t *testing.T) {
 	db := useRelayLogPipelineSQLite(t)
 	cfg := operation_setting.GetRelayLogPipelineSetting()
 	previousCfg := *cfg
@@ -624,24 +624,137 @@ func TestFlushRelayLogsMakesSameSecondConsumptionVisibleFirst(t *testing.T) {
 	cfg.InnerBatchSize = 100
 	t.Cleanup(func() { *cfg = previousCfg })
 
+	// 三条共享同一个 created_at 秒，列表顺序因此完全由 id 决定。
+	// EnqueuedAt 直接给定，不依赖 time.Now() 的时钟分辨率。
 	createdAt := time.Now().Unix()
-	require.True(t, enqueueRelayLog(relayLogKindConsume, &relayLogEvent{Log: &Log{
-		RequestId: "consume-one", Type: LogTypeConsume, CreatedAt: createdAt,
-	}}))
-	require.True(t, enqueueRelayLog(relayLogKindConsume, &relayLogEvent{Log: &Log{
-		RequestId: "consume-two", Type: LogTypeConsume, CreatedAt: createdAt,
-	}}))
-	require.True(t, enqueueRelayLog(relayLogKindError, &relayLogEvent{Log: &Log{
-		RequestId: "error-one", Type: LogTypeError, CreatedAt: createdAt,
-	}}))
+	base := time.Now()
+	appendRelayLogPending(relayLogKindConsume, []*relayLogEvent{
+		{Kind: relayLogKindConsume, EnqueuedAt: base, Log: &Log{
+			RequestId: "consume-first", Type: LogTypeConsume, CreatedAt: createdAt,
+		}},
+		{Kind: relayLogKindConsume, EnqueuedAt: base.Add(3 * time.Millisecond), Log: &Log{
+			RequestId: "consume-third", Type: LogTypeConsume, CreatedAt: createdAt,
+		}},
+	})
+	appendRelayLogPending(relayLogKindError, []*relayLogEvent{
+		{Kind: relayLogKindError, EnqueuedAt: base.Add(2 * time.Millisecond), Log: &Log{
+			RequestId: "error-second", Type: LogTypeError, CreatedAt: createdAt,
+		}},
+	})
+
 	flushRelayLogs()
 
-	var displayed []Log
-	require.NoError(t, db.Order("created_at DESC, id DESC").Find(&displayed).Error)
-	require.Len(t, displayed, 3)
-	require.Equal(t, LogTypeConsume, displayed[0].Type,
-		"the unchanged indexed list order must show consumption before the same-second error batch")
-	require.Equal(t, LogTypeError, displayed[2].Type)
+	var inserted []string
+	require.NoError(t, db.Model(&Log{}).Order("id ASC").Pluck("request_id", &inserted).Error)
+	require.Equal(t, []string{"consume-first", "error-second", "consume-third"}, inserted,
+		"insert order must follow response order instead of grouping by buffer")
+
+	var displayed []string
+	require.NoError(t, db.Model(&Log{}).Order("created_at DESC, id DESC").Pluck("request_id", &displayed).Error)
+	require.Equal(t, []string{"consume-third", "error-second", "consume-first"}, displayed,
+		"the unchanged indexed list order must interleave same-second consumption and error rows")
+}
+
+func TestFlushRelayLogsKeepsConsumptionFirstBudgetUnderBacklog(t *testing.T) {
+	db := useRelayLogPipelineSQLite(t)
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	previousCfg := *cfg
+	cfg.FullDrain = false
+	cfg.FlushMaxPerCycle = 2
+	cfg.OuterBatchSize = 100
+	cfg.InnerBatchSize = 100
+	t.Cleanup(func() { *cfg = previousCfg })
+
+	// 错误日志的响应时间比两条消费日志都早。按响应顺序排序绝不能把它提进本轮预算——
+	// 预算分配仍然是消费优先，排序只作用于已选出的那批。
+	base := time.Now()
+	appendRelayLogPending(relayLogKindError, []*relayLogEvent{
+		{Kind: relayLogKindError, EnqueuedAt: base, Log: &Log{
+			RequestId: "error-earliest", Type: LogTypeError,
+		}},
+	})
+	appendRelayLogPending(relayLogKindConsume, []*relayLogEvent{
+		{Kind: relayLogKindConsume, EnqueuedAt: base.Add(time.Millisecond), Log: &Log{
+			RequestId: "consume-one", Type: LogTypeConsume,
+		}},
+		{Kind: relayLogKindConsume, EnqueuedAt: base.Add(2 * time.Millisecond), Log: &Log{
+			RequestId: "consume-two", Type: LogTypeConsume,
+		}},
+	})
+
+	flushRelayLogs()
+
+	var inserted []string
+	require.NoError(t, db.Model(&Log{}).Order("id ASC").Pluck("request_id", &inserted).Error)
+	require.Equal(t, []string{"consume-one", "consume-two"}, inserted,
+		"the per-cycle budget must stay consumption-first even when an error log is older")
+	require.Equal(t, 1, len(relayLogPendingError), "the deferred error log stays queued for a later cycle")
+}
+
+func TestFlushRelayLogsKeepsArrivalOrderAcrossOuterBatches(t *testing.T) {
+	db := useRelayLogPipelineSQLite(t)
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	previousCfg := *cfg
+	cfg.FullDrain = true
+	// 小于本轮事件数，强制切成多个外层批。
+	cfg.OuterBatchSize = 2
+	cfg.InnerBatchSize = 2
+	t.Cleanup(func() { *cfg = previousCfg })
+
+	base := time.Now()
+	var consume, failures []*relayLogEvent
+	expected := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		at := base.Add(time.Duration(i) * time.Millisecond)
+		if i%2 == 0 {
+			requestID := fmt.Sprintf("consume-%d", i)
+			consume = append(consume, &relayLogEvent{
+				Kind: relayLogKindConsume, EnqueuedAt: at,
+				Log: &Log{RequestId: requestID, Type: LogTypeConsume},
+			})
+			expected = append(expected, requestID)
+			continue
+		}
+		requestID := fmt.Sprintf("error-%d", i)
+		failures = append(failures, &relayLogEvent{
+			Kind: relayLogKindError, EnqueuedAt: at,
+			Log: &Log{RequestId: requestID, Type: LogTypeError},
+		})
+		expected = append(expected, requestID)
+	}
+	appendRelayLogPending(relayLogKindConsume, consume)
+	appendRelayLogPending(relayLogKindError, failures)
+
+	flushRelayLogs()
+
+	var inserted []string
+	require.NoError(t, db.Model(&Log{}).Order("id ASC").Pluck("request_id", &inserted).Error)
+	require.Equal(t, expected, inserted,
+		"global id order must equal arrival order even when the cycle spans several outer batches")
+}
+
+func TestEnqueueRelayLogStampsArrivalTimeWithinCallWindow(t *testing.T) {
+	useRelayLogPipelineSQLite(t)
+
+	before := time.Now()
+	for i := 0; i < 5; i++ {
+		require.True(t, enqueueRelayLog(relayLogKindConsume, &relayLogEvent{
+			Log: &Log{RequestId: fmt.Sprintf("stamped-%d", i)},
+		}))
+	}
+	after := time.Now()
+
+	events := takeRelayLogBatch(relayLogKindConsume)
+	require.Len(t, events, 5)
+	for i, event := range events {
+		require.Equal(t, relayLogKindConsume, event.Kind)
+		require.False(t, event.EnqueuedAt.Before(before), "the arrival stamp must not predate the call")
+		require.False(t, event.EnqueuedAt.After(after), "the arrival stamp must not postdate the call")
+		if i > 0 {
+			require.False(t, event.EnqueuedAt.Before(events[i-1].EnqueuedAt),
+				"successive arrival stamps must not go backwards")
+		}
+	}
 }
 
 func TestFlushRelayLogRetriesPersistsEligibleAndFallsBackExhausted(t *testing.T) {
