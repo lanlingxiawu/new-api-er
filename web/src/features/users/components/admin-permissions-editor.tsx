@@ -75,7 +75,7 @@ function groupResources(resources: PermissionResourceDef[]): PermissionGroup[] {
   }
   return [...groups.values()].map((group) => ({
     ...group,
-    resources: group.resources.toSorted(
+    resources: [...group.resources].sort(
       (left, right) => (left.sort ?? 0) - (right.sort ?? 0)
     ),
   }))
