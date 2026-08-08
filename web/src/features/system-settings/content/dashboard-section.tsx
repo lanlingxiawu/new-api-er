@@ -48,6 +48,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -76,6 +77,7 @@ const granularityOptions = [
 export function DashboardSection({ defaultValues }: DashboardSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const form = useForm<DataDashboardFormValues>({
     resolver: zodResolver(dataDashboardSchema),
@@ -92,9 +94,15 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
         value !== defaultValues[key as keyof DataDashboardFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({ key, value })
+      }
+    })
   }
 
   const isEnabled = form.watch('DataExportEnabled')
@@ -159,9 +167,9 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
                   <FormLabel>{t('Default time granularity')}</FormLabel>
                   <Select
                     items={granularityOptions.map((option) => ({
-                        value: option.value,
-                        label: t(option.label),
-                      }))}
+                      value: option.value,
+                      label: t(option.label),
+                    }))}
                     onValueChange={field.onChange}
                     value={field.value}
                     disabled={!isEnabled}

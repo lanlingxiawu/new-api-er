@@ -45,6 +45,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -66,6 +67,7 @@ export function IoNetDeploymentSettingsSection({
 }) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const form = useForm<Values>({
     resolver: zodResolver(schema),
@@ -106,11 +108,13 @@ export function IoNetDeploymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
 
-    form.reset(values)
+      form.reset(values)
+    })
   }
 
   const handleTestConnection = async () => {

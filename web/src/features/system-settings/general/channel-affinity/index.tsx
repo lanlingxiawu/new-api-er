@@ -39,6 +39,7 @@ import { Textarea } from '@/components/ui/textarea'
 
 import { SettingsSwitchField } from '../../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../../components/settings-save-confirmation'
 import { SettingsSection } from '../../components/settings-section'
 import { useUpdateOption } from '../../hooks/use-update-option'
 import { getCacheStats, clearAllCache, clearRuleCache } from './api'
@@ -125,6 +126,7 @@ interface Props {
 export function ChannelAffinitySection(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const [enabled, setEnabled] = useState(
     props.defaultValues['channel_affinity_setting.enabled']
@@ -252,81 +254,84 @@ export function ChannelAffinitySection(props: Props) {
       rulesJson = serializeRules(rules)
     }
 
-    setSaving(true)
+    const updates: { key: string; value: string }[] = []
+
+    if (enabled !== props.defaultValues['channel_affinity_setting.enabled']) {
+      updates.push({
+        key: 'channel_affinity_setting.enabled',
+        value: String(enabled),
+      })
+    }
+    if (
+      switchOnSuccess !==
+      props.defaultValues['channel_affinity_setting.switch_on_success']
+    ) {
+      updates.push({
+        key: 'channel_affinity_setting.switch_on_success',
+        value: String(switchOnSuccess),
+      })
+    }
+    if (
+      keepOnChannelDisabled !==
+      props.defaultValues['channel_affinity_setting.keep_on_channel_disabled']
+    ) {
+      updates.push({
+        key: 'channel_affinity_setting.keep_on_channel_disabled',
+        value: String(keepOnChannelDisabled),
+      })
+    }
+    if (
+      maxEntries !== props.defaultValues['channel_affinity_setting.max_entries']
+    ) {
+      updates.push({
+        key: 'channel_affinity_setting.max_entries',
+        value: String(maxEntries),
+      })
+    }
+    if (
+      defaultTtl !==
+      props.defaultValues['channel_affinity_setting.default_ttl_seconds']
+    ) {
+      updates.push({
+        key: 'channel_affinity_setting.default_ttl_seconds',
+        value: String(defaultTtl),
+      })
+    }
+
+    const origRules = props.defaultValues['channel_affinity_setting.rules']
+    const origSerialized = (() => {
+      try {
+        return JSON.stringify(JSON.parse(origRules || '[]'))
+      } catch {
+        return '[]'
+      }
+    })()
+    if (rulesJson !== origSerialized) {
+      updates.push({
+        key: 'channel_affinity_setting.rules',
+        value: rulesJson,
+      })
+    }
+
+    if (updates.length === 0) {
+      toast.info(t('No changes'))
+      return
+    }
+
     try {
-      const updates: { key: string; value: string }[] = []
-
-      if (enabled !== props.defaultValues['channel_affinity_setting.enabled']) {
-        updates.push({
-          key: 'channel_affinity_setting.enabled',
-          value: String(enabled),
-        })
-      }
-      if (
-        switchOnSuccess !==
-        props.defaultValues['channel_affinity_setting.switch_on_success']
-      ) {
-        updates.push({
-          key: 'channel_affinity_setting.switch_on_success',
-          value: String(switchOnSuccess),
-        })
-      }
-      if (
-        keepOnChannelDisabled !==
-        props.defaultValues['channel_affinity_setting.keep_on_channel_disabled']
-      ) {
-        updates.push({
-          key: 'channel_affinity_setting.keep_on_channel_disabled',
-          value: String(keepOnChannelDisabled),
-        })
-      }
-      if (
-        maxEntries !==
-        props.defaultValues['channel_affinity_setting.max_entries']
-      ) {
-        updates.push({
-          key: 'channel_affinity_setting.max_entries',
-          value: String(maxEntries),
-        })
-      }
-      if (
-        defaultTtl !==
-        props.defaultValues['channel_affinity_setting.default_ttl_seconds']
-      ) {
-        updates.push({
-          key: 'channel_affinity_setting.default_ttl_seconds',
-          value: String(defaultTtl),
-        })
-      }
-
-      const origRules = props.defaultValues['channel_affinity_setting.rules']
-      const origSerialized = (() => {
+      await requestSaveConfirmation(async () => {
+        setSaving(true)
         try {
-          return JSON.stringify(JSON.parse(origRules || '[]'))
-        } catch {
-          return '[]'
+          for (const u of updates) {
+            await updateOption.mutateAsync(u)
+          }
+          toast.success(t('Saved successfully'))
+        } finally {
+          setSaving(false)
         }
-      })()
-      if (rulesJson !== origSerialized) {
-        updates.push({
-          key: 'channel_affinity_setting.rules',
-          value: rulesJson,
-        })
-      }
-
-      if (updates.length === 0) {
-        toast.info(t('No changes'))
-        return
-      }
-
-      for (const u of updates) {
-        await updateOption.mutateAsync(u)
-      }
-      toast.success(t('Saved successfully'))
+      })
     } catch {
       toast.error(t('Failed to save'))
-    } finally {
-      setSaving(false)
     }
   }
 

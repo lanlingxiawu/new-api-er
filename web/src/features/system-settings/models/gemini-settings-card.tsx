@@ -43,6 +43,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -115,6 +116,7 @@ type GeminiSettingsCardProps = {
 export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const normalizedDefaultsRef = useRef<FlatGeminiSettings>({
     'gemini.safety_settings': normalizeJsonString(
       defaultValues.gemini.safety_settings
@@ -220,12 +222,14 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
       return
     }
 
-    for (const key of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value: normalized[key],
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of updates) {
+        await updateOption.mutateAsync({
+          key,
+          value: normalized[key],
+        })
+      }
+    })
   }
 
   const imaginePlaceholder = useMemo(

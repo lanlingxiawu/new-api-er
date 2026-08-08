@@ -33,6 +33,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -58,6 +59,7 @@ export function NodeControlServiceSection({
 }: NodeControlServiceSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const schema = createSchema(t)
 
   const form = useForm<FormValues>({
@@ -70,12 +72,14 @@ export function NodeControlServiceSection({
   const onSubmit = async (values: FormValues) => {
     const newUrl = removeTrailingSlash(values.NodeControlServiceUrl)
     const oldUrl = removeTrailingSlash(defaultValues.NodeControlServiceUrl)
-    if (newUrl !== oldUrl) {
+    if (newUrl === oldUrl) return
+
+    await requestSaveConfirmation(async () => {
       await updateOption.mutateAsync({
         key: 'NodeControlServiceUrl',
         value: newUrl,
       })
-    }
+    })
   }
 
   return (

@@ -52,6 +52,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -227,6 +228,7 @@ export function RoutingReliabilitySection({
 }: RoutingReliabilitySectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const baselineRef = useRef<NormalizedRoutingReliabilityValues>(
     normalizeDefaults(defaultValues)
   )
@@ -270,15 +272,17 @@ export function RoutingReliabilitySection({
       return
     }
 
-    for (const key of updates) {
-      const value = normalized[key]
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of updates) {
+        const value = normalized[key]
+        await updateOption.mutateAsync({
+          key,
+          value,
+        })
+      }
 
-    baselineRef.current = normalized
+      baselineRef.current = normalized
+    })
   }
 
   return (

@@ -55,12 +55,21 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  AlipaySettingsSection,
+  type AlipaySettingsValues,
+} from './alipay-settings-section'
 import { AmountDiscountVisualEditor } from './amount-discount-visual-editor'
 import { AmountOptionsVisualEditor } from './amount-options-visual-editor'
 import { CreemProductsVisualEditor } from './creem-products-visual-editor'
+import {
+  InfiniSettingsSection,
+  type InfiniSettingsValues,
+} from './infini-settings-section'
 import { PaymentMethodsVisualEditor } from './payment-methods-visual-editor'
 import {
   formatJsonForEditor,
@@ -68,10 +77,6 @@ import {
   normalizeJsonForComparison,
   removeTrailingSlash,
 } from './utils'
-import {
-  AlipaySettingsSection,
-  type AlipaySettingsValues,
-} from './alipay-settings-section'
 import { saveWaffoPancakeConfig } from './waffo-pancake-api'
 import {
   WaffoPancakeSettingsSection,
@@ -87,10 +92,6 @@ import {
   WechatSettingsSection,
   type WechatSettingsValues,
 } from './wechat-settings-section'
-import {
-  InfiniSettingsSection,
-  type InfiniSettingsValues,
-} from './infini-settings-section'
 
 function isHttpOriginUrl(value: string) {
   const trimmed = value.trim()
@@ -277,6 +278,7 @@ export function PaymentSettingsSection({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const initialFormValues = React.useMemo<PaymentFormValues>(
     () => ({
       ...defaultValues,
@@ -969,12 +971,21 @@ export function PaymentSettingsSection({
       updates.push({ key: 'InfiniApiKey', value: sanitized.InfiniApiKey })
     }
 
-    if (sanitized.InfiniApiSecret && sanitized.InfiniApiSecret !== initial.InfiniApiSecret) {
+    if (
+      sanitized.InfiniApiSecret &&
+      sanitized.InfiniApiSecret !== initial.InfiniApiSecret
+    ) {
       updates.push({ key: 'InfiniApiSecret', value: sanitized.InfiniApiSecret })
     }
 
-    if (sanitized.InfiniWebhookSecret && sanitized.InfiniWebhookSecret !== initial.InfiniWebhookSecret) {
-      updates.push({ key: 'InfiniWebhookSecret', value: sanitized.InfiniWebhookSecret })
+    if (
+      sanitized.InfiniWebhookSecret &&
+      sanitized.InfiniWebhookSecret !== initial.InfiniWebhookSecret
+    ) {
+      updates.push({
+        key: 'InfiniWebhookSecret',
+        value: sanitized.InfiniWebhookSecret,
+      })
     }
 
     if (sanitized.InfiniSandbox !== initial.InfiniSandbox) {
@@ -1006,13 +1017,18 @@ export function PaymentSettingsSection({
     }
 
     if (sanitized.InfiniCurrencies !== initial.InfiniCurrencies) {
-      updates.push({ key: 'InfiniCurrencies', value: sanitized.InfiniCurrencies })
+      updates.push({
+        key: 'InfiniCurrencies',
+        value: sanitized.InfiniCurrencies,
+      })
     }
 
     if (sanitized.InfiniPayMethods !== initial.InfiniPayMethods) {
-      updates.push({ key: 'InfiniPayMethods', value: sanitized.InfiniPayMethods })
+      updates.push({
+        key: 'InfiniPayMethods',
+        value: sanitized.InfiniPayMethods,
+      })
     }
-
 
     const hasWaffoPancakeChanges =
       sanitized.WaffoPancakeMerchantID !== initial.WaffoPancakeMerchantID ||
@@ -1026,63 +1042,68 @@ export function PaymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
-
-    if (!hasWaffoPancakeChanges) {
-      return
-    }
-
-    if (!sanitized.WaffoPancakeMerchantID) {
+    if (hasWaffoPancakeChanges && !sanitized.WaffoPancakeMerchantID) {
       toast.error(t('Merchant ID is required'))
       return
     }
 
-    if (!waffoPancakeSelection.storeID || !waffoPancakeSelection.productID) {
+    if (
+      hasWaffoPancakeChanges &&
+      (!waffoPancakeSelection.storeID || !waffoPancakeSelection.productID)
+    ) {
       toast.error(t('Pick or create both a store and a product before saving.'))
       return
     }
 
-    try {
-      const body = await saveWaffoPancakeConfig({
-        merchantID: sanitized.WaffoPancakeMerchantID,
-        privateKey: sanitized.WaffoPancakePrivateKey,
-        returnURL: sanitized.WaffoPancakeReturnURL,
-        storeID: waffoPancakeSelection.storeID,
-        productID: waffoPancakeSelection.productID,
-      })
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
 
-      if (
-        body?.message === 'success' &&
-        typeof body.data === 'object' &&
-        body.data
-      ) {
-        const saved = body.data as { product_id: string; store_id: string }
-        const savedBinding = {
-          storeID: saved.store_id,
-          productID: saved.product_id,
-        }
-        setWaffoPancakeSavedBinding(savedBinding)
-        setWaffoPancakeSelection(savedBinding)
-        queryClient.invalidateQueries({ queryKey: ['system-options'] })
-        toast.success(t('Waffo Pancake settings saved'))
+      if (!hasWaffoPancakeChanges) {
         return
       }
 
-      const reason = typeof body?.data === 'string' ? body.data : undefined
-      toast.error(
-        reason
-          ? `${t('Waffo Pancake save failed')}: ${reason}`
-          : t('Waffo Pancake save failed')
-      )
-    } catch (error) {
-      toast.error(
-        `${t('Waffo Pancake save failed')}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      )
-    }
+      try {
+        const body = await saveWaffoPancakeConfig({
+          merchantID: sanitized.WaffoPancakeMerchantID,
+          privateKey: sanitized.WaffoPancakePrivateKey,
+          returnURL: sanitized.WaffoPancakeReturnURL,
+          storeID: waffoPancakeSelection.storeID,
+          productID: waffoPancakeSelection.productID,
+        })
+
+        if (
+          body?.message === 'success' &&
+          typeof body.data === 'object' &&
+          body.data
+        ) {
+          const saved = body.data as { product_id: string; store_id: string }
+          const savedBinding = {
+            storeID: saved.store_id,
+            productID: saved.product_id,
+          }
+          setWaffoPancakeSavedBinding(savedBinding)
+          setWaffoPancakeSelection(savedBinding)
+          queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          toast.success(t('Waffo Pancake settings saved'))
+          return
+        }
+
+        const reason = typeof body?.data === 'string' ? body.data : undefined
+        toast.error(
+          reason
+            ? `${t('Waffo Pancake save failed')}: ${reason}`
+            : t('Waffo Pancake save failed')
+        )
+      } catch (error) {
+        toast.error(
+          `${t('Waffo Pancake save failed')}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      }
+    })
   }
 
   const currentFormValues = form.watch()

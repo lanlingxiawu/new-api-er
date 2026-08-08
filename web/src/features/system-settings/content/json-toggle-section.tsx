@@ -41,6 +41,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { formatJsonForEditor, normalizeJsonString } from './utils'
 
@@ -84,6 +85,7 @@ export function JsonToggleSection({
 }: JsonToggleSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const formattedDefault = useMemo(
     () => formatJsonForEditor(defaultValue, fallbackValue),
@@ -156,9 +158,15 @@ export function JsonToggleSection({
       updates.push({ key: optionKey, value: normalized })
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
+    })
   }
 
   return (

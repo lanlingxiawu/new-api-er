@@ -46,6 +46,7 @@ import {
   SettingsFormGridItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -82,6 +83,7 @@ export function QuotaSettingsSection({
 }: QuotaSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const handleNumberChange =
     (onChange: (value: QuotaInputValue) => void) =>
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -98,12 +100,14 @@ export function QuotaSettingsSection({
       >,
       defaultValues,
       onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
-          await updateOption.mutateAsync({
-            key,
-            value: value as string | number | boolean,
-          })
-        }
+        return requestSaveConfirmation(async () => {
+          for (const [key, value] of Object.entries(changedFields)) {
+            await updateOption.mutateAsync({
+              key,
+              value: value as string | number | boolean,
+            })
+          }
+        })
       },
     })
 

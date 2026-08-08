@@ -37,6 +37,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -63,6 +64,7 @@ export function SidebarModulesSection({
 }: SidebarModulesSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const sectionMeta: Record<string, { title: string; description: string }> = {
     chat: {
@@ -192,9 +194,11 @@ export function SidebarModulesSection({
       return
     }
 
-    await updateOption.mutateAsync({
-      key: 'SidebarModulesAdmin',
-      value: serialized,
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'SidebarModulesAdmin',
+        value: serialized,
+      })
     })
   }
 

@@ -51,6 +51,7 @@ import {
 import { Input } from '@/components/ui/input'
 
 import { SettingsSwitchField } from '../components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -91,6 +92,7 @@ const UPTIME_KUMA_FORM_ID = 'uptime-kuma-form'
 export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const uptimeKumaSchema = createUptimeKumaSchema(t)
   const [groups, setGroups] = useState<UptimeKumaGroup[]>([])
   const [isEnabled, setIsEnabled] = useState(enabled)
@@ -131,13 +133,17 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
   }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
+    if (checked === isEnabled) return
+
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.uptime_kuma_enabled',
-        value: checked,
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.uptime_kuma_enabled',
+          value: checked,
+        })
+        setIsEnabled(checked)
+        toast.success(t('Setting saved'))
       })
-      setIsEnabled(checked)
-      toast.success(t('Setting saved'))
     } catch {
       toast.error(t('Failed to update setting'))
     }
@@ -216,12 +222,14 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
 
   const handleSaveAll = async () => {
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.uptime_kuma_groups',
-        value: JSON.stringify(groups),
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.uptime_kuma_groups',
+          value: JSON.stringify(groups),
+        })
+        setHasChanges(false)
+        toast.success(t('Uptime Kuma groups saved successfully'))
       })
-      setHasChanges(false)
-      toast.success(t('Uptime Kuma groups saved successfully'))
     } catch {
       toast.error(t('Failed to save Uptime Kuma groups'))
     }

@@ -40,6 +40,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -63,6 +64,7 @@ type BasicAuthSectionProps = {
 export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const formDefaults = useMemo<BasicAuthFormValues>(
     () => ({
@@ -101,9 +103,15 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
       }
     })
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
+    })
   }
 
   return (

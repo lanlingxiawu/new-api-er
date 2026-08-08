@@ -27,7 +27,10 @@ import {
 import { toast } from 'sonner'
 
 type SettingsFormOptions<T extends FieldValues> = UseFormProps<T> & {
-  onSubmit: (data: T, changedFields: Record<string, unknown>) => Promise<void>
+  onSubmit: (
+    data: T,
+    changedFields: Record<string, unknown>
+  ) => Promise<boolean | void>
   compareValues?: (a: unknown, b: unknown) => boolean
 }
 
@@ -261,7 +264,8 @@ export function useSettingsForm<T extends FieldValues>({
       {}
     )
 
-    await onSubmit(data, changedFields)
+    const didSave = await onSubmit(data, changedFields)
+    if (didSave === false) return
 
     const flattenedValues = flattenValues(data)
     baselineRef.current = flattenedValues

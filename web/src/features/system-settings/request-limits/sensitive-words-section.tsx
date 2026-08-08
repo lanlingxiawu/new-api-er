@@ -40,6 +40,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -60,6 +61,7 @@ export function SensitiveWordsSection({
 }: SensitiveWordsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<SensitiveFormValues>({
     resolver: zodResolver(sensitiveSchema),
     defaultValues,
@@ -75,9 +77,15 @@ export function SensitiveWordsSection({
         value !== defaultValues[key as keyof SensitiveFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({ key, value: value ?? '' })
+      }
+    })
   }
 
   return (

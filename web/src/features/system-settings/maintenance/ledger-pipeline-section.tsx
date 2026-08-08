@@ -43,6 +43,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -309,6 +310,7 @@ export function LedgerPipelineSection({
 }: LedgerPipelineSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const statusQuery = useQuery({
     queryKey: ['ledger-pipeline-status'],
     queryFn: getLedgerPipelineStatus,
@@ -521,18 +523,20 @@ export function LedgerPipelineSection({
       return
     }
 
-    for (const key of changedKeys) {
-      const value = normalized[key]
-      // Array-valued options (e.g. cache TTLs) are stored as a JSON string.
-      await updateOption.mutateAsync({
-        key,
-        value: Array.isArray(value) ? JSON.stringify(value) : value,
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of changedKeys) {
+        const value = normalized[key]
+        // Array-valued options (e.g. cache TTLs) are stored as a JSON string.
+        await updateOption.mutateAsync({
+          key,
+          value: Array.isArray(value) ? JSON.stringify(value) : value,
+        })
+      }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
-    form.reset(buildFormDefaults(normalized))
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+      form.reset(buildFormDefaults(normalized))
+    })
   }
 
   return (

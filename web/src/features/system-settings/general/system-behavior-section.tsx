@@ -36,6 +36,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -57,6 +58,7 @@ export function SystemBehaviorSection({
 }: SystemBehaviorSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const form = useForm({
     resolver: zodResolver(behaviorSchema),
@@ -69,10 +71,13 @@ export function SystemBehaviorSection({
     const updates = Object.entries(data).filter(
       ([key, value]) => value !== defaultValues[key as keyof BehaviorFormValues]
     )
+    if (updates.length === 0) return
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({ key, value })
+      }
+    })
   }
 
   return (

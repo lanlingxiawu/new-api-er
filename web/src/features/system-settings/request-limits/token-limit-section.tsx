@@ -35,6 +35,7 @@ import { Input } from '@/components/ui/input'
 
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -72,6 +73,7 @@ const normalizeFormValues = (
 export function TokenLimitSection({ defaultValues }: TokenLimitSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<TokenLimitFormInput, unknown, TokenLimitFormValues>({
     resolver: zodResolver(tokenLimitSchema),
     mode: 'onChange',
@@ -86,9 +88,13 @@ export function TokenLimitSection({ defaultValues }: TokenLimitSectionProps) {
     const key = 'token_setting.max_user_tokens' as const
     const normalized = normalizeFormValues(values)
     const value = normalized[key]
-    if (value !== defaultValues[key]) {
-      await updateOption.mutateAsync({ key, value })
+    if (value === defaultValues[key]) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({ key, value })
+    })
   }
 
   return (

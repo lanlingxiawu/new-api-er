@@ -43,6 +43,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
@@ -89,6 +90,7 @@ type RateLimitSectionProps = {
 export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [useVisualEditor, setUseVisualEditor] = useState(true)
 
   const rateLimitSchema = createRateLimitSchema(t)
@@ -109,9 +111,15 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
         value !== defaultValues[key as keyof RateLimitFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({ key, value: value ?? '' })
+      }
+    })
   }
 
   return (

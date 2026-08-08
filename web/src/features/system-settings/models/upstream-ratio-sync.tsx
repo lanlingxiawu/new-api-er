@@ -29,6 +29,7 @@ import {
   getUpstreamChannels,
   updateSystemOption,
 } from '../api'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import type {
   DifferencesMap,
   RatioType,
@@ -124,6 +125,7 @@ function parseJsonRecord<T>(raw: string | undefined | null): Record<string, T> {
 export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const [channelDialogOpen, setChannelDialogOpen] = useState(false)
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
@@ -408,7 +410,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
     return entry ? entry[0] : 'Unknown'
   }
 
-  const handleApplySync = () => {
+  const handleApplySync = async () => {
     const currentRatios = parsedRatios
     const conflicts: ConflictItem[] = []
 
@@ -459,8 +461,10 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       return
     }
 
-    toast.info(t('Syncing prices, please wait...'))
-    performSync(currentRatios)
+    await requestSaveConfirmation(async () => {
+      toast.info(t('Syncing prices, please wait...'))
+      await performSync(currentRatios)
+    })
   }
 
   const handleConfirmConflict = async () => {

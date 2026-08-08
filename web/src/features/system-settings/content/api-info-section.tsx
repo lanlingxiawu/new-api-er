@@ -62,6 +62,7 @@ import {
 import { getBgColorClass } from '@/lib/colors'
 
 import { SettingsSwitchField } from '../components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -124,6 +125,7 @@ function parseApiInfoList(data: string): ApiInfo[] {
 export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const apiInfoSchema = createApiInfoSchema(t)
   const parsedApiInfoList = useMemo(() => parseApiInfoList(data), [data])
   const [draftApiInfoList, setDraftApiInfoList] = useState<ApiInfo[] | null>(
@@ -150,13 +152,17 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
   })
 
   const handleToggleEnabled = async (checked: boolean) => {
+    if (checked === isEnabled) return
+
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.api_info_enabled',
-        value: checked,
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.api_info_enabled',
+          value: checked,
+        })
+        setIsEnabledDraft(checked)
+        toast.success(t('Setting saved'))
       })
-      setIsEnabledDraft(checked)
-      toast.success(t('Setting saved'))
     } catch {
       toast.error(t('Failed to update setting'))
     }
@@ -238,13 +244,15 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
 
   const handleSaveAll = async () => {
     try {
-      const result = await updateOption.mutateAsync({
-        key: 'console_setting.api_info',
-        value: JSON.stringify(apiInfoList),
+      await requestSaveConfirmation(async () => {
+        const result = await updateOption.mutateAsync({
+          key: 'console_setting.api_info',
+          value: JSON.stringify(apiInfoList),
+        })
+        if (result.success) {
+          setDraftApiInfoList(null)
+        }
       })
-      if (result.success) {
-        setDraftApiInfoList(null)
-      }
     } catch {
       toast.error(t('Failed to save API info'))
     }

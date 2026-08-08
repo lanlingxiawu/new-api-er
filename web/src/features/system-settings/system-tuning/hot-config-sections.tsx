@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -28,6 +28,10 @@ import { Switch } from '@/components/ui/switch'
 
 import { getDatabasePoolRuntimeStatus, updateSystemOptionGroup } from '../api'
 import { useSettingsPageAccess } from '../components/settings-page-access-context'
+import {
+  useSettingsSaveConfirmation,
+  type SettingsSaveConfirmationOptions,
+} from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import type { DatabasePoolStats, SystemTuningSettings } from '../types'
 
@@ -52,6 +56,10 @@ type ConfigGroupSectionProps = {
   fields: ConfigGroupField[]
   defaults: ConfigGroupValues
   statusContent?: ReactNode
+  getConfirmationOptions?: (
+    values: ConfigGroupValues,
+    defaults: ConfigGroupValues
+  ) => SettingsSaveConfirmationOptions | undefined
 }
 
 /**
@@ -67,13 +75,19 @@ function ConfigGroupSection({
   fields,
   defaults,
   statusContent,
+  getConfirmationOptions,
 }: ConfigGroupSectionProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { scope } = useSettingsPageAccess()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [values, setValues] = useState(defaults)
+  const baselineRef = useRef(defaults)
 
-  useEffect(() => setValues(defaults), [defaults])
+  useEffect(() => {
+    baselineRef.current = defaults
+    setValues(defaults)
+  }, [defaults])
 
   const mutation = useMutation({
     mutationFn: (request: Parameters<typeof updateSystemOptionGroup>[0]) =>
@@ -98,13 +112,50 @@ function ConfigGroupSection({
     onError: (error: Error) => toast.error(error.message),
   })
 
-  const save = () =>
-    mutation.mutate({
+  const save = async () => {
+    const invalidNumber = fields.some(({ key, type, min, max }) => {
+      if (type === 'switch') return false
+      const value = Number(values[key])
+      return (
+        !Number.isFinite(value) ||
+        (min !== undefined && value < min) ||
+        (max !== undefined && value > max)
+      )
+    })
+    if (invalidNumber) {
+      toast.error(t('Please enter a valid number'))
+      return
+    }
+
+    const nextValues = Object.fromEntries(
+      fields.map(({ key }) => [key, values[key]])
+    ) as ConfigGroupValues
+    const changed = fields.some(
+      ({ key }) => String(nextValues[key]) !== String(baselineRef.current[key])
+    )
+    if (!changed) {
+      toast.info(t('No changes to save'))
+      return
+    }
+
+    const request = {
       module,
       values: Object.fromEntries(
-        fields.map(({ key }) => [key, String(values[key])])
+        fields.map(({ key }) => [key, String(nextValues[key])])
       ),
-    })
+    }
+    const confirmationOptions = getConfirmationOptions?.(
+      nextValues,
+      baselineRef.current
+    )
+
+    await requestSaveConfirmation(async () => {
+      const response = await mutation.mutateAsync(request)
+      if (!response.success) return
+      baselineRef.current = nextValues
+      setValues(nextValues)
+    }, confirmationOptions)
+  }
 
   return (
     <SettingsSection title={t(title)}>
@@ -379,6 +430,20 @@ export function DBPoolHotConfigSection({
       module='db_pool_setting'
       fields={dbPoolFields}
       defaults={groupDefaults(settings, 'db_pool_setting', dbPoolFields)}
+      getConfirmationOptions={(nextValues, previousValues) => {
+        const nextMaxOpenConnections = Number(nextValues.max_open_conns)
+        const previousMaxOpenConnections = Number(previousValues.max_open_conns)
+        if (nextMaxOpenConnections >= previousMaxOpenConnections / 2) {
+          return undefined
+        }
+
+        return {
+          description: t(
+            'Reducing the main database connection limit by more than half can slow AI requests. Current active connections: {{active}}.',
+            { active: status?.main.in_use ?? t('Unavailable') }
+          ),
+        }
+      }}
       statusContent={
         <div className='flex flex-col gap-3 pb-2'>
           <div className='flex flex-wrap items-center justify-between gap-3'>

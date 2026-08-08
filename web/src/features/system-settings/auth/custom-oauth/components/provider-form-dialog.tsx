@@ -52,6 +52,7 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../../../components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '../../../components/settings-save-confirmation'
 import { buildOAuthCallbackUrl } from '../../oauth-callback-url'
 import {
   useCreateProvider,
@@ -80,6 +81,7 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
   const isEditing = !!props.provider
   const createProvider = useCreateProvider()
   const updateProvider = useUpdateProvider()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const form = useForm<CustomOAuthFormValues>({
     resolver: zodResolver(
@@ -161,22 +163,31 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
   }, [props.open, props.provider, form])
 
   const onSubmit = async (values: CustomOAuthFormValues) => {
-    if (isEditing && props.provider) {
-      const res = await updateProvider.mutateAsync({
-        id: props.provider.id,
-        data: values,
-      })
-      if (res.success) {
-        props.onOpenChange(false)
+    if (isEditing && !form.formState.isDirty) return
+
+    await requestSaveConfirmation(
+      async () => {
+        if (isEditing && props.provider) {
+          const res = await updateProvider.mutateAsync({
+            id: props.provider.id,
+            data: values,
+          })
+          if (res.success) {
+            props.onOpenChange(false)
+          }
+        } else {
+          const res = await createProvider.mutateAsync(
+            values as Omit<CustomOAuthProvider, 'id'>
+          )
+          if (res.success) {
+            props.onOpenChange(false)
+          }
+        }
+      },
+      {
+        confirmText: isEditing ? t('Update Provider') : t('Create Provider'),
       }
-    } else {
-      const res = await createProvider.mutateAsync(
-        values as Omit<CustomOAuthProvider, 'id'>
-      )
-      if (res.success) {
-        props.onOpenChange(false)
-      }
-    }
+    )
   }
 
   const isPending = createProvider.isPending || updateProvider.isPending

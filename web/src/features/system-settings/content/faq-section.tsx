@@ -52,6 +52,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
 import { SettingsSwitchField } from '../components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -84,6 +85,7 @@ const FAQ_FORM_ID = 'faq-form'
 export function FAQSection({ enabled, data }: FAQSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [faqList, setFaqList] = useState<FAQ[]>([])
   const [isEnabled, setIsEnabled] = useState(enabled)
   const [hasChanges, setHasChanges] = useState(false)
@@ -122,13 +124,17 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
   }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
+    if (checked === isEnabled) return
+
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.faq_enabled',
-        value: checked,
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.faq_enabled',
+          value: checked,
+        })
+        setIsEnabled(checked)
+        toast.success(t('Setting saved'))
       })
-      setIsEnabled(checked)
-      toast.success(t('Setting saved'))
     } catch {
       toast.error(t('Failed to update setting'))
     }
@@ -207,12 +213,14 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
 
   const handleSaveAll = async () => {
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.faq',
-        value: JSON.stringify(faqList),
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.faq',
+          value: JSON.stringify(faqList),
+        })
+        setHasChanges(false)
+        toast.success(t('FAQ saved successfully'))
       })
-      setHasChanges(false)
-      toast.success(t('FAQ saved successfully'))
     } catch {
       toast.error(t('Failed to save FAQ'))
     }

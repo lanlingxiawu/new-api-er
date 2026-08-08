@@ -50,6 +50,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -160,6 +161,7 @@ const isEqual = (a: unknown, b: unknown) => {
 export function SSRFSection({ defaultValues }: SSRFSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const baselineRef = useRef<NormalizedSSRFValues>(
     normalizeDefaults(defaultValues)
   )
@@ -190,15 +192,17 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
       return
     }
 
-    for (const key of updates) {
-      const value = normalized[key]
-      await updateOption.mutateAsync({
-        key,
-        value: Array.isArray(value) ? JSON.stringify(value) : value,
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of updates) {
+        const value = normalized[key]
+        await updateOption.mutateAsync({
+          key,
+          value: Array.isArray(value) ? JSON.stringify(value) : value,
+        })
+      }
 
-    baselineRef.current = normalized
+      baselineRef.current = normalized
+    })
   }
 
   const domainFilterMode = form.watch('fetch_setting.domain_filter_mode')

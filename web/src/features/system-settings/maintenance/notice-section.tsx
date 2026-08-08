@@ -34,6 +34,7 @@ import { Textarea } from '@/components/ui/textarea'
 
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -50,6 +51,7 @@ type NoticeSectionProps = {
 export function NoticeSection({ defaultValue }: NoticeSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<NoticeFormValues>({
     resolver: zodResolver(noticeSchema),
     defaultValues: {
@@ -66,9 +68,11 @@ export function NoticeSection({ defaultValue }: NoticeSectionProps) {
     if (normalized === (defaultValue ?? '')) {
       return
     }
-    await updateOption.mutateAsync({
-      key: 'Notice',
-      value: normalized,
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'Notice',
+        value: normalized,
+      })
     })
   }
 

@@ -39,6 +39,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -66,6 +67,7 @@ export function WorkerSettingsSection({
 }: WorkerSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const workerSchema = createWorkerSchema(t)
 
   const form = useForm<WorkerFormValues>({
@@ -87,7 +89,10 @@ export function WorkerSettingsSection({
       updates.push({ key: 'WorkerUrl', value: sanitizedUrl })
     }
 
-    if (sanitizedKey !== initialKey || sanitizedUrl === '') {
+    if (
+      sanitizedKey !== initialKey ||
+      (sanitizedUrl === '' && initialUrl !== '')
+    ) {
       updates.push({ key: 'WorkerValidKey', value: sanitizedKey })
     }
 
@@ -101,9 +106,13 @@ export function WorkerSettingsSection({
       })
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    if (updates.length === 0) return
+
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
+    })
   }
 
   return (

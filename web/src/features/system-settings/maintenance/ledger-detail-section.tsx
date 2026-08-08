@@ -35,6 +35,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -210,6 +211,7 @@ const listFields: Array<{
 export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const formDefaults = useMemo(() => buildFormDefaults(defaultValues), [defaultValues])
 
@@ -238,12 +240,14 @@ export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps)
       toast.info(t('No changes to save'))
       return
     }
-    for (const key of changedKeys) {
-      await updateOption.mutateAsync({ key, value: normalized[key] })
-    }
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
-    form.reset(buildFormDefaults(normalized))
+    await requestSaveConfirmation(async () => {
+      for (const key of changedKeys) {
+        await updateOption.mutateAsync({ key, value: normalized[key] })
+      }
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+      form.reset(buildFormDefaults(normalized))
+    })
   }
 
   const renderFields = (fields: typeof exportFields) =>

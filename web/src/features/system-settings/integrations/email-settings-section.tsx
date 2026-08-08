@@ -41,6 +41,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -88,6 +89,7 @@ export function EmailSettingsSection({
 }: EmailSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const emailSchema = createEmailSchema(t)
 
   const form = useForm<EmailFormValues>({
@@ -173,9 +175,13 @@ export function EmailSettingsSection({
       })
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    if (updates.length === 0) return
+
+    await requestSaveConfirmation(async () => {
+      for (const update of updates) {
+        await updateOption.mutateAsync(update)
+      }
+    })
   }
 
   return (

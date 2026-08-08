@@ -52,6 +52,8 @@ const { QueryClient, QueryClientProvider } =
   await import('@tanstack/react-query')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { SettingsSaveConfirmationProvider } =
+  await import('../../components/settings-save-confirmation')
 const { ToolPriceSettings } = await import('../tool-price-settings')
 
 const i18n = createInstance()
@@ -102,7 +104,9 @@ describe('tool price validation', () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <I18nextProvider i18n={i18n}>
-            <ToolPriceSettings defaultValue='{"web_search":10}' />
+            <SettingsSaveConfirmationProvider>
+              <ToolPriceSettings defaultValue='{"web_search":10}' />
+            </SettingsSaveConfirmationProvider>
           </I18nextProvider>
         </QueryClientProvider>
       )

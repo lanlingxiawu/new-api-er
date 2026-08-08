@@ -48,6 +48,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -243,6 +244,7 @@ type OAuthSectionProps = {
 export function OAuthSection(props: OAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [activeTab, setActiveTab] = useState('github')
   const siteUrl = resolveOAuthSiteUrl(props.serverAddress, t('Site URL'))
   const githubCallbackUrl = buildOAuthCallbackUrl(
@@ -345,16 +347,18 @@ export function OAuthSection(props: OAuthSectionProps) {
       return
     }
 
-    for (const key of changedKeys) {
-      await updateOption.mutateAsync({
-        key,
-        value: normalized[key],
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of changedKeys) {
+        await updateOption.mutateAsync({
+          key,
+          value: normalized[key],
+        })
+      }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
-    form.reset(buildFormDefaults(normalized))
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+      form.reset(buildFormDefaults(normalized))
+    })
   }
 
   const handleReset = () => {

@@ -36,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea'
 
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { ChatSettingsVisualEditor } from './chat-settings-visual-editor'
@@ -96,6 +97,7 @@ export function ChatSettingsSection({
 }: ChatSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
 
   const chatSchema = createChatSchema(t)
@@ -121,9 +123,11 @@ export function ChatSettingsSection({
       return
     }
 
-    await updateOption.mutateAsync({
-      key: 'Chats',
-      value: normalized,
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'Chats',
+        value: normalized,
+      })
     })
   }
 

@@ -50,6 +50,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -104,6 +105,7 @@ type PricingSectionProps = {
 export function PricingSection({ defaultValues }: PricingSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const pricingSchema = createPricingSchema(t)
 
@@ -116,23 +118,25 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
       >,
       defaultValues,
       onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
-          if (value === undefined || value === null) continue
-          if (typeof value === 'object') continue
+        return requestSaveConfirmation(async () => {
+          for (const [key, value] of Object.entries(changedFields)) {
+            if (value === undefined || value === null) continue
+            if (typeof value === 'object') continue
 
-          let serialized: string | boolean = value as string | boolean
+            let serialized: string | boolean = value as string | boolean
 
-          if (typeof value === 'boolean') {
-            serialized = String(value)
-          } else if (typeof value === 'number') {
-            serialized = Number.isFinite(value) ? String(value) : '0'
+            if (typeof value === 'boolean') {
+              serialized = String(value)
+            } else if (typeof value === 'number') {
+              serialized = Number.isFinite(value) ? String(value) : '0'
+            }
+
+            await updateOption.mutateAsync({
+              key,
+              value: serialized,
+            })
           }
-
-          await updateOption.mutateAsync({
-            key,
-            value: serialized,
-          })
-        }
+        })
       },
     })
 
@@ -238,9 +242,7 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
                     <FormLabel>
                       {displayType === 'CNY'
                         ? t('CNY per USD')
-                        : displayType === 'USD'
-                          ? t('USD Exchange Rate')
-                          : t('USD Exchange Rate')}
+                        : t('USD Exchange Rate')}
                     </FormLabel>
                     <FormControl>
                       <Input

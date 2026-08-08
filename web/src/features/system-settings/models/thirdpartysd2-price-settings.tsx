@@ -1,3 +1,4 @@
+import { Code2, Copy, Eye, Plus, Trash2 } from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,9 +18,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { Code2, Copy, Eye, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +33,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const OPTION_KEY = 'thirdpartysd2_pricing.matrix'
@@ -67,7 +70,9 @@ type ThirdPartySD2PriceRow = {
   withVideo: number
 }
 
-function matrixToRows(matrix: ThirdPartySD2PricingMatrix): ThirdPartySD2PriceRow[] {
+function matrixToRows(
+  matrix: ThirdPartySD2PricingMatrix
+): ThirdPartySD2PriceRow[] {
   let nextId = 1
   const rows: ThirdPartySD2PriceRow[] = []
   for (const [model, resolutions] of Object.entries(matrix)) {
@@ -84,7 +89,9 @@ function matrixToRows(matrix: ThirdPartySD2PricingMatrix): ThirdPartySD2PriceRow
   return rows
 }
 
-function rowsToMatrix(rows: ThirdPartySD2PriceRow[]): ThirdPartySD2PricingMatrix {
+function rowsToMatrix(
+  rows: ThirdPartySD2PriceRow[]
+): ThirdPartySD2PricingMatrix {
   const matrix: ThirdPartySD2PricingMatrix = {}
   for (const row of rows) {
     const model = row.model.trim()
@@ -118,7 +125,9 @@ function findDuplicateModelResolution(
   return null
 }
 
-function parseInitialMatrix(rawValue: string | undefined): ThirdPartySD2PricingMatrix {
+function parseInitialMatrix(
+  rawValue: string | undefined
+): ThirdPartySD2PricingMatrix {
   if (!rawValue) return { ...DEFAULT_MATRIX }
   try {
     const parsed = JSON.parse(rawValue) as unknown
@@ -146,6 +155,7 @@ export const ThirdPartySD2PriceSettings = memo(
   }: ThirdPartySD2PriceSettingsProps) {
     const { t } = useTranslation()
     const updateOption = useUpdateOption()
+    const requestSaveConfirmation = useSettingsSaveConfirmation()
     const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
     const [rows, setRows] = useState<ThirdPartySD2PriceRow[]>([])
     const [jsonText, setJsonText] = useState('')
@@ -162,6 +172,10 @@ export const ThirdPartySD2PriceSettings = memo(
     }, [defaultValue])
 
     const currentMatrix = useMemo(() => rowsToMatrix(rows), [rows])
+    const savedMatrix = useMemo(
+      () => JSON.stringify(parseInitialMatrix(defaultValue)),
+      [defaultValue]
+    )
 
     const syncFromRows = useCallback((nextRows: ThirdPartySD2PriceRow[]) => {
       setRows(nextRows)
@@ -176,7 +190,9 @@ export const ThirdPartySD2PriceSettings = memo(
           const parsed = JSON.parse(text) as unknown
           if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
             setJsonError(
-              t('JSON must be an object of model -> resolution -> price entries')
+              t(
+                'JSON must be an object of model -> resolution -> price entries'
+              )
             )
             return
           }
@@ -185,7 +201,9 @@ export const ThirdPartySD2PriceSettings = memo(
           setNextRowId(nextRows.length + 1)
           setJsonError('')
         } catch (error) {
-          setJsonError(error instanceof Error ? error.message : t('Invalid JSON'))
+          setJsonError(
+            error instanceof Error ? error.message : t('Invalid JSON')
+          )
         }
       },
       [t]
@@ -258,11 +276,27 @@ export const ThirdPartySD2PriceSettings = memo(
         )
         return
       }
-      await updateOption.mutateAsync({
-        key: OPTION_KEY,
-        value: JSON.stringify(currentMatrix),
+      const serializedMatrix = JSON.stringify(currentMatrix)
+      if (serializedMatrix === savedMatrix) {
+        toast.info(t('No changes to save'))
+        return
+      }
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: OPTION_KEY,
+          value: serializedMatrix,
+        })
       })
-    }, [currentMatrix, editMode, jsonError, rows, t, updateOption])
+    }, [
+      currentMatrix,
+      editMode,
+      jsonError,
+      requestSaveConfirmation,
+      rows,
+      savedMatrix,
+      t,
+      updateOption,
+    ])
 
     const toggleEditMode = useCallback(() => {
       setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
@@ -428,7 +462,9 @@ export const ThirdPartySD2PriceSettings = memo(
               rows={14}
               spellCheck={false}
             />
-            {jsonError && <p className='text-destructive text-sm'>{jsonError}</p>}
+            {jsonError && (
+              <p className='text-destructive text-sm'>{jsonError}</p>
+            )}
           </div>
         )}
 

@@ -38,6 +38,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -61,6 +62,7 @@ export function DrawingSettingsSection({
 }: DrawingSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<DrawingFormValues>({
     resolver: zodResolver(drawingSchema),
     defaultValues,
@@ -75,9 +77,15 @@ export function DrawingSettingsSection({
       ([key, value]) => value !== defaultValues[key as keyof DrawingFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
+    if (updates.length === 0) {
+      return
     }
+
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({ key, value })
+      }
+    })
   }
 
   const switches: Array<{

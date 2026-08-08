@@ -25,8 +25,8 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-
 import { SettingsSwitchField } from '@/features/system-settings/components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '@/features/system-settings/components/settings-save-confirmation'
 import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
 
 import { downloadProfile, getPprofStatus } from '../api'
@@ -87,6 +87,7 @@ export function ProfilingControls() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [seconds, setSeconds] = useState('30')
 
   const statusQuery = useQuery({
@@ -99,11 +100,15 @@ export function ProfilingControls() {
   const profiles = status?.profiles ?? []
 
   const toggle = async (checked: boolean) => {
-    await updateOption.mutateAsync({
-      key: 'pprof_setting.enabled',
-      value: checked,
+    if (checked === enabled) return
+
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'pprof_setting.enabled',
+        value: checked,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['profiling', 'status'] })
     })
-    await queryClient.invalidateQueries({ queryKey: ['profiling', 'status'] })
   }
 
   // key 用 profile 名，但 goroutine 文本变体用合成 key 'goroutine:text' 区分，

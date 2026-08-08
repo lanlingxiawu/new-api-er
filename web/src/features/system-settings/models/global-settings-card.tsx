@@ -46,6 +46,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -141,6 +142,7 @@ type GlobalSettingsCardProps = {
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -185,12 +187,14 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
       return
     }
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({
+          key,
+          value,
+        })
+      }
+    })
   }
 
   return (

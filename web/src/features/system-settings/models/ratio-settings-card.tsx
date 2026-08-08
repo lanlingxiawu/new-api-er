@@ -29,6 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { resetModelRatios } from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { positiveIntegerSchema } from '../utils/numeric-field'
@@ -174,6 +175,7 @@ export function RatioSettingsCard({
 }: RatioSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
 
@@ -220,8 +222,10 @@ export function RatioSettingsCard({
     AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
     MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
-    UserExclusiveGroupRatioEnabled: groupDefaults.UserExclusiveGroupRatioEnabled,
-    UserExclusiveGroupRatioCacheMax: groupDefaults.UserExclusiveGroupRatioCacheMax,
+    UserExclusiveGroupRatioEnabled:
+      groupDefaults.UserExclusiveGroupRatioEnabled,
+    UserExclusiveGroupRatioCacheMax:
+      groupDefaults.UserExclusiveGroupRatioCacheMax,
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
@@ -309,8 +313,10 @@ export function RatioSettingsCard({
       AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
       MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
-    UserExclusiveGroupRatioEnabled: groupDefaults.UserExclusiveGroupRatioEnabled,
-    UserExclusiveGroupRatioCacheMax: groupDefaults.UserExclusiveGroupRatioCacheMax,
+      UserExclusiveGroupRatioEnabled:
+        groupDefaults.UserExclusiveGroupRatioEnabled,
+      UserExclusiveGroupRatioCacheMax:
+        groupDefaults.UserExclusiveGroupRatioCacheMax,
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
@@ -361,15 +367,20 @@ export function RatioSettingsCard({
         return
       }
 
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key as string] || (key as string)
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
-      }
+      await requestSaveConfirmation(async () => {
+        for (const key of updates) {
+          const apiKey = apiKeyMap[key as string] || (key as string)
+          await updateOption.mutateAsync({
+            key: apiKey,
+            value: normalized[key],
+          })
+        }
 
-      modelNormalizedDefaults.current = normalized
-      setSavedModelValues(normalized)
+        modelNormalizedDefaults.current = normalized
+        setSavedModelValues(normalized)
+      })
     },
-    [t, updateOption]
+    [requestSaveConfirmation, t, updateOption]
   )
 
   const saveGroupRatios = useCallback(
@@ -401,14 +412,21 @@ export function RatioSettingsCard({
         (key) => normalized[key] !== groupNormalizedDefaults.current[key]
       )
 
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key] || key
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
-      }
+      if (updates.length === 0) return
 
-      groupNormalizedDefaults.current = normalized
+      await requestSaveConfirmation(async () => {
+        for (const key of updates) {
+          const apiKey = apiKeyMap[key] || key
+          await updateOption.mutateAsync({
+            key: apiKey,
+            value: normalized[key],
+          })
+        }
+
+        groupNormalizedDefaults.current = normalized
+      })
     },
-    [updateOption]
+    [requestSaveConfirmation, updateOption]
   )
 
   const handleResetRatios = useCallback(() => {

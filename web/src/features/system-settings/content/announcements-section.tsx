@@ -63,6 +63,7 @@ import { Textarea } from '@/components/ui/textarea'
 import dayjs from '@/lib/dayjs'
 
 import { SettingsSwitchField } from '../components/settings-form-layout'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -135,6 +136,7 @@ export function AnnouncementsSection({
 }: AnnouncementsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [isEnabled, setIsEnabled] = useState(enabled)
   const [hasChanges, setHasChanges] = useState(false)
@@ -176,13 +178,17 @@ export function AnnouncementsSection({
   }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
+    if (checked === isEnabled) return
+
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.announcements_enabled',
-        value: checked,
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.announcements_enabled',
+          value: checked,
+        })
+        setIsEnabled(checked)
+        toast.success(t('Setting saved'))
       })
-      setIsEnabled(checked)
-      toast.success(t('Setting saved'))
     } catch {
       toast.error(t('Failed to update setting'))
     }
@@ -267,12 +273,14 @@ export function AnnouncementsSection({
 
   const handleSaveAll = async () => {
     try {
-      await updateOption.mutateAsync({
-        key: 'console_setting.announcements',
-        value: JSON.stringify(announcements),
+      await requestSaveConfirmation(async () => {
+        await updateOption.mutateAsync({
+          key: 'console_setting.announcements',
+          value: JSON.stringify(announcements),
+        })
+        setHasChanges(false)
+        toast.success(t('Announcements saved successfully'))
       })
-      setHasChanges(false)
-      toast.success(t('Announcements saved successfully'))
     } catch {
       toast.error(t('Failed to save announcements'))
     }

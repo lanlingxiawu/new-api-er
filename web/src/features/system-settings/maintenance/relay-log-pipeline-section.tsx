@@ -45,6 +45,7 @@ import {
   SettingsSwitchItem,
 } from "../components/settings-form-layout";
 import { SettingsPageFormActions } from "../components/settings-page-context";
+import { useSettingsSaveConfirmation } from "../components/settings-save-confirmation";
 import { SettingsSection } from "../components/settings-section";
 import { useUpdateOption } from "../hooks/use-update-option";
 import type { RelayLogReplayState, RelayLogReplayStatus } from "../types";
@@ -358,6 +359,7 @@ export function RelayLogPipelineSection({
 }) {
   const { t } = useTranslation();
   const updateOption = useUpdateOption();
+  const requestSaveConfirmation = useSettingsSaveConfirmation();
   const [showReplayDialog, setShowReplayDialog] = useState(false);
   const [isStartingReplay, setIsStartingReplay] = useState(false);
   const statusQuery = useQuery({
@@ -394,12 +396,46 @@ export function RelayLogPipelineSection({
       toast.info(t("No changes to save"));
       return;
     }
-    for (const key of changed) {
-      await updateOption.mutateAsync({ key, value: next[key] });
-    }
-    baselineRef.current = next;
-    baselineSerializedRef.current = JSON.stringify(next);
-    form.reset(buildFormDefaults(next));
+
+    const disablesPipeline =
+      baselineRef.current["relay_log_pipeline_setting.enabled"] &&
+      !next["relay_log_pipeline_setting.enabled"];
+    const enablesConcurrentFlush =
+      !baselineRef.current[
+        "relay_log_retry_setting.allow_concurrent_flush"
+      ] && next["relay_log_retry_setting.allow_concurrent_flush"];
+    const confirmationOptions =
+      disablesPipeline || enablesConcurrentFlush
+        ? {
+            description: (
+              <div className="space-y-2">
+                {disablesPipeline ? (
+                  <p>
+                    {t(
+                      "Disabling the relay log pipeline stops recording new relay consumption and error logs, and they cannot be backfilled later. Quota settlement is not affected.",
+                    )}
+                  </p>
+                ) : null}
+                {enablesConcurrentFlush ? (
+                  <p>
+                    {t(
+                      "Enabling concurrent relay log flushes may increase PostgreSQL connection contention.",
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            ),
+          }
+        : undefined;
+
+    await requestSaveConfirmation(async () => {
+      for (const key of changed) {
+        await updateOption.mutateAsync({ key, value: next[key] });
+      }
+      baselineRef.current = next;
+      baselineSerializedRef.current = JSON.stringify(next);
+      form.reset(buildFormDefaults(next));
+    }, confirmationOptions);
   };
 
   const status = statusQuery.data?.data;

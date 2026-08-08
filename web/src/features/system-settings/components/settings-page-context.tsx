@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 
 import { SettingsPageContext } from './settings-page-access-context'
+import { SettingsSaveConfirmationProvider } from './settings-save-confirmation'
 
 type SettingsPageProviderProps = {
   actionsContainer: HTMLDivElement | null
@@ -41,17 +42,19 @@ type SettingsPageProviderProps = {
 
 export function SettingsPageProvider(props: SettingsPageProviderProps) {
   return (
-    <SettingsPageContext.Provider
-      value={{
-        actionsContainer: props.actionsContainer,
-        titleStatusContainer: props.titleStatusContainer ?? null,
-        suppressSectionHeader: props.suppressSectionHeader ?? true,
-        scope: props.scope,
-        canEdit: props.canEdit,
-      }}
-    >
-      {props.children}
-    </SettingsPageContext.Provider>
+    <SettingsSaveConfirmationProvider>
+      <SettingsPageContext.Provider
+        value={{
+          actionsContainer: props.actionsContainer,
+          titleStatusContainer: props.titleStatusContainer ?? null,
+          suppressSectionHeader: props.suppressSectionHeader ?? true,
+          scope: props.scope,
+          canEdit: props.canEdit,
+        }}
+      >
+        {props.children}
+      </SettingsPageContext.Provider>
+    </SettingsSaveConfirmationProvider>
   )
 }
 

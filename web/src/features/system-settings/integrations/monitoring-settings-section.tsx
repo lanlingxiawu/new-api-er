@@ -49,6 +49,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -127,6 +128,7 @@ export function MonitoringSettingsSection({
 }: MonitoringSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const baselineRef = useRef<FlatMonitoringDefaults>(
     normalizeDefaults(defaultValues)
   )
@@ -167,15 +169,17 @@ export function MonitoringSettingsSection({
       return
     }
 
-    for (const key of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value: normalized[key],
-      })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of updates) {
+        await updateOption.mutateAsync({
+          key,
+          value: normalized[key],
+        })
+      }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+    })
   }
 
   return (

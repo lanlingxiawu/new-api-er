@@ -40,6 +40,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -173,6 +174,7 @@ export function FallbackBackfillSection({
 }: FallbackBackfillSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
 
   const formDefaults = useMemo(
     () => buildFormDefaults(defaultValues),
@@ -206,13 +208,15 @@ export function FallbackBackfillSection({
       return
     }
 
-    for (const key of changedKeys) {
-      await updateOption.mutateAsync({ key, value: normalized[key] })
-    }
+    await requestSaveConfirmation(async () => {
+      for (const key of changedKeys) {
+        await updateOption.mutateAsync({ key, value: normalized[key] })
+      }
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
-    form.reset(buildFormDefaults(normalized))
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+      form.reset(buildFormDefaults(normalized))
+    })
   }
 
   return (

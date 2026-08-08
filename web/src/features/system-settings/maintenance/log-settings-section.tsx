@@ -74,6 +74,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { LogCleanupTask } from '../types'
@@ -144,6 +145,7 @@ export function LogSettingsSection({
 }: LogSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<LogSettingsFormValues>({
     resolver: zodResolver(logSettingsSchema),
     defaultValues: {
@@ -258,9 +260,11 @@ export function LogSettingsSection({
 
   const onSubmit = async (values: LogSettingsFormValues) => {
     if (values.LogConsumeEnabled === defaultEnabled) return
-    await updateOption.mutateAsync({
-      key: 'LogConsumeEnabled',
-      value: values.LogConsumeEnabled,
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'LogConsumeEnabled',
+        value: values.LogConsumeEnabled,
+      })
     })
   }
 

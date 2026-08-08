@@ -40,6 +40,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -103,6 +104,7 @@ export function HeaderNavigationSection({
 }: HeaderNavigationSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const formDefaults = useMemo(() => toFormValues(config), [config])
 
   const form = useForm<HeaderNavFormValues>({
@@ -138,9 +140,11 @@ export function HeaderNavigationSection({
       return
     }
 
-    await updateOption.mutateAsync({
-      key: 'HeaderNavModules',
-      value: serialized,
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: 'HeaderNavModules',
+        value: serialized,
+      })
     })
   }
 

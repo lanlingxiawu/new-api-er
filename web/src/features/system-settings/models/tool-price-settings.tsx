@@ -28,6 +28,7 @@ import { Field, FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
+import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const OPTION_KEY = 'tool_price_setting.prices'
@@ -117,6 +118,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
 }: ToolPriceSettingsProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [rows, setRows] = useState<ToolPriceRow[]>([])
   const [jsonText, setJsonText] = useState('')
@@ -133,6 +135,10 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   }, [defaultValue])
 
   const currentPrices = useMemo(() => rowsToObject(rows), [rows])
+  const savedPrices = useMemo(
+    () => JSON.stringify(parseInitialPrices(defaultValue)),
+    [defaultValue]
+  )
   const invalidRowIds = useMemo(
     () =>
       new Set(
@@ -229,11 +235,27 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
       toast.error(t('Please fix JSON errors before saving'))
       return
     }
-    await updateOption.mutateAsync({
-      key: OPTION_KEY,
-      value: JSON.stringify(currentPrices),
+    const serializedPrices = JSON.stringify(currentPrices)
+    if (serializedPrices === savedPrices) {
+      toast.info(t('No changes to save'))
+      return
+    }
+    await requestSaveConfirmation(async () => {
+      await updateOption.mutateAsync({
+        key: OPTION_KEY,
+        value: serializedPrices,
+      })
     })
-  }, [currentPrices, editMode, invalidRowIds.size, jsonError, t, updateOption])
+  }, [
+    currentPrices,
+    editMode,
+    invalidRowIds.size,
+    jsonError,
+    requestSaveConfirmation,
+    savedPrices,
+    t,
+    updateOption,
+  ])
 
   const toggleEditMode = useCallback(() => {
     setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
