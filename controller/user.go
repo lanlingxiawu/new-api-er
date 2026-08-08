@@ -679,9 +679,20 @@ func GetUserModels(c *gin.Context) {
 	})
 }
 
+type updateUserRequest struct {
+	model.User
+	// These pointer fields intentionally shadow the embedded User JSON fields so
+	// an omitted value can be distinguished from an explicit zero (inherit).
+	StreamResponseTimeout    *int `json:"stream_response_timeout"`
+	StreamTotalTimeout       *int `json:"stream_total_timeout"`
+	NonStreamResponseTimeout *int `json:"non_stream_response_timeout"`
+	NonStreamTotalTimeout    *int `json:"non_stream_total_timeout"`
+}
+
 func UpdateUser(c *gin.Context) {
-	var updatedUser model.User
-	err := common.DecodeJson(c.Request.Body, &updatedUser)
+	var request updateUserRequest
+	err := common.DecodeJson(c.Request.Body, &request)
+	updatedUser := request.User
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -702,6 +713,27 @@ func UpdateUser(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	timeoutOverrides := [...]struct {
+		requested *int
+		target    *int
+		original  int
+	}{
+		{request.StreamResponseTimeout, &updatedUser.StreamResponseTimeout, originUser.StreamResponseTimeout},
+		{request.StreamTotalTimeout, &updatedUser.StreamTotalTimeout, originUser.StreamTotalTimeout},
+		{request.NonStreamResponseTimeout, &updatedUser.NonStreamResponseTimeout, originUser.NonStreamResponseTimeout},
+		{request.NonStreamTotalTimeout, &updatedUser.NonStreamTotalTimeout, originUser.NonStreamTotalTimeout},
+	}
+	for _, override := range timeoutOverrides {
+		if override.requested == nil {
+			*override.target = override.original
+			continue
+		}
+		if err := service.ValidateRelayTimeoutOverride(*override.requested); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		*override.target = *override.requested
 	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)

@@ -114,6 +114,11 @@ type User struct {
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 	AuthVersion      int64          `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"` // 无状态鉴权版本号，上游 #6329
 
+	StreamResponseTimeout    int `json:"stream_response_timeout" gorm:"type:int;not null;default:0;column:stream_response_timeout"`
+	StreamTotalTimeout       int `json:"stream_total_timeout" gorm:"type:int;not null;default:0;column:stream_total_timeout"`
+	NonStreamResponseTimeout int `json:"non_stream_response_timeout" gorm:"type:int;not null;default:0;column:non_stream_response_timeout"`
+	NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not null;default:0;column:non_stream_total_timeout"`
+
 	// 非持久化：仅在用户搜索（分配客户场景）中填充
 	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
 	AssignedEmployeeUserId int    `json:"assigned_employee_user_id,omitempty" gorm:"-:all"`
@@ -138,6 +143,10 @@ func (user *User) ToBaseUser() *UserBase {
 		AuthVersion: user.AuthVersion,
 		CacheSchema: userCacheSchemaVersion,
 	}
+	cache.StreamResponseTimeout = user.StreamResponseTimeout
+	cache.StreamTotalTimeout = user.StreamTotalTimeout
+	cache.NonStreamResponseTimeout = user.NonStreamResponseTimeout
+	cache.NonStreamTotalTimeout = user.NonStreamTotalTimeout
 	return cache
 }
 
@@ -970,6 +979,10 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 		"group_ratios": newUser.GroupRatios,
 		"remark":       newUser.Remark,
 	}
+	updates["stream_response_timeout"] = newUser.StreamResponseTimeout
+	updates["stream_total_timeout"] = newUser.StreamTotalTimeout
+	updates["non_stream_response_timeout"] = newUser.NonStreamResponseTimeout
+	updates["non_stream_total_timeout"] = newUser.NonStreamTotalTimeout
 	if updatePassword {
 		updates["password"] = newUser.Password
 	}

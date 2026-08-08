@@ -368,6 +368,7 @@ func InitResources() error {
 	operation_setting.ApplyRateLimitEnvDefaults()
 	operation_setting.ApplyDBPoolEnvDefaults()
 	operation_setting.ApplyUserSessionEnvDefaults()
+	operation_setting.ApplyRelayTimeoutEnvDefaults()
 
 	// Initialize options, should after model.InitDB()
 	if common.IsMasterNode {

@@ -305,7 +305,7 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
-	fullRequestURL, err := a.GetRequestURL(info)
+	fullRequestURL, err := requestURLForContext(a, c, info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
@@ -474,7 +474,12 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	return doRequest(c, req, info)
 }
+
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	req = service.BindRelayRequestContext(c, req)
+	if traceContext := service.RelayResponseTraceContext(c, req.Context()); traceContext != req.Context() {
+		req = req.WithContext(traceContext)
+	}
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -510,9 +515,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	resp, err := client.Do(req)
+	resp, err := service.RelayHTTPClient(c, client).Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
+		if contextErr := service.RelayContextError(c); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {

@@ -40,6 +40,10 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
+  stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
+  stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
+  non_stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
+  non_stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
   // Per-user exclusive group ratios, edited as rows and serialized to JSON on submit
   groupRatios: z
     .array(
@@ -98,6 +102,10 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   role: 1, // Default to common user
   quota_dollars: 0,
   group: DEFAULT_GROUP,
+  stream_response_timeout: 0,
+  stream_total_timeout: 0,
+  non_stream_response_timeout: 0,
+  non_stream_total_timeout: 0,
   groupRatios: [],
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
@@ -141,6 +149,10 @@ export function transformFormDataToPayload(
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group
     payload.group_ratios = serializeGroupRatioRows(data.groupRatios)
+    payload.stream_response_timeout = data.stream_response_timeout ?? 0
+    payload.stream_total_timeout = data.stream_total_timeout ?? 0
+    payload.non_stream_response_timeout = data.non_stream_response_timeout ?? 0
+    payload.non_stream_total_timeout = data.non_stream_total_timeout ?? 0
     payload.remark = data.remark || undefined
     payload.id = userId
   }
@@ -161,6 +173,10 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
+    stream_response_timeout: user.stream_response_timeout ?? 0,
+    stream_total_timeout: user.stream_total_timeout ?? 0,
+    non_stream_response_timeout: user.non_stream_response_timeout ?? 0,
+    non_stream_total_timeout: user.non_stream_total_timeout ?? 0,
     groupRatios: parseGroupRatioRows(user.group_ratios),
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},

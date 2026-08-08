@@ -1,7 +1,6 @@
 package volcengine
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -209,7 +210,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
 
-	conn, resp, dialErr := websocket.DefaultDialer.DialContext(context.Background(), requestURL, header)
+	conn, resp, dialErr := websocket.DefaultDialer.DialContext(service.RelayRequestContext(c), requestURL, header)
 	if dialErr != nil {
 		if resp != nil {
 			return nil, types.NewErrorWithStatusCode(
@@ -225,6 +226,9 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 		)
 	}
 	defer conn.Close()
+	if deadline, ok := service.RelayRequestDeadline(c); ok {
+		_ = conn.SetReadDeadline(deadline.Add(10 * time.Millisecond))
+	}
 
 	payload, marshalErr := json.Marshal(volcRequest)
 	if marshalErr != nil {
@@ -277,6 +281,12 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 						types.ErrorCodeBadResponse,
 						http.StatusInternalServerError,
 					)
+				}
+				service.MarkRelayResponse(c)
+				if deadline, ok := service.RelayRequestDeadline(c); ok {
+					_ = conn.SetReadDeadline(deadline.Add(10 * time.Millisecond))
+				} else {
+					_ = conn.SetReadDeadline(time.Time{})
 				}
 				c.Writer.Flush()
 			}

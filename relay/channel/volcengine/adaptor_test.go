@@ -8,10 +8,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	rootcommon "github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 
@@ -25,6 +28,17 @@ func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
 	m.Run()
 }
+
+type relayDeadlineStub struct {
+	deadline time.Time
+	kind     string
+}
+
+func (state relayDeadlineStub) RelayTimeoutDeadline() (time.Time, bool) {
+	return state.deadline, !state.deadline.IsZero()
+}
+
+func (state relayDeadlineStub) RelayTimeoutKind() string { return state.kind }
 
 func newTestContext() *gin.Context {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -518,6 +532,68 @@ func TestHandleTTSWebSocketResponse(t *testing.T) {
 		require.NotNil(t, usage)
 		assert.Contains(t, rec.Body.String(), "AUDIODATA")
 		assert.Equal(t, 4, usage.(*dto.Usage).PromptTokens)
+	})
+
+	t.Run("audio frames complete before total deadline", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if _, err := ReceiveMessage(conn); err != nil {
+				return
+			}
+			first, _ := NewMessage(MsgTypeAudioOnlyServer, MsgTypeFlagPositiveSeq)
+			first.Sequence = 1
+			first.Payload = []byte("FIRST")
+			firstFrame, _ := first.Marshal()
+			_ = conn.WriteMessage(websocket.BinaryMessage, firstFrame)
+			time.Sleep(50 * time.Millisecond)
+			last, _ := NewMessage(MsgTypeAudioOnlyServer, MsgTypeFlagNegativeSeq)
+			last.Sequence = -1
+			last.Payload = []byte("LAST")
+			lastFrame, _ := last.Marshal()
+			_ = conn.WriteMessage(websocket.BinaryMessage, lastFrame)
+		}))
+		defer srv.Close()
+
+		c, rec := newWSContext()
+		rootcommon.SetContextKey(c, rootconstant.ContextKeyIsStream, true)
+		rootcommon.SetContextKey(c, rootconstant.ContextKeyRelayTimeoutControl, relayDeadlineStub{deadline: time.Now().Add(200 * time.Millisecond)})
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "appid|token"}}
+		info.ApiKey = "appid|token"
+
+		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+		_, apiErr := handleTTSWebSocketResponse(c, wsURL, VolcengineTTSRequest{}, info, "mp3")
+		require.Nil(t, apiErr)
+		assert.Contains(t, rec.Body.String(), "FIRST")
+		assert.Contains(t, rec.Body.String(), "LAST")
+	})
+
+	t.Run("no audio before request deadline returns", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if _, err := ReceiveMessage(conn); err != nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}))
+		defer srv.Close()
+
+		c, _ := newWSContext()
+		rootcommon.SetContextKey(c, rootconstant.ContextKeyIsStream, true)
+		rootcommon.SetContextKey(c, rootconstant.ContextKeyRelayTimeoutControl, relayDeadlineStub{deadline: time.Now().Add(20 * time.Millisecond)})
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "appid|token"}}
+		info.ApiKey = "appid|token"
+
+		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+		_, apiErr := handleTTSWebSocketResponse(c, wsURL, VolcengineTTSRequest{}, info, "mp3")
+		require.NotNil(t, apiErr)
 	})
 
 	t.Run("server error message returns error", func(t *testing.T) {

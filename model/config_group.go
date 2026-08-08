@@ -76,6 +76,24 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 			return false, err
 		}
 		operation_setting.ReplaceUserSessionSetting(draft)
+	case "relay_timeout_setting":
+		draft := operation_setting.GetRelayTimeoutSetting()
+		if err := validateRelayTimeoutFields(values); err != nil {
+			return false, err
+		}
+		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+			return false, err
+		}
+		if err := operation_setting.ValidateRelayTimeoutSetting(draft); err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceRelayTimeoutSetting(draft)
 	default:
 		return false, fmt.Errorf("configuration module is not editable")
 	}
@@ -113,9 +131,28 @@ func validateGroupFields(values map[string]string, allowed map[string]struct{}) 
 	return nil
 }
 
+func validateRelayTimeoutFields(values map[string]string) error {
+	for key, value := range values {
+		if _, ok := relayTimeoutFields[key]; !ok {
+			return fmt.Errorf("configuration field is not editable")
+		}
+		if key == "enabled" {
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean configuration value")
+			}
+			continue
+		}
+		if _, err := strconv.Atoi(value); err != nil {
+			return fmt.Errorf("invalid integer configuration value")
+		}
+	}
+	return nil
+}
+
 var rateLimitFields = fieldSet("global_api_enabled", "global_api_num", "global_api_duration_sec", "global_api_user_enabled", "global_api_user_num", "global_api_user_duration_sec", "global_web_enabled", "global_web_num", "global_web_duration_sec", "critical_enabled", "critical_num", "critical_duration_sec", "auth_refresh_enabled", "auth_refresh_num", "auth_refresh_ip_num", "auth_refresh_duration_sec", "search_enabled", "search_num", "search_duration_sec", "log_export_enabled", "log_export_num", "log_export_duration_sec", "redis_timeout_ms")
 var dbPoolFields = fieldSet("max_idle_conns", "max_open_conns", "max_lifetime_sec", "log_max_idle_conns", "log_max_open_conns")
 var userSessionFields = fieldSet("active_limit", "issuance_limit", "issuance_window_sec", "revoked_retention_days", "hourly_alert_threshold")
+var relayTimeoutFields = fieldSet("enabled", "response_timeout_seconds", "total_timeout_seconds")
 
 func fieldSet(fields ...string) map[string]struct{} {
 	out := make(map[string]struct{}, len(fields))

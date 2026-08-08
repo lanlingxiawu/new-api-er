@@ -200,9 +200,17 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 	if err != nil {
 		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "create_request_failed", http.StatusInternalServerError), nullBytes, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	// 使用带有超时的 context 创建新的请求
-	req = req.WithContext(ctx)
+	var ctx context.Context
+	cancel := func() {}
+	if _, owned := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl); owned {
+		// The unified request-local controller is authoritative for managed
+		// requests. Keep the legacy provider cap only when the feature is off.
+		ctx = c.Request.Context()
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
+	// Bind either the unified managed context or the legacy local timeout.
+	req = req.WithContext(RelayResponseTraceContext(c, ctx))
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	req.Header.Set("Accept", c.Request.Header.Get("Accept"))
 	auth := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
@@ -211,7 +219,7 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 		req.Header.Set("mj-api-secret", auth)
 	}
 	defer cancel()
-	resp, err := GetHttpClient().Do(req)
+	resp, err := RelayHTTPClient(c, GetHttpClient()).Do(req)
 	if err != nil {
 		common.SysLog("do request failed: " + err.Error())
 		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "do_request_failed", http.StatusInternalServerError), nullBytes, err

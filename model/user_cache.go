@@ -26,6 +26,11 @@ type UserBase struct {
 	Setting     string `json:"setting"`
 	AuthVersion int64  `json:"-"`
 	CacheSchema int    `json:"-"`
+
+	StreamResponseTimeout    int `json:"stream_response_timeout"`
+	StreamTotalTimeout       int `json:"stream_total_timeout"`
+	NonStreamResponseTimeout int `json:"non_stream_response_timeout"`
+	NonStreamTotalTimeout    int `json:"non_stream_total_timeout"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -35,6 +40,10 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, user.StreamResponseTimeout)
+	common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, user.StreamTotalTimeout)
+	common.SetContextKey(c, constant.ContextKeyUserNonStreamResponseTimeout, user.NonStreamResponseTimeout)
+	common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, user.NonStreamTotalTimeout)
 	// Per-user exclusive group ratios. Only parse when the feature is enabled:
 	// when the flag is off the map is ignored by ResolveGroupRatio anyway, so
 	// this avoids a per-request JSON unmarshal + map allocation on the auth hot

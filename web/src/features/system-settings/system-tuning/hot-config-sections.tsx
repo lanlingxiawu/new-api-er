@@ -39,6 +39,7 @@ type ConfigGroupModule =
   | 'rate_limit_setting'
   | 'db_pool_setting'
   | 'user_session_setting'
+  | 'relay_timeout_setting'
 type ConfigGroupValues = Record<string, string | number | boolean>
 
 type ConfigGroupField = {
@@ -318,6 +319,22 @@ const rateLimitFields: ConfigGroupField[] = [
   },
 ]
 
+const relayTimeoutFields: ConfigGroupField[] = [
+  { key: 'enabled', label: 'AI request timeout enabled', type: 'switch' },
+  {
+    key: 'response_timeout_seconds',
+    label: 'Default response timeout (seconds)',
+    min: 0,
+    max: 604800,
+  },
+  {
+    key: 'total_timeout_seconds',
+    label: 'Default total timeout (seconds)',
+    min: 0,
+    max: 604800,
+  },
+]
+
 const dbPoolFields: ConfigGroupField[] = [
   {
     key: 'max_idle_conns',
@@ -407,6 +424,26 @@ export function RateLimitHotConfigSection({
       module='rate_limit_setting'
       fields={rateLimitFields}
       defaults={groupDefaults(settings, 'rate_limit_setting', rateLimitFields)}
+    />
+  )
+}
+
+export function RelayTimeoutHotConfigSection({
+  settings,
+}: {
+  settings: SystemTuningSettings
+}) {
+  return (
+    <ConfigGroupSection
+      title='AI Request Timeout'
+      description='Changes apply to new requests immediately. Environment variables are startup fallbacks; 0 means unlimited.'
+      module='relay_timeout_setting'
+      fields={relayTimeoutFields}
+      defaults={groupDefaults(
+        settings,
+        'relay_timeout_setting',
+        relayTimeoutFields
+      )}
     />
   )
 }

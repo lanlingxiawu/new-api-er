@@ -2,11 +2,14 @@ package service
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -216,6 +219,49 @@ func TestMJ_DoMidjourneyHttpRequest_BadRequestBody(t *testing.T) {
 	assert.Error(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestMJ_DoMidjourneyHttpRequest_UsesOwnedRelayDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer srv.Close()
+	InitHttpClient()
+
+	requestContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/mj/task/id/fetch", nil).WithContext(requestContext)
+	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, struct{}{})
+
+	_, _, err := DoMidjourneyHttpRequest(c, 5*time.Second, srv.URL)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+}
+
+func TestMJ_DoMidjourneyHttpRequest_ManagedRequestIgnoresLegacyLocalCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":1,"description":"submitted","result":"tid-managed"}`))
+	}))
+	defer srv.Close()
+	InitHttpClient()
+
+	requestContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/mj/submit/imagine", nil).WithContext(requestContext)
+	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, struct{}{})
+
+	resp, _, err := DoMidjourneyHttpRequest(c, 10*time.Millisecond, srv.URL)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, 1, resp.Response.Code)
 }
 
 // readAll drains an http.Request body.

@@ -42,7 +42,11 @@ export type UpdateOptionResponse = {
 
 export type UpdateOptionGroupRequest = {
   scope?: string
-  module: 'rate_limit_setting' | 'db_pool_setting' | 'user_session_setting'
+  module:
+    | 'rate_limit_setting'
+    | 'db_pool_setting'
+    | 'user_session_setting'
+    | 'relay_timeout_setting'
   values: Record<string, string>
 }
 
@@ -560,6 +564,9 @@ export type OperationsSettings = {
 }
 
 export type SystemTuningSettings = {
+  'relay_timeout_setting.enabled': boolean
+  'relay_timeout_setting.response_timeout_seconds': number
+  'relay_timeout_setting.total_timeout_seconds': number
   'business_stats_circuit_breaker_setting.enabled': boolean
   'business_stats_circuit_breaker_setting.manual_disabled': boolean
   'business_stats_circuit_breaker_setting.failure_threshold': number

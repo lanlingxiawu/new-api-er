@@ -29,6 +29,7 @@ func useConfigGroupDB(t *testing.T) *gorm.DB {
 	rateBefore := operation_setting.GetRateLimitSetting()
 	poolBefore := operation_setting.GetDBPoolSetting()
 	sessionBefore := operation_setting.GetUserSessionSetting()
+	relayTimeoutBefore := operation_setting.GetRelayTimeoutSetting()
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -48,6 +49,7 @@ func useConfigGroupDB(t *testing.T) *gorm.DB {
 		operation_setting.ReplaceRateLimitSetting(rateBefore)
 		operation_setting.ReplaceDBPoolSetting(poolBefore)
 		operation_setting.ReplaceUserSessionSetting(sessionBefore)
+		operation_setting.ReplaceRelayTimeoutSetting(relayTimeoutBefore)
 	})
 	return db
 }
@@ -115,6 +117,44 @@ func TestConfigGroupWhitelistsCoverEveryStructField(t *testing.T) {
 	assert.Len(t, rateLimitFields, 23, "rate_limit_setting 字段数与白名单不一致")
 	assert.Len(t, dbPoolFields, 5, "db_pool_setting 字段数与白名单不一致")
 	assert.Len(t, userSessionFields, 5, "user_session_setting 字段数与白名单不一致")
+	assert.Len(t, relayTimeoutFields, 3, "relay_timeout_setting 字段数与白名单不一致")
+}
+
+func TestSaveRelayTimeoutConfigGroupPersistsAndPublishes(t *testing.T) {
+	db := useConfigGroupDB(t)
+
+	applied, err := SaveConfigGroup("relay_timeout_setting", map[string]string{
+		"enabled":                  "false",
+		"response_timeout_seconds": "45",
+		"total_timeout_seconds":    "600",
+	})
+	require.NoError(t, err)
+	assert.True(t, applied)
+
+	snapshot := operation_setting.GetRelayTimeoutSnapshot()
+	require.NotNil(t, snapshot)
+	assert.False(t, snapshot.Enabled)
+	assert.Equal(t, 45, snapshot.ResponseTimeoutSeconds)
+	assert.Equal(t, 600, snapshot.TotalTimeoutSeconds)
+	value, ok := optionRowValue(t, db, "relay_timeout_setting.enabled")
+	require.True(t, ok)
+	assert.Equal(t, "false", value)
+}
+
+func TestSaveRelayTimeoutConfigGroupRejectsInvalidValuesBeforePersistence(t *testing.T) {
+	db := useConfigGroupDB(t)
+
+	for _, values := range []map[string]string{
+		{"enabled": "not-a-bool"},
+		{"response_timeout_seconds": "-1"},
+		{"total_timeout_seconds": strconv.Itoa(operation_setting.MaxRelayTimeoutSettingSeconds + 1)},
+	} {
+		applied, err := SaveConfigGroup("relay_timeout_setting", values)
+		require.Error(t, err)
+		assert.False(t, applied)
+	}
+	_, exists := optionRowValue(t, db, "relay_timeout_setting.enabled")
+	assert.False(t, exists)
 }
 
 func TestSaveUserSessionConfigGroupPersistsAndPublishes(t *testing.T) {

@@ -26,12 +26,20 @@ import {
   Pencil,
   Plus,
   ShieldCheck,
+  Timer,
   Trash2,
   UserRound,
   UsersRound,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useForm, useFieldArray } from 'react-hook-form'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react'
+import { useForm, useFieldArray, type Control } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -112,9 +120,97 @@ type UsersMutateDrawerProps = {
   currentRow?: User
 }
 
+type TimeoutOverrideFieldName =
+  | 'stream_response_timeout'
+  | 'stream_total_timeout'
+  | 'non_stream_response_timeout'
+  | 'non_stream_total_timeout'
+
+type TimeoutOverrideFieldProps = {
+  control: Control<UserFormValues>
+  name: TimeoutOverrideFieldName
+  label: ReactNode
+  description: ReactNode
+}
+
+type TimeoutNumberInputProps = Omit<
+  ComponentProps<typeof Input>,
+  'value' | 'onChange'
+> & {
+  value: number | undefined
+  onValueChange: (value: number) => void
+}
+
+function TimeoutNumberInput({
+  value,
+  onValueChange,
+  onBlur,
+  ...props
+}: TimeoutNumberInputProps) {
+  const [draft, setDraft] = useState(String(value ?? 0))
+
+  useEffect(() => setDraft(String(value ?? 0)), [value])
+
+  return (
+    <Input
+      {...props}
+      type='number'
+      value={draft}
+      onChange={(event) => {
+        const next = event.target.value
+        setDraft(next)
+        if (/^-?\d+$/.test(next)) {
+          onValueChange(Number(next))
+        }
+      }}
+      onBlur={(event) => {
+        if (!/^-?\d+$/.test(draft)) {
+          setDraft('0')
+          onValueChange(0)
+        }
+        onBlur?.(event)
+      }}
+    />
+  )
+}
+
+function TimeoutOverrideField({
+  control,
+  name,
+  label,
+  description,
+}: TimeoutOverrideFieldProps) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>{label}</FormLabel>
+          <FormControl>
+            <TimeoutNumberInput
+              min={-1}
+              max={604800}
+              step={1}
+              name={field.name}
+              ref={field.ref}
+              value={field.value}
+              onBlur={field.onBlur}
+              onValueChange={field.onChange}
+            />
+          </FormControl>
+          <FormDescription>{description}</FormDescription>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  )
+}
+
 const USER_SECTION_IDS = {
   BASIC: 'user-basic-information',
   GROUP_QUOTA: 'user-group-quota',
+  TIMEOUT: 'user-request-timeout',
   EMPLOYEE: 'user-assigned-employee',
   BINDINGS: 'user-binding-information',
 } as const
@@ -211,6 +307,11 @@ export function UsersMutateDrawer({
               id: USER_SECTION_IDS.GROUP_QUOTA,
               label: t('Group & Quota'),
               icon: <CreditCard className='size-4' aria-hidden='true' />,
+            },
+            {
+              id: USER_SECTION_IDS.TIMEOUT,
+              label: t('AI Request Timeout'),
+              icon: <Timer className='size-4' aria-hidden='true' />,
             },
           ]
         : []),
@@ -711,6 +812,78 @@ export function UsersMutateDrawer({
                             </FormItem>
                           )}
                         />
+                      </SideDrawerSection>
+                    </div>
+                  )}
+
+                  {isUpdate && (
+                    <div id={USER_SECTION_IDS.TIMEOUT} className='scroll-mt-4'>
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>
+                          {t('AI Request Timeout')}
+                        </h3>
+                        <p className='text-muted-foreground text-sm'>
+                          {t(
+                            'Each request applies both response and total timeout limits.'
+                          )}{' '}
+                          {t(
+                            'All four 0 keeps legacy behavior; otherwise, 0 inherits the system default and -1 disables that limit.'
+                          )}
+                          {' '}
+                          {t(
+                            '10-minute example: stream response 600, stream total -1; non-stream response -1, non-stream total 600.'
+                          )}
+                        </p>
+
+                        <div className='space-y-4'>
+                          <h4 className='text-sm font-medium'>
+                            {t('Streaming requests')}
+                          </h4>
+                          <div className='grid gap-4 sm:grid-cols-2'>
+                            <TimeoutOverrideField
+                              control={form.control}
+                              name='stream_response_timeout'
+                              label={t('Stream response timeout (seconds)')}
+                              description={t(
+                                'Maximum time without valid stream output. The timer restarts after each valid output.'
+                              )}
+                            />
+
+                            <TimeoutOverrideField
+                              control={form.control}
+                              name='stream_total_timeout'
+                              label={t('Stream total timeout (seconds)')}
+                              description={t(
+                                'Maximum total duration of a streaming request. This timer never restarts.'
+                              )}
+                            />
+                          </div>
+                        </div>
+
+                        <div className='space-y-4'>
+                          <h4 className='text-sm font-medium'>
+                            {t('Non-streaming requests')}
+                          </h4>
+                          <div className='grid gap-4 sm:grid-cols-2'>
+                            <TimeoutOverrideField
+                              control={form.control}
+                              name='non_stream_response_timeout'
+                              label={t('Non-stream response timeout (seconds)')}
+                              description={t(
+                                'Maximum time to wait for the upstream first response.'
+                              )}
+                            />
+
+                            <TimeoutOverrideField
+                              control={form.control}
+                              name='non_stream_total_timeout'
+                              label={t('Non-stream total timeout (seconds)')}
+                              description={t(
+                                'Maximum total duration until the complete response finishes.'
+                              )}
+                            />
+                          </div>
+                        </div>
                       </SideDrawerSection>
                     </div>
                   )}

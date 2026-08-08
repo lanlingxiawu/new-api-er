@@ -184,24 +184,22 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
-	t.Cleanup(func() {
-		common.RelayTimeout = originalRelayTimeout
-	})
+	t.Cleanup(func() { common.RelayTimeout = originalRelayTimeout })
 
-	tests := []struct {
+	for _, test := range []struct {
 		name         string
 		relayTimeout int
+		managed      bool
 		wantDeadline bool
 	}{
-		{name: "without relay timeout", relayTimeout: 0, wantDeadline: false},
-		{name: "with relay timeout", relayTimeout: 30, wantDeadline: true},
-	}
-
-	for _, test := range tests {
+		{name: "legacy without timeout"},
+		{name: "legacy with timeout", relayTimeout: 30, wantDeadline: true},
+		{name: "managed request uses unified timeout", relayTimeout: 30, managed: true},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			common.RelayTimeout = test.relayTimeout
 			parent, cancelParent := context.WithCancel(context.Background())
-			invokeContext, cancelInvoke := newAwsInvokeContext(parent)
+			invokeContext, cancelInvoke := newAwsInvokeContext(parent, test.managed)
 			defer cancelInvoke()
 
 			_, hasDeadline := invokeContext.Deadline()

@@ -1,14 +1,72 @@
 package channel
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type relayTimeoutStateStub string
+
+func (state relayTimeoutStateStub) RelayTimeoutKind() string { return string(state) }
+
+func TestDoRequestClassifiesOwnedRelayDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	rootcommon.SetContextKey(c, rootconstant.ContextKeyRelayTimeoutControl, relayTimeoutStateStub("total_timeout"))
+	rootcommon.SetContextKey(c, rootconstant.ContextKeyRelayTotalTimeoutSeconds, 1)
+	request, err := http.NewRequest(http.MethodPost, server.URL, nil)
+	require.NoError(t, err)
+
+	_, err = doRequest(c, request, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.Error(t, err)
+	var relayErr *types.NewAPIError
+	require.ErrorAs(t, err, &relayErr)
+	require.Equal(t, types.ErrorCodeRelayTimeout, relayErr.GetErrorCode())
+	require.Equal(t, http.StatusGatewayTimeout, relayErr.StatusCode)
+	require.True(t, errors.Is(relayErr, context.DeadlineExceeded))
+	require.True(t, types.IsSkipRetryError(relayErr))
+}
+
+func TestDoRequestDoesNotClassifyClientCancellationAsRelayTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	rootcommon.SetContextKey(c, rootconstant.ContextKeyRelayTimeoutControl, relayTimeoutStateStub(""))
+	request, err := http.NewRequest(http.MethodPost, server.URL, nil)
+	require.NoError(t, err)
+	cancel()
+
+	_, err = doRequest(c, request, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.Error(t, err)
+	var relayErr *types.NewAPIError
+	require.ErrorAs(t, err, &relayErr)
+	require.Equal(t, types.ErrorCodeDoRequestFailed, relayErr.GetErrorCode())
+	require.True(t, errors.Is(relayErr, context.Canceled))
+	require.True(t, types.IsSkipRetryError(relayErr))
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

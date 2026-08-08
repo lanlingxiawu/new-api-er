@@ -33,6 +33,7 @@ import { systemTuningFallbackSettings } from './defaults'
 import {
   DBPoolHotConfigSection,
   RateLimitHotConfigSection,
+  RelayTimeoutHotConfigSection,
   UserSessionHotConfigSection,
 } from './hot-config-sections'
 
@@ -545,6 +546,13 @@ const SYSTEM_TUNING_SECTIONS = [
             ],
         }}
       />
+    ),
+  },
+  {
+    id: 'relay-timeout',
+    titleKey: 'AI Request Timeout',
+    build: (settings: SystemTuningSettings) => (
+      <RelayTimeoutHotConfigSection settings={settings} />
     ),
   },
 ] as const

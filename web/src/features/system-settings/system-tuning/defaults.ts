@@ -2,6 +2,9 @@ import type { SystemTuningSettings } from '../types'
 
 // Safe UI fallbacks for the runtime-parameter page. Server-side `setting/` remains the source of truth.
 export const systemTuningFallbackSettings: SystemTuningSettings = {
+  'relay_timeout_setting.enabled': true,
+  'relay_timeout_setting.response_timeout_seconds': 300,
+  'relay_timeout_setting.total_timeout_seconds': 0,
   'business_stats_circuit_breaker_setting.enabled': true,
   'business_stats_circuit_breaker_setting.manual_disabled': false,
   'business_stats_circuit_breaker_setting.failure_threshold': 3,

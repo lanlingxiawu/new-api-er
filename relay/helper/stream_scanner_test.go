@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -27,6 +28,24 @@ func init() {
 		constant.StreamingTimeout = 30
 	}
 }
+
+type relayTimeoutStateStub string
+
+func (state relayTimeoutStateStub) RelayTimeoutKind() string { return string(state) }
+
+type deadlineResponseWriter struct {
+	header http.Header
+}
+
+func (writer *deadlineResponseWriter) Header() http.Header {
+	return writer.header
+}
+
+func (writer *deadlineResponseWriter) Write([]byte) (int, error) {
+	return 0, context.DeadlineExceeded
+}
+
+func (writer *deadlineResponseWriter) WriteHeader(int) {}
 
 func setupStreamTest(t *testing.T, body io.Reader) (*gin.Context, *http.Response, *relaycommon.RelayInfo) {
 	t.Helper()
@@ -308,6 +327,69 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	body := rec.Body.String()
 	assert.Contains(t, body, "first")
 	assert.NotContains(t, body, "second")
+}
+
+func TestStreamScannerHandler_OwnedDeadlineUsesTimeoutEndReason(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, relayTimeoutStateStub("response_timeout"))
+	resp := &http.Response{Body: pr}
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "handler did not return after configured deadline")
+	}
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
+}
+
+func TestStreamScannerHandler_PingWriteFailurePreservesOwnedTimeoutReason(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled, oldSeconds := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		_ = writer.Close()
+	}()
+
+	c, _ := gin.CreateTestContext(&deadlineResponseWriter{header: make(http.Header)})
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, relayTimeoutStateStub("response_timeout"))
+	resp := &http.Response{Body: reader}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		require.Fail(t, "stream scanner did not stop")
+	}
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
 }
 
 // ---------- Ping ----------

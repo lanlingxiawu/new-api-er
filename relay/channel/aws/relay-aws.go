@@ -40,11 +40,11 @@ func getAwsErrorStatusCode(err error) int {
 	return http.StatusInternalServerError
 }
 
-func newAwsInvokeContext(parent context.Context) (context.Context, context.CancelFunc) {
-	if common.RelayTimeout <= 0 {
-		return context.WithCancel(parent)
+func newAwsInvokeContext(parent context.Context, managed bool) (context.Context, context.CancelFunc) {
+	if !managed && common.RelayTimeout > 0 {
+		return context.WithTimeout(parent, time.Duration(common.RelayTimeout)*time.Second)
 	}
-	return context.WithTimeout(parent, time.Duration(common.RelayTimeout)*time.Second)
+	return context.WithCancel(parent)
 }
 
 func newAwsInvokeError(requestContext context.Context, err error, operation string) *types.NewAPIError {
@@ -65,6 +65,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
+	httpClient = service.RelayHTTPClient(c, httpClient)
 
 	awsSecret := strings.Split(info.ApiKey, "|")
 	var client *bedrockruntime.Client
@@ -229,7 +230,7 @@ func getAwsModelID(requestModel string) string {
 func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
-	ctx, cancel := newAwsInvokeContext(requestContext)
+	ctx, cancel := newAwsInvokeContext(service.RelayResponseTraceContext(c, requestContext), service.IsRelayTimeoutManaged(c))
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
@@ -259,7 +260,7 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 	requestContext := c.Request.Context()
-	ctx, cancel := newAwsInvokeContext(requestContext)
+	ctx, cancel := newAwsInvokeContext(service.RelayResponseTraceContext(c, requestContext), service.IsRelayTimeoutManaged(c))
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
@@ -328,7 +329,7 @@ streamLoop:
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
-	ctx, cancel := newAwsInvokeContext(requestContext)
+	ctx, cancel := newAwsInvokeContext(service.RelayResponseTraceContext(c, requestContext), service.IsRelayTimeoutManaged(c))
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))

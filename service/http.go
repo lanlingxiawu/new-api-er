@@ -53,15 +53,12 @@ func DrainAndCloseResponseBody(httpResponse *http.Response) {
 }
 
 // drainMayBlockIndefinitely 判断排空是否可能永久阻塞。
-// 仅当三者同时成立才算“可能永久阻塞”：全局 RELAY_TIMEOUT 未配置、
-// 响应确实来自一次网络请求、且该请求的 context 没有 deadline。
+// 普通调用依赖全局 RELAY_TIMEOUT 或 request context deadline；受单用户
+// 超时控制的 relay 调用则以本次请求是否有有限总时长为准，因为共享
+// http.Client.Timeout 已在该请求上移除。
 // 采取“默认排空、仅在可证明无时间边界时跳过”的策略：
 // Request 为 nil 说明是内存构造的响应（读取不涉及网络，不会阻塞），照常排空。
 func drainMayBlockIndefinitely(httpResponse *http.Response) bool {
-	if common.RelayTimeout > 0 {
-		// http.Client.Timeout 覆盖包括读 body 在内的整个过程。
-		return false
-	}
 	req := httpResponse.Request
 	if req == nil {
 		return false
@@ -69,6 +66,13 @@ func drainMayBlockIndefinitely(httpResponse *http.Response) bool {
 	ctx := req.Context()
 	if ctx == nil {
 		return true
+	}
+	if state, managed := managedRelayTimeoutContext(ctx); managed {
+		return !state.hasTotalLimit
+	}
+	if common.RelayTimeout > 0 {
+		// http.Client.Timeout covers the full request, including response-body reads.
+		return false
 	}
 	_, hasDeadline := ctx.Deadline()
 	return !hasDeadline

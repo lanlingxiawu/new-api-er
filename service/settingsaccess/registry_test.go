@@ -55,4 +55,10 @@ func TestConfigGroupAllowlistRejectsPartialSmuggling(t *testing.T) {
 	assert.False(t, AllowsGroup("system-tuning.database-pool", "user_session_setting", valid))
 	assert.False(t, AllowsGroup("unknown.scope", "db_pool_setting", valid))
 	assert.False(t, AllowsGroup("system-tuning.database-pool", "db_pool_setting", nil))
+	assert.True(t, AllowsGroup("system-tuning.relay-timeout", "relay_timeout_setting", map[string]string{
+		"enabled": "true", "response_timeout_seconds": "300", "total_timeout_seconds": "0",
+	}))
+	assert.False(t, AllowsGroup("system-tuning.relay-timeout", "relay_timeout_setting", map[string]string{
+		"enabled": "true", "critical_num": "1",
+	}))
 }

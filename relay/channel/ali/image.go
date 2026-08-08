@@ -192,7 +192,7 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 	return &imageRequest, nil
 }
 
-func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
+func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
 	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
 
 	var aliResponse AliResponse
@@ -203,6 +203,7 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
+	req = service.BindRelayRequestContext(c, req)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -232,16 +233,25 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 	var taskResponse AliResponse
 	var responseBody []byte
 
-	time.Sleep(time.Duration(5) * time.Second)
+	requestContext := service.RelayRequestContext(c)
+	select {
+	case <-time.After(5 * time.Second):
+	case <-requestContext.Done():
+		return nil, nil, requestContext.Err()
+	}
 
 	for {
 		logger.LogDebug(c, "asyncTaskWait step %d/%d, wait %d seconds", step, maxStep, waitSeconds)
 		step++
-		rsp, err, body := updateTask(info, taskID)
+		rsp, err, body := updateTask(c, info, taskID)
 		responseBody = body
 		if err != nil {
 			logger.LogWarn(c, "asyncTaskWait UpdateTask err: "+err.Error())
-			time.Sleep(time.Duration(waitSeconds) * time.Second)
+			select {
+			case <-time.After(time.Duration(waitSeconds) * time.Second):
+			case <-requestContext.Done():
+				return nil, responseBody, requestContext.Err()
+			}
 			continue
 		}
 
@@ -262,7 +272,11 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 		if step >= maxStep {
 			break
 		}
-		time.Sleep(time.Duration(waitSeconds) * time.Second)
+		select {
+		case <-time.After(time.Duration(waitSeconds) * time.Second):
+		case <-requestContext.Done():
+			return nil, responseBody, requestContext.Err()
+		}
 	}
 
 	return nil, nil, fmt.Errorf("aliAsyncTaskWait timeout")

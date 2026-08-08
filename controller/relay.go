@@ -91,23 +91,30 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 		if newAPIError != nil {
 			responseMessage := common.MessageWithRequestId(newAPIError.Error(), requestId)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(responseMessage)))
 			newAPIError.SetMessage(responseMessage)
-			switch relayFormat {
-			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			case types.RelayFormatClaude:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
-				})
-			default:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
-				})
+			writeError := func() {
+				switch relayFormat {
+				case types.RelayFormatOpenAIRealtime:
+					helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				case types.RelayFormatClaude:
+					c.JSON(newAPIError.StatusCode, gin.H{
+						"type":  "error",
+						"error": newAPIError.ToClaudeError(),
+					})
+				default:
+					c.JSON(newAPIError.StatusCode, gin.H{
+						"error": newAPIError.ToOpenAIError(),
+					})
+				}
 			}
+			if handleRelayTimeoutResponse(c, newAPIError.GetErrorCode() == types.ErrorCodeRelayTimeout, writeError) {
+				return
+			}
+			writeError()
 		}
 	}()
 
@@ -126,6 +133,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -173,6 +183,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
@@ -195,6 +206,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		if retryParam.GetRetry() > 0 {
+			service.RestartRelayResponseTimeout(c)
+		}
 		// relayInfo 在整个重试循环里复用，ReceivedResponseCount 会跨尝试累积。
 		// 必须每次尝试前归零：否则「上一尝试收到过 SSE 数据后报可重试错、本次尝试
 		// 上游返回 200 却零响应」时，计费守卫（service.ResponseText2UsageFromStream /
@@ -235,9 +249,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			if middleware.IsRelayRequestTimeout(c) {
+				processChannelError(c,
+					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
+						common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
+					relayTimeoutAPIError(c),
+				)
+			}
 			return
 		}
 
@@ -437,6 +459,9 @@ func RelayMidjourney(c *gin.Context) {
 		})
 		return
 	}
+	if shouldStartMidjourneyTimeout(relayInfo.RelayMode) {
+		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
+	}
 
 	var mjErr *taskdto.MidjourneyResponse
 	switch relayInfo.RelayMode {
@@ -450,6 +475,13 @@ func RelayMidjourney(c *gin.Context) {
 		mjErr = relay.RelaySwapFace(c, relayInfo)
 	default:
 		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
+	}
+	if middleware.IsRelayRequestTimeout(c) {
+		if !c.Writer.Written() {
+			respondMidjourneyTimeout(c)
+		}
+		logger.LogError(c, "midjourney relay timed out")
+		return
 	}
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
@@ -518,9 +550,10 @@ func RelayTask(c *gin.Context) {
 		})
 		return
 	}
+	middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
 
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
-		respondTaskError(c, taskErr)
+		respondTaskError(c, normalizeRelayTaskTimeout(c, taskErr))
 		return
 	}
 
@@ -541,6 +574,9 @@ func RelayTask(c *gin.Context) {
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		if retryParam.GetRetry() > 0 {
+			service.RestartRelayResponseTimeout(c)
+		}
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
@@ -574,15 +610,20 @@ func RelayTask(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bodyStorage)
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
+		taskErr = normalizeRelayTaskTimeout(c, taskErr)
 		if taskErr == nil {
 			break
 		}
 
-		if !taskErr.LocalError {
+		if shouldProcessTaskChannelError(taskErr) {
+			channelErr := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
+			if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
+				channelErr = relayTimeoutAPIError(c)
+			}
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				channelErr)
 		}
 
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
@@ -633,6 +674,11 @@ func RelayTask(c *gin.Context) {
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
 func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
+	if handleRelayTimeoutResponse(c, taskErr.Code == string(types.ErrorCodeRelayTimeout), func() {
+		c.JSON(taskErr.StatusCode, taskErr)
+	}) {
+		return
+	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
 	}
@@ -641,6 +687,9 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
+		return false
+	}
+	if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {

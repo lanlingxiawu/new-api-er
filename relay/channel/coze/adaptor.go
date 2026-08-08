@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -95,7 +96,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 				break
 			}
 		}
-		time.Sleep(time.Second * 1)
+		select {
+		case <-time.After(time.Second):
+		case <-service.RelayRequestContext(c).Done():
+			return nil, c.Request.Context().Err()
+		}
 	}
 	// 发送获取消息请求
 	return getChatDetail(a, c, info)

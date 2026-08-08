@@ -47,6 +47,10 @@ export const userSchema = z.object({
   request_count: z.number(),
   group: z.string(),
   group_ratios: z.string().optional(),
+  stream_response_timeout: z.number().optional(),
+  stream_total_timeout: z.number().optional(),
+  non_stream_response_timeout: z.number().optional(),
+  non_stream_total_timeout: z.number().optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -133,6 +137,10 @@ export interface UserFormData {
   quota?: number // Only used when updating user
   group?: string // Only used when updating user
   group_ratios?: string // JSON {group: ratio}; only used when updating user
+  stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
+  stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables
+  non_stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
+  non_stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }

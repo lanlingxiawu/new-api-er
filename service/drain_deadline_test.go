@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // slowBody 模拟“慢速涓流”上游：先给出少量数据，随后阻塞直到被 Close。
@@ -16,6 +18,29 @@ import (
 type slowBody struct {
 	sent   bool
 	closed chan struct{}
+}
+
+func TestDrainDecisionUsesManagedRequestTotalLimitInsteadOfGlobalClientTimeout(t *testing.T) {
+	previous := common.RelayTimeout
+	common.RelayTimeout = 30
+	t.Cleanup(func() { common.RelayTimeout = previous })
+
+	for _, test := range []struct {
+		name                string
+		hasTotalLimit       bool
+		wantMayBlockForever bool
+	}{
+		{name: "managed_unlimited_total", hasTotalLimit: false, wantMayBlockForever: true},
+		{name: "managed_bounded_total", hasTotalLimit: true, wantMayBlockForever: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := WithManagedRelayTimeoutContext(context.Background(), test.hasTotalLimit)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+			require.NoError(t, err)
+			resp := &http.Response{Body: &countingBody{}, Request: req}
+			assert.Equal(t, test.wantMayBlockForever, drainMayBlockIndefinitely(resp))
+		})
+	}
 }
 
 func newSlowBody() *slowBody { return &slowBody{closed: make(chan struct{})} }

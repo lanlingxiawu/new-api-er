@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -48,14 +49,18 @@ func TestUserBase_WriteContext(t *testing.T) {
 	t.Cleanup(func() { ratio_setting.SetUserExclusiveGroupRatioEnabled(prev) })
 
 	ub := &UserBase{
-		Id:          nextTestID(),
-		Group:       "vipgrp",
-		GroupRatios: `{"vipgrp":3}`,
-		Email:       "a@b.com",
-		Quota:       555,
-		Status:      common.UserStatusEnabled,
-		Username:    "ctxuser",
-		Setting:     `{"language":"en"}`,
+		Id:                       nextTestID(),
+		Group:                    "vipgrp",
+		GroupRatios:              `{"vipgrp":3}`,
+		Email:                    "a@b.com",
+		Quota:                    555,
+		Status:                   common.UserStatusEnabled,
+		Username:                 "ctxuser",
+		Setting:                  `{"language":"en"}`,
+		StreamResponseTimeout:    11,
+		StreamTotalTimeout:       22,
+		NonStreamResponseTimeout: 33,
+		NonStreamTotalTimeout:    44,
 	}
 
 	// feature enabled + non-empty ratios -> ratios written
@@ -66,6 +71,10 @@ func TestUserBase_WriteContext(t *testing.T) {
 	assert.Equal(t, 555, common.GetContextKeyInt(c1, constant.ContextKeyUserQuota))
 	assert.Equal(t, common.UserStatusEnabled, common.GetContextKeyInt(c1, constant.ContextKeyUserStatus))
 	assert.Equal(t, "ctxuser", common.GetContextKeyString(c1, constant.ContextKeyUserName))
+	assert.Equal(t, 11, common.GetContextKeyInt(c1, constant.ContextKeyUserStreamResponseTimeout))
+	assert.Equal(t, 22, common.GetContextKeyInt(c1, constant.ContextKeyUserStreamTotalTimeout))
+	assert.Equal(t, 33, common.GetContextKeyInt(c1, constant.ContextKeyUserNonStreamResponseTimeout))
+	assert.Equal(t, 44, common.GetContextKeyInt(c1, constant.ContextKeyUserNonStreamTotalTimeout))
 	_, hasRatios := c1.Get(string(constant.ContextKeyUserGroupRatios))
 	assert.True(t, hasRatios)
 
@@ -76,6 +85,7 @@ func TestUserBase_WriteContext(t *testing.T) {
 	_, hasRatios2 := c2.Get(string(constant.ContextKeyUserGroupRatios))
 	assert.False(t, hasRatios2)
 	assert.Equal(t, "vipgrp", common.GetContextKeyString(c2, constant.ContextKeyUserGroup))
+
 }
 
 func TestGetUserCacheKey(t *testing.T) {
@@ -159,6 +169,10 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 		u.Quota = 1000
 		u.Email = uniq("e") + "@x.com"
 		u.Setting = `{"language":"ja"}`
+		u.StreamResponseTimeout = 15
+		u.StreamTotalTimeout = 30
+		u.NonStreamResponseTimeout = 45
+		u.NonStreamTotalTimeout = 60
 	})
 	t.Cleanup(func() { _ = invalidateUserCache(u.Id) })
 
@@ -170,6 +184,10 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	assert.Equal(t, u.Group, base.Group)
 	assert.Equal(t, 1000, base.Quota)
 	assert.Equal(t, common.UserStatusEnabled, base.Status)
+	assert.Equal(t, 15, base.StreamResponseTimeout)
+	assert.Equal(t, 30, base.StreamTotalTimeout)
+	assert.Equal(t, 45, base.NonStreamResponseTimeout)
+	assert.Equal(t, 60, base.NonStreamTotalTimeout)
 
 	// atomic quota incr / decr on the hash
 	require.NoError(t, cacheIncrUserQuota(u.Id, 250))
@@ -204,6 +222,20 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 
 	// language + group-ratios helpers over the cache
 	assert.Equal(t, "fr", GetUserLanguage(u.Id))
+
+	// Rolling deployments keep the existing base schema. A hash written by an
+	// older instance therefore lacks the timeout fields but remains a valid hit;
+	// missing fields must safely mean zero/inheritance instead of forcing every
+	// new instance through a synchronous DB refresh.
+	require.NoError(t, common.RDB.HDel(context.Background(), getUserCacheKey(u.Id),
+		"StreamResponseTimeout", "StreamTotalTimeout",
+		"NonStreamResponseTimeout", "NonStreamTotalTimeout").Err())
+	legacyBase, err := cacheGetUserBase(u.Id)
+	require.NoError(t, err)
+	assert.Zero(t, legacyBase.StreamResponseTimeout)
+	assert.Zero(t, legacyBase.StreamTotalTimeout)
+	assert.Zero(t, legacyBase.NonStreamResponseTimeout)
+	assert.Zero(t, legacyBase.NonStreamTotalTimeout)
 
 	// invalidate -> subsequent hash read misses
 	require.NoError(t, invalidateUserCache(u.Id))

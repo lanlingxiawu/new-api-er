@@ -1,6 +1,7 @@
 package baidu
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,20 +189,20 @@ func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	return nil, &fullTextResponse.Usage
 }
 
-func getBaiduAccessToken(apiKey string) (string, error) {
+func getBaiduAccessToken(c *gin.Context, requestContext context.Context, apiKey string) (string, error) {
 	if val, ok := baiduTokenStore.Load(apiKey); ok {
 		var accessToken BaiduAccessToken
 		if accessToken, ok = val.(BaiduAccessToken); ok {
 			// soon this will expire
 			if time.Now().Add(time.Hour).After(accessToken.ExpiresAt) {
 				go func() {
-					_, _ = getBaiduAccessTokenHelper(apiKey)
+					_, _ = getBaiduAccessTokenHelper(nil, context.Background(), apiKey)
 				}()
 			}
 			return accessToken.AccessToken, nil
 		}
 	}
-	accessToken, err := getBaiduAccessTokenHelper(apiKey)
+	accessToken, err := getBaiduAccessTokenHelper(c, requestContext, apiKey)
 	if err != nil {
 		return "", err
 	}
@@ -211,7 +212,7 @@ func getBaiduAccessToken(apiKey string) (string, error) {
 	return (*accessToken).AccessToken, nil
 }
 
-func getBaiduAccessTokenHelper(apiKey string) (*BaiduAccessToken, error) {
+func getBaiduAccessTokenHelper(c *gin.Context, requestContext context.Context, apiKey string) (*BaiduAccessToken, error) {
 	parts := strings.Split(apiKey, "|")
 	if len(parts) != 2 {
 		return nil, errors.New("invalid baidu apikey")
@@ -223,7 +224,8 @@ func getBaiduAccessTokenHelper(apiKey string) (*BaiduAccessToken, error) {
 	}
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Accept", "application/json")
-	res, err := service.GetHttpClient().Do(req)
+	req = req.WithContext(requestContext)
+	res, err := service.RelayHTTPClient(c, service.GetHttpClient()).Do(req)
 	if err != nil {
 		return nil, err
 	}

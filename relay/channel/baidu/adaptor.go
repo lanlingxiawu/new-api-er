@@ -1,6 +1,7 @@
 package baidu
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,6 +46,14 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	return a.getRequestURL(nil, context.Background(), info)
+}
+
+func (a *Adaptor) GetRequestURLWithContext(c *gin.Context, info *relaycommon.RelayInfo) (string, error) {
+	return a.getRequestURL(c, service.RelayRequestContext(c), info)
+}
+
+func (a *Adaptor) getRequestURL(c *gin.Context, requestContext context.Context, info *relaycommon.RelayInfo) (string, error) {
 	// https://cloud.baidu.com/doc/WENXINWORKSHOP/s/clntwmv7t
 	suffix := "chat/"
 	if strings.HasPrefix(info.UpstreamModelName, "Embedding") {
@@ -104,7 +114,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	fullRequestURL := fmt.Sprintf("%s/rpc/2.0/ai_custom/v1/wenxinworkshop/%s", info.ChannelBaseUrl, suffix)
 	var accessToken string
 	var err error
-	if accessToken, err = getBaiduAccessToken(info.ApiKey); err != nil {
+	if accessToken, err = getBaiduAccessToken(c, requestContext, info.ApiKey); err != nil {
 		return "", err
 	}
 	fullRequestURL += "?access_token=" + accessToken
