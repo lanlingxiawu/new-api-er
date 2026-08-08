@@ -504,6 +504,12 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         </div>
       </div>
 
+      <p className='text-muted-foreground shrink-0 text-xs'>
+        {t(
+          'This table compares ratios. Prices in the editor are derived: model ratio * 2 = input price ($/1M); output price = input price * completion ratio; cache price = input price * cache ratio.'
+        )}
+      </p>
+
       <div className='min-h-0 flex-1'>
         <UpstreamRatioSyncTable
           differences={differences}

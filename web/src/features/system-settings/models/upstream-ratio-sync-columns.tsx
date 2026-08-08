@@ -35,6 +35,7 @@ import type { RatioType } from '../types'
 import {
   getAlignedRatioTypes,
   getPreferredSyncField,
+  getRatioPriceHint,
   getSyncFieldLabel,
   isSelectedResolutionValue,
   type ModelRow,
@@ -116,6 +117,13 @@ export function useUpstreamRatioSyncColumns(
             <div className={syncFieldListClassName}>
               {fields.map((ratioType) => {
                 const current = row.original.ratioTypes[ratioType]?.current
+                const priceHint = getRatioPriceHint(
+                  row.original.ratioTypes,
+                  ratioType,
+                  current,
+                  null,
+                  t
+                )
                 return (
                   <div key={ratioType} className={syncFieldRowClassName}>
                     <StatusBadge
@@ -145,10 +153,15 @@ export function useUpstreamRatioSyncColumns(
                               />
                             }
                           />
-                          <TooltipContent>
+                          <TooltipContent className='flex-col items-start gap-0.5'>
                             <p className='max-w-xs text-xs break-all'>
                               {String(current)}
                             </p>
+                            {priceHint && (
+                              <p className='text-background/70 max-w-xs text-xs'>
+                                {priceHint}
+                              </p>
+                            )}
                           </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
@@ -239,6 +252,13 @@ export function useUpstreamRatioSyncColumns(
                     <div className='min-w-0 flex-1'>
                       {renderUpstreamValue({
                         upstreamVal,
+                        priceHint: getRatioPriceHint(
+                          row.original.ratioTypes,
+                          ratioType,
+                          upstreamVal,
+                          upstreamName,
+                          t
+                        ),
                         isAvailable: isVisibleForSource,
                         isConfident,
                         isSelected: isSelectedResolutionValue(
@@ -286,6 +306,7 @@ export function useUpstreamRatioSyncColumns(
 
 type RenderUpstreamValueArgs = {
   upstreamVal: number | string | 'same' | null | undefined
+  priceHint: string | null
   isAvailable: boolean
   isConfident: boolean
   isSelected: boolean
@@ -296,8 +317,15 @@ type RenderUpstreamValueArgs = {
 }
 
 function renderUpstreamValue(args: RenderUpstreamValueArgs) {
-  const { upstreamVal, isAvailable, isConfident, isSelected, isDisabled, t } =
-    args
+  const {
+    upstreamVal,
+    priceHint,
+    isAvailable,
+    isConfident,
+    isSelected,
+    isDisabled,
+    t,
+  } = args
 
   if (!isAvailable) {
     return (
@@ -352,8 +380,11 @@ function renderUpstreamValue(args: RenderUpstreamValueArgs) {
           >
             {text}
           </TooltipTrigger>
-          <TooltipContent>
+          <TooltipContent className='flex-col items-start gap-0.5'>
             <p className='max-w-xs text-xs break-all'>{text}</p>
+            {priceHint && (
+              <p className='text-background/70 max-w-xs text-xs'>{priceHint}</p>
+            )}
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

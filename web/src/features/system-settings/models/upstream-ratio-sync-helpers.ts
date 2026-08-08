@@ -24,6 +24,7 @@ import {
   OFFICIAL_CHANNEL_NAME,
   RATIO_TYPE_OPTIONS,
 } from './constants'
+import { formatPricingNumber } from './pricing-format'
 
 export type RatioDifferenceEntry = {
   current: number | string | null
@@ -146,6 +147,74 @@ export function getAlignedRatioTypes(
   })
 
   return ordered.filter((ratioType) => visible.has(ratioType))
+}
+
+// A model ratio of 1 bills $0.002/1K tokens, i.e. $2 per 1M input tokens
+// (`USD = 500` in setting/ratio_setting/model_ratio.go). Every other lane is a
+// multiplier on that input price rather than a price of its own.
+const RATIO_TO_INPUT_PRICE_FACTOR = 2
+
+const PRICE_LABEL_KEY_BY_RATIO_TYPE: Partial<Record<RatioType, string>> = {
+  model_ratio: 'Input price',
+  completion_ratio: 'Completion price',
+  cache_ratio: 'Cache read price',
+  create_cache_ratio: 'Cache write price',
+  image_ratio: 'Image input price',
+  audio_ratio: 'Audio input price',
+  audio_completion_ratio: 'Audio output price',
+}
+
+function readSourceRatio(
+  entry: RatioDifferenceEntry | undefined,
+  sourceName: string | null
+): number | null {
+  if (!entry) return null
+
+  const raw = sourceName === null ? entry.current : entry.upstreams?.[sourceName]
+  // "same" means the upstream matches the local value, so the local one is the
+  // number that would actually be in effect for this column.
+  const resolved = raw === 'same' ? entry.current : raw
+  if (resolved === null || resolved === undefined || resolved === '') return null
+
+  const num = Number(resolved)
+  return Number.isFinite(num) ? num : null
+}
+
+/**
+ * Renders a ratio cell as the $/1M price the pricing editor would show for it,
+ * e.g. `Input price $1.09 / 1M`.
+ *
+ * Lanes other than the model ratio are multipliers on the input price, so they
+ * can only be converted when the *same column* also carries a model ratio —
+ * the local column and each upstream must each use their own base. Returns null
+ * for non-ratio fields (fixed price, expression) and when the base is missing.
+ */
+export function getRatioPriceHint(
+  ratioTypes: Partial<Record<RatioType, RatioDifferenceEntry>>,
+  ratioType: RatioType,
+  value: number | string | 'same' | null | undefined,
+  sourceName: string | null,
+  t: (key: string) => string
+): string | null {
+  const labelKey = PRICE_LABEL_KEY_BY_RATIO_TYPE[ratioType]
+  if (!labelKey) return null
+
+  const ratio = Number(value)
+  if (value === null || value === undefined || !Number.isFinite(ratio)) {
+    return null
+  }
+
+  let price = ratio * RATIO_TO_INPUT_PRICE_FACTOR
+  if (ratioType !== 'model_ratio') {
+    const baseRatio = readSourceRatio(ratioTypes.model_ratio, sourceName)
+    if (baseRatio === null) return null
+    price = baseRatio * RATIO_TO_INPUT_PRICE_FACTOR * ratio
+  }
+
+  const formatted = formatPricingNumber(price)
+  if (!formatted) return null
+
+  return `${t(labelKey)} $${formatted} / 1M`
 }
 
 export function getBillingCategory(
