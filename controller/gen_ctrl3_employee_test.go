@@ -222,6 +222,24 @@ func TestAdminAddEmployeePerformance_Success(t *testing.T) {
 	})
 }
 
+func TestAdminAddEmployeePerformance_AllowsAmountBeyondBillingQuotaLimit(t *testing.T) {
+	requireDB(t)
+	_, emp := mkEmployee(t, nil)
+	ctx, rec := newCtx(t, http.MethodPost, "/api/admin/employee/"+strconv.Itoa(emp.Id)+"/performance",
+		AddEmployeePerformanceRequest{ProfitUsd: 100_000, Reason: "large adjustment"})
+	idParam(ctx, "id", strconv.Itoa(emp.Id))
+	asAdmin(ctx, 7)
+	AdminAddEmployeePerformance(ctx)
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, "body: %s", rec.Body.String())
+	t.Cleanup(func() {
+		if model.DB != nil {
+			model.DB.Exec("DELETE FROM employee_commission_logs WHERE employee_user_id = ?", emp.UserId)
+			model.DB.Exec("DELETE FROM employee_performance_adjust_logs WHERE employee_user_id = ?", emp.UserId)
+		}
+	})
+}
+
 func TestAdminAddEmployeePerformance_EmployeeNotFound(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPost, "/api/admin/employee/999999991/performance",
 		AddEmployeePerformanceRequest{ProfitUsd: 1})

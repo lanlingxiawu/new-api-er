@@ -436,16 +436,20 @@ func AdminAddEmployeePerformance(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "employee not found"})
 		return
 	}
-	// 用户可控金额 → quota：走集中式饱和转换（int32 边界 + NaN 处理），符合项目 billing 安全不变量。
-	// 手工调整是管理员单次操作，越界时显式报错而非静默钳制，避免把一笔巨额调整悄悄截断。
-	profitQuotaInt, clamp := common.QuotaFromDecimalChecked(
-		decimal.NewFromFloat(req.ProfitUsd).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-	)
-	if clamp != nil {
+	// Manual adjustments use int64 commission/stat columns and do not share
+	// the int32 billing-quota limit enforced on the relay path. Reject only
+	// values that the storage type itself cannot represent.
+	profitQuotaDecimal := decimal.NewFromFloat(req.ProfitUsd).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Round(0)
+	const maxInt64 = int64(^uint64(0) >> 1)
+	const minInt64 = -maxInt64 - 1
+	if profitQuotaDecimal.GreaterThan(decimal.NewFromInt(maxInt64)) ||
+		profitQuotaDecimal.LessThan(decimal.NewFromInt(minInt64)) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "profit amount out of range"})
 		return
 	}
-	profitQuota := int64(profitQuotaInt)
+	profitQuota := profitQuotaDecimal.IntPart()
 	if profitQuota == 0 {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "profit amount is too small"})
 		return
@@ -1601,4 +1605,3 @@ func AdminUnassignCustomerFromEmployee(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
-
