@@ -434,6 +434,10 @@ func TestClearAllRequestLogs_ReturnsEntryCount(t *testing.T) {
 	assert.Zero(t, requestLogIndexLen())
 	assert.Equal(t, 3, countRequestLogFiles(t, root), "files are reclaimed by the sweeper, not by clear")
 
+	stats := SweepRequestLogFiles()
+	assert.Zero(t, stats.Errors)
+	assert.Zero(t, countRequestLogFiles(t, root), "the next periodic sweep reclaims cleared bodies")
+
 	// 空索引再清一次 -> 0
 	cleared, err = ClearAllRequestLogs()
 	require.NoError(t, err)

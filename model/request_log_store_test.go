@@ -204,19 +204,6 @@ func TestInitRequestLogStore_EnvClamping(t *testing.T) {
 	InitRequestLogStore()
 	assert.Equal(t, 2500, RequestLogQueueSize())
 
-	// 宽限期保护"写盘成功但尚未进索引"的窗口，任何低于下限的配置都会被抬到下限，
-	// 否则清理协程会删掉在途正文。
-	t.Setenv("REQUEST_LOG_SWEEP_GRACE_SEC", "-1")
-	InitRequestLogStore()
-	assert.Equal(t, minRequestLogSweepGrace, requestLogSweepGrace, "negative grace must clamp to the floor")
-
-	t.Setenv("REQUEST_LOG_SWEEP_GRACE_SEC", "0")
-	InitRequestLogStore()
-	assert.Equal(t, minRequestLogSweepGrace, requestLogSweepGrace, "0 must clamp to the floor")
-
-	t.Setenv("REQUEST_LOG_SWEEP_GRACE_SEC", "900")
-	InitRequestLogStore()
-	assert.Equal(t, 900*time.Second, requestLogSweepGrace, "values above the floor are kept")
 }
 
 // 清理协程会回收根目录下一切不属于本布局的内容，所以非独占目录必须整体拒绝接管，
@@ -249,7 +236,6 @@ func TestInitRequestLogStore_AdoptsExistingLayoutAndMarksOwnership(t *testing.T)
 // 标记文件被清理协程删掉，下次启动就再也无法证明目录独占。
 func TestSweep_KeepsOwnerMarker(t *testing.T) {
 	dir := requestLogTestStore(t)
-	requestLogWithGrace(t, time.Hour)
 	marker := filepath.Join(dir, requestLogOwnerMarker)
 	past := time.Now().Add(-72 * time.Hour)
 	require.NoError(t, os.Chtimes(marker, past, past))

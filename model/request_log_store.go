@@ -37,15 +37,10 @@ const (
 	// 根等），没有这道校验就会把无关文件一并回收。
 	requestLogOwnerMarker = ".new-api-request-log"
 
-	// 孤儿删除宽限期下限。宽限期保护"写盘成功但尚未进索引"的瞬间窗口，配成 0
-	// 会让清理协程删掉在途正文，详情点开就是 404。
-	minRequestLogSweepGrace = 60 * time.Second
-
 	defaultRequestLogWriters       = 4
 	maxRequestLogWriters           = 32
 	defaultRequestLogQueueSize     = 1000
 	defaultRequestLogSweepInterval = 300 * time.Second
-	defaultRequestLogSweepGrace    = 600 * time.Second
 )
 
 var errRequestLogStoreUnavailable = errors.New("request log store unavailable")
@@ -60,7 +55,6 @@ var (
 	requestLogWriters       = defaultRequestLogWriters
 	requestLogQueueSize     = defaultRequestLogQueueSize
 	requestLogSweepInterval = defaultRequestLogSweepInterval
-	requestLogSweepGrace    = defaultRequestLogSweepGrace
 )
 
 // InitRequestLogStore 解析请求日志的部署级环境变量并准备根目录。
@@ -72,12 +66,6 @@ func InitRequestLogStore() {
 	requestLogWriters = clampInt(common.GetEnvOrDefault("REQUEST_LOG_WRITERS", defaultRequestLogWriters), 1, maxRequestLogWriters)
 	requestLogQueueSize = clampInt(common.GetEnvOrDefault("REQUEST_LOG_MAX_INFLIGHT", defaultRequestLogQueueSize), 1, 1<<20)
 	requestLogSweepInterval = time.Duration(maxInt(common.GetEnvOrDefault("REQUEST_LOG_SWEEP_INTERVAL_SEC", int(defaultRequestLogSweepInterval/time.Second)), 0)) * time.Second
-	// 下限而不是照单全收：0 会让宽限期形同虚设。0 表示"关闭清理"由 INTERVAL 负责表达。
-	requestLogSweepGrace = time.Duration(common.GetEnvOrDefault("REQUEST_LOG_SWEEP_GRACE_SEC", int(defaultRequestLogSweepGrace/time.Second))) * time.Second
-	if requestLogSweepGrace < minRequestLogSweepGrace {
-		requestLogSweepGrace = minRequestLogSweepGrace
-	}
-
 	requestLogDirMu.Lock()
 	requestLogDirCache = make(map[string]struct{}, requestLogDirCacheMax)
 	requestLogDirMu.Unlock()

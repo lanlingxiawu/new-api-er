@@ -259,7 +259,7 @@ func GetRequestLogById(id int) (*RequestLog, error) {
 }
 
 // DeleteOldRequestLog 删除 targetTimestamp 之前的请求日志索引，返回删除条数。
-// 磁盘正文由清理协程回收，这里只触发一次立即扫描。
+// 磁盘正文由后台定时扫描统一回收。
 func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 	reqLogMu.Lock()
 	kept := make([]requestLogIndexEntry, 0, len(reqLogItems))
@@ -274,9 +274,6 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 	reqLogItems = kept
 	reqLogMu.Unlock()
 
-	if deleted > 0 {
-		TriggerRequestLogSweep()
-	}
 	return deleted, nil
 }
 
@@ -288,6 +285,5 @@ func ClearAllRequestLogs() (int64, error) {
 	reqLogItems = nil
 	reqLogMu.Unlock()
 
-	TriggerRequestLogSweep()
 	return cleared, nil
 }

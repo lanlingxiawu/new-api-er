@@ -21,10 +21,7 @@ import (
 // 远超上限的文件，分批读避免一次性把目录项全部载入内存。
 const requestLogSweepBatch = 1000
 
-var (
-	requestLogSweepTrigger = make(chan struct{}, 1)
-	requestLogSweepOnce    sync.Once
-)
+var requestLogSweepOnce sync.Once
 
 type requestLogSweepStats struct {
 	Scanned     int
@@ -43,23 +40,10 @@ func StartRequestLogSweeper() {
 	})
 }
 
-// TriggerRequestLogSweep 请求一次立即清理（清空/按时间删除索引后调用）。
-// 非阻塞：已有待处理信号时直接返回，绝不阻塞调用方。
-func TriggerRequestLogSweep() {
-	select {
-	case requestLogSweepTrigger <- struct{}{}:
-	default:
-	}
-}
-
 func requestLogSweepLoop() {
 	ticker := time.NewTicker(requestLogSweepInterval)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-		case <-requestLogSweepTrigger:
-		}
+	for range ticker.C {
 		runRequestLogSweep()
 	}
 }
@@ -79,7 +63,7 @@ func runRequestLogSweep() {
 	}
 }
 
-// SweepRequestLogFiles 执行一轮清理并返回统计。导出供测试与立即触发使用。
+// SweepRequestLogFiles 执行一轮清理并返回统计。导出供测试使用。
 func SweepRequestLogFiles() requestLogSweepStats {
 	var stats requestLogSweepStats
 	if !RequestLogStoreReady() {
@@ -96,10 +80,8 @@ func SweepRequestLogFiles() requestLogSweepStats {
 	}
 
 	now := time.Now()
-	cutoff := now.Add(-requestLogSweepGrace)
 	today := now.Format("2006-01-02")
-	// 早于该日期的日期目录可以整体删除，无需逐文件 stat。取"今天-1"是为了
-	// 让宽限期判断（分钟级）与整目录删除（天级）之间留出一整天的安全距离。
+	// 早于该日期且没有索引引用的日期目录可以整体删除，无需逐文件比对。
 	wholeDirBefore := now.AddDate(0, 0, -1).Format("2006-01-02")
 
 	entries, err := os.ReadDir(requestLogRoot)
@@ -122,17 +104,16 @@ func SweepRequestLogFiles() requestLogSweepStats {
 		if !entry.IsDir() {
 			// 根目录下的散落文件：InitRequestLogStore 已经确认本目录独占，按孤儿处理。
 			stats.Scanned++
-			removeRequestLogPathIfStale(full, entry, cutoff, false, &stats)
+			removeRequestLogPath(full, false, &stats)
 			continue
 		}
 		if !isRequestLogDateDir(name) {
-			removeRequestLogPathIfStale(full, entry, cutoff, true, &stats)
+			removeRequestLogPath(full, true, &stats)
 			continue
 		}
 		if name < wholeDirBefore {
 			if _, used := datesInUse[name]; !used {
-				// ReadDir 在多数平台不返回 mtime，逐文件判断宽限期就是逐文件 stat；
-				// 长期停机后目录里可能有几十万个文件，整目录删除把这部分开销省掉。
+				// 长期停机后目录里可能有几十万个文件，整目录删除省掉逐文件比对开销。
 				if rerr := os.RemoveAll(full); rerr == nil {
 					stats.DirsRemoved++
 				} else {
@@ -141,13 +122,13 @@ func SweepRequestLogFiles() requestLogSweepStats {
 				continue
 			}
 		}
-		sweepRequestLogDateDir(name, full, keep, cutoff, today, &stats)
+		sweepRequestLogDateDir(name, full, keep, today, &stats)
 	}
 	return stats
 }
 
 // sweepRequestLogDateDir 处理单个日期目录下的 8 个桶。
-func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, cutoff time.Time, today string, stats *requestLogSweepStats) {
+func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, today string, stats *requestLogSweepStats) {
 	buckets, err := os.ReadDir(dateFull)
 	if err != nil {
 		stats.Errors++
@@ -158,12 +139,12 @@ func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, cut
 		bucketFull := filepath.Join(dateFull, bucket.Name())
 		if !bucket.IsDir() {
 			stats.Scanned++
-			if !removeRequestLogPathIfStale(bucketFull, bucket, cutoff, false, stats) {
+			if !removeRequestLogPath(bucketFull, false, stats) {
 				remaining++
 			}
 			continue
 		}
-		left := sweepRequestLogBucketDir(date, bucket.Name(), bucketFull, keep, cutoff, stats)
+		left := sweepRequestLogBucketDir(date, bucket.Name(), bucketFull, keep, stats)
 		if left > 0 {
 			remaining++
 			continue
@@ -183,7 +164,7 @@ func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, cut
 }
 
 // sweepRequestLogBucketDir 返回该桶内保留下来的条目数。
-func sweepRequestLogBucketDir(date, bucket, bucketFull string, keep map[string]struct{}, cutoff time.Time, stats *requestLogSweepStats) int {
+func sweepRequestLogBucketDir(date, bucket, bucketFull string, keep map[string]struct{}, stats *requestLogSweepStats) int {
 	dir, err := os.Open(bucketFull)
 	if err != nil {
 		stats.Errors++
@@ -201,7 +182,7 @@ func sweepRequestLogBucketDir(date, bucket, bucketFull string, keep map[string]s
 				remaining++
 				continue
 			}
-			if !removeRequestLogPathIfStale(filepath.Join(bucketFull, entry.Name()), entry, cutoff, entry.IsDir(), stats) {
+			if !removeRequestLogPath(filepath.Join(bucketFull, entry.Name()), entry.IsDir(), stats) {
 				remaining++
 			}
 		}
@@ -218,15 +199,10 @@ func sweepRequestLogBucketDir(date, bucket, bucketFull string, keep map[string]s
 	return remaining
 }
 
-// removeRequestLogPathIfStale 删除超过宽限期的孤儿路径，返回是否已删除。
-//
-// 宽限期是必须的：写盘成功到进索引之间存在一个瞬间窗口，没有它并发写入的文件会被
-// 当场当成孤儿删掉。
-func removeRequestLogPathIfStale(full string, entry os.DirEntry, cutoff time.Time, recursive bool, stats *requestLogSweepStats) bool {
-	info, err := entry.Info()
-	if err != nil || !info.ModTime().Before(cutoff) {
-		return false
-	}
+// removeRequestLogPath 删除无索引对应的孤儿路径，返回是否已删除。
+// 扫描撞上“已落盘、未进索引”的窗口时允许丢失该条尽力而为的请求日志。
+func removeRequestLogPath(full string, recursive bool, stats *requestLogSweepStats) bool {
+	var err error
 	if recursive {
 		err = os.RemoveAll(full)
 	} else {
