@@ -39,6 +39,10 @@ import { ThirdPartySD2PriceSettings } from './thirdpartysd2-price-settings'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
+  PriceMonitorPanel,
+  type PriceMonitorDefaults,
+} from './price-monitor-panel'
+import {
   formatJsonForTextarea,
   type JsonValidationError,
   normalizeJsonString,
@@ -149,12 +153,14 @@ type RatioTabId =
   | 'thirdpartysd2'
   | 'tool-prices'
   | 'upstream-sync'
+  | 'price-monitor'
 
 type RatioSettingsCardProps = {
   modelDefaults: ModelFormValues
   groupDefaults: GroupFormValues
   toolPricesDefault: string
   thirdPartySD2PricingDefault: string
+  priceMonitorDefaults?: PriceMonitorDefaults
   titleKey?: string
   visibleTabs?: RatioTabId[]
 }
@@ -164,6 +170,7 @@ export function RatioSettingsCard({
   groupDefaults,
   toolPricesDefault,
   thirdPartySD2PricingDefault,
+  priceMonitorDefaults,
   titleKey = 'Pricing Ratios',
   visibleTabs = [
     'models',
@@ -171,6 +178,7 @@ export function RatioSettingsCard({
     'thirdpartysd2',
     'tool-prices',
     'upstream-sync',
+    'price-monitor',
   ],
 }: RatioSettingsCardProps) {
   const { t } = useTranslation()
@@ -445,6 +453,7 @@ export function RatioSettingsCard({
     thirdpartysd2: 'Third-party SD2 prices',
     'tool-prices': 'Tool prices',
     'upstream-sync': 'Upstream price sync',
+    'price-monitor': 'Price monitor',
   }
   const tabsGridClass =
     {
@@ -453,7 +462,8 @@ export function RatioSettingsCard({
       3: 'grid-cols-3',
       4: 'grid-cols-4',
       5: 'grid-cols-5',
-    }[visibleTabs.length] ?? 'grid-cols-5'
+      6: 'grid-cols-6',
+    }[visibleTabs.length] ?? 'grid-cols-6'
   const defaultTab = visibleTabs[0] ?? 'models'
 
   const renderTabContent = (tab: RatioTabId) => {
@@ -488,6 +498,9 @@ export function RatioSettingsCard({
           defaultValue={thirdPartySD2PricingDefault}
         />
       )
+    }
+    if (tab === 'price-monitor' && priceMonitorDefaults) {
+      return <PriceMonitorPanel defaults={priceMonitorDefaults} />
     }
     return (
       <UpstreamRatioSync
@@ -524,14 +537,14 @@ export function RatioSettingsCard({
           {renderTabContent(defaultTab)}
         </SettingsSection>
       ) : (
-        <Tabs defaultValue={defaultTab} className='h-full min-h-0 gap-6'>
+        <Tabs defaultValue={defaultTab} className='h-full min-h-0 min-w-0 gap-6'>
           <SettingsPageTitleStatusPortal>
             {renderTabSwitcher()}
           </SettingsPageTitleStatusPortal>
 
-          <SettingsSection title={t(titleKey)} className='min-h-0 flex-1'>
+          <SettingsSection title={t(titleKey)} className='min-h-0 min-w-0 flex-1'>
             {visibleTabs.map((tab) => (
-              <TabsContent key={tab} value={tab} className='min-h-0'>
+              <TabsContent key={tab} value={tab} className='min-h-0 min-w-0'>
                 {renderTabContent(tab)}
               </TabsContent>
             ))}

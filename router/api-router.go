@@ -17,6 +17,9 @@ func SetApiRouter(router *gin.Engine) {
 	router.GET("/dl/ledger/:token", controller.AdminDownloadLedgerExport)
 	// Log export parts: same pattern, plus Range/resumable download via http.ServeContent.
 	router.GET("/dl/log-export/:token", controller.DownloadLogExport)
+	// Public read-only share page. Its data endpoint is protected by a rotating
+	// password and an additional public-query rate limit.
+	router.GET("/price_monitor/view", middleware.GlobalWebRateLimit(), controller.PriceMonitorView)
 
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
@@ -362,6 +365,16 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			ratioSyncRoute.GET("/channels", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.FetchUpstreamRatios)
+		}
+		priceMonitorRoute := apiRouter.Group("/price_monitor")
+		{
+			priceMonitorRoute.POST("/public_query", middleware.PublicQueryRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.PublicPriceMonitorQuery)
+			priceMonitorAdminRoute := priceMonitorRoute.Group("")
+			priceMonitorAdminRoute.Use(middleware.AdminAuth())
+			priceMonitorAdminRoute.GET("/status", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), middleware.DisableCache(), controller.GetPriceMonitorStatus)
+			priceMonitorAdminRoute.GET("/results", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), controller.GetPriceMonitorResults)
+			priceMonitorAdminRoute.GET("/inconsistencies", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), middleware.DisableCache(), controller.GetPriceMonitorInconsistencies)
+			priceMonitorAdminRoute.POST("/run", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.RunPriceMonitor)
 		}
 		registerChannelRoutes(apiRouter)
 		registerAuthzRoutes(apiRouter)

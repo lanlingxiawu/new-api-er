@@ -37,12 +37,41 @@ import type {
   UpdateOptionResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
+  PriceMonitorResultsResponse,
+  PriceMonitorStatusResponse,
 } from './types'
 
 export async function getScopedSystemOptions(scope: string) {
   const res = await api.get<SystemOptionsResponse>('/api/option/', {
     params: { scope },
   })
+  return res.data
+}
+
+export async function getPriceMonitorStatus() {
+  const res = await api.get<PriceMonitorStatusResponse>(
+    '/api/price_monitor/status',
+    { disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function getPriceMonitorResults(params: {
+  model?: string
+  source_keys?: string
+  comparison?: string
+  page: number
+  page_size: number
+}) {
+  const res = await api.get<PriceMonitorResultsResponse>(
+    '/api/price_monitor/results',
+    { params, disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function runPriceMonitor() {
+  const res = await api.post<UpdateOptionResponse>('/api/price_monitor/run', {})
   return res.data
 }
 

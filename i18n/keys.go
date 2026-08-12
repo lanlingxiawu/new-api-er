@@ -511,3 +511,9 @@ const (
 	MsgRequestLogNotFound          = "request_log.not_found"
 	MsgRequestLogTimestampRequired = "request_log.timestamp_required"
 )
+
+const (
+	MsgPriceMonitorInvalidPassword = "price_monitor.invalid_password"
+	MsgPriceMonitorAlreadyRunning  = "price_monitor.already_running"
+	MsgPriceMonitorMasterRequired  = "price_monitor.master_required"
+)

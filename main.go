@@ -135,6 +135,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Periodic read-only comparison of marketplace pricing sources.
+	controller.StartPriceMonitorTask()
+
 	// Commission tier / performance period monthly auto-reset task
 	service.StartCommissionTierResetTask()
 

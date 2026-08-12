@@ -40,6 +40,112 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type PriceMonitorSource = {
+  name: string
+  value: unknown
+}
+
+export type PriceMonitorItem = {
+  model: string
+  field: string
+  platform: unknown
+  sources: PriceMonitorSource[]
+}
+
+export type PriceMonitorPriceLane = {
+  key: string
+  price?: number
+  different?: boolean
+}
+
+export type PriceMonitorPriceTier = {
+  range: string
+  condition_variable?: 'p' | 'c' | 'len'
+  condition_operator?: '<' | '<=' | '>' | '>='
+  condition_value?: number
+  input: number
+  output: number
+  lanes?: PriceMonitorPriceLane[]
+}
+
+export type PriceMonitorPriceCell = {
+  mode: 'per_token' | 'per_request' | 'tiered_expr' | ''
+  input?: number
+  output?: number
+  price?: number
+  lanes?: PriceMonitorPriceLane[]
+  tiers?: PriceMonitorPriceTier[]
+  dynamic?: boolean
+  different?: boolean
+  input_different?: boolean
+  output_different?: boolean
+  price_different?: boolean
+  mode_different?: boolean
+  unavailable_reason?: 'missing' | 'placeholder' | 'source_failed'
+}
+
+export type PriceMonitorSourceHeader = {
+  key: string
+  name: string
+  type: 'platform' | 'official' | 'channel'
+  api_url?: string
+}
+
+export type PriceMonitorMatrixItem = {
+  model: string
+  prices: Record<string, PriceMonitorPriceCell>
+}
+
+export type PriceMonitorStatusResponse = {
+  success: boolean
+  message: string
+  data: {
+    config: {
+      enabled: boolean
+      interval_minutes: number
+      timeout_seconds: number
+      include_official: boolean
+      include_models_dev: boolean
+      model_whitelist: string
+    }
+    snapshot: {
+      checked_at: number
+      status: string
+      source_total: number
+      source_ok: number
+      source_err: number
+      model_count: number
+      item_count: number
+      access_password: string
+      password_expire_at: number
+    }
+    running: boolean
+    last_attempt_at: number
+    last_attempt_error: string
+    storage_scope: string
+    is_master: boolean
+  }
+}
+
+export type PriceMonitorResultsResponse = {
+  success: boolean
+  message: string
+  data: {
+    checked_at: number
+    total: number
+    page: number
+    page_size: number
+      source_headers: PriceMonitorSourceHeader[]
+      available_source_headers: PriceMonitorSourceHeader[]
+      available_models: string[]
+      applied_filters: {
+        source_keys: string[]
+        comparison: string
+      }
+      items: PriceMonitorMatrixItem[]
+  }
+}
+
 export type UpdateOptionGroupRequest = {
   scope?: string
   module:
@@ -137,11 +243,7 @@ export type RelayLogQueueStatus = {
 }
 
 export type RelayLogReplayState =
-  | 'idle'
-  | 'running'
-  | 'succeeded'
-  | 'partial_failed'
-  | 'failed'
+  'idle' | 'running' | 'succeeded' | 'partial_failed' | 'failed'
 
 export type RelayLogReplayStatus = {
   state: RelayLogReplayState
@@ -429,6 +531,12 @@ export type BillingSettings = {
   'billing_setting.billing_expr': string
   'tool_price_setting.prices': string
   'thirdpartysd2_pricing.matrix': string
+  'price_monitor_setting.enabled': boolean
+  'price_monitor_setting.interval_minutes': number
+  'price_monitor_setting.timeout_seconds': number
+  'price_monitor_setting.include_official': boolean
+  'price_monitor_setting.include_models_dev': boolean
+  'price_monitor_setting.model_whitelist': string
   TopupGroupRatio: string
   GroupRatio: string
   UserUsableGroups: string

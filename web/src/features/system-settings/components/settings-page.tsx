@@ -92,7 +92,7 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
         <SectionPageLayout.Content>
           <fieldset
             disabled={!props.canEdit}
-            className='flex h-full min-h-0 w-full flex-col gap-4 disabled:opacity-80'
+            className='flex h-full min-h-0 min-w-0 w-full max-w-full flex-col gap-4 disabled:opacity-80'
           >
             {props.children}
           </fieldset>
