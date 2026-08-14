@@ -17,6 +17,7 @@
   "Midjourney": "Midjourney",
   "MidjourneyPlus": "MidjourneyPlus",
   "New API": "New API",
+  "OpenAI Wire API": "OpenAI Wire API",
   "Per-queue buffer ceiling. Oldest entries dropped on overflow to avoid OOM.": "Per-queue buffer ceiling. Oldest entries dropped on overflow to avoid OOM.",
   "Records per outer loop (error-recovery granularity).": "Records per outer loop (error-recovery granularity).",
   "Seconds between flush cycles. Throughput/min = paired_max × 60 ÷ interval.": "Seconds between flush cycles. Throughput/min = paired_max × 60 ÷ interval.",
@@ -27,5 +28,6 @@
   "TTL of each Redis dedup key (seconds), covering the retry window. Used only when Dedup via Redis is on.": "TTL of each Redis dedup key (seconds), covering the retry window. Used only when Dedup via Redis is on.",
   "Twitter / X": "Twitter / X",
   "Use the live USD/CNY rate; fall back to the manual price below if it is unavailable": "使用实时 USD/CNY 汇率；获取失败时回退到下方手动填写的价格",
-  "User export row limit": "User export row limit"
+  "User export row limit": "User export row limit",
+  "Veridrop Base URL": "Veridrop Base URL"
 }

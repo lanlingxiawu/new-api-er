@@ -148,6 +148,11 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
+            title: t('Veridrop Detection'),
+            url: '/channels/detection',
+            icon: Activity,
+          },
+          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
