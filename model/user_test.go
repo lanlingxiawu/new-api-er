@@ -81,12 +81,22 @@ func TestUser_ToBaseUserAndAccessors(t *testing.T) {
 	u := &User{
 		Id: 5, Group: "g", GroupRatios: `{"g":1}`, Quota: 9, Status: common.UserStatusEnabled,
 		Username: "bob", Setting: `{"language":"en"}`, Email: "b@c.com",
+		StreamResponseTimeout: 11, StreamResponseTimeoutMode: "idle",
+		StreamTotalTimeout: 22, NonStreamResponseTimeout: 33, NonStreamTotalTimeout: 44,
 	}
 	base := u.ToBaseUser()
 	assert.Equal(t, 5, base.Id)
 	assert.Equal(t, "g", base.Group)
 	assert.Equal(t, 9, base.Quota)
 	assert.Equal(t, "bob", base.Username)
+	assert.Equal(t, 11, base.StreamResponseTimeout)
+	assert.Equal(t, "idle", base.StreamResponseTimeoutMode)
+	assert.Equal(t, 22, base.StreamTotalTimeout)
+	assert.Equal(t, 33, base.NonStreamResponseTimeout)
+	assert.Equal(t, 44, base.NonStreamTotalTimeout)
+
+	u.StreamResponseTimeoutMode = ""
+	assert.Equal(t, "first_output", u.ToBaseUser().StreamResponseTimeoutMode)
 
 	// access token accessors
 	assert.Equal(t, "", u.GetAccessToken())

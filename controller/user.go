@@ -683,10 +683,11 @@ type updateUserRequest struct {
 	model.User
 	// These pointer fields intentionally shadow the embedded User JSON fields so
 	// an omitted value can be distinguished from an explicit zero (inherit).
-	StreamResponseTimeout    *int `json:"stream_response_timeout"`
-	StreamTotalTimeout       *int `json:"stream_total_timeout"`
-	NonStreamResponseTimeout *int `json:"non_stream_response_timeout"`
-	NonStreamTotalTimeout    *int `json:"non_stream_total_timeout"`
+	StreamResponseTimeout     *int    `json:"stream_response_timeout"`
+	StreamResponseTimeoutMode *string `json:"stream_response_timeout_mode"`
+	StreamTotalTimeout        *int    `json:"stream_total_timeout"`
+	NonStreamResponseTimeout  *int    `json:"non_stream_response_timeout"`
+	NonStreamTotalTimeout     *int    `json:"non_stream_total_timeout"`
 }
 
 func UpdateUser(c *gin.Context) {
@@ -734,6 +735,15 @@ func UpdateUser(c *gin.Context) {
 			return
 		}
 		*override.target = *override.requested
+	}
+	if request.StreamResponseTimeoutMode == nil {
+		updatedUser.StreamResponseTimeoutMode = service.NormalizeRelayStreamResponseTimeoutMode(originUser.StreamResponseTimeoutMode)
+	} else {
+		if err := service.ValidateRelayStreamResponseTimeoutMode(*request.StreamResponseTimeoutMode); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		updatedUser.StreamResponseTimeoutMode = service.NormalizeRelayStreamResponseTimeoutMode(*request.StreamResponseTimeoutMode)
 	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)

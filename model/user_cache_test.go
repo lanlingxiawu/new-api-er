@@ -49,18 +49,19 @@ func TestUserBase_WriteContext(t *testing.T) {
 	t.Cleanup(func() { ratio_setting.SetUserExclusiveGroupRatioEnabled(prev) })
 
 	ub := &UserBase{
-		Id:                       nextTestID(),
-		Group:                    "vipgrp",
-		GroupRatios:              `{"vipgrp":3}`,
-		Email:                    "a@b.com",
-		Quota:                    555,
-		Status:                   common.UserStatusEnabled,
-		Username:                 "ctxuser",
-		Setting:                  `{"language":"en"}`,
-		StreamResponseTimeout:    11,
-		StreamTotalTimeout:       22,
-		NonStreamResponseTimeout: 33,
-		NonStreamTotalTimeout:    44,
+		Id:                        nextTestID(),
+		Group:                     "vipgrp",
+		GroupRatios:               `{"vipgrp":3}`,
+		Email:                     "a@b.com",
+		Quota:                     555,
+		Status:                    common.UserStatusEnabled,
+		Username:                  "ctxuser",
+		Setting:                   `{"language":"en"}`,
+		StreamResponseTimeout:     11,
+		StreamResponseTimeoutMode: "idle",
+		StreamTotalTimeout:        22,
+		NonStreamResponseTimeout:  33,
+		NonStreamTotalTimeout:     44,
 	}
 
 	// feature enabled + non-empty ratios -> ratios written
@@ -72,6 +73,7 @@ func TestUserBase_WriteContext(t *testing.T) {
 	assert.Equal(t, common.UserStatusEnabled, common.GetContextKeyInt(c1, constant.ContextKeyUserStatus))
 	assert.Equal(t, "ctxuser", common.GetContextKeyString(c1, constant.ContextKeyUserName))
 	assert.Equal(t, 11, common.GetContextKeyInt(c1, constant.ContextKeyUserStreamResponseTimeout))
+	assert.Equal(t, "idle", common.GetContextKeyString(c1, constant.ContextKeyUserStreamResponseTimeoutMode))
 	assert.Equal(t, 22, common.GetContextKeyInt(c1, constant.ContextKeyUserStreamTotalTimeout))
 	assert.Equal(t, 33, common.GetContextKeyInt(c1, constant.ContextKeyUserNonStreamResponseTimeout))
 	assert.Equal(t, 44, common.GetContextKeyInt(c1, constant.ContextKeyUserNonStreamTotalTimeout))
@@ -86,6 +88,10 @@ func TestUserBase_WriteContext(t *testing.T) {
 	assert.False(t, hasRatios2)
 	assert.Equal(t, "vipgrp", common.GetContextKeyString(c2, constant.ContextKeyUserGroup))
 
+	ub.StreamResponseTimeoutMode = ""
+	c3, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ub.WriteContext(c3)
+	assert.Equal(t, "first_output", common.GetContextKeyString(c3, constant.ContextKeyUserStreamResponseTimeoutMode))
 }
 
 func TestGetUserCacheKey(t *testing.T) {
@@ -170,6 +176,7 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 		u.Email = uniq("e") + "@x.com"
 		u.Setting = `{"language":"ja"}`
 		u.StreamResponseTimeout = 15
+		u.StreamResponseTimeoutMode = "idle"
 		u.StreamTotalTimeout = 30
 		u.NonStreamResponseTimeout = 45
 		u.NonStreamTotalTimeout = 60
@@ -185,6 +192,7 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	assert.Equal(t, 1000, base.Quota)
 	assert.Equal(t, common.UserStatusEnabled, base.Status)
 	assert.Equal(t, 15, base.StreamResponseTimeout)
+	assert.Equal(t, "idle", base.StreamResponseTimeoutMode)
 	assert.Equal(t, 30, base.StreamTotalTimeout)
 	assert.Equal(t, 45, base.NonStreamResponseTimeout)
 	assert.Equal(t, 60, base.NonStreamTotalTimeout)
@@ -229,10 +237,11 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	// new instance through a synchronous DB refresh.
 	require.NoError(t, common.RDB.HDel(context.Background(), getUserCacheKey(u.Id),
 		"StreamResponseTimeout", "StreamTotalTimeout",
-		"NonStreamResponseTimeout", "NonStreamTotalTimeout").Err())
+		"StreamResponseTimeoutMode", "NonStreamResponseTimeout", "NonStreamTotalTimeout").Err())
 	legacyBase, err := cacheGetUserBase(u.Id)
 	require.NoError(t, err)
 	assert.Zero(t, legacyBase.StreamResponseTimeout)
+	assert.Empty(t, legacyBase.StreamResponseTimeoutMode)
 	assert.Zero(t, legacyBase.StreamTotalTimeout)
 	assert.Zero(t, legacyBase.NonStreamResponseTimeout)
 	assert.Zero(t, legacyBase.NonStreamTotalTimeout)

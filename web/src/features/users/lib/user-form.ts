@@ -41,6 +41,7 @@ export const userFormSchema = z.object({
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
   stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
+  stream_response_timeout_mode: z.enum(['first_output', 'idle']).optional(),
   stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
   non_stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
   non_stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
@@ -103,6 +104,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   quota_dollars: 0,
   group: DEFAULT_GROUP,
   stream_response_timeout: 0,
+  stream_response_timeout_mode: 'first_output',
   stream_total_timeout: 0,
   non_stream_response_timeout: 0,
   non_stream_total_timeout: 0,
@@ -150,6 +152,8 @@ export function transformFormDataToPayload(
     payload.group = data.group
     payload.group_ratios = serializeGroupRatioRows(data.groupRatios)
     payload.stream_response_timeout = data.stream_response_timeout ?? 0
+    payload.stream_response_timeout_mode =
+      data.stream_response_timeout_mode ?? 'first_output'
     payload.stream_total_timeout = data.stream_total_timeout ?? 0
     payload.non_stream_response_timeout = data.non_stream_response_timeout ?? 0
     payload.non_stream_total_timeout = data.non_stream_total_timeout ?? 0
@@ -174,6 +178,8 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
     stream_response_timeout: user.stream_response_timeout ?? 0,
+    stream_response_timeout_mode:
+      user.stream_response_timeout_mode ?? 'first_output',
     stream_total_timeout: user.stream_total_timeout ?? 0,
     non_stream_response_timeout: user.non_stream_response_timeout ?? 0,
     non_stream_total_timeout: user.non_stream_total_timeout ?? 0,

@@ -839,13 +839,66 @@ export function UsersMutateDrawer({
                           <h4 className='text-sm font-medium'>
                             {t('Streaming requests')}
                           </h4>
+                          <FormField
+                            control={form.control}
+                            name='stream_response_timeout_mode'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  {t('Stream response timeout mode')}
+                                </FormLabel>
+                                <Select
+                                  items={[
+                                    {
+                                      value: 'first_output',
+                                      label: t('First output timeout'),
+                                    },
+                                    {
+                                      value: 'idle',
+                                      label: t('Continuous silence timeout'),
+                                    },
+                                  ]}
+                                  value={field.value ?? 'first_output'}
+                                  onValueChange={(value) => {
+                                    if (value !== null) field.onChange(value)
+                                  }}
+                                >
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent alignItemWithTrigger={false}>
+                                    <SelectGroup>
+                                      <SelectItem value='first_output'>
+                                        {t('First output timeout')}
+                                      </SelectItem>
+                                      <SelectItem value='idle'>
+                                        {t('Continuous silence timeout')}
+                                      </SelectItem>
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                                <FormDescription>
+                                  {field.value === 'idle'
+                                    ? t(
+                                        'Restart this timeout after every valid stream output. The request stops if the stream stays silent longer than this value.'
+                                      )
+                                    : t(
+                                        'Only wait for the first valid stream output. Later silence is not managed by this timeout.'
+                                      )}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
                           <div className='grid gap-4 sm:grid-cols-2'>
                             <TimeoutOverrideField
                               control={form.control}
                               name='stream_response_timeout'
                               label={t('Stream response timeout (seconds)')}
                               description={t(
-                                'Maximum time without valid stream output. The timer restarts after each valid output.'
+                                'Used as first-output wait time or continuous silence time, depending on the selected stream response timeout mode.'
                               )}
                             />
 

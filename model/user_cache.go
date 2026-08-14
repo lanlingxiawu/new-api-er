@@ -27,10 +27,11 @@ type UserBase struct {
 	AuthVersion int64  `json:"-"`
 	CacheSchema int    `json:"-"`
 
-	StreamResponseTimeout    int `json:"stream_response_timeout"`
-	StreamTotalTimeout       int `json:"stream_total_timeout"`
-	NonStreamResponseTimeout int `json:"non_stream_response_timeout"`
-	NonStreamTotalTimeout    int `json:"non_stream_total_timeout"`
+	StreamResponseTimeout     int    `json:"stream_response_timeout"`
+	StreamResponseTimeoutMode string `json:"stream_response_timeout_mode"`
+	StreamTotalTimeout        int    `json:"stream_total_timeout"`
+	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout"`
+	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -41,6 +42,11 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
 	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, user.StreamResponseTimeout)
+	streamResponseTimeoutMode := user.StreamResponseTimeoutMode
+	if streamResponseTimeoutMode == "" {
+		streamResponseTimeoutMode = "first_output"
+	}
+	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeoutMode, streamResponseTimeoutMode)
 	common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, user.StreamTotalTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamResponseTimeout, user.NonStreamResponseTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, user.NonStreamTotalTimeout)

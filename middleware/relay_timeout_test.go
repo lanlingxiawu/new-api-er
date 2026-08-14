@@ -25,9 +25,14 @@ func useRelayTimeoutSetting(t *testing.T, setting operation_setting.RelayTimeout
 
 func timeoutTestContext(t *testing.T, responseTimeout, totalTimeout time.Duration, isStream bool) (*gin.Context, context.Context, *relayTimeoutControl) {
 	t.Helper()
+	return timeoutTestContextWithMode(t, responseTimeout, totalTimeout, isStream, service.RelayStreamResponseTimeoutModeFirstOutput)
+}
+
+func timeoutTestContextWithMode(t *testing.T, responseTimeout, totalTimeout time.Duration, isStream bool, mode string) (*gin.Context, context.Context, *relayTimeoutControl) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx, control := newRelayTimeoutControl(context.Background(), responseTimeout, totalTimeout)
+	ctx, control := newRelayTimeoutControl(context.Background(), responseTimeout, totalTimeout, mode)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
 	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, control)
 	common.SetContextKey(c, constant.ContextKeyIsStream, isStream)
@@ -61,7 +66,7 @@ func TestRelayTimeoutTotalLimitWins(t *testing.T) {
 	assert.ErrorIs(t, context.Cause(ctx), errRelayTotalTimeout)
 }
 
-func TestRelayTimeoutStreamOutputResetsResponseButNotTotal(t *testing.T) {
+func TestRelayTimeoutStreamOutputStopsResponseButNotTotal(t *testing.T) {
 	startedAt := time.Now()
 	c, ctx, control := timeoutTestContext(t, 500*time.Millisecond, 100*time.Millisecond, true)
 
@@ -77,16 +82,71 @@ func TestRelayTimeoutStreamOutputResetsResponseButNotTotal(t *testing.T) {
 	assert.Less(t, time.Since(startedAt), 170*time.Millisecond, "stream output must not move the total deadline")
 }
 
-func TestRelayTimeoutStreamBecomesResponseTimeoutAfterOutputStops(t *testing.T) {
-	c, ctx, control := timeoutTestContext(t, 25*time.Millisecond, 300*time.Millisecond, true)
+func TestRelayTimeoutStreamFirstOutputStopsResponseTimeout(t *testing.T) {
+	c, ctx, control := timeoutTestContext(t, 25*time.Millisecond, 120*time.Millisecond, true)
 	time.Sleep(15 * time.Millisecond)
 	_, err := c.Writer.Write([]byte("data: output\n\n"))
 	require.NoError(t, err)
-	time.Sleep(15 * time.Millisecond)
-	assert.NoError(t, ctx.Err(), "valid output must restart the response timeout window")
+	time.Sleep(45 * time.Millisecond)
+	assert.NoError(t, ctx.Err(), "valid output must stop the stream response timeout window")
+	assert.False(t, control.responseActive.Load())
+
+	waitForTimeout(t, ctx)
+	assert.Equal(t, relayTimeoutKindTotal, control.ExpiredKind())
+}
+
+func TestRelayTimeoutStreamIdleOutputResetsResponseTimeout(t *testing.T) {
+	c, ctx, control := timeoutTestContextWithMode(t, 35*time.Millisecond, 180*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
+	time.Sleep(25 * time.Millisecond)
+	_, err := c.Writer.Write([]byte("data: first\n\n"))
+	require.NoError(t, err)
+	time.Sleep(25 * time.Millisecond)
+	_, err = c.Writer.Write([]byte("data: second\n\n"))
+	require.NoError(t, err)
+	time.Sleep(25 * time.Millisecond)
+	assert.NoError(t, ctx.Err(), "each valid stream output must refresh the idle response timeout")
+	assert.True(t, control.responseActive.Load())
 
 	waitForTimeout(t, ctx)
 	assert.Equal(t, relayTimeoutKindResponse, control.ExpiredKind())
+}
+
+func TestRelayTimeoutStreamIdleHeartbeatDoesNotResetResponseLimit(t *testing.T) {
+	c, ctx, control := timeoutTestContextWithMode(t, 30*time.Millisecond, 300*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
+	for _, data := range [][]byte{[]byte(": PING\n\n"), []byte("\n"), []byte(": upstream comment\n\n")} {
+		_, err := c.Writer.Write(data)
+		require.NoError(t, err)
+	}
+	waitForTimeout(t, ctx)
+	assert.Equal(t, relayTimeoutKindResponse, control.ExpiredKind())
+}
+
+func TestRelayTimeoutStreamIdleTotalLimitWinsEvenWithOutput(t *testing.T) {
+	startedAt := time.Now()
+	c, ctx, control := timeoutTestContextWithMode(t, 90*time.Millisecond, 125*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
+	for index := 0; index < 3; index++ {
+		_, err := c.Writer.Write([]byte("data: chunk\n\n"))
+		require.NoError(t, err)
+		if index < 2 {
+			time.Sleep(40 * time.Millisecond)
+		}
+	}
+
+	waitForTimeout(t, ctx)
+	assert.Equal(t, relayTimeoutKindTotal, control.ExpiredKind())
+	assert.Less(t, time.Since(startedAt), 190*time.Millisecond)
+}
+
+func TestRelayTimeoutStreamFirstOutputModeDoesNotResetAfterFirstOutput(t *testing.T) {
+	c, ctx, control := timeoutTestContextWithMode(t, 25*time.Millisecond, 120*time.Millisecond, true, service.RelayStreamResponseTimeoutModeFirstOutput)
+	time.Sleep(15 * time.Millisecond)
+	_, err := c.Writer.Write([]byte("data: first\n\n"))
+	require.NoError(t, err)
+	time.Sleep(35 * time.Millisecond)
+	_, err = c.Writer.Write([]byte("data: second\n\n"))
+	require.NoError(t, err)
+	assert.False(t, control.responseActive.Load())
+	assert.NoError(t, ctx.Err(), "first-output mode must not manage silence after the first valid output")
 }
 
 func TestRelayTimeoutHeartbeatDoesNotResetResponseLimit(t *testing.T) {
@@ -126,7 +186,7 @@ func TestRelayTimeoutNonStreamRetryRestartsResponseLimit(t *testing.T) {
 func TestRelayTimeoutClientCancellationIsNotOwnedTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	parent, cancel := context.WithCancel(context.Background())
-	ctx, control := newRelayTimeoutControl(parent, time.Minute, time.Minute)
+	ctx, control := newRelayTimeoutControl(parent, time.Minute, time.Minute, service.RelayStreamResponseTimeoutModeFirstOutput)
 	t.Cleanup(control.Close)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx)
@@ -266,6 +326,21 @@ func TestRelayRequestTimeoutEnabledWithoutUserOverridesLeavesLegacyChainUntouche
 	assert.Same(t, legacyClient, service.RelayHTTPClient(c, legacyClient))
 }
 
+func TestRelayRequestTimeoutStreamModeWithoutDurationOverridesLeavesLegacyChainUntouched(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 1, TotalTimeoutSeconds: 1})
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeoutMode, service.RelayStreamResponseTimeoutModeIdle)
+	originalWriter := c.Writer
+
+	RelayRequestTimeout()(c)
+	StartRelayRequestTimeout(c, true)
+
+	assert.False(t, service.IsRelayTimeoutManaged(c))
+	assert.Same(t, originalWriter, c.Writer)
+}
+
 func TestRelayRequestTimeoutAnyUserOverrideActivatesManagedPath(t *testing.T) {
 	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 11, TotalTimeoutSeconds: 22})
 	setters := []struct {
@@ -352,6 +427,37 @@ func TestRelayRequestTimeoutExplicitUnlimitedStaysManaged(t *testing.T) {
 	assert.Nil(t, control.totalTimer)
 	assert.Zero(t, common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds))
 	assert.Zero(t, common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds))
+}
+
+func TestRelayRequestTimeoutCapturesAndNormalizesStreamResponseMode(t *testing.T) {
+	useRelayTimeoutSetting(t, operation_setting.RelayTimeoutSetting{Enabled: true, ResponseTimeoutSeconds: 11, TotalTimeoutSeconds: 22})
+	tests := []struct {
+		name     string
+		mode     string
+		expected string
+	}{
+		{"idle", service.RelayStreamResponseTimeoutModeIdle, service.RelayStreamResponseTimeoutModeIdle},
+		{"invalid cache value", "unexpected", service.RelayStreamResponseTimeoutModeFirstOutput},
+		{"blank cache value", "", service.RelayStreamResponseTimeoutModeFirstOutput},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, 1)
+			common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeoutMode, testCase.mode)
+
+			RelayRequestTimeout()(c)
+			StartRelayRequestTimeout(c, true)
+
+			control, ok := relayTimeoutControlFromContext(c)
+			require.True(t, ok)
+			t.Cleanup(control.Close)
+			assert.Equal(t, testCase.expected, control.streamResponseMode)
+		})
+	}
 }
 
 func TestRelayRequestTimeoutEnabledWithoutStartLeavesWriterUntouched(t *testing.T) {

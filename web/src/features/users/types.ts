@@ -48,6 +48,7 @@ export const userSchema = z.object({
   group: z.string(),
   group_ratios: z.string().optional(),
   stream_response_timeout: z.number().optional(),
+  stream_response_timeout_mode: z.enum(['first_output', 'idle']).optional(),
   stream_total_timeout: z.number().optional(),
   non_stream_response_timeout: z.number().optional(),
   non_stream_total_timeout: z.number().optional(),
@@ -138,6 +139,7 @@ export interface UserFormData {
   group?: string // Only used when updating user
   group_ratios?: string // JSON {group: ratio}; only used when updating user
   stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
+  stream_response_timeout_mode?: 'first_output' | 'idle' // first output or continuous stream silence timeout
   stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables
   non_stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
   non_stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables

@@ -37,11 +37,12 @@ type relayTimeoutControl struct {
 	cancel context.CancelCauseFunc
 	closed bool
 
-	responseTimer    *time.Timer
-	responseTimeout  time.Duration
-	responseDeadline time.Time
-	responseStopped  bool
-	responseActive   atomic.Bool
+	responseTimer      *time.Timer
+	responseTimeout    time.Duration
+	responseDeadline   time.Time
+	responseStopped    bool
+	responseActive     atomic.Bool
+	streamResponseMode string
 
 	totalTimer    *time.Timer
 	totalDeadline time.Time
@@ -53,11 +54,12 @@ type relayTimeoutControl struct {
 	lateWriteRejected atomic.Bool
 }
 
-func newRelayTimeoutControl(parent context.Context, responseTimeout, totalTimeout time.Duration) (context.Context, *relayTimeoutControl) {
+func newRelayTimeoutControl(parent context.Context, responseTimeout, totalTimeout time.Duration, streamResponseMode string) (context.Context, *relayTimeoutControl) {
 	ctx, cancel := context.WithCancelCause(parent)
 	control := &relayTimeoutControl{
-		cancel:          cancel,
-		responseTimeout: responseTimeout,
+		cancel:             cancel,
+		responseTimeout:    responseTimeout,
+		streamResponseMode: service.NormalizeRelayStreamResponseTimeoutMode(streamResponseMode),
 	}
 
 	if responseTimeout > 0 {
@@ -109,18 +111,23 @@ func (control *relayTimeoutControl) MarkResponse(isStream bool) bool {
 	}
 	control.mu.Lock()
 	defer control.mu.Unlock()
-	if control.closed || control.expiredKind != relayTimeoutKindNone || control.responseTimer == nil || control.responseStopped {
+	if control.closed || control.expiredKind != relayTimeoutKindNone || control.responseTimer == nil {
 		return false
 	}
-	if !isStream {
-		control.responseStopped = true
-		control.responseActive.Store(false)
+	if isStream && control.streamResponseMode == service.RelayStreamResponseTimeoutModeIdle {
+		control.responseStopped = false
+		control.responseDeadline = time.Now().Add(control.responseTimeout)
 		control.responseTimer.Stop()
+		control.responseTimer.Reset(control.responseTimeout)
+		control.responseActive.Store(true)
 		return true
 	}
-	control.responseDeadline = time.Now().Add(control.responseTimeout)
+	if control.responseStopped {
+		return false
+	}
+	control.responseStopped = true
+	control.responseActive.Store(false)
 	control.responseTimer.Stop()
-	control.responseTimer.Reset(control.responseTimeout)
 	return true
 }
 
@@ -400,6 +407,7 @@ func StartRelayRequestTimeout(c *gin.Context, isStream bool) {
 		c.Request.Context(),
 		time.Duration(responseSeconds)*time.Second,
 		time.Duration(totalSeconds)*time.Second,
+		common.GetContextKeyString(c, constant.ContextKeyUserStreamResponseTimeoutMode),
 	)
 	ctx = service.WithManagedRelayTimeoutContext(ctx, totalSeconds > 0)
 	common.SetContextKey(c, constant.ContextKeyRelayResponseTimeoutSeconds, responseSeconds)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptrace"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,8 +15,10 @@ import (
 )
 
 const (
-	MaxRelayTimeoutSeconds = 7 * 24 * 60 * 60
-	RelayTimeoutUnlimited  = -1
+	MaxRelayTimeoutSeconds                    = 7 * 24 * 60 * 60
+	RelayTimeoutUnlimited                     = -1
+	RelayStreamResponseTimeoutModeFirstOutput = "first_output"
+	RelayStreamResponseTimeoutModeIdle        = "idle"
 )
 
 func ValidateRelayTimeoutOverride(seconds int) error {
@@ -26,6 +29,24 @@ func ValidateRelayTimeoutOverride(seconds int) error {
 		return fmt.Errorf("relay timeout override is out of range")
 	}
 	return nil
+}
+
+func NormalizeRelayStreamResponseTimeoutMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case RelayStreamResponseTimeoutModeIdle:
+		return RelayStreamResponseTimeoutModeIdle
+	default:
+		return RelayStreamResponseTimeoutModeFirstOutput
+	}
+}
+
+func ValidateRelayStreamResponseTimeoutMode(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", RelayStreamResponseTimeoutModeFirstOutput, RelayStreamResponseTimeoutModeIdle:
+		return nil
+	default:
+		return fmt.Errorf("stream response timeout mode is invalid")
+	}
 }
 
 func ResolveRelayTimeoutOverride(userSeconds, globalSeconds int) int {

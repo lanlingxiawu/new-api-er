@@ -80,8 +80,9 @@ redis.call('HSET', KEYS[1],
   'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
   'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9],
   'GroupRatios', ARGV[13],
-  'StreamResponseTimeout', ARGV[14], 'StreamTotalTimeout', ARGV[15],
-  'NonStreamResponseTimeout', ARGV[16], 'NonStreamTotalTimeout', ARGV[17])
+  'StreamResponseTimeout', ARGV[14], 'StreamResponseTimeoutMode', ARGV[15],
+  'StreamTotalTimeout', ARGV[16],
+  'NonStreamResponseTimeout', ARGV[17], 'NonStreamTotalTimeout', ARGV[18])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
@@ -92,7 +93,7 @@ return 1`
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
 		user.GroupRatios,
-		user.StreamResponseTimeout, user.StreamTotalTimeout,
+		user.StreamResponseTimeout, user.StreamResponseTimeoutMode, user.StreamTotalTimeout,
 		user.NonStreamResponseTimeout, user.NonStreamTotalTimeout,
 	).Int()
 	if err != nil {

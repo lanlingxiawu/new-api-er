@@ -23,6 +23,7 @@ type relayTimeoutRuntimeProbe struct {
 	isStream        bool
 	responseTimeout time.Duration
 	totalTimeout    time.Duration
+	streamMode      string
 }
 
 func waitForUpstream(t *testing.T, request *http.Request, delay time.Duration) bool {
@@ -47,7 +48,7 @@ func runRelayTimeoutRuntimeProbe(t *testing.T, probe relayTimeoutRuntimeProbe, u
 			c.Next()
 			return
 		}
-		ctx, control := newRelayTimeoutControl(c.Request.Context(), probe.responseTimeout, probe.totalTimeout)
+		ctx, control := newRelayTimeoutControl(c.Request.Context(), probe.responseTimeout, probe.totalTimeout, probe.streamMode)
 		ctx = service.WithManagedRelayTimeoutContext(ctx, probe.totalTimeout > 0)
 		common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, control)
 		common.SetContextKey(c, constant.ContextKeyIsStream, probe.isStream)
@@ -165,7 +166,7 @@ func TestRelayTimeoutRuntimeAgainstLocalUpstream(t *testing.T) {
 		assert.Less(t, elapsed, 200*time.Millisecond)
 	})
 
-	t.Run("stream_output_resets_response_timeout", func(t *testing.T) {
+	t.Run("stream_first_output_stops_response_timeout", func(t *testing.T) {
 		status, body, _ := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
 			managed: true, isStream: true, responseTimeout: 80 * time.Millisecond, totalTimeout: 400 * time.Millisecond,
 		}, func(w http.ResponseWriter, r *http.Request) {
@@ -184,8 +185,8 @@ func TestRelayTimeoutRuntimeAgainstLocalUpstream(t *testing.T) {
 		assert.Contains(t, body, "chunk-4")
 	})
 
-	t.Run("stream_silence_times_out_without_late_output", func(t *testing.T) {
-		status, body, elapsed := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
+	t.Run("stream_silence_after_first_output_is_not_response_timeout", func(t *testing.T) {
+		status, body, _ := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
 			managed: true, isStream: true, responseTimeout: 80 * time.Millisecond, totalTimeout: 400 * time.Millisecond,
 		}, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -197,7 +198,82 @@ func TestRelayTimeoutRuntimeAgainstLocalUpstream(t *testing.T) {
 		})
 		assert.Equal(t, http.StatusOK, status, "a committed stream keeps its original status")
 		assert.True(t, strings.Contains(body, "first"))
+		assert.True(t, strings.Contains(body, "late"))
+	})
+
+	t.Run("stream_idle_mode_times_out_after_silence", func(t *testing.T) {
+		status, body, elapsed := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
+			managed: true, isStream: true, responseTimeout: 80 * time.Millisecond, totalTimeout: 400 * time.Millisecond,
+			streamMode: service.RelayStreamResponseTimeoutModeIdle,
+		}, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: first\n\n")
+			w.(http.Flusher).Flush()
+			if waitForUpstream(t, r, 200*time.Millisecond) {
+				_, _ = io.WriteString(w, "data: late\n\n")
+			}
+		})
+		assert.Equal(t, http.StatusOK, status, "a committed stream keeps its original status")
+		assert.True(t, strings.Contains(body, "first"))
 		assert.False(t, strings.Contains(body, "late"))
-		assert.Less(t, elapsed, 190*time.Millisecond)
+		assert.Less(t, elapsed, 180*time.Millisecond)
+	})
+
+	t.Run("stream_idle_mode_resets_after_each_valid_output", func(t *testing.T) {
+		status, body, _ := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
+			managed: true, isStream: true, responseTimeout: 80 * time.Millisecond, totalTimeout: 400 * time.Millisecond,
+			streamMode: service.RelayStreamResponseTimeoutModeIdle,
+		}, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			for index := 1; index <= 3; index++ {
+				_, _ = fmt.Fprintf(w, "data: chunk-%d\n\n", index)
+				flusher.Flush()
+				if index < 3 && !waitForUpstream(t, r, 50*time.Millisecond) {
+					return
+				}
+			}
+		})
+		assert.Equal(t, http.StatusOK, status)
+		assert.Contains(t, body, "chunk-1")
+		assert.Contains(t, body, "chunk-3")
+	})
+
+	t.Run("stream_total_timeout_still_limits_after_first_output", func(t *testing.T) {
+		status, body, elapsed := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
+			managed: true, isStream: true, responseTimeout: 80 * time.Millisecond, totalTimeout: 120 * time.Millisecond,
+		}, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: first\n\n")
+			w.(http.Flusher).Flush()
+			if waitForUpstream(t, r, 240*time.Millisecond) {
+				_, _ = io.WriteString(w, "data: late\n\n")
+			}
+		})
+		assert.Equal(t, http.StatusOK, status, "a committed stream keeps its original status")
+		assert.True(t, strings.Contains(body, "first"))
+		assert.False(t, strings.Contains(body, "late"))
+		assert.Less(t, elapsed, 220*time.Millisecond)
+	})
+
+	t.Run("stream_idle_total_timeout_still_limits_continuous_output", func(t *testing.T) {
+		status, body, elapsed := runRelayTimeoutRuntimeProbe(t, relayTimeoutRuntimeProbe{
+			managed: true, isStream: true, responseTimeout: 90 * time.Millisecond, totalTimeout: 140 * time.Millisecond,
+			streamMode: service.RelayStreamResponseTimeoutModeIdle,
+		}, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			for index := 1; index <= 6; index++ {
+				_, _ = fmt.Fprintf(w, "data: chunk-%d\n\n", index)
+				flusher.Flush()
+				if index < 6 && !waitForUpstream(t, r, 45*time.Millisecond) {
+					return
+				}
+			}
+		})
+		assert.Equal(t, http.StatusOK, status, "a committed stream keeps its original status")
+		assert.True(t, strings.Contains(body, "chunk-1"))
+		assert.False(t, strings.Contains(body, "chunk-6"))
+		assert.Less(t, elapsed, 240*time.Millisecond)
 	})
 }

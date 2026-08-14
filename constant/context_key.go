@@ -54,10 +54,11 @@ const (
 	ContextKeyUserName    ContextKey = "username"
 	// Per-user AI relay timeout overrides copied from the existing auth cache.
 	// Zero inherits the corresponding hot global setting; -1 disables it.
-	ContextKeyUserStreamResponseTimeout    ContextKey = "user_stream_response_timeout"
-	ContextKeyUserStreamTotalTimeout       ContextKey = "user_stream_total_timeout"
-	ContextKeyUserNonStreamResponseTimeout ContextKey = "user_non_stream_response_timeout"
-	ContextKeyUserNonStreamTotalTimeout    ContextKey = "user_non_stream_total_timeout"
+	ContextKeyUserStreamResponseTimeout     ContextKey = "user_stream_response_timeout"
+	ContextKeyUserStreamResponseTimeoutMode ContextKey = "user_stream_response_timeout_mode"
+	ContextKeyUserStreamTotalTimeout        ContextKey = "user_stream_total_timeout"
+	ContextKeyUserNonStreamResponseTimeout  ContextKey = "user_non_stream_response_timeout"
+	ContextKeyUserNonStreamTotalTimeout     ContextKey = "user_non_stream_total_timeout"
 	// Relay-timeout keys hold the hot config snapshot taken at request start, the
 	// two effective limits, and the request-local control.
 	ContextKeyRelayTimeoutSetting         ContextKey = "relay_timeout_setting"

@@ -23,6 +23,20 @@ func TestValidateRelayTimeoutOverridePartitions(t *testing.T) {
 	}
 }
 
+func TestNormalizeRelayStreamResponseTimeoutMode(t *testing.T) {
+	assert.Equal(t, RelayStreamResponseTimeoutModeFirstOutput, NormalizeRelayStreamResponseTimeoutMode(""))
+	assert.Equal(t, RelayStreamResponseTimeoutModeFirstOutput, NormalizeRelayStreamResponseTimeoutMode(RelayStreamResponseTimeoutModeFirstOutput))
+	assert.Equal(t, RelayStreamResponseTimeoutModeIdle, NormalizeRelayStreamResponseTimeoutMode(RelayStreamResponseTimeoutModeIdle))
+	assert.Equal(t, RelayStreamResponseTimeoutModeFirstOutput, NormalizeRelayStreamResponseTimeoutMode("unexpected"))
+}
+
+func TestValidateRelayStreamResponseTimeoutMode(t *testing.T) {
+	assert.NoError(t, ValidateRelayStreamResponseTimeoutMode(""))
+	assert.NoError(t, ValidateRelayStreamResponseTimeoutMode(RelayStreamResponseTimeoutModeFirstOutput))
+	assert.NoError(t, ValidateRelayStreamResponseTimeoutMode(RelayStreamResponseTimeoutModeIdle))
+	assert.Error(t, ValidateRelayStreamResponseTimeoutMode("unexpected"))
+}
+
 func TestResolveRelayTimeoutOverride(t *testing.T) {
 	assert.Equal(t, 300, ResolveRelayTimeoutOverride(0, 300), "zero inherits the global value")
 	assert.Equal(t, 20, ResolveRelayTimeoutOverride(20, 300), "positive user value overrides the global value")
