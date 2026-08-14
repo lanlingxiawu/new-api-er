@@ -50,6 +50,7 @@ type TaskDto struct {
 	Properties any             `json:"properties"`
 	Username   string          `json:"username,omitempty"`
 	Data       json.RawMessage `json:"data"`
+	Other      map[string]any  `json:"other,omitempty"`
 }
 
 type FetchReq struct {

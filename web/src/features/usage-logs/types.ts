@@ -207,6 +207,12 @@ export interface LogOtherData {
   model_price?: number
   group_ratio?: number
   user_group_ratio?: number
+  xai_video_units?: number
+  pricing_xai_video_model?: string
+  pricing_duration_seconds?: string
+  pricing_requested_resolution?: string
+  pricing_resolution?: string
+  pricing_reference_image_count?: string
   cache_ratio?: number
   cache_creation_ratio?: number
   cache_creation_ratio_5m?: number
@@ -321,6 +327,7 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
+  quota: number
   submit_time: number // seconds
   finish_time?: number // seconds
   progress?: string
@@ -328,7 +335,7 @@ export interface TaskLog {
   data?: string // JSON string
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
-  other?: string
+  other?: string | LogOtherData
   created_at?: number
   updated_at?: number
 }

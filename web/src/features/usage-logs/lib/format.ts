@@ -154,10 +154,12 @@ export function hasToolSurcharge(other: LogOtherData | null): boolean {
 }
 
 /**
- * Parse the 'other' field from JSON string to object
+ * Parse the 'other' field from JSON string or already-decoded API payload.
  */
-export function parseLogOther(other: string): LogOtherData | null {
+export function parseLogOther(other: unknown): LogOtherData | null {
   if (!other) return null
+  if (typeof other === 'object') return other as LogOtherData
+  if (typeof other !== 'string') return null
   try {
     return JSON.parse(other) as LogOtherData
   } catch (error) {

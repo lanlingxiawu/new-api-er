@@ -29,6 +29,7 @@ import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
+import { parseLogOther } from '../../lib/format'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
 import type { TaskLog } from '../../types'
 import {
@@ -36,6 +37,7 @@ import {
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { LogCostDisplay } from '../log-cost-display'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
@@ -87,6 +89,30 @@ function AudioPreviewCell({ log }: { log: TaskLog }) {
         clips={clips as AudioClip[]}
       />
     </>
+  )
+}
+
+function TaskCostCell({ log }: { log: TaskLog }) {
+  const { t } = useTranslation()
+  const other = parseLogOther(log.other)
+  const duration = other?.pricing_duration_seconds
+  const resolution = other?.pricing_resolution
+  const imageCount = other?.pricing_reference_image_count
+  const summaryParts = [duration ? `${duration}s` : '', resolution || '']
+    .filter(Boolean)
+  if (imageCount && imageCount !== '0') {
+    summaryParts.push(`${imageCount} ${t('Image input')}`)
+  }
+
+  return (
+    <div className='flex min-w-[96px] flex-col gap-0.5'>
+      <LogCostDisplay quota={log.quota || 0} other={other} />
+      {summaryParts.length > 0 && (
+        <span className='text-muted-foreground/70 truncate text-[11px]'>
+          {summaryParts.join(' · ')}
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -213,6 +239,12 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       },
     },
     createProgressColumn<TaskLog>({ headerLabel: t('Progress') }),
+    {
+      accessorKey: 'quota',
+      header: t('Cost'),
+      cell: ({ row }) => <TaskCostCell log={row.original} />,
+      size: 120,
+    },
     {
       accessorKey: 'fail_reason',
       header: t('Details'),

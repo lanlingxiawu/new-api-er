@@ -26,6 +26,7 @@ var ModelList = []string{
 	"grok-imagine-image",
 	"grok-2-image-1212",
 	// video generation model
+	"grok-imagine-video-1.5",
 	"grok-imagine-video",
 }
 

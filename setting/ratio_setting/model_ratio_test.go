@@ -580,6 +580,8 @@ func TestDefaultModelPrice_WellKnownAnchors(t *testing.T) {
 	assert.Equal(t, 0.1, d["mj_imagine"])
 	assert.Equal(t, 0.0, d["mj_inpaint"])
 	assert.Equal(t, 0.5, d["sora-2-pro"])
+	assert.Equal(t, 0.05, d["grok-imagine-video"])
+	assert.Equal(t, 0.08, d["grok-imagine-video-1.5"])
 }
 
 func TestDefaultModelRatio2JSONString(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -268,6 +268,25 @@ func TestInitTask(t *testing.T) {
 		assert.Empty(t, tk.Properties.OriginModelName)
 		assert.True(t, strings.HasPrefix(tk.TaskID, "task_"))
 	})
+}
+
+func TestInitTaskPreservesXaiPrivateKey(t *testing.T) {
+	info := &commonRelay.RelayInfo{
+		UserId:          1,
+		UsingGroup:      "default",
+		OriginModelName: "grok-imagine-video-1.5",
+		ChannelMeta: &commonRelay.ChannelMeta{
+			ChannelType:       constant.ChannelTypeXai,
+			ApiKey:            "xai-key",
+			UpstreamModelName: "grok-imagine-video-1.5",
+		},
+	}
+
+	task := InitTask(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeXai)), info)
+
+	assert.Equal(t, "xai-key", task.PrivateData.Key)
+	assert.Equal(t, "grok-imagine-video-1.5", task.Properties.UpstreamModelName)
+	assert.Equal(t, "grok-imagine-video-1.5", task.Properties.OriginModelName)
 }
 
 // sanity: TaskPrivateData.Value implements driver.Valuer

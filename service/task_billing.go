@@ -143,6 +143,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	return other
 }
 
+func TaskBillingOther(task *model.Task) map[string]interface{} {
+	return taskBillingOther(task)
+}
+
 func taskBillingContextPriceData(bc *model.TaskBillingContext) *hosttypes.PriceData {
 	if bc == nil || len(bc.OtherRatios) == 0 {
 		return nil
