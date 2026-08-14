@@ -23,6 +23,10 @@ common.already_exists: "Already exists"
 common.name_cannot_be_empty: "Name cannot be empty"
 common.batch_too_many: "Too many items in batch request, maximum is {{.Max}}"
 
+# Veridrop detection
+veridrop.disabled: "Enable Veridrop detection settings before starting detection"
+veridrop.base_url_missing: "Set the Veridrop base URL before starting detection"
+
 # Auth middleware messages
 auth.not_logged_in: "Unauthorized, not logged in and no access token provided"
 auth.access_token_invalid: "Unauthorized, invalid access token"

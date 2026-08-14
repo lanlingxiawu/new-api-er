@@ -30,6 +30,11 @@ const (
 
 const MsgRelayTimeout = "relay.timeout"
 
+const (
+	MsgVeridropDisabled       = "veridrop.disabled"
+	MsgVeridropBaseURLMissing = "veridrop.base_url_missing"
+)
+
 // Auth middleware messages
 const (
 	MsgAuthNotLoggedIn           = "auth.not_logged_in"

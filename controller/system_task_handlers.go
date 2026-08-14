@@ -20,6 +20,7 @@ import (
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
+	service.RegisterSystemTaskHandler(veridropDetectionHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 }
@@ -108,6 +109,21 @@ func (modelUpdateHandler) Run(ctx context.Context, task *model.SystemTask, runne
 		return
 	}
 	summary := runChannelUpstreamModelUpdateTaskOnce(ctx, payload.Manual, !payload.Manual, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+type veridropDetectionHandler struct{}
+
+func (veridropDetectionHandler) Type() string { return model.SystemTaskTypeVeridrop }
+
+func (veridropDetectionHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := service.VeridropDetectionTaskPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	summary := service.RunVeridropDetectionTask(ctx, payload, service.NewSystemTaskProgressReporter(task, runnerID))
+	service.LogVeridropTaskResult(summary)
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 

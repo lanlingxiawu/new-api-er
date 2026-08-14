@@ -24,6 +24,10 @@ common.already_exists: "已存在"
 common.name_cannot_be_empty: "名稱不能為空"
 common.batch_too_many: "批次請求數量過多，最多 {{.Max}} 條"
 
+# Veridrop 檢測
+veridrop.disabled: "請先啟用 Veridrop 檢測設定，再開始檢測"
+veridrop.base_url_missing: "請先設定 Veridrop Base URL，再開始檢測"
+
 # Auth middleware messages
 auth.not_logged_in: "無權進行此操作，未登入且未提供 access token"
 auth.access_token_invalid: "無權進行此操作，access token 無效"
