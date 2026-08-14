@@ -64,3 +64,4 @@ _local/
 go.work
 go.work.sum
 /relay_log
+/logger/binlog.*
