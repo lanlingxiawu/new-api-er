@@ -230,8 +230,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// DrainAndCloseResponseBody 自带 nil 保护，resp 为 nil 时安全跳过。
 	defer service.DrainAndCloseResponseBody(resp)
 	if resp != nil && resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		apiErr := service.RelayErrorHandler(c.Request.Context(), resp, false)
+		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
 
 	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）

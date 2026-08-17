@@ -123,6 +123,32 @@ func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 	require.Equal(t, message, newAPIError.Error())
 }
 
+func TestRelayErrorHandlerMarksExhaustedQuotaAsNonRetryable(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":429,"message":"You exceeded your current quota. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0","status":"RESOURCE_EXHAUSTED"}}`)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.True(t, types.IsSkipRetryError(newAPIError))
+	require.Equal(t, http.StatusTooManyRequests, newAPIError.StatusCode)
+	require.Contains(t, newAPIError.Error(), "quota")
+}
+
+func TestRelayErrorHandlerMarksXAIFreeUsageExhaustedAsNonRetryable(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":-32003,"message":"API error (status 429 Too Many Requests): subscription:free-usage-exhausted: You've used all the included free usage for model grok-4.6 for now. Usage resets over a rolling 24-hour window","type":"rate_limit_error"}}`)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.True(t, types.IsSkipRetryError(newAPIError))
+	require.Equal(t, http.StatusTooManyRequests, newAPIError.StatusCode)
+	require.Contains(t, newAPIError.Error(), "free-usage-exhausted")
+}
+
 func TestRelayErrorHandlerStripsNestedRequestIds(t *testing.T) {
 	body := `{"error":{"message":"upstream failed (request id: upstream-a) (request id: upstream-b)","type":"server_error","code":"server_error"}}`
 	resp := &http.Response{

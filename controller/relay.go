@@ -692,6 +692,9 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
 		return false
 	}
+	if taskErr.SkipRetry {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}

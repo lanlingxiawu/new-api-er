@@ -118,7 +118,8 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
-			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+			newAPIErrorOptions := quotaExhaustedErrorOptions(oaiError.Message)
+			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode, newAPIErrorOptions...)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
 			}
@@ -131,11 +132,23 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// raw body so the upstream failure remains diagnosable.
 		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
 	}
-	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	newAPIErrorOptions := quotaExhaustedErrorOptions(message)
+	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode, newAPIErrorOptions...)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
 	return
+}
+
+func quotaExhaustedErrorOptions(message string) []types.NewAPIErrorOptions {
+	lowerMessage := strings.ToLower(message)
+	if strings.Contains(lowerMessage, "quota exceeded") ||
+		strings.Contains(lowerMessage, "resource_exhausted") && strings.Contains(lowerMessage, "limit: 0") ||
+		strings.Contains(lowerMessage, "free-usage-exhausted") ||
+		strings.Contains(lowerMessage, "used all the included free usage") {
+		return []types.NewAPIErrorOptions{types.ErrOptionWithSkipRetry()}
+	}
+	return nil
 }
 
 func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) {
@@ -227,6 +240,7 @@ func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
 		Message:    apiErr.Error(),
 		StatusCode: apiErr.StatusCode,
 		Error:      apiErr.Err,
+		SkipRetry:  types.IsSkipRetryError(apiErr),
 	}
 }
 
