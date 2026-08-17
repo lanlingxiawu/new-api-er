@@ -97,6 +97,8 @@ func TestBuildRequestBodyMapsOfficialXaiFields(t *testing.T) {
 func TestBuildRequestBodyUsesReferenceImagesForMultipleImages(t *testing.T) {
 	ctx := newTaskContext()
 	info := newTestInfo()
+	info.OriginModelName = "grok-imagine-video"
+	info.ChannelMeta.UpstreamModelName = "grok-imagine-video"
 	ctx.Set("task_request", relaycommon.TaskSubmitReq{
 		Prompt: "walk down the street",
 		Images: []string{"file_subject", "https://example.com/outfit.png"},
@@ -111,6 +113,66 @@ func TestBuildRequestBodyUsesReferenceImagesForMultipleImages(t *testing.T) {
 	require.Len(t, refs, 2)
 	assert.Equal(t, "file_subject", refs[0].(map[string]any)["file_id"])
 	assert.Equal(t, "https://example.com/outfit.png", refs[1].(map[string]any)["url"])
+}
+
+func TestValidateRequestRejectsUnsupportedXaiVideoInputs(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		req   relaycommon.TaskSubmitReq
+	}{
+		{
+			name: "duration exceeds xai maximum",
+			req:  relaycommon.TaskSubmitReq{Prompt: "too long", Duration: maxXaiVideoDurationSeconds + 1},
+		},
+		{
+			name: "version 1.5 requires an input image",
+			req:  relaycommon.TaskSubmitReq{Prompt: "image required"},
+		},
+		{
+			name: "version 1.5 does not support reference images",
+			req: relaycommon.TaskSubmitReq{
+				Prompt: "unsupported references",
+				Images: []string{"file_1", "file_2"},
+			},
+		},
+		{
+			name: "more than seven reference images",
+			req: relaycommon.TaskSubmitReq{
+				Prompt: "too many references",
+				Images: []string{"file_1", "file_2", "file_3", "file_4", "file_5", "file_6", "file_7", "file_8"},
+			},
+			model: "grok-imagine-video",
+		},
+		{
+			name: "reference video duration exceeds ten seconds",
+			req: relaycommon.TaskSubmitReq{
+				Prompt:   "reference duration",
+				Duration: 11,
+				Images:   []string{"file_1", "file_2"},
+			},
+			model: "grok-imagine-video",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTaskContext()
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			ctx.Set("task_request", tt.req)
+			info := newTestInfo()
+			if tt.model != "" {
+				info.OriginModelName = tt.model
+				info.ChannelMeta.UpstreamModelName = tt.model
+			}
+
+			taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(ctx, info)
+
+			require.NotNil(t, taskErr)
+			assert.Equal(t, "invalid_request", taskErr.Code)
+			assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+		})
+	}
 }
 
 func TestBuildRequestBodyClampsUnsupportedLegacy1080pTo720p(t *testing.T) {

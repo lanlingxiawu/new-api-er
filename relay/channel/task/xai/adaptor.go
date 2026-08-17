@@ -28,6 +28,12 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+const (
+	maxXaiVideoDurationSeconds = 15
+	maxXaiReferenceImages      = 7
+	maxXaiReferenceDuration    = 10
+)
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.apiKey = info.ApiKey
@@ -35,7 +41,21 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	if taskErr := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate); taskErr != nil {
+		return taskErr
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	meta := &requestMetadata{}
+	if err := taskcommon.UnmarshalMetadata(req.Metadata, meta); err != nil {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("invalid metadata: %w", err), "invalid_request", http.StatusBadRequest)
+	}
+	if err := validateXaiVideoRequest(c, req, meta, info); err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	return nil
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -100,6 +120,9 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	meta := &requestMetadata{}
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, meta); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata failed: %w", err)
+	}
+	if err := validateXaiVideoRequest(c, req, meta, info); err != nil {
+		return nil, err
 	}
 
 	duration := resolveDurationSeconds(req.Metadata, req.Duration, req.Seconds)
@@ -268,4 +291,35 @@ func (a *TaskAdaptor) GetModelList() []string {
 
 func (a *TaskAdaptor) GetChannelName() string {
 	return "xai"
+}
+
+func validateXaiVideoRequest(c *gin.Context, req relaycommon.TaskSubmitReq, meta *requestMetadata, info *relaycommon.RelayInfo) error {
+	duration := resolveDurationSeconds(req.Metadata, req.Duration, req.Seconds)
+	if duration > maxXaiVideoDurationSeconds {
+		return fmt.Errorf("duration must not exceed %d seconds", maxXaiVideoDurationSeconds)
+	}
+	modelName := ""
+	if info != nil {
+		modelName = info.UpstreamModelName
+		if modelName == "" {
+			modelName = info.OriginModelName
+		}
+	}
+	references := requestReferenceImages(req, meta)
+	if len(references) > maxXaiReferenceImages {
+		return fmt.Errorf("reference_images must not exceed %d", maxXaiReferenceImages)
+	}
+	if strings.Contains(strings.ToLower(modelName), "grok-imagine-video-1.5") {
+		if len(references) > 0 {
+			return fmt.Errorf("grok-imagine-video-1.5 does not support reference_images")
+		}
+		if firstRequestImage(c, req, meta, info) == nil {
+			return fmt.Errorf("grok-imagine-video-1.5 requires an input image")
+		}
+		return nil
+	}
+	if len(references) > 0 && duration > maxXaiReferenceDuration {
+		return fmt.Errorf("reference_images require duration no greater than %d seconds", maxXaiReferenceDuration)
+	}
+	return nil
 }

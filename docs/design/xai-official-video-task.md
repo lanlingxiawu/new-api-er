@@ -99,9 +99,9 @@
 
 - `model`：`grok-imagine-video` 或 `grok-imagine-video-1.5`，也支持已有模型映射别名。
 - `prompt`：必填。
-- `duration` 或 `seconds`：可选时长，受现有任务时长上限保护。
+- `duration` 或 `seconds`：可选时长；xAI 视频接口最多 15 秒，超过时在计费前以 400 拒绝。
 - `size`：可选 OpenAI 风格尺寸；仅在未显式提供 metadata 时用于推断方向/分辨率。
-- `image`、`images`、`reference_images` 或 metadata 中的图片字段：可选图片输入，支持公开 URL、data URL、file ID 风格引用。
+- `image`、`images`、`reference_images` 或 metadata 中的图片字段：支持公开 URL、data URL、file ID 风格引用。`grok-imagine-video` 的 reference-to-video 最多 7 张，且时长最多 10 秒；`grok-imagine-video-1.5` 仅支持 image-to-video，必须提供输入图片且不能使用 reference images。
 - `metadata.resolution`：可选，`480p`、`720p`、`1080p`。
 - `metadata.aspect_ratio`：可选 xAI aspect ratio 字符串。
 - `metadata.seed`：可选整数。
