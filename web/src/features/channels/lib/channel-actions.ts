@@ -20,6 +20,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
+import { startChannelVeridropDetection } from '@/features/veridrop-detection/api'
 import { formatCurrencyFromUSD } from '@/lib/currency'
 
 import {
@@ -337,6 +338,44 @@ export async function handleTestChannel(
       })
     }
     onTestComplete?.(false, undefined, errorMsg)
+  }
+}
+
+/**
+ * Start a Veridrop detection run for a single channel, using its stored
+ * upstream credentials. Detection runs asynchronously against the Veridrop
+ * backend, so this only confirms the run was queued -- results land on the
+ * Veridrop Detection page.
+ */
+export async function handleVeridropDetectChannel(
+  id: number,
+  onSuccess?: () => void
+): Promise<void> {
+  try {
+    const response = await startChannelVeridropDetection(id)
+    if (!response.success || response.data == null) {
+      toast.error(
+        response.message ||
+          i18next.t(
+            'Detection was not started. Check the settings and try again.'
+          )
+      )
+      return
+    }
+    toast.success(
+      response.data.created
+        ? i18next.t('Detection task started')
+        : i18next.t('Detection task is already running')
+    )
+    onSuccess?.()
+  } catch (_error: unknown) {
+    const err = _error as { response?: { data?: { message?: string } } }
+    toast.error(
+      err?.response?.data?.message ||
+        i18next.t(
+          'Detection was not started. Check the settings and try again.'
+        )
+    )
   }
 }
 

@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
 import {
   MoreHorizontal,
+  Activity,
   Boxes,
   Pencil,
   PlugZap,
@@ -55,6 +56,7 @@ import {
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
+  canViewAdminMenu,
   hasPermission,
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
@@ -65,6 +67,7 @@ import {
   handleDeleteChannel,
   handleTestChannel,
   handleToggleChannelStatus,
+  handleVeridropDetectChannel,
   isChannelEnabled,
   isMultiKeyChannel,
 } from '../lib'
@@ -87,6 +90,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [isDetectingVeridrop, setIsDetectingVeridrop] = useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
@@ -95,6 +99,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
+  const canUseVeridropDetection =
+    canViewAdminMenu(currentUser, 'veridrop_detection') &&
+    hasPermission(
+      currentUser,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.OPERATE
+    )
 
   const handleEdit = () => {
     setCurrentRow(channel)
@@ -115,6 +126,16 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       })
     } finally {
       setIsTesting(false)
+    }
+  }
+
+  const handleVeridropDetect = async () => {
+    if (isDetectingVeridrop) return
+    setIsDetectingVeridrop(true)
+    try {
+      await handleVeridropDetectChannel(channel.id)
+    } finally {
+      setIsDetectingVeridrop(false)
     }
   }
 
@@ -280,6 +301,24 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               <PlugZap size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
+
+          {canUseVeridropDetection && (
+            <DropdownMenuItem
+              disabled={isDetectingVeridrop}
+              onClick={() => {
+                void handleVeridropDetect()
+              }}
+            >
+              {t('Authenticity Detection')}
+              <DropdownMenuShortcut>
+                {isDetectingVeridrop ? (
+                  <Loader2 size={16} className='animate-spin' />
+                ) : (
+                  <Activity size={16} />
+                )}
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
 
           {/* Query Balance */}
           <DropdownMenuItem onClick={handleQueryBalance}>

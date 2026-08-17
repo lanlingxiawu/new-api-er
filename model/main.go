@@ -301,6 +301,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateChannelVeridropUpdatedIndex(DB); err != nil {
+		return err
+	}
 	if err := migrateMainLogTableIfNeeded(); err != nil {
 		return err
 	}

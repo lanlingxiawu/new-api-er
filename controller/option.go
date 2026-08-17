@@ -510,7 +510,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
-	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting") {
+	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting") {
 		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)})
 	} else {
 		err = model.UpdateOption(option.Key, option.Value.(string))

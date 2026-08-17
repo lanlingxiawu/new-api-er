@@ -22,21 +22,31 @@ import (
 )
 
 var (
-	ErrVeridropMonitorDisabled = errors.New("veridrop monitor is disabled")
-	ErrVeridropBaseURLEmpty    = errors.New("veridrop monitor base url is not configured")
+	ErrVeridropMonitorDisabled  = errors.New("veridrop monitor is disabled")
+	ErrVeridropBaseURLEmpty     = errors.New("veridrop monitor base url is not configured")
+	ErrInvalidVeridropWireAPI   = errors.New("invalid veridrop OpenAI wire API")
+	ErrVeridropResponseTooLarge = errors.New("veridrop response exceeds size limit")
+)
+
+const (
+	veridropMaxResponseBytes    = 4 << 20
+	veridropMaxErrorDetailBytes = 4 << 10
 )
 
 type VeridropDetectionTaskPayload struct {
 	Batch                     bool   `json:"batch,omitempty"`
+	BatchTaskID               string `json:"-"`
 	ChannelID                 int    `json:"channel_id,omitempty"`
 	ChannelIDs                []int  `json:"channel_ids,omitempty"`
 	Model                     string `json:"model,omitempty"`
 	Protocol                  string `json:"protocol,omitempty"`
 	Mode                      string `json:"mode,omitempty"`
 	MaxChannels               int    `json:"max_channels,omitempty"`
-	IncludeLongContext        bool   `json:"include_long_context,omitempty"`
-	IncludeLongContextExtreme bool   `json:"include_long_context_extreme,omitempty"`
+	IncludeLongContext        *bool  `json:"include_long_context,omitempty"`
+	IncludeLongContextExtreme *bool  `json:"include_long_context_extreme,omitempty"`
 	OpenAIWireAPI             string `json:"openai_wire_api,omitempty"`
+	Force                     bool   `json:"force,omitempty"`
+	IncludeDisabled           bool   `json:"include_disabled,omitempty"`
 }
 
 type VeridropManualDetectionPayload struct {
@@ -48,6 +58,7 @@ type VeridropManualDetectionPayload struct {
 	IncludeLongContext        bool   `json:"include_long_context"`
 	IncludeLongContextExtreme bool   `json:"include_long_context_extreme"`
 	OpenAIWireAPI             string `json:"openai_wire_api"`
+	Force                     bool   `json:"force"`
 }
 
 type VeridropDetectionSummary struct {
@@ -57,7 +68,6 @@ type VeridropDetectionSummary struct {
 	Skipped   int `json:"skipped"`
 	TimedOut  int `json:"timed_out"`
 	Cancelled int `json:"cancelled"`
-	Disabled  int `json:"disabled"`
 	Channels  int `json:"channels"`
 	Models    int `json:"models"`
 }
@@ -72,6 +82,7 @@ type VeridropDetectionTarget struct {
 	Models          []string `json:"models"`
 	ModelCount      int      `json:"model_count"`
 	SkippedReason   string   `json:"skipped_reason,omitempty"`
+	Status          int      `json:"status"`
 }
 
 type VeridropDetectionTargets struct {
@@ -93,20 +104,18 @@ type veridropDetectionJob struct {
 }
 
 type veridropSettingsSnapshot struct {
-	Enabled                    bool
-	BaseURL                    string
-	AdminToken                 string
-	DefaultMode                string
-	DefaultOpenAIWireAPI       string
-	IncludeLongContext         bool
-	IncludeLongContextExtreme  bool
-	MaxConcurrent              int
-	SubmitTimeoutSeconds       int
-	PollIntervalSeconds        int
-	JobTimeoutSeconds          int
-	AutoDisableEnabled         bool
-	AutoDisableFailedThreshold float64
-	BatchSize                  int
+	Enabled                   bool
+	BaseURL                   string
+	AdminToken                string
+	DefaultMode               string
+	DefaultOpenAIWireAPI      string
+	IncludeLongContext        bool
+	IncludeLongContextExtreme bool
+	MaxConcurrent             int
+	SubmitTimeoutSeconds      int
+	PollIntervalSeconds       int
+	JobTimeoutSeconds         int
+	BatchSize                 int
 }
 
 type veridropSubmitResponse struct {
@@ -133,6 +142,14 @@ type veridropReportSummary struct {
 }
 
 func StartVeridropDetectionTask(payload VeridropDetectionTaskPayload) (*model.SystemTask, bool, error) {
+	return startVeridropDetectionTask(model.SystemTaskTypeVeridrop, payload)
+}
+
+func StartSingleVeridropDetectionTask(payload VeridropDetectionTaskPayload) (*model.SystemTask, bool, error) {
+	return startVeridropDetectionTask(model.SystemTaskTypeVeridropSingle, payload)
+}
+
+func startVeridropDetectionTask(taskType string, payload VeridropDetectionTaskPayload) (*model.SystemTask, bool, error) {
 	settings := snapshotVeridropSettings()
 	if !settings.Enabled {
 		return nil, false, ErrVeridropMonitorDisabled
@@ -140,7 +157,15 @@ func StartVeridropDetectionTask(payload VeridropDetectionTaskPayload) (*model.Sy
 	if settings.BaseURL == "" {
 		return nil, false, ErrVeridropBaseURLEmpty
 	}
-	return EnqueueSystemTask(model.SystemTaskTypeVeridrop, payload)
+	wireAPI := payload.OpenAIWireAPI
+	if strings.TrimSpace(wireAPI) == "" {
+		wireAPI = settings.DefaultOpenAIWireAPI
+	}
+	if err := validateVeridropWireAPI(wireAPI); err != nil {
+		return nil, false, err
+	}
+	payload.OpenAIWireAPI = strings.TrimSpace(wireAPI)
+	return EnqueueSystemTask(taskType, payload)
 }
 
 func StartManualVeridropDetection(ctx context.Context, payload VeridropManualDetectionPayload) (*model.ChannelVeridropDetection, error) {
@@ -150,6 +175,12 @@ func StartManualVeridropDetection(ctx context.Context, payload VeridropManualDet
 	}
 	if settings.BaseURL == "" {
 		return nil, ErrVeridropBaseURLEmpty
+	}
+	if strings.TrimSpace(payload.OpenAIWireAPI) == "" {
+		payload.OpenAIWireAPI = settings.DefaultOpenAIWireAPI
+	}
+	if err := validateVeridropWireAPI(payload.OpenAIWireAPI); err != nil {
+		return nil, err
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(payload.BaseURL), "/")
@@ -176,9 +207,10 @@ func StartManualVeridropDetection(ctx context.Context, payload VeridropManualDet
 
 	runPayload := VeridropDetectionTaskPayload{
 		Mode:                      mode,
-		IncludeLongContext:        payload.IncludeLongContext,
-		IncludeLongContextExtreme: payload.IncludeLongContextExtreme,
+		IncludeLongContext:        &payload.IncludeLongContext,
+		IncludeLongContextExtreme: &payload.IncludeLongContextExtreme,
 		OpenAIWireAPI:             payload.OpenAIWireAPI,
+		Force:                     payload.Force,
 	}
 	job := veridropDetectionJob{
 		Channel: &model.Channel{
@@ -223,7 +255,7 @@ func ListVeridropDetectionTargets(ctx context.Context, payload VeridropDetection
 		if ctx != nil && ctx.Err() != nil {
 			return targets, ctx.Err()
 		}
-		channels, err := model.FindEnabledChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs)
+		channels, err := model.FindChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs, payload.IncludeDisabled)
 		if err != nil {
 			return targets, err
 		}
@@ -273,42 +305,27 @@ func RunVeridropDetectionTask(ctx context.Context, payload VeridropDetectionTask
 		return runVeridropBatchDetection(ctx, payload, settings, report)
 	}
 
-	channel, err := model.GetChannelById(payload.ChannelID, true)
-	if err != nil {
-		common.SysLog(fmt.Sprintf("veridrop detection channel query failed: %v", err))
-		return summary
-	}
-	if channel == nil {
-		return summary
-	}
-	job, err := buildVeridropDetectionJob(channel, payload.Model, payload.Protocol, payload.Mode, settings)
-	if err != nil {
-		_ = createSkippedVeridropDetection(channel, payload.Protocol, payload.Model, payload.Mode, sanitizeVeridropText(err.Error(), channel.Key, settings.AdminToken))
-		summary.Skipped++
-		return summary
-	}
-	summary.Created++
-	summary.Channels = 1
-	summary.Models = 1
-	runVeridropDetectionJob(ctx, job, payload, settings, &summary)
-	if report != nil {
-		report(1, 1)
-	}
-	return summary
+	payload.ChannelIDs = []int{payload.ChannelID}
+	payload.IncludeDisabled = true
+	payload.MaxChannels = 1
+	return runVeridropBatchDetection(ctx, payload, settings, report)
 }
 
 func applyVeridropPayloadDefaults(payload VeridropDetectionTaskPayload, settings veridropSettingsSnapshot) VeridropDetectionTaskPayload {
+	payload.Model = strings.TrimSpace(payload.Model)
 	if payload.Mode == "" {
 		payload.Mode = settings.DefaultMode
 	}
 	if payload.OpenAIWireAPI == "" {
 		payload.OpenAIWireAPI = settings.DefaultOpenAIWireAPI
 	}
-	if !payload.IncludeLongContext {
-		payload.IncludeLongContext = settings.IncludeLongContext
+	if payload.IncludeLongContext == nil {
+		includeLongContext := settings.IncludeLongContext
+		payload.IncludeLongContext = &includeLongContext
 	}
-	if !payload.IncludeLongContextExtreme {
-		payload.IncludeLongContextExtreme = settings.IncludeLongContextExtreme
+	if payload.IncludeLongContextExtreme == nil {
+		includeLongContextExtreme := settings.IncludeLongContextExtreme
+		payload.IncludeLongContextExtreme = &includeLongContextExtreme
 	}
 	return payload
 }
@@ -326,7 +343,7 @@ func runVeridropBatchDetection(ctx context.Context, payload VeridropDetectionTas
 		if limitReached {
 			break
 		}
-		channels, err := model.FindEnabledChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs)
+		channels, err := model.FindChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs, payload.IncludeDisabled)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("veridrop batch channel query failed: %v", err))
 			break
@@ -354,7 +371,7 @@ func runVeridropBatchDetection(ctx context.Context, payload VeridropDetectionTas
 				modelNames = []string{strings.TrimSpace(payload.Model)}
 			}
 			if len(modelNames) == 0 {
-				_ = createSkippedVeridropDetection(channel, payload.Protocol, "", payload.Mode, "channel has no enabled models")
+				_ = createSkippedVeridropDetection(channel, payload.Protocol, "", payload.Mode, payload.BatchTaskID, "channel has no enabled models")
 				summary.Skipped++
 				processed++
 				if report != nil {
@@ -363,9 +380,9 @@ func runVeridropBatchDetection(ctx context.Context, payload VeridropDetectionTas
 				continue
 			}
 			for _, modelName := range modelNames {
-				job, err := buildVeridropDetectionJob(channel, modelName, payload.Protocol, payload.Mode, settings)
+				job, err := buildVeridropDetectionJob(channel, modelName, payload.Protocol, payload.Mode, payload.BatchTaskID, settings)
 				if err != nil {
-					_ = createSkippedVeridropDetection(channel, payload.Protocol, modelName, payload.Mode, sanitizeVeridropText(err.Error(), channel.Key, settings.AdminToken))
+					_ = createSkippedVeridropDetection(channel, payload.Protocol, modelName, payload.Mode, payload.BatchTaskID, sanitizeVeridropText(err.Error(), channel.Key, settings.AdminToken))
 					summary.Skipped++
 					processed++
 					if report != nil {
@@ -399,7 +416,7 @@ func countVeridropBatchWork(ctx context.Context, payload VeridropDetectionTaskPa
 		if ctx != nil && ctx.Err() != nil {
 			break
 		}
-		channels, err := model.FindEnabledChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs)
+		channels, err := model.FindChannelsForVeridropAfterID(lastID, settings.BatchSize, payload.ChannelIDs, payload.IncludeDisabled)
 		if err != nil || len(channels) == 0 {
 			break
 		}
@@ -460,8 +477,18 @@ func runVeridropDetectionJobs(ctx context.Context, jobs []veridropDetectionJob, 
 
 	go func() {
 		defer close(jobCh)
-		for _, job := range jobs {
+		for index, job := range jobs {
 			if ctx != nil && ctx.Err() != nil {
+				for _, pendingJob := range jobs[index:] {
+					markVeridropDetectionTerminal(
+						pendingJob.Detection.ID,
+						model.ChannelVeridropDetectionCancelled,
+						"",
+						nil,
+						"detection cancelled",
+					)
+					resultCh <- VeridropDetectionSummary{Cancelled: 1}
+				}
 				return
 			}
 			jobCh <- job
@@ -495,6 +522,7 @@ func buildVeridropDetectionTarget(channel *model.Channel, payload VeridropDetect
 		ChannelTypeName: constant.ChannelTypeNames[channel.Type],
 		Protocol:        protocol,
 		BaseURL:         strings.TrimRight(channel.GetBaseURL(), "/"),
+		Status:          channel.Status,
 	}
 	if target.ChannelTypeName == "" {
 		target.ChannelTypeName = "Unknown"
@@ -521,10 +549,9 @@ func mergeVeridropDetectionSummary(target *VeridropDetectionSummary, source Veri
 	target.Failed += source.Failed
 	target.TimedOut += source.TimedOut
 	target.Cancelled += source.Cancelled
-	target.Disabled += source.Disabled
 }
 
-func buildVeridropDetectionJob(channel *model.Channel, modelName string, protocol string, mode string, settings veridropSettingsSnapshot) (veridropDetectionJob, error) {
+func buildVeridropDetectionJob(channel *model.Channel, modelName string, protocol string, mode string, batchTaskID string, settings veridropSettingsSnapshot) (veridropDetectionJob, error) {
 	protocol = normalizeVeridropProtocol(protocol)
 	if protocol == "" {
 		protocol = inferVeridropProtocol(channel)
@@ -556,6 +583,7 @@ func buildVeridropDetectionJob(channel *model.Channel, modelName string, protoco
 		Model:       modelName,
 		Mode:        mode,
 		Status:      model.ChannelVeridropDetectionQueued,
+		BatchTaskID: batchTaskID,
 	}
 	if err := model.CreateChannelVeridropDetection(detection); err != nil {
 		return veridropDetectionJob{}, err
@@ -642,14 +670,9 @@ func runVeridropDetectionJob(ctx context.Context, job veridropDetectionJob, payl
 	reportBody = sanitizeVeridropText(reportBody, key, settings.AdminToken)
 	markVeridropDetectionTerminal(job.Detection.ID, model.ChannelVeridropDetectionDone, submitResp.JobID, &reportSummary, reportBody)
 	summary.Succeeded++
-
-	if !job.Manual && shouldAutoDisableByVeridrop(reportSummary, settings) {
-		DisableChannel(*types.NewChannelError(job.Channel.Id, job.Channel.Type, job.Channel.Name, job.Channel.ChannelInfo.IsMultiKey, "", true), "Veridrop: "+reportSummary.Summary)
-		summary.Disabled++
-	}
 }
 
-func createSkippedVeridropDetection(channel *model.Channel, protocol string, modelName string, mode string, reason string) error {
+func createSkippedVeridropDetection(channel *model.Channel, protocol string, modelName string, mode string, batchTaskID string, reason string) error {
 	protocol = normalizeVeridropProtocol(protocol)
 	if protocol == "" && channel != nil {
 		protocol = inferVeridropProtocol(channel)
@@ -665,6 +688,7 @@ func createSkippedVeridropDetection(channel *model.Channel, protocol string, mod
 		Model:       modelName,
 		Mode:        mode,
 		Status:      model.ChannelVeridropDetectionSkipped,
+		BatchTaskID: batchTaskID,
 		Error:       reason,
 		FinishedAt:  common.GetTimestamp(),
 	}
@@ -704,14 +728,19 @@ func submitVeridropDetection(ctx context.Context, settings veridropSettingsSnaps
 	form.Set("api_key", apiKey)
 	form.Set("model", job.Model)
 	form.Set("mode", job.Mode)
-	form.Set("include_long_context", fmt.Sprintf("%t", payload.IncludeLongContext))
-	form.Set("include_long_context_extreme", fmt.Sprintf("%t", payload.IncludeLongContextExtreme))
+	if job.Protocol != "gemini" {
+		form.Set("include_long_context", fmt.Sprintf("%t", payload.IncludeLongContext != nil && *payload.IncludeLongContext))
+		form.Set("include_long_context_extreme", fmt.Sprintf("%t", payload.IncludeLongContextExtreme != nil && *payload.IncludeLongContextExtreme))
+	}
 	if job.Protocol == "openai" {
 		wire := strings.TrimSpace(payload.OpenAIWireAPI)
-		if wire == "" {
-			wire = "chat_completions"
+		if err := validateVeridropWireAPI(wire); err != nil {
+			return veridropSubmitResponse{}, err
 		}
 		form.Set("wire_api", wire)
+	}
+	if payload.Force {
+		form.Set("force", "true")
 	}
 
 	var out veridropSubmitResponse
@@ -723,6 +752,15 @@ func submitVeridropDetection(ctx context.Context, settings veridropSettingsSnaps
 		return out, errors.New("veridrop detection response missing job_id")
 	}
 	return out, nil
+}
+
+func validateVeridropWireAPI(value string) error {
+	switch strings.TrimSpace(value) {
+	case "", "chat_completions", "responses":
+		return nil
+	default:
+		return ErrInvalidVeridropWireAPI
+	}
 }
 
 func pollVeridropDetection(ctx context.Context, settings veridropSettingsSnapshot, jobID string) (veridropStatusResponse, error) {
@@ -790,6 +828,9 @@ func doVeridropJSON(ctx context.Context, settings veridropSettingsSnapshot, meth
 }
 
 func doVeridropRequest(ctx context.Context, settings veridropSettingsSnapshot, method string, endpoint string, form url.Values, timeoutSeconds int) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -814,12 +855,19 @@ func doVeridropRequest(ctx context.Context, settings veridropSettingsSnapshot, m
 	}
 	defer response.Body.Close()
 
-	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, veridropMaxResponseBytes+1))
 	if readErr != nil {
 		return nil, readErr
 	}
+	if len(responseBody) > veridropMaxResponseBytes {
+		return nil, ErrVeridropResponseTooLarge
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("veridrop returned HTTP %d: %s", response.StatusCode, string(bytes.TrimSpace(responseBody)))
+		detail := bytes.TrimSpace(responseBody)
+		if len(detail) > veridropMaxErrorDetailBytes {
+			detail = detail[:veridropMaxErrorDetailBytes]
+		}
+		return nil, fmt.Errorf("veridrop returned HTTP %d: %s", response.StatusCode, string(detail))
 	}
 	return responseBody, nil
 }
@@ -829,22 +877,20 @@ func veridropHTTPClient() *http.Client {
 }
 
 func snapshotVeridropSettings() veridropSettingsSnapshot {
-	setting := operation_setting.GetVeridropMonitorSetting()
+	setting := operation_setting.GetVeridropMonitorSnapshot()
 	return veridropSettingsSnapshot{
-		Enabled:                    setting.Enabled,
-		BaseURL:                    strings.TrimRight(strings.TrimSpace(setting.BaseURL), "/"),
-		AdminToken:                 strings.TrimSpace(setting.AdminToken),
-		DefaultMode:                strings.TrimSpace(setting.DefaultMode),
-		DefaultOpenAIWireAPI:       strings.TrimSpace(setting.DefaultOpenAIWireAPI),
-		IncludeLongContext:         setting.IncludeLongContext,
-		IncludeLongContextExtreme:  setting.IncludeLongContextExtreme,
-		MaxConcurrent:              setting.MaxConcurrent,
-		SubmitTimeoutSeconds:       setting.SubmitTimeoutSeconds,
-		PollIntervalSeconds:        setting.PollIntervalSeconds,
-		JobTimeoutSeconds:          setting.JobTimeoutSeconds,
-		AutoDisableEnabled:         setting.AutoDisableEnabled,
-		AutoDisableFailedThreshold: setting.AutoDisableFailedThreshold,
-		BatchSize:                  setting.BatchSize,
+		Enabled:                   setting.Enabled,
+		BaseURL:                   strings.TrimRight(strings.TrimSpace(setting.BaseURL), "/"),
+		AdminToken:                strings.TrimSpace(setting.AdminToken),
+		DefaultMode:               strings.TrimSpace(setting.DefaultMode),
+		DefaultOpenAIWireAPI:      strings.TrimSpace(setting.DefaultOpenAIWireAPI),
+		IncludeLongContext:        setting.IncludeLongContext,
+		IncludeLongContextExtreme: setting.IncludeLongContextExtreme,
+		MaxConcurrent:             setting.MaxConcurrent,
+		SubmitTimeoutSeconds:      setting.SubmitTimeoutSeconds,
+		PollIntervalSeconds:       setting.PollIntervalSeconds,
+		JobTimeoutSeconds:         setting.JobTimeoutSeconds,
+		BatchSize:                 setting.BatchSize,
 	}
 }
 
@@ -987,22 +1033,14 @@ func sanitizeVeridropText(text string, secrets ...string) string {
 	return out
 }
 
-func shouldAutoDisableByVeridrop(report veridropReportSummary, settings veridropSettingsSnapshot) bool {
-	if !settings.AutoDisableEnabled || settings.AutoDisableFailedThreshold <= 0 {
-		return false
-	}
-	return strings.EqualFold(report.Verdict, "failed") && report.Score <= settings.AutoDisableFailedThreshold
-}
-
 func LogVeridropTaskResult(result VeridropDetectionSummary) {
 	logger.LogInfo(context.Background(), fmt.Sprintf(
-		"veridrop detection task done: created=%d succeeded=%d failed=%d skipped=%d timed_out=%d cancelled=%d disabled=%d",
+		"veridrop detection task done: created=%d succeeded=%d failed=%d skipped=%d timed_out=%d cancelled=%d",
 		result.Created,
 		result.Succeeded,
 		result.Failed,
 		result.Skipped,
 		result.TimedOut,
 		result.Cancelled,
-		result.Disabled,
 	))
 }

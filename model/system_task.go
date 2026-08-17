@@ -16,12 +16,14 @@ const (
 	SystemTaskStatusSucceeded SystemTaskStatus = "succeeded"
 	SystemTaskStatusFailed    SystemTaskStatus = "failed"
 
-	SystemTaskTypeLogCleanup     = "log_cleanup"
-	SystemTaskTypeChannelTest    = "channel_test"
-	SystemTaskTypeModelUpdate    = "model_update"
-	SystemTaskTypeVeridrop       = "veridrop_detection"
-	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
-	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+	SystemTaskTypeLogCleanup      = "log_cleanup"
+	SystemTaskTypeChannelTest     = "channel_test"
+	SystemTaskTypeModelUpdate     = "model_update"
+	SystemTaskTypeVeridrop        = "veridrop_detection"
+	SystemTaskTypeVeridropSingle  = "veridrop_detection_single"
+	SystemTaskTypeVeridropCleanup = "veridrop_detection_cleanup"
+	SystemTaskTypeMidjourneyPoll  = "midjourney_poll"
+	SystemTaskTypeAsyncTaskPoll   = "async_task_poll"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")

@@ -23,7 +23,7 @@ import { ADMIN_MENU_IDS, requireAdminMenu } from '@/lib/admin-menu-access'
 
 export const Route = createFileRoute('/_authenticated/channels/detection')({
   beforeLoad: () => {
-    requireAdminMenu(ADMIN_MENU_IDS.CHANNELS)
+    requireAdminMenu(ADMIN_MENU_IDS.VERIDROP_DETECTION)
   },
   component: VeridropDetection,
 })

@@ -16,21 +16,30 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   CheckCircle2,
   Download,
   FlaskConical,
   ListChecks,
+  Loader2,
   Play,
   RefreshCw,
   Save,
   Settings2,
-  ShieldAlert,
+  Trash2,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -40,56 +49,97 @@ import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Combobox } from '@/components/ui/combobox'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { listSystemTasks } from '@/features/system-settings/api'
 import type {
   SystemTask,
   SystemTaskStatus,
 } from '@/features/system-settings/types'
+import { useDebounce } from '@/hooks'
 import { toIntlLocale } from '@/i18n/languages'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
+  fetchManualUpstreamModels,
+  cleanupVeridropDetectionResults,
   getVeridropOptions,
   listVeridropDetectionTargets,
   listVeridropDetectionResults,
-  startEnabledVeridropDetection,
+  startChannelVeridropDetection,
+  startChannelsVeridropDetection,
   startManualVeridropDetection,
   updateVeridropOptions,
   VERIDROP_DEFAULT_OPTIONS,
 } from './api'
+import {
+  buildDetailedDetectionReportHtml,
+  getVeridropResultDisplayMessage,
+  hasVeridropScoreReport,
+  parseVeridropScoreReport,
+  type VeridropReportCheck,
+  type VeridropScoreReport,
+} from './report'
 import type {
   VeridropDetectionOptions,
   VeridropDetectionResult,
+  VeridropDetectionSortBy,
+  VeridropDetectionSortOrder,
   VeridropDetectionStatus,
+  VeridropDetectionSummary,
   VeridropDetectionTarget,
   VeridropManualDetectionRequest,
 } from './types'
 
 const ACTIVE_POLL_INTERVAL_MS = 8000
 const RESULT_LIMIT = 100
-const RESULT_STATUSES: VeridropDetectionStatus[] = [
-  'queued',
-  'running',
-  'done',
-  'error',
-  'timeout',
-  'cancelled',
+const RESULT_OUTCOMES = [
+  'in_progress',
+  'passed',
+  'completed',
+  'low_score',
+  'failed',
   'skipped',
-]
+  'cancelled',
+] as const
+const RESULT_MODES = ['all', 'quick', 'standard', 'full'] as const
+const RESULT_BATCHES = ['all', 'latest'] as const
 const EMPTY_DETECTION_RESULTS: VeridropDetectionResult[] = []
+const EMPTY_DETECTION_TARGETS: VeridropDetectionTarget[] = []
 const DEFAULT_MANUAL_FORM: VeridropManualDetectionRequest = {
   protocol: 'openai',
   base_url: 'https://',
@@ -99,51 +149,226 @@ const DEFAULT_MANUAL_FORM: VeridropManualDetectionRequest = {
   include_long_context: false,
   include_long_context_extreme: false,
   openai_wire_api: 'chat_completions',
+  force: false,
 }
 
 type Translator = (key: string) => string
-type ResultStatusFilter = 'all' | VeridropDetectionStatus
+type ResultOutcomeFilter = (typeof RESULT_OUTCOMES)[number]
+type ResultModeFilter = (typeof RESULT_MODES)[number]
+type ResultBatchFilter = (typeof RESULT_BATCHES)[number]
 type ResultTimeFilter = 'all' | '24h' | '7d' | '30d'
-
-type DetectionSectionProps = {
-  title: ReactNode
-  description?: ReactNode
-  icon?: ReactNode
-  action?: ReactNode
-  children: ReactNode
-  className?: string
+type DetectionWorkspaceTab = 'results' | 'batch' | 'manual'
+type DetectionResultSort = {
+  by: VeridropDetectionSortBy
+  order: VeridropDetectionSortOrder
 }
 
-function DetectionSection({
-  title,
-  description,
-  icon,
-  action,
-  children,
-  className,
-}: DetectionSectionProps) {
+const TASK_STATUS_CLASS_NAME: Record<SystemTaskStatus, string> = {
+  pending:
+    'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+  running: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+  succeeded:
+    'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+  failed: '',
+}
+
+const TASK_STATUS_DOT_CLASS_NAME: Record<SystemTaskStatus, string> = {
+  pending: 'bg-amber-500',
+  running: 'bg-sky-500',
+  succeeded: 'bg-emerald-500',
+  failed: 'bg-destructive',
+}
+
+const RESULT_STATUS_CLASS_NAME: Record<VeridropDetectionStatus, string> = {
+  queued: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+  running: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+  done: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+  error: '',
+  timeout: '',
+  cancelled: 'bg-muted text-muted-foreground',
+  skipped: 'bg-muted text-muted-foreground',
+}
+
+const RESULT_STATUS_DOT_CLASS_NAME: Record<VeridropDetectionStatus, string> = {
+  queued: 'bg-amber-500',
+  running: 'bg-sky-500',
+  done: 'bg-emerald-500',
+  error: 'bg-destructive',
+  timeout: 'bg-destructive',
+  cancelled: 'bg-muted-foreground/50',
+  skipped: 'bg-muted-foreground/50',
+}
+
+type LiveRefreshIndicatorProps = {
+  active: boolean
+}
+
+function LiveRefreshIndicator({ active }: LiveRefreshIndicatorProps) {
+  const { t } = useTranslation()
   return (
-    <section className={cn('rounded-lg border bg-background p-4', className)}>
-      <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-        <div className='min-w-0'>
-          <div className='flex items-center gap-2'>
-            {icon != null && (
-              <span className='text-muted-foreground shrink-0'>{icon}</span>
-            )}
-            <h3 className='text-base font-semibold'>{title}</h3>
-          </div>
-          {description != null && (
-            <p className='text-muted-foreground mt-1 text-sm'>{description}</p>
-          )}
-        </div>
-        {action != null && (
-          <div className='flex shrink-0 flex-wrap items-center gap-2'>
-            {action}
-          </div>
+    <span
+      className='text-muted-foreground inline-flex items-center gap-1.5 text-xs'
+      aria-live='polite'
+    >
+      <span
+        className={cn(
+          'size-1.5 rounded-full',
+          active ? 'bg-emerald-500' : 'bg-muted-foreground/40'
         )}
+        aria-hidden='true'
+      />
+      {active
+        ? t('Auto-refreshing every {{seconds}}s', {
+            seconds: ACTIVE_POLL_INTERVAL_MS / 1000,
+          })
+        : t('Live refresh pauses when no task is running')}
+    </span>
+  )
+}
+
+type PanelEmptyStateProps = {
+  icon: ReactNode
+  message: string
+}
+
+function PanelEmptyState({ icon, message }: PanelEmptyStateProps) {
+  return (
+    <div className='px-4 py-10 text-center'>
+      <div className='bg-muted mx-auto mb-3 flex size-10 items-center justify-center rounded-lg'>
+        {icon}
       </div>
-      {children}
-    </section>
+      <p className='text-muted-foreground text-sm'>{message}</p>
+    </div>
+  )
+}
+
+function TaskStatusBadge({ status }: { status: SystemTaskStatus }) {
+  const { t } = useTranslation()
+  return (
+    <Badge
+      variant={status === 'failed' ? 'destructive' : 'secondary'}
+      className={cn('gap-1.5', TASK_STATUS_CLASS_NAME[status])}
+    >
+      <span
+        className={cn(
+          'size-1.5 rounded-full',
+          TASK_STATUS_DOT_CLASS_NAME[status]
+        )}
+        aria-hidden='true'
+      />
+      {t(status)}
+    </Badge>
+  )
+}
+
+function getResultStatusLabel(result: VeridropDetectionResult, t: Translator) {
+  if (result.status === 'done') {
+    if (isPassedDetectionResult(result)) {
+      return t('Passed')
+    }
+    if (isFailedDetectionResult(result)) {
+      return t('Failed')
+    }
+    if (isBelowThresholdDetectionResult(result)) {
+      return t('Below threshold')
+    }
+    if (isMarginalDetectionResult(result)) {
+      return t('Marginal')
+    }
+    return t('Completed')
+  }
+  if (result.status === 'queued') return t('Waiting')
+  if (result.status === 'running') return t('Detecting')
+  if (result.status === 'error') return t('Failed')
+  if (result.status === 'timeout') return t('Timed out')
+  if (result.status === 'cancelled') return t('Cancelled')
+  return t('Skipped')
+}
+
+function getResultOutcomeFilterLabel(
+  outcome: ResultOutcomeFilter,
+  t: Translator
+) {
+  if (outcome === 'in_progress') return t('In Progress')
+  if (outcome === 'passed') return t('Passed')
+  if (outcome === 'completed') return t('Marginal')
+  if (outcome === 'low_score') return t('Below threshold')
+  if (outcome === 'failed') return t('Failed')
+  if (outcome === 'skipped') return t('Skipped')
+  return t('Cancelled')
+}
+
+function getResultModeFilterLabel(mode: ResultModeFilter, t: Translator) {
+  if (mode === 'all') return t('All modes')
+  return getVeridropModeLabel(mode, t)
+}
+
+function getResultBatchFilterLabel(batch: ResultBatchFilter, t: Translator) {
+  return batch === 'latest' ? t('Latest batch') : t('All batches')
+}
+
+function isPassedDetectionResult(result: VeridropDetectionResult) {
+  return result.outcome === 'passed'
+}
+
+function isFailedDetectionResult(result: VeridropDetectionResult) {
+  return result.outcome === 'failed'
+}
+
+function isMarginalDetectionResult(result: VeridropDetectionResult) {
+  return (
+    result.outcome === 'completed' &&
+    result.verdict.trim().toLowerCase() === 'marginal'
+  )
+}
+
+function isBelowThresholdDetectionResult(result: VeridropDetectionResult) {
+  return result.outcome === 'low_score'
+}
+
+function ResultStatusBadge({
+  result,
+  score,
+}: {
+  result: VeridropDetectionResult
+  score?: string | null
+}) {
+  const { t } = useTranslation()
+  const failedVerdict =
+    result.status === 'done' && isFailedDetectionResult(result)
+  const belowThreshold = isBelowThresholdDetectionResult(result)
+  const marginal = isMarginalDetectionResult(result) && !belowThreshold
+  const destructive = isFailedDetectionResult(result) || belowThreshold
+  let badgeVariant: 'destructive' | 'secondary' | 'warning' = 'secondary'
+  if (destructive) badgeVariant = 'destructive'
+  else if (marginal) badgeVariant = 'warning'
+
+  let dotClassName = RESULT_STATUS_DOT_CLASS_NAME[result.status]
+  if (failedVerdict || belowThreshold) {
+    dotClassName = RESULT_STATUS_DOT_CLASS_NAME.error
+  } else if (marginal) {
+    dotClassName = 'bg-warning'
+  }
+
+  return (
+    <Badge
+      variant={badgeVariant}
+      className={cn(
+        'gap-1.5',
+        failedVerdict || belowThreshold || marginal
+          ? ''
+          : RESULT_STATUS_CLASS_NAME[result.status]
+      )}
+    >
+      <span
+        className={cn('size-1.5 rounded-full', dotClassName)}
+        aria-hidden='true'
+      />
+      {getResultStatusLabel(result, t)}
+      {score != null && result.status === 'done' ? (
+        <span className='tabular-nums'>{t('{{score}} points', { score })}</span>
+      ) : null}
+    </Badge>
   )
 }
 
@@ -186,17 +411,141 @@ function getResultTimeLabel(timeFilter: ResultTimeFilter, t: Translator) {
   }
 }
 
-function getResultSinceSeconds(timeFilter: ResultTimeFilter, nowSeconds: number) {
+function DetectionResultStatistics({
+  summary,
+  isLoading,
+  selectedOutcomes,
+  onSelectedOutcomesChange,
+}: {
+  summary?: VeridropDetectionSummary
+  isLoading: boolean
+  selectedOutcomes: ResultOutcomeFilter[]
+  onSelectedOutcomesChange: (outcomes: ResultOutcomeFilter[]) => void
+}) {
+  const { t } = useTranslation()
+
+  if (summary == null) {
+    if (!isLoading) return null
+    return (
+      <div className='mt-3 flex min-h-11 flex-wrap items-center gap-2 border-y py-2'>
+        {Array.from({ length: 8 }, (_, index) => (
+          <Skeleton key={index} className='h-7 w-24 rounded-full' />
+        ))}
+      </div>
+    )
+  }
+
+  const statistics = [
+    {
+      key: 'total',
+      label: t('Total'),
+      count: summary.total,
+      variant: 'outline',
+    },
+    {
+      key: 'in_progress',
+      label: t('In Progress'),
+      count: summary.in_progress,
+      variant: 'outline',
+    },
+    {
+      key: 'passed',
+      label: t('Passed'),
+      count: summary.passed,
+      variant: 'secondary',
+    },
+    {
+      key: 'completed',
+      label: t('Marginal'),
+      count: summary.completed,
+      variant: 'warning',
+    },
+    {
+      key: 'low_score',
+      label: t('Below threshold'),
+      count: summary.low_score,
+      variant: 'destructive',
+    },
+    {
+      key: 'failed',
+      label: t('Failed'),
+      count: summary.failed,
+      variant: 'destructive',
+    },
+    {
+      key: 'skipped',
+      label: t('Skipped'),
+      count: summary.skipped,
+      variant: 'secondary',
+    },
+    {
+      key: 'cancelled',
+      label: t('Cancelled'),
+      count: summary.cancelled,
+      variant: 'outline',
+    },
+  ] as const
+
+  return (
+    <div className='mt-3 flex min-h-11 flex-wrap items-center gap-2 border-y py-2'>
+      {statistics.map((statistic) => {
+        const isTotal = statistic.key === 'total'
+        const isSelected = isTotal
+          ? selectedOutcomes.length === 0
+          : selectedOutcomes.includes(statistic.key)
+
+        return (
+          <Badge
+            key={statistic.key}
+            render={<button type='button' />}
+            variant={statistic.variant}
+            aria-pressed={isSelected}
+            className={cn(
+              'h-7 cursor-pointer gap-1.5 px-2.5 select-none hover:shadow-sm',
+              isSelected &&
+                'ring-primary/50 ring-2 ring-offset-1 ring-offset-background shadow-sm'
+            )}
+            onClick={() => {
+              if (isTotal) {
+                onSelectedOutcomesChange([])
+                return
+              }
+              if (isSelected) {
+                onSelectedOutcomesChange(
+                  selectedOutcomes.filter(
+                    (outcome) => outcome !== statistic.key
+                  )
+                )
+                return
+              }
+              onSelectedOutcomesChange(
+                RESULT_OUTCOMES.filter(
+                  (outcome) =>
+                    outcome === statistic.key ||
+                    selectedOutcomes.includes(outcome)
+                )
+              )
+            }}
+          >
+            <span>{statistic.label}</span>
+            <span className='font-semibold tabular-nums'>
+              {statistic.count}
+            </span>
+          </Badge>
+        )
+      })}
+    </div>
+  )
+}
+
+function getResultSinceSeconds(
+  timeFilter: ResultTimeFilter,
+  nowSeconds: number
+) {
   if (timeFilter === '24h') return nowSeconds - 24 * 60 * 60
   if (timeFilter === '7d') return nowSeconds - 7 * 24 * 60 * 60
   if (timeFilter === '30d') return nowSeconds - 30 * 24 * 60 * 60
   return 0
-}
-
-function escapeCsvCell(value: string | number | null | undefined) {
-  const text = value == null ? '' : String(value)
-  if (!/[",\n\r]/.test(text)) return text
-  return `"${text.replaceAll('"', '""')}"`
 }
 
 function downloadTextFile(filename: string, content: string, type: string) {
@@ -211,74 +560,287 @@ function downloadTextFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url)
 }
 
-function getResultDisplayMessage(result: VeridropDetectionResult) {
-  const raw = result.error || result.run_error || result.summary
-  if (raw === '') return '-'
-  const messageMatch = raw.match(/"message"\s*:\s*"([^"]+)"/)
-  if (messageMatch?.[1] != null && messageMatch[1] !== '') {
-    return messageMatch[1]
+function formatResultScore(score: number) {
+  if (!Number.isFinite(score) || score < 0) return null
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+  }).format(score)
+}
+
+function getReportCheckStatusLabel(status: string, t: Translator) {
+  if (status === 'pass') return t('Passed')
+  if (status === 'fail') return t('Failed')
+  if (status === 'skip') return t('Skipped')
+  if (status === 'error') return t('Error')
+  return status
+}
+
+function getReportVerdictLabel(verdict: string, t: Translator) {
+  if (verdict === 'passed') return t('Passed')
+  if (verdict === 'marginal') return t('Marginal')
+  if (verdict === 'failed') return t('Failed')
+  return verdict
+}
+
+function getReportCheckStatusVariant(
+  status: string
+): 'destructive' | 'outline' | 'secondary' {
+  if (status === 'fail' || status === 'error') return 'destructive'
+  if (status === 'skip') return 'outline'
+  return 'secondary'
+}
+
+function ReportCheckStatusBadge({ check }: { check: VeridropReportCheck }) {
+  const { t } = useTranslation()
+  return (
+    <Badge variant={getReportCheckStatusVariant(check.status)}>
+      {getReportCheckStatusLabel(check.status, t)}
+    </Badge>
+  )
+}
+
+function getSkippedCheckExplanation(
+  check: VeridropReportCheck,
+  mode: string,
+  t: ReturnType<typeof useTranslation>['t']
+) {
+  if (check.skipReason === 'mode-excluded') {
+    return t('Not called in {{mode}} mode.', {
+      mode: getVeridropModeLabel(mode, t),
+    })
   }
-  const detailMatch = raw.match(/"detail"\s*:\s*"([^"]+)"/)
-  if (detailMatch?.[1] != null && detailMatch[1] !== '') {
-    return detailMatch[1]
+  if (
+    [
+      'model-excluded',
+      'unknown model',
+      'model lacks thinking support',
+    ].includes(check.skipReason)
+  ) {
+    return t('Not called because this check does not apply to the model.')
   }
-  return raw
+  if (
+    check.skipReason.toLowerCase().includes('long context') ||
+    check.skipReason.includes('长上下文')
+  ) {
+    return t('Not called because the optional probe is disabled.')
+  }
+  if (['missing-usage', 'no observations'].includes(check.skipReason)) {
+    return t(
+      'The upstream was called, but the response did not contain enough evidence to score this check.'
+    )
+  }
+  return t('Skipped: {{reason}}', {
+    reason: check.skipReason || t('No reason provided'),
+  })
 }
 
-function buildDetectionReportCsv(results: VeridropDetectionResult[]) {
-  const headers = [
-    'ID',
-    'Channel ID',
-    'Channel',
-    'Model',
-    'Protocol',
-    'Mode',
-    'Status',
-    'Score',
-    'Verdict',
-    'Summary',
-    'Error',
-    'Updated At',
-  ]
-  const rows = results.map((result) => [
-    result.id,
-    result.channel_id,
-    result.channel_name,
-    result.model,
-    result.protocol,
-    result.mode,
-    result.status,
-    result.score > 0 ? result.score : '',
-    result.verdict,
-    result.summary,
-    result.error || result.run_error,
-    formatTimestampToDate(result.updated_at),
-  ])
-
-  return [headers, ...rows]
-    .map((row) => row.map((value) => escapeCsvCell(value)).join(','))
-    .join('\n')
+function ReportCheckEvidence({
+  check,
+  mode,
+}: {
+  check: VeridropReportCheck
+  mode: string
+}) {
+  const { t } = useTranslation()
+  if (check.error !== '') {
+    return <span className='text-destructive text-xs'>{check.error}</span>
+  }
+  const skippedExplanation =
+    check.status === 'skip' ? getSkippedCheckExplanation(check, mode, t) : null
+  if (Object.keys(check.details).length === 0) {
+    return skippedExplanation == null ? (
+      <span className='text-muted-foreground'>—</span>
+    ) : (
+      <span className='text-muted-foreground text-xs'>
+        {skippedExplanation}
+      </span>
+    )
+  }
+  return (
+    <div className='flex flex-col gap-1.5'>
+      {skippedExplanation != null ? (
+        <span className='text-muted-foreground text-xs'>
+          {skippedExplanation}
+        </span>
+      ) : null}
+      <details>
+        <summary className='text-primary cursor-pointer text-xs'>
+          {t('View evidence')}
+        </summary>
+        <pre className='bg-muted mt-2 max-h-64 w-full max-w-[420px] overflow-auto rounded-md p-3 text-[11px] whitespace-pre-wrap'>
+          {JSON.stringify(check.details, null, 2)}
+        </pre>
+      </details>
+    </div>
+  )
 }
 
-const TASK_STATUS_CLASS_NAME: Record<SystemTaskStatus, string> = {
-  pending:
-    'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
-  running:
-    'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
-  succeeded:
-    'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
-  failed: '',
-}
+function ScoreDetailsDialog({
+  result,
+  report,
+  onOpenChange,
+}: {
+  result: VeridropDetectionResult | null
+  report: VeridropScoreReport | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const belowThreshold = result?.outcome === 'low_score'
+  const marginal =
+    result?.outcome === 'completed' &&
+    report?.verdict.trim().toLowerCase() === 'marginal'
+  let scorePanelClassName = 'bg-muted/40'
+  if (belowThreshold) scorePanelClassName = 'bg-destructive/5'
+  else if (marginal) scorePanelClassName = 'bg-warning/5'
 
-const RESULT_STATUS_CLASS_NAME: Record<VeridropDetectionStatus, string> = {
-  queued:
-    'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
-  running: 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
-  done: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
-  error: '',
-  timeout: '',
-  cancelled: 'bg-muted text-muted-foreground',
-  skipped: 'bg-muted text-muted-foreground',
+  return (
+    <Dialog
+      open={result != null && report != null}
+      onOpenChange={onOpenChange}
+      title={t('Score Details')}
+      description={
+        result == null
+          ? undefined
+          : `${result.channel_name || t('Manual Test')} · ${result.model}`
+      }
+      contentClassName='sm:max-w-6xl'
+      contentHeight='min(72vh, 760px)'
+      showCloseButton
+    >
+      {report != null ? (
+        <div className='space-y-4'>
+          <div
+            className={cn(
+              'grid gap-3 rounded-md px-4 py-3 sm:grid-cols-[auto_1fr] sm:items-center',
+              scorePanelClassName
+            )}
+          >
+            <div className='min-w-24'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Total Score')}
+              </div>
+              <div
+                className={cn(
+                  'text-2xl font-semibold tabular-nums',
+                  belowThreshold && 'text-destructive'
+                )}
+              >
+                {formatResultScore(report.totalScore) ?? '0'}
+              </div>
+            </div>
+            <div className='min-w-0 text-sm'>
+              <div className='flex flex-wrap items-center gap-2'>
+                {belowThreshold ? (
+                  <Badge variant='destructive'>{t('Below threshold')}</Badge>
+                ) : null}
+                {marginal && !belowThreshold ? (
+                  <Badge variant='warning'>{t('Marginal')}</Badge>
+                ) : null}
+                <span className='font-medium'>
+                  {getReportVerdictLabel(report.verdict, t) || report.summary}
+                </span>
+              </div>
+              <div className='text-muted-foreground mt-1 text-xs'>
+                {t('{{count}} checks · {{weight}} total weight', {
+                  count: report.checks.length,
+                  weight: formatResultScore(report.effectiveWeight) ?? '0',
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className='border-border space-y-1 border-b pb-3 text-xs'>
+            <div className='font-medium'>{t('Scoring Rules')}</div>
+            <div className='text-muted-foreground'>
+              {t('Weighted average of all non-skipped checks.')}
+            </div>
+            <div className='text-muted-foreground'>
+              {t('Error checks remain weighted; skipped checks are excluded.')}
+            </div>
+            <div className='text-muted-foreground'>
+              {t('70+ passed · 50–69.9 marginal · below 50 failed')}
+            </div>
+            {report.hasCriticalIssues ? (
+              <div className='text-amber-700 dark:text-amber-300'>
+                {t('Critical findings can lower a passing result to marginal.')}
+              </div>
+            ) : null}
+          </div>
+
+          <div className='overflow-x-auto'>
+            <Table className='min-w-[900px]'>
+              <TableHeader>
+                <TableRow className='bg-muted/40 hover:bg-muted/40'>
+                  <TableHead className='min-w-[190px]'>{t('Check')}</TableHead>
+                  <TableHead className='min-w-[150px]'>{t('Result')}</TableHead>
+                  <TableHead className='text-right'>
+                    {t('Contribution')}
+                  </TableHead>
+                  <TableHead className='min-w-[220px]'>
+                    {t('Evidence')}
+                  </TableHead>
+                  <TableHead className='text-right'>{t('Weight')}</TableHead>
+                  <TableHead className='text-right'>{t('Duration')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.checks.map((check) => {
+                  const checkFailed = ['fail', 'error'].includes(check.status)
+                  return (
+                    <TableRow
+                      key={`${check.name}-${check.displayName}`}
+                      className={cn(checkFailed && 'bg-destructive/5')}
+                    >
+                      <TableCell className='align-top'>
+                        <div className='font-medium'>{check.displayName}</div>
+                        <div className='text-muted-foreground font-mono text-[11px]'>
+                          {check.name}
+                        </div>
+                      </TableCell>
+                      <TableCell className='align-top'>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <ReportCheckStatusBadge check={check} />
+                          <span
+                            className={cn(
+                              'font-semibold tabular-nums',
+                              checkFailed && 'text-destructive'
+                            )}
+                          >
+                            {t('{{score}} points', {
+                              score: formatResultScore(check.score) ?? '0',
+                            })}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className='text-right align-top tabular-nums'>
+                        {check.contribution == null
+                          ? '—'
+                          : (formatResultScore(check.contribution) ?? '0')}
+                      </TableCell>
+                      <TableCell className='align-top'>
+                        <ReportCheckEvidence
+                          check={check}
+                          mode={result?.mode ?? ''}
+                        />
+                      </TableCell>
+                      <TableCell className='text-right align-top tabular-nums'>
+                        {formatResultScore(check.weight) ?? '0'}
+                      </TableCell>
+                      <TableCell className='text-right align-top tabular-nums'>
+                        {check.durationMs == null
+                          ? '—'
+                          : `${check.durationMs} ms`}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      ) : null}
+    </Dialog>
+  )
 }
 
 function isActiveTask(task: SystemTask) {
@@ -293,7 +855,12 @@ function numberInputValue(value: number) {
   return Number.isFinite(value) ? String(value) : ''
 }
 
-function clampInteger(value: string, fallback: number, min: number, max: number) {
+function clampInteger(
+  value: string,
+  fallback: number,
+  min: number,
+  max: number
+) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed)) return fallback
   return Math.min(max, Math.max(min, parsed))
@@ -318,13 +885,13 @@ type SettingFieldProps = {
 
 function SettingField({ label, description, children }: SettingFieldProps) {
   return (
-    <div className='grid gap-2'>
-      <Label>{label}</Label>
+    <Field>
+      <FieldLabel>{label}</FieldLabel>
       {children}
       {description != null && (
-        <p className='text-muted-foreground text-xs'>{description}</p>
+        <FieldDescription>{description}</FieldDescription>
       )}
-    </div>
+    </Field>
   )
 }
 
@@ -354,13 +921,13 @@ function SwitchRow({
   onCheckedChange,
 }: SwitchRowProps) {
   return (
-    <div className='flex items-center justify-between gap-4 rounded-md border px-3 py-3'>
+    <Field orientation='horizontal' className='rounded-md border px-3 py-3'>
       <div className='min-w-0'>
-        <div className='text-sm font-medium'>{label}</div>
-        <p className='text-muted-foreground mt-0.5 text-xs'>{description}</p>
+        <FieldLabel>{label}</FieldLabel>
+        <FieldDescription className='mt-0.5'>{description}</FieldDescription>
       </div>
       <Switch checked={checked} onCheckedChange={onCheckedChange} />
-    </div>
+    </Field>
   )
 }
 
@@ -384,15 +951,16 @@ function DetectionSettingsDialog({
   isSaving,
 }: DetectionSettingsDialogProps) {
   const { t } = useTranslation()
-  const dirty =
-    hasUnsavedVeridropChanges(options, savedOptions)
+  const dirty = hasUnsavedVeridropChanges(options, savedOptions)
 
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
       title={t('Detection Settings')}
-      description={t('Configure the Veridrop monitor backend used by this page.')}
+      description={t(
+        'Configure the Veridrop monitor backend used by this page.'
+      )}
       contentClassName='sm:max-w-4xl'
       contentHeight='min(70vh, 620px)'
       footer={
@@ -411,21 +979,50 @@ function DetectionSettingsDialog({
         </>
       }
     >
-      <div className='grid gap-4 lg:grid-cols-2'>
+      <FieldGroup className='grid gap-4 lg:grid-cols-2'>
         <SwitchRow
           label={t('Enable Veridrop Detection')}
-          description={t('Allow detection tasks to call the configured Veridrop backend.')}
+          description={t(
+            'Allow detection tasks to call the configured Veridrop backend.'
+          )}
           checked={options.enabled}
           onCheckedChange={(enabled) => onChange({ ...options, enabled })}
         />
         <SwitchRow
-          label={t('Auto-disable Failed Channels')}
-          description={t('Disabled by default. When enabled, failed detections can disable the channel.')}
-          checked={options.auto_disable_enabled}
-          onCheckedChange={(auto_disable_enabled) =>
-            onChange({ ...options, auto_disable_enabled })
+          label={t('Scheduled Detection')}
+          description={t(
+            'Automatically run batch detection for enabled channels at the configured interval.'
+          )}
+          checked={options.auto_detection_enabled}
+          onCheckedChange={(auto_detection_enabled) =>
+            onChange({ ...options, auto_detection_enabled })
           }
         />
+        <SettingField
+          label={t('Detection Interval (minutes)')}
+          description={t(
+            'Time between scheduled batch detections. This is separate from task status polling.'
+          )}
+        >
+          <Input
+            type='number'
+            min={15}
+            max={43200}
+            disabled={!options.auto_detection_enabled}
+            value={numberInputValue(options.detection_interval_minutes)}
+            onChange={(event) =>
+              onChange({
+                ...options,
+                detection_interval_minutes: clampInteger(
+                  event.target.value,
+                  VERIDROP_DEFAULT_OPTIONS.detection_interval_minutes,
+                  15,
+                  43200
+                ),
+              })
+            }
+          />
+        </SettingField>
         <SettingField
           label={t('Veridrop Base URL')}
           description={t('The backend address of veridrop-monitor.')}
@@ -465,48 +1062,42 @@ function DetectionSettingsDialog({
               </SelectValue>
             </SelectTrigger>
             <SelectContent align='start' alignItemWithTrigger={false}>
-              <SelectItem value='quick'>{t('Quick')}</SelectItem>
-              <SelectItem value='standard'>{t('Standard')}</SelectItem>
-              <SelectItem value='full'>{t('Full')}</SelectItem>
+              <SelectGroup>
+                <SelectItem value='quick'>{t('Quick')}</SelectItem>
+                <SelectItem value='standard'>{t('Standard')}</SelectItem>
+                <SelectItem value='full'>{t('Full')}</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
         </SettingField>
         <SettingField
           label={t('OpenAI Wire API')}
-          description={t('Optional wire protocol passed to OpenAI-compatible checks.')}
+          description={t(
+            'Optional wire protocol passed to OpenAI-compatible checks.'
+          )}
         >
-          <Input
+          <Select
             value={options.default_openai_wire_api}
-            placeholder='chat_completions'
-            onChange={(event) =>
+            onValueChange={(default_openai_wire_api) =>
               onChange({
                 ...options,
-                default_openai_wire_api: event.target.value,
+                default_openai_wire_api:
+                  default_openai_wire_api ?? 'chat_completions',
               })
             }
-          />
-        </SettingField>
-        <SettingField
-          label={t('Auto-disable Threshold')}
-          description={t('Failed results at or below this score can disable channels when auto-disable is enabled.')}
-        >
-          <Input
-            type='number'
-            min={0}
-            max={100}
-            value={numberInputValue(options.auto_disable_failed_threshold)}
-            onChange={(event) =>
-              onChange({
-                ...options,
-                auto_disable_failed_threshold: clampInteger(
-                  event.target.value,
-                  VERIDROP_DEFAULT_OPTIONS.auto_disable_failed_threshold,
-                  0,
-                  100
-                ),
-              })
-            }
-          />
+          >
+            <SelectTrigger className='w-full'>
+              <SelectValue>{options.default_openai_wire_api}</SelectValue>
+            </SelectTrigger>
+            <SelectContent align='start' alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='chat_completions'>
+                  chat_completions
+                </SelectItem>
+                <SelectItem value='responses'>responses</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </SettingField>
         <SettingField label={t('Max Concurrent Detections')}>
           <Input
@@ -529,7 +1120,9 @@ function DetectionSettingsDialog({
         </SettingField>
         <SwitchRow
           label={t('Long-context Probe')}
-          description={t('Run the longer probe when the monitor backend supports it.')}
+          description={t(
+            'Run the longer probe when the monitor backend supports it.'
+          )}
           checked={options.include_long_context}
           onCheckedChange={(include_long_context) =>
             onChange({ ...options, include_long_context })
@@ -537,173 +1130,100 @@ function DetectionSettingsDialog({
         />
         <SwitchRow
           label={t('Extreme Long-context Probe')}
-          description={t('Use only when the upstream and monitor backend can tolerate the cost.')}
+          description={t(
+            'Use only when the upstream and monitor backend can tolerate the cost.'
+          )}
           checked={options.include_long_context_extreme}
           onCheckedChange={(include_long_context_extreme) =>
             onChange({ ...options, include_long_context_extreme })
           }
         />
-      </div>
+      </FieldGroup>
     </Dialog>
   )
 }
 
-type DetectionRunCardProps = {
-  options: VeridropDetectionOptions
+type DetectionRunToolbarProps = {
   activeTask: SystemTask | null
-  targetChannelCount: number
+  totalChannelCount: number
   targetModelCount: number
   skippedChannelCount: number
-  targetsLoading: boolean
-  targetsError: boolean
-  onRun: () => void
-  isRunning: boolean
   onRefresh: () => void
   isRefreshing: boolean
-  settingsDirty: boolean
 }
 
-function DetectionRunCard({
-  options,
+function DetectionRunToolbar({
   activeTask,
-  targetChannelCount,
+  totalChannelCount,
   targetModelCount,
   skippedChannelCount,
-  targetsLoading,
-  targetsError,
-  onRun,
-  isRunning,
   onRefresh,
   isRefreshing,
-  settingsDirty,
-}: DetectionRunCardProps) {
+}: DetectionRunToolbarProps) {
   const { t, i18n } = useTranslation()
-  let disabledReason: string | null = null
-  if (settingsDirty) {
-    disabledReason = t('Save your Veridrop settings before starting detection.')
-  } else if (!options.enabled || options.base_url.trim() === '') {
-    disabledReason = t(
-      'Complete and enable the Veridrop settings before starting detection.'
-    )
-  } else if (targetsLoading) {
-    disabledReason = t('Loading detection coverage...')
-  } else if (targetsError) {
-    disabledReason = t('Detection coverage is unavailable. Refresh before starting detection.')
-  } else if (!targetsLoading && targetModelCount === 0) {
-    disabledReason = t('No enabled channel/model targets are ready for detection.')
-  }
+  const taskProgress = (activeTask?.state as { progress?: unknown } | undefined)
+    ?.progress
 
   return (
-    <DetectionSection
-      title={t('Batch Detection')}
-      description={t('Runs all enabled channels and their enabled models against each channel base URL.')}
-      icon={<Play className='size-4' aria-hidden='true' />}
-      action={
-        <div className='flex w-full flex-wrap items-center gap-2 sm:w-auto'>
-          <Button
-            type='button'
-            variant='outline'
-            size='sm'
-            onClick={onRefresh}
-            disabled={isRefreshing}
-          >
-            <RefreshCw
-              data-icon='inline-start'
-              className={cn('size-4', isRefreshing && 'animate-spin')}
-            />
-            {t('Refresh')}
-          </Button>
-          <Button
-            type='button'
-            size='sm'
-            onClick={onRun}
-            disabled={isRunning || disabledReason != null}
-          >
-            <Play data-icon='inline-start' className='size-4' />
-            {isRunning ? t('Starting...') : t('Run Detection')}
-          </Button>
-        </div>
-      }
-    >
-      <div className='space-y-4'>
-        {disabledReason != null && (
-          <div className='bg-muted/40 text-muted-foreground flex items-start gap-2 rounded-md px-3 py-2 text-sm'>
-            <AlertTriangle className='mt-0.5 size-4 shrink-0' />
-            <span>{disabledReason}</span>
-          </div>
-        )}
-        <div className='grid gap-x-6 gap-y-3 sm:grid-cols-3'>
-          <div>
-            <div className='text-muted-foreground text-xs'>{t('Target')}</div>
-            <div className='mt-1 text-sm font-medium'>
-              {t('Channel base URL')}
-            </div>
-          </div>
-          <div>
-            <div className='text-muted-foreground text-xs'>{t('Scope')}</div>
-            <div className='mt-1 text-sm font-medium'>
-              {t('{{channels}} channels / {{models}} models', {
-                channels: targetChannelCount,
-                models: targetModelCount,
-              })}
-            </div>
-          </div>
-          <div>
-            <div className='text-muted-foreground text-xs'>{t('Failure Policy')}</div>
-            <div className='mt-1 text-sm font-medium'>
-              {options.auto_disable_enabled
-                ? t('Auto-disable enabled')
-                : t('Record only')}
-            </div>
-          </div>
-        </div>
-        {skippedChannelCount > 0 && (
-          <div className='text-muted-foreground px-1 text-xs'>
-            {t('{{count}} channels are not included because they are missing models or use unsupported protocols.', {
-              count: skippedChannelCount,
-            })}
-          </div>
-        )}
+    <div className='flex flex-col gap-3 border-b py-2.5 lg:flex-row lg:items-center lg:justify-between'>
+      <div className='flex min-w-0 items-center gap-2'>
+        <span className='bg-muted text-muted-foreground inline-flex size-7 shrink-0 items-center justify-center rounded-md'>
+          <ListChecks className='size-4' aria-hidden='true' />
+        </span>
         {activeTask != null ? (
-          <div className='bg-muted/40 flex flex-col gap-3 rounded-md px-3 py-3 sm:flex-row sm:items-center sm:justify-between'>
-            <div className='min-w-0'>
-              <div className='flex items-center gap-2'>
-                <Badge
-                  variant={
-                    activeTask.status === 'failed' ? 'destructive' : 'outline'
-                  }
-                  className={TASK_STATUS_CLASS_NAME[activeTask.status]}
-                >
-                  {t(activeTask.status)}
-                </Badge>
-                <span className='text-sm font-medium'>
-                  {t('Latest detection task')}
-                </span>
-              </div>
-              <p
-                className='text-muted-foreground mt-1 truncate text-xs'
-                title={formatTimestampToDate(activeTask.updated_at)}
-              >
-                {t('Updated {{time}}', {
-                  time: formatTimestampRelative(
-                    activeTask.updated_at,
-                    'seconds',
-                    toIntlLocale(i18n.language)
-                  ),
-                })}
-              </p>
-            </div>
-            <div className='text-muted-foreground truncate font-mono text-xs'>
-              {activeTask.task_id}
-            </div>
+          <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
+            <TaskStatusBadge status={activeTask.status} />
+            {typeof taskProgress === 'number' && (
+              <span className='text-sm font-medium tabular-nums'>
+                {Math.min(100, Math.max(0, taskProgress))}%
+              </span>
+            )}
+            <span
+              className='text-muted-foreground truncate text-xs'
+              title={formatTimestampToDate(activeTask.updated_at)}
+            >
+              {t('Updated {{time}}', {
+                time: formatTimestampRelative(
+                  activeTask.updated_at,
+                  'seconds',
+                  toIntlLocale(i18n.language)
+                ),
+              })}
+            </span>
           </div>
         ) : (
-          <div className='text-muted-foreground bg-muted/30 rounded-md px-4 py-6 text-center text-sm'>
-            {t('No Veridrop detection task is currently active.')}
-          </div>
+          <span className='text-muted-foreground text-sm'>
+            {t('No task is running')}
+          </span>
         )}
       </div>
-    </DetectionSection>
+      <div className='flex flex-wrap items-center gap-2 lg:justify-end'>
+        <Badge variant='outline'>
+          {t('{{channels}} channels · {{models}} models', {
+            channels: totalChannelCount,
+            models: targetModelCount,
+          })}
+        </Badge>
+        {skippedChannelCount > 0 && (
+          <Badge variant='secondary'>
+            {t('{{count}} skipped', { count: skippedChannelCount })}
+          </Badge>
+        )}
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={onRefresh}
+          disabled={isRefreshing}
+        >
+          <RefreshCw
+            data-icon='inline-start'
+            className={cn('size-4', isRefreshing && 'animate-spin')}
+          />
+          {isRefreshing ? t('Refreshing...') : t('Refresh')}
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -725,6 +1245,52 @@ function ManualDetectionCard({
   isSubmitting,
 }: ManualDetectionCardProps) {
   const { t } = useTranslation()
+  const [fetchedModels, setFetchedModels] = useState<string[]>([])
+  const modelSourceRevision = useRef(0)
+  const modelOptions = useMemo(
+    () => fetchedModels.map((model) => ({ label: model, value: model })),
+    [fetchedModels]
+  )
+  const canFetchModels =
+    form.base_url.trim() !== '' &&
+    form.base_url.trim() !== 'https://' &&
+    form.api_key.trim() !== '' &&
+    form.protocol.trim() !== ''
+  const supportsLongContext = form.protocol !== 'gemini'
+  const fetchModelsMutation = useMutation({
+    mutationFn: ({
+      request,
+    }: {
+      request: Pick<
+        VeridropManualDetectionRequest,
+        'base_url' | 'api_key' | 'protocol'
+      >
+      revision: number
+    }) => fetchManualUpstreamModels(request),
+    onSuccess: (models, variables) => {
+      if (variables.revision !== modelSourceRevision.current) return
+      setFetchedModels(models)
+      if (models.length === 0) {
+        toast.info(
+          t('No models were returned. You can enter a model manually.')
+        )
+        return
+      }
+      toast.success(t('Fetched {{count}} models', { count: models.length }))
+    },
+    onError: (_error, variables) => {
+      if (variables.revision !== modelSourceRevision.current) return
+      toast.error(
+        t(
+          'Could not fetch models. Check the Base URL, API Key and protocol, then try again.'
+        )
+      )
+    },
+  })
+  const clearFetchedModels = () => {
+    modelSourceRevision.current += 1
+    setFetchedModels([])
+  }
   const canSubmit =
     !settingsDirty &&
     options.enabled &&
@@ -736,21 +1302,28 @@ function ManualDetectionCard({
     form.protocol.trim() !== ''
   let disabledReason: string | null = null
   if (settingsDirty) {
-    disabledReason = t('Save your Veridrop settings before starting detection.')
+    disabledReason = t('Save detection settings before starting.')
   } else if (!options.enabled || options.base_url.trim() === '') {
     disabledReason = t(
-      'Complete and enable the Veridrop settings before starting detection.'
+      'Complete and enable detection settings before starting.'
     )
   } else if (!canSubmit) {
-    disabledReason = t('Fill in Base URL, API Key, model and protocol before testing.')
+    disabledReason = t(
+      'Fill in Base URL, API Key, model and protocol before testing.'
+    )
   }
 
   return (
-    <DetectionSection
-      title={t('Manual Test')}
-      description={t('Test a temporary upstream without adding it as a channel.')}
-      icon={<FlaskConical className='size-4' aria-hidden='true' />}
-      action={
+    <section className='rounded-lg border px-3'>
+      <div className='flex flex-col gap-3 border-b py-3 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='text-muted-foreground flex min-w-0 items-center gap-2 text-xs'>
+          <span className='bg-muted inline-flex size-7 shrink-0 items-center justify-center rounded-md'>
+            <FlaskConical className='size-4' aria-hidden='true' />
+          </span>
+          <span>
+            {t('Test a temporary upstream without adding it as a channel.')}
+          </span>
+        </div>
         <Button
           type='button'
           size='sm'
@@ -759,17 +1332,17 @@ function ManualDetectionCard({
           className='w-full sm:w-auto'
         >
           <Play data-icon='inline-start' className='size-4' />
-          {isSubmitting ? t('Starting...') : t('Start Test')}
+          {isSubmitting ? t('Starting...') : t('Start Detection')}
         </Button>
-      }
-    >
-      <div className='grid gap-4 lg:grid-cols-2'>
+      </div>
+      <div className='grid gap-4 py-4 lg:grid-cols-2'>
         <SettingField label={t('Protocol')}>
           <Select
             value={form.protocol}
-            onValueChange={(protocol) =>
+            onValueChange={(protocol) => {
+              clearFetchedModels()
               onChange({ ...form, protocol: protocol ?? '' })
-            }
+            }}
           >
             <SelectTrigger className='w-full'>
               <SelectValue>
@@ -777,9 +1350,11 @@ function ManualDetectionCard({
               </SelectValue>
             </SelectTrigger>
             <SelectContent align='start' alignItemWithTrigger={false}>
-              <SelectItem value='openai'>{t('OpenAI Compatible')}</SelectItem>
-              <SelectItem value='anthropic'>{t('Anthropic')}</SelectItem>
-              <SelectItem value='gemini'>{t('Gemini')}</SelectItem>
+              <SelectGroup>
+                <SelectItem value='openai'>{t('OpenAI Compatible')}</SelectItem>
+                <SelectItem value='anthropic'>{t('Anthropic')}</SelectItem>
+                <SelectItem value='gemini'>{t('Gemini')}</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
         </SettingField>
@@ -794,9 +1369,11 @@ function ManualDetectionCard({
               </SelectValue>
             </SelectTrigger>
             <SelectContent align='start' alignItemWithTrigger={false}>
-              <SelectItem value='quick'>{t('Quick')}</SelectItem>
-              <SelectItem value='standard'>{t('Standard')}</SelectItem>
-              <SelectItem value='full'>{t('Full')}</SelectItem>
+              <SelectGroup>
+                <SelectItem value='quick'>{t('Quick')}</SelectItem>
+                <SelectItem value='standard'>{t('Standard')}</SelectItem>
+                <SelectItem value='full'>{t('Full')}</SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
         </SettingField>
@@ -807,82 +1384,163 @@ function ManualDetectionCard({
           <Input
             value={form.base_url}
             placeholder='https://api.example.com/v1'
-            onChange={(event) =>
+            onChange={(event) => {
+              clearFetchedModels()
               onChange({ ...form, base_url: event.target.value })
-            }
+            }}
           />
         </SettingField>
         <SettingField
           label={t('API Key')}
-          description={t('Only used for this test and never stored in system tasks.')}
+          description={t(
+            'Only used for this test and never stored in system tasks.'
+          )}
         >
           <Input
             type='password'
             value={form.api_key}
             placeholder='sk-...'
             autoComplete='new-password'
-            onChange={(event) =>
+            onChange={(event) => {
+              clearFetchedModels()
               onChange({ ...form, api_key: event.target.value })
-            }
-          />
-        </SettingField>
-        <SettingField label={t('Model')}>
-          <Input
-            value={form.model}
-            placeholder='gpt-5'
-            onChange={(event) =>
-              onChange({ ...form, model: event.target.value })
-            }
+            }}
           />
         </SettingField>
         <SettingField
-          label={t('OpenAI Wire API')}
-          description={t('Only used when protocol is openai.')}
+          label={t('Model')}
+          description={
+            canFetchModels
+              ? t('Fetch available models from upstream')
+              : t(
+                  'Enter the upstream Base URL and API Key before fetching models.'
+                )
+          }
         >
-          <Input
-            value={form.openai_wire_api || ''}
-            placeholder='chat_completions'
-            disabled={form.protocol !== 'openai'}
-            onChange={(event) =>
-              onChange({ ...form, openai_wire_api: event.target.value })
-            }
-          />
+          <div className='flex flex-col gap-2 sm:flex-row'>
+            <div className='min-w-0 flex-1'>
+              <Combobox
+                options={modelOptions}
+                value={form.model}
+                onValueChange={(model) =>
+                  onChange({ ...form, model: model ?? '' })
+                }
+                placeholder={t('Select or enter a model')}
+                emptyText='No models fetched from upstream'
+                allowCustomValue
+              />
+            </div>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() =>
+                fetchModelsMutation.mutate({
+                  request: {
+                    base_url: form.base_url,
+                    api_key: form.api_key,
+                    protocol: form.protocol,
+                  },
+                  revision: modelSourceRevision.current,
+                })
+              }
+              disabled={!canFetchModels || fetchModelsMutation.isPending}
+              aria-busy={fetchModelsMutation.isPending}
+              className='w-full shrink-0 sm:w-auto'
+            >
+              <RefreshCw
+                data-icon='inline-start'
+                className={cn(
+                  'size-4',
+                  fetchModelsMutation.isPending && 'animate-spin'
+                )}
+              />
+              {t('Fetch Models')}
+            </Button>
+          </div>
         </SettingField>
+        {form.protocol === 'openai' ? (
+          <SettingField
+            label={t('OpenAI Wire API')}
+            description={t('Only used when protocol is openai.')}
+          >
+            <Select
+              value={form.openai_wire_api || 'chat_completions'}
+              onValueChange={(openai_wire_api) =>
+                onChange({
+                  ...form,
+                  openai_wire_api: openai_wire_api ?? 'chat_completions',
+                })
+              }
+            >
+              <SelectTrigger className='w-full'>
+                <SelectValue>
+                  {form.openai_wire_api || 'chat_completions'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align='start' alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='chat_completions'>
+                    chat_completions
+                  </SelectItem>
+                  <SelectItem value='responses'>responses</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </SettingField>
+        ) : null}
+        {supportsLongContext ? (
+          <>
+            <SwitchRow
+              label={t('Long-context Probe')}
+              description={t(
+                'Run the longer probe when the monitor backend supports it.'
+              )}
+              checked={Boolean(form.include_long_context)}
+              onCheckedChange={(include_long_context) =>
+                onChange({ ...form, include_long_context })
+              }
+            />
+            <SwitchRow
+              label={t('Extreme Long-context Probe')}
+              description={t(
+                'Use only when the upstream and monitor backend can tolerate the cost.'
+              )}
+              checked={Boolean(form.include_long_context_extreme)}
+              onCheckedChange={(include_long_context_extreme) =>
+                onChange({ ...form, include_long_context_extreme })
+              }
+            />
+          </>
+        ) : null}
         <SwitchRow
-          label={t('Long-context Probe')}
-          description={t('Run the longer probe when the monitor backend supports it.')}
-          checked={Boolean(form.include_long_context)}
-          onCheckedChange={(include_long_context) =>
-            onChange({ ...form, include_long_context })
-          }
-        />
-        <SwitchRow
-          label={t('Extreme Long-context Probe')}
-          description={t('Use only when the upstream and monitor backend can tolerate the cost.')}
-          checked={Boolean(form.include_long_context_extreme)}
-          onCheckedChange={(include_long_context_extreme) =>
-            onChange({ ...form, include_long_context_extreme })
-          }
+          label={t('Skip availability pre-check')}
+          description={t(
+            'Start detection even if the preliminary model check fails.'
+          )}
+          checked={Boolean(form.force)}
+          onCheckedChange={(force) => onChange({ ...form, force })}
         />
       </div>
       {disabledReason != null && (
-        <div className='bg-muted/40 text-muted-foreground mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs'>
+        <div className='text-muted-foreground flex items-start gap-2 border-t py-2 text-xs'>
           <AlertTriangle className='mt-0.5 size-4 shrink-0' />
           <span>{disabledReason}</span>
         </div>
       )}
-    </DetectionSection>
+    </section>
   )
 }
 
-type DetectionTargetsCardProps = {
+type DetectionTargetsContentProps = {
   targets: VeridropDetectionTarget[]
-  channelCount: number
-  modelCount: number
-  skippedChannelCount: number
   loading: boolean
   isError: boolean
   onRetry: () => void
+  disabledReason: string | null
+  onDetectBatch: (channelIds: number[]) => void
+  onDetectOne: (channelId: number) => void
+  pendingBatch: boolean
+  pendingChannelId: number | null
 }
 
 function getTargetSkippedLabel(
@@ -898,26 +1556,98 @@ function getTargetSkippedLabel(
   return reason != null && reason !== '' ? reason : t('Not included')
 }
 
-function DetectionTargetsCard({
+function DetectionTargetsContent({
   targets,
-  channelCount,
-  modelCount,
-  skippedChannelCount,
   loading,
   isError,
   onRetry,
-}: DetectionTargetsCardProps) {
+  disabledReason,
+  onDetectBatch,
+  onDetectOne,
+  pendingBatch,
+  pendingChannelId,
+}: DetectionTargetsContentProps) {
   const { t } = useTranslation()
-  const visibleTargets = targets.slice(0, 12)
-  const hiddenCount = Math.max(0, targets.length - visibleTargets.length)
+  const [keyword, setKeyword] = useState('')
+  const debouncedKeyword = useDebounce(keyword, 300).trim().toLowerCase()
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [protocolFilter, setProtocolFilter] = useState('all')
+  const [availabilityFilter, setAvailabilityFilter] = useState('all')
+  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([])
+  const filteredTargets = useMemo(
+    () =>
+      targets.filter((target) => {
+        const models = Array.isArray(target.models) ? target.models : []
+        const ready = !target.skipped_reason && models.length > 0
+        if (statusFilter === 'enabled' && target.status !== 1) return false
+        if (statusFilter === 'disabled' && target.status === 1) return false
+        if (protocolFilter !== 'all' && target.protocol !== protocolFilter) {
+          return false
+        }
+        if (availabilityFilter === 'ready' && !ready) return false
+        if (availabilityFilter === 'unavailable' && ready) return false
+        if (debouncedKeyword === '') return true
+        return [
+          target.channel_name,
+          String(target.channel_id),
+          target.base_url,
+          target.protocol,
+          ...models,
+        ].some((value) => value.toLowerCase().includes(debouncedKeyword))
+      }),
+    [
+      availabilityFilter,
+      debouncedKeyword,
+      protocolFilter,
+      statusFilter,
+      targets,
+    ]
+  )
+  const readyFilteredIds = useMemo(
+    () =>
+      filteredTargets
+        .filter(
+          (target) =>
+            !target.skipped_reason &&
+            Array.isArray(target.models) &&
+            target.models.length > 0
+        )
+        .map((target) => target.channel_id),
+    [filteredTargets]
+  )
+  const selectedIdSet = useMemo(
+    () => new Set(selectedChannelIds),
+    [selectedChannelIds]
+  )
+  const allReadySelected =
+    readyFilteredIds.length > 0 &&
+    readyFilteredIds.every((channelId) => selectedIdSet.has(channelId))
+  let statusFilterLabel = t('All channel statuses')
+  if (statusFilter === 'enabled') statusFilterLabel = t('Enabled')
+  if (statusFilter === 'disabled') statusFilterLabel = t('Disabled')
+  let availabilityFilterLabel = t('All channels')
+  if (availabilityFilter === 'ready') {
+    availabilityFilterLabel = t('Ready for detection')
+  }
+  if (availabilityFilter === 'unavailable') {
+    availabilityFilterLabel = t('Unavailable for detection')
+  }
+
+  useEffect(() => {
+    const visibleReadyIds = new Set(readyFilteredIds)
+    setSelectedChannelIds((current) =>
+      current.filter((channelId) => visibleReadyIds.has(channelId))
+    )
+  }, [readyFilteredIds])
+
   let content: ReactNode
 
   if (loading) {
     content = (
-      <div className='space-y-2'>
+      <div className='flex flex-col gap-2'>
         {['target-skeleton-1', 'target-skeleton-2', 'target-skeleton-3'].map(
           (key) => (
-            <Skeleton key={key} className='h-16 w-full rounded-md' />
+            <Skeleton key={key} className='h-9 w-full rounded-md' />
           )
         )}
       </div>
@@ -933,148 +1663,400 @@ function DetectionTargetsCard({
     )
   } else if (targets.length === 0) {
     content = (
-      <div className='text-muted-foreground bg-muted/30 rounded-md px-4 py-8 text-center text-sm'>
-        {t('No enabled channels with models are ready for detection.')}
-      </div>
+      <PanelEmptyState
+        icon={
+          <ListChecks
+            className='text-muted-foreground size-5'
+            aria-hidden='true'
+          />
+        }
+        message={t('No channels are available for detection.')}
+      />
+    )
+  } else if (filteredTargets.length === 0) {
+    content = (
+      <PanelEmptyState
+        icon={<ListChecks className='text-muted-foreground size-5' />}
+        message={t('No channels match the current filters.')}
+      />
     )
   } else {
     content = (
-      <div className='space-y-2'>
-        <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs'>
-          <span>
-            {t('{{channels}} channels / {{models}} models', {
-              channels: channelCount,
-              models: modelCount,
-            })}
-          </span>
-          {skippedChannelCount > 0 && (
-            <span>
-              {t('{{count}} skipped', { count: skippedChannelCount })}
-            </span>
-          )}
-        </div>
-        <div className='max-h-[300px] overflow-y-auto rounded-md border'>
-          <div className='bg-muted/40 text-muted-foreground sticky top-0 z-10 hidden grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_120px_minmax(260px,2fr)_64px] gap-3 border-b px-3 py-2 text-xs font-medium xl:grid'>
-            <span>{t('Channel')}</span>
-            <span>{t('Base URL')}</span>
-            <span>{t('Protocol')}</span>
-            <span>{t('Models')}</span>
-            <span className='text-right'>ID</span>
-          </div>
-          {visibleTargets.map((target) => {
-            const models = Array.isArray(target.models) ? target.models : []
-            const skipped =
-              target.skipped_reason != null && target.skipped_reason !== ''
-            return (
-              <div
-                key={target.channel_id}
-                className='grid gap-2 border-b px-3 py-2 last:border-b-0 xl:grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_120px_minmax(260px,2fr)_64px] xl:items-start xl:gap-3'
-              >
-                <div className='min-w-0'>
-                  <div className='flex items-center gap-2'>
-                    {skipped ? (
-                      <AlertTriangle className='text-muted-foreground size-4 shrink-0' />
-                    ) : (
-                      <CheckCircle2 className='text-emerald-600 size-4 shrink-0 dark:text-emerald-400' />
-                    )}
-                    <span className='truncate text-sm font-medium'>
-                      {target.channel_name || `#${target.channel_id}`}
-                    </span>
-                  </div>
-                </div>
-                <div
-                  className='text-muted-foreground min-w-0 truncate font-mono text-[11px]'
-                  title={target.base_url}
-                >
-                  {target.base_url || '-'}
-                </div>
-                <div>
-                  <Badge variant='outline' className='text-[11px]'>
-                    {target.protocol || target.channel_type_name}
-                  </Badge>
-                </div>
-                <div className='min-w-0'>
-                  {skipped ? (
-                    <span className='text-muted-foreground text-xs'>
-                      {getTargetSkippedLabel(target.skipped_reason, t)}
-                    </span>
-                  ) : (
-                    <div className='flex flex-wrap gap-1.5'>
-                      {models.slice(0, 6).map((model) => (
-                        <Badge
-                          key={`${target.channel_id}-${model}`}
-                          variant='secondary'
-                          className='max-w-[220px] truncate font-mono text-[11px]'
-                        >
-                          {model}
-                        </Badge>
-                      ))}
-                      {models.length > 6 && (
-                        <Badge variant='outline' className='text-[11px]'>
-                          {t('+{{count}} more', {
-                            count: models.length - 6,
-                          })}
-                        </Badge>
-                      )}
-                    </div>
+      <div className='overflow-x-auto'>
+        <Table className='min-w-[1020px]'>
+          <TableHeader>
+            <TableRow className='bg-muted/40 hover:bg-muted/40'>
+              <TableHead className='h-9 w-10 px-3'>
+                <Checkbox
+                  checked={allReadySelected}
+                  onCheckedChange={(checked) =>
+                    setSelectedChannelIds(checked ? readyFilteredIds : [])
+                  }
+                  disabled={readyFilteredIds.length === 0 || pendingBatch}
+                  aria-label={t('Select all filtered channels')}
+                />
+              </TableHead>
+              <TableHead className='h-9 min-w-[220px] text-xs'>
+                {t('Channel')}
+              </TableHead>
+              <TableHead className='h-9 min-w-[220px] text-xs'>
+                {t('Base URL')}
+              </TableHead>
+              <TableHead className='h-9 w-[120px] text-xs'>
+                {t('Protocol')}
+              </TableHead>
+              <TableHead className='h-9 min-w-[260px] text-xs'>
+                {t('Models')}
+              </TableHead>
+              <TableHead className='h-9 w-[150px] pr-4 text-right text-xs'>
+                {t('Actions')}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredTargets.map((target) => {
+              const models = Array.isArray(target.models) ? target.models : []
+              const skipped =
+                target.skipped_reason != null && target.skipped_reason !== ''
+              return (
+                <TableRow
+                  key={target.channel_id}
+                  className={cn(
+                    'hover:bg-muted/30 transition-colors [contain-intrinsic-size:auto_52px] [content-visibility:auto]',
+                    selectedIdSet.has(target.channel_id) &&
+                      'bg-primary/5 hover:bg-primary/10'
                   )}
-                </div>
-                <div className='text-muted-foreground text-right font-mono text-[11px]'>
-                  #{target.channel_id}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {hiddenCount > 0 && (
-          <div className='text-muted-foreground px-3 py-1 text-center text-xs'>
-            {t('{{count}} more channels are hidden in this preview.', {
-              count: hiddenCount,
+                >
+                  <TableCell className='px-3 py-2.5 align-middle'>
+                    <Checkbox
+                      checked={selectedIdSet.has(target.channel_id)}
+                      onCheckedChange={(checked) => {
+                        setSelectedChannelIds((current) => {
+                          if (!checked) {
+                            return current.filter(
+                              (channelId) => channelId !== target.channel_id
+                            )
+                          }
+                          return current.includes(target.channel_id)
+                            ? current
+                            : [...current, target.channel_id]
+                        })
+                      }}
+                      disabled={skipped || pendingBatch}
+                      aria-label={t('Select channel {{name}}', {
+                        name: target.channel_name,
+                      })}
+                    />
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <div className='flex min-w-0 items-center gap-2'>
+                      {skipped ? (
+                        <AlertTriangle className='text-muted-foreground size-4 shrink-0' />
+                      ) : (
+                        <CheckCircle2 className='size-4 shrink-0 text-emerald-600 dark:text-emerald-400' />
+                      )}
+                      <div className='min-w-0'>
+                        <div className='flex items-center gap-2'>
+                          <span className='truncate text-sm font-medium'>
+                            {target.channel_name || `#${target.channel_id}`}
+                          </span>
+                          <Badge
+                            variant={
+                              target.status === 1 ? 'secondary' : 'outline'
+                            }
+                            className='text-[10px]'
+                          >
+                            {target.status === 1 ? t('Enabled') : t('Disabled')}
+                          </Badge>
+                        </div>
+                        <span className='text-muted-foreground font-mono text-[10px]'>
+                          #{target.channel_id}
+                        </span>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell
+                    className='text-muted-foreground max-w-[260px] truncate py-2.5 align-middle font-mono text-[11px]'
+                    title={target.base_url}
+                  >
+                    {target.base_url || '-'}
+                  </TableCell>
+                  <TableCell className='py-2.5 align-middle'>
+                    <Badge variant='outline' className='text-[11px]'>
+                      {target.protocol || target.channel_type_name}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className='max-w-[320px] py-2.5 align-middle whitespace-normal'>
+                    {skipped ? (
+                      <span className='text-muted-foreground text-xs'>
+                        {getTargetSkippedLabel(target.skipped_reason, t)}
+                      </span>
+                    ) : (
+                      <div className='flex flex-wrap gap-1.5'>
+                        {models.slice(0, 3).map((model) => (
+                          <Badge
+                            key={`${target.channel_id}-${model}`}
+                            variant='secondary'
+                            className='max-w-[220px] truncate font-mono text-[11px]'
+                          >
+                            {model}
+                          </Badge>
+                        ))}
+                        {models.length > 3 && (
+                          <Badge variant='outline' className='text-[11px]'>
+                            {t('+{{count}} more', {
+                              count: models.length - 3,
+                            })}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell className='py-2.5 pr-4 text-right align-middle'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={
+                        skipped ||
+                        disabledReason != null ||
+                        pendingBatch ||
+                        pendingChannelId != null
+                      }
+                      onClick={() => onDetectOne(target.channel_id)}
+                    >
+                      {pendingChannelId === target.channel_id ? (
+                        <Loader2
+                          data-icon='inline-start'
+                          className='size-4 animate-spin'
+                        />
+                      ) : (
+                        <Play data-icon='inline-start' className='size-4' />
+                      )}
+                      {pendingChannelId === target.channel_id
+                        ? t('Detecting...')
+                        : t('Detect')}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )
             })}
-          </div>
-        )}
+          </TableBody>
+        </Table>
       </div>
     )
   }
 
   return (
-    <DetectionSection
-      title={t('Detection Coverage')}
-      description={t('Review the enabled channels and models before starting detection.')}
-      icon={<ListChecks className='size-4' aria-hidden='true' />}
-      action={
-        <div className='flex w-full flex-wrap items-center gap-2 sm:w-auto'>
-          <Badge variant='outline'>
-            {t('{{count}} channels', { count: channelCount })}
-          </Badge>
-          <Badge variant='outline'>
-            {t('{{count}} models', { count: modelCount })}
-          </Badge>
-          {skippedChannelCount > 0 && (
-            <Badge variant='secondary'>
-              {t('{{count}} skipped', { count: skippedChannelCount })}
-            </Badge>
-          )}
+    <div aria-busy={loading} className='pt-3'>
+      <div className='border-b pb-3'>
+        <div className='grid gap-2 md:grid-cols-2 2xl:grid-cols-[minmax(320px,1fr)_180px_160px_180px] 2xl:items-end'>
+          <div className='md:col-span-2 2xl:col-span-1'>
+            <CompactField label={t('Search')}>
+              <Input
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                placeholder={t('Search channels, IDs, API URLs or models...')}
+              />
+            </CompactField>
+          </div>
+          <CompactField label={t('Status')}>
+            <Select
+              value={statusFilter}
+              onValueChange={(value) => setStatusFilter(value ?? 'all')}
+            >
+              <SelectTrigger className='w-full'>
+                <SelectValue>{statusFilterLabel}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align='start' alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='all'>
+                    {t('All channel statuses')}
+                  </SelectItem>
+                  <SelectItem value='enabled'>{t('Enabled')}</SelectItem>
+                  <SelectItem value='disabled'>{t('Disabled')}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </CompactField>
+          <CompactField label={t('Protocol')}>
+            <Select
+              value={protocolFilter}
+              onValueChange={(value) => setProtocolFilter(value ?? 'all')}
+            >
+              <SelectTrigger className='w-full'>
+                <SelectValue>
+                  {protocolFilter === 'all'
+                    ? t('All protocols')
+                    : getVeridropProtocolLabel(protocolFilter, t)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align='start' alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='all'>{t('All protocols')}</SelectItem>
+                  <SelectItem value='openai'>OpenAI</SelectItem>
+                  <SelectItem value='anthropic'>Anthropic</SelectItem>
+                  <SelectItem value='gemini'>Gemini</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </CompactField>
+          <CompactField label={t('Availability')}>
+            <Select
+              value={availabilityFilter}
+              onValueChange={(value) => setAvailabilityFilter(value ?? 'all')}
+            >
+              <SelectTrigger className='w-full'>
+                <SelectValue>{availabilityFilterLabel}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align='start' alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='all'>{t('All channels')}</SelectItem>
+                  <SelectItem value='ready'>
+                    {t('Ready for detection')}
+                  </SelectItem>
+                  <SelectItem value='unavailable'>
+                    {t('Unavailable for detection')}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </CompactField>
         </div>
-      }
-    >
+        <div className='mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+          <span className='text-muted-foreground text-xs'>
+            {t('{{visible}} of {{total}} channels · {{selected}} selected', {
+              visible: filteredTargets.length,
+              total: targets.length,
+              selected: selectedChannelIds.length,
+            })}
+          </span>
+          <div className='flex flex-wrap gap-2 sm:justify-end'>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              disabled={
+                disabledReason != null ||
+                pendingBatch ||
+                readyFilteredIds.length === 0
+              }
+              onClick={() => onDetectBatch(readyFilteredIds)}
+            >
+              <Play data-icon='inline-start' className='size-4' />
+              {t('Detect current results ({{count}})', {
+                count: readyFilteredIds.length,
+              })}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              disabled={
+                disabledReason != null ||
+                pendingBatch ||
+                selectedChannelIds.length === 0
+              }
+              onClick={() => onDetectBatch(selectedChannelIds)}
+            >
+              {pendingBatch ? (
+                <Loader2
+                  data-icon='inline-start'
+                  className='size-4 animate-spin'
+                />
+              ) : (
+                <Play data-icon='inline-start' className='size-4' />
+              )}
+              {t('Detect selected ({{count}})', {
+                count: selectedChannelIds.length,
+              })}
+            </Button>
+          </div>
+        </div>
+      </div>
+      {disabledReason != null && (
+        <div className='text-muted-foreground flex items-start gap-2 border-b py-2 text-xs'>
+          <AlertTriangle className='mt-0.5 size-4 shrink-0' />
+          <span>{disabledReason}</span>
+        </div>
+      )}
       {content}
-    </DetectionSection>
+    </div>
   )
 }
 
 type DetectionResultsTableProps = {
   results: VeridropDetectionResult[]
   loading: boolean
-  emptyMessage?: string
+  emptyMessage: string
+  sort: DetectionResultSort
+  onSort: (sortBy: VeridropDetectionSortBy) => void
+}
+
+function DetectionResultSortHead({
+  label,
+  sortBy,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string
+  sortBy: VeridropDetectionSortBy
+  sort: DetectionResultSort
+  onSort: (sortBy: VeridropDetectionSortBy) => void
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const active = sort.by === sortBy
+  const defaultOrder: VeridropDetectionSortOrder =
+    sortBy === 'updated_at' ? 'desc' : 'asc'
+  let nextOrder = defaultOrder
+  let ariaSort: 'ascending' | 'descending' | 'none' = 'none'
+  let sortIcon: ReactNode = (
+    <ArrowUpDown
+      className='text-muted-foreground size-3.5'
+      aria-hidden='true'
+    />
+  )
+  if (active) {
+    nextOrder = sort.order === 'asc' ? 'desc' : 'asc'
+    ariaSort = sort.order === 'asc' ? 'ascending' : 'descending'
+    sortIcon =
+      sort.order === 'asc' ? (
+        <ArrowUp className='size-3.5' aria-hidden='true' />
+      ) : (
+        <ArrowDown className='size-3.5' aria-hidden='true' />
+      )
+  }
+
+  return (
+    <TableHead aria-sort={ariaSort} className={cn('h-9 text-xs', className)}>
+      <Button
+        type='button'
+        variant='ghost'
+        size='sm'
+        className='-ml-3 h-8 gap-1 px-3 text-xs'
+        aria-label={`${label}: ${t(nextOrder === 'asc' ? 'Asc' : 'Desc')}`}
+        onClick={() => onSort(sortBy)}
+      >
+        {label}
+        {sortIcon}
+      </Button>
+    </TableHead>
+  )
 }
 
 function DetectionResultsTable({
   results,
   loading,
   emptyMessage,
+  sort,
+  onSort,
 }: DetectionResultsTableProps) {
   const { t, i18n } = useTranslation()
+  const [detailsSelection, setDetailsSelection] = useState<{
+    result: VeridropDetectionResult
+    report: VeridropScoreReport
+  } | null>(null)
 
   if (loading) {
     const skeletonRows = [
@@ -1086,7 +2068,7 @@ function DetectionResultsTable({
       'detection-result-skeleton-6',
     ]
     return (
-      <div className='space-y-2'>
+      <div className='flex flex-col gap-2'>
         {skeletonRows.map((key) => (
           <Skeleton key={key} className='h-10 w-full rounded-md' />
         ))}
@@ -1096,110 +2078,218 @@ function DetectionResultsTable({
 
   if (results.length === 0) {
     return (
-      <div className='text-muted-foreground bg-muted/30 rounded-md px-4 py-10 text-center text-sm'>
-        {emptyMessage ?? t('No detection results yet.')}
-      </div>
+      <PanelEmptyState
+        icon={
+          <Activity
+            className='text-muted-foreground size-5'
+            aria-hidden='true'
+          />
+        }
+        message={emptyMessage}
+      />
     )
   }
 
   return (
-    <div className='overflow-hidden rounded-md border'>
-      <div className='bg-muted/40 text-muted-foreground hidden grid-cols-[minmax(180px,1.2fr)_minmax(180px,1fr)_150px_minmax(260px,2fr)_140px] gap-3 border-b px-4 py-2 text-xs font-medium xl:grid'>
-        <span>{t('Channel')}</span>
-        <span>{t('Model')}</span>
-        <span>{t('Status')}</span>
-        <span>{t('Summary')}</span>
-        <span>{t('Updated')}</span>
-      </div>
-      <div className='divide-y'>
-        {results.map((result) => {
-          const message = getResultDisplayMessage(result)
-          return (
-            <div
-              key={result.id}
-              className='grid gap-3 px-4 py-3 hover:bg-muted/30 xl:grid-cols-[minmax(180px,1.2fr)_minmax(180px,1fr)_150px_minmax(260px,2fr)_140px] xl:items-center'
-            >
-              <div className='min-w-0'>
-                <div className='truncate text-sm font-medium'>
-                  {result.channel_name || `#${result.channel_id}`}
-                </div>
-                <div className='mt-1 flex flex-wrap items-center gap-1.5'>
-                  <span className='text-muted-foreground font-mono text-[11px]'>
-                    #{result.channel_id}
-                  </span>
-                  {result.protocol !== '' && (
-                    <Badge variant='outline' className='text-[11px]'>
-                      {result.protocol}
-                    </Badge>
+    <>
+      <div className='overflow-x-auto'>
+        <Table className='min-w-[1000px]'>
+          <TableHeader>
+            <TableRow className='bg-muted/40 hover:bg-muted/40'>
+              <DetectionResultSortHead
+                label={t('Result')}
+                sortBy='score'
+                sort={sort}
+                onSort={onSort}
+                className='min-w-[210px] pl-4'
+              />
+              <DetectionResultSortHead
+                label={t('Channel')}
+                sortBy='channel_name'
+                sort={sort}
+                onSort={onSort}
+                className='min-w-[220px]'
+              />
+              <DetectionResultSortHead
+                label={t('Model')}
+                sortBy='model'
+                sort={sort}
+                onSort={onSort}
+                className='min-w-[160px]'
+              />
+              <TableHead className='h-9 min-w-[260px] text-xs'>
+                {t('Details')}
+              </TableHead>
+              <DetectionResultSortHead
+                label={t('Updated')}
+                sortBy='updated_at'
+                sort={sort}
+                onSort={onSort}
+                className='w-[140px] pr-4'
+              />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {results.map((result) => {
+              const message = getVeridropResultDisplayMessage(result)
+              const score =
+                result.status === 'done'
+                  ? formatResultScore(result.score)
+                  : null
+              const manual = result.channel_id === 0
+              const hasScoreReport = hasVeridropScoreReport(result.result_json)
+              const belowThreshold = isBelowThresholdDetectionResult(result)
+              const statusLabel = getResultStatusLabel(result, t)
+                .trim()
+                .toLocaleLowerCase()
+              const verdict = result.verdict.trim().toLocaleLowerCase()
+              const normalizedMessage = message.trim().toLocaleLowerCase()
+              const detailMessage =
+                normalizedMessage !== '' &&
+                normalizedMessage !== statusLabel &&
+                normalizedMessage !== verdict
+                  ? message
+                  : ''
+              return (
+                <TableRow
+                  key={result.id}
+                  className={cn(
+                    'hover:bg-muted/30 [contain-intrinsic-size:auto_64px] [content-visibility:auto]',
+                    belowThreshold && 'bg-destructive/5 hover:bg-destructive/10'
                   )}
-                  {result.mode !== '' && (
-                    <Badge variant='secondary' className='text-[11px]'>
-                      {getVeridropModeLabel(result.mode, t)}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-              <div className='min-w-0 truncate font-mono text-xs'>
-                {result.model || '-'}
-              </div>
-              <div className='flex flex-wrap items-center gap-2'>
-                <Badge
-                  variant={
-                    result.status === 'error' || result.status === 'timeout'
-                      ? 'destructive'
-                      : 'outline'
-                  }
-                  className={RESULT_STATUS_CLASS_NAME[result.status]}
                 >
-                  {t(result.status)}
-                </Badge>
-                <span className='text-muted-foreground text-xs tabular-nums'>
-                  {result.score > 0 ? result.score : '-'}
-                </span>
-                {result.verdict !== '' && (
-                  <span className='text-muted-foreground max-w-[120px] truncate text-xs'>
-                    {result.verdict}
-                  </span>
-                )}
-              </div>
-              <div
-                className='text-muted-foreground line-clamp-2 min-w-0 text-sm'
-                title={result.error || result.run_error || result.summary}
-              >
-                {message}
-              </div>
-              <div
-                className='text-muted-foreground text-xs whitespace-nowrap'
-                title={formatTimestampToDate(result.updated_at)}
-              >
-                {formatTimestampRelative(
-                  result.updated_at,
-                  'seconds',
-                  toIntlLocale(i18n.language)
-                )}
-              </div>
-            </div>
-          )
-        })}
+                  <TableCell className='px-4 py-3 align-middle'>
+                    <div className='flex flex-wrap items-center gap-1.5'>
+                      <ResultStatusBadge result={result} score={score} />
+                      {hasScoreReport ? (
+                        <Button
+                          type='button'
+                          variant='link'
+                          size='sm'
+                          className='h-auto gap-1 px-1 text-xs'
+                          onClick={() => {
+                            const report = parseVeridropScoreReport(
+                              result.result_json ?? ''
+                            )
+                            if (report == null) {
+                              toast.error(
+                                t(
+                                  'No scoring details are available for this result.'
+                                )
+                              )
+                              return
+                            }
+                            setDetailsSelection({ result, report })
+                          }}
+                        >
+                          <ListChecks className='size-3.5' />
+                          {t('View details')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className='py-3 align-middle'>
+                    <div className='min-w-0'>
+                      <div className='truncate text-sm font-medium'>
+                        {manual
+                          ? t('Manual Test')
+                          : result.channel_name || `#${result.channel_id}`}
+                      </div>
+                      <div className='mt-1 flex flex-wrap items-center gap-1.5'>
+                        {!manual && (
+                          <span className='text-muted-foreground font-mono text-[11px]'>
+                            #{result.channel_id}
+                          </span>
+                        )}
+                        {result.protocol !== '' && (
+                          <Badge variant='outline' className='text-[11px]'>
+                            {result.protocol}
+                          </Badge>
+                        )}
+                        {result.mode !== '' && (
+                          <Badge variant='secondary' className='text-[11px]'>
+                            {getVeridropModeLabel(result.mode, t)}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className='max-w-[200px] truncate py-3 align-middle font-mono text-xs'>
+                    {result.model || '-'}
+                  </TableCell>
+                  <TableCell
+                    className='text-muted-foreground line-clamp-2 max-w-[420px] py-3 align-middle text-sm whitespace-normal'
+                    title={detailMessage}
+                  >
+                    {detailMessage || '—'}
+                  </TableCell>
+                  <TableCell
+                    className='text-muted-foreground py-3 pr-4 align-middle text-xs whitespace-nowrap'
+                    title={formatTimestampToDate(result.updated_at)}
+                  >
+                    {formatTimestampRelative(
+                      result.updated_at,
+                      'seconds',
+                      toIntlLocale(i18n.language)
+                    )}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
       </div>
-    </div>
+      <ScoreDetailsDialog
+        result={detailsSelection?.result ?? null}
+        report={detailsSelection?.report ?? null}
+        onOpenChange={(open) => {
+          if (!open) setDetailsSelection(null)
+        }}
+      />
+    </>
   )
 }
 
 export function VeridropDetection() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
-  const [draftOptions, setDraftOptions] =
-    useState<VeridropDetectionOptions>(VERIDROP_DEFAULT_OPTIONS)
+  const currentUser = useAuthStore((state) => state.auth.user)
+  const canCleanupRecords = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
+  const [draftOptions, setDraftOptions] = useState<VeridropDetectionOptions>(
+    VERIDROP_DEFAULT_OPTIONS
+  )
   const [runConfirmOpen, setRunConfirmOpen] = useState(false)
+  const [pendingBatchChannelIds, setPendingBatchChannelIds] = useState<
+    number[]
+  >([])
+  const [pendingChannelId, setPendingChannelId] = useState<number | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [cleanupOpen, setCleanupOpen] = useState(false)
+  const [cleanupRetentionDays, setCleanupRetentionDays] = useState('30')
+  const [activeTab, setActiveTab] = useState<DetectionWorkspaceTab>('results')
   const [manualForm, setManualForm] =
     useState<VeridropManualDetectionRequest>(DEFAULT_MANUAL_FORM)
-  const [resultStatusFilter, setResultStatusFilter] =
-    useState<ResultStatusFilter>('all')
-  const [resultKeyword, setResultKeyword] = useState('')
+  const [resultOutcomeFilters, setResultOutcomeFilters] = useState<
+    ResultOutcomeFilter[]
+  >([])
+  const [resultChannelFilter, setResultChannelFilter] = useState('')
+  const debouncedResultChannelFilter = useDebounce(resultChannelFilter, 400)
+  const [resultModelFilter, setResultModelFilter] = useState('')
+  const debouncedResultModelFilter = useDebounce(resultModelFilter, 400)
+  const [resultModeFilter, setResultModeFilter] =
+    useState<ResultModeFilter>('all')
+  const [resultBatchFilter, setResultBatchFilter] =
+    useState<ResultBatchFilter>('all')
   const [resultTimeFilter, setResultTimeFilter] =
     useState<ResultTimeFilter>('all')
+  const [resultSort, setResultSort] = useState<DetectionResultSort>({
+    by: 'updated_at',
+    order: 'desc',
+  })
 
   const optionsQuery = useQuery({
     queryKey: ['veridrop-detection', 'options'],
@@ -1207,33 +2297,64 @@ export function VeridropDetection() {
     staleTime: 60 * 1000,
   })
 
-  const resultRequest = useMemo(() => {
-    const keyword = resultKeyword.trim()
-    const updatedAfter = getResultSinceSeconds(
-      resultTimeFilter,
-      Math.floor(Date.now() / 1000)
-    )
-    const request: Parameters<typeof listVeridropDetectionResults>[0] = {
-      limit: RESULT_LIMIT,
+  const resultFilters = useMemo(() => {
+    return {
+      channel: debouncedResultChannelFilter.trim(),
+      model: debouncedResultModelFilter.trim(),
+      outcomes: resultOutcomeFilters,
+      mode: resultModeFilter,
+      batch: resultBatchFilter,
+      time: resultTimeFilter,
+      sortBy: resultSort.by,
+      sortOrder: resultSort.order,
     }
-    if (resultStatusFilter !== 'all') request.status = resultStatusFilter
-    if (keyword !== '') request.keyword = keyword
-    if (updatedAfter > 0) request.updated_after = updatedAfter
-    return request
-  }, [resultKeyword, resultStatusFilter, resultTimeFilter])
+  }, [
+    debouncedResultChannelFilter,
+    debouncedResultModelFilter,
+    resultModeFilter,
+    resultBatchFilter,
+    resultOutcomeFilters,
+    resultSort.by,
+    resultSort.order,
+    resultTimeFilter,
+  ])
 
   const resultsQuery = useQuery({
-    queryKey: ['veridrop-detection', 'results', resultRequest],
+    queryKey: ['veridrop-detection', 'results', resultFilters],
     queryFn: async () => {
-      const res = await listVeridropDetectionResults(resultRequest)
-      if (!res.success || !Array.isArray(res.data?.items)) {
-        throw new Error(res.message || t('We could not load detection results.'))
+      const request: Parameters<typeof listVeridropDetectionResults>[0] = {
+        limit: RESULT_LIMIT,
+        sort_by: resultFilters.sortBy,
+        sort_order: resultFilters.sortOrder,
       }
-      return res.data.items
+      const updatedAfter = getResultSinceSeconds(
+        resultFilters.time,
+        Math.floor(Date.now() / 1000)
+      )
+      if (resultFilters.outcomes.length > 0) {
+        request.outcomes = resultFilters.outcomes
+      }
+      if (resultFilters.channel !== '') {
+        request.channel_name = resultFilters.channel
+      }
+      if (resultFilters.model !== '') request.model = resultFilters.model
+      if (resultFilters.mode !== 'all') request.mode = resultFilters.mode
+      if (resultFilters.batch === 'latest') request.batch = 'latest'
+      if (updatedAfter > 0) request.updated_after = updatedAfter
+
+      const res = await listVeridropDetectionResults(request)
+      if (!res.success || !Array.isArray(res.data?.items)) {
+        throw new Error(
+          res.message || t('We could not load detection results.')
+        )
+      }
+      return res.data
     },
     retry: false,
+    placeholderData: keepPreviousData,
     refetchInterval: (query) =>
-      query.state.data?.some((result) => isActiveResult(result))
+      resultFilters.batch === 'latest' ||
+      query.state.data?.items.some((result) => isActiveResult(result))
         ? ACTIVE_POLL_INTERVAL_MS
         : false,
   })
@@ -1245,9 +2366,15 @@ export function VeridropDetection() {
       if (!res.success || !Array.isArray(res.data)) {
         throw new Error(res.message || t('We could not load system tasks.'))
       }
-      return res.data.filter((task) => task.type === 'veridrop_detection')
+      return res.data.filter(
+        (task) =>
+          task.type === 'veridrop_detection' ||
+          task.type === 'veridrop_detection_single' ||
+          task.type === 'veridrop_detection_cleanup'
+      )
     },
     retry: false,
+    enabled: activeTab === 'batch' || activeTab === 'results',
     refetchInterval: (query) =>
       query.state.data?.some((task) => isActiveTask(task))
         ? ACTIVE_POLL_INTERVAL_MS
@@ -1256,6 +2383,7 @@ export function VeridropDetection() {
 
   const targetRequest = useMemo(
     () => ({
+      scope: 'all' as const,
       mode: draftOptions.default_mode,
       include_long_context: draftOptions.include_long_context,
       include_long_context_extreme: draftOptions.include_long_context_extreme,
@@ -1274,11 +2402,14 @@ export function VeridropDetection() {
     queryFn: async () => {
       const res = await listVeridropDetectionTargets(targetRequest)
       if (!res.success || res.data == null) {
-        throw new Error(res.message || t('We could not load detection coverage.'))
+        throw new Error(
+          res.message || t('We could not load detection coverage.')
+        )
       }
       return res.data
     },
     retry: false,
+    enabled: activeTab === 'batch' || activeTab === 'results',
     staleTime: 30 * 1000,
   })
 
@@ -1296,7 +2427,9 @@ export function VeridropDetection() {
       ),
     onSuccess: (count) => {
       toast.success(
-        count === 0 ? t('No changes to save') : t('Setting updated successfully')
+        count === 0
+          ? t('No changes to save')
+          : t('Setting updated successfully')
       )
       setSettingsOpen(false)
       queryClient.invalidateQueries({
@@ -1309,12 +2442,12 @@ export function VeridropDetection() {
   })
 
   const runMutation = useMutation({
-    mutationFn: () =>
-      startEnabledVeridropDetection({
+    mutationFn: (channelIds: number[]) =>
+      startChannelsVeridropDetection({
+        channel_ids: channelIds,
         mode: draftOptions.default_mode,
         include_long_context: draftOptions.include_long_context,
-        include_long_context_extreme:
-          draftOptions.include_long_context_extreme,
+        include_long_context_extreme: draftOptions.include_long_context_extreme,
         openai_wire_api: draftOptions.default_openai_wire_api,
       }),
     onSuccess: (res) => {
@@ -1333,8 +2466,38 @@ export function VeridropDetection() {
       queryClient.invalidateQueries({ queryKey: ['veridrop-detection'] })
     },
     onError: () => {
-      toast.error(t('Detection was not started. Check the settings and try again.'))
+      toast.error(
+        t('Detection was not started. Check the settings and try again.')
+      )
     },
+  })
+
+  const singleRunMutation = useMutation({
+    mutationFn: (channelId: number) => {
+      setPendingChannelId(channelId)
+      return startChannelVeridropDetection(channelId)
+    },
+    onSuccess: (res) => {
+      if (!res.success || res.data == null) {
+        toast.error(
+          res.message ||
+            t('Detection was not started. Check the settings and try again.')
+        )
+        return
+      }
+      toast.success(
+        res.data.created
+          ? t('Detection task started')
+          : t('Detection task is already running')
+      )
+      queryClient.invalidateQueries({ queryKey: ['veridrop-detection'] })
+    },
+    onError: () => {
+      toast.error(
+        t('Detection was not started. Check the settings and try again.')
+      )
+    },
+    onSettled: () => setPendingChannelId(null),
   })
 
   const manualMutation = useMutation({
@@ -1342,175 +2505,317 @@ export function VeridropDetection() {
       startManualVeridropDetection({
         ...manualForm,
         mode: manualForm.mode || draftOptions.default_mode,
+        include_long_context:
+          manualForm.protocol === 'gemini'
+            ? false
+            : manualForm.include_long_context,
+        include_long_context_extreme:
+          manualForm.protocol === 'gemini'
+            ? false
+            : manualForm.include_long_context_extreme,
         openai_wire_api:
-          manualForm.openai_wire_api || draftOptions.default_openai_wire_api,
+          manualForm.protocol === 'openai'
+            ? manualForm.openai_wire_api || draftOptions.default_openai_wire_api
+            : undefined,
       }),
     onSuccess: (res) => {
       if (!res.success || res.data == null) {
         toast.error(
           res.message ||
-            t('Manual test was not started. Check the values and try again.')
+            t(
+              'Manual detection was not started. Check the values and try again.'
+            )
         )
         return
       }
-      toast.success(t('Manual test started'))
+      toast.success(t('Manual detection started'))
       setManualForm((current) => ({ ...current, api_key: '' }))
       queryClient.invalidateQueries({ queryKey: ['veridrop-detection'] })
     },
     onError: () => {
-      toast.error(t('Manual test was not started. Check the values and try again.'))
+      toast.error(
+        t('Manual detection was not started. Check the values and try again.')
+      )
+    },
+  })
+
+  const cleanupMutation = useMutation({
+    mutationFn: () =>
+      cleanupVeridropDetectionResults({
+        retention_days: Number(cleanupRetentionDays),
+      }),
+    onSuccess: (res) => {
+      if (!res.success || res.data == null) {
+        toast.error(
+          res.message || t('Record cleanup was not started. Try again later.')
+        )
+        return
+      }
+      toast.success(
+        res.data.created
+          ? t('Record cleanup started')
+          : t('Record cleanup is already running')
+      )
+      setCleanupOpen(false)
+      queryClient.invalidateQueries({
+        queryKey: ['veridrop-detection', 'tasks'],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['veridrop-detection', 'results'],
+      })
+    },
+    onError: () => {
+      toast.error(t('Record cleanup was not started. Try again later.'))
     },
   })
 
   const savedOptions = optionsQuery.data ?? VERIDROP_DEFAULT_OPTIONS
   const settingsDirty = hasUnsavedVeridropChanges(draftOptions, savedOptions)
+  const handleSettingsOpenChange = (open: boolean) => {
+    if (!open) {
+      setDraftOptions({ ...savedOptions, admin_api_key: '' })
+    }
+    setSettingsOpen(open)
+  }
   const tasks = tasksQuery.data ?? []
-  const activeTask = tasks.find((task) => isActiveTask(task)) ?? tasks[0] ?? null
-  const results = resultsQuery.data ?? EMPTY_DETECTION_RESULTS
-  const filteredResults = useMemo(() => {
-    const keyword = resultKeyword.trim().toLowerCase()
-    const nowSeconds = Math.floor(Date.now() / 1000)
-    const sinceSeconds = getResultSinceSeconds(resultTimeFilter, nowSeconds)
-    return results.filter((result) => {
-      if (
-        resultStatusFilter !== 'all' &&
-        result.status !== resultStatusFilter
-      ) {
-        return false
-      }
-      if (sinceSeconds > 0 && result.updated_at < sinceSeconds) {
-        return false
-      }
-      if (keyword === '') return true
-      return [
-        result.channel_name,
-        result.model,
-        result.protocol,
-        result.mode,
-        result.verdict,
-        result.summary,
-        result.error,
-        result.run_error,
-      ].some((value) => value.toLowerCase().includes(keyword))
+  const activeBatchTask =
+    tasks.find(
+      (task) => task.type === 'veridrop_detection' && isActiveTask(task)
+    ) ?? null
+  const activeSingleTask =
+    tasks.find(
+      (task) => task.type === 'veridrop_detection_single' && isActiveTask(task)
+    ) ?? null
+  const activeTask = activeBatchTask ?? activeSingleTask
+  const activeCleanupTask =
+    tasks.find(
+      (task) => task.type === 'veridrop_detection_cleanup' && isActiveTask(task)
+    ) ?? null
+  const cleanupWasActiveRef = useRef(false)
+
+  useEffect(() => {
+    if (cleanupWasActiveRef.current && activeCleanupTask == null) {
+      queryClient.invalidateQueries({
+        queryKey: ['veridrop-detection', 'results'],
+      })
+    }
+    cleanupWasActiveRef.current = activeCleanupTask != null
+  }, [activeCleanupTask, queryClient])
+  const results = resultsQuery.data?.items ?? EMPTY_DETECTION_RESULTS
+  const resultSummary = resultsQuery.data?.summary
+  const matchingResultCount = resultsQuery.data?.matching_count ?? 0
+  let resultOutcomeTriggerLabel = t('All')
+  if (resultOutcomeFilters.length === 1) {
+    resultOutcomeTriggerLabel = getResultOutcomeFilterLabel(
+      resultOutcomeFilters[0],
+      t
+    )
+  } else if (resultOutcomeFilters.length > 1) {
+    resultOutcomeTriggerLabel = t('Selected {{count}}', {
+      count: resultOutcomeFilters.length,
     })
-  }, [resultKeyword, resultStatusFilter, resultTimeFilter, results])
-  const targets = targetsQuery.data?.items ?? []
-  const targetChannelCount = targetsQuery.data?.channel_count ?? 0
+  }
+  const resultOutcomeReportLabel =
+    resultOutcomeFilters.length === 0
+      ? t('All')
+      : resultOutcomeFilters
+          .map((outcome) => getResultOutcomeFilterLabel(outcome, t))
+          .join(', ')
+  const hasActiveResultFilters =
+    resultOutcomeFilters.length > 0 ||
+    resultChannelFilter.trim() !== '' ||
+    resultModelFilter.trim() !== '' ||
+    resultModeFilter !== 'all' ||
+    resultBatchFilter !== 'all' ||
+    resultTimeFilter !== 'all'
+  const targets = targetsQuery.data?.items ?? EMPTY_DETECTION_TARGETS
+  const resultChannelOptions = useMemo(() => {
+    const channels = new Map<string, number>()
+    for (const target of targets) {
+      const name = target.channel_name.trim()
+      if (name !== '' && !channels.has(name)) {
+        channels.set(name, target.channel_id)
+      }
+    }
+    return [...channels.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, channelId]) => ({
+        value: name,
+        label: `${name} · #${channelId}`,
+      }))
+  }, [targets])
+  const resultModelOptions = useMemo(() => {
+    const models = new Set<string>()
+    for (const target of targets) {
+      for (const model of target.models ?? []) {
+        const name = model.trim()
+        if (name !== '') models.add(name)
+      }
+    }
+    return [...models]
+      .sort((left, right) => left.localeCompare(right))
+      .map((model) => ({ value: model, label: model }))
+  }, [targets])
+  const targetChannelCount = targets.length
   const targetModelCount = targetsQuery.data?.model_count ?? 0
   const skippedTargetCount = targetsQuery.data?.skipped_channel_count ?? 0
   const activeResultCount = results.filter((result) =>
     isActiveResult(result)
   ).length
-  const failureCount = results.filter((result) =>
-    ['error', 'timeout'].includes(result.status)
-  ).length
-  const runConfirmDescription = draftOptions.auto_disable_enabled
-    ? t(
-        'This will test {{channels}} channels and {{models}} models. Failed channels can be disabled automatically.',
-        { channels: targetChannelCount, models: targetModelCount }
-      )
-    : t(
-        'This will test {{channels}} channels and {{models}} models. Results will be recorded only.',
-        { channels: targetChannelCount, models: targetModelCount }
-      )
+  let resultEmptyMessage = t('No detection results yet.')
+  if (resultBatchFilter === 'latest') {
+    resultEmptyMessage = t(
+      'No results match the latest batch and current filters.'
+    )
+  } else if (hasActiveResultFilters) {
+    resultEmptyMessage = t(
+      'No results match these filters. Clear filters or broaden the criteria.'
+    )
+  }
+  let batchDisabledReason: string | null = null
+  if (settingsDirty) {
+    batchDisabledReason = t('Save detection settings before starting.')
+  } else if (!draftOptions.enabled || draftOptions.base_url.trim() === '') {
+    batchDisabledReason = t(
+      'Complete and enable detection settings before starting.'
+    )
+  } else if (targetsQuery.isLoading) {
+    batchDisabledReason = t('Loading detection coverage...')
+  } else if (targetsQuery.isError) {
+    batchDisabledReason = t(
+      'Detection coverage is unavailable. Refresh before starting detection.'
+    )
+  }
+  const selectedBatchModelCount = targets
+    .filter((target) => pendingBatchChannelIds.includes(target.channel_id))
+    .reduce((sum, target) => sum + target.model_count, 0)
+  const runConfirmDescription = t(
+    'This will test {{channels}} channels and {{models}} models.',
+    {
+      channels: pendingBatchChannelIds.length,
+      models: selectedBatchModelCount,
+    }
+  )
 
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t('Veridrop Detection')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          {t('Authenticity Detection')}
+        </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          onClick={() => {
-            if (optionsQuery.isError) void optionsQuery.refetch()
-            setSettingsOpen(true)
-          }}
-          disabled={optionsQuery.isLoading}
-        >
-          <Settings2 data-icon='inline-start' className='size-4' />
-          {t('Detection Settings')}
-        </Button>
-        <Badge variant='outline' className='gap-1.5'>
-          <ShieldAlert className='size-3.5' aria-hidden='true' />
-          {draftOptions.auto_disable_enabled
-            ? t('Auto-disable enabled')
-            : t('Record only')}
-        </Badge>
-        </SectionPageLayout.Actions>
-        <SectionPageLayout.Content className='space-y-4'>
-        {optionsQuery.isError && (
-          <ErrorState
-            title={t('We could not load detection settings.')}
-            description={t('Refresh the page or check your administrator permissions.')}
-            onRetry={() => {
-              void optionsQuery.refetch()
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={() => {
+              if (optionsQuery.isError) void optionsQuery.refetch()
+              setDraftOptions({ ...savedOptions, admin_api_key: '' })
+              setSettingsOpen(true)
             }}
-          />
-        )}
-        {!optionsQuery.isError && optionsQuery.isLoading && (
-          <div className='space-y-4'>
-            <Skeleton className='h-12 rounded-lg' />
-            <Skeleton className='h-[360px] rounded-lg' />
-          </div>
-        )}
-        {!optionsQuery.isError && !optionsQuery.isLoading && (
-          <div className='space-y-4'>
-            <Tabs defaultValue='batch' className='space-y-4'>
-              <TabsList className='grid w-full max-w-3xl grid-cols-3'>
-                <TabsTrigger value='batch'>{t('Batch Detection')}</TabsTrigger>
-                <TabsTrigger value='manual'>{t('Manual Test')}</TabsTrigger>
-                <TabsTrigger value='results'>{t('Detection Results')}</TabsTrigger>
-              </TabsList>
-              <TabsContent
-                value='batch'
-                className='mt-0 grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]'
-              >
-                <DetectionRunCard
-                  options={draftOptions}
-                  activeTask={activeTask}
-                  targetChannelCount={targetChannelCount}
-                  targetModelCount={targetModelCount}
-                  skippedChannelCount={skippedTargetCount}
-                  targetsLoading={targetsQuery.isLoading}
-                  targetsError={targetsQuery.isError}
-                  onRun={() => {
-                    if (draftOptions.auto_disable_enabled) {
-                      setRunConfirmOpen(true)
-                      return
-                    }
-                    runMutation.mutate()
-                  }}
-                  isRunning={runMutation.isPending}
-                  onRefresh={() => {
-                    void tasksQuery.refetch()
-                    void resultsQuery.refetch()
-                    void targetsQuery.refetch()
-                  }}
-                  isRefreshing={
-                    (tasksQuery.isFetching ||
-                      resultsQuery.isFetching ||
-                      targetsQuery.isFetching) &&
-                    !tasksQuery.isLoading &&
-                    !resultsQuery.isLoading &&
-                    !targetsQuery.isLoading
-                  }
-                  settingsDirty={settingsDirty}
-                />
-                <DetectionTargetsCard
-                  targets={targets}
-                  channelCount={targetChannelCount}
-                  modelCount={targetModelCount}
-                  skippedChannelCount={skippedTargetCount}
-                  loading={targetsQuery.isLoading}
-                  isError={targetsQuery.isError}
+            disabled={optionsQuery.isLoading}
+          >
+            <Settings2 data-icon='inline-start' className='size-4' />
+            {t('Detection Settings')}
+          </Button>
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) =>
+              setActiveTab((value ?? 'results') as DetectionWorkspaceTab)
+            }
+            className='flex flex-col gap-3'
+          >
+            <TabsList className='w-full justify-start sm:w-fit'>
+              <TabsTrigger value='results' className='px-4'>
+                {t('Detection Results')}
+              </TabsTrigger>
+              <TabsTrigger value='batch' className='px-4'>
+                {t('Batch Detection')}
+              </TabsTrigger>
+              <TabsTrigger value='manual' className='px-4'>
+                {t('Manual Test')}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value='batch' className='mt-0'>
+              {optionsQuery.isError ? (
+                <ErrorState
+                  title={t('We could not load detection settings.')}
+                  description={t(
+                    'Refresh the page or check your administrator permissions.'
+                  )}
                   onRetry={() => {
-                    void targetsQuery.refetch()
+                    void optionsQuery.refetch()
                   }}
+                  className='min-h-[240px]'
                 />
-              </TabsContent>
-              <TabsContent value='manual' className='mt-0'>
+              ) : null}
+              {!optionsQuery.isError && optionsQuery.isLoading ? (
+                <div className='flex flex-col gap-4'>
+                  <Skeleton className='h-16 rounded-lg' />
+                  <Skeleton className='h-[320px] rounded-lg' />
+                </div>
+              ) : null}
+              {!optionsQuery.isError && !optionsQuery.isLoading ? (
+                <section className='rounded-lg border px-3'>
+                  <DetectionRunToolbar
+                    activeTask={activeTask}
+                    totalChannelCount={targetChannelCount}
+                    targetModelCount={targetModelCount}
+                    skippedChannelCount={skippedTargetCount}
+                    onRefresh={() => {
+                      void tasksQuery.refetch()
+                      void resultsQuery.refetch()
+                      void targetsQuery.refetch()
+                    }}
+                    isRefreshing={
+                      (tasksQuery.isFetching ||
+                        resultsQuery.isFetching ||
+                        targetsQuery.isFetching) &&
+                      !tasksQuery.isLoading &&
+                      !resultsQuery.isLoading &&
+                      !targetsQuery.isLoading
+                    }
+                  />
+                  <DetectionTargetsContent
+                    targets={targets}
+                    loading={targetsQuery.isLoading}
+                    isError={targetsQuery.isError}
+                    onRetry={() => {
+                      void targetsQuery.refetch()
+                    }}
+                    disabledReason={batchDisabledReason}
+                    onDetectBatch={(channelIds) => {
+                      setPendingBatchChannelIds(channelIds)
+                      setRunConfirmOpen(true)
+                    }}
+                    onDetectOne={(channelId) =>
+                      singleRunMutation.mutate(channelId)
+                    }
+                    pendingBatch={runMutation.isPending}
+                    pendingChannelId={pendingChannelId}
+                  />
+                </section>
+              ) : null}
+            </TabsContent>
+            <TabsContent value='manual' className='mt-0'>
+              {optionsQuery.isError ? (
+                <ErrorState
+                  title={t('We could not load detection settings.')}
+                  description={t(
+                    'Refresh the page or check your administrator permissions.'
+                  )}
+                  onRetry={() => {
+                    void optionsQuery.refetch()
+                  }}
+                  className='min-h-[240px]'
+                />
+              ) : null}
+              {!optionsQuery.isError && optionsQuery.isLoading ? (
+                <Skeleton className='h-[420px] rounded-lg' />
+              ) : null}
+              {!optionsQuery.isError && !optionsQuery.isLoading ? (
                 <ManualDetectionCard
                   form={manualForm}
                   options={draftOptions}
@@ -1519,90 +2824,144 @@ export function VeridropDetection() {
                   onSubmit={() => manualMutation.mutate()}
                   isSubmitting={manualMutation.isPending}
                 />
-              </TabsContent>
-              <TabsContent value='results' className='mt-0'>
-                <DetectionSection
-                  title={t('Detection Results')}
-                  description={t('Recent results produced by Veridrop for enabled channels and models.')}
-                  icon={<Activity className='size-4' aria-hidden='true' />}
-                  action={
-                    <div className='flex w-full flex-wrap items-center gap-2 sm:w-auto'>
-                      <Badge variant='outline'>
-                        {t('{{count}} running', { count: activeResultCount })}
-                      </Badge>
-                      <Badge
-                        variant={failureCount > 0 ? 'destructive' : 'outline'}
-                      >
-                        {t('{{count}} failed', { count: failureCount })}
-                      </Badge>
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        disabled={filteredResults.length === 0}
-                        onClick={() => {
-                          downloadTextFile(
-                            `veridrop-report-${Date.now()}.csv`,
-                            buildDetectionReportCsv(filteredResults),
-                            'text/csv;charset=utf-8'
-                          )
-                        }}
-                      >
-                        <Download data-icon='inline-start' className='size-4' />
-                        {t('Download Report')}
-                      </Button>
-                    </div>
-                  }
-                >
-                  {resultsQuery.isError ? (
-                    <ErrorState
-                      title={t('We could not load detection results.')}
-                      description={t('Refresh the page or try again later.')}
-                      onRetry={() => {
-                        void resultsQuery.refetch()
-                      }}
-                      className='min-h-[240px]'
-                    />
-                  ) : (
-                    <div className='space-y-3'>
-                      <div className='grid gap-2 lg:grid-cols-[minmax(260px,1fr)_160px_160px_auto]'>
-                        <CompactField label={t('Keyword')}>
-                          <Input
-                            value={resultKeyword}
-                            placeholder={t('Search verdict, summary or error')}
-                            onChange={(event) =>
-                              setResultKeyword(event.target.value)
+              ) : null}
+            </TabsContent>
+            <TabsContent value='results' className='mt-0'>
+              <section
+                aria-busy={
+                  resultsQuery.isFetching ||
+                  debouncedResultChannelFilter !== resultChannelFilter ||
+                  debouncedResultModelFilter !== resultModelFilter
+                }
+              >
+                {resultsQuery.isError ? (
+                  <ErrorState
+                    title={t('We could not load detection results.')}
+                    description={t('Refresh the page or try again later.')}
+                    onRetry={() => {
+                      void resultsQuery.refetch()
+                    }}
+                    className='min-h-[240px]'
+                  />
+                ) : (
+                  <div>
+                    <div className='rounded-lg border p-3'>
+                      <div className='grid gap-2 md:grid-cols-2 md:items-end xl:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_140px_150px_130px_140px]'>
+                        <CompactField label={t('Channel')}>
+                          <Combobox
+                            options={resultChannelOptions}
+                            value={resultChannelFilter}
+                            placeholder={t('Filter by channel name...')}
+                            emptyText='No channels found.'
+                            allowCustomValue
+                            openOnFocus
+                            onValueChange={(channel) =>
+                              setResultChannelFilter(channel ?? '')
                             }
                           />
                         </CompactField>
-                        <CompactField label={t('Status')}>
+                        <CompactField label={t('Model')}>
+                          <Combobox
+                            options={resultModelOptions}
+                            value={resultModelFilter}
+                            placeholder={t('Filter by model name...')}
+                            emptyText='No models found.'
+                            allowCustomValue
+                            openOnFocus
+                            onValueChange={(model) =>
+                              setResultModelFilter(model ?? '')
+                            }
+                          />
+                        </CompactField>
+                        <CompactField label={t('Batch')}>
                           <Select
-                            value={resultStatusFilter}
-                            onValueChange={(status) =>
-                              setResultStatusFilter(
-                                (status ?? 'all') as ResultStatusFilter
+                            value={resultBatchFilter}
+                            onValueChange={(batch) =>
+                              setResultBatchFilter(
+                                (batch ?? 'all') as ResultBatchFilter
                               )
                             }
                           >
                             <SelectTrigger className='w-full'>
                               <SelectValue>
-                                {resultStatusFilter === 'all'
-                                  ? t('All statuses')
-                                  : t(resultStatusFilter)}
+                                {getResultBatchFilterLabel(
+                                  resultBatchFilter,
+                                  t
+                                )}
                               </SelectValue>
                             </SelectTrigger>
                             <SelectContent
                               align='start'
                               alignItemWithTrigger={false}
                             >
-                              <SelectItem value='all'>
-                                {t('All statuses')}
-                              </SelectItem>
-                              {RESULT_STATUSES.map((status) => (
-                                <SelectItem key={status} value={status}>
-                                  {t(status)}
-                                </SelectItem>
-                              ))}
+                              <SelectGroup>
+                                {RESULT_BATCHES.map((batch) => (
+                                  <SelectItem key={batch} value={batch}>
+                                    {getResultBatchFilterLabel(batch, t)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </CompactField>
+                        <CompactField label={t('Result')}>
+                          <Select
+                            multiple
+                            value={resultOutcomeFilters}
+                            onValueChange={(outcomes) =>
+                              setResultOutcomeFilters(
+                                outcomes as ResultOutcomeFilter[]
+                              )
+                            }
+                          >
+                            <SelectTrigger className='w-full'>
+                              <SelectValue>
+                                {resultOutcomeTriggerLabel}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent
+                              align='start'
+                              alignItemWithTrigger={false}
+                            >
+                              <SelectGroup>
+                                {RESULT_OUTCOMES.map((outcome) => (
+                                  <SelectItem
+                                    key={outcome}
+                                    value={outcome}
+                                    className='data-selected:border-primary/20 data-selected:bg-primary/5 data-selected:ring-primary/20 focus:bg-muted/60 border border-transparent data-selected:ring-1 data-selected:ring-inset'
+                                  >
+                                    {getResultOutcomeFilterLabel(outcome, t)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </CompactField>
+                        <CompactField label={t('Mode')}>
+                          <Select
+                            value={resultModeFilter}
+                            onValueChange={(mode) =>
+                              setResultModeFilter(
+                                (mode ?? 'all') as ResultModeFilter
+                              )
+                            }
+                          >
+                            <SelectTrigger className='w-full'>
+                              <SelectValue>
+                                {getResultModeFilterLabel(resultModeFilter, t)}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent
+                              align='start'
+                              alignItemWithTrigger={false}
+                            >
+                              <SelectGroup>
+                                {RESULT_MODES.map((mode) => (
+                                  <SelectItem key={mode} value={mode}>
+                                    {getResultModeFilterLabel(mode, t)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
                             </SelectContent>
                           </Select>
                         </CompactField>
@@ -1624,62 +2983,198 @@ export function VeridropDetection() {
                               align='start'
                               alignItemWithTrigger={false}
                             >
-                              <SelectItem value='all'>{t('Any time')}</SelectItem>
-                              <SelectItem value='24h'>
-                                {t('Last 24 hours')}
-                              </SelectItem>
-                              <SelectItem value='7d'>
-                                {t('Last 7 days')}
-                              </SelectItem>
-                              <SelectItem value='30d'>
-                                {t('Last 30 days')}
-                              </SelectItem>
+                              <SelectGroup>
+                                <SelectItem value='all'>
+                                  {t('Any time')}
+                                </SelectItem>
+                                <SelectItem value='24h'>
+                                  {t('Last 24 hours')}
+                                </SelectItem>
+                                <SelectItem value='7d'>
+                                  {t('Last 7 days')}
+                                </SelectItem>
+                                <SelectItem value='30d'>
+                                  {t('Last 30 days')}
+                                </SelectItem>
+                              </SelectGroup>
                             </SelectContent>
                           </Select>
                         </CompactField>
-                        <div className='flex items-end'>
+                      </div>
+                      <DetectionResultStatistics
+                        summary={resultSummary}
+                        isLoading={resultsQuery.isLoading}
+                        selectedOutcomes={resultOutcomeFilters}
+                        onSelectedOutcomesChange={setResultOutcomeFilters}
+                      />
+                      <div className='mt-2 flex flex-wrap items-center justify-end gap-2'>
+                        <span className='text-muted-foreground text-xs whitespace-nowrap'>
+                          {t(
+                            '{{total}} matching results · showing {{visible}}',
+                            {
+                              total: matchingResultCount,
+                              visible: results.length,
+                            }
+                          )}
+                        </span>
+                        {activeResultCount > 0 && (
+                          <LiveRefreshIndicator active />
+                        )}
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          disabled={!hasActiveResultFilters}
+                          onClick={() => {
+                            setResultChannelFilter('')
+                            setResultModelFilter('')
+                            setResultOutcomeFilters([])
+                            setResultModeFilter('all')
+                            setResultBatchFilter('all')
+                            setResultTimeFilter('all')
+                          }}
+                        >
+                          {t('Reset Filters')}
+                        </Button>
+                        {canCleanupRecords && (
                           <Button
                             type='button'
+                            size='sm'
                             variant='outline'
-                            className='w-full'
-                            onClick={() => {
-                              setResultKeyword('')
-                              setResultStatusFilter('all')
-                              setResultTimeFilter('all')
-                            }}
+                            disabled={
+                              cleanupMutation.isPending ||
+                              activeCleanupTask != null ||
+                              activeTask != null
+                            }
+                            onClick={() => setCleanupOpen(true)}
                           >
-                            {t('Reset Filters')}
+                            <Trash2
+                              data-icon='inline-start'
+                              className='size-4'
+                            />
+                            {activeCleanupTask != null
+                              ? t('Cleaning records...')
+                              : t('Clean Records')}
                           </Button>
-                        </div>
+                        )}
+                        <Button
+                          type='button'
+                          size='icon-sm'
+                          variant='outline'
+                          aria-label={t('Refresh')}
+                          title={t('Refresh')}
+                          disabled={resultsQuery.isFetching}
+                          onClick={() => {
+                            void resultsQuery.refetch()
+                          }}
+                        >
+                          <RefreshCw
+                            className={cn(
+                              'size-4',
+                              resultsQuery.isFetching && 'animate-spin'
+                            )}
+                          />
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          disabled={results.length === 0}
+                          onClick={() => {
+                            downloadTextFile(
+                              `veridrop-detailed-report-${Date.now()}.html`,
+                              buildDetailedDetectionReportHtml(
+                                results,
+                                t,
+                                formatTimestampToDate,
+                                formatTimestampToDate(
+                                  Math.floor(Date.now() / 1000)
+                                ),
+                                [
+                                  {
+                                    label: t('Channel'),
+                                    value:
+                                      debouncedResultChannelFilter ||
+                                      t('All channels'),
+                                  },
+                                  {
+                                    label: t('Model'),
+                                    value:
+                                      debouncedResultModelFilter ||
+                                      t('All models'),
+                                  },
+                                  {
+                                    label: t('Batch'),
+                                    value: getResultBatchFilterLabel(
+                                      resultBatchFilter,
+                                      t
+                                    ),
+                                  },
+                                  {
+                                    label: t('Result'),
+                                    value: resultOutcomeReportLabel,
+                                  },
+                                  {
+                                    label: t('Mode'),
+                                    value: getResultModeFilterLabel(
+                                      resultModeFilter,
+                                      t
+                                    ),
+                                  },
+                                  {
+                                    label: t('Updated'),
+                                    value: getResultTimeLabel(
+                                      resultTimeFilter,
+                                      t
+                                    ),
+                                  },
+                                ],
+                                i18n.language
+                              ),
+                              'text/html;charset=utf-8'
+                            )
+                          }}
+                        >
+                          <Download
+                            data-icon='inline-start'
+                            className='size-4'
+                          />
+                          {t('Download Detailed Report')}
+                        </Button>
                       </div>
-                      <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                        <div className='text-muted-foreground text-xs'>
-                          {t('Showing {{count}} matching results', {
-                            count: filteredResults.length,
-                          })}
-                        </div>
-                      </div>
+                    </div>
+                    <div className='pt-2'>
                       <DetectionResultsTable
-                        results={filteredResults}
+                        results={results}
                         loading={resultsQuery.isLoading}
-                        emptyMessage={
-                          results.length === 0
-                            ? t('No detection results yet.')
-                            : t('No results match these filters. Clear filters or broaden the criteria.')
-                        }
+                        sort={resultSort}
+                        onSort={(sortBy) => {
+                          setResultSort((current) => {
+                            if (current.by === sortBy) {
+                              return {
+                                by: sortBy,
+                                order: current.order === 'asc' ? 'desc' : 'asc',
+                              }
+                            }
+                            return {
+                              by: sortBy,
+                              order: sortBy === 'updated_at' ? 'desc' : 'asc',
+                            }
+                          })
+                        }}
+                        emptyMessage={resultEmptyMessage}
                       />
                     </div>
-                  )}
-                </DetectionSection>
-              </TabsContent>
-            </Tabs>
-          </div>
-        )}
+                  </div>
+                )}
+              </section>
+            </TabsContent>
+          </Tabs>
         </SectionPageLayout.Content>
       </SectionPageLayout>
       <DetectionSettingsDialog
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={handleSettingsOpenChange}
         options={draftOptions}
         savedOptions={savedOptions}
         onChange={setDraftOptions}
@@ -1689,16 +3184,57 @@ export function VeridropDetection() {
       <ConfirmDialog
         open={runConfirmOpen}
         onOpenChange={setRunConfirmOpen}
-        title={t('Start Veridrop detection?')}
+        title={t('Start detection?')}
         desc={runConfirmDescription}
         confirmText={runMutation.isPending ? t('Starting...') : t('Start')}
-        destructive={draftOptions.auto_disable_enabled}
         isLoading={runMutation.isPending}
         handleConfirm={() => {
-          runMutation.mutate()
+          runMutation.mutate(pendingBatchChannelIds)
           setRunConfirmOpen(false)
         }}
       />
+      <ConfirmDialog
+        open={cleanupOpen}
+        onOpenChange={setCleanupOpen}
+        title={t('Clean detection records?')}
+        desc={t(
+          'This permanently deletes completed records in the selected range. Queued and running detections are kept.'
+        )}
+        confirmText={
+          cleanupMutation.isPending ? t('Cleaning...') : t('Clean Records')
+        }
+        destructive
+        isLoading={cleanupMutation.isPending}
+        handleConfirm={() => cleanupMutation.mutate()}
+      >
+        <div className='grid gap-2'>
+          <Label>{t('Records to clean')}</Label>
+          <Select
+            value={cleanupRetentionDays}
+            onValueChange={(value) => setCleanupRetentionDays(value ?? '30')}
+          >
+            <SelectTrigger className='w-full'>
+              <SelectValue>
+                {cleanupRetentionDays === '0'
+                  ? t('All completed records')
+                  : t('Completed records older than {{days}} days', {
+                      days: cleanupRetentionDays,
+                    })}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent align='start' alignItemWithTrigger={false}>
+              <SelectGroup>
+                {[7, 30, 90].map((days) => (
+                  <SelectItem key={days} value={String(days)}>
+                    {t('Completed records older than {{days}} days', { days })}
+                  </SelectItem>
+                ))}
+                <SelectItem value='0'>{t('All completed records')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+      </ConfirmDialog>
     </>
   )
 }

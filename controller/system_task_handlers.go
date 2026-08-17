@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -21,6 +22,8 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(veridropDetectionHandler{})
+	service.RegisterSystemTaskHandler(veridropSingleDetectionHandler{})
+	service.RegisterSystemTaskHandler(veridropDetectionCleanupHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
 }
@@ -116,15 +119,66 @@ type veridropDetectionHandler struct{}
 
 func (veridropDetectionHandler) Type() string { return model.SystemTaskTypeVeridrop }
 
+func (veridropDetectionHandler) Enabled() bool {
+	settings := operation_setting.GetVeridropMonitorSnapshot()
+	return settings.Enabled && settings.AutoDetectionEnabled && strings.TrimSpace(settings.BaseURL) != ""
+}
+
+func (veridropDetectionHandler) Interval() time.Duration {
+	minutes := operation_setting.GetVeridropMonitorSnapshot().DetectionIntervalMinutes
+	return time.Duration(minutes) * time.Minute
+}
+
+func (veridropDetectionHandler) NewPayload() any {
+	return service.VeridropDetectionTaskPayload{Batch: true}
+}
+
 func (veridropDetectionHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	runVeridropDetectionSystemTask(ctx, task, runnerID, true)
+}
+
+type veridropSingleDetectionHandler struct{}
+
+func (veridropSingleDetectionHandler) Type() string { return model.SystemTaskTypeVeridropSingle }
+
+func (veridropSingleDetectionHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	runVeridropDetectionSystemTask(ctx, task, runnerID, false)
+}
+
+func runVeridropDetectionSystemTask(ctx context.Context, task *model.SystemTask, runnerID string, batch bool) {
 	payload := service.VeridropDetectionTaskPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
+	if batch && payload.Batch {
+		payload.BatchTaskID = task.TaskID
+	}
 	summary := service.RunVeridropDetectionTask(ctx, payload, service.NewSystemTaskProgressReporter(task, runnerID))
 	service.LogVeridropTaskResult(summary)
+	if err := ctx.Err(); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, summary, err)
+		return
+	}
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+type veridropDetectionCleanupHandler struct{}
+
+func (veridropDetectionCleanupHandler) Type() string { return model.SystemTaskTypeVeridropCleanup }
+
+func (veridropDetectionCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := service.VeridropDetectionCleanupPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		return
+	}
+	result, err := service.RunVeridropDetectionCleanupTask(ctx, payload, service.NewSystemTaskProgressReporter(task, runnerID))
+	if err != nil {
+		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, result, err)
+		return
+	}
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, result, nil)
 }
 
 // midjourneyPollHandler runs one Midjourney polling pass per scheduled run.
