@@ -1,11 +1,13 @@
 package authz
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // seedBuiltInRoles upserts both built-in roles; re-running updates in place
@@ -78,4 +80,143 @@ func TestSeedDefaultPolicies_NilEnforcer(t *testing.T) {
 	err := seedDefaultPolicies()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
+}
+
+func TestMigrateVeridropMenuDeniesPreservesExistingOverridesAndRunsOnce(t *testing.T) {
+	db := newAuthzTestDB(t)
+	legacyOnly := newRule("p", []string{UserSubject(101), ResourceAdminMenuChannels, ActionView, EffectDeny})
+	legacyWithAllow := newRule("p", []string{UserSubject(102), ResourceAdminMenuChannels, ActionView, EffectDeny})
+	existingAllow := newRule("p", []string{UserSubject(102), ResourceAdminMenuVeridropDetection, ActionView, EffectAllow})
+	require.NoError(t, db.Create(&[]model.CasbinRule{legacyOnly, legacyWithAllow, existingAllow}).Error)
+
+	require.NoError(t, migrateVeridropMenuDenies(db))
+
+	var migrated model.CasbinRule
+	require.NoError(t, db.Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(101), ResourceAdminMenuVeridropDetection, ActionView,
+	).First(&migrated).Error)
+	require.Equal(t, EffectDeny, migrated.V3)
+	var preserved []model.CasbinRule
+	require.NoError(t, db.Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(102), ResourceAdminMenuVeridropDetection, ActionView,
+	).Find(&preserved).Error)
+	require.Len(t, preserved, 1)
+	require.Equal(t, EffectAllow, preserved[0].V3)
+
+	var markerCount int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ? AND v3 = ?",
+		"p", veridropMenuDenyMigrationKey, ResourceAdminMenuVeridropDetection, ActionView, EffectAllow,
+	).Count(&markerCount).Error)
+	require.EqualValues(t, 1, markerCount)
+	require.NoError(t, db.Where("id = ?", migrated.Id).Delete(&model.CasbinRule{}).Error)
+	require.NoError(t, migrateVeridropMenuDenies(db))
+	var count int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(101), ResourceAdminMenuVeridropDetection, ActionView,
+	).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestMigrateVeridropMenuDeniesRollsBackWhenMarkerWriteFails(t *testing.T) {
+	db := newAuthzTestDB(t)
+	legacy := newRule("p", []string{UserSubject(103), ResourceAdminMenuChannels, ActionView, EffectDeny})
+	require.NoError(t, db.Create(&legacy).Error)
+	callbackName := "test:fail_veridrop_menu_migration_marker"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if rule, ok := tx.Statement.Dest.(*model.CasbinRule); ok && rule.V0 == veridropMenuDenyMigrationKey {
+			tx.AddError(errors.New("forced marker write failure"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Create().Remove(callbackName)) })
+	require.Error(t, migrateVeridropMenuDenies(db))
+	var count int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(103), ResourceAdminMenuVeridropDetection, ActionView,
+	).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestMigratePriceMonitorPermissionsPreservesEffectsAndExistingOverrides(t *testing.T) {
+	db := newAuthzTestDB(t)
+	legacyResource := SystemSettingsResource("billing.model-pricing")
+	rules := []model.CasbinRule{
+		newRule("p", []string{UserSubject(201), legacyResource, ActionView, EffectAllow}),
+		newRule("p", []string{UserSubject(201), legacyResource, ActionEdit, EffectAllow}),
+		newRule("p", []string{UserSubject(202), legacyResource, ActionView, EffectDeny}),
+		newRule("p", []string{UserSubject(202), legacyResource, ActionEdit, EffectDeny}),
+		newRule("p", []string{UserSubject(203), legacyResource, ActionEdit, EffectAllow}),
+		newRule("p", []string{UserSubject(204), legacyResource, ActionView, EffectAllow}),
+		newRule("p", []string{UserSubject(204), ResourceAdminMenuPriceMonitor, ActionView, EffectDeny}),
+		newRule("p", []string{UserSubject(206), legacyResource, ActionEdit, EffectAllow}),
+		newRule("p", []string{UserSubject(206), ResourceAdminMenuPriceMonitor, ActionView, EffectDeny}),
+		newRule("p", []string{RoleSubject(BuiltInRoleAdmin), legacyResource, ActionView, EffectAllow}),
+	}
+	require.NoError(t, db.Create(&rules).Error)
+
+	require.NoError(t, migratePriceMonitorPermissions(db))
+
+	assertPolicyEffect := func(subject string, action string, effect string) {
+		t.Helper()
+		var rule model.CasbinRule
+		require.NoError(t, db.Where(
+			"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", subject, ResourceAdminMenuPriceMonitor, action,
+		).First(&rule).Error)
+		assert.Equal(t, effect, rule.V3)
+	}
+	assertPolicyEffect(UserSubject(201), ActionView, EffectAllow)
+	assertPolicyEffect(UserSubject(201), ActionEdit, EffectAllow)
+	assertPolicyEffect(UserSubject(202), ActionView, EffectDeny)
+	assertPolicyEffect(UserSubject(202), ActionEdit, EffectDeny)
+	assertPolicyEffect(UserSubject(203), ActionView, EffectAllow)
+	assertPolicyEffect(UserSubject(203), ActionEdit, EffectAllow)
+	assertPolicyEffect(UserSubject(204), ActionView, EffectDeny)
+	var conflictingEditRows int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(206), ResourceAdminMenuPriceMonitor, ActionEdit,
+	).Count(&conflictingEditRows).Error)
+	assert.Zero(t, conflictingEditRows)
+
+	var roleRows int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ?", "p", RoleSubject(BuiltInRoleAdmin), ResourceAdminMenuPriceMonitor,
+	).Count(&roleRows).Error)
+	assert.Zero(t, roleRows)
+
+	var markerCount int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ? AND v3 = ?",
+		"p", priceMonitorPermissionMigrationKey, ResourceAdminMenuPriceMonitor, ActionView, EffectAllow,
+	).Count(&markerCount).Error)
+	assert.EqualValues(t, 1, markerCount)
+
+	require.NoError(t, db.Where(
+		"ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(201), ResourceAdminMenuPriceMonitor,
+	).Delete(&model.CasbinRule{}).Error)
+	require.NoError(t, migratePriceMonitorPermissions(db))
+	var migratedAgain int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(201), ResourceAdminMenuPriceMonitor,
+	).Count(&migratedAgain).Error)
+	assert.Zero(t, migratedAgain)
+}
+
+func TestMigratePriceMonitorPermissionsRollsBackWhenMarkerWriteFails(t *testing.T) {
+	db := newAuthzTestDB(t)
+	legacy := newRule("p", []string{UserSubject(205), SystemSettingsResource("billing.model-pricing"), ActionView, EffectAllow})
+	require.NoError(t, db.Create(&legacy).Error)
+	callbackName := "test:fail_price_monitor_permission_migration_marker"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		if rule, ok := tx.Statement.Dest.(*model.CasbinRule); ok && rule.V0 == priceMonitorPermissionMigrationKey {
+			tx.AddError(errors.New("forced marker write failure"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Create().Remove(callbackName)) })
+
+	require.Error(t, migratePriceMonitorPermissions(db))
+	var count int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Where(
+		"ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(205), ResourceAdminMenuPriceMonitor,
+	).Count(&count).Error)
+	assert.Zero(t, count)
 }

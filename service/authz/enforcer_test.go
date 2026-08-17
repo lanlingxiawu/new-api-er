@@ -13,8 +13,8 @@ import (
 )
 
 // Init on a master node seeds the built-in roles and writes only the admin
-// baseline policy rows (root is a superuser and gets no explicit rows). Running
-// twice is idempotent.
+// baseline policy rows plus durable migration markers (root is a superuser and
+// gets no explicit rows). Running twice is idempotent.
 func TestInit_MasterSeedsRolesAndBaselineIdempotently(t *testing.T) {
 	db := newAuthzTestDB(t)
 
@@ -23,7 +23,7 @@ func TestInit_MasterSeedsRolesAndBaselineIdempotently(t *testing.T) {
 
 	var policyCount int64
 	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&policyCount).Error)
-	assert.Equal(t, int64(len(PermissionsForRole(BuiltInRoleAdmin))), policyCount)
+	assert.Equal(t, int64(len(PermissionsForRole(BuiltInRoleAdmin))+2), policyCount)
 
 	var roles []model.AuthzRole
 	require.NoError(t, db.Order("sort asc").Find(&roles).Error)

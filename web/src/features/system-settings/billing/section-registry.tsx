@@ -114,22 +114,12 @@ const BILLING_SECTIONS = [
         groupDefaults={getGroupDefaults(settings)}
         toolPricesDefault={settings['tool_price_setting.prices']}
         thirdPartySD2PricingDefault={settings['thirdpartysd2_pricing.matrix']}
-        priceMonitorDefaults={{
-          enabled: settings['price_monitor_setting.enabled'],
-          intervalMinutes: settings['price_monitor_setting.interval_minutes'],
-          timeoutSeconds: settings['price_monitor_setting.timeout_seconds'],
-          includeOfficial: settings['price_monitor_setting.include_official'],
-          includeModelsDev:
-            settings['price_monitor_setting.include_models_dev'],
-          modelWhitelist: settings['price_monitor_setting.model_whitelist'],
-        }}
         visibleTabs={[
           'models',
           'unset-models',
           'thirdpartysd2',
           'tool-prices',
           'upstream-sync',
-          'price-monitor',
         ]}
       />
     ),

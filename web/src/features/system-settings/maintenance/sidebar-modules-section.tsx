@@ -148,21 +148,23 @@ export function SidebarModulesSection({
         title: t('Models'),
         description: t('Manage catalog visibility and pricing.'),
       },
-      redemption: {
-        title: t('Redeem codes'),
-        description: t('Create and review invite or credit codes.'),
-      },
       user: {
         title: t('Users'),
         description: t('Administer user accounts and roles.'),
       },
-      setting: {
-        title: t('System settings'),
-        description: t('Advanced platform configuration.'),
+      redemption: {
+        title: t('Redeem codes'),
+        description: t('Create and review invite or credit codes.'),
       },
       subscription: {
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
+      },
+      veridropDetection: {
+        title: t('Authenticity Detection'),
+        description: t(
+          'Show the authenticity detection workspace in the admin sidebar.'
+        ),
       },
       employee: {
         title: t('Employee Management'),
@@ -175,6 +177,10 @@ export function SidebarModulesSection({
       businessOverview: {
         title: t('Business Overview'),
         description: t('Consumption, cost, profit, and commission stats.'),
+      },
+      setting: {
+        title: t('System settings'),
+        description: t('Advanced platform configuration.'),
       },
     },
   }

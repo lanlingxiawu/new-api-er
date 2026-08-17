@@ -22,6 +22,8 @@ func TestOptionKeyAllowlist(t *testing.T) {
 	assert.True(t, AllowsOption("operations.performance", "performance_setting.monitor_enabled"))
 	assert.False(t, AllowsOption("operations.performance", "SMTPToken"))
 	assert.False(t, AllowsOption("unknown.scope", "Notice"))
+	assert.False(t, AllowsOption("billing.model-pricing", "price_monitor_setting.enabled"))
+	assert.False(t, AllowsOption("billing.model-pricing", "price_monitor_setting.model_whitelist"))
 }
 
 func TestChannelProfitPreviewOnlyExposesGroupRatio(t *testing.T) {

@@ -42,9 +42,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { useAuthStore } from '@/stores/auth-store'
 import type { SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -148,11 +148,6 @@ export function useSidebarData(): SidebarData {
             icon: Radio,
           },
           {
-            title: t('Veridrop Detection'),
-            url: '/channels/detection',
-            icon: Activity,
-          },
-          {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
@@ -171,6 +166,16 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Authenticity Detection'),
+            url: '/channels/detection',
+            icon: Activity,
+          },
+          {
+            title: t('Price monitor'),
+            url: '/price-monitor',
+            icon: BadgeDollarSign,
           },
           {
             title: t('Node Pool'),

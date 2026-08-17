@@ -35,6 +35,12 @@ func Init(db *gorm.DB) error {
 		if err := seedBuiltInRoles(db); err != nil {
 			return err
 		}
+		if err := migrateVeridropMenuDenies(db); err != nil {
+			return err
+		}
+		if err := migratePriceMonitorPermissions(db); err != nil {
+			return err
+		}
 		if err := resetBuiltInRolePolicies(db); err != nil {
 			return err
 		}

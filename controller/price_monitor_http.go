@@ -9,10 +9,34 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/price_monitor_setting"
 
 	"github.com/gin-gonic/gin"
 )
+
+type priceMonitorSettingsRequest struct {
+	Enabled          bool   `json:"enabled"`
+	IntervalMinutes  int    `json:"interval_minutes"`
+	TimeoutSeconds   int    `json:"timeout_seconds"`
+	IncludeModelsDev bool   `json:"include_models_dev"`
+	ModelWhitelist   string `json:"model_whitelist"`
+}
+
+func validatePriceMonitorSettingsRequest(request priceMonitorSettingsRequest) (map[string]string, bool) {
+	if request.IntervalMinutes < 5 || request.TimeoutSeconds < 1 || request.TimeoutSeconds > 120 {
+		return nil, false
+	}
+	return map[string]string{
+		"enabled":            strconv.FormatBool(request.Enabled),
+		"interval_minutes":   strconv.Itoa(request.IntervalMinutes),
+		"timeout_seconds":    strconv.Itoa(request.TimeoutSeconds),
+		"include_official":   "true",
+		"include_models_dev": strconv.FormatBool(request.IncludeModelsDev),
+		"model_whitelist":    request.ModelWhitelist,
+	}, true
+}
 
 type publicPriceMonitorQueryRequest struct {
 	Password   string   `json:"password"`
@@ -90,6 +114,27 @@ func RunPriceMonitor(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
+func UpdatePriceMonitorSettings(c *gin.Context) {
+	var request priceMonitorSettingsRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	values, valid := validatePriceMonitorSettingsRequest(request)
+	if !valid {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	applied, err := model.SaveConfigGroup("price_monitor_setting", values)
+	if err != nil {
+		logger.LogError(c, "failed to update price monitor settings: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgRetryLater)
+		return
+	}
+	recordManageAudit(c, "price_monitor.settings.update", map[string]interface{}{"applied": applied})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"applied": applied}})
 }
 
 func GetPriceMonitorResults(c *gin.Context) {

@@ -56,10 +56,14 @@ export function ComboboxInput({
   const [open, setOpen] = React.useState(false)
   const [searchValue, setSearchValue] = React.useState('')
   const [highlightedIndex, setHighlightedIndex] = React.useState(-1)
+  const generatedId = React.useId()
+  const inputId = id ?? `combobox-${generatedId.replace(/:/g, '')}`
+  const listboxId = `${inputId}-listbox`
   const containerRef = React.useRef<HTMLDivElement>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const listRef = React.useRef<HTMLUListElement>(null)
   const pointerFocusRef = React.useRef(false)
+  const initialValueRef = React.useRef(value)
   const selectedOption = React.useMemo(
     () => options.find((option) => option.value === value),
     [options, value]
@@ -108,6 +112,8 @@ export function ComboboxInput({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      initialValueRef.current = value
+      setSearchValue(value)
       setOpen(true)
       return
     }
@@ -141,6 +147,9 @@ export function ComboboxInput({
         break
       case 'Escape':
         e.preventDefault()
+        if (allowCustomValue && value !== initialValueRef.current) {
+          onValueChange(initialValueRef.current)
+        }
         setOpen(false)
         setSearchValue('')
         break
@@ -154,20 +163,24 @@ export function ComboboxInput({
     item?.scrollIntoView({ block: 'nearest' })
   }, [highlightedIndex])
 
-  const showDropdown =
-    open &&
-    (filteredOptions.length > 0 || (allowCustomValue && searchValue.trim()))
+  const showDropdown = open
 
   return (
     <div ref={containerRef} className='relative'>
       <Input
         ref={inputRef}
-        id={id}
+        id={inputId}
         type='text'
         role='combobox'
         aria-expanded={open}
         aria-haspopup='listbox'
         aria-autocomplete='list'
+        aria-controls={listboxId}
+        aria-activedescendant={
+          highlightedIndex >= 0
+            ? `${listboxId}-option-${highlightedIndex}`
+            : undefined
+        }
         autoComplete='off'
         placeholder={placeholder}
         value={displayValue}
@@ -177,16 +190,22 @@ export function ComboboxInput({
           if (allowCustomValue) {
             onValueChange(nextValue)
           }
-          if (!open) setOpen(true)
+          if (!open) {
+            initialValueRef.current = value
+            setOpen(true)
+          }
         }}
         onPointerDown={() => {
           pointerFocusRef.current = true
           if (document.activeElement === inputRef.current && !open) {
+            initialValueRef.current = value
+            setSearchValue(value)
             setOpen(true)
           }
         }}
         onFocus={() => {
-          setSearchValue(allowCustomValue && !selectedOption ? value : '')
+          initialValueRef.current = value
+          setSearchValue(value)
           if (openOnFocus || pointerFocusRef.current) {
             setOpen(true)
           }
@@ -201,12 +220,14 @@ export function ComboboxInput({
         <div className='bg-popover text-popover-foreground absolute top-full z-100 mt-1 w-full rounded-md border shadow-md'>
           {filteredOptions.length > 0 ? (
             <ul
+              id={listboxId}
               ref={listRef}
               role='listbox'
               className='max-h-[200px] overflow-y-auto p-1'
             >
               {filteredOptions.map((option, index) => (
                 <li
+                  id={`${listboxId}-option-${index}`}
                   key={option.value}
                   role='option'
                   aria-selected={value === option.value}
@@ -235,7 +256,11 @@ export function ComboboxInput({
               ))}
             </ul>
           ) : (
-            <div className='px-2 py-6 text-center text-sm'>
+            <div
+              id={listboxId}
+              role='listbox'
+              className='px-2 py-6 text-center text-sm'
+            >
               {t(emptyText)}
               {allowCustomValue && searchValue.trim() && (
                 <div className='text-muted-foreground mt-1 text-xs'>

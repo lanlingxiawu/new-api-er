@@ -10,7 +10,20 @@ import (
 
 func TestAdminMenuResources_RegisteredWithAdminBaseline(t *testing.T) {
 	resources := AdminMenuResources()
-	require.Len(t, resources, 9)
+	require.Len(t, resources, 11)
+	assert.Equal(t, []string{
+		ResourceAdminMenuChannels,
+		ResourceAdminMenuModels,
+		ResourceAdminMenuUsers,
+		ResourceAdminMenuRedemptionCodes,
+		ResourceAdminMenuSubscriptions,
+		ResourceAdminMenuVeridropDetection,
+		ResourceAdminMenuPriceMonitor,
+		ResourceAdminMenuEmployees,
+		ResourceAdminMenuBusinessOverview,
+		ResourceAdminMenuRequestLogs,
+		ResourceAdminMenuSystemInfo,
+	}, resources)
 
 	admin, ok := roleSpec(BuiltInRoleAdmin)
 	require.True(t, ok)
@@ -23,8 +36,9 @@ func TestAdminMenuResources_RegisteredWithAdminBaseline(t *testing.T) {
 	// they must be granted per user by root. Every other menu resource keeps
 	// its historical baseline of ON for ordinary administrators.
 	adminBaselineOff := map[string]bool{
-		ResourceAdminMenuRequestLogs: true,
-		ResourceAdminMenuSystemInfo:  true,
+		ResourceAdminMenuRequestLogs:  true,
+		ResourceAdminMenuSystemInfo:   true,
+		ResourceAdminMenuPriceMonitor: true,
 	}
 
 	for _, resource := range resources {
@@ -37,6 +51,27 @@ func TestAdminMenuResources_RegisteredWithAdminBaseline(t *testing.T) {
 			assert.True(t, adminGrants[resource][ActionView], "%s must default on for ordinary administrators", resource)
 		}
 	}
+
+	actions := catalogActions(ResourceAdminMenuPriceMonitor)
+	require.Len(t, actions, 2)
+	assert.Equal(t, ActionView, actions[0].Action)
+	assert.Equal(t, ActionEdit, actions[1].Action)
+	assert.False(t, adminGrants[ResourceAdminMenuPriceMonitor][ActionEdit])
+	assert.True(t, rootGrants[ResourceAdminMenuPriceMonitor][ActionEdit])
+
+	for _, resource := range Catalog() {
+		if resource.Resource == ResourceAdminMenuVeridropDetection {
+			assert.Equal(t, "Authenticity Detection", resource.LabelKey)
+			assert.Equal(t, 6, resource.Sort)
+		}
+	}
+}
+
+func TestNormalizePriceMonitorMenuActions(t *testing.T) {
+	assert.Equal(t, map[string]bool{ActionView: true, ActionEdit: true},
+		normalizePermissionActions(ResourceAdminMenuPriceMonitor, map[string]bool{ActionEdit: true}))
+	assert.Equal(t, map[string]bool{ActionView: false, ActionEdit: false},
+		normalizePermissionActions(ResourceAdminMenuPriceMonitor, map[string]bool{ActionView: false, ActionEdit: true}))
 }
 
 func TestAdminMenuPermissions_UserDenyAndRootBypass(t *testing.T) {

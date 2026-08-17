@@ -129,8 +129,9 @@ func TestPermissionsForRole_AdminBaseline(t *testing.T) {
 	// Request logs and system info are sensitive enough that they are NOT part
 	// of the ordinary-administrator baseline; root must grant them per user.
 	notBaselineForAdmin := map[string]bool{
-		ResourceAdminMenuRequestLogs: true,
-		ResourceAdminMenuSystemInfo:  true,
+		ResourceAdminMenuPriceMonitor: true,
+		ResourceAdminMenuRequestLogs:  true,
+		ResourceAdminMenuSystemInfo:   true,
 	}
 	baselineMenuCount := 0
 	for _, resource := range AdminMenuResources() {

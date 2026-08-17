@@ -53,6 +53,7 @@ import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenti
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
 import { Route as AuthenticatedNodePoolIndexRouteImport } from './routes/_authenticated/node-pool/index'
 import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
+import { Route as AuthenticatedPriceMonitorIndexRouteImport } from './routes/_authenticated/price-monitor/index'
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
 import { Route as AuthenticatedRequestLogsIndexRouteImport } from './routes/_authenticated/request-logs/index'
@@ -315,6 +316,12 @@ const AuthenticatedPlaygroundIndexRoute =
     path: '/playground/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedPriceMonitorIndexRoute =
+  AuthenticatedPriceMonitorIndexRouteImport.update({
+    id: '/price-monitor/',
+    path: '/price-monitor/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedProfileIndexRoute =
   AuthenticatedProfileIndexRouteImport.update({
     id: '/profile/',
@@ -520,6 +527,7 @@ export interface FileRoutesByFullPath {
   '/models/': typeof AuthenticatedModelsIndexRoute
   '/node-pool/': typeof AuthenticatedNodePoolIndexRoute
   '/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/price-monitor/': typeof AuthenticatedPriceMonitorIndexRoute
   '/profile/': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/request-logs/': typeof AuthenticatedRequestLogsIndexRoute
@@ -590,6 +598,7 @@ export interface FileRoutesByTo {
   '/models': typeof AuthenticatedModelsIndexRoute
   '/node-pool': typeof AuthenticatedNodePoolIndexRoute
   '/playground': typeof AuthenticatedPlaygroundIndexRoute
+  '/price-monitor': typeof AuthenticatedPriceMonitorIndexRoute
   '/profile': typeof AuthenticatedProfileIndexRoute
   '/redemption-codes': typeof AuthenticatedRedemptionCodesIndexRoute
   '/request-logs': typeof AuthenticatedRequestLogsIndexRoute
@@ -664,6 +673,7 @@ export interface FileRoutesById {
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
   '/_authenticated/node-pool/': typeof AuthenticatedNodePoolIndexRoute
   '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/_authenticated/price-monitor/': typeof AuthenticatedPriceMonitorIndexRoute
   '/_authenticated/profile/': typeof AuthenticatedProfileIndexRoute
   '/_authenticated/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/_authenticated/request-logs/': typeof AuthenticatedRequestLogsIndexRoute
@@ -737,6 +747,7 @@ export interface FileRouteTypes {
     | '/models/'
     | '/node-pool/'
     | '/playground/'
+    | '/price-monitor/'
     | '/profile/'
     | '/redemption-codes/'
     | '/request-logs/'
@@ -807,6 +818,7 @@ export interface FileRouteTypes {
     | '/models'
     | '/node-pool'
     | '/playground'
+    | '/price-monitor'
     | '/profile'
     | '/redemption-codes'
     | '/request-logs'
@@ -880,6 +892,7 @@ export interface FileRouteTypes {
     | '/_authenticated/models/'
     | '/_authenticated/node-pool/'
     | '/_authenticated/playground/'
+    | '/_authenticated/price-monitor/'
     | '/_authenticated/profile/'
     | '/_authenticated/redemption-codes/'
     | '/_authenticated/request-logs/'
@@ -1239,6 +1252,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPlaygroundIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/price-monitor/': {
+      id: '/_authenticated/price-monitor/'
+      path: '/price-monitor'
+      fullPath: '/price-monitor/'
+      preLoaderRoute: typeof AuthenticatedPriceMonitorIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/profile/': {
       id: '/_authenticated/profile/'
       path: '/profile'
@@ -1541,6 +1561,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
   AuthenticatedNodePoolIndexRoute: typeof AuthenticatedNodePoolIndexRoute
   AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
+  AuthenticatedPriceMonitorIndexRoute: typeof AuthenticatedPriceMonitorIndexRoute
   AuthenticatedProfileIndexRoute: typeof AuthenticatedProfileIndexRoute
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
   AuthenticatedRequestLogsIndexRoute: typeof AuthenticatedRequestLogsIndexRoute
@@ -1575,6 +1596,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
   AuthenticatedNodePoolIndexRoute: AuthenticatedNodePoolIndexRoute,
   AuthenticatedPlaygroundIndexRoute: AuthenticatedPlaygroundIndexRoute,
+  AuthenticatedPriceMonitorIndexRoute: AuthenticatedPriceMonitorIndexRoute,
   AuthenticatedProfileIndexRoute: AuthenticatedProfileIndexRoute,
   AuthenticatedRedemptionCodesIndexRoute:
     AuthenticatedRedemptionCodesIndexRoute,

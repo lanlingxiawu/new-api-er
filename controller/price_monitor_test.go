@@ -877,3 +877,26 @@ func TestFetchUpstreamPricingDataParsesPricingFixture(t *testing.T) {
 	_, testResults := fetchUpstreamPricingData(context.Background(), []dto.UpstreamDTO{{Name: "fixture", BaseURL: server.URL, Endpoint: "/pricing"}}, 2)
 	require.Equal(t, []dto.TestResult{{Name: "fixture", Status: "success"}}, testResults)
 }
+
+func TestValidatePriceMonitorSettingsRequestBoundaries(t *testing.T) {
+	valid := []priceMonitorSettingsRequest{
+		{IntervalMinutes: 5, TimeoutSeconds: 1},
+		{IntervalMinutes: 360, TimeoutSeconds: 120, Enabled: true, IncludeModelsDev: true, ModelWhitelist: "model-a"},
+	}
+	for _, request := range valid {
+		values, ok := validatePriceMonitorSettingsRequest(request)
+		require.True(t, ok)
+		require.Equal(t, "true", values["include_official"])
+	}
+
+	invalid := []priceMonitorSettingsRequest{
+		{IntervalMinutes: 4, TimeoutSeconds: 10},
+		{IntervalMinutes: 5, TimeoutSeconds: 0},
+		{IntervalMinutes: 5, TimeoutSeconds: 121},
+	}
+	for _, request := range invalid {
+		values, ok := validatePriceMonitorSettingsRequest(request)
+		require.False(t, ok)
+		require.Nil(t, values)
+	}
+}

@@ -61,14 +61,15 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
   admin: {
     enabled: true,
     channel: true,
+    veridropDetection: true,
     models: true,
-    redemption: true,
     user: true,
-    setting: true,
+    redemption: true,
     subscription: true,
     employee: true,
     customer: true,
     businessOverview: true,
+    setting: true,
   },
 }
 
@@ -114,6 +115,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/usage-logs/export': { section: 'console', module: 'log' },
   '/wallet': { section: 'personal', module: 'topup' },
   '/profile': { section: 'personal', module: 'personal' },
+  '/channels/detection': { section: 'admin', module: 'veridropDetection' },
   '/channels': { section: 'admin', module: 'channel' },
   '/models': { section: 'admin', module: 'models' },
   '/models/metadata': { section: 'admin', module: 'models' },
@@ -182,7 +184,12 @@ function isModuleEnabled(
   adminConfig: SidebarModulesAdminConfig,
   userConfig: SidebarModulesUserConfig
 ): boolean {
-  if (adminMenuFromUrl(url) || url.startsWith('/system-settings')) {
+  const permissionMenu = adminMenuFromUrl(url)
+  const usesGlobalVisibility = url === '/channels/detection'
+  if (
+    (permissionMenu && !usesGlobalVisibility) ||
+    url.startsWith('/system-settings')
+  ) {
     return true
   }
   const mapping = URL_TO_CONFIG_MAP[url]
@@ -197,6 +204,8 @@ function isModuleEnabled(
     adminSection && adminSection.enabled && adminSection[module] === true
   )
   if (!adminAllowed) return false
+
+  if (permissionMenu) return true
 
   if (!userConfig) return true
 

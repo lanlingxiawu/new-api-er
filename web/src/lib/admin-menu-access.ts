@@ -6,6 +6,8 @@ import { useAuthStore } from '@/stores/auth-store'
 
 export const ADMIN_MENU_IDS = {
   CHANNELS: 'channels',
+  VERIDROP_DETECTION: 'veridrop_detection',
+  PRICE_MONITOR: 'price_monitor',
   MODELS: 'models',
   USERS: 'users',
   REDEMPTION_CODES: 'redemption_codes',
@@ -26,6 +28,10 @@ export function requireAdminMenu(menu: AdminMenuId) {
 }
 
 const ADMIN_MENU_BY_URL: Array<{ prefix: string; menu: AdminMenuId }> = [
+  // More specific than the /channels entry below, so it must be listed
+  // first: adminMenuFromUrl returns the first prefix match.
+  { prefix: '/channels/detection', menu: ADMIN_MENU_IDS.VERIDROP_DETECTION },
+  { prefix: '/price-monitor', menu: ADMIN_MENU_IDS.PRICE_MONITOR },
   { prefix: '/channels', menu: ADMIN_MENU_IDS.CHANNELS },
   { prefix: '/models', menu: ADMIN_MENU_IDS.MODELS },
   { prefix: '/users', menu: ADMIN_MENU_IDS.USERS },

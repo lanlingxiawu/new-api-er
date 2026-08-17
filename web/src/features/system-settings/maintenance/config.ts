@@ -77,14 +77,15 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   admin: {
     enabled: true,
     channel: true,
+    veridropDetection: true,
     models: true,
-    redemption: true,
     user: true,
-    setting: true,
+    redemption: true,
     subscription: true,
     employee: true,
     customer: true,
     businessOverview: true,
+    setting: true,
   },
 }
 
@@ -234,7 +235,34 @@ export function parseSidebarModulesAdmin(
       })
     })
 
-    return result
+    const orderedResult: SidebarModulesAdminConfig = {}
+    Object.entries(defaults).forEach(([sectionKey, defaultSection]) => {
+      const currentSection = result[sectionKey]
+      if (!currentSection) return
+
+      const orderedSection: SidebarSectionConfig = {
+        enabled: currentSection.enabled ?? true,
+      }
+      Object.keys(defaultSection).forEach((moduleKey) => {
+        if (moduleKey === 'enabled') return
+        if (moduleKey in currentSection) {
+          orderedSection[moduleKey] = currentSection[moduleKey]
+        }
+      })
+      Object.entries(currentSection).forEach(([moduleKey, moduleValue]) => {
+        if (!(moduleKey in orderedSection)) {
+          orderedSection[moduleKey] = moduleValue
+        }
+      })
+      orderedResult[sectionKey] = orderedSection
+    })
+    Object.entries(result).forEach(([sectionKey, sectionConfig]) => {
+      if (!(sectionKey in orderedResult)) {
+        orderedResult[sectionKey] = sectionConfig
+      }
+    })
+
+    return orderedResult
   } catch {
     return defaults
   }

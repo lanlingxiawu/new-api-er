@@ -142,7 +142,8 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
       [resource]: { ...selected[resource], [action]: checked },
     }
     if (
-      resource.startsWith(ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX)
+      resource.startsWith(ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX) ||
+      resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR
     ) {
       if (action === ADMIN_PERMISSION_ACTIONS.EDIT && checked) {
         next[resource][ADMIN_PERMISSION_ACTIONS.VIEW] = true

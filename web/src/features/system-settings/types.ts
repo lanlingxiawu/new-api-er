@@ -135,14 +135,14 @@ export type PriceMonitorResultsResponse = {
     total: number
     page: number
     page_size: number
-      source_headers: PriceMonitorSourceHeader[]
-      available_source_headers: PriceMonitorSourceHeader[]
-      available_models: string[]
-      applied_filters: {
-        source_keys: string[]
-        comparison: string
-      }
-      items: PriceMonitorMatrixItem[]
+    source_headers: PriceMonitorSourceHeader[]
+    available_source_headers: PriceMonitorSourceHeader[]
+    available_models: string[]
+    applied_filters: {
+      source_keys: string[]
+      comparison: string
+    }
+    items: PriceMonitorMatrixItem[]
   }
 }
 
@@ -153,6 +153,8 @@ export type UpdateOptionGroupRequest = {
     | 'db_pool_setting'
     | 'user_session_setting'
     | 'relay_timeout_setting'
+    | 'veridrop_monitor_setting'
+    | 'veridrop_monitor_setting'
   values: Record<string, string>
 }
 
@@ -243,7 +245,11 @@ export type RelayLogQueueStatus = {
 }
 
 export type RelayLogReplayState =
-  'idle' | 'running' | 'succeeded' | 'partial_failed' | 'failed'
+  | 'idle'
+  | 'running'
+  | 'succeeded'
+  | 'partial_failed'
+  | 'failed'
 
 export type RelayLogReplayStatus = {
   state: RelayLogReplayState
@@ -531,12 +537,6 @@ export type BillingSettings = {
   'billing_setting.billing_expr': string
   'tool_price_setting.prices': string
   'thirdpartysd2_pricing.matrix': string
-  'price_monitor_setting.enabled': boolean
-  'price_monitor_setting.interval_minutes': number
-  'price_monitor_setting.timeout_seconds': number
-  'price_monitor_setting.include_official': boolean
-  'price_monitor_setting.include_models_dev': boolean
-  'price_monitor_setting.model_whitelist': string
   TopupGroupRatio: string
   GroupRatio: string
   UserUsableGroups: string

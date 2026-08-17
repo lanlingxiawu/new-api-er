@@ -75,6 +75,24 @@ export async function runPriceMonitor() {
   return res.data
 }
 
+export type PriceMonitorSettingsRequest = {
+  enabled: boolean
+  interval_minutes: number
+  timeout_seconds: number
+  include_models_dev: boolean
+  model_whitelist: string
+}
+
+export async function updatePriceMonitorSettings(
+  request: PriceMonitorSettingsRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/price_monitor/settings',
+    request
+  )
+  return res.data
+}
+
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
   return res.data

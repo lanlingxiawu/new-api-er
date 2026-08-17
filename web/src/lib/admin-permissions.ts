@@ -7,6 +7,7 @@ export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
+  PRICE_MONITOR: 'admin_menu.price_monitor',
   ADMIN_MENU_PREFIX: 'admin_menu.',
   SYSTEM_SETTINGS_PREFIX: 'system_settings.',
 } as const
@@ -152,7 +153,8 @@ export function normalizeAdminPermissions(
     if (
       resource.resource.startsWith(
         ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
-      )
+      ) ||
+      resource.resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR
     ) {
       if (actions[ADMIN_PERMISSION_ACTIONS.VIEW] === false) {
         actions[ADMIN_PERMISSION_ACTIONS.EDIT] = false

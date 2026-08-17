@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/price_monitor_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,6 +120,91 @@ func TestConfigGroupWhitelistsCoverEveryStructField(t *testing.T) {
 	assert.Len(t, dbPoolFields, 5, "db_pool_setting 字段数与白名单不一致")
 	assert.Len(t, userSessionFields, 5, "user_session_setting 字段数与白名单不一致")
 	assert.Len(t, relayTimeoutFields, 3, "relay_timeout_setting 字段数与白名单不一致")
+}
+
+func TestSaveVeridropMonitorConfigGroupPersistsAndPublishes(t *testing.T) {
+	db := useConfigGroupDB(t)
+	original := operation_setting.GetVeridropMonitorSetting()
+	t.Cleanup(func() { operation_setting.ReplaceVeridropMonitorSetting(original) })
+
+	applied, err := SaveConfigGroup("veridrop_monitor_setting", map[string]string{
+		"enabled":        "true",
+		"base_url":       "https://veridrop.example",
+		"max_concurrent": "4",
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.True(t, operation_setting.GetVeridropMonitorSnapshot().Enabled)
+	require.Equal(t, 4, operation_setting.GetVeridropMonitorSnapshot().MaxConcurrent)
+	value, ok := optionRowValue(t, db, "veridrop_monitor_setting.base_url")
+	require.True(t, ok)
+	require.Equal(t, "https://veridrop.example", value)
+}
+
+func TestSaveVeridropMonitorConfigGroupRejectsInvalidValues(t *testing.T) {
+	useConfigGroupDB(t)
+	original := operation_setting.GetVeridropMonitorSetting()
+	t.Cleanup(func() { operation_setting.ReplaceVeridropMonitorSetting(original) })
+
+	applied, err := SaveConfigGroup("veridrop_monitor_setting", map[string]string{
+		"default_mode": "fast",
+	})
+	require.Error(t, err)
+	require.False(t, applied)
+}
+
+func TestSavePriceMonitorConfigGroupPersistsAndPublishes(t *testing.T) {
+	db := useConfigGroupDB(t)
+	original := *price_monitor_setting.GetPriceMonitorSetting()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("price_monitor_setting", map[string]string{
+			"enabled":            strconv.FormatBool(original.Enabled),
+			"interval_minutes":   strconv.Itoa(original.IntervalMinutes),
+			"timeout_seconds":    strconv.Itoa(original.TimeoutSeconds),
+			"include_official":   strconv.FormatBool(original.IncludeOfficial),
+			"include_models_dev": strconv.FormatBool(original.IncludeModelsDev),
+			"model_whitelist":    original.ModelWhitelist,
+		}))
+	})
+
+	applied, err := SaveConfigGroup("price_monitor_setting", map[string]string{
+		"enabled":            "true",
+		"interval_minutes":   "5",
+		"timeout_seconds":    "120",
+		"include_official":   "true",
+		"include_models_dev": "true",
+		"model_whitelist":    "free-model",
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	snapshot := price_monitor_setting.GetPriceMonitorSetting()
+	assert.True(t, snapshot.Enabled)
+	assert.Equal(t, 5, snapshot.IntervalMinutes)
+	assert.Equal(t, 120, snapshot.TimeoutSeconds)
+	assert.True(t, snapshot.IncludeOfficial)
+	assert.True(t, snapshot.IncludeModelsDev)
+	assert.Equal(t, "free-model", snapshot.ModelWhitelist)
+	value, ok := optionRowValue(t, db, "price_monitor_setting.interval_minutes")
+	require.True(t, ok)
+	assert.Equal(t, "5", value)
+}
+
+func TestSavePriceMonitorConfigGroupRejectsInvalidValues(t *testing.T) {
+	db := useConfigGroupDB(t)
+
+	for _, values := range []map[string]string{
+		{"interval_minutes": "4"},
+		{"timeout_seconds": "0"},
+		{"timeout_seconds": "121"},
+		{"include_official": "false"},
+		{"unknown": "value"},
+	} {
+		applied, err := SaveConfigGroup("price_monitor_setting", values)
+		require.Error(t, err)
+		assert.False(t, applied)
+	}
+	_, exists := optionRowValue(t, db, "price_monitor_setting.interval_minutes")
+	assert.False(t, exists)
 }
 
 func TestSaveRelayTimeoutConfigGroupPersistsAndPublishes(t *testing.T) {
