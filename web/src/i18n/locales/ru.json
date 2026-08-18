@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "Окно скорости выделения (сек)",
     "Allow accountFilter parameter": "Разрешить параметр accountFilter",
     "Allow balance redemption": "Разрешить оплату балансом",
+    "Allow changing price monitor settings and running checks.": "Разрешить изменять настройки проверки цен и запускать проверки.",
     "Allow changing settings and running actions in this section.": "Разрешить изменение настроек и выполнение действий в этом разделе.",
     "Allow Claude beta query passthrough": "Разрешить проброс бета-запросов Claude",
     "Allow clients to query configured ratios via `/api/ratio`.": "Разрешить клиентам запрашивать настроенные соотношения через `/api/ratio`.",
@@ -2952,6 +2953,7 @@
     "Home": "Главная",
     "Home Page Content": "Содержимое главной страницы",
     "Homepage URL": "URL главной страницы",
+    "Horizontal position": "Положение по горизонтали",
     "Hostname or IP of your SMTP provider": "Имя хоста или IP-адрес вашего SMTP-провайдера",
     "Hot-path Cache TTLs": "TTL кэшей горячего пути",
     "Hotspot list length": "Длина списка горячих точек",
@@ -4649,6 +4651,7 @@
     "Price ID": "ID цены",
     "Price mode (USD per 1M tokens)": "Режим ценообразования (USD за 1 млн токенов)",
     "Price monitor": "Проверка цен",
+    "Price monitor settings": "Настройки проверки цен",
     "Price monitor settings saved": "Настройки проверки цен сохранены",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "Не удалось проверить источник цен",
@@ -5336,6 +5339,8 @@
     "Score Details": "Подробная оценка",
     "Scored Records": "Записи с оценкой",
     "Scoring Rules": "Правила оценки",
+    "Scroll left": "Прокрутить влево",
+    "Scroll right": "Прокрутить вправо",
     "Search": "Поиск",
     "Search and select the user to assign employee status": "Найдите и выберите пользователя, чтобы назначить статус сотрудника",
     "Search by name or URL...": "Поиск по имени или URL...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "Строки с нулевой выручкой",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Allow changing price monitor settings and running checks.": "Разрешить изменять настройки проверки цен и запускать проверки.",
-    "Price monitor settings": "Настройки проверки цен"
+    "Zoom": "Zoom"
   }
 }

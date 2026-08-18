@@ -26,7 +26,7 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 8
+	priceMonitorMatrixVersion           = 9
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -319,10 +319,6 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 	pageItems := filtered[start:end]
 	headers := make([]PriceMonitorSourceHeader, 0, len(eligibleHeaders))
 	for _, header := range eligibleHeaders {
-		if comparison == "all" && (header.Type == priceSourceOfficial || query.SourceKeysSet) {
-			headers = append(headers, header)
-			continue
-		}
 		if _, visible := visibleKeys[header.Key]; visible {
 			headers = append(headers, header)
 		}
@@ -340,12 +336,21 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []PriceMonitorSourceHeader, comparison string) (bool, map[string]struct{}) {
 	displayKeys := make(map[string]struct{})
 	if comparison == "all" {
+		hasComparableDifference := false
 		for _, header := range headers {
-			if _, ok := item.Prices[header.Key]; ok {
+			cell, ok := item.Prices[header.Key]
+			if !ok || header.Type == priceMonitorPlatformKey {
+				continue
+			}
+			if priceMonitorCellHasComparableDifference(cell) {
 				displayKeys[header.Key] = struct{}{}
+				hasComparableDifference = true
 			}
 		}
-		return true, displayKeys
+		if hasComparableDifference {
+			displayKeys[priceMonitorPlatformKey] = struct{}{}
+		}
+		return hasComparableDifference, displayKeys
 	}
 	var official *PriceMonitorPriceCell
 	officialKey := ""
@@ -447,6 +452,16 @@ func priceMonitorComparisonIgnores(cell PriceMonitorPriceCell) bool {
 	return cell.UnavailableReason == priceMonitorUnavailablePlaceholder || cell.UnavailableReason == priceMonitorUnavailableSourceFailed
 }
 
+func priceMonitorCellHasComparableDifference(cell PriceMonitorPriceCell) bool {
+	if priceMonitorComparisonIgnores(cell) {
+		return false
+	}
+	if cell.UnavailableReason != "" {
+		return cell.UnavailableReason == priceMonitorUnavailableMissing
+	}
+	return cell.Different
+}
+
 func priceMonitorPriceCellsEqual(left, right PriceMonitorPriceCell) bool {
 	if left.UnavailableReason != "" || right.UnavailableReason != "" {
 		return left.UnavailableReason == right.UnavailableReason
@@ -454,20 +469,36 @@ func priceMonitorPriceCellsEqual(left, right PriceMonitorPriceCell) bool {
 	if left.Mode != right.Mode || left.Dynamic != right.Dynamic || !priceMonitorOptionalPriceEqual(left.Input, right.Input) || !priceMonitorOptionalPriceEqual(left.Output, right.Output) || !priceMonitorOptionalPriceEqual(left.Price, right.Price) || len(left.Lanes) != len(right.Lanes) || len(left.Tiers) != len(right.Tiers) {
 		return false
 	}
-	for i := range left.Lanes {
-		if left.Lanes[i].Key != right.Lanes[i].Key || !priceMonitorOptionalPriceEqual(left.Lanes[i].Price, right.Lanes[i].Price) {
-			return false
-		}
+	if !priceMonitorLanePricesEqual(left.Lanes, right.Lanes) {
+		return false
 	}
 	for i := range left.Tiers {
 		leftTier, rightTier := left.Tiers[i], right.Tiers[i]
 		if leftTier.Range != rightTier.Range || leftTier.ConditionVariable != rightTier.ConditionVariable || leftTier.ConditionOperator != rightTier.ConditionOperator || !priceMonitorOptionalPriceEqual(leftTier.ConditionValue, rightTier.ConditionValue) || !nearlyEqual(leftTier.Input, rightTier.Input) || !nearlyEqual(leftTier.Output, rightTier.Output) || len(leftTier.Lanes) != len(rightTier.Lanes) {
 			return false
 		}
-		for laneIndex := range leftTier.Lanes {
-			if leftTier.Lanes[laneIndex].Key != rightTier.Lanes[laneIndex].Key || !priceMonitorOptionalPriceEqual(leftTier.Lanes[laneIndex].Price, rightTier.Lanes[laneIndex].Price) {
-				return false
-			}
+		if !priceMonitorLanePricesEqual(leftTier.Lanes, rightTier.Lanes) {
+			return false
+		}
+	}
+	return true
+}
+
+func priceMonitorLanePricesEqual(left, right []PriceMonitorPriceLane) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	rightByKey := make(map[string]*float64, len(right))
+	for _, lane := range right {
+		if _, exists := rightByKey[lane.Key]; exists {
+			return false
+		}
+		rightByKey[lane.Key] = lane.Price
+	}
+	for _, lane := range left {
+		rightPrice, ok := rightByKey[lane.Key]
+		if !ok || !priceMonitorOptionalPriceEqual(lane.Price, rightPrice) {
+			return false
 		}
 	}
 	return true
@@ -837,7 +868,11 @@ func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMo
 		source.PriceDifferent = platform.Price == nil || source.Price == nil || !nearlyEqual(*platform.Price, *source.Price)
 		source.Different = source.PriceDifferent
 	case priceMonitorModeExpression:
-		source.Different = platform.Expr != source.Expr
+		if !platform.Dynamic && !source.Dynamic {
+			source.Different = !priceMonitorPriceCellsEqual(platform, *source)
+		} else {
+			source.Different = platform.Expr != source.Expr
+		}
 		source.ModeDifferent = source.Different
 	default:
 		source.Different = true

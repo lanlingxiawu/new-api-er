@@ -284,6 +284,38 @@ func TestPriceMonitorDifferenceFlagsHandleMissingPrices(t *testing.T) {
 	})
 }
 
+func TestPriceMonitorExpressionDifferencesUseComparableTiers(t *testing.T) {
+	platformExpression := `len <= 272000 ? tier("short", p * 0.2 + c * 1.2 + cr * 0.02 + cc * 0.25) : tier("long", p * 0.4 + c * 1.8 + cr * 0.04 + cc * 0.5)`
+	sourceExpression := `len <= 272000 ? tier("vendor_short", cr * 0.02 + p * 0.2 + cc * 0.25 + c * 1.2) : tier("vendor_long", cc * 0.5 + c * 1.8 + cr * 0.04 + p * 0.4)`
+	platformTiers, platformDynamic := parsePriceMonitorExpression(platformExpression)
+	sourceTiers, sourceDynamic := parsePriceMonitorExpression(sourceExpression)
+	platform := PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: platformExpression, Tiers: platformTiers, Dynamic: platformDynamic}
+	source := PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: sourceExpression, Tiers: sourceTiers, Dynamic: sourceDynamic}
+
+	markPriceMonitorDifferences(platform, &source)
+
+	require.False(t, platformDynamic)
+	require.False(t, sourceDynamic)
+	require.False(t, source.Different)
+	require.False(t, source.ModeDifferent)
+
+	source.Tiers[1].Output = 1.9
+	markPriceMonitorDifferences(platform, &source)
+
+	require.True(t, source.Different)
+	require.True(t, source.ModeDifferent)
+}
+
+func TestPriceMonitorExpressionDifferencesKeepDynamicExpressionsConservative(t *testing.T) {
+	platform := PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: `tier("base", p * 1 + c * 2)|||when(header("x-fast") has "1") * 2`, Dynamic: true}
+	source := PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: `tier("base", p * 1 + c * 2)|||when(header("x-slow") has "1") * 2`, Dynamic: true}
+
+	markPriceMonitorDifferences(platform, &source)
+
+	require.True(t, source.Different)
+	require.True(t, source.ModeDifferent)
+}
+
 func TestQueryPriceMonitorMatrixFiltersModelsSourcesAndPaginates(t *testing.T) {
 	snapshot := PriceMonitorSnapshot{
 		CheckedAt: 123, Status: "success", PasswordExpireAt: 456,
@@ -293,9 +325,9 @@ func TestQueryPriceMonitorMatrixFiltersModelsSourcesAndPaginates(t *testing.T) {
 			{Key: "channel", Name: "渠道", Type: priceSourceChannel},
 		},
 		MatrixItems: []PriceMonitorMatrixItem{
-			{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {}}},
-			{Model: "alpha-plus", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {}}},
-			{Model: "beta", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {}}},
+			{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {Different: true}, "channel": {}}},
+			{Model: "alpha-plus", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {Different: true}, "channel": {}}},
+			{Model: "beta", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {Different: true}}},
 		},
 	}
 
@@ -342,24 +374,27 @@ func TestQueryPriceMonitorMatrixKeepsColumnsUsedOutsideCurrentPage(t *testing.T)
 		},
 	}
 
+	snapshot.MatrixItems[0].Prices["channel-a"] = PriceMonitorPriceCell{Different: true}
+	snapshot.MatrixItems[1].Prices["channel-b"] = PriceMonitorPriceCell{Different: true}
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Page: 1, PageSize: 1})
 
-	require.Equal(t, snapshot.SourceHeaders, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2], snapshot.SourceHeaders[3]}, result.SourceHeaders)
 }
 
-func TestQueryPriceMonitorMatrixAlwaysKeepsOfficialColumn(t *testing.T) {
+func TestQueryPriceMonitorMatrixAllOmitsNonDifferentSources(t *testing.T) {
 	snapshot := PriceMonitorSnapshot{
 		SourceHeaders: []PriceMonitorSourceHeader{
 			{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
 			{Key: "official", Type: priceSourceOfficial},
 			{Key: "channel", Type: priceSourceChannel},
 		},
-		MatrixItems: []PriceMonitorMatrixItem{{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {}}}},
+		MatrixItems: []PriceMonitorMatrixItem{{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {Different: true}}}},
 	}
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Source: priceSourceChannel, Page: 1, PageSize: 20})
 
-	require.Equal(t, snapshot.SourceHeaders, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2]}, result.SourceHeaders)
+	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "channel": {Different: true}}, result.Items[0].Prices)
 }
 
 func TestQueryPriceMonitorMatrixSelectsExactChannelColumnsAndReturnsModels(t *testing.T) {
@@ -371,8 +406,8 @@ func TestQueryPriceMonitorMatrixSelectsExactChannelColumnsAndReturnsModels(t *te
 			{Key: "channel-b", Type: priceSourceChannel},
 		},
 		MatrixItems: []PriceMonitorMatrixItem{
-			{Model: "beta", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel-b": {}}},
-			{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel-a": {}, "channel-b": {}}},
+			{Model: "beta", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel-b": {Different: true}}},
+			{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel-a": {}, "channel-b": {Different: true}}},
 		},
 	}
 
@@ -382,7 +417,7 @@ func TestQueryPriceMonitorMatrixSelectsExactChannelColumnsAndReturnsModels(t *te
 	})
 
 	require.Equal(t, []string{"alpha", "beta"}, result.AvailableModels)
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[1], snapshot.SourceHeaders[3]}, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[3]}, result.SourceHeaders)
 	require.Equal(t, []string{"channel-b"}, result.AppliedFilters.SourceKeys)
 	require.Equal(t, "all", result.AppliedFilters.Comparison)
 	require.Len(t, result.Items, 1)
@@ -396,7 +431,7 @@ func TestQueryPriceMonitorMatrixSupportsClearingAllChannelColumns(t *testing.T) 
 			{Key: "official", Type: priceSourceOfficial},
 			{Key: "channel", Type: priceSourceChannel},
 		},
-		MatrixItems: []PriceMonitorMatrixItem{{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {}}}},
+		MatrixItems: []PriceMonitorMatrixItem{{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {Different: true}, "channel": {Different: true}}}},
 	}
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{SourceKeys: []string{}, SourceKeysSet: true, Page: 1, PageSize: 20})
@@ -464,6 +499,35 @@ func TestQueryPriceMonitorMatrixComparisonFilters(t *testing.T) {
 			require.ElementsMatch(t, test.models, models)
 		})
 	}
+}
+
+func TestQueryPriceMonitorMatrixAllExcludesIgnoredSources(t *testing.T) {
+	platform := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(1), Output: floatPointer(2)}
+	channelDifferent := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(2), Output: floatPointer(2), Different: true, InputDifferent: true}
+	snapshot := PriceMonitorSnapshot{
+		SourceHeaders: []PriceMonitorSourceHeader{
+			{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+			{Key: "official", Type: priceSourceOfficial},
+			{Key: "failed", Type: priceSourceChannel},
+			{Key: "placeholder", Type: priceSourceChannel},
+			{Key: "channel", Type: priceSourceChannel},
+		},
+		MatrixItems: []PriceMonitorMatrixItem{{
+			Model: "alpha",
+			Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: platform,
+				"official":              platform,
+				"failed":                {UnavailableReason: priceMonitorUnavailableSourceFailed},
+				"placeholder":           {UnavailableReason: priceMonitorUnavailablePlaceholder},
+				"channel":               channelDifferent,
+			},
+		}},
+	}
+
+	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: "all", Page: 1, PageSize: 20})
+
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[4]}, result.SourceHeaders)
+	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform, "channel": channelDifferent}, result.Items[0].Prices)
 }
 
 func TestPriceMonitorPriceCellsEqualUsesNormalizedPrices(t *testing.T) {
@@ -662,13 +726,13 @@ func TestQueryPriceMonitorMatrixFiltersChannelByAPIURLAndKeepsOfficial(t *testin
 			{Key: "channel-b", Name: "channel-b", Type: priceSourceChannel, APIURL: "https://b.example/v1"},
 		},
 		MatrixItems: []PriceMonitorMatrixItem{{Model: "alpha", Prices: map[string]PriceMonitorPriceCell{
-			priceMonitorPlatformKey: {}, "official": {}, "channel-a": {}, "channel-b": {},
+			priceMonitorPlatformKey: {}, "official": {}, "channel-a": {Different: true}, "channel-b": {},
 		}}},
 	}
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Source: "a.example", Page: 1, PageSize: 20})
 
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[1], snapshot.SourceHeaders[2]}, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2]}, result.SourceHeaders)
 	require.Equal(t, snapshot.SourceHeaders, result.AvailableSourceHeaders)
 	require.NotContains(t, result.Items[0].Prices, "channel-b")
 }
@@ -677,6 +741,19 @@ func TestPriceMonitorPageSourceNavigationContract(t *testing.T) {
 	require.Contains(t, priceMonitorHTML, `id="source-picker"`)
 	require.Contains(t, priceMonitorHTML, `id="scroll-left"`)
 	require.Contains(t, priceMonitorHTML, `id="scroll-right"`)
+	require.Contains(t, priceMonitorHTML, `id="scroll-left-top"`)
+	require.Contains(t, priceMonitorHTML, `id="scroll-right-top"`)
+	require.Contains(t, priceMonitorHTML, `id="scroll-progress-top"`)
+	require.Contains(t, priceMonitorHTML, `function scrollTable(direction)`)
+	require.Contains(t, priceMonitorHTML, `function syncScrollControls()`)
+	require.Contains(t, priceMonitorHTML, `addEventListener('resize',syncScrollControls)`)
+	require.Contains(t, priceMonitorHTML, `.app{width:min(1600px,100%);margin:auto;padding:22px 22px 40px;height:100vh;display:flex;flex-direction:column}`)
+	require.Contains(t, priceMonitorHTML, `.table-scroll{position:relative;min-height:0;flex:1 1 auto;overflow:auto`)
+	require.Contains(t, priceMonitorHTML, `.matrix-sticky-controls{position:sticky`)
+	require.Contains(t, priceMonitorHTML, `.matrix-scroll-tools{`)
+	require.Contains(t, priceMonitorHTML, `.matrix-scroll-tools{display:none}`)
+	require.Contains(t, priceMonitorHTML, `.app{height:auto;min-height:100vh`)
+	require.Contains(t, priceMonitorHTML, `<div class="matrix-sticky-controls">`)
 	require.Contains(t, priceMonitorHTML, `available_source_headers`)
 	require.Contains(t, priceMonitorHTML, `status-pill`)
 }
@@ -697,6 +774,25 @@ func TestPriceMonitorPageFilterAndStickyOfficialContract(t *testing.T) {
 	require.Contains(t, priceMonitorHTML, `data-comparison="channel_official"`)
 	require.Contains(t, priceMonitorHTML, `id="comparison-more"`)
 	require.Contains(t, priceMonitorHTML, `source_keys:`)
+}
+
+func TestPriceMonitorPageUsesTopPagerControls(t *testing.T) {
+	require.Contains(t, priceMonitorHTML, `id="pager-top"`)
+	require.Contains(t, priceMonitorHTML, `id="range-top"`)
+	require.Contains(t, priceMonitorHTML, `id="previous-top"`)
+	require.Contains(t, priceMonitorHTML, `id="next-top"`)
+	require.NotContains(t, priceMonitorHTML, `id="previous"`)
+	require.NotContains(t, priceMonitorHTML, `id="next"`)
+	require.NotContains(t, priceMonitorHTML, `id="range"`)
+	require.NotContains(t, priceMonitorHTML, `<footer class="footer pager-bar">`)
+	require.Contains(t, priceMonitorHTML, `function setRange(text)`)
+	require.Contains(t, priceMonitorHTML, `function setPagerDisabled(end)`)
+	require.Contains(t, priceMonitorHTML, `function goPage(delta)`)
+	require.Contains(t, priceMonitorHTML, `$('previous-top').onclick=()=>goPage(-1)`)
+	require.Contains(t, priceMonitorHTML, `$('next-top').onclick=()=>goPage(1)`)
+	require.NotContains(t, priceMonitorHTML, `$('previous').onclick`)
+	require.NotContains(t, priceMonitorHTML, `$('next').onclick`)
+	require.Contains(t, priceMonitorHTML, `.pager-bar.top{display:none}`)
 }
 
 func TestPriceMonitorPageUsesCompactPasswordPrompt(t *testing.T) {

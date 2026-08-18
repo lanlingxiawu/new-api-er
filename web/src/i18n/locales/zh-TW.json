@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "Allocation rate window (seconds)",
     "Allow accountFilter parameter": "允許 accountFilter 參數",
     "Allow balance redemption": "允許餘額兌換",
+    "Allow changing price monitor settings and running checks.": "允許修改價格巡檢設定並執行巡檢。",
     "Allow changing settings and running actions in this section.": "允許修改此分區的設定並執行相關操作。",
     "Allow Claude beta query passthrough": "允許 Claude beta 查詢透傳",
     "Allow clients to query configured ratios via `/api/ratio`.": "允許用戶端透過 `/api/ratio` 查詢已設定的比例。",
@@ -2952,6 +2953,7 @@
     "Home": "主頁",
     "Home Page Content": "首頁內容",
     "Homepage URL": "首頁 URL",
+    "Horizontal position": "橫向位置",
     "Hostname or IP of your SMTP provider": "您的 SMTP 供應商的主機名稱或 IP",
     "Hot-path Cache TTLs": "熱路徑緩存過期時間",
     "Hotspot list length": "Hotspot list length",
@@ -4649,6 +4651,7 @@
     "Price ID": "價格 ID",
     "Price mode (USD per 1M tokens)": "價格模式（每 100 萬個 token 的美元價格）",
     "Price monitor": "價格巡檢",
+    "Price monitor settings": "價格巡檢設定",
     "Price monitor settings saved": "價格巡檢設定已儲存",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "價格來源檢查失敗",
@@ -5336,6 +5339,8 @@
     "Score Details": "評分明細",
     "Scored Records": "已評分記錄",
     "Scoring Rules": "評分規則",
+    "Scroll left": "向左捲動",
+    "Scroll right": "向右捲動",
     "Search": "搜尋",
     "Search and select the user to assign employee status": "Search and select the user to assign employee status",
     "Search by name or URL...": "按名稱或 URL 搜尋...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "Zero-revenue rows",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放",
-    "Allow changing price monitor settings and running checks.": "允許修改價格巡檢設定並執行巡檢。",
-    "Price monitor settings": "價格巡檢設定"
+    "Zoom": "縮放"
   }
 }

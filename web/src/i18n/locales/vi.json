@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "Cửa sổ tốc độ cấp phát (giây)",
     "Allow accountFilter parameter": "Cho phép tham số accountFilter",
     "Allow balance redemption": "Cho phép thanh toán bằng số dư",
+    "Allow changing price monitor settings and running checks.": "Cho phép thay đổi cài đặt kiểm tra giá và chạy kiểm tra.",
     "Allow changing settings and running actions in this section.": "Cho phép thay đổi cài đặt và thực hiện thao tác trong mục này.",
     "Allow Claude beta query passthrough": "Cho phép chuyển tiếp truy vấn beta Claude",
     "Allow clients to query configured ratios via `/api/ratio`.": "Cho phép khách hàng truy vấn các tỷ lệ đã cấu hình thông qua `/api/ratio`.",
@@ -2952,6 +2953,7 @@
     "Home": "Trang chủ",
     "Home Page Content": "Nội dung Trang chủ",
     "Homepage URL": "URL trang chủ",
+    "Horizontal position": "Vị trí ngang",
     "Hostname or IP of your SMTP provider": "Tên máy chủ hoặc IP của nhà cung cấp SMTP của bạn",
     "Hot-path Cache TTLs": "TTL bộ nhớ đệm đường nóng",
     "Hotspot list length": "Số dòng trong bảng điểm nóng",
@@ -4649,6 +4651,7 @@
     "Price ID": "Mã giá",
     "Price mode (USD per 1M tokens)": "Chế độ giá (USD mỗi 1 triệu token)",
     "Price monitor": "Kiểm tra giá",
+    "Price monitor settings": "Cài đặt kiểm tra giá",
     "Price monitor settings saved": "Đã lưu cài đặt kiểm tra giá",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "Kiểm tra nguồn giá thất bại",
@@ -5336,6 +5339,8 @@
     "Score Details": "Chi tiết điểm",
     "Scored Records": "Bản ghi đã chấm điểm",
     "Scoring Rules": "Quy tắc chấm điểm",
+    "Scroll left": "Cuộn sang trái",
+    "Scroll right": "Cuộn sang phải",
     "Search": "Tìm kiếm",
     "Search and select the user to assign employee status": "Tìm và chọn người dùng để gán trạng thái nhân viên",
     "Search by name or URL...": "Tìm kiếm theo tên hoặc URL...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "Dòng doanh thu bằng 0",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Allow changing price monitor settings and running checks.": "Cho phép thay đổi cài đặt kiểm tra giá và chạy kiểm tra.",
-    "Price monitor settings": "Cài đặt kiểm tra giá"
+    "Zoom": "Zoom"
   }
 }

@@ -15,6 +15,8 @@ import {
 import type { TFunction } from 'i18next'
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   ExternalLink,
   Play,
@@ -23,7 +25,7 @@ import {
   Settings2,
   Share2,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -571,12 +573,170 @@ function PriceCell({
   )
 }
 
+function PriceMonitorPagination({
+  page,
+  pageSize,
+  total,
+  isFetching,
+  onPageChange,
+}: {
+  page: number
+  pageSize: number
+  total: number
+  isFetching: boolean
+  onPageChange: (page: number) => void
+}) {
+  const { t } = useTranslation()
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const start = total > 0 ? (page - 1) * pageSize + 1 : 0
+  const end = Math.min(page * pageSize, total)
+
+  return (
+    <div className='flex flex-wrap items-center justify-between gap-3'>
+      <span className='text-muted-foreground text-sm'>
+        {total > 0
+          ? `${start}-${end} / ${total}`
+          : t('{{total}} items', { total })}
+      </span>
+      <div className='flex items-center gap-2'>
+        <span className='text-muted-foreground hidden text-sm sm:inline'>
+          {t('Page {{current}} of {{total}}', {
+            current: Math.min(page, totalPages),
+            total: totalPages,
+          })}
+        </span>
+        <Button
+          variant='outline'
+          size='sm'
+          disabled={isFetching || page <= 1}
+          onClick={() => onPageChange(page - 1)}
+        >
+          <ChevronLeft data-icon='inline-start' className='size-4' />
+          {t('Previous page')}
+        </Button>
+        <Button
+          variant='outline'
+          size='sm'
+          disabled={isFetching || page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+        >
+          {t('Next page')}
+          <ChevronRight data-icon='inline-end' className='size-4' />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function PriceMonitorHorizontalScrollControls({
+  containerRef,
+  refreshKey,
+}: {
+  containerRef: { current: HTMLDivElement | null }
+  refreshKey: string
+}) {
+  const { t } = useTranslation()
+  const [state, setState] = useState({
+    canScrollLeft: false,
+    canScrollRight: false,
+    progress: 0,
+  })
+
+  const getScrollElement = useCallback(
+    () =>
+      containerRef.current?.querySelector<HTMLElement>(
+        '[data-slot="table-container"]'
+      ) ?? null,
+    [containerRef]
+  )
+
+  const syncScrollState = useCallback(() => {
+    const scrollElement = getScrollElement()
+    if (!scrollElement) {
+      setState({ canScrollLeft: false, canScrollRight: false, progress: 0 })
+      return
+    }
+
+    const maxScrollLeft = Math.max(
+      0,
+      scrollElement.scrollWidth - scrollElement.clientWidth
+    )
+    const scrollLeft = Math.max(0, scrollElement.scrollLeft)
+    setState({
+      canScrollLeft: scrollLeft > 1,
+      canScrollRight: scrollLeft < maxScrollLeft - 1,
+      progress:
+        maxScrollLeft > 0
+          ? Math.round((Math.min(scrollLeft, maxScrollLeft) / maxScrollLeft) * 100)
+          : 0,
+    })
+  }, [getScrollElement])
+
+  useEffect(() => {
+    const scrollElement = getScrollElement()
+    syncScrollState()
+    if (!scrollElement) return
+
+    scrollElement.addEventListener('scroll', syncScrollState, { passive: true })
+    window.addEventListener('resize', syncScrollState)
+    const frame = window.requestAnimationFrame(syncScrollState)
+
+    return () => {
+      scrollElement.removeEventListener('scroll', syncScrollState)
+      window.removeEventListener('resize', syncScrollState)
+      window.cancelAnimationFrame(frame)
+    }
+  }, [getScrollElement, refreshKey, syncScrollState])
+
+  const scrollTable = (direction: -1 | 1) => {
+    const scrollElement = getScrollElement()
+    if (!scrollElement) return
+
+    scrollElement.scrollBy({
+      left: direction * Math.max(360, scrollElement.clientWidth * 0.65),
+      behavior: 'smooth',
+    })
+    window.requestAnimationFrame(syncScrollState)
+  }
+
+  return (
+    <div className='flex flex-wrap items-center justify-between gap-3'>
+      <span className='text-muted-foreground text-sm'>
+        {t('Horizontal position')}: {state.progress}%
+      </span>
+      <div className='flex gap-2'>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          aria-label={t('Scroll left')}
+          disabled={!state.canScrollLeft}
+          onClick={() => scrollTable(-1)}
+        >
+          <ChevronLeft className='size-4' />
+        </Button>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          aria-label={t('Scroll right')}
+          disabled={!state.canScrollRight}
+          onClick={() => scrollTable(1)}
+        >
+          <ChevronRight className='size-4' />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [form, setForm] = useState(DEFAULT_FORM)
   const formInitializedRef = useRef(false)
+  const priceMatrixRef = useRef<HTMLDivElement | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [page, setPage] = useState(1)
@@ -660,6 +820,10 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
   const status = statusQuery.data?.data
   const snapshot = status?.snapshot
   const results = resultsQuery.data?.data
+  const totalResults = results?.total ?? 0
+  const sourceHeadersKey = (results?.source_headers ?? [])
+    .map((header) => header.key)
+    .join('|')
 
   useEffect(() => {
     if (!status?.config || formInitializedRef.current) return
@@ -726,7 +890,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
 
   return (
     <>
-      <SectionPageLayout>
+      <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>{t('Price monitor')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
           <Button
@@ -770,8 +934,8 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               : t('Check now')}
           </Button>
         </SectionPageLayout.Actions>
-        <SectionPageLayout.Content>
-          <div className='flex min-h-0 max-w-full min-w-0 flex-col gap-3'>
+        <SectionPageLayout.Content className='flex flex-col'>
+          <div className='flex h-full min-h-0 max-w-full min-w-0 flex-col gap-3'>
             <div className='grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[repeat(4,minmax(0,1fr))]'>
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
@@ -939,22 +1103,40 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
             </div>
 
             <div
-              className='min-h-[32rem] max-w-full min-w-0 overflow-hidden rounded-lg border'
+              ref={priceMatrixRef}
+              className='flex min-h-0 max-w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border'
               aria-busy={resultsQuery.isFetching}
             >
+              <div className='bg-background shrink-0 border-b'>
+                <div className='border-b p-3'>
+                  <PriceMonitorPagination
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    total={totalResults}
+                    isFetching={resultsQuery.isFetching}
+                    onPageChange={setPage}
+                  />
+                </div>
+                <div className='p-3'>
+                  <PriceMonitorHorizontalScrollControls
+                    containerRef={priceMatrixRef}
+                    refreshKey={sourceHeadersKey}
+                  />
+                </div>
+              </div>
               <Table
                 className='min-w-max'
-                containerClassName='min-h-[32rem] max-w-full overflow-x-auto'
+                containerClassName='min-h-0 flex-1 max-w-full overflow-auto'
               >
                 <TableHeader>
                   <TableRow>
-                    <TableHead className='bg-muted sticky left-0 z-30 w-56 max-w-56 min-w-56'>
+                    <TableHead className='bg-muted sticky top-0 left-0 z-30 w-56 max-w-56 min-w-56'>
                       {t('Model')}
                     </TableHead>
                     {(results?.source_headers ?? []).map((header) => (
                       <TableHead
                         key={header.key}
-                        className={`bg-muted w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'header')}`}
+                        className={`bg-muted sticky top-0 z-30 w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'header')}`}
                       >
                         <span className='block font-semibold break-all'>
                           {sourceLabel(header)}
@@ -1000,27 +1182,6 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                     )}
                 </TableBody>
               </Table>
-            </div>
-            <div className='flex items-center justify-between gap-3'>
-              <span className='text-muted-foreground text-sm'>
-                {t('{{total}} items', { total: results?.total ?? 0 })}
-              </span>
-              <div className='flex gap-2'>
-                <Button
-                  variant='outline'
-                  disabled={page <= 1}
-                  onClick={() => setPage((current) => current - 1)}
-                >
-                  {t('Previous')}
-                </Button>
-                <Button
-                  variant='outline'
-                  disabled={!results || page * PAGE_SIZE >= results.total}
-                  onClick={() => setPage((current) => current + 1)}
-                >
-                  {t('Next')}
-                </Button>
-              </div>
             </div>
           </div>
         </SectionPageLayout.Content>

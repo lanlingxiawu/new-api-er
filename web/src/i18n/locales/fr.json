@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "Fenêtre du débit d'allocation (secondes)",
     "Allow accountFilter parameter": "Autoriser le paramètre accountFilter",
     "Allow balance redemption": "Autoriser le paiement avec le solde",
+    "Allow changing price monitor settings and running checks.": "Autoriser la modification des paramètres de contrôle des prix et l’exécution des contrôles.",
     "Allow changing settings and running actions in this section.": "Autoriser la modification des paramètres et les actions de cette section.",
     "Allow Claude beta query passthrough": "Autoriser le passage des requêtes bêta Claude",
     "Allow clients to query configured ratios via `/api/ratio`.": "Autoriser les clients à interroger les ratios configurés via `/api/ratio`.",
@@ -2952,6 +2953,7 @@
     "Home": "Accueil",
     "Home Page Content": "Contenu de la page d'accueil",
     "Homepage URL": "URL de la page d'accueil",
+    "Horizontal position": "Position horizontale",
     "Hostname or IP of your SMTP provider": "Nom d'hôte ou IP de votre fournisseur SMTP",
     "Hot-path Cache TTLs": "TTL des caches du chemin critique",
     "Hotspot list length": "Longueur de la liste des points chauds",
@@ -4649,6 +4651,7 @@
     "Price ID": "ID du prix",
     "Price mode (USD per 1M tokens)": "Mode de tarification (USD par 1M de jetons)",
     "Price monitor": "Contrôle des prix",
+    "Price monitor settings": "Paramètres du contrôle des prix",
     "Price monitor settings saved": "Paramètres du contrôle des prix enregistrés",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "Échec de la vérification de la source tarifaire",
@@ -5336,6 +5339,8 @@
     "Score Details": "Détail du score",
     "Scored Records": "Enregistrements notés",
     "Scoring Rules": "Règles de notation",
+    "Scroll left": "Faire défiler à gauche",
+    "Scroll right": "Faire défiler à droite",
     "Search": "Rechercher",
     "Search and select the user to assign employee status": "Recherchez et sélectionnez l'utilisateur auquel attribuer le statut d'employé",
     "Search by name or URL...": "Rechercher par nom ou URL...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "Lignes sans revenu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Allow changing price monitor settings and running checks.": "Autoriser la modification des paramètres de contrôle des prix et l’exécution des contrôles.",
-    "Price monitor settings": "Paramètres du contrôle des prix"
+    "Zoom": "Zoom"
   }
 }

@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "Allocation rate window (seconds)",
     "Allow accountFilter parameter": "Allow accountFilter parameter",
     "Allow balance redemption": "Allow balance redemption",
+    "Allow changing price monitor settings and running checks.": "Allow changing price monitor settings and running checks.",
     "Allow changing settings and running actions in this section.": "Allow changing settings and running actions in this section.",
     "Allow Claude beta query passthrough": "Allow Claude beta query passthrough",
     "Allow clients to query configured ratios via `/api/ratio`.": "Allow clients to query configured ratios via `/api/ratio`.",
@@ -2952,6 +2953,7 @@
     "Home": "Home",
     "Home Page Content": "Home Page Content",
     "Homepage URL": "Homepage URL",
+    "Horizontal position": "Horizontal position",
     "Hostname or IP of your SMTP provider": "Hostname or IP of your SMTP provider",
     "Hot-path Cache TTLs": "Hot-path Cache TTLs",
     "Hotspot list length": "Hotspot list length",
@@ -4649,6 +4651,7 @@
     "Price ID": "Price ID",
     "Price mode (USD per 1M tokens)": "Price mode (USD per 1M tokens)",
     "Price monitor": "Price monitor",
+    "Price monitor settings": "Price monitor settings",
     "Price monitor settings saved": "Price monitor settings saved",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "Price source check failed",
@@ -5336,6 +5339,8 @@
     "Score Details": "Score Details",
     "Scored Records": "Scored Records",
     "Scoring Rules": "Scoring Rules",
+    "Scroll left": "Scroll left",
+    "Scroll right": "Scroll right",
     "Search": "Search",
     "Search and select the user to assign employee status": "Search and select the user to assign employee status",
     "Search by name or URL...": "Search by name or URL...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "Zero-revenue rows",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Allow changing price monitor settings and running checks.": "Allow changing price monitor settings and running checks.",
-    "Price monitor settings": "Price monitor settings"
+    "Zoom": "Zoom"
   }
 }

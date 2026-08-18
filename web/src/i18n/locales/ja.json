@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "アロケーション速度の集計窓（秒）",
     "Allow accountFilter parameter": "accountFilter パラメータを許可",
     "Allow balance redemption": "残高での交換を許可",
+    "Allow changing price monitor settings and running checks.": "価格チェック設定の変更とチェックの実行を許可します。",
     "Allow changing settings and running actions in this section.": "このセクションの設定変更と操作の実行を許可します。",
     "Allow Claude beta query passthrough": "Claude ベータクエリのパススルーを許可",
     "Allow clients to query configured ratios via `/api/ratio`.": "クライアントが `/api/ratio` 経由で設定された比率を照会できるようにします。",
@@ -2952,6 +2953,7 @@
     "Home": "ホーム",
     "Home Page Content": "ホームコンテンツ",
     "Homepage URL": "ホームページ URL",
+    "Horizontal position": "横位置",
     "Hostname or IP of your SMTP provider": "SMTP プロバイダーのホスト名または IP",
     "Hot-path Cache TTLs": "ホットパスキャッシュのTTL",
     "Hotspot list length": "ホットスポット一覧の件数",
@@ -4649,6 +4651,7 @@
     "Price ID": "価格 ID",
     "Price mode (USD per 1M tokens)": "価格モード (100万トークンあたりのUSD)",
     "Price monitor": "価格チェック",
+    "Price monitor settings": "価格チェック設定",
     "Price monitor settings saved": "価格チェック設定を保存しました",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92",
     "Price source check failed": "価格ソースの確認に失敗しました",
@@ -5336,6 +5339,8 @@
     "Score Details": "採点明細",
     "Scored Records": "採点済みレコード",
     "Scoring Rules": "採点ルール",
+    "Scroll left": "左へスクロール",
+    "Scroll right": "右へスクロール",
     "Search": "検索",
     "Search and select the user to assign employee status": "従業員にするユーザーを検索して選択してください",
     "Search by name or URL...": "名前またはURLで検索...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "ゼロ収益行",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム",
-    "Allow changing price monitor settings and running checks.": "価格チェック設定の変更とチェックの実行を許可します。",
-    "Price monitor settings": "価格チェック設定"
+    "Zoom": "ズーム"
   }
 }

@@ -462,6 +462,7 @@
     "Allocation rate window (seconds)": "分配速率窗口（秒）",
     "Allow accountFilter parameter": "允许 accountFilter 参数",
     "Allow balance redemption": "允许余额兑换",
+    "Allow changing price monitor settings and running checks.": "允许修改价格巡检设置并执行巡检。",
     "Allow changing settings and running actions in this section.": "允许修改此分区的设置并执行相关操作。",
     "Allow Claude beta query passthrough": "允许 Claude beta 查询透传",
     "Allow clients to query configured ratios via `/api/ratio`.": "允许客户端通过 `/api/ratio` 查询配置的比例。",
@@ -2952,6 +2953,7 @@
     "Home": "主页",
     "Home Page Content": "首页内容",
     "Homepage URL": "主页 URL",
+    "Horizontal position": "横向位置",
     "Hostname or IP of your SMTP provider": "您的 SMTP 提供商的主机名或 IP",
     "Hot-path Cache TTLs": "热路径缓存过期时间",
     "Hotspot list length": "热点榜单长度",
@@ -4649,6 +4651,7 @@
     "Price ID": "价格 ID",
     "Price mode (USD per 1M tokens)": "价格模式（每 100 万个 token 的美元价格）",
     "Price monitor": "价格巡检",
+    "Price monitor settings": "价格巡检设置",
     "Price monitor settings saved": "价格巡检设置已保存",
     "Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92": "每个额度单位对应的该币种金额。例：1 单位售价 $1 则填 1.0；售价 €0.92 则填 0.92",
     "Price source check failed": "价格来源检查失败",
@@ -5336,6 +5339,8 @@
     "Score Details": "评分明细",
     "Scored Records": "已评分记录",
     "Scoring Rules": "评分规则",
+    "Scroll left": "向左滚动",
+    "Scroll right": "向右滚动",
     "Search": "搜索",
     "Search and select the user to assign employee status": "搜索并选择要设为员工的用户",
     "Search by name or URL...": "按名称或 URL 搜索...",
@@ -6846,8 +6851,6 @@
     "Zero-revenue rows": "零收入行",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "Zoom",
-    "Allow changing price monitor settings and running checks.": "允许修改价格巡检设置并执行巡检。",
-    "Price monitor settings": "价格巡检设置"
+    "Zoom": "Zoom"
   }
 }
