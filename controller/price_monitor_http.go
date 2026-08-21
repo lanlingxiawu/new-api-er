@@ -77,24 +77,29 @@ func buildPriceMonitorShareSummary(snapshot PriceMonitorSnapshot) priceMonitorSh
 	}
 }
 
+func priceMonitorStatusSnapshot(snapshot PriceMonitorSnapshot) gin.H {
+	return gin.H{
+		"checked_at":              snapshot.CheckedAt,
+		"status":                  snapshot.Status,
+		"source_total":            snapshot.SourceTotal,
+		"source_ok":               snapshot.SourceOK,
+		"source_err":              snapshot.SourceError,
+		"model_count":             snapshot.ModelCount,
+		"item_count":              snapshot.ItemCount,
+		"comparison_model_counts": snapshot.ComparisonModelCounts,
+		"access_password":         snapshot.AccessPassword,
+		"password_expire_at":      snapshot.PasswordExpireAt,
+	}
+}
+
 func GetPriceMonitorStatus(c *gin.Context) {
 	snapshot := getPriceMonitorStore().Get()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"config": price_monitor_setting.GetPriceMonitorSetting().Normalized(),
-			"snapshot": gin.H{
-				"checked_at":         snapshot.CheckedAt,
-				"status":             snapshot.Status,
-				"source_total":       snapshot.SourceTotal,
-				"source_ok":          snapshot.SourceOK,
-				"source_err":         snapshot.SourceError,
-				"model_count":        snapshot.ModelCount,
-				"item_count":         snapshot.ItemCount,
-				"access_password":    snapshot.AccessPassword,
-				"password_expire_at": snapshot.PasswordExpireAt,
-			},
+			"config":             price_monitor_setting.GetPriceMonitorSetting().Normalized(),
+			"snapshot":           priceMonitorStatusSnapshot(snapshot),
 			"running":            priceMonitorRunning.Load(),
 			"last_attempt_at":    priceMonitorLastAttempt.Load(),
 			"last_attempt_error": getPriceMonitorRuntimeError(),

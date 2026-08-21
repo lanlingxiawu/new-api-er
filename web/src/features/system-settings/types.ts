@@ -87,7 +87,7 @@ export type PriceMonitorPriceCell = {
 export type PriceMonitorSourceHeader = {
   key: string
   name: string
-  type: 'platform' | 'official' | 'channel'
+  type: 'platform' | 'official' | 'models_dev' | 'channel'
   api_url?: string
 }
 
@@ -116,6 +116,13 @@ export type PriceMonitorStatusResponse = {
       source_err: number
       model_count: number
       item_count: number
+      comparison_model_counts?: {
+        platform_official: number
+        platform_models_dev: number
+        platform_channel: number
+        channel_official: number
+        channel_models_dev: number
+      }
       access_password: string
       password_expire_at: number
     }

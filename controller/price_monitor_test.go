@@ -115,6 +115,19 @@ func TestPriceMonitorSourceLabelsDisambiguateDuplicateChannelNames(t *testing.T)
 	require.Equal(t, "同名渠道（2）", headers[2].Name)
 }
 
+func TestPriceMonitorSourceHeadersKeepModelsDevDistinctFromOfficial(t *testing.T) {
+	headers := buildPriceMonitorSourceHeaders(
+		[]pricingSource{{name: officialRatioPresetName}, {name: modelsDevPresetName}},
+		map[string]string{officialRatioPresetName: priceSourceOfficial, modelsDevPresetName: priceSourceModelsDev},
+	)
+
+	require.Equal(t, []PriceMonitorSourceHeader{
+		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey},
+		{Key: officialRatioPresetName, Name: "官方价格", Type: priceSourceOfficial},
+		{Key: modelsDevPresetName, Name: "models.dev 价格", Type: priceSourceModelsDev},
+	}, headers)
+}
+
 func TestBuildPriceMonitorMatrixOnlyComparesEnabledChannelModels(t *testing.T) {
 	localData := map[string]any{
 		"model_ratio":      map[string]float64{"model-a": 1, "model-b": 1},
@@ -378,10 +391,10 @@ func TestQueryPriceMonitorMatrixKeepsColumnsUsedOutsideCurrentPage(t *testing.T)
 	snapshot.MatrixItems[1].Prices["channel-b"] = PriceMonitorPriceCell{Different: true}
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Page: 1, PageSize: 1})
 
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2], snapshot.SourceHeaders[3]}, result.SourceHeaders)
+	require.Equal(t, snapshot.SourceHeaders, result.SourceHeaders)
 }
 
-func TestQueryPriceMonitorMatrixAllOmitsNonDifferentSources(t *testing.T) {
+func TestQueryPriceMonitorMatrixAllKeepsMatchingOfficialSource(t *testing.T) {
 	snapshot := PriceMonitorSnapshot{
 		SourceHeaders: []PriceMonitorSourceHeader{
 			{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
@@ -393,8 +406,8 @@ func TestQueryPriceMonitorMatrixAllOmitsNonDifferentSources(t *testing.T) {
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Source: priceSourceChannel, Page: 1, PageSize: 20})
 
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2]}, result.SourceHeaders)
-	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "channel": {Different: true}}, result.Items[0].Prices)
+	require.Equal(t, snapshot.SourceHeaders, result.SourceHeaders)
+	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: {}, "official": {}, "channel": {Different: true}}, result.Items[0].Prices)
 }
 
 func TestQueryPriceMonitorMatrixSelectsExactChannelColumnsAndReturnsModels(t *testing.T) {
@@ -417,7 +430,7 @@ func TestQueryPriceMonitorMatrixSelectsExactChannelColumnsAndReturnsModels(t *te
 	})
 
 	require.Equal(t, []string{"alpha", "beta"}, result.AvailableModels)
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[3]}, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[1], snapshot.SourceHeaders[3]}, result.SourceHeaders)
 	require.Equal(t, []string{"channel-b"}, result.AppliedFilters.SourceKeys)
 	require.Equal(t, "all", result.AppliedFilters.Comparison)
 	require.Len(t, result.Items, 1)
@@ -478,9 +491,9 @@ func TestQueryPriceMonitorMatrixComparisonFilters(t *testing.T) {
 		comparison string
 		models     []string
 	}{
-		{"channel_official", []string{"billing-difference", "channel-missing", "price-difference"}},
-		{"channel_platform", []string{"billing-difference", "channel-missing", "price-difference"}},
-		{"platform_official", []string{"official-missing", "price-difference"}},
+		{"channel_official", []string{"billing-difference", "price-difference"}},
+		{"channel_platform", []string{"billing-difference", "price-difference"}},
+		{"platform_official", []string{"price-difference"}},
 		{"input", []string{"price-difference"}},
 		{"output", []string{"price-difference"}},
 		{"cache", []string{"price-difference"}},
@@ -499,6 +512,188 @@ func TestQueryPriceMonitorMatrixComparisonFilters(t *testing.T) {
 			require.ElementsMatch(t, test.models, models)
 		})
 	}
+}
+
+func TestPriceMonitorOfficialComparisonsExcludeModelsMissingOfficialPricing(t *testing.T) {
+	snapshot := PriceMonitorSnapshot{
+		SourceHeaders: []PriceMonitorSourceHeader{
+			{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+			{Key: "official", Type: priceSourceOfficial},
+			{Key: "channel", Type: priceSourceChannel},
+		},
+		MatrixItems: []PriceMonitorMatrixItem{{
+			Model: "official-missing",
+			Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: {Mode: priceMonitorModeToken, Input: floatPointer(1)},
+				"official":              {Different: true, UnavailableReason: priceMonitorUnavailableMissing},
+				"channel":               {Mode: priceMonitorModeToken, Input: floatPointer(2), Different: true},
+			},
+		}},
+	}
+
+	for _, comparison := range []string{"platform_official", "channel_official"} {
+		result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: comparison, Page: 1, PageSize: 20})
+		require.Empty(t, result.Items, comparison)
+		require.Zero(t, result.Total, comparison)
+	}
+
+	all := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: "all", Page: 1, PageSize: 20})
+	officialMissing := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: "official_missing", Page: 1, PageSize: 20})
+	require.Len(t, all.Items, 1, "the valid platform-to-channel difference still belongs in all differences")
+	require.NotContains(t, all.Items[0].Prices, "official", "the missing official cell must not be treated as a difference")
+	require.Len(t, officialMissing.Items, 1)
+}
+
+func TestPriceMonitorMissingChannelPricingDoesNotParticipateInComparisons(t *testing.T) {
+	snapshot := PriceMonitorSnapshot{
+		SourceHeaders: []PriceMonitorSourceHeader{
+			{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+			{Key: "official", Type: priceSourceOfficial},
+			{Key: "channel", Type: priceSourceChannel},
+		},
+		MatrixItems: []PriceMonitorMatrixItem{{
+			Model: "channel-missing",
+			Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: {Mode: priceMonitorModeToken, Input: floatPointer(1)},
+				"official":              {Mode: priceMonitorModeToken, Input: floatPointer(1)},
+				"channel":               {Different: true, UnavailableReason: priceMonitorUnavailableMissing},
+			},
+		}},
+	}
+
+	for _, comparison := range []string{"all", "channel_platform", "channel_official", "input", "output", "cache", "billing"} {
+		result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: comparison, Page: 1, PageSize: 20})
+		require.Empty(t, result.Items, comparison)
+		require.Zero(t, result.Total, comparison)
+	}
+
+	channelMissing := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: "channel_missing", Page: 1, PageSize: 20})
+	require.Len(t, channelMissing.Items, 1)
+}
+
+func TestCountPriceMonitorComparisonModels(t *testing.T) {
+	platform := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(1)}
+	officialDifferent := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(2), Different: true, InputDifferent: true}
+	channelDifferent := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(3), Different: true, InputDifferent: true}
+	headers := []PriceMonitorSourceHeader{
+		{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+		{Key: "official", Type: priceSourceOfficial},
+		{Key: "channel-a", Type: priceSourceChannel},
+		{Key: "channel-b", Type: priceSourceChannel},
+	}
+	items := []PriceMonitorMatrixItem{
+		{Model: "all-relations", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              officialDifferent,
+			"channel-a":             channelDifferent,
+			"channel-b":             officialDifferent,
+		}},
+		{Model: "multiple-channels", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              platform,
+			"channel-a":             channelDifferent,
+			"channel-b":             channelDifferent,
+		}},
+		{Model: "official-only", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              officialDifferent,
+		}},
+		{Model: "official-missing", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              {Different: true, UnavailableReason: priceMonitorUnavailableMissing},
+			"channel-a":             channelDifferent,
+		}},
+		{Model: "ignored-sources", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              {UnavailableReason: priceMonitorUnavailableSourceFailed},
+			"channel-a":             {UnavailableReason: priceMonitorUnavailablePlaceholder},
+		}},
+		{Model: "channel-missing", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: platform,
+			"official":              platform,
+			"channel-a":             {Different: true, UnavailableReason: priceMonitorUnavailableMissing},
+		}},
+	}
+
+	require.Equal(t, PriceMonitorComparisonModelCounts{
+		PlatformOfficial: 2,
+		PlatformChannel:  3,
+		ChannelOfficial:  2,
+	}, countPriceMonitorComparisonModels(headers, items))
+	require.Zero(t, countPriceMonitorComparisonModels(headers, nil))
+}
+
+func TestPriceMonitorOfficialAndModelsDevComparisonsAreIndependent(t *testing.T) {
+	platform := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(1)}
+	officialDifferent := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(2), Different: true, InputDifferent: true}
+	modelsDevDifferent := PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(3), Different: true, InputDifferent: true}
+	missing := PriceMonitorPriceCell{Different: true, UnavailableReason: priceMonitorUnavailableMissing}
+	headers := []PriceMonitorSourceHeader{
+		{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+		{Key: "official", Type: priceSourceOfficial},
+		{Key: "models-dev", Type: priceSourceModelsDev},
+		{Key: "channel", Type: priceSourceChannel},
+	}
+	snapshot := PriceMonitorSnapshot{
+		SourceHeaders: headers,
+		MatrixItems: []PriceMonitorMatrixItem{
+			{Model: "official-different", Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: platform,
+				"official":              officialDifferent,
+				"models-dev":            platform,
+				"channel":               platform,
+			}},
+			{Model: "models-dev-different", Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: platform,
+				"official":              platform,
+				"models-dev":            modelsDevDifferent,
+				"channel":               platform,
+			}},
+			{Model: "both-missing", Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: platform,
+				"official":              missing,
+				"models-dev":            missing,
+			}},
+		},
+	}
+
+	require.Equal(t, PriceMonitorComparisonModelCounts{
+		PlatformOfficial:  1,
+		PlatformModelsDev: 1,
+		ChannelOfficial:   1,
+		ChannelModelsDev:  1,
+	}, countPriceMonitorComparisonModels(headers, snapshot.MatrixItems))
+
+	tests := []struct {
+		comparison string
+		models     []string
+		headers    []PriceMonitorSourceHeader
+	}{
+		{"platform_official", []string{"official-different"}, headers[0:2]},
+		{"platform_models_dev", []string{"models-dev-different"}, []PriceMonitorSourceHeader{headers[0], headers[2]}},
+		{"channel_official", []string{"official-different"}, []PriceMonitorSourceHeader{headers[1], headers[3]}},
+		{"channel_models_dev", []string{"models-dev-different"}, headers[2:4]},
+		{"official_missing", []string{"both-missing"}, headers[1:2]},
+		{"models_dev_missing", []string{"both-missing"}, headers[2:3]},
+	}
+	for _, test := range tests {
+		t.Run(test.comparison, func(t *testing.T) {
+			result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: test.comparison, Page: 1, PageSize: 20})
+			models := make([]string, 0, len(result.Items))
+			for _, item := range result.Items {
+				models = append(models, item.Model)
+			}
+			require.Equal(t, test.models, models)
+			require.Equal(t, test.headers, result.SourceHeaders)
+		})
+	}
+}
+
+func TestPriceMonitorStatusSnapshotIncludesComparisonModelCounts(t *testing.T) {
+	counts := PriceMonitorComparisonModelCounts{PlatformOfficial: 1, PlatformModelsDev: 2, PlatformChannel: 3, ChannelOfficial: 4, ChannelModelsDev: 5}
+	status := priceMonitorStatusSnapshot(PriceMonitorSnapshot{ComparisonModelCounts: counts})
+
+	require.Equal(t, counts, status["comparison_model_counts"])
 }
 
 func TestQueryPriceMonitorMatrixAllExcludesIgnoredSources(t *testing.T) {
@@ -526,8 +721,8 @@ func TestQueryPriceMonitorMatrixAllExcludesIgnoredSources(t *testing.T) {
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: "all", Page: 1, PageSize: 20})
 
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[4]}, result.SourceHeaders)
-	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform, "channel": channelDifferent}, result.Items[0].Prices)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[1], snapshot.SourceHeaders[4]}, result.SourceHeaders)
+	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform, "official": platform, "channel": channelDifferent}, result.Items[0].Prices)
 }
 
 func TestPriceMonitorPriceCellsEqualUsesNormalizedPrices(t *testing.T) {
@@ -603,7 +798,7 @@ func TestQueryPriceMonitorMatrixComparisonHeaderMappings(t *testing.T) {
 		comparison string
 		headers    []PriceMonitorSourceHeader
 	}{
-		{"platform_official", snapshot.SourceHeaders[:2]},
+		{"platform_official", []PriceMonitorSourceHeader{}},
 		{"official_missing", snapshot.SourceHeaders[1:2]},
 		{"channel_missing", snapshot.SourceHeaders[2:3]},
 		{"source_failed", snapshot.SourceHeaders[2:3]},
@@ -686,7 +881,13 @@ func TestPriceMonitorPageAvailabilityContract(t *testing.T) {
 	require.Contains(t, priceMonitorHTML, `prefers-reduced-motion:reduce`)
 	require.Contains(t, priceMonitorHTML, `Token 用量价格统一按百万计算`)
 	require.Contains(t, priceMonitorHTML, `官方价格预设未收录此模型`)
+	require.Contains(t, priceMonitorHTML, `models.dev 价格预设未收录此模型`)
 	require.Contains(t, priceMonitorHTML, `该渠道价格接口未提供此模型`)
+	require.Contains(t, priceMonitorHTML, `data-comparison="platform_models_dev"`)
+	require.Contains(t, priceMonitorHTML, `data-comparison="channel_models_dev"`)
+	require.Contains(t, priceMonitorHTML, `models_dev_missing`)
+	require.Contains(t, priceMonitorHTML, `header.type==='models_dev'`)
+	require.Contains(t, priceMonitorHTML, `fixed-source-2`)
 	require.Contains(t, priceMonitorHTML, `仅提供输入价格`)
 	require.Contains(t, priceMonitorHTML, `价格来源检查失败，请等待下次巡检`)
 	require.Contains(t, priceMonitorHTML, `该渠道未启用此模型，不参与对比`)
@@ -732,7 +933,7 @@ func TestQueryPriceMonitorMatrixFiltersChannelByAPIURLAndKeepsOfficial(t *testin
 
 	result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Source: "a.example", Page: 1, PageSize: 20})
 
-	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[2]}, result.SourceHeaders)
+	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[0], snapshot.SourceHeaders[1], snapshot.SourceHeaders[2]}, result.SourceHeaders)
 	require.Equal(t, snapshot.SourceHeaders, result.AvailableSourceHeaders)
 	require.NotContains(t, result.Items[0].Prices, "channel-b")
 }
@@ -759,16 +960,18 @@ func TestPriceMonitorPageSourceNavigationContract(t *testing.T) {
 }
 
 func TestPriceMonitorPageShowsChannelAPIURLBelowName(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `const title=header.name,subtitle=header.type==='platform'?'平台基准':header.type==='official'?'必须对比':(header.api_url||'')`)
+	require.Contains(t, priceMonitorHTML, `const title=header.name,subtitle=header.type==='platform'?'平台基准':header.type==='official'?'必须对比':header.type==='models_dev'?'可选对比':(header.api_url||'')`)
 	require.NotContains(t, priceMonitorHTML, `const title=header.type==='channel'?(header.api_url||header.name):header.name`)
 }
 
 func TestPriceMonitorPageFilterAndStickyOfficialContract(t *testing.T) {
 	require.Contains(t, priceMonitorHTML, `th.fixed-source-0,td.fixed-source-0`)
 	require.Contains(t, priceMonitorHTML, `th.fixed-source-1,td.fixed-source-1`)
+	require.Contains(t, priceMonitorHTML, `th.fixed-source-2,td.fixed-source-2`)
 	require.Contains(t, priceMonitorHTML, `fixedClasses[header.key]=header.type+' fixed-source-'+fixedIndex`)
 	require.Contains(t, priceMonitorHTML, `left:230px`)
 	require.Contains(t, priceMonitorHTML, `left:450px`)
+	require.Contains(t, priceMonitorHTML, `left:670px`)
 	require.Contains(t, priceMonitorHTML, `id="model-suggestions"`)
 	require.Contains(t, priceMonitorHTML, `id="source-options"`)
 	require.Contains(t, priceMonitorHTML, `data-comparison="channel_official"`)
@@ -856,7 +1059,7 @@ func TestPriceMonitorPageUsesMobileInfiniteLoading(t *testing.T) {
 }
 
 func TestPriceMonitorPagePreservesRenderedTableWhileFiltering(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `comparison='all',hasRendered=false,availableModels=[]`)
+	require.Contains(t, priceMonitorHTML, `comparison='all',hasRendered=false,hasModelsDev=false,availableModels=[]`)
 	require.Contains(t, priceMonitorHTML, `const preserveTable=hasRendered`)
 	require.Contains(t, priceMonitorHTML, `$('table-scroll').classList.toggle('is-loading',preserveTable)`)
 	require.Contains(t, priceMonitorHTML, `hasRendered=true`)
@@ -911,7 +1114,15 @@ func TestBuildPriceMonitorShareSummaryUsesRelativeURLWhenServerAddressEmpty(t *t
 func TestPriceMonitorSnapshotStoreRoundTripAndCorruptFileFallback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "snapshot.json")
 	store := newPriceMonitorSnapshotStore(path)
-	want := PriceMonitorSnapshot{CheckedAt: 123, Status: "success", AccessPassword: "secret", Items: []PriceMonitorItem{{Model: "m", Field: "model_ratio"}}, SourceHeaders: []PriceMonitorSourceHeader{}, MatrixItems: []PriceMonitorMatrixItem{}}
+	want := PriceMonitorSnapshot{
+		CheckedAt:             123,
+		Status:                "success",
+		ComparisonModelCounts: PriceMonitorComparisonModelCounts{PlatformOfficial: 1, PlatformChannel: 2, ChannelOfficial: 3},
+		AccessPassword:        "secret",
+		Items:                 []PriceMonitorItem{{Model: "m", Field: "model_ratio"}},
+		SourceHeaders:         []PriceMonitorSourceHeader{},
+		MatrixItems:           []PriceMonitorMatrixItem{},
+	}
 	require.NoError(t, store.Save(want))
 	require.Equal(t, want, store.Get())
 

@@ -22,11 +22,12 @@ import (
 const (
 	priceSourceChannel                  = "channel"
 	priceSourceOfficial                 = "official"
+	priceSourceModelsDev                = "models_dev"
 	priceMonitorPlatformKey             = "platform"
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 9
+	priceMonitorMatrixVersion           = 12
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -97,21 +98,30 @@ type PriceMonitorMatrixItem struct {
 	Prices map[string]PriceMonitorPriceCell `json:"prices"`
 }
 
+type PriceMonitorComparisonModelCounts struct {
+	PlatformOfficial  int `json:"platform_official"`
+	PlatformModelsDev int `json:"platform_models_dev"`
+	PlatformChannel   int `json:"platform_channel"`
+	ChannelOfficial   int `json:"channel_official"`
+	ChannelModelsDev  int `json:"channel_models_dev"`
+}
+
 type PriceMonitorSnapshot struct {
-	CheckedAt        int64                      `json:"checked_at"`
-	Status           string                     `json:"status"`
-	SourceTotal      int                        `json:"source_total"`
-	SourceOK         int                        `json:"source_ok"`
-	SourceError      int                        `json:"source_err"`
-	ModelCount       int                        `json:"model_count"`
-	ItemCount        int                        `json:"item_count"`
-	AccessPassword   string                     `json:"access_password"`
-	PasswordExpireAt int64                      `json:"password_expire_at"`
-	Message          string                     `json:"message,omitempty"`
-	Items            []PriceMonitorItem         `json:"items"`
-	SourceHeaders    []PriceMonitorSourceHeader `json:"source_headers"`
-	MatrixItems      []PriceMonitorMatrixItem   `json:"matrix_items"`
-	MatrixVersion    int                        `json:"matrix_version"`
+	CheckedAt             int64                             `json:"checked_at"`
+	Status                string                            `json:"status"`
+	SourceTotal           int                               `json:"source_total"`
+	SourceOK              int                               `json:"source_ok"`
+	SourceError           int                               `json:"source_err"`
+	ModelCount            int                               `json:"model_count"`
+	ItemCount             int                               `json:"item_count"`
+	ComparisonModelCounts PriceMonitorComparisonModelCounts `json:"comparison_model_counts"`
+	AccessPassword        string                            `json:"access_password"`
+	PasswordExpireAt      int64                             `json:"password_expire_at"`
+	Message               string                            `json:"message,omitempty"`
+	Items                 []PriceMonitorItem                `json:"items"`
+	SourceHeaders         []PriceMonitorSourceHeader        `json:"source_headers"`
+	MatrixItems           []PriceMonitorMatrixItem          `json:"matrix_items"`
+	MatrixVersion         int                               `json:"matrix_version"`
 }
 
 type priceMonitorSnapshotStore struct {
@@ -260,7 +270,7 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 	sourceFilter := strings.ToLower(strings.TrimSpace(query.Source))
 	comparison := strings.ToLower(strings.TrimSpace(query.Comparison))
 	switch comparison {
-	case "channel_official", "channel_platform", "platform_official", "input", "output", "cache", "billing", "official_missing", "channel_missing", "source_failed":
+	case "channel_official", "channel_models_dev", "channel_platform", "platform_official", "platform_models_dev", "input", "output", "cache", "billing", "official_missing", "models_dev_missing", "channel_missing", "source_failed":
 	default:
 		comparison = "all"
 	}
@@ -337,10 +347,14 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 	displayKeys := make(map[string]struct{})
 	if comparison == "all" {
 		hasComparableDifference := false
+		matchingReferenceKeys := make([]string, 0, 2)
 		for _, header := range headers {
 			cell, ok := item.Prices[header.Key]
 			if !ok || header.Type == priceMonitorPlatformKey {
 				continue
+			}
+			if (header.Type == priceSourceOfficial || header.Type == priceSourceModelsDev) && cell.UnavailableReason == "" && !cell.Different {
+				matchingReferenceKeys = append(matchingReferenceKeys, header.Key)
 			}
 			if priceMonitorCellHasComparableDifference(cell) {
 				displayKeys[header.Key] = struct{}{}
@@ -349,29 +363,45 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 		}
 		if hasComparableDifference {
 			displayKeys[priceMonitorPlatformKey] = struct{}{}
+			for _, key := range matchingReferenceKeys {
+				displayKeys[key] = struct{}{}
+			}
 		}
 		return hasComparableDifference, displayKeys
 	}
 	var official *PriceMonitorPriceCell
 	officialKey := ""
+	var modelsDev *PriceMonitorPriceCell
+	modelsDevKey := ""
 	for _, header := range headers {
 		cell, ok := item.Prices[header.Key]
-		if ok && header.Type == priceSourceOfficial {
+		if !ok {
+			continue
+		}
+		switch header.Type {
+		case priceSourceOfficial:
 			copy := cell
 			official = &copy
 			officialKey = header.Key
-			break
+		case priceSourceModelsDev:
+			copy := cell
+			modelsDev = &copy
+			modelsDevKey = header.Key
 		}
 	}
 	switch comparison {
-	case "channel_official":
-		if official == nil || priceMonitorComparisonIgnores(*official) {
+	case "channel_official", "channel_models_dev":
+		reference, referenceKey := official, officialKey
+		if comparison == "channel_models_dev" {
+			reference, referenceKey = modelsDev, modelsDevKey
+		}
+		if reference == nil || priceMonitorComparisonIgnores(*reference) {
 			return false, displayKeys
 		}
 		for _, header := range headers {
 			channel, ok := item.Prices[header.Key]
-			if header.Type == priceSourceChannel && ok && !priceMonitorComparisonIgnores(channel) && !priceMonitorPriceCellsEqual(*official, channel) {
-				displayKeys[officialKey] = struct{}{}
+			if header.Type == priceSourceChannel && ok && !priceMonitorComparisonIgnores(channel) && !priceMonitorPriceCellsEqual(*reference, channel) {
+				displayKeys[referenceKey] = struct{}{}
 				displayKeys[header.Key] = struct{}{}
 			}
 		}
@@ -383,10 +413,14 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 				displayKeys[header.Key] = struct{}{}
 			}
 		}
-	case "platform_official":
-		if official != nil && !priceMonitorComparisonIgnores(*official) && official.Different {
+	case "platform_official", "platform_models_dev":
+		reference, referenceKey := official, officialKey
+		if comparison == "platform_models_dev" {
+			reference, referenceKey = modelsDev, modelsDevKey
+		}
+		if reference != nil && !priceMonitorComparisonIgnores(*reference) && reference.Different {
 			displayKeys[priceMonitorPlatformKey] = struct{}{}
-			displayKeys[officialKey] = struct{}{}
+			displayKeys[referenceKey] = struct{}{}
 		}
 	case "input":
 		for _, header := range headers {
@@ -426,9 +460,13 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 				displayKeys[header.Key] = struct{}{}
 			}
 		}
-	case "official_missing":
-		if official != nil && official.UnavailableReason == priceMonitorUnavailableMissing {
-			displayKeys[officialKey] = struct{}{}
+	case "official_missing", "models_dev_missing":
+		reference, referenceKey := official, officialKey
+		if comparison == "models_dev_missing" {
+			reference, referenceKey = modelsDev, modelsDevKey
+		}
+		if reference != nil && reference.UnavailableReason == priceMonitorUnavailableMissing {
+			displayKeys[referenceKey] = struct{}{}
 		}
 	case "channel_missing":
 		for _, header := range headers {
@@ -448,16 +486,35 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 	return len(displayKeys) > 0, displayKeys
 }
 
+func countPriceMonitorComparisonModels(headers []PriceMonitorSourceHeader, items []PriceMonitorMatrixItem) PriceMonitorComparisonModelCounts {
+	counts := PriceMonitorComparisonModelCounts{}
+	for _, item := range items {
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "platform_official"); matched {
+			counts.PlatformOfficial++
+		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "platform_models_dev"); matched {
+			counts.PlatformModelsDev++
+		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "channel_platform"); matched {
+			counts.PlatformChannel++
+		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "channel_official"); matched {
+			counts.ChannelOfficial++
+		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "channel_models_dev"); matched {
+			counts.ChannelModelsDev++
+		}
+	}
+	return counts
+}
+
 func priceMonitorComparisonIgnores(cell PriceMonitorPriceCell) bool {
-	return cell.UnavailableReason == priceMonitorUnavailablePlaceholder || cell.UnavailableReason == priceMonitorUnavailableSourceFailed
+	return cell.UnavailableReason != ""
 }
 
 func priceMonitorCellHasComparableDifference(cell PriceMonitorPriceCell) bool {
 	if priceMonitorComparisonIgnores(cell) {
 		return false
-	}
-	if cell.UnavailableReason != "" {
-		return cell.UnavailableReason == priceMonitorUnavailableMissing
 	}
 	return cell.Different
 }
@@ -609,7 +666,18 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 	sort.Slice(sources, func(i, j int) bool {
 		leftType, rightType := sourceTypes[sources[i].name], sourceTypes[sources[j].name]
 		if leftType != rightType {
-			return leftType == priceSourceOfficial
+			leftRank, rightRank := 2, 2
+			if leftType == priceSourceOfficial {
+				leftRank = 0
+			} else if leftType == priceSourceModelsDev {
+				leftRank = 1
+			}
+			if rightType == priceSourceOfficial {
+				rightRank = 0
+			} else if rightType == priceSourceModelsDev {
+				rightRank = 1
+			}
+			return leftRank < rightRank
 		}
 		return sources[i].name < sources[j].name
 	})
@@ -691,10 +759,10 @@ func priceMonitorDisplayURL(raw string) string {
 
 func priceMonitorSourceLabel(name, sourceType string) string {
 	if sourceType == priceSourceOfficial {
-		if strings.Contains(strings.ToLower(name), "models.dev") {
-			return "models.dev 官方价格"
-		}
 		return "官方价格"
+	}
+	if sourceType == priceSourceModelsDev {
+		return "models.dev 价格"
 	}
 	trimmed := strings.TrimSpace(name)
 	open := strings.LastIndex(trimmed, "(")

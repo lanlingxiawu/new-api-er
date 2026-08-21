@@ -164,7 +164,7 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 	if setting.IncludeModelsDev {
 		upstream := dto.UpstreamDTO{ID: modelsDevPresetID, Name: modelsDevPresetName, BaseURL: modelsDevPresetBaseURL, Endpoint: modelsDevPresetBaseURL + modelsDevPath}
 		upstreams = append(upstreams, upstream)
-		sourceTypes[pricingSourceDisplayName(upstream)] = priceSourceOfficial
+		sourceTypes[pricingSourceDisplayName(upstream)] = priceSourceModelsDev
 	}
 	if len(upstreams) == 0 {
 		setPriceMonitorRuntimeError("no enabled pricing sources are available")
@@ -212,20 +212,22 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 	if sourceOK < len(upstreams) {
 		status = "partial"
 	}
+	comparisonModelCounts := countPriceMonitorComparisonModels(sourceHeaders, matrixItems)
 	snapshot := PriceMonitorSnapshot{
-		CheckedAt:        checkedAt.Unix(),
-		Status:           status,
-		SourceTotal:      len(upstreams),
-		SourceOK:         sourceOK,
-		SourceError:      len(upstreams) - sourceOK,
-		ModelCount:       len(matrixItems),
-		ItemCount:        len(items),
-		AccessPassword:   password,
-		PasswordExpireAt: checkedAt.Add(time.Duration(setting.IntervalMinutes) * time.Minute).Unix(),
-		Items:            items,
-		SourceHeaders:    sourceHeaders,
-		MatrixItems:      matrixItems,
-		MatrixVersion:    priceMonitorMatrixVersion,
+		CheckedAt:             checkedAt.Unix(),
+		Status:                status,
+		SourceTotal:           len(upstreams),
+		SourceOK:              sourceOK,
+		SourceError:           len(upstreams) - sourceOK,
+		ModelCount:            len(matrixItems),
+		ItemCount:             len(items),
+		ComparisonModelCounts: comparisonModelCounts,
+		AccessPassword:        password,
+		PasswordExpireAt:      checkedAt.Add(time.Duration(setting.IntervalMinutes) * time.Minute).Unix(),
+		Items:                 items,
+		SourceHeaders:         sourceHeaders,
+		MatrixItems:           matrixItems,
+		MatrixVersion:         priceMonitorMatrixVersion,
 	}
 	if err := getPriceMonitorStore().Save(snapshot); err != nil {
 		setPriceMonitorRuntimeError("failed to save the latest price check")

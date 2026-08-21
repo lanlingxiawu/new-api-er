@@ -105,8 +105,10 @@ const PAGE_SIZE = 20
 const primaryComparisonFilters = [
   ['all', 'All differences'],
   ['channel_official', 'Channel vs official'],
+  ['channel_models_dev', 'Channel vs models.dev'],
   ['channel_platform', 'Channel vs platform'],
   ['platform_official', 'Platform vs official'],
+  ['platform_models_dev', 'Platform vs models.dev'],
 ] as const
 
 const additionalComparisonFilters = [
@@ -115,6 +117,7 @@ const additionalComparisonFilters = [
   ['cache', 'Cache price differs'],
   ['billing', 'Billing differs'],
   ['official_missing', 'Official model missing'],
+  ['models_dev_missing', 'models.dev model missing'],
   ['channel_missing', 'Channel price missing'],
   ['source_failed', 'Source check failed'],
 ] as const
@@ -122,6 +125,12 @@ const additionalComparisonFilters = [
 type ComparisonFilter =
   | (typeof primaryComparisonFilters)[number][0]
   | (typeof additionalComparisonFilters)[number][0]
+
+const modelsDevComparisonFilters = new Set<ComparisonFilter>([
+  'channel_models_dev',
+  'platform_models_dev',
+  'models_dev_missing',
+])
 
 function SourceColumnPicker({
   headers,
@@ -336,10 +345,20 @@ function sourceStickyClass(
   layer: 'header' | 'body'
 ) {
   if (fixedIndex === undefined) return ''
-  const zIndex = layer === 'header' ? 'lg:z-30' : 'lg:z-20'
-  const left = fixedIndex === 0 ? 'lg:left-56' : 'lg:left-[30rem]'
-  const divider = type === 'official' ? 'border-r-2' : ''
-  return `${divider} lg:sticky ${left} ${zIndex}`
+  const zIndex = layer === 'header' ? 'lg:z-40' : 'lg:z-20'
+  let left = 'lg:left-[46rem]'
+  if (fixedIndex === 0) {
+    left = 'lg:left-56'
+  } else if (fixedIndex === 1) {
+    left = 'lg:left-[30rem]'
+  }
+  return cn(
+    'lg:sticky',
+    left,
+    zIndex,
+    (type === 'official' || type === 'models_dev') &&
+      'border-r-2 lg:shadow-[4px_0_6px_-4px_var(--border)]'
+  )
 }
 
 type PriceMonitorForm = {
@@ -464,11 +483,16 @@ function PriceCell({
     )
   }
   if (price.unavailable_reason) {
+    let missingMessage = t('Channel pricing API did not provide this model')
+    if (sourceType === 'official') {
+      missingMessage = t('Official price preset does not include this model')
+    } else if (sourceType === 'models_dev') {
+      missingMessage = t(
+        'models.dev price preset does not include this model'
+      )
+    }
     const messages = {
-      missing:
-        sourceType === 'official'
-          ? t('Official price preset does not include this model')
-          : t('Channel pricing API did not provide this model'),
+      missing: missingMessage,
       placeholder: t('Placeholder price excluded from comparison'),
       source_failed: t('Price source check failed; wait for the next check'),
     }
@@ -592,8 +616,8 @@ function PriceMonitorPagination({
   const end = Math.min(page * pageSize, total)
 
   return (
-    <div className='flex flex-wrap items-center justify-between gap-3'>
-      <span className='text-muted-foreground text-sm'>
+    <>
+      <span className='text-muted-foreground mr-auto whitespace-nowrap text-sm'>
         {total > 0
           ? `${start}-${end} / ${total}`
           : t('{{total}} items', { total })}
@@ -624,7 +648,7 @@ function PriceMonitorPagination({
           <ChevronRight data-icon='inline-end' className='size-4' />
         </Button>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -700,8 +724,12 @@ function PriceMonitorHorizontalScrollControls({
   }
 
   return (
-    <div className='flex flex-wrap items-center justify-between gap-3'>
-      <span className='text-muted-foreground text-sm'>
+    <>
+      <div
+        aria-hidden='true'
+        className='bg-border hidden h-6 w-px xl:block'
+      />
+      <span className='text-muted-foreground whitespace-nowrap text-sm'>
         {t('Horizontal position')}: {state.progress}%
       </span>
       <div className='flex gap-2'>
@@ -726,7 +754,7 @@ function PriceMonitorHorizontalScrollControls({
           <ChevronRight className='size-4' />
         </Button>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -788,7 +816,17 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
     onSuccess: () => {
       toast.success(t('Price monitor settings saved'))
       setSettingsOpen(false)
-      queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] })
+      if (
+        !form.includeModelsDev &&
+        modelsDevComparisonFilters.has(filters.comparison)
+      ) {
+        setPage(1)
+        setFilters((current) => ({ ...current, comparison: 'all' }))
+      }
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+      ])
     },
     onError: (error: Error) =>
       toast.error(error.message || t('Failed to save price monitor settings')),
@@ -820,6 +858,17 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
   const status = statusQuery.data?.data
   const snapshot = status?.snapshot
   const results = resultsQuery.data?.data
+  const hasModelsDev = status?.config.include_models_dev === true
+  const visiblePrimaryComparisonFilters = hasModelsDev
+    ? primaryComparisonFilters
+    : primaryComparisonFilters.filter(
+        ([value]) => !modelsDevComparisonFilters.has(value)
+      )
+  const visibleAdditionalComparisonFilters = hasModelsDev
+    ? additionalComparisonFilters
+    : additionalComparisonFilters.filter(
+        ([value]) => !modelsDevComparisonFilters.has(value)
+      )
   const totalResults = results?.total ?? 0
   const sourceHeadersKey = (results?.source_headers ?? [])
     .map((header) => header.key)
@@ -848,7 +897,13 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
     const positions = new Map<string, number>()
     let fixedIndex = 0
     for (const header of results?.source_headers ?? []) {
-      if (header.type !== 'platform' && header.type !== 'official') continue
+      if (
+        header.type !== 'platform' &&
+        header.type !== 'official' &&
+        header.type !== 'models_dev'
+      ) {
+        continue
+      }
       positions.set(header.key, fixedIndex)
       fixedIndex += 1
     }
@@ -879,12 +934,14 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
   const sourceLabel = (header: PriceMonitorSourceHeader) => {
     if (header.type === 'platform') return t('Platform configuration')
     if (header.type === 'official') return t('Official price')
+    if (header.type === 'models_dev') return t('models.dev price')
     return header.name
   }
 
   const sourceSubtitle = (header: PriceMonitorSourceHeader) => {
     if (header.type === 'platform') return t('Platform baseline')
     if (header.type === 'official') return t('Required comparison')
+    if (header.type === 'models_dev') return t('Optional comparison')
     return header.api_url || ''
   }
 
@@ -936,7 +993,14 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content className='flex flex-col'>
           <div className='flex h-full min-h-0 max-w-full min-w-0 flex-col gap-3'>
-            <div className='grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[repeat(4,minmax(0,1fr))]'>
+            <div
+              className={cn(
+                'grid min-w-0 gap-3 md:grid-cols-2',
+                hasModelsDev
+                  ? 'xl:grid-cols-4 2xl:grid-cols-7'
+                  : 'xl:grid-cols-5'
+              )}
+            >
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
                   {t('Last checked')}
@@ -947,20 +1011,49 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                     : t('Not checked yet')}
                 </p>
               </div>
+              {hasModelsDev && (
+                <div className='rounded-lg border p-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('Platform vs models.dev models')}
+                  </p>
+                  <p className='mt-1 text-xl font-semibold'>
+                    {snapshot?.comparison_model_counts?.platform_models_dev ??
+                      0}
+                  </p>
+                </div>
+              )}
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
-                  {t('Different models')}
+                  {t('Platform vs official models')}
                 </p>
                 <p className='mt-1 text-xl font-semibold'>
-                  {snapshot?.model_count ?? 0}
+                  {snapshot?.comparison_model_counts?.platform_official ?? 0}
                 </p>
               </div>
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
-                  {t('Difference items')}
+                  {t('Platform vs channel models')}
                 </p>
                 <p className='mt-1 text-xl font-semibold'>
-                  {snapshot?.item_count ?? 0}
+                  {snapshot?.comparison_model_counts?.platform_channel ?? 0}
+                </p>
+              </div>
+              {hasModelsDev && (
+                <div className='rounded-lg border p-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('Channel vs models.dev models')}
+                  </p>
+                  <p className='mt-1 text-xl font-semibold'>
+                    {snapshot?.comparison_model_counts?.channel_models_dev ?? 0}
+                  </p>
+                </div>
+              )}
+              <div className='rounded-lg border p-3'>
+                <p className='text-muted-foreground text-sm'>
+                  {t('Channel vs official models')}
+                </p>
+                <p className='mt-1 text-xl font-semibold'>
+                  {snapshot?.comparison_model_counts?.channel_official ?? 0}
                 </p>
               </div>
               <div className='rounded-lg border p-3'>
@@ -1030,7 +1123,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               <div className='mt-3 flex min-h-8 flex-wrap items-center gap-2'>
                 <ToggleGroup
                   value={
-                    primaryComparisonFilters.some(
+                    visiblePrimaryComparisonFilters.some(
                       ([value]) => value === filters.comparison
                     )
                       ? [filters.comparison]
@@ -1038,7 +1131,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                   }
                   onValueChange={(values) => {
                     const value = values.at(-1) as
-                      | (typeof primaryComparisonFilters)[number][0]
+                      | (typeof visiblePrimaryComparisonFilters)[number][0]
                       | undefined
                     if (!value) return
                     setPage(1)
@@ -1052,7 +1145,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                   spacing={2}
                   className='flex-wrap'
                 >
-                  {primaryComparisonFilters.map(([value, label]) => (
+                  {visiblePrimaryComparisonFilters.map(([value, label]) => (
                     <ToggleGroupItem
                       key={value}
                       value={value}
@@ -1063,12 +1156,14 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                   ))}
                 </ToggleGroup>
                 <Select
-                  items={additionalComparisonFilters.map(([value, label]) => ({
-                    value,
-                    label: t(label),
-                  }))}
+                  items={visibleAdditionalComparisonFilters.map(
+                    ([value, label]) => ({
+                      value,
+                      label: t(label),
+                    })
+                  )}
                   value={
-                    additionalComparisonFilters.some(
+                    visibleAdditionalComparisonFilters.some(
                       ([value]) => value === filters.comparison
                     )
                       ? filters.comparison
@@ -1088,11 +1183,13 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                   </SelectTrigger>
                   <SelectContent align='start' alignItemWithTrigger={false}>
                     <SelectGroup>
-                      {additionalComparisonFilters.map(([value, label]) => (
+                      {visibleAdditionalComparisonFilters.map(
+                        ([value, label]) => (
                         <SelectItem key={value} value={value} className='py-2'>
                           {t(label)}
                         </SelectItem>
-                      ))}
+                        )
+                      )}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1107,30 +1204,26 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               className='flex min-h-0 max-w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border'
               aria-busy={resultsQuery.isFetching}
             >
-              <div className='bg-background shrink-0 border-b'>
-                <div className='border-b p-3'>
-                  <PriceMonitorPagination
-                    page={page}
-                    pageSize={PAGE_SIZE}
-                    total={totalResults}
-                    isFetching={resultsQuery.isFetching}
-                    onPageChange={setPage}
-                  />
-                </div>
-                <div className='p-3'>
-                  <PriceMonitorHorizontalScrollControls
-                    containerRef={priceMatrixRef}
-                    refreshKey={sourceHeadersKey}
-                  />
-                </div>
+              <div className='bg-background flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-3'>
+                <PriceMonitorPagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={totalResults}
+                  isFetching={resultsQuery.isFetching}
+                  onPageChange={setPage}
+                />
+                <PriceMonitorHorizontalScrollControls
+                  containerRef={priceMatrixRef}
+                  refreshKey={sourceHeadersKey}
+                />
               </div>
               <Table
                 className='min-w-max'
-                containerClassName='min-h-0 flex-1 max-w-full overflow-auto'
+                containerClassName='isolate min-h-0 flex-1 max-w-full overflow-auto'
               >
                 <TableHeader>
                   <TableRow>
-                    <TableHead className='bg-muted sticky top-0 left-0 z-30 w-56 max-w-56 min-w-56'>
+                    <TableHead className='bg-muted sticky top-0 left-0 z-50 w-56 max-w-56 min-w-56'>
                       {t('Model')}
                     </TableHead>
                     {(results?.source_headers ?? []).map((header) => (
@@ -1152,7 +1245,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                   {(results?.items ?? []).map((item) => {
                     return (
                       <TableRow key={item.model}>
-                        <TableCell className='bg-background sticky left-0 z-20 w-56 max-w-56 min-w-56 align-top font-semibold'>
+                        <TableCell className='bg-background sticky left-0 z-30 w-56 max-w-56 min-w-56 align-top font-semibold'>
                           {item.model}
                         </TableCell>
                         {(results?.source_headers ?? []).map((header) => (
