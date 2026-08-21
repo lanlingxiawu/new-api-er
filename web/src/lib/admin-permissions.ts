@@ -7,6 +7,7 @@ export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
+  VERIDROP_DETECTION: 'admin_menu.veridrop_detection',
   PRICE_MONITOR: 'admin_menu.price_monitor',
   ADMIN_MENU_PREFIX: 'admin_menu.',
   SYSTEM_SETTINGS_PREFIX: 'system_settings.',
@@ -154,7 +155,8 @@ export function normalizeAdminPermissions(
       resource.resource.startsWith(
         ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
       ) ||
-      resource.resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR
+      resource.resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR ||
+      resource.resource === ADMIN_PERMISSION_RESOURCES.VERIDROP_DETECTION
     ) {
       if (actions[ADMIN_PERMISSION_ACTIONS.VIEW] === false) {
         actions[ADMIN_PERMISSION_ACTIONS.EDIT] = false

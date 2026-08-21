@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -32,6 +33,12 @@ type veridropDetectRequest struct {
 
 type veridropCleanupRequest struct {
 	RetentionDays int `json:"retention_days"`
+}
+
+type veridropManualModelsRequest struct {
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Protocol string `json:"protocol"`
 }
 
 func parseOptionalNonNegativeInt(raw string) (int, bool) {
@@ -252,6 +259,76 @@ func StartManualChannelVeridropDetection(c *gin.Context) {
 		"message": "",
 		"data":    detection,
 	})
+}
+
+func FetchVeridropManualModels(c *gin.Context) {
+	var req veridropManualModelsRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	baseURL := strings.TrimSpace(req.BaseURL)
+	apiKey := strings.TrimSpace(req.APIKey)
+	if baseURL == "" || apiKey == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	channelType := 0
+	switch strings.ToLower(strings.TrimSpace(req.Protocol)) {
+	case "openai":
+		channelType = constant.ChannelTypeOpenAI
+	case "anthropic":
+		channelType = constant.ChannelTypeAnthropic
+	case "gemini":
+		channelType = constant.ChannelTypeGemini
+	default:
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	models, err := fetchChannelUpstreamModelIDs(&model.Channel{
+		Type:    channelType,
+		Key:     strings.Split(apiKey, "\n")[0],
+		BaseURL: &baseURL,
+	})
+	if err != nil {
+		logger.LogError(c, "discover veridrop manual models failed: "+sanitizeFetchModelsError(err, apiKey).Error())
+		common.ApiErrorI18n(c, i18n.MsgModelGetListFailed)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": models})
+}
+
+func ListVeridropSystemTasks(c *gin.Context) {
+	limit := 30
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > 100 {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		limit = parsedLimit
+	}
+
+	tasks, err := model.ListSystemTasksByTypes([]string{
+		model.SystemTaskTypeVeridrop,
+		model.SystemTaskTypeVeridropSingle,
+		model.SystemTaskTypeVeridropCleanup,
+	}, limit)
+	if err != nil {
+		logger.LogError(c, "list veridrop system tasks failed: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgRetryLater)
+		return
+	}
+
+	responses := make([]model.SystemTaskResponse, 0, len(tasks))
+	for _, task := range tasks {
+		responses = append(responses, task.ToResponse())
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": responses})
 }
 
 func ListChannelVeridropDetectionTargets(c *gin.Context) {

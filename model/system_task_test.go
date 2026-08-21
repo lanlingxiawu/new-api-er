@@ -241,6 +241,30 @@ func TestListSystemTasks_LimitClamping(t *testing.T) {
 	assert.LessOrEqual(t, len(got), 1)
 }
 
+func TestListSystemTasksByTypes_FiltersOrdersAndClampsLimit(t *testing.T) {
+	includedType := uniqTaskType()
+	otherIncludedType := uniqTaskType()
+	excludedType := uniqTaskType()
+	first := newPendingSystemTask(t, includedType)
+	second := newPendingSystemTask(t, otherIncludedType)
+	newPendingSystemTask(t, excludedType)
+
+	tasks, err := ListSystemTasksByTypes([]string{includedType, otherIncludedType}, 1000)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	assert.Equal(t, second.ID, tasks[0].ID)
+	assert.Equal(t, first.ID, tasks[1].ID)
+
+	tasks, err = ListSystemTasksByTypes([]string{includedType, otherIncludedType}, 1)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, second.ID, tasks[0].ID)
+
+	tasks, err = ListSystemTasksByTypes(nil, 10)
+	require.NoError(t, err)
+	assert.Empty(t, tasks)
+}
+
 // ---------------------------------------------------------------------------
 // DB: locking / claim / lease lifecycle
 // ---------------------------------------------------------------------------

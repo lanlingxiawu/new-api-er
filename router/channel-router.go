@@ -39,7 +39,7 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	// independently of general channel management, so it gets its own
 	// group instead of inheriting AdminMenuChannelsView above.
 	veridropRoute := apiRouter.Group("/channel/veridrop")
-	veridropRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuVeridropDetectionView))
+	veridropRoute.Use(middleware.AdminAuth())
 	for _, route := range veridropChannelPermissionRoutes {
 		veridropRoute.Handle(route.method, route.path,
 			middleware.RequirePermission(route.permission),
@@ -49,14 +49,16 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 }
 
 var veridropChannelPermissionRoutes = []permissionRoute{
-	{method: http.MethodPost, path: "/detect", permission: authz.ChannelOperate, handler: controller.StartChannelVeridropDetection},
-	{method: http.MethodPost, path: "/detect_manual", permission: authz.ChannelOperate, handler: controller.StartManualChannelVeridropDetection},
-	{method: http.MethodPost, path: "/detect_enabled", permission: authz.ChannelOperate, handler: controller.StartEnabledChannelsVeridropDetection},
-	{method: http.MethodPost, path: "/detect_batch", permission: authz.ChannelOperate, handler: controller.StartChannelsVeridropDetection},
-	{method: http.MethodGet, path: "/targets", permission: authz.ChannelRead, handler: controller.ListChannelVeridropDetectionTargets},
-	{method: http.MethodGet, path: "/results", permission: authz.ChannelRead, handler: controller.ListChannelVeridropDetectionResults},
-	{method: http.MethodPost, path: "/results/cleanup", permission: authz.ChannelSensitiveWrite, handler: controller.StartChannelVeridropDetectionCleanup},
-	{method: http.MethodGet, path: "/results/:id", permission: authz.ChannelRead, handler: controller.GetChannelVeridropDetectionResult},
+	{method: http.MethodPost, path: "/detect", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.StartChannelVeridropDetection},
+	{method: http.MethodPost, path: "/detect_manual", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.StartManualChannelVeridropDetection},
+	{method: http.MethodPost, path: "/detect_enabled", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.StartEnabledChannelsVeridropDetection},
+	{method: http.MethodPost, path: "/detect_batch", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.StartChannelsVeridropDetection},
+	{method: http.MethodPost, path: "/manual_models", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.FetchVeridropManualModels},
+	{method: http.MethodGet, path: "/targets", permission: authz.AdminMenuVeridropDetectionView, handler: controller.ListChannelVeridropDetectionTargets},
+	{method: http.MethodGet, path: "/results", permission: authz.AdminMenuVeridropDetectionView, handler: controller.ListChannelVeridropDetectionResults},
+	{method: http.MethodGet, path: "/tasks", permission: authz.AdminMenuVeridropDetectionView, handler: controller.ListVeridropSystemTasks},
+	{method: http.MethodPost, path: "/results/cleanup", permission: authz.AdminMenuVeridropDetectionEdit, handler: controller.StartChannelVeridropDetectionCleanup},
+	{method: http.MethodGet, path: "/results/:id", permission: authz.AdminMenuVeridropDetectionView, handler: controller.GetChannelVeridropDetectionResult},
 }
 
 var channelPermissionRoutes = []permissionRoute{

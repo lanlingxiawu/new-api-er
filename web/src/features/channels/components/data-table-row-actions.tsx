@@ -56,7 +56,6 @@ import {
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
-  canViewAdminMenu,
   hasPermission,
 } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
@@ -99,13 +98,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
     ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
   )
-  const canUseVeridropDetection =
-    canViewAdminMenu(currentUser, 'veridrop_detection') &&
-    hasPermission(
-      currentUser,
-      ADMIN_PERMISSION_RESOURCES.CHANNEL,
-      ADMIN_PERMISSION_ACTIONS.OPERATE
-    )
+  const canUseVeridropDetection = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.VERIDROP_DETECTION,
+    ADMIN_PERMISSION_ACTIONS.EDIT
+  )
 
   const handleEdit = () => {
     setCurrentRow(channel)

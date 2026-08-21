@@ -59,6 +59,14 @@ func TestAdminMenuResources_RegisteredWithAdminBaseline(t *testing.T) {
 	assert.False(t, adminGrants[ResourceAdminMenuPriceMonitor][ActionEdit])
 	assert.True(t, rootGrants[ResourceAdminMenuPriceMonitor][ActionEdit])
 
+	veridropActions := catalogActions(ResourceAdminMenuVeridropDetection)
+	require.Len(t, veridropActions, 2)
+	assert.Equal(t, ActionView, veridropActions[0].Action)
+	assert.Equal(t, ActionEdit, veridropActions[1].Action)
+	assert.True(t, adminGrants[ResourceAdminMenuVeridropDetection][ActionView])
+	assert.False(t, adminGrants[ResourceAdminMenuVeridropDetection][ActionEdit])
+	assert.True(t, rootGrants[ResourceAdminMenuVeridropDetection][ActionEdit])
+
 	for _, resource := range Catalog() {
 		if resource.Resource == ResourceAdminMenuVeridropDetection {
 			assert.Equal(t, "Authenticity Detection", resource.LabelKey)
@@ -67,11 +75,15 @@ func TestAdminMenuResources_RegisteredWithAdminBaseline(t *testing.T) {
 	}
 }
 
-func TestNormalizePriceMonitorMenuActions(t *testing.T) {
+func TestNormalizeEditableAdminMenuActions(t *testing.T) {
 	assert.Equal(t, map[string]bool{ActionView: true, ActionEdit: true},
 		normalizePermissionActions(ResourceAdminMenuPriceMonitor, map[string]bool{ActionEdit: true}))
 	assert.Equal(t, map[string]bool{ActionView: false, ActionEdit: false},
 		normalizePermissionActions(ResourceAdminMenuPriceMonitor, map[string]bool{ActionView: false, ActionEdit: true}))
+	assert.Equal(t, map[string]bool{ActionView: true, ActionEdit: true},
+		normalizePermissionActions(ResourceAdminMenuVeridropDetection, map[string]bool{ActionEdit: true}))
+	assert.Equal(t, map[string]bool{ActionView: false, ActionEdit: false},
+		normalizePermissionActions(ResourceAdminMenuVeridropDetection, map[string]bool{ActionView: false, ActionEdit: true}))
 }
 
 func TestAdminMenuPermissions_UserDenyAndRootBypass(t *testing.T) {

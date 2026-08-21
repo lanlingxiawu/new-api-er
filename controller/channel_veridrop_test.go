@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -13,6 +14,50 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFetchVeridropManualModelsValidatesAndFetchesModels(t *testing.T) {
+	for _, request := range []map[string]any{
+		{"protocol": "openai", "base_url": "", "api_key": "secret"},
+		{"protocol": "unknown", "base_url": "https://example.com", "api_key": "secret"},
+	} {
+		ctx, rec := newCtx(t, http.MethodPost, "/api/channel/veridrop/manual_models", request)
+		FetchVeridropManualModels(ctx)
+		resp := decodeResp(t, rec)
+		require.False(t, resp.Success)
+	}
+
+	authorization := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization <- r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4.1"},{"id":"gpt-4.1-mini"}]}`))
+	}))
+	defer server.Close()
+
+	ctx, rec := newCtx(t, http.MethodPost, "/api/channel/veridrop/manual_models", map[string]any{
+		"protocol": "openai",
+		"base_url": server.URL,
+		"api_key":  "temporary-secret",
+	})
+	FetchVeridropManualModels(ctx)
+	var response struct {
+		Success bool     `json:"success"`
+		Data    []string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, []string{"gpt-4.1", "gpt-4.1-mini"}, response.Data)
+	require.Equal(t, "Bearer temporary-secret", <-authorization)
+}
+
+func TestListVeridropSystemTasksRejectsInvalidLimit(t *testing.T) {
+	for _, limit := range []string{"0", "101", "invalid"} {
+		ctx, rec := newCtx(t, http.MethodGet, "/api/channel/veridrop/tasks?limit="+limit, nil)
+		ListVeridropSystemTasks(ctx)
+		resp := decodeResp(t, rec)
+		require.False(t, resp.Success)
+	}
+}
 
 func TestStartEnabledChannelsVeridropDetectionRequiresReadySettings(t *testing.T) {
 	original := operation_setting.GetVeridropMonitorSetting()

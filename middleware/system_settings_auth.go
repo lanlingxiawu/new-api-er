@@ -47,6 +47,9 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 		}
 
 		permission := authz.Permission{Resource: authz.SystemSettingsResource(scope), Action: action}
+		if scope == settingsaccess.ScopeVeridropDetection {
+			permission = authz.Permission{Resource: authz.ResourceAdminMenuVeridropDetection, Action: action}
+		}
 		allowed := authz.Can(c.GetInt("id"), role, permission)
 		if !allowed && scope == settingsaccess.ScopeChannelProfitPreview && action == authz.ActionView {
 			allowed = authz.Can(c.GetInt("id"), role, authz.ChannelSensitiveWrite)

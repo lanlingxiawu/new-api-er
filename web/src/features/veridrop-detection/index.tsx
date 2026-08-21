@@ -78,7 +78,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { listSystemTasks } from '@/features/system-settings/api'
 import type {
   SystemTask,
   SystemTaskStatus,
@@ -100,6 +99,7 @@ import {
   getVeridropOptions,
   listVeridropDetectionTargets,
   listVeridropDetectionResults,
+  listVeridropSystemTasks,
   startChannelVeridropDetection,
   startChannelsVeridropDetection,
   startManualVeridropDetection,
@@ -2254,10 +2254,10 @@ export function VeridropDetection() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const currentUser = useAuthStore((state) => state.auth.user)
-  const canCleanupRecords = hasPermission(
+  const canEditVeridrop = hasPermission(
     currentUser,
-    ADMIN_PERMISSION_RESOURCES.CHANNEL,
-    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+    ADMIN_PERMISSION_RESOURCES.VERIDROP_DETECTION,
+    ADMIN_PERMISSION_ACTIONS.EDIT
   )
   const [draftOptions, setDraftOptions] = useState<VeridropDetectionOptions>(
     VERIDROP_DEFAULT_OPTIONS
@@ -2271,6 +2271,7 @@ export function VeridropDetection() {
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [cleanupRetentionDays, setCleanupRetentionDays] = useState('30')
   const [activeTab, setActiveTab] = useState<DetectionWorkspaceTab>('results')
+  const visibleActiveTab = canEditVeridrop ? activeTab : 'results'
   const [manualForm, setManualForm] =
     useState<VeridropManualDetectionRequest>(DEFAULT_MANUAL_FORM)
   const [resultOutcomeFilters, setResultOutcomeFilters] = useState<
@@ -2295,6 +2296,7 @@ export function VeridropDetection() {
     queryKey: ['veridrop-detection', 'options'],
     queryFn: getVeridropOptions,
     staleTime: 60 * 1000,
+    enabled: canEditVeridrop,
   })
 
   const resultFilters = useMemo(() => {
@@ -2362,7 +2364,7 @@ export function VeridropDetection() {
   const tasksQuery = useQuery({
     queryKey: ['veridrop-detection', 'tasks'],
     queryFn: async () => {
-      const res = await listSystemTasks(30)
+      const res = await listVeridropSystemTasks(30)
       if (!res.success || !Array.isArray(res.data)) {
         throw new Error(res.message || t('We could not load system tasks.'))
       }
@@ -2374,7 +2376,7 @@ export function VeridropDetection() {
       )
     },
     retry: false,
-    enabled: activeTab === 'batch' || activeTab === 'results',
+    enabled: visibleActiveTab === 'batch' || visibleActiveTab === 'results',
     refetchInterval: (query) =>
       query.state.data?.some((task) => isActiveTask(task))
         ? ACTIVE_POLL_INTERVAL_MS
@@ -2409,7 +2411,9 @@ export function VeridropDetection() {
       return res.data
     },
     retry: false,
-    enabled: activeTab === 'batch' || activeTab === 'results',
+    enabled:
+      visibleActiveTab === 'results' ||
+      (canEditVeridrop && visibleActiveTab === 'batch'),
     staleTime: 30 * 1000,
   })
 
@@ -2704,24 +2708,26 @@ export function VeridropDetection() {
           {t('Authenticity Detection')}
         </SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          <Button
-            type='button'
-            size='sm'
-            variant='outline'
-            onClick={() => {
-              if (optionsQuery.isError) void optionsQuery.refetch()
-              setDraftOptions({ ...savedOptions, admin_api_key: '' })
-              setSettingsOpen(true)
-            }}
-            disabled={optionsQuery.isLoading}
-          >
-            <Settings2 data-icon='inline-start' className='size-4' />
-            {t('Detection Settings')}
-          </Button>
+          {canEditVeridrop ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                if (optionsQuery.isError) void optionsQuery.refetch()
+                setDraftOptions({ ...savedOptions, admin_api_key: '' })
+                setSettingsOpen(true)
+              }}
+              disabled={optionsQuery.isLoading}
+            >
+              <Settings2 data-icon='inline-start' className='size-4' />
+              {t('Detection Settings')}
+            </Button>
+          ) : null}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <Tabs
-            value={activeTab}
+            value={visibleActiveTab}
             onValueChange={(value) =>
               setActiveTab((value ?? 'results') as DetectionWorkspaceTab)
             }
@@ -2731,12 +2737,16 @@ export function VeridropDetection() {
               <TabsTrigger value='results' className='px-4'>
                 {t('Detection Results')}
               </TabsTrigger>
-              <TabsTrigger value='batch' className='px-4'>
-                {t('Batch Detection')}
-              </TabsTrigger>
-              <TabsTrigger value='manual' className='px-4'>
-                {t('Manual Test')}
-              </TabsTrigger>
+              {canEditVeridrop ? (
+                <>
+                  <TabsTrigger value='batch' className='px-4'>
+                    {t('Batch Detection')}
+                  </TabsTrigger>
+                  <TabsTrigger value='manual' className='px-4'>
+                    {t('Manual Test')}
+                  </TabsTrigger>
+                </>
+              ) : null}
             </TabsList>
             <TabsContent value='batch' className='mt-0'>
               {optionsQuery.isError ? (
@@ -3036,7 +3046,7 @@ export function VeridropDetection() {
                         >
                           {t('Reset Filters')}
                         </Button>
-                        {canCleanupRecords && (
+                        {canEditVeridrop && (
                           <Button
                             type='button'
                             size='sm'
@@ -3172,69 +3182,79 @@ export function VeridropDetection() {
           </Tabs>
         </SectionPageLayout.Content>
       </SectionPageLayout>
-      <DetectionSettingsDialog
-        open={settingsOpen}
-        onOpenChange={handleSettingsOpenChange}
-        options={draftOptions}
-        savedOptions={savedOptions}
-        onChange={setDraftOptions}
-        onSave={() => saveMutation.mutate()}
-        isSaving={saveMutation.isPending}
-      />
-      <ConfirmDialog
-        open={runConfirmOpen}
-        onOpenChange={setRunConfirmOpen}
-        title={t('Start detection?')}
-        desc={runConfirmDescription}
-        confirmText={runMutation.isPending ? t('Starting...') : t('Start')}
-        isLoading={runMutation.isPending}
-        handleConfirm={() => {
-          runMutation.mutate(pendingBatchChannelIds)
-          setRunConfirmOpen(false)
-        }}
-      />
-      <ConfirmDialog
-        open={cleanupOpen}
-        onOpenChange={setCleanupOpen}
-        title={t('Clean detection records?')}
-        desc={t(
-          'This permanently deletes completed records in the selected range. Queued and running detections are kept.'
-        )}
-        confirmText={
-          cleanupMutation.isPending ? t('Cleaning...') : t('Clean Records')
-        }
-        destructive
-        isLoading={cleanupMutation.isPending}
-        handleConfirm={() => cleanupMutation.mutate()}
-      >
-        <div className='grid gap-2'>
-          <Label>{t('Records to clean')}</Label>
-          <Select
-            value={cleanupRetentionDays}
-            onValueChange={(value) => setCleanupRetentionDays(value ?? '30')}
+      {canEditVeridrop ? (
+        <>
+          <DetectionSettingsDialog
+            open={settingsOpen}
+            onOpenChange={handleSettingsOpenChange}
+            options={draftOptions}
+            savedOptions={savedOptions}
+            onChange={setDraftOptions}
+            onSave={() => saveMutation.mutate()}
+            isSaving={saveMutation.isPending}
+          />
+          <ConfirmDialog
+            open={runConfirmOpen}
+            onOpenChange={setRunConfirmOpen}
+            title={t('Start detection?')}
+            desc={runConfirmDescription}
+            confirmText={runMutation.isPending ? t('Starting...') : t('Start')}
+            isLoading={runMutation.isPending}
+            handleConfirm={() => {
+              runMutation.mutate(pendingBatchChannelIds)
+              setRunConfirmOpen(false)
+            }}
+          />
+          <ConfirmDialog
+            open={cleanupOpen}
+            onOpenChange={setCleanupOpen}
+            title={t('Clean detection records?')}
+            desc={t(
+              'This permanently deletes completed records in the selected range. Queued and running detections are kept.'
+            )}
+            confirmText={
+              cleanupMutation.isPending ? t('Cleaning...') : t('Clean Records')
+            }
+            destructive
+            isLoading={cleanupMutation.isPending}
+            handleConfirm={() => cleanupMutation.mutate()}
           >
-            <SelectTrigger className='w-full'>
-              <SelectValue>
-                {cleanupRetentionDays === '0'
-                  ? t('All completed records')
-                  : t('Completed records older than {{days}} days', {
-                      days: cleanupRetentionDays,
-                    })}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent align='start' alignItemWithTrigger={false}>
-              <SelectGroup>
-                {[7, 30, 90].map((days) => (
-                  <SelectItem key={days} value={String(days)}>
-                    {t('Completed records older than {{days}} days', { days })}
-                  </SelectItem>
-                ))}
-                <SelectItem value='0'>{t('All completed records')}</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </div>
-      </ConfirmDialog>
+            <div className='grid gap-2'>
+              <Label>{t('Records to clean')}</Label>
+              <Select
+                value={cleanupRetentionDays}
+                onValueChange={(value) =>
+                  setCleanupRetentionDays(value ?? '30')
+                }
+              >
+                <SelectTrigger className='w-full'>
+                  <SelectValue>
+                    {cleanupRetentionDays === '0'
+                      ? t('All completed records')
+                      : t('Completed records older than {{days}} days', {
+                          days: cleanupRetentionDays,
+                        })}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align='start' alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {[7, 30, 90].map((days) => (
+                      <SelectItem key={days} value={String(days)}>
+                        {t('Completed records older than {{days}} days', {
+                          days,
+                        })}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value='0'>
+                      {t('All completed records')}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+          </ConfirmDialog>
+        </>
+      ) : null}
     </>
   )
 }

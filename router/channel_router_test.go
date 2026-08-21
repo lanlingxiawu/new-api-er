@@ -27,6 +27,38 @@ func TestChannelDeleteRoutesUseSensitiveWritePermission(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodPost, "/batch/tag", authz.ChannelWrite, controller.BatchSetChannelTag)
 }
 
+func TestVeridropRoutesUseIndependentDynamicPermissions(t *testing.T) {
+	viewRoutes := []struct {
+		method  string
+		path    string
+		handler gin.HandlerFunc
+	}{
+		{http.MethodGet, "/targets", controller.ListChannelVeridropDetectionTargets},
+		{http.MethodGet, "/results", controller.ListChannelVeridropDetectionResults},
+		{http.MethodGet, "/results/:id", controller.GetChannelVeridropDetectionResult},
+		{http.MethodGet, "/tasks", controller.ListVeridropSystemTasks},
+	}
+	for _, route := range viewRoutes {
+		assertVeridropRoutePermission(t, route.method, route.path, authz.AdminMenuVeridropDetectionView, route.handler)
+	}
+
+	editRoutes := []struct {
+		method  string
+		path    string
+		handler gin.HandlerFunc
+	}{
+		{http.MethodPost, "/detect", controller.StartChannelVeridropDetection},
+		{http.MethodPost, "/detect_manual", controller.StartManualChannelVeridropDetection},
+		{http.MethodPost, "/detect_enabled", controller.StartEnabledChannelsVeridropDetection},
+		{http.MethodPost, "/detect_batch", controller.StartChannelsVeridropDetection},
+		{http.MethodPost, "/manual_models", controller.FetchVeridropManualModels},
+		{http.MethodPost, "/results/cleanup", controller.StartChannelVeridropDetectionCleanup},
+	}
+	for _, route := range editRoutes {
+		assertVeridropRoutePermission(t, route.method, route.path, authz.AdminMenuVeridropDetectionEdit, route.handler)
+	}
+}
+
 func TestChannelStatusRoutesRegisterWithoutConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -47,4 +79,16 @@ func assertChannelRoutePermission(t *testing.T, method string, path string, perm
 		}
 	}
 	t.Fatalf("route %s %s not found", method, path)
+}
+
+func assertVeridropRoutePermission(t *testing.T, method string, path string, permission authz.Permission, handler any) {
+	t.Helper()
+	for _, route := range veridropChannelPermissionRoutes {
+		if route.method == method && route.path == path {
+			assert.Equal(t, permission, route.permission)
+			assert.Equal(t, reflect.ValueOf(handler).Pointer(), reflect.ValueOf(route.handler).Pointer())
+			return
+		}
+	}
+	t.Fatalf("veridrop route %s %s not found", method, path)
 }

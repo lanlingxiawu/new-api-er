@@ -13,7 +13,7 @@ func TestRegistryCoversEverySystemSettingsScope(t *testing.T) {
 		_, ok := Resolve(scope)
 		assert.True(t, ok, "scope %s must have an access definition", scope)
 	}
-	assert.Len(t, Scopes(), len(authz.SystemSettingsScopes())+1)
+	assert.Len(t, Scopes(), len(authz.SystemSettingsScopes())+2)
 }
 
 func TestOptionKeyAllowlist(t *testing.T) {
@@ -63,4 +63,19 @@ func TestConfigGroupAllowlistRejectsPartialSmuggling(t *testing.T) {
 	assert.False(t, AllowsGroup("system-tuning.relay-timeout", "relay_timeout_setting", map[string]string{
 		"enabled": "true", "critical_num": "1",
 	}))
+}
+
+func TestVeridropScopeOnlyAllowsVeridropConfiguration(t *testing.T) {
+	assert.True(t, AllowsOption(ScopeVeridropDetection, "veridrop_monitor_setting.enabled"))
+	assert.True(t, AllowsOption(ScopeVeridropDetection, "veridrop_monitor_setting.detection_interval_minutes"))
+	assert.False(t, AllowsOption(ScopeVeridropDetection, "rate_limit_setting.global_api_enabled"))
+	assert.True(t, AllowsGroup(ScopeVeridropDetection, "veridrop_monitor_setting", map[string]string{
+		"enabled":  "true",
+		"base_url": "https://veridrop.example",
+	}))
+	assert.False(t, AllowsGroup(ScopeVeridropDetection, "veridrop_monitor_setting", map[string]string{
+		"enabled":        "true",
+		"max_open_conns": "100",
+	}))
+	assert.False(t, AllowsGroup(ScopeVeridropDetection, "db_pool_setting", map[string]string{"max_open_conns": "100"}))
 }

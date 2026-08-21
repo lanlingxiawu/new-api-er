@@ -29,9 +29,9 @@ const (
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
 
 type SystemTask struct {
-	ID        int64            `json:"id" gorm:"primary_key"`
+	ID        int64            `json:"id" gorm:"primary_key;index:idx_system_tasks_type_id,priority:2"`
 	TaskID    string           `json:"task_id" gorm:"type:varchar(64);uniqueIndex"`
-	Type      string           `json:"type" gorm:"type:varchar(64);index"`
+	Type      string           `json:"type" gorm:"type:varchar(64);index;index:idx_system_tasks_type_id,priority:1"`
 	Status    SystemTaskStatus `json:"status" gorm:"type:varchar(32);index"`
 	ActiveKey *string          `json:"active_key,omitempty" gorm:"type:varchar(64);uniqueIndex"`
 	Payload   string           `json:"payload" gorm:"type:text"`
@@ -187,6 +187,25 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	}
 	var tasks []*SystemTask
 	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
+func ListSystemTasksByTypes(taskTypes []string, limit int) ([]*SystemTask, error) {
+	if len(taskTypes) == 0 {
+		return []*SystemTask{}, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var tasks []*SystemTask
+	err := DB.Select("id", "task_id", "type", "status", "active_key", "payload", "state", "result", "error", "locked_by", "created_at", "updated_at").
+		Where("type IN ?", taskTypes).
+		Order("id desc").
+		Limit(limit).
+		Find(&tasks).Error
 	return tasks, err
 }
 

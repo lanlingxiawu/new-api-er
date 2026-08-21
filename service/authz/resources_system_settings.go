@@ -114,7 +114,7 @@ func IsSystemSettingsResource(resource string) bool {
 }
 
 func normalizePermissionActions(resource string, actions map[string]bool) map[string]bool {
-	if !IsSystemSettingsResource(resource) && resource != ResourceAdminMenuPriceMonitor {
+	if !IsSystemSettingsResource(resource) && resource != ResourceAdminMenuPriceMonitor && resource != ResourceAdminMenuVeridropDetection {
 		return actions
 	}
 

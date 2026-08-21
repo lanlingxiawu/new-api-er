@@ -3,6 +3,7 @@ package settingsaccess
 const (
 	ScopeBillingGroupPricing  = "billing.group-pricing"
 	ScopeChannelProfitPreview = "channel.profit-preview"
+	ScopeVeridropDetection    = "veridrop-detection"
 )
 
 type Definition struct {
