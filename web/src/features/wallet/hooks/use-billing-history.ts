@@ -28,6 +28,7 @@ import {
   exportUserBillingHistory,
   exportAllBillingHistory,
   completeOrder,
+  queryTopUpPlatformStatus,
   isApiSuccess,
 } from '../api'
 import type { TopupRecord, BillingHistoryFilters } from '../types'
@@ -56,7 +57,9 @@ interface UseBillingHistoryOptions {
   initialPageSize?: number
 }
 
-function normalizeFilters(filters: BillingHistoryFilters): BillingHistoryFilters {
+function normalizeFilters(
+  filters: BillingHistoryFilters
+): BillingHistoryFilters {
   const keyword = filters.keyword?.trim()
   const userId =
     typeof filters.userId === 'number' && filters.userId > 0
@@ -77,11 +80,11 @@ function hasFilters(filters: BillingHistoryFilters): boolean {
   const normalized = normalizeFilters(filters)
   return Boolean(
     normalized.keyword ||
-      normalized.startTime ||
-      normalized.endTime ||
-      normalized.status ||
-      normalized.paymentMethod ||
-      normalized.userId
+    normalized.startTime ||
+    normalized.endTime ||
+    normalized.status ||
+    normalized.paymentMethod ||
+    normalized.userId
   )
 }
 
@@ -109,6 +112,14 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [queryingPlatformTradeNos, setQueryingPlatformTradeNos] = useState<
+    Set<string>
+  >(new Set())
+  // Trade numbers whose most recent platform-status query failed (query_failed
+  // / persist_failed). Surfaced inline so the admin can see which order to retry.
+  const [failedPlatformTradeNos, setFailedPlatformTradeNos] = useState<
+    Set<string>
+  >(new Set())
 
   const keyword = draftFilters.keyword ?? ''
   const hasPendingFilterChanges = !isSameFilters(draftFilters, filters)
@@ -168,45 +179,42 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   /**
    * Export the currently applied billing-history view as CSV.
    */
-  const handleExport = useCallback(
-    async () => {
-      if (exporting) return
-      if (total <= 0) return
-      setExporting(true)
-      try {
-        const result = isAdmin
-          ? await exportAllBillingHistory(filters)
-          : await exportUserBillingHistory(filters)
+  const handleExport = useCallback(async () => {
+    if (exporting) return
+    if (total <= 0) return
+    setExporting(true)
+    try {
+      const result = isAdmin
+        ? await exportAllBillingHistory(filters)
+        : await exportUserBillingHistory(filters)
 
-        triggerBlobDownload(result.blob, result.filename)
+      triggerBlobDownload(result.blob, result.filename)
 
-        if (result.truncated) {
-          toast.warning(
-            i18next.t(
-              'Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.',
-              { count: result.maxRows ?? 0 }
-            )
+      if (result.truncated) {
+        toast.warning(
+          i18next.t(
+            'Export reached the {{count}}-row limit. Some records were not exported. Narrow the time range to export the rest.',
+            { count: result.maxRows ?? 0 }
           )
-        } else {
-          toast.success(i18next.t('Export started'))
-        }
-      } catch (error) {
-        let message = i18next.t('Failed to export billing history')
-        if (error instanceof Error && error.message) {
-          message =
-            error.message === 'TOPUP_EXPORT_RATE_LIMITED'
-              ? i18next.t(
-                  'Export requests are too frequent, please try again later.'
-                )
-              : error.message
-        }
-        toast.error(message)
-      } finally {
-        setExporting(false)
+        )
+      } else {
+        toast.success(i18next.t('Export started'))
       }
-    },
-    [exporting, filters, isAdmin, total]
-  )
+    } catch (error) {
+      let message = i18next.t('Failed to export billing history')
+      if (error instanceof Error && error.message) {
+        message =
+          error.message === 'TOPUP_EXPORT_RATE_LIMITED'
+            ? i18next.t(
+                'Export requests are too frequent, please try again later.'
+              )
+            : error.message
+      }
+      toast.error(message)
+    } finally {
+      setExporting(false)
+    }
+  }, [exporting, filters, isAdmin, total])
 
   /**
    * Complete a pending order (admin only)
@@ -240,6 +248,104 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
       }
     },
     [isAdmin, fetchBillingHistory]
+  )
+
+  const handleQueryPlatformStatus = useCallback(
+    async (tradeNos: string[]) => {
+      if (!isAdmin) {
+        toast.error(i18next.t('Admin access required'))
+        return
+      }
+
+      const uniqueTradeNos = [
+        ...new Set(tradeNos.map((value) => value.trim())),
+      ].filter(Boolean)
+      if (uniqueTradeNos.length === 0) return
+
+      setQueryingPlatformTradeNos((current) => {
+        const next = new Set(current)
+        uniqueTradeNos.forEach((tradeNo) => next.add(tradeNo))
+        return next
+      })
+
+      try {
+        const response = await queryTopUpPlatformStatus(uniqueTradeNos)
+        if (!isApiSuccess(response) || !response.data) {
+          toast.error(
+            response.message || i18next.t('Failed to query platform status')
+          )
+          return
+        }
+
+        const updatedItems = new Map(
+          response.data.items
+            .filter((item) => item.result === 'updated')
+            .map((item) => [item.trade_no, item])
+        )
+        if (updatedItems.size > 0) {
+          setRecords((current) =>
+            current.map((record) => {
+              const item = updatedItems.get(record.trade_no)
+              if (!item) return record
+              return {
+                ...record,
+                platform_payment_status: item.platform_payment_status,
+                platform_payment_status_raw: item.platform_payment_status_raw,
+                platform_payment_status_checked_at:
+                  item.platform_payment_status_checked_at,
+              }
+            })
+          )
+        }
+
+        // Track which orders failed this round so the row can show a retry hint;
+        // clear the flag for any order that succeeded this time.
+        const failedTradeNos = new Set(
+          response.data.items
+            .filter(
+              (item) =>
+                item.result === 'query_failed' ||
+                item.result === 'persist_failed'
+            )
+            .map((item) => item.trade_no)
+        )
+        setFailedPlatformTradeNos((current) => {
+          const next = new Set(current)
+          uniqueTradeNos.forEach((tradeNo) => next.delete(tradeNo))
+          failedTradeNos.forEach((tradeNo) => next.add(tradeNo))
+          return next
+        })
+
+        const { updated, failed, skipped } = response.data.summary
+        if (failed > 0) {
+          toast.warning(
+            i18next.t(
+              'Updated {{success}} platform statuses; {{failed}} failed, please retry',
+              { success: updated, failed }
+            )
+          )
+        } else if (updated === 0 && skipped > 0) {
+          toast.info(i18next.t('No orders eligible for platform status query'))
+        } else {
+          toast.success(
+            i18next.t('Updated {{count}} platform statuses', {
+              count: updated,
+            })
+          )
+        }
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Failed to query platform status:', error)
+        toast.error(i18next.t('Failed to query platform status'))
+      } finally {
+        setQueryingPlatformTradeNos((current) => {
+          const next = new Set(current)
+          uniqueTradeNos.forEach((tradeNo) => next.delete(tradeNo))
+          return next
+        })
+      }
+    },
+    [isAdmin]
   )
 
   /**
@@ -309,6 +415,8 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     loading,
     completing,
     exporting,
+    queryingPlatformTradeNos,
+    failedPlatformTradeNos,
     isAdmin,
     hasActiveFilters,
     hasAppliedFilters,
@@ -321,6 +429,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     handleResetFilters,
     handleExport,
     handleCompleteOrder,
+    handleQueryPlatformStatus,
     refresh: fetchBillingHistory,
   }
 }

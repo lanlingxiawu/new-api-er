@@ -66,6 +66,52 @@ func TestTopUp_InsertGetUpdate(t *testing.T) {
 	assert.Nil(t, GetTopUpByTradeNo(uniq("nope")))
 }
 
+func TestTopUpPlatformPaymentStatusPersistence(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	tp := mkTopUp(t, u.Id, func(tp *TopUp) {
+		tp.PaymentProvider = PaymentProviderAlipay
+	})
+
+	rows, err := GetTopUpsForPlatformStatus([]string{tp.TradeNo, uniq("missing")})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, tp.Id, rows[0].Id)
+	assert.Equal(t, tp.TradeNo, rows[0].TradeNo)
+	assert.Equal(t, PaymentProviderAlipay, rows[0].PaymentProvider)
+
+	checkedAt := common.GetTimestamp()
+	require.NoError(t, UpdateTopUpPlatformPaymentStatus(
+		tp.Id,
+		PlatformPaymentStatusCredited,
+		"TRADE_SUCCESS",
+		checkedAt,
+	))
+
+	reloaded := GetTopUpById(tp.Id)
+	require.NotNil(t, reloaded)
+	assert.Equal(t, PlatformPaymentStatusCredited, reloaded.PlatformPaymentStatus)
+	assert.Equal(t, "TRADE_SUCCESS", reloaded.PlatformPaymentStatusRaw)
+	assert.Equal(t, checkedAt, reloaded.PlatformPaymentStatusCheckedAt)
+}
+
+func TestUpdateTopUpPlatformPaymentStatusValidation(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	tp := mkTopUp(t, u.Id, nil)
+
+	assert.Error(t, UpdateTopUpPlatformPaymentStatus(tp.Id, "invalid", "raw", common.GetTimestamp()))
+	assert.Error(t, UpdateTopUpPlatformPaymentStatus(tp.Id, PlatformPaymentStatusCredited, "", common.GetTimestamp()))
+	assert.Error(t, UpdateTopUpPlatformPaymentStatus(tp.Id, PlatformPaymentStatusCredited, "TRADE_SUCCESS", 0))
+	assert.ErrorIs(t, UpdateTopUpPlatformPaymentStatus(nextTestID(), PlatformPaymentStatusCredited, "TRADE_SUCCESS", common.GetTimestamp()), ErrTopUpNotFound)
+
+	reloaded := GetTopUpById(tp.Id)
+	require.NotNil(t, reloaded)
+	assert.Empty(t, reloaded.PlatformPaymentStatus)
+	assert.Empty(t, reloaded.PlatformPaymentStatusRaw)
+	assert.Zero(t, reloaded.PlatformPaymentStatusCheckedAt)
+}
+
 // ---------------------------------------------------------------------------
 // UpdatePendingTopUpStatus
 // ---------------------------------------------------------------------------

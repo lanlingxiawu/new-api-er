@@ -26,6 +26,10 @@ type TopUp struct {
 	ProviderOrderId string `json:"provider_order_id" gorm:"type:varchar(255);default:''"`
 	// PaymentCurrency 保存下单时使用的结算币种，供 webhook 校验时与通知币种比对，防止配置变更导致误拒或误充
 	PaymentCurrency string `json:"payment_currency" gorm:"type:varchar(10);default:''"`
+	// PlatformPaymentStatus 保存管理员最后一次成功查询到的平台支付状态快照。
+	PlatformPaymentStatus          string `json:"platform_payment_status" gorm:"type:varchar(32);default:''"`
+	PlatformPaymentStatusRaw       string `json:"platform_payment_status_raw" gorm:"type:varchar(64);default:''"`
+	PlatformPaymentStatusCheckedAt int64  `json:"platform_payment_status_checked_at" gorm:"default:0"`
 	// CreateTime 同时参与复合索引（用户维度）与单列索引（管理员全表时间范围扫描）。
 	CreateTime   int64  `json:"create_time" gorm:"index:idx_topups_user_create,priority:2;index:idx_topups_create_time"`
 	CompleteTime int64  `json:"complete_time"`
@@ -41,6 +45,12 @@ const (
 	PaymentMethodWechat       = "wechat_official"
 	PaymentMethodBalance      = "balance"
 	PaymentMethodInfini       = "infini"
+)
+
+const (
+	PlatformPaymentStatusCredited    = "credited"
+	PlatformPaymentStatusNotCredited = "not_credited"
+	PlatformPaymentStatusUnknown     = "unknown"
 )
 
 const (
@@ -91,6 +101,59 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 		return nil
 	}
 	return topUp
+}
+
+// GetTopUpsForPlatformStatus returns only the columns required to query the
+// upstream payment platform. trade_no has a unique index, so the bounded IN
+// query does not scan the continuously growing top_ups table.
+func GetTopUpsForPlatformStatus(tradeNos []string) ([]*TopUp, error) {
+	if len(tradeNos) == 0 {
+		return []*TopUp{}, nil
+	}
+
+	var topUps []*TopUp
+	err := DB.Select("id", "trade_no", "payment_provider", "provider_order_id").
+		Where("trade_no IN ?", tradeNos).
+		Find(&topUps).Error
+	if err != nil {
+		common.SysError("failed to fetch topups for platform status query: " + err.Error())
+		return nil, errors.New("failed to query topup orders")
+	}
+	return topUps, nil
+}
+
+// UpdateTopUpPlatformPaymentStatus persists one successfully queried platform
+// snapshot. Query failures never call this function, so a transient provider
+// outage cannot erase the last confirmed state.
+func UpdateTopUpPlatformPaymentStatus(id int, status string, rawStatus string, checkedAt int64) error {
+	if id <= 0 || checkedAt <= 0 {
+		return errors.New("invalid platform payment status update")
+	}
+	if status != PlatformPaymentStatusCredited &&
+		status != PlatformPaymentStatusNotCredited &&
+		status != PlatformPaymentStatusUnknown {
+		return errors.New("invalid platform payment status")
+	}
+	rawStatus = strings.TrimSpace(rawStatus)
+	if rawStatus == "" || len(rawStatus) > 64 {
+		return errors.New("invalid raw platform payment status")
+	}
+
+	result := DB.Model(&TopUp{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"platform_payment_status":            status,
+			"platform_payment_status_raw":        rawStatus,
+			"platform_payment_status_checked_at": checkedAt,
+		})
+	if result.Error != nil {
+		common.SysError("failed to update topup platform payment status: " + result.Error.Error())
+		return errors.New("failed to update platform payment status")
+	}
+	if result.RowsAffected == 0 {
+		return ErrTopUpNotFound
+	}
+	return nil
 }
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {

@@ -280,6 +280,8 @@ export interface UserWalletData {
  */
 export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
 
+export type PlatformPaymentStatus = 'credited' | 'not_credited' | 'unknown'
+
 /**
  * Topup billing record
  */
@@ -306,6 +308,12 @@ export interface TopupRecord {
   complete_time?: number
   /** Payment status */
   status: TopupStatus
+  /** Last successfully persisted upstream payment status */
+  platform_payment_status?: PlatformPaymentStatus
+  /** Raw status returned by the upstream payment platform */
+  platform_payment_status_raw?: string
+  /** Unix timestamp of the last successful platform status check */
+  platform_payment_status_checked_at?: number
 }
 
 /**
@@ -339,4 +347,32 @@ export interface BillingHistoryResponse {
  */
 export interface CompleteOrderRequest {
   trade_no: string
+}
+
+export type PlatformStatusQueryResult =
+  | 'updated'
+  | 'query_failed'
+  | 'persist_failed'
+  | 'unsupported'
+  | 'not_found'
+
+export interface PlatformStatusQueryItem {
+  trade_no: string
+  provider?: string
+  result: PlatformStatusQueryResult
+  platform_payment_status?: PlatformPaymentStatus
+  platform_payment_status_raw?: string
+  platform_payment_status_checked_at?: number
+}
+
+export interface PlatformStatusQueryResponse {
+  summary: {
+    requested: number
+    updated: number
+    /** Eligible orders whose query/persist failed (retryable) */
+    failed: number
+    /** Orders skipped by design (unsupported provider / not found) */
+    skipped: number
+  }
+  items: PlatformStatusQueryItem[]
 }

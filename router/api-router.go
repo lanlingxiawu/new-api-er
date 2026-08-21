@@ -181,6 +181,7 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
 				adminRoute.GET("/topup/export", controller.ExportAllTopUps)
+				adminRoute.POST("/topup/platform-status", middleware.UserCriticalRateLimit(), controller.AdminQueryTopUpPlatformStatus)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
 				adminRoute.GET("/search", controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)

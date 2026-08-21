@@ -43,6 +43,7 @@ import type {
   AlipayPaymentResponse,
   WechatPaymentResponse,
   WechatOrderQueryResponse,
+  PlatformStatusQueryResponse,
 } from './types'
 
 // ============================================================================
@@ -312,10 +313,12 @@ function buildBillingFilterParams(
   if (filters.startTime) params.append('start_time', String(filters.startTime))
   if (filters.endTime) params.append('end_time', String(filters.endTime))
   if (filters.status) params.append('status', filters.status)
-  if (filters.paymentMethod)
-    {params.append('payment_method', filters.paymentMethod)}
-  if (isAdmin && filters.userId && filters.userId > 0)
-    {params.append('user_id', String(filters.userId))}
+  if (filters.paymentMethod) {
+    params.append('payment_method', filters.paymentMethod)
+  }
+  if (isAdmin && filters.userId && filters.userId > 0) {
+    params.append('user_id', String(filters.userId))
+  }
   return params
 }
 
@@ -384,9 +387,7 @@ function parseContentDispositionFilename(
  * business error (Content-Type application/json) instead of a CSV stream, it is
  * decoded and thrown so the caller can surface a readable message.
  */
-async function requestBillingExport(
-  url: string
-): Promise<BillingExportResult> {
+async function requestBillingExport(url: string): Promise<BillingExportResult> {
   let res
   try {
     res = await api.get(url, {
@@ -402,7 +403,9 @@ async function requestBillingExport(
     if (status === 429) {
       throw new Error('TOPUP_EXPORT_RATE_LIMITED', { cause: err })
     }
-    throw err instanceof Error ? err : new Error('Export failed', { cause: err })
+    throw err instanceof Error
+      ? err
+      : new Error('Export failed', { cause: err })
   }
 
   const headers = (res.headers || {}) as Record<string, string>
@@ -461,5 +464,18 @@ export async function completeOrder(
   request: CompleteOrderRequest
 ): Promise<ApiResponse> {
   const res = await api.post('/api/user/topup/complete', request)
+  return res.data
+}
+
+/**
+ * Query and persist upstream payment status for one or more top-up orders.
+ * The backend route is administrator-only.
+ */
+export async function queryTopUpPlatformStatus(
+  tradeNos: string[]
+): Promise<ApiResponse<PlatformStatusQueryResponse>> {
+  const res = await api.post('/api/user/topup/platform-status', {
+    trade_nos: tradeNos,
+  })
   return res.data
 }

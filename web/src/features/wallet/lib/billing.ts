@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { StatusBadgeProps } from '@/components/status-badge'
 import { formatTimestampToDate } from '@/lib/format'
 
-import type { TopupStatus } from '../types'
+import type { PlatformPaymentStatus, TopupStatus } from '../types'
 
 // ============================================================================
 // Billing Utility Functions
@@ -57,6 +57,39 @@ export const STATUS_CONFIG: Record<TopupStatus, StatusConfig> = {
  */
 export function getStatusConfig(status: TopupStatus): StatusConfig {
   return STATUS_CONFIG[status] || STATUS_CONFIG.pending
+}
+
+export const PLATFORM_PAYMENT_STATUS_CONFIG: Record<
+  PlatformPaymentStatus,
+  StatusConfig
+> = {
+  credited: {
+    variant: 'success',
+    label: 'Platform credited',
+  },
+  not_credited: {
+    variant: 'neutral',
+    label: 'Platform not credited',
+  },
+  unknown: {
+    variant: 'warning',
+    label: 'Platform status unknown',
+  },
+}
+
+export function getPlatformPaymentStatusConfig(
+  status: PlatformPaymentStatus
+): StatusConfig {
+  return PLATFORM_PAYMENT_STATUS_CONFIG[status]
+}
+
+export function supportsPlatformStatusQuery(record: {
+  payment_provider?: string
+}): boolean {
+  return (
+    record.payment_provider === 'alipay_official' ||
+    record.payment_provider === 'infini'
+  )
 }
 
 /**
@@ -118,7 +151,9 @@ export function getEnabledPaymentMethods(
     ['wechat_official', flags.enable_wechat_official_topup],
     ['infini', flags.enable_infini_topup],
   ]
-  return mapping.filter(([, enabled]) => Boolean(enabled)).map(([method]) => method)
+  return mapping
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([method]) => method)
 }
 
 /**

@@ -1,3 +1,15 @@
+import {
+  Search,
+  Filter,
+  Copy,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  RotateCcw,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,21 +29,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
-import {
-  Search,
-  Filter,
-  Copy,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  RotateCcw,
-  Loader2,
-} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatCurrencyFromUSD } from '@/lib/currency'
-import { formatNumber, formatQuota } from '@/lib/format'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+
+import { StatusBadge } from '@/components/status-badge'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -62,18 +62,29 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { StatusBadge } from '@/components/status-badge'
+import { Spinner } from '@/components/ui/spinner'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { formatCurrencyFromUSD } from '@/lib/currency'
+import { formatNumber, formatQuota } from '@/lib/format'
+
 import { useBillingHistory } from '../../hooks/use-billing-history'
-import type { TopupStatus } from '../../types'
 import {
   STATUS_CONFIG,
   getStatusConfig,
+  getPlatformPaymentStatusConfig,
   getPaymentMethodName,
   formatTimestamp,
   formatPaymentAmount,
   PAYMENT_METHOD_FILTER_OPTIONS,
+  supportsPlatformStatusQuery,
 } from '../../lib/billing'
+import type { TopupStatus } from '../../types'
 
 interface BillingHistoryDialogProps {
   open: boolean
@@ -91,6 +102,13 @@ const ALL_VALUE = 'all'
 // Status filter options are derived from the canonical status config so the
 // dropdown always reflects the actually-designed top-up statuses.
 const STATUS_OPTIONS = Object.keys(STATUS_CONFIG) as TopupStatus[]
+const BILLING_HISTORY_SKELETON_IDS = [
+  'billing-history-skeleton-1',
+  'billing-history-skeleton-2',
+  'billing-history-skeleton-3',
+  'billing-history-skeleton-4',
+  'billing-history-skeleton-5',
+]
 
 // Convert a Unix-seconds value to a Date for the range picker (and back).
 const secondsToDate = (seconds?: number) =>
@@ -120,6 +138,8 @@ export function BillingHistoryDialog({
     loading,
     completing,
     exporting,
+    queryingPlatformTradeNos,
+    failedPlatformTradeNos,
     isAdmin,
     hasActiveFilters,
     hasAppliedFilters,
@@ -132,6 +152,7 @@ export function BillingHistoryDialog({
     handleResetFilters,
     handleExport,
     handleCompleteOrder,
+    handleQueryPlatformStatus,
   } = useBillingHistory()
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
@@ -147,6 +168,27 @@ export function BillingHistoryDialog({
 
   const canShowExport = isAdmin || userExportEnabled
   const canExport = total > 0
+  // Batch query targets supported orders that are not already confirmed as
+  // credited — re-hitting a settled final state wastes an upstream call.
+  const platformStatusTradeNos = records
+    .filter(
+      (record) =>
+        supportsPlatformStatusQuery(record) &&
+        record.platform_payment_status !== 'credited'
+    )
+    .map((record) => record.trade_no)
+  // Whether the page has any supported order at all (used to explain why the
+  // batch button is disabled: no eligible orders vs. all already confirmed).
+  const hasSupportedOrders = records.some(supportsPlatformStatusQuery)
+  const isBatchPlatformQuerying = platformStatusTradeNos.some((tradeNo) =>
+    queryingPlatformTradeNos.has(tradeNo)
+  )
+  let batchDisabledReason: string | undefined
+  if (platformStatusTradeNos.length === 0) {
+    batchDisabledReason = hasSupportedOrders
+      ? t('All eligible orders on this page are already confirmed')
+      : t('No Alipay or Infini orders on this page')
+  }
 
   const handleConfirmComplete = async () => {
     if (confirmTradeNo) {
@@ -195,7 +237,8 @@ export function BillingHistoryDialog({
                 <Select
                   value={pageSize.toString()}
                   onValueChange={(value) =>
-                    value !== null && handlePageSizeChange(Number.parseInt(value))
+                    value !== null &&
+                    handlePageSizeChange(Number.parseInt(value))
                   }
                 >
                   <SelectTrigger className='h-9 w-[92px] sm:w-32'>
@@ -230,10 +273,7 @@ export function BillingHistoryDialog({
                 value={filters.status || ALL_VALUE}
                 onValueChange={(value) =>
                   handleFilterChange({
-                    status:
-                      value === ALL_VALUE
-                        ? ''
-                        : (value as TopupStatus),
+                    status: value === ALL_VALUE ? '' : (value as TopupStatus),
                   })
                 }
               >
@@ -326,14 +366,42 @@ export function BillingHistoryDialog({
                   {t('Export')}
                 </Button>
               )}
+
+              {isAdmin && (
+                <span title={batchDisabledReason} className='inline-flex'>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    className='h-9'
+                    disabled={
+                      loading ||
+                      platformStatusTradeNos.length === 0 ||
+                      isBatchPlatformQuerying
+                    }
+                    onClick={() =>
+                      handleQueryPlatformStatus(platformStatusTradeNos)
+                    }
+                  >
+                    {isBatchPlatformQuerying ? (
+                      <Spinner data-icon='inline-start' />
+                    ) : (
+                      <RefreshCw data-icon='inline-start' />
+                    )}
+                    {t('Query current page')}
+                  </Button>
+                </span>
+              )}
             </div>
 
             {/* Records List */}
             <ScrollArea className='min-h-0 flex-1 pr-3 sm:pr-4'>
-              {loading ? (
+              {loading && (
                 <div className='space-y-3'>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className='rounded-lg border p-3 sm:p-4'>
+                  {BILLING_HISTORY_SKELETON_IDS.map((skeletonId) => (
+                    <div
+                      key={skeletonId}
+                      className='rounded-lg border p-3 sm:p-4'
+                    >
                       <div className='flex items-start justify-between'>
                         <div className='flex-1 space-y-2'>
                           <Skeleton className='h-4 w-48' />
@@ -349,7 +417,8 @@ export function BillingHistoryDialog({
                     </div>
                   ))}
                 </div>
-              ) : records.length === 0 ? (
+              )}
+              {!loading && records.length === 0 && (
                 <div className='text-muted-foreground flex h-[320px] flex-col items-center justify-center text-center sm:h-[400px]'>
                   <p className='text-sm font-medium'>
                     {t('No billing records found')}
@@ -360,10 +429,23 @@ export function BillingHistoryDialog({
                       : t('Your transaction history will appear here')}
                   </p>
                 </div>
-              ) : (
+              )}
+              {!loading && records.length > 0 && (
                 <div className='space-y-3'>
                   {records.map((record) => {
                     const statusConfig = getStatusConfig(record.status)
+                    const platformStatusConfig = record.platform_payment_status
+                      ? getPlatformPaymentStatusConfig(
+                          record.platform_payment_status
+                        )
+                      : null
+                    const canQueryPlatformStatus =
+                      supportsPlatformStatusQuery(record)
+                    const isQueryingPlatformStatus =
+                      queryingPlatformTradeNos.has(record.trade_no)
+                    const isFailedPlatformStatus = failedPlatformTradeNos.has(
+                      record.trade_no
+                    )
                     return (
                       <div
                         key={record.id}
@@ -401,12 +483,74 @@ export function BillingHistoryDialog({
                               {formatTimestamp(record.create_time)}
                             </div>
                           </div>
-                          <StatusBadge
-                            label={statusConfig.label}
-                            variant={statusConfig.variant}
-                            showDot
-                            copyable={false}
-                          />
+                          <div className='flex shrink-0 flex-col items-end gap-1.5'>
+                            <StatusBadge
+                              label={statusConfig.label}
+                              variant={statusConfig.variant}
+                              showDot
+                              copyable={false}
+                            />
+                            {(platformStatusConfig ||
+                              (isAdmin && canQueryPlatformStatus)) && (
+                              <div className='flex flex-col items-end gap-0.5'>
+                                <div className='flex min-h-6 items-center justify-end gap-0.5'>
+                                  {platformStatusConfig && (
+                                    <StatusBadge
+                                      label={t(platformStatusConfig.label)}
+                                      variant={platformStatusConfig.variant}
+                                      showDot
+                                      copyable={false}
+                                    />
+                                  )}
+                                  {isAdmin && canQueryPlatformStatus && (
+                                    <Tooltip>
+                                      <TooltipTrigger
+                                        render={
+                                          <Button
+                                            size='icon-xs'
+                                            variant='ghost'
+                                            className='text-muted-foreground hover:text-foreground'
+                                            onClick={() =>
+                                              handleQueryPlatformStatus([
+                                                record.trade_no,
+                                              ])
+                                            }
+                                            disabled={isQueryingPlatformStatus}
+                                            aria-label={t(
+                                              'Query platform status'
+                                            )}
+                                          />
+                                        }
+                                      >
+                                        {isQueryingPlatformStatus ? (
+                                          <Spinner />
+                                        ) : (
+                                          <RefreshCw />
+                                        )}
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        {t('Query platform status')}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                </div>
+                                {isFailedPlatformStatus ? (
+                                  <span className='text-destructive text-[11px] leading-none'>
+                                    {t('Query failed, please retry')}
+                                  </span>
+                                ) : (
+                                  record.platform_payment_status_checked_at && (
+                                    <span className='text-muted-foreground text-[11px] leading-none'>
+                                      {t('Last checked')}:{' '}
+                                      {formatTimestamp(
+                                        record.platform_payment_status_checked_at
+                                      )}
+                                    </span>
+                                  )
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {/* Details Grid */}
@@ -437,7 +581,7 @@ export function BillingHistoryDialog({
                             <Label className='text-muted-foreground text-xs'>
                               {t('Payment')}
                             </Label>
-                            <div className='text-sm font-semibold text-red-600'>
+                            <div className='text-destructive text-sm font-semibold'>
                               {isRawQuotaTopup(record)
                                 ? formatPaymentAmount(
                                     record.money,
