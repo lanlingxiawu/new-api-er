@@ -27,6 +27,9 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
   LogsScope,
+  UpstreamLogChannelOption,
+  UpstreamLogQueryData,
+  UpstreamLogQueryRequest,
   UserInfo,
 } from './types'
 
@@ -98,6 +101,37 @@ export async function getUserInfo(
   userId: number
 ): Promise<{ success: boolean; message?: string; data?: UserInfo }> {
   const res = await api.get(`/api/user/${userId}`)
+  return res.data
+}
+
+// ============================================================================
+// Upstream Log Query (admin only)
+// ============================================================================
+
+/**
+ * Query the upstream New API instance's logs for a given channel.
+ * Admin-only endpoint: the backend enforces AdminAuth, loads the channel
+ * credential server-side, and never returns the channel key to the browser.
+ */
+export async function queryUpstreamLog(
+  body: UpstreamLogQueryRequest,
+  signal?: AbortSignal
+): Promise<{ success: boolean; message?: string; data?: UpstreamLogQueryData }> {
+  const res = await api.post('/api/log/upstream/query', body, { signal })
+  return res.data
+}
+
+/** List New API channels available as upstream-log query targets (admin only). */
+export async function getUpstreamLogChannels(
+  keyword = '',
+  signal?: AbortSignal
+): Promise<{
+  success: boolean
+  message?: string
+  data?: UpstreamLogChannelOption[]
+}> {
+  const query = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
+  const res = await api.get(`/api/log/upstream/channels${query}`, { signal })
   return res.data
 }
 

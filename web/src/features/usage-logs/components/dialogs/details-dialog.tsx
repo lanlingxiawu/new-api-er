@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -31,7 +32,7 @@ import {
   Info,
   LogIn,
 } from 'lucide-react'
-import type { TFunction } from 'i18next'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -64,6 +65,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { UpstreamComparePane } from '../../upstream-log/upstream-compare-pane'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -179,7 +181,9 @@ function getUsageBillingPathLabel(
   }
 }
 
-function isUsageBillingPathLocal(adminInfo: LogOtherData['admin_info']): boolean {
+function isUsageBillingPathLocal(
+  adminInfo: LogOtherData['admin_info']
+): boolean {
   if (adminInfo?.usage_billing_path) {
     return adminInfo.usage_billing_path === USAGE_BILLING_PATH.LOCAL
   }
@@ -458,6 +462,7 @@ interface DetailsDialogProps {
 
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
+  const [showUpstreamComparison, setShowUpstreamComparison] = useState(false)
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
@@ -581,6 +586,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
     props.log.type !== 6 &&
     (other?.request_path || conversionChain.length > 0)
 
+  let dialogWidthClassName = 'sm:max-w-lg'
+  if (isTieredBilling) dialogWidthClassName = 'sm:max-w-4xl lg:max-w-5xl'
+  if (showUpstreamComparison) {
+    dialogWidthClassName = 'sm:max-w-[min(96vw,90rem)]'
+  }
+
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
@@ -594,7 +605,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
   return (
     <Dialog
       open={props.open}
-      onOpenChange={props.onOpenChange}
+      onOpenChange={(open) => {
+        if (!open) setShowUpstreamComparison(false)
+        props.onOpenChange(open)
+      }}
       title={
         <>
           {t('Log Details')}
@@ -610,28 +624,60 @@ export function DetailsDialog(props: DetailsDialogProps) {
       contentClassName={cn(
         'min-w-0 overflow-hidden',
         'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
-        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-lg'
+        dialogWidthClassName
       )}
       headerClassName='max-sm:gap-1'
       titleClassName='flex items-center gap-2 text-base'
       descriptionClassName='sr-only'
-      contentHeight='min(72dvh, 720px)'
-      bodyClassName='pr-2 sm:pr-4'
+      contentHeight={
+        showUpstreamComparison ? 'min(76dvh, 780px)' : 'min(72dvh, 720px)'
+      }
+      bodyClassName={cn(
+        'pr-2 sm:pr-4',
+        showUpstreamComparison && 'grid gap-4 lg:grid-cols-2'
+      )}
     >
       <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
+        {showUpstreamComparison && (
+          <h3 className='border-b pb-2 text-sm font-semibold'>
+            {t('Log Details')}
+          </h3>
+        )}
         {/* Overview section - key identifiers */}
         <div className='min-w-0 space-y-1'>
           {props.log.request_id && (
             <DetailRow
               label={t('Request ID')}
-              value={props.log.request_id}
+              value={
+                <span className='flex items-center gap-2'>
+                  <span className='min-w-0 break-all'>
+                    {props.log.request_id}
+                  </span>
+                  {props.isAdmin &&
+                    props.log.upstream_request_id &&
+                    !showUpstreamComparison && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        className='h-6 shrink-0 px-2 text-xs'
+                        onClick={() => setShowUpstreamComparison(true)}
+                      >
+                        {t('Query Upstream')}
+                      </Button>
+                    )}
+                </span>
+              }
               mono
             />
           )}
           {props.log.upstream_request_id && (
             <DetailRow
               label={t('Upstream Request ID')}
-              value={props.log.upstream_request_id}
+              value={
+                <span className='min-w-0 break-all'>
+                  {props.log.upstream_request_id}
+                </span>
+              }
               mono
             />
           )}
@@ -1232,6 +1278,15 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </div>
         )}
       </div>
+
+      {showUpstreamComparison && (
+        <aside className='min-w-0 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-4'>
+          <h3 className='mb-3 border-b pb-2 text-sm font-semibold'>
+            {t('Upstream Log Details')}
+          </h3>
+          <UpstreamComparePane localRequestId={props.log.request_id} />
+        </aside>
+      )}
     </Dialog>
   )
 }

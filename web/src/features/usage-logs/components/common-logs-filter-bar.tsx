@@ -25,7 +25,6 @@ import { useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useIsEmployee } from '@/hooks/use-admin'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -46,6 +45,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { useIsEmployee } from '@/hooks/use-admin'
+
 import { exportLogs, LogExportError } from '../api'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
@@ -94,6 +95,7 @@ function buildSearchSourceKey(values: {
   token?: unknown
   group?: unknown
   username?: unknown
+  customerUserId?: unknown
   requestId?: unknown
   upstreamRequestId?: unknown
   type?: unknown
@@ -106,6 +108,7 @@ function buildSearchSourceKey(values: {
     values.token,
     values.group,
     values.username,
+    values.customerUserId,
     values.requestId,
     values.upstreamRequestId,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
@@ -127,7 +130,9 @@ export function CommonLogsFilterBar<TData>(
   const searchParams = route.useSearch()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const isEmployee = useIsEmployee()
-  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
+  let logsScope: 'admin' | 'employee' | 'self' = 'self'
+  if (isEmployee) logsScope = 'employee'
+  if (isAdmin) logsScope = 'admin'
   const showAdminFields = logsScope !== 'self'
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
@@ -142,6 +147,7 @@ export function CommonLogsFilterBar<TData>(
       token: searchParams.token,
       group: searchParams.group,
       username: searchParams.username,
+      customerUserId: searchParams.customerUserId,
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
       type: searchParams.type,
@@ -214,14 +220,28 @@ export function CommonLogsFilterBar<TData>(
       to: '/usage-logs/$section',
       params: { section: 'common' },
       search: {
+        ...searchParams,
+        type: undefined,
+        filter: undefined,
+        model: undefined,
+        token: undefined,
+        channel: undefined,
+        group: undefined,
+        username: undefined,
+        customerUserId: undefined,
+        requestId: undefined,
+        upstreamRequestId: undefined,
+        startTime: undefined,
+        endTime: undefined,
         ...filterParams,
         ...logTypeSearch(logType),
         page: 1,
+        localSection: 'common',
       },
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [filters, logType, logTypeSearch, navigate, queryClient])
+  }, [filters, logType, logTypeSearch, navigate, queryClient, searchParams])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
@@ -241,13 +261,26 @@ export function CommonLogsFilterBar<TData>(
       to: '/usage-logs/$section',
       params: { section: 'common' },
       search: {
+        ...searchParams,
         page: 1,
+        pageSize: searchParams.pageSize,
+        type: undefined,
+        filter: undefined,
+        model: undefined,
+        token: undefined,
+        channel: undefined,
+        group: undefined,
+        username: undefined,
+        customerUserId: undefined,
+        requestId: undefined,
+        upstreamRequestId: undefined,
         ...resetSearch,
+        localSection: 'common',
       },
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [logTypeSearch, navigate, queryClient])
+  }, [logTypeSearch, navigate, queryClient, searchParams])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -274,7 +307,9 @@ export function CommonLogsFilterBar<TData>(
       await exportLogs(params, exportScope)
     } catch (e) {
       if (axios.isAxiosError(e) && e.response?.status === 429) {
-        toast.error(t('Downloading too frequently, please try again in 10 minutes.'))
+        toast.error(
+          t('Downloading too frequently, please try again in 10 minutes.')
+        )
       } else if (e instanceof LogExportError && e.message) {
         toast.error(e.message)
       } else {

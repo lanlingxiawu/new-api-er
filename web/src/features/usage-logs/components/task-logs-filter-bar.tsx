@@ -121,12 +121,26 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       to: '/usage-logs/$section',
       params: { section: props.logCategory },
       search: {
+        ...searchParams,
+        type: undefined,
+        model: undefined,
+        token: undefined,
+        group: undefined,
+        username: undefined,
+        customerUserId: undefined,
+        requestId: undefined,
+        upstreamRequestId: undefined,
+        filter: undefined,
+        channel: undefined,
+        startTime: undefined,
+        endTime: undefined,
         ...filterParams,
         page: 1,
+        localSection: props.logCategory,
       },
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
-  }, [filters, navigate, props.logCategory, queryClient])
+  }, [filters, navigate, props.logCategory, queryClient, searchParams])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
@@ -137,13 +151,25 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       to: '/usage-logs/$section',
       params: { section: props.logCategory },
       search: {
+        ...searchParams,
         page: 1,
+        type: undefined,
+        model: undefined,
+        token: undefined,
+        group: undefined,
+        username: undefined,
+        customerUserId: undefined,
+        requestId: undefined,
+        upstreamRequestId: undefined,
+        filter: undefined,
+        channel: undefined,
         startTime: start.getTime(),
         endTime: end.getTime(),
+        localSection: props.logCategory,
       },
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
-  }, [navigate, props.logCategory, queryClient])
+  }, [navigate, props.logCategory, queryClient, searchParams])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

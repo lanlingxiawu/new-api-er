@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // ---------------------------------------------------------------------------
@@ -684,6 +685,71 @@ func TestGetLogByTokenId(t *testing.T) {
 	assert.NotContains(t, m, "admin_info") // formatUserLogs applied
 }
 
+func TestGetLogByTokenIdWithFilters(t *testing.T) {
+	requireLogDB(t)
+	uid := nextTestID()
+	tokenID := nextTestID()
+	otherToken := nextTestID()
+	logCleanupUser(t, uid)
+	now := common.GetTimestamp()
+	grp := uniq("gltf")
+
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.TokenId, l.ModelName, l.Group, l.CreatedAt, l.RequestId = uid, tokenID, "gpt-4o", grp, now, "rq-1"
+	})
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.TokenId, l.ModelName, l.Group, l.CreatedAt, l.Type = uid, tokenID, "claude-3", grp, now+1, LogTypeManage
+	})
+	// a row on a DIFFERENT token that must never leak through token scoping
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.TokenId, l.ModelName, l.CreatedAt, l.RequestId = uid, otherToken, "gpt-4o", now, "rq-1"
+	})
+
+	t.Run("token scoped - all", func(t *testing.T) {
+		logs, total, err := GetLogByTokenIdWithFilters(tokenID, LogTypeUnknown, 0, 0, "", "", "", 0, 50, 0, 0, "", "", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 2, total)
+		assert.Len(t, logs, 2)
+	})
+
+	t.Run("request id does not cross token boundary", func(t *testing.T) {
+		logs, total, err := GetLogByTokenIdWithFilters(tokenID, LogTypeUnknown, 0, 0, "", "", "", 0, 50, 0, 0, "", "rq-1", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, total)
+		require.Len(t, logs, 1)
+		// the matching row is the one on tokenID, not otherToken
+		logs2, total2, err := GetLogByTokenIdWithFilters(otherToken, LogTypeUnknown, 0, 0, "", "", "", 0, 50, 0, 0, "", "rq-1", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, total2)
+		require.Len(t, logs2, 1)
+	})
+
+	t.Run("type filter", func(t *testing.T) {
+		_, total, err := GetLogByTokenIdWithFilters(tokenID, LogTypeManage, 0, 0, "", "", "", 0, 50, 0, 0, "", "", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, total)
+	})
+
+	t.Run("model fuzzy filter", func(t *testing.T) {
+		_, total, err := GetLogByTokenIdWithFilters(tokenID, LogTypeUnknown, 0, 0, "claude%", "", "", 0, 50, 0, 0, "", "", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, total)
+	})
+
+	t.Run("group + time range", func(t *testing.T) {
+		_, total, err := GetLogByTokenIdWithFilters(tokenID, LogTypeUnknown, now+1, now+1, "", "", "", 0, 50, 0, 0, grp, "", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, total)
+	})
+
+	t.Run("empty result for unknown token", func(t *testing.T) {
+		logs, total, err := GetLogByTokenIdWithFilters(nextTestID(), LogTypeUnknown, 0, 0, "", "", "", 0, 50, 0, 0, "", "", "")
+		require.NoError(t, err)
+		assert.EqualValues(t, 0, total)
+		assert.Empty(t, logs)
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Aggregations: GetConsumptionByChannelGroup / SumUsedQuota / SumUsedToken
 // ---------------------------------------------------------------------------
@@ -897,4 +963,37 @@ func countScopedOld(userID int, ts int64) (int64, error) {
 	var n int64
 	err := LOG_DB.Model(&Log{}).Where("user_id = ? AND created_at < ?", userID, ts).Count(&n).Error
 	return n, err
+}
+
+func TestGetLogTraceByRequestId(t *testing.T) {
+	requireLogDB(t)
+	requestID := uniq("trace-request")
+
+	older := mkLogRow(t, func(l *Log) {
+		l.RequestId = requestID
+		l.UpstreamRequestId = "upstream-older"
+		l.ChannelId = nextTestID()
+		l.Other = `{"admin_info":{"multi_key_index":1}}`
+		l.CreatedAt = common.GetTimestamp() - 1
+	})
+	newer := mkLogRow(t, func(l *Log) {
+		l.RequestId = requestID
+		l.UpstreamRequestId = "upstream-newer"
+		l.ChannelId = nextTestID()
+		l.Other = `{"admin_info":{"multi_key_index":2}}`
+		l.CreatedAt = common.GetTimestamp()
+	})
+
+	trace, err := GetLogTraceByRequestId(requestID)
+	require.NoError(t, err)
+	require.NotNil(t, trace)
+	assert.Equal(t, newer.RequestId, trace.RequestId)
+	assert.Equal(t, newer.UpstreamRequestId, trace.UpstreamRequestId)
+	assert.Equal(t, newer.ChannelId, trace.ChannelId)
+	assert.Equal(t, newer.Other, trace.Other)
+	assert.Zero(t, trace.UserId, "trace lookup must only project routing fields")
+	assert.NotEqual(t, older.ChannelId, trace.ChannelId)
+
+	_, err = GetLogTraceByRequestId(uniq("missing-trace"))
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }

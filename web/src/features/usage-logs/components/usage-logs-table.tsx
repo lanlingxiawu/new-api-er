@@ -19,8 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
 import {
   DataTablePage,
   DataTableRow,
@@ -63,22 +65,64 @@ function getColumnVisibilityStorageKey(
 }
 
 function deserializeLogTypeFilter(value: unknown): unknown[] {
-  const values = Array.isArray(value) ? value : value ? [value] : []
+  let values: unknown[] = []
+  if (Array.isArray(value)) values = value
+  else if (value) values = [value]
   return values.filter((item) => String(item) !== LOG_TYPE_ALL_VALUE)
 }
 
 interface UsageLogsTableProps {
   logCategory: LogCategory
+  isWorkspaceActive?: boolean
 }
 
-export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+export function UsageLogsTable({
+  logCategory,
+  isWorkspaceActive = true,
+}: UsageLogsTableProps) {
   const { t } = useTranslation()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const isEmployee = useIsEmployee()
-  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
+  let logsScope: 'admin' | 'employee' | 'self' = 'self'
+  if (isEmployee) logsScope = 'employee'
+  if (isAdmin) logsScope = 'admin'
   const showAdminFields =
     isAdmin || (logsScope === 'employee' && logCategory === 'common')
   const searchParams = route.useSearch()
+  const localSearchParams = useMemo(
+    () => ({
+      page: searchParams.page,
+      pageSize: searchParams.pageSize,
+      type: searchParams.type,
+      filter: searchParams.filter,
+      model: searchParams.model,
+      token: searchParams.token,
+      channel: searchParams.channel,
+      group: searchParams.group,
+      username: searchParams.username,
+      customerUserId: searchParams.customerUserId,
+      requestId: searchParams.requestId,
+      upstreamRequestId: searchParams.upstreamRequestId,
+      startTime: searchParams.startTime,
+      endTime: searchParams.endTime,
+    }),
+    [
+      searchParams.page,
+      searchParams.pageSize,
+      searchParams.type,
+      searchParams.filter,
+      searchParams.model,
+      searchParams.token,
+      searchParams.channel,
+      searchParams.group,
+      searchParams.username,
+      searchParams.customerUserId,
+      searchParams.requestId,
+      searchParams.upstreamRequestId,
+      searchParams.startTime,
+      searchParams.endTime,
+    ]
+  )
 
   const {
     columnFilters,
@@ -87,7 +131,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     onPaginationChange,
     ensurePageInRange,
   } = useTableUrlState({
-    search: route.useSearch(),
+    search: localSearchParams,
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: 20 },
     globalFilter: { enabled: false },
@@ -135,7 +179,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       pagination.pageIndex + 1,
       pagination.pageSize,
       columnFilters,
-      searchParams,
+      localSearchParams,
       t,
     ],
     queryFn: async () => {
@@ -144,7 +188,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         scope: logsScope,
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
-        searchParams,
+        searchParams: localSearchParams,
         columnFilters,
       })
 
@@ -199,6 +243,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       )}
       skeletonKeyPrefix='usage-log-skeleton'
       applyHeaderSize
+      showPagination={isWorkspaceActive}
       tableClassName={cn(
         '[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:text-[13px] [&_[data-slot=table]_td_*]:text-[13px] [&_[data-slot=table]_th]:text-[13px] [&_[data-slot=table]_th_*]:text-[13px]'
       )}

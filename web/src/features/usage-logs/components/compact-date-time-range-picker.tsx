@@ -35,6 +35,7 @@ interface CompactDateTimeRangePickerProps {
   end?: Date
   onChange: (range: { start?: Date; end?: Date }) => void
   className?: string
+  disabled?: boolean
 }
 
 function toInputValue(date?: Date): string {
@@ -52,6 +53,7 @@ export function CompactDateTimeRangePicker({
   end,
   onChange,
   className,
+  disabled = false,
 }: CompactDateTimeRangePickerProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -117,12 +119,13 @@ export function CompactDateTimeRangePicker({
   }
 
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
+    <Popover open={open && !disabled} onOpenChange={handleOpenChange}>
       <PopoverTrigger
         render={
           <Button
             type='button'
             variant='outline'
+            disabled={disabled}
             className={cn(
               'w-full justify-start gap-2 px-2.5 text-sm leading-5 font-normal tabular-nums',
               !start && !end && 'text-muted-foreground',

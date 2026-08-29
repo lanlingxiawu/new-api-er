@@ -48,6 +48,88 @@ export interface UsageLog {
 }
 
 // ============================================================================
+// Upstream Log Query (admin only)
+// ============================================================================
+
+/** Filters mirror the standard log query semantics; empty fields are omitted. */
+export interface UpstreamLogFilters {
+  type?: number
+  username?: string
+  token_name?: string
+  model_name?: string
+  start_timestamp?: number
+  end_timestamp?: number
+  channel?: number
+  log_id?: number
+  group?: string
+  request_id?: string
+  upstream_request_id?: string
+}
+
+export interface UpstreamLogQueryRequest {
+  local_request_id?: string
+  channel_id?: number
+  key_index?: number
+  page?: number
+  page_size?: number
+  filters?: UpstreamLogFilters
+}
+
+export interface UpstreamLogItem {
+  id: number
+  created_at: number
+  type: number
+  request_id: string
+  upstream_request_id?: string
+  model_name: string
+  token_name?: string
+  quota: number
+  prompt_tokens: number
+  completion_tokens: number
+  use_time: number
+  is_stream: boolean
+  content?: string
+  other?: Record<string, unknown>
+}
+
+export type UpstreamLogScope = 'exact' | 'filtered' | 'recent_fallback'
+
+export interface UpstreamLogQueryData {
+  source?: {
+    request_id: string
+    upstream_request_id: string
+    /** False when the local log did not record which channel key was used. */
+    key_index_from_log: boolean
+  }
+  channel: {
+    id: number
+    name: string
+    type: number
+    key_index: number
+    is_multi_key: boolean
+  }
+  query: {
+    filters: UpstreamLogFilters
+    scope: UpstreamLogScope
+    upstream_supports_exact: boolean
+    page: number
+    page_size: number
+  }
+  total: number
+  items: UpstreamLogItem[]
+  elapsed_ms: number
+}
+
+export interface UpstreamLogChannelOption {
+  id: number
+  name: string
+  type: number
+  is_multi_key: boolean
+  key_count: number
+  status: number
+}
+
+// ============================================================================
 // Log Category Types
 // ============================================================================
 

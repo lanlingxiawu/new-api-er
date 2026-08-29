@@ -362,6 +362,54 @@ func GetLogByKey(c *gin.Context) {
 	})
 }
 
+// UpstreamLogQueryCapabilityHeader 标记本实例的令牌日志查询接口原生支持完整筛选，
+// 下游 new-api 实例据此判断可执行精确/筛选查询，而非仅拉取近期日志降级过滤。
+const UpstreamLogQueryCapabilityHeader = "X-NewAPI-Log-Query"
+const UpstreamLogQueryCapabilityValue = "filters-v1"
+
+// GetLogByKeyQuery 是 /api/log/token/query 的处理器：在 TokenAuthReadOnly 之后，
+// 强制以当前认证令牌的 token_id 为作用域，叠加与通用日志查询一致的筛选条件返回分页日志。
+// 该接口只读、只暴露当前令牌自身的日志，绝不允许扩大到其他令牌。
+func GetLogByKeyQuery(c *gin.Context) {
+	tokenId := c.GetInt("token_id")
+	if tokenId == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "无效的令牌",
+		})
+		return
+	}
+	pageInfo := common.GetPageQuery(c)
+	logType, _ := strconv.Atoi(c.Query("type"))
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	username := c.Query("username")
+	tokenName := c.Query("token_name")
+	modelName := c.Query("model_name")
+	channel, _ := strconv.Atoi(c.Query("channel"))
+	logId, _ := strconv.Atoi(c.Query("log_id"))
+	group := c.Query("group")
+	requestId := c.Query("request_id")
+	upstreamRequestId := c.Query("upstream_request_id")
+
+	// 声明本实例原生支持完整筛选，供下游实例区分精确查询与近期降级。
+	c.Header(UpstreamLogQueryCapabilityHeader, UpstreamLogQueryCapabilityValue)
+
+	logs, total, err := model.GetLogByTokenIdWithFilters(tokenId, logType, startTimestamp, endTimestamp,
+		modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, logId, group,
+		requestId, upstreamRequestId)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(logs)
+	common.ApiSuccess(c, pageInfo)
+}
+
 func GetLogsStat(c *gin.Context) {
 	logType, _ := strconv.Atoi(c.Query("type"))
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)

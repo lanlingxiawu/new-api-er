@@ -43,6 +43,12 @@ const USAGE_LOGS_SECTIONS = [
     titleKey: 'Export Center',
     build: () => null, // Content is rendered directly in the page component
   },
+  {
+    // Admin-only upstream log workspace; AdminAuth remains the final boundary.
+    id: 'upstream',
+    titleKey: 'Upstream Logs',
+    build: () => null,
+  },
 ] as const
 
 export type UsageLogsSectionId = (typeof USAGE_LOGS_SECTIONS)[number]['id']

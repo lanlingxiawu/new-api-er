@@ -48,6 +48,23 @@ const usageLogsSearchSchema = z.object({
   upstreamRequestId: z.string().optional().catch(''),
   startTime: z.number().optional(),
   endTime: z.number().optional(),
+  localSection: z
+    .enum(['common', 'drawing', 'task', 'export'])
+    .optional()
+    .catch('common'),
+  upstreamPage: z.number().optional().catch(1),
+  upstreamPageSize: z.number().optional().catch(undefined),
+  upstreamType: logTypeSearchSchema.optional(),
+  upstreamModel: z.string().optional().catch(''),
+  upstreamToken: z.string().optional().catch(''),
+  upstreamChannel: z.string().optional().catch(''),
+  upstreamGroup: z.string().optional().catch(''),
+  upstreamUsername: z.string().optional().catch(''),
+  upstreamLocalRequestId: z.string().optional().catch(''),
+  upstreamFilterRequestId: z.string().optional().catch(''),
+  upstreamStartTime: z.number().optional(),
+  upstreamEndTime: z.number().optional(),
+  upstreamFilterKeyIndex: z.number().int().nonnegative().optional(),
 })
 
 export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
@@ -62,7 +79,11 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
     const hasTypeSearch = Array.isArray(search?.type)
       ? search.type.length > 0
       : search?.type != null && search.type !== ''
-    if (params.section !== 'common' && hasTypeSearch) {
+    if (
+      params.section !== 'common' &&
+      params.section !== 'upstream' &&
+      hasTypeSearch
+    ) {
       throw redirect({
         to: '/usage-logs/$section',
         params: { section: params.section },

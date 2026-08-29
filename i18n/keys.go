@@ -522,3 +522,22 @@ const (
 	MsgPriceMonitorAlreadyRunning  = "price_monitor.already_running"
 	MsgPriceMonitorMasterRequired  = "price_monitor.master_required"
 )
+
+// Upstream log query (渠道上游日志查询) — admin only
+const (
+	MsgUpstreamLogChannelNotFound        = "upstream_log.channel_not_found"
+	MsgUpstreamLogUnsupportedChannelType = "upstream_log.unsupported_channel_type"
+	MsgUpstreamLogBaseURLMissing         = "upstream_log.base_url_missing"
+	MsgUpstreamLogKeyMissing             = "upstream_log.key_missing"
+	MsgUpstreamLogKeyIndexRequired       = "upstream_log.key_index_required"
+	MsgUpstreamLogKeyIndexInvalid        = "upstream_log.key_index_invalid"
+	MsgUpstreamLogBusy                   = "upstream_log.query_busy"
+	MsgUpstreamLogTimeout                = "upstream_log.timeout"
+	MsgUpstreamLogUnauthorized           = "upstream_log.unauthorized"
+	MsgUpstreamLogUnavailable            = "upstream_log.upstream_unavailable"
+	MsgUpstreamLogInvalidResponse        = "upstream_log.invalid_response"
+	MsgUpstreamLogInvalidParams          = "upstream_log.invalid_params"
+	MsgUpstreamLogLocalRequestNotFound   = "upstream_log.local_request_not_found"
+	MsgUpstreamLogRequestIdMissing       = "upstream_log.upstream_request_id_missing"
+	MsgUpstreamLogTraceKeyIndexMissing   = "upstream_log.trace_key_index_missing"
+)

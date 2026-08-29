@@ -428,6 +428,11 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/employee", middleware.UserAuth(), controller.GetEmployeeCustomerLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
+		// 渠道上游日志查询（管理员专属）：必须注册在下方 logRoute.Use(PublicQueryRateLimit)
+		// 之前，避免误挂公开查询限流、脱离管理员频控语义。
+		logRoute.POST("/upstream/query", middleware.AdminAuth(), controller.QueryUpstreamLog)
+		logRoute.GET("/upstream/channels", middleware.AdminAuth(), controller.GetUpstreamLogChannels)
+
 		// 后台导出（管理员专属）：任务化、分片、断点续传。
 		// 普通用户的自助导出仍走上面的 /log/self/export 同步路径。
 		logExportRoute := apiRouter.Group("/log/export")
@@ -471,6 +476,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.Use(middleware.CORS(), middleware.PublicQueryRateLimit())
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
+			logRoute.GET("/token/query", middleware.TokenAuthReadOnly(), controller.GetLogByKeyQuery)
 		}
 		groupAdminRoute := apiRouter.Group("/group")
 		groupAdminRoute.Use(middleware.AdminAuth())

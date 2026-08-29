@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
-import { useCallback, useMemo } from 'react'
+import { Activity, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -27,7 +27,6 @@ import { CacheStatsDialog } from '@/features/system-settings/general/channel-aff
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
-import { LogExportCenter } from './export'
 import {
   type LogsViewScope,
   UsageLogsProvider,
@@ -35,14 +34,17 @@ import {
   useUsageLogsContext,
 } from './components/usage-logs-provider'
 import { UsageLogsTable } from './components/usage-logs-table'
+import { LogExportCenter } from './export'
 import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
   type UsageLogsSectionId,
 } from './section-registry'
+import { UpstreamLogsPage } from './upstream-log/upstream-logs-page'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 const TASK_LOG_SECTIONS = ['drawing', 'task'] as const
+type LocalUsageLogsSectionId = Exclude<UsageLogsSectionId, 'upstream'>
 
 const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
   common: {
@@ -57,12 +59,16 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
   export: {
     titleKey: 'Export Center',
   },
+  upstream: {
+    titleKey: 'Upstream Logs',
+  },
 }
 
 function UsageLogsContent() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const params = route.useParams()
+  const searchParams = route.useSearch()
   const activeCategory: UsageLogsSectionId =
     params.section && isUsageLogsSectionId(params.section)
       ? params.section
@@ -104,39 +110,124 @@ function UsageLogsContent() {
 
   const handleSectionChange = useCallback(
     (section: string) => {
+      if (!isUsageLogsSectionId(section) || section === 'upstream') return
       void navigate({
         to: '/usage-logs/$section',
-        params: { section: section as UsageLogsSectionId },
+        params: { section },
+        search: {
+          ...searchParams,
+          page: 1,
+          filter: undefined,
+          localSection: section,
+        },
       })
     },
-    [navigate]
+    [navigate, searchParams]
   )
 
-  const handleViewScopeChange = useCallback(
-    (scope: string) => {
-      if (scope === 'all' || scope === 'self') {
-        setViewScope(scope as LogsViewScope)
+  const isUpstreamSection = activeCategory === 'upstream'
+  const savedLocalSection: LocalUsageLogsSectionId =
+    searchParams.localSection ?? 'common'
+  const localSection: LocalUsageLogsSectionId = isUpstreamSection
+    ? savedLocalSection
+    : activeCategory
+
+  const handleHeaderTabChange = useCallback(
+    (tab: string) => {
+      if (tab === 'upstream') {
+        if (!canManageScope || isUpstreamSection) return
+        void navigate({
+          to: '/usage-logs/$section',
+          params: { section: 'upstream' },
+          search: {
+            ...searchParams,
+            localSection,
+          },
+        })
+        return
       }
+      if (tab !== 'all' && tab !== 'self') return
+      setViewScope(tab as LogsViewScope)
+      const targetSection = isUpstreamSection
+        ? savedLocalSection
+        : localSection
+      void navigate({
+        to: '/usage-logs/$section',
+        params: { section: targetSection },
+        search: {
+          ...searchParams,
+          page: 1,
+          localSection: targetSection,
+        },
+        replace: true,
+      })
     },
-    [setViewScope]
+    [
+      canManageScope,
+      isUpstreamSection,
+      localSection,
+      navigate,
+      savedLocalSection,
+      searchParams,
+      setViewScope,
+    ]
   )
+
+  useEffect(() => {
+    if (!isUpstreamSection || canManageScope) return
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: {
+        ...searchParams,
+        upstreamPage: undefined,
+        upstreamPageSize: undefined,
+        upstreamType: undefined,
+        upstreamModel: undefined,
+        upstreamToken: undefined,
+        upstreamChannel: undefined,
+        upstreamGroup: undefined,
+        upstreamUsername: undefined,
+        upstreamLocalRequestId: undefined,
+        upstreamFilterRequestId: undefined,
+        upstreamStartTime: undefined,
+        upstreamEndTime: undefined,
+        upstreamFilterKeyIndex: undefined,
+      },
+      replace: true,
+    })
+  }, [canManageScope, isUpstreamSection, navigate, searchParams])
 
   // 导出中心是管理员专属的后台任务页：非管理员直接看回普通日志，
   // 而不是渲染一个注定 403 的空页面。
-  const isExportSection = activeCategory === 'export' && canManageScope
+  const isExportSection = localSection === 'export' && canManageScope
   // 非管理员访问 /usage-logs/export 时回落到普通日志：标题也必须跟着回落，
   // 否则会出现「标题写着任务日志、下面渲染的是普通日志」。
-  const isCommonView = activeCategory === 'common' || activeCategory === 'export'
+  const isCommonView = localSection === 'common' || localSection === 'export'
   let pageMeta = SECTION_META.task
-  if (isExportSection) {
+  if (isUpstreamSection && canManageScope) {
+    pageMeta = SECTION_META.upstream
+  } else if (isExportSection) {
     pageMeta = SECTION_META.export
   } else if (isCommonView) {
     pageMeta = SECTION_META.common
   }
   const showTaskSwitcher =
-    activeCategory !== 'common' &&
-    !isExportSection &&
-    visibleSections.length > 1
+    localSection !== 'common' && !isExportSection && visibleSections.length > 1
+
+  const logCategory =
+    localSection === 'drawing' || localSection === 'task'
+      ? localSection
+      : 'common'
+  let localPageContent = (
+    <UsageLogsTable
+      logCategory={logCategory}
+      isWorkspaceActive={!isUpstreamSection}
+    />
+  )
+  if (isExportSection) {
+    localPageContent = <LogExportCenter />
+  }
 
   return (
     <>
@@ -146,51 +237,64 @@ function UsageLogsContent() {
         </SectionPageLayout.Title>
         {canManageScope && (
           <SectionPageLayout.Actions>
-            <Tabs value={viewScope} onValueChange={handleViewScopeChange}>
+            <Tabs
+              value={isUpstreamSection ? 'upstream' : viewScope}
+              onValueChange={handleHeaderTabChange}
+            >
               <TabsList>
                 <TabsTrigger value='all'>{t('All')}</TabsTrigger>
                 <TabsTrigger value='self'>{t('Only Mine')}</TabsTrigger>
+                <TabsTrigger value='upstream'>{t('Upstream Logs')}</TabsTrigger>
               </TabsList>
             </Tabs>
           </SectionPageLayout.Actions>
         )}
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
-            {showTaskSwitcher && (
-              <Tabs value={activeCategory} onValueChange={handleSectionChange}>
-                <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-                  {visibleSections.map((section) => (
-                    <TabsTrigger key={section} value={section}>
-                      {t(SECTION_META[section].titleKey)}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
+            <Activity mode={isUpstreamSection ? 'hidden' : 'visible'}>
+              <div className='flex h-full min-h-0 flex-col gap-4'>
+                {showTaskSwitcher && (
+                  <Tabs
+                    value={localSection}
+                    onValueChange={handleSectionChange}
+                  >
+                    <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
+                      {visibleSections.map((section) => (
+                        <TabsTrigger key={section} value={section}>
+                          {t(SECTION_META[section].titleKey)}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
+                )}
+                {/* 导出中心是从使用日志页的「高级导出」进来的，给一条一键返回的路。 */}
+                {isExportSection && (
+                  <Tabs
+                    value={localSection}
+                    onValueChange={handleSectionChange}
+                  >
+                    <TabsList>
+                      <TabsTrigger value='common'>
+                        {t(SECTION_META.common.titleKey)}
+                      </TabsTrigger>
+                      <TabsTrigger value='export'>
+                        {t(SECTION_META.export.titleKey)}
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                )}
+                <div className='min-h-0 flex-1 overflow-y-auto'>
+                  {localPageContent}
+                </div>
+              </div>
+            </Activity>
+            {canManageScope && (
+              <Activity mode={isUpstreamSection ? 'visible' : 'hidden'}>
+                <div className='h-full min-h-0 overflow-y-auto'>
+                  <UpstreamLogsPage isWorkspaceActive={isUpstreamSection} />
+                </div>
+              </Activity>
             )}
-            {/* 导出中心是从使用日志页的「高级导出」进来的，给一条一键返回的路。 */}
-            {isExportSection && (
-              <Tabs value={activeCategory} onValueChange={handleSectionChange}>
-                <TabsList>
-                  <TabsTrigger value='common'>
-                    {t(SECTION_META.common.titleKey)}
-                  </TabsTrigger>
-                  <TabsTrigger value='export'>
-                    {t(SECTION_META.export.titleKey)}
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-            )}
-            <div className='min-h-0 flex-1 overflow-y-auto'>
-              {isExportSection ? (
-                <LogExportCenter />
-              ) : (
-                <UsageLogsTable
-                  logCategory={
-                    activeCategory === 'export' ? 'common' : activeCategory
-                  }
-                />
-              )}
-            </div>
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>

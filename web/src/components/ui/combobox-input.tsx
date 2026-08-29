@@ -39,6 +39,8 @@ interface ComboboxInputProps {
   id?: string
   allowCustomValue?: boolean
   openOnFocus?: boolean
+  onSearchValueChange?: (value: string) => void
+  disabled?: boolean
 }
 
 export function ComboboxInput({
@@ -51,6 +53,8 @@ export function ComboboxInput({
   id,
   allowCustomValue = false,
   openOnFocus = true,
+  onSearchValueChange,
+  disabled = false,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -96,17 +100,19 @@ export function ComboboxInput({
       ) {
         setOpen(false)
         setSearchValue('')
+        onSearchValueChange?.('')
       }
     }
 
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [open])
+  }, [onSearchValueChange, open])
 
   const handleSelect = (selectedValue: string) => {
     onValueChange(selectedValue)
     setOpen(false)
     setSearchValue('')
+    onSearchValueChange?.('')
     inputRef.current?.focus()
   }
 
@@ -114,6 +120,7 @@ export function ComboboxInput({
     if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       initialValueRef.current = value
       setSearchValue(value)
+      onSearchValueChange?.(value)
       setOpen(true)
       return
     }
@@ -143,6 +150,7 @@ export function ComboboxInput({
           // No highlighted option, just close the dropdown and keep current value
           setOpen(false)
           setSearchValue('')
+          onSearchValueChange?.('')
         }
         break
       case 'Escape':
@@ -152,6 +160,7 @@ export function ComboboxInput({
         }
         setOpen(false)
         setSearchValue('')
+        onSearchValueChange?.('')
         break
     }
   }
@@ -163,7 +172,7 @@ export function ComboboxInput({
     item?.scrollIntoView({ block: 'nearest' })
   }, [highlightedIndex])
 
-  const showDropdown = open
+  const showDropdown = open && !disabled
 
   return (
     <div ref={containerRef} className='relative'>
@@ -182,11 +191,13 @@ export function ComboboxInput({
             : undefined
         }
         autoComplete='off'
+        disabled={disabled}
         placeholder={placeholder}
         value={displayValue}
         onChange={(e) => {
           const nextValue = e.target.value
           setSearchValue(nextValue)
+          onSearchValueChange?.(nextValue)
           if (allowCustomValue) {
             onValueChange(nextValue)
           }
@@ -200,12 +211,14 @@ export function ComboboxInput({
           if (document.activeElement === inputRef.current && !open) {
             initialValueRef.current = value
             setSearchValue(value)
+            onSearchValueChange?.(value)
             setOpen(true)
           }
         }}
         onFocus={() => {
           initialValueRef.current = value
           setSearchValue(value)
+          onSearchValueChange?.(value)
           if (openOnFocus || pointerFocusRef.current) {
             setOpen(true)
           }

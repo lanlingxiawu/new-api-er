@@ -143,6 +143,83 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	return logs, err
 }
 
+// GetLogTraceByRequestId returns only the trusted routing fields needed to
+// resolve an administrator-initiated upstream log lookup. Request IDs are
+// expected to be unique; ordering makes legacy duplicates deterministic.
+func GetLogTraceByRequestId(requestId string) (*Log, error) {
+	var log Log
+	err := LOG_DB.Model(&Log{}).
+		Select("request_id, upstream_request_id, channel_id, other, created_at").
+		Where("request_id = ?", requestId).
+		Order("created_at desc, id desc").
+		Take(&log).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+// GetLogByTokenIdWithFilters 按认证令牌 token_id 强制作用域，叠加与通用日志查询一致的
+// 筛选条件，供只读的 /api/log/token/query 上游查询接口使用。
+// token_id 永远由认证中间件注入，调用方传入的任何字段都不能扩大到其他令牌的日志。
+func GetLogByTokenIdWithFilters(tokenId int, logType int, startTimestamp int64, endTimestamp int64,
+	modelName string, username string, tokenName string, startIdx int, num int, channel int, logId int,
+	group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+	tx := LOG_DB.Where("logs.token_id = ?", tokenId)
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
+	}
+
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+		return nil, 0, err
+	}
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.username", username); err != nil {
+		return nil, 0, err
+	}
+	if tokenName != "" {
+		tx = tx.Where("logs.token_name = ?", tokenName)
+	}
+	if requestId != "" {
+		tx = tx.Where("logs.request_id = ?", requestId)
+	}
+	if upstreamRequestId != "" {
+		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	if channel != 0 {
+		tx = tx.Where("logs.channel_id = ?", channel)
+	}
+	if logId > 0 {
+		tx = tx.Where("logs.id = ?", logId)
+	}
+	if group != "" {
+		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	// token_id 天然收敛查询范围，计数保持有界，不会退化为无界全表 COUNT。
+	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
+	if err != nil {
+		common.SysError("failed to count token logs: " + err.Error())
+		return nil, 0, errors.New("查询日志失败")
+	}
+	order := "logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
+	if err != nil {
+		common.SysError("failed to search token logs: " + err.Error())
+		return nil, 0, errors.New("查询日志失败")
+	}
+
+	formatUserLogs(logs, startIdx)
+	return logs, total, err
+}
+
 func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
