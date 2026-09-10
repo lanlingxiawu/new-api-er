@@ -1,4 +1,5 @@
 # English translations
+relay.claude_stream_failed: "Upstream stream failed. Please retry."
 
 # Common messages
 common.invalid_params: "Invalid parameters"

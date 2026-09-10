@@ -1,5 +1,8 @@
 package i18n
 
+// MsgClaudeStreamFailed 是 Claude 本地流内 error 的通用展示消息键，文案不包含底层错误或原始上游数据。
+const MsgClaudeStreamFailed = "relay.claude_stream_failed"
+
 // Message keys for i18n translations
 // Use these constants instead of hardcoded strings
 

@@ -350,40 +350,17 @@ func claudeEventTypesFromBody(body string) []string {
 	return events
 }
 
-func TestForceCloseClaudeStreamClosesOpenBlockAndMessage(t *testing.T) {
-	c, recorder := newClaudeStreamRecorder()
-	openIndex := 0
-	claudeInfo := &ClaudeResponseInfo{
-		HasMessageStart: true,
-		OpenBlockIndex:  &openIndex,
-		Usage: &dto.Usage{
-			PromptTokens:     10,
-			CompletionTokens: 2,
-		},
+// TestTruncatedClaudeFinalResponseDoesNotManufactureSuccess 验证截断流的收尾函数不伪造 end_turn、内容块结束或消息结束。
+// 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
+func TestTruncatedClaudeFinalResponseDoesNotManufactureSuccess(t *testing.T) {
+	for _, done := range []bool{false, true} {
+		c, w := newClaudeStreamRecorder()
+		i := 0
+		state := &ClaudeResponseInfo{HasMessageStart: true, Done: done, OpenBlockIndex: &i, Usage: &dto.Usage{PromptTokens: 10, CompletionTokens: 2}}
+		HandleStreamFinalResponse(c, &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, ChannelMeta: &relaycommon.ChannelMeta{}}, state)
+		require.Empty(t, w.Body.String())
+		require.False(t, state.MessageStopSent)
 	}
-
-	forceCloseClaudeStream(c, &relaycommon.RelayInfo{}, claudeInfo)
-
-	require.Equal(t, []string{"content_block_stop", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
-	require.True(t, claudeInfo.Done)
-	require.True(t, claudeInfo.MessageStopSent)
-	require.Nil(t, claudeInfo.OpenBlockIndex)
-	require.Contains(t, recorder.Body.String(), `"stop_reason":"end_turn"`)
-}
-
-func TestForceCloseClaudeStreamOnlyAddsMessageStopAfterMessageDelta(t *testing.T) {
-	c, recorder := newClaudeStreamRecorder()
-	claudeInfo := &ClaudeResponseInfo{
-		HasMessageStart: true,
-		Done:            true,
-		Usage:           &dto.Usage{PromptTokens: 10, CompletionTokens: 2},
-	}
-
-	forceCloseClaudeStream(c, &relaycommon.RelayInfo{}, claudeInfo)
-
-	require.Equal(t, []string{"message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
-	require.NotContains(t, recorder.Body.String(), "message_delta")
-	require.True(t, claudeInfo.MessageStopSent)
 }
 
 func TestHandleStreamFinalResponseDoesNotDuplicateMessageStop(t *testing.T) {
@@ -403,28 +380,14 @@ func TestHandleStreamFinalResponseDoesNotDuplicateMessageStop(t *testing.T) {
 	require.Empty(t, recorder.Body.String())
 }
 
-func TestClaudeStreamHandlerForceClosesAfterUpstreamErrorEvent(t *testing.T) {
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldTimeout
-	})
-
-	c, recorder := newClaudeStreamRecorder()
-	body := strings.Join([]string{
-		`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-test","usage":{"input_tokens":10,"output_tokens":0}}}`,
-		`data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}`,
-	}, "\n")
-	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
-
-	usage, err := ClaudeStreamHandler(c, resp, &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
-	})
-
-	require.Nil(t, usage)
-	require.NotNil(t, err)
-	require.Equal(t, []string{"message_start", "message_delta", "message_stop"}, claudeEventTypesFromBody(recorder.Body.String()))
+// TestClaudeStreamHandlerPreservesUpstreamError 验证上游 error 事件经流式处理后保留原内容，不重复生成错误。
+// 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
+func TestClaudeStreamHandlerPreservesUpstreamError(t *testing.T) {
+	c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(strictStart + "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")))
+	usage, err := ClaudeStreamHandler(c, resp, info)
+	require.Nil(t, err)
+	require.Zero(t, usage.TotalTokens)
+	require.Equal(t, []string{"message_start", "error"}, claudeEventTypesFromBody(w.Body.String()))
 }
 
 // TestClaudeStreamHandlerBillsEstimateWhenUpstreamSendsNoData 复现线上现象：

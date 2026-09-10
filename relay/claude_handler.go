@@ -10,7 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -22,9 +22,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ClaudeHelper 执行 Claude 请求准备、请求体透传/转换、上游调用和最终计费，按尝试隔离响应诊断。
+// 参数 c：当前请求与渠道选择上下文；info：跨本请求重试复用的中转信息，会更新尝试诊断和用量。
+// 返回 newAPIError：需交给控制器处理的错误；严格流式终止已接管时返回 nil，避免重复处理。
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 
 	info.InitChannelMeta(c)
+	info.UseStrictClaudeStream()
+	// 每次中转尝试重建诊断状态，避免渠道重试混用错误/用量；SDK 内部重试由同一采集器分别记录。
+	info.ClaudeStream = nil
+	info.ClaudeDiagnostic = nil
+	info.ClaudeRejectReason = ""
+	c.Set(relaycommon.ClaudeResponseOnlyKey, true)
+	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "")
+	c.Set(relaycommon.ClaudeResponseCaptureKey, (*relaycommon.ClaudeResponseCapture)(nil))
+	if info.CaptureClaudeResponse() {
+		attempt := c.GetInt(relaycommon.ClaudeDiagnosticAttemptKey) + 1
+		c.Set(relaycommon.ClaudeDiagnosticAttemptKey, attempt)
+		info.ClaudeDiagnostic = relaycommon.NewClaudeResponseCapture(attempt)
+		c.Set(relaycommon.ClaudeResponseCaptureKey, info.ClaudeDiagnostic)
+	}
+	defer func() {
+		if newAPIError != nil && info.ClaudeDiagnostic != nil {
+			info.ClaudeDiagnostic.SetError(newAPIError)
+		}
+	}()
 
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
 
@@ -155,6 +177,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	var requestBody io.Reader
+	defer func() { info.ClaudeRequestBody = nil }() // 终止结算完成后清除借用引用，诊断不保留请求存储。
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
@@ -162,6 +185,8 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		info.UpstreamRequestBodySize = storage.Size()
 		requestBody = common.ReaderOnly(storage)
+		// 透传请求也保留同一出站存储供缺失用量时估算，不改变发送字节或采集请求内容。
+		info.ClaudeRequestBody = storage
 	} else {
 		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
 		if err != nil {
@@ -190,12 +215,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 
-		logger.LogDebug(c, "requestBody: %s", jsonData)
 		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
+		info.ClaudeRequestBody, _ = closer.(common.BodyStorage)
 		jsonData = nil
 		info.UpstreamRequestBodySize = size
 		requestBody = body
@@ -205,6 +230,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	var httpResp *http.Response
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		if _, native := adaptor.(*claude.Adaptor); native && info.IsStream && info.UseStrictClaudeStream() {
+			// 无 HTTP 响应时仍使用单一终止路径；返回 nil 让控制器跳过二次重试/退款/错误响应。
+			usage, _ := claude.HandleStreamTransportFailure(c, info, err)
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			return nil
+		}
 		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 
@@ -212,7 +243,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			newAPIError = service.RelayErrorHandler(c, httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError

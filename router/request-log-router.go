@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// registerRequestLogRoutes 按权限声明注册请求日志路由，原始详情 GET /:id 额外限制为超级管理员。
+// 参数 apiRouter：已建立的 API 路由分组，在该分组下挂载请求日志处理器。
 func registerRequestLogRoutes(apiRouter *gin.RouterGroup) {
 	requestLogRoute := apiRouter.Group("/request-log")
 	requestLogRoute.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuRequestLogsView))
@@ -18,6 +20,10 @@ func registerRequestLogRoutes(apiRouter *gin.RouterGroup) {
 		handlers := make([]gin.HandlerFunc, 0, 2)
 		if route.permission != (authz.Permission{}) {
 			handlers = append(handlers, middleware.RequirePermission(route.permission))
+		}
+		if route.method == http.MethodGet && route.path == "/:id" {
+			// 原始请求日志详情有敏感内容，普通管理员权限之外额外要求超级管理员身份。
+			handlers = append(handlers, middleware.RootAuth())
 		}
 		handlers = append(handlers, route.handler)
 		requestLogRoute.Handle(route.method, route.path, handlers...)

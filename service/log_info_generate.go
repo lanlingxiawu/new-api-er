@@ -69,6 +69,10 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+// GenerateTextOtherInfo 生成文本消费日志的扩展字段，整合倍率、首字时间、订阅和流式诊断摘要。
+// 参数 ctx：请求上下文；relayInfo：请求和结算元数据；modelRatio：模型倍率；groupRatio：本次分组倍率；completionRatio：输出倍率。
+// 参数 cacheTokens：缓存读取 token 数；cacheRatio：缓存倍率；modelPrice：配置模型单价；userGroupRatio：用户专属分组倍率。
+// 返回新建的日志字段映射；此时订阅可能尚未结算，严格流式结算后会刷新其中的订阅字段。
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -119,7 +123,64 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	AppendClaudeStreamLogInfo(relayInfo, other)
 	return other
+}
+
+// Private evidence is stripped at the log read boundary; only the Root detail
+// API reads the stored envelope. Never pass this payload to application logging.
+// AppendClaudeStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
+// 参数 info：请求中转状态，nil 时跳过；other：待原地扩充的日志映射，nil 时跳过。
+// 无返回值；不把私有 envelope 输出到应用日志，不在此处执行结算。
+func AppendClaudeStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface{}) {
+	if info == nil || other == nil {
+		return
+	}
+	if info.ClaudeStream == nil && info.ClaudeDiagnostic == nil && info.ClaudeRejectReason == "" {
+		return
+	}
+	diagnostic := info.ClaudeDiagnostic.Snapshot()
+	if info.StreamStatus != nil && info.StreamStatus.EndError != nil {
+		diagnostic.Error = relaycommon.BoundedClaudeDiagnosticError(info.StreamStatus.EndError)
+	}
+	if info.ClaudeStream != nil {
+		other["claude_stream"] = info.ClaudeStream
+		diagnostic = info.ClaudeStream.Diagnostic
+	}
+	if info.ClaudeRejectReason != "" {
+		diagnostic.RejectReason = info.ClaudeRejectReason
+	}
+	other["claude_diagnostic"] = diagnostic
+	other["claude_diagnostic_attempt"] = diagnostic.Attempt
+}
+
+// Attach error-path diagnostics without enrolling legacy/non-200 handlers in
+// strict streaming or settlement. The capture belongs to this attempt only.
+// AppendClaudeErrorDiagnostic 为错误路径追加本次尝试的响应诊断，不把非流式、非 200 或兼容渠道纳入严格结算。
+// 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志映射，将原地更新；err：底层错误，nil 时不覆盖已有原因。
+func AppendClaudeErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
+	value, _ := c.Get(relaycommon.ClaudeResponseCaptureKey)
+	capture, _ := value.(*relaycommon.ClaudeResponseCapture)
+	reject := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
+	if capture == nil && reject == "" {
+		return
+	}
+	capture.SetError(err)
+	diagnostic := capture.Snapshot()
+	diagnostic.RejectReason = reject
+	other["claude_diagnostic"] = diagnostic
+	other["claude_diagnostic_attempt"] = diagnostic.Attempt
+}
+
+// Keep low-level causes in Root evidence, not ordinary console/usage summaries.
+// ClaudePublicErrorSummary 生成普通日志使用的错误摘要，Claude 响应专用模式仅公开状态码和错误码。
+// 参数 c：请求上下文，用于读取响应专用标记；err：非 nil 的中转错误。
+// 返回公开摘要字符串；底层错误与原始 body 由独立诊断保存。
+func ClaudePublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
+	if c.GetBool(relaycommon.ClaudeResponseOnlyKey) {
+		return fmt.Sprintf("upstream response failed (status=%d, code=%s)", err.StatusCode, err.GetErrorCode())
+	}
+	return err.MaskSensitiveErrorWithStatusCode()
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
@@ -129,11 +190,14 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 	other["po"] = relayInfo.ParamOverrideAudit
 }
 
+// appendStreamStatus 生成公开的流状态字段，Claude 的底层错误细节仅保存在私有诊断中。
+// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志映射。任一为 nil、非流式或无状态时跳过。
 func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
 		return
 	}
 	ss := relayInfo.StreamStatus
+	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.ClaudeDiagnostic != nil || relayInfo.ClaudeStream != nil
 	status := "ok"
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"
@@ -142,11 +206,15 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		"status":     status,
 		"end_reason": string(ss.EndReason),
 	}
-	if ss.EndError != nil {
+	if ss.EndError != nil && !privateErrors {
 		streamInfo["end_error"] = ss.EndError.Error()
 	}
 	if ss.ErrorCount > 0 {
 		streamInfo["error_count"] = ss.ErrorCount
+		if privateErrors {
+			other["stream_status"] = streamInfo
+			return
+		}
 		messages := make([]string, 0, len(ss.Errors))
 		for _, e := range ss.Errors {
 			messages = append(messages, e.Message)

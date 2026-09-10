@@ -277,6 +277,8 @@ func (writer *relayTimeoutResponseWriter) Unwrap() http.ResponseWriter {
 
 // WriteRelayTimeoutResponse temporarily permits the controller's standardized
 // timeout payload while late business output remains blocked.
+// WriteRelayTimeoutResponse 在受管超时后临时开放一次终止错误写出；无超时控制器时直接调用回调。
+// 参数 c：保存超时控制器的请求上下文；write：同步写入标准错误的无参回调，nil 时直接返回。
 func WriteRelayTimeoutResponse(c *gin.Context, write func()) {
 	if write == nil {
 		return
@@ -286,6 +288,13 @@ func WriteRelayTimeoutResponse(c *gin.Context, write func()) {
 		write()
 		return
 	}
+	control.WriteTerminalError(write)
+}
+
+// WriteTerminalError permits only the terminal error, not late business output.
+// WriteTerminalError 临时允许终止错误写入，回调结束后恢复原有过期写入限制。
+// 接收者 control：本请求超时控制器；参数 write：非 nil 的同步终止写入回调，业务正文不应通过此入口发送。
+func (control *relayTimeoutControl) WriteTerminalError(write func()) {
 	previous := control.allowExpiredWrite.Swap(true)
 	defer control.allowExpiredWrite.Store(previous)
 	write()

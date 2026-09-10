@@ -3,8 +3,10 @@ package channel
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,38 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// TestClaudeResponseCapturedBeforeStatusOrDecode 验证原生 HTTP 路径在状态码判断和 JSON 解码前保留原始响应，并覆盖成功与失败状态。
+// 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
+func TestClaudeResponseCapturedBeforeStatusOrDecode(t *testing.T) {
+	for _, status := range []int{200, 429, 503} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("X-Response-Only", "fixture")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, "{ invalid upstream JSON }")
+		}))
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader("private request body"))
+		req, err := http.NewRequest("POST", server.URL, strings.NewReader("private request body"))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "private request credential")
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, ClaudeDiagnostic: relaycommon.NewClaudeResponseCapture(1)}
+		resp, err := doRequest(c, req, info)
+		require.NoError(t, err)
+		require.Equal(t, status, resp.StatusCode)
+		require.Zero(t, info.ClaudeDiagnostic.Snapshot().ObservedBytes)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		snapshot := info.ClaudeDiagnostic.Snapshot()
+		require.Equal(t, body, append(snapshot.BodyHead, snapshot.BodyTail...))
+		encoded, err := rootcommon.Marshal(snapshot)
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), "private request")
+		require.NotContains(t, string(encoded), "Authorization")
+		server.Close()
+	}
+}
 
 type relayTimeoutStateStub string
 

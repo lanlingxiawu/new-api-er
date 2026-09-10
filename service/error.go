@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
@@ -84,14 +85,18 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 	return claudeErr
 }
 
+// RelayErrorHandler 把非成功 HTTP 响应转换为统一中转错误并关闭响应体，响应诊断模式避免普通日志带出 body。
+// 参数 ctx：含响应专用标记的请求上下文；resp：上游 HTTP 错误响应；showBodyWhenFail：解析失败时是否把预览附入错误。
+// 返回 newApiErr：转换后的状态码及错误信息；读取失败时保留初始化的 HTTP 状态错误。
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	defer CloseResponseBodyGracefully(resp)
+	responseOnly, _ := ctx.Value(relaycommon.ClaudeResponseOnlyKey).(bool)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return
 	}
-	CloseResponseBodyGracefully(resp)
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := common.StripRequestIds(string(responseBody))
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)
@@ -108,7 +113,9 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
+			if !responseOnly {
+				logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
+			}
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
 		}
 		return
@@ -127,7 +134,7 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		}
 	}
 	message := errResponse.ToMessage()
-	if message == "" {
+	if message == "" && !responseOnly {
 		// The body parsed as JSON but carried no usable error message; log the
 		// raw body so the upstream failure remains diagnosable.
 		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))

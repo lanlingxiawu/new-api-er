@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	hostconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -475,6 +476,9 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 
+// doRequest 使用请求级 HTTP 客户端发送上游请求，在状态处理/解码前接入 Claude 响应采集。
+// 参数 c：下游请求及超时上下文；req：已构建的上游 HTTP 请求；info：渠道、代理、流式及诊断状态。
+// 返回上游响应和传输错误；原生严格 Claude 的底层错误交给统一终止流程保存。
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	req = service.BindRelayRequestContext(c, req)
 	if traceContext := service.RelayResponseTraceContext(c, req.Context()); traceContext != req.Context() {
@@ -515,9 +519,17 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	resp, err := service.RelayHTTPClient(c, client).Do(req)
+	// 请求级包装在任何状态处理/JSON 解码前接入响应采集，nil 采集器时沿用原客户端行为。
+	diagnosticClient := common.ClaudeDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, client), Capture: info.ClaudeDiagnostic}
+	resp, err := diagnosticClient.Do(req)
 	if err != nil {
-		logger.LogError(c, "do request failed: "+err.Error())
+		if info.IsStream && info.RelayFormat == types.RelayFormatClaude && info.ChannelType == hostconstant.ChannelTypeAnthropic && info.UseStrictClaudeStream() {
+			// 严格流式终止处理器将该底层原因保存到超级管理员诊断，避免应用日志直接输出详情。
+			return nil, err
+		}
+		if info.ClaudeDiagnostic == nil {
+			logger.LogError(c, "do request failed: "+err.Error())
+		}
 		if contextErr := service.RelayContextError(c); contextErr != nil {
 			return nil, contextErr
 		}

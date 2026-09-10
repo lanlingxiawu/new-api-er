@@ -73,6 +73,44 @@ func newAwsTestClient(httpClient bedrockruntime.HTTPClient) *bedrockruntime.Clie
 	})
 }
 
+// TestAwsDiagnosticCapturesBeforeSDKDecode 验证 Bedrock SDK 解码前采集到真实 HTTP 响应字节及响应头，而非重新序列化的对象。
+// 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
+func TestAwsDiagnosticCapturesBeforeSDKDecode(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		var wire bytes.Buffer
+		if stream {
+			require.NoError(t, writeAwsStreamEvent(&wire, `{"type":"ping"}`))
+		} else {
+			wire.WriteString(" {\n \"type\":\"message\",\"content\":[] } ")
+		}
+		original := append([]byte(nil), wire.Bytes()...)
+		capture := relaycommon.NewClaudeResponseCapture(1)
+		client := newAwsTestClient(relaycommon.ClaudeDiagnosticHTTPClient{
+			Capture: capture,
+			Client: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+				if stream {
+					return newAwsStreamResponse(req, io.NopCloser(bytes.NewReader(original))), nil
+				}
+				return &http.Response{StatusCode: 200, Request: req, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(original))}, nil
+			}),
+		})
+		if stream {
+			response, err := client.InvokeModelWithResponseStream(context.Background(), newAwsStreamInput())
+			require.NoError(t, err)
+			for range response.GetStream().Events() {
+			}
+			require.NoError(t, response.GetStream().Close())
+		} else {
+			_, err := client.InvokeModel(context.Background(), newAwsInvokeModelInput())
+			require.NoError(t, err)
+		}
+		snapshot := capture.Snapshot()
+		require.Equal(t, original, append(snapshot.BodyHead, snapshot.BodyTail...))
+		require.True(t, snapshot.ReadEOF)
+		require.Equal(t, 200, snapshot.StatusCode)
+	}
+}
+
 func newAwsTestContext(writer http.ResponseWriter, requestContext context.Context) *gin.Context {
 	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)

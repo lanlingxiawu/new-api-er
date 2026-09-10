@@ -458,3 +458,4 @@ upstream_log.invalid_params: "查询参数不合法，请检查请求 ID 与筛�
 upstream_log.local_request_not_found: "未找到该本站请求 ID 对应的日志，请检查后重试。"
 upstream_log.upstream_request_id_missing: "该本站日志未记录上游请求 ID，无法查询对应的上游日志。"
 upstream_log.trace_key_index_missing: "该本站日志未记录实际使用的渠道令牌序号。请清空本站请求 ID，改用「渠道 + 上游请求 ID」查询。"
+relay.claude_stream_failed: "上游流式响应异常，请重试。"

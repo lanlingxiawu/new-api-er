@@ -458,3 +458,4 @@ upstream_log.invalid_params: "查詢參數不合法，請檢查請求 ID 與篩�
 upstream_log.local_request_not_found: "找不到該本站請求 ID 對應的日誌，請檢查後重試。"
 upstream_log.upstream_request_id_missing: "該本站日誌未記錄上游請求 ID，無法查詢對應的上游日誌。"
 upstream_log.trace_key_index_missing: "該本站日誌未記錄實際使用的渠道令牌序號。請清空本站請求 ID，改用「渠道 + 上游請求 ID」查詢。"
+relay.claude_stream_failed: "上游串流回應異常，請重試。"

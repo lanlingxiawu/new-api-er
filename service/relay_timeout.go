@@ -66,6 +66,20 @@ type RelayResponseMarker interface {
 	MarkResponse(bool) bool
 }
 
+// WriteRelayTerminalError lets a stream send its one in-band error after a
+// managed deadline without reopening the response for ordinary content.
+// WriteRelayTerminalError 为流式终止错误选用受管超时写入通道，避免重新放开普通业务内容。
+// 参数 c：保存超时控制器的上下文；write：非 nil 的同步错误写入回调，无控制器时直接执行。
+func WriteRelayTerminalError(c *gin.Context, write func()) {
+	if value, ok := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl); ok {
+		if control, ok := value.(interface{ WriteTerminalError(func()) }); ok {
+			control.WriteTerminalError(write)
+			return
+		}
+	}
+	write()
+}
+
 type relayResponseRestarter interface {
 	RestartResponse(bool) bool
 }

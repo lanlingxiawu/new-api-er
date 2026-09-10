@@ -115,6 +115,8 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 	}
 }
 
+// formatUserLogs 整理普通用户日志展示字段，并移除管理员信息和历史策略停止原因。
+// 参数 logs：待原地更新的日志切片；startIdx：当前页起始序号，用于生成展示用日志编号。
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -125,7 +127,7 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "admin_info")
 			// Remove operation-audit details (operator/route info), admin-only.
 			delete(otherMap, "audit_info")
-			// delete(otherMap, "reject_reason")
+			delete(otherMap, "reject_reason")
 			// delete(otherMap, "stream_status")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)

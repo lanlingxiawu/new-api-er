@@ -35,9 +35,22 @@ type BillingSession struct {
 	mu               sync.Mutex
 }
 
+// FundingCommitted distinguishes a completed wallet/subscription charge from a
+// failed token adjustment, without retrying either non-idempotent operation.
+// FundingCommitted 检查资金来源是否已提交，用于区分资金失败与资金成功后令牌调整失败。
+// 接收者 s：计费会话；无参数；在会话锁内读取状态并返回布尔值，true 时避免再次退款。
+func (s *BillingSession) FundingCommitted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fundingSettled || s.settled
+}
+
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
 // 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
+// Settle 按实际消耗与预扣差额调整资金和令牌，并记录已提交的订阅差额。
+// 接收者 s：本请求计费会话；参数 actualQuota：最终应收费的内部额度，0 表示释放全部预扣。
+// 返回资金或令牌调整错误；资金已提交后即使令牌失败也保留提交标记，防止重复资金操作。
 func (s *BillingSession) Settle(actualQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,8 +79,10 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		}
 		if tokenErr != nil {
 			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
-			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
-				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+			if s.relayInfo.ClaudeStream == nil {
+				common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
+					s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+			}
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -82,14 +83,14 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
+	TokenId    int
+	TokenKey   string
+	TokenGroup string
+	UserId     int
+	UsingGroup string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup  string // 用户所在分组
 	// UserGroupRatios 用户专属分组倍率覆盖（map[group]ratio）。只读快照，构造后不得原地改写（设计 §8.5）。
-	UserGroupRatios map[string]float64
+	UserGroupRatios   map[string]float64
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
@@ -181,7 +182,14 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus *StreamStatus
+	StreamStatus       *StreamStatus          // 通用流状态摘要，记录结束分类与异常数量。
+	ClaudeStream       *ClaudeStreamOutcome   // 仅严格 Claude 响应设置，随后用于唯一结算；nil 表示沿用既有结算路径。
+	ClaudeDiagnostic   *ClaudeResponseCapture `json:"-"` // 当前尝试的上游响应采集器，每次渠道重试单独重建。
+	ClaudeRejectReason string                 `json:"-"` // 私有策略停止原因，不进入普通日志字段。
+	// ClaudeRequestBody 借用已有出站存储，仅在终止时缺少用量的估算路径读取；不序列化或复制到诊断。
+	ClaudeRequestBody            common.BodyStorage `json:"-"`
+	claudeStreamStrict           *bool              // nil 表示尚未冻结严格处理配置；false 与尚未读取区别保留。
+	claudeResponseCaptureEnabled *bool              // nil 表示尚未冻结响应采集配置；同一请求的重试沿用首次结果。
 
 	// convOptions caches the converter settings snapshot (see ConvOptions).
 	convOptions *convmeta.Options
@@ -193,6 +201,27 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+// UseStrictClaudeStream freezes the switch for the request, including retries.
+// UseStrictClaudeStream 首次读取时冻结严格流式处理开关，使同一请求及其重试使用一致配置。
+// 接收者 info：当前请求拥有的中转信息；无参数；返回是否启用严格处理，nil 指针字段表示尚未读取配置。
+func (info *RelayInfo) UseStrictClaudeStream() bool {
+	if info.claudeStreamStrict == nil {
+		enabled := operation_setting.GetClaudeStreamSetting().Enabled
+		info.claudeStreamStrict = &enabled
+	}
+	return *info.claudeStreamStrict
+}
+
+// CaptureClaudeResponse 首次读取时冻结原始响应采集开关，该开关独立于严格流式处理。
+// 接收者 info：当前请求中转信息；无参数；返回是否采集上游响应，后续重试沿用首次结果。
+func (info *RelayInfo) CaptureClaudeResponse() bool {
+	if info.claudeResponseCaptureEnabled == nil {
+		enabled := operation_setting.GetClaudeStreamSetting().CaptureResponse
+		info.claudeResponseCaptureEnabled = &enabled
+	}
+	return *info.claudeResponseCaptureEnabled
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

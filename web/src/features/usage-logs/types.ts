@@ -224,6 +224,17 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  claude_diagnostic_available?: boolean // 原始诊断已由后端从普通日志移除；此标记只表示可通过 Root 专用接口查询。
+  claude_diagnostic_attempt?: number // 本条日志的中转尝试编号，历史记录缺省按 0 处理。
+  /** 可公开的流式计费摘要，不含原始响应、底层原因或详细用量证据。 */
+  claude_stream?: {
+    failed: boolean // 是否异常结束；与资金结算是否成功分开判断。
+    client_gone: boolean // 下游取消/写入失败，受管超时不归入此类。
+    effective_content: boolean // 服务端已成功写出并刷新有效内容，不证明客户端应用已读取。
+    confirmed_usage: boolean // 是否含上游确认的用量字段，显式 0 仍是确认字段。
+    usage_source: 'none' | 'upstream' | 'estimated' | 'mixed' // 不计费、上游确认、估算或混合来源。
+    settlement_state: 'pending' | 'settled' | 'released' | 'failed' | 'partial' // 待结算、完成、释放预扣、失败或部分提交。
+  }
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number

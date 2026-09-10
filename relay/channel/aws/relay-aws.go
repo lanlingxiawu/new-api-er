@@ -60,12 +60,17 @@ func newAwsInvokeError(requestContext context.Context, err error, operation stri
 	)
 }
 
+// newAwsClient 按渠道代理、区域和认证配置构建 Bedrock SDK 客户端，并在 SDK 解码前采集原始响应。
+// 参数 c：当前请求及超时上下文；info：AWS 渠道配置和本次尝试的采集器。
+// 返回 SDK 客户端及初始化错误；复用既有 HTTP 连接池，不采集请求头或请求体。
 func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.Client, error) {
 	httpClient, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	httpClient = service.RelayHTTPClient(c, httpClient)
+	// 保留 SDK 原有解码与计费，仅包装 HTTP 读取以观察解码前的二进制/JSON 响应字节。
+	diagnosticClient := relaycommon.ClaudeDiagnosticHTTPClient{Client: httpClient, Capture: info.ClaudeDiagnostic}
 
 	awsSecret := strings.Split(info.ApiKey, "|")
 	var client *bedrockruntime.Client
@@ -76,7 +81,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:                  region,
 			BearerAuthTokenProvider: bearer.StaticTokenProvider{Token: bearer.Token{Value: apiKey}},
-			HTTPClient:              httpClient,
+			HTTPClient:              diagnosticClient,
 		})
 	case 3:
 		ak := awsSecret[0]
@@ -85,7 +90,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:      region,
 			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
-			HTTPClient:  httpClient,
+			HTTPClient:  diagnosticClient,
 		})
 	default:
 		return nil, errors.New("invalid aws secret key")

@@ -212,8 +212,15 @@ func (w *responseBodyWriter) WriteString(s string) (int, error) {
 
 // RequestResponseLogger 记录中转请求的下游请求体/请求头 以及 返回给下游的返回头/返回体。
 // 仅在 common.RequestLogEnabled 开启时生效；当 common.RequestLogUsername 非空时仅记录该用户名。
+// RequestResponseLogger 返回请求/响应日志中间件；Claude Messages 请求交由独立的上游响应采集器处理。
+// 无参数；返回 Gin 处理器，其 c 为当前请求上下文。非 Claude 请求继续遵循既有采集开关和大小限制。
 func RequestResponseLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Claude 诊断在上游响应解析前采集；此处跳过请求头/请求体及下游响应副本，避免混淆原始来源。
+		if strings.HasSuffix(strings.TrimRight(c.Request.URL.Path, "/"), "/messages") {
+			c.Next()
+			return
+		}
 		// 关闭时零开销直接放行
 		if !common.RequestLogEnabled {
 			c.Next()

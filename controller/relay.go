@@ -69,6 +69,8 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
+// Relay 接收统一 AI 请求并执行渠道选择、重试和响应终止；严格 Claude 流已处理时跳过重复错误响应与退款。
+// 参数 c：当前下游请求、身份和响应写入上下文；relayFormat：客户端使用的协议格式。
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -91,10 +93,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+			return
+		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 		if newAPIError != nil {
 			responseMessage := common.MessageWithRequestId(newAPIError.Error(), requestId)
-			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(responseMessage)))
+			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(service.ClaudePublicErrorSummary(c, newAPIError))))
 			newAPIError.SetMessage(responseMessage)
 			writeError := func() {
 				switch relayFormat {
@@ -183,6 +188,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+			return
+		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
@@ -248,6 +256,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = geminiRelayHandler(c, relayInfo)
 		default:
 			newAPIError = relayHandler(c, relayInfo)
+		}
+		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+			return
 		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 
@@ -401,13 +412,16 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+// processChannelError 处理渠道失败统计、错误日志及渠道状态；Claude 底层原因单独保存为超级管理员诊断。
+// 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，供分类及记录。
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(messageWithCurrentRequestId(c, err.Error()))))
+	publicSummary := service.ClaudePublicErrorSummary(c, err)
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(messageWithCurrentRequestId(c, publicSummary))))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {
 		gopool.Go(func() {
-			service.DisableChannel(channelError, messageWithCurrentRequestId(c, err.ErrorWithStatusCode()))
+			service.DisableChannel(channelError, publicSummary)
 		})
 	}
 
@@ -443,7 +457,8 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, messageWithCurrentRequestId(c, err.MaskSensitiveErrorWithStatusCode()), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		service.AppendClaudeErrorDiagnostic(c, other, err)
+		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, messageWithCurrentRequestId(c, publicSummary), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 
 }

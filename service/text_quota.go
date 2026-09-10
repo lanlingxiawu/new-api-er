@@ -75,8 +75,10 @@ type textQuotaSummary struct {
 // A request can carry zero tokens yet still be billable via a tool-call
 // surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
 // call), so token count alone is not sufficient to decide.
+// hasBillableUsage 判断用量摘要是否含可计费项目，包括普通 token、缓存读取/写入和工具附加费用。
+// 接收者 s：当前费用计算摘要；无参数；返回 true 表示存在可计费项目，最终是否收费仍受流式结算策略控制。
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
+	return s.TotalTokens > 0 || s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -405,7 +407,13 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+// PostTextConsumeQuota 根据用量和既有价格规则计算费用并发起最终结算，严格流式无收费来源时清零全部费用项。
+// 参数 ctx：请求及日志上下文；relayInfo：计费配置、预扣和流式结果；usage：解析或估算的用量，nil 时使用既有请求估算。
+// 参数 extraContent：消费日志的附加说明，可为 nil。已尝试严格结算的请求直接退出以避免重复收费。
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	if relayInfo.ClaudeStream != nil && relayInfo.ClaudeStream.SettlementAttempted {
+		return
+	}
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -415,7 +423,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
-	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
+	relayInfo.ClaudeRejectReason = common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult
@@ -433,6 +441,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
+	if stream := relayInfo.ClaudeStream; stream != nil && stream.UsageSource == "none" {
+		// 在费用展示及日志生成前执行免收费策略，按次、阶梯和工具附加费一并清零。
+		summary.Quota = 0
+		summary.LedgerQuota = 0
+		summary.ToolCallSurchargeQuota = decimal.Zero
+		summary.ToolSurchargeItems = nil
+	}
 	for _, item := range summary.ToolSurchargeItems {
 		q := decimal.NewFromFloat(item.Price).
 			Mul(decimal.NewFromInt(int64(item.Count))).
@@ -454,7 +469,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// 与 buildTextQuotaSummary 的计费口径保持一致：零 token 但有工具附加费时
 	// 仍然扣费，不该打「无法扣费」的日志。
 	countUsage := summary.hasBillableUsage()
-	if !countUsage {
+	if relayInfo.ClaudeStream != nil && relayInfo.ClaudeStream.UsageSource == "none" {
+		countUsage = false
+	}
+	// 严格流式零收费由 claude_stream 解释；即使上游有用量，也可能因没有有效交付而释放预扣。
+	if !countUsage && relayInfo.ClaudeStream == nil {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
@@ -484,9 +503,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
-	if adminRejectReason != "" {
-		other["reject_reason"] = adminRejectReason
-	}
 	if summary.ImageTokens != 0 {
 		other["image"] = true
 		other["image_ratio"] = summary.ImageRatio
@@ -548,6 +564,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		LedgerQuota:      summary.LedgerQuota,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, relayInfo.ClaudeStream == nil || !relayInfo.ClaudeStream.Failed, int64(summary.CompletionTokens))
 	})
 }

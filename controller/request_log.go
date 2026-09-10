@@ -33,7 +33,10 @@ func GetAllRequestLogs(c *gin.Context) {
 }
 
 // GetRequestLogDetail 获取单条请求日志详情（含完整请求/返回体）。
+// GetRequestLogDetail 读取请求日志原始详情并返回禁止缓存的响应，由路由层限制为超级管理员访问。
+// 参数 c：含日志路径参数 id 及已认证身份的 Gin 上下文，结果写入其响应。
 func GetRequestLogDetail(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidId)

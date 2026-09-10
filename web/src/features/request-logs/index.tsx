@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react'
+
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   getCoreRowModel,
@@ -24,12 +24,16 @@ import {
   type ColumnDef,
   type PaginationState,
 } from '@tanstack/react-table'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
+import { DataTablePage } from '@/components/data-table/data-table-page'
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { DataTablePage } from '@/components/data-table/data-table-page'
+import { useAuthStore } from '@/stores/auth-store'
+
 import { getRequestLogs } from './api'
 import { RequestLogDetailDialog } from './request-log-detail-dialog'
 import type { RequestLogFilters, RequestLogItem } from './types'
@@ -65,8 +69,14 @@ function statusVariant(
   return 'secondary'
 }
 
+/**
+ * RequestLogs 展示请求日志列表；原始详情按钮仅对超级管理员启用，服务端另行校验权限。
+ * 无参数；返回带筛选、分页和详情弹窗的页面，权限变化会同步重建操作列。
+ */
 export function RequestLogs() {
   const { t } = useTranslation()
+  // 选择器 s 是认证状态快照；仅订阅派生权限值，避免无关账户字段变化触发重绘。
+  const isRoot = useAuthStore((s) => (s.auth.user?.role ?? 0) >= 100)
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 20,
@@ -97,7 +107,7 @@ export function RequestLogs() {
         accessorKey: 'created_at',
         header: t('Time'),
         cell: ({ row }) => (
-          <span className='whitespace-nowrap text-xs'>
+          <span className='text-xs whitespace-nowrap'>
             {formatTime(row.original.created_at)}
           </span>
         ),
@@ -153,7 +163,7 @@ export function RequestLogs() {
         accessorKey: 'use_time_ms',
         header: t('Duration'),
         cell: ({ row }) => (
-          <span className='whitespace-nowrap text-xs'>
+          <span className='text-xs whitespace-nowrap'>
             {formatDuration(row.original.use_time_ms)}
           </span>
         ),
@@ -162,7 +172,7 @@ export function RequestLogs() {
         accessorKey: 'request_body_size',
         header: t('Req Size'),
         cell: ({ row }) => (
-          <span className='whitespace-nowrap text-xs'>
+          <span className='text-xs whitespace-nowrap'>
             {formatBytes(row.original.request_body_size)}
           </span>
         ),
@@ -171,7 +181,7 @@ export function RequestLogs() {
         accessorKey: 'response_body_size',
         header: t('Resp Size'),
         cell: ({ row }) => (
-          <span className='whitespace-nowrap text-xs'>
+          <span className='text-xs whitespace-nowrap'>
             {formatBytes(row.original.response_body_size)}
           </span>
         ),
@@ -179,10 +189,12 @@ export function RequestLogs() {
       {
         id: 'actions',
         header: t('Actions'),
+        // row 为当前表格行；无参点击回调选中其日志 ID，非 Root 禁用按钮，后端仍保留最终鉴权。
         cell: ({ row }) => (
           <Button
             variant='outline'
             size='sm'
+            disabled={!isRoot}
             onClick={() => setDetailId(row.original.id)}
           >
             {t('View')}
@@ -190,7 +202,7 @@ export function RequestLogs() {
         ),
       },
     ],
-    [t]
+    [t, isRoot] // 语言或权限变化时刷新列定义，不沿用旧账号的详情按钮状态。
   )
 
   const table = useReactTable({
@@ -221,7 +233,9 @@ export function RequestLogs() {
         <Input
           className='h-9 w-40'
           value={draft.username ?? ''}
-          onChange={(e) => setDraft((p) => ({ ...p, username: e.target.value }))}
+          onChange={(e) =>
+            setDraft((p) => ({ ...p, username: e.target.value }))
+          }
           onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
         />
       </div>
@@ -270,7 +284,9 @@ export function RequestLogs() {
           }
           emptyDescription={
             isError
-              ? t('Please retry. If the problem persists, check the server logs.')
+              ? t(
+                  'Please retry. If the problem persists, check the server logs.'
+                )
               : t(
                   'No request logs available. Logs will appear here once relay requests are made.'
                 )

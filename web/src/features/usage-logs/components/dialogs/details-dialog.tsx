@@ -66,6 +66,7 @@ import {
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { UpstreamComparePane } from '../../upstream-log/upstream-compare-pane'
+import { ClaudeDiagnosticPanel } from './claude-diagnostic-panel'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -453,13 +454,20 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   )
 }
 
+/** 使用日志详情输入；管理员标记不代表具有超级管理员原始诊断权限。 */
 interface DetailsDialogProps {
-  log: UsageLog
-  isAdmin: boolean
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  log: UsageLog // 当前日志，含请求 ID、Unix 秒创建时间和后端已过滤的扩展字段。
+  isAdmin: boolean // 控制既有管理员费用字段展示，原始诊断权限由面板与后端独立判断。
+  open: boolean // 弹窗是否打开，同时控制私有诊断面板的挂载生命周期。
+  onOpenChange: (open: boolean) => void // 向父组件报告显隐变化，参数 open 为新的打开状态。
 }
 
+/**
+ * DetailsDialog 展示单条使用日志的费用、流状态及按需加载的私有诊断。
+ * @param props 日志及弹窗控制参数，具体作用见 DetailsDialogProps。
+ * @returns 日志详情弹窗；诊断面板仅在弹窗打开、诊断可查询且具有请求 ID 时挂载。
+ * 诊断 key 由请求 ID、时间和尝试编号组成，切换日志时重建面板，避免显示上一次尝试的数据。
+ */
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
   const [showUpstreamComparison, setShowUpstreamComparison] = useState(false)
@@ -841,17 +849,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {/* Reject reason (admin only) */}
-        {props.isAdmin && other?.reject_reason && (
-          <DetailSection
-            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
-            label={t('Reject Reason')}
-            variant='danger'
-          >
-            <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
-          </DetailSection>
-        )}
-
         {/* Violation fee info */}
         {isViolation && other && (
           <DetailSection
@@ -1173,6 +1170,48 @@ export function DetailsDialog(props: DetailsDialogProps) {
               )}
           </DetailSection>
         )}
+
+        {other?.claude_stream && (
+          <DetailSection label={t('Stream billing')}>
+            <DetailRow
+              label={t('Billing Path')}
+              value={
+                {
+                  upstream: t('Confirmed upstream usage'),
+                  estimated: t('Estimated delivered content'),
+                  mixed: t('Mixed upstream and estimated usage'),
+                  none: t('No charge'),
+                }[other.claude_stream.usage_source]
+              }
+            />
+            <DetailRow
+              label={t('Settlement')}
+              value={
+                {
+                  pending: t('Stream settlement: pending'),
+                  settled: t('Stream settlement: settled'),
+                  released: t('Stream settlement: released'),
+                  failed: t('Stream settlement: failed'),
+                  partial: t('Stream settlement: partial'),
+                }[other.claude_stream.settlement_state]
+              }
+            />
+            <DetailRow
+              label={t('Effective content delivered')}
+              value={other.claude_stream.effective_content ? t('Yes') : t('No')}
+            />
+          </DetailSection>
+        )}
+        {props.open &&
+          other?.claude_diagnostic_available &&
+          props.log.request_id && (
+            <ClaudeDiagnosticPanel
+              key={`${props.log.request_id}:${props.log.created_at}:${other.claude_diagnostic_attempt ?? 0}`}
+              requestId={props.log.request_id}
+              createdAt={props.log.created_at}
+              attempt={other.claude_diagnostic_attempt ?? 0}
+            />
+          )}
 
         {/* Subscription billing details */}
         {isSubscription && other && (
