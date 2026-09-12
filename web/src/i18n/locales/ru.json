@@ -4064,6 +4064,7 @@
     "No upstream logs found": "Вышестоящие журналы не найдены",
     "No upstream price differences found": "Различий в ценах провайдера не найдено",
     "No upstream ratio differences found": "Различия в коэффициентах вышестоящего потока не найдены",
+    "No upstream response was captured for this request.": "Для этого запроса ответ провайдера не зафиксирован.",
     "No uptime data available": "Данные о доступности недоступны",
     "No Uptime Kuma groups yet. Click \"Add Group\" to create one.": "Пока нет групп Uptime Kuma. Нажмите \"Добавить группу\", чтобы создать одну.",
     "No uptime monitoring configured": "Мониторинг доступности не настроен",

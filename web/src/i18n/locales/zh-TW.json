@@ -4064,6 +4064,7 @@
     "No upstream logs found": "未找到上游日誌",
     "No upstream price differences found": "未發現上游價格差異",
     "No upstream ratio differences found": "未找到上游比例差異",
+    "No upstream response was captured for this request.": "此請求未擷取到上游回應。",
     "No uptime data available": "暫無可用率數據",
     "No Uptime Kuma groups yet. Click \"Add Group\" to create one.": "暫無 Uptime Kuma 分組。點擊「新增分組」來建立一個。",
     "No uptime monitoring configured": "未設定正常執行時間監控",

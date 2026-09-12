@@ -4064,6 +4064,7 @@
     "No upstream logs found": "Aucun journal amont trouvé",
     "No upstream price differences found": "Aucune différence de prix amont trouvée",
     "No upstream ratio differences found": "Aucune différence de ratio amont trouvée",
+    "No upstream response was captured for this request.": "Aucune réponse amont n’a été capturée pour cette requête.",
     "No uptime data available": "Aucune donnée de disponibilité disponible",
     "No Uptime Kuma groups yet. Click \"Add Group\" to create one.": "Aucun groupe Uptime Kuma pour l'instant. Cliquez sur « Ajouter un groupe » pour en créer un.",
     "No uptime monitoring configured": "Aucune surveillance de disponibilité configurée",

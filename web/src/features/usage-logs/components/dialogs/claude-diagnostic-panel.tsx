@@ -1,25 +1,31 @@
 import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { IconBadge } from '@/components/ui/icon-badge'
+import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
-/** 超级管理员诊断响应；仅包含上游响应及错误/用量证据，不含请求采集内容。 */
+/**
+ * 超级管理员诊断响应；仅包含上游响应及错误/用量证据，不含请求采集内容。
+ * 非 Claude 原生请求只携带策略原因，响应字段为 null；历史记录经兼容分支可能只返回 reject_reason。
+ */
 interface ClaudeDiagnostic {
   attempt?: number // 中转尝试编号；历史记录可能缺失。
   status_code?: number // 上游 HTTP 状态码；未取得响应时为 0。
-  response_headers: Record<string, string[]> // 保留多值的上游响应头，受后端 16 KiB 预算限制。
-  headers_truncated: boolean // 响应头是否因预算限制省略部分值。
-  body_head_base64: string // 已读 body 前 1024 字节的 base64 编码。
-  body_tail_base64: string // 首部之后的最后 1024 字节的 base64 编码。
-  observed_bytes: number // 实际读取字节数，不等于未读取部分也已获取。
-  omitted_bytes: number // 被省略的中间字节数；0 表示首尾拼接即为全部已读内容。
-  read_eof: boolean // 底层是否观察到 EOF，与协议完整结束分别判断。
+  response_headers?: Record<string, string[]> | null // 保留多值的上游响应头，受后端 16 KiB 预算限制。
+  headers_truncated?: boolean // 响应头是否因预算限制省略部分值。
+  body_head_base64?: string | null // 已读 body 前 1024 字节的 base64 编码。
+  body_tail_base64?: string | null // 首部之后的最后 1024 字节的 base64 编码。
+  observed_bytes?: number // 实际读取字节数，不等于未读取部分也已获取。
+  omitted_bytes?: number // 被省略的中间字节数；0 表示首尾拼接即为全部已读内容。
+  read_eof?: boolean // 底层是否观察到 EOF，与协议完整结束分别判断。
   error?: string // 私有终止原因，可能来自协议校验或传输错误。
-  usage_evidence: Record<string, number> // 上游确认的累计 token/工具次数，键缺失与显式 0 有区别。
-  usage_final: boolean // 输出报告之后没有新内容块，且消息结束校验通过。
+  usage_evidence?: Record<string, number> | null // 上游确认的累计 token/工具次数，键缺失与显式 0 有区别。
+  usage_final?: boolean // 输出报告之后没有新内容块，且消息结束校验通过。
   settlement_error?: string // 资金或令牌结算错误，与响应处理错误分开记录。
   read_error?: string // 该 HTTP 交换的底层读取/传输错误。
   reject_reason?: string // 上游策略停止原因，仅本私有详情展示。
@@ -43,6 +49,55 @@ function decodeBody(head: string, tail = ''): string {
   all.set(first)
   all.set(last, first.length)
   return new TextDecoder().decode(all)
+}
+
+/**
+ * hasCapturedResponse 判断是否真正采集到上游 HTTP 响应。
+ * @param detail 诊断数据。
+ * @returns false 表示没有可展示的响应头/正文，例如非 Claude 原生请求或连接未建立。
+ */
+function hasCapturedResponse(detail: ClaudeDiagnostic): boolean {
+  return (
+    (detail.status_code ?? 0) !== 0 ||
+    (detail.observed_bytes ?? 0) > 0 ||
+    Object.keys(detail.response_headers ?? {}).length > 0
+  )
+}
+
+/**
+ * isEmptyEvidence 判断证据值是否无信息量：null、空串、空对象或空数组。
+ * @param value 任意证据字段值。
+ * @returns true 表示展示时应省略。
+ */
+function isEmptyEvidence(value: unknown): boolean {
+  if (value == null || value === '') return true
+  if (typeof value === 'object') return Object.keys(value).length === 0
+  return false
+}
+
+/**
+ * compactEvidence 只保留有信息量的错误与用量证据。
+ * 拒绝原因已在上方单独展示；为 0 的尝试编号、状态码、遗漏数，以及没有用量证据时的 usage_final 均属噪音。
+ * @param detail 诊断数据。
+ * @returns 可直接序列化展示的证据对象，可能为空对象。
+ */
+function compactEvidence(detail: ClaudeDiagnostic): Record<string, unknown> {
+  const hasUsage = !isEmptyEvidence(detail.usage_evidence)
+  const entries: Array<[string, unknown]> = [
+    ['error', detail.error],
+    ['read_error', detail.read_error],
+    ['attempt', detail.attempt || undefined],
+    ['status_code', detail.status_code || undefined],
+    ['usage_evidence', detail.usage_evidence],
+    ['usage_phases', detail.usage_phases],
+    ['estimated_usage', detail.estimated_usage],
+    ['usage_final', hasUsage ? detail.usage_final : undefined],
+    ['settlement_error', detail.settlement_error],
+    ['omitted_responses', detail.omitted_responses || undefined],
+  ]
+  return Object.fromEntries(
+    entries.filter(([, value]) => !isEmptyEvidence(value))
+  )
 }
 
 /**
@@ -83,11 +138,16 @@ export function ClaudeDiagnosticPanel(props: {
   })
   if ((user?.role ?? 0) < 100) return null
   const detail = query.data
+  const captured = detail ? hasCapturedResponse(detail) : false
+  const evidence = detail ? compactEvidence(detail) : {}
+  const hasEvidence = Object.keys(evidence).length > 0
   let body = ''
-  if (detail) {
-    body = decodeBody(detail.body_head_base64, detail.body_tail_base64)
-    if (detail.omitted_bytes > 0) {
-      body = `${decodeBody(detail.body_head_base64)}\n\n${t('Omitted {{count}} bytes', { count: detail.omitted_bytes })}\n\n${decodeBody(detail.body_tail_base64)}`
+  if (detail && captured) {
+    const head = detail.body_head_base64 ?? ''
+    const tail = detail.body_tail_base64 ?? ''
+    body = decodeBody(head, tail)
+    if ((detail.omitted_bytes ?? 0) > 0) {
+      body = `${decodeBody(head)}\n\n${t('Omitted {{count}} bytes', { count: detail.omitted_bytes })}\n\n${decodeBody(tail)}`
     }
   }
   return (
@@ -111,50 +171,61 @@ export function ClaudeDiagnosticPanel(props: {
           {t('Diagnostics could not be loaded. Please retry.')}
         </p>
       )}
+      {/* 拒绝原因是最直接的结论，置顶并沿用日志详情 danger 区块样式，不再埋在证据 JSON 里。 */}
+      {detail?.reject_reason && (
+        <div className='min-w-0 space-y-1.5'>
+          <Label className='flex items-center gap-1.5 text-xs font-semibold text-red-500'>
+            <IconBadge tone='destructive' size='xs'>
+              <AlertTriangle className='size-3.5' aria-hidden='true' />
+            </IconBadge>
+            {t('Reject Reason')}
+          </Label>
+          <div className='min-w-0 overflow-hidden rounded-md border border-red-200 bg-red-50 p-2.5 max-sm:p-2 dark:border-red-900 dark:bg-red-950/20'>
+            <p className='text-xs wrap-break-word'>{detail.reject_reason}</p>
+          </div>
+        </div>
+      )}
       {detail && (
         <div className='bg-muted/30 min-w-0 space-y-2 rounded-md border p-2.5'>
-          <p className='text-muted-foreground text-xs'>
-            {t('Observed {{count}} bytes', { count: detail.observed_bytes ?? 0 })}
-            {' · '}
-            {detail.read_eof
-              ? t('Upstream EOF observed')
-              : t('Only bytes read are shown')}
-          </p>
-          {detail.headers_truncated && (
-            <p className='text-xs'>{t('Response headers were truncated')}</p>
+          {captured ? (
+            <>
+              <p className='text-muted-foreground text-xs'>
+                {t('Observed {{count}} bytes', { count: detail.observed_bytes ?? 0 })}
+                {' · '}
+                {detail.read_eof
+                  ? t('Upstream EOF observed')
+                  : t('Only bytes read are shown')}
+              </p>
+              {detail.headers_truncated && (
+                <p className='text-xs'>{t('Response headers were truncated')}</p>
+              )}
+              <p className='text-xs font-semibold'>
+                {t('Upstream response headers')}
+              </p>
+              <pre className='bg-background/60 max-h-48 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
+                {JSON.stringify(detail.response_headers ?? {}, null, 2)}
+              </pre>
+              <p className='text-xs font-semibold'>{t('Upstream response body')}</p>
+              <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
+                {body}
+              </pre>
+            </>
+          ) : (
+            // 未取得上游响应时不展示空的响应头/正文区块，避免被误读为采集失败。
+            <p className='text-muted-foreground text-xs'>
+              {t('No upstream response was captured for this request.')}
+            </p>
           )}
-          <p className='text-xs font-semibold'>
-            {t('Upstream response headers')}
-          </p>
-          <pre className='bg-background/60 max-h-48 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
-            {JSON.stringify(detail.response_headers, null, 2)}
-          </pre>
-          <p className='text-xs font-semibold'>{t('Upstream response body')}</p>
-          <pre className='bg-background/60 max-h-72 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
-            {body}
-          </pre>
-          <p className='text-xs font-semibold'>
-            {t('Error and usage evidence')}
-          </p>
-          <pre className='bg-background/60 max-h-48 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
-            {JSON.stringify(
-              {
-                error: detail.error,
-                read_error: detail.read_error,
-                attempt: detail.attempt,
-                status_code: detail.status_code,
-                reject_reason: detail.reject_reason,
-                usage_evidence: detail.usage_evidence,
-                usage_phases: detail.usage_phases,
-                estimated_usage: detail.estimated_usage,
-                usage_final: detail.usage_final,
-                settlement_error: detail.settlement_error,
-                omitted_responses: detail.omitted_responses,
-              },
-              null,
-              2
-            )}
-          </pre>
+          {hasEvidence && (
+            <>
+              <p className='text-xs font-semibold'>
+                {t('Error and usage evidence')}
+              </p>
+              <pre className='bg-background/60 max-h-48 overflow-auto rounded border p-2 font-mono text-xs break-all whitespace-pre-wrap'>
+                {JSON.stringify(evidence, null, 2)}
+              </pre>
+            </>
+          )}
           {!!detail.previous_responses?.length && (
             <>
               <p className='text-xs font-semibold'>{t('Previous upstream responses')}</p>

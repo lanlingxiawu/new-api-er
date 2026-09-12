@@ -4064,6 +4064,7 @@
     "No upstream logs found": "Không tìm thấy nhật ký thượng nguồn",
     "No upstream price differences found": "Không tìm thấy sự khác biệt về giá upstream",
     "No upstream ratio differences found": "Không tìm thấy chênh lệch tỷ lệ thượng nguồn",
+    "No upstream response was captured for this request.": "Không ghi nhận được phản hồi từ nguồn cho yêu cầu này.",
     "No uptime data available": "Không có dữ liệu thời gian hoạt động",
     "No Uptime Kuma groups yet. Click \"Add Group\" to create one.": "Chưa có nhóm Uptime Kuma nào. Nhấp vào \"Thêm nhóm\" để tạo một nhóm.",
     "No uptime monitoring configured": "Chưa cấu hình giám sát thời gian hoạt động",

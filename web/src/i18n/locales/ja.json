@@ -4064,6 +4064,7 @@
     "No upstream logs found": "上流ログが見つかりません",
     "No upstream price differences found": "上流価格の差異は見つかりませんでした",
     "No upstream ratio differences found": "アップストリームの比率の差は見つかりません",
+    "No upstream response was captured for this request.": "このリクエストでは上流レスポンスを取得していません。",
     "No uptime data available": "稼働率データがありません",
     "No Uptime Kuma groups yet. Click \"Add Group\" to create one.": "Uptime Kumaグループはまだありません。「グループを追加」をクリックして作成してください。",
     "No uptime monitoring configured": "アップタイム監視が設定されていません",
