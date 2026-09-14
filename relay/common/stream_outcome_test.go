@@ -39,10 +39,10 @@ func TestClaudeBillingDecision(t *testing.T) {
 		client, confirmed, effective bool   // 依次表示用户断开、上游已有确认用量、已有有效交付。
 		want                         string // 预期计费来源：upstream、estimated 或 none。
 	}{
-		{true, true, false, "upstream"}, {true, true, true, "upstream"}, {true, false, true, "none"}, {true, false, false, "none"},
+		{true, true, false, "upstream"}, {true, true, true, "upstream"}, {true, false, true, "estimated"}, {true, false, false, "none"},
 		{false, true, true, "upstream"}, {false, true, false, "none"}, {false, false, true, "estimated"}, {false, false, false, "none"},
 	} {
-		s := StreamOutcome{ClientGone: tc.client, ConfirmedUsage: tc.confirmed, EffectiveContent: tc.effective, Failed: true}
+		s := StreamOutcome{ClientGone: tc.client, ReceivedResponse: tc.effective, ConfirmedUsage: tc.confirmed, EffectiveContent: tc.effective, Failed: true}
 		require.Equal(t, tc.want, s.SelectUsageSource())
 	}
 	for _, confirmed := range []bool{false, true} {

@@ -103,7 +103,7 @@ func TestManagedNativeTTSResponse(t *testing.T) {
 				}
 			case tc.clientGone:
 				require.False(t, info.StreamResult.EffectiveContent)
-				require.Equal(t, "none", info.StreamResult.UsageSource, "没有确认 token 用量时不补估用户断开的费用")
+				require.Equal(t, "estimated", info.StreamResult.UsageSource, "无确认用量的断开采用已有输入估算，不估造音频输出")
 				require.Empty(t, rec.Body.String())
 			case tc.name == "hex":
 				require.False(t, info.StreamResult.Failed)

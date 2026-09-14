@@ -128,13 +128,14 @@ func TestUnifiedOpenAICandidateEndForwarding(t *testing.T) {
 			require.Equal(t, tc.failAfter, info.StreamResult.Failed)
 			require.Equal(t, tc.failAfter, info.StreamResult.DiagnosticAvailable)
 			require.True(t, info.StreamResult.EffectiveContent)
-			require.Equal(t, "upstream", info.StreamResult.UsageSource)
 			require.Equal(t, 10, usage.PromptTokens)
 			if tc.failAfter {
-				require.Zero(t, usage.CompletionTokens, "异常只采用确认字段，不把旧估算混入")
+				require.Equal(t, "mixed", info.StreamResult.UsageSource)
+				require.Positive(t, usage.CompletionTokens, "已有交付内容时补估零输出")
 				require.NotContains(t, rec.Body.String(), "[DONE]")
 				require.Contains(t, rec.Body.String(), `"error"`)
 			} else {
+				require.Equal(t, "upstream", info.StreamResult.UsageSource)
 				require.Equal(t, 2, usage.CompletionTokens)
 				require.Contains(t, rec.Body.String(), "[DONE]")
 				require.NotContains(t, rec.Body.String(), `"error"`)

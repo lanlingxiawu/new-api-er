@@ -16,55 +16,63 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// MaxStreamFrameBytes 限制单个协议事件及工具参数，防止异常上游造成无界内存增长。
-const MaxStreamFrameBytes = 8 << 20
+// MaxStreamFrameBytes 统一限制受管事件、完整 JSON 和工具参数为 200 MiB；缓冲按需增长。
+const MaxStreamFrameBytes = 200 << 20
 
 // StreamSessionKey 把尝试会话提供给没有 RelayInfo 参数的旧渠道读取函数。
 const StreamSessionKey = "unified_stream_session"
 
 // StreamSnapshot 是一次尝试的脱离锁快照；仅由结算所有者转换为日志及最终费用。
 type StreamSnapshot struct {
-	UsageFormat     types.RelayFormat // 从实际上游事件识别的用量口径，透传不依赖是否执行请求转换。
-	Complete        bool              // 已收到协议明确的正常结束，不把传输 EOF 本身当作 SSE 完成。
-	Reason          StreamEndReason   // 首个已记录终止原因，可来自上游或本地处理；客户端写入失败另记录。
-	Err             error             // 底层错误，只允许进入私有诊断。
-	Evidence        map[string]int    // 统一字段的上游确认累计用量，保留显式零。
-	Effective       bool              // 下游成功写出并刷新了有效内容。
-	ClientErr       error             // 下游写入/刷新错误，区别于上游错误。
-	ErrorFrame      []byte            // 已收到的原始上游错误 SSE 帧，供同协议直接输出。
-	ErrorPayload    []byte            // SDK/WS 原始错误载荷，保留原字节；取得完整原 SSE 帧后释放，不作为日志字段。
-	ErrorDelivered  bool              // 错误已成功发给下游，避免本地重复补发。
-	HTTPObserved    bool              // 已接入 HTTP 响应观察，SDK 可另外送入解码事件。
-	Accepted        bool              // 上游已返回成功 HTTP 状态或有效 SDK/WS 事件。
-	EstimatedOutput int               // 成功交付文本的累计增量估算，不对每个分片独立取整。
-	MediaBytes      int64             // 成功交付的裸媒体字节，仅作为证据，不直接换算成 token。
-	UpstreamFailure bool              // 首个终止原因确认为上游异常；与兼容计费原因字符串分开记录。
-	UpstreamStarted bool              // 已通过真实成功响应门控或绑定响应/连接，用于区分响应前超时和成功响应后的超时。
-	TransportFailed bool              // 历史传输失败证据兼容槽；当前非成功交换不激活新流程，成功交换清零。
+	UsageFormat         types.RelayFormat // 从实际上游事件识别的用量口径，透传不依赖是否执行请求转换。
+	Complete            bool              // 已收到协议明确的正常结束，不把传输 EOF 本身当作 SSE 完成。
+	Reason              StreamEndReason   // 首个已记录终止原因，可来自上游或本地处理；客户端写入失败另记录。
+	Err                 error             // 底层错误，只允许进入私有诊断。
+	Evidence            map[string]int    // 统一字段的上游确认累计用量，保留显式零。
+	Effective           bool              // 下游成功写出并刷新了有效内容。
+	ClientErr           error             // 下游写入/刷新错误，区别于上游错误。
+	ErrorFrame          []byte            // 已收到的原始上游错误 SSE 帧，供同协议直接输出。
+	ErrorPayload        []byte            // SDK/WS 原始错误载荷，保留原字节；取得完整原 SSE 帧后释放，不作为日志字段。
+	ErrorDelivered      bool              // 错误已成功发给下游，避免本地重复补发。
+	HTTPObserved        bool              // 已接入 HTTP 响应观察，SDK 可另外送入解码事件。
+	Accepted            bool              // 上游已返回成功 HTTP 状态或有效 SDK/WS 事件。
+	EstimatedOutput     int               // 成功交付文本的累计增量估算，不对每个分片独立取整。
+	ReceivedResponse    bool              // 已解析上游业务响应，不要求下游写入成功。
+	ReceivedOutput      int               // 接收侧文本估算，仅用户断开且无确认用量时采用。
+	ReceivedAudioOutput int               // Realtime 已接收音频的专用估算，不按压缩字节计量。
+	MediaBytes          int64             // 成功交付的裸媒体字节，仅作为证据，不直接换算成 token。
+	UpstreamFailure     bool              // 首个终止原因确认为上游异常；与兼容计费原因字符串分开记录。
+	UpstreamStarted     bool              // 已通过真实成功响应门控或绑定响应/连接，用于区分响应前超时和成功响应后的超时。
+	TransportFailed     bool              // 历史传输失败证据兼容槽；当前非成功交换不激活新流程，成功交换清零。
 }
 
 // StreamSession 保存单次中转尝试的协议和交付状态；短锁不跨网络读取、写出或刷新。
 type StreamSession struct {
-	ResponseGate    *StreamResponseGate    // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
-	OpaqueSSE       bool                   // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
-	ChannelType     int                    // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
-	RelayMode       int                    // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
-	ExpectedImages  int                    // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
-	mu              sync.Mutex             // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
-	format          types.RelayFormat      // 下游协议，错误输出按此格式选择。
-	state           StreamSnapshot         // 当前可变状态，外部读取须经 Snapshot 复制。
-	disabled        bool                   // 原生 Claude 专用处理器已接管时禁用通用观察。
-	text            strings.Builder        // 仅保存一个写出批次的文本，调用者及时取走估算。
-	tools           map[string]*streamTool // 有界的未完成工具调用，完整参数交付后才计入有效内容。
-	toolBytes       int                    // 所有未完成工具名称和参数共享单帧预算，避免每个工具各分配 8 MiB。
-	toolDeliveries  *streamToolDeliveries  // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
-	choices         map[int]bool           // 当前上游协议按索引累计的候选结束状态，最多 128 项。
-	ExpectedChoices int                    // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
-	claudeStarted   bool                   // Claude 转换路径是否看到了 message_start。
-	claudeStop      bool                   // Claude 转换路径是否确认 stop_reason。
-	claudeBlocks    map[int]bool           // 尚未关闭的 Claude 内容块。
-	closeBody       io.Closer              // 当前上游资源，终止时由所有者关闭以停止生成。
-	requestContext  context.Context        // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
+	ResponseGate       *StreamResponseGate     // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
+	OpaqueSSE          bool                    // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
+	ChannelType        int                     // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
+	RelayMode          int                     // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
+	ExpectedImages     int                     // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
+	mu                 sync.Mutex              // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
+	format             types.RelayFormat       // 下游协议，错误输出按此格式选择。
+	state              StreamSnapshot          // 当前可变状态，外部读取须经 Snapshot 复制。
+	disabled           bool                    // 原生 Claude 专用处理器已接管时禁用通用观察。
+	text               strings.Builder         // 仅保存一个写出批次的文本，调用者及时取走估算。
+	tools              map[string]*streamTool  // 有界的未完成工具调用，完整参数交付后才计入有效内容。
+	toolBytes          int                     // 所有未完成工具名称和参数共享单帧预算，不为每个工具单独分配上限。
+	toolDeliveries     *streamToolDeliveries   // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
+	choices            map[int]bool            // 当前上游协议按索引累计的候选结束状态，最多 128 项。
+	ExpectedChoices    int                     // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
+	claudeStarted      bool                    // Claude 转换路径是否看到了 message_start。
+	claudeStop         bool                    // Claude 转换路径是否确认 stop_reason。
+	claudeBlocks       map[int]bool            // 尚未关闭的 Claude 内容块。
+	closeBody          io.Closer               // 当前上游资源，终止时由所有者关闭以停止生成。
+	requestContext     context.Context         // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
+	received           *StreamSession          // 独立接收内容跟踪器，复用有界工具去重，不参与协议与交付状态。
+	receivedFactory    func() func(string) int // 新实际响应/轮次创建独立增量估算器。
+	receivedEstimate   func(string) int
+	receivedOnly       bool // 内容跟踪器专用：按接收片段计工具文本，不等待完整交付。
+	receivedTranscript bool // 接收侧已计入转录 delta，完成快照不再重复估算。
 }
 
 // streamTool 缓存一个待完成工具调用的名称与参数；所有字段仅在会话锁内操作。
@@ -491,6 +499,7 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		s.state.Complete = false
 		return s.state.Err
 	}
+	s.observeReceivedLocked(event, data, v)
 	return nil
 }
 
@@ -689,6 +698,11 @@ func (b *streamObservedBody) Read(p []byte) (int, error) {
 	if b.mode == "sdk" || b.mode == "binary" {
 		n, err := b.source.Read(p)
 		b.readBytes += int64(n)
+		if b.mode == "binary" && n > 0 {
+			b.session.mu.Lock()
+			b.session.state.ReceivedResponse = true
+			b.session.mu.Unlock()
+		}
 		if b.mode == "binary" && err != nil {
 			if errors.Is(err, io.EOF) && b.readBytes > 0 {
 				b.session.Complete()
@@ -804,6 +818,18 @@ func (s *StreamSession) ObserveFrame(raw []byte) error {
 	var observeErr error
 	if !s.OpaqueSSE || event == "finish" || event == "error" {
 		observeErr = s.ObserveEvent(event, data)
+	} else if event == "add" && len(data) > 0 {
+		s.mu.Lock()
+		if s.state.Reason == "" && (s.requestContext == nil || s.requestContext.Err() == nil) {
+			s.state.ReceivedResponse = true
+			if s.receivedFactory != nil {
+				if s.receivedEstimate == nil {
+					s.receivedEstimate = s.receivedFactory()
+				}
+				s.state.ReceivedOutput += s.receivedEstimate(string(data))
+			}
+		}
+		s.mu.Unlock()
 	}
 	if IsStreamErrorEvent(event, data) {
 		// 即使原 error 的 usage 校验失败也保留原帧；仅拒绝其无效用量，不替换上游错误正文。
@@ -958,8 +984,13 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 		s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), "", "", true, false)
 	case "response.output_text.delta", "response.text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.audio_transcript.delta", "transcript.text.delta":
 		text.WriteString(v.Get("delta").String())
+		if s.receivedOnly && kind == "transcript.text.delta" {
+			s.receivedTranscript = true
+		}
 	case "transcript.text.done":
-		text.WriteString(v.Get("text").String())
+		if !s.receivedOnly || !s.receivedTranscript {
+			text.WriteString(v.Get("text").String())
+		}
 	case "response.audio.delta", "response.output_audio.delta", "speech.audio.delta":
 		if v.Get("delta").String() != "" || v.Get("audio").String() != "" {
 			s.state.Effective = true
@@ -974,6 +1005,15 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 		}
 	case "response.function_call_arguments.done":
 		s.commitResponseToolLocked(v.Get("item_id").String(), v.Get("call_id").String(), v.Get("name").String(), v.Get("arguments").String())
+	case "response.output_item.added":
+		item := v.Get("item")
+		if s.receivedOnly && item.Get("type").String() == "function_call" {
+			s.toolLocked(streamResponseToolKey(item.Get("id").String(), item.Get("call_id").String()), item.Get("name").String(), item.Get("arguments").String(), false, false)
+		}
+	case "response.function_call_arguments.delta":
+		if s.receivedOnly {
+			s.toolLocked(streamResponseToolKey(v.Get("item_id").String(), v.Get("call_id").String()), "", v.Get("delta").String(), false, false)
+		}
 	case "image_generation.partial_image", "image_generation.completed", "image_edit.partial_image", "image_edit.completed":
 		// 完整 JSON 转 SSE 也可交付图片 URL；它与 base64 图片同样属于有效返回。
 		url := v.Get("url")
@@ -1029,6 +1069,13 @@ func (s *StreamSession) toolLocked(key, name, args string, done, appendName bool
 		return false
 	}
 	if name != "" {
+		if s.receivedOnly {
+			delta := name
+			if !appendName && strings.HasPrefix(name, tool.name.String()) {
+				delta = strings.TrimPrefix(name, tool.name.String())
+			}
+			s.text.WriteString(delta)
+		}
 		if !appendName {
 			tool.name.Reset()
 		}
@@ -1036,6 +1083,9 @@ func (s *StreamSession) toolLocked(key, name, args string, done, appendName bool
 		s.toolBytes += nameGrowth
 	}
 	tool.args.WriteString(args)
+	if s.receivedOnly {
+		s.text.WriteString(args)
+	}
 	s.toolBytes += len(args)
 	committed := false
 	if done {
@@ -1045,8 +1095,10 @@ func (s *StreamSession) toolLocked(key, name, args string, done, appendName bool
 		}
 		if tool.name.Len() > 0 && gjson.Valid(raw) && gjson.Parse(raw).IsObject() {
 			s.state.Effective = true
-			s.text.WriteString(tool.name.String())
-			s.text.WriteString(raw)
+			if !s.receivedOnly {
+				s.text.WriteString(tool.name.String())
+				s.text.WriteString(raw)
+			}
 			committed = true
 		}
 		delete(s.tools, key)

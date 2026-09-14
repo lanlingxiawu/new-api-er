@@ -73,6 +73,8 @@ func (s *StreamSession) observeTransport(resp *http.Response, err error, success
 		s.tools = map[string]*streamTool{}
 		s.toolBytes = 0
 		s.toolDeliveries = nil // 新成功响应重新计量，旧工具身份不跨 SDK 重试。
+		s.received = nil
+		s.receivedEstimate = nil
 		s.choices = map[int]bool{}
 		s.claudeStarted = false
 		s.claudeStop = false

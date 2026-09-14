@@ -54,8 +54,8 @@ func TestUnifiedDifyUsageSettlement(t *testing.T) {
 		{"tail write", `{"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`, "write", "upstream", true, false, 12, 3},
 		{"tail flush", `{"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`, "flush", "upstream", true, false, 12, 3},
 		{"client gone without content", `{"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`, "write", "upstream", false, false, 12, 3},
-		{"confirmed zero", `{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`, "write", "upstream", true, false, 0, 0},
-		{"missing usage", `{}`, "write", "none", true, false, 0, 0},
+		{"confirmed zero", `{"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`, "write", "mixed", true, false, 0, 0},
+		{"missing usage", `{}`, "write", "estimated", true, false, 0, 0},
 		{"invalid with content", `{"usage":{"prompt_tokens":12,"completion_tokens":-1}}`, "", "estimated", true, true, 0, 0},
 		{"invalid without content", `{"usage":{"prompt_tokens":12,"completion_tokens":-1}}`, "", "none", false, true, 0, 0},
 	} {
@@ -95,6 +95,9 @@ func TestUnifiedDifyUsageSettlement(t *testing.T) {
 			require.Equal(t, tc.upstreamBad, info.StreamResult.DiagnosticAvailable)
 			if tc.source == "estimated" {
 				require.Equal(t, 7, selected.PromptTokens)
+				require.Positive(t, selected.CompletionTokens)
+			} else if tc.source == "mixed" {
+				require.Equal(t, tc.input, selected.PromptTokens)
 				require.Positive(t, selected.CompletionTokens)
 			} else {
 				require.Equal(t, tc.input, selected.PromptTokens)

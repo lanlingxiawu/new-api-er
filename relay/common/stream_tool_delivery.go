@@ -1,6 +1,21 @@
 package common
 
-import "crypto/sha256"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+)
+
+// streamResponseToolKey bounds pending response-tool identity independently of ID length.
+func streamResponseToolKey(itemID, callID string) string {
+	if itemID != "" {
+		return fmt.Sprintf("response:item:%x", sha256.Sum256([]byte(itemID)))
+	}
+	if callID != "" {
+		return fmt.Sprintf("response:call:%x", sha256.Sum256([]byte(callID)))
+	}
+	return "response:complete"
+}
 
 // streamToolDeliveryKey 使用定长摘要保存工具别名；避免任意长上游 ID 占用整个连接生命周期的内存。
 type streamToolDeliveryKey struct {
@@ -45,7 +60,19 @@ func (s *StreamSession) commitResponseToolLocked(itemID, callID, name, args stri
 		}
 	}
 	// 此路径总是完整事件，在本次调用内创建并移除候选；固定 key 不保留上游长 ID。
-	if !s.toolLocked("response:complete", name, args, true, false) || (itemID == "" && callID == "") {
+	key := "response:complete"
+	if s.receivedOnly {
+		key = streamResponseToolKey(itemID, callID)
+		if pending := s.tools[key]; pending != nil {
+			// Completion repeats the full arguments; only its unreceived suffix is new.
+			if strings.HasPrefix(args, pending.args.String()) {
+				args = strings.TrimPrefix(args, pending.args.String())
+			} else {
+				args = ""
+			}
+		}
+	}
+	if !s.toolLocked(key, name, args, true, false) || (itemID == "" && callID == "") {
 		return
 	}
 	if s.toolDeliveries == nil {

@@ -44,6 +44,7 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	// 每次渠道尝试重新等待真实成功响应；采集和终止共用门控，SDK 内部重试可重新激活。
 	info.StreamResponseGate = &relaycommon.StreamResponseGate{}
 	info.StreamSession = relaycommon.NewStreamSession(info.RelayFormat)
+	InitStreamReceivedEstimator(info)
 	info.StreamSession.RelayMode = info.RelayMode
 	info.StreamSession.ResponseGate = info.StreamResponseGate
 	info.StreamSession.BindContext(c.Request.Context())
@@ -121,11 +122,11 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	}
 	confirmed := len(snapshot.Evidence) > 0
 	if _, imageCountOnly := snapshot.Evidence["image_count"]; imageCountOnly && len(snapshot.Evidence) == 1 && !info.PriceData.UsePrice {
-		// 张数是完成证据，不是 token 计费用量；保留诊断原值，异常有交付时走估算，客户端断开时不估算。
+		// 张数是完成证据，不是 token 用量；上游异常按交付估算，用户断开按接收估算。
 		// 只排除单独 image_count，显式 0 的 token 字段仍属于确认用量。
 		confirmed = false
 	}
-	outcome := &relaycommon.StreamOutcome{Failed: reason != "", ClientGone: clientGone, EffectiveContent: snapshot.Effective, ConfirmedUsage: confirmed, SettlementState: "pending"}
+	outcome := &relaycommon.StreamOutcome{Failed: reason != "", ClientGone: clientGone, ReceivedResponse: snapshot.ReceivedResponse, EffectiveContent: snapshot.Effective, ConfirmedUsage: confirmed, SettlementState: "pending"}
 	// 诊断依据实际错误来源，不借用 Failed/计费标签，也不依赖是否启用了 body 采集。
 	outcome.DiagnosticAvailable = snapshot.DiagnosticAvailable(IsRelayRequestTimeout(c))
 	outcome.Diagnostic = info.StreamDiagnostic.Snapshot()
@@ -160,6 +161,17 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		WriteStreamTerminalError(c, info, snapshot)
 	}
 	selected := usage
+	if !outcome.Failed && confirmed && snapshot.EstimatedOutput > 0 {
+		// 适配器可能已经估算过零输出；先保留原始确认输入/缓存，再按统一内容口径补估。
+		confirmedUsage := BuildConfirmedStreamUsage(info, snapshot.Evidence)
+		if confirmedUsage.CompletionTokens == 0 {
+			selected = confirmedUsage
+			if usage != nil && usage.BillingUsage != nil && !usage.BillingUsage.Estimated && effectiveBillingUsage(usage).CompletionTokens == 0 {
+				// 原始嵌套计费对象保留供应商输入模态等细分，补估函数只修改输出。
+				selected = usage
+			}
+		}
+	}
 	if outcome.Failed {
 		switch outcome.UsageSource {
 		case "none":
@@ -167,7 +179,11 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		case "upstream":
 			selected = BuildConfirmedStreamUsage(info, snapshot.Evidence)
 		case "estimated":
+			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: snapshot.EstimatedOutput}
+			if clientGone {
+				selected.CompletionTokens = snapshot.ReceivedOutput
+			}
 			if (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) && info.PriceData.UsePrice {
 				// 只有预览而无完成用量时按一张估算，不把原请求的多张数量全部收费。
 				info.PriceData.AddOtherRatio("n", 1)
@@ -179,6 +195,13 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	}
 	if selected == nil {
 		selected = &dto.Usage{}
+	}
+	if info.RelayFormat != types.RelayFormatOpenAIRealtime {
+		output := snapshot.EstimatedOutput
+		if clientGone {
+			output = snapshot.ReceivedOutput
+		}
+		selected = SupplementStreamZeroOutput(c, info, selected, output, 0)
 	}
 	info.StreamFinalUsage = selected
 	c.Set(relaycommon.StreamHandledKey, true)

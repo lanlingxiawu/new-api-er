@@ -43,6 +43,10 @@ func TestStrictStreamEstimatePartitionInvariant(t *testing.T) {
 								}
 								report = fmt.Sprintf(`,"usage":{"output_tokens":%d}`, expected)
 								source = "upstream"
+								if mode == "confirmed-zero" {
+									expected = service.EstimateTokenByModel("claude", full)
+									source = "mixed"
+								}
 							}
 							body.WriteString("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}" + report + "}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 						}

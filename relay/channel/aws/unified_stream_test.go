@@ -97,7 +97,8 @@ func TestUnifiedAwsSDKStream(t *testing.T) {
 			require.Equal(t, 2, info.StreamFinalUsage.BillingUsage.ClaudeUsage.OutputTokens)
 			require.Contains(t, rec.Body.String(), "[DONE]")
 		} else {
-			require.Zero(t, info.StreamFinalUsage.CompletionTokens)
+			require.Positive(t, info.StreamFinalUsage.CompletionTokens)
+			require.Equal(t, "mixed", info.StreamResult.UsageSource)
 			require.Equal(t, 10, info.StreamFinalUsage.PromptTokens)
 			require.NotContains(t, rec.Body.String(), "[DONE]")
 			require.Contains(t, rec.Body.String(), "event: error")

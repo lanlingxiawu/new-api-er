@@ -1,6 +1,16 @@
 # Claude stream termination, partial billing and private diagnostics
 
+最新确认：共用大小上限已提升为 **200 MiB**，覆盖下文历史 100 MiB/8 MiB 数值，见 [实施记录](stream-size-limit-100mib.md)。
+
+2026-09-15 后续确认：已有内容的零输出用量（包括最终零）补估，非零输出保留原值，输入/缓存不变。此次约定覆盖历史显式零与正常非最终正用量的补估规则，详见 [零输出补估](stream-zero-output-estimation.md)。
+
+2026-09-15：Claude 专用流与公共受管流共用 100 MiB 大小常量；下文历史 8 MiB 预算以 [最新设计](stream-size-limit-100mib.md) 为准。
+
 Approved for implementation in the current task on 2026-09-10.
+
+## 用户断开结算更新（2026-09-15）
+
+用户已确认 [断开估算方案](client-disconnect-estimation.md)。本节覆盖下文历史合同中的用户断开零收费规则：优先采用上游确认用量（包括显式零和部分字段）；无确认但已接收业务响应时使用本地输入及接收输出估算，写出失败的最后片段也计入。零响应仍释放预扣。正常完成与上游异常策略保持原状。
 
 ## 成功响应门控（2026-09-13）
 

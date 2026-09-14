@@ -1189,7 +1189,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
               value={
                 {
                   upstream: t('Confirmed upstream usage'),
-                  estimated: t('Estimated delivered content'),
+                  estimated: other.stream_result.client_gone
+                    ? t('Local Token Counting')
+                    : t('Estimated delivered content'),
                   mixed: t('Mixed upstream and estimated usage'),
                   none: t('No charge'),
                 }[other.stream_result.usage_source]

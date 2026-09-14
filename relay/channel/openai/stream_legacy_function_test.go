@@ -31,7 +31,7 @@ func TestUnifiedStreamLegacyFunctionSettlement(t *testing.T) {
 			completion int    // 确认输出量；estimated 分支单独验证增量值。
 		}{
 			{"confirmed", `{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}`, true, "upstream", 7},
-			{"confirmed zero", `{"prompt_tokens":10,"completion_tokens":0,"total_tokens":10}`, true, "upstream", 0},
+			{"confirmed zero", `{"prompt_tokens":10,"completion_tokens":0,"total_tokens":10}`, true, "mixed", 0},
 			{"estimated", "", true, "estimated", 0},
 			{"unfinished confirmed", `{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}`, false, "none", 0},
 			{"unfinished no usage", "", false, "none", 0},
@@ -80,7 +80,7 @@ func TestUnifiedStreamLegacyFunctionSettlement(t *testing.T) {
 					require.Zero(t, final.TotalTokens)
 				} else {
 					require.Equal(t, 10, final.PromptTokens)
-					if tc.source == "estimated" {
+					if tc.source == "estimated" || tc.source == "mixed" {
 						var estimator service.StreamTokenEstimator
 						expected := estimator.Add("gpt-4o", `lookup{"x":1}`)
 						require.Positive(t, expected)

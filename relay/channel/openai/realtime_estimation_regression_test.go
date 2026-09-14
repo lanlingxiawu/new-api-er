@@ -34,6 +34,7 @@ func TestRealtimeEstimatedOutputSelection(t *testing.T) {
 					info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIRealtime, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o"}}
 					service.BeginStreamAttempt(c, info)
 					info.StreamSession.ObserveWebSocketHandshake(&http.Response{StatusCode: 101}, nil)
+					require.NoError(t, info.StreamSession.ObserveEvent("", []byte(`{"type":"response.text.delta","delta":"hello"}`)))
 					info.StreamSession.CommitDelivery([]byte(`{"type":"response.text.delta","delta":"hello"}`))
 					info.StreamSession.AddEstimatedOutput(2)
 					local := &dto.RealtimeUsage{InputTokens: input, OutputTokens: audio, TotalTokens: input + audio}
@@ -52,19 +53,43 @@ func TestRealtimeEstimatedOutputSelection(t *testing.T) {
 					}
 					a := newRealtimeStreamAccounting()
 					require.NoError(t, a.finishRound(c, info, local))
-					if mode == "client" || mode == "confirmed-zero" {
-						require.Zero(t, a.usage.TotalTokens)
-					} else {
-						require.Equal(t, input, a.usage.InputTokens)
-						require.Equal(t, 2, a.usage.OutputTokenDetails.TextTokens)
-						require.Equal(t, audio, a.usage.OutputTokenDetails.AudioTokens)
+					if mode == "confirmed-zero" {
+						require.Zero(t, a.usage.InputTokens)
 						require.Equal(t, 2+audio, a.usage.OutputTokens)
-						require.Equal(t, input+2+audio, a.usage.TotalTokens)
+						require.Equal(t, "mixed", info.StreamResult.UsageSource)
+					} else {
+						output := 2
+						if mode == "client" {
+							output = service.EstimateTokenByModel("gpt-4o", "hello")
+						}
+						require.Equal(t, input, a.usage.InputTokens)
+						require.Equal(t, output, a.usage.OutputTokenDetails.TextTokens)
+						require.Equal(t, audio, a.usage.OutputTokenDetails.AudioTokens)
+						require.Equal(t, output+audio, a.usage.OutputTokens)
+						require.Equal(t, input+output+audio, a.usage.TotalTokens)
 					}
 				})
 			}
 		}
 	}
+}
+
+func TestRealtimeDisconnectIncludesUnwrittenAudio(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIRealtime, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o"}}
+	service.BeginStreamAttempt(c, info)
+	info.StreamSession.ObserveWebSocketHandshake(&http.Response{StatusCode: 101}, nil)
+	info.StreamSession.RecordReceivedMedia(8)
+	info.StreamSession.ClientFailed(io.ErrClosedPipe)
+	a := newRealtimeStreamAccounting()
+	local := &dto.RealtimeUsage{InputTokens: 10}
+	local.InputTokenDetails.TextTokens = 10
+	require.NoError(t, a.finishRound(c, info, local))
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
+	require.Equal(t, 8, a.usage.OutputTokenDetails.AudioTokens)
+	require.Equal(t, 18, a.usage.TotalTokens)
+	require.False(t, info.StreamResult.EffectiveContent)
 }
 
 // TestRealtimeDeliveredEstimateFixtures 经本地 WS 验证 t 中交付文本分片、转写、音频、工具去重及多轮清零；不访问真实上游或资金。

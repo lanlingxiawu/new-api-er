@@ -45,7 +45,7 @@ func TestRealtimeToolInputSelection(t *testing.T) {
 		{"later null", "null", "estimated", false, false},
 		{"later no tools", "complete", "estimated", false, true},
 		{"confirmed positive", "confirmed", "upstream", false, false},
-		{"confirmed zero", "zero", "upstream", false, false},
+		{"confirmed zero", "zero", "mixed", false, false},
 		{"upstream partial", "error", "estimated", false, false},
 		{"upstream no delivery", "empty-error", "none", false, false},
 		{"client no usage", "client", "none", false, false},
@@ -91,8 +91,10 @@ func TestRealtimeToolInputSelection(t *testing.T) {
 				info.StreamSession.EndRead(io.EOF)
 			}
 			wantInputText, wantInputAudio, wantOutputText, wantOutputAudio := 8, 3, 2, 4
-			if tc.source == "none" || tc.mode == "zero" {
+			if tc.source == "none" {
 				wantInputText, wantInputAudio, wantOutputText, wantOutputAudio = 0, 0, 0, 0
+			} else if tc.mode == "zero" {
+				wantInputText, wantInputAudio = 0, 0
 			} else if tc.source == "upstream" {
 				wantInputText, wantInputAudio, wantOutputText, wantOutputAudio = 4, 0, 2, 0
 			} else if tc.mode == "complete" || tc.mode == "null" {
@@ -121,6 +123,9 @@ func TestRealtimeToolInputSelection(t *testing.T) {
 				require.Equal(t, a.usage.InputTokens, info.GetEstimatePromptTokens())
 				require.Equal(t, a.usage.InputTokens, a.estimated["input_tokens"])
 				require.Equal(t, a.usage.OutputTokens, a.estimated["output_tokens"])
+			} else if tc.source == "mixed" {
+				require.Equal(t, a.usage.OutputTokens, a.estimated["output_tokens"])
+				require.NotContains(t, a.estimated, "input_tokens")
 			} else {
 				require.Empty(t, a.estimated)
 			}
@@ -184,6 +189,10 @@ func TestRealtimeToolInputWebSocketRounds(t *testing.T) {
 					}
 					wantConfirmedInput += input
 					wantConfirmedOutput += output
+					if tc.usage[round] == zero {
+						output = service.EstimateTokenByModel("gpt-4o", "hello")
+						wantEstimatedOutput += output
+					}
 				}
 				wantInputs = append(wantInputs, input)
 				wantOutputs = append(wantOutputs, output)
@@ -277,9 +286,7 @@ func TestRealtimeToolInputWebSocketRounds(t *testing.T) {
 				require.Equal(t, wantEstimatedInput, got.outcome.Diagnostic.EstimatedUsage["input_tokens"])
 				require.Equal(t, wantConfirmedInput, got.outcome.Diagnostic.UsageEvidence["input_tokens"])
 				wantSource := "estimated"
-				if tc.usage == [3]string{positive, positive, zero} {
-					wantSource = "upstream"
-				} else if wantConfirmedInput > 0 || tc.usage[1] == zero {
+				if wantConfirmedInput > 0 || tc.usage[1] == zero {
 					wantSource = "mixed"
 				}
 				require.Equal(t, wantSource, got.outcome.UsageSource)

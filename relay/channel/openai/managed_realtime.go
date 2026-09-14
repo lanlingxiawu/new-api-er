@@ -75,6 +75,12 @@ func (a *realtimeStreamAccounting) finishRound(c *gin.Context, info *relaycommon
 	selected := service.FinalizeStreamUsage(c, info, original)
 	if info.StreamResult.UsageSource == "estimated" {
 		selected = estimated
+		if info.StreamResult.ClientGone {
+			selected.CompletionTokenDetails.TextTokens = snapshot.ReceivedOutput
+			selected.CompletionTokenDetails.AudioTokens = max(snapshot.ReceivedAudioOutput, local.OutputTokenDetails.AudioTokens)
+			selected.CompletionTokens = snapshot.ReceivedOutput + selected.CompletionTokenDetails.AudioTokens
+			selected.TotalTokens = selected.PromptTokens + selected.CompletionTokens
+		}
 		if snapshot.Complete && !info.StreamResult.Failed && !info.IsFirstRequest && len(info.RealtimeTools) > 0 {
 			// 复用旧 response.done 的工具计数口径；固定分支仅计算文本，没有音频解码或返回错误的路径。
 			toolTokens, _, _ := service.CountTokenRealtime(info, dto.RealtimeEvent{Type: dto.RealtimeEventTypeResponseDone}, info.UpstreamModelName)
@@ -86,6 +92,13 @@ func (a *realtimeStreamAccounting) finishRound(c *gin.Context, info *relaycommon
 		info.StreamFinalUsage = selected
 		info.StreamResult.Diagnostic.EstimatedUsage = map[string]int{"input_tokens": selected.PromptTokens, "output_tokens": selected.CompletionTokens, "input_audio_tokens": selected.PromptTokensDetails.AudioTokens, "output_audio_tokens": selected.CompletionTokenDetails.AudioTokens}
 	}
+	textOutput, audioOutput := snapshot.EstimatedOutput, local.OutputTokenDetails.AudioTokens
+	if info.StreamResult.ClientGone {
+		textOutput = snapshot.ReceivedOutput
+		audioOutput = max(snapshot.ReceivedAudioOutput, audioOutput)
+	}
+	selected = service.SupplementStreamZeroOutput(c, info, selected, textOutput, audioOutput)
+	info.StreamFinalUsage = selected
 	a.usage.InputTokens += selected.PromptTokens
 	a.usage.OutputTokens += selected.CompletionTokens
 	a.usage.TotalTokens = a.usage.InputTokens + a.usage.OutputTokens
@@ -274,6 +287,14 @@ loop:
 					break loop
 				}
 			}
+			receivedAudio := 0
+			var audioErr error
+			if !duplicate && (event.Type == "response.audio.delta" || event.Type == "response.output_audio.delta") {
+				receivedAudio, audioErr = service.CountAudioTokenOutput(event.Delta, info.OutputAudioFormat)
+				if audioErr == nil {
+					info.StreamSession.RecordReceivedMedia(receivedAudio)
+				}
+			}
 			_ = info.ClientWs.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if err := info.ClientWs.WriteMessage(websocket.TextMessage, frame.data); err != nil {
 				info.StreamSession.ClientFailed(err)
@@ -307,14 +328,13 @@ loop:
 			}
 			if event.Type == "response.audio.delta" || event.Type == "response.output_audio.delta" {
 				// 沿用原音频算法；文本/转写/完整工具参数由交付观察器累计，避免再次逐 delta 相加。
-				audio, err := service.CountAudioTokenOutput(event.Delta, info.OutputAudioFormat)
-				if err != nil {
-					endErr = err
-					info.StreamSession.Fail("response_conversion_error", err)
+				if audioErr != nil {
+					endErr = audioErr
+					info.StreamSession.Fail("response_conversion_error", audioErr)
 					break loop
 				}
-				local.OutputTokens += audio
-				local.OutputTokenDetails.AudioTokens += audio
+				local.OutputTokens += receivedAudio
+				local.OutputTokenDetails.AudioTokens += receivedAudio
 				local.TotalTokens = local.InputTokens + local.OutputTokens
 			}
 			if state := info.StreamSession.Snapshot(); state.Reason == "upstream_error" {
@@ -335,6 +355,7 @@ loop:
 				info.IsFirstRequest = false
 				info.StreamSession.Disable()
 				info.StreamSession = relaycommon.NewStreamSession(types.RelayFormatOpenAIRealtime)
+				service.InitStreamReceivedEstimator(info)
 				info.StreamSession.ResponseGate = info.StreamResponseGate // 同一 WS 的后续轮次继承已成功的握手资格。
 				info.StreamSession.BindContext(c.Request.Context())
 				info.StreamSession.BindUpstream(info.TargetWs)

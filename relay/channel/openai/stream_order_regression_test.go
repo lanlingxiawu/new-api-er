@@ -41,7 +41,7 @@ func TestUnifiedStreamOrderedTail(t *testing.T) {
 			require.NotContains(t, rec.Body.String(), "[DONE]")
 			require.True(t, info.StreamResult.Failed)
 			require.True(t, info.StreamResult.EffectiveContent)
-			require.Equal(t, "upstream", info.StreamResult.UsageSource)
+			require.Equal(t, "mixed", info.StreamResult.UsageSource)
 			require.Equal(t, 10, final.PromptTokens)
 		}
 	}

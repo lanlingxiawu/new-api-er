@@ -88,7 +88,7 @@ func (r *audioDeliveryReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// TestUnifiedRawAudioImmediateDelivery 验证带 MIME 参数的媒体首块不等 EOF，且大于 8 MiB 仍逐块完成；t 为测试上下文。
+// TestUnifiedRawAudioImmediateDelivery 验证媒体首块不等 EOF，且大于文本帧上限仍逐块完成；t 为测试上下文。
 func TestUnifiedRawAudioImmediateDelivery(t *testing.T) {
 	for _, size := range []int{1, 32 << 10, relaycommon.MaxStreamFrameBytes + 1} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {

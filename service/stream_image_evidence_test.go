@@ -54,7 +54,7 @@ func TestStreamImageEvidencePricing(t *testing.T) {
 						want := "none"
 						if confirmed && (clientGone || delivered) {
 							want = "upstream"
-						} else if delivered && !clientGone {
+						} else if delivered || clientGone {
 							want = "estimated"
 						}
 						require.Equal(t, confirmed, info.StreamResult.ConfirmedUsage)

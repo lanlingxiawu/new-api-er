@@ -4,7 +4,18 @@ import (
 	"math"
 	"strings"
 	"unicode"
+
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
+
+// InitStreamReceivedEstimator binds per-attempt estimation without retaining response text.
+// Realtime calls this again after replacing the round session; SDK retries invoke the factory.
+func InitStreamReceivedEstimator(info *relaycommon.RelayInfo) {
+	info.StreamSession.SetReceivedEstimator(func() func(string) int {
+		var estimator StreamTokenEstimator
+		return func(text string) int { return estimator.Add(info.UpstreamModelName, text) }
+	})
+}
 
 // StreamTokenEstimator 保存一轮已交付文本的词类及小数权重，不保存正文；由写入所有者串行调用。
 // 零值可用，首次非空 Add 才确定模型权重，避免早于渠道模型映射。

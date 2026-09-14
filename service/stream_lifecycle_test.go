@@ -35,6 +35,7 @@ func TestUnifiedStreamBillingMatrix(t *testing.T) {
 					require.NoError(t, info.StreamSession.ObserveEvent("", []byte(`{"usage":{"prompt_tokens":20,"completion_tokens":3}}`)))
 				}
 				if delivered {
+					require.NoError(t, info.StreamSession.ObserveEvent("", []byte(`{"choices":[{"delta":{"content":"hello"}}]}`)))
 					info.StreamSession.CommitDelivery([]byte(`{"choices":[{"delta":{"content":"hello"}}]}`))
 					info.StreamSession.AddEstimatedOutput(2)
 				}
@@ -47,7 +48,7 @@ func TestUnifiedStreamBillingMatrix(t *testing.T) {
 				expected := "none"
 				if confirmed && (client || delivered) {
 					expected = "upstream"
-				} else if !client && delivered {
+				} else if delivered {
 					expected = "estimated"
 				}
 				require.Equal(t, expected, info.StreamResult.UsageSource)

@@ -58,6 +58,11 @@ const strictStart = "event: message_start\ndata: {\"type\":\"message_start\",\"m
 const strictText = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
 const strictStop = "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
+func TestStrictStreamSharedSizeLimit(t *testing.T) {
+	require.Equal(t, 209715200, maxClaudeFrameBytes)
+	require.Equal(t, relaycommon.MaxStreamFrameBytes, maxClaudeFrameBytes)
+}
+
 // TestStrictStreamMixedLineEndings 验证原生 Claude 同样接受 CR 与混合空行，保留真实结束和计量；t 为上下文。
 func TestStrictStreamMixedLineEndings(t *testing.T) {
 	for _, body := range []string{
@@ -95,11 +100,11 @@ func TestStrictStreamTermination(t *testing.T) {
 		output                     int    // 预期输出 token 数。
 	}{
 		{"complete", strictStart + strictText + strictStop, "done", "upstream", true, 7},
-		{"truncated with text", strictStart + strictText, "upstream_incomplete", "upstream", true, 0},
+		{"truncated with text", strictStart + strictText, "upstream_incomplete", "mixed", true, service.EstimateTokenByModel("claude", "hello")},
 		{"start only", strictStart, "upstream_incomplete", "none", false, 0},
 		{"ping only", "event: ping\ndata: {\"type\":\"ping\"}\n\n", "upstream_incomplete", "none", false, 0},
 		{"invalid json", strictStart + "event: message_delta\ndata: {oops}\n\n", "upstream_json_error", "none", false, 0},
-		{"missing block stop", strictStart + strictText + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "upstream_protocol_error", "upstream", true, 0},
+		{"missing block stop", strictStart + strictText + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "upstream_protocol_error", "mixed", true, service.EstimateTokenByModel("claude", "hello")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(tc.body)))
@@ -173,8 +178,8 @@ func TestStrictNormalPartialUsageRegression(t *testing.T) {
 	}{
 		{"absent output", strings.Replace(strictStart, `,"output_tokens":0`, "", 1), missingOutputStop, "mixed", service.EstimateTokenByModel("claude", "hello")},
 		{"initial zero", strictStart, missingOutputStop, "mixed", service.EstimateTokenByModel("claude", "hello")},
-		{"initial cumulative floor", strings.Replace(strictStart, `"output_tokens":0`, `"output_tokens":99`, 1), missingOutputStop, "mixed", 99},
-		{"terminal zero", strictStart, strings.Replace(strictStop, `"output_tokens":7`, `"output_tokens":0`, 1), "upstream", 0},
+		{"initial cumulative floor", strings.Replace(strictStart, `"output_tokens":0`, `"output_tokens":99`, 1), missingOutputStop, "upstream", 99},
+		{"terminal zero", strictStart, strings.Replace(strictStop, `"output_tokens":7`, `"output_tokens":0`, 1), "mixed", service.EstimateTokenByModel("claude", "hello")},
 		{"terminal positive", strictStart, strictStop, "upstream", 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,15 +224,15 @@ func TestStrictOutputUsageOrdering(t *testing.T) {
 				final                        bool   // 是否应将最新输出报告视为完整最终用量。
 			}{
 				{"before stop", closedText + outputReport + stopReason + messageStop, "upstream", "done", 1, 1, true},
-				{"zero before stop", closedText + zeroReport + stopReason + messageStop, "upstream", "done", 0, 0, true},
+				{"zero before stop", closedText + zeroReport + stopReason + messageStop, "mixed", "done", estimated, 0, true},
 				{"metadata after report", closedText + outputReport + metadata + stopReason + messageStop, "upstream", "done", 1, 1, true},
 				{"with stop", strictText + strings.Replace(strictStop, `"output_tokens":7`, `"output_tokens":1`, 1), "upstream", "done", 1, 1, true},
 				{"after stop", closedText + stopReason + outputReport + messageStop, "upstream", "done", 1, 1, true},
-				{"latest zero", closedText + outputReport + stopReason + zeroReport + messageStop, "upstream", "done", 0, 0, true},
+				{"latest zero", closedText + outputReport + stopReason + zeroReport + messageStop, "mixed", "done", estimated, 0, true},
 				{"initial usage only", closedText + stopReason + messageStop, "mixed", "done", estimated, 0, false},
-				{"report before content", outputReport + closedText + stopReason + messageStop, "mixed", "done", max(1, estimated), 1, false},
-				{"new content after report", closedText + outputReport + secondText + stopReason + messageStop, "mixed", "done", max(1, estimatedTwice), 1, false},
-				{"fresh report after new content", closedText + outputReport + secondText + zeroReport + stopReason + messageStop, "upstream", "done", 0, 0, true},
+				{"report before content", outputReport + closedText + stopReason + messageStop, "upstream", "done", 1, 1, false},
+				{"new content after report", closedText + outputReport + secondText + stopReason + messageStop, "upstream", "done", 1, 1, false},
+				{"fresh report after new content", closedText + outputReport + secondText + zeroReport + stopReason + messageStop, "mixed", "done", estimatedTwice, 0, true},
 				{"missing message stop", closedText + outputReport + stopReason, "upstream", "upstream_incomplete", 1, 1, false},
 				{"missing stop reason", closedText + outputReport + messageStop, "upstream", "upstream_protocol_error", 1, 1, false},
 			} {
@@ -380,7 +385,7 @@ func TestStrictPassthroughAdapterHTTPRegression(t *testing.T) {
 				failed     bool   // 预期是否异常结束。
 			}{
 				{"usage before stop", strictStart + closedText + finalDeltas + messageStop, 1, false},
-				{"zero before stop", strictStart + closedText + strings.Replace(finalDeltas, `"output_tokens":1`, `"output_tokens":0`, 1) + messageStop, 0, false},
+				{"zero before stop", strictStart + closedText + strings.Replace(finalDeltas, `"output_tokens":1`, `"output_tokens":0`, 1) + messageStop, service.EstimateTokenByModel("claude", "hello"), false},
 				{"empty message start", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n" + finalDeltas + messageStop, 0, true},
 				{"upstream error", upstreamError, 0, true},
 			} {
@@ -425,7 +430,11 @@ func TestStrictPassthroughAdapterHTTPRegression(t *testing.T) {
 						require.Zero(t, u.TotalTokens)
 						require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 					} else {
-						require.Equal(t, "upstream", info.StreamResult.UsageSource)
+						source := "upstream"
+						if tc.name == "zero before stop" {
+							source = "mixed"
+						}
+						require.Equal(t, source, info.StreamResult.UsageSource)
 						require.Equal(t, tc.output, u.BillingUsage.ClaudeUsage.OutputTokens)
 						require.True(t, info.StreamResult.Diagnostic.UsageFinal)
 					}
@@ -537,7 +546,7 @@ func TestStrictUsagePresenceAndEstimation(t *testing.T) {
 		input              int    // 预期计费输入 token，显式 0 与缺少证据分别测试。
 	}{
 		{"missing", noUsage + strictText, "estimated", 50},
-		{"explicit zero", strings.Replace(strictStart, `"input_tokens":100`, `"input_tokens":0`, 1) + strictText, "upstream", 0},
+		{"explicit zero", strings.Replace(strictStart, `"input_tokens":100`, `"input_tokens":0`, 1) + strictText, "mixed", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(tc.body)))
@@ -545,7 +554,7 @@ func TestStrictUsagePresenceAndEstimation(t *testing.T) {
 			require.Nil(t, e)
 			require.Equal(t, tc.source, info.StreamResult.UsageSource)
 			require.Equal(t, tc.input, u.PromptTokens)
-			if tc.source == "estimated" {
+			if tc.source == "estimated" || tc.source == "mixed" {
 				require.Positive(t, u.CompletionTokens)
 				require.Equal(t, u.CompletionTokens, u.BillingUsage.ClaudeUsage.OutputTokens)
 				require.True(t, u.BillingUsage.Estimated)
@@ -598,7 +607,7 @@ func (w *strictFailWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-// TestStrictDisconnectBilling 遍历用户断开前是否有内容和用量的组合，验证客户端断开仅依已确认上游用量收费。
+// TestStrictDisconnectBilling 验证用户断开优先确认用量，无确认时采用接收侧本地估算。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
 func TestStrictDisconnectBilling(t *testing.T) {
 	noUsage := strings.Replace(strictStart, `,"usage":{"input_tokens":100,"output_tokens":0}`, "", 1)
@@ -620,13 +629,36 @@ func TestStrictDisconnectBilling(t *testing.T) {
 			require.Equal(t, afterText, info.StreamResult.EffectiveContent)
 			if confirmed {
 				require.Equal(t, 100, u.PromptTokens)
-				require.Equal(t, "upstream", info.StreamResult.UsageSource)
+				if afterText {
+					require.Equal(t, "mixed", info.StreamResult.UsageSource)
+					require.Positive(t, u.CompletionTokens)
+				} else {
+					require.Equal(t, "upstream", info.StreamResult.UsageSource)
+				}
 			} else {
-				require.Zero(t, u.TotalTokens)
-				require.Equal(t, "none", info.StreamResult.UsageSource)
+				require.Equal(t, 50, u.PromptTokens)
+				require.Equal(t, "estimated", info.StreamResult.UsageSource)
+				if afterText {
+					require.Greater(t, u.CompletionTokens, 0)
+				} else {
+					require.Zero(t, u.CompletionTokens)
+				}
 			}
 		}
 	}
+}
+
+func TestStrictDisconnectIncludesFailedTextFrame(t *testing.T) {
+	start := strings.Replace(strictStart, `,"usage":{"input_tokens":100,"output_tokens":0}`, "", 1)
+	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(start + strictText + strictStop)))
+	c.Writer = &strictFailWriter{ResponseWriter: c.Writer, failOn: "content_block_delta", short: true}
+	u, apiErr := strictClaudeStream(c, resp, info)
+	require.Nil(t, apiErr)
+	require.True(t, info.StreamResult.ClientGone)
+	require.False(t, info.StreamResult.EffectiveContent)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
+	require.Equal(t, 50, u.PromptTokens)
+	require.Equal(t, service.EstimateTokenByModel("claude", "hello"), u.CompletionTokens)
 }
 
 // TestStrictSignatureOnly 验证只有 signature 不算有效内容；正常完整结束尊重上游用量，异常且无有效交付时不收费。

@@ -24,8 +24,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// maxClaudeFrameBytes 限制单个 SSE 帧及累计工具参数为 8 MiB，避免异常上游持续占用内存。
-const maxClaudeFrameBytes = 8 << 20
+// maxClaudeFrameBytes 与公共受管流共享 200 MiB 上限，覆盖单个 SSE 帧及累计工具参数。
+const maxClaudeFrameBytes = relaycommon.MaxStreamFrameBytes
 
 // errClaudeIncompleteFrame 表示读到 EOF 时仍残留没有空行结束的非空 SSE 帧。
 var errClaudeIncompleteFrame = errors.New("incomplete SSE frame at end of response")
@@ -423,6 +423,8 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 	outputUsageCurrent := false                                        // 最近 message_delta 输出报告后尚无新内容块；显式 0 也算报告。
 	estimatedOutput := 0                                               // 已成功交付内容的估算输出 token 累计值。
 	var outputEstimator service.StreamTokenEstimator                   // 仅消费成功写出并刷新后的内容；跨帧保留词类和权重，避免分批取整。
+	var receivedEstimator service.StreamTokenEstimator
+	receivedOutput := 0
 loop:
 	for {
 		// 已观察到的下游取消优先于队列中的后续帧，避免继续采用取消后的用量。
@@ -563,6 +565,27 @@ loop:
 			if response.Type == "message_start" && response.Message != nil && response.Message.Model != "" {
 				info.UpstreamModelName = response.Message.Model
 			}
+			if response.Type != "ping" {
+				result.ReceivedResponse = true
+				receivedContent := content
+				switch response.Type {
+				case "content_block_start":
+					block := v.Get("content_block")
+					if block.Get("type").String() == "tool_use" || block.Get("type").String() == "server_tool_use" {
+						receivedContent = block.Get("name").String()
+						if args := block.Get("input").Raw; args != "{}" {
+							receivedContent += args
+						}
+					}
+				case "content_block_delta":
+					if v.Get("delta.type").String() == "input_json_delta" {
+						receivedContent = v.Get("delta.partial_json").String()
+					}
+				case "content_block_stop":
+					receivedContent = "" // 工具接收片段已逐次计入，不再累计完整参数。
+				}
+				receivedOutput += receivedEstimator.Add(info.UpstreamModelName, receivedContent)
+			}
 			raw := frame.raw
 			if response.Type == "message_delta" && !shouldSkipClaudeMessageDeltaUsagePatch(info) {
 				patched := patchClaudeMessageDeltaUsageData(data, buildFinalClaudeUsage(confirmedClaudeUsage(result.Diagnostic.UsageEvidence)))
@@ -625,15 +648,6 @@ loop:
 	case "upstream":
 		usage = confirmedClaudeUsage(result.Diagnostic.UsageEvidence)
 		c.Set("claude_web_search_requests", result.Diagnostic.UsageEvidence["server_tool_use.web_search_requests"])
-		// 起始用量或之后仍有内容的报告不是最终输出；只补正常结束的估算，异常/用户取消仍按既定已确认用量结算。
-		if !result.Failed && !result.Diagnostic.UsageFinal {
-			usage.CompletionTokens = max(usage.CompletionTokens, estimatedOutput)
-			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-			usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildFinalClaudeUsage(usage))
-			usage.BillingUsage.Estimated = true
-			result.UsageSource = "mixed"
-			result.Diagnostic.EstimatedUsage = map[string]int{"output_tokens": estimatedOutput}
-		}
 	case "estimated":
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 		if storage := info.ClaudeRequestBody; storage != nil {
@@ -659,11 +673,19 @@ loop:
 			}
 		}
 		usage.CompletionTokens = estimatedOutput
+		if result.ClientGone {
+			usage.CompletionTokens = receivedOutput
+		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildFinalClaudeUsage(usage))
 		usage.BillingUsage.Estimated = true
 		result.Diagnostic.EstimatedUsage = map[string]int{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens}
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	}
+	output := estimatedOutput
+	if result.ClientGone {
+		output = receivedOutput
+	}
+	usage = service.SupplementStreamZeroOutput(c, info, usage, output, 0)
 	return usage, nil
 }

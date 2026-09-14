@@ -66,6 +66,9 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 	// 只按基础 MIME 类型分类，避免参数中的 json/SSE 字样影响缓存和交付证据。
 	ct := StreamMediaType(w.Header().Get("Content-Type"))
 	if !strings.Contains(ct, "text/event-stream") {
+		if len(p) > 0 && IsStreamBinaryContentType(ct) {
+			w.session.RecordReceivedMedia(0)
+		}
 		n, err := w.ResponseWriter.Write(p)
 		if err == nil && n != len(p) {
 			err = io.ErrShortWrite

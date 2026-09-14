@@ -95,7 +95,12 @@ func TestManagedResponsesLimitZeroUsage(t *testing.T) {
 				selected := service.FinalizeStreamUsage(c, info, usage)
 				require.False(t, info.StreamResult.Failed)
 				require.Equal(t, counts[0], selected.PromptTokens)
-				require.Equal(t, counts[1], selected.CompletionTokens)
+				if counts[1] == 0 {
+					require.Positive(t, selected.CompletionTokens)
+					require.Equal(t, "mixed", info.StreamResult.UsageSource)
+				} else {
+					require.Equal(t, counts[1], selected.CompletionTokens)
+				}
 			})
 		}
 	}
