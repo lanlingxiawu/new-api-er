@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -115,12 +116,13 @@ func embeddingResponseBaidu2OpenAI(response *BaiduEmbeddingResponse) *dto.OpenAI
 	return &openAIEmbeddingResponse
 }
 
+// baiduStreamHandler 转换百度流；c 为输出上下文，info 保存用量，resp 为原始上游响应，私有错误交给会话。
 func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
 	usage := &dto.Usage{}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var baiduResponse BaiduChatStreamResponse
 		if err := common.Unmarshal([]byte(data), &baiduResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 			sr.Error(err)
 			return
 		}
@@ -131,8 +133,8 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		}
 		response := streamResponseBaidu2OpenAI(&baiduResponse)
 		if err := helper.ObjectData(c, response); err != nil {
-			common.SysLog("error sending stream response: " + err.Error())
-			sr.Error(err)
+			logger.LogLegacyStreamError(c, "error sending stream response: "+err.Error())
+			sr.ConversionError(err)
 		}
 	})
 	service.CloseResponseBodyGracefully(resp)

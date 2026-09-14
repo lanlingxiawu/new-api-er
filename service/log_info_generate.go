@@ -117,67 +117,148 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	// 恢复 bb6317462 的上下文原因记录，独立于流式处理、诊断采集和按钮资格。
+	if reason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason); reason != "" {
+		other["reject_reason"] = reason
+	}
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
-	AppendClaudeStreamLogInfo(relayInfo, other)
+	AppendStreamLogInfo(relayInfo, other)
 	return other
 }
 
 // Private evidence is stripped at the log read boundary; only the Root detail
 // API reads the stored envelope. Never pass this payload to application logging.
-// AppendClaudeStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
+// AppendStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
 // 参数 info：请求中转状态，nil 时跳过；other：待原地扩充的日志映射，nil 时跳过。
-// 无返回值；不把私有 envelope 输出到应用日志，不在此处执行结算。
-func AppendClaudeStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface{}) {
+// 无返回值；新流程只在明确上游异常时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
+func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface{}) {
 	if info == nil || other == nil {
 		return
 	}
-	if info.ClaudeStream == nil && info.ClaudeDiagnostic == nil && info.ClaudeRejectReason == "" {
+	delete(other, "claude_diagnostic_available")
+	delete(other, "stream_diagnostic_available")
+	if !info.StreamResponseGate.AllowsStream() {
+		// 只排除新流程证据，策略拒绝原因仍按历史独立字段显示。
+		if info.StreamRejectReason != "" {
+			other["reject_reason"] = info.StreamRejectReason
+		}
+		delete(other, "stream_diagnostic")
+		delete(other, "stream_diagnostic_attempt")
+		delete(other, "stream_result")
 		return
 	}
-	diagnostic := info.ClaudeDiagnostic.Snapshot()
+	if info.StreamResult == nil && info.StreamDiagnostic == nil && info.StreamRejectReason == "" {
+		return
+	}
+	diagnostic := info.StreamDiagnostic.Snapshot()
 	if info.StreamStatus != nil && info.StreamStatus.EndError != nil {
-		diagnostic.Error = relaycommon.BoundedClaudeDiagnosticError(info.StreamStatus.EndError)
+		diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(info.StreamStatus.EndError)
 	}
-	if info.ClaudeStream != nil {
-		other["claude_stream"] = info.ClaudeStream
-		diagnostic = info.ClaudeStream.Diagnostic
+	if info.StreamResult != nil {
+		other["stream_result"] = info.StreamResult
+		diagnostic = info.StreamResult.Diagnostic
 	}
-	if info.ClaudeRejectReason != "" {
-		diagnostic.RejectReason = info.ClaudeRejectReason
+	if info.StreamRejectReason != "" {
+		diagnostic.RejectReason = info.StreamRejectReason
 	}
-	other["claude_diagnostic"] = diagnostic
-	other["claude_diagnostic_attempt"] = diagnostic.Attempt
+	if diagnostic.RejectReason != "" {
+		other["reject_reason"] = diagnostic.RejectReason
+	}
+	available := info.StreamResult != nil && info.StreamResult.DiagnosticAvailable
+	if available {
+		other["stream_diagnostic_available"] = true
+		// 终止 error 可能晚于结果快照写出；日志入队前取得当前正文，避免漏掉补发帧。
+		diagnostic.DownstreamBodyBase64 = info.StreamDiagnostic.DownstreamBody()
+	}
+	if info.StreamResponseGate != nil {
+		// 仅收紧新流程的日志副本；保留正常/客户端断开时的用量与错误，不改旧采集路径。
+		diagnostic = filterStreamDiagnosticResponse(diagnostic, available && info.StreamDiagnostic != nil)
+	}
+	other["stream_diagnostic"] = diagnostic
+	other["stream_diagnostic_attempt"] = diagnostic.Attempt
 }
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
-// AppendClaudeErrorDiagnostic 为错误路径追加本次尝试的响应诊断，不把非流式、非 200 或兼容渠道纳入严格结算。
+// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算。
 // 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志映射，将原地更新；err：底层错误，nil 时不覆盖已有原因。
-func AppendClaudeErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
-	value, _ := c.Get(relaycommon.ClaudeResponseCaptureKey)
-	capture, _ := value.(*relaycommon.ClaudeResponseCapture)
+func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
+	value, _ := c.Get(relaycommon.StreamResponseCaptureKey)
+	capture, _ := value.(*relaycommon.StreamResponseCapture)
 	reject := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
-	if capture == nil && reject == "" {
+	if reject != "" {
+		other["reject_reason"] = reject
+	}
+	delete(other, "claude_diagnostic_available")
+	delete(other, "stream_diagnostic_available")
+	value, _ = c.Get(relaycommon.StreamSessionKey)
+	session, _ := value.(*relaycommon.StreamSession)
+	if session != nil && !session.ResponseGate.AllowsStream() {
+		// 非 200、连接失败和响应头之前超时仅沿用原错误日志，不保存私有响应与用量。
+		delete(other, "stream_diagnostic")
+		delete(other, "stream_diagnostic_attempt")
+		delete(other, "stream_result")
+		return
+	}
+	available := session.DiagnosticAvailable(IsRelayRequestTimeout(c))
+	if capture == nil && reject == "" && !available {
 		return
 	}
 	capture.SetError(err)
 	diagnostic := capture.Snapshot()
+	if available {
+		other["stream_diagnostic_available"] = true
+		diagnostic.DownstreamBodyBase64 = capture.DownstreamBody()
+		// 关闭响应采集仍保留错误与尝试编号，使无 body 的诊断也能查询。
+		diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
+		if err != nil {
+			diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(err)
+		}
+	}
 	diagnostic.RejectReason = reject
-	other["claude_diagnostic"] = diagnostic
-	other["claude_diagnostic_attempt"] = diagnostic.Attempt
+	if session != nil && session.ResponseGate != nil {
+		// 错误日志也以明确上游来源为准，本地错误或提前记录日志不应保存原始响应。
+		diagnostic = filterStreamDiagnosticResponse(diagnostic, available && capture != nil)
+	}
+	other["stream_diagnostic"] = diagnostic
+	other["stream_diagnostic_attempt"] = diagnostic.Attempt
+}
+
+// filterStreamDiagnosticResponse 为新流程日志过滤原始响应内容，保留独立错误、读取元数据、用量与结算证据。
+// 参数 diagnostic 为按值传入的诊断快照，keepResponse 表示已确认上游异常且开启采集；返回可入队的副本。
+// 历史响应只复制元数据切片后清空内容引用，不修改采集器或固定结果，以供后续异常/Realtime 轮次使用。
+func filterStreamDiagnosticResponse(diagnostic relaycommon.StreamDiagnostic, keepResponse bool) relaycommon.StreamDiagnostic {
+	if keepResponse {
+		return diagnostic
+	}
+	diagnostic.ResponseHeaders = nil
+	diagnostic.BodyHead = nil
+	diagnostic.BodyTail = nil
+	diagnostic.DownstreamBodyBase64 = nil
+	if len(diagnostic.PreviousResponses) > 0 {
+		previous := make([]relaycommon.StreamResponseSnapshot, len(diagnostic.PreviousResponses))
+		copy(previous, diagnostic.PreviousResponses)
+		for i := range previous {
+			previous[i].ResponseHeaders = nil
+			previous[i].BodyHead = nil
+			previous[i].BodyTail = nil
+		}
+		diagnostic.PreviousResponses = previous
+	}
+	return diagnostic
 }
 
 // Keep low-level causes in Root evidence, not ordinary console/usage summaries.
-// ClaudePublicErrorSummary 生成普通日志使用的错误摘要，Claude 响应专用模式仅公开状态码和错误码。
+// StreamPublicErrorSummary 生成普通日志使用的错误摘要，响应诊断专用模式仅公开状态码和错误码。
 // 参数 c：请求上下文，用于读取响应专用标记；err：非 nil 的中转错误。
 // 返回公开摘要字符串；底层错误与原始 body 由独立诊断保存。
-func ClaudePublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
-	if c.GetBool(relaycommon.ClaudeResponseOnlyKey) {
+func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
+	if c.GetBool(relaycommon.StreamResponseOnlyKey) {
 		return fmt.Sprintf("upstream response failed (status=%d, code=%s)", err.StatusCode, err.GetErrorCode())
 	}
 	return err.MaskSensitiveErrorWithStatusCode()
@@ -190,14 +271,14 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 	other["po"] = relayInfo.ParamOverrideAudit
 }
 
-// appendStreamStatus 生成公开的流状态字段，Claude 的底层错误细节仅保存在私有诊断中。
+// appendStreamStatus 生成公开流状态；有通用会话、流式结果或响应采集器时省略底层错误文本，旧路径按原逻辑保留。
 // 参数 relayInfo：流式状态及协议信息；other：原地写入的日志映射。任一为 nil、非流式或无状态时跳过。
 func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
 		return
 	}
 	ss := relayInfo.StreamStatus
-	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.ClaudeDiagnostic != nil || relayInfo.ClaudeStream != nil
+	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil
 	status := "ok"
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"

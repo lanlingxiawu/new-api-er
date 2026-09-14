@@ -77,21 +77,43 @@ func LogInfo(ctx context.Context, msg string) {
 	logHelper(ctx, loggerINFO, msg)
 }
 
+// LogWarn 输出请求警告；ctx 为请求上下文，私有流的 msg 仅保留公开定位提示。
 func LogWarn(ctx context.Context, msg string) {
+	if common.IsPrivateStream(ctx) {
+		msg = "stream warning; see private upstream diagnostics"
+	}
 	logHelper(ctx, loggerWarn, msg)
 }
 
+// LogError 输出请求错误；ctx 用于关联请求 ID，私有流的底层 msg 由诊断单独保存。
 func LogError(ctx context.Context, msg string) {
+	if common.IsPrivateStream(ctx) {
+		msg = "stream error; see private upstream diagnostics"
+	}
 	logHelper(ctx, loggerError, msg)
 }
 
+// LogDebug 使用请求上下文 ctx 并按开关格式化 msg/args；私有流直接跳过，避免请求或原始响应落入系统日志。
 func LogDebug(ctx context.Context, msg string, args ...any) {
+	if common.IsPrivateStream(ctx) {
+		return
+	}
 	if common.DebugEnabled {
 		if len(args) > 0 {
 			msg = fmt.Sprintf(msg, args...)
 		}
 		logHelper(ctx, loggerDebug, msg)
 	}
+}
+
+// LogLegacyStreamError 兼容旧渠道 SysLog；仅私有流改用请求定位提示，其他请求保持原日志行为。
+// 参数 ctx 为当前请求，msg 为旧日志文本；本函数只输出日志，不修改流状态，底层原因由出错处显式登记。
+func LogLegacyStreamError(ctx context.Context, msg string) {
+	if common.IsPrivateStream(ctx) {
+		LogError(ctx, msg)
+		return
+	}
+	common.SysLog(msg)
 }
 
 func logHelper(ctx context.Context, level string, msg string) {

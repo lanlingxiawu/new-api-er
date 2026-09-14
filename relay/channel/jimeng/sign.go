@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/gin-gonic/gin"
 )
@@ -40,12 +41,15 @@ import (
 
 const HexPayloadHashKey = "HexPayloadHash"
 
+// SetPayloadHash 计算请求签名摘要；c 关联请求，req 是签名对象，私有流不输出请求正文日志。
 func SetPayloadHash(c *gin.Context, req any) error {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	logger.LogInfo(c, fmt.Sprintf("SetPayloadHash body: %s", body))
+	if !common.IsPrivateStream(c) {
+		logger.LogInfo(c, fmt.Sprintf("SetPayloadHash body: %s", body))
+	}
 	payloadHash := sha256.Sum256(body)
 	hexPayloadHash := hex.EncodeToString(payloadHash[:])
 	c.Set(HexPayloadHashKey, hexPayloadHash)

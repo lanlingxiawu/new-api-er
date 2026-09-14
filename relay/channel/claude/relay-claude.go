@@ -83,11 +83,14 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	return relayconvert.FormatClaudeResponseInfo(claudeResponse, oaiResponse, claudeInfo)
 }
 
+// HandleStreamResponseData 解析并转换一条 Claude data；data 是上游 JSON，claudeInfo 累计转换状态，info/c 保存本次诊断与输出。
+// DTO 解析失败直接登记上游 JSON 原因，避免 SDK 返回错误后被统一兜底误归为本地转换问题。
 func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string) *types.NewAPIError {
 	var claudeResponse dto.ClaudeResponse
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
 	if err != nil {
-		common.SysLog("error unmarshalling stream response: " + err.Error())
+		info.StreamSession.Fail("upstream_json_error", err)
+		logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 		return types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
@@ -164,6 +167,8 @@ func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo,
 
 // HandleStreamFinalResponse 完成既有流式输出的格式转换与用量收尾；原生 Claude 分支不补造成功结束事件。
 // 参数 c：下游写入上下文；info：客户端协议及转换状态；claudeInfo：流处理中累积的响应文本、ID 和用量。
+// OpenAI 转换分支仍尝试写用量和 DONE，由受管写入器按会话状态过滤成功尾帧；原生 Claude 分支仅收尾用量。
+// 用量尾帧的本地输出错误显式登记，已存在的客户端或上游首因保持不变。
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
 	if info.ReceivedResponseCount == 0 {
 		// 上游零响应：HTTP 200 进入了流式分支，但整段流一条 SSE 数据都没发过来
@@ -202,7 +207,8 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
-				common.SysLog("send final response failed: " + err.Error())
+				info.StreamSession.Fail("response_conversion_error", err)
+				logger.LogLegacyStreamError(c, "send final response failed: "+err.Error())
 			}
 		}
 		helper.Done(c)

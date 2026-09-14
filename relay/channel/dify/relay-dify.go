@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -224,6 +225,7 @@ func streamResponseDify2OpenAI(difyResponse DifyChunkChatCompletionResponse) *dt
 	return &response
 }
 
+// difyStreamHandler 转换 Dify 流并保留原用量；c 为请求，info 为会话，resp 为上游响应，错误原文仅进入私有诊断。
 func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var responseText string
 	usage := &dto.Usage{}
@@ -231,8 +233,8 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	helper.SetEventStreamHeaders(c)
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
-		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 			sr.Error(err)
 			return
 		}
@@ -252,8 +254,8 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			}
 		}
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
-			common.SysLog(err.Error())
-			sr.Error(err)
+			logger.LogLegacyStreamError(c, err.Error())
+			sr.ConversionError(err)
 		}
 	})
 	helper.Done(c)

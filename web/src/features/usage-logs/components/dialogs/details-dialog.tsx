@@ -66,7 +66,7 @@ import {
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { UpstreamComparePane } from '../../upstream-log/upstream-compare-pane'
-import { ClaudeDiagnosticPanel } from './claude-diagnostic-panel'
+import { StreamDiagnosticPanel } from './stream-diagnostic-panel'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -849,6 +849,17 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
+        {/* 按 bb6317462 恢复管理员独立原因区块，与流式诊断按钮及 Root 查询无关。 */}
+        {props.isAdmin && other?.reject_reason && (
+          <DetailSection
+            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+            label={t('Reject Reason')}
+            variant='danger'
+          >
+            <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
+          </DetailSection>
+        )}
+
         {/* Violation fee info */}
         {isViolation && other && (
           <DetailSection
@@ -1171,7 +1182,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {other?.claude_stream && (
+        {other?.stream_result && (
           <DetailSection label={t('Stream billing')}>
             <DetailRow
               label={t('Billing Path')}
@@ -1181,7 +1192,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   estimated: t('Estimated delivered content'),
                   mixed: t('Mixed upstream and estimated usage'),
                   none: t('No charge'),
-                }[other.claude_stream.usage_source]
+                }[other.stream_result.usage_source]
               }
             />
             <DetailRow
@@ -1193,23 +1204,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   released: t('Stream settlement: released'),
                   failed: t('Stream settlement: failed'),
                   partial: t('Stream settlement: partial'),
-                }[other.claude_stream.settlement_state]
+                }[other.stream_result.settlement_state]
               }
             />
             <DetailRow
               label={t('Effective content delivered')}
-              value={other.claude_stream.effective_content ? t('Yes') : t('No')}
+              value={other.stream_result.effective_content ? t('Yes') : t('No')}
             />
           </DetailSection>
         )}
+        {/* 只接受后端新流程确认的布尔标记；面板内部继续校验 Root 身份并按点击加载。 */}
         {props.open &&
-          other?.claude_diagnostic_available &&
+          other?.stream_diagnostic_available === true &&
           props.log.request_id && (
-            <ClaudeDiagnosticPanel
-              key={`${props.log.request_id}:${props.log.created_at}:${other.claude_diagnostic_attempt ?? 0}`}
+            <StreamDiagnosticPanel
+              key={`${props.log.request_id}:${props.log.created_at}:${other.stream_diagnostic_attempt ?? 0}`}
               requestId={props.log.request_id}
               createdAt={props.log.created_at}
-              attempt={other.claude_diagnostic_attempt ?? 0}
+              attempt={other.stream_diagnostic_attempt ?? 0}
             />
           )}
 

@@ -2,10 +2,10 @@ package operation_setting
 
 import "github.com/QuantumNous/new-api/setting/config"
 
-// ClaudeStreamSetting 分别控制严格流式处理和原始响应采集，两项开关互相独立。
+// ClaudeStreamSetting 保留 Claude 协议的兼容开关；新流式入口还需满足通用开关，关闭采集不关闭严格解析。
 type ClaudeStreamSetting struct {
 	Enabled         bool `json:"enabled"`          // 默认 true；控制原生 Claude 流式协议校验和异常结算路径。
-	CaptureResponse bool `json:"capture_response"` // 默认 true；控制只读采集上游响应头/body，不决定严格解析是否启用。
+	CaptureResponse bool `json:"capture_response"` // 默认 true；旧路径控制上游采集，新流程与通用采集开关共同控制上下游响应缓存，不决定严格解析是否启用。
 }
 
 // claudeStreamSetting 保存配置注册初值，运行时通过配置管理器发布快照。

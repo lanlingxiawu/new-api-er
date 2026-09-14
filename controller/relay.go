@@ -69,8 +69,8 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 	return err
 }
 
-// Relay 接收统一 AI 请求并执行渠道选择、重试和响应终止；严格 Claude 流已处理时跳过重复错误响应与退款。
-// 参数 c：当前下游请求、身份和响应写入上下文；relayFormat：客户端使用的协议格式。
+// Relay 管理请求校验、预扣、渠道尝试与唯一终止；流式补发/结算由尝试会话接管。
+// 参数 c 为本请求上下文，relayFormat 为入口协议；非流式继续原重试、错误和退款路径。
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -93,13 +93,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
-		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+		if c.GetBool(relaycommon.StreamHandledKey) {
 			return
 		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 		if newAPIError != nil {
 			responseMessage := common.MessageWithRequestId(newAPIError.Error(), requestId)
-			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(service.ClaudePublicErrorSummary(c, newAPIError))))
+			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(service.StreamPublicErrorSummary(c, newAPIError))))
 			newAPIError.SetMessage(responseMessage)
 			writeError := func() {
 				switch relayFormat {
@@ -181,6 +181,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
 	} else {
+		// Realtime 长连接逐轮补充同一预留，禁用一次性请求的信任旁路，防止无限轮次透支。
+		if relayFormat == types.RelayFormatOpenAIRealtime && relayInfo.UseStreamErrors() {
+			relayInfo.ForcePreConsume = true
+		}
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
 			return
@@ -188,7 +192,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
-		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+		if c.GetBool(relaycommon.StreamHandledKey) {
 			return
 		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
@@ -209,6 +213,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		RequestPath: c.Request.URL.Path,
 		Retry:       common.GetPointer(0),
 	}
+	// 最后一次请求失败也由流式所有者结算；LIFO 保证先于旧退款 defer，非流式直接跳过。
+	defer func() {
+		if newAPIError != nil && !c.GetBool(relaycommon.StreamHandledKey) {
+			service.FinalizeStreamFailure(c, relayInfo, newAPIError)
+		}
+	}()
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
@@ -246,6 +256,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		// 模式取自入口；每次尝试重建证据，兼容渠道、转换及请求体透传均在同一位置接入。
+		service.BeginStreamAttempt(c, relayInfo)
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -257,8 +269,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
-		if c.GetBool(relaycommon.ClaudeStreamHandledKey) {
+		if c.GetBool(relaycommon.StreamHandledKey) {
 			return
+		}
+		if relayInfo.StreamSession.Active() {
+			state := relayInfo.StreamSession.Snapshot()
+			if state.Accepted || c.Writer.Written() || c.Request.Context().Err() != nil {
+				service.FinalizeStreamFailure(c, relayInfo, newAPIError)
+				return
+			}
 		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
 
@@ -412,10 +431,10 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
-// processChannelError 处理渠道失败统计、错误日志及渠道状态；Claude 底层原因单独保存为超级管理员诊断。
+// processChannelError 处理渠道失败统计、错误日志及渠道状态；流式底层原因单独保存为超级管理员诊断。
 // 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，供分类及记录。
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	publicSummary := service.ClaudePublicErrorSummary(c, err)
+	publicSummary := service.StreamPublicErrorSummary(c, err)
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(messageWithCurrentRequestId(c, publicSummary))))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -457,7 +476,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		service.AppendClaudeErrorDiagnostic(c, other, err)
+		service.AppendStreamErrorDiagnostic(c, other, err)
 		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, messageWithCurrentRequestId(c, publicSummary), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 

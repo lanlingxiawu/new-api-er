@@ -192,6 +192,8 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 	return &imageRequest, nil
 }
 
+// updateTask 查询 taskID 的原始任务响应；c/info 提供请求上下文与会话，返回解析结果、错误及本次原始正文。
+// 受管图片轮询延续初始 HTTP 200 的会话，采集后再解析，不重置门控/证据；非受管请求保持既有行为。
 func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
 	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
 
@@ -206,18 +208,48 @@ func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*Al
 	req = service.BindRelayRequestContext(c, req)
 
 	client := &http.Client{}
+	managed := info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0
+	if managed {
+		// 新会话已负责用户取消；不沿用旧轮询脱离下游的后台上下文。
+		req = req.WithContext(c.Request.Context())
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if managed {
+			info.StreamSession.Fail("upstream_read_error", err)
+			return &aliResponse, err, nil
+		}
 		common.SysLog("updateTask client.Do err: " + err.Error())
 		return &aliResponse, err, nil
 	}
-	defer resp.Body.Close()
+	if managed {
+		// 轮询不是新的渠道尝试；直接观察本次响应，避免 ObserveTransport 清空前次已确认用量。
+		info.StreamDiagnostic.Observe(resp)
+		info.StreamSession.ObserveHTTP(resp)
+		relaycommon.UseStreamImageTaskResponse(resp)
+	}
+	defer resp.Body.Close() // 包装完成后登记 Close，保证采集器与会话共用同一个幂等关闭入口。
 
 	responseBody, err := io.ReadAll(resp.Body)
+	if managed {
+		if err != nil {
+			info.StreamSession.Fail("upstream_read_error", err)
+			return &aliResponse, err, responseBody
+		}
+		if resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("upstream image task returned HTTP %d", resp.StatusCode)
+			info.StreamSession.Fail("upstream_error", err)
+			return &aliResponse, err, responseBody
+		}
+	}
 
 	var response AliResponse
 	err = common.Unmarshal(responseBody, &response)
 	if err != nil {
+		if managed {
+			info.StreamSession.Fail("upstream_json_error", err)
+			return &aliResponse, err, responseBody
+		}
 		common.SysLog("updateTask NewDecoder err: " + err.Error())
 		return &aliResponse, err, nil
 	}
@@ -225,6 +257,8 @@ func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*Al
 	return &response, nil, responseBody
 }
 
+// asyncTaskWait 按原间隔轮询 taskID，c/info 提供取消与诊断会话；返回最终任务、原始正文及错误。
+// 已进入受管图片任务的异常立即交给统一终止流程，旧请求维持既有重试和等待策略。
 func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
 	waitSeconds := 10
 	step := 0
@@ -234,6 +268,9 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 	var responseBody []byte
 
 	requestContext := service.RelayRequestContext(c)
+	if info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0 {
+		requestContext = c.Request.Context() // 未启用旧超时控制器时，受管任务也立即响应用户断开。
+	}
 	select {
 	case <-time.After(5 * time.Second):
 	case <-requestContext.Done():
@@ -246,6 +283,9 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 		rsp, err, body := updateTask(c, info, taskID)
 		responseBody = body
 		if err != nil {
+			if info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0 {
+				return nil, responseBody, err
+			}
 			logger.LogWarn(c, "asyncTaskWait UpdateTask err: "+err.Error())
 			select {
 			case <-time.After(time.Duration(waitSeconds) * time.Second):
@@ -279,7 +319,11 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 		}
 	}
 
-	return nil, nil, fmt.Errorf("aliAsyncTaskWait timeout")
+	err := fmt.Errorf("aliAsyncTaskWait timeout")
+	if info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0 {
+		info.StreamSession.Fail("upstream_incomplete", err)
+	}
+	return nil, nil, err
 }
 
 func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody []byte, info *relaycommon.RelayInfo, responseFormat string) *dto.ImageResponse {
@@ -297,8 +341,13 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 	return &imageResponse
 }
 
+// aliImageHandler 将 Ali 原生图片响应转换并写出；a 决定同步/任务阶段，c 为下游，resp 为初始响应，info 为结算会话。
+// 返回渠道错误与原计费用量；任务响应在读取前声明中间态规则，非受管响应不受影响。
 func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	responseFormat := c.GetString("response_format")
+	if !a.IsSyncImageModel {
+		relaycommon.UseStreamImageTaskResponse(resp)
+	}
 
 	var aliTaskResponse AliResponse
 	responseBody, err := io.ReadAll(resp.Body)
@@ -308,6 +357,8 @@ func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *rela
 	service.CloseResponseBodyGracefully(resp)
 	err = common.Unmarshal(responseBody, &aliTaskResponse)
 	if err != nil {
+		// 结构观察不替代 DTO 类型检查；原生字段解码失败仍作为上游 JSON 异常保存诊断。
+		info.StreamSession.Fail("upstream_json_error", err)
 		return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError), nil
 	}
 

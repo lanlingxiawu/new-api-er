@@ -32,15 +32,15 @@ func TestClaudeResponseCapturedBeforeStatusOrDecode(t *testing.T) {
 		req, err := http.NewRequest("POST", server.URL, strings.NewReader("private request body"))
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "private request credential")
-		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, ClaudeDiagnostic: relaycommon.NewClaudeResponseCapture(1)}
+		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamDiagnostic: relaycommon.NewStreamResponseCapture(1)}
 		resp, err := doRequest(c, req, info)
 		require.NoError(t, err)
 		require.Equal(t, status, resp.StatusCode)
-		require.Zero(t, info.ClaudeDiagnostic.Snapshot().ObservedBytes)
+		require.Zero(t, info.StreamDiagnostic.Snapshot().ObservedBytes)
 		body, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
-		snapshot := info.ClaudeDiagnostic.Snapshot()
+		snapshot := info.StreamDiagnostic.Snapshot()
 		require.Equal(t, body, append(snapshot.BodyHead, snapshot.BodyTail...))
 		encoded, err := rootcommon.Marshal(snapshot)
 		require.NoError(t, err)

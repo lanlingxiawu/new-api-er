@@ -20,6 +20,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ImageHelper 处理图片请求的透传/转换、上游调用和原有消费结算。
+// c 提供当前请求与渠道覆盖；info 保存请求及流式会话，按标准/已知原生 JSON 的实际出站张数同步完成约束。
+// newAPIError 返回原中继错误链处理的失败；未安装流式会话时不启用新增完成校验。
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
@@ -52,6 +55,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		requestBody = common.ReaderOnly(storage)
+		if info.ApiType == constant.APITypeAli {
+			// 原生透传只认 parameters.n；使用已解析入口字段，不读取/记录请求流，也不采用顶层 n 或渠道覆盖。
+			info.UpdateStreamExpectedImages(imageReq.Extra["parameters"], "n")
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
@@ -76,6 +83,21 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				}
 			}
 
+			// 只对已知 JSON 图片协议同步最终字段；MiniMax/xAI 使用 n，Ali 使用 parameters.n，multipart 保留旧路径。
+			imageCountPath := ""
+			switch info.ApiType {
+			case constant.APITypeXai, constant.APITypeMiniMax:
+				imageCountPath = "n"
+			case constant.APITypeAli:
+				imageCountPath = "parameters.n"
+			}
+			switch convertedRequest.(type) {
+			case dto.ImageRequest, *dto.ImageRequest:
+				imageCountPath = "n"
+			}
+			if imageCountPath != "" {
+				info.UpdateStreamExpectedImages(jsonData, imageCountPath)
+			}
 			logger.LogDebug(c, "image request body: %s", jsonData)
 			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {

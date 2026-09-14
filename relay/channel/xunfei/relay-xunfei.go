@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -131,8 +132,12 @@ func buildXunfeiAuthUrl(hostUrl string, apiKey, apiSecret string) string {
 	return callUrl
 }
 
-func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string) (*dto.Usage, *types.NewAPIError) {
+// xunfeiStreamHandler 根据 info 的请求会话选择受管 WS；c/textRequest 为下游请求，appId/apiSecret/apiKey 仅用于原渠道鉴权，不进入诊断。
+func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
 	domain, authUrl := getXunfeiAuthUrl(c, apiKey, apiSecret, textRequest.Model)
+	if info.StreamSession != nil { // 待激活会话必须先走实际拨号，由握手结果决定是否启用新流程。
+		return managedXunfeiStream(c, textRequest, domain, authUrl, appId, info)
+	}
 	dataChan, stopChan, err := xunfeiMakeRequest(c, textRequest, domain, authUrl, appId)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)

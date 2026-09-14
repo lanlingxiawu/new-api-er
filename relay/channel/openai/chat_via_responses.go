@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -185,6 +186,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	return usage, nil
 }
 
+// OaiResponsesToChatStreamHandler 把 Responses SSE 转为当前下游协议；c 提供写入，info 保存转换和计费状态，resp 为上游响应。
+// 受管限制终态采用原转换器的结束原因并保留确认用量（含显式零）；非受管流程继续原估算逻辑。
+// 返回选定用量及转换错误，最终异常补发和结算仍由统一流程处理。
 func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -203,6 +207,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	var limitUsage *dto.Usage // 限制终态的确认用量；nil 表示仍采用转换器原有计量/估算。
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -293,6 +298,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 
+		// 限制终态单独保留确认用量；普通正文沿用原转换路径，不增加额外探测。
+		if (streamResp.Type == "response.incomplete" || streamResp.Type == "response.done") && info.StreamSession.Active() && relaycommon.IsResponsesLimitCompletion(gjson.Parse(data)) {
+			if evidence := info.StreamSession.Snapshot().Evidence; len(evidence) > 0 {
+				limitUsage = service.BuildConfirmedStreamUsage(info, evidence)
+			}
+		}
 		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &streamResp)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -312,7 +323,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage := state.Usage()
-	if usage == nil || usage.TotalTokens == 0 {
+	if limitUsage != nil {
+		usage = limitUsage
+		state.SetUsage(usage)
+	} else if usage == nil || usage.TotalTokens == 0 {
 		usage = service.ResponseText2UsageFromStream(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
 		state.SetUsage(usage)
 	}

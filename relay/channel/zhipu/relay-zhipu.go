@@ -155,7 +155,11 @@ func streamMetaResponseZhipu2OpenAI(zhipuResponse *ZhipuStreamMetaResponse) (*dt
 	return &response, &zhipuResponse.Usage
 }
 
+// zhipuStreamHandler 选择旧智谱受管 add/finish 处理；c 为下游上下文，info 为会话，resp 为原始上游流。
 func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	if info.StreamSession.Active() {
+		return managedZhipuStream(c, info, resp)
+	}
 	var usage *dto.Usage
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)

@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -72,6 +73,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return &usage, nil
 }
 
+// OaiResponsesStreamHandler 转发 Responses SSE 并汇总用量；c 提供下游写入，info 保存协议/计价状态，resp 为上游响应。
+// 受管流的正常限制终态与 completed 共用用量读取，原始事件仍保持 incomplete；旧路径保持原分支。
+// 返回渠道用量和中继错误，异常结算由统一终止流程负责。
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -81,6 +85,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	defer service.CloseResponseBodyGracefully(resp)
 
 	var usage = &dto.Usage{}
+	var limitUsage *dto.Usage // 正常限制终态的确认用量，独立于旧路径的零值估算判断。
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
@@ -95,7 +100,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 		sendResponsesStreamData(c, streamResponse, data)
-		switch streamResponse.Type {
+		usageEvent := streamResponse.Type // 仅控制内部用量分支，不改写发给下游的事件。
+		// 仅终态额外读取确认用量，正文 delta 不增加会话快照或 JSON 探测。
+		if (streamResponse.Type == "response.incomplete" || streamResponse.Type == "response.done") && info.StreamSession.Active() && relaycommon.IsResponsesLimitCompletion(gjson.Parse(data)) {
+			usageEvent = "response.completed"
+			if evidence := info.StreamSession.Snapshot().Evidence; len(evidence) > 0 {
+				limitUsage = service.BuildConfirmedStreamUsage(info, evidence)
+			}
+		}
+		switch usageEvent {
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
@@ -158,6 +171,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
+	if limitUsage != nil {
+		// 限制终态改走正常分支后，仍保留已确认的显式零，不触发旧的零 token 估算。
+		return limitUsage, nil
+	}
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
 		tempStr := responseTextBuilder.String()

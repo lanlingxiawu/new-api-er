@@ -30,27 +30,6 @@ const maxClaudeFrameBytes = 8 << 20
 // errClaudeIncompleteFrame 表示读到 EOF 时仍残留没有空行结束的非空 SSE 帧。
 var errClaudeIncompleteFrame = errors.New("incomplete SSE frame at end of response")
 
-// claudeTransportFailure 用 err 携带尚未取得 HTTP 响应的传输错误，复用统一终止路径；不代表真实上游 body。
-type claudeTransportFailure struct{ err error }
-
-// Read 将连接失败以读取错误形式交给严格流式处理器。
-// 接收者 r：保存原始传输错误的内部读取器；未命名 []byte 参数是调用方缓冲区，不填充。
-// 返回 0 字节和原始错误，不生成任何上游响应内容。
-func (r *claudeTransportFailure) Read([]byte) (int, error) { return 0, r.err }
-
-// Close 结束内部传输失败读取器；它不持有连接或文件。
-// 接收者 r：内部错误读取器；无参数；始终返回 nil。
-func (r *claudeTransportFailure) Close() error { return nil }
-
-// HandleStreamTransportFailure shares the single terminal/billing path even
-// when no HTTP response body was obtained. No request data is retained.
-// HandleStreamTransportFailure 在没有取得 HTTP 响应时复用严格流式的唯一终止和用量选择流程。
-// 参数 c：下游请求上下文；info：当前中转状态；err：上游连接/传输错误。
-// 返回用于最终结算的用量及处理结果；只包装内部错误读取器，不采集请求内容。
-func HandleStreamTransportFailure(c *gin.Context, info *relaycommon.RelayInfo, err error) (*dto.Usage, *types.NewAPIError) {
-	return strictClaudeStream(c, &http.Response{Body: &claudeTransportFailure{err: err}}, info)
-}
-
 // claudeFrameRead 是读取工作者交给响应处理者的一帧数据或终止信号。
 type claudeFrameRead struct {
 	raw []byte // 包含原始分隔符的完整 SSE 帧副本；读取失败时为空。
@@ -84,29 +63,20 @@ func claudeErrorDetail(data string) string {
 	return message
 }
 
-// claudeFrameSplitter 以增量游标避免短读时重复扫描整帧；offset 为已扫描字节数，lineStart 为当前行起点。
-type claudeFrameSplitter struct{ offset, lineStart int }
+// claudeFrameSplitter 复用通用 SSE 增量行游标，保留原生 Claude 的 EOF 半帧错误合同。
+type claudeFrameSplitter struct {
+	framing relaycommon.StreamFrameScanner // 当前未消费缓冲的行游标，支持混合换行及跨读取的 CRLF。
+}
 
 // Preserve SSE frames byte-for-byte, including CRLF and unknown SSE fields.
 // Split 按空行切出完整 SSE 帧，并保留 CRLF、未知字段等原始字节。
 // 接收者 s：增量扫描游标；参数 data：Scanner 当前未消费缓冲；atEOF：底层是否已结束。
-// 依次返回消费字节数、完整帧和错误；EOF 时仍有非空残片返回不完整帧错误，普通短读继续等待。
+// 依次返回消费字节数、帧字节和错误；CR 后延续 LF 可单独返回且没有事件载荷。
+// EOF 时仍有非空残片返回不完整帧错误，普通短读继续等待。
 func (s *claudeFrameSplitter) Split(data []byte, atEOF bool) (int, []byte, error) {
-	for i := s.offset; i < len(data); i++ {
-		if data[i] != '\n' {
-			continue
-		}
-		line := data[s.lineStart:i]
-		if len(line) > 0 && line[len(line)-1] == '\r' {
-			line = line[:len(line)-1]
-		}
-		if len(line) == 0 {
-			s.offset, s.lineStart = 0, 0
-			return i + 1, data[:i+1], nil
-		}
-		s.lineStart = i + 1
+	if end := s.framing.End(data); end > 0 {
+		return end, data[:end], nil
 	}
-	s.offset = len(data)
 	if atEOF && len(bytes.TrimSpace(data)) > 0 {
 		return 0, nil, errClaudeIncompleteFrame
 	}
@@ -116,26 +86,8 @@ func (s *claudeFrameSplitter) Split(data []byte, atEOF bool) (int, []byte, error
 // claudeFramePayload 从原始 SSE 帧提取事件名与 data，多个 data 行以换行连接。
 // 参数 raw：含分隔符的完整帧；返回 event、data 两个字符串，不修改 raw，透传仍使用原始字节。
 func claudeFramePayload(raw []byte) (string, string) {
-	var event string
-	var data strings.Builder
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		field, value, ok := strings.Cut(line, ":")
-		if !ok {
-			value = ""
-		}
-		value = strings.TrimPrefix(value, " ")
-		switch field {
-		case "event":
-			event = value
-		case "data":
-			if data.Len() > 0 {
-				data.WriteByte('\n')
-			}
-			data.WriteString(value)
-		}
-	}
-	return event, data.String()
+	event, data := relaycommon.StreamFramePayload(raw)
+	return event, string(data)
 }
 
 // 返回值只是候选有效内容；调用方应在对应帧完整写出并刷新成功后才计入已交付内容。
@@ -366,25 +318,29 @@ func writeClaudeFrame(c *gin.Context, raw []byte, terminal bool) (err error) {
 }
 
 // strictClaudeStream 统一负责原生 Claude SSE 读取、协议校验、下游交付、终止分类和用量选择，不补造成功结束事件。
-// 参数 c：下游请求上下文；resp：上游响应或内部连接失败包装；info：本请求中转数据，会写入状态、证据和用量来源。
-// 返回结算用量及 nil 中转错误：终止异常已经在流内处理，调用者依 outcome 结算，控制器应跳过重复响应/重试。
+// 参数 c：下游请求上下文；resp：交给专用解析器的上游响应；info：本请求状态、用量与采集器，新流程调用前已通过真实成功响应门控。
+// 返回选定用量及 nil 中转错误；可写且非客户端断开的异常才尝试流内补发，调用者依 outcome 结算，控制器跳过重复处理。
 func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
-	result := &relaycommon.ClaudeStreamOutcome{SettlementState: "pending"} // 本请求唯一终止结果，随后交给结算阶段更新。
+	// 原生协议由本处理器唯一管理；禁用通用观察，解除透明读取包装，避免重复采集和终止。
+	info.StreamSession.Disable()
+	if resp != nil {
+		if body, ok := resp.Body.(interface{ UnwrapStream() io.ReadCloser }); ok {
+			resp.Body = body.UnwrapStream()
+		}
+	}
+	result := &relaycommon.StreamOutcome{SettlementState: "pending"} // 本请求唯一终止结果，随后交给结算阶段更新。
 	result.Diagnostic.UsageEvidence = make(map[string]int)
 	result.Diagnostic.UsagePhases = make(map[string]string)
-	info.ClaudeStream = result
+	info.StreamResult = result
 	info.StreamStatus = relaycommon.NewStreamStatus()
-	c.Set(relaycommon.ClaudeStreamHandledKey, true)
+	c.Set(relaycommon.StreamHandledKey, true)
 	helper.SetEventStreamHeaders(c)
 	if info.CaptureClaudeResponse() {
-		if info.ClaudeDiagnostic == nil {
-			info.ClaudeDiagnostic = relaycommon.NewClaudeResponseCapture(1)
+		if info.StreamDiagnostic == nil {
+			info.StreamDiagnostic = relaycommon.NewStreamResponseCapture(1)
 		}
 		if resp != nil {
-			// 内部错误读取器仅复用终止逻辑，不额外登记为一次上游 HTTP 响应。
-			if _, synthetic := resp.Body.(*claudeTransportFailure); !synthetic {
-				info.ClaudeDiagnostic.Observe(resp)
-			}
+			info.StreamDiagnostic.Observe(resp)
 		}
 	}
 	frames := make(chan claudeFrameRead, 1)                        // 单帧有界交接，避免慢下游使响应帧无限堆积。
@@ -466,7 +422,7 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 	var upstreamErrorFrame []byte                                      // 保存上游 error 帧原始字节，供结束读取后原样写出。
 	outputUsageCurrent := false                                        // 最近 message_delta 输出报告后尚无新内容块；显式 0 也算报告。
 	estimatedOutput := 0                                               // 已成功交付内容的估算输出 token 累计值。
-	var textBuffer strings.Builder                                     // 成功写出后的候选文本，达到 8 KiB 时分批估算并清空。
+	var outputEstimator service.StreamTokenEstimator                   // 仅消费成功写出并刷新后的内容；跨帧保留词类和权重，避免分批取整。
 loop:
 	for {
 		// 已观察到的下游取消优先于队列中的后续帧，避免继续采用取消后的用量。
@@ -622,11 +578,7 @@ loop:
 				result.EffectiveContent = true
 			}
 			if content != "" {
-				textBuffer.WriteString(content)
-				if textBuffer.Len() >= 8192 {
-					estimatedOutput += service.EstimateTokenByModel(info.UpstreamModelName, textBuffer.String())
-					textBuffer.Reset()
-				}
+				estimatedOutput += outputEstimator.Add(info.UpstreamModelName, content)
 			}
 			if response.Type == "message_stop" {
 				break loop
@@ -639,8 +591,10 @@ loop:
 	}
 	result.Failed = reason != relaycommon.StreamEndReasonDone
 	result.ClientGone = reason == relaycommon.StreamEndReasonClientGone
+	// 专用解析器已停用通用会话，直接采用本循环确定的上游首因；正常策略停止不生成诊断资格。
+	result.DiagnosticAvailable = info.UseStreamErrors() && relaycommon.IsUpstreamStreamFailure(reason)
 	if endErr != nil {
-		result.Diagnostic.Error = relaycommon.BoundedClaudeDiagnosticError(endErr)
+		result.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(endErr)
 	}
 	info.StreamStatus.SetEndReason(reason, nil)
 	// 先关闭上游再写终止错误，避免下游慢写继续拖延上游生成。
@@ -653,14 +607,17 @@ loop:
 		payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)}})
 		service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
 	}
-	if info.ClaudeDiagnostic != nil {
-		snapshot := info.ClaudeDiagnostic.Snapshot()
-		result.Diagnostic.ClaudeResponseSnapshot = snapshot.ClaudeResponseSnapshot
+	if info.StreamDiagnostic != nil {
+		snapshot := info.StreamDiagnostic.Snapshot()
+		result.Diagnostic.StreamResponseSnapshot = snapshot.StreamResponseSnapshot
 		result.Diagnostic.Attempt = snapshot.Attempt
 		result.Diagnostic.PreviousResponses = snapshot.PreviousResponses
 		result.Diagnostic.OmittedResponses = snapshot.OmittedResponses
 	}
 	result.Diagnostic.RejectReason = common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
+	if attempt := c.GetInt(relaycommon.StreamDiagnosticAttemptKey); attempt > 0 {
+		result.Diagnostic.Attempt = attempt
+	}
 	result.ConfirmedUsage = len(result.Diagnostic.UsageEvidence) > 0
 	result.UsageSource = result.SelectUsageSource()
 	usage := &dto.Usage{UsageSemantic: "anthropic"}
@@ -670,7 +627,6 @@ loop:
 		c.Set("claude_web_search_requests", result.Diagnostic.UsageEvidence["server_tool_use.web_search_requests"])
 		// 起始用量或之后仍有内容的报告不是最终输出；只补正常结束的估算，异常/用户取消仍按既定已确认用量结算。
 		if !result.Failed && !result.Diagnostic.UsageFinal {
-			estimatedOutput += service.EstimateTokenByModel(info.UpstreamModelName, textBuffer.String())
 			usage.CompletionTokens = max(usage.CompletionTokens, estimatedOutput)
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 			usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildFinalClaudeUsage(usage))
@@ -679,7 +635,6 @@ loop:
 			result.Diagnostic.EstimatedUsage = map[string]int{"output_tokens": estimatedOutput}
 		}
 	case "estimated":
-		estimatedOutput += service.EstimateTokenByModel(info.UpstreamModelName, textBuffer.String())
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 		if storage := info.ClaudeRequestBody; storage != nil {
 			var request dto.ClaudeRequest

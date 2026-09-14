@@ -79,7 +79,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		}
 		if tokenErr != nil {
 			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
-			if s.relayInfo.ClaudeStream == nil {
+			if s.relayInfo.StreamResult == nil {
 				common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 					s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
 			}

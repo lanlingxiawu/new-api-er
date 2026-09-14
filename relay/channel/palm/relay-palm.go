@@ -2,11 +2,14 @@ package palm
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -50,7 +53,46 @@ func streamResponsePaLM2OpenAI(palmResponse *PaLMChatResponse) *dto.ChatCompleti
 	return &response
 }
 
+// palmStreamHandler 将完整 PaLM JSON 转为下游 SSE；c 保存会话，resp 提供原始响应，受管路径使用单个所有者避免取消后协程滞留。
 func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError, string) {
+	if value, ok := c.Get(relaycommon.StreamSessionKey); ok {
+		if session, _ := value.(*relaycommon.StreamSession); session.Active() {
+			// PaLM 原协议返回完整 JSON；请求所有者直接转换，避免取消后旧发送协程滞留。
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err == nil {
+				// io.ReadAll 会消费 EOF；完整 JSON 中的上游 error 仍由会话保留，先终止再进行成功转换。
+				err = session.ProtocolError()
+			}
+			if err != nil {
+				session.EndRead(err)
+				return types.NewError(err, types.ErrorCodeBadResponseBody), ""
+			}
+			var upstream PaLMChatResponse
+			if err := common.Unmarshal(body, &upstream); err != nil {
+				session.Fail("upstream_json_error", err)
+				return types.NewError(err, types.ErrorCodeBadResponseBody), ""
+			}
+			// 完整 JSON 仍需实际 PaLM 内容；避免未知形状或空候选生成 stop 并计收输入费用。
+			if len(upstream.Candidates) == 0 || strings.TrimSpace(upstream.Candidates[0].Content) == "" {
+				err := errors.New("PaLM response has no output content")
+				session.Fail("upstream_protocol_error", err)
+				return types.NewError(err, types.ErrorCodeBadResponseBody), ""
+			}
+			chunk := streamResponsePaLM2OpenAI(&upstream)
+			chunk.Id = helper.GetResponseID(c)
+			chunk.Created = common.GetTimestamp()
+			helper.SetEventStreamHeaders(c)
+			if err := helper.ObjectData(c, chunk); err != nil {
+				return types.NewError(err, types.ErrorCodeBadResponseBody), ""
+			}
+			helper.Done(c)
+			if len(upstream.Candidates) > 0 {
+				return nil, upstream.Candidates[0].Content
+			}
+			return nil, ""
+		}
+	}
 	responseText := ""
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
@@ -59,7 +101,7 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 	go func() {
 		responseBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			common.SysLog("error reading stream response: " + err.Error())
+			logger.LogLegacyStreamError(c, "error reading stream response: "+err.Error())
 			stopChan <- true
 			return
 		}
@@ -67,7 +109,7 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 		var palmResponse PaLMChatResponse
 		err = json.Unmarshal(responseBody, &palmResponse)
 		if err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 			stopChan <- true
 			return
 		}
@@ -79,7 +121,7 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 		}
 		jsonResponse, err := json.Marshal(fullTextResponse)
 		if err != nil {
-			common.SysLog("error marshalling stream response: " + err.Error())
+			logger.LogLegacyStreamError(c, "error marshalling stream response: "+err.Error())
 			stopChan <- true
 			return
 		}

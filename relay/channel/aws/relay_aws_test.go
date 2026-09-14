@@ -84,8 +84,8 @@ func TestAwsDiagnosticCapturesBeforeSDKDecode(t *testing.T) {
 			wire.WriteString(" {\n \"type\":\"message\",\"content\":[] } ")
 		}
 		original := append([]byte(nil), wire.Bytes()...)
-		capture := relaycommon.NewClaudeResponseCapture(1)
-		client := newAwsTestClient(relaycommon.ClaudeDiagnosticHTTPClient{
+		capture := relaycommon.NewStreamResponseCapture(1)
+		client := newAwsTestClient(relaycommon.StreamDiagnosticHTTPClient{
 			Capture: capture,
 			Client: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 				if stream {
