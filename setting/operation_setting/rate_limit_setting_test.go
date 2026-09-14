@@ -177,3 +177,83 @@ func TestRateLimitDraftAccessIsSerialized(t *testing.T) {
 	close(stop)
 	observersWG.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// 注册间隔
+// ---------------------------------------------------------------------------
+
+func TestRegisterCooldownSnapshot(t *testing.T) {
+	original := GetRateLimitSetting()
+	t.Cleanup(func() { ReplaceRateLimitSetting(original) })
+
+	cases := []struct {
+		name         string
+		enabled      bool
+		num, seconds int
+		expectWindow time.Duration
+		expectNum    int
+	}{
+		{"开启时按配置生效", true, 3, 300, 300 * time.Second, 3},
+		{"关闭时为 0，注册不做检查", false, 3, 300, 0, 0},
+		{"未配置回落默认值", true, 0, 0, defaultRegisterCooldownSec * time.Second, defaultRegisterCooldownNum},
+		{"超过上界钳到上界", true, maxRegisterCooldownNum + 1, maxRegisterCooldownSec + 1, maxRegisterCooldownSec * time.Second, maxRegisterCooldownNum},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			draft := original
+			draft.RegisterCooldownEnabled = tc.enabled
+			draft.RegisterCooldownNum = tc.num
+			draft.RegisterCooldownSec = tc.seconds
+			ReplaceRateLimitSetting(draft)
+			require.Equal(t, tc.expectWindow, GetRateLimitSnapshot().RegisterCooldown)
+			require.Equal(t, tc.expectNum, GetRateLimitSnapshot().RegisterCooldownNum)
+		})
+	}
+}
+
+func TestValidateRateLimitSettingRegisterCooldownRange(t *testing.T) {
+	base := GetRateLimitSetting()
+	base.RedisTimeoutMs = defaultRateLimitRedisTimeoutMs
+	base.RegisterCooldownNum = defaultRegisterCooldownNum
+	base.RegisterCooldownSec = defaultRegisterCooldownSec
+	require.NoError(t, ValidateRateLimitSetting(base))
+
+	for _, invalid := range []int{-1, 0, maxRegisterCooldownSec + 1} {
+		draft := base
+		draft.RegisterCooldownSec = invalid
+		require.Error(t, ValidateRateLimitSetting(draft), "窗口 %d 应当被拒绝", invalid)
+	}
+	// 注册窗口不受其它桶 1200 秒窗口上限的约束。
+	for _, valid := range []int{1, 120, maxRateLimitWindowSec + 1, maxRegisterCooldownSec} {
+		draft := base
+		draft.RegisterCooldownSec = valid
+		require.NoError(t, ValidateRateLimitSetting(draft), "窗口 %d 应当被接受", valid)
+	}
+
+	for _, invalid := range []int{-1, 0, maxRegisterCooldownNum + 1} {
+		draft := base
+		draft.RegisterCooldownNum = invalid
+		require.Error(t, ValidateRateLimitSetting(draft), "次数 %d 应当被拒绝", invalid)
+	}
+	for _, valid := range []int{1, 5, maxRegisterCooldownNum} {
+		draft := base
+		draft.RegisterCooldownNum = valid
+		require.NoError(t, ValidateRateLimitSetting(draft), "次数 %d 应当被接受", valid)
+	}
+}
+
+func TestApplyRateLimitEnvDefaultsReadsRegisterCooldown(t *testing.T) {
+	original := GetRateLimitSetting()
+	t.Cleanup(func() { ReplaceRateLimitSetting(original) })
+
+	t.Setenv("REGISTER_COOLDOWN_ENABLE", "true")
+	t.Setenv("REGISTER_COOLDOWN_NUM", "3")
+	t.Setenv("REGISTER_COOLDOWN_SEC", "300")
+	ApplyRateLimitEnvDefaults()
+
+	require.True(t, GetRateLimitSetting().RegisterCooldownEnabled)
+	require.Equal(t, 3, GetRateLimitSetting().RegisterCooldownNum)
+	require.Equal(t, 300, GetRateLimitSetting().RegisterCooldownSec)
+	require.Equal(t, 3, GetRateLimitSnapshot().RegisterCooldownNum)
+	require.Equal(t, 300*time.Second, GetRateLimitSnapshot().RegisterCooldown)
+}

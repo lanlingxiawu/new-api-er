@@ -273,7 +273,14 @@ func Register(c *gin.Context) {
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
+	// 所有校验都已通过，写库前按 IP 预占名额；写库成功后才从成功时刻开始计时。
+	finishCooldown, retryAfter, ok := service.ClaimRegisterCooldown(c.Request.Context(), c.ClientIP())
+	if !ok {
+		common.ApiErrorI18n(c, i18n.MsgUserRegisterTooFrequent, map[string]any{"Seconds": retryAfter})
+		return
+	}
 	if err := cleanUser.Insert(inviterId); err != nil {
+		finishCooldown(false)
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 			return
@@ -281,6 +288,7 @@ func Register(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	finishCooldown(true)
 
 	// 获取插入后的用户ID
 	var insertedUser model.User

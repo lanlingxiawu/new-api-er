@@ -116,7 +116,7 @@ func TestConfigGroupFieldWhitelistsAreDisjoint(t *testing.T) {
 
 // 白名单必须覆盖结构体的全部 json 字段，否则新增配置项在后台改不了。
 func TestConfigGroupWhitelistsCoverEveryStructField(t *testing.T) {
-	assert.Len(t, rateLimitFields, 23, "rate_limit_setting 字段数与白名单不一致")
+	assert.Len(t, rateLimitFields, 26, "rate_limit_setting 字段数与白名单不一致")
 	assert.Len(t, dbPoolFields, 5, "db_pool_setting 字段数与白名单不一致")
 	assert.Len(t, userSessionFields, 5, "user_session_setting 字段数与白名单不一致")
 	assert.Len(t, relayTimeoutFields, 3, "relay_timeout_setting 字段数与白名单不一致")
@@ -334,6 +334,33 @@ func TestSaveConfigGroupPersistsAndTakesEffectImmediately(t *testing.T) {
 	mapped := common.OptionMap["rate_limit_setting.critical_num"]
 	common.OptionMapRWMutex.RUnlock()
 	assert.Equal(t, "77", mapped)
+}
+
+func TestSaveConfigGroupRegisterCooldown(t *testing.T) {
+	db := useConfigGroupDB(t)
+
+	applied, err := SaveConfigGroup("rate_limit_setting", map[string]string{
+		"register_cooldown_enabled": "true",
+		"register_cooldown_num":     "3",
+		"register_cooldown_sec":     "300",
+	})
+	require.NoError(t, err)
+	assert.True(t, applied)
+	value, ok := optionRowValue(t, db, "rate_limit_setting.register_cooldown_sec")
+	require.True(t, ok)
+	assert.Equal(t, "300", value)
+	value, ok = optionRowValue(t, db, "rate_limit_setting.register_cooldown_num")
+	require.True(t, ok)
+	assert.Equal(t, "3", value)
+	snapshot := operation_setting.GetRateLimitSnapshot()
+	assert.Equal(t, float64(300), snapshot.RegisterCooldown.Seconds())
+	assert.Equal(t, 3, snapshot.RegisterCooldownNum)
+
+	before := operation_setting.GetRateLimitSetting()
+	applied, err = SaveConfigGroup("rate_limit_setting", map[string]string{"register_cooldown_sec": "0"})
+	require.Error(t, err)
+	assert.False(t, applied)
+	assert.Equal(t, before, operation_setting.GetRateLimitSetting(), "校验失败不应改动内存配置")
 }
 
 // 整组保存的意义就在于跨字段校验：单字段看都合法，组合起来非法必须被拒。

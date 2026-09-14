@@ -1169,6 +1169,9 @@ db_pool_setting.max_open_conns
 | `critical_enabled` | true | — | `CRITICAL_RATE_LIMIT_ENABLE` |
 | `critical_num` | 60 | 1 ~ 100_000 | `CRITICAL_RATE_LIMIT` |
 | `critical_duration_sec` | 1200 | 1 ~ 1200 | `CRITICAL_RATE_LIMIT_DURATION` |
+| `register_cooldown_enabled` | true | — | `REGISTER_COOLDOWN_ENABLE` |
+| `register_cooldown_num` | 1 | 1 ~ 1_000 | `REGISTER_COOLDOWN_NUM` |
+| `register_cooldown_sec` | 120 | 1 ~ 86_400（不受 1200 秒窗口上限约束，见 [register-rate-limit.md](register-rate-limit.md)） | `REGISTER_COOLDOWN_SEC` |
 | `auth_refresh_enabled` | true | — | `AUTH_REFRESH_RATE_LIMIT_ENABLE` |
 | `auth_refresh_num` | 60 | 1 ~ 100_000 | `AUTH_REFRESH_RATE_LIMIT` |
 | `auth_refresh_ip_num` | 600 | 1 ~ 100_000 | `AUTH_REFRESH_RATE_LIMIT_IP` |

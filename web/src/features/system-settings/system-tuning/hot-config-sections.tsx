@@ -269,6 +269,23 @@ const rateLimitFields: ConfigGroupField[] = [
     max: 1200,
   },
   {
+    key: 'register_cooldown_enabled',
+    label: 'Registration limit enabled',
+    type: 'switch',
+  },
+  {
+    key: 'register_cooldown_num',
+    label: 'Registrations allowed per IP',
+    min: 1,
+    max: 1000,
+  },
+  {
+    key: 'register_cooldown_sec',
+    label: 'Registration window (seconds)',
+    min: 1,
+    max: 86400,
+  },
+  {
     key: 'auth_refresh_enabled',
     label: 'Session refresh limit enabled',
     type: 'switch',

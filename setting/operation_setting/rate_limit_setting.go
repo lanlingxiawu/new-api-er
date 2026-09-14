@@ -15,6 +15,14 @@ const (
 	maxRateLimitNum       = 100_000
 	maxRateLimitWindowSec = 1200
 
+	// 注册次数限制：同一 IP 在任意 W 秒内最多注册成功 N 次。窗口不是计数桶的窗口，
+	// 所以不受 maxRateLimitWindowSec 约束，上限放到一天；N 的每个名额都要单独记录，
+	// 上限收在 1000，保证单个 IP 的记录量可控。
+	defaultRegisterCooldownNum = 1
+	maxRegisterCooldownNum     = 1_000
+	defaultRegisterCooldownSec = 120
+	maxRegisterCooldownSec     = 86_400
+
 	// 限流查 Redis 的超时预算。限流是可降级的旁路，Redis 不可用时降级到本地内存
 	// 计数即可，请求不该跟着 go-redis 的默认超时（DialTimeout 5s / ReadTimeout 3s /
 	// 重试 3 次）一起等下去。
@@ -41,6 +49,9 @@ type RateLimitSetting struct {
 	CriticalEnabled          bool `json:"critical_enabled"`
 	CriticalNum              int  `json:"critical_num"`
 	CriticalDurationSec      int  `json:"critical_duration_sec"`
+	RegisterCooldownEnabled  bool `json:"register_cooldown_enabled"`
+	RegisterCooldownNum      int  `json:"register_cooldown_num"`
+	RegisterCooldownSec      int  `json:"register_cooldown_sec"`
 	AuthRefreshEnabled       bool `json:"auth_refresh_enabled"`
 	AuthRefreshNum           int  `json:"auth_refresh_num"`
 	AuthRefreshIPNum         int  `json:"auth_refresh_ip_num"`
@@ -68,6 +79,10 @@ type RateLimitSnapshot struct {
 	AuthRefresh                                                      AuthRefreshBucket
 	// RedisTimeout 是单次限流查询允许消耗的最长时间，超时即降级到本地内存计数。
 	RedisTimeout time.Duration
+	// RegisterCooldown / RegisterCooldownNum：同一 IP 在 RegisterCooldown 内最多注册成功
+	// RegisterCooldownNum 次。关闭时两者都为 0，表示不限制。
+	RegisterCooldown    time.Duration
+	RegisterCooldownNum int
 }
 
 var rateLimitSetting = RateLimitSetting{
@@ -75,6 +90,7 @@ var rateLimitSetting = RateLimitSetting{
 	GlobalAPIUserEnabled: true, GlobalAPIUserNum: 360, GlobalAPIUserDurationSec: 180,
 	GlobalWebEnabled: true, GlobalWebNum: 2000, GlobalWebDurationSec: 180,
 	CriticalEnabled: true, CriticalNum: 60, CriticalDurationSec: 1200,
+	RegisterCooldownEnabled: true, RegisterCooldownNum: defaultRegisterCooldownNum, RegisterCooldownSec: defaultRegisterCooldownSec,
 	AuthRefreshEnabled: true, AuthRefreshNum: 60, AuthRefreshIPNum: 600, AuthRefreshDurationSec: 1200,
 	SearchEnabled: true, SearchNum: 10, SearchDurationSec: 60,
 	LogExportEnabled: true, LogExportNum: 1, LogExportDurationSec: 600,
@@ -124,6 +140,10 @@ func PublishRateLimitSetting() {
 	}
 	snap.AuthRefresh = AuthRefreshBucket{RateLimitBucket: bucket(s.AuthRefreshEnabled, s.AuthRefreshNum, s.AuthRefreshDurationSec, 60, 1200), IPNum: clamp(s.AuthRefreshIPNum, 600, maxRateLimitNum)}
 	snap.RedisTimeout = time.Duration(clampRedisTimeoutMs(s.RedisTimeoutMs)) * time.Millisecond
+	if s.RegisterCooldownEnabled {
+		snap.RegisterCooldown = time.Duration(clamp(s.RegisterCooldownSec, defaultRegisterCooldownSec, maxRegisterCooldownSec)) * time.Second
+		snap.RegisterCooldownNum = clamp(s.RegisterCooldownNum, defaultRegisterCooldownNum, maxRegisterCooldownNum)
+	}
 	rateLimitSnapshot.Store(&snap)
 }
 func GetRateLimitSnapshot() *RateLimitSnapshot { return rateLimitSnapshot.Load() }
@@ -151,6 +171,12 @@ func ValidateRateLimitSetting(s RateLimitSetting) error {
 	if s.AuthRefreshIPNum < 1 || s.AuthRefreshIPNum > maxRateLimitNum {
 		return fmt.Errorf("rate limit value out of range")
 	}
+	if s.RegisterCooldownNum < 1 || s.RegisterCooldownNum > maxRegisterCooldownNum {
+		return fmt.Errorf("register limit count must be between 1 and %d", maxRegisterCooldownNum)
+	}
+	if s.RegisterCooldownSec < 1 || s.RegisterCooldownSec > maxRegisterCooldownSec {
+		return fmt.Errorf("register limit window must be between 1 and %d seconds", maxRegisterCooldownSec)
+	}
 	if s.RedisTimeoutMs < minRateLimitRedisTimeoutMs || s.RedisTimeoutMs > maxRateLimitRedisTimeoutMs {
 		return fmt.Errorf("redis timeout must be between %dms and %dms",
 			minRateLimitRedisTimeoutMs, maxRateLimitRedisTimeoutMs)
@@ -171,6 +197,9 @@ func ApplyRateLimitEnvDefaults() {
 	s.CriticalEnabled = common.GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", s.CriticalEnabled)
 	s.CriticalNum = common.GetEnvOrDefault("CRITICAL_RATE_LIMIT", s.CriticalNum)
 	s.CriticalDurationSec = common.GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", s.CriticalDurationSec)
+	s.RegisterCooldownEnabled = common.GetEnvOrDefaultBool("REGISTER_COOLDOWN_ENABLE", s.RegisterCooldownEnabled)
+	s.RegisterCooldownNum = common.GetEnvOrDefault("REGISTER_COOLDOWN_NUM", s.RegisterCooldownNum)
+	s.RegisterCooldownSec = common.GetEnvOrDefault("REGISTER_COOLDOWN_SEC", s.RegisterCooldownSec)
 	s.AuthRefreshEnabled = common.GetEnvOrDefaultBool("AUTH_REFRESH_RATE_LIMIT_ENABLE", s.AuthRefreshEnabled)
 	s.AuthRefreshNum = common.GetEnvOrDefault("AUTH_REFRESH_RATE_LIMIT", s.AuthRefreshNum)
 	s.AuthRefreshIPNum = common.GetEnvOrDefault("AUTH_REFRESH_RATE_LIMIT_IP", s.AuthRefreshIPNum)

@@ -720,6 +720,9 @@ export type SystemTuningSettings = {
   'rate_limit_setting.critical_enabled': boolean
   'rate_limit_setting.critical_num': number
   'rate_limit_setting.critical_duration_sec': number
+  'rate_limit_setting.register_cooldown_enabled': boolean
+  'rate_limit_setting.register_cooldown_num': number
+  'rate_limit_setting.register_cooldown_sec': number
   'rate_limit_setting.auth_refresh_enabled': boolean
   'rate_limit_setting.auth_refresh_num': number
   'rate_limit_setting.auth_refresh_ip_num': number
