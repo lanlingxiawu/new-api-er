@@ -504,10 +504,20 @@ func (m *Message) readPayload(buf *bytes.Buffer) error {
 	return nil
 }
 
+// ReceiveMessage 解码上游 WS 消息；conn 为待读连接，旧调用不接入额外观察。
 func ReceiveMessage(conn *websocket.Conn) (*Message, error) {
+	return receiveMessageObserved(conn, nil)
+}
+
+// receiveMessageObserved 在二进制解码之前交付原始上游消息；observe 为 nil 时保留旧读取行为。
+// 参数 conn 为上游 WS，observe 仅用于本次流式诊断，不采集发往上游的请求。
+func receiveMessageObserved(conn *websocket.Conn, observe func([]byte)) (*Message, error) {
 	mt, frame, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
+	}
+	if observe != nil {
+		observe(frame)
 	}
 	if mt != websocket.BinaryMessage && mt != websocket.TextMessage {
 		return nil, fmt.Errorf("unexpected Websocket message type: %d", mt)

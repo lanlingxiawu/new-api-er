@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -197,6 +199,8 @@ func generateRequestID() string {
 	return uuid.New().String()
 }
 
+// handleTTSWebSocketResponse 转发火山音频 WS；原始帧先采集再解码，实际负序号才表示完成。
+// 参数 c 为下游，requestURL/volcRequest 用于原连接请求，info 保存会话，encoding 决定音频响应头；请求数据不进入诊断。
 func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest VolcengineTTSRequest, info *relaycommon.RelayInfo, encoding string) (usage any, err *types.NewAPIError) {
 	_, token, parseErr := parseVolcengineAuth(info.ApiKey)
 	if parseErr != nil {
@@ -211,6 +215,10 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
 
 	conn, resp, dialErr := websocket.DefaultDialer.DialContext(service.RelayRequestContext(c), requestURL, header)
+	if info.StreamSession != nil { // 响应前只预备会话，真实 101 握手才激活。
+		info.StreamSession.ObserveWebSocketHandshake(resp, dialErr)
+		info.StreamDiagnostic.ObserveStreamHandshake(resp, dialErr)
+	}
 	if dialErr != nil {
 		if resp != nil {
 			return nil, types.NewErrorWithStatusCode(
@@ -226,6 +234,12 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 		)
 	}
 	defer conn.Close()
+	if info.StreamSession.Active() {
+		info.StreamSession.BindUpstream(conn)
+		conn.SetReadLimit(relaycommon.MaxStreamFrameBytes)
+		defer relaycommon.StreamConnectionLifetime(service.RelayRequestContext(c), conn)()
+		_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	}
 	if deadline, ok := service.RelayRequestDeadline(c); ok {
 		_ = conn.SetReadDeadline(deadline.Add(10 * time.Millisecond))
 	}
@@ -240,6 +254,11 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	}
 
 	if sendErr := FullClientRequest(conn, payload); sendErr != nil {
+		// 只有已确认的连接写错误归入上游；本地二进制编码失败仍交给旧控制器收口。
+		var networkErr net.Error
+		if errors.As(sendErr, &networkErr) || errors.Is(sendErr, io.ErrClosedPipe) || errors.Is(sendErr, websocket.ErrCloseSent) {
+			info.StreamSession.Fail("upstream_read_error", sendErr)
+		}
 		return nil, types.NewErrorWithStatusCode(
 			fmt.Errorf("failed to send request: %w", sendErr),
 			types.ErrorCodeBadRequestBody,
@@ -252,8 +271,20 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	c.Header("Transfer-Encoding", "chunked")
 
 	for {
-		msg, recvErr := ReceiveMessage(conn)
+		var observe func([]byte)
+		if info.StreamSession.Active() {
+			observe = info.StreamDiagnostic.WriteStreamPayload
+			if deadline, ok := service.RelayRequestDeadline(c); ok {
+				_ = conn.SetReadDeadline(deadline.Add(10 * time.Millisecond))
+			} else if constant.StreamingTimeout > 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(time.Duration(constant.StreamingTimeout) * time.Second))
+			}
+		}
+		msg, recvErr := receiveMessageObserved(conn, observe)
 		if recvErr != nil {
+			if info.StreamSession.Active() {
+				info.StreamSession.EndRead(recvErr)
+			}
 			if websocket.IsCloseError(recvErr, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				break
 			}
@@ -266,6 +297,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 
 		switch msg.MsgType {
 		case MsgTypeError:
+			info.StreamSession.Fail("upstream_error", fmt.Errorf("upstream audio error %d: %s", msg.ErrorCode, msg.Payload))
 			return nil, types.NewErrorWithStatusCode(
 				fmt.Errorf("received error from server: code=%d, %s", msg.ErrorCode, string(msg.Payload)),
 				types.ErrorCodeBadResponse,
@@ -289,9 +321,13 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 					_ = conn.SetReadDeadline(time.Time{})
 				}
 				c.Writer.Flush()
+				if info.StreamSession.Active() && info.StreamSession.ClientError() != nil {
+					return nil, types.NewError(info.StreamSession.ClientError(), types.ErrorCodeBadResponse)
+				}
 			}
 
 			if msg.Sequence < 0 {
+				info.StreamSession.Complete()
 				c.Status(http.StatusOK)
 				usage = &dto.Usage{
 					PromptTokens:     info.GetEstimatePromptTokens(),

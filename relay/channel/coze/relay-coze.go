@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -97,6 +98,8 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	return &usage, nil
 }
 
+// cozeChatStreamHandler 转换 resp 中的扣子事件到 c；info 保存用量，受管解析/写出失败后停止，不读取后续成功帧。
+// 已确认正常完成后的读取错误不再作为中转错误返回，防止上层重新改判终态；未受管路径保持原返回行为。
 func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
@@ -120,6 +123,9 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 				handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
 				currentEvent = ""
 				currentData = ""
+				if info.StreamSession.Active() && (info.StreamSession.ProtocolError() != nil || info.StreamSession.ClientError() != nil) {
+					break
+				}
 			}
 			continue
 		}
@@ -143,7 +149,10 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		info.StreamSession.EndRead(err)
+		if !info.StreamSession.Active() || !info.StreamSession.ProtocolComplete() {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
 	}
 	helper.Done(c)
 
@@ -154,14 +163,17 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	return usage, nil
 }
 
+// handleCozeEvent 转换扣子事件；event/data 为原始事件名与 JSON，responseText/usage 累计结果，id 标识响应，c/info 管理输出与私有错误。
+// JSON 解析与原生 error 分别登记上游来源；会话保留首因，下游失败由写入器登记，日志本身不修改终态。
 func handleCozeEvent(c *gin.Context, event string, data string, responseText *string, usage *dto.Usage, id string, info *relaycommon.RelayInfo) {
 	switch event {
 	case "conversation.chat.completed":
 		// 将 data 解析为 CozeChatResponseData
 		var chatData CozeChatResponseData
-		err := json.Unmarshal([]byte(data), &chatData)
+		err := common.Unmarshal([]byte(data), &chatData)
 		if err != nil {
-			common.SysLog("error_unmarshalling_stream_response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error_unmarshalling_stream_response: "+err.Error())
 			return
 		}
 
@@ -176,16 +188,18 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 	case "conversation.message.delta":
 		// 将 data 解析为 CozeChatV3MessageDetail
 		var messageData CozeChatV3MessageDetail
-		err := json.Unmarshal([]byte(data), &messageData)
+		err := common.Unmarshal([]byte(data), &messageData)
 		if err != nil {
-			common.SysLog("error_unmarshalling_stream_response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error_unmarshalling_stream_response: "+err.Error())
 			return
 		}
 
 		var content string
-		err = json.Unmarshal(messageData.Content, &content)
+		err = common.Unmarshal(messageData.Content, &content)
 		if err != nil {
-			common.SysLog("error_unmarshalling_stream_response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error_unmarshalling_stream_response: "+err.Error())
 			return
 		}
 
@@ -208,13 +222,16 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 
 	case "error":
 		var errorData CozeError
-		err := json.Unmarshal([]byte(data), &errorData)
+		err := common.Unmarshal([]byte(data), &errorData)
 		if err != nil {
-			common.SysLog("error_unmarshalling_stream_response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error_unmarshalling_stream_response: "+err.Error())
 			return
 		}
 
-		common.SysLog(fmt.Sprintf("stream event error: %v %v", errorData.Code, errorData.Message))
+		err = fmt.Errorf("stream event error: %v %v", errorData.Code, errorData.Message)
+		info.StreamSession.Fail("upstream_error", err)
+		logger.LogLegacyStreamError(c, err.Error())
 	}
 }
 
@@ -283,13 +300,15 @@ func getChatDetail(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (*ht
 	return resp, nil
 }
 
+// doRequest 发送扣子上游请求；req 仅转交，c/info 决定超时和响应观察，返回原响应/传输错误，不采集请求。
 func doRequest(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) (*http.Response, error) {
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	req = service.BindRelayRequestContext(c, req)
-	resp, err := service.RelayHTTPClient(c, client).Do(req)
+	diagnosticClient := relaycommon.StreamDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, client), Capture: info.StreamDiagnostic, Stream: info.StreamSession}
+	resp, err := diagnosticClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("client.Do failed: %w", err)
 	}

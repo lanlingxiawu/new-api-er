@@ -175,6 +175,8 @@ func responseMiniMax2OpenAIImage(response *MiniMaxImageResponse, info *relaycomm
 	return imageResponse, nil
 }
 
+// miniMaxImageHandler 解码并转换原生图片 JSON；c 为下游，resp 为上游原始响应，info 保存受管会话与计费参数。
+// 返回原用量或渠道错误；新会话同时记录 DTO 类型解析失败，非受管调用的 nil 会话保持原流程。
 func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -184,6 +186,7 @@ func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	var minimaxResponse MiniMaxImageResponse
 	if err := common.Unmarshal(responseBody, &minimaxResponse); err != nil {
+		info.StreamSession.Fail("upstream_json_error", err)
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if minimaxResponse.BaseResp.StatusCode != 0 {

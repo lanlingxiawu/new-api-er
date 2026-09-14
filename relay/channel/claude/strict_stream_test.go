@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -24,11 +25,55 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// TestStrictDownstreamDiagnostic 验证专用 Claude 写出及补发错误全部进入同一正文；t 为测试上下文。
+func TestStrictDownstreamDiagnostic(t *testing.T) {
+	for _, body := range []string{strictStart + strictText, strictStart + strictText + strictStop, "event: ping\ndata: {\"type\":\"ping\"}\n\n"} {
+		c, rec, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
+		service.BeginStreamAttempt(c, info)
+		info.StreamSession.ObserveTransport(resp, nil)
+		_, err := strictClaudeStream(c, resp, info)
+		require.Nil(t, err)
+		other := map[string]any{}
+		service.AppendStreamLogInfo(info, other)
+		diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+		if info.StreamResult.DiagnosticAvailable {
+			require.Equal(t, body, string(diagnostic.BodyHead)+string(diagnostic.BodyTail))
+			require.Equal(t, []string{"one", "two"}, diagnostic.ResponseHeaders["X-Test"])
+			require.Contains(t, rec.Body.String(), "event: error")
+			require.NotNil(t, diagnostic.DownstreamBodyBase64)
+			require.Equal(t, base64.StdEncoding.EncodeToString(rec.Body.Bytes()), *diagnostic.DownstreamBodyBase64)
+		} else {
+			require.Empty(t, diagnostic.ResponseHeaders)
+			require.Empty(t, diagnostic.BodyHead)
+			require.Empty(t, diagnostic.BodyTail)
+			require.Nil(t, diagnostic.DownstreamBodyBase64)
+		}
+		require.Equal(t, body, string(info.StreamResult.Diagnostic.BodyHead)+string(info.StreamResult.Diagnostic.BodyTail), "日志过滤不清空专用 Claude 的内存证据")
+	}
+}
+
 // strictStart 为合法消息起始夹具，确认输入 100/输出 0；strictText 提供 hello 文本但不结束内容块。
 // strictStop 依次结束内容块、报告输出 7 和 end_turn、结束消息，供各测试按需删改以制造边界条件。
 const strictStart = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":100,\"output_tokens\":0}}}\n\n"
 const strictText = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n"
 const strictStop = "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+// TestStrictStreamMixedLineEndings 验证原生 Claude 同样接受 CR 与混合空行，保留真实结束和计量；t 为上下文。
+func TestStrictStreamMixedLineEndings(t *testing.T) {
+	for _, body := range []string{
+		strings.ReplaceAll(strictStart+strictText+strictStop, "\n\n", "\n\r\n"),
+		strings.ReplaceAll(strictStart+strictText+strictStop, "\n", "\r"),
+	} {
+		c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
+		usage, err := strictClaudeStream(c, resp, info)
+		require.Nil(t, err)
+		require.False(t, info.StreamResult.Failed)
+		require.False(t, info.StreamResult.DiagnosticAvailable)
+		require.Equal(t, 7, usage.CompletionTokens)
+		require.Contains(t, w.Body.String(), "hello")
+		require.NotContains(t, w.Body.String(), "event: error")
+	}
+}
 
 // strictTestContext 构造本地严格流式测试上下文、响应记录器、上游响应和默认中转信息。
 // 参数 body：模拟上游响应体，可为 nil 以覆盖缺失响应场景；四个返回值依次供调用、断言输出、输入响应及检查状态使用。
@@ -61,8 +106,9 @@ func TestStrictStreamTermination(t *testing.T) {
 			usage, err := strictClaudeStream(c, resp, info)
 			require.Nil(t, err)
 			require.Equal(t, tc.reason, string(info.StreamStatus.EndReason))
-			require.Equal(t, tc.source, info.ClaudeStream.UsageSource)
-			require.Equal(t, tc.effective, info.ClaudeStream.EffectiveContent)
+			require.Equal(t, tc.reason != "done", info.StreamResult.DiagnosticAvailable)
+			require.Equal(t, tc.source, info.StreamResult.UsageSource)
+			require.Equal(t, tc.effective, info.StreamResult.EffectiveContent)
 			require.Equal(t, tc.output, usage.CompletionTokens)
 			if tc.reason != "done" {
 				require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
@@ -82,7 +128,7 @@ func TestStrictUpstreamErrorVerbatim(t *testing.T) {
 	require.Nil(t, err)
 	require.True(t, strings.HasSuffix(w.Body.String(), raw))
 	require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
-	require.Equal(t, "none", info.ClaudeStream.UsageSource)
+	require.Equal(t, "none", info.StreamResult.UsageSource)
 }
 
 // TestStrictKnownEventSchemaRegression 验证已知事件缺数据/缺字段时终止，未知扩展和注释帧继续兼容且不污染用量。
@@ -100,8 +146,8 @@ func TestStrictKnownEventSchemaRegression(t *testing.T) {
 		u, err := strictClaudeStream(c, resp, info)
 		require.Nil(t, err)
 		require.Equal(t, "upstream_protocol_error", string(info.StreamStatus.EndReason), malformed)
-		require.False(t, info.ClaudeStream.EffectiveContent)
-		require.Equal(t, "none", info.ClaudeStream.UsageSource)
+		require.False(t, info.StreamResult.EffectiveContent)
+		require.Equal(t, "none", info.StreamResult.UsageSource)
 		require.Zero(t, u.TotalTokens)
 		require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 		require.NotContains(t, w.Body.String(), "event: message_stop")
@@ -111,7 +157,8 @@ func TestStrictKnownEventSchemaRegression(t *testing.T) {
 	c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(prefix + strictStart + strictText + strictStop)))
 	u, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.False(t, info.ClaudeStream.Failed)
+	require.False(t, info.StreamResult.Failed)
+	require.False(t, info.StreamResult.DiagnosticAvailable)
 	require.Equal(t, 7, u.CompletionTokens)
 	require.True(t, strings.HasPrefix(w.Body.String(), prefix))
 }
@@ -135,8 +182,8 @@ func TestStrictNormalPartialUsageRegression(t *testing.T) {
 			c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(start + strictText + tc.stop)))
 			u, err := strictClaudeStream(c, resp, info)
 			require.Nil(t, err)
-			require.False(t, info.ClaudeStream.Failed)
-			require.Equal(t, tc.source, info.ClaudeStream.UsageSource)
+			require.False(t, info.StreamResult.Failed)
+			require.Equal(t, tc.source, info.StreamResult.UsageSource)
 			require.Equal(t, 100, u.PromptTokens)
 			require.Equal(t, 200, u.PromptTokensDetails.CachedTokens)
 			require.Equal(t, tc.output, u.CompletionTokens)
@@ -190,18 +237,18 @@ func TestStrictOutputUsageOrdering(t *testing.T) {
 					info.ChannelSetting.PassThroughBodyEnabled = mode == "channel passthrough"
 					u, err := ClaudeStreamHandler(c, resp, info)
 					require.Nil(t, err)
-					require.NotNil(t, info.ClaudeStream, "passthrough must still use strict response handling")
+					require.NotNil(t, info.StreamResult, "passthrough must still use strict response handling")
 					require.Equal(t, tc.reason, string(info.StreamStatus.EndReason))
-					require.Equal(t, tc.source, info.ClaudeStream.UsageSource)
-					require.Equal(t, tc.final, info.ClaudeStream.Diagnostic.UsageFinal)
-					require.Equal(t, tc.evidence, info.ClaudeStream.Diagnostic.UsageEvidence["output_tokens"])
+					require.Equal(t, tc.source, info.StreamResult.UsageSource)
+					require.Equal(t, tc.final, info.StreamResult.Diagnostic.UsageFinal)
+					require.Equal(t, tc.evidence, info.StreamResult.Diagnostic.UsageEvidence["output_tokens"])
 					require.Equal(t, tc.output, u.CompletionTokens)
 					require.Equal(t, 100, u.PromptTokens)
 					require.Equal(t, 100+tc.output, u.TotalTokens)
 					require.Equal(t, tc.output, u.BillingUsage.ClaudeUsage.OutputTokens)
 					require.Equal(t, tc.source == "mixed", u.BillingUsage.Estimated)
 					if tc.source != "mixed" {
-						require.Empty(t, info.ClaudeStream.Diagnostic.EstimatedUsage)
+						require.Empty(t, info.StreamResult.Diagnostic.EstimatedUsage)
 					}
 					if tc.reason == "done" {
 						require.NotContains(t, w.Body.String(), "event: error")
@@ -263,14 +310,14 @@ func TestStrictMessageStartCoreSchema(t *testing.T) {
 					info.ChannelSetting.PassThroughBodyEnabled = mode == "channel passthrough"
 					u, err := ClaudeStreamHandler(c, resp, info)
 					require.Nil(t, err)
-					require.NotNil(t, info.ClaudeStream)
-					require.True(t, info.ClaudeStream.Failed)
-					require.False(t, info.ClaudeStream.ClientGone)
-					require.False(t, info.ClaudeStream.EffectiveContent)
-					require.False(t, info.ClaudeStream.ConfirmedUsage)
-					require.Empty(t, info.ClaudeStream.Diagnostic.UsageEvidence)
-					require.NotEmpty(t, info.ClaudeStream.Diagnostic.Error)
-					require.Equal(t, "none", info.ClaudeStream.UsageSource)
+					require.NotNil(t, info.StreamResult)
+					require.True(t, info.StreamResult.Failed)
+					require.False(t, info.StreamResult.ClientGone)
+					require.False(t, info.StreamResult.EffectiveContent)
+					require.False(t, info.StreamResult.ConfirmedUsage)
+					require.Empty(t, info.StreamResult.Diagnostic.UsageEvidence)
+					require.NotEmpty(t, info.StreamResult.Diagnostic.Error)
+					require.Equal(t, "none", info.StreamResult.UsageSource)
 					require.Zero(t, u.TotalTokens)
 					require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 					require.NotContains(t, w.Body.String(), "event: message_start")
@@ -290,16 +337,16 @@ func TestStrictMessageStartCoreSchema(t *testing.T) {
 					info.ChannelSetting.PassThroughBodyEnabled = mode == "channel passthrough"
 					u, err := ClaudeStreamHandler(c, resp, info)
 					require.Nil(t, err)
-					require.NotNil(t, info.ClaudeStream)
-					require.False(t, info.ClaudeStream.Failed)
-					require.True(t, info.ClaudeStream.EffectiveContent)
+					require.NotNil(t, info.StreamResult)
+					require.False(t, info.StreamResult.Failed)
+					require.True(t, info.StreamResult.EffectiveContent)
 					require.Equal(t, service.EstimateTokenByModel("claude", "hello"), u.CompletionTokens)
 					require.Equal(t, u.CompletionTokens, u.BillingUsage.ClaudeUsage.OutputTokens)
 					if withUsage {
-						require.Equal(t, "mixed", info.ClaudeStream.UsageSource)
+						require.Equal(t, "mixed", info.StreamResult.UsageSource)
 						require.Equal(t, 100, u.PromptTokens)
 					} else {
-						require.Equal(t, "estimated", info.ClaudeStream.UsageSource)
+						require.Equal(t, "estimated", info.StreamResult.UsageSource)
 						require.Equal(t, 50, u.PromptTokens)
 					}
 					if mode != "normal" {
@@ -370,22 +417,22 @@ func TestStrictPassthroughAdapterHTTPRegression(t *testing.T) {
 					value, apiErr := adaptor.DoResponse(c, response.(*http.Response), info)
 					require.Nil(t, apiErr)
 					u := value.(*dto.Usage)
-					require.NotNil(t, info.ClaudeStream)
-					require.Equal(t, tc.failed, info.ClaudeStream.Failed)
+					require.NotNil(t, info.StreamResult)
+					require.Equal(t, tc.failed, info.StreamResult.Failed)
 					require.Equal(t, tc.output, u.CompletionTokens)
 					if tc.failed {
-						require.Equal(t, "none", info.ClaudeStream.UsageSource)
+						require.Equal(t, "none", info.StreamResult.UsageSource)
 						require.Zero(t, u.TotalTokens)
 						require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 					} else {
-						require.Equal(t, "upstream", info.ClaudeStream.UsageSource)
+						require.Equal(t, "upstream", info.StreamResult.UsageSource)
 						require.Equal(t, tc.output, u.BillingUsage.ClaudeUsage.OutputTokens)
-						require.True(t, info.ClaudeStream.Diagnostic.UsageFinal)
+						require.True(t, info.StreamResult.Diagnostic.UsageFinal)
 					}
 					if !tc.failed || tc.body == upstreamError {
 						require.Equal(t, tc.body, w.Body.String())
 					}
-					d := info.ClaudeStream.Diagnostic
+					d := info.StreamResult.Diagnostic
 					require.Equal(t, tc.body, string(d.BodyHead)+string(d.BodyTail))
 					require.NotContains(t, string(d.BodyHead)+string(d.BodyTail), "private-request-sentinel")
 				})
@@ -401,7 +448,8 @@ func TestStrictPolicyStopMarkerRegression(t *testing.T) {
 	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(strictStart + strictText + strings.Replace(strictStop, "end_turn", stop, 1))))
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.False(t, info.ClaudeStream.Failed)
+	require.False(t, info.StreamResult.Failed)
+	require.False(t, info.StreamResult.DiagnosticAvailable, "policy reason is independent of upstream failure")
 	require.NotEmpty(t, common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
 }
 
@@ -418,19 +466,19 @@ func TestClaudeCaptureAndStrictSwitchesAreIndependent(t *testing.T) {
 			body := strictStart + strictText + strictStop
 			c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
 			if info.CaptureClaudeResponse() {
-				info.ClaudeDiagnostic = relaycommon.NewClaudeResponseCapture(1)
-				info.ClaudeDiagnostic.Observe(resp)
+				info.StreamDiagnostic = relaycommon.NewStreamResponseCapture(1)
+				info.StreamDiagnostic.Observe(resp)
 			}
 			_, err := ClaudeStreamHandler(c, resp, info)
 			require.Nil(t, err)
-			require.Equal(t, strict, info.ClaudeStream != nil)
+			require.Equal(t, strict, info.StreamResult != nil)
 			if capture {
-				d := info.ClaudeDiagnostic.Snapshot()
+				d := info.StreamDiagnostic.Snapshot()
 				require.Equal(t, body, string(d.BodyHead)+string(d.BodyTail))
 			} else {
-				require.Nil(t, info.ClaudeDiagnostic)
+				require.Nil(t, info.StreamDiagnostic)
 				if strict {
-					require.Empty(t, info.ClaudeStream.Diagnostic.BodyHead)
+					require.Empty(t, info.StreamResult.Diagnostic.BodyHead)
 				}
 			}
 		}
@@ -461,7 +509,7 @@ func TestStrictReadError(t *testing.T) {
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
 	require.Equal(t, "upstream_read_error", string(info.StreamStatus.EndReason))
-	require.Equal(t, "fixture read failure", info.ClaudeStream.Diagnostic.Error)
+	require.Equal(t, "fixture read failure", info.StreamResult.Diagnostic.Error)
 	require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 }
 
@@ -475,8 +523,9 @@ func TestStrictClientCancellation(t *testing.T) {
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
 	require.Equal(t, "client_gone", string(info.StreamStatus.EndReason))
+	require.False(t, info.StreamResult.DiagnosticAvailable)
 	require.Empty(t, w.Body.String())
-	require.Equal(t, "none", info.ClaudeStream.UsageSource)
+	require.Equal(t, "none", info.StreamResult.UsageSource)
 }
 
 // TestStrictUsagePresenceAndEstimation 区分 usage 缺失和显式零值，验证只有缺少证据且已交付内容时走异常估算。
@@ -494,7 +543,7 @@ func TestStrictUsagePresenceAndEstimation(t *testing.T) {
 			c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(tc.body)))
 			u, e := strictClaudeStream(c, resp, info)
 			require.Nil(t, e)
-			require.Equal(t, tc.source, info.ClaudeStream.UsageSource)
+			require.Equal(t, tc.source, info.StreamResult.UsageSource)
 			require.Equal(t, tc.input, u.PromptTokens)
 			if tc.source == "estimated" {
 				require.Positive(t, u.CompletionTokens)
@@ -568,13 +617,13 @@ func TestStrictDisconnectBilling(t *testing.T) {
 			u, err := strictClaudeStream(c, resp, info)
 			require.Nil(t, err)
 			require.Equal(t, "client_gone", string(info.StreamStatus.EndReason))
-			require.Equal(t, afterText, info.ClaudeStream.EffectiveContent)
+			require.Equal(t, afterText, info.StreamResult.EffectiveContent)
 			if confirmed {
 				require.Equal(t, 100, u.PromptTokens)
-				require.Equal(t, "upstream", info.ClaudeStream.UsageSource)
+				require.Equal(t, "upstream", info.StreamResult.UsageSource)
 			} else {
 				require.Zero(t, u.TotalTokens)
-				require.Equal(t, "none", info.ClaudeStream.UsageSource)
+				require.Equal(t, "none", info.StreamResult.UsageSource)
 			}
 		}
 	}
@@ -598,7 +647,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta",
 		c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
 		u, err := strictClaudeStream(c, resp, info)
 		require.Nil(t, err)
-		require.False(t, info.ClaudeStream.EffectiveContent)
+		require.False(t, info.StreamResult.EffectiveContent)
 		if complete {
 			require.Equal(t, 9523, u.CompletionTokens)
 			require.NotContains(t, w.Body.String(), "event: error")
@@ -654,8 +703,8 @@ func TestStrictFlushFailureDoesNotCountContent(t *testing.T) {
 	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.False(t, info.ClaudeStream.EffectiveContent)
-	require.True(t, info.ClaudeStream.ClientGone)
+	require.False(t, info.StreamResult.EffectiveContent)
+	require.True(t, info.StreamResult.ClientGone)
 }
 
 // strictTimeoutControl 的 writable 标记回调执行期间允许终止错误写入，模拟受管超时控制器。
@@ -696,7 +745,7 @@ func TestStrictRawDiagnosticBeforePatching(t *testing.T) {
 	c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	diagnostic := info.ClaudeStream.Diagnostic
+	diagnostic := info.StreamResult.Diagnostic
 	require.Equal(t, body, string(diagnostic.BodyHead)+string(diagnostic.BodyTail))
 	require.NotEqual(t, body, w.Body.String(), "usage patch affects only the downstream copy")
 	require.Equal(t, []string{"one", "two"}, diagnostic.ResponseHeaders["X-Test"])
@@ -716,24 +765,18 @@ func TestStrictEstimatesActualOutboundRequest(t *testing.T) {
 	u, apiErr := strictClaudeStream(c, resp, info)
 	require.Nil(t, apiErr)
 	require.Equal(t, 7, u.PromptTokens) // 包含 Claude 消息角色元数据的 token 估算。
-	require.Equal(t, "estimated", info.ClaudeStream.UsageSource)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
 }
 
-// TestStrictConnectionFailureAndHeaderBound 覆盖无 HTTP 响应的连接失败及响应头超限，检查零用量、错误事件和截断标记。
+// TestStrictHeaderBound 验证成功 HTTP 响应中的超限头只记录截断标记。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
-func TestStrictConnectionFailureAndHeaderBound(t *testing.T) {
-	c, w, _, info := strictTestContext(nil)
-	u, err := HandleStreamTransportFailure(c, info, errors.New("connection fixture failed"))
-	require.Nil(t, err)
-	require.Zero(t, u.TotalTokens)
-	require.Contains(t, w.Body.String(), "event: error")
-	require.Equal(t, "connection fixture failed", info.ClaudeStream.Diagnostic.Error)
+func TestStrictHeaderBound(t *testing.T) {
 	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader("")))
 	resp.Header.Set("Large", strings.Repeat("x", 17<<10))
-	_, err = strictClaudeStream(c, resp, info)
+	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.True(t, info.ClaudeStream.Diagnostic.HeadersTruncated)
-	require.NotContains(t, info.ClaudeStream.Diagnostic.ResponseHeaders, "Large")
+	require.True(t, info.StreamResult.Diagnostic.HeadersTruncated)
+	require.NotContains(t, info.StreamResult.Diagnostic.ResponseHeaders, "Large")
 }
 
 // strictTransportErrorClient 不访问网络，固定返回连接错误以检验空响应诊断。
@@ -746,20 +789,17 @@ func (strictTransportErrorClient) Do(*http.Request) (*http.Response, error) {
 	return nil, errors.New("transport fixture")
 }
 
-// TestStrictTransportFailureDoesNotCaptureSyntheticResponse 验证内部错误读取器不被重复登记为上游响应，真实传输错误和尝试编号保留。
+// TestStrictTransportFailureDoesNotCaptureSyntheticResponse 验证连接失败不伪造响应、不采集诊断或创建严格结算结果。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
 func TestStrictTransportFailureDoesNotCaptureSyntheticResponse(t *testing.T) {
 	c, _, _, info := strictTestContext(nil)
-	info.ClaudeDiagnostic = relaycommon.NewClaudeResponseCapture(2)
-	client := relaycommon.ClaudeDiagnosticHTTPClient{Client: strictTransportErrorClient{}, Capture: info.ClaudeDiagnostic}
+	service.BeginStreamAttempt(c, info)
+	client := relaycommon.StreamDiagnosticHTTPClient{Client: strictTransportErrorClient{}, Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 	_, transportErr := client.Do(c.Request)
-	_, err := HandleStreamTransportFailure(c, info, transportErr)
-	require.Nil(t, err)
-	d := info.ClaudeStream.Diagnostic
-	require.Empty(t, d.PreviousResponses, "the synthetic error reader is not another upstream HTTP response")
-	require.Equal(t, "transport fixture", d.ReadError)
-	require.Zero(t, d.ObservedBytes)
-	require.Equal(t, 2, d.Attempt)
+	require.Error(t, transportErr)
+	require.False(t, service.FinalizeStreamFailure(c, info, transportErr))
+	require.Nil(t, info.StreamResult)
+	require.Equal(t, relaycommon.StreamDiagnostic{}, info.StreamDiagnostic.Snapshot())
 }
 
 // TestStrictMultipleMessageDeltasAndFinalUsage 验证多次累计 message_delta、相同/冲突停止原因及初始用量不算最终报告。
@@ -781,7 +821,7 @@ func TestStrictMultipleMessageDeltasAndFinalUsage(t *testing.T) {
 			require.Equal(t, tc.reason, string(info.StreamStatus.EndReason))
 			if tc.reason == "done" {
 				require.Equal(t, 12, u.CompletionTokens)
-				require.True(t, info.ClaudeStream.Diagnostic.UsageFinal)
+				require.True(t, info.StreamResult.Diagnostic.UsageFinal)
 			}
 		})
 	}
@@ -789,7 +829,7 @@ func TestStrictMultipleMessageDeltasAndFinalUsage(t *testing.T) {
 	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.False(t, info.ClaudeStream.Diagnostic.UsageFinal, "initial usage is not a final report")
+	require.False(t, info.StreamResult.Diagnostic.UsageFinal, "initial usage is not a final report")
 }
 
 // TestStrictNormalEmptyMessageKeepsInputEstimation 验证正常结束的空消息保留既有输入估算，不套用异常无有效交付的免收费规则。
@@ -800,9 +840,9 @@ func TestStrictNormalEmptyMessageKeepsInputEstimation(t *testing.T) {
 	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
 	u, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
-	require.False(t, info.ClaudeStream.Failed)
-	require.False(t, info.ClaudeStream.EffectiveContent)
-	require.Equal(t, "estimated", info.ClaudeStream.UsageSource)
+	require.False(t, info.StreamResult.Failed)
+	require.False(t, info.StreamResult.EffectiveContent)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
 	require.Equal(t, 50, u.PromptTokens)
 	require.Zero(t, u.CompletionTokens)
 }

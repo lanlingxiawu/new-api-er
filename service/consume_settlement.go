@@ -49,7 +49,7 @@ func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 // and employee commission ledger.
 // The consume log is enqueued, so no log id exists at return time; cost and
 // commission are scheduled by the pipeline once the INSERT produced one.
-// FinalizeConsumptionSettlement 完成结算、用量统计及日志/成本流水入队；严格 Claude 流每个请求仅尝试结算一次。
+// FinalizeConsumptionSettlement 完成结算、用量统计及日志/成本流水入队；具有 StreamResult 的受管流每个请求仅尝试终止结算一次。
 // 参数 ctx：请求日志上下文；relayInfo：本请求渠道、资金来源和流式结果；params：最终额度和日志数据，Other 引用会刷新。
 // 无返回值；零收费异常写错误日志，其余走既有异步消费日志管线，入队时尚无日志 ID。
 func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, params ConsumptionSettlementParams) {
@@ -71,12 +71,12 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		params.TokenId = relayInfo.TokenId
 	}
 
-	if stream := relayInfo.ClaudeStream; stream != nil {
+	if stream := relayInfo.StreamResult; stream != nil {
 		// 先完成唯一资金结算与订阅字段刷新，再构造流式日志摘要，避免记录预扣旧值。
-		if !settleClaudeStreamQuota(ctx, relayInfo, &params) {
+		if !settleStreamQuota(ctx, relayInfo, &params) {
 			return
 		}
-		AppendClaudeStreamLogInfo(relayInfo, params.Other)
+		AppendStreamLogInfo(relayInfo, params.Other)
 		// 零收费异常保留错误日志和诊断，不再进入消费计数/消费日志分支。
 		if params.Quota == 0 && (stream.Failed || stream.SettlementState == "failed" || stream.SettlementState == "partial") {
 			model.RecordErrorLog(ctx, relayInfo.UserId, params.ChannelId, params.ModelName, params.TokenName, params.Content, params.TokenId, params.UseTimeSeconds, params.IsStream, params.Group, params.Other)
@@ -89,7 +89,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		model.UpdateChannelUsedQuota(params.ChannelId, params.Quota)
 	}
 
-	if relayInfo.ClaudeStream == nil {
+	if relayInfo.StreamResult == nil {
 		if err := SettleBilling(ctx, relayInfo, params.Quota); err != nil {
 			logger.LogError(ctx, "error settling billing: "+err.Error())
 		}

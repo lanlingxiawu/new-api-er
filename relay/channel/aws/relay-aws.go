@@ -2,7 +2,6 @@ package aws
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrockruntimeTypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/auth/bearer"
 )
 
@@ -60,6 +61,19 @@ func newAwsInvokeError(requestContext context.Context, err error, operation stri
 	)
 }
 
+// markAwsStreamResponseError 识别 SDK 在交回流之前报告的响应解码错误，防止落入控制器的本地未知错误分支。
+// 参数 info 为本次中转尝试，err 为 SDK 原始错误；必须已有真实上游交换，非流式及本地配置/序列化错误不标记。
+func markAwsStreamResponseError(info *relaycommon.RelayInfo, err error) {
+	if !info.StreamSession.Active() || !info.StreamSession.Snapshot().UpstreamStarted {
+		return
+	}
+	var decodeErr *smithy.DeserializationError
+	if errors.As(err, &decodeErr) {
+		// 沿用原控制器失败收口的计费标签；只补充明确的响应错误来源。
+		info.StreamSession.Fail("upstream_read_error", err)
+	}
+}
+
 // newAwsClient 按渠道代理、区域和认证配置构建 Bedrock SDK 客户端，并在 SDK 解码前采集原始响应。
 // 参数 c：当前请求及超时上下文；info：AWS 渠道配置和本次尝试的采集器。
 // 返回 SDK 客户端及初始化错误；复用既有 HTTP 连接池，不采集请求头或请求体。
@@ -70,7 +84,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 	}
 	httpClient = service.RelayHTTPClient(c, httpClient)
 	// 保留 SDK 原有解码与计费，仅包装 HTTP 读取以观察解码前的二进制/JSON 响应字节。
-	diagnosticClient := relaycommon.ClaudeDiagnosticHTTPClient{Client: httpClient, Capture: info.ClaudeDiagnostic}
+	diagnosticClient := relaycommon.StreamDiagnosticHTTPClient{Client: httpClient, Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 
 	awsSecret := strings.Split(info.ApiKey, "|")
 	var client *bedrockruntime.Client
@@ -263,6 +277,9 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 	return nil, claudeInfo.Usage
 }
 
+// awsStreamHandler 消费 SDK EventStream；先观察解码事件，再执行原渠道转换，不把读错误当正常结束。
+// 参数 c 为请求，info 保存会话/确认用量，a 提供已准备的 SDK 调用；返回中转错误与原计量对象。
+// 未识别的 SDK 事件显式登记为上游协议错误，日志仅输出定位信息。
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 	requestContext := c.Request.Context()
 	ctx, cancel := newAwsInvokeContext(service.RelayResponseTraceContext(c, requestContext), service.IsRelayTimeoutManaged(c))
@@ -270,6 +287,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 
 	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
 	if err != nil {
+		markAwsStreamResponseError(info, err)
 		return newAwsInvokeError(requestContext, err, "InvokeModelWithResponseStream"), nil
 	}
 	stream := awsResp.GetStream()
@@ -308,17 +326,31 @@ streamLoop:
 			switch v := event.(type) {
 			case *bedrockruntimeTypes.ResponseStreamMemberChunk:
 				info.SetFirstResponseTime()
+				// SDK 原始二进制由 HTTP 包装采集；协议观察使用解码后的原始 JSON，早于 Claude 改写。
+				if observeErr := info.StreamSession.ObserveEvent("", v.Value.Bytes); observeErr != nil {
+					return types.NewError(observeErr, types.ErrorCodeBadResponseBody), nil
+				}
 				respErr := claude.HandleStreamResponseData(c, info, claudeInfo, string(v.Value.Bytes))
 				if respErr != nil {
 					finalizeClaudeOnError()
 					return respErr, nil
 				}
 			case *bedrockruntimeTypes.UnknownUnionMember:
-				fmt.Println("unknown tag:", v.Tag)
+				if info.StreamSession.Active() {
+					info.StreamSession.Fail("upstream_protocol_error", fmt.Errorf("unknown SDK tag: %s", v.Tag))
+					logger.LogLegacyStreamError(c, "unknown SDK tag: "+v.Tag)
+				} else {
+					fmt.Println("unknown tag:", v.Tag)
+				}
 				finalizeClaudeOnError()
 				return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
 			default:
-				fmt.Println("union is nil or unknown type")
+				if info.StreamSession.Active() {
+					info.StreamSession.Fail("upstream_protocol_error", errors.New("nil or unknown SDK response type"))
+					logger.LogLegacyStreamError(c, "nil or unknown SDK response type")
+				} else {
+					fmt.Println("union is nil or unknown type")
+				}
 				finalizeClaudeOnError()
 				return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
 			}
@@ -326,11 +358,19 @@ streamLoop:
 	}
 
 	_ = stream.Close()
+	if info.StreamSession.Active() {
+		if stream.Err() != nil {
+			info.StreamSession.EndRead(stream.Err())
+		} else {
+			info.StreamSession.EndRead(io.EOF)
+		}
+	}
 	claude.HandleStreamFinalResponse(c, info, claudeInfo)
 	return nil, claudeInfo.Usage
 }
 
 // Nova模型处理函数
+// handleNovaRequest 解析 Nova 完整响应；c 负责下游输出，info 提供流式策略，a 持有 SDK 请求，空内容异常进入统一结算。
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
 
 	requestContext := c.Request.Context()
@@ -339,6 +379,7 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
 	if err != nil {
+		markAwsStreamResponseError(info, err)
 		return newAwsInvokeError(requestContext, err, "InvokeModel"), nil
 	}
 
@@ -358,8 +399,13 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		} `json:"usage"`
 	}
 
-	if err := json.Unmarshal(awsResp.Body, &novaResp); err != nil {
+	if err := common.Unmarshal(awsResp.Body, &novaResp); err != nil {
+		info.StreamSession.Fail("upstream_read_error", err)
 		return types.NewError(errors.Wrap(err, "unmarshal nova response"), types.ErrorCodeBadResponseBody), nil
+	}
+	if info.StreamSession.Active() && len(novaResp.Output.Message.Content) == 0 {
+		info.StreamSession.Fail("upstream_read_error", errors.New("Nova response has no output content"))
+		return types.NewError(errors.New("Nova response has no output content"), types.ErrorCodeBadResponseBody), nil
 	}
 
 	// 构造OpenAI格式响应

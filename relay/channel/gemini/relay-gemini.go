@@ -206,6 +206,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return usage, nil
 }
 
+// GeminiChatStreamHandler 转换 Gemini 流；c/resp 对应下游和上游，info 保存用量与诊断，异常收尾不暴露底层原因。
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
@@ -305,7 +306,8 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	}
 	handleErr := handleFinalStream(c, info, response)
 	if handleErr != nil {
-		common.SysLog("send final response failed: " + handleErr.Error())
+		info.StreamSession.Fail("response_conversion_error", handleErr)
+		logger.LogLegacyStreamError(c, "send final response failed: "+handleErr.Error())
 	}
 	return usage, nil
 }

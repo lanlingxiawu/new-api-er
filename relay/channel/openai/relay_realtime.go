@@ -16,9 +16,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// OpenaiRealtimeHandler 选择受管或旧 WS 处理；c 为请求，info 持有两端连接，返回累计用量供唯一结算。
 func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
 	if info == nil || info.ClientWs == nil || info.TargetWs == nil {
 		return types.NewError(fmt.Errorf("invalid websocket connection"), types.ErrorCodeBadResponse), nil
+	}
+	if info.StreamSession.Active() {
+		return managedRealtimeHandler(c, info)
 	}
 
 	info.IsStream = true

@@ -18,6 +18,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// OpenaiTTSHandler 根据响应协议转发 SSE 或裸音频；c 为输出上下文，resp 是原响应，info 保存交付证据及计费输入。
+// 非流式保持既有整段音频时长计量；受管流式按实际 Write/Flush 结果选择异常结算。
 func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) *dto.Usage {
 	// the status code has been judged before, if there is a body reading failure,
 	// it should be regarded as a non-recoverable error, so it should not return err for external retry.
@@ -36,6 +38,26 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		c.Writer.Header().Set(k, v[0])
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
+	// 入口流式但上游使用裸媒体时按字节块转发，保留音频协议，不强行拆成 SSE。
+	if info.StreamSession.Active() && relaycommon.IsStreamBinaryContentType(resp.Header.Get("Content-Type")) {
+		buffer := make([]byte, 32<<10)
+		for {
+			n, readErr := resp.Body.Read(buffer)
+			if n > 0 {
+				if _, writeErr := c.Writer.Write(buffer[:n]); writeErr != nil {
+					return usage
+				}
+				if err := helper.FlushWriter(c); err != nil {
+					return usage
+				}
+				service.MarkRelayResponse(c)
+			}
+			if readErr != nil {
+				info.StreamSession.EndRead(readErr)
+				return usage
+			}
+		}
+	}
 
 	if info.IsStream {
 		helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {

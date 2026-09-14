@@ -16,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -90,6 +91,8 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 	return &response
 }
 
+// tencentStreamHandler 转换腾讯 SSE；c 为输出上下文，info 保存计量/异常，resp 为已接入原始观察的响应。
+// 受管 DTO/输出错误在来源处登记并停止，正常完成后的读取错误交由 EndRead 忽略；旧路径保留软错误行为。
 func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var responseText string
 	receivedResponseCount := 0
@@ -108,7 +111,11 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		var tencentResponse TencentChatResponse
 		err := common.Unmarshal([]byte(data), &tencentResponse)
 		if err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
+			if info.StreamSession.Active() {
+				break
+			}
 			continue
 		}
 		receivedResponseCount++
@@ -121,12 +128,17 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 
 		err = helper.ObjectData(c, response)
 		if err != nil {
-			common.SysLog(err.Error())
+			info.StreamSession.Fail("response_conversion_error", err)
+			logger.LogLegacyStreamError(c, err.Error())
+			if info.StreamSession.Active() {
+				break
+			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		common.SysLog("error reading stream: " + err.Error())
+		info.StreamSession.EndRead(err)
+		logger.LogLegacyStreamError(c, "error reading stream: "+err.Error())
 	}
 
 	helper.Done(c)

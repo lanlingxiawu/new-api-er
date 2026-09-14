@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SetApiRouter 注册管理 API 及分组鉴权；本轮 Claude 原始诊断端点额外挂载 RootAuth。
+// SetApiRouter 注册管理 API 及分组鉴权；通用流式诊断沿用 claude-diagnostic 路径并额外挂载 RootAuth。
 // 参数 router：应用 Gin 路由引擎，函数在其上注册路由和中间件，无返回值。
 func SetApiRouter(router *gin.Engine) {
 	// Token-validated file download: no gzip re-compression, no AdminAuth headers needed.
@@ -435,7 +435,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.POST("/upstream/query", middleware.AdminAuth(), controller.QueryUpstreamLog)
 		logRoute.GET("/upstream/channels", middleware.AdminAuth(), controller.GetUpstreamLogChannels)
 		// 原始上游响应、底层原因和用量证据仅经 RootAuth 专用详情端点读取。
-		logRoute.GET("/claude-diagnostic", middleware.RootAuth(), controller.GetClaudeStreamDiagnostic)
+		logRoute.GET("/claude-diagnostic", middleware.RootAuth(), controller.GetStreamDiagnostic)
 
 		// 后台导出（管理员专属）：任务化、分片、断点续传。
 		// 普通用户的自助导出仍走上面的 /log/self/export 同步路径。

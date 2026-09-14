@@ -182,10 +182,18 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus       *StreamStatus          // 通用流状态摘要，记录结束分类与异常数量。
-	ClaudeStream       *ClaudeStreamOutcome   // 仅严格 Claude 响应设置，随后用于唯一结算；nil 表示沿用既有结算路径。
-	ClaudeDiagnostic   *ClaudeResponseCapture `json:"-"` // 当前尝试的上游响应采集器，每次渠道重试单独重建。
-	ClaudeRejectReason string                 `json:"-"` // 私有策略停止原因，不进入普通日志字段。
+	StreamStatus         *StreamStatus          // 通用流状态摘要，记录结束分类与异常数量。
+	StreamResponseGate   *StreamResponseGate    `json:"-"` // 实际成功响应资格；跨 SDK 交换共享，每次渠道重试重新等待。
+	StreamResult         *StreamOutcome         // 全渠道流式唯一结算结果；保留历史字段名兼容日志和已有 Claude 测试。
+	StreamSession        *StreamSession         `json:"-"` // 本次通用流式尝试；非流式为 nil，专用 Claude 接管后禁用。
+	StreamWriter         *StreamWriter          `json:"-"` // 跟踪下游完整帧写出与刷新，终止时恢复原写入器。
+	StreamFinalUsage     *dto.Usage             `json:"-"` // 本次终止唯一选定的用量，避免多个收费入口重复选取。
+	StreamUsageFormat    types.RelayFormat      `json:"-"` // 上游事件确认的用量口径，兼容透传绕过请求转换的路径。
+	clientStreamMode     *bool                  // 入口冻结的下游流式标记，不随上游 Content-Type 更改。
+	streamErrorsEnabled  *bool                  // 本请求冻结的通用处理设置，重试时不重新读取配置。
+	streamCaptureEnabled *bool                  // 本请求冻结的通用响应采集设置。
+	StreamDiagnostic     *StreamResponseCapture `json:"-"` // 当前尝试的上游响应及下游正文采集器，每次渠道重试单独重建。
+	StreamRejectReason   string                 `json:"-"` // 独立策略停止原因，日志生成时写入顶层 reject_reason，与诊断资格无关。
 	// ClaudeRequestBody 借用已有出站存储，仅在终止时缺少用量的估算路径读取；不序列化或复制到诊断。
 	ClaudeRequestBody            common.BodyStorage `json:"-"`
 	claudeStreamStrict           *bool              // nil 表示尚未冻结严格处理配置；false 与尚未读取区别保留。
@@ -207,6 +215,12 @@ type RelayInfo struct {
 // UseStrictClaudeStream 首次读取时冻结严格流式处理开关，使同一请求及其重试使用一致配置。
 // 接收者 info：当前请求拥有的中转信息；无参数；返回是否启用严格处理，nil 指针字段表示尚未读取配置。
 func (info *RelayInfo) UseStrictClaudeStream() bool {
+	if info.clientStreamMode != nil && *info.clientStreamMode && info.streamErrorsEnabled != nil && !*info.streamErrorsEnabled {
+		return false
+	}
+	if info.clientStreamMode != nil && !*info.clientStreamMode {
+		return false
+	}
 	if info.claudeStreamStrict == nil {
 		enabled := operation_setting.GetClaudeStreamSetting().Enabled
 		info.claudeStreamStrict = &enabled
@@ -214,9 +228,44 @@ func (info *RelayInfo) UseStrictClaudeStream() bool {
 	return *info.claudeStreamStrict
 }
 
-// CaptureClaudeResponse 首次读取时冻结原始响应采集开关，该开关独立于严格流式处理。
+// UseStreamErrors 首次调用冻结入口流式模式及配置；非流式不会被上游 SSE 头提升为新流程。
+// 参数无；返回是否为本请求启用通用终止处理，重试沿用冻结值。
+func (info *RelayInfo) UseStreamErrors() bool {
+	if info.clientStreamMode == nil {
+		stream := info.IsStream || info.RelayFormat == types.RelayFormatOpenAIRealtime
+		info.clientStreamMode = &stream
+	}
+	if !*info.clientStreamMode {
+		return false
+	}
+	if info.streamErrorsEnabled == nil {
+		setting := operation_setting.GetStreamErrorSetting()
+		enabled := setting.Enabled
+		if info.RelayFormat == types.RelayFormatClaude {
+			enabled = enabled && info.UseStrictClaudeStream()
+		}
+		info.streamErrorsEnabled = &enabled
+		capture := setting.CaptureResponse
+		if info.RelayFormat == types.RelayFormatClaude {
+			capture = capture && info.CaptureClaudeResponse()
+		}
+		info.streamCaptureEnabled = &capture
+	}
+	return *info.clientStreamMode && *info.streamErrorsEnabled
+}
+
+// CaptureStreamResponse 初始化并读取本请求冻结的模式/配置；无参数，只有新流程与采集开关均开启才返回 true。
+// true 允许有界内存采集，不代表原始响应一定入日志，落库还要求真实成功响应及明确上游异常。
+func (info *RelayInfo) CaptureStreamResponse() bool {
+	return info.UseStreamErrors() && *info.streamCaptureEnabled
+}
+
+// CaptureClaudeResponse 首次读取时冻结 Claude 原始响应采集开关；已冻结的新流程通用采集开关可进一步禁止采集。
 // 接收者 info：当前请求中转信息；无参数；返回是否采集上游响应，后续重试沿用首次结果。
 func (info *RelayInfo) CaptureClaudeResponse() bool {
+	if info.clientStreamMode != nil && *info.clientStreamMode && info.streamCaptureEnabled != nil && !*info.streamCaptureEnabled {
+		return false
+	}
 	if info.claudeResponseCaptureEnabled == nil {
 		enabled := operation_setting.GetClaudeStreamSetting().CaptureResponse
 		info.claudeResponseCaptureEnabled = &enabled

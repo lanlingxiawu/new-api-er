@@ -224,12 +224,12 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
-  claude_diagnostic_available?: boolean // 原始诊断已由后端从普通日志移除；此标记只表示可通过 Root 专用接口查询。
-  claude_diagnostic_attempt?: number // 本条日志的中转尝试编号，历史记录缺省按 0 处理。
+  stream_diagnostic_available?: boolean // 仅新流式流程确认的上游异常为 true；Root 诊断按钮据此显示，采集或拒绝原因不触发。
+  stream_diagnostic_attempt?: number // 本条日志的中转尝试编号，历史记录缺省按 0 处理。
   /** 可公开的流式计费摘要，不含原始响应、底层原因或详细用量证据。 */
-  claude_stream?: {
+  stream_result?: {
     failed: boolean // 是否异常结束；与资金结算是否成功分开判断。
-    client_gone: boolean // 下游取消/写入失败，受管超时不归入此类。
+    client_gone: boolean // 下游取消/写入失败标记，具体终止分类由对应流式处理器生成。
     effective_content: boolean // 服务端已成功写出并刷新有效内容，不证明客户端应用已读取。
     confirmed_usage: boolean // 是否含上游确认的用量字段，显式 0 仍是确认字段。
     usage_source: 'none' | 'upstream' | 'estimated' | 'mixed' // 不计费、上游确认、估算或混合来源。
@@ -355,7 +355,7 @@ export interface LogOtherData {
   violation_fee_marker?: string
   fee_quota?: number
   // Reject / intercept reason (admin)
-  reject_reason?: string
+  reject_reason?: string // 按 bb6317462 保留独立策略原因；接口保留，详情仅管理员展示，不依赖诊断标记。
   // Task-related fields (for refund logs, type=6)
   is_task?: boolean
   task_id?: string

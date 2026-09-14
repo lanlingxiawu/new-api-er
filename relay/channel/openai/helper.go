@@ -19,9 +19,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 辅助函数
+// HandleStreamFormat 按 info 的下游协议转换 data；forceFormat/thinkToContent 沿用 OpenAI 格式选项。
+// 受管 Claude 的计数由实际转换分支推进，跳过的前置事件不占用 message_start 的首帧位置。
 func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
-	info.SendResponseCount++
+	if info.RelayFormat != types.RelayFormatClaude || !info.StreamSession.Active() {
+		info.SendResponseCount++
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -34,14 +37,41 @@ func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string
 	return nil
 }
 
+// handleClaudeFormat 将当前 data 转换为 Claude 事件；c 为输出上下文，info 保存首帧及终态，返回转换错误。
 func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo) error {
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
 		return err
 	}
+	if info.StreamSession.Active() && info.ClaudeConvertInfo == nil {
+		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{} // 首帧也可能携带 finish/usage，先建立请求局部转换状态。
+	}
 
 	if streamResponse.Usage != nil {
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
+	}
+	if info.StreamSession.Active() {
+		// 旧转换器在无 usage 的 finish 帧会直接返回，连同尾部正文一起丢弃。
+		// 受管模式先交付当前内容，实际 stop_reason 留给确认完成后的 usage/收尾；不提前改变 Done。
+		complete := info.StreamSession.ProtocolComplete()
+		if len(streamResponse.Choices) == 0 && !complete {
+			return nil
+		}
+		for i := range streamResponse.Choices {
+			choice := &streamResponse.Choices[i]
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				info.ClaudeConvertInfo.FinishReason = *choice.FinishReason
+				if streamResponse.Usage == nil || !complete {
+					choice.FinishReason = nil
+				}
+			}
+		}
+		// 以实际 message_start 状态初始化，而不是把上游 ping/空事件数当成已发送帧数。
+		if !info.ClaudeConvertInfo.MessageStartSent {
+			info.SendResponseCount = 1
+		} else {
+			info.SendResponseCount++
+		}
 	}
 	result, err := relayconvert.ConvertStreamResponse(c, info, types.RelayFormatClaude, &streamResponse)
 	if err != nil {
@@ -159,6 +189,9 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 	return nil
 }
 
+// HandleFinalResponse 按下游协议完成正常转换；受管写入器会过滤异常情况下的成功尾帧。
+// 参数 c/info 为本请求；lastStreamData 为最后上游 JSON，responseId/createAt/model/systemFingerprint 为响应元数据，usage/containStreamUsage 为计量及来源标记。
+// 最后上游 JSON 的解析失败与本地转换/序列化错误分别登记来源，不通过日志函数设置终态。
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
 	usage *dto.Usage, containStreamUsage bool) {
@@ -179,7 +212,8 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 		} else {
 			info.ClaudeConvertInfo.Usage = usage
 
@@ -208,7 +242,8 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	case types.RelayFormatGemini:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			info.StreamSession.Fail("upstream_json_error", err)
+			logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 			return
 		}
 
@@ -219,12 +254,15 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 		result, err := relayconvert.ConvertStreamResponse(c, info, types.RelayFormatGemini, &streamResponse)
 		if err != nil {
-			common.SysLog("error converting Gemini stream response: " + err.Error())
+			info.StreamSession.Fail("response_conversion_error", err)
+			logger.LogLegacyStreamError(c, "error converting Gemini stream response: "+err.Error())
 			return
 		}
 		geminiResponse, ok := result.Value.(*dto.GeminiChatResponse)
 		if !ok {
-			common.SysLog(fmt.Sprintf("expected Gemini stream response, got %T", result.Value))
+			err := fmt.Errorf("expected Gemini stream response, got %T", result.Value)
+			info.StreamSession.Fail("response_conversion_error", err)
+			logger.LogLegacyStreamError(c, err.Error())
 			return
 		}
 
@@ -235,7 +273,8 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 		geminiResponseStr, err := common.Marshal(geminiResponse)
 		if err != nil {
-			common.SysLog("error marshalling gemini response: " + err.Error())
+			info.StreamSession.Fail("response_conversion_error", err)
+			logger.LogLegacyStreamError(c, "error marshalling gemini response: "+err.Error())
 			return
 		}
 

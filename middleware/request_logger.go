@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,10 +180,16 @@ type responseBodyWriter struct {
 	body      *bytes.Buffer
 	limit     int
 	truncated bool
-	totalSize int64 // 返回体实际字节数（含被截断的部分）
+	totalSize int64           // 返回体实际字节数（含被截断的部分）
+	ctx       context.Context // 请求内只读隐私标记；通用流式接管后停止缓存下游副本。
 }
 
+// capture 按字节预算缓存本批下游数据 b；私有流停止保留副本，w 只属于当前请求。
 func (w *responseBodyWriter) capture(b []byte) {
+	if common.IsPrivateStream(w.ctx) {
+		w.body.Reset()
+		return
+	}
 	w.totalSize += int64(len(b))
 	if w.limit <= 0 {
 		return
@@ -200,6 +207,9 @@ func (w *responseBodyWriter) capture(b []byte) {
 	}
 }
 
+// Unwrap 让流式 ResponseController 到达底层 FlushError，防止日志包装掩盖客户端写出失败。
+func (w *responseBodyWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *responseBodyWriter) Write(b []byte) (int, error) {
 	w.capture(b)
 	return w.ResponseWriter.Write(b)
@@ -210,13 +220,12 @@ func (w *responseBodyWriter) WriteString(s string) (int, error) {
 	return w.ResponseWriter.WriteString(s)
 }
 
-// RequestResponseLogger 记录中转请求的下游请求体/请求头 以及 返回给下游的返回头/返回体。
+// RequestResponseLogger 记录未被排除的中转请求及响应；/messages 路径直接跳过，私有流标记阻止日志投递。
 // 仅在 common.RequestLogEnabled 开启时生效；当 common.RequestLogUsername 非空时仅记录该用户名。
-// RequestResponseLogger 返回请求/响应日志中间件；Claude Messages 请求交由独立的上游响应采集器处理。
-// 无参数；返回 Gin 处理器，其 c 为当前请求上下文。非 Claude 请求继续遵循既有采集开关和大小限制。
+// 无参数；返回 Gin 处理器，其 c 为当前请求上下文。其他非流式保留原采集开关和大小限制。
 func RequestResponseLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Claude 诊断在上游响应解析前采集；此处跳过请求头/请求体及下游响应副本，避免混淆原始来源。
+		// /messages 无论是否流式均跳过请求日志；流式原始响应由独立采集器按开关及异常条件保存。
 		if strings.HasSuffix(strings.TrimRight(c.Request.URL.Path, "/"), "/messages") {
 			c.Next()
 			return
@@ -239,6 +248,7 @@ func RequestResponseLogger() gin.HandlerFunc {
 
 		// 包装 writer 以捕获返回体
 		rbw := &responseBodyWriter{
+			ctx:            c,
 			ResponseWriter: c.Writer,
 			body:           &bytes.Buffer{},
 			limit:          maxBytes,
@@ -250,6 +260,10 @@ func RequestResponseLogger() gin.HandlerFunc {
 		// Recovery，原始堆栈不受影响；completed 用来区分正常返回与栈展开。
 		completed := false
 		defer func() {
+			// 私有流不投递请求日志；上游及实际下游正文是否写入私有诊断由统一终止流程判断。
+			if common.IsPrivateStream(c) {
+				return
+			}
 			recordRequestLogEntry(c, requestLogCapture{
 				started:        started,
 				requestHeaders: requestHeaders,

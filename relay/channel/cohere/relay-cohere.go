@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -80,7 +81,11 @@ func stopReasonCohere2OpenAI(reason string) string {
 	}
 }
 
+// cohereStreamHandler 按开关选择有界 NDJSON 处理；c/resp 为下游上下文和上游响应，info 保存本次流式策略和用量。
 func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	if info.StreamSession.Active() {
+		return managedCohereStream(c, info, resp)
+	}
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
@@ -107,7 +112,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			dataChan <- data
 		}
 		if err := scanner.Err(); err != nil {
-			common.SysLog("error reading stream: " + err.Error())
+			logger.LogLegacyStreamError(c, "error reading stream: "+err.Error())
 		}
 		stopChan <- true
 	}()
@@ -124,7 +129,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			var cohereResp CohereResponse
 			err := json.Unmarshal([]byte(data), &cohereResp)
 			if err != nil {
-				common.SysLog("error unmarshalling stream response: " + err.Error())
+				logger.LogLegacyStreamError(c, "error unmarshalling stream response: "+err.Error())
 				return true
 			}
 			receivedResponseCount++
@@ -161,7 +166,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 			jsonStr, err := json.Marshal(openaiResp)
 			if err != nil {
-				common.SysLog("error marshalling stream response: " + err.Error())
+				logger.LogLegacyStreamError(c, "error marshalling stream response: "+err.Error())
 				return true
 			}
 			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonStr)})

@@ -101,6 +101,7 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 	return helper.ObjectData(c, lastStreamResponse)
 }
 
+// OaiStreamHandler 处理 OpenAI 兼容 SSE；c 为输出上下文，info 为渠道/计量状态，resp 为原始上游，受管错误只进入私有诊断。
 func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -121,14 +122,15 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
+	managed := info.StreamSession.Active() // 受管路径逐帧写出，避免旧的一帧延迟把有效尾段留到未来错误之后。
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if lastStreamData != "" {
+		if !managed && lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
+				logger.LogLegacyStreamError(c, "error handling stream format: "+err.Error())
 				sr.Error(err)
 			}
 		}
@@ -143,6 +145,21 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
+				return
+			}
+			if managed {
+				// 当前帧先转换并交付，再让扫描器处理下一帧；仅隐藏未请求的纯 usage 帧。
+				var current dto.ChatCompletionsStreamResponse
+				if err := common.UnmarshalJsonStr(data, &current); err != nil {
+					sr.Error(err)
+					return
+				}
+				if info.RelayFormat != types.RelayFormatOpenAI || info.ShouldIncludeUsage || current.Usage == nil || len(current.Choices) > 0 {
+					if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+						// 当前上游 DTO 已解析成功；此后的错误来自本地转换或下游写入。
+						sr.ConversionError(err)
+					}
+				}
 			}
 		}
 	})
@@ -172,7 +189,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
 
-	if info.RelayFormat == types.RelayFormatOpenAI {
+	if !managed && info.RelayFormat == types.RelayFormatOpenAI {
 		if shouldSendLastResp {
 			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 		}
@@ -189,7 +206,20 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	// 受管转换已交付最后一帧，Claude/Gemini 不再重复转换；OpenAI 仅补既有 usage/DONE，成功门控仍由写入器负责。
+	if !managed || info.RelayFormat == types.RelayFormatOpenAI {
+		HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	} else if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil && !info.ClaudeConvertInfo.Done {
+		// 仅真实 finish_reason 且全流完成时关闭转换协议；不重放最后正文，不为截断猜测 end_turn。
+		state := info.StreamSession.Snapshot()
+		if state.Complete && state.Reason == "" && info.ClaudeConvertInfo.FinishReason != "" {
+			stop := helper.GenerateStopResponse(responseId, createAt, model, info.ClaudeConvertInfo.FinishReason)
+			stop.Usage = usage
+			for _, response := range service.StreamResponseOpenAI2Claude(stop, info) {
+				_ = helper.ClaudeData(c, *response)
+			}
+		}
+	}
 
 	return usage, nil
 }

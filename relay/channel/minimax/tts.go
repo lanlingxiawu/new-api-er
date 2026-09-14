@@ -2,13 +2,13 @@ package minimax
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -105,6 +105,8 @@ func getContentTypeByFormat(format string) string {
 	return "audio/mpeg" // default to mp3
 }
 
+// handleTTSResponse 将原生语音 resp 转成 c 的音频正文或跳转；info 提供受管状态和原用量口径。
+// 返回原适配器用量/错误，受管路径的 DTO 或音频解码错误另记录上游原因，交由既有统一终止处理。
 func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
@@ -118,7 +120,10 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 
 	// Parse response
 	var minimaxResp MiniMaxTTSResponse
-	if unmarshalErr := json.Unmarshal(body, &minimaxResp); unmarshalErr != nil {
+	if unmarshalErr := common.Unmarshal(body, &minimaxResp); unmarshalErr != nil {
+		if info.StreamSession.Active() {
+			info.StreamSession.Fail("upstream_json_error", unmarshalErr)
+		}
 		return nil, types.NewErrorWithStatusCode(
 			fmt.Errorf("failed to unmarshal minimax TTS response: %w", unmarshalErr),
 			types.ErrorCodeBadResponseBody,
@@ -145,11 +150,18 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 
 	if strings.HasPrefix(minimaxResp.Data.Audio, "http") {
+		if info.StreamSession.Active() {
+			// URL 响应仍走原跳转，移除请求阶段的 SSE 占位头，由 Redirect 决定实际响应类型。
+			c.Header("Content-Type", "")
+		}
 		c.Redirect(http.StatusFound, minimaxResp.Data.Audio)
 	} else {
 		// Handle hex-encoded audio data
 		audioData, decodeErr := hex.DecodeString(minimaxResp.Data.Audio)
 		if decodeErr != nil {
+			if info.StreamSession.Active() {
+				info.StreamSession.Fail("upstream_protocol_error", decodeErr)
+			}
 			return nil, types.NewErrorWithStatusCode(
 				fmt.Errorf("failed to decode hex audio data: %w", decodeErr),
 				types.ErrorCodeBadResponse,
@@ -159,6 +171,10 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 
 		// Determine content type - default to mp3
 		contentType := "audio/mpeg"
+		if info.StreamSession.Active() {
+			// 请求阶段可能预设 SSE 头；在原生音频实际写出前恢复媒体类型，避免语义写入器把音频当半帧缓存。
+			c.Header("Content-Type", contentType)
+		}
 
 		c.Data(http.StatusOK, contentType, audioData)
 	}

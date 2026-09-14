@@ -166,8 +166,13 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	return nil
 }
 
+// PostWssConsumeQuota 结算 WS 累计用量；受管流复用唯一资金会话，旧分支保留原有处理。
+// 参数 ctx/relayInfo 为请求和资金状态，modelName 决定价格，usage 为已选择的累计用量，extraContent 为公开日志补充。
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
 	usage *dto.RealtimeUsage, extraContent string) {
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.SettlementAttempted {
+		return
+	}
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
@@ -239,13 +244,19 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	} else if relayInfo.StreamResult == nil {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+	if relayInfo.StreamResult == nil {
+		if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+			logger.LogError(ctx, "error settling billing: "+err.Error())
+		}
+	}
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.UsageSource == "none" {
+		quota = 0
+		ledgerQuota = 0
 	}
 
 	logModel := modelName
@@ -258,6 +269,10 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
+	if relayInfo.StreamResult != nil {
+		FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{ChannelId: relayInfo.ChannelId, PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, ModelName: logModel, TokenName: tokenName, Quota: quota, Content: logContent, TokenId: relayInfo.TokenId, UseTimeSeconds: int(useTimeSeconds), IsStream: true, Group: relayInfo.UsingGroup, Other: other, CountUsage: totalTokens > 0 && quota > 0, LedgerQuota: ledgerQuota})
+		return
+	}
 	EnqueueConsumeLogWithCost(ctx, relayInfo, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
@@ -295,7 +310,13 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData hosttypes.PriceD
 		(promptCacheCreatePrice - quotaPrice)))
 }
 
+// PostAudioConsumeQuota 按音频/文本细分计价；受管流先选择异常用量再执行唯一结算，非流式保持原逻辑。
+// 参数 ctx 为请求，relayInfo 为资金/价格状态，usage 为渠道计量，extraContent 为公开说明，不包含底层错误。
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+	usage = FinalizeStreamUsage(ctx, relayInfo, usage)
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.SettlementAttempted {
+		return
+	}
 
 	var tieredUsedVars map[string]bool
 	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
@@ -367,13 +388,19 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	} else if relayInfo.StreamResult == nil {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+	if relayInfo.StreamResult == nil {
+		if err := SettleBilling(ctx, relayInfo, quota); err != nil {
+			logger.LogError(ctx, "error settling billing: "+err.Error())
+		}
+	}
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.UsageSource == "none" {
+		quota = 0
+		ledgerQuota = 0
 	}
 
 	logModel := relayInfo.OriginModelName
@@ -386,6 +413,16 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
+	if relayInfo.StreamResult != nil {
+		// 流式音频复用同一结算事务，避免旧音频入口再次扣款；非流式继续下方原分支。
+		FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
+			ChannelId: relayInfo.ChannelId, PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
+			ModelName: logModel, TokenName: tokenName, Quota: quota, Content: logContent, TokenId: relayInfo.TokenId,
+			UseTimeSeconds: int(useTimeSeconds), IsStream: true, Group: relayInfo.UsingGroup, Other: other,
+			CountUsage: totalTokens > 0 && quota > 0, LedgerQuota: ledgerQuota,
+		})
+		return
+	}
 	EnqueueConsumeLogWithCost(ctx, relayInfo, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,

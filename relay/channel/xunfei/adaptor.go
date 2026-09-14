@@ -79,6 +79,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	return dummyResp, nil
 }
 
+// DoResponse 根据入口模式选择讯飞响应处理；c/resp 为请求及占位 HTTP 响应，info 将统一会话传给流式 WS 所有者。
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	splits := strings.Split(info.ApiKey, "|")
 	if len(splits) != 3 {
@@ -88,7 +89,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return nil, types.NewError(errors.New("request is nil"), types.ErrorCodeInvalidRequest)
 	}
 	if info.IsStream {
-		usage, err = xunfeiStreamHandler(c, *a.request, splits[0], splits[1], splits[2])
+		usage, err = xunfeiStreamHandler(c, *a.request, splits[0], splits[1], splits[2], info)
 	} else {
 		usage, err = xunfeiHandler(c, *a.request, splits[0], splits[1], splits[2])
 	}

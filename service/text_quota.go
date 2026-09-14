@@ -65,20 +65,18 @@ type textQuotaSummary struct {
 	AudioInputPrice        float64
 	ToolSurchargeItems     []ToolSurchargeItem
 	ToolCallSurchargeQuota decimal.Decimal
+	StreamCacheBillable    bool // 仅已有受管流式终态时允许纯缓存用量计费；旧路径不扩大收费资格。
 	// LedgerQuota 是本仓库的成本记账口径，与实际向用户扣减的 Quota 分开：
 	// 上游没有返回 usage 时不向用户计费（Quota 归零），但工具调用附加费仍要
 	// 计入成本账。参见下方 buildTextQuotaSummary 末尾的赋值。
 	LedgerQuota int
 }
 
-// hasBillableUsage reports whether this request should incur any charge.
-// A request can carry zero tokens yet still be billable via a tool-call
-// surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
-// call), so token count alone is not sufficient to decide.
-// hasBillableUsage 判断用量摘要是否含可计费项目，包括普通 token、缓存读取/写入和工具附加费用。
+// hasBillableUsage 判断用量摘要是否含普通 token 或工具附加费；纯缓存资格只扩展到已有受管流式终态的摘要。
 // 接收者 s：当前费用计算摘要；无参数；返回 true 表示存在可计费项目，最终是否收费仍受流式结算策略控制。
 func (s *textQuotaSummary) hasBillableUsage() bool {
-	return s.TotalTokens > 0 || s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0 || !s.ToolCallSurchargeQuota.IsZero()
+	return s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() ||
+		s.StreamCacheBillable && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -233,6 +231,8 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // calculateTextQuotaSummary expects a usage already remapped by
 // effectiveBillingUsage; PostTextConsumeQuota performs that remap once and shares
 // the result with tiered billing, affinity observation and logging.
+// 参数 ctx 提供请求计费上下文，relayInfo 提供价格及受管终态，usage 为已归一化用量；返回费用摘要，不执行资金扣减。
+// 纯缓存收费资格以 StreamResult 为准，兼容原生 Claude 接管后停用通用会话；非受管请求维持原资格。
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
 	summary := textQuotaSummary{
 		ModelName:            relayInfo.OriginModelName,
@@ -248,6 +248,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CacheCreationRatio5m: relayInfo.PriceData.CacheCreation5mRatio,
 		CacheCreationRatio1h: relayInfo.PriceData.CacheCreation1hRatio,
 		UsageSemantic:        usageSemanticFromUsage(relayInfo, usage),
+		StreamCacheBillable:  relayInfo.StreamResult != nil,
 	}
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
@@ -411,7 +412,8 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 // 参数 ctx：请求及日志上下文；relayInfo：计费配置、预扣和流式结果；usage：解析或估算的用量，nil 时使用既有请求估算。
 // 参数 extraContent：消费日志的附加说明，可为 nil。已尝试严格结算的请求直接退出以避免重复收费。
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
-	if relayInfo.ClaudeStream != nil && relayInfo.ClaudeStream.SettlementAttempted {
+	usage = FinalizeStreamUsage(ctx, relayInfo, usage)
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.SettlementAttempted {
 		return
 	}
 	originUsage := usage
@@ -423,7 +425,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
-	relayInfo.ClaudeRejectReason = common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
+	relayInfo.StreamRejectReason = common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult
@@ -441,7 +443,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
-	if stream := relayInfo.ClaudeStream; stream != nil && stream.UsageSource == "none" {
+	if stream := relayInfo.StreamResult; stream != nil && stream.UsageSource == "none" {
 		// 在费用展示及日志生成前执行免收费策略，按次、阶梯和工具附加费一并清零。
 		summary.Quota = 0
 		summary.LedgerQuota = 0
@@ -469,11 +471,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// 与 buildTextQuotaSummary 的计费口径保持一致：零 token 但有工具附加费时
 	// 仍然扣费，不该打「无法扣费」的日志。
 	countUsage := summary.hasBillableUsage()
-	if relayInfo.ClaudeStream != nil && relayInfo.ClaudeStream.UsageSource == "none" {
+	if relayInfo.StreamResult != nil && relayInfo.StreamResult.UsageSource == "none" {
 		countUsage = false
 	}
-	// 严格流式零收费由 claude_stream 解释；即使上游有用量，也可能因没有有效交付而释放预扣。
-	if !countUsage && relayInfo.ClaudeStream == nil {
+	// 严格流式零收费由 stream_result 解释；即使上游有用量，也可能因没有有效交付而释放预扣。
+	if !countUsage && relayInfo.StreamResult == nil {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
@@ -564,6 +566,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		LedgerQuota:      summary.LedgerQuota,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, relayInfo.ClaudeStream == nil || !relayInfo.ClaudeStream.Failed, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens))
 	})
 }

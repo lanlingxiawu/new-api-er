@@ -12,7 +12,6 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
-	hostconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -367,6 +366,8 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	return resp, nil
 }
 
+// DoWssRequest 建立上游 WS；受管流式只采集握手响应并登记取消时需关闭的连接。
+// 参数 a 构造渠道 URL/头，c 为请求上下文，info 保存连接策略，requestBody 保留旧接口但不参与诊断。
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -387,7 +388,19 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	var targetConn *websocket.Conn
+	// 待激活会话也需观察真实握手；此处不把“尚未握手”误判为关闭功能。
+	if info.StreamSession != nil {
+		var resp *http.Response
+		targetConn, resp, err = websocket.DefaultDialer.DialContext(service.RelayRequestContext(c), fullRequestURL, targetHeader)
+		info.StreamSession.ObserveWebSocketHandshake(resp, err)
+		info.StreamDiagnostic.ObserveStreamHandshake(resp, err)
+		if err == nil {
+			info.StreamSession.BindUpstream(targetConn)
+		}
+	} else {
+		targetConn, _, err = websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
 	}
@@ -476,9 +489,9 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 
-// doRequest 使用请求级 HTTP 客户端发送上游请求，在状态处理/解码前接入 Claude 响应采集。
+// doRequest 使用请求级 HTTP 客户端发送上游请求，在状态处理/解码前接入通用响应观察，并兼容旧 Claude 采集器。
 // 参数 c：下游请求及超时上下文；req：已构建的上游 HTTP 请求；info：渠道、代理、流式及诊断状态。
-// 返回上游响应和传输错误；原生严格 Claude 的底层错误交给统一终止流程保存。
+// 返回上游响应和传输错误；非 200 / 未收到响应沿用原错误路径，成功响应才启用新流程。
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	req = service.BindRelayRequestContext(c, req)
 	if traceContext := service.RelayResponseTraceContext(c, req.Context()); traceContext != req.Context() {
@@ -520,14 +533,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	// 请求级包装在任何状态处理/JSON 解码前接入响应采集，nil 采集器时沿用原客户端行为。
-	diagnosticClient := common.ClaudeDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, client), Capture: info.ClaudeDiagnostic}
+	diagnosticClient := common.StreamDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, client), Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 	resp, err := diagnosticClient.Do(req)
 	if err != nil {
-		if info.IsStream && info.RelayFormat == types.RelayFormatClaude && info.ChannelType == hostconstant.ChannelTypeAnthropic && info.UseStrictClaudeStream() {
-			// 严格流式终止处理器将该底层原因保存到超级管理员诊断，避免应用日志直接输出详情。
-			return nil, err
-		}
-		if info.ClaudeDiagnostic == nil {
+		if info.StreamDiagnostic == nil {
 			logger.LogError(c, "do request failed: "+err.Error())
 		}
 		if contextErr := service.RelayContextError(c); contextErr != nil {

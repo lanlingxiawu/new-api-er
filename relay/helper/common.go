@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// FlushWriter 刷新当前请求 c 的写入器；优先返回 FlushError，供流式结算排除写入后刷新失败的内容。
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -27,6 +28,9 @@ func FlushWriter(c *gin.Context) (err error) {
 
 	if requestContextDone(c) {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	}
+	if flusher, ok := c.Writer.(interface{ FlushError() error }); ok {
+		return flusher.FlushError()
 	}
 
 	flusher, ok := c.Writer.(http.Flusher)
