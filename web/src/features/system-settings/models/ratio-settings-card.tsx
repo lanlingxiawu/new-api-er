@@ -47,6 +47,18 @@ import {
 
 type Translate = (key: string, options?: Record<string, unknown>) => string
 
+/** GroupRatio JSON → 分组名；解析失败时返回空（保存前表单已校验过 JSON）。 */
+function getGroupRatioNames(json: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? Object.keys(parsed)
+      : []
+  } catch {
+    return []
+  }
+}
+
 function formatJsonValidationError(
   t: Translate,
   error?: JsonValidationError,
@@ -406,27 +418,58 @@ export function RatioSettingsCard({
           'group_ratio_setting.group_special_usable_group',
       }
 
+      // GroupRatio 必须最先保存：后端可能拒绝（例如分组仍被启用的渠道使用），
+      // 被拒后不能再把依赖它的 UserUsableGroups / TopupGroupRatio 等单独写进去。
       const updates = (
         Object.keys(normalized) as Array<keyof typeof normalized>
-      ).filter(
-        (key) => normalized[key] !== groupNormalizedDefaults.current[key]
       )
+        .filter(
+          (key) => normalized[key] !== groupNormalizedDefaults.current[key]
+        )
+        .sort((a, b) => Number(b === 'GroupRatio') - Number(a === 'GroupRatio'))
 
       if (updates.length === 0) return
 
-      await requestSaveConfirmation(async () => {
-        for (const key of updates) {
-          const apiKey = apiKeyMap[key] || key
-          await updateOption.mutateAsync({
-            key: apiKey,
-            value: normalized[key],
-          })
-        }
+      const nextGroups = getGroupRatioNames(normalized.GroupRatio)
+      const removedGroups = updates.includes('GroupRatio')
+        ? getGroupRatioNames(groupNormalizedDefaults.current.GroupRatio).filter(
+            (group) => !nextGroups.includes(group)
+          )
+        : []
 
-        groupNormalizedDefaults.current = normalized
-      })
+      await requestSaveConfirmation(
+        async () => {
+          const saved: Partial<typeof normalized> = {}
+          try {
+            for (const key of updates) {
+              const apiKey = apiKeyMap[key] || key
+              const result = await updateOption.mutateAsync({
+                key: apiKey,
+                value: normalized[key],
+              })
+              // 业务失败只返回 success: false、不会抛错；遇到第一个失败就停，避免部分提交。
+              if (!result.success) break
+              Object.assign(saved, { [key]: normalized[key] })
+            }
+          } finally {
+            // 只把真正保存成功的键记为新基线，失败的键下次仍会被当作改动。
+            groupNormalizedDefaults.current = {
+              ...groupNormalizedDefaults.current,
+              ...saved,
+            }
+          }
+        },
+        removedGroups.length > 0
+          ? {
+              description: t(
+                'These groups will be removed: {{groups}}. Exclusive ratios set for users in these groups will be permanently deleted.',
+                { groups: removedGroups.join(', ') }
+              ),
+            }
+          : undefined
+      )
     },
-    [requestSaveConfirmation, updateOption]
+    [requestSaveConfirmation, t, updateOption]
   )
 
   const handleResetRatios = useCallback(() => {

@@ -536,7 +536,7 @@ function GroupPricingTable({
             <CardTitle>{t('Pricing groups')}</CardTitle>
             <CardDescription>
               {t(
-                'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.'
+                'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group. Deleting a group requires that no enabled channel still uses it, and permanently clears that group’s per-user exclusive ratios.'
               )}
             </CardDescription>
           </div>

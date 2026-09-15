@@ -2,6 +2,7 @@ package ratio_setting
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -161,4 +162,40 @@ func ResolveGroupRatio(userGroupRatios map[string]float64, userGroup, usingGroup
 		return r, true
 	}
 	return GetGroupRatio(usingGroup), false
+}
+
+// FilterUserGroupRatios removes every entry of a user's raw group_ratios JSON
+// for which drop reports true, and re-serializes what is left. It returns the
+// cleaned JSON, the removed group names (sorted, for stable logging) and
+// whether anything actually changed.
+//
+// Unlike ParseUserGroupRatios this deliberately bypasses the memo table: the
+// callers are cleanup paths whose input strings are about to disappear, so
+// caching them would only evict live entries.
+func FilterUserGroupRatios(raw string, drop func(group string) bool) (string, []string, bool, error) {
+	if raw == "" || raw == "{}" || drop == nil {
+		return raw, nil, false, nil
+	}
+	ratios := make(map[string]float64)
+	if err := common.Unmarshal([]byte(raw), &ratios); err != nil {
+		return raw, nil, false, err
+	}
+	var removed []string
+	for name := range ratios {
+		if drop(name) {
+			removed = append(removed, name)
+		}
+	}
+	if len(removed) == 0 {
+		return raw, nil, false, nil
+	}
+	sort.Strings(removed)
+	for _, name := range removed {
+		delete(ratios, name)
+	}
+	cleaned, err := common.Marshal(ratios)
+	if err != nil {
+		return raw, nil, false, err
+	}
+	return string(cleaned), removed, true, nil
 }

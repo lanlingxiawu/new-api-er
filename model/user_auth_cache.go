@@ -241,6 +241,18 @@ func PublishUserAuthCache(userId int) error {
 	return updateUserCache(*user)
 }
 
+// userCacheExists reports whether the user's cache hash is present, so bulk
+// callers can skip the database read when there is no cached copy to refresh (a
+// later fill reads the current row anyway). On a Redis error it answers true:
+// attempting a refresh is safer than leaving a possibly stale entry behind.
+func userCacheExists(userId int) bool {
+	n, err := common.RDB.Exists(context.Background(), getUserCacheKey(userId)).Result()
+	if err != nil {
+		return true
+	}
+	return n > 0
+}
+
 // InitializeUserAuthVersions must run after AutoMigrate when upgrading an
 // existing database. It is idempotent and portable across all supported DBs.
 func InitializeUserAuthVersions() error {

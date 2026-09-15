@@ -79,6 +79,11 @@ func TestMain(m *testing.M) {
 
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
+	// Mirror the production default (NODE_TYPE unset => master). InitEnv does not
+	// run here, so the zero value would silently turn every test into a slave node
+	// and master-only paths would pass for the wrong reason. Tests that need slave
+	// behaviour switch it explicitly.
+	common.IsMasterNode = true
 	common.LogConsumeEnabled = true
 	if common.OptionMap == nil {
 		common.OptionMap = make(map[string]string)

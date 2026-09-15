@@ -3,8 +3,11 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -696,6 +699,41 @@ type updateUserRequest struct {
 	StreamTotalTimeout        *int    `json:"stream_total_timeout"`
 	NonStreamResponseTimeout  *int    `json:"non_stream_response_timeout"`
 	NonStreamTotalTimeout     *int    `json:"non_stream_total_timeout"`
+	// Omitting group_ratios must inherit the stored rules; only an explicit
+	// "{}" clears them. Without the shadow field a caller that leaves the
+	// optional field out would silently wipe every exclusive ratio.
+	GroupRatios *string `json:"group_ratios"`
+}
+
+// activeGroupRatioCleanups 是包级变量，只为测试能模拟「分组清理进行中」。
+var activeGroupRatioCleanups = model.GroupRatioCleanupsActive
+
+// parseUserGroupRatiosForEdit 解析管理员提交（或库里已有）的专属倍率 JSON；空串与 "{}" 得到空表。
+// 不走 ratio_setting.ParseUserGroupRatios：那是 relay 用的解析缓存，管理端的原始串不该挤进去。
+func parseUserGroupRatiosForEdit(raw string) (map[string]float64, error) {
+	ratios := make(map[string]float64)
+	if raw == "" || raw == "{}" {
+		return ratios, nil
+	}
+	if err := common.Unmarshal([]byte(raw), &ratios); err != nil {
+		return map[string]float64{}, err
+	}
+	return ratios, nil
+}
+
+// changedGroupRatioNames returns the groups whose exclusive ratio is new in next
+// or differs from prev, sorted. Entries carried over unchanged are left out on
+// purpose: a form round-trips the whole map, and only new or changed rules can
+// collide with a cleanup that is still running for their group.
+func changedGroupRatioNames(prev, next map[string]float64) []string {
+	var names []string
+	for name, ratio := range next {
+		if old, ok := prev[name]; !ok || old != ratio {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func UpdateUser(c *gin.Context) {
@@ -767,18 +805,57 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
-	// Validate per-user exclusive group ratios (admin-only field).
-	if updatedUser.GroupRatios != "" && updatedUser.GroupRatios != "{}" {
-		ratios := make(map[string]float64)
-		if err := common.Unmarshal([]byte(updatedUser.GroupRatios), &ratios); err != nil {
+	// Per-user exclusive group ratios (admin-only field). The shadow field wins
+	// during decoding, so the embedded User's own GroupRatios is never populated
+	// and has to be filled in here.
+	updatedUser.GroupRatios = originUser.GroupRatios
+	var removedGroupRatios []string
+	if request.GroupRatios != nil {
+		// 库里的旧值损坏时按空表处理。
+		current, _ := parseUserGroupRatiosForEdit(originUser.GroupRatios)
+		submitted, err := parseUserGroupRatiosForEdit(*request.GroupRatios)
+		if err != nil {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
-		baseGroups := ratio_setting.GetGroupRatioCopy()
-		for name, r := range ratios {
-			if _, ok := baseGroups[name]; !ok || r < 0 {
-				common.ApiErrorI18n(c, i18n.MsgUserGroupRatiosInvalid, map[string]any{"Group": name})
+		if !common.IsMasterNode {
+			// 专属倍率要按内存分组表校验、并与只在主节点运行的清理协调，只有主节点满足。
+			// 从节点只放行原样回传（表单总会带上它），并保持库里的值不动：在这里按可能落后的
+			// 分组表「自愈」，会删掉主节点刚新建的分组上的规则。
+			if !maps.Equal(current, submitted) {
+				common.ApiErrorI18n(c, i18n.MsgGroupRatioMasterRequired)
 				return
+			}
+		} else {
+			// 指向已不存在分组的规则直接丢弃而不是拒绝：分组没了，规则本就不生效，拒绝会挡住
+			// 对这个用户的所有无关编辑。存在的分组上倍率非法仍然报错。
+			baseGroups := ratio_setting.GetGroupRatioCopy()
+			for name, r := range submitted {
+				if _, ok := baseGroups[name]; !ok {
+					removedGroupRatios = append(removedGroupRatios, name)
+					delete(submitted, name)
+					continue
+				}
+				if r < 0 || math.IsNaN(r) || math.IsInf(r, 0) {
+					common.ApiErrorI18n(c, i18n.MsgUserGroupRatiosInvalid, map[string]any{"Group": name})
+					return
+				}
+			}
+			// 分组刚被删除或重建、历史专属倍率还在清理时，不接受为它设置新规则：扫描可能还没
+			// 走到这个用户，会把新规则当成旧残留删掉。
+			if busy := activeGroupRatioCleanups(changedGroupRatioNames(current, submitted)); len(busy) > 0 {
+				common.ApiErrorI18n(c, i18n.MsgUserGroupRatioCleanupInProgress, map[string]any{"Groups": strings.Join(busy, ", ")})
+				return
+			}
+			updatedUser.GroupRatios = *request.GroupRatios
+			if len(removedGroupRatios) > 0 {
+				sort.Strings(removedGroupRatios)
+				encoded, err := common.Marshal(submitted)
+				if err != nil {
+					common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+					return
+				}
+				updatedUser.GroupRatios = string(encoded)
 			}
 		}
 	}
@@ -820,14 +897,19 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAuditFor(c, updatedUser.Id, "user.update", map[string]interface{}{
-		"username": originUser.Username,
-		"id":       updatedUser.Id,
-	})
-	c.JSON(http.StatusOK, gin.H{
+	auditMeta := map[string]interface{}{}
+	if len(removedGroupRatios) > 0 {
+		auditMeta["removed_group_ratios"] = removedGroupRatios
+	}
+	recordManageAuditForUser(c, updatedUser.Id, originUser.Username, "user.update", auditMeta)
+	response := gin.H{
 		"success": true,
 		"message": "",
-	})
+	}
+	if len(removedGroupRatios) > 0 {
+		response["data"] = gin.H{"removed_group_ratios": removedGroupRatios}
+	}
+	c.JSON(http.StatusOK, response)
 	return
 }
 
@@ -861,9 +943,8 @@ func AdminClearUserBinding(c *gin.Context) {
 		return
 	}
 
-	recordManageAuditFor(c, user.Id, "user.binding_clear", map[string]interface{}{
+	recordManageAuditForUser(c, user.Id, user.Username, "user.binding_clear", map[string]interface{}{
 		"bindingType": bindingType,
-		"username":    user.Username,
 	})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1060,10 +1141,7 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAuditFor(c, originUser.Id, "user.delete", map[string]interface{}{
-		"username": originUser.Username,
-		"id":       originUser.Id,
-	})
+	recordManageAuditForUser(c, originUser.Id, originUser.Username, "user.delete", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1139,9 +1217,8 @@ func CreateUser(c *gin.Context) {
 	}
 	cleanUser.FinishInsert(0)
 
-	recordManageAuditFor(c, cleanUser.Id, "user.create", map[string]interface{}{
-		"username": cleanUser.Username,
-		"role":     cleanUser.Role,
+	recordManageAuditForUser(c, cleanUser.Id, cleanUser.Username, "user.create", map[string]interface{}{
+		"role": cleanUser.Role,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1222,10 +1299,8 @@ func ManageUser(c *gin.Context) {
 		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}
-		recordManageAuditFor(c, user.Id, "user.manage", map[string]interface{}{
-			"action":   req.Action,
-			"username": user.Username,
-			"id":       user.Id,
+		recordManageAuditForUser(c, user.Id, user.Username, "user.manage", map[string]interface{}{
+			"action": req.Action,
 		})
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1263,7 +1338,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_add", map[string]interface{}{
+			recordManageAuditForUser(c, user.Id, user.Username, "user.quota_add", map[string]interface{}{
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "subtract":
@@ -1275,7 +1350,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_subtract", map[string]interface{}{
+			recordManageAuditForUser(c, user.Id, user.Username, "user.quota_subtract", map[string]interface{}{
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
@@ -1284,7 +1359,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
+			recordManageAuditForUser(c, user.Id, user.Username, "user.quota_override", map[string]interface{}{
 				"from": logger.LogQuota(oldQuota),
 				"to":   logger.LogQuota(req.Value),
 			})
@@ -1337,10 +1412,8 @@ func ManageUser(c *gin.Context) {
 	if err := model.InvalidateUserTokensCache(user.Id); err != nil {
 		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 	}
-	recordManageAuditFor(c, user.Id, "user.manage", map[string]interface{}{
-		"action":   req.Action,
-		"username": user.Username,
-		"id":       user.Id,
+	recordManageAuditForUser(c, user.Id, user.Username, "user.manage", map[string]interface{}{
+		"action": req.Action,
 	})
 	clearUser := model.User{
 		Role:   user.Role,

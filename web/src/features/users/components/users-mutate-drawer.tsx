@@ -244,6 +244,8 @@ export function UsersMutateDrawer({
   })
 
   const groups = groupsData?.data || []
+  // 只有分组列表加载成功时才能判断规则所属分组是否已被删除；加载中或失败时不做标记。
+  const groupsLoaded = groupsData?.success === true
 
   // Permission catalog is owned by the backend; fetched once and reused.
   const { data: permissionCatalog = EMPTY_PERMISSION_CATALOG } = useQuery({
@@ -421,6 +423,18 @@ export function UsersMutateDrawer({
             ? t(SUCCESS_MESSAGES.USER_UPDATED)
             : t(SUCCESS_MESSAGES.USER_CREATED)
         )
+        // 后端会顺带清掉已删除分组上的专属倍率，告诉管理员具体清了哪些。
+        const removedGroups =
+          result.data && 'removed_group_ratios' in result.data
+            ? (result.data.removed_group_ratios ?? [])
+            : []
+        if (removedGroups.length > 0) {
+          toast.info(
+            t('Removed exclusive ratios for deleted groups: {{groups}}', {
+              groups: removedGroups.join(', '),
+            })
+          )
+        }
         onOpenChange(false)
         triggerRefresh()
       } else {
@@ -461,7 +475,7 @@ export function UsersMutateDrawer({
         <SheetContent className={sideDrawerContentClassName('sm:max-w-5xl')}>
           <SheetHeader className={sideDrawerHeaderClassName()}>
             <SheetTitle>
-              {isUpdate ? t('Update') : t('Create')} {t('User')}
+              {isUpdate ? t('Update User') : t('Create User')}
             </SheetTitle>
             <SheetDescription>
               {isUpdate
@@ -687,57 +701,78 @@ export function UsersMutateDrawer({
                             )}
                           </FormDescription>
                           <div className='space-y-2'>
-                            {groupRatioFields.map((row, index) => (
-                              <div
-                                key={row.id}
-                                className='flex items-center gap-2'
-                              >
-                                <div className='flex-1'>
-                                  <FormField
-                                    control={form.control}
-                                    name={`groupRatios.${index}.group`}
-                                    render={({ field }) => (
-                                      <GroupCombobox
-                                        groups={groups}
-                                        value={field.value}
-                                        onValueChange={field.onChange}
-                                        placeholder={t('Select a group')}
-                                      />
-                                    )}
-                                  />
-                                </div>
-                                <FormField
-                                  control={form.control}
-                                  name={`groupRatios.${index}.ratio`}
-                                  render={({ field }) => (
-                                    <Input
-                                      type='number'
-                                      step='0.01'
-                                      min='0'
-                                      className='w-28'
-                                      value={field.value ?? ''}
-                                      onChange={(e) =>
-                                        field.onChange(
-                                          e.target.value === ''
-                                            ? 0
-                                            : Number(e.target.value)
-                                        )
-                                      }
-                                      placeholder={t('Ratio')}
-                                    />
-                                  )}
-                                />
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='icon-sm'
-                                  onClick={() => removeGroupRatio(index)}
-                                  aria-label={t('Remove')}
+                            {groupRatioFields.map((row, index) => {
+                              // A rule left over from a deleted group renders as
+                              // an empty combobox, because its value is not in
+                              // the options. Say so, instead of showing a blank.
+                              const ruleGroup = form.watch(
+                                `groupRatios.${index}.group`
+                              )
+                              const isDeletedGroup =
+                                groupsLoaded && ruleGroup
+                                  ? !groups.includes(ruleGroup)
+                                  : false
+                              return (
+                                <div
+                                  key={row.id}
+                                  className='flex flex-col gap-1'
                                 >
-                                  <Trash2 className='h-4 w-4' />
-                                </Button>
-                              </div>
-                            ))}
+                                  <div className='flex items-center gap-2'>
+                                    <div className='flex-1'>
+                                      <FormField
+                                        control={form.control}
+                                        name={`groupRatios.${index}.group`}
+                                        render={({ field }) => (
+                                          <GroupCombobox
+                                            groups={groups}
+                                            value={field.value}
+                                            onValueChange={field.onChange}
+                                            placeholder={t('Select a group')}
+                                          />
+                                        )}
+                                      />
+                                    </div>
+                                    <FormField
+                                      control={form.control}
+                                      name={`groupRatios.${index}.ratio`}
+                                      render={({ field }) => (
+                                        <Input
+                                          type='number'
+                                          step='0.01'
+                                          min='0'
+                                          className='w-28'
+                                          value={field.value ?? ''}
+                                          onChange={(e) =>
+                                            field.onChange(
+                                              e.target.value === ''
+                                                ? 0
+                                                : Number(e.target.value)
+                                            )
+                                          }
+                                          placeholder={t('Ratio')}
+                                        />
+                                      )}
+                                    />
+                                    <Button
+                                      type='button'
+                                      variant='ghost'
+                                      size='icon-sm'
+                                      onClick={() => removeGroupRatio(index)}
+                                      aria-label={t('Remove')}
+                                    >
+                                      <Trash2 className='h-4 w-4' />
+                                    </Button>
+                                  </div>
+                                  {isDeletedGroup && (
+                                    <p className='text-muted-foreground text-xs'>
+                                      {t(
+                                        'This group has been deleted. The rule is inactive and will be removed when you save.'
+                                      )}
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            })}
                             <Button
                               type='button'
                               variant='outline'
@@ -828,8 +863,7 @@ export function UsersMutateDrawer({
                           )}{' '}
                           {t(
                             'All four 0 keeps legacy behavior; otherwise, 0 inherits the system default and -1 disables that limit.'
-                          )}
-                          {' '}
+                          )}{' '}
                           {t(
                             '10-minute example: stream response 600, stream total -1; non-stream response -1, non-stream total 600.'
                           )}

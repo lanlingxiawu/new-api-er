@@ -109,9 +109,12 @@ export async function createUser(
 /**
  * Update an existing user
  */
+// removed_group_ratios：因分组已删除而被一并清掉的专属倍率所属分组。
+type UpdateUserResult = Partial<User> & { removed_group_ratios?: string[] }
+
 export async function updateUser(
   data: UserFormData & { id: number }
-): Promise<ApiResponse<Partial<User>>> {
+): Promise<ApiResponse<UpdateUserResult>> {
   const res = await api.put('/api/user/', data)
   return res.data
 }

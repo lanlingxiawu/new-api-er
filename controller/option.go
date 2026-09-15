@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -229,6 +230,10 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
+	// Group names disappearing from GroupRatio (or reappearing under a name that
+	// was deleted before) invalidate every per-user exclusive ratio keyed by that
+	// name; the list is collected here and cleaned up after the save succeeds.
+	var groupRatioCleanupTargets []string
 	switch option.Key {
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
@@ -304,12 +309,23 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "GroupRatio":
+		// 清理计划以本节点内存里的分组表为基准，判断这次「新增 / 删除」了哪些分组；只有主节点
+		// 的内存保证是最新的。从节点上保存可能把已存在的分组误判为新增，进而清掉用户专属倍率。
+		if !common.IsMasterNode {
+			common.ApiErrorI18n(c, i18n.MsgGroupRatioMasterRequired)
+			return
+		}
 		err = ratio_setting.CheckGroupRatio(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
 			})
+			return
+		}
+		var aborted bool
+		groupRatioCleanupTargets, aborted = planGroupRatioCleanup(c, option.Value.(string))
+		if aborted {
 			return
 		}
 	case "gemini.safety_settings":
@@ -509,8 +525,21 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, "side_effect_db_timeout_ms must be between 50 and 30000")
 			return
 		}
+	// 每日金额上限：单键 PUT 不会调用 setting 包里的整份校验函数，因此这里逐键校验，
+	// 取值范围与 ValidateChannelDailyLimitSetting 保持一致。
+	case "channel_daily_limit_setting.retention_days":
+		if !isIntInRange(option.Value.(string), operation_setting.MinChannelDailyLimitRetentionDays, operation_setting.MaxChannelDailyLimitRetentionDays) {
+			common.ApiErrorMsg(c, fmt.Sprintf("retention_days must be between %d and %d",
+				operation_setting.MinChannelDailyLimitRetentionDays, operation_setting.MaxChannelDailyLimitRetentionDays))
+			return
+		}
+	case "channel_daily_limit_setting.timezone":
+		if err := operation_setting.ValidateChannelDailyLimitTimezone(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	}
-	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting") {
+	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting" || parts[0] == "channel_daily_limit_setting") {
 		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)})
 	} else {
 		err = model.UpdateOption(option.Key, option.Value.(string))
@@ -519,6 +548,11 @@ func UpdateOption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Off the request goroutine: the cleanup paces itself across the whole users
+	// table and must not hold up the admin response. Repeated group edits are
+	// merged into a single pass — see
+	// docs/design/user-exclusive-group-ratio-deletion.md.
+	model.ScheduleUserGroupRatioCleanup(groupRatioCleanupTargets)
 	// 调度参数（统计方式/重置日/重置时刻/时区）变更后，把 last_reset_at 前移到新调度的
 	// 最近边界，避免仅因边界被重新定义而在下一分钟补跑一次意料之外的重置。
 	if isCommissionTierResetScheduleKey(option.Key) {
@@ -550,4 +584,64 @@ func isCommissionTierResetScheduleKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// planGroupRatioCleanup diffs the submitted GroupRatio against the live registry
+// and returns the group names whose per-user exclusive ratios are no longer
+// valid: names being removed, plus names being added.
+//
+// Added names matter because group ratios change over time — a recreated "vip"
+// is not the same pricing object as the deleted one, so ratios negotiated
+// against the old pricing must not come back with the name.
+//
+// Deleting a group that still has enabled channels is rejected outright: the
+// group would keep serving traffic with no price attached. Reports whether the
+// request has already been answered.
+func planGroupRatioCleanup(c *gin.Context, value string) ([]string, bool) {
+	submitted := make(map[string]float64)
+	if err := common.UnmarshalJsonStr(value, &submitted); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return nil, true
+	}
+	current := ratio_setting.GetGroupRatioCopy()
+
+	var removed, added []string
+	for name := range current {
+		if _, ok := submitted[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	for name := range submitted {
+		if _, ok := current[name]; !ok {
+			added = append(added, name)
+		}
+	}
+	sort.Strings(removed)
+	sort.Strings(added)
+
+	// Re-creating a name whose cleanup is still running would let the old
+	// exclusive ratios — still in users' rows until the scan reaches them — bill
+	// the new group. Refuse until the cleanup has finished (usually seconds).
+	if busy := activeGroupRatioCleanups(added); len(busy) > 0 {
+		common.ApiErrorI18n(c, i18n.MsgGroupRecreateCleanupInProgress, map[string]any{
+			"Groups": strings.Join(busy, ", "),
+		})
+		return nil, true
+	}
+
+	if len(removed) > 0 {
+		blocked, err := model.GroupsWithEnabledChannels(removed)
+		if err != nil {
+			logger.LogError(c, "failed to check enabled channels before group deletion: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgGroupDeleteChannelCheckFailed)
+			return nil, true
+		}
+		if len(blocked) > 0 {
+			common.ApiErrorI18n(c, i18n.MsgGroupDeleteHasEnabledChannels, map[string]any{
+				"Groups": strings.Join(blocked, ", "),
+			})
+			return nil, true
+		}
+	}
+	return append(removed, added...), false
 }
