@@ -190,6 +190,8 @@ func TestMain(m *testing.M) {
 		&SystemTask{},
 		&SystemTaskLock{},
 		&LogExportTemplate{},
+		&ChannelDailyUsage{},
+		&ChannelLimitPeriodUsage{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -235,7 +237,21 @@ func allowTestDBCleanup() bool {
 
 const testIDBase = 800_000_000
 
-var testIDCounter int64
+// testIDCounter is seeded per process into a distinct 50k-id block. Test rows
+// are cleaned up by t.Cleanup, but those deletes only run on a graceful exit —
+// an interrupted or panicking `go test` leaves rows behind at their ids. A
+// fixed counter start (0) makes every fresh run regenerate those same ids and
+// collide on the primary key ("Duplicate entry ... for PRIMARY"). Seeding the
+// counter from pid+time puts each run in its own id block so leaked rows from a
+// prior run cannot collide; within a run, uniqueness is still guaranteed by the
+// atomic increment. Max id stays well under the signed 32-bit ceiling:
+// 800_000_000 + 20_000*50_000 ≈ 1.8e9 < 2_147_483_647.
+var testIDCounter = func() int64 {
+	const blocks, blockSize = 20_000, 50_000
+	seed := time.Now().UnixNano() ^ (int64(os.Getpid()) * 0x9E3779B1)
+	block := ((seed % blocks) + blocks) % blocks
+	return block * blockSize
+}()
 
 // nextTestID returns a process-unique id in the high test range.
 func nextTestID() int {

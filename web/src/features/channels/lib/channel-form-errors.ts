@@ -38,6 +38,10 @@ const ADVANCED_SETTINGS_FIELDS = new Set<FieldPath<ChannelFormValues>>([
   'force_format',
   'thinking_to_content',
   'pass_through_body_enabled',
+  // 每日金额上限的字段位于高级设置下的「每日金额上限」分区，校验失败要能定位并展开到该分区。
+  'daily_quota_limit_amount',
+  'daily_limit_recover_mode',
+  'daily_limit_recover_minutes',
   'proxy',
   'http_protocol',
   'http2_connection_shards',

@@ -38,14 +38,19 @@ func appendToolSurchargeLogInfo(other map[string]interface{}, items []ToolSurcha
 }
 
 type textQuotaSummary struct {
-	PromptTokens           int
-	CompletionTokens       int
-	TotalTokens            int
-	CacheTokens            int
-	CacheCreationTokens    int
-	CacheCreationTokens5m  int
-	CacheCreationTokens1h  int
-	ImageTokens            int
+	PromptTokens          int
+	CompletionTokens      int
+	TotalTokens           int
+	CacheTokens           int
+	CacheCreationTokens   int
+	CacheCreationTokens5m int
+	CacheCreationTokens1h int
+	ImageTokens           int
+	// TextTokens 是输入里的纯文本部分，仅用于日志展示，不参与计费。
+	// 上游（如 Azure images 的 input_tokens_details.text_tokens）报了就用它，
+	// 没报时由 PromptTokens - ImageTokens 推导，让日志里
+	// 「输入 = 文本输入 + 图像输入」这一关系可以自洽核对。
+	TextTokens             int
 	AudioTokens            int
 	ModelName              string
 	TokenName              string
@@ -70,6 +75,10 @@ type textQuotaSummary struct {
 	// 上游没有返回 usage 时不向用户计费（Quota 归零），但工具调用附加费仍要
 	// 计入成本账。参见下方 buildTextQuotaSummary 末尾的赋值。
 	LedgerQuota int
+	// UpstreamBaseQuota 是渠道每日上限「上游消耗」口径的基础消耗：同一次用量按分组倍率 1 计算的
+	// 额度（含其它倍率与工具附加费），与 Quota 同步清零。免费分组（倍率 0）时 Quota 为 0，只有它
+	// 能还原上游实际消耗。见 docs/design/channel-limit-upstream-basis-and-timed-recovery.md §4.2。
+	UpstreamBaseQuota int64
 }
 
 // hasBillableUsage 判断用量摘要是否含普通 token 或工具附加费；纯缓存资格只扩展到已有受管流式终态的摘要。
@@ -77,6 +86,20 @@ type textQuotaSummary struct {
 func (s *textQuotaSummary) hasBillableUsage() bool {
 	return s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() ||
 		s.StreamCacheBillable && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)
+}
+
+// textInputTokensForLog returns the text-only portion of the input for logging.
+// Not every upstream reports text_tokens alongside image_tokens, so fall back to
+// PromptTokens - ImageTokens; a negative result means the upstream counts don't
+// nest the way we assume, in which case 0 is the only honest answer.
+func (s *textQuotaSummary) textInputTokensForLog() int {
+	if s.TextTokens > 0 {
+		return s.TextTokens
+	}
+	if remaining := s.PromptTokens - s.ImageTokens; remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -268,6 +291,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
+	summary.TextTokens = usage.PromptTokensDetails.TextTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
 	isOpenRouterClaudeBilling := relayInfo.ChannelMeta != nil &&
@@ -307,6 +331,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
 
 	var audioInputQuota decimal.Decimal
+	// audioInputBase / upstreamBase：同一份用量按分组倍率 1 计算，供每日上限的上游消耗口径使用。
+	var audioInputBase decimal.Decimal
+	var upstreamBase decimal.Decimal
 	if !relayInfo.PriceData.UsePrice {
 		baseTokens := dPromptTokens
 
@@ -345,8 +372,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			summary.AudioInputPrice = operation_setting.GetGeminiInputAudioPricePerMillionTokens(summary.ModelName)
 			if summary.AudioInputPrice > 0 {
 				baseTokens = baseTokens.Sub(dAudioTokens)
-				audioInputQuota = decimal.NewFromFloat(summary.AudioInputPrice).
-					Div(decimal.NewFromInt(1000000)).Mul(dAudioTokens).Mul(dGroupRatio).Mul(dQuotaPerUnit)
+				audioInputBase = decimal.NewFromFloat(summary.AudioInputPrice).
+					Div(decimal.NewFromInt(1000000)).Mul(dAudioTokens).Mul(dQuotaPerUnit)
+				audioInputQuota = audioInputBase.Mul(dGroupRatio)
 			}
 		}
 
@@ -360,6 +388,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
+		upstreamBase = promptQuota.Add(completionQuota).Mul(dModelRatio).Add(audioInputBase)
 		quotaCalculateDecimal := promptQuota.Add(completionQuota).Mul(ratio)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		quotaCalculateDecimal = relayInfo.PriceData.ApplyOtherRatiosToDecimal(quotaCalculateDecimal)
@@ -372,6 +401,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		summary.Quota = quota
 		noteQuotaClamp(relayInfo, clamp)
 	} else {
+		upstreamBase = dModelPrice.Mul(dQuotaPerUnit).Add(audioInputBase)
 		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		quotaCalculateDecimal = relayInfo.PriceData.ApplyOtherRatiosToDecimal(quotaCalculateDecimal)
@@ -393,9 +423,33 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	// 成本账与实扣口径一致：只要计了费就记账。
 	if summary.hasBillableUsage() {
 		summary.LedgerQuota = summary.Quota
+		upstreamBase = relayInfo.PriceData.ApplyOtherRatiosToDecimal(upstreamBase).
+			Add(toolSurchargeBase(summary.ToolSurchargeItems))
+		summary.UpstreamBaseQuota = int64(common.QuotaFromDecimal(upstreamBase))
 	}
 
 	return summary
+}
+
+// toolSurchargeBase 求工具附加费不乘分组倍率的基础额度，供每日上限的上游消耗口径使用。
+func toolSurchargeBase(items []ToolSurchargeItem) decimal.Decimal {
+	var total decimal.Decimal
+	for _, item := range items {
+		total = total.Add(decimal.NewFromFloat(item.Price).
+			Mul(decimal.NewFromInt(int64(item.Count))).
+			Div(decimal.NewFromInt(1000)).
+			Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	}
+	return total
+}
+
+// tieredUpstreamBaseQuota 阶梯表达式计费时的基础消耗：表达式在乘分组倍率之前的额度加工具附加费。
+func tieredUpstreamBaseQuota(summary textQuotaSummary, tieredResult *billingexpr.TieredResult) int64 {
+	if tieredResult == nil || !summary.hasBillableUsage() {
+		return summary.UpstreamBaseQuota
+	}
+	return int64(common.QuotaFromDecimal(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).
+		Add(toolSurchargeBase(summary.ToolSurchargeItems))))
 }
 
 func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) string {
@@ -440,6 +494,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			tieredBillingApplied = true
 			tieredResult = tieredRes
 			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
+			summary.UpstreamBaseQuota = tieredUpstreamBaseQuota(summary, tieredRes)
 		}
 	}
 
@@ -447,6 +502,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// 在费用展示及日志生成前执行免收费策略，按次、阶梯和工具附加费一并清零。
 		summary.Quota = 0
 		summary.LedgerQuota = 0
+		summary.UpstreamBaseQuota = 0
 		summary.ToolCallSurchargeQuota = decimal.Zero
 		summary.ToolSurchargeItems = nil
 	}
@@ -508,7 +564,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.ImageTokens != 0 {
 		other["image"] = true
 		other["image_ratio"] = summary.ImageRatio
+		// 键名 image_output 是历史遗留：存的是输入图像 token（见 summary.ImageTokens 的
+		// 赋值来源 usage.PromptTokensDetails.ImageTokens）。键不能改，历史日志和用户
+		// 已保存的导出列偏好都引用它；展示文案已在导出列与详情弹窗中更正为「图像输入」。
 		other["image_output"] = summary.ImageTokens
+		// 同时给出文本输入，让「输入 = 文本输入 + 图像输入」在日志里可直接核对。
+		other["text_input"] = summary.textInputTokensForLog()
 	}
 	appendToolSurchargeLogInfo(other, summary.ToolSurchargeItems)
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
@@ -549,21 +610,22 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
-		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
-		CompletionTokens: summary.CompletionTokens,
-		ModelName:        logModel,
-		TokenName:        summary.TokenName,
-		Quota:            summary.Quota,
-		Content:          logContent,
-		TokenId:          relayInfo.TokenId,
-		UseTimeSeconds:   int(summary.UseTimeSeconds),
-		IsStream:         relayInfo.IsStream,
-		Group:            relayInfo.UsingGroup,
-		Other:            other,
-		CountUsage:       countUsage,
-		SurchargeQuota:   int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
-		LedgerQuota:      summary.LedgerQuota,
+		ChannelId:         relayInfo.ChannelId,
+		PromptTokens:      summary.PromptTokens,
+		CompletionTokens:  summary.CompletionTokens,
+		ModelName:         logModel,
+		TokenName:         summary.TokenName,
+		Quota:             summary.Quota,
+		Content:           logContent,
+		TokenId:           relayInfo.TokenId,
+		UseTimeSeconds:    int(summary.UseTimeSeconds),
+		IsStream:          relayInfo.IsStream,
+		Group:             relayInfo.UsingGroup,
+		Other:             other,
+		CountUsage:        countUsage,
+		SurchargeQuota:    int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
+		LedgerQuota:       summary.LedgerQuota,
+		UpstreamBaseQuota: &summary.UpstreamBaseQuota,
 	})
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens))

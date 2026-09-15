@@ -505,7 +505,7 @@ func TestSearchChannelsAndTags(t *testing.T) {
 		c.Tag = &tag
 	})
 
-	found, err := SearchChannels(name, grp, "gpt-4o", true)
+	found, err := SearchChannels(name, grp, "gpt-4o", true, ChannelLimitFilterAll, 0)
 	require.NoError(t, err)
 	require.Len(t, found, 1)
 	assert.Equal(t, ch.Id, found[0].Id)

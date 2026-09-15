@@ -39,6 +39,13 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
+import { getCurrencyLabel } from '@/lib/currency'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   editTagChannels,
@@ -46,7 +53,11 @@ import {
   getAllModels,
   getGroups,
 } from '../../api'
-import { channelsQueryKeys } from '../../lib'
+import {
+  DAILY_LIMIT_AMOUNT_TOO_SMALL_MESSAGE,
+  channelsQueryKeys,
+  dailyLimitAmountToQuota,
+} from '../../lib'
 import type { TagOperationParams } from '../../types'
 import { useChannels } from '../channels-provider'
 
@@ -59,6 +70,13 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
   const { t } = useTranslation()
   const { currentTag } = useChannels()
   const queryClient = useQueryClient()
+  // 每日金额上限属于敏感字段，与渠道抽屉 / 批量设置同一权限口径。
+  const currentUser = useAuthStore((s) => s.auth.user)
+  const canEditSensitive = hasPermission(
+    currentUser,
+    ADMIN_PERMISSION_RESOURCES.CHANNEL,
+    ADMIN_PERMISSION_ACTIONS.SENSITIVE_WRITE
+  )
 
   // Form state
   const [newTag, setNewTag] = useState('')
@@ -66,6 +84,8 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
   const [customModel, setCustomModel] = useState('')
   const [modelMapping, setModelMapping] = useState('')
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  // 每日金额上限：留空 = 本次不修改；要清除上限必须显式填 0。
+  const [dailyLimitValue, setDailyLimitValue] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Fetch tag models
@@ -100,6 +120,9 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
       setModelMapping('')
       setSelectedGroups([])
       setCustomModel('')
+      // 必须一起重置：留空表示「本次不改上限」，不清的话编辑完标签 A 再打开标签 B，
+      // 会把 A 填过的限额提交给 B。
+      setDailyLimitValue('')
 
       // Load tag models
       if (tagModelsData?.data) {
@@ -158,12 +181,30 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
     if (!currentTag) return
     if (!validateForm()) return
 
+    // 留空 = 本次不修改上限；无权限时不提交该字段。
+    const trimmedLimit = canEditSensitive ? dailyLimitValue.trim() : ''
+    let dailyQuotaLimit: number | undefined
+    if (trimmedLimit !== '') {
+      const amount = Number(trimmedLimit)
+      if (!Number.isFinite(amount) || amount < 0) {
+        toast.error(t('Please enter an amount greater than or equal to 0'))
+        return
+      }
+      const quota = dailyLimitAmountToQuota(amount)
+      if (quota === null) {
+        toast.error(t(DAILY_LIMIT_AMOUNT_TOO_SMALL_MESSAGE))
+        return
+      }
+      dailyQuotaLimit = quota
+    }
+
     // Check if anything changed
     const hasChanges =
       newTag !== currentTag ||
       modelMapping.trim() ||
       selectedModels.length > 0 ||
-      selectedGroups.length > 0
+      selectedGroups.length > 0 ||
+      dailyQuotaLimit !== undefined
 
     if (!hasChanges) {
       toast.warning(t('No changes to save'))
@@ -190,9 +231,12 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
         params.groups = selectedGroups.join(',')
       }
 
-      const response = await editTagChannels(
-        params as unknown as TagOperationParams
-      )
+      const payload = params as unknown as TagOperationParams
+      if (dailyQuotaLimit !== undefined) {
+        payload.daily_quota_limit = dailyQuotaLimit
+      }
+
+      const response = await editTagChannels(payload)
 
       if (response.success) {
         toast.success(t('Tag updated successfully'))
@@ -434,6 +478,35 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
                 />
               ))}
             </div>
+          </div>
+
+          <Separator />
+
+          {/* Daily amount limit */}
+          <div className='space-y-2'>
+            <Label htmlFor='tag-daily-limit'>
+              {t('Daily Amount Limit')} ({getCurrencyLabel()})
+              <span className='text-muted-foreground ml-2 text-xs'>
+                {t("(Override all channels' daily limit)")}
+              </span>
+            </Label>
+            <Input
+              id='tag-daily-limit'
+              type='number'
+              min={0}
+              step='any'
+              value={dailyLimitValue}
+              onChange={(e) => setDailyLimitValue(e.target.value)}
+              placeholder={t('Leave empty to keep unchanged')}
+              disabled={!canEditSensitive}
+            />
+            <p className='text-muted-foreground text-xs'>
+              {canEditSensitive
+                ? t(
+                    '0 removes the limit. Raising it does not re-enable disabled channels.'
+                  )
+                : t('No permission to perform this action')}
+            </p>
           </div>
         </div>
       </ScrollArea>

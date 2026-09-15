@@ -95,6 +95,8 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodDelete, path: "/ollama/delete", permission: authz.ChannelSensitiveWrite, handler: controller.OllamaDeleteModel},
 	{method: http.MethodGet, path: "/ollama/version/:id", permission: authz.ChannelSensitiveWrite, handler: controller.OllamaVersion},
 	{method: http.MethodPost, path: "/batch/tag", permission: authz.ChannelWrite, handler: controller.BatchSetChannelTag},
+	// 每日金额上限属于金额管控，与单渠道编辑该字段的门槛一致，要求 ChannelSensitiveWrite。
+	{method: http.MethodPost, path: "/batch/daily_limit", permission: authz.ChannelSensitiveWrite, handler: controller.BatchUpdateChannelDailyLimit},
 	{method: http.MethodGet, path: "/tag/models", permission: authz.ChannelRead, handler: controller.GetTagModels},
 	{method: http.MethodPost, path: "/copy/:id", permission: authz.ChannelSensitiveWrite, handler: controller.CopyChannel},
 	{method: http.MethodPost, path: "/multi_key/manage", permission: authz.ChannelOperate, handler: controller.ManageMultiKeys},

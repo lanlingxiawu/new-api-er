@@ -294,6 +294,8 @@ func migrateDB() error {
 		&SystemTask{},
 		&SystemTaskLock{},
 		&ChannelVeridropDetection{},
+		&ChannelDailyUsage{},
+		&ChannelLimitPeriodUsage{},
 		&CasbinRule{},
 		&AuthzRole{},
 		&LogExportTemplate{},

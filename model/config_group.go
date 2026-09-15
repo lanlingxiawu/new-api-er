@@ -133,6 +133,29 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		if err := config.GlobalConfig.UpdateFromMap(module, values); err != nil {
 			return true, err
 		}
+	case "channel_daily_limit_setting":
+		// 这个模块由 ConfigManager 的快照机制支撑（RegisterSnapshot），所以发布必须走
+		// GlobalConfig.UpdateFromMap：只写 options 表不发布，正在跑的 flusher 与结算路径
+		// 读到的仍是旧开关。
+		draft := operation_setting.GetChannelDailyLimitSetting()
+		if err := validateChannelDailyLimitFields(values); err != nil {
+			return false, err
+		}
+		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+			return false, err
+		}
+		if err := operation_setting.ValidateChannelDailyLimitSetting(draft); err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		if err := config.GlobalConfig.UpdateFromMap(module, values); err != nil {
+			return true, err
+		}
 	default:
 		return false, fmt.Errorf("configuration module is not editable")
 	}
@@ -224,6 +247,32 @@ func validatePriceMonitorFields(values map[string]string) error {
 	return nil
 }
 
+// validateChannelDailyLimitFields 逐字段校验类型。
+//
+// 不能复用 validateGroupFields：它把所有不以 `_enabled` 结尾的字段一律当整数，而本模块的
+// 字段是 enabled(bool) / timezone(string) / retention_days(int)，套上去 enabled 和 timezone
+// 都会被误判成非法整数。也不能只靠 updateConfigFromMap 兜底——它在解析失败时是 continue
+// 而不是报错（setting/config/config.go），非法值会被静默丢弃，option 行却照样落库。
+// timezone 的取值合法性由 ValidateChannelDailyLimitSetting 负责。
+func validateChannelDailyLimitFields(values map[string]string) error {
+	if err := validateGroupFieldNames(values, channelDailyLimitFields); err != nil {
+		return err
+	}
+	for key, value := range values {
+		switch key {
+		case "enabled":
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean configuration value")
+			}
+		case "retention_days":
+			if _, err := strconv.Atoi(value); err != nil {
+				return fmt.Errorf("invalid integer configuration value")
+			}
+		}
+	}
+	return nil
+}
+
 var rateLimitFields = fieldSet("global_api_enabled", "global_api_num", "global_api_duration_sec", "global_api_user_enabled", "global_api_user_num", "global_api_user_duration_sec", "global_web_enabled", "global_web_num", "global_web_duration_sec", "critical_enabled", "critical_num", "critical_duration_sec", "register_cooldown_enabled", "register_cooldown_num", "register_cooldown_sec", "auth_refresh_enabled", "auth_refresh_num", "auth_refresh_ip_num", "auth_refresh_duration_sec", "search_enabled", "search_num", "search_duration_sec", "log_export_enabled", "log_export_num", "log_export_duration_sec", "redis_timeout_ms")
 var dbPoolFields = fieldSet("max_idle_conns", "max_open_conns", "max_lifetime_sec", "log_max_idle_conns", "log_max_open_conns")
 var userSessionFields = fieldSet("active_limit", "issuance_limit", "issuance_window_sec", "revoked_retention_days", "hourly_alert_threshold")
@@ -238,6 +287,7 @@ var priceMonitorFields = fieldSet(
 	"enabled", "interval_minutes", "timeout_seconds", "include_official",
 	"include_models_dev", "model_whitelist",
 )
+var channelDailyLimitFields = fieldSet("enabled", "timezone", "retention_days")
 
 func fieldSet(fields ...string) map[string]struct{} {
 	out := make(map[string]struct{}, len(fields))

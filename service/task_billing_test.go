@@ -173,6 +173,8 @@ func TestMain(m *testing.M) {
 		&model.CustomerQuotaLog{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
+		&model.ChannelDailyUsage{},
+		&model.ChannelLimitPeriodUsage{},
 	); err != nil {
 		panic("failed to migrate main db: " + err.Error())
 	}

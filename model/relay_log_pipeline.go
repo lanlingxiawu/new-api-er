@@ -79,6 +79,9 @@ type RelayLogAccountingPayload struct {
 	GroupRatio      float64 `json:"group_ratio"`
 	Quota           int     `json:"quota"`
 	SurchargeQuota  int64   `json:"surcharge_quota"`
+	// BaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1）。旧记录没有该字段时读出为 0，
+	// 由消费方回退为 Quota / GroupRatio。
+	BaseQuota int64 `json:"base_quota,omitempty"`
 }
 
 var relayLogAccountingHandler func(RelayLogAccountingPayload, int)

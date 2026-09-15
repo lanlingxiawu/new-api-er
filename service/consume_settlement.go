@@ -25,6 +25,9 @@ type ConsumptionSettlementParams struct {
 	CreatedAt        int64                  // 日志创建时间，Unix 秒，传递给既有日志管线。
 	CountUsage       bool                   // 是否更新用户/渠道消费统计；严格免收费或资金失败时关闭。
 	LedgerQuota      int                    // 成本/佣金使用的额度口径；0 时日志快照逻辑取 Quota。
+	// UpstreamBaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1 的额度）。
+	// nil 时按结算额与分组倍率推导，见 upstreamBaseQuota。
+	UpstreamBaseQuota *int64
 }
 
 // EnqueueConsumeLogWithCost is the relay-safe entry point for legacy relay
@@ -34,7 +37,7 @@ func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	if relayInfo == nil {
 		return
 	}
-	snapshot := snapshotCostAndCommission(relayInfo, ledgerQuota, surchargeQuota)
+	snapshot := snapshotCostAndCommission(relayInfo, ledgerQuota, surchargeQuota, nil)
 	if params.ChannelId != 0 {
 		snapshot.ChannelID = params.ChannelId
 	}
@@ -115,7 +118,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 	if params.LedgerQuota != 0 {
 		quotaCopy = params.LedgerQuota
 	}
-	snapshot := snapshotCostAndCommission(relayInfo, quotaCopy, params.SurchargeQuota)
+	snapshot := snapshotCostAndCommission(relayInfo, quotaCopy, params.SurchargeQuota, params.UpstreamBaseQuota)
 	if params.ChannelId != 0 {
 		snapshot.ChannelID = params.ChannelId
 	}

@@ -220,6 +220,8 @@ type costCommissionSnapshot struct {
 	GroupRatio      float64
 	Quota           int
 	SurchargeQuota  int64
+	// BaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1），在 relay goroutine 上算好。
+	BaseQuota int64
 }
 
 func init() {
@@ -228,6 +230,7 @@ func init() {
 			UserID: payload.UserID, ChannelID: payload.ChannelID, ChannelName: payload.ChannelName,
 			UsingGroup: payload.UsingGroup, OriginModelName: payload.OriginModelName,
 			GroupRatio: payload.GroupRatio, Quota: payload.Quota, SurchargeQuota: payload.SurchargeQuota,
+			BaseQuota: payload.BaseQuota,
 		}.record(logID)
 	})
 }
@@ -237,16 +240,30 @@ func (s costCommissionSnapshot) accountingPayload() model.RelayLogAccountingPayl
 		Version: 1, UserID: s.UserID, ChannelID: s.ChannelID, ChannelName: s.ChannelName,
 		UsingGroup: s.UsingGroup, OriginModelName: s.OriginModelName,
 		GroupRatio: s.GroupRatio, Quota: s.Quota, SurchargeQuota: s.SurchargeQuota,
+		BaseQuota: s.BaseQuota,
 	}
 }
 
-func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64) costCommissionSnapshot {
+// upstreamBaseQuota 返回用于每日上限的基础消耗。降级 JSONL 里的旧载荷没有 base_quota（读出为 0），
+// 回退为「结算额 ÷ 分组倍率」，与改动前的采购成本口径一致。
+func (s costCommissionSnapshot) upstreamBaseQuota() int64 {
+	if s.BaseQuota > 0 {
+		return s.BaseQuota
+	}
+	if s.Quota > 0 && s.GroupRatio > 0 {
+		return decimal.NewFromInt(int64(s.Quota)).Div(decimal.NewFromFloat(s.GroupRatio)).Round(0).IntPart()
+	}
+	return 0
+}
+
+func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, explicitBase *int64) costCommissionSnapshot {
 	if relayInfo == nil {
 		return costCommissionSnapshot{Quota: quota, SurchargeQuota: surchargeQuota}
 	}
 	snapshot := costCommissionSnapshot{
 		UserID: relayInfo.UserId, UsingGroup: relayInfo.UsingGroup, OriginModelName: relayInfo.OriginModelName,
 		GroupRatio: relayInfo.PriceData.GroupRatioInfo.GroupRatio, Quota: quota, SurchargeQuota: surchargeQuota,
+		BaseQuota: upstreamBaseQuota(&relayInfo.PriceData, quota, explicitBase),
 	}
 	// ChannelId/ChannelName are promoted from the embedded *ChannelMeta, which
 	// stays nil until InitChannelMeta runs. Reading them unguarded panics on the
@@ -264,6 +281,10 @@ func (s costCommissionSnapshot) record(logID int) {
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: s.ChannelID, ChannelName: s.ChannelName},
 	}
 	info.PriceData.GroupRatioInfo.GroupRatio = s.GroupRatio
+	// 渠道每日上限的上游消耗口径独立于提成台账：必须放在 RecordCostAndSettleEmployeeCommission
+	// 之前——免费分组的结算额为 0，会在那里的 quota == 0 处提前返回；而且业务统计熔断打开导致成本
+	// 台账不落库时，限额仍要照常累计（限额是止损控制，宁可算到也不能漏算）。
+	recordChannelDailyUpstream(s.ChannelID, s.upstreamBaseQuota())
 	RecordCostAndSettleEmployeeCommission(info, s.Quota, s.SurchargeQuota, logID)
 }
 

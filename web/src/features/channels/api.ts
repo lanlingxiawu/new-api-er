@@ -21,6 +21,7 @@ import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type {
   AddChannelRequest,
+  BatchDailyLimitParams,
   BatchDeleteParams,
   BatchSetTagParams,
   Channel,
@@ -520,6 +521,22 @@ export async function editTagChannels(
   params: TagOperationParams
 ): Promise<{ success: boolean; message?: string }> {
   const res = await api.put('/api/channel/tag', params, channelActionConfig())
+  return res.data
+}
+
+/**
+ * Batch set the daily quota limit on the selected channels.
+ * Requires ChannelSensitiveWrite on the backend, same as editing the field on a
+ * single channel. Omitted fields are left untouched; pass 0 to clear the limit.
+ */
+export async function batchSetChannelDailyLimit(
+  params: BatchDailyLimitParams
+): Promise<{ success: boolean; message?: string; data?: number }> {
+  const res = await api.post(
+    '/api/channel/batch/daily_limit',
+    params,
+    channelActionConfig()
+  )
   return res.data
 }
 

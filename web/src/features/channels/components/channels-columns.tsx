@@ -18,11 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef, Table } from '@tanstack/react-table'
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   ListOrdered,
   Shuffle,
   SlidersHorizontal,
@@ -40,6 +43,13 @@ import { TableId } from '@/components/table-id'
 import { TruncatedText } from '@/components/truncated-text'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Tooltip,
   TooltipContent,
@@ -77,7 +87,11 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import { createChannelFieldUpdateScheduler } from '../lib/channel-field-update'
-import type { Channel } from '../types'
+import {
+  DAILY_LIMIT_NEAR_THRESHOLD,
+  type Channel,
+  type ChannelSortBy,
+} from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -324,6 +338,116 @@ function TagWeightCell({ channel }: { channel: TagRow }) {
 const MAX_INLINE_BALANCE_CHARS = 8
 const SENSITIVE_MASK = '••••'
 
+/** 本列头提供的排序键：列本身的余额，以及额度用量 / 额度使用率。 */
+const BALANCE_HEADER_SORTS = new Set<string>([
+  'balance',
+  'daily_used',
+  'daily_usage_ratio',
+])
+
+/**
+ * 「已用 / 剩余」列头，样式与 DataTableColumnHeader 保持一致。除了列本身的余额排序，
+ * 还提供按额度用量与额度使用率排序（按日模式为今日、限时模式为本轮）。
+ *
+ * 不新增列：额度用量已经显示在本列单元格内（见 BalanceCell），再加一列会把本就拥挤的
+ * 表格撑宽，移动端卡片也放不下。
+ */
+function BalanceColumnHeader({ table }: { table: Table<Channel> }) {
+  const { t } = useTranslation()
+  const { enableTagMode } = useChannels()
+  const active = table.getState().sorting[0]
+  const activeSort =
+    active && BALANCE_HEADER_SORTS.has(active.id) ? active : undefined
+
+  const applySort = (id: ChannelSortBy, desc: boolean) => {
+    table.setSorting([{ id, desc }])
+  }
+
+  const dailySortActive =
+    activeSort?.id === 'daily_used' || activeSort?.id === 'daily_usage_ratio'
+  const label = dailySortActive
+    ? `${t('Used / Remaining')} · ${
+        activeSort?.id === 'daily_used'
+          ? t('Limit usage')
+          : t('Limit usage ratio')
+      }`
+    : t('Used / Remaining')
+  let SortIcon = ChevronsUpDown
+  if (activeSort) SortIcon = activeSort.desc ? ArrowDown : ArrowUp
+  const iconClassName = 'text-muted-foreground/70 size-3.5'
+
+  return (
+    <div className='flex items-center space-x-2'>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='sm'
+              className='data-popup-open:bg-accent -ms-3 h-8'
+            />
+          }
+        >
+          <span>{label}</span>
+          <SortIcon className='ms-2 h-4 w-4' />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align='start'>
+          <DropdownMenuItem onClick={() => applySort('balance', false)}>
+            <ArrowUp className={iconClassName} />
+            {t('Remaining balance')} · {t('Asc')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => applySort('balance', true)}>
+            <ArrowDown className={iconClassName} />
+            {t('Remaining balance')} · {t('Desc')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* 标签模式下这两项不可用：标签分页与子渠道排序是两层，对子渠道排序
+              改变不了标签本身的顺序，点了不会有反应，所以直接置灰并说明。 */}
+          <DropdownMenuItem
+            disabled={enableTagMode}
+            onClick={() => applySort('daily_used', true)}
+          >
+            <ArrowDown className={iconClassName} />
+            {t('Limit usage')} · {t('Desc')}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={enableTagMode}
+            onClick={() => applySort('daily_used', false)}
+          >
+            <ArrowUp className={iconClassName} />
+            {t('Limit usage')} · {t('Asc')}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={enableTagMode}
+            onClick={() => applySort('daily_usage_ratio', true)}
+          >
+            <ArrowDown className={iconClassName} />
+            {t('Limit usage ratio')} · {t('Desc')}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={enableTagMode}
+            onClick={() => applySort('daily_usage_ratio', false)}
+          >
+            <ArrowUp className={iconClassName} />
+            {t('Limit usage ratio')} · {t('Asc')}
+          </DropdownMenuItem>
+          {enableTagMode ? (
+            <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+              {t('Sorting by daily usage is unavailable in tag mode')}
+            </div>
+          ) : (
+            dailySortActive && (
+              <div className='text-muted-foreground px-2 py-1.5 text-xs'>
+                {t('Channels without a daily limit are listed last')}
+              </div>
+            )
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
 /**
  * Balance cell component with click to update
  */
@@ -388,6 +512,67 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const remainingLabel = `${t('Remaining:')} ${remainingFull}`
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
   const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
+
+  // 今日用量：沿用本单元格既有的四条约束——敏感遮罩、卡片布局不显示货币符号、
+  // 超长降级为紧凑记法、Tag 聚合行不显示（子渠道口径可能不同，相加没有业务含义）。
+  const dailyUsage = useMemo(() => {
+    if (isTagRow) return null
+    const usage = channel.daily_usage
+    if (!usage || usage.limit_quota <= 0) return null
+    // 口径唯一：上游消耗。限时模式（达到上限 N 分钟后恢复）的上限按「轮」计算，
+    // 展示本轮用量；按日模式展示今日用量。
+    const timed = usage.recover_minutes > 0
+    const used = timed ? usage.period_cost_quota : usage.cost_quota
+    const ratio = usage.limit_quota > 0 ? used / usage.limit_quota : 0
+    const addSuffix = (value: string) =>
+      tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
+    const fmt = (v: number) =>
+      addSuffix(
+        formatQuotaWithCurrency(v, {
+          digitsLarge: 2,
+          digitsSmall: 4,
+          abbreviate: true,
+          showSymbol: layout !== 'card',
+        })
+      )
+    const compact = (v: number) =>
+      addSuffix(
+        formatQuotaWithCurrency(v, {
+          compact: true,
+          locale,
+          showSymbol: layout !== 'card',
+        })
+      )
+    const usedFull = fmt(used)
+    const limitFull = fmt(usage.limit_quota)
+    let variant: StatusBadgeProps['variant'] = 'neutral'
+    if (usage.disabled_at > 0 || ratio >= 1) {
+      variant = 'danger'
+    } else if (ratio >= DAILY_LIMIT_NEAR_THRESHOLD) {
+      variant = 'warning'
+    }
+    return {
+      timed,
+      prefix: timed ? t('This round') : t('Used today'),
+      usedFull,
+      limitFull,
+      usedDisplay:
+        usedFull.length > MAX_INLINE_BALANCE_CHARS ? compact(used) : usedFull,
+      limitDisplay:
+        limitFull.length > MAX_INLINE_BALANCE_CHARS
+          ? compact(usage.limit_quota)
+          : limitFull,
+      periodStart:
+        timed && usage.period_start > 0
+          ? formatTimestampToDate(usage.period_start)
+          : '',
+      recoverAt:
+        timed && usage.recover_at > 0
+          ? formatTimestampToDate(usage.recover_at)
+          : '',
+      variant,
+    }
+  }, [channel.daily_usage, isTagRow, layout, locale, t, tokenSuffix])
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -482,6 +667,12 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const accountRemainingDisplay = accountBalance
     ? formatQuotaValue(accountBalance.quota)
     : '-'
+  let accountBadgeLabel = t('Query Balance')
+  if (isAccountUpdating) {
+    accountBadgeLabel = t('Updating...')
+  } else if (accountBalance) {
+    accountBadgeLabel = accountRemainingDisplay
+  }
 
   return (
     <TooltipProvider>
@@ -553,13 +744,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
               <TooltipTrigger
                 render={
                   <StatusBadge
-                    label={
-                      isAccountUpdating
-                        ? t('Updating...')
-                        : accountBalance
-                          ? accountRemainingDisplay
-                          : t('Query Balance')
-                    }
+                    label={accountBadgeLabel}
                     variant={isAccountUpdating ? 'neutral' : 'info'}
                     size='sm'
                     copyable={false}
@@ -583,6 +768,71 @@ function BalanceCell({ channel }: { channel: Channel }) {
                   <p>{t('Account balance not queried yet')}</p>
                 )}
                 <p>{t('Click to update account balance')}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+
+        {/* 行3：今日用量 / 每日上限。仅配置了上限的渠道显示，避免给绝大多数
+            未启用本功能的渠道增加视觉噪音。 */}
+        {dailyUsage && (
+          <div className='flex items-center gap-1'>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <StatusBadge
+                    label={
+                      sensitiveVisible
+                        ? `${dailyUsage.prefix} ${dailyUsage.usedDisplay} / ${dailyUsage.limitDisplay}`
+                        : `${dailyUsage.prefix} ${SENSITIVE_MASK}`
+                    }
+                    variant={dailyUsage.variant}
+                    size='sm'
+                    copyable={false}
+                    showDot={false}
+                    className='cursor-help'
+                  />
+                }
+              />
+              <TooltipContent className='max-w-xs'>
+                {sensitiveVisible ? (
+                  <>
+                    <p>
+                      {dailyUsage.timed
+                        ? t('Used this round: {{used}}', {
+                            used: dailyUsage.usedFull,
+                          })
+                        : t('Used today: {{used}}', {
+                            used: dailyUsage.usedFull,
+                          })}
+                    </p>
+                    <p>
+                      {dailyUsage.timed
+                        ? t('Limit per round: {{limit}}', {
+                            limit: dailyUsage.limitFull,
+                          })
+                        : t('Daily limit: {{limit}}', {
+                            limit: dailyUsage.limitFull,
+                          })}
+                    </p>
+                    {dailyUsage.periodStart && (
+                      <p>
+                        {t('Round started at {{time}}', {
+                          time: dailyUsage.periodStart,
+                        })}
+                      </p>
+                    )}
+                    {dailyUsage.recoverAt && (
+                      <p>
+                        {t('Will recover at {{time}}', {
+                          time: dailyUsage.recoverAt,
+                        })}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p>{`${dailyUsage.prefix} ${SENSITIVE_MASK}`}</p>
+                )}
               </TooltipContent>
             </Tooltip>
           </div>
@@ -1012,6 +1262,37 @@ export function useChannelsColumns(
               /* empty */
             }
 
+            // 因每日金额上限被禁用时，不展示后端那条面向运维的原始 reason 串，
+            // 改成告诉用户接下来会发生什么、他能做什么。判定直接读真实列，
+            // 不依赖解析 other_info。
+            if (channel.daily_limit_disabled_at > 0) {
+              const limit = channel.daily_usage?.limit_quota
+                ? formatQuotaValue(channel.daily_usage.limit_quota)
+                : formatQuotaValue(channel.daily_quota_limit)
+              if ((channel.daily_limit_auto_recover ?? 1) !== 1) {
+                statusReason = t(
+                  'Daily spend reached the limit {{limit}}; auto recovery is off for this channel, enable it manually when needed.',
+                  { limit }
+                )
+              } else if (channel.daily_limit_recover_minutes > 0) {
+                // 限时模式：优先用后端给出的 recover_at；缺失时按「禁用时刻 + N 分钟」推算，
+                // 与后端的恢复条件一致。
+                const recoverAt =
+                  channel.daily_usage?.recover_at ||
+                  channel.daily_limit_disabled_at +
+                    channel.daily_limit_recover_minutes * 60
+                statusReason = t(
+                  'Upstream spend in this round reached the limit {{limit}}; the channel will be re-enabled automatically at {{time}} and a new round will start.',
+                  { limit, time: formatTimestampToDate(recoverAt) }
+                )
+              } else {
+                statusReason = t(
+                  'Daily spend reached the limit {{limit}}; the channel will be re-enabled automatically at midnight.',
+                  { limit }
+                )
+              }
+            }
+
             if (statusReason || statusTime) {
               return (
                 <TooltipProvider delay={100}>
@@ -1175,9 +1456,23 @@ export function useChannelsColumns(
       // Balance column (Used/Remaining)
       {
         accessorKey: 'balance',
-        header: t('Used / Remaining'),
+        header: ({ table }) => <BalanceColumnHeader table={table} />,
         cell: ({ row }) => <BalanceCell channel={row.original} />,
         size: 180,
+      },
+
+      // 每日上限筛选的载体列。通用工具栏渲染筛选控件前会 table.getColumn(columnId)，
+      // 取不到列就直接 return null——所以哪怕只是服务端筛选，也必须有一个对应的列存在。
+      // 该列不展示任何内容，默认隐藏，也不出现在列显示菜单里。
+      {
+        id: 'daily_limit',
+        accessorFn: (row) => row.daily_quota_limit ?? 0,
+        header: () => null,
+        cell: () => null,
+        enableSorting: false,
+        enableHiding: false,
+        size: 0,
+        meta: { mobileHidden: true },
       },
 
       // Response Time column

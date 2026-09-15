@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -68,6 +69,71 @@ type Channel struct {
 	// 仅用于在渠道增改接口中透传该值，由控制器同步到 ChannelCostConfig；
 	// GetChannel 读取时回填，供前端编辑表单预填。指针区分「未提供(nil)」与「显式设置」。
 	CostRatio *float64 `json:"cost_ratio,omitempty" gorm:"-"`
+
+	// —— 渠道每日金额上限（docs/design/channel-daily-quota-limit.md）——
+	// 配置列用真实列而非 setting JSON：筛选/排序需要进 SQL，批量设置需要原子 UPDATE。
+	// DailyQuotaLimit 每日上限（quota 单位，与 UsedQuota 同单位）。<=0 表示无上限。
+	DailyQuotaLimit int64 `json:"daily_quota_limit" gorm:"bigint;default:0;index"`
+	// DailyLimitAutoRecover 是否自动恢复启用。沿用本表 AutoBan 的 *int 跨库布尔写法。
+	DailyLimitAutoRecover *int `json:"daily_limit_auto_recover" gorm:"default:1"`
+	// DailyLimitRecoverMinutes 限时恢复间隔（分钟）。0 = 按自然日：次日零点恢复或不恢复，由
+	// DailyLimitAutoRecover 决定；>0 = 限时模式：达到上限后 N 分钟自动恢复并开启新一轮计数。
+	DailyLimitRecoverMinutes int `json:"daily_limit_recover_minutes" gorm:"default:0"`
+	// DailyLimitPeriodStart 限时模式当前一轮的开始时刻（unix 秒），服务端维护、只读。
+	// 由限时恢复、手动启用、修改恢复间隔时写入；按日模式下不使用。
+	DailyLimitPeriodStart int64 `json:"daily_limit_period_start" gorm:"bigint;default:0"`
+	// DailyLimitDisabledAt 本功能自动禁用的时刻；0 表示当前不是被本功能禁用。
+	// 不变式：DailyLimitDisabledAt > 0 <=> 最近一次禁用来自每日上限。
+	DailyLimitDisabledAt int64 `json:"daily_limit_disabled_at" gorm:"bigint;default:0"`
+	// DailyLimitDisabledDate 触发禁用时对应的 StatDate（配置时区当日 00:00），恢复判定用。
+	DailyLimitDisabledDate int64 `json:"daily_limit_disabled_date" gorm:"bigint;default:0"`
+
+	// DailyUsage 渠道今日用量，列表接口按需批量填充，不持久化。
+	DailyUsage *ChannelDailyUsageView `json:"daily_usage,omitempty" gorm:"-"`
+}
+
+// MaxDailyLimitRecoverMinutes 限时恢复间隔上限：7 天。
+const MaxDailyLimitRecoverMinutes = 10080
+
+// MinDailyQuotaLimit 返回允许配置的最小上限，避免误填极小值导致渠道第一个请求就被禁用。
+//
+// 取「一分钱」而不是一个写死的常量：quota 与金额的换算由 common.QuotaPerUnit 决定，
+// 而它是可配置的（Tokens 模式 / 自定义货币会改它）。写死 1 quota 等于没有下限——
+// 默认换算下 1 quota ≈ $0.000002。
+//
+// 只在保存时校验，不影响已有配置：LoadDailyLimitConfigs 不做校验，改小 QuotaPerUnit
+// 不会让历史上限突然失效。
+func MinDailyQuotaLimit() int64 {
+	minimum := int64(common.QuotaPerUnit / 100)
+	if minimum < 1 {
+		return 1
+	}
+	return minimum
+}
+
+// GetDailyLimitAutoRecover 返回是否自动恢复；未配置（nil）视为 true。
+func (channel *Channel) GetDailyLimitAutoRecover() bool {
+	if channel.DailyLimitAutoRecover == nil {
+		return true
+	}
+	return *channel.DailyLimitAutoRecover == 1
+}
+
+// IsDailyLimitTimed 报告渠道是否处于限时恢复模式（达到上限后 N 分钟恢复）。
+func (channel *Channel) IsDailyLimitTimed() bool {
+	return channel.DailyLimitRecoverMinutes > 0
+}
+
+// NormalizeDailyLimitRecovery 规整新建渠道的恢复配置：限时模式隐含自动恢复，并从当前时刻开启第一轮。
+// 按日模式不使用轮次，period_start 归零。客户端传入的 period_start 一律不采信。
+func (channel *Channel) NormalizeDailyLimitRecovery(now int64) {
+	if channel.DailyLimitRecoverMinutes > 0 {
+		one := 1
+		channel.DailyLimitAutoRecover = &one
+		channel.DailyLimitPeriodStart = now
+		return
+	}
+	channel.DailyLimitPeriodStart = 0
 }
 
 type ChannelInfo struct {
@@ -84,6 +150,9 @@ type ChannelSortOptions struct {
 	SortBy    string
 	SortOrder string
 	IDSort    bool
+	// StatDate 是今日用量 JOIN 的日期条件；仅在按每日用量排序时需要，为 0 表示不启用
+	// 表达式排序（Tag 模式与不支持的排序键都是 0）。
+	StatDate int64
 }
 
 var channelSortColumns = map[string]string{
@@ -98,7 +167,9 @@ var channelSortColumns = map[string]string{
 func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) ChannelSortOptions {
 	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
 	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
-	if _, ok := channelSortColumns[normalizedSortBy]; !ok {
+	_, isColumnSort := channelSortColumns[normalizedSortBy]
+	isUsageSort := channelSortNeedsUsage(normalizedSortBy)
+	if !isColumnSort && !isUsageSort {
 		normalizedSortBy = ""
 		normalizedSortOrder = ""
 	} else if normalizedSortOrder != "asc" {
@@ -113,6 +184,13 @@ func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) Channel
 }
 
 func (options ChannelSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	// 每日用量 / 使用率是表达式排序，clause.OrderByColumn 表达不了，单独处理。
+	// TagMode 下不支持（见 ChannelListQueryOptions.TagMode 的说明），此时 StatDate 为 0。
+	if options.StatDate > 0 {
+		if next, ok := applyDailyUsageOrder(query, options.SortBy, options.StatDate, options.SortOrder != "asc"); ok {
+			return next
+		}
+	}
 	if columnName, ok := channelSortColumns[options.SortBy]; ok {
 		return query.Order(clause.OrderByColumn{
 			Column: clause.Column{Name: columnName},
@@ -398,7 +476,12 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 	return channels, err
 }
 
-func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
+// SearchChannels 关键字搜索。limitFilter / statDate 与列表接口共用同一套条件构造
+// （ApplyChannelLimitFilter），保证两条路径在每日上限筛选上的行为完全一致。
+//
+// 注意：本函数的 status / type 过滤仍由 controller 在 Go 侧完成（既有实现），这里不动，
+// 那属于独立的搜索路径重构，不在每日上限功能范围内。
+func SearchChannels(keyword string, group string, model string, idSort bool, limitFilter string, statDate int64, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
 	modelsCol := "`models`"
 
@@ -419,9 +502,10 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	baseQuery := DB.Model(&Channel{}).Omit("key")
 
 	// 构造WHERE子句
-	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
+	whereClause := "(channels.id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
 	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+	baseQuery = ApplyChannelLimitFilter(baseQuery, limitFilter, statDate)
 
 	// 执行查询
 	err := order.Apply(baseQuery).Find(&channels).Error
@@ -608,7 +692,10 @@ func (channel *Channel) Update() error {
 		}
 	}
 	var err error
-	err = DB.Model(channel).Updates(channel).Error
+	// 限时恢复的两列只经 DailyLimitEdit 写入：恢复间隔变化时要在同一条 UPDATE 里据旧值
+	// 判断是否开启新一轮，这里若先把新间隔写进去，那次判断就读不到旧值了；period_start 则是
+	// 服务端维护的只读列。
+	err = DB.Model(channel).Omit("daily_limit_recover_minutes", "daily_limit_period_start").Updates(channel).Error
 	if err != nil {
 		return err
 	}
@@ -704,6 +791,17 @@ func finalizeChannelDeletion(names map[int]string, ids []int) {
 		if err := DeleteChannelAccountBalance(id); err != nil {
 			common.SysError(fmt.Sprintf("finalizeChannelDeletion: delete account balance cache channel_id=%d failed: %v", id, err))
 		}
+	}
+	// 每日上限的用量行。累计器里残留的增量可能再写回一行孤儿记录，由周期性孤儿清理兜底。
+	if deleted, err := DeleteChannelLimitPeriodUsageByChannelIds(ids); err != nil {
+		common.SysError(fmt.Sprintf("finalizeChannelDeletion: delete limit period usage rows failed: %v", err))
+	} else if deleted > 0 {
+		common.SysLog(fmt.Sprintf("finalizeChannelDeletion: removed %d channel limit period usage row(s)", deleted))
+	}
+	if deleted, err := DeleteChannelDailyUsageByChannelIds(ids); err != nil {
+		common.SysError(fmt.Sprintf("finalizeChannelDeletion: delete daily usage rows failed: %v", err))
+	} else if deleted > 0 {
+		common.SysLog(fmt.Sprintf("finalizeChannelDeletion: removed %d channel daily usage row(s)", deleted))
 	}
 }
 
@@ -824,6 +922,11 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+	// 任何「非每日上限」的状态变更都先清除限额禁用标记，维持不变式
+	// daily_limit_disabled_at > 0 <=> 最近一次禁用来自每日上限。必须放在「目标状态与当前相同」
+	// 的提前返回之前：限额禁用后在途请求报错再写一次 status=3 时，标记不清就会把一个真坏的
+	// 渠道自动恢复。
+	clearDailyLimitMarksIfPresent(channelId)
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -887,7 +990,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			info["status_time"] = common.GetTimestamp()
 			channel.SetOtherInfo(info)
 			channel.Status = status
+			// 与状态写入同一次保存，保证「状态变了但标记还在」这种中间态不会落库。
+			channel.DailyLimitDisabledAt = 0
+			channel.DailyLimitDisabledDate = 0
 			shouldUpdateAbilities = true
+		}
+		// 限时恢复模式下，任何「变为启用」（管理员手动启用、按 key 恢复等）都开启新一轮：
+		// 否则本轮用量仍压在上限之上，下一笔请求就会再次触发禁用。
+		if shouldUpdateAbilities && channel.Status == common.ChannelStatusEnabled && channel.IsDailyLimitTimed() {
+			channel.DailyLimitPeriodStart = common.GetTimestamp()
 		}
 		err = channel.SaveWithoutKey()
 		if err != nil {
@@ -899,7 +1010,17 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	// 同一条 UPDATE 里顺带清零限额禁用标记，见 UpdateChannelStatus 中的同名说明。
+	// 只给「原本未启用」的限时渠道开启新一轮，已在运行的渠道保持当前一轮——否则按 Tag 点一次
+	// 启用，就会让本轮快跑满的渠道凭空多出一整轮额度。CASE 必须读到旧状态：GORM 按列名排序
+	// 生成 SET，daily_limit_period_start 排在 status 之前（MySQL 按书写顺序求值）。
+	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(map[string]any{
+		"status":                    common.ChannelStatusEnabled,
+		"daily_limit_disabled_at":   0,
+		"daily_limit_disabled_date": 0,
+		"daily_limit_period_start": gorm.Expr("CASE WHEN daily_limit_recover_minutes > 0 AND status <> ? THEN ? ELSE daily_limit_period_start END",
+			common.ChannelStatusEnabled, common.GetTimestamp()),
+	}).Error
 	if err != nil {
 		return err
 	}
@@ -908,7 +1029,11 @@ func EnableChannelByTag(tag string) error {
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
+	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(map[string]any{
+		"status":                    common.ChannelStatusManuallyDisabled,
+		"daily_limit_disabled_at":   0,
+		"daily_limit_disabled_date": 0,
+	}).Error
 	if err != nil {
 		return err
 	}
@@ -1132,6 +1257,24 @@ func (channel *Channel) ValidateSettings() error {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
 		}
+	}
+	if err := ValidateDailyLimitConfig(channel.DailyQuotaLimit, channel.DailyLimitRecoverMinutes); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidateDailyLimitConfig 校验每日上限配置。单渠道保存、批量设置、按 Tag 设置共用此函数，
+// 保证三条写入路径的校验完全一致。返回的错误串对应 i18n key，由控制器翻译。
+func ValidateDailyLimitConfig(limit int64, recoverMinutes int) error {
+	if limit < 0 {
+		return errors.New(i18n.MsgChannelDailyLimitInvalidAmount)
+	}
+	if limit > 0 && limit < MinDailyQuotaLimit() {
+		return errors.New(i18n.MsgChannelDailyLimitInvalidAmount)
+	}
+	if recoverMinutes < 0 || recoverMinutes > MaxDailyLimitRecoverMinutes {
+		return errors.New(i18n.MsgChannelDailyLimitInvalidRecoverMinutes)
 	}
 	return nil
 }

@@ -18,13 +18,23 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import { getCurrencyDisplay } from '@/lib/currency'
+import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
+
 import {
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import {
+  DAILY_LIMIT_RECOVER_MODES,
+  DAILY_LIMIT_RECOVER_MINUTES_DEFAULT,
+  DAILY_LIMIT_RECOVER_MINUTES_MAX,
+  DAILY_LIMIT_RECOVER_MINUTES_MIN,
+  type Channel,
+  type DailyLimitRecoverMode,
+} from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -253,6 +263,17 @@ export const channelFormSchema = z
     multi_key_type: z.enum(['random', 'polling']).optional(),
     batch_add_set_key_prefix_2_name: z.boolean().optional(),
     key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
+    // 每日金额上限（真实列，直接随渠道对象提交；金额以当前展示货币为单位）
+    // 0 = 不限；正数换算后不能低于后端下限，校验放在 superRefine。
+    daily_quota_limit_amount: z
+      .number()
+      .min(0, 'Daily quota limit must be greater than or equal to 0')
+      .optional(),
+    // 恢复方式：不自动恢复 / 次日零点恢复 / 达到上限后 N 分钟恢复。
+    // 仅表单层概念，提交时由 buildDailyLimitPayload 映射成两列。
+    daily_limit_recover_mode: z.enum(DAILY_LIMIT_RECOVER_MODES).optional(),
+    // 「N 分钟后恢复」的 N；范围校验放在 superRefine，只在该模式且设置了上限时生效。
+    daily_limit_recover_minutes: z.number().optional(),
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
@@ -291,6 +312,39 @@ export const channelFormSchema = z
   .superRefine((data, ctx) => {
     if (data.cost_ratio === undefined || data.cost_ratio === null) {
       addRequiredIssue(ctx, 'cost_ratio', 'Cost ratio is required')
+    }
+
+    const dailyLimitAmount = data.daily_quota_limit_amount ?? 0
+    if (
+      dailyLimitAmount > 0 &&
+      dailyLimitAmountToQuota(dailyLimitAmount) === null
+    ) {
+      addRequiredIssue(
+        ctx,
+        'daily_quota_limit_amount',
+        DAILY_LIMIT_AMOUNT_TOO_SMALL_MESSAGE
+      )
+    }
+
+    // 未设置上限时恢复方式控件是置灰的，用户无法修正，因此只在设置了上限时校验。
+    if (
+      (data.daily_quota_limit_amount ?? 0) > 0 &&
+      data.daily_limit_recover_mode === 'after_minutes'
+    ) {
+      const minutes = data.daily_limit_recover_minutes
+      if (minutes === undefined || Number.isNaN(minutes)) {
+        addRequiredIssue(
+          ctx,
+          'daily_limit_recover_minutes',
+          'Recovery interval is required'
+        )
+      } else if (!isValidDailyLimitRecoverMinutes(minutes)) {
+        addRequiredIssue(
+          ctx,
+          'daily_limit_recover_minutes',
+          'Enter a whole number of minutes between 1 and 10080'
+        )
+      }
     }
 
     if (
@@ -437,6 +491,10 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   multi_key_type: 'random',
   batch_add_set_key_prefix_2_name: false,
   key_mode: 'append',
+  // 每日金额上限：0 = 无上限（默认）
+  daily_quota_limit_amount: 0,
+  daily_limit_recover_mode: 'next_day' as const,
+  daily_limit_recover_minutes: DAILY_LIMIT_RECOVER_MINUTES_DEFAULT,
   // Channel extra settings
   force_format: false,
   thinking_to_content: false,
@@ -615,6 +673,120 @@ export function transformChannelToFormDefaults(
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     advanced_custom: advancedCustom,
+    // 每日金额上限：后端存 quota 单位，表单按当前展示货币显示。
+    // 必须走 quotaUnitsToDollars，不能自己除 QuotaPerUnit——该函数还处理 Tokens 模式、
+    // 自定义货币与汇率。
+    daily_quota_limit_amount:
+      channel.daily_quota_limit > 0
+        ? quotaUnitsToDollars(channel.daily_quota_limit)
+        : 0,
+    daily_limit_recover_mode: getDailyLimitRecoverMode(
+      channel.daily_limit_auto_recover ?? 1,
+      channel.daily_limit_recover_minutes ?? 0
+    ),
+    daily_limit_recover_minutes:
+      (channel.daily_limit_recover_minutes ?? 0) > 0
+        ? channel.daily_limit_recover_minutes
+        : DAILY_LIMIT_RECOVER_MINUTES_DEFAULT,
+  }
+}
+
+/** 金额为正但换算后低于后端下限时的提示（抽屉 / 批量设置 / 标签编辑共用）。 */
+export const DAILY_LIMIT_AMOUNT_TOO_SMALL_MESSAGE =
+  'Enter 0 for no limit, or an amount worth at least 0.01 USD'
+
+/** 与后端 model.MinDailyQuotaLimit() 一致：一分钱对应的 quota，至少为 1。 */
+export function getMinDailyQuotaLimit(): number {
+  return Math.max(1, Math.trunc(getCurrencyDisplay().config.quotaPerUnit / 100))
+}
+
+/**
+ * 展示金额 → 提交用的 quota。0（或负数）= 不限；金额为正但换算后低于后端下限时
+ * 返回 null——包括四舍五入成 0 的情况，否则一个极小的正数会被当成「清除上限」。
+ *
+ * 换算必须走 parseQuotaFromDollars（处理 Tokens 模式 / 自定义货币 / 汇率）。
+ */
+export function dailyLimitAmountToQuota(amount: number): number | null {
+  if (!(amount > 0)) return 0
+  const quota = parseQuotaFromDollars(amount)
+  return quota >= getMinDailyQuotaLimit() ? quota : null
+}
+
+/** 渠道两列 → 表单恢复方式。auto_recover = 0 优先于分钟数。 */
+export function getDailyLimitRecoverMode(
+  autoRecover: number,
+  recoverMinutes: number
+): DailyLimitRecoverMode {
+  if (autoRecover === 0) return 'manual'
+  if (recoverMinutes > 0) return 'after_minutes'
+  return 'next_day'
+}
+
+export function isValidDailyLimitRecoverMinutes(minutes: number): boolean {
+  return (
+    Number.isInteger(minutes) &&
+    minutes >= DAILY_LIMIT_RECOVER_MINUTES_MIN &&
+    minutes <= DAILY_LIMIT_RECOVER_MINUTES_MAX
+  )
+}
+
+/**
+ * 表单恢复方式 → 提交用的两列。
+ *
+ * minutes 只在 after_minutes 模式下使用；非法值（只可能出现在未设上限、控件置灰时，
+ * 此时分钟数不起作用）回落到默认值，保证提交的值始终落在后端允许的范围内。
+ */
+export function buildDailyLimitRecoverFields(
+  mode: DailyLimitRecoverMode,
+  minutes: number | undefined
+): { daily_limit_auto_recover: 0 | 1; daily_limit_recover_minutes: number } {
+  if (mode === 'manual') {
+    return { daily_limit_auto_recover: 0, daily_limit_recover_minutes: 0 }
+  }
+  if (mode === 'after_minutes') {
+    return {
+      daily_limit_auto_recover: 1,
+      daily_limit_recover_minutes:
+        minutes !== undefined && isValidDailyLimitRecoverMinutes(minutes)
+          ? minutes
+          : DAILY_LIMIT_RECOVER_MINUTES_DEFAULT,
+    }
+  }
+  return { daily_limit_auto_recover: 1, daily_limit_recover_minutes: 0 }
+}
+
+/**
+ * 去掉数字输入里多余的前导零：「011」→「11」、「00.5」→「0.5」，
+ * 「0.5」「0.」「0」保持不变。
+ *
+ * type='number' 的受控输入里，React 用宽松比较判断 DOM 值与 value 是否一致
+ * （"011" == 11），所以不会把 DOM 里的「011」刷新成「11」，需要手动规整。
+ */
+export function normalizeLeadingZeros(raw: string): string {
+  return raw.replace(/^(-?)0+(?=\d)/, '$1')
+}
+
+/**
+ * 把表单里的每日上限字段转成提交用的渠道列。
+ *
+ * 不需要回传加载时的原值：表单直接持有 quotaUnitsToDollars 的未取整结果，
+ * 而汇率与 QuotaPerUnit 都被限定为正数，parseQuotaFromDollars 的 Math.round
+ * 能把这几个 ULP 的浮点误差还原成原来的整数 quota，所以未改动的上限原样回传，
+ * 不会被后端判成敏感字段变更。
+ */
+export function buildDailyLimitPayload(formData: ChannelFormValues): {
+  daily_quota_limit: number
+  daily_limit_auto_recover: 0 | 1
+  daily_limit_recover_minutes: number
+} {
+  const amount = formData.daily_quota_limit_amount ?? 0
+  return {
+    // 表单校验已拦住低于下限的正数金额。
+    daily_quota_limit: amount > 0 ? parseQuotaFromDollars(amount) : 0,
+    ...buildDailyLimitRecoverFields(
+      formData.daily_limit_recover_mode ?? 'next_day',
+      formData.daily_limit_recover_minutes
+    ),
   }
 }
 
@@ -643,6 +815,15 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
   }
+
+  // 账号余额查询配置同样存在 setting 里，而 setting 是整体覆盖的：漏写就等于清空。
+  // 令牌原样回传——编辑时未改动即为脱敏占位符 ***，由后端保留原值；留空则后端清除。
+  const balanceUrl = formData.account_balance_url?.trim()
+  const balanceToken = formData.account_balance_token?.trim()
+  const balanceUserId = formData.account_balance_user_id?.trim()
+  if (balanceUrl) settingObj.account_balance_url = balanceUrl
+  if (balanceToken) settingObj.account_balance_token = balanceToken
+  if (balanceUserId) settingObj.account_balance_user_id = balanceUserId
 
   return JSON.stringify(settingObj)
 }
@@ -819,6 +1000,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
     cost_ratio: formData.cost_ratio ?? 1,
+    ...buildDailyLimitPayload(formData),
   }
 
   // Clean up empty strings to null for optional fields
@@ -867,6 +1049,7 @@ export function transformFormDataToUpdatePayload(
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
     cost_ratio: formData.cost_ratio ?? 1,
+    ...buildDailyLimitPayload(formData),
   }
 
   // Only include key if it was changed (not empty)

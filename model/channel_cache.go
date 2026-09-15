@@ -271,6 +271,23 @@ func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
 	return &c.ChannelInfo, nil
 }
 
+// CacheUpdateChannelDailyLimitMarks 同步缓存里的每日上限禁用标记。
+//
+// CacheUpdateChannelStatus 只同步 Status，两个标记列会一直是陈旧值。目前没有代码从缓存
+// 读这两列（读缓存判断标记曾经导致过一个真实缺陷，见 clearDailyLimitMarksIfPresent 的
+// 注释），但把明知过期的值留在共享缓存里是个陷阱，写入方顺手同步掉。
+func CacheUpdateChannelDailyLimitMarks(id int, disabledAt int64, disabledDate int64) {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	if channel, ok := channelsIDM[id]; ok {
+		channel.DailyLimitDisabledAt = disabledAt
+		channel.DailyLimitDisabledDate = disabledDate
+	}
+}
+
 func CacheUpdateChannelStatus(id int, status int) {
 	if !common.MemoryCacheEnabled {
 		return

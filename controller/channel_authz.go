@@ -24,6 +24,17 @@ func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, re
 	if _, ok := requestData["setting"]; ok && !equalStringPtr(channel.Setting, origin.Setting) {
 		return true
 	}
+	// 每日金额上限属于金额管控，与放在 setting JSON 时的权限门槛保持一致：
+	// 修改需要 ChannelSensitiveWrite。
+	if _, ok := requestData["daily_quota_limit"]; ok && channel.DailyQuotaLimit != origin.DailyQuotaLimit {
+		return true
+	}
+	if _, ok := requestData["daily_limit_auto_recover"]; ok && !equalIntPtr(channel.DailyLimitAutoRecover, origin.DailyLimitAutoRecover) {
+		return true
+	}
+	if _, ok := requestData["daily_limit_recover_minutes"]; ok && channel.DailyLimitRecoverMinutes != origin.DailyLimitRecoverMinutes {
+		return true
+	}
 	if _, ok := requestData["other"]; ok && channel.Other != origin.Other {
 		return true
 	}
@@ -71,6 +82,10 @@ var channelSensitiveFields = map[string]struct{}{
 	"other":               {},
 	"settings":            {},
 	"key_mode":            {},
+
+	"daily_quota_limit":           {},
+	"daily_limit_auto_recover":    {},
+	"daily_limit_recover_minutes": {},
 }
 
 // channelOperationalFields lists fields managed by operation endpoints instead
@@ -90,6 +105,16 @@ var channelReadOnlyFields = map[string]struct{}{
 	"used_quota":                 {},
 	"account_balance":            {},
 	"account_balance_configured": {},
+
+	// 服务端管理的禁用来源标记与展示字段：客户端传入一律清零/忽略，
+	// 防止伪造「因每日上限被禁用」的状态骗过次日自动恢复。
+	"daily_limit_disabled_at":   {},
+	"daily_limit_disabled_date": {},
+	"daily_usage":               {},
+	// 限时恢复的轮次由服务端维护（恢复、手动启用、改恢复间隔时写入），客户端不能伪造。
+	"daily_limit_period_start": {},
+	// 统计口径已停用、统一按上游消耗统计；旧客户端仍可能回传，按只读忽略，不当作敏感修改。
+	"daily_limit_basis": {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -111,6 +136,29 @@ func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]an
 	if _, ok := requestData["used_quota"]; ok {
 		channel.UsedQuota = 0
 	}
+	if _, ok := requestData["daily_limit_disabled_at"]; ok {
+		channel.DailyLimitDisabledAt = 0
+	}
+	if _, ok := requestData["daily_limit_disabled_date"]; ok {
+		channel.DailyLimitDisabledDate = 0
+	}
+	if _, ok := requestData["daily_usage"]; ok {
+		channel.DailyUsage = nil
+	}
+	if _, ok := requestData["daily_limit_period_start"]; ok {
+		channel.DailyLimitPeriodStart = 0
+	}
+}
+
+// equalIntPtr 比较两个 *int 是否相等（均为 nil 视为相等）。
+func equalIntPtr(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 // channelNonSensitiveFields lists routing / server-managed channel

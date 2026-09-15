@@ -84,6 +84,17 @@ const routingReliabilitySchema = z
         .min(1, 'Interval must be at least 1 minute'),
       channel_test_mode: z.enum(channelTestModes),
     }),
+    // 渠道每日金额上限。取值范围与后端 ValidateChannelDailyLimitSetting 一致，
+    // 后端另有逐键校验（controller/option.go），两边必须保持同步。
+    channel_daily_limit_setting: z.object({
+      enabled: z.boolean(),
+      timezone: z.string().min(1, 'Timezone is required'),
+      retention_days: z.coerce
+        .number()
+        .int()
+        .min(7, 'Retention must be between 7 and 3650 days')
+        .max(3650, 'Retention must be between 7 and 3650 days'),
+    }),
   })
   .superRefine((values, ctx) => {
     const disableParsed = parseHttpStatusCodeRules(
@@ -128,6 +139,9 @@ type RoutingReliabilitySectionProps = {
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
     'monitor_setting.channel_test_mode': ChannelTestMode
+    'channel_daily_limit_setting.enabled': boolean
+    'channel_daily_limit_setting.timezone': string
+    'channel_daily_limit_setting.retention_days': number
   }
 }
 
@@ -146,6 +160,9 @@ type NormalizedRoutingReliabilityValues = {
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_mode': ChannelTestMode
+  'channel_daily_limit_setting.enabled': boolean
+  'channel_daily_limit_setting.timezone': string
+  'channel_daily_limit_setting.retention_days': number
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -173,6 +190,12 @@ const buildFormDefaults = (
       defaults['monitor_setting.channel_test_mode']
     ),
   },
+  channel_daily_limit_setting: {
+    enabled: defaults['channel_daily_limit_setting.enabled'],
+    timezone:
+      defaults['channel_daily_limit_setting.timezone'] || 'Asia/Shanghai',
+    retention_days: defaults['channel_daily_limit_setting.retention_days'],
+  },
 })
 
 const normalizeDefaults = (
@@ -198,6 +221,12 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
+  'channel_daily_limit_setting.enabled':
+    defaults['channel_daily_limit_setting.enabled'],
+  'channel_daily_limit_setting.timezone':
+    defaults['channel_daily_limit_setting.timezone'] || 'Asia/Shanghai',
+  'channel_daily_limit_setting.retention_days':
+    defaults['channel_daily_limit_setting.retention_days'],
 })
 
 const normalizeFormValues = (
@@ -221,6 +250,12 @@ const normalizeFormValues = (
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
+  'channel_daily_limit_setting.enabled':
+    values.channel_daily_limit_setting.enabled,
+  'channel_daily_limit_setting.timezone':
+    values.channel_daily_limit_setting.timezone.trim(),
+  'channel_daily_limit_setting.retention_days':
+    values.channel_daily_limit_setting.retention_days,
 })
 
 export function RoutingReliabilitySection({
@@ -583,6 +618,86 @@ export function RoutingReliabilitySection({
                       {t(
                         'If an upstream error contains any of these keywords (case insensitive), the channel will be disabled automatically.'
                       )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </div>
+
+          {/* 渠道每日金额上限的全局配置。逐渠道的上限在渠道编辑抽屉里设置。 */}
+          <div className='flex min-w-0 flex-col gap-4'>
+            <div className='flex flex-col gap-1'>
+              <h4 className='text-sm font-medium'>
+                {t('Channel daily amount limit')}
+              </h4>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Per-channel limits are configured on each channel. These settings control how the feature runs globally.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='channel_daily_limit_setting.enabled'
+              render={({ field }) => (
+                <FormItem className='flex items-center justify-between gap-4'>
+                  <div className='space-y-0.5'>
+                    <FormLabel>{t('Enable daily amount limit')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When off, usage is no longer accumulated and channels are neither disabled nor recovered. Channels already disabled stay disabled and must be enabled manually; re-enabling this switch does not recover them retroactively.'
+                      )}
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='channel_daily_limit_setting.timezone'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Daily reset timezone')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder='Asia/Shanghai' {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The day boundary (00:00) is evaluated in this timezone. Changing it shifts the boundary, so the current day may be split into two periods.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='channel_daily_limit_setting.retention_days'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Usage history retention (days)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={7}
+                        max={3650}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Daily usage rows older than this are deleted.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

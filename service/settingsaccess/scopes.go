@@ -42,7 +42,19 @@ func buildDefinitions() map[string]Definition {
 		scope("billing.payment", "PayAddress", "EpayId", "EpayKey", "Price", "MinTopUp", "CustomCallbackAddress", "PayMethods", "payment_setting.amount_options", "payment_setting.amount_discount", "payment_setting.compliance_confirmed", "payment_setting.compliance_terms_version", "payment_setting.compliance_confirmed_at", "payment_setting.compliance_confirmed_by", "payment_setting.compliance_confirmed_ip", "StripeEnabled", "StripeApiSecret", "StripeWebhookSecret", "StripePriceId", "StripeUnitPrice", "StripeUseRealtimeRate", "StripeMinTopUp", "StripePromotionCodesEnabled", "CreemApiKey", "CreemWebhookSecret", "CreemTestMode", "CreemProducts", "WaffoEnabled", "WaffoApiKey", "WaffoPrivateKey", "WaffoPublicCert", "WaffoSandboxPublicCert", "WaffoSandboxApiKey", "WaffoSandboxPrivateKey", "WaffoSandbox", "WaffoMerchantId", "WaffoCurrency", "WaffoUnitPrice", "WaffoMinTopUp", "WaffoNotifyUrl", "WaffoReturnUrl", "WaffoPayMethods", "WaffoPancakeMerchantID", "WaffoPancakePrivateKey", "WaffoPancakeReturnURL", "WaffoPancakeStoreID", "WaffoPancakeProductID", "AlipayEnabled", "AlipayAppId", "AlipayPrivateKey", "AlipayPublicKey", "AlipaySandbox", "AlipayMinTopUp", "AlipayNotifyUrl", "AlipayReturnUrl", "WechatEnabled", "WechatAppId", "WechatMchId", "WechatApiV3Key", "WechatMchPrivateKey", "WechatMchCertSerialNo", "WechatMinTopUp", "WechatNotifyUrl", "InfiniEnabled", "InfiniApiKey", "InfiniApiSecret", "InfiniWebhookSecret", "InfiniSandbox", "InfiniNotifyUrl", "InfiniReturnUrl", "InfiniFailUrl", "InfiniUnitPrice", "InfiniMinTopUp", "InfiniCurrency", "InfiniCurrencies", "InfiniPayMethods"),
 		scope("billing.checkin", "checkin_setting.enabled", "checkin_setting.min_quota", "checkin_setting.max_quota"),
 		scope("models.global", "global.pass_through_request_enabled", "global.thinking_model_blacklist", "global.chat_completions_to_responses_policy", "general_setting.ping_interval_enabled", "general_setting.ping_interval_seconds"),
-		scope("models.routing-reliability", "RetryTimes", "ChannelDisableThreshold", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "AutomaticDisableKeywords", "AutomaticDisableStatusCodes", "AutomaticRetryStatusCodes", "monitor_setting.auto_test_channel_enabled", "monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_mode"),
+		// 每日金额上限用 configScope：它由 ConfigManager 支撑，保存走 SaveConfigGroup，
+		// 而 AllowsGroup 要求 definition.GroupKeys[module] 存在——普通 scope() 构造出来的
+		// GroupKeys 是空 map，只把键名加进 OptionKeys 是不够的。
+		configScope("models.routing-reliability", "channel_daily_limit_setting",
+			[]string{
+				"RetryTimes", "ChannelDisableThreshold", "AutomaticDisableChannelEnabled",
+				"AutomaticEnableChannelEnabled", "AutomaticDisableKeywords", "AutomaticDisableStatusCodes",
+				"AutomaticRetryStatusCodes", "monitor_setting.auto_test_channel_enabled",
+				"monitor_setting.auto_test_channel_minutes", "monitor_setting.channel_test_mode",
+				"channel_daily_limit_setting.enabled", "channel_daily_limit_setting.timezone",
+				"channel_daily_limit_setting.retention_days",
+			},
+			[]string{"enabled", "timezone", "retention_days"}),
 		scope("models.gemini", "gemini.safety_settings", "gemini.version_settings", "gemini.supported_imagine_models", "gemini.thinking_adapter_enabled", "gemini.thinking_adapter_budget_tokens_percentage", "gemini.function_call_thought_signature_enabled", "gemini.remove_function_response_id_enabled"),
 		scope("models.claude", "claude.model_headers_settings", "claude.default_max_tokens", "claude.thinking_adapter_enabled", "claude.thinking_adapter_budget_tokens_percentage"),
 		scope("models.grok", "grok.violation_deduction_enabled", "grok.violation_deduction_amount"),

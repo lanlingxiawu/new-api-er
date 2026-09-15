@@ -66,6 +66,82 @@ func optionRowValue(t *testing.T, db *gorm.DB, key string) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// channel_daily_limit_setting —— 保存路径必须真的可写
+//
+// controller/option.go:542 把 channel_daily_limit_setting.* 的单键 PUT 路由到
+// SaveConfigGroup，前端「模型 → 路由与可靠性」也是逐键保存（use-update-option.ts），
+// 但 SaveConfigGroup 的 switch 里没有这个模块，保存一律落到 default 分支返回
+// "configuration module is not editable"：总开关 / 时区 / 保留天数在后台根本存不下来，
+// 永远停在编译期默认值。settingsaccess 已按 configScope 注册（scopes.go:48），
+// 唯独保存侧漏了接线，而 channel_daily_limit_scope_test.go 只断言作用域白名单，
+// 没有断言保存成功，因此拦不住。
+// ---------------------------------------------------------------------------
+
+func TestSaveConfigGroupPersistsChannelDailyLimitSetting(t *testing.T) {
+	db := useConfigGroupDB(t)
+	before := operation_setting.GetChannelDailyLimitSetting()
+	t.Cleanup(func() { operation_setting.ReplaceChannelDailyLimitSetting(before) })
+
+	changed, err := SaveConfigGroup("channel_daily_limit_setting", map[string]string{
+		"enabled":        "false",
+		"timezone":       "UTC",
+		"retention_days": "30",
+	})
+	require.NoError(t, err, "the daily-limit switch/timezone/retention must be saveable")
+	assert.True(t, changed)
+
+	for key, want := range map[string]string{
+		"channel_daily_limit_setting.enabled":        "false",
+		"channel_daily_limit_setting.timezone":       "UTC",
+		"channel_daily_limit_setting.retention_days": "30",
+	} {
+		value, ok := optionRowValue(t, db, key)
+		assert.True(t, ok, "option row %q must be persisted", key)
+		assert.Equal(t, want, value, key)
+	}
+
+	// 快照必须同步发布：flusher 与结算路径读的是快照，只写库不发布等于没生效。
+	snapshot := operation_setting.GetChannelDailyLimitSnapshot()
+	assert.False(t, snapshot.Enabled, "the published snapshot must reflect the saved switch")
+	assert.Equal(t, "UTC", snapshot.Timezone)
+	assert.Equal(t, 30, snapshot.RetentionDays)
+}
+
+// 非法值必须在**落库之前**被拦下。persistOptionsTx 排在校验之后，顺序一旦写反，
+// 非法配置就会留在 options 表里并在下次启动时被加载——只断言「返回了错误」抓不到这种回归。
+func TestSaveConfigGroupRejectsMalformedChannelDailyLimitValues(t *testing.T) {
+	db := useConfigGroupDB(t)
+	before := operation_setting.GetChannelDailyLimitSetting()
+	t.Cleanup(func() { operation_setting.ReplaceChannelDailyLimitSetting(before) })
+
+	cases := []struct {
+		name   string
+		values map[string]string
+		reason string
+	}{
+		{"未知字段", map[string]string{"not_a_field": "1"}, "configuration field is not editable"},
+		{"字段名带点会越权写到别的模块", map[string]string{"other.enabled": "true"}, "invalid configuration field"},
+		{"enabled 收到非布尔值", map[string]string{"enabled": "yes-please"}, "invalid boolean configuration value"},
+		{"retention_days 收到非整数", map[string]string{"retention_days": "30.5"}, "invalid integer configuration value"},
+		{"retention_days 越界", map[string]string{"retention_days": "3"}, "retention_days must be between"},
+		{"时区不可解析", map[string]string{"timezone": "Mars/Olympus"}, "invalid timezone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SaveConfigGroup("channel_daily_limit_setting", tc.values)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.reason)
+			for key := range tc.values {
+				_, ok := optionRowValue(t, db, "channel_daily_limit_setting."+key)
+				assert.False(t, ok, "rejected value must not be persisted: %s", key)
+			}
+			assert.True(t, operation_setting.GetChannelDailyLimitSnapshot().Enabled,
+				"a rejected save must not flip the live switch")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // validateGroupFields —— 等价类划分 + 判定覆盖
 // ---------------------------------------------------------------------------
 

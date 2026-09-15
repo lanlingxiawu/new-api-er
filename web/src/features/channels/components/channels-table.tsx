@@ -59,7 +59,7 @@ import {
   getChannelTypeIcon,
   getChannelTypeLabel,
 } from '../lib'
-import type { Channel, ChannelSortBy } from '../types'
+import type { Channel, ChannelLimitFilter, ChannelSortBy } from '../types'
 import { ChannelCard } from './channel-card'
 import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
@@ -78,6 +78,15 @@ const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
   'balance',
   'response_time',
   'test_time',
+  // 今日用量 / 今日使用率。标签模式下后端会忽略并回退默认排序（见下方 sortParams）。
+  'daily_used',
+  'daily_usage_ratio',
+])
+
+/** 标签模式不支持的排序键：先分页标签再查子渠道，对子渠道排序改不了标签顺序。 */
+const TAG_MODE_UNSUPPORTED_SORTS = new Set<ChannelSortBy>([
+  'daily_used',
+  'daily_usage_ratio',
 ])
 
 function isDisabledChannelRow(channel: Channel) {
@@ -133,6 +142,8 @@ export function ChannelsTable() {
       { columnId: 'type', searchKey: 'type', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
       { columnId: 'model', searchKey: 'model', type: 'string' },
+      // 每日上限筛选与其它筛选同等对待，参与 URL 持久化，刷新后不丢失、分页不错位。
+      { columnId: 'daily_limit', searchKey: 'daily_limit', type: 'array' },
     ],
   })
 
@@ -161,6 +172,13 @@ export function ChannelsTable() {
   )
   const groupFilter =
     (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
+  const dailyLimitFilterValues =
+    (columnFilters.find((f) => f.id === 'daily_limit')?.value as string[]) || []
+  const limitFilter =
+    dailyLimitFilterValues.length > 0 &&
+    !dailyLimitFilterValues.includes('all')
+      ? (dailyLimitFilterValues[0] as ChannelLimitFilter)
+      : undefined
   const {
     value: modelFilter,
     inputValue: modelFilterInput,
@@ -174,6 +192,19 @@ export function ChannelsTable() {
     onColumnFiltersChange,
   })
 
+  // 有搜索或筛选生效时，空结果应提示「没有符合条件的渠道」，而不是引导创建首个渠道。
+  // 取值为 'all' 的单选筛选（如「全部状态」）等同于未筛选。
+  const hasActiveChannelFilters =
+    Boolean(globalFilter?.trim()) ||
+    Boolean(modelFilter.trim()) ||
+    columnFilters.some((filter) => {
+      const value = filter.value
+      if (Array.isArray(value)) {
+        return value.length > 0 && !value.includes('all')
+      }
+      return typeof value === 'string' ? value.trim() !== '' : value != null
+    })
+
   // Determine whether to use search or regular list API
   const shouldSearch = Boolean(globalFilter?.trim() || modelFilter.trim())
 
@@ -185,12 +216,18 @@ export function ChannelsTable() {
     ) {
       return {}
     }
+    if (
+      enableTagMode &&
+      TAG_MODE_UNSUPPORTED_SORTS.has(activeSort.id as ChannelSortBy)
+    ) {
+      return {}
+    }
 
     return {
       sort_by: activeSort.id as ChannelSortBy,
       sort_order: activeSort.desc ? 'desc' : 'asc',
     } as const
-  }, [sorting])
+  }, [sorting, enableTagMode])
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
     setSorting((previous) => {
@@ -207,6 +244,18 @@ export function ChannelsTable() {
     queryKey: ['groups'],
     queryFn: getGroups,
   })
+
+  const dailyLimitFilterOptions = useMemo(
+    () => [
+      { label: t('All'), value: 'all' },
+      { label: t('Limit configured'), value: 'configured' },
+      { label: t('No limit'), value: 'unlimited' },
+      // 限时恢复的渠道按本轮用量判定，不只是「今日」，文案不能写死今日。
+      { label: t('Limit reached'), value: 'reached' },
+      { label: t('Near limit (>=80%)'), value: 'near' },
+    ],
+    [t]
+  )
 
   const groupOptions = useMemo(
     () =>
@@ -237,6 +286,7 @@ export function ChannelsTable() {
           : undefined,
       tag_mode: enableTagMode,
       id_sort: idSort,
+      limit_filter: limitFilter,
       ...sortParams,
       p: pagination.pageIndex + 1,
       page_size: pagination.pageSize,
@@ -260,6 +310,7 @@ export function ChannelsTable() {
               : undefined,
           tag_mode: enableTagMode,
           id_sort: idSort,
+          limit_filter: limitFilter,
           ...sortParams,
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
@@ -280,6 +331,7 @@ export function ChannelsTable() {
               : undefined,
           tag_mode: enableTagMode,
           id_sort: idSort,
+          limit_filter: limitFilter,
           ...sortParams,
           p: pagination.pageIndex + 1,
           page_size: pagination.pageSize,
@@ -315,6 +367,8 @@ export function ChannelsTable() {
     initialColumnVisibility: {
       models: false,
       tag: false,
+      // 仅作为「每日上限」筛选控件的载体，不展示内容。
+      daily_limit: false,
     },
     columnVisibilityStorageKey: CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
     columnSizingStorageKey: isMobile
@@ -412,9 +466,13 @@ export function ChannelsTable() {
       isLoading={isLoading}
       isFetching={isFetching}
       emptyTitle={t('No Channels Found')}
-      emptyDescription={t(
-        'No channels available. Create your first channel to get started.'
-      )}
+      emptyDescription={
+        hasActiveChannelFilters
+          ? t('No channels match the current filters.')
+          : t(
+              'No channels available. Create your first channel to get started.'
+            )
+      }
       skeletonKeyPrefix='channel-skeleton'
       enableCardView
       viewModeStorageKey={CHANNELS_VIEW_MODE_STORAGE_KEY}
@@ -456,6 +514,12 @@ export function ChannelsTable() {
             columnId: 'group',
             title: t('Group'),
             options: groupFilterOptions,
+            singleSelect: true,
+          },
+          {
+            columnId: 'daily_limit',
+            title: t('Daily Limit'),
+            options: dailyLimitFilterOptions,
             singleSelect: true,
           },
         ],

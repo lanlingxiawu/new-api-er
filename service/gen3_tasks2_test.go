@@ -39,15 +39,26 @@ func TestChannelSvc_ShouldEnableChannel(t *testing.T) {
 	common.AutomaticEnableChannelEnabled = true
 	t.Cleanup(func() { common.AutomaticEnableChannelEnabled = orig })
 
+	autoDisabled := &model.Channel{Status: common.ChannelStatusAutoDisabled}
+	enabled := &model.Channel{Status: common.ChannelStatusEnabled}
+
 	// happy path: no error + auto-disabled status.
-	assert.True(t, ShouldEnableChannel(nil, common.ChannelStatusAutoDisabled))
+	assert.True(t, ShouldEnableChannel(nil, autoDisabled))
 	// non-nil error blocks enable.
-	assert.False(t, ShouldEnableChannel(types.NewError(fmt.Errorf("x"), types.ErrorCodeInvalidRequest), common.ChannelStatusAutoDisabled))
+	assert.False(t, ShouldEnableChannel(types.NewError(fmt.Errorf("x"), types.ErrorCodeInvalidRequest), autoDisabled))
 	// wrong status blocks enable.
-	assert.False(t, ShouldEnableChannel(nil, common.ChannelStatusEnabled))
+	assert.False(t, ShouldEnableChannel(nil, enabled))
+	// nil channel blocks enable.
+	assert.False(t, ShouldEnableChannel(nil, nil))
+	// daily-limit disabled channels are exempt from automatic re-enable: their key
+	// is fine and a test would pass, which would silently defeat the daily limit.
+	assert.False(t, ShouldEnableChannel(nil, &model.Channel{
+		Status:               common.ChannelStatusAutoDisabled,
+		DailyLimitDisabledAt: 1234567890,
+	}))
 
 	common.AutomaticEnableChannelEnabled = false
-	assert.False(t, ShouldEnableChannel(nil, common.ChannelStatusAutoDisabled))
+	assert.False(t, ShouldEnableChannel(nil, autoDisabled))
 }
 
 func TestChannelSvc_ShouldDisableChannel(t *testing.T) {

@@ -125,6 +125,7 @@ import {
   parseChannelConnectionInfo,
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
+import { getCurrencyLabel } from '@/lib/currency'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
@@ -144,6 +145,7 @@ import {
   CHANNEL_STATUS_LABELS,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
+  DAILY_LIMIT_RECOVER_MODE_OPTIONS,
   ERROR_MESSAGES,
   FIELD_DESCRIPTIONS,
   FIELD_PLACEHOLDERS,
@@ -169,13 +171,20 @@ import {
   findMissingModelsInMapping,
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
+  normalizeLeadingZeros,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
 } from '../../lib/status-code-risk-guard'
-import type { Channel } from '../../types'
+import {
+  DAILY_LIMIT_RECOVER_MINUTES_DEFAULT,
+  DAILY_LIMIT_RECOVER_MINUTES_MAX,
+  DAILY_LIMIT_RECOVER_MINUTES_MIN,
+  type Channel,
+} from '../../types'
 import { useChannels } from '../channels-provider'
+import { DailyLimitRecoverSelect } from '../daily-limit-recover-select'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
 import {
@@ -259,6 +268,7 @@ const ADVANCED_SETTINGS_SECTION_IDS = {
   routingStrategy: 'channel-section-advanced-routing-strategy',
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
+  dailyLimit: 'channel-section-advanced-daily-limit',
   extraSettings: 'channel-section-advanced-extra-settings',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   accountBalance: 'channel-section-advanced-account-balance',
@@ -288,6 +298,11 @@ const SENSITIVE_FORM_FIELDS = [
   'force_format',
   'thinking_to_content',
   'proxy',
+  // 每日金额上限在后端属于 channelSensitiveFields，前端必须同样受 sensitiveLocked 控制，
+  // 否则无权限的管理员能填完再被后端拒绝。
+  'daily_quota_limit_amount',
+  'daily_limit_recover_mode',
+  'daily_limit_recover_minutes',
   'http_protocol',
   'http2_connection_shards',
   'pass_through_body_enabled',
@@ -377,6 +392,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
     values.claude_beta_query ||
+    (values.daily_quota_limit_amount ?? 0) > 0 ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -687,8 +703,14 @@ export function ChannelMutateDrawer({
   const [clipboardConnectionInfo, setClipboardConnectionInfo] =
     useState<ChannelConnectionInfo | null>(null)
 
-  const isEditing = Boolean(currentRow)
-  const channelId = currentRow?.id ?? null
+  // 父组件关闭时会同时把 currentRow 置空；若直接用它，退场动画里标题和表单会闪成「创建渠道」。
+  // 打开期间跟随 currentRow，关闭后沿用到退场动画结束（handleOpenChangeComplete 里清空）。
+  const [activeRow, setActiveRow] = useState<Channel | null>(currentRow ?? null)
+  if (open && activeRow !== (currentRow ?? null)) {
+    setActiveRow(currentRow ?? null)
+  }
+  const isEditing = Boolean(activeRow)
+  const channelId = activeRow?.id ?? null
   const sensitiveLocked = isEditing && !canEditSensitive
 
   // Fetch channel details if editing
@@ -791,6 +813,18 @@ export function ChannelMutateDrawer({
   const currentStatusCodeMapping = form.watch('status_code_mapping')
   const currentParamOverride = form.watch('param_override')
   const currentHeaderOverride = form.watch('header_override')
+  // 每日金额上限：未填上限时恢复方式控件置灰，避免用户在无效状态下调整却不生效。
+  const dailyLimitAmount = form.watch('daily_quota_limit_amount')
+  const dailyLimitRecoverMode =
+    form.watch('daily_limit_recover_mode') ?? 'next_day'
+  const dailyLimitEnabled = (dailyLimitAmount ?? 0) > 0
+  const dailyLimitRecoverOption =
+    DAILY_LIMIT_RECOVER_MODE_OPTIONS.find(
+      (option) => option.value === dailyLimitRecoverMode
+    ) ?? DAILY_LIMIT_RECOVER_MODE_OPTIONS[1]
+  const dailyLimitRecoverDescription = dailyLimitEnabled
+    ? t(dailyLimitRecoverOption.description)
+    : t('Configurable once a daily amount limit is set')
   const currentForceFormat = form.watch('force_format')
   const currentThinkingToContent = form.watch('thinking_to_content')
   const currentPassThroughBodyEnabled = form.watch('pass_through_body_enabled')
@@ -1088,6 +1122,9 @@ export function ChannelMutateDrawer({
     hasConfiguredOverrideValue(currentParamOverride) ||
     hasConfiguredOverrideValue(currentHeaderOverride)
   )
+  // 每日金额上限自成一节，因此它的「已配置」状态也要独立计算，不能并进
+  // extraSettingsConfigured——否则导航上的圆点会指错分区。
+  const dailyLimitConfigured = (dailyLimitAmount ?? 0) > 0
   const extraSettingsConfigured = Boolean(
     currentForceFormat ||
     currentThinkingToContent ||
@@ -1131,6 +1168,7 @@ export function ChannelMutateDrawer({
     extraSettingsConfigured ||
     fieldPassthroughConfigured ||
     accountBalanceConfigured ||
+    dailyLimitConfigured ||
     upstreamModelDetectionConfigured
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
@@ -1148,6 +1186,11 @@ export function ChannelMutateDrawer({
       id: ADVANCED_SETTINGS_SECTION_IDS.overrideRules,
       title: t('Override Rules'),
       configured: overrideRulesConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.dailyLimit,
+      title: t('Daily Amount Limit'),
+      configured: dailyLimitConfigured,
     },
     {
       id: ADVANCED_SETTINGS_SECTION_IDS.extraSettings,
@@ -1691,7 +1734,7 @@ export function ChannelMutateDrawer({
   }, [])
 
   const channelMutation = useChannelMutateForm({
-    currentRow,
+    currentRow: activeRow,
     isEditing,
     isMultiKeyChannel,
     onSuccess: handleSuccess,
@@ -1923,21 +1966,33 @@ export function ChannelMutateDrawer({
   const handleOpenChange = useCallback(
     (v: boolean) => {
       onOpenChange(v)
-      if (!v) {
-        form.reset(CHANNEL_FORM_DEFAULT_VALUES)
-        advancedNavScrollPendingRef.current = false
-        setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
-        setExpandedEditorNavItemId(undefined)
-        setAdvancedSettingsOpen(false)
-        setClipboardConnectionInfo(null)
-      }
     },
-    [onOpenChange, form]
+    [onOpenChange]
+  )
+
+  // 重置放到退场动画结束之后：关闭过程中抽屉仍保持原来的渠道和已填内容，不会先被清空。
+  // 保存成功、点取消、点遮罩等所有关闭方式都会走到这里。
+  const handleOpenChangeComplete = useCallback(
+    (v: boolean) => {
+      if (v) return
+      setActiveRow(null)
+      form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+      advancedNavScrollPendingRef.current = false
+      setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
+      setExpandedEditorNavItemId(undefined)
+      setAdvancedSettingsOpen(false)
+      setClipboardConnectionInfo(null)
+    },
+    [form]
   )
 
   return (
     <>
-      <Sheet open={open} onOpenChange={handleOpenChange}>
+      <Sheet
+        open={open}
+        onOpenChange={handleOpenChange}
+        onOpenChangeComplete={handleOpenChangeComplete}
+      >
         <SheetContent className={sideDrawerContentClassName('sm:max-w-5xl')}>
           <SheetHeader className={sideDrawerHeaderClassName()}>
             <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
@@ -4209,6 +4264,158 @@ export function ChannelMutateDrawer({
                               />
                             </fieldset>
                           </div>
+                        </div>
+
+                        {/* ── Daily Amount Limit ── */}
+                        {/* 金额管控自成一节：它决定渠道会不会被自动停用，属于风控开关，
+                            和「渠道额外设置」里那些请求行为开关（强制格式化 / 透传请求体 /
+                            代理地址…）不是一类东西，混在同一张卡片里既难找也容易误改。 */}
+                        <div
+                          id={ADVANCED_SETTINGS_SECTION_IDS.dailyLimit}
+                          className={sideDrawerSectionClassName(
+                            configuredAdvancedSectionClassName(
+                              'scroll-mt-4',
+                              dailyLimitConfigured
+                            )
+                          )}
+                        >
+                          <CardHeading
+                            title={t('Daily Amount Limit')}
+                            icon={<Wallet className='h-4 w-4' />}
+                            iconTone='warning'
+                          />
+                          {sensitiveLocked && (
+                            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                              <AlertDescription>
+                                {t('No permission to perform this action')}
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          <fieldset
+                            disabled={sensitiveLocked}
+                            className='space-y-4 disabled:opacity-60'
+                          >
+                            {/* 每日金额上限：金额与恢复方式并排；选「N 分钟后恢复」时
+                                分钟数输入框另起一格。items-start 是必须的——两列描述文案
+                                长度不同，默认的 align-items:stretch 会让 FormItem 高度不等，
+                                标签与控件就对不齐了。 */}
+                            <div className='grid items-start gap-4 sm:grid-cols-2'>
+                              <FormField
+                                control={form.control}
+                                name='daily_quota_limit_amount'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Daily Amount Limit')} (
+                                      {getCurrencyLabel()})
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min={0}
+                                        step='any'
+                                        placeholder='0'
+                                        value={field.value ?? 0}
+                                        onChange={(e) => {
+                                          // 受控 number 输入不会自己把「011」刷新成「11」，
+                                          // 这里直接规整 DOM 值；「0.5」这类小数不受影响。
+                                          const normalized =
+                                            normalizeLeadingZeros(
+                                              e.target.value
+                                            )
+                                          if (normalized !== e.target.value) {
+                                            e.target.value = normalized
+                                          }
+                                          field.onChange(Number(normalized))
+                                        }}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        '0 means no limit. The channel is disabled once the limit is reached; spend may slightly exceed it.'
+                                      )}
+                                      <span className='mt-1 block'>
+                                        {t(
+                                          'Counts upstream cost: model price × cost ratio (1.0 if unset), excluding group ratios.'
+                                        )}
+                                      </span>
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='daily_limit_recover_mode'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('Recovery mode')}</FormLabel>
+                                    <FormControl>
+                                      <DailyLimitRecoverSelect
+                                        className='w-full'
+                                        value={field.value ?? 'next_day'}
+                                        onValueChange={field.onChange}
+                                        disabled={!dailyLimitEnabled}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {dailyLimitRecoverDescription}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              {dailyLimitRecoverMode === 'after_minutes' && (
+                                <FormField
+                                  control={form.control}
+                                  name='daily_limit_recover_minutes'
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>
+                                        {t('Recovery interval (minutes)')}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          ref={field.ref}
+                                          name={field.name}
+                                          onBlur={field.onBlur}
+                                          type='number'
+                                          min={DAILY_LIMIT_RECOVER_MINUTES_MIN}
+                                          max={DAILY_LIMIT_RECOVER_MINUTES_MAX}
+                                          step={1}
+                                          placeholder={String(
+                                            DAILY_LIMIT_RECOVER_MINUTES_DEFAULT
+                                          )}
+                                          disabled={!dailyLimitEnabled}
+                                          value={field.value ?? ''}
+                                          onChange={(e) => {
+                                            const normalized =
+                                              normalizeLeadingZeros(
+                                                e.target.value
+                                              )
+                                            if (normalized !== e.target.value) {
+                                              e.target.value = normalized
+                                            }
+                                            field.onChange(
+                                              normalized === ''
+                                                ? undefined
+                                                : Number(normalized)
+                                            )
+                                          }}
+                                        />
+                                      </FormControl>
+                                      <FormDescription>
+                                        {t('1–10080 minutes (up to 7 days)')}
+                                      </FormDescription>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+                            </div>
+                          </fieldset>
                         </div>
 
                         {/* ── Extra Settings ── */}

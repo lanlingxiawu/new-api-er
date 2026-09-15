@@ -234,6 +234,8 @@ func recordTaskCostAndCommission(task *model.Task, quota int, logId int) {
 	}
 	ledgerInfo := buildTaskLedgerRelayInfo(task)
 	go func() {
+		// 差额补扣也是上游消耗；退款（quota < 0）不减少限额累计，upstreamBaseQuota 返回 0。
+		recordChannelDailyUpstream(task.ChannelId, upstreamBaseQuota(&ledgerInfo.PriceData, quota, nil))
 		RecordCostAndSettleEmployeeCommission(ledgerInfo, quota, 0, logId)
 	}()
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -110,14 +111,82 @@ func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	return query
 }
 
-func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm.DB {
+func buildChannelListQuery(group string, statusFilter int, typeFilter int, limitFilter string, statDate int64) *gorm.DB {
 	query := model.DB.Model(&model.Channel{})
 	query = model.ApplyChannelGroupFilter(query, group)
 	query = applyChannelStatusFilter(query, statusFilter)
 	if typeFilter >= 0 {
 		query = query.Where("type = ?", typeFilter)
 	}
+	// 每日上限筛选与分页/计数走同一个构造点，因此列表数据、总数与 Tag 模式三条路径
+	// 天然一致。见 docs/design/channel-daily-quota-limit.md §9.4。
+	query = model.ApplyChannelLimitFilter(query, limitFilter, statDate)
 	return query
+}
+
+// channelDailyStatDate 返回当前配置时区下的今日 StatDate，供筛选、排序与用量回填共用。
+func channelDailyStatDate() int64 {
+	setting := operation_setting.GetChannelDailyLimitSnapshot()
+	return operation_setting.ChannelDailyLimitStatDate(time.Now().Unix(), setting.Timezone)
+}
+
+// fillChannelDailyUsage 为配置了每日上限的渠道批量回填用量：今日上游消耗，限时恢复模式再加
+// 本轮上游消耗与预计恢复时刻。
+//
+// 本页没有任何配置了上限的渠道时直接跳过，不发起查询——绝大多数部署都不会启用本功能，
+// 不该为此多打一次库。
+func fillChannelDailyUsage(channels []*model.Channel, statDate int64) {
+	if len(channels) == 0 || statDate <= 0 {
+		return
+	}
+	ids := make([]int, 0, len(channels))
+	var periodKeys []model.ChannelPeriodKey
+	for _, ch := range channels {
+		if ch == nil || ch.DailyQuotaLimit <= 0 {
+			continue
+		}
+		ids = append(ids, ch.Id)
+		if ch.IsDailyLimitTimed() {
+			periodKeys = append(periodKeys, model.ChannelPeriodKey{ChannelId: ch.Id, PeriodStart: ch.DailyLimitPeriodStart})
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := model.GetChannelDailyUsages(statDate, ids)
+	if err != nil {
+		// 展示性数据，失败不影响列表本身。
+		common.SysError("failed to load channel daily usage: " + err.Error())
+		return
+	}
+	periodRows, err := model.GetChannelLimitPeriodUsages(periodKeys)
+	if err != nil {
+		common.SysError("failed to load channel limit period usage: " + err.Error())
+		periodRows = nil
+	}
+	for _, ch := range channels {
+		if ch == nil || ch.DailyQuotaLimit <= 0 {
+			continue
+		}
+		view := &model.ChannelDailyUsageView{
+			StatDate:       statDate,
+			LimitQuota:     ch.DailyQuotaLimit,
+			RecoverMinutes: ch.DailyLimitRecoverMinutes,
+		}
+		if row := rows[ch.Id]; row != nil {
+			view.CostQuota = row.CostQuota
+		}
+		// 取渠道上的标记列：恢复或手动启用时会清零，展示不会停留在「已达上限」。
+		view.DisabledAt = ch.DailyLimitDisabledAt
+		if ch.IsDailyLimitTimed() {
+			view.PeriodStart = ch.DailyLimitPeriodStart
+			view.PeriodCostQuota = periodRows[model.ChannelPeriodKey{ChannelId: ch.Id, PeriodStart: ch.DailyLimitPeriodStart}]
+			if ch.Status == common.ChannelStatusAutoDisabled && ch.DailyLimitDisabledAt > 0 {
+				view.RecoverAt = ch.DailyLimitDisabledAt + int64(ch.DailyLimitRecoverMinutes)*60
+			}
+		}
+		ch.DailyUsage = view
+	}
 }
 
 func GetChannelOps(c *gin.Context) {
@@ -130,8 +199,15 @@ func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
-	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
+	statDate := channelDailyStatDate()
+	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
+	// Tag 模式下不支持按每日用量排序：先分页 Tag 再查子渠道，对子渠道排序改变不了
+	// Tag 本身的顺序。StatDate 置 0 即回退到默认排序。
+	if !enableTagMode {
+		sortOptions.StatDate = statDate
+	}
+	limitFilter := model.NormalizeChannelLimitFilter(c.Query("limit_filter"))
 	groupFilter := model.NormalizeChannelGroupFilter(c.Query("group"))
 	statusParam := c.Query("status")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
@@ -148,13 +224,13 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, limitFilter, statDate), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 		if err != nil {
 			common.SysError("failed to get paginated tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签失败，请稍后重试"})
 			return
 		}
-		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter))
+		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, limitFilter, statDate))
 		if err != nil {
 			common.SysError("failed to count tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签数量失败，请稍后重试"})
@@ -165,7 +241,7 @@ func GetAllChannels(c *gin.Context) {
 				continue
 			}
 			var tagChannels []*model.Channel
-			err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter).Where("tag = ?", *tag)).
+			err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, limitFilter, statDate).Where("tag = ?", *tag)).
 				Omit("key").
 				Find(&tagChannels).Error
 			if err != nil {
@@ -176,13 +252,13 @@ func GetAllChannels(c *gin.Context) {
 			channelData = append(channelData, tagChannels...)
 		}
 	} else {
-		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter).Count(&total).Error; err != nil {
+		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter, limitFilter, statDate).Count(&total).Error; err != nil {
 			common.SysError("failed to count channels: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道数量失败，请稍后重试"})
 			return
 		}
 
-		err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter)).
+		err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, limitFilter, statDate)).
 			Limit(pageInfo.GetPageSize()).
 			Offset(pageInfo.GetStartIdx()).
 			Omit("key").
@@ -216,7 +292,10 @@ func GetAllChannels(c *gin.Context) {
 		}
 	}
 
-	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
+	fillChannelDailyUsage(channelData, statDate)
+
+	// 类型统计沿用原有口径（不受类型筛选影响），但要跟随其余筛选条件。
+	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1, limitFilter, statDate)
 	var results []struct {
 		Type  int64
 		Count int64
@@ -326,8 +405,13 @@ func SearchChannels(c *gin.Context) {
 	statusParam := c.Query("status")
 	statusFilter := parseStatusFilter(statusParam)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
-	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
+	statDate := channelDailyStatDate()
+	limitFilter := model.NormalizeChannelLimitFilter(c.Query("limit_filter"))
+	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
+	if !enableTagMode {
+		sortOptions.StatDate = statDate
+	}
 	channelData := make([]*model.Channel, 0)
 	if enableTagMode {
 		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
@@ -341,7 +425,7 @@ func SearchChannels(c *gin.Context) {
 		for _, tag := range tags {
 			if tag != nil && *tag != "" {
 				var tagChannels []*model.Channel
-				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1).Where("tag = ?", *tag)).
+				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1, limitFilter, statDate).Where("tag = ?", *tag)).
 					Omit("key").
 					Find(&tagChannels).Error
 				if err != nil {
@@ -355,7 +439,7 @@ func SearchChannels(c *gin.Context) {
 			}
 		}
 	} else {
-		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, sortOptions)
+		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, limitFilter, statDate, sortOptions)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -444,6 +528,10 @@ func SearchChannels(c *gin.Context) {
 			ch.AccountBalanceConfigured = isChannelAccountBalanceConfigured(ch)
 		}
 	}
+
+	// 搜索结果同样回填今日用量：否则「每日上限」筛选在搜索下能生效，列表里却看不到
+	// 今日用量那一行，同一个功能在两条路径上表现不一致。
+	fillChannelDailyUsage(pagedData, statDate)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -702,6 +790,10 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	// 每日上限先单独校验，好让报错是翻译过的而不是裸 i18n key（见函数注释）。
+	if !validateChannelDailyLimitI18n(c, addChannelRequest.Channel) {
+		return
+	}
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -712,6 +804,10 @@ func AddChannel(c *gin.Context) {
 	}
 
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
+	// 限时恢复模式从创建时刻开启第一轮；客户端传入的轮次与禁用标记一律不采信。
+	addChannelRequest.Channel.NormalizeDailyLimitRecovery(addChannelRequest.Channel.CreatedTime)
+	addChannelRequest.Channel.DailyLimitDisabledAt = 0
+	addChannelRequest.Channel.DailyLimitDisabledDate = 0
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
@@ -793,6 +889,8 @@ func AddChannel(c *gin.Context) {
 		}
 	}
 	model.InitChannelCache()
+	// 新渠道可能带着每日上限，本节点立即刷新快照，不等下一个 flush 周期。
+	service.RefreshChannelDailyLimitConfigs()
 	service.ResetProxyClientCache()
 	recordManageAudit(c, "channel.create", map[string]interface{}{
 		"name":  addChannelRequest.Channel.Name,
@@ -871,6 +969,18 @@ type ChannelTag struct {
 	Groups         *string `json:"groups"`
 	ParamOverride  *string `json:"param_override"`
 	HeaderOverride *string `json:"header_override"`
+	// 每日金额上限：nil = 本次不修改；要清除上限必须显式传 0。
+	DailyQuotaLimit          *int64 `json:"daily_quota_limit"`
+	DailyLimitAutoRecover    *int   `json:"daily_limit_auto_recover"`
+	DailyLimitRecoverMinutes *int   `json:"daily_limit_recover_minutes"`
+}
+
+func (t ChannelTag) dailyLimitEdit() model.DailyLimitEdit {
+	return model.DailyLimitEdit{
+		QuotaLimit:     t.DailyQuotaLimit,
+		AutoRecover:    t.DailyLimitAutoRecover,
+		RecoverMinutes: t.DailyLimitRecoverMinutes,
+	}
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -942,10 +1052,17 @@ func EditTagChannels(c *gin.Context) {
 		})
 		return
 	}
-	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil) &&
+	// 每日金额上限与 param/header override 同属敏感字段，权限门槛一致。
+	if (channelTag.ParamOverride != nil || channelTag.HeaderOverride != nil || !channelTag.dailyLimitEdit().IsEmpty()) &&
 		!authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
 		common.ApiErrorI18n(c, i18n.MsgAuthInsufficientPrivilege)
 		return
+	}
+	if edit := channelTag.dailyLimitEdit(); !edit.IsEmpty() {
+		if err := edit.Validate(); err != nil {
+			common.ApiErrorI18n(c, err.Error())
+			return
+		}
 	}
 	if channelTag.ParamOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
@@ -969,10 +1086,33 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
+	// 在改名**之前**锁定这批渠道的 ID：EditChannelByTag 可能把标签改成一个已存在的
+	// 名字，之后再按名字定位就会连带命中原本就叫那个名字的渠道。
+	var taggedChannelIds []int
+	if !channelTag.dailyLimitEdit().IsEmpty() {
+		ids, idErr := model.GetChannelIdsByTag(channelTag.Tag)
+		if idErr != nil {
+			common.ApiError(c, idErr)
+			return
+		}
+		taggedChannelIds = ids
+	}
 	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 每日上限单独走 map 更新：daily_quota_limit = 0 表示「清除上限」，
+	// 而 EditChannelByTag 的 Updates(struct) 会忽略结构体零值。
+	//
+	// 按**改名前锁定的渠道 ID**更新，不能按新标签名更新：把 A 改名成一个已存在的 B
+	// 之后，按 B 更新会把原本就属于 B 的渠道一起改掉，作用域凭空放大。
+	if edit := channelTag.dailyLimitEdit(); !edit.IsEmpty() {
+		if _, err := model.UpdateChannelDailyLimitByIds(taggedChannelIds, edit); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		service.RefreshChannelDailyLimitConfigs()
 	}
 	model.InitChannelCache()
 	recordManageAudit(c, "channel.tag_edit", map[string]interface{}{
@@ -1057,6 +1197,10 @@ func UpdateChannel(c *gin.Context) {
 	}
 	clearChannelReadOnlyFields(&channel, requestData)
 
+	// 每日上限先单独校验，好让报错是翻译过的而不是裸 i18n key（见函数注释）。
+	if !validateChannelDailyLimitI18n(c, &channel.Channel) {
+		return
+	}
 	// 使用统一的校验函数
 	if err := validateChannel(&channel.Channel, false); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1178,14 +1322,27 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
+	// 每日上限必须补一次 map 更新：Channel.Update() 走 Updates(struct)，GORM 会跳过
+	// 结构体零值，而 daily_quota_limit = 0 恰恰是「清除上限」这个有意义的值。批量与
+	// 按 Tag 两条路径早就为此改用了 map 更新（model.DailyLimitEdit），单渠道这条也要
+	// 一致，否则管理员在编辑抽屉里清空金额保存后上限依旧生效。
+	//
+	// 摘字段要赶在 Update() 之前：Update() 末尾会把整行重新读回 channel，之后再读就
+	// 只能拿到库里的旧值。
+	dailyLimitEdit := buildChannelDailyLimitEdit(&channel, requestData)
 	err = channel.Update()
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := applyChannelDailyLimitEdit(channel.Id, dailyLimitEdit); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	// 同步成本系数（透传字段，存于 ChannelCostConfig）
 	syncChannelCostRatio(channel.Id, channel.CostRatio)
 	model.InitChannelCache()
+	service.RefreshChannelDailyLimitConfigs()
 	if proxyChanged {
 		service.InvalidateProxyClient(originProxy)
 	}
@@ -1533,6 +1690,14 @@ func CopyChannel(c *gin.Context) {
 		clone.Balance = 0
 		clone.UsedQuota = 0
 	}
+	// 每日上限的禁用标记是服务端管理的运行时状态，不能随浅拷贝带到副本上：
+	// 否则副本会被当成「今日因限额被禁用」，在筛选和状态列里显示错误原因，
+	// 并且到了次日会被恢复任务「恢复」成启用——而它从未被本功能禁用过。
+	clone.DailyLimitDisabledAt = 0
+	clone.DailyLimitDisabledDate = 0
+	clone.DailyUsage = nil
+	// 副本从复制时刻开启自己的第一轮，不继承原渠道的轮次。
+	clone.NormalizeDailyLimitRecovery(common.GetTimestamp())
 
 	if err := clone.ValidateSettings(); err != nil {
 		common.SysError("failed to validate cloned channel: " + err.Error())

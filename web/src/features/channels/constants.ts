@@ -203,6 +203,27 @@ export const ADD_MODE_OPTIONS = [
   },
 ] as const
 
+// 每日金额上限的恢复方式。label / description 是 i18n key，渲染时再 t()。
+// 与后端两列的映射见 lib/channel-form.ts 的 buildDailyLimitRecoverFields。
+export const DAILY_LIMIT_RECOVER_MODE_OPTIONS = [
+  {
+    value: 'manual',
+    label: 'Do not recover automatically',
+    description: 'Stays disabled until enabled manually',
+  },
+  {
+    value: 'next_day',
+    label: 'Recover at next midnight',
+    description: 'Re-enabled automatically at midnight',
+  },
+  {
+    value: 'after_minutes',
+    label: 'Recover N minutes after the limit is reached',
+    description:
+      'Counted per round: disabled when reached, re-enabled after the interval with a fresh count. Enabling manually also starts a new round.',
+  },
+] as const
+
 // ============================================================================
 // Multi-Key Management
 // ============================================================================

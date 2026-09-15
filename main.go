@@ -141,6 +141,12 @@ func main() {
 	// Commission tier / performance period monthly auto-reset task
 	service.StartCommissionTierResetTask()
 
+	// Channel daily quota limit: per-node accumulator flusher + bounded disable
+	// workers run everywhere; the day-rollover recovery and history cleanup are
+	// master-only. See docs/design/channel-daily-quota-limit.md.
+	service.StartChannelDailyLimitWorkers()
+	service.StartChannelDailyLimitRecoveryTask()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()

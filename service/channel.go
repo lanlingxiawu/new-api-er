@@ -64,15 +64,33 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	return search
 }
 
-func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
+// ShouldEnableChannel 判断一次成功调用后是否应当自动启用该渠道。
+//
+// 入参从 status 改成整个 channel，是为了能识别「因每日金额上限被禁用」的渠道：这类渠道
+// 的 Key 通常是好的、测试必然通过，若不豁免就会被立刻错误恢复，等于让每日上限失效。
+func ShouldEnableChannel(newAPIError *types.NewAPIError, channel *model.Channel) bool {
 	if !common.AutomaticEnableChannelEnabled {
 		return false
 	}
 	if newAPIError != nil {
 		return false
 	}
-	if status != common.ChannelStatusAutoDisabled {
+	if channel == nil || channel.Status != common.ChannelStatusAutoDisabled {
+		return false
+	}
+	if IsDailyLimitDisabled(channel) {
 		return false
 	}
 	return true
+}
+
+// IsDailyLimitDisabled 判断渠道当前是否处于「因每日金额上限被禁用」状态。
+//
+// 不变式由 model 侧维护：任何非本功能的状态变更都会先清零标记列，因此标记非零就说明
+// 最近一次禁用来自每日上限。
+func IsDailyLimitDisabled(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return channel.Status == common.ChannelStatusAutoDisabled && channel.DailyLimitDisabledAt > 0
 }

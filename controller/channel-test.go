@@ -975,7 +975,7 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		}
 
 		// enable channel
-		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
+		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel) {
 			service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
 			summary.Enabled++
 		}
@@ -1037,6 +1037,12 @@ func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*m
 	selected := make([]*model.Channel, 0, len(channels))
 	for _, channel := range channels {
 		if channel.Status == common.ChannelStatusManuallyDisabled {
+			continue
+		}
+		// 因每日金额上限被禁用的渠道必须排除：它们的 Key 是好的、测试必然通过，
+		// 被动恢复模式会把它们立刻重新启用，等于让每日上限失效。
+		if service.IsDailyLimitDisabled(channel) {
+			common.SysLog(fmt.Sprintf("skip channel test for daily-limit disabled channel: channel_id=%d", channel.Id))
 			continue
 		}
 		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled {

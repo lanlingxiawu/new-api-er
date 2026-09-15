@@ -269,3 +269,45 @@ func TestPreserveSensitiveChannelSettingsForUpdate(t *testing.T) {
 	preserveSensitiveChannelSettingsForUpdate(cleared, origin)
 	assert.Empty(t, cleared.GetSetting().AccountBalanceToken)
 }
+
+// TestCopyChannelDropsDailyLimitDisableMarks 是「副本继承限额禁用标记」的回归测试。
+//
+// CopyChannel 用整struct浅拷贝，若不显式清零，源渠道当前若正因每日金额上限被禁用，
+// 副本会带着 daily_limit_disabled_at/_date 一起被创建：它会被筛选成「今日已达上限」、
+// 状态列显示错误的禁用原因，并且到了次日被恢复任务「恢复」成启用——而它从未被
+// 本功能禁用过。上限配置本身（daily_quota_limit / recover_minutes / auto_recover）则应当复制，
+// 限时模式的轮次则从复制时刻重新开始，不继承原渠道的轮次。
+func TestCopyChannelDropsDailyLimitDisableMarks(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	origin := &model.Channel{
+		Type:                   constant.ChannelTypeOpenAI,
+		Name:                   "daily limit disabled channel",
+		Key:                    "test-key",
+		Models:                 "gpt-test",
+		Group:                  "default",
+		Status:                 common.ChannelStatusAutoDisabled,
+		DailyQuotaLimit:          5000,
+		DailyLimitRecoverMinutes: 30,
+		DailyLimitPeriodStart:    1_234,
+		DailyLimitDisabledAt:     1_700_000_123,
+		DailyLimitDisabledDate:   1_700_000_000,
+	}
+	require.NoError(t, db.Create(origin).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", origin.Id)}}
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/copy", nil)
+
+	CopyChannel(ctx)
+
+	var clone model.Channel
+	require.NoError(t, db.Where("id <> ?", origin.Id).First(&clone).Error)
+	assert.Zero(t, clone.DailyLimitDisabledAt, "the clone was never disabled by the daily limit")
+	assert.Zero(t, clone.DailyLimitDisabledDate)
+	// 配置本身仍然复制。
+	assert.EqualValues(t, 5000, clone.DailyQuotaLimit)
+	assert.Equal(t, 30, clone.DailyLimitRecoverMinutes)
+	assert.NotEqualValues(t, 1_234, clone.DailyLimitPeriodStart, "the clone starts its own round")
+	assert.Positive(t, clone.DailyLimitPeriodStart)
+}
