@@ -34,6 +34,7 @@ import { applyFaviconToDom } from '@/lib/dom-utils'
 import '@/lib/dayjs'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
 import { handleServerError } from '@/lib/handle-server-error'
+import { installToastDedupe } from '@/lib/toast-dedupe'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { DirectionProvider } from './context/direction-provider'
@@ -50,6 +51,7 @@ import './styles/index.css'
 // VChart theme is driven by our ThemeProvider (html.light/html.dark) via per-chart `theme` prop.
 initializeFrontendCache()
 installBuildMetadata()
+installToastDedupe()
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -92,7 +94,10 @@ const queryClient = new QueryClient({
           router.navigate({ to: '/sign-in', search: { redirect } })
         }
         if (error.response?.status === 500) {
-          toast.error(i18next.t('Internal Server Error!'))
+          // 没设 skipErrorHandler 的请求，http-client 的拦截器已经提示过服务端消息，这里只负责跳转。
+          if (error.config?.skipErrorHandler) {
+            toast.error(i18next.t('Internal Server Error!'))
+          }
           router.navigate({ to: '/500' })
         }
       }
@@ -116,7 +121,7 @@ declare module '@tanstack/react-router' {
 }
 
 // Render the app
-const rootElement = document.querySelector('#root')!
+const rootElement = document.querySelector('#root')
 // Set document.title and favicon from cached status, then refresh from network
 ;(function initSystemBranding() {
   try {
@@ -159,6 +164,9 @@ const rootElement = document.querySelector('#root')!
     /* empty */
   }
 })()
+if (!rootElement) {
+  throw new Error('Root element #root not found')
+}
 if (!rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(

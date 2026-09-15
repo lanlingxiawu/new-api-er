@@ -24,6 +24,9 @@ export function handleServerError(error: unknown) {
   // eslint-disable-next-line no-console
   console.log(error)
 
+  // 没设 skipErrorHandler 的请求失败时，http-client 的全局拦截器已经提示过，再提示就是重复。
+  if (error instanceof AxiosError && !error.config?.skipErrorHandler) return
+
   let errMsg = i18next.t('Something went wrong!')
 
   if (
@@ -36,7 +39,8 @@ export function handleServerError(error: unknown) {
   }
 
   if (error instanceof AxiosError) {
-    errMsg = error.response?.data.title
+    // 后端错误体是 { success, message }，没有 title；原先读 title 会弹出一个空提示。
+    errMsg = error.response?.data?.message || error.message || errMsg
   }
 
   toast.error(errMsg)
