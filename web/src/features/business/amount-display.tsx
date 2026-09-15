@@ -1,6 +1,9 @@
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+
 import { formatBusinessAmount } from './format'
 
 export function BusinessAmount({
@@ -29,6 +32,25 @@ export function BusinessAmount({
   const isPositive = amount > 0
   const isNegative = amount < 0
 
+  let negativeBadge: ReactNode = null
+  if (markNegative && isNegative) {
+    negativeBadge = isReversal ? (
+      <Badge
+        variant='outline'
+        className='border-muted-foreground/30 bg-muted text-muted-foreground h-5 shrink-0 px-1.5 text-[10px] font-medium'
+      >
+        {t('Refund/Reversal')}
+      </Badge>
+    ) : (
+      <Badge
+        variant='outline'
+        className='border-destructive/30 bg-destructive/5 text-destructive h-5 shrink-0 px-1.5 text-[10px] font-medium'
+      >
+        {t('Loss')}
+      </Badge>
+    )
+  }
+
   return (
     <span
       className={cn(
@@ -43,23 +65,7 @@ export function BusinessAmount({
         {showPositiveSign && isPositive ? '+' : ''}
         {formatBusinessAmount(amount, digits)}
       </span>
-      {markNegative && isNegative ? (
-        isReversal ? (
-          <Badge
-            variant='outline'
-            className='border-muted-foreground/30 bg-muted text-muted-foreground h-5 shrink-0 px-1.5 text-[10px] font-medium'
-          >
-            {t('Refund/Reversal')}
-          </Badge>
-        ) : (
-          <Badge
-            variant='outline'
-            className='border-destructive/30 bg-destructive/5 text-destructive h-5 shrink-0 px-1.5 text-[10px] font-medium'
-          >
-            {t('Loss')}
-          </Badge>
-        )
-      ) : null}
+      {negativeBadge}
     </span>
   )
 }

@@ -1,13 +1,3 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-  type UIEvent,
-} from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   TrendingUp,
@@ -23,10 +13,19 @@ import {
   RefreshCw,
   CalendarDays,
 } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type UIEvent,
+} from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
-import dayjs from '@/lib/dayjs'
-import { getEndOfDay, getStartOfDay } from '@/lib/time'
+
+import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -43,9 +42,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { SectionPageLayout } from '@/components/layout'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessUsd } from '@/features/business/format'
+import dayjs from '@/lib/dayjs'
+import { getEndOfDay, getStartOfDay } from '@/lib/time'
+import { cn } from '@/lib/utils'
+
 import {
   getCommissionOverview,
   getChannelProfitPage,
@@ -289,22 +291,32 @@ function SortableHead({
   currentSort: { key: string; dir: 'asc' | 'desc' } | null
   onSort: (key: string) => void
 }) {
-  const isActive = currentSort?.key === sortKey
+  const activeDir = currentSort?.key === sortKey ? currentSort.dir : undefined
+  let sortIcon: ReactNode
+  if (activeDir === 'desc') {
+    sortIcon = <ArrowDown className='size-3' />
+  } else if (activeDir === 'asc') {
+    sortIcon = <ArrowUp className='size-3' />
+  } else {
+    sortIcon = <ArrowUpDown className='size-3 opacity-40' />
+  }
   return (
     <button
+      type='button'
       className='hover:text-foreground flex items-center gap-1 transition-colors'
       onClick={() => onSort(sortKey)}
     >
       {children}
-      {isActive && currentSort!.dir === 'desc' ? (
-        <ArrowDown className='size-3' />
-      ) : isActive && currentSort!.dir === 'asc' ? (
-        <ArrowUp className='size-3' />
-      ) : (
-        <ArrowUpDown className='size-3 opacity-40' />
-      )}
+      {sortIcon}
     </button>
   )
+}
+
+function grossMarginClassName(margin: number) {
+  if (margin >= 0.1) return 'text-emerald-600 dark:text-emerald-400'
+  if (margin > 0) return 'text-amber-600 dark:text-amber-400'
+  if (margin < 0) return 'text-destructive'
+  return ''
 }
 
 function CompactDateRangePicker({
@@ -579,10 +591,7 @@ export function CommissionOverview() {
     setLoadedEmployeeRows([])
   }
 
-  const channelPageItems = useMemo(
-    () => cd?.items ?? [],
-    [cd?.items]
-  )
+  const channelPageItems = useMemo(() => cd?.items ?? [], [cd?.items])
   const employeeRows = useMemo(() => d?.by_employee ?? [], [d?.by_employee])
   const sortedChannelRows = useMemo(
     () => sortChannelRows(loadedChannelRows, channelSort),
@@ -641,13 +650,10 @@ export function CommissionOverview() {
   }, [hasMoreChannelRows, isChannelFetching])
 
   const toggleChannelSort = useCallback((key: string) => {
-    setChannelSort((prev) =>
-      prev?.key === key
-        ? prev.dir === 'desc'
-          ? { key, dir: 'asc' }
-          : null
-        : { key, dir: 'desc' }
-    )
+    setChannelSort((prev) => {
+      if (prev?.key !== key) return { key, dir: 'desc' }
+      return prev.dir === 'desc' ? { key, dir: 'asc' } : null
+    })
   }, [])
 
   return (
@@ -700,7 +706,10 @@ export function CommissionOverview() {
                 <Button
                   size='sm'
                   variant='outline'
-                  onClick={() => { void refetch(); void refetchChannels() }}
+                  onClick={() => {
+                    void refetch()
+                    void refetchChannels()
+                  }}
                   disabled={isFetching || isChannelFetching}
                   title={t('Refresh')}
                 >
@@ -939,13 +948,7 @@ export function CommissionOverview() {
                                   <span
                                     className={cn(
                                       'tabular-nums',
-                                      ch.est_gross_margin >= 0.1
-                                        ? 'text-emerald-600 dark:text-emerald-400'
-                                        : ch.est_gross_margin > 0
-                                          ? 'text-amber-600 dark:text-amber-400'
-                                          : ch.est_gross_margin < 0
-                                            ? 'text-destructive'
-                                            : ''
+                                      grossMarginClassName(ch.est_gross_margin)
                                     )}
                                   >
                                     {(ch.est_gross_margin * 100).toFixed(1)}%
@@ -1052,8 +1055,11 @@ export function CommissionOverview() {
                                 <TableCell>
                                   <BusinessAmount
                                     value={
-                                      e.current_tier_rate != null && e.current_tier_rate > 0
-                                        ? Math.round(e.total_profit * e.current_tier_rate)
+                                      e.current_tier_rate != null &&
+                                      e.current_tier_rate > 0
+                                        ? Math.round(
+                                            e.total_profit * e.current_tier_rate
+                                          )
                                         : e.total_commission
                                     }
                                     positiveClassName='text-emerald-600 dark:text-emerald-400'
@@ -1070,7 +1076,6 @@ export function CommissionOverview() {
                 )}
               </div>
             </div>
-
           </TabsContent>
           <TabsContent
             value='ledger'

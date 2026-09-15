@@ -426,24 +426,26 @@ function tryParseRequestCondition(expr: string): RequestCondition | null {
   if (m) return { source: 'param', path: m[1], mode: MATCH_EXISTS, value: '' }
 
   m = expr.match(/^has\(header\("([^"]+)"\), ((?:"(?:[^"\\]|\\.)*"))\)$/)
-  if (m)
-    {return {
+  if (m) {
+    return {
       source: 'header',
       path: m[1],
       mode: MATCH_CONTAINS,
       value: JSON.parse(m[2]) as string,
-    }}
+    }
+  }
 
   m = expr.match(
     /^param\("([^"]+)"\) != nil && has\(param\("([^"]+)"\), ((?:"(?:[^"\\]|\\.)*"))\)$/
   )
-  if (m && m[1] === m[2])
-    {return {
+  if (m && m[1] === m[2]) {
+    return {
       source: 'param',
       path: m[1],
       mode: MATCH_CONTAINS,
       value: JSON.parse(m[3]) as string,
-    }}
+    }
+  }
 
   m = expr.match(
     /^param\("([^"]+)"\) != nil && param\("([^"]+)"\) (>|>=|<|<=) ([\d.eE+-]+)$/
@@ -639,15 +641,18 @@ function isTimeFunc(value: unknown): value is TimeFunc {
   return typeof value === 'string' && TIME_FUNCS.includes(value as TimeFunc)
 }
 
+function normalizeConditionSource(
+  source: unknown
+): 'time' | 'header' | 'param' {
+  if (source === 'time') return 'time'
+  if (source === 'header') return 'header'
+  return 'param'
+}
+
 export function normalizeCondition(
   cond: Partial<RequestCondition> | null | undefined
 ): RequestCondition {
-  const source =
-    cond?.source === 'time'
-      ? 'time'
-      : cond?.source === 'header'
-        ? 'header'
-        : 'param'
+  const source = normalizeConditionSource(cond?.source)
 
   if (source === 'time') {
     const timeCond = cond as Partial<TimeCondition> | null | undefined

@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Code, Plus, Table, Trash2 } from 'lucide-react'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -127,11 +134,15 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
     }
   }
 
-  // Parse JSON to rows when value changes externally
+  // Parse JSON to rows when value changes externally (only on props.value
+  // changes; the effect event always sees the latest parseJsonToRows/t)
+  const parseExternalValue = useEffectEvent((value: string) => {
+    parseJsonToRows(value)
+  })
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setJsonValue(props.value)
-    parseJsonToRows(props.value)
+    parseExternalValue(props.value)
   }, [props.value])
 
   const convertRowsToJson = (updatedRows: MappingRow[]): string => {

@@ -16,5 +16,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/**
+ * Query string helpers shared by the usage-logs API layer and lib utilities.
+ * Kept free of `../api` imports so `api.ts` can depend on it without a cycle.
+ */
 
-// MonitorHealthPanel was removed from the overview dashboard.
+/**
+ * Build query parameters from filters
+ */
+export function buildQueryParams(
+  params: Record<string, unknown>
+): URLSearchParams {
+  const queryParams = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    // Keep 0 as a valid value, only filter out undefined, null, and empty string
+    if (value !== undefined && value !== null && value !== '') {
+      queryParams.append(key, String(value))
+    }
+  })
+
+  return queryParams
+}

@@ -144,6 +144,20 @@ function describeCondition(
   return `${src} ${path} ${opMap[cond.mode] || '='} ${cond.value}`
 }
 
+/**
+ * Pair each item with a content-derived React key. Repeated bases are
+ * prefixed with their occurrence count so keys stay unique.
+ */
+function withStableKeys<T>(items: T[], getBase: (item: T) => string) {
+  const occurrences = new Map<string, number>()
+  return items.map((item) => {
+    const base = getBase(item)
+    const count = occurrences.get(base) ?? 0
+    occurrences.set(base, count + 1)
+    return { item, key: `${count}:${base}` }
+  })
+}
+
 function describeGroup(
   group: RequestRuleGroup,
   t: (key: string) => string
@@ -188,6 +202,10 @@ export function DynamicPricingBreakdown({
 
   const hasTiers = tiers.length > 0
   const hasRules = ruleGroups.length > 0
+  const keyedTiers = withStableKeys(tiers, (tier) => tier.label)
+  const keyedRuleGroups = withStableKeys(ruleGroups, (group) =>
+    JSON.stringify(group)
+  )
   const normalizedMatchedTierLabel = normalizeTierLabel(
     matchedTierLabel ?? undefined
   )
@@ -260,7 +278,7 @@ export function DynamicPricingBreakdown({
             {t('Tiered price table')}
           </div>
           <div className='space-y-1.5 sm:hidden'>
-            {tiers.map((tier, i) => {
+            {keyedTiers.map(({ item: tier, key }) => {
               const condSummary = formatConditionSummary(tier.conditions, t)
               const isMatched =
                 matchedTierLabel != null &&
@@ -268,7 +286,7 @@ export function DynamicPricingBreakdown({
                 tier.label === matchedTierLabel
               return (
                 <div
-                  key={`tier-mobile-${i}`}
+                  key={key}
                   className={cn(
                     'rounded-md border p-2',
                     isMatched && 'border-emerald-500/40 bg-emerald-500/10'
@@ -425,9 +443,9 @@ export function DynamicPricingBreakdown({
             {t('Conditional multipliers')}
           </div>
           <ul className='space-y-1.5'>
-            {ruleGroups.map((group, gi) => (
+            {keyedRuleGroups.map(({ item: group, key }) => (
               <li
-                key={`group-${gi}`}
+                key={key}
                 className='bg-muted/50 flex items-center justify-between gap-3 rounded-md px-3 py-2'
               >
                 <span

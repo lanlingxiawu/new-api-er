@@ -109,6 +109,12 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
     ? t('Enter amount in tokens')
     : t('Enter amount in {{currency}}', { currency: currencyLabel })
 
+  const modeLabels = {
+    add: t('Add'),
+    subtract: t('Subtract'),
+    override: t('Override'),
+  }
+
   return (
     <Dialog
       open={props.open}
@@ -149,11 +155,7 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                   setAmount('')
                 }}
               >
-                {m === 'add'
-                  ? t('Add')
-                  : m === 'subtract'
-                    ? t('Subtract')
-                    : t('Override')}
+                {modeLabels[m]}
               </Button>
             ))}
           </div>

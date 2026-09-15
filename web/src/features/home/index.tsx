@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
@@ -16,16 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  INTERFACE_LANGUAGE_OPTIONS,
-  normalizeInterfaceLanguage,
-} from '@/i18n/languages'
 import { ArrowRight, ChevronDown, ChevronRight, Menu, X } from 'lucide-react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import heroOrbitImage from '@/assets/home/Ellipse 6.png'
 import homeOrbitDot from '@/assets/home/Frame 37.png'
 import featureGlobalAccess from '@/assets/home/Global Model Access.png'
+import homeSearchIcon from '@/assets/home/home_icon_search.png'
+import homeMapBg from '@/assets/home/home_mapbg.png'
+import statModelsIcon from '@/assets/home/home_page01_icon_01.png'
+import statRegionsIcon from '@/assets/home/home_page01_icon_02.png'
+import statUptimeIcon from '@/assets/home/home_page01_icon_03.png'
+import statDevelopersIcon from '@/assets/home/home_page01_icon_04.png'
+import heroGlobeImage from '@/assets/home/image 6.png'
 import featureSecureReliable from '@/assets/home/Secure & Reliable.png'
 import featureStableFast from '@/assets/home/Stable & Fast.png'
 import routeLineOne from '@/assets/home/Vector 1.png'
@@ -34,17 +38,15 @@ import routeLineFour from '@/assets/home/Vector 4.png'
 import routeLineFive from '@/assets/home/Vector 5.png'
 import routeLineSix from '@/assets/home/Vector 6.png'
 import routeLineSeven from '@/assets/home/Vector 7.png'
-import homeSearchIcon from '@/assets/home/home_icon_search.png'
-import homeMapBg from '@/assets/home/home_mapbg.png'
-import statModelsIcon from '@/assets/home/home_page01_icon_01.png'
-import statRegionsIcon from '@/assets/home/home_page01_icon_02.png'
-import statUptimeIcon from '@/assets/home/home_page01_icon_03.png'
-import statDevelopersIcon from '@/assets/home/home_page01_icon_04.png'
-import heroGlobeImage from '@/assets/home/image 6.png'
-import { useAuthStore } from '@/stores/auth-store'
-import { api } from '@/lib/api'
-import { useStatus } from '@/hooks/use-status'
 import { Markdown } from '@/components/ui/markdown'
+import { useStatus } from '@/hooks/use-status'
+import {
+  INTERFACE_LANGUAGE_OPTIONS,
+  normalizeInterfaceLanguage,
+} from '@/i18n/languages'
+import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
+
 import { useHomePageContent } from './hooks'
 
 const EMBEDDED_INITIAL_PROMPT_KEY = '__NEW_API_NEXTCHAT_INITIAL_PROMPT__'
@@ -554,6 +556,12 @@ function TypewriterTitle({ text }: { text: string }) {
   )
 }
 
+function getLanguageShortLabel(code: string) {
+  if (code === 'zhCN') return 'CN'
+  if (code === 'zhTW') return 'TW'
+  return code.toUpperCase()
+}
+
 function FigmaHomeHeader() {
   const { t, i18n } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
@@ -570,12 +578,7 @@ function FigmaHomeHeader() {
         fullLabel: item.label,
         // Collapsed switcher shows a short English/region code (EN / CN / TW /
         // FR / RU / JA / VI); zhCN/zhTW map to region codes to avoid "ZHCN".
-        shortLabel:
-          item.code === 'zhCN'
-            ? 'CN'
-            : item.code === 'zhTW'
-              ? 'TW'
-              : item.code.toUpperCase(),
+        shortLabel: getLanguageShortLabel(item.code),
       })),
     []
   )
@@ -853,25 +856,36 @@ export function Home() {
       defaultValue: text,
       interpolation: { prefix: '__', suffix: '__' },
     })
-  const promoTextRaw =
-    currentLanguage === 'en'
-      ? (isChinesePromoText(promoTextEn)
+  const resolvePromoText = () => {
+    if (currentLanguage === 'en') {
+      return (
+        (isChinesePromoText(promoTextEn)
           ? translatePromoText(promoTextEn)
           : promoTextEn) ||
         translatePromoText(promoTextZh || HOME_PROMO_FALLBACK_TEXT)
-      : currentLanguage === 'zh'
-        ? promoTextZh ||
-          translatePromoText(promoTextEn || HOME_PROMO_FALLBACK_TEXT)
-        : translatePromoText(
-            promoTextZh || promoTextEn || HOME_PROMO_FALLBACK_TEXT
-          )
+      )
+    }
+    if (currentLanguage === 'zh') {
+      return (
+        promoTextZh ||
+        translatePromoText(promoTextEn || HOME_PROMO_FALLBACK_TEXT)
+      )
+    }
+    return translatePromoText(
+      promoTextZh || promoTextEn || HOME_PROMO_FALLBACK_TEXT
+    )
+  }
+  const promoTextRaw = resolvePromoText()
   const promoLink =
     (status?.home_promo_link as string | undefined) || getStartedPath
   const promoIsExternal = /^https?:\/\//i.test(promoLink)
 
   const promoSegments = useMemo(() => {
     if (!promoTextRaw) return []
-    const segments: Array<{ highlight: boolean; text: string }> = []
+    // `start` is the segment's offset in the raw text; it is unique per
+    // segment and doubles as a stable React key.
+    const segments: Array<{ highlight: boolean; text: string; start: number }> =
+      []
     const regex = /\{\{([\s\S]+?)\}\}/g
     let lastIndex = 0
     let match: RegExpExecArray | null
@@ -880,15 +894,17 @@ export function Home() {
         segments.push({
           highlight: false,
           text: promoTextRaw.slice(lastIndex, match.index),
+          start: lastIndex,
         })
       }
-      segments.push({ highlight: true, text: match[1] })
+      segments.push({ highlight: true, text: match[1], start: match.index })
       lastIndex = regex.lastIndex
     }
     if (lastIndex < promoTextRaw.length) {
       segments.push({
         highlight: false,
         text: promoTextRaw.slice(lastIndex),
+        start: lastIndex,
       })
     }
     return segments
@@ -1036,6 +1052,11 @@ export function Home() {
 
   if (content !== '') {
     return isUrl ? (
+      // The admin-configured home page is a full external site that needs
+      // scripts, its own origin's cookies/storage and top-level navigation.
+      // A sandbox would have to allow both scripts and same-origin, which
+      // isolates nothing, so it stays unsandboxed as before.
+      // oxlint-disable-next-line react/iframe-missing-sandbox -- external home page needs full capabilities (see above)
       <iframe
         src={content}
         title='Home Page Content'
@@ -1062,13 +1083,16 @@ export function Home() {
               rel='noopener noreferrer'
             >
               <span className='figma-home-promo-text'>
-                {promoSegments.map((seg, idx) =>
+                {promoSegments.map((seg) =>
                   seg.highlight ? (
-                    <span key={idx} className='figma-home-promo-highlight'>
+                    <span
+                      key={seg.start}
+                      className='figma-home-promo-highlight'
+                    >
                       {seg.text}
                     </span>
                   ) : (
-                    <React.Fragment key={idx}>{seg.text}</React.Fragment>
+                    <React.Fragment key={seg.start}>{seg.text}</React.Fragment>
                   )
                 )}
               </span>
@@ -1077,13 +1101,16 @@ export function Home() {
           ) : (
             <a href={promoLink} className='figma-home-promo'>
               <span className='figma-home-promo-text'>
-                {promoSegments.map((seg, idx) =>
+                {promoSegments.map((seg) =>
                   seg.highlight ? (
-                    <span key={idx} className='figma-home-promo-highlight'>
+                    <span
+                      key={seg.start}
+                      className='figma-home-promo-highlight'
+                    >
                       {seg.text}
                     </span>
                   ) : (
-                    <React.Fragment key={idx}>{seg.text}</React.Fragment>
+                    <React.Fragment key={seg.start}>{seg.text}</React.Fragment>
                   )
                 )}
               </span>

@@ -733,7 +733,7 @@ export function LedgerPipelineSection({
           </FormDescription>
           {cacheTtlLabels.map((item, idx) => (
             <FormField
-              key={idx}
+              key={item.label}
               control={form.control}
               name={`ledger_pipeline_setting.cache_ttl_secs.${idx}`}
               render={({ field }) => (

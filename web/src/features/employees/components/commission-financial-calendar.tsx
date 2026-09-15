@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState,type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
-import { toIntlLocale } from '@/i18n/languages'
+
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,6 +16,9 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { formatBusinessAmount } from '@/features/business/format'
+import { toIntlLocale } from '@/i18n/languages'
+import { cn } from '@/lib/utils'
+
 import {
   getEmployeeTierGroupBadgeClass,
   getEmployeeTierLevelBadgeClass,
@@ -26,68 +28,11 @@ import type {
   CommissionCalendarDayStat,
   CommissionCalendarStats,
 } from '../types'
-
-export function currentMonthValue() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-export function shiftMonthValue(value: string, offset: number) {
-  const [year, month] = value.split('-').map(Number)
-  const date = new Date(
-    year || new Date().getFullYear(),
-    (month || 1) - 1 + offset,
-    1
-  )
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
-
-export function monthValueToRange(value: string) {
-  const [year, month] = value.split('-').map(Number)
-  const start = new Date(
-    year || new Date().getFullYear(),
-    (month || 1) - 1,
-    1,
-    0,
-    0,
-    0
-  ).getTime()
-  const end = new Date(
-    year || new Date().getFullYear(),
-    month || 1,
-    0,
-    23,
-    59,
-    59
-  ).getTime()
-  return {
-    start_time: Math.floor(start / 1000),
-    end_time: Math.floor(end / 1000),
-  }
-}
-
-export function monthValueToCalendarRange(value: string) {
-  const currentMonth = currentMonthValue()
-  if (value === currentMonth) {
-    const now = Math.floor(Date.now() / 1000)
-    return {
-      start_time: now,
-      end_time: now,
-    }
-  }
-
-  const [year, month] = value.split('-').map(Number)
-  const y = year || new Date().getFullYear()
-  const m = (month || 1) - 1
-  // 历史月份：start_time 只用于后端 ResolveCommissionMonthlyPeriod 识别周期，
-  // end_time 只要大于任意月度周期结束时间即可，让后端以 period.PeriodEndAt 为自然上界，
-  // 展示完整周期数据（前端不应截断历史数据）。
-  const start = Math.floor(new Date(Date.UTC(y, m, 15, 12, 0, 0)).getTime() / 1000)
-  return {
-    start_time: start,
-    end_time: start + 62 * 86400,
-  }
-}
+import {
+  currentMonthValue,
+  monthValueToCalendarRange,
+  shiftMonthValue,
+} from './commission-financial-calendar-utils'
 
 function monthLabel(value: string) {
   const [year, month] = value.split('-').map(Number)
@@ -405,7 +350,7 @@ export function CommissionFinancialCalendar({
     const firstStat = cells.find((cell) => cell.inPeriod && cell.stat)
     const firstDay = cells.find((cell) => cell.inPeriod)
     setSelectedDate((today || firstStat || firstDay)?.key)
-  }, [cells, selectedDate])
+  }, [cells, selectedDate, timezone])
 
   const selectMonth = (value: string) => {
     onMonthChange(isMonthValue(value) ? value : currentMonthValue())
@@ -523,8 +468,12 @@ export function CommissionFinancialCalendar({
                     !isHistorical &&
                     overrideCommissionRate != null &&
                     overrideCommissionRate > 0
-                      ? Math.round((summary?.profit_quota ?? 0) * overrideCommissionRate)
-                      : (summary?.recalc_commission_quota ?? summary?.commission_quota ?? 0)
+                      ? Math.round(
+                          (summary?.profit_quota ?? 0) * overrideCommissionRate
+                        )
+                      : (summary?.recalc_commission_quota ??
+                        summary?.commission_quota ??
+                        0)
                   }
                 />
               )}

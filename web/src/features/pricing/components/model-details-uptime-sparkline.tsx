@@ -143,6 +143,29 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
 // Uptime status row — sparkline + summary text + status icon
 // ---------------------------------------------------------------------------
 
+type UptimeStatus = 'operational' | 'minor' | 'degraded' | 'major'
+
+const STATUS_ICONS: Record<UptimeStatus, typeof CheckCircle2> = {
+  operational: CheckCircle2,
+  minor: Activity,
+  degraded: AlertCircle,
+  major: AlertCircle,
+}
+
+const STATUS_COLOURS: Record<UptimeStatus, string> = {
+  operational: 'text-emerald-600 dark:text-emerald-400',
+  minor: 'text-emerald-600 dark:text-emerald-400',
+  degraded: 'text-amber-600 dark:text-amber-400',
+  major: 'text-rose-600 dark:text-rose-400',
+}
+
+function getStatusLabel(status: UptimeStatus, t: (key: string) => string) {
+  if (status === 'operational') return t('All systems operational')
+  if (status === 'minor') return t('Minor blips in the last 30 days')
+  if (status === 'degraded') return t('Degraded performance recently')
+  return t('Significant outages detected')
+}
+
 export function UptimeStatusRow(props: {
   series: UptimeDayPoint[]
   className?: string
@@ -156,30 +179,9 @@ export function UptimeStatusRow(props: {
     return 'major'
   }, [summary.uptime_pct])
 
-  const StatusIcon =
-    status === 'operational'
-      ? CheckCircle2
-      : status === 'minor'
-        ? Activity
-        : AlertCircle
-
-  const statusColour =
-    status === 'operational'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : status === 'minor'
-        ? 'text-emerald-600 dark:text-emerald-400'
-        : status === 'degraded'
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-rose-600 dark:text-rose-400'
-
-  const statusLabel =
-    status === 'operational'
-      ? t('All systems operational')
-      : status === 'minor'
-        ? t('Minor blips in the last 30 days')
-        : status === 'degraded'
-          ? t('Degraded performance recently')
-          : t('Significant outages detected')
+  const StatusIcon = STATUS_ICONS[status]
+  const statusColour = STATUS_COLOURS[status]
+  const statusLabel = getStatusLabel(status, t)
 
   return (
     <div

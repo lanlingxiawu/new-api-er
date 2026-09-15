@@ -1,3 +1,5 @@
+import axios from 'axios'
+import { Download, List, Loader2, RefreshCw, Search } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -7,13 +9,9 @@ import {
   type ReactNode,
   type UIEvent,
 } from 'react'
-import axios from 'axios'
-import { Download, List, Loader2, RefreshCw, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import dayjs from '@/lib/dayjs'
-import { cn } from '@/lib/utils'
-import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
+
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,6 +32,10 @@ import {
 } from '@/components/ui/table'
 import { BusinessAmount } from '@/features/business/amount-display'
 import { UsageLogIdHover } from '@/features/employees/components/usage-log-id-hover'
+import { useTableCompactMode } from '@/hooks/use-table-compact-mode'
+import dayjs from '@/lib/dayjs'
+import { cn } from '@/lib/utils'
+
 import {
   createLedgerExport,
   getConsumptionCostLedger,
@@ -439,7 +441,10 @@ export function ConsumptionCostLedgerDetail() {
       }
       start = clampLedgerDateTimeToNow(start)
       end = clampLedgerDateTimeToNow(end)
-      if (key === 'start_time' && end.diff(start, 's') > LEDGER_MAX_RANGE_SECONDS) {
+      if (
+        key === 'start_time' &&
+        end.diff(start, 's') > LEDGER_MAX_RANGE_SECONDS
+      ) {
         start = end.subtract(LEDGER_MAX_RANGE_SECONDS, 's')
       }
       const nextStart = start.format(LEDGER_DATE_TIME_FORMAT)
@@ -489,10 +494,7 @@ export function ConsumptionCostLedgerDetail() {
         setHasMore(Boolean(res.data?.has_more))
         // fallback_hint is a top-level sibling of "data" in the JSON body
         const hint = (res as unknown as Record<string, unknown>)
-          .fallback_hint as
-          | FallbackHint
-          | null
-          | undefined
+          .fallback_hint as FallbackHint | null | undefined
         if (!append && hint !== undefined) setFallbackHint(hint ?? null)
       } catch (error) {
         if (axios.isAxiosError(error)) {
@@ -502,7 +504,9 @@ export function ConsumptionCostLedgerDetail() {
             // instead of leaving the user permanently stuck at the bottom.
             loadMoreArmedRef.current = true
           } else {
-            toast.error(translateLedgerMessage(t, error.response?.data?.message))
+            toast.error(
+              translateLedgerMessage(t, error.response?.data?.message)
+            )
           }
         } else {
           toast.error(t('Request failed'))
@@ -515,37 +519,56 @@ export function ConsumptionCostLedgerDetail() {
     [filters, t]
   )
 
-  const loadStats = useCallback(async (options?: { silent?: boolean }) => {
-    if (statsLoadingRef.current) return
-    statsLoadingRef.current = true
-    try {
-      const res = await getConsumptionCostLedgerStats(
-        buildLedgerParams(filters)
-      )
-      if (!res.success) {
-        if (!options?.silent) toast.error(translateLedgerMessage(t, res.message))
-        return
+  const loadStats = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (statsLoadingRef.current) return
+      statsLoadingRef.current = true
+      try {
+        const res = await getConsumptionCostLedgerStats(
+          buildLedgerParams(filters)
+        )
+        if (!res.success) {
+          if (!options?.silent) {
+            toast.error(translateLedgerMessage(t, res.message))
+          }
+          return
+        }
+        setFilterStats(res.data?.stats ?? null)
+        setStatsStatus(res.data?.stats_status ?? '')
+        setStatsRunningCount(res.data?.stats_running_count ?? 0)
+        setStatsRunningLimit(res.data?.stats_running_limit ?? 2)
+        if (res.data?.stats_status !== 'pending') {
+          statsRefreshCountRef.current = 0
+        }
+      } catch (error) {
+        if (options?.silent) {
+          return
+        }
+        if (axios.isAxiosError(error)) {
+          toast.error(translateLedgerMessage(t, error.response?.data?.message))
+        } else {
+          toast.error(t('Request failed'))
+        }
+      } finally {
+        statsLoadingRef.current = false
       }
-      setFilterStats(res.data?.stats ?? null)
-      setStatsStatus(res.data?.stats_status ?? '')
-      setStatsRunningCount(res.data?.stats_running_count ?? 0)
-      setStatsRunningLimit(res.data?.stats_running_limit ?? 2)
-      if (res.data?.stats_status !== 'pending') {
-        statsRefreshCountRef.current = 0
-      }
-    } catch (error) {
-      if (options?.silent) {
-        return
-      }
-      if (axios.isAxiosError(error)) {
-        toast.error(translateLedgerMessage(t, error.response?.data?.message))
-      } else {
-        toast.error(t('Request failed'))
-      }
-    } finally {
-      statsLoadingRef.current = false
-    }
-  }, [filters, t])
+    },
+    [filters, t]
+  )
+
+  // Keep a ref so the polling interval always calls the latest loadStats without
+  // being a dep of the interval effect — prevents the interval from restarting
+  // (and switching to uncommitted filter values) when the user edits filters
+  // between clicking Search and the stats becoming ready.
+  // loadPageRef follows the same idea: only a searchKey change (Search / Reset)
+  // triggers a reload, editing filters alone does not.
+  // Declared before the searchKey effect so the refs are synced first.
+  const loadStatsRef = useRef(loadStats)
+  const loadPageRef = useRef(loadPage)
+  useEffect(() => {
+    loadStatsRef.current = loadStats
+    loadPageRef.current = loadPage
+  })
 
   useEffect(() => {
     setRows([])
@@ -559,18 +582,9 @@ export function ConsumptionCostLedgerDetail() {
     }
     loadMoreArmedRef.current = true
     statsRefreshCountRef.current = 0
-    loadPage(null, false)
-    loadStats()
+    loadPageRef.current(null, false)
+    loadStatsRef.current()
   }, [searchKey])
-
-  // Keep a ref so the polling interval always calls the latest loadStats without
-  // being a dep of the interval effect — prevents the interval from restarting
-  // (and switching to uncommitted filter values) when the user edits filters
-  // between clicking Search and the stats becoming ready.
-  const loadStatsRef = useRef(loadStats)
-  useEffect(() => {
-    loadStatsRef.current = loadStats
-  })
 
   useEffect(() => {
     if (statsStatus !== 'pending') return
@@ -638,7 +652,13 @@ export function ConsumptionCostLedgerDetail() {
   )
 
   const startExport = useCallback(async () => {
-    if (exportLoading || exportJob?.status === 'pending' || exportJob?.status === 'running') return
+    if (
+      exportLoading ||
+      exportJob?.status === 'pending' ||
+      exportJob?.status === 'running'
+    ) {
+      return
+    }
     if (exportJob?.status === 'ready') {
       try {
         await triggerDownload(exportJob.job_id)
@@ -661,8 +681,17 @@ export function ConsumptionCostLedgerDetail() {
         toast.error(translateLedgerMessage(t, res.message, 'Export failed'))
         return
       }
-      const jobId = res.data!.job_id
-      setExportJob({ job_id: jobId, status: 'pending', progress: 0, row_count: 0 })
+      if (!res.data) {
+        toast.error(t('Export failed'))
+        return
+      }
+      const jobId = res.data.job_id
+      setExportJob({
+        job_id: jobId,
+        status: 'pending',
+        progress: 0,
+        row_count: 0,
+      })
       stopExportPolling()
       exportPollingRef.current = setInterval(async () => {
         try {
@@ -681,7 +710,9 @@ export function ConsumptionCostLedgerDetail() {
               )
               setExportJob(null)
             } catch (err) {
-              toast.error(err instanceof Error ? err.message : t('Export failed'))
+              toast.error(
+                err instanceof Error ? err.message : t('Export failed')
+              )
               setExportJob(null)
             }
           } else if (job.status === 'failed') {
@@ -695,7 +726,13 @@ export function ConsumptionCostLedgerDetail() {
       }, LEDGER_EXPORT_POLLING_DELAY_MS)
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        toast.error(translateLedgerMessage(t, error.response?.data?.message, 'Export failed'))
+        toast.error(
+          translateLedgerMessage(
+            t,
+            error.response?.data?.message,
+            'Export failed'
+          )
+        )
       } else {
         toast.error(t('Export failed'))
       }
@@ -720,13 +757,37 @@ export function ConsumptionCostLedgerDetail() {
         !hasMore ||
         loading ||
         !cursor
-      )
-        {return}
+      ) {
+        return
+      }
       loadMoreArmedRef.current = false
       loadPage(cursor, true)
     },
     [cursor, hasMore, loadPage, loading]
   )
+
+  let exportButtonLabel: string
+  if (exportJob?.status === 'pending' || exportJob?.status === 'running') {
+    exportButtonLabel = t('Exporting ({{progress}}%)', {
+      progress: exportJob.progress,
+    })
+  } else if (exportJob?.status === 'ready') {
+    exportButtonLabel = t('Download')
+  } else {
+    exportButtonLabel = t('Export')
+  }
+
+  let tableFooterContent: ReactNode = null
+  if (loading && rows.length > 0) {
+    tableFooterContent = (
+      <>
+        <Loader2 className='h-4 w-4 animate-spin' />
+        {t('Loading...')}
+      </>
+    )
+  } else if (rows.length > 0 && !hasMore) {
+    tableFooterContent = t('No more records')
+  }
 
   return (
     <div className='flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
@@ -824,16 +885,13 @@ export function ConsumptionCostLedgerDetail() {
               exportJob?.status === 'running'
             }
           >
-            {exportJob?.status === 'pending' || exportJob?.status === 'running' ? (
+            {exportJob?.status === 'pending' ||
+            exportJob?.status === 'running' ? (
               <Loader2 data-icon='inline-start' className='animate-spin' />
             ) : (
               <Download data-icon='inline-start' />
             )}
-            {exportJob?.status === 'pending' || exportJob?.status === 'running'
-              ? t('Exporting ({{progress}}%)', { progress: exportJob.progress })
-              : exportJob?.status === 'ready'
-              ? t('Download')
-              : t('Export')}
+            {exportButtonLabel}
           </Button>
         </div>
       </div>
@@ -852,9 +910,7 @@ export function ConsumptionCostLedgerDetail() {
             <Loader2 className='mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin' />
             <div className='flex flex-col gap-0.5'>
               <span>
-                {t(
-                  'Preparing statistics. They will update automatically.'
-                )}
+                {t('Preparing statistics. They will update automatically.')}
               </span>
               <span>
                 {t('Statistics tasks running: {{count}}/{{limit}}', {
@@ -928,7 +984,11 @@ export function ConsumptionCostLedgerDetail() {
                 <TableCell>
                   <div className='flex flex-wrap gap-1'>
                     {sortLedgerTags(visibleLedgerTags(row)).map((tag) => (
-                      <Badge key={tag} variant='outline' className={tagBadgeClass(tag)}>
+                      <Badge
+                        key={tag}
+                        variant='outline'
+                        className={tagBadgeClass(tag)}
+                      >
                         {tagLabel(tag, t)}
                       </Badge>
                     ))}
@@ -960,14 +1020,7 @@ export function ConsumptionCostLedgerDetail() {
           </TableBody>
         </Table>
         <div className='text-muted-foreground flex h-10 items-center justify-center gap-2 text-xs'>
-          {loading && rows.length > 0 ? (
-            <>
-              <Loader2 className='h-4 w-4 animate-spin' />
-              {t('Loading...')}
-            </>
-          ) : rows.length > 0 && !hasMore ? (
-            t('No more records')
-          ) : null}
+          {tableFooterContent}
         </div>
       </div>
     </div>

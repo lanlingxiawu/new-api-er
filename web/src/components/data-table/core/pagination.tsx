@@ -55,7 +55,10 @@ export function DataTablePagination<TData>({
   const pageSize = pagination.pageSize
   const totalPages = table.getPageCount()
   const totalRows = table.getRowCount()
-  const pageNumbers = getPageNumbers(currentPage, totalPages)
+  // '...' can appear twice, so each entry carries a positional key.
+  const pageItems = getPageNumbers(currentPage, totalPages).map(
+    (pageNumber, position) => ({ pageNumber, id: `${pageNumber}-${position}` })
+  )
 
   return (
     <div
@@ -118,8 +121,8 @@ export function DataTablePagination<TData>({
             <ChevronLeftIcon className='h-4 w-4' />
           </Button>
 
-          {pageNumbers.map((pageNumber, index) => (
-            <div key={`${pageNumber}-${index}`} className='flex items-center'>
+          {pageItems.map(({ pageNumber, id }) => (
+            <div key={id} className='flex items-center'>
               {pageNumber === '...' ? (
                 <span className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'>
                   ...

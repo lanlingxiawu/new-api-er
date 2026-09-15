@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatLocalCurrencyAmount, formatCurrencyFromUSD } from '@/lib/currency'
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,9 +30,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  formatLocalCurrencyAmount,
+  formatCurrencyFromUSD,
+} from '@/lib/currency'
+import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
+
 import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from '../../constants'
 import { formatCurrency, getPaymentIcon } from '../../lib'
-import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 import { isInfiniPayment, isStripePayment } from '../../lib/payment'
 import type { PaymentMethod } from '../../types'
 
@@ -60,6 +65,14 @@ interface PaymentConfirmDialogProps {
    * 保证展示的实际到账与后端到账口径一致，且不随前端实时汇率异步刷新而跳动。
    */
   quoteRate?: number
+}
+
+/** 按顺序返回第一个 >0 的汇率，全部不可用时返回 fallback。 */
+function firstPositiveRate(candidates: number[], fallback: number): number {
+  for (const rate of candidates) {
+    if (rate > 0) return rate
+  }
+  return fallback
 }
 
 export function PaymentConfirmDialog({
@@ -107,23 +120,13 @@ export function PaymentConfirmDialog({
   //   - Stripe：实时模式用 Binance（失败回退手动 stripeUnitPrice）；手动模式直接用 stripeUnitPrice。
   const stripeManualRate = stripeUnitPrice > 0 ? stripeUnitPrice : 0
   const stripeEffectiveRate = stripeUseRealtimeRate
-    ? binanceRate > 0
-      ? binanceRate
-      : stripeManualRate > 0
-        ? stripeManualRate
-        : usdExchangeRate
-    : stripeManualRate > 0
-      ? stripeManualRate
-      : binanceRate > 0
-        ? binanceRate
-        : usdExchangeRate
+    ? firstPositiveRate([binanceRate, stripeManualRate], usdExchangeRate)
+    : firstPositiveRate([stripeManualRate, binanceRate], usdExchangeRate)
   // 优先使用后端报价锁定的汇率（quoteRate），它随「支付金额」一并返回，稳定且与到账口径一致；
   // 仅当拿不到（未报价/非动态支付）时才回退到前端汇率推算。
   const fallbackRate = isStripe
     ? stripeEffectiveRate
-    : binanceRate > 0
-      ? binanceRate
-      : usdExchangeRate
+    : firstPositiveRate([binanceRate], usdExchangeRate)
   const effectiveRate = quoteRate > 0 ? quoteRate : fallbackRate
   const safePrice = priceRatio > 0 ? priceRatio : 1
   // 实际到账额度单位数（浮点，用于显示）= 实付USD × 到账折算汇率(effectiveRate) / 系统充值比例(Price)
@@ -132,7 +135,9 @@ export function PaymentConfirmDialog({
   const expectedCreditUnits =
     isRateDynamic && paymentAmount > 0 && effectiveRate > 0
       ? Math.round(
-          (paymentAmount * effectiveRate * DEFAULT_CURRENCY_CONFIG.quotaPerUnit) /
+          (paymentAmount *
+            effectiveRate *
+            DEFAULT_CURRENCY_CONFIG.quotaPerUnit) /
             safePrice
         ) / DEFAULT_CURRENCY_CONFIG.quotaPerUnit
       : 0
@@ -180,16 +185,18 @@ export function PaymentConfirmDialog({
             ) : (
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
-                  {isRateDynamic
-                    ? /* Infini / Stripe 以 USD 收款，formatCurrency 只出数字，再追加货币码 */
-                      <>
-                        {formatCurrency(paymentAmount)}
-                        <span className='text-muted-foreground ml-1 text-base font-normal'>
-                          {paymentMethod?.currency ?? 'USD'}
-                        </span>
-                      </>
-                    : /* Payment gateways may use a fixed settlement currency. */
-                      formatPaymentAmount(paymentAmount)}
+                  {isRateDynamic ? (
+                    /* Infini / Stripe 以 USD 收款，formatCurrency 只出数字，再追加货币码 */
+                    <>
+                      {formatCurrency(paymentAmount)}
+                      <span className='text-muted-foreground ml-1 text-base font-normal'>
+                        {paymentMethod?.currency ?? 'USD'}
+                      </span>
+                    </>
+                  ) : (
+                    /* Payment gateways may use a fixed settlement currency. */
+                    formatPaymentAmount(paymentAmount)
+                  )}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
@@ -217,21 +224,26 @@ export function PaymentConfirmDialog({
 
           {/* Infini / Stripe：充值比例 / 实时汇率（实际到账已并入上方“充值数量”行） */}
           {isRateDynamic && !calculating && paymentAmount > 0 && (
-            <div className='bg-muted/40 rounded-lg px-3 py-3 space-y-3'>
+            <div className='bg-muted/40 space-y-3 rounded-lg px-3 py-3'>
               {/* 充值比例 = 1/Price（后台可配置，精确值） */}
-              <div className='flex items-center justify-between text-xs text-muted-foreground'>
+              <div className='text-muted-foreground flex items-center justify-between text-xs'>
                 <span>{t('Top-up rate')}</span>
                 <span>
                   {'1 ¥ = '}
-                  {formatCurrencyFromUSD(1 / safePrice, { digitsLarge: 2, digitsSmall: 2, abbreviate: false })}
+                  {formatCurrencyFromUSD(1 / safePrice, {
+                    digitsLarge: 2,
+                    digitsSmall: 2,
+                    abbreviate: false,
+                  })}
                 </span>
               </div>
               {/* 汇率（Binance 实时） */}
               {effectiveRate > 0 && (
-                <div className='flex items-center justify-between text-xs text-muted-foreground'>
+                <div className='text-muted-foreground flex items-center justify-between text-xs'>
                   <span>{t('Real-time exchange rate')}</span>
                   <span className='font-medium'>
-                    1 {paymentMethod?.currency ?? 'USD'} ≈ ¥{effectiveRate.toFixed(2)}
+                    1 {paymentMethod?.currency ?? 'USD'} ≈ ¥
+                    {effectiveRate.toFixed(2)}
                   </span>
                 </div>
               )}

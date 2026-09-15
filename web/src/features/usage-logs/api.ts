@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import { buildQueryParams } from './lib/utils'
+import { buildQueryParams } from './lib/query-params'
 import type {
   GetLogsParams,
   GetLogsResponse,
@@ -89,9 +89,8 @@ export const getUserLogs = (
 export const getLogStats = (params: GetLogStatsParams = {}) =>
   fetchLogStats('/api/log', params, 'admin')
 
-export const getEmployeeCustomerLogStats = (
-  params: GetLogStatsParams = {}
-) => fetchLogStats('/api/log', params, 'employee')
+export const getEmployeeCustomerLogStats = (params: GetLogStatsParams = {}) =>
+  fetchLogStats('/api/log', params, 'employee')
 
 export const getUserLogStats = (
   params: Omit<GetLogStatsParams, 'username' | 'channel'> = {}
@@ -116,7 +115,11 @@ export async function getUserInfo(
 export async function queryUpstreamLog(
   body: UpstreamLogQueryRequest,
   signal?: AbortSignal
-): Promise<{ success: boolean; message?: string; data?: UpstreamLogQueryData }> {
+): Promise<{
+  success: boolean
+  message?: string
+  data?: UpstreamLogQueryData
+}> {
   const res = await api.post('/api/log/upstream/query', body, { signal })
   return res.data
 }

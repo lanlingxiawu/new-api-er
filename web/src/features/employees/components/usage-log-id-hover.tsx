@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
 import { Info } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import { Badge } from '@/components/ui/badge'
 import {
   HoverCard,
@@ -27,6 +28,7 @@ import {
 } from '@/components/ui/hover-card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { UsageLog } from '@/features/usage-logs/types'
+
 import { getUsageLogById } from '../api'
 
 const usageLogPreviewCache = new Map<number, UsageLog | null>()
@@ -90,7 +92,7 @@ function UsageLogPreviewContent({
             className='grid grid-cols-[88px_minmax(0,1fr)] gap-2'
           >
             <span className='text-muted-foreground'>{field.label}</span>
-            <span className='break-words font-mono leading-5'>
+            <span className='font-mono leading-5 break-words'>
               {field.value}
             </span>
           </div>
@@ -130,19 +132,20 @@ export function UsageLogIdHover({ logId }: { logId?: number | null }) {
     }
     let cancelled = false
     setLoading(true)
-    getUsageLogById(logId)
-      .then((res) => {
+    const loadPreview = async () => {
+      try {
+        const res = await getUsageLogById(logId)
         if (cancelled) return
-        const next = res.success ? (res.data ?? null) : null
-        usageLogPreviewCache.set(logId, next)
-        setLog(next)
-      })
-      .catch(() => {
+        const nextLog = res.success ? (res.data ?? null) : null
+        usageLogPreviewCache.set(logId, nextLog)
+        setLog(nextLog)
+      } catch {
         if (!cancelled) setLog(null)
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+    void loadPreview()
     return () => {
       cancelled = true
     }

@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useRef } from 'react'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+
 import { formatCurrency } from '../../lib'
 
 interface WechatPayDialogProps {
@@ -73,51 +75,54 @@ export function WechatPayDialog({
     return () => clearInterval(timer)
   }, [open, status])
 
+  let description: string
+  let body: ReactNode
+  if (status === 'success') {
+    description = t('Your payment has been received.')
+    body = (
+      <div className='flex flex-col items-center gap-2 py-6'>
+        <CheckCircle2 className='h-12 w-12 text-green-600' />
+        <p className='text-sm font-medium'>{t('Payment successful')}</p>
+      </div>
+    )
+  } else if (status === 'failed') {
+    description = t('This payment could not be completed.')
+    body = (
+      <div className='flex flex-col items-center gap-2 py-6'>
+        <XCircle className='text-destructive h-12 w-12' />
+        <p className='text-sm font-medium'>{t('Payment failed')}</p>
+      </div>
+    )
+  } else {
+    description = t('Scan the QR code with WeChat to complete payment')
+    body = codeUrl ? (
+      <>
+        <div className='flex justify-center rounded-lg bg-white p-4'>
+          <QRCodeSVG value={codeUrl} size={200} />
+        </div>
+        <div className='text-muted-foreground flex items-center gap-2 text-sm'>
+          <Loader2 className='h-4 w-4 animate-spin' />
+          <span>{t('Waiting for payment...')}</span>
+        </div>
+        <p className='text-sm'>
+          {t('Amount to pay:')}{' '}
+          <span className='font-semibold'>{formatCurrency(paymentAmount)}</span>
+        </p>
+      </>
+    ) : (
+      <Loader2 className='h-8 w-8 animate-spin' />
+    )
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-sm:w-[calc(100vw-1.5rem)] sm:max-w-sm'>
         <DialogHeader>
           <DialogTitle>{t('WeChat Pay')}</DialogTitle>
-          <DialogDescription>
-            {status === 'success'
-              ? t('Your payment has been received.')
-              : status === 'failed'
-                ? t('This payment could not be completed.')
-                : t('Scan the QR code with WeChat to complete payment')}
-          </DialogDescription>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className='flex flex-col items-center gap-4 py-4'>
-          {status === 'success' ? (
-            <div className='flex flex-col items-center gap-2 py-6'>
-              <CheckCircle2 className='h-12 w-12 text-green-600' />
-              <p className='text-sm font-medium'>{t('Payment successful')}</p>
-            </div>
-          ) : status === 'failed' ? (
-            <div className='flex flex-col items-center gap-2 py-6'>
-              <XCircle className='text-destructive h-12 w-12' />
-              <p className='text-sm font-medium'>{t('Payment failed')}</p>
-            </div>
-          ) : codeUrl ? (
-            <>
-              <div className='flex justify-center rounded-lg bg-white p-4'>
-                <QRCodeSVG value={codeUrl} size={200} />
-              </div>
-              <div className='text-muted-foreground flex items-center gap-2 text-sm'>
-                <Loader2 className='h-4 w-4 animate-spin' />
-                <span>{t('Waiting for payment...')}</span>
-              </div>
-              <p className='text-sm'>
-                {t('Amount to pay:')}{' '}
-                <span className='font-semibold'>
-                  {formatCurrency(paymentAmount)}
-                </span>
-              </p>
-            </>
-          ) : (
-            <Loader2 className='h-8 w-8 animate-spin' />
-          )}
-        </div>
+        <div className='flex flex-col items-center gap-4 py-4'>{body}</div>
 
         <Button
           variant='outline'

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import dayjs from '@/lib/dayjs'
+
 import { Button } from '@/components/ui/button'
+import dayjs from '@/lib/dayjs'
+
 import {
   getFallbackBackfillResult,
   triggerFallbackBackfill,
@@ -111,73 +113,93 @@ export function FallbackBackfillBanner({
   const isSuccess = isDone && result.success
   const isFailed = isDone && !result.success
 
+  let toneClassName: string
+  if (isSuccess) {
+    toneClassName =
+      'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400'
+  } else if (isFailed) {
+    toneClassName =
+      'border-red-200 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400'
+  } else {
+    toneClassName =
+      'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400'
+  }
+
+  let statusIcon: ReactNode
+  if (isRunning) {
+    statusIcon = <Loader2 className='h-4 w-4 animate-spin' />
+  } else if (isSuccess) {
+    statusIcon = <CheckCircle2 className='h-4 w-4' />
+  } else if (isFailed) {
+    statusIcon = <XCircle className='h-4 w-4' />
+  } else {
+    statusIcon = <AlertTriangle className='h-4 w-4' />
+  }
+
+  let statusContent: ReactNode
+  if (isSuccess) {
+    statusContent = (
+      <>
+        <span className='font-medium'>
+          {t('Backfill completed for {{date}}', { date: result?.date })}
+        </span>
+        <span className='text-xs opacity-80'>
+          {t('{{rows}} records written', { rows: result?.success_count ?? 0 })}
+        </span>
+      </>
+    )
+  } else if (isFailed) {
+    statusContent = (
+      <>
+        <span className='font-medium'>
+          {t('Backfill failed for {{date}}', { date: result?.date })}
+        </span>
+        {result?.last_error ? (
+          <span className='text-xs opacity-80'>{result.last_error}</span>
+        ) : null}
+      </>
+    )
+  } else if (isRunning) {
+    statusContent = (
+      <span className='font-medium'>
+        {t('Backfill running for {{date}}...', {
+          date: result?.date ?? hint.date,
+        })}
+      </span>
+    )
+  } else {
+    statusContent = (
+      <>
+        <span className='font-medium'>
+          {t('Fallback log detected for {{date}}', { date: hint.date })}
+        </span>
+        <span className='text-xs opacity-80'>
+          {t('File: {{name}} ({{size}}, updated {{time}})', {
+            name: hint.file_name ?? '-',
+            size: formatFileSize(hint.file_size),
+            time: formatUnixTime(hint.updated_at),
+          })}
+        </span>
+        <span className='text-xs opacity-80'>
+          {t(
+            'These records were buffered during a circuit-breaker event. Trigger backfill to write them into the ledger.'
+          )}
+        </span>
+      </>
+    )
+  }
+
   return (
     <div
       className={[
         'flex items-start gap-3 rounded-lg border px-4 py-3 text-sm',
-        isSuccess
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400'
-          : isFailed
-            ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400'
-            : 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400',
+        toneClassName,
       ].join(' ')}
     >
-      <span className='mt-0.5 shrink-0'>
-        {isRunning ? (
-          <Loader2 className='h-4 w-4 animate-spin' />
-        ) : isSuccess ? (
-          <CheckCircle2 className='h-4 w-4' />
-        ) : isFailed ? (
-          <XCircle className='h-4 w-4' />
-        ) : (
-          <AlertTriangle className='h-4 w-4' />
-        )}
-      </span>
+      <span className='mt-0.5 shrink-0'>{statusIcon}</span>
 
       <div className='flex min-w-0 flex-1 flex-col gap-0.5'>
-        {isSuccess ? (
-          <>
-            <span className='font-medium'>
-              {t('Backfill completed for {{date}}', { date: result?.date })}
-            </span>
-            <span className='text-xs opacity-80'>
-              {t('{{rows}} records written', { rows: result?.success_count ?? 0 })}
-            </span>
-          </>
-        ) : isFailed ? (
-          <>
-            <span className='font-medium'>
-              {t('Backfill failed for {{date}}', { date: result?.date })}
-            </span>
-            {result?.last_error ? (
-              <span className='text-xs opacity-80'>{result.last_error}</span>
-            ) : null}
-          </>
-        ) : isRunning ? (
-          <span className='font-medium'>
-            {t('Backfill running for {{date}}...', {
-              date: result?.date ?? hint.date,
-            })}
-          </span>
-        ) : (
-          <>
-            <span className='font-medium'>
-              {t('Fallback log detected for {{date}}', { date: hint.date })}
-            </span>
-            <span className='text-xs opacity-80'>
-              {t('File: {{name}} ({{size}}, updated {{time}})', {
-                name: hint.file_name ?? '-',
-                size: formatFileSize(hint.file_size),
-                time: formatUnixTime(hint.updated_at),
-              })}
-            </span>
-            <span className='text-xs opacity-80'>
-              {t(
-                'These records were buffered during a circuit-breaker event. Trigger backfill to write them into the ledger.'
-              )}
-            </span>
-          </>
-        )}
+        {statusContent}
       </div>
 
       {!isRunning && !isSuccess ? (

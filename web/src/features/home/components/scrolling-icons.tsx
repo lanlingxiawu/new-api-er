@@ -37,6 +37,15 @@ export function ScrollingIcons({
   const animationClass =
     direction === 'up' ? 'animate-scroll-up' : 'animate-scroll-down'
 
+  // Icon names may repeat; prefix each with its occurrence count so keys stay
+  // unique and derived from the data rather than the array position.
+  const occurrences = new Map<string, number>()
+  const keyedIcons = icons.map((iconName) => {
+    const count = occurrences.get(iconName) ?? 0
+    occurrences.set(iconName, count + 1)
+    return { iconName, key: `${count}:${iconName}` }
+  })
+
   return (
     <div
       className={cn(
@@ -46,13 +55,13 @@ export function ScrollingIcons({
     >
       <div className={cn('flex flex-col gap-5', animationClass)}>
         {/* First set */}
-        {icons.map((iconName, i) => (
-          <IconCard key={`${direction}-1-${i}`} iconName={iconName} />
+        {keyedIcons.map(({ iconName, key }) => (
+          <IconCard key={`${direction}-1-${key}`} iconName={iconName} />
         ))}
         {/* Duplicate set for seamless loop */}
-        {icons.map((iconName, i) => (
+        {keyedIcons.map(({ iconName, key }) => (
           <IconCard
-            key={`${direction}-2-${i}`}
+            key={`${direction}-2-${key}`}
             iconName={iconName}
             className='aria-hidden'
           />

@@ -223,6 +223,12 @@ export function BusinessStatsCircuitBreakerSection({
   }, [defaultValues, form])
 
   const status = statusQuery.data?.data
+  let runtimeStatusLabel = t('Runtime status: healthy')
+  if (status?.hard_disabled) {
+    runtimeStatusLabel = t('Runtime status: hard disabled')
+  } else if (status?.open) {
+    runtimeStatusLabel = t('Runtime status: bypassing side logic')
+  }
 
   const enabled = form.watch(
     'business_stats_circuit_breaker_setting.enabled'
@@ -276,13 +282,7 @@ export function BusinessStatsCircuitBreakerSection({
               </div>
               {status && (
                 <div className='mt-1 flex flex-wrap gap-x-3 gap-y-1'>
-                  <span>
-                    {status.hard_disabled
-                      ? t('Runtime status: hard disabled')
-                      : status.open
-                        ? t('Runtime status: bypassing side logic')
-                        : t('Runtime status: healthy')}
-                  </span>
+                  <span>{runtimeStatusLabel}</span>
                   <span>
                     {t('Consecutive failures')}: {status.consecutive_failures}
                   </span>

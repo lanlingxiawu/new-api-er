@@ -418,6 +418,28 @@ function DraftNumberInput({
 }
 
 // ---------------------------------------------------------------------------
+// Stable row keys
+// ---------------------------------------------------------------------------
+
+// Tiers, conditions and rule groups carry no id. Keep a parallel list of
+// client-side ids used only as React keys (never part of the expression or
+// saved data): new rows get a fresh id; call removeKey before removing a row.
+function useRowKeys(count: number, prefix: string) {
+  const seqRef = useRef(0)
+  const keysRef = useRef<string[]>([])
+  const keys = keysRef.current
+  while (keys.length < count) {
+    seqRef.current += 1
+    keys.push(`${prefix}-${seqRef.current}`)
+  }
+  if (keys.length > count) keys.length = count
+  const removeKey = (index: number) => {
+    keys.splice(index, 1)
+  }
+  return { keys, removeKey }
+}
+
+// ---------------------------------------------------------------------------
 // Tier condition row
 // ---------------------------------------------------------------------------
 
@@ -555,6 +577,10 @@ function VisualTierCard({
 }: VisualTierCardProps) {
   const { t } = useTranslation()
   const cacheMode = getTierCacheMode(tier)
+  const { keys: conditionKeys, removeKey: removeConditionKey } = useRowKeys(
+    tier.conditions.length,
+    'tier-condition'
+  )
 
   const handleConditionChange = (
     conditionIndex: number,
@@ -566,6 +592,7 @@ function VisualTierCard({
   }
 
   const handleConditionRemove = (conditionIndex: number) => {
+    removeConditionKey(conditionIndex)
     onChange({
       ...tier,
       conditions: tier.conditions.filter((_, i) => i !== conditionIndex),
@@ -665,7 +692,7 @@ function VisualTierCard({
         ) : (
           tier.conditions.map((condition, conditionIndex) => (
             <ConditionRow
-              key={conditionIndex}
+              key={conditionKeys[conditionIndex]}
               condition={condition}
               onChange={(next) => handleConditionChange(conditionIndex, next)}
               onRemove={() => handleConditionRemove(conditionIndex)}
@@ -778,6 +805,10 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     () => normalizeVisualConfig(visualConfig),
     [visualConfig]
   )
+  const { keys: tierKeys, removeKey: removeTierKey } = useRowKeys(
+    config.tiers.length,
+    'tier'
+  )
 
   const handleTierChange = (index: number, next: VisualTier) => {
     const tiers = [...config.tiers]
@@ -810,6 +841,7 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
 
   const handleRemoveTier = (index: number) => {
     const tiers = config.tiers.filter((_, i) => i !== index)
+    if (tiers.length > 0) removeTierKey(index)
     onChange({ ...config, tiers: tiers.length > 0 ? tiers : config.tiers })
   }
 
@@ -847,7 +879,7 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
       </p>
       {config.tiers.map((tier, index) => (
         <VisualTierCard
-          key={index}
+          key={tierKeys[index]}
           tier={tier}
           index={index}
           total={config.tiers.length}
@@ -965,12 +997,12 @@ function RuleConditionRow({
         return timeFunc
     }
   }
-  const sourceLabel =
-    condition.source === SOURCE_PARAM
-      ? t('Body param')
-      : condition.source === SOURCE_HEADER
-        ? t('Header')
-        : t('Time')
+  let sourceLabel = t('Time')
+  if (condition.source === SOURCE_PARAM) {
+    sourceLabel = t('Body param')
+  } else if (condition.source === SOURCE_HEADER) {
+    sourceLabel = t('Header')
+  }
 
   const handleSourceChange = (source: string) => {
     if (source === SOURCE_TIME) {
@@ -1192,6 +1224,10 @@ function RuleGroupCard({
   onRemove,
 }: RuleGroupCardProps) {
   const { t } = useTranslation()
+  const { keys: conditionKeys, removeKey: removeConditionKey } = useRowKeys(
+    group.conditions.length,
+    'rule-condition'
+  )
 
   const handleConditionChange = (
     conditionIndex: number,
@@ -1231,17 +1267,18 @@ function RuleGroupCard({
       <div className='space-y-2'>
         {group.conditions.map((condition, conditionIndex) => (
           <RuleConditionRow
-            key={conditionIndex}
+            key={conditionKeys[conditionIndex]}
             condition={condition}
             onChange={(next) => handleConditionChange(conditionIndex, next)}
-            onRemove={() =>
+            onRemove={() => {
+              removeConditionKey(conditionIndex)
               onChange({
                 ...group,
                 conditions: group.conditions.filter(
                   (_, i) => i !== conditionIndex
                 ),
               })
-            }
+            }}
           />
         ))}
         <div className='flex flex-wrap gap-2'>
@@ -1639,6 +1676,10 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   const [requestRuleGroups, setRequestRuleGroups] = useState<
     RequestRuleGroup[]
   >(() => tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
+  const { keys: ruleGroupKeys, removeKey: removeRuleGroupKey } = useRowKeys(
+    requestRuleGroups.length,
+    'rule-group'
+  )
   const initRef = useRef(false)
 
   useEffect(() => {
@@ -1827,7 +1868,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
               <>
                 {requestRuleGroups.map((group, groupIndex) => (
                   <RuleGroupCard
-                    key={groupIndex}
+                    key={ruleGroupKeys[groupIndex]}
                     group={group}
                     index={groupIndex}
                     onChange={(next) => {
@@ -1835,11 +1876,12 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
                       updated[groupIndex] = next
                       handleRuleGroupsChange(updated)
                     }}
-                    onRemove={() =>
+                    onRemove={() => {
+                      removeRuleGroupKey(groupIndex)
                       handleRuleGroupsChange(
                         requestRuleGroups.filter((_, i) => i !== groupIndex)
                       )
-                    }
+                    }}
                   />
                 ))}
                 <Button

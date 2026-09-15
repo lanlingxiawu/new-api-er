@@ -1,4 +1,3 @@
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnDef,
@@ -8,8 +7,11 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { BadgeDollarSign, DollarSign, TrendingUp, Wallet } from 'lucide-react'
+import { useMemo, useState, type ComponentType, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
+import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
+import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -20,8 +22,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DataTableColumnHeader, DataTablePage } from '@/components/data-table'
-import { SectionPageLayout } from '@/components/layout'
 import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
@@ -32,6 +32,8 @@ import { CommissionCalendarSection } from '@/features/employees/components/commi
 import { UsageLogIdHover } from '@/features/employees/components/usage-log-id-hover'
 import type { CommissionLog } from '@/features/employees/types'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { cn } from '@/lib/utils'
+
 import {
   getMyCommissionLogs,
   getMyCommissionCalendarStats,
@@ -66,8 +68,12 @@ function SummaryCards({
   const totalConsumptionQuota = num(data.customer_total_consumption_quota)
   const totalConsumptionUsd = data.customer_total_consumption_usd
   // Use cumulative (all-time) totals, not the current-period snapshot.
-  const totalProfitQuota = num(data.profit_total_quota ?? data.total_profit_quota)
-  const totalProfitUsd = num(data.profit_total_usd ?? data.total_profit_usd ?? 0)
+  const totalProfitQuota = num(
+    data.profit_total_quota ?? data.total_profit_quota
+  )
+  const totalProfitUsd = num(
+    data.profit_total_usd ?? data.total_profit_usd ?? 0
+  )
   const totalCommissionQuota = num(
     data.commission_total_quota ?? data.total_commission_quota
   )
@@ -75,16 +81,19 @@ function SummaryCards({
     data.commission_total_usd ?? data.total_commission_usd
 
   // Tier card sub: show next tier info, "highest tier reached", or "no tier assigned"
-  const tierSub: ReactNode = nextTier ? (
-    <span>
-      {t('Next Tier')}: {formatPercent(nextTier.tier_rate)}{' '}
-      ({t('Threshold')}: ${nextTier.tier_threshold_usd.toFixed(2)})
-    </span>
-  ) : hasTier ? (
-    <span>{t('Highest tier reached')}</span>
-  ) : (
-    <span>{t('No tier assigned')}</span>
-  )
+  let tierSub: ReactNode
+  if (nextTier) {
+    tierSub = (
+      <span>
+        {t('Next Tier')}: {formatPercent(nextTier.tier_rate)} ({t('Threshold')}:
+        ${nextTier.tier_threshold_usd.toFixed(2)})
+      </span>
+    )
+  } else if (hasTier) {
+    tierSub = <span>{t('Highest tier reached')}</span>
+  } else {
+    tierSub = <span>{t('No tier assigned')}</span>
+  }
 
   const cards = [
     {
@@ -103,7 +112,9 @@ function SummaryCards({
       sub: formatBusinessExactUsd(totalProfitUsd),
       icon: TrendingUp,
       valueClassName:
-        totalProfitQuota > 0 ? 'text-emerald-600 dark:text-emerald-400' : undefined,
+        totalProfitQuota > 0
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : undefined,
     },
     {
       title: t('Commission Amount'),
@@ -114,7 +125,9 @@ function SummaryCards({
           : formatBusinessUsd(num(totalCommissionUsd)),
       icon: BadgeDollarSign,
       valueClassName:
-        totalCommissionQuota > 0 ? 'text-emerald-600 dark:text-emerald-400' : undefined,
+        totalCommissionQuota > 0
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : undefined,
     },
     {
       title: t('Commission Tier'),
@@ -222,7 +235,9 @@ function useMyCommissionColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Consumption')} />
         ),
-        cell: ({ row }) => <BusinessAmount value={row.original.revenue_quota} />,
+        cell: ({ row }) => (
+          <BusinessAmount value={row.original.revenue_quota} />
+        ),
       },
       {
         accessorKey: 'profit_quota',
@@ -356,12 +371,14 @@ function CommissionHistory() {
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
-  const lossStatusLabel =
-    filterForm.lossStatus === 'loss'
-      ? t('Loss only')
-      : filterForm.lossStatus === 'normal'
-        ? t('Non-loss only')
-        : t('All profit states')
+  let lossStatusLabel: string
+  if (filterForm.lossStatus === 'loss') {
+    lossStatusLabel = t('Loss only')
+  } else if (filterForm.lossStatus === 'normal') {
+    lossStatusLabel = t('Non-loss only')
+  } else {
+    lossStatusLabel = t('All profit states')
+  }
 
   return (
     <DataTablePage
@@ -516,7 +533,7 @@ export function EmployeeConsole() {
                     data={summary}
                     commissionRate={effectiveRate}
                     nextTier={nextTier}
-                    hasTier={!!(tierInfo?.tier_id)}
+                    hasTier={!!tierInfo?.tier_id}
                   />
                 </div>
               ) : null}

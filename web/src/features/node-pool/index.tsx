@@ -17,8 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 // xiugai 添加号池节点功能
-import { useEffect, useState, useCallback, useRef, startTransition } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useRouterState } from '@tanstack/react-router'
 import {
   Activity,
@@ -37,11 +35,21 @@ import {
   Wallet,
   XCircle,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  startTransition,
+} from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SectionPageLayout } from '@/components/layout'
+import { cn } from '@/lib/utils'
+
 import { deleteNode, getNodeAccounts, getNodes } from './api'
 import type { Node, NodeAccount, NodeStats } from './types'
 
@@ -66,11 +74,13 @@ function StatCard({
     <div
       className={cn(
         'flex min-w-0 flex-1 flex-col gap-1 rounded-lg border bg-card p-3 shadow-sm',
-        variant === 'online' && 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40',
-        variant === 'offline' && 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/40'
+        variant === 'online' &&
+          'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/40',
+        variant === 'offline' &&
+          'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/40'
       )}
     >
-      <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+      <div className='text-muted-foreground flex items-center gap-1.5 text-xs'>
         <Icon
           className={cn(
             'size-3.5',
@@ -97,7 +107,10 @@ function NodeStatusBadge({ status }: { status: string }) {
   const { t } = useTranslation()
   if (status === 'online') {
     return (
-      <Badge variant='default' className='gap-1 bg-emerald-600 text-white hover:bg-emerald-600 dark:bg-emerald-500 dark:hover:bg-emerald-500'>
+      <Badge
+        variant='default'
+        className='gap-1 bg-emerald-600 text-white hover:bg-emerald-600 dark:bg-emerald-500 dark:hover:bg-emerald-500'
+      >
         <CheckCircle2 className='size-3' />
         {t('Online')}
       </Badge>
@@ -132,7 +145,12 @@ type NodeListItemProps = {
   accountStats?: AccountStats
 }
 
-function NodeListItem({ node, selected, onClick, accountStats }: NodeListItemProps) {
+function NodeListItem({
+  node,
+  selected,
+  onClick,
+  accountStats,
+}: NodeListItemProps) {
   return (
     <button
       type='button'
@@ -145,13 +163,13 @@ function NodeListItem({ node, selected, onClick, accountStats }: NodeListItemPro
       <div className='flex items-start justify-between gap-2'>
         <div className='min-w-0 flex-1'>
           <p className='truncate text-sm font-medium'>{node.node_name}</p>
-          <p className='truncate text-xs text-muted-foreground'>
+          <p className='text-muted-foreground truncate text-xs'>
             {node.public_ip}:{node.listen_port}
           </p>
         </div>
         <NodeStatusBadge status={node.status} />
       </div>
-      <div className='mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-xs text-muted-foreground'>
+      <div className='text-muted-foreground mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-xs'>
         <span className='flex items-center gap-1'>
           <Cpu className='size-3 shrink-0' />
           {formatNumber(node.cpu_usage, 1)}%
@@ -167,7 +185,9 @@ function NodeListItem({ node, selected, onClick, accountStats }: NodeListItemPro
         {accountStats != null && (
           <span className='col-span-3 mt-0.5 flex items-center gap-1'>
             <Users className='size-3 shrink-0' />
-            <span className='text-emerald-600 dark:text-emerald-400'>{accountStats.available}</span>
+            <span className='text-emerald-600 dark:text-emerald-400'>
+              {accountStats.available}
+            </span>
             <span>/</span>
             <span>{accountStats.total}</span>
           </span>
@@ -184,9 +204,9 @@ type NodeDetailFieldProps = {
 
 function NodeDetailField({ label, value }: NodeDetailFieldProps) {
   return (
-    <div className='flex flex-col gap-0.5 rounded-md bg-muted/40 px-3 py-2 text-sm'>
-      <span className='text-xs text-muted-foreground'>{label}</span>
-      <span className='min-w-0 break-all font-medium'>{value}</span>
+    <div className='bg-muted/40 flex flex-col gap-0.5 rounded-md px-3 py-2 text-sm'>
+      <span className='text-muted-foreground text-xs'>{label}</span>
+      <span className='min-w-0 font-medium break-all'>{value}</span>
     </div>
   )
 }
@@ -214,7 +234,7 @@ function NodeDetailPanel({
   }
 
   return (
-    <div className='shrink-0 rounded-lg border bg-card p-4'>
+    <div className='bg-card shrink-0 rounded-lg border p-4'>
       <div className='mb-3 flex items-center justify-between'>
         <h3 className='text-sm font-semibold'>{t('Node Details')}</h3>
         {node.status === 'offline' && (
@@ -239,19 +259,60 @@ function NodeDetailPanel({
         <NodeDetailField label={t('Public IP')} value={node.public_ip} />
         <NodeDetailField label={t('Internal IP')} value={node.internal_ip} />
         <NodeDetailField label={t('Port')} value={node.listen_port} />
-        <NodeDetailField label={t('Status')} value={<NodeStatusBadge status={node.status} />} />
-        <NodeDetailField label={t('Last Seen')} value={node.last_seen ? new Date(node.last_seen).toLocaleString() : '–'} />
-        <NodeDetailField label={t('CPU Usage')} value={`${formatNumber(node.cpu_usage, 1)}%`} />
-        <NodeDetailField label={t('Memory Usage')} value={`${formatNumber(node.mem_usage, 1)}%`} />
-        <NodeDetailField label={t('Upload Bandwidth')} value={`${formatNumber(node.upload_bandwidth, 1)} Mbps`} />
-        <NodeDetailField label={t('Download Bandwidth')} value={`${formatNumber(node.download_bandwidth, 1)} Mbps`} />
-        <NodeDetailField label={t('Today Requests')} value={node.today_requests ?? '–'} />
-        <NodeDetailField label={t('Total Requests')} value={node.total_requests ?? '–'} />
-        <NodeDetailField label={t('Today Consumption')} value={`$${formatNumber(node.today_consumption)}`} />
-        <NodeDetailField label={t('Total Consumption')} value={`$${formatNumber(node.total_consumption)}`} />
-        <NodeDetailField label={t('Total RPM')} value={formatNumber(node.total_rpm, 1)} />
-        <NodeDetailField label={t('Current RPM')} value={formatNumber(node.current_rpm, 1)} />
-        <NodeDetailField label={t('Avg Response Time')} value={`${formatNumber(node.avg_response_time, 0)} ms`} />
+        <NodeDetailField
+          label={t('Status')}
+          value={<NodeStatusBadge status={node.status} />}
+        />
+        <NodeDetailField
+          label={t('Last Seen')}
+          value={
+            node.last_seen ? new Date(node.last_seen).toLocaleString() : '–'
+          }
+        />
+        <NodeDetailField
+          label={t('CPU Usage')}
+          value={`${formatNumber(node.cpu_usage, 1)}%`}
+        />
+        <NodeDetailField
+          label={t('Memory Usage')}
+          value={`${formatNumber(node.mem_usage, 1)}%`}
+        />
+        <NodeDetailField
+          label={t('Upload Bandwidth')}
+          value={`${formatNumber(node.upload_bandwidth, 1)} Mbps`}
+        />
+        <NodeDetailField
+          label={t('Download Bandwidth')}
+          value={`${formatNumber(node.download_bandwidth, 1)} Mbps`}
+        />
+        <NodeDetailField
+          label={t('Today Requests')}
+          value={node.today_requests ?? '–'}
+        />
+        <NodeDetailField
+          label={t('Total Requests')}
+          value={node.total_requests ?? '–'}
+        />
+        <NodeDetailField
+          label={t('Today Consumption')}
+          value={`$${formatNumber(node.today_consumption)}`}
+        />
+        <NodeDetailField
+          label={t('Total Consumption')}
+          value={`$${formatNumber(node.total_consumption)}`}
+        />
+        <NodeDetailField
+          label={t('Total RPM')}
+          value={formatNumber(node.total_rpm, 1)}
+        />
+        <NodeDetailField
+          label={t('Current RPM')}
+          value={formatNumber(node.current_rpm, 1)}
+        />
+        <NodeDetailField
+          label={t('Avg Response Time')}
+          value={`${formatNumber(node.avg_response_time, 0)} ms`}
+        />
       </div>
     </div>
   )
@@ -261,7 +322,13 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 
 type StatusFilter = 'all' | 'online' | 'offline'
 
-function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading: boolean }) {
+function AccountsTable({
+  accounts,
+  loading,
+}: {
+  accounts: NodeAccount[]
+  loading: boolean
+}) {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -274,8 +341,15 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
   }, [accounts])
 
   const filtered = accounts.filter((acc) => {
-    if (filterId && !acc.id.toLowerCase().includes(filterId.toLowerCase())) return false
-    if (filterName && !(acc.name ?? '').toLowerCase().includes(filterName.toLowerCase())) return false
+    if (filterId && !acc.id.toLowerCase().includes(filterId.toLowerCase())) {
+      return false
+    }
+    if (
+      filterName &&
+      !(acc.name ?? '').toLowerCase().includes(filterName.toLowerCase())
+    ) {
+      return false
+    }
     if (filterStatus === 'online' && acc.status !== '正常') return false
     if (filterStatus === 'offline' && acc.status === '正常') return false
     return true
@@ -284,6 +358,11 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
   const totalPages = Math.ceil(filtered.length / pageSize)
   const pageAccounts = filtered.slice((page - 1) * pageSize, page * pageSize)
   const hasData = !loading && accounts.length > 0 && filtered.length > 0
+  const statusFilterLabels: Record<StatusFilter, string> = {
+    all: t('All'),
+    online: t('Online'),
+    offline: t('Offline'),
+  }
 
   return (
     <div className='flex flex-col'>
@@ -294,20 +373,29 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
             className='h-7 w-36 text-xs'
             placeholder={t('Filter by ID')}
             value={filterId}
-            onChange={(e) => { setFilterId(e.target.value); startTransition(() => setPage(1)) }}
+            onChange={(e) => {
+              setFilterId(e.target.value)
+              startTransition(() => setPage(1))
+            }}
           />
           <Input
             className='h-7 w-36 text-xs'
             placeholder={t('Filter by Name')}
             value={filterName}
-            onChange={(e) => { setFilterName(e.target.value); startTransition(() => setPage(1)) }}
+            onChange={(e) => {
+              setFilterName(e.target.value)
+              startTransition(() => setPage(1))
+            }}
           />
           <div className='flex rounded-md border text-xs'>
             {(['all', 'online', 'offline'] as StatusFilter[]).map((s) => (
               <button
                 key={s}
                 type='button'
-                onClick={() => { setFilterStatus(s); startTransition(() => setPage(1)) }}
+                onClick={() => {
+                  setFilterStatus(s)
+                  startTransition(() => setPage(1))
+                }}
                 className={cn(
                   'px-2.5 py-1 first:rounded-l-md last:rounded-r-md transition-colors',
                   filterStatus === s
@@ -315,7 +403,7 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
                     : 'hover:bg-muted'
                 )}
               >
-                {s === 'all' ? t('All') : s === 'online' ? t('Online') : t('Offline')}
+                {statusFilterLabels[s]}
               </button>
             ))}
           </div>
@@ -323,60 +411,92 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
       )}
 
       {/* 表格区域 — 仅此层滚动 */}
-      <div className='overflow-auto px-4' style={{ maxHeight: 'calc(100vh - 440px)', minHeight: 120 }}>
-        {loading ? (
-          <div className='flex h-24 items-center justify-center text-muted-foreground'>
+      <div
+        className='overflow-auto px-4'
+        style={{ maxHeight: 'calc(100vh - 440px)', minHeight: 120 }}
+      >
+        {loading && (
+          <div className='text-muted-foreground flex h-24 items-center justify-center'>
             <Loader2 className='mr-2 size-4 animate-spin' />
             {t('Loading accounts...')}
           </div>
-        ) : accounts.length === 0 ? (
-          <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
+        )}
+        {!loading && accounts.length === 0 && (
+          <div className='text-muted-foreground flex h-24 items-center justify-center text-sm'>
             {t('No accounts')}
           </div>
-        ) : filtered.length === 0 ? (
-          <div className='flex h-16 items-center justify-center text-sm text-muted-foreground'>
+        )}
+        {!loading && accounts.length > 0 && filtered.length === 0 && (
+          <div className='text-muted-foreground flex h-16 items-center justify-center text-sm'>
             {t('No matching accounts')}
           </div>
-        ) : (
+        )}
+        {hasData && (
           <table className='w-full text-sm'>
-            <thead className='sticky top-0 z-10 bg-card'>
-              <tr className='border-b text-left text-xs text-muted-foreground'>
-                <th className='pb-2 pr-3 pt-3 font-medium'>{t('ID')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium'>{t('Name')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium'>{t('Status')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Requests')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Token Count')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('Account Cost')}</th>
-                <th className='pb-2 pr-3 pt-3 font-medium text-right'>{t('User Cost')}</th>
-                <th className='pb-2 pt-3 font-medium text-right'>{t('Used / Total')}</th>
+            <thead className='bg-card sticky top-0 z-10'>
+              <tr className='text-muted-foreground border-b text-left text-xs'>
+                <th className='pt-3 pr-3 pb-2 font-medium'>{t('ID')}</th>
+                <th className='pt-3 pr-3 pb-2 font-medium'>{t('Name')}</th>
+                <th className='pt-3 pr-3 pb-2 font-medium'>{t('Status')}</th>
+                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                  {t('Requests')}
+                </th>
+                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                  {t('Token Count')}
+                </th>
+                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                  {t('Account Cost')}
+                </th>
+                <th className='pt-3 pr-3 pb-2 text-right font-medium'>
+                  {t('User Cost')}
+                </th>
+                <th className='pt-3 pb-2 text-right font-medium'>
+                  {t('Used / Total')}
+                </th>
               </tr>
             </thead>
             <tbody>
               {pageAccounts.map((acc) => (
-                <tr key={acc.id} className='border-b last:border-b-0 hover:bg-muted/40'>
+                <tr
+                  key={acc.id}
+                  className='hover:bg-muted/40 border-b last:border-b-0'
+                >
                   <td className='py-2 pr-3 font-mono text-xs'>{acc.id}</td>
                   <td className='py-2 pr-3'>{acc.name || '–'}</td>
                   <td className='py-2 pr-3'>
                     <AccountStatusBadge status={acc.status} />
                   </td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>{acc.req ?? 0}</td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>{acc.tokens ?? 0}</td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.account_cost)}</td>
-                  <td className='py-2 pr-3 text-right tabular-nums'>${formatNumber(acc.user_cost)}</td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>
+                    {acc.req ?? 0}
+                  </td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>
+                    {acc.tokens ?? 0}
+                  </td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>
+                    ${formatNumber(acc.account_cost)}
+                  </td>
+                  <td className='py-2 pr-3 text-right tabular-nums'>
+                    ${formatNumber(acc.user_cost)}
+                  </td>
                   <td className='py-2 text-right tabular-nums'>
                     {acc.used_capacity != null || acc.total_capacity != null ? (
                       <div className='flex flex-col items-end gap-1'>
-                        <span>{formatNumber(acc.used_capacity)} / {formatNumber(acc.total_capacity)}</span>
-                        <div className='h-1 w-16 overflow-hidden rounded-full bg-muted'>
+                        <span>
+                          {formatNumber(acc.used_capacity)} /{' '}
+                          {formatNumber(acc.total_capacity)}
+                        </span>
+                        <div className='bg-muted h-1 w-16 overflow-hidden rounded-full'>
                           <div
-                            className='h-full rounded-full bg-primary transition-all'
+                            className='bg-primary h-full rounded-full transition-all'
                             style={{
                               width: `${Math.min(100, acc.total_capacity > 0 ? (acc.used_capacity / acc.total_capacity) * 100 : 0).toFixed(1)}%`,
                             }}
                           />
                         </div>
                       </div>
-                    ) : '–'}
+                    ) : (
+                      '–'
+                    )}
                   </td>
                 </tr>
               ))}
@@ -387,18 +507,24 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
 
       {/* 分页栏 — 固定底部，不随表格滚动 */}
       {hasData && (
-        <div className='flex shrink-0 items-center justify-between border-t px-4 py-2.5 text-xs text-muted-foreground'>
+        <div className='text-muted-foreground flex shrink-0 items-center justify-between border-t px-4 py-2.5 text-xs'>
           <div className='flex items-center gap-2'>
             <span>
-              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} / {filtered.length}
+              {(page - 1) * pageSize + 1}–
+              {Math.min(page * pageSize, filtered.length)} / {filtered.length}
             </span>
             <select
               value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); startTransition(() => setPage(1)) }}
-              className='h-6 rounded border bg-background px-1 text-xs'
+              onChange={(e) => {
+                setPageSize(Number(e.target.value))
+                startTransition(() => setPage(1))
+              }}
+              className='bg-background h-6 rounded border px-1 text-xs'
             >
               {PAGE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n} / {t('page')}</option>
+                <option key={n} value={n}>
+                  {n} / {t('page')}
+                </option>
               ))}
             </select>
           </div>
@@ -412,7 +538,9 @@ function AccountsTable({ accounts, loading }: { accounts: NodeAccount[]; loading
             >
               {t('Prev')}
             </Button>
-            <span className='px-1 tabular-nums'>{page} / {totalPages}</span>
+            <span className='px-1 tabular-nums'>
+              {page} / {totalPages}
+            </span>
             <Button
               size='sm'
               variant='outline'
@@ -442,7 +570,9 @@ export function NodePool() {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [accounts, setAccounts] = useState<NodeAccount[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
-  const [accountStatsCache, setAccountStatsCache] = useState<Record<string, AccountStats>>({})
+  const [accountStatsCache, setAccountStatsCache] = useState<
+    Record<string, AccountStats>
+  >({})
   // xiugai 添加号池节点功能 - 离线节点删除
   const [deleting, setDeleting] = useState(false)
   // end
@@ -462,7 +592,10 @@ export function NodePool() {
       const list = data.accounts ?? []
       setAccounts(list)
       const available = list.filter((a) => a.status === '正常').length
-      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }))
+      setAccountStatsCache((prev) => ({
+        ...prev,
+        [node.node_name]: { available, total: list.length },
+      }))
     } catch {
       if (seq === fetchAccountsSeqRef.current) setAccounts([])
     } finally {
@@ -476,45 +609,57 @@ export function NodePool() {
       const data = await getNodeAccounts(node.node_name)
       const list = data.accounts ?? []
       const available = list.filter((a) => a.status === '正常').length
-      setAccountStatsCache((prev) => ({ ...prev, [node.node_name]: { available, total: list.length } }))
+      setAccountStatsCache((prev) => ({
+        ...prev,
+        [node.node_name]: { available, total: list.length },
+      }))
     } catch {
       // 缓存拉取失败静默忽略
     }
   }, [])
 
-  const fetchNodes = useCallback(async (skipBulkCache = false) => {
-    if (!isNodePoolRoute) return
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await getNodes()
-      const list = data.nodes ?? []
-      setNodes(list)
-      if (list.length === 0) return
+  const fetchNodes = useCallback(
+    async (skipBulkCache = false) => {
+      if (!isNodePoolRoute) return
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await getNodes()
+        const list = data.nodes ?? []
+        setNodes(list)
+        if (list.length === 0) return
 
-      // 保持或自动选中第一个节点
-      const cur = selectedNodeRef.current
-      let nodeToSelect = cur
-        ? list.find((n) => n.public_ip === cur.public_ip && n.node_name === cur.node_name)
-        : undefined
-      if (!nodeToSelect) nodeToSelect = list[0]
-      selectedNodeRef.current = nodeToSelect
-      setSelectedNode(nodeToSelect)
+        // 保持或自动选中第一个节点
+        const cur = selectedNodeRef.current
+        let nodeToSelect = cur
+          ? list.find(
+              (n) =>
+                n.public_ip === cur.public_ip && n.node_name === cur.node_name
+            )
+          : undefined
+        if (!nodeToSelect) nodeToSelect = list[0]
+        selectedNodeRef.current = nodeToSelect
+        setSelectedNode(nodeToSelect)
 
-      // 选中节点：拉取展示账号（同时更新缓存）
-      fetchAccounts(nodeToSelect)
-      // 其余节点：并发拉取缓存（删除节点后跳过，避免批量请求所有节点）
-      if (!skipBulkCache) {
-        list
-          .filter((n) => n.node_name !== nodeToSelect!.node_name)
-          .forEach((n) => fetchAccountsForCache(n))
+        // 选中节点：拉取展示账号（同时更新缓存）
+        fetchAccounts(nodeToSelect)
+        // 其余节点：并发拉取缓存（删除节点后跳过，避免批量请求所有节点）
+        if (!skipBulkCache) {
+          const selectedNodeName = nodeToSelect.node_name
+          list
+            .filter((n) => n.node_name !== selectedNodeName)
+            .forEach((n) => fetchAccountsForCache(n))
+        }
+      } catch {
+        setError(
+          t('Node pool is temporarily unavailable, please try again later')
+        )
+      } finally {
+        setLoading(false)
       }
-    } catch {
-      setError(t('Node pool is temporarily unavailable, please try again later'))
-    } finally {
-      setLoading(false)
-    }
-  }, [t, isNodePoolRoute, fetchAccounts, fetchAccountsForCache])
+    },
+    [t, isNodePoolRoute, fetchAccounts, fetchAccountsForCache]
+  )
 
   useEffect(() => {
     // Keep the initial node fetch behavior aligned with the classic UI.
@@ -540,7 +685,11 @@ export function NodePool() {
       selectedNodeRef.current = null
       setSelectedNode(null)
       setAccounts([])
-      setAccountStatsCache((prev) => { const n = { ...prev }; delete n[selectedNode.node_name]; return n })
+      setAccountStatsCache((prev) => {
+        const n = { ...prev }
+        delete n[selectedNode.node_name]
+        return n
+      })
       await fetchNodes(true)
     } catch {
       setError(t('Failed to delete node'))
@@ -580,9 +729,23 @@ export function NodePool() {
       <SectionPageLayout.Content>
         {/* Summary stats */}
         <div className='mb-4 flex flex-wrap gap-3'>
-          <StatCard label={t('Total Nodes')} value={stats.total} icon={Server} />
-          <StatCard label={t('Online')} value={stats.online} icon={CheckCircle2} variant='online' />
-          <StatCard label={t('Offline')} value={stats.offline} icon={XCircle} variant='offline' />
+          <StatCard
+            label={t('Total Nodes')}
+            value={stats.total}
+            icon={Server}
+          />
+          <StatCard
+            label={t('Online')}
+            value={stats.online}
+            icon={CheckCircle2}
+            variant='online'
+          />
+          <StatCard
+            label={t('Offline')}
+            value={stats.offline}
+            icon={XCircle}
+            variant='offline'
+          />
           <StatCard
             label={t('Today Consumption')}
             value={`$${formatNumber(stats.todayConsumption)}`}
@@ -601,23 +764,26 @@ export function NodePool() {
         </div>
 
         {error && (
-          <div className='mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive'>
+          <div className='border-destructive/30 bg-destructive/10 text-destructive mb-4 flex items-center gap-2 rounded-lg border px-4 py-3 text-sm'>
             <AlertCircle className='size-4 shrink-0' />
             {error}
           </div>
         )}
 
         {loading && !nodes.length ? (
-          <div className='flex h-40 items-center justify-center text-muted-foreground'>
+          <div className='text-muted-foreground flex h-40 items-center justify-center'>
             <Loader2 className='mr-2 size-5 animate-spin' />
             {t('Loading nodes...')}
           </div>
         ) : (
-          <div className='flex gap-4' style={{ height: 'calc(100vh - 160px)', minHeight: 400 }}>
+          <div
+            className='flex gap-4'
+            style={{ height: 'calc(100vh - 160px)', minHeight: 400 }}
+          >
             {/* Left: Node list */}
             <div className='flex w-72 shrink-0 flex-col gap-2 overflow-y-auto'>
               {nodes.length === 0 ? (
-                <div className='flex h-24 items-center justify-center text-sm text-muted-foreground'>
+                <div className='text-muted-foreground flex h-24 items-center justify-center text-sm'>
                   <CircleDashed className='mr-2 size-4' />
                   {t('No nodes found')}
                 </div>
@@ -638,7 +804,7 @@ export function NodePool() {
             </div>
 
             {/* Right: Details + Accounts */}
-            <div className='flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pb-4 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border'>
+            <div className='[&::-webkit-scrollbar-thumb]:bg-border flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pb-4 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full'>
               {selectedNode ? (
                 <>
                   {/* Node detail */}
@@ -649,22 +815,27 @@ export function NodePool() {
                   />
 
                   {/* Account list */}
-                  <div className='flex flex-col rounded-lg border bg-card'>
+                  <div className='bg-card flex flex-col rounded-lg border'>
                     <h3 className='shrink-0 border-b px-4 py-3 text-sm font-semibold'>
                       {t('Accounts')}
                       {!accountsLoading && (
-                        <span className='ml-2 text-xs font-normal text-muted-foreground'>
+                        <span className='text-muted-foreground ml-2 text-xs font-normal'>
                           ({accounts.length})
                         </span>
                       )}
                     </h3>
-                    <AccountsTable accounts={accounts} loading={accountsLoading} />
+                    <AccountsTable
+                      accounts={accounts}
+                      loading={accountsLoading}
+                    />
                   </div>
                 </>
               ) : (
-                <div className='flex h-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed text-muted-foreground'>
+                <div className='text-muted-foreground flex h-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed'>
                   <Server className='size-10 opacity-30' />
-                  <p className='text-sm'>{t('Select a node to view details')}</p>
+                  <p className='text-sm'>
+                    {t('Select a node to view details')}
+                  </p>
                 </div>
               )}
             </div>

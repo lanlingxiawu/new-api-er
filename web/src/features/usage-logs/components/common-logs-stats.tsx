@@ -21,9 +21,9 @@ import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { Skeleton } from '@/components/ui/skeleton'
+import { useIsEmployee } from '@/hooks/use-admin'
 import { formatLogQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useIsEmployee } from '@/hooks/use-admin'
 
 import {
   getEmployeeCustomerLogStats,
@@ -32,9 +32,22 @@ import {
 } from '../api'
 import { DEFAULT_LOG_STATS } from '../constants'
 import { buildApiParams } from '../lib/utils'
+import type { GetLogsParams, LogsScope } from '../types'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
+
+function resolveLogsScope(isAdmin: boolean, isEmployee: boolean): LogsScope {
+  if (isAdmin) return 'admin'
+  if (isEmployee) return 'employee'
+  return 'self'
+}
+
+function fetchLogStatsByScope(scope: LogsScope, params: GetLogsParams) {
+  if (scope === 'admin') return getLogStats(params)
+  if (scope === 'employee') return getEmployeeCustomerLogStats(params)
+  return getUserLogStats(params)
+}
 
 function StatBadge(props: {
   label: string
@@ -56,7 +69,7 @@ export function CommonLogsStats() {
   const { t } = useTranslation()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const isEmployee = useIsEmployee()
-  const logsScope = isAdmin ? 'admin' : isEmployee ? 'employee' : 'self'
+  const logsScope = resolveLogsScope(isAdmin, isEmployee)
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
 
@@ -71,12 +84,7 @@ export function CommonLogsStats() {
         scope: logsScope,
       })
 
-      const result =
-        logsScope === 'admin'
-          ? await getLogStats(params)
-          : logsScope === 'employee'
-            ? await getEmployeeCustomerLogStats(params)
-            : await getUserLogStats(params)
+      const result = await fetchLogStatsByScope(logsScope, params)
 
       return result.success
         ? result.data || DEFAULT_LOG_STATS

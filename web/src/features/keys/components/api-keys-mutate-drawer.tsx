@@ -24,10 +24,17 @@ import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { getUserGroups } from '@/lib/api'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
-import { cn } from '@/lib/utils'
-import { useStatus } from '@/hooks/use-status'
+import { DateTimePicker } from '@/components/datetime-picker'
+import {
+  SideDrawerSection,
+  SideDrawerSectionHeader,
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -55,18 +62,11 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { DateTimePicker } from '@/components/datetime-picker'
-import {
-  SideDrawerSection,
-  SideDrawerSectionHeader,
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-  sideDrawerSwitchItemClassName,
-} from '@/components/drawer-layout'
-import { MultiSelect } from '@/components/multi-select'
 import { getPricing } from '@/features/pricing/api'
+import { useStatus } from '@/hooks/use-status'
+import { getUserGroups } from '@/lib/api'
+import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import { cn } from '@/lib/utils'
 
 import {
   createApiKey,
@@ -207,12 +207,12 @@ export function ApiKeysMutateDrawer({
       return []
     }
 
-    const targetGroups =
-      selectedGroup === 'auto'
-        ? autoGroups
-        : selectedGroup
-          ? [selectedGroup]
-          : []
+    let targetGroups: string[] = []
+    if (selectedGroup === 'auto') {
+      targetGroups = autoGroups
+    } else if (selectedGroup) {
+      targetGroups = [selectedGroup]
+    }
     const targetGroupSet = new Set(targetGroups)
 
     return pricingModels

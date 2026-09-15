@@ -43,6 +43,33 @@ import {
   submitPaymentForm,
 } from '../lib'
 
+// 按支付方式选择对应的金额计算接口
+function requestPaymentAmount(
+  topupAmount: number,
+  paymentType: string,
+  infiniCurrency?: string
+) {
+  if (isStripePayment(paymentType)) {
+    return calculateStripeAmount({ amount: topupAmount })
+  }
+  if (isWaffoPancakePayment(paymentType)) {
+    return calculateWaffoPancakeAmount({ amount: topupAmount })
+  }
+  if (isAlipayOfficialPayment(paymentType)) {
+    return calculateAlipayAmount({ amount: topupAmount })
+  }
+  if (isWechatOfficialPayment(paymentType)) {
+    return calculateWechatAmount({ amount: topupAmount })
+  }
+  if (isInfiniPayment(paymentType)) {
+    return calculateInfiniAmount({
+      amount: topupAmount,
+      currency: infiniCurrency,
+    })
+  }
+  return calculateAmount({ amount: topupAmount })
+}
+
 // ============================================================================
 // Payment Hook
 // ============================================================================
@@ -58,26 +85,19 @@ export function usePayment() {
   // Calculate payment amount
   // infiniCurrency: 多币种时由外部（Wallet / Infini 选择器）传入所选币种
   const calculatePaymentAmount = useCallback(
-    async (topupAmount: number, paymentType: string, infiniCurrency?: string) => {
+    async (
+      topupAmount: number,
+      paymentType: string,
+      infiniCurrency?: string
+    ) => {
       try {
         setCalculating(true)
 
-        const isStripe = isStripePayment(paymentType)
-        const isPancake = isWaffoPancakePayment(paymentType)
-        const isAlipayOfficial = isAlipayOfficialPayment(paymentType)
-        const isWechatOfficial = isWechatOfficialPayment(paymentType)
-        const isInfini = isInfiniPayment(paymentType)
-        const response = isStripe
-          ? await calculateStripeAmount({ amount: topupAmount })
-          : isPancake
-            ? await calculateWaffoPancakeAmount({ amount: topupAmount })
-            : isAlipayOfficial
-              ? await calculateAlipayAmount({ amount: topupAmount })
-              : isWechatOfficial
-                ? await calculateWechatAmount({ amount: topupAmount })
-                : isInfini
-                  ? await calculateInfiniAmount({ amount: topupAmount, currency: infiniCurrency })
-                  : await calculateAmount({ amount: topupAmount })
+        const response = await requestPaymentAmount(
+          topupAmount,
+          paymentType,
+          infiniCurrency
+        )
 
         if (isApiSuccess(response) && response.data) {
           const calculatedAmount = Number.parseFloat(response.data)
@@ -107,7 +127,11 @@ export function usePayment() {
 
   // Process payment
   const processPayment = useCallback(
-    async (topupAmount: number, paymentType: string, infiniCurrency?: string) => {
+    async (
+      topupAmount: number,
+      paymentType: string,
+      infiniCurrency?: string
+    ) => {
       try {
         setProcessing(true)
 
@@ -121,9 +145,7 @@ export function usePayment() {
           })
 
           if (!isApiSuccess(response)) {
-            toast.error(
-              response.message || i18next.t('Payment request failed')
-            )
+            toast.error(response.message || i18next.t('Payment request failed'))
             return false
           }
 
@@ -141,9 +163,7 @@ export function usePayment() {
           const response = await requestAlipayPayment({ amount })
 
           if (!isApiSuccess(response)) {
-            toast.error(
-              response.message || i18next.t('Payment request failed')
-            )
+            toast.error(response.message || i18next.t('Payment request failed'))
             return false
           }
 
@@ -165,12 +185,13 @@ export function usePayment() {
 
         // Handle Infini hosted checkout payment
         if (isInfiniPayment(paymentType)) {
-          const response = await requestInfiniPayment({ amount, currency: infiniCurrency })
+          const response = await requestInfiniPayment({
+            amount,
+            currency: infiniCurrency,
+          })
 
           if (!isApiSuccess(response)) {
-            toast.error(
-              response.message || i18next.t('Payment request failed')
-            )
+            toast.error(response.message || i18next.t('Payment request failed'))
             return false
           }
 

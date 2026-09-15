@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useRef } from 'react'
+
 import { getUSDCNYRate } from '../api'
 
 // ============================================================================
@@ -73,12 +74,16 @@ export function useBinanceRate() {
   useEffect(() => {
     mounted.current = true
     setLoading(true)
-    fetchRate().then((r) => {
-      if (mounted.current) {
-        setRate(r)
-        setLoading(false)
-      }
-    })
+    fetchRate()
+      .then((r) => {
+        if (mounted.current) {
+          setRate(r)
+          setLoading(false)
+        }
+      })
+      .catch(() => {
+        // fetchRate 内部已兜底（失败返回缓存或 0），此处不会实际触发
+      })
     return () => {
       mounted.current = false
     }

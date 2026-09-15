@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react'
 import {
   useInfiniteQuery,
   useQuery,
@@ -30,10 +29,24 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyDisplay } from '@/lib/currency'
-import { cn } from '@/lib/utils'
+
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTableColumnHeader,
+  DataTablePage,
+} from '@/components/data-table'
+import { SectionPageLayout } from '@/components/layout'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,7 +70,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import { TableCell, TableRow } from '@/components/ui/table'
 import {
   Select,
   SelectContent,
@@ -66,6 +78,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { TableCell, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Tooltip,
@@ -73,13 +86,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import {
-  DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
-  DataTableColumnHeader,
-  DataTablePage,
-} from '@/components/data-table'
-import { SectionPageLayout } from '@/components/layout'
 import { BusinessAmount } from '@/features/business/amount-display'
 import {
   formatBusinessAmount,
@@ -88,6 +94,9 @@ import {
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { searchUsers } from '@/features/users/api'
 import type { User } from '@/features/users/types'
+import { getCurrencyDisplay } from '@/lib/currency'
+import { cn } from '@/lib/utils'
+
 import {
   assignCustomerToEmployee,
   createEmployeeTier,
@@ -104,11 +113,11 @@ import {
   unassignCustomerFromEmployee,
   updateEmployeeTier,
 } from './api'
+import { CommissionCalendarSection } from './components/commission-financial-calendar'
 import {
-  CommissionCalendarSection,
   currentMonthValue,
   monthValueToCalendarRange,
-} from './components/commission-financial-calendar'
+} from './components/commission-financial-calendar-utils'
 import { EmployeeFormDialog } from './components/employee-form-dialog'
 import { PerformanceAdjustDialog } from './components/performance-adjust-dialog'
 import { TierResetSettingsCard } from './components/tier-reset-settings-card'
@@ -263,13 +272,9 @@ function AssignUserPicker({
             onScroll={handleListScroll}
             className='max-h-56 overflow-y-auto p-1'
           >
-            {isInitialFetching ? (
+            {isInitialFetching || users.length === 0 ? (
               <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
-                {t('Loading...')}
-              </li>
-            ) : users.length === 0 ? (
-              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
-                {t('No users found')}
+                {isInitialFetching ? t('Loading...') : t('No users found')}
               </li>
             ) : (
               <>
@@ -279,6 +284,22 @@ function AssignUserPicker({
                     user.assigned_employee_user_id === employeeUserId
                   const isSelected = selectedIds.has(user.id)
                   const canSelect = !isCurrentEmployeeCustomer
+                  let customerDetail: ReactNode = null
+                  if (user.is_assigned_customer) {
+                    customerDetail = (
+                      <div className='mt-0.5 truncate text-xs text-amber-600 dark:text-amber-400'>
+                        {user.assigned_employee_name
+                          ? `${t('Assigned to')}: ${user.assigned_employee_name}`
+                          : t('Assigned to another employee')}
+                      </div>
+                    )
+                  } else if (user.email) {
+                    customerDetail = (
+                      <div className='text-muted-foreground mt-0.5 truncate text-xs'>
+                        {user.email}
+                      </div>
+                    )
+                  }
                   return (
                     <li
                       key={user.id}
@@ -319,17 +340,7 @@ function AssignUserPicker({
                           </span>
                         </div>
                       </div>
-                      {user.is_assigned_customer ? (
-                        <div className='mt-0.5 truncate text-xs text-amber-600 dark:text-amber-400'>
-                          {user.assigned_employee_name
-                            ? `${t('Assigned to')}: ${user.assigned_employee_name}`
-                            : t('Assigned to another employee')}
-                        </div>
-                      ) : user.email ? (
-                        <div className='text-muted-foreground mt-0.5 truncate text-xs'>
-                          {user.email}
-                        </div>
-                      ) : null}
+                      {customerDetail}
                     </li>
                   )
                 })}
@@ -402,12 +413,14 @@ function RemoveCustomersDialog({
       debounced,
       pagination,
     ],
-    queryFn: () =>
-      getEmployeeCustomers(employee!.id, {
+    queryFn: () => {
+      if (!employee) throw new Error('Employee is required')
+      return getEmployeeCustomers(employee.id, {
         page: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
         keyword: debounced,
-      }),
+      })
+    },
     enabled: open && Boolean(employee?.id),
   })
 
@@ -424,6 +437,23 @@ function RemoveCustomersDialog({
     employee?.username ||
     employee?.display_name ||
     (employee?.user_id ? `#${employee.user_id}` : '-')
+
+  let customerListPlaceholder: ReactNode = null
+  if (isLoading) {
+    customerListPlaceholder = (
+      <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center text-sm'>
+        {t('Loading...')}
+      </div>
+    )
+  } else if (customers.length === 0) {
+    customerListPlaceholder = (
+      <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center px-6 text-center text-sm'>
+        {debounced
+          ? t('No current customers match your search')
+          : t('This employee has no assigned customers')}
+      </div>
+    )
+  }
 
   const confirmRemoveCustomer = async () => {
     if (!employee || !customerToRemove) return
@@ -542,17 +572,7 @@ function RemoveCustomersDialog({
                 <span className='text-right'>{t('Action')}</span>
               </div>
               <div className='divide-border/40 min-h-0 flex-1 divide-y overflow-y-auto'>
-                {isLoading ? (
-                  <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center text-sm'>
-                    {t('Loading...')}
-                  </div>
-                ) : customers.length === 0 ? (
-                  <div className='text-muted-foreground flex h-full min-h-[260px] items-center justify-center px-6 text-center text-sm'>
-                    {debounced
-                      ? t('No current customers match your search')
-                      : t('This employee has no assigned customers')}
-                  </div>
-                ) : (
+                {customerListPlaceholder ??
                   customers.map((customer) => {
                     const customerUserId = getCustomerUserId(customer)
                     return (
@@ -606,8 +626,7 @@ function RemoveCustomersDialog({
                         </div>
                       </div>
                     )
-                  })
-                )}
+                  })}
               </div>
             </div>
 
@@ -1311,8 +1330,9 @@ function useEmployeesColumns({
             title={t('Period Customer Consumption')}
           />
         ),
-        cell: ({ row }) =>
-          <BusinessAmount value={row.original.period_consumption_quota ?? 0} />,
+        cell: ({ row }) => (
+          <BusinessAmount value={row.original.period_consumption_quota ?? 0} />
+        ),
       },
       {
         accessorKey: 'period_cost_quota',
@@ -1320,8 +1340,9 @@ function useEmployeesColumns({
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Period Cost')} />
         ),
-        cell: ({ row }) =>
-          <BusinessAmount value={row.original.period_cost_quota ?? 0} />,
+        cell: ({ row }) => (
+          <BusinessAmount value={row.original.period_cost_quota ?? 0} />
+        ),
       },
       {
         accessorKey: 'period_profit_quota',
@@ -1345,7 +1366,10 @@ function useEmployeesColumns({
         cell: ({ row }) => {
           const profitQuota = row.original.period_profit_quota ?? 0
           const tierRate = row.original.current_tier_rate ?? 0
-          const value = tierRate > 0 ? Math.round(profitQuota * tierRate) : (row.original.period_commission_quota ?? 0)
+          const value =
+            tierRate > 0
+              ? Math.round(profitQuota * tierRate)
+              : (row.original.period_commission_quota ?? 0)
           return (
             <BusinessAmount
               value={value}
@@ -1465,9 +1489,7 @@ function EmployeeTotalsPanel({ row }: { row: EmployeeProfile }) {
   const items = [
     {
       label: t('Customer Total Consumption'),
-      value: (
-        <BusinessAmount value={row.total_consumption_quota ?? 0} />
-      ),
+      value: <BusinessAmount value={row.total_consumption_quota ?? 0} />,
     },
     {
       label: t('Total Cost'),
@@ -1490,7 +1512,7 @@ function EmployeeTotalsPanel({ row }: { row: EmployeeProfile }) {
 
   return (
     <div className='bg-muted/30 border-t px-4 py-3'>
-      <div className='mb-2 text-xs font-medium text-muted-foreground'>
+      <div className='text-muted-foreground mb-2 text-xs font-medium'>
         {t('Historical Totals')}
       </div>
       <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
@@ -1605,10 +1627,7 @@ function EmployeeMobileList({
               {fieldCells.map((cell) => (
                 <div key={cell.id} className='min-w-0 overflow-hidden'>
                   <div className='text-muted-foreground mb-0.5 text-[10px] leading-none select-none'>
-                    {
-                      (cell.column.columnDef.meta as { label?: string })
-                        ?.label
-                    }
+                    {(cell.column.columnDef.meta as { label?: string })?.label}
                   </div>
                   <div className='min-w-0 overflow-hidden text-xs'>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -1746,7 +1765,9 @@ function useCommissionLogColumns() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Revenue')} />
         ),
-        cell: ({ row }) => <BusinessAmount value={row.original.revenue_quota} />,
+        cell: ({ row }) => (
+          <BusinessAmount value={row.original.revenue_quota} />
+        ),
       },
       {
         accessorKey: 'cost_quota',
@@ -2033,13 +2054,10 @@ function EmployeesTab() {
             </div>
           </form>
         }
-        getRowClassName={(row, ctx) =>
-          row.original.status === 2
-            ? ctx.isMobile
-              ? DISABLED_ROW_MOBILE
-              : DISABLED_ROW_DESKTOP
-            : undefined
-        }
+        getRowClassName={(row, ctx) => {
+          if (row.original.status !== 2) return undefined
+          return ctx.isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+        }}
         renderRow={(row) => (
           <EmployeeTableRow
             key={row.id}
@@ -2287,12 +2305,14 @@ function CommissionLogsTab() {
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   })
-  const lossStatusLabel =
-    filterForm.lossStatus === 'loss'
-      ? t('Loss only')
-      : filterForm.lossStatus === 'normal'
-        ? t('Non-loss only')
-        : t('All profit states')
+  let lossStatusLabel: string
+  if (filterForm.lossStatus === 'loss') {
+    lossStatusLabel = t('Loss only')
+  } else if (filterForm.lossStatus === 'normal') {
+    lossStatusLabel = t('Non-loss only')
+  } else {
+    lossStatusLabel = t('All profit states')
+  }
 
   useEffect(() => {
     localStorage.setItem(
@@ -2382,7 +2402,10 @@ function CommissionLogsTab() {
                 <SelectGroup>
                   <SelectItem value='all'>{t('All channels')}</SelectItem>
                   {channelOptions.map((ch) => (
-                    <SelectItem key={ch.channel_id} value={String(ch.channel_id)}>
+                    <SelectItem
+                      key={ch.channel_id}
+                      value={String(ch.channel_id)}
+                    >
                       <span className='flex items-center gap-1'>
                         <span className='max-w-[180px] truncate'>
                           {ch.channel_name || `#${ch.channel_id}`}
@@ -2527,11 +2550,12 @@ function EmployeeMonthlySelector({
   }, [data])
   const isInitialFetching = isFetching && !data
   const allEmployeesLabel = t('All employees')
-  const displayValue = open
-    ? keyword
-    : value
-      ? getEmployeeMonthlyOptionLabel(value)
-      : ''
+  let displayValue = ''
+  if (open) {
+    displayValue = keyword
+  } else if (value) {
+    displayValue = getEmployeeMonthlyOptionLabel(value)
+  }
 
   const handleListScroll = (event: UIEvent<HTMLUListElement>) => {
     const list = event.currentTarget
@@ -2594,21 +2618,15 @@ function EmployeeMonthlySelector({
             }}
           >
             <span className='font-medium'>{allEmployeesLabel}</span>
-            <span className='text-muted-foreground text-xs'>
-              {t('All')}
-            </span>
+            <span className='text-muted-foreground text-xs'>{t('All')}</span>
           </button>
           <ul
             onScroll={handleListScroll}
             className='max-h-64 overflow-y-auto border-t p-1'
           >
-            {isInitialFetching ? (
+            {isInitialFetching || employees.length === 0 ? (
               <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
-                {t('Loading...')}
-              </li>
-            ) : employees.length === 0 ? (
-              <li className='text-muted-foreground px-3 py-8 text-center text-sm'>
-                {t('No users found')}
+                {isInitialFetching ? t('Loading...') : t('No users found')}
               </li>
             ) : (
               <>
@@ -2629,7 +2647,8 @@ function EmployeeMonthlySelector({
                     >
                       <div className='flex min-w-0 items-center justify-between gap-3'>
                         <span className='truncate font-medium'>
-                          {employee.remark || getEmployeeMonthlyAccountLabel(employee)}
+                          {employee.remark ||
+                            getEmployeeMonthlyAccountLabel(employee)}
                         </span>
                         {employee.remark ? (
                           <span className='text-muted-foreground shrink-0 truncate text-xs'>
@@ -2655,7 +2674,7 @@ function EmployeeMonthlySelector({
 }
 
 function csvCell(value: string | number | undefined) {
-  return `"${String(value ?? '').replaceAll(/"/g, '""')}"`
+  return `"${String(value ?? '').replaceAll('"', '""')}"`
 }
 
 function CommissionMonthlyStatsTab() {
@@ -2716,7 +2735,7 @@ function CommissionMonthlyStatsTab() {
             .join(',')
         )
       }
-      const csv = `﻿${  lines.join('\r\n')}`
+      const csv = `﻿${lines.join('\r\n')}`
       // 前置 UTF-8 BOM，便于 Excel/WPS 正确识别中文。
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
@@ -2729,7 +2748,9 @@ function CommissionMonthlyStatsTab() {
       URL.revokeObjectURL(url)
       toast.success(t('Export successful'))
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('Operation failed'))
+      toast.error(
+        error instanceof Error ? error.message : t('Operation failed')
+      )
     } finally {
       setExporting(false)
     }

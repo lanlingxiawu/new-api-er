@@ -18,12 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { useQuery } from '@tanstack/react-query'
+import { AlertCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { getUserModels } from '@/lib/api'
+
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertCircle } from 'lucide-react'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import { getUserModels } from '@/lib/api'
+
+const SKELETON_ROW_IDS = Array.from({ length: 5 }, (_, i) => `skeleton-${i}`)
 
 export function ModelMarketplace() {
   const { t } = useTranslation()
@@ -43,7 +46,9 @@ export function ModelMarketplace() {
   return (
     <div className='w-full space-y-6'>
       <div>
-        <h1 className='text-3xl font-bold tracking-tight'>{t('Model Marketplace')}</h1>
+        <h1 className='text-3xl font-bold tracking-tight'>
+          {t('Model Marketplace')}
+        </h1>
         <p className='text-muted-foreground mt-2'>
           {t('View all available models and their status')}
         </p>
@@ -65,16 +70,16 @@ export function ModelMarketplace() {
         <CardContent>
           {isLoading ? (
             <div className='space-y-3'>
-              {[...Array(5)].map((_, i) => (
-                <Skeleton key={i} className='h-8 w-full' />
+              {SKELETON_ROW_IDS.map((id) => (
+                <Skeleton key={id} className='h-8 w-full' />
               ))}
             </div>
           ) : (
-            <div className='grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2'>
+            <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3'>
               {models.map((name: string) => (
                 <div
                   key={name}
-                  className='rounded-md border px-3 py-2 text-sm font-mono'
+                  className='rounded-md border px-3 py-2 font-mono text-sm'
                 >
                   {name}
                 </div>

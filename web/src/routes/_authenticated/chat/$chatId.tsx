@@ -154,6 +154,11 @@ function ChatRouteComponent() {
   }
 
   return (
+    // The embedded chat app (admin-configured, usually cross-origin) needs full
+    // capabilities: scripts, its own origin's storage/cookies, forms, popups,
+    // downloads and top-level navigation. A sandbox would have to allow both
+    // scripts and same-origin, which isolates nothing, so it stays unsandboxed.
+    // oxlint-disable-next-line react/iframe-missing-sandbox -- embedded chat app needs full capabilities (see above)
     <iframe
       src={iframeSrc}
       key={iframeSrc}

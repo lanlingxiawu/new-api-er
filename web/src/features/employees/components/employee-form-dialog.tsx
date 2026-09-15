@@ -1,12 +1,12 @@
-import { useState, useEffect, useMemo, useRef, type UIEvent } from 'react'
-import { z } from 'zod'
-import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef, type UIEvent } from 'react'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+import { z } from 'zod'
+
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -38,6 +38,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { formatBusinessTargetAmount } from '@/features/business/format'
 import { searchUsers } from '@/features/users/api'
 import type { User } from '@/features/users/types'
+import { cn } from '@/lib/utils'
+
 import { createEmployee, getEmployeeTiers, updateEmployee } from '../api'
 import {
   compareEmployeeTiersByGroupLevel,
@@ -187,13 +189,9 @@ function UserPicker({
       ) : null}
       {open && (
         <div className='bg-popover text-popover-foreground absolute top-full z-[100] mt-1 w-full rounded-md border shadow-md'>
-          {isInitialFetching ? (
+          {isInitialFetching || users.length === 0 ? (
             <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
-              {t('Loading...')}
-            </div>
-          ) : users.length === 0 ? (
-            <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
-              {t('No users found')}
+              {isInitialFetching ? t('Loading...') : t('No users found')}
             </div>
           ) : (
             <ul
@@ -258,8 +256,12 @@ function TierSelectField({
     const map = new Map<string, EmployeeTier[]>()
     tiers.forEach((tier) => {
       const group = getEmployeeTierGroup(tier, DEFAULT_TIER_GROUP)
-      if (!map.has(group)) map.set(group, [])
-      map.get(group)!.push(tier)
+      const groupTiers = map.get(group)
+      if (groupTiers) {
+        groupTiers.push(tier)
+      } else {
+        map.set(group, [tier])
+      }
     })
     return [...map.entries()]
       .sort((a, b) =>

@@ -212,6 +212,7 @@ export const WebPreviewBody = ({
     <div className='flex-1'>
       <iframe
         className={cn('size-full', className)}
+        // oxlint-disable-next-line react/iframe-missing-sandbox -- previews arbitrary (typically cross-origin) web apps that need scripts plus their own origin's storage/cookies; dropping either token breaks them
         sandbox='allow-scripts allow-same-origin allow-forms allow-popups allow-presentation'
         src={(src ?? url) || undefined}
         title={t('Preview')}
@@ -238,6 +239,11 @@ export const WebPreviewConsole = ({
 }: WebPreviewConsoleProps) => {
   const { t } = useTranslation()
   const { consoleOpen, setConsoleOpen } = useWebPreview()
+  // Identical timestamps are possible, so the list position disambiguates.
+  const keyedLogs = logs.map((log, position) => ({
+    log,
+    id: `${log.timestamp.getTime()}-${position}`,
+  }))
 
   return (
     <Collapsible
@@ -272,7 +278,7 @@ export const WebPreviewConsole = ({
           {logs.length === 0 ? (
             <p className='text-muted-foreground'>{t('No console output')}</p>
           ) : (
-            logs.map((log, index) => (
+            keyedLogs.map(({ log, id }) => (
               <div
                 className={cn(
                   'text-xs',
@@ -280,7 +286,7 @@ export const WebPreviewConsole = ({
                   log.level === 'warn' && 'text-warning',
                   log.level === 'log' && 'text-foreground'
                 )}
-                key={`${log.timestamp.getTime()}-${index}`}
+                key={id}
               >
                 <span className='text-muted-foreground'>
                   {dayjs(log.timestamp).format('HH:mm:ss')}
