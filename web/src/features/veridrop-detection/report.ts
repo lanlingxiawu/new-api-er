@@ -143,10 +143,38 @@ export function parseVeridropScoreReport(
   }
 }
 
+/** Raw error/summary text of a result, kept for tooltips and troubleshooting. */
+export function getVeridropResultRawMessage(result: VeridropDetectionResult) {
+  return result.error || result.run_error || result.summary
+}
+
+const ERROR_MESSAGE_KEYS = ['message', 'detail', 'msg', 'error_description']
+
+// Pulls the human-readable message out of common upstream error bodies:
+// {"message"}, {"detail"}, {"error": "..."} and OpenAI-style
+// {"error": {"message": "..."}}. Returns '' when nothing readable is found.
+function extractErrorMessage(value: unknown, depth = 0): string {
+  if (typeof value === 'string') return value.trim()
+  if (!isRecord(value) || depth > 3) return ''
+  for (const key of ERROR_MESSAGE_KEYS) {
+    const message = stringValue(value[key]).trim()
+    if (message !== '') return message
+  }
+  return extractErrorMessage(value.error, depth + 1)
+}
+
+function parseJsonErrorMessage(source: string): string {
+  try {
+    return extractErrorMessage(JSON.parse(source))
+  } catch {
+    return ''
+  }
+}
+
 export function getVeridropResultDisplayMessage(
   result: VeridropDetectionResult
 ) {
-  const raw = result.error || result.run_error || result.summary
+  const raw = getVeridropResultRawMessage(result)
   if (raw === '') {
     const verdict = result.verdict.trim()
     return ['passed', 'pass', 'success', 'failed', 'fail', 'error'].includes(
@@ -156,17 +184,17 @@ export function getVeridropResultDisplayMessage(
       : verdict
   }
 
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (isRecord(parsed)) {
-      const message = stringValue(parsed.message)
-      if (message !== '') return message
-      const detail = stringValue(parsed.detail)
-      if (detail !== '') return detail
-    }
-  } catch {
-    // Non-JSON upstream errors are already suitable for direct display.
+  const message = parseJsonErrorMessage(raw)
+  if (message !== '') return message
+
+  // Errors such as `upstream returned 401: {"error":{...}}` carry a readable
+  // prefix followed by a raw JSON body; keep the prefix, replace the body.
+  const jsonStart = raw.indexOf('{')
+  if (jsonStart > 0) {
+    const embedded = parseJsonErrorMessage(raw.slice(jsonStart))
+    if (embedded !== '') return `${raw.slice(0, jsonStart).trim()} ${embedded}`
   }
+  // Non-JSON upstream errors are already suitable for direct display.
   return raw
 }
 

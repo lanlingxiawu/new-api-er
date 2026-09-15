@@ -1402,7 +1402,7 @@ function TestModelsBulkActions({ table }: { table: TanStackTable<ModelRow> }) {
   }, [copyToClipboard, selectedModels])
 
   return (
-    <BulkActionsToolbar table={table} entityName='model'>
+    <BulkActionsToolbar table={table} entityName={t('model')}>
       <Tooltip>
         <TooltipTrigger
           render={

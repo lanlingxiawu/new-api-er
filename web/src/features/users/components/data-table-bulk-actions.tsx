@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
+import { useTranslation } from 'react-i18next'
 
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 
@@ -27,9 +28,10 @@ interface DataTableBulkActionsProps {
 }
 
 export function DataTableBulkActions({ table }: DataTableBulkActionsProps) {
+  const { t } = useTranslation()
   return (
-    <BulkActionsToolbar table={table} entityName='user'>
-      <></>
+    <BulkActionsToolbar table={table} entityName={t('user')}>
+      {null}
     </BulkActionsToolbar>
   )
 }

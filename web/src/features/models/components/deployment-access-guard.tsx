@@ -183,7 +183,22 @@ export function DeploymentAccessGuard({
           <Alert variant='destructive'>
             <AlertCircle className='h-4 w-4' />
             <AlertTitle>{t('Connection error')}</AlertTitle>
-            <AlertDescription>{t(connectionError)}</AlertDescription>
+            <AlertDescription className='space-y-2'>
+              <p>
+                {t(
+                  'We could not reach the model deployment service. Check that the io.net API key in System Settings is valid and has not expired, then retry.'
+                )}
+              </p>
+              {/* Raw upstream/backend error kept for troubleshooting only. */}
+              <details>
+                <summary className='cursor-pointer text-xs'>
+                  {t('View details')}
+                </summary>
+                <pre className='bg-muted text-muted-foreground mt-2 max-h-40 overflow-auto rounded-md p-2 text-[11px] break-all whitespace-pre-wrap'>
+                  {connectionError}
+                </pre>
+              </details>
+            </AlertDescription>
           </Alert>
           <div className='flex gap-2'>
             <Button variant='outline' onClick={onRetry} className='flex-1'>
@@ -199,5 +214,5 @@ export function DeploymentAccessGuard({
     )
   }
 
-  return <>{children}</>
+  return children
 }

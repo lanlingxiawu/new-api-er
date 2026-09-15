@@ -43,7 +43,7 @@ type DataTableBulkActionsProps<TData> = {
  * @template TData The type of data in the table.
  * @param {object} props The component props.
  * @param {Table<TData>} props.table The react-table instance.
- * @param {string} props.entityName The name of the entity being acted upon (e.g., "task", "user").
+ * @param {string} props.entityName The already-translated singular noun of the entity being acted upon (e.g. `t('user')`); it is interpolated into complete translated sentences.
  * @param {React.ReactNode} props.children The action buttons to be rendered inside the toolbar.
  * @returns {React.ReactNode | null} The rendered component or null if no rows are selected.
  */
@@ -66,7 +66,10 @@ export function DataTableBulkActions<TData>({
   // Announce selection changes to screen readers
   useEffect(() => {
     if (selectedCount > 0) {
-      const message = `${selectedCount} ${entityName}${selectedCount > 1 ? 's' : ''} selected. Bulk actions toolbar is available.`
+      const message = t(
+        '{{count}} {{entity}}(s) selected. Bulk actions toolbar is available.',
+        { count: selectedCount, entity: entityName }
+      )
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnnouncement(message)
 
@@ -74,7 +77,7 @@ export function DataTableBulkActions<TData>({
       const timer = setTimeout(() => setAnnouncement(''), 3000)
       return () => clearTimeout(timer)
     }
-  }, [selectedCount, entityName])
+  }, [selectedCount, entityName, t])
 
   const handleClearSelection = () => {
     table.resetRowSelection()
@@ -84,8 +87,8 @@ export function DataTableBulkActions<TData>({
     const buttons = buttonsRef.current
     if (!buttons) return
 
-    const currentIndex = [...buttons].findIndex(
-      (button) => button === document.activeElement
+    const currentIndex = [...buttons].indexOf(
+      document.activeElement as HTMLButtonElement
     )
 
     switch (event.key) {
@@ -161,7 +164,10 @@ export function DataTableBulkActions<TData>({
       <div
         ref={toolbarRef}
         role='toolbar'
-        aria-label={`Bulk actions for ${selectedCount} selected ${entityName}${selectedCount > 1 ? 's' : ''}`}
+        aria-label={t('Bulk actions for {{count}} selected {{entity}}(s)', {
+          count: selectedCount,
+          entity: entityName,
+        })}
         aria-describedby='bulk-actions-description'
         tabIndex={-1}
         onKeyDown={handleKeyDown}
@@ -210,18 +216,25 @@ export function DataTableBulkActions<TData>({
             className='flex items-center gap-x-1 text-sm'
             id='bulk-actions-description'
           >
-            <Badge
-              variant='default'
-              className='min-w-8 rounded-lg'
-              aria-label={`${selectedCount} selected`}
-            >
-              {selectedCount}
-            </Badge>{' '}
-            <span className='hidden sm:inline'>
-              {entityName}
-              {selectedCount > 1 ? 's' : ''}
-            </span>{' '}
-            {t('selected')}
+            {/* Narrow screens: compact "[count] selected"; wider screens: a
+                complete translated sentence so word order follows the locale
+                (e.g. zh "已选择 2 个渠道"). */}
+            <span className='flex items-center gap-x-1 sm:hidden'>
+              <Badge
+                variant='default'
+                className='min-w-8 rounded-lg'
+                aria-label={t('{{count}} selected', { count: selectedCount })}
+              >
+                {selectedCount}
+              </Badge>
+              {t('selected')}
+            </span>
+            <span className='hidden font-medium sm:inline'>
+              {t('{{count}} {{entity}}(s) selected', {
+                count: selectedCount,
+                entity: entityName,
+              })}
+            </span>
           </div>
 
           <Separator

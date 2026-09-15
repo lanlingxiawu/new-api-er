@@ -164,4 +164,40 @@ describe('detailed detection report', () => {
       'fallback detail'
     )
   })
+
+  test('extracts nested and prefixed upstream JSON error messages', () => {
+    assert.equal(
+      getVeridropResultDisplayMessage({
+        ...result,
+        error: JSON.stringify({
+          error: { message: 'Invalid API key', type: 'auth_error' },
+        }),
+      }),
+      'Invalid API key'
+    )
+    assert.equal(
+      getVeridropResultDisplayMessage({
+        ...result,
+        error: JSON.stringify({ error: 'quota exceeded' }),
+      }),
+      'quota exceeded'
+    )
+    assert.equal(
+      getVeridropResultDisplayMessage({
+        ...result,
+        error: 'upstream returned 401: {"error":{"message":"Key is expired"}}',
+      }),
+      'upstream returned 401: Key is expired'
+    )
+    // JSON without any readable field stays raw rather than going blank.
+    const unreadable = JSON.stringify({ code: 500 })
+    assert.equal(
+      getVeridropResultDisplayMessage({ ...result, error: unreadable }),
+      unreadable
+    )
+    assert.equal(
+      getVeridropResultDisplayMessage({ ...result, error: 'plain failure' }),
+      'plain failure'
+    )
+  })
 })

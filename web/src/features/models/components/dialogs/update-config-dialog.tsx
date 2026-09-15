@@ -260,7 +260,7 @@ export function UpdateConfigDialog({
                   name='image_url'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t('Image')}</FormLabel>
+                      <FormLabel>{t('Container image')}</FormLabel>
                       <FormControl>
                         <Input placeholder='ollama/ollama:latest' {...field} />
                       </FormControl>

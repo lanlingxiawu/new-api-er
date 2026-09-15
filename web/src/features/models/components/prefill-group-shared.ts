@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { TFunction } from 'i18next'
+
 import type { StatusBadgeProps } from '@/components/status-badge'
 
 import type { PrefillGroup, PrefillGroupFormValues } from '../types'
@@ -25,39 +27,57 @@ export type PrefillGroupType = PrefillGroup['type']
 export const PREFILL_GROUP_TYPES = [
   {
     value: 'model' as PrefillGroupType,
-    label: 'Model Group',
-    description: 'Reusable sets of models you can attach to channels.',
     badge: 'blue' as StatusBadgeProps['variant'],
   },
   {
     value: 'tag' as PrefillGroupType,
-    label: 'Tag Group',
-    description: 'Collections of metadata tags for bulk operations.',
     badge: 'purple' as StatusBadgeProps['variant'],
   },
   {
     value: 'endpoint' as PrefillGroupType,
-    label: 'Endpoint Group',
-    description: 'HTTP endpoint mappings shared across providers.',
     badge: 'cyan' as StatusBadgeProps['variant'],
   },
 ] as const
 
 export const PREFILL_GROUP_TYPE_META = PREFILL_GROUP_TYPES.reduce<
-  Record<
-    PrefillGroupType,
-    { label: string; badge: StatusBadgeProps['variant'] }
-  >
+  Record<PrefillGroupType, { badge: StatusBadgeProps['variant'] }>
 >(
   (acc, type) => {
-    acc[type.value] = { label: type.label, badge: type.badge }
+    acc[type.value] = { badge: type.badge }
     return acc
   },
-  {} as Record<
-    PrefillGroupType,
-    { label: string; badge: StatusBadgeProps['variant'] }
-  >
+  {} as Record<PrefillGroupType, { badge: StatusBadgeProps['variant'] }>
 )
+
+/**
+ * Translated label/description for each prefill group type. Kept as literal
+ * t() calls (not constants passed to t) so every key stays discoverable.
+ * Unknown/future types fall back to their raw identifier.
+ */
+export function getPrefillGroupTypeText(
+  type: string,
+  t: TFunction
+): { label: string; description: string } {
+  switch (type) {
+    case 'model':
+      return {
+        label: t('Model Group'),
+        description: t('Reusable sets of models you can attach to channels.'),
+      }
+    case 'tag':
+      return {
+        label: t('Tag Group'),
+        description: t('Collections of metadata tags for bulk operations.'),
+      }
+    case 'endpoint':
+      return {
+        label: t('Endpoint Group'),
+        description: t('HTTP endpoint mappings shared across providers.'),
+      }
+    default:
+      return { label: type, description: '' }
+  }
+}
 
 export const DEFAULT_FORM_VALUES: PrefillGroupFormValues = {
   name: '',
@@ -98,13 +118,10 @@ export function parseEndpointKeys(items: PrefillGroup['items']): string[] {
       typeof items === 'string' ? JSON.parse(items || '{}') : (items as unknown)
     if (Array.isArray(parsed)) {
       return parsed
-        .map((item) =>
-          typeof item === 'string'
-            ? item
-            : typeof item?.name === 'string'
-              ? item.name
-              : ''
-        )
+        .map((item) => {
+          if (typeof item === 'string') return item
+          return typeof item?.name === 'string' ? item.name : ''
+        })
         .filter(Boolean)
     }
     if (parsed && typeof parsed === 'object') {

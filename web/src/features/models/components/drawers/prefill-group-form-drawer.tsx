@@ -77,6 +77,7 @@ import {
   PREFILL_GROUP_TYPE_META,
   PREFILL_GROUP_TYPES,
   type PrefillGroupType,
+  getPrefillGroupTypeText,
   parseStringItems,
   serializeEndpointItems,
 } from '../prefill-group-shared'
@@ -143,41 +144,41 @@ export function PrefillGroupFormDrawer({
 
   const handleSubmit = async (values: PrefillGroupFormValues) => {
     setIsSaving(true)
+    const getPayloadItems = () => {
+      if (values.type === 'endpoint') {
+        return typeof values.items === 'string' ? values.items : ''
+      }
+      return Array.isArray(values.items) ? values.items : []
+    }
     const payload = {
       name: values.name.trim(),
       type: values.type,
       description: values.description?.trim() || '',
-      items:
-        values.type === 'endpoint'
-          ? typeof values.items === 'string'
-            ? values.items
-            : ''
-          : Array.isArray(values.items)
-            ? values.items
-            : [],
+      items: getPayloadItems(),
     }
 
     try {
-      const response = isEdit
-        ? await updatePrefillGroup({
-            id: currentGroup!.id,
-            ...payload,
-          })
-        : await createPrefillGroup(payload)
+      const response =
+        isEdit && currentGroup
+          ? await updatePrefillGroup({
+              id: currentGroup.id,
+              ...payload,
+            })
+          : await createPrefillGroup(payload)
 
       if (response.success) {
         toast.success(
-          isEdit ? 'Prefill group updated' : 'Prefill group created'
+          isEdit ? t('Prefill group updated') : t('Prefill group created')
         )
         queryClient.invalidateQueries({
           queryKey: prefillGroupsQueryKeys.lists(),
         })
         onClose()
       } else {
-        toast.error(response.message || 'Operation failed')
+        toast.error(response.message || t('Operation failed'))
       }
     } catch (err: unknown) {
-      toast.error((err as Error)?.message || 'Operation failed')
+      toast.error((err as Error)?.message || t('Operation failed'))
     } finally {
       setIsSaving(false)
     }
@@ -185,6 +186,14 @@ export function PrefillGroupFormDrawer({
 
   const meta =
     PREFILL_GROUP_TYPE_META[selectedType] || PREFILL_GROUP_TYPE_META.model
+  const selectedTypeLabel = getPrefillGroupTypeText(selectedType, t).label
+
+  let submitLabel = t('Create')
+  if (isSaving) {
+    submitLabel = t('Saving...')
+  } else if (isEdit) {
+    submitLabel = t('Save changes')
+  }
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -275,22 +284,27 @@ export function PrefillGroupFormDrawer({
                 name='type'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Group Type</FormLabel>
+                    <FormLabel>{t('Group Type')}</FormLabel>
                     <Select
-                      items={PREFILL_GROUP_TYPES.map((type) => ({
-                          value: type.value,
-                          label: (
-                            <div className='flex flex-col text-left'>
-                              <span className='font-medium'>{type.label}</span>
-                              <span
-                                data-prefill-description
-                                className='text-muted-foreground text-xs'
-                              >
-                                {type.description}
-                              </span>
-                            </div>
-                          ),
-                        }))}
+                      items={PREFILL_GROUP_TYPES.map((type) => {
+                          const text = getPrefillGroupTypeText(type.value, t)
+                          return {
+                            value: type.value,
+                            label: (
+                              <div className='flex flex-col text-left'>
+                                <span className='font-medium'>
+                                  {text.label}
+                                </span>
+                                <span
+                                  data-prefill-description
+                                  className='text-muted-foreground text-xs'
+                                >
+                                  {text.description}
+                                </span>
+                              </div>
+                            ),
+                          }
+                        })}
                       value={field.value}
                       onValueChange={(value) =>
                         value !== null &&
@@ -304,21 +318,24 @@ export function PrefillGroupFormDrawer({
                       </FormControl>
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
-                          {PREFILL_GROUP_TYPES.map((type) => (
-                            <SelectItem key={type.value} value={type.value}>
-                              <div className='flex flex-col text-left'>
-                                <span className='font-medium'>
-                                  {type.label}
-                                </span>
-                                <span
-                                  data-prefill-description
-                                  className='text-muted-foreground text-xs'
-                                >
-                                  {type.description}
-                                </span>
-                              </div>
-                            </SelectItem>
-                          ))}
+                          {PREFILL_GROUP_TYPES.map((type) => {
+                            const text = getPrefillGroupTypeText(type.value, t)
+                            return (
+                              <SelectItem key={type.value} value={type.value}>
+                                <div className='flex flex-col text-left'>
+                                  <span className='font-medium'>
+                                    {text.label}
+                                  </span>
+                                  <span
+                                    data-prefill-description
+                                    className='text-muted-foreground text-xs'
+                                  >
+                                    {text.description}
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
                         </SelectGroup>
                       </SelectContent>
                     </Select>
@@ -334,7 +351,7 @@ export function PrefillGroupFormDrawer({
                 <div className='flex items-center gap-2'>
                   <h4 className='text-sm font-medium'>{t('Project')}</h4>
                   <StatusBadge
-                    label={meta.label}
+                    label={selectedTypeLabel}
                     variant={meta.badge}
                     size='sm'
                     copyable={false}
@@ -397,11 +414,7 @@ export function PrefillGroupFormDrawer({
           </SheetClose>
           <Button type='submit' form='prefill-group-form' disabled={isSaving}>
             {isSaving && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {isSaving
-              ? t('Saving...')
-              : isEdit
-                ? t('Save changes')
-                : t('Create')}
+            {submitLabel}
           </Button>
         </SheetFooter>
       </SheetContent>

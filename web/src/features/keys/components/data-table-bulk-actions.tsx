@@ -82,7 +82,7 @@ export function DataTableBulkActions<TData>({
 
   return (
     <>
-      <BulkActionsToolbar table={table} entityName='API key'>
+      <BulkActionsToolbar table={table} entityName={t('API key')}>
         <Tooltip>
           <TooltipTrigger
             render={

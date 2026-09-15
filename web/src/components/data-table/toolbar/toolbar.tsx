@@ -254,6 +254,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
     />
   )
 
+  const columnFilters = props.table.getState().columnFilters
   const filterChips = React.useMemo(
     () =>
       filters.map((filter) => {
@@ -266,11 +267,12 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
             title={filter.title}
             options={filter.options}
             singleSelect={filter.singleSelect}
+            filterValue={column.getFilterValue()}
           />
         )
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.filters, props.table]
+    [props.filters, props.table, columnFilters]
   )
 
   const handleReset = () => {

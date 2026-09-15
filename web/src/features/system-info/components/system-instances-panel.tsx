@@ -280,6 +280,18 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
               instance.info?.node?.should_configure_manually === true
             const resources = instance.info?.resources
             const storage = resources?.storage
+            // The backend only samples CPU/memory while performance monitoring
+            // is enabled; otherwise both are reported as 0. Memory usage is
+            // never truly 0% on a live host, so treat it as "not collected"
+            // rather than showing a misleading 0%.
+            const memoryUsage = resources?.memory?.usage_percent
+            const hostMetricsCollected =
+              typeof memoryUsage === 'number' && memoryUsage > 0
+            const hostMetricsTooltip = hostMetricsCollected
+              ? undefined
+              : t(
+                  'CPU and memory usage are not collected. Enable performance monitoring in System Settings to report them.'
+                )
             const isDeletingThisInstance =
               props.isDeletingInstance &&
               props.deletingNodeName === instance.node_name
@@ -385,10 +397,20 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                   </TooltipProvider>
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell value={resources?.cpu?.usage_percent} />
+                  <ResourceCell
+                    value={
+                      hostMetricsCollected
+                        ? resources?.cpu?.usage_percent
+                        : undefined
+                    }
+                    tooltip={hostMetricsTooltip}
+                  />
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
-                  <ResourceCell value={resources?.memory?.usage_percent} />
+                  <ResourceCell
+                    value={hostMetricsCollected ? memoryUsage : undefined}
+                    tooltip={hostMetricsTooltip}
+                  />
                 </TableCell>
                 <TableCell className='py-2.5 align-middle'>
                   <ResourceCell

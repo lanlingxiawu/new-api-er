@@ -59,7 +59,9 @@ export function AmountDiscountVisualEditor({
         discountRate:
           typeof rate === 'number' ? rate : Number.parseFloat(String(rate)),
       }))
-      .filter((item) => !isNaN(item.amount) && !isNaN(item.discountRate))
+      .filter(
+        (item) => !Number.isNaN(item.amount) && !Number.isNaN(item.discountRate)
+      )
       .sort((a, b) => a.amount - b.amount)
   }, [value])
 
@@ -107,10 +109,11 @@ export function AmountDiscountVisualEditor({
     setDialogOpen(true)
   }
 
-  const formatPercentage = (rate: number) => {
-    if (rate >= 1) return '0%'
-    const discount = Math.round((1 - rate) * 100)
-    return `${discount}%`
+  // One interpolated key per label so each locale controls word order
+  // (e.g. zh "优惠 7%"); a bare "off" suffix key was translated as "turned off".
+  const formatDiscountLabel = (rate: number) => {
+    if (rate >= 1) return t('No discount')
+    return t('{{percent}}% off', { percent: Math.round((1 - rate) * 100) })
   }
 
   return (
@@ -173,7 +176,7 @@ export function AmountDiscountVisualEditor({
                     className='font-mono'
                     copyable={false}
                   >
-                    {formatPercentage(discount.discountRate)} {t('off')}
+                    {formatDiscountLabel(discount.discountRate)}
                   </StatusBadge>
                 ),
               },
@@ -209,7 +212,7 @@ export function AmountDiscountVisualEditor({
                       className='font-mono'
                       copyable={false}
                     >
-                      {formatPercentage(discount.discountRate)} {t('off')}
+                      {formatDiscountLabel(discount.discountRate)}
                     </StatusBadge>
                   </div>
                   <div className='flex gap-1'>

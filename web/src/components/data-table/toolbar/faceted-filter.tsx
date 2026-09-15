@@ -52,6 +52,13 @@ type DataTableFacetedFilterProps<TData, TValue> = {
   }[]
   /** Enable single select mode (only one option can be selected at a time) */
   singleSelect?: boolean
+  /**
+   * Current filter value of the column. Passed explicitly so this memoized
+   * chip re-renders when the value changes: the column instance is stable and
+   * callers may memoize `options`, so without it React.memo would skip the
+   * update and the selected-value badge would never appear.
+   */
+  filterValue?: unknown
 }
 
 function DataTableFacetedFilterInner<TData, TValue>({
@@ -59,10 +66,13 @@ function DataTableFacetedFilterInner<TData, TValue>({
   title,
   options,
   singleSelect = false,
+  filterValue: filterValueProp,
 }: DataTableFacetedFilterProps<TData, TValue>) {
   const { t } = useTranslation()
   const facets = column?.getFacetedUniqueValues()
-  const filterValue = column?.getFilterValue() as string[] | undefined
+  const filterValue = (filterValueProp ?? column?.getFilterValue()) as
+    | string[]
+    | undefined
   const selectedValues = new Set(filterValue)
 
   const handleOptionSelect = (optionValue: string) => {
@@ -128,6 +138,35 @@ function DataTableFacetedFilterInner<TData, TValue>({
             <CommandGroup>
               {options.map((option) => {
                 const isSelected = selectedValues.has(option.value)
+
+                let optionIcon: React.ReactNode = null
+                if (option.iconNode) {
+                  optionIcon = (
+                    <span className='text-muted-foreground flex size-4 items-center justify-center'>
+                      {option.iconNode}
+                    </span>
+                  )
+                } else if (option.icon) {
+                  optionIcon = (
+                    <option.icon className='text-muted-foreground size-4' />
+                  )
+                }
+
+                let optionCount: React.ReactNode = null
+                if (typeof option.count === 'number') {
+                  optionCount = (
+                    <span className='text-muted-foreground ms-auto flex h-4 min-w-4 items-center justify-center font-mono text-xs'>
+                      {option.count}
+                    </span>
+                  )
+                } else if (facets?.get(option.value)) {
+                  optionCount = (
+                    <span className='ms-auto flex h-4 w-4 items-center justify-center font-mono text-xs'>
+                      {facets.get(option.value)}
+                    </span>
+                  )
+                }
+
                 return (
                   <CommandItem
                     key={option.value}
@@ -143,28 +182,14 @@ function DataTableFacetedFilterInner<TData, TValue>({
                     >
                       <CheckIcon className={cn('text-background h-4 w-4')} />
                     </div>
-                    {option.iconNode ? (
-                      <span className='text-muted-foreground flex size-4 items-center justify-center'>
-                        {option.iconNode}
-                      </span>
-                    ) : option.icon ? (
-                      <option.icon className='text-muted-foreground size-4' />
-                    ) : null}
+                    {optionIcon}
                     <span
                       className='min-w-0 flex-1 truncate'
                       title={t(option.label)}
                     >
                       {t(option.label)}
                     </span>
-                    {typeof option.count === 'number' ? (
-                      <span className='text-muted-foreground ms-auto flex h-4 min-w-4 items-center justify-center font-mono text-xs'>
-                        {option.count}
-                      </span>
-                    ) : facets?.get(option.value) ? (
-                      <span className='ms-auto flex h-4 w-4 items-center justify-center font-mono text-xs'>
-                        {facets.get(option.value)}
-                      </span>
-                    ) : null}
+                    {optionCount}
                   </CommandItem>
                 )
               })}

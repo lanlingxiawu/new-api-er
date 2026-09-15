@@ -109,6 +109,7 @@ import {
 import {
   buildDetailedDetectionReportHtml,
   getVeridropResultDisplayMessage,
+  getVeridropResultRawMessage,
   hasVeridropScoreReport,
   parseVeridropScoreReport,
   type VeridropReportCheck,
@@ -2219,7 +2220,11 @@ function DetectionResultsTable({
                   </TableCell>
                   <TableCell
                     className='text-muted-foreground line-clamp-2 max-w-[420px] py-3 align-middle text-sm whitespace-normal'
-                    title={detailMessage}
+                    title={
+                      detailMessage === ''
+                        ? undefined
+                        : getVeridropResultRawMessage(result) || detailMessage
+                    }
                   >
                     {detailMessage || '—'}
                   </TableCell>

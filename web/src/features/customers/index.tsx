@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pencil, PlusIcon, Trash2, UserRoundPen } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatQuota } from '@/lib/format'
-import { cn } from '@/lib/utils'
+
+import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,8 +31,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { SectionPageLayout } from '@/components/layout'
 import { searchUsers } from '@/features/users/api'
+import { formatQuota } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import {
   createAdminCustomer,
   deleteAdminCustomer,
@@ -114,13 +116,9 @@ function UserPicker({
       />
       {open && (
         <div className='bg-popover text-popover-foreground absolute top-full z-50 mt-1 w-full rounded-md border shadow-md'>
-          {isFetching ? (
+          {isFetching || users.length === 0 ? (
             <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
-              {t('Loading...')}
-            </div>
-          ) : users.length === 0 ? (
-            <div className='text-muted-foreground px-2 py-6 text-center text-sm'>
-              {t('No users found')}
+              {isFetching ? t('Loading...') : t('No users found')}
             </div>
           ) : (
             <ul className='max-h-[240px] overflow-y-auto p-1'>
@@ -176,6 +174,15 @@ function CustomerFormDialog({
   const [status, setStatus] = useState(1)
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
+  const statusItems = [
+    { value: '1', label: t('Enabled') },
+    { value: '2', label: t('Disabled') },
+  ]
+  // Base UI SelectValue renders the raw value ("1") unless the label is
+  // rendered explicitly (same pattern as DailyLimitRecoverSelect).
+  const statusLabel =
+    statusItems.find((item) => item.value === String(status))?.label ??
+    String(status)
 
   useEffect(() => {
     setStatus(currentRow?.status ?? 1)
@@ -238,15 +245,19 @@ function CustomerFormDialog({
             <div className='flex flex-col gap-2'>
               <label className='text-sm font-medium'>{t('Status')}</label>
               <Select
+                items={statusItems}
                 value={String(status)}
                 onValueChange={(v) => setStatus(Number(v))}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{statusLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='1'>{t('Enabled')}</SelectItem>
-                  <SelectItem value='2'>{t('Disabled')}</SelectItem>
+                  {statusItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -590,7 +601,8 @@ function LogsTable({
             <TableCell
               className={`font-medium ${log.quota_delta < 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}
             >
-              {log.quota_delta >= 0 ? '+' : ''}{formatQuota(log.quota_delta)}
+              {log.quota_delta >= 0 ? '+' : ''}
+              {formatQuota(log.quota_delta)}
             </TableCell>
             <TableCell>
               {formatQuota(log.employee_before_quota)}
