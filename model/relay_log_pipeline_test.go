@@ -541,6 +541,23 @@ func useRelayLogPipelineSQLite(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// A shared-cache in-memory SQLite database is destroyed the instant its
+	// connection count drops to zero. Under the concurrent enqueue/drain tests
+	// GORM's pool would otherwise close the idle connection between operations,
+	// dropping the `logs` table mid-test ("no such table: logs"). Hold one
+	// keep-alive connection open for the whole test so the in-memory DB (and its
+	// `logs` table) survives regardless of pool churn. The pool is left
+	// otherwise unconstrained so concurrent writers can still get connections.
+	sqlDB, dbErr := db.DB()
+	require.NoError(t, dbErr)
+	sqlDB.SetConnMaxIdleTime(0)
+	sqlDB.SetConnMaxLifetime(0)
+	keepAlive, connErr := sqlDB.Conn(context.Background())
+	require.NoError(t, connErr)
+	// Registered before the LOG_DB-restore cleanup below so it runs LAST (LIFO):
+	// workers are stopped by resetRelayLogPipelineForTest first, then the
+	// database is allowed to drop.
+	t.Cleanup(func() { _ = keepAlive.Close() })
 	require.NoError(t, db.AutoMigrate(&Log{}))
 	previous := LOG_DB
 	LOG_DB = db

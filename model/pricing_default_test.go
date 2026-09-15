@@ -58,9 +58,14 @@ func TestGetOrCreateVendor_CreatesNew(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInitDefaultVendorMapping(t *testing.T) {
-	existing := uniq("zzexisting")
-	ruleMatch := "claude-" + uniq("zzc") // matches the "claude" -> Anthropic rule
-	noRule := uniq("zznomatch")           // matches no vendor rule
+	// Model names must be digit-free: defaultVendorRules contains numeric/short
+	// patterns like "360", "o1", "o3". uniq() embeds a numeric suffix, so a
+	// random "360" inside it would make noRule/ruleMatch accidentally match the
+	// 360 rule (map iteration order is randomized), flaking the assertions. The
+	// metaMap is local to this test, so fixed alpha-only names are unique enough.
+	existing := "zzexisting-fixed"
+	ruleMatch := "claude-zzruleonly" // matches only the "claude" -> Anthropic rule
+	noRule := "zznomatchtoken"       // contains no vendor rule pattern
 
 	metaMap := map[string]*Model{
 		existing: {ModelName: existing, VendorID: 999}, // pre-populated -> must be untouched
