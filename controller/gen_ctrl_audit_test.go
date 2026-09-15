@@ -12,17 +12,19 @@ import (
 // operator-info extraction helpers. All are pure (no DB) except the context reads.
 
 func TestAuditContentEN_KnownTemplateExpands(t *testing.T) {
+	// 针对用户的 action 一律以 target_username / target_user_id 标识被操作用户。
 	got := auditContentEN("user.create", map[string]interface{}{
-		"username": "alice",
-		"role":     3,
+		"target_username": "alice",
+		"target_user_id":  42,
+		"role":            3,
 	})
-	assert.Equal(t, "Created user alice (role 3)", got)
+	assert.Equal(t, "Created user alice (ID: 42, role 3)", got)
 }
 
 func TestAuditContentEN_MissingParamRendersEmpty(t *testing.T) {
-	// ${id} absent from params -> os.Expand yields empty string for it.
+	// 缺失占位符解析为空串，多余空格被折叠，不会留下断句。
 	got := auditContentEN("user.update", map[string]interface{}{
-		"username": "bob",
+		"target_username": "bob",
 	})
 	assert.Equal(t, "Updated user bob (ID: )", got)
 }
@@ -35,7 +37,7 @@ func TestAuditContentEN_UnknownActionReturnsActionItself(t *testing.T) {
 func TestAuditContentEN_NilParams(t *testing.T) {
 	// nil params must not panic; placeholders resolve to empty.
 	got := auditContentEN("redemption.create", nil)
-	assert.Equal(t, "Created  redemption codes named  ( each)", got)
+	assert.Equal(t, "Created redemption codes named ( each)", got)
 }
 
 func TestAuditAuthMethod_AccessTokenVsSession(t *testing.T) {

@@ -137,3 +137,102 @@ func TestFinishAdminAudit_GenericAction(t *testing.T) {
 	// No FullPath (not routed) -> action falls back to "generic"; recorded async.
 	require.NotPanics(t, func() { finishAdminAudit(ctx, w) })
 }
+
+// ---------------------------------------------------------------------------
+// auditTargetUserID — 兜底路径从路由参数解析被操作用户
+// ---------------------------------------------------------------------------
+
+func TestAuditTargetUserID(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		route  string
+		params gin.Params
+		want   int
+	}{
+		{
+			name:   "registered user route",
+			method: http.MethodDelete,
+			route:  "/api/user/:id/oauth/bindings/:provider_id",
+			params: gin.Params{{Key: "id", Value: "7"}, {Key: "provider_id", Value: "3"}},
+			want:   7,
+		},
+		{
+			// 该路由的用户在 :user_id 而非 :id（:id 是员工记录 ID）。
+			name:   "reads the registered param, not :id",
+			method: http.MethodDelete,
+			route:  "/api/admin/employee/:id/customer/:user_id",
+			params: gin.Params{{Key: "id", Value: "3"}, {Key: "user_id", Value: "9"}},
+			want:   9,
+		},
+		{
+			// :id 是客户档案 ID，真正的用户在档案的 CustomerUserId 上
+			// （controller.AdminUpdateCustomerUser 用它解析用户）。把 :id 当用户 ID
+			// 写进审计，记录到的是另一个账号。
+			name:   "customer profile id is not a user id",
+			method: http.MethodPut,
+			route:  "/api/admin/customer/:id/user",
+			params: gin.Params{{Key: "id", Value: "7"}},
+			want:   0,
+		},
+		{
+			// 未登记的路由不能把 :id 当成用户 ID——这里的 :id 是订阅 ID。
+			name:   "unregistered route yields nothing",
+			method: http.MethodPost,
+			route:  "/api/subscription/admin/user_subscriptions/:id/invalidate",
+			params: gin.Params{{Key: "id", Value: "7"}},
+			want:   0,
+		},
+		{
+			name:   "registered route but wrong method",
+			method: http.MethodPost,
+			route:  "/api/user/:id/2fa",
+			params: gin.Params{{Key: "id", Value: "7"}},
+			want:   0,
+		},
+		{
+			name:   "non-numeric param",
+			method: http.MethodDelete,
+			route:  "/api/user/:id",
+			params: gin.Params{{Key: "id", Value: "abc"}},
+			want:   0,
+		},
+		{
+			name:   "zero is not a user id",
+			method: http.MethodDelete,
+			route:  "/api/user/:id",
+			params: gin.Params{{Key: "id", Value: "0"}},
+			want:   0,
+		},
+		{
+			name:   "negative is not a user id",
+			method: http.MethodDelete,
+			route:  "/api/user/:id",
+			params: gin.Params{{Key: "id", Value: "-1"}},
+			want:   0,
+		},
+		{
+			name:   "missing param",
+			method: http.MethodDelete,
+			route:  "/api/user/:id",
+			params: gin.Params{},
+			want:   0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Params = tc.params
+			require.Equal(t, tc.want, auditTargetUserID(ctx, tc.method, tc.route))
+		})
+	}
+}
+
+// 登记表里的每条路由都必须真实存在于路由表中，否则是静默失效的死配置。
+func TestAuditRouteTargetUserParam_RoutesAreRegisteredElsewhere(t *testing.T) {
+	for key, param := range auditRouteTargetUserParam {
+		require.NotEmpty(t, param, key)
+		require.Contains(t, key, " ", "key must be \"METHOD /route\": %s", key)
+		require.Contains(t, key, ":"+param, "route must contain the :%s param: %s", param, key)
+	}
+}

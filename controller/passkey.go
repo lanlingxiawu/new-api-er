@@ -474,10 +474,7 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	recordManageAuditFor(c, user.Id, "user.reset_passkey", map[string]interface{}{
-		"username": user.Username,
-		"id":       user.Id,
-	})
+	recordManageAuditForUser(c, user.Id, user.Username, "user.reset_passkey", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Passkey 已重置",

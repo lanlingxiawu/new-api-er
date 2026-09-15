@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -15,19 +16,25 @@ import (
 // Log.Content（供导出等非本地化消费者使用）。占位符为 ${name}，由该
 // action 的 params 填充。本地化展示文案在前端 i18n 模板中维护，本表是语言中立的
 // 英文基线——调用方因此无需在每个埋点处手写句子（避免与 params 重复书写同一份值）。
+//
+// 针对用户的 action 一律以 ${target_username} (ID: ${target_user_id}) 标识被操作
+// 用户——这是审计的核心信息，不能缺席。历史日志的 Content 已入库不再重渲染，
+// 因此这里的改动只影响新写入的记录。
 var auditContentTemplates = map[string]string{
-	"user.create":           "Created user ${username} (role ${role})",
-	"user.update":           "Updated user ${username} (ID: ${id})",
-	"user.delete":           "Deleted user ${username} (ID: ${id})",
-	"user.manage":           "Performed ${action} on user ${username} (ID: ${id})",
-	"user.quota_add":        "Increased user quota by ${quota}",
-	"user.quota_subtract":   "Decreased user quota by ${quota}",
-	"user.quota_override":   "Overrode user quota from ${from} to ${to}",
-	"user.binding_clear":    "Cleared ${bindingType} binding for user ${username}",
-	"user.2fa_disable":      "Force-disabled two-factor authentication for the user",
+	"user.create":           "Created user ${target_username} (ID: ${target_user_id}, role ${role})",
+	"user.update":           "Updated user ${target_username} (ID: ${target_user_id})",
+	"user.delete":           "Deleted user ${target_username} (ID: ${target_user_id})",
+	"user.manage":           "Performed ${action} on user ${target_username} (ID: ${target_user_id})",
+	"user.quota_add":        "Increased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
+	"user.quota_subtract":   "Decreased quota of user ${target_username} (ID: ${target_user_id}) by ${quota}",
+	"user.quota_override":   "Overrode quota of user ${target_username} (ID: ${target_user_id}) from ${from} to ${to}",
+	"user.binding_clear":    "Cleared ${bindingType} binding for user ${target_username} (ID: ${target_user_id})",
+	"user.2fa_disable":      "Force-disabled two-factor authentication for user ${target_username} (ID: ${target_user_id})",
 	"user.passkey_register": "Registered a passkey",
 	"user.passkey_delete":   "Deleted a passkey",
-	"user.reset_passkey":    "Reset the user passkey",
+	"user.reset_passkey":    "Reset the passkey of user ${target_username} (ID: ${target_user_id})",
+	"user.oauth_unbind":     "Removed an OAuth binding for user ${target_username} (ID: ${target_user_id})",
+	"user.topup_complete":   "Completed top-up order ${trade_no} for user ${target_username} (ID: ${target_user_id})",
 	"option.update":         "Updated system setting ${key}",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
@@ -48,7 +55,7 @@ var auditContentTemplates = map[string]string{
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
 
 	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
-	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_user_id}",
+	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_username} (ID: ${target_user_id})",
 }
 
 // auditContentEN 按 action 模板渲染英文兜底文本；未登记的 action 退回 action 本身。
@@ -57,12 +64,15 @@ func auditContentEN(action string, params map[string]interface{}) string {
 	if !ok {
 		return action
 	}
-	return os.Expand(tmpl, func(key string) string {
+	expanded := os.Expand(tmpl, func(key string) string {
 		if v, ok := params[key]; ok {
 			return fmt.Sprintf("%v", v)
 		}
 		return ""
 	})
+	// 占位符缺值（例如用户名回查失败）会留下多余空格，折叠掉以免导出文本出现
+	// "Deleted user  (ID: 42)" 这种断句。
+	return strings.Join(strings.Fields(expanded), " ")
 }
 
 // auditOperatorInfo 从上下文构建操作者身份信息（管理员 id/用户名/角色）。
@@ -89,21 +99,61 @@ func markAuditLogged(c *gin.Context) {
 }
 
 // recordManageAudit 记录一条由操作者本人归属的管理/高危审计日志（资源类操作：
-// 渠道 / 系统设置 / 兑换码等）。content 由 action+params 自动渲染。
+// 渠道 / 系统设置 / 兑换码等）。这类操作的对象是资源而非用户，因此不写入
+// target_user_id / target_username——审计时「被操作用户」为空即表示非用户类操作。
+// content 由 action+params 自动渲染。
 func recordManageAudit(c *gin.Context, action string, params map[string]interface{}) {
-	recordManageAuditFor(c, c.GetInt("id"), action, params)
-}
-
-// recordManageAuditFor 记录一条管理审计日志，日志归属于操作者；targetUserId
-// 只表示被操作用户，用于在结构化参数中保留目标上下文。
-func recordManageAuditFor(c *gin.Context, targetUserId int, action string, params map[string]interface{}) {
 	if params == nil {
 		params = map[string]interface{}{}
 	}
-	operatorUserId := c.GetInt("id")
-	if _, ok := params["target_user_id"]; !ok && targetUserId > 0 && targetUserId != operatorUserId {
+	writeManageAudit(c, action, params)
+}
+
+// recordManageAuditFor 记录一条针对用户的管理审计日志，日志归属于操作者；
+// targetUserId 表示被操作用户。调用方未持有用户名时使用本函数，用户名由
+// targetUserId 回查补齐（管理写操作低频，不在中继链路上）。
+func recordManageAuditFor(c *gin.Context, targetUserId int, action string, params map[string]interface{}) {
+	recordManageAuditForUser(c, targetUserId, "", action, params)
+}
+
+// recordManageAuditForUser 记录一条针对用户的管理审计日志。调用方已持有用户对象时
+// 直接传入 targetUsername，避免一次用户名回查。
+//
+// 与 recordManageAudit 的区别是本函数一定会在 params 中留下被操作用户：
+// 即使操作者操作的是自己（root 通过管理接口改自己的记录），也必须留痕——
+// 「对自己动手」恰恰是审计上最需要记录的场景。
+func recordManageAuditForUser(c *gin.Context, targetUserId int, targetUsername string, action string, params map[string]interface{}) {
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+	fillAuditTargetUser(params, targetUserId, targetUsername)
+	writeManageAudit(c, action, params)
+}
+
+// fillAuditTargetUser 把被操作用户写入 op.params 的规范键。
+// 调用方已显式给出的值优先，不覆盖；targetUserId 非正数时视为「无用户目标」，
+// 不写入任何 target 键。用户名为操作发生时的快照，用户改名后历史日志不变。
+func fillAuditTargetUser(params map[string]interface{}, targetUserId int, targetUsername string) {
+	if targetUserId <= 0 {
+		return
+	}
+	if _, ok := params["target_user_id"]; !ok {
 		params["target_user_id"] = targetUserId
 	}
+	if _, ok := params["target_username"]; ok {
+		return
+	}
+	if targetUsername == "" {
+		// 回查失败时只记 ID，前端降级为仅显示 ID，不阻断日志写入。
+		targetUsername, _ = model.GetUsernameById(targetUserId, false)
+	}
+	if targetUsername != "" {
+		params["target_username"] = targetUsername
+	}
+}
+
+func writeManageAudit(c *gin.Context, action string, params map[string]interface{}) {
+	operatorUserId := c.GetInt("id")
 	model.RecordOperationAuditLog(operatorUserId, auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil)
 	markAuditLogged(c)
 }

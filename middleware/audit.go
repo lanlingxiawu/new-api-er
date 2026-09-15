@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -104,6 +105,45 @@ var auditRouteActions = map[string]string{
 	"DELETE /api/log/export/templates/:id": "log_export.template_delete",
 }
 
+// auditRouteTargetUserParam 登记「METHOD + 路由模板」→ 该路由中代表**被操作用户**的
+// 路由参数名。兜底记录据此把目标用户写进 op.params，使审计文案能显示操作对象。
+//
+// 必须逐条登记、不能把 :id 一律当用户 ID：例如
+// POST /api/subscription/admin/user_subscriptions/:id 的 :id 是订阅 ID，
+// DELETE /api/admin/employee/:id/customer/:user_id 的用户在 :user_id 而非 :id。
+//
+// 表中部分路由的 handler 已手动埋点（成功路径不会走到兜底），保留登记是为了让
+// 业务失败提前返回时的兜底记录同样带上目标用户。
+var auditRouteTargetUserParam = map[string]string{
+	"DELETE /api/user/:id":                             "id",
+	"DELETE /api/user/:id/2fa":                         "id",
+	"DELETE /api/user/:id/reset_passkey":               "id",
+	"DELETE /api/user/:id/bindings/:binding_type":      "id",
+	"DELETE /api/user/:id/oauth/bindings/:provider_id": "id",
+
+	"POST /api/subscription/admin/users/:id/subscriptions":       "id",
+	"POST /api/subscription/admin/users/:id/subscriptions/reset": "id",
+
+	// PUT /api/admin/customer/:id/user 不登记：:id 是客户档案 ID，真正的用户要经
+	// CustomerProfile.CustomerUserId 解析（controller.AdminUpdateCustomerUser），
+	// 把 :id 当用户 ID 会把审计记到另一个账号上。该 handler 成功路径自行埋点。
+	"DELETE /api/admin/employee/:id/customer/:user_id": "user_id",
+}
+
+// auditTargetUserID 按登记表从路由参数解析被操作用户 ID。
+// 未登记、参数缺失、非数字或非正数一律返回 0（不写入），不产生错误。
+func auditTargetUserID(c *gin.Context, method string, route string) int {
+	param, ok := auditRouteTargetUserParam[method+" "+route]
+	if !ok {
+		return 0
+	}
+	id, err := strconv.Atoi(c.Param(param))
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
 // beginAdminAudit 在管理/root 写操作进入 handler 前包装 ResponseWriter，
 // 以便事后解析响应判断业务是否成功。仅对写方法（POST/PUT/PATCH/DELETE）生效；
 // 只读请求返回 nil，调用方据此跳过事后兜底记录。
@@ -161,6 +201,11 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 	if action == "generic" {
 		opParams["method"] = method
 		opParams["route"] = route
+	}
+	// 被操作用户只记 ID：兜底运行在鉴权链路上，不为此额外查一次用户名，
+	// 前端渲染时降级为只显示 ID。
+	if targetUserId := auditTargetUserID(c, method, route); targetUserId > 0 {
+		opParams["target_user_id"] = targetUserId
 	}
 
 	// content 为英文兜底文本（供导出等非本地化消费者使用）。

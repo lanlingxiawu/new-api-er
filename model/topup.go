@@ -378,9 +378,11 @@ func FetchTopUpExportBatch(f TopUpListFilter, beforeId int64, limit int) ([]*Top
 }
 
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
-func ManualCompleteTopUp(tradeNo string, callerIp string) error {
+// ManualCompleteTopUp 管理员补单。返回被补单的用户 ID 供调用方写审计日志；
+// 订单不存在等错误路径返回 0。幂等命中（订单已成功）也会返回用户 ID。
+func ManualCompleteTopUp(tradeNo string, callerIp string) (int, error) {
 	if tradeNo == "" {
-		return errors.New("未提供订单号")
+		return 0, errors.New("未提供订单号")
 	}
 
 	refCol := "`trade_no`"
@@ -392,6 +394,8 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	var quotaToAdd int
 	var payMoney float64
 	var paymentMethod string
+	// 幂等命中：订单早已入账，本次只解析出目标用户，不再重复记账，也不该再写充值日志。
+	var alreadyCompleted bool
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
@@ -400,8 +404,12 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return errors.New("充值订单不存在")
 		}
 
+		// 目标用户先记下来：幂等命中和后续失败路径都需要它来定位审计对象。
+		userId = topUp.UserId
+
 		// 幂等处理：已成功直接返回
 		if topUp.Status == common.TopUpStatusSuccess {
+			alreadyCompleted = true
 			return nil
 		}
 
@@ -435,19 +443,24 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 			return err
 		}
 
-		userId = topUp.UserId
 		payMoney = topUp.Money
 		paymentMethod = topUp.PaymentMethod
 		return nil
 	})
 
 	if err != nil {
-		return err
+		return userId, err
+	}
+
+	// 幂等命中：本次没有入账（quotaToAdd / payMoney 都是零值），再写一条充值日志就是
+	// 给用户看一笔「充值金额: $0.00」的假记录。目标用户仍然返回，供调用方写审计。
+	if alreadyCompleted {
+		return userId, nil
 	}
 
 	// 事务外记录日志，避免阻塞
 	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
-	return nil
+	return userId, nil
 }
 func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string) (err error) {
 	if referenceId == "" {

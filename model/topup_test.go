@@ -232,15 +232,53 @@ func TestManualCompleteTopUp_StripeSnapshot(t *testing.T) {
 		tp.PaymentProvider = PaymentProviderStripe
 		tp.Amount = 33333
 	})
-	require.NoError(t, ManualCompleteTopUp(tp.TradeNo, "ip"))
+	userId, err := ManualCompleteTopUp(tp.TradeNo, "ip")
+	require.NoError(t, err)
+	// The credited user is returned so the caller can record an audit log.
+	assert.Equal(t, u.Id, userId)
 	reloaded, _ := GetUserById(u.Id, false)
 	assert.Equal(t, 33333, reloaded.Quota)
 	assert.Equal(t, common.TopUpStatusSuccess, GetTopUpById(tp.Id).Status)
 
-	// Idempotent: completing again returns nil and does NOT re-credit.
-	require.NoError(t, ManualCompleteTopUp(tp.TradeNo, "ip"))
+	// Idempotent: completing again returns nil and does NOT re-credit,
+	// but still resolves the target user.
+	userId, err = ManualCompleteTopUp(tp.TradeNo, "ip")
+	require.NoError(t, err)
+	assert.Equal(t, u.Id, userId)
 	reloaded2, _ := GetUserById(u.Id, false)
 	assert.Equal(t, 33333, reloaded2.Quota)
+}
+
+// 幂等命中时不写充值日志：事务在 status 已是 success 时直接返回，quotaToAdd / payMoney
+// 仍是零值，函数尾部却无条件调用 RecordTopupLog，于是用户看到一条
+// 「管理员补单成功，充值金额: $0.00，支付金额：0.000000」的假记录。
+func TestManualCompleteTopUp_ReplayWritesNoTopupLog(t *testing.T) {
+	requireDB(t)
+	requireLogDB(t)
+	u := mkUser(t, func(u *User) { u.Quota = 0 })
+	tp := mkTopUp(t, u.Id, func(tp *TopUp) {
+		tp.PaymentProvider = PaymentProviderStripe
+		tp.Amount = 4321
+	})
+
+	// 第一次补单：正常入账，并写一条真实的充值日志。
+	userId, err := ManualCompleteTopUp(tp.TradeNo, "ip")
+	require.NoError(t, err)
+	require.Equal(t, u.Id, userId)
+
+	_, before, err := GetAllLogs(LogTypeTopup, 0, 0, "", u.Username, "", 0, 50, 0, 0, "", "", "")
+	require.NoError(t, err)
+
+	// 重复补单：额度不再变化，也不该再写日志。
+	userId, err = ManualCompleteTopUp(tp.TradeNo, "ip")
+	require.NoError(t, err)
+	assert.Equal(t, u.Id, userId, "幂等命中仍要返回目标用户，供审计定位")
+	reloaded, _ := GetUserById(u.Id, false)
+	assert.Equal(t, 4321, reloaded.Quota, "重复补单不得重复入账")
+
+	_, after, err := GetAllLogs(LogTypeTopup, 0, 0, "", u.Username, "", 0, 50, 0, 0, "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "重复补单不得写出金额为 0 的假充值记录")
 }
 
 func TestManualCompleteTopUp_QuotaPerUnitConversion(t *testing.T) {
@@ -254,7 +292,9 @@ func TestManualCompleteTopUp_QuotaPerUnitConversion(t *testing.T) {
 		tp.Amount = amount
 	})
 	expected := int(decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart())
-	require.NoError(t, ManualCompleteTopUp(tp.TradeNo, "ip"))
+	userId, err := ManualCompleteTopUp(tp.TradeNo, "ip")
+	require.NoError(t, err)
+	assert.Equal(t, u.Id, userId)
 	reloaded, _ := GetUserById(u.Id, false)
 	assert.Equal(t, expected, reloaded.Quota)
 }
@@ -263,19 +303,29 @@ func TestManualCompleteTopUp_Rejections(t *testing.T) {
 	requireDB(t)
 	u := mkUser(t, nil)
 
-	assert.Error(t, ManualCompleteTopUp("", "ip"))
-	assert.Error(t, ManualCompleteTopUp(uniq("missing"), "ip"))
+	// No order to resolve -> no target user for the audit log either.
+	userId, err := ManualCompleteTopUp("", "ip")
+	assert.Error(t, err)
+	assert.Zero(t, userId)
 
-	// non-pending, non-success -> error
+	userId, err = ManualCompleteTopUp(uniq("missing"), "ip")
+	assert.Error(t, err)
+	assert.Zero(t, userId)
+
+	// non-pending, non-success -> error, but the order was found so the
+	// target user is still reported.
 	failed := mkTopUp(t, u.Id, func(tp *TopUp) { tp.Status = common.TopUpStatusFailed })
-	assert.Error(t, ManualCompleteTopUp(failed.TradeNo, "ip"))
+	userId, err = ManualCompleteTopUp(failed.TradeNo, "ip")
+	assert.Error(t, err)
+	assert.Equal(t, u.Id, userId)
 
 	// invalid amount (0) on a non-snapshot provider -> invalid quota error
 	badEpay := mkTopUp(t, u.Id, func(tp *TopUp) {
 		tp.PaymentProvider = PaymentProviderEpay
 		tp.Amount = 0
 	})
-	assert.Error(t, ManualCompleteTopUp(badEpay.TradeNo, "ip"))
+	_, err = ManualCompleteTopUp(badEpay.TradeNo, "ip")
+	assert.Error(t, err)
 }
 
 // ---------------------------------------------------------------------------

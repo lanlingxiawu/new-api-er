@@ -578,9 +578,13 @@ func AdminCompleteTopUp(c *gin.Context) {
 	LockOrder(req.TradeNo)
 	defer UnlockOrder(req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	userId, err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP())
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAuditFor(c, userId, "user.topup_complete", map[string]interface{}{
+		"trade_no": req.TradeNo,
+	})
 	common.ApiSuccess(c, nil)
 }
