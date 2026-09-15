@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestClaudeRequestLoggingDoesNotCaptureRequests 验证 Claude Messages 绕过旧请求日志采集，开启全局请求日志也不采集该请求的头和正文。
+// TestClaudeRequestLoggingCapturesRequests 验证 Messages 与其他路径一样遵循原请求采集规则。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
-func TestClaudeRequestLoggingDoesNotCaptureRequests(t *testing.T) {
+func TestClaudeRequestLoggingCapturesRequests(t *testing.T) {
 	old := common.RequestLogEnabled
 	common.RequestLogEnabled = true
 	t.Cleanup(func() { common.RequestLogEnabled = old })
@@ -20,7 +20,7 @@ func TestClaudeRequestLoggingDoesNotCaptureRequests(t *testing.T) {
 	router.Use(RequestResponseLogger())
 	router.POST("/v1/messages", func(c *gin.Context) {
 		_, capturing := c.Writer.(*responseBodyWriter)
-		require.False(t, capturing)
+		require.True(t, capturing)
 		c.Status(200)
 	})
 	request := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"private":"request"}`))

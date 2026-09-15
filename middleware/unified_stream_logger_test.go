@@ -50,26 +50,26 @@ type privateStreamFlushRecorder struct{ *httptest.ResponseRecorder }
 // FlushError 无参数，固定返回刷新错误夹具，验证多层响应包装仍能取得底层错误。
 func (w privateStreamFlushRecorder) FlushError() error { return errors.New("flush fixture") }
 
-// TestUnifiedStreamLoggerWriter 验证私有流不缓存下游副本，FlushError 穿透日志与 Gin 包装。
+// TestUnifiedStreamLoggerWriter 验证私有流沿用原响应采集，FlushError 穿透日志与 Gin 包装。
 // 参数 t：测试上下文，承载断言与测试资源清理。
 func TestUnifiedStreamLoggerWriter(t *testing.T) {
 	c, _ := gin.CreateTestContext(privateStreamFlushRecorder{httptest.NewRecorder()})
 	c.Set(common.StreamPrivateContextKey, true)
-	logWriter := &responseBodyWriter{ResponseWriter: c.Writer, body: &bytes.Buffer{}, limit: 1024, ctx: c}
+	logWriter := &responseBodyWriter{ResponseWriter: c.Writer, body: &bytes.Buffer{}, limit: 1024}
 	s := relaycommon.NewStreamSession(types.RelayFormatOpenAI)
 	capture := relaycommon.NewStreamResponseCapture(1)
 	writer := relaycommon.NewStreamWriter(relaycommon.NewDownstreamCaptureWriter(logWriter, capture), s, nil)
 	writer.Header().Set("Content-Type", "text/event-stream")
 	_, err := writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
 	require.NoError(t, err)
-	require.Zero(t, logWriter.body.Len())
+	require.Contains(t, logWriter.body.String(), "hi")
 	require.Error(t, writer.FlushError())
 	require.Error(t, s.Snapshot().ClientErr)
 	require.False(t, s.Snapshot().Effective)
 	require.NotEmpty(t, *capture.DownstreamBody(), "Root 诊断与请求日志缓冲完全独立")
 }
 
-// TestUnifiedStreamRequestLogIsolation 验证流式请求不投递请求日志，非流式保持原有投递，不启动数据库工作者。
+// TestUnifiedStreamRequestLogIsolation 验证私有与普通请求均按原规则投递，不启动数据库工作者。
 // 参数 t：测试上下文，承载断言与测试资源清理。
 func TestUnifiedStreamRequestLogIsolation(t *testing.T) {
 	oldQueue := requestLogQueue.Load()
@@ -94,10 +94,9 @@ func TestUnifiedStreamRequestLogIsolation(t *testing.T) {
 		req := httptest.NewRequest("POST", "/"+mode, strings.NewReader(`{"private":"request"}`))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(httptest.NewRecorder(), req)
-		if mode == "stream" {
-			require.Zero(t, len(queue.ch))
-		} else {
-			require.Equal(t, 1, len(queue.ch))
-		}
+		require.Equal(t, 1, len(queue.ch))
+		task := <-queue.ch
+		require.Equal(t, `{"private":"request"}`, task.entry.RequestBody)
+		require.Equal(t, "response", task.entry.ResponseBody)
 	}
 }

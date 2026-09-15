@@ -1,5 +1,7 @@
 # Claude stream termination, partial billing and private diagnostics
 
+后续确认：撤销 `/messages` 及私有流对普通请求日志的排除，恢复原采集/投递规则，见 [请求日志恢复](restore-original-request-logging.md)。仅请求日志行为更新，私有诊断和使用日志规则保持。
+
 最新确认：共用大小上限已提升为 **200 MiB**，覆盖下文历史 100 MiB/8 MiB 数值，见 [实施记录](stream-size-limit-100mib.md)。
 
 2026-09-15 后续确认：已有内容的零输出用量（包括最终零）补估，非零输出保留原值，输入/缓存不变。此次约定覆盖历史显式零与正常非最终正用量的补估规则，详见 [零输出补估](stream-zero-output-estimation.md)。
