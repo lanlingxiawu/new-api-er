@@ -135,6 +135,7 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 	sourceTypes := make(map[string]string)
 	sourceModels := make(map[string]map[string]struct{})
 	sourceURLs := make(map[string]string)
+	channelSourceNames := make(map[int]string, len(channels))
 	for _, channel := range channels {
 		baseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
 		if channel.Status != common.ChannelStatusEnabled || !strings.HasPrefix(baseURL, "http") {
@@ -147,6 +148,7 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		upstream := dto.UpstreamDTO{ID: channel.Id, Name: channel.Name, BaseURL: baseURL, Endpoint: endpoint}
 		upstreams = append(upstreams, upstream)
 		sourceName := pricingSourceDisplayName(upstream)
+		channelSourceNames[channel.Id] = sourceName
 		sourceTypes[sourceName] = priceSourceChannel
 		sourceURLs[sourceName] = priceMonitorDisplayURL(baseURL)
 		enabledModels := make(map[string]struct{})
@@ -201,6 +203,10 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		matrixSources = append(matrixSources, source)
 	}
 	sourceHeaders, matrixItems := buildPriceMonitorMatrix(getLocalPricingSyncData(), matrixSources, marketplaceModels, sourceTypes)
+	// 亏损判定单独走一遍已构建的矩阵，above_platform 的既有路径完全不受影响。
+	contexts := buildPriceMonitorLossContexts(channels, channelSourceNames)
+	applyPriceMonitorLossVerdicts(sourceHeaders, matrixItems, contexts)
+	applyPriceMonitorRepairFloors(sourceHeaders, matrixItems, contexts)
 	password, err := generatePriceMonitorPassword(8)
 	if err != nil {
 		setPriceMonitorRuntimeError("failed to create the access password")

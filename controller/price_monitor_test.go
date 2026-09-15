@@ -619,6 +619,7 @@ func TestCountPriceMonitorComparisonModels(t *testing.T) {
 		PlatformOfficial: 2,
 		PlatformChannel:  3,
 		ChannelOfficial:  2,
+		AbovePlatform:    4,
 	}, countPriceMonitorComparisonModels(headers, items))
 	require.Zero(t, countPriceMonitorComparisonModels(headers, nil))
 }
@@ -662,6 +663,7 @@ func TestPriceMonitorOfficialAndModelsDevComparisonsAreIndependent(t *testing.T)
 		PlatformModelsDev: 1,
 		ChannelOfficial:   1,
 		ChannelModelsDev:  1,
+		AbovePlatform:     1,
 	}, countPriceMonitorComparisonModels(headers, snapshot.MatrixItems))
 
 	tests := []struct {

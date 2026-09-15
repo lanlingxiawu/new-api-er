@@ -37,6 +37,8 @@ import type {
   UpdateOptionResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
+  PriceMonitorApplyPriceItem,
+  PriceMonitorApplyPriceResponse,
   PriceMonitorResultsResponse,
   PriceMonitorStatusResponse,
 } from './types'
@@ -66,6 +68,23 @@ export async function getPriceMonitorResults(params: {
   const res = await api.get<PriceMonitorResultsResponse>(
     '/api/price_monitor/results',
     { params, disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function applyPriceMonitorPrice(request: {
+  checked_at: number
+  pricing_version: number
+  items: PriceMonitorApplyPriceItem[]
+  /** 明知低于保本下限仍要提交（亏损引流等刻意定价）。服务端会记审计。 */
+  force?: boolean
+}) {
+  // 失败提示由调用方统一给出：低于保本下限时要留在弹窗里让管理员确认，
+  // 不能再被全局拦截器弹一次 toast。
+  const res = await api.post<PriceMonitorApplyPriceResponse>(
+    '/api/price_monitor/apply_price',
+    request,
+    { skipBusinessError: true, skipErrorHandler: true }
   )
   return res.data
 }

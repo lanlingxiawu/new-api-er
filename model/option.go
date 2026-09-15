@@ -263,6 +263,12 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
+	// 价格类 option 走带版本递增的事务写入：倍率设置页仍是整块覆写，但只要它也推进
+	// PricingConfigVersion，巡检页的行内改价就能检测到「我读到的价格已经被整块保存覆盖」，
+	// 而不是被静默清掉。见 docs/design/price-monitor-loss-detection-and-price-repair.md §5.4。
+	if IsPricingOptionKey(key) {
+		return updatePricingOption(key, value)
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -276,6 +282,43 @@ func UpdateOption(key string, value string) error {
 	DB.Save(&option)
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+
+// updatePricingOption 在同一事务里保存价格 option 并递增 PricingConfigVersion。
+func updatePricingOption(key string, value string) error {
+	version := ""
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 加锁顺序必须是「先版本行、后价格行」，与 PatchPricingOptions 保持一致。
+		// 反过来写会构成锁顺序反转：倍率设置页整块保存（本函数）先拿到 ModelRatio 的
+		// 行锁再等版本行，巡检页行内改价（PatchPricingOptions）先拿到版本行再等
+		// ModelRatio，两者并发时 MySQL / PostgreSQL 会检测到死锁并回滚其中一个。
+		current, err := readPricingVersionForUpdate(lockedPricingTx(tx))
+		if err != nil {
+			return err
+		}
+		versionOption := Option{Key: PricingConfigVersionKey}
+		if err := tx.Where(Option{Key: PricingConfigVersionKey}).FirstOrCreate(&versionOption).Error; err != nil {
+			return err
+		}
+		option := Option{Key: key}
+		if err := tx.Where(Option{Key: key}).FirstOrCreate(&option).Error; err != nil {
+			return err
+		}
+		option.Value = value
+		if err := tx.Save(&option).Error; err != nil {
+			return err
+		}
+		version = strconv.FormatInt(current+1, 10)
+		versionOption.Value = version
+		return tx.Save(&versionOption).Error
+	})
+	if err != nil {
+		return err
+	}
+	if err := updateOptionMap(key, value); err != nil {
+		return err
+	}
+	return updateOptionMap(PricingConfigVersionKey, version)
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database

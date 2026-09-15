@@ -86,6 +86,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 
 import {
+  applyPriceMonitorPrice,
   getPriceMonitorResults,
   getPriceMonitorStatus,
   runPriceMonitor,
@@ -93,14 +94,71 @@ import {
 } from '../api'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import type {
+  PriceMonitorApplyPriceItem,
+  PriceMonitorApplyPriceResponse,
+  PriceMonitorFloorViolation,
+  PriceMonitorLossKind,
+  PriceMonitorMatrixItem,
   PriceMonitorPriceCell,
   PriceMonitorPriceLane,
   PriceMonitorPriceTier,
   PriceMonitorSourceHeader,
   PriceMonitorStatusResponse,
 } from '../types'
+import {
+  PriceMonitorApplyDialog,
+  type PriceMonitorRepairTarget,
+} from './price-monitor-apply-dialog'
 
 const PAGE_SIZE = 20
+const PLATFORM_KEY = 'platform'
+const MEASURED_LOSS: PriceMonitorLossKind = 'measured'
+const NO_MODELS: ReadonlySet<string> = new Set()
+
+/**
+ * 只有实测成本风险能靠改平台价解决。配置成本风险来自 cost = revenue / g * r：
+ * 成本正比于收入，平台价是 profit = P*(g-r) 的公因子，改价不改变毛利率，
+ * 只会等比放大绝对亏损额——所以这类行不给改价按钮。
+ */
+function hasMeasuredLoss(
+  item: PriceMonitorMatrixItem,
+  headers: PriceMonitorSourceHeader[]
+) {
+  return headers.some(
+    (header) =>
+      header.type === 'channel' &&
+      (item.prices[header.key]?.loss_kinds ?? []).includes(MEASURED_LOSS)
+  )
+}
+
+/** 阶梯表达式（或动态价格）无法在这里改价，服务端也会拒绝。 */
+function isTieredPlatformPrice(platform: PriceMonitorPriceCell | undefined) {
+  return platform?.mode === 'tiered_expr' || Boolean(platform?.dynamic)
+}
+
+/**
+ * 保本价是整行的联合下限 repair_floor.fields（后端按所有可比渠道算出），
+ * 与具体哪个渠道命中无关。
+ */
+function buildRepairTarget(
+  item: PriceMonitorMatrixItem,
+  headers: PriceMonitorSourceHeader[]
+): PriceMonitorRepairTarget | null {
+  const platform = item.prices[PLATFORM_KEY]
+  const fields = item.repair_floor?.fields
+  if (!item.repair_floor || !fields || Object.keys(fields).length === 0) {
+    return null
+  }
+  if (platform?.mode !== 'per_token' && platform?.mode !== 'per_request') {
+    return null
+  }
+  if (platform.dynamic || !hasMeasuredLoss(item, headers)) return null
+  return {
+    model: item.model,
+    platform,
+    floor: { ...item.repair_floor, fields },
+  }
+}
 
 const primaryComparisonFilters = [
   ['all', 'All differences'],
@@ -109,6 +167,8 @@ const primaryComparisonFilters = [
   ['channel_platform', 'Channel vs platform'],
   ['platform_official', 'Platform vs official'],
   ['platform_models_dev', 'Platform vs models.dev'],
+  ['above_platform', 'Priced above platform'],
+  ['loss_risk', 'Loss risk'],
 ] as const
 
 const additionalComparisonFilters = [
@@ -371,6 +431,9 @@ type PriceMonitorForm = {
 
 type PriceMonitorPanelProps = {
   canEdit: boolean
+  /** 改价按钮的权限：后端 apply_price 要的是 billing.model-pricing 编辑权，
+      与巡检页自身的编辑权不同，必须分开传。 */
+  canRepairPricing: boolean
 }
 
 const DEFAULT_FORM: PriceMonitorForm = {
@@ -473,28 +536,80 @@ function PriceCell({
   sourceType: PriceMonitorSourceHeader['type']
 }) {
   const { t } = useTranslation()
+  const lossKinds = price?.loss_kinds ?? []
+  if (!price?.highest && lossKinds.length === 0) {
+    return <PriceCellContent price={price} sourceType={sourceType} />
+  }
+  const formatFactor = (value?: number) =>
+    value === undefined ? '—' : Number(value.toFixed(4)).toString()
+  return (
+    <div className='space-y-1.5'>
+      {/*
+        价格行必须排在最前面。同一模型行里各来源是并排的独立单元格，横向对比只有在
+        「输入 / 输出 / 缓存读取」处于同一水平线时才成立。徽标与系数是对价格的标注，
+        高度随命中情况变化（0 个徽标 ~ 2 个徽标 + 3 行系数），一旦放在价格上方，
+        带徽标的单元格就会把自己的价格行整体下推，出现「左侧输入 ↔ 右侧徽标、
+        左侧输出 ↔ 右侧输入」的错位——对比表就失去意义了。
+        放到下面之后，各单元格的价格行都从顶部开始，天然平行。
+      */}
+      <PriceCellContent price={price} sourceType={sourceType} />
+      <div className='flex flex-wrap gap-1'>
+        {price?.highest && (
+          <Badge variant='warning'>{t('Highest price')}</Badge>
+        )}
+        {lossKinds.includes('measured') && (
+          <Badge variant='destructive'>{t('Measured loss')}</Badge>
+        )}
+        {lossKinds.includes('configured') && (
+          <Badge variant='destructive'>{t('Configured loss')}</Badge>
+        )}
+      </div>
+      {lossKinds.length > 0 && (
+        <div className='text-muted-foreground space-y-0.5 text-xs'>
+          <div className='flex justify-between gap-2'>
+            <span>{t('Sell factor')}</span>
+            <span>{formatFactor(price?.sell_factor)}</span>
+          </div>
+          <div className='flex justify-between gap-2'>
+            <span>{t('Measured factor')}</span>
+            <span>{formatFactor(price?.measured_factor)}</span>
+          </div>
+          <div className='flex justify-between gap-2'>
+            <span>{t('Configured factor')}</span>
+            <span>{formatFactor(price?.configured_factor)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PriceCellContent({
+  price,
+  sourceType,
+}: {
+  price?: PriceMonitorPriceCell
+  sourceType: PriceMonitorSourceHeader['type']
+}) {
+  const { t } = useTranslation()
   if (!price) {
     return (
       <span className='text-muted-foreground text-sm'>
-        {sourceType === 'channel'
-          ? t('Model not enabled for this channel')
-          : t('Price source did not provide this model')}
+        {sourceType === 'channel' ? t('Not enabled') : t('Not in source')}
       </span>
     )
   }
   if (price.unavailable_reason) {
-    let missingMessage = t('Channel pricing API did not provide this model')
+    let missingMessage = t('Not in channel pricing')
     if (sourceType === 'official') {
-      missingMessage = t('Official price preset does not include this model')
+      missingMessage = t('Not in official prices')
     } else if (sourceType === 'models_dev') {
-      missingMessage = t(
-        'models.dev price preset does not include this model'
-      )
+      missingMessage = t('Not in models.dev')
     }
     const messages = {
       missing: missingMessage,
-      placeholder: t('Placeholder price excluded from comparison'),
-      source_failed: t('Price source check failed; wait for the next check'),
+      placeholder: t('Placeholder price, not compared'),
+      source_failed: t('Source check failed'),
     }
     return (
       <span
@@ -590,9 +705,7 @@ function PriceCell({
       }
     >
       <p className='font-medium'>{t('Dynamic rule pricing')}</p>
-      <p className='mt-1 text-xs'>
-        {t('Price depends on request or time conditions')}
-      </p>
+      <p className='mt-1 text-xs'>{t('Varies by request or time')}</p>
     </div>
   )
 }
@@ -617,7 +730,7 @@ function PriceMonitorPagination({
 
   return (
     <>
-      <span className='text-muted-foreground mr-auto whitespace-nowrap text-sm'>
+      <span className='text-muted-foreground mr-auto text-sm whitespace-nowrap'>
         {total > 0
           ? `${start}-${end} / ${total}`
           : t('{{total}} items', { total })}
@@ -691,7 +804,9 @@ function PriceMonitorHorizontalScrollControls({
       canScrollRight: scrollLeft < maxScrollLeft - 1,
       progress:
         maxScrollLeft > 0
-          ? Math.round((Math.min(scrollLeft, maxScrollLeft) / maxScrollLeft) * 100)
+          ? Math.round(
+              (Math.min(scrollLeft, maxScrollLeft) / maxScrollLeft) * 100
+            )
           : 0,
     })
   }, [getScrollElement])
@@ -725,11 +840,8 @@ function PriceMonitorHorizontalScrollControls({
 
   return (
     <>
-      <div
-        aria-hidden='true'
-        className='bg-border hidden h-6 w-px xl:block'
-      />
-      <span className='text-muted-foreground whitespace-nowrap text-sm'>
+      <div aria-hidden='true' className='bg-border hidden h-6 w-px xl:block' />
+      <span className='text-muted-foreground text-sm whitespace-nowrap'>
         {t('Horizontal position')}: {state.progress}%
       </span>
       <div className='flex gap-2'>
@@ -758,7 +870,10 @@ function PriceMonitorHorizontalScrollControls({
   )
 }
 
-export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
+export function PriceMonitorPanel({
+  canEdit,
+  canRepairPricing,
+}: PriceMonitorPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
@@ -832,6 +947,18 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
       toast.error(error.message || t('Failed to save price monitor settings')),
   })
 
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
+  const [repairOpen, setRepairOpen] = useState(false)
+  // 当前快照内已改过价的模型。快照在下次巡检前仍显示旧价格，再提交一次会与
+  // 刚写入的新价冲突，所以这些行的改价入口先禁用；快照一换（checked_at 变化）自动失效。
+  const [appliedModels, setAppliedModels] = useState<{
+    checkedAt: number
+    models: ReadonlySet<string>
+  }>({ checkedAt: 0, models: NO_MODELS })
+
+  // 结果统一在 handleApplyPrice 里处理，这里不挂 onSuccess / onError，避免重复提示。
+  const applyPriceMutation = useMutation({ mutationFn: applyPriceMonitorPrice })
+
   const runMutation = useMutation({
     mutationFn: runPriceMonitor,
     onMutate: () => {
@@ -858,6 +985,87 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
   const status = statusQuery.data?.data
   const snapshot = status?.snapshot
   const results = resultsQuery.data?.data
+  const checkedAt = snapshot?.checked_at ?? 0
+  const isLossView = filters.comparison === 'loss_risk'
+  const repairTargets = useMemo(() => {
+    const targets = new Map<string, PriceMonitorRepairTarget>()
+    if (!isLossView) return targets
+    for (const item of results?.items ?? []) {
+      const target = buildRepairTarget(item, results?.source_headers ?? [])
+      if (target) targets.set(item.model, target)
+    }
+    return targets
+  }, [isLossView, results?.items, results?.source_headers])
+  const appliedInSnapshot =
+    appliedModels.checkedAt === checkedAt ? appliedModels.models : NO_MODELS
+  const selectableModels = useMemo(
+    () =>
+      [...repairTargets.keys()].filter(
+        (model) => !appliedInSnapshot.has(model)
+      ),
+    [appliedInSnapshot, repairTargets]
+  )
+  // 必须 memo：结果每 30 秒轮询一次，内联数组会让弹窗每次都拿到新的 targets。
+  const selectedTargets = useMemo(
+    () =>
+      [...selectedModels].flatMap((model) => {
+        const target = repairTargets.get(model)
+        return target ? [target] : []
+      }),
+    [repairTargets, selectedModels]
+  )
+
+  const handleApplyPrice = async (
+    items: PriceMonitorApplyPriceItem[],
+    force: boolean
+  ): Promise<PriceMonitorFloorViolation[]> => {
+    let response: PriceMonitorApplyPriceResponse
+    try {
+      response = await applyPriceMutation.mutateAsync({
+        checked_at: checkedAt,
+        pricing_version: status?.pricing_version ?? 0,
+        items,
+        force,
+      })
+    } catch {
+      toast.error(t('Failed to update pricing'))
+      return []
+    }
+    if (!response.success) {
+      // 低于保本下限：交给弹窗列出违规字段并进入确认步骤，不弹 toast。
+      const violations =
+        response.error_code === 'PRICE_BELOW_FLOOR'
+          ? (response.data?.violations ?? [])
+          : []
+      if (violations.length === 0) {
+        toast.error(response.message || t('Failed to update pricing'))
+      }
+      return violations
+    }
+    const appliedCount = (response.data?.results ?? []).reduce(
+      (total, result) => total + result.applied.length,
+      0
+    )
+    setAppliedModels((current) => ({
+      checkedAt,
+      models: new Set([
+        ...(current.checkedAt === checkedAt ? current.models : []),
+        ...items.map((item) => item.model),
+      ]),
+    }))
+    setRepairOpen(false)
+    setSelectedModels(new Set())
+    toast.success(
+      t('Updated {{count}} pricing fields', { count: appliedCount })
+    )
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
+      queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+      queryClient.invalidateQueries({ queryKey: ['system-options'] }),
+    ])
+    return []
+  }
+
   const hasModelsDev = status?.config.include_models_dev === true
   const visiblePrimaryComparisonFilters = hasModelsDev
     ? primaryComparisonFilters
@@ -931,6 +1139,10 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
     setFilters((current) => ({ ...current, model }))
   }
 
+  useEffect(() => {
+    setSelectedModels(new Set())
+  }, [filters.comparison, filters.model, filters.sourceKeys, page])
+
   const sourceLabel = (header: PriceMonitorSourceHeader) => {
     if (header.type === 'platform') return t('Platform configuration')
     if (header.type === 'official') return t('Official price')
@@ -943,6 +1155,67 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
     if (header.type === 'official') return t('Required comparison')
     if (header.type === 'models_dev') return t('Optional comparison')
     return header.api_url || ''
+  }
+
+  // 亏损视图里每行的操作列。
+  const renderRepairAction = (item: PriceMonitorMatrixItem) => {
+    if (repairTargets.has(item.model)) {
+      if (appliedInSnapshot.has(item.model)) {
+        return (
+          <div className='space-y-1'>
+            <Button size='sm' variant='outline' disabled>
+              {t('Repair pricing')}
+            </Button>
+            <p className='text-muted-foreground text-xs'>
+              {t('Updated — refreshes after the next check')}
+            </p>
+          </div>
+        )
+      }
+      return (
+        <div className='flex items-start gap-2'>
+          <Checkbox
+            className='mt-0.5'
+            checked={selectedModels.has(item.model)}
+            onCheckedChange={(checked) =>
+              setSelectedModels((current) => {
+                const next = new Set(current)
+                if (checked) next.add(item.model)
+                else next.delete(item.model)
+                return next
+              })
+            }
+          />
+          <Button
+            size='sm'
+            variant='outline'
+            disabled={!canRepairPricing}
+            onClick={() => {
+              setSelectedModels(new Set([item.model]))
+              setRepairOpen(true)
+            }}
+          >
+            {t('Repair pricing')}
+          </Button>
+        </div>
+      )
+    }
+    if (
+      isTieredPlatformPrice(item.prices[PLATFORM_KEY]) &&
+      hasMeasuredLoss(item, results?.source_headers ?? [])
+    ) {
+      return (
+        <p className='text-muted-foreground text-xs'>
+          {t('Tiered price. Edit it in model pricing.')}
+        </p>
+      )
+    }
+    return (
+      <div className='text-muted-foreground space-y-1 text-xs'>
+        <p>{t('Raising the price does not change this margin.')}</p>
+        <p>{t('Adjust the group ratio or cost ratio.')}</p>
+      </div>
+    )
   }
 
   return (
@@ -997,8 +1270,8 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               className={cn(
                 'grid min-w-0 gap-3 md:grid-cols-2',
                 hasModelsDev
-                  ? 'xl:grid-cols-4 2xl:grid-cols-7'
-                  : 'xl:grid-cols-5'
+                  ? 'xl:grid-cols-4 2xl:grid-cols-9'
+                  : 'xl:grid-cols-4 2xl:grid-cols-7'
               )}
             >
               <div className='rounded-lg border p-3'>
@@ -1014,7 +1287,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               {hasModelsDev && (
                 <div className='rounded-lg border p-3'>
                   <p className='text-muted-foreground text-sm'>
-                    {t('Platform vs models.dev models')}
+                    {t('Platform vs models.dev')}
                   </p>
                   <p className='mt-1 text-xl font-semibold'>
                     {snapshot?.comparison_model_counts?.platform_models_dev ??
@@ -1041,7 +1314,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               {hasModelsDev && (
                 <div className='rounded-lg border p-3'>
                   <p className='text-muted-foreground text-sm'>
-                    {t('Channel vs models.dev models')}
+                    {t('Channel vs models.dev')}
                   </p>
                   <p className='mt-1 text-xl font-semibold'>
                     {snapshot?.comparison_model_counts?.channel_models_dev ?? 0}
@@ -1058,6 +1331,22 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               </div>
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
+                  {t('Models at a loss')}
+                </p>
+                <p className='text-destructive mt-1 text-xl font-semibold'>
+                  {snapshot?.comparison_model_counts?.loss_risk ?? 0}
+                </p>
+              </div>
+              <div className='rounded-lg border p-3'>
+                <p className='text-muted-foreground text-sm'>
+                  {t('Models priced above platform')}
+                </p>
+                <p className='mt-1 text-xl font-semibold'>
+                  {snapshot?.comparison_model_counts?.above_platform ?? 0}
+                </p>
+              </div>
+              <div className='rounded-lg border p-3'>
+                <p className='text-muted-foreground text-sm'>
                   {t('Pricing sources')}
                 </p>
                 <p className='mt-1 font-medium'>
@@ -1070,7 +1359,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
 
             {status?.last_attempt_error && (
               <p className='text-destructive text-sm'>
-                {t('Last price check failed. Review server logs and retry.')}
+                {t('Last check failed. See the logs and retry.')}
               </p>
             )}
 
@@ -1185,16 +1474,20 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                     <SelectGroup>
                       {visibleAdditionalComparisonFilters.map(
                         ([value, label]) => (
-                        <SelectItem key={value} value={value} className='py-2'>
-                          {t(label)}
-                        </SelectItem>
+                          <SelectItem
+                            key={value}
+                            value={value}
+                            className='py-2'
+                          >
+                            {t(label)}
+                          </SelectItem>
                         )
                       )}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
                 <p className='text-muted-foreground ml-auto text-sm'>
-                  {t('All token prices are per million')}
+                  {t('USD per 1M tokens')}
                 </p>
               </div>
             </div>
@@ -1205,6 +1498,36 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
               aria-busy={resultsQuery.isFetching}
             >
               <div className='bg-background flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-3'>
+                {/* 批量修复放进表格工具栏，而不是单独占一行：切换筛选时页面结构保持一致，不会上下跳动。 */}
+                {isLossView && repairTargets.size > 0 && (
+                  <div className='flex items-center gap-2'>
+                    <Checkbox
+                      aria-label={t('Select all')}
+                      checked={
+                        selectedModels.size > 0 &&
+                        selectedModels.size === selectableModels.length
+                      }
+                      disabled={selectableModels.length === 0}
+                      onCheckedChange={(checked) =>
+                        setSelectedModels(
+                          checked ? new Set(selectableModels) : new Set()
+                        )
+                      }
+                    />
+                    <span className='text-sm whitespace-nowrap'>
+                      {t('Selected {{count}}', { count: selectedModels.size })}
+                    </span>
+                    <Button
+                      size='sm'
+                      title={t('Only measured losses can be repaired.')}
+                      disabled={!canRepairPricing || selectedModels.size === 0}
+                      onClick={() => setRepairOpen(true)}
+                    >
+                      {t('Repair selected')}
+                    </Button>
+                    <div aria-hidden='true' className='bg-border h-6 w-px' />
+                  </div>
+                )}
                 <PriceMonitorPagination
                   page={page}
                   pageSize={PAGE_SIZE}
@@ -1226,6 +1549,11 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                     <TableHead className='bg-muted sticky top-0 left-0 z-50 w-56 max-w-56 min-w-56'>
                       {t('Model')}
                     </TableHead>
+                    {isLossView && (
+                      <TableHead className='bg-muted sticky top-0 z-30 w-40 max-w-40 min-w-40'>
+                        {t('Action')}
+                      </TableHead>
+                    )}
                     {(results?.source_headers ?? []).map((header) => (
                       <TableHead
                         key={header.key}
@@ -1248,6 +1576,11 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                         <TableCell className='bg-background sticky left-0 z-30 w-56 max-w-56 min-w-56 align-top font-semibold'>
                           {item.model}
                         </TableCell>
+                        {isLossView && (
+                          <TableCell className='bg-background w-40 max-w-40 min-w-40 align-top'>
+                            {renderRepairAction(item)}
+                          </TableCell>
+                        )}
                         {(results?.source_headers ?? []).map((header) => (
                           <TableCell
                             key={header.key}
@@ -1266,7 +1599,11 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                     (results?.items.length ?? 0) === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={1 + (results?.source_headers.length ?? 0)}
+                          colSpan={
+                            1 +
+                            (isLossView ? 1 : 0) +
+                            (results?.source_headers.length ?? 0)
+                          }
                           className='text-muted-foreground text-center'
                         >
                           {t('No price differences found')}
@@ -1279,6 +1616,14 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
+
+      <PriceMonitorApplyDialog
+        open={repairOpen}
+        submitting={applyPriceMutation.isPending}
+        targets={selectedTargets}
+        onOpenChange={setRepairOpen}
+        onSubmit={handleApplyPrice}
+      />
 
       <Dialog
         open={settingsOpen}
@@ -1391,7 +1736,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                 id='price-monitor-model-whitelist'
                 rows={4}
                 value={form.modelWhitelist}
-                placeholder={t('One model per line or separate with commas')}
+                placeholder={t('One per line or comma-separated')}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
@@ -1400,9 +1745,7 @@ export function PriceMonitorPanel({ canEdit }: PriceMonitorPanelProps) {
                 }
               />
               <FieldDescription>
-                {t(
-                  'Models in this list are skipped; leave empty to check all marketplace models'
-                )}
+                {t('Listed models are skipped; leave empty to check all.')}
               </FieldDescription>
             </Field>
           </FieldGroup>

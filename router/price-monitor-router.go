@@ -15,6 +15,8 @@ var priceMonitorAdminRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/inconsistencies", permission: authz.AdminMenuPriceMonitorView, handler: controller.GetPriceMonitorInconsistencies},
 	{method: http.MethodPut, path: "/settings", permission: authz.AdminMenuPriceMonitorEdit, handler: controller.UpdatePriceMonitorSettings},
 	{method: http.MethodPost, path: "/run", permission: authz.AdminMenuPriceMonitorEdit, handler: controller.RunPriceMonitor},
+	// 改价与 rest_model_ratio 用同一个权限位：两者都是「修改模型价格」，不该有两套授权语义。
+	{method: http.MethodPost, path: "/apply_price", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.ApplyPriceMonitorPrice},
 }
 
 func registerPriceMonitorRoutes(apiRouter *gin.RouterGroup, anonymousRequestBodyLimit gin.HandlerFunc) {

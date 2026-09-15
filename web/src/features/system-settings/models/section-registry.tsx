@@ -85,6 +85,12 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_minutes'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
+          'channel_daily_limit_setting.enabled':
+            settings['channel_daily_limit_setting.enabled'],
+          'channel_daily_limit_setting.timezone':
+            settings['channel_daily_limit_setting.timezone'],
+          'channel_daily_limit_setting.retention_days':
+            settings['channel_daily_limit_setting.retention_days'],
         }}
       />
     ),

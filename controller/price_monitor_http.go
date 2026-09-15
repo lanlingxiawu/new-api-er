@@ -105,6 +105,8 @@ func GetPriceMonitorStatus(c *gin.Context) {
 			"last_attempt_error": getPriceMonitorRuntimeError(),
 			"storage_scope":      priceMonitorStorageScope(),
 			"is_master":          common.IsMasterNode,
+			// 行内改价请求必须带上它，让服务端能检测到「我读到的价格已被其他管理员改过」。
+			"pricing_version": model.GetPricingConfigVersion(),
 		},
 	})
 }
@@ -163,7 +165,12 @@ func PublicPriceMonitorQuery(c *gin.Context) {
 		return
 	}
 	query := priceMonitorQuery{Model: request.Model, Source: request.Source, SourceKeys: request.SourceKeys, SourceKeysSet: request.SourceKeys != nil, Comparison: request.Comparison, Page: request.Page, PageSize: request.PageSize}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": queryPriceMonitorMatrix(snapshot, query)})
+	result := queryPriceMonitorMatrix(snapshot, query)
+	// 保本下限是内部定价信息（逐字段保本价与决定它的渠道），持有分享口令的外部人员不该看到。
+	for i := range result.Items {
+		result.Items[i].RepairFloor = nil
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
 }
 
 func PriceMonitorView(c *gin.Context) {

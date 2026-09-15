@@ -82,6 +82,33 @@ export type PriceMonitorPriceCell = {
   price_different?: boolean
   mode_different?: boolean
   unavailable_reason?: 'missing' | 'placeholder' | 'source_failed'
+  highest?: boolean
+  loss_kinds?: PriceMonitorLossKind[]
+  sell_factor?: number
+  measured_factor?: number
+  configured_factor?: number
+}
+
+export type PriceMonitorLossKind = 'measured' | 'configured'
+
+/**
+ * 改价保本下限：把平台价改到多少才对所有可比渠道都不亏（整行一个，不分渠道）。
+ * 公开分享页不返回该字段。
+ */
+export type PriceMonitorRepairFloor = {
+  mode: string
+  /** 保本价：可直接提交给 apply_price 的 option 字段值下限。 */
+  fields?: Record<string, number>
+  /** 对应的展示价下限（每百万 token），用于按生效 input 重算比值型字段。 */
+  display?: Record<string, number>
+  /** 每个字段的下限由哪个渠道决定。 */
+  binding?: Record<string, string>
+  /** 平台当前的 option 字段值，作为改价请求的 expected；缺失的字段 expected 为 null。 */
+  current?: Record<string, number>
+  /** 每一项在所有渠道原始报价中的最高展示价（每百万 token，按次为每次），不除售价系数。 */
+  highest?: Record<string, number>
+  /** 补全倍率被系统锁定时的倍率：输出价 = 输入价 × 该值，不能单独改。 */
+  locked_completion_ratio?: number
 }
 
 export type PriceMonitorSourceHeader = {
@@ -94,6 +121,7 @@ export type PriceMonitorSourceHeader = {
 export type PriceMonitorMatrixItem = {
   model: string
   prices: Record<string, PriceMonitorPriceCell>
+  repair_floor?: PriceMonitorRepairFloor
 }
 
 export type PriceMonitorStatusResponse = {
@@ -122,6 +150,8 @@ export type PriceMonitorStatusResponse = {
         platform_channel: number
         channel_official: number
         channel_models_dev: number
+        above_platform: number
+        loss_risk: number
       }
       access_password: string
       password_expire_at: number
@@ -131,6 +161,36 @@ export type PriceMonitorStatusResponse = {
     last_attempt_error: string
     storage_scope: string
     is_master: boolean
+    pricing_version: number
+  }
+}
+
+export type PriceMonitorApplyPriceItem = {
+  model: string
+  /** 服务端拒绝 null 值，只提交确定的数字。 */
+  fields: Record<string, number>
+  expected: Record<string, number | null>
+}
+
+/** 服务端判定低于保本下限的字段（error_code = PRICE_BELOW_FLOOR）。 */
+export type PriceMonitorFloorViolation = {
+  model: string
+  field: string
+  /** 生效后的值：提交了用提交值，没提交用当前值。 */
+  value: number
+  floor: number
+  binding?: string
+  submitted: boolean
+}
+
+export type PriceMonitorApplyPriceResponse = {
+  success: boolean
+  message: string
+  error_code?: string
+  data?: {
+    pricing_version?: number
+    results?: { model: string; applied: string[]; unchanged: string[] }[]
+    violations?: PriceMonitorFloorViolation[]
   }
 }
 
@@ -506,6 +566,10 @@ export type ModelSettings = {
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_mode': 'scheduled_all' | 'passive_recovery'
+  // 渠道每日金额上限（docs/design/channel-daily-quota-limit.md §3.2）
+  'channel_daily_limit_setting.enabled': boolean
+  'channel_daily_limit_setting.timezone': string
+  'channel_daily_limit_setting.retention_days': number
   'channel_affinity_setting.enabled': boolean
   'channel_affinity_setting.switch_on_success': boolean
   'channel_affinity_setting.keep_on_channel_disabled': boolean

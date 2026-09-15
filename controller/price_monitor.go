@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 12
+	priceMonitorMatrixVersion           = 17
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -74,7 +75,17 @@ type PriceMonitorPriceCell struct {
 	PriceDifferent    bool                    `json:"price_different,omitempty"`
 	ModeDifferent     bool                    `json:"mode_different,omitempty"`
 	UnavailableReason string                  `json:"unavailable_reason,omitempty"`
+	Highest           bool                    `json:"highest,omitempty"`
 	Expr              string                  `json:"-"`
+
+	// 亏损判定结果，仅命中 loss_risk 的渠道单元格写入。
+	LossKinds        []string `json:"loss_kinds,omitempty"`
+	SellFactor       *float64 `json:"sell_factor,omitempty"`
+	MeasuredFactor   *float64 `json:"measured_factor,omitempty"`
+	ConfiguredFactor *float64 `json:"configured_factor,omitempty"`
+
+	// optionFields 是平台单元格的原始 option 值，只在构建矩阵时用来填充 RepairFloor.Current，不序列化。
+	optionFields map[string]float64
 }
 
 type PriceMonitorPriceTier struct {
@@ -96,6 +107,33 @@ type PriceMonitorPriceLane struct {
 type PriceMonitorMatrixItem struct {
 	Model  string                           `json:"model"`
 	Prices map[string]PriceMonitorPriceCell `json:"prices"`
+	// RepairFloor 是「平台价改到多少才对所有可比渠道都不亏」的逐字段下限。
+	// 挂在 item 而不是某个单元格上：它描述的是这一行所有渠道的联合约束，
+	// 不属于任何单一来源；挂在 item 上也不会被 queryPriceMonitorMatrix 的
+	// displayKeys 过滤连带丢掉。
+	RepairFloor *PriceMonitorRepairFloor `json:"repair_floor,omitempty"`
+}
+
+// PriceMonitorRepairFloor 是改价的保本下限。
+//
+// 口径：floor_d = max over 可比渠道 s ( C_{s,d} / g_s )。注意是**先除各渠道自己的
+// 售价系数再取 max**——不同渠道服务不同分组、系数不同，报价最高的渠道未必约束最紧。
+type PriceMonitorRepairFloor struct {
+	Mode string `json:"mode"`
+	// Fields 是可直接与改价输入框比对的 option 字段值下限。
+	Fields map[string]float64 `json:"fields,omitempty"`
+	// Display 是对应的展示价下限（每百万 token），用于文案。
+	Display map[string]float64 `json:"display,omitempty"`
+	// Binding 记录每个字段的下限由哪个渠道决定，便于管理员追因。
+	Binding map[string]string `json:"binding,omitempty"`
+	// Current 是这些字段当前的原始 option 值，作为改价请求的 expected（乐观并发校验）；
+	// 缺少的字段表示当前未配置（expected 传 null）。
+	Current map[string]float64 `json:"current,omitempty"`
+	// Highest 是改价弹窗的「最高价」：每一项在所有可比渠道原始报价中的最高展示价（每百万 token，
+	// 按次为每次），不除售价系数。键与 Fields 相同；输出价即使补全倍率被锁定也给出，供比较。
+	Highest map[string]float64 `json:"highest,omitempty"`
+	// LockedCompletionRatio 非 0 表示补全倍率被系统锁定：输出价 = 输入价 × 该值，不能单独改。
+	LockedCompletionRatio float64 `json:"locked_completion_ratio,omitempty"`
 }
 
 type PriceMonitorComparisonModelCounts struct {
@@ -104,6 +142,8 @@ type PriceMonitorComparisonModelCounts struct {
 	PlatformChannel   int `json:"platform_channel"`
 	ChannelOfficial   int `json:"channel_official"`
 	ChannelModelsDev  int `json:"channel_models_dev"`
+	AbovePlatform     int `json:"above_platform"`
+	LossRisk          int `json:"loss_risk"`
 }
 
 type PriceMonitorSnapshot struct {
@@ -270,7 +310,7 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 	sourceFilter := strings.ToLower(strings.TrimSpace(query.Source))
 	comparison := strings.ToLower(strings.TrimSpace(query.Comparison))
 	switch comparison {
-	case "channel_official", "channel_models_dev", "channel_platform", "platform_official", "platform_models_dev", "input", "output", "cache", "billing", "official_missing", "models_dev_missing", "channel_missing", "source_failed":
+	case "channel_official", "channel_models_dev", "channel_platform", "platform_official", "platform_models_dev", "above_platform", "loss_risk", "input", "output", "cache", "billing", "official_missing", "models_dev_missing", "channel_missing", "source_failed":
 	default:
 		comparison = "all"
 	}
@@ -309,14 +349,22 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 		if !matched {
 			continue
 		}
+		highestKey := ""
+		if comparison == "above_platform" {
+			highestKey = priceMonitorHighestAbovePlatformKey(item, eligibleHeaders)
+		}
 		prices := make(map[string]PriceMonitorPriceCell, len(displayKeys))
 		for key := range displayKeys {
 			if price, ok := item.Prices[key]; ok {
+				price.Highest = key == highestKey
 				prices[key] = price
 				visibleKeys[key] = struct{}{}
 			}
 		}
-		filtered = append(filtered, PriceMonitorMatrixItem{Model: item.Model, Prices: prices})
+		// RepairFloor 必须显式带上：这里是重建一个新 item（只保留可见来源的单元格），
+		// 漏掉它前端就拿不到保本下限，逐项校验会整个失效——服务端仍会拦，但管理员
+		// 在点提交之前看不到任何提示。
+		filtered = append(filtered, PriceMonitorMatrixItem{Model: item.Model, Prices: prices, RepairFloor: item.RepairFloor})
 	}
 	start := (query.Page - 1) * query.PageSize
 	if start > len(filtered) {
@@ -413,6 +461,27 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 				displayKeys[header.Key] = struct{}{}
 			}
 		}
+	case "loss_risk":
+		// 判定在巡检时已写入单元格（applyPriceMonitorLossVerdicts），查询期只读结果，
+		// 不重算，也不依赖查询时的分组倍率配置。
+		for _, header := range headers {
+			source, ok := item.Prices[header.Key]
+			if !ok || header.Type != priceSourceChannel || len(source.LossKinds) == 0 {
+				continue
+			}
+			displayKeys[priceMonitorPlatformKey] = struct{}{}
+			displayKeys[header.Key] = struct{}{}
+		}
+	case "above_platform":
+		platform := item.Prices[priceMonitorPlatformKey]
+		for _, header := range headers {
+			source, ok := item.Prices[header.Key]
+			if !ok || !priceMonitorAbovePlatformCandidate(header.Type) || !priceMonitorSourceAbovePlatform(platform, source) {
+				continue
+			}
+			displayKeys[priceMonitorPlatformKey] = struct{}{}
+			displayKeys[header.Key] = struct{}{}
+		}
 	case "platform_official", "platform_models_dev":
 		reference, referenceKey := official, officialKey
 		if comparison == "platform_models_dev" {
@@ -504,8 +573,126 @@ func countPriceMonitorComparisonModels(headers []PriceMonitorSourceHeader, items
 		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "channel_models_dev"); matched {
 			counts.ChannelModelsDev++
 		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "above_platform"); matched {
+			counts.AbovePlatform++
+		}
+		if matched, _ := priceMonitorMatrixItemDisplayKeys(item, headers, "loss_risk"); matched {
+			counts.LossRisk++
+		}
 	}
 	return counts
+}
+
+// priceMonitorAbovePlatformCandidate limits the "priced above platform" comparison to sources that
+// represent a real upstream cost. models.dev is a reference dataset, so it stays out of this
+// comparison and out of its summary count.
+func priceMonitorAbovePlatformCandidate(sourceType string) bool {
+	return sourceType == priceSourceChannel || sourceType == priceSourceOfficial
+}
+
+// priceMonitorSourceAbovePlatform reports whether any comparable price dimension of the source is
+// strictly more expensive than the platform configuration. Cells with different billing modes,
+// dynamic expressions or mismatched tier conditions are not comparable and never count as higher.
+func priceMonitorSourceAbovePlatform(platform, source PriceMonitorPriceCell) bool {
+	if priceMonitorComparisonIgnores(platform) || priceMonitorComparisonIgnores(source) || platform.Mode != source.Mode {
+		return false
+	}
+	switch platform.Mode {
+	case priceMonitorModeToken:
+		return priceMonitorPriceHigher(platform.Input, source.Input) || priceMonitorPriceHigher(platform.Output, source.Output) || priceMonitorLanePriceHigher(priceMonitorComparablePlatformLanes(platform.Lanes), source.Lanes)
+	case priceMonitorModeRequest:
+		return priceMonitorPriceHigher(platform.Price, source.Price)
+	case priceMonitorModeExpression:
+		return priceMonitorTierPriceHigher(platform, source)
+	}
+	return false
+}
+
+// priceMonitorPriceHigher skips dimensions only one side configured, so a price the platform never
+// set is not reported as more expensive.
+func priceMonitorPriceHigher(platform, source *float64) bool {
+	if platform == nil || source == nil {
+		return false
+	}
+	return *source > *platform && !nearlyEqual(*source, *platform)
+}
+
+func priceMonitorLanePriceHigher(platformLanes, sourceLanes []PriceMonitorPriceLane) bool {
+	if len(platformLanes) == 0 || len(sourceLanes) == 0 {
+		return false
+	}
+	platformByKey := make(map[string]*float64, len(platformLanes))
+	for _, lane := range platformLanes {
+		platformByKey[lane.Key] = lane.Price
+	}
+	for _, lane := range sourceLanes {
+		platformPrice, ok := platformByKey[lane.Key]
+		if ok && priceMonitorPriceHigher(platformPrice, lane.Price) {
+			return true
+		}
+	}
+	return false
+}
+
+func priceMonitorTierPriceHigher(platform, source PriceMonitorPriceCell) bool {
+	if platform.Dynamic || source.Dynamic || len(platform.Tiers) == 0 || len(platform.Tiers) != len(source.Tiers) {
+		return false
+	}
+	higher := false
+	for index, platformTier := range platform.Tiers {
+		sourceTier := source.Tiers[index]
+		if platformTier.ConditionVariable != sourceTier.ConditionVariable || platformTier.ConditionOperator != sourceTier.ConditionOperator || !priceMonitorOptionalPriceEqual(platformTier.ConditionValue, sourceTier.ConditionValue) {
+			return false
+		}
+		if priceMonitorPriceHigher(&platformTier.Input, &sourceTier.Input) || priceMonitorPriceHigher(&platformTier.Output, &sourceTier.Output) || priceMonitorLanePriceHigher(platformTier.Lanes, sourceTier.Lanes) {
+			higher = true
+		}
+	}
+	return higher
+}
+
+// priceMonitorHighestAbovePlatformKey picks the most expensive source among those already known to
+// be above the platform price. Every candidate shares the platform billing mode, so the scores are
+// directly comparable; ties keep the first source header so the result stays stable.
+func priceMonitorHighestAbovePlatformKey(item PriceMonitorMatrixItem, headers []PriceMonitorSourceHeader) string {
+	platform := item.Prices[priceMonitorPlatformKey]
+	highestKey := ""
+	highestScore := 0.0
+	for _, header := range headers {
+		source, ok := item.Prices[header.Key]
+		if !ok || !priceMonitorAbovePlatformCandidate(header.Type) || !priceMonitorSourceAbovePlatform(platform, source) {
+			continue
+		}
+		if score := priceMonitorCellScore(source); highestKey == "" || score > highestScore {
+			highestKey, highestScore = header.Key, score
+		}
+	}
+	return highestKey
+}
+
+func priceMonitorCellScore(cell PriceMonitorPriceCell) float64 {
+	switch cell.Mode {
+	case priceMonitorModeToken:
+		return priceMonitorPriceValue(cell.Input) + priceMonitorPriceValue(cell.Output)
+	case priceMonitorModeRequest:
+		return priceMonitorPriceValue(cell.Price)
+	case priceMonitorModeExpression:
+		score := 0.0
+		for index, tier := range cell.Tiers {
+			if total := tier.Input + tier.Output; index == 0 || total > score {
+				score = total
+			}
+		}
+		return score
+	}
+	return 0
+}
+
+func priceMonitorPriceValue(price *float64) float64 {
+	if price == nil {
+		return 0
+	}
+	return *price
 }
 
 func priceMonitorComparisonIgnores(cell PriceMonitorPriceCell) bool {
@@ -693,6 +880,7 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 		if !platformOK {
 			continue
 		}
+		platform = priceMonitorBilledPlatformCell(platform, localData, modelName)
 		prices := map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform}
 		hasDifference := false
 		for _, source := range sources {
@@ -809,6 +997,39 @@ func priceMonitorCell(data map[string]any, modelName string) (PriceMonitorPriceC
 	return cell, true
 }
 
+// priceMonitorBilledPlatformCell 让平台单元格反映计费真正使用的价格，并记下改价用的原始 option 值。
+//
+// 输出价：补全倍率被系统锁定、或映射表里没有该模型时，计费走 GetCompletionRatio 的内置规则；
+// 只读映射表会得到「没有输出价」，输出维度就不参与亏损判定与保本下限了。
+func priceMonitorBilledPlatformCell(cell PriceMonitorPriceCell, data map[string]any, modelName string) PriceMonitorPriceCell {
+	if cell.Mode == priceMonitorModeToken && cell.Input != nil &&
+		(cell.Output == nil || ratio_setting.GetCompletionRatioInfo(modelName).Locked) {
+		cell.Output = floatPointer(*cell.Input * ratio_setting.GetCompletionRatio(modelName))
+	}
+	cell.optionFields = priceMonitorOptionFields(data, modelName)
+	return cell
+}
+
+// priceMonitorOptionFields 读取模型在各改价字段上的原始 option 值（不做任何回退），作为改价请求的
+// expected。不能从展示价倒推：锁定或内置规则下的输出价并不来自 CompletionRatio。
+func priceMonitorOptionFields(data map[string]any, modelName string) map[string]float64 {
+	fields := make(map[string]float64)
+	read := func(field string) {
+		if raw, ok := valueMap(data[field])[modelName]; ok {
+			if value, valid := asFloat64(raw); valid {
+				fields[field] = value
+			}
+		}
+	}
+	read("model_price")
+	read("model_ratio")
+	read("completion_ratio")
+	for _, lane := range priceMonitorRatioLanes {
+		read(lane.field)
+	}
+	return fields
+}
+
 func floatPointer(value float64) *float64 { return &value }
 
 var (
@@ -921,6 +1142,19 @@ func isUntrustedPriceMonitorSource(data map[string]any, modelName string) bool {
 }
 
 func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMonitorPriceCell) {
+	// 只有一档、不带条件的阶梯表达式，与同价的按量计费完全等价，不能仅凭计费模式不同就判为不一致。
+	// 来源侧直接换算成按量单元格：之后的逐字段标记、「高于平台」、亏损判定与保本下限都读这个
+	// 单元格，口径因此一致。平台侧只在这里借用换算结果、不改写自身——改价接口要靠平台的计费
+	// 模式判断能否行内改价，平台实际按表达式计费时写 ModelRatio 并不生效。
+	if platform.Mode == priceMonitorModeToken {
+		if flattened, ok := priceMonitorFlattenSingleTier(*source); ok {
+			*source = flattened
+		}
+	} else if source.Mode == priceMonitorModeToken {
+		if flattened, ok := priceMonitorFlattenSingleTier(platform); ok {
+			platform = flattened
+		}
+	}
 	if platform.Mode != source.Mode {
 		source.ModeDifferent = true
 		source.Different = true
@@ -930,7 +1164,7 @@ func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMo
 	case priceMonitorModeToken:
 		source.InputDifferent = priceMonitorValuesDifferent(platform.Input, source.Input)
 		source.OutputDifferent = priceMonitorValuesDifferent(platform.Output, source.Output)
-		laneDifferent := markPriceMonitorLaneDifferences(platform.Lanes, source)
+		laneDifferent := markPriceMonitorLaneDifferences(priceMonitorComparablePlatformLanes(platform.Lanes), source)
 		source.Different = source.InputDifferent || source.OutputDifferent || laneDifferent
 	case priceMonitorModeRequest:
 		source.PriceDifferent = platform.Price == nil || source.Price == nil || !nearlyEqual(*platform.Price, *source.Price)
@@ -946,6 +1180,89 @@ func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMo
 		source.Different = true
 		source.ModeDifferent = true
 	}
+}
+
+// priceMonitorFlattenSingleTier 把「只有一档、不带条件、非动态」的阶梯表达式单元格换算成按量单元格。
+//
+// 含按量计费表达不了的分项（图片输出等）时不换算：markPriceMonitorLaneDifferences 只认按量计费
+// 能比较的分项，换算过去会把这些分项连同它们的真实差异一起丢掉。
+func priceMonitorFlattenSingleTier(cell PriceMonitorPriceCell) (PriceMonitorPriceCell, bool) {
+	if cell.Mode != priceMonitorModeExpression || cell.Dynamic || cell.UnavailableReason != "" || len(cell.Tiers) != 1 {
+		return cell, false
+	}
+	tier := cell.Tiers[0]
+	if tier.ConditionVariable != "" {
+		return cell, false
+	}
+	var lanes []PriceMonitorPriceLane
+	for _, lane := range tier.Lanes {
+		if !priceMonitorTokenLaneKey(lane.Key) {
+			return cell, false
+		}
+		lanes = append(lanes, PriceMonitorPriceLane{Key: lane.Key, Price: lane.Price})
+	}
+	flattened := cell
+	flattened.Mode = priceMonitorModeToken
+	flattened.Input = floatPointer(tier.Input)
+	flattened.Output = floatPointer(tier.Output)
+	flattened.Lanes = lanes
+	flattened.Tiers = nil
+	return flattened, true
+}
+
+// priceMonitorTokenLaneKey 报告按量计费的平台能否在该分项上比较。1 小时缓存写入没有独立配置项，
+// 但计费按 5 分钟缓存写入价 × priceMonitorCacheWrite1hMultiplier 计价，因此同样可比。
+func priceMonitorTokenLaneKey(key string) bool {
+	if key == priceMonitorLaneCacheWrite1h {
+		return true
+	}
+	for _, lane := range priceMonitorRatioLanes {
+		if lane.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// priceMonitorCacheWrite1hMultiplier 必须与 relay/helper/price.go 的 claudeCacheCreation1hMultiplier 一致：
+// 按量计费时 1 小时缓存写入的倍率 = create_cache_ratio × 该系数，平台没有单独的配置项。
+const priceMonitorCacheWrite1hMultiplier = 6 / 3.75
+
+// priceMonitorTokenLaneOrder 是按量单元格分项的比较与展示顺序：配置型分项之外，
+// 在 5 分钟缓存写入之后插入 1 小时缓存写入。
+var priceMonitorTokenLaneOrder = func() []string {
+	keys := make([]string, 0, len(priceMonitorRatioLanes)+1)
+	for _, lane := range priceMonitorRatioLanes {
+		keys = append(keys, lane.key)
+		if lane.key == priceMonitorLaneCacheWrite {
+			keys = append(keys, priceMonitorLaneCacheWrite1h)
+		}
+	}
+	return keys
+}()
+
+// priceMonitorComparablePlatformLanes 返回按量平台用于比较的分项：配置了 5 分钟缓存写入价时，补上计费
+// 实际使用的 1 小时缓存写入价。只在比较时使用、不写回平台单元格——否则每个配置了缓存写入的模型
+// 都会多出一行 1 小时价格，而绝大多数模型根本不产生 1 小时缓存。
+func priceMonitorComparablePlatformLanes(lanes []PriceMonitorPriceLane) []PriceMonitorPriceLane {
+	var cacheWrite *float64
+	for _, lane := range lanes {
+		switch lane.Key {
+		case priceMonitorLaneCacheWrite1h:
+			return lanes
+		case priceMonitorLaneCacheWrite:
+			cacheWrite = lane.Price
+		}
+	}
+	if cacheWrite == nil {
+		return lanes
+	}
+	comparable := make([]PriceMonitorPriceLane, 0, len(lanes)+1)
+	comparable = append(comparable, lanes...)
+	return append(comparable, PriceMonitorPriceLane{
+		Key:   priceMonitorLaneCacheWrite1h,
+		Price: floatPointer(*cacheWrite * priceMonitorCacheWrite1hMultiplier),
+	})
 }
 
 func priceMonitorValuesDifferent(platform, source *float64) bool {
@@ -966,9 +1283,9 @@ func markPriceMonitorLaneDifferences(platformLanes []PriceMonitorPriceLane, sour
 	}
 	ordered := make([]PriceMonitorPriceLane, 0, len(platformByKey)+len(sourceByKey))
 	hasDifference := false
-	for _, definition := range priceMonitorRatioLanes {
-		platformLane, platformOK := platformByKey[definition.key]
-		sourceLane, sourceOK := sourceByKey[definition.key]
+	for _, key := range priceMonitorTokenLaneOrder {
+		platformLane, platformOK := platformByKey[key]
+		sourceLane, sourceOK := sourceByKey[key]
 		if !platformOK && !sourceOK {
 			continue
 		}
@@ -980,7 +1297,12 @@ func markPriceMonitorLaneDifferences(platformLanes []PriceMonitorPriceLane, sour
 			ordered = append(ordered, sourceLane)
 			continue
 		}
-		ordered = append(ordered, PriceMonitorPriceLane{Key: definition.key})
+		// 平台的 1 小时缓存写入价是比较时推导出来的；来源没报这一项时不留空行，
+		// 否则每个配置了缓存写入的模型都会多出一行空的 1 小时价格。
+		if key == priceMonitorLaneCacheWrite1h {
+			continue
+		}
+		ordered = append(ordered, PriceMonitorPriceLane{Key: key})
 	}
 	source.Lanes = ordered
 	return hasDifference

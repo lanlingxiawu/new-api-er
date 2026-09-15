@@ -121,6 +121,11 @@ func GetGroupGroupRatio(userGroup, usingGroup string) (float64, bool) {
 	return ratio, true
 }
 
+// GetGroupGroupRatioCopy 返回分组对倍率的快照副本。调用方只读，用于枚举已配置的用户分组。
+func GetGroupGroupRatioCopy() map[string]map[string]float64 {
+	return groupGroupRatioMap.ReadAll()
+}
+
 func GroupGroupRatio2JSONString() string {
 	return groupGroupRatioMap.MarshalJSONString()
 }
