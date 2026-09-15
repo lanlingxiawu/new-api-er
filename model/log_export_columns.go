@@ -145,6 +145,21 @@ func (ctx *rowCtx) auditInfo(l *Log) map[string]any {
 	return sub
 }
 
+// opParams 取 other.op.params——审计/登录日志的语言无关操作参数，
+// 被操作用户（target_user_id / target_username）即存放于此。
+func (ctx *rowCtx) opParams(l *Log) map[string]any {
+	m := ctx.otherMap(l)
+	if m == nil {
+		return nil
+	}
+	op, _ := m["op"].(map[string]any)
+	if op == nil {
+		return nil
+	}
+	sub, _ := op["params"].(map[string]any)
+	return sub
+}
+
 // formatAny 把 other 中的任意 JSON 值渲染成单元格文本。
 // 数字统一走 strconv：整数不带小数点，浮点去掉尾随零。
 func formatAny(v any) string {
@@ -207,6 +222,17 @@ func adminInfoCol(key, otherKey, label, group string) LogExportColumn {
 		AdminOnly: true, NeedOther: true,
 		Extract: func(l *Log, ctx *rowCtx) string {
 			return otherValue(ctx.adminInfo(l), otherKey)
+		},
+	}
+}
+
+// opParamsCol 生成一个从 other.op.params 取值的列（一律 AdminOnly）。
+func opParamsCol(key, otherKey, label string) LogExportColumn {
+	return LogExportColumn{
+		Key: key, Label: label, Group: LogExportGroupAudit,
+		AdminOnly: true, NeedOther: true,
+		Extract: func(l *Log, ctx *rowCtx) string {
+			return otherValue(ctx.opParams(l), otherKey)
 		},
 	}
 }
@@ -281,7 +307,7 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("text_output", "Text Output Tokens", LogExportGroupTokens),
 		otherCol("audio_input", "Audio Input Tokens", LogExportGroupTokens),
 		otherCol("audio_output", "Audio Output Tokens", LogExportGroupTokens),
-		otherCol("image_output", "Image Output Tokens", LogExportGroupTokens),
+		otherCol("image_output", "Image Input Tokens", LogExportGroupTokens),
 		otherCol("web_search_call_count", "Web Search Calls", LogExportGroupTokens),
 		otherCol("file_search_call_count", "File Search Calls", LogExportGroupTokens),
 
@@ -307,7 +333,7 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("cache_creation_ratio_1h", "Cache Write Ratio (1h)", LogExportGroupBilling),
 		otherCol("audio_ratio", "Audio Ratio", LogExportGroupBilling),
 		otherCol("audio_completion_ratio", "Audio Completion Ratio", LogExportGroupBilling),
-		otherCol("image_ratio", "Image Ratio", LogExportGroupBilling),
+		otherCol("image_ratio", "Image Input Ratio", LogExportGroupBilling),
 		otherCol("model_price", "Model Price", LogExportGroupBilling),
 		otherCol("web_search_price", "Web Search Price", LogExportGroupBilling),
 		otherCol("file_search_price", "File Search Price", LogExportGroupBilling),
@@ -385,6 +411,8 @@ func buildLogExportColumns() []LogExportColumn {
 		adminInfoCol("server_ip", "server_ip", "Server IP", LogExportGroupAudit),
 		adminInfoCol("node_name", "node_name", "Node Name", LogExportGroupAudit),
 		adminInfoCol("version", "version", "Version", LogExportGroupAudit),
+		opParamsCol("target_username", "target_username", "Target User"),
+		opParamsCol("target_user_id", "target_user_id", "Target User ID"),
 		auditInfoCol("audit_method", "method", "HTTP Method"),
 		auditInfoCol("audit_route", "route", "Route"),
 		auditInfoCol("audit_path", "path", "Path"),
@@ -466,6 +494,7 @@ var performanceColumns = []string{
 var auditColumns = []string{
 	"created_at", "type", "username", "user_id",
 	"admin_username", "admin_id", "admin_role", "auth_method",
+	"target_username", "target_user_id",
 	"audit_method", "audit_route", "audit_path", "audit_status", "audit_success",
 	"payment_method", "callback_payment_method", "caller_ip", "server_ip", "node_name",
 	"login_method", "user_agent", "request_path", "ip", "content",

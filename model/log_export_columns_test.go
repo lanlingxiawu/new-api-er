@@ -292,6 +292,57 @@ func TestLogExportExtract_AuditInfo(t *testing.T) {
 	assert.Equal(t, "session", renderOne(t, "auth_method", l, ctx))
 }
 
+func TestLogExportExtract_TargetUser(t *testing.T) {
+	ctx := newTestRowCtx()
+
+	// 管理审计日志把被操作用户放在 other.op.params 里。
+	l := &Log{Other: `{"op":{"action":"user.quota_add","params":{"quota":"$5.00","target_user_id":42,"target_username":"alice"}}}`}
+	assert.Equal(t, "alice", renderOne(t, "target_username", l, ctx))
+	assert.Equal(t, "42", renderOne(t, "target_user_id", l, ctx))
+
+	// 兜底路径只记 ID，用户名列留空。
+	idOnly := &Log{Other: `{"op":{"action":"user.oauth_unbind","params":{"target_user_id":7}}}`}
+	assert.Equal(t, "", renderOne(t, "target_username", idOnly, ctx))
+	assert.Equal(t, "7", renderOne(t, "target_user_id", idOnly, ctx))
+}
+
+// 历史日志与资源类操作没有 op/params，两列必须留空且不 panic。
+func TestLogExportExtract_TargetUserMissingOrMalformed(t *testing.T) {
+	ctx := newTestRowCtx()
+	for _, other := range []string{
+		"",
+		"not json",
+		`{}`,
+		`{"op":{}}`,
+		`{"op":{"action":"channel.delete_batch","params":{"count":3}}}`,
+		`{"op":"not-an-object"}`,
+		`{"op":{"params":"not-an-object"}}`,
+	} {
+		l := &Log{Other: other}
+		assert.Equal(t, "", renderOne(t, "target_username", l, ctx), "other=%s", other)
+		assert.Equal(t, "", renderOne(t, "target_user_id", l, ctx), "other=%s", other)
+	}
+}
+
+// 两列是 AdminOnly：普通用户导出时必须被过滤掉。
+func TestLogExportColumns_TargetUserIsAdminOnly(t *testing.T) {
+	_, err := ResolveLogExportColumns([]string{"target_user_id", "target_username"}, false)
+	assert.Error(t, err, "非管理员只选这两列时应报错（全部被过滤）")
+
+	set, err := ResolveLogExportColumns([]string{"created_at", "target_username"}, false)
+	require.NoError(t, err)
+	for _, col := range set.Columns {
+		assert.NotEqual(t, "target_username", col.Key)
+	}
+	assert.Contains(t, set.Dropped, "target_username")
+}
+
+// 内置审计模板必须包含被操作用户，否则导出的审计文件仍然无法定位对象。
+func TestLogExportColumns_AuditTemplateIncludesTargetUser(t *testing.T) {
+	assert.Contains(t, auditColumns, "target_user_id")
+	assert.Contains(t, auditColumns, "target_username")
+}
+
 func TestLogExportExtract_ChannelNameFromCacheAndRow(t *testing.T) {
 	ctx := newTestRowCtx()
 	ctx.channelNames[5] = "azure-east"

@@ -1061,3 +1061,130 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, other, "image_generation_call")
 	assert.NotContains(t, other, "image_generation_call_price")
 }
+
+// The Azure images path reports input_tokens_details.{text_tokens,image_tokens}
+// as a split of input_tokens, and the image portion bills at ImageRatio instead
+// of the text rate. This case is a real customer row (gpt-image-2, group ratio
+// 1.9) that produced a "消耗对不上" report because the log exposed no way to see
+// the image-input tier. The quota assertion pins the billing formula: it must
+// not move when the log fields change.
+func TestCalculateTextQuotaSummaryBillsImageInputTokensAtImageRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-image-2",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      2.5,
+			CompletionRatio: 6,
+			ImageRatio:      1.6,
+			CacheRatio:      0.25,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.9},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{
+		PromptTokens:     1892,
+		CompletionTokens: 3787,
+		PromptTokensDetails: dto.InputTokenDetails{
+			ImageTokens: 1500,
+			TextTokens:  392,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	require.Equal(t, 1500, summary.ImageTokens)
+	require.Equal(t, 392, summary.TextTokens)
+	require.Equal(t, 392, summary.textInputTokensForLog())
+	// (1892-1500) + 1500*1.6 + 3787*6 = 392 + 2400 + 22722 = 25514
+	// 25514 * 2.5 * 1.9 = 121191.5 => 121192 quota = $0.242384
+	require.Equal(t, 121192, summary.Quota)
+}
+
+func TestTextInputTokensForLog(t *testing.T) {
+	cases := []struct {
+		name         string
+		promptTokens int
+		imageTokens  int
+		textTokens   int
+		want         int
+	}{
+		{
+			name:         "upstream reports text tokens",
+			promptTokens: 1892,
+			imageTokens:  1500,
+			textTokens:   392,
+			want:         392,
+		},
+		{
+			name:         "falls back to prompt minus image when text tokens absent",
+			promptTokens: 1892,
+			imageTokens:  1500,
+			want:         392,
+		},
+		{
+			// Some upstreams report image tokens that are not nested inside
+			// input_tokens; a negative remainder must never surface as a count.
+			name:         "clamps to zero when image exceeds prompt",
+			promptTokens: 900,
+			imageTokens:  1152,
+			want:         0,
+		},
+		{
+			name:         "boundary: image equals prompt",
+			promptTokens: 1500,
+			imageTokens:  1500,
+			want:         0,
+		},
+		{
+			name:         "reported text tokens win over the fallback",
+			promptTokens: 1892,
+			imageTokens:  1500,
+			textTokens:   400,
+			want:         400,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := textQuotaSummary{
+				PromptTokens: tc.promptTokens,
+				ImageTokens:  tc.imageTokens,
+				TextTokens:   tc.textTokens,
+			}
+			require.Equal(t, tc.want, summary.textInputTokensForLog())
+		})
+	}
+}
+
+// Requests without image input must keep the exact log shape they had before
+// text_input existed, so historical rows and non-image models are unaffected.
+func TestCalculateTextQuotaSummaryOmitsImageFieldsWithoutImageTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 2,
+			ImageRatio:      1.6,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{PromptTokens: 100, CompletionTokens: 10}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	require.Zero(t, summary.ImageTokens)
+	// 100 + 10*2 = 120; the image ratio must not touch a request with no image input.
+	require.Equal(t, 120, summary.Quota)
+}

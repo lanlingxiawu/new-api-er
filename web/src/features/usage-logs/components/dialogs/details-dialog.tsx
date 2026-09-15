@@ -29,6 +29,7 @@ import {
   Globe,
   ShieldCheck,
   UserCog,
+  UserRound,
   Info,
   LogIn,
 } from 'lucide-react'
@@ -58,6 +59,8 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
   renderAuditContent,
+  getAuditTargetUser,
+  formatAuditTargetUser,
 } from '../../lib/format'
 import {
   getLogTypeConfig,
@@ -438,9 +441,19 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     })
   }
 
+  // image_output is a legacy key holding *input* image tokens, and both it and
+  // text_input are subsets of Input Tokens above — the labels say so, otherwise
+  // the rows read as if they should be added on top of the input count.
   if (other.image && other.image_output) {
+    const textInput = other.text_input || 0
+    if (textInput > 0) {
+      rows.push({
+        label: t('Text input (part of input)'),
+        value: textInput.toLocaleString(),
+      })
+    }
     rows.push({
-      label: t('Image Tokens'),
+      label: t('Image input (part of input)'),
       value: other.image_output.toLocaleString(),
     })
   }
@@ -536,6 +549,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
     if (hasUsername && hasId) return `${username} (ID: ${id})`
     if (hasUsername) return String(username)
     return `ID: ${id}`
+  })()
+  // The user this admin operation was performed on. Resource-level operations
+  // (channels, settings, ...) have no target user, so the row is omitted rather
+  // than rendered empty.
+  const manageTargetUser = (() => {
+    if (!isManage || !props.isAdmin) return null
+    const target = getAuditTargetUser(other)
+    return target ? formatAuditTargetUser(target) : null
   })()
   const authMethodLabel = (() => {
     if (!isManage || !props.isAdmin || !adminInfo?.auth_method) return ''
@@ -941,6 +962,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </span>
             }
             value={manageOperator}
+            mono
+          />
+        )}
+
+        {/* Target user of the operation (type=3, admin only) */}
+        {manageTargetUser && (
+          <DetailRow
+            label={
+              <span className='flex items-center gap-1.5'>
+                <UserRound
+                  className='text-muted-foreground size-3.5'
+                  aria-hidden='true'
+                />
+                {t('Target User')}
+              </span>
+            }
+            value={manageTargetUser}
             mono
           />
         )}

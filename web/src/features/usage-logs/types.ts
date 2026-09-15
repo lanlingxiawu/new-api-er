@@ -288,6 +288,10 @@ export interface LogOtherData {
   audio?: boolean
   audio_input?: number
   audio_output?: number
+  /**
+   * Text-only portion of the input, i.e. prompt_tokens minus the image/audio
+   * part. Written on the ws, audio and image-input paths; absent otherwise.
+   */
   text_input?: number
   text_output?: number
   cache_tokens?: number
@@ -324,6 +328,7 @@ export interface LogOtherData {
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number
+  /** Legacy key: holds input image tokens, not output. Subset of prompt_tokens. */
   image_output?: number
   web_search?: boolean
   web_search_call_count?: number
