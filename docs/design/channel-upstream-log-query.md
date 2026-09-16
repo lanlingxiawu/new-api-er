@@ -27,7 +27,7 @@ New API 渠道同时已经配置上游 Base URL 和 API 令牌。管理员排查
 
 ### 2.2 V1 范围
 
-- 仅支持 `ChannelTypeNewAPI`（61）。该类型具有稳定的 New API 日志接口契约。
+- 不按渠道类型限制（v2 修订，原 v1 仅支持 `ChannelTypeNewAPI`（61））。上游是否实现 New API 的日志接口，取决于上游本身而非本站给渠道贴的类型标签：把 new-api 网关配置成 OpenAI / Gemini 兼容类型是常见做法，按类型硬拒会让本来可用的配置永远查不了。上游确实不支持时，由 404 分支如实报「上游不可用」，不需要前置的类型闸。
 - 支持单令牌渠道。
 - 支持多令牌渠道，但一次只查询一个明确的令牌序号。
 - 支持两种查询：
@@ -61,12 +61,12 @@ New API 渠道同时已经配置上游 Base URL 和 API 令牌。管理员排查
 
 页面复用项目现有 `SectionPageLayout`、`DataTablePage`、`LogsFilterToolbar`、`ComboboxInput`、`CompactDateTimeRangePicker`、`StatusBadge`、`Skeleton`、`Empty` 与响应式移动卡片，不再挂载 `Sheet`。
 
-1. **筛选工具栏**：第一行依次是目标 New API 渠道、令牌序号（仅多令牌渠道渲染）、本站请求 ID、上游请求 ID；“更多筛选”承载时间范围、类型、用户名、令牌名称、模型、分组。令牌序号是多令牌渠道的必填项，因此固定在第一行，不能藏进折叠区，否则用户会对着看不见的字段收到“请选择令牌序号”的报错。
+1. **筛选工具栏**：第一行依次是目标渠道、令牌序号（仅多令牌渠道渲染）、本站请求 ID、上游请求 ID；“更多筛选”承载时间范围、类型、用户名、令牌名称、模型、分组。令牌序号是多令牌渠道的必填项，因此固定在第一行，不能藏进折叠区，否则用户会对着看不见的字段收到“请选择令牌序号”的报错。
 2. **渠道搜索**：输入关键字后调用 `/api/log/upstream/channels?keyword=`，服务端最多返回 50 个匹配项；详情入口提供的当前渠道作为已选项保留，不依赖它恰好位于最近 50 条。
 3. **结果摘要**：工具栏下显示查询范围徽章、总数、耗时和目标渠道。旧版上游降级时用项目 `Alert` 明确提示“仅近期结果”，不把它混进普通空状态。
 4. **桌面结果**：使用项目数据表，列为时间、类型、模型、请求 ID、令牌、输入/输出 token、额度、耗时和操作；服务端分页，页码或页大小变化会重新查询。
 5. **移动结果**：使用与现有使用日志一致的卡片结构，保留时间、模型、请求 ID、token、额度、耗时和详情入口。
-6. **详情展示**：行操作打开居中的项目 `Dialog`，按现有日志详情的 `DetailSection / DetailRow` 视觉层级展示标准化字段；不显示未知原始 JSON，不使用侧栏内联展开。
+6. **详情展示**：行操作打开居中的项目 `Dialog`，直接复用本站日志详情主体 `LogDetailBody`，排版与本站详情完全一致；不显示未知原始 JSON，不使用侧栏内联展开（见 §18）。
 
 查询不会在每次输入时自动发送。只有点击“查询”或在请求 ID 输入框按 Enter 才提交；提交时页码归 1。切换渠道会清空令牌序号和旧结果，多令牌渠道必须明确选择序号。新查询通过 `AbortController` 取消前一个请求。
 
@@ -133,6 +133,17 @@ New API 渠道同时已经配置上游 Base URL 和 API 令牌。管理员排查
 这里的上游请求 ID 完全信任为“查询条件输入”并在后端做格式校验，不通过本地日志 ID 反查、补全或验证。走该分支时本实例后端不会访问本地 `logs` 表；是否存在匹配记录由上游日志接口回答。
 
 **多令牌序号的兜底。** 反查模式下令牌序号优先取本站日志 `other.admin_info.multi_key_index`。历史日志可能没有记录该字段；此时如果渠道是多令牌，允许使用客户端提交的 `key_index` 兜底，而不是让整条链路走不下去——同一管理员本来就能通过“渠道 + 上游请求 ID”分支查询任意渠道任意序号，拒绝并不带来额外安全性，只制造死路。响应中 `source.key_index_from_log` 标明序号来源，为 `false` 时前端显示琥珀色徽章提示结果不一定精确对应该次请求。日志记录了序号时，客户端提交的值永远被忽略。
+
+**多令牌序号的轮询（v2 修订）。** 若历史日志没记录序号、客户端也没提交 `key_index`，不再直接报「日志未记录令牌序号」，而是按顺序逐个试该渠道的 key、命中即停：一条日志只可能属于一个 key，按请求 ID 命中的结果是精确的，不存在「挑一个 key 冒充全渠道」的问题。规则：
+
+- 跳过 `ChannelInfo.MultiKeyStatusList` 中已禁用与内容为空的 key；
+- 轮询链上某个 key「查询成功但 0 条」表示「不是这个 key」，继续试下一个；全部未命中时若配了账号访问令牌再用它查一次，仍未命中则如实返回空结果（「上游无此记录」是答案，不是错误）；
+- 每次尝试前检查请求上下文，客户端已断开即停止，不再继续访问上游；
+- 命中时 `source.key_index_from_log` 置为 `true`：结果精确对应该次请求，不应出现「不一定精确」的琥珀色提示。
+
+**只在「按本站请求 ID 追溯」时轮询，浏览场景不轮询。** 浏览时没有请求 ID 可供比对，「第一个有数据的 key」是任意的，把它当作整个渠道的日志会误导使用者，因此浏览多令牌渠道仍须手动选择序号（`TestQueryUpstreamLog_BrowseMultiKeyWithoutIndexStillRequiresSelection` 锁定）。
+
+**已知代价**：key 数量没有上限，单次上游请求超时 8 秒，最坏耗时约为「启用 key 数 × 8 秒」。只在「旧日志缺序号」这一种情形触发，正常追溯会直接取日志里记录的序号，不走轮询；如确有必要可再加上限。
 
 ## 5. API 契约
 
@@ -283,14 +294,13 @@ New API 渠道同时已经配置上游 Base URL 和 API 令牌。管理员排查
 
 鉴权：`middleware.AdminAuth()`，与上游查询接口相同。仅供上游日志独立页面选择目标，不在渠道页面使用。
 
-响应只包含：`id`、`name`、`type`、`is_multi_key`、`key_count`、`status`。只返回 New API 渠道，不返回 Base URL、Key、完整 settings、模型列表或成本配置。按 ID/名称搜索，结果上限 50，不做全量渠道加载。
+响应只包含：`id`、`name`、`type`、`is_multi_key`、`key_count`、`status`。只返回配置了 Base URL 的渠道（不按类型过滤，理由见 §2.2），不返回 Base URL、Key、完整 settings、模型列表或成本配置。按 ID/名称搜索，结果上限 50，不做全量渠道加载。
 
 ### 5.4 错误契约
 
 控制器使用 `ApiErrorI18n` 返回用户可执行的错误信息，底层错误先用 `logger.LogError(c, ...)` 记录。建议错误键：
 
 - `upstream_log.channel_not_found`
-- `upstream_log.unsupported_channel_type`
 - `upstream_log.base_url_missing`
 - `upstream_log.key_missing`
 - `upstream_log.key_index_required`
@@ -310,16 +320,16 @@ New API 渠道同时已经配置上游 Base URL 和 API 令牌。管理员排查
 ### 6.1 渠道与令牌选择
 
 1. 按 ID 查询渠道，只选择实现所需列，避免 `SELECT *`。
-2. 仅接受 `constant.ChannelTypeNewAPI`。
+2. 不限制渠道类型：只要渠道配置了 Base URL，且上游是 new-api 系网关，就能查询（见 §2.2）；上游不兼容时由凭证回退链与错误契约给出可读提示。
 3. 单令牌渠道使用 `channel.Key`，不把 Key 写入响应或日志。
 4. 多令牌渠道解析 `GetKeys()`：
-   - 必须提交 `key_index`；
+   - 浏览场景必须提交 `key_index`；追溯场景日志缺少序号时按 §4 逐个尝试已启用的 key；
    - 索引必须存在；
    - 禁用令牌默认仍允许只读查询，因为上游的 `TokenAuthReadOnly` 允许非禁用状态查询，但本地已标记禁用的 key 需要在 UI 明示；
    - 不调用 `GetNextEnabledKey()`，避免改变轮询状态或与 relay 竞争渠道锁。
 5. 本地使用日志中的 `multi_key_index` 仅用于预填，后端仍重新校验。
 
-V1 不提供“全部令牌”选项，避免一个管理操作按令牌数放大为大量外部请求。
+浏览场景不提供“全部令牌”选项，避免一个管理操作按令牌数放大为大量外部请求；追溯场景的逐个尝试命中即停，且只在日志没有记录序号时发生。
 
 ### 6.2 上游 URL 生成
 
@@ -349,6 +359,8 @@ V1 不提供“全部令牌”选项，避免一个管理操作按令牌数放�
 - 接受 New API 标准 `success/message/data` 结构；`data` 必须为数组。
 - 最多解析 `page_size` 条，字符串字段设置长度上限。
 - 只映射 UI 所需字段，并对 `other` 做 allowlist 投影。
+- 顶层额外保留 `channel`、`channel_name`、`group`、`ip`，`other` 的 allowlist 覆盖本站日志详情排版读取的全部键（首字耗时、流式状态、模型映射、请求转换链、请求路径、计费模式与倍率、阶梯表达式、缓存 token、音频/图片/联网搜索/文件搜索等附加计费、违规扣费、订阅扣费等），使上游详情可与本站详情逐区块一致（见 §18）。
+- 明确排除：`admin_info`（重试链等管理信息）、`audit_info`、`op`、`login_method`、`user_agent`、`stream_diagnostic_available`，以及 `po`（参数覆盖可能携带含凭证的请求头）。`TestProjectUpstreamLogItem_KeepsDetailLayoutFields` 锁定保留与排除两侧。
 - 永不记录 Authorization Header、渠道 Key、上游响应原文或含凭证的字段。
 
 ## 7. 数据模型与索引
@@ -386,8 +398,13 @@ LIMIT 20
 
 V1 不新增用户配置，也不新增环境变量：
 
-- 上游地址复用渠道 `base_url`。
-- 上游查询令牌复用渠道 `key`。
+- 上游地址复用渠道 `base_url`；配置了「账号余额查询 → 查询地址」时优先取它。
+- 凭证有两套，**按固定顺序尝试**，不新增字段也不新增控件；查询结果来自哪一套**不对用户区分**，界面不展示来源：
+  1. **渠道 `key`**（优先）：打上游 `/api/log/token/query`（旧版降级 `/api/log/token`）。该接口被上游强制限定在该令牌自身范围（`GetLogByKeyQuery`），只能看到这条渠道自己产生的日志。
+  2. **「账号余额查询」的访问令牌 + 用户 ID**（回退）：打上游 `/api/log/self`（UserAuth），附 `New-Api-User` 头，范围是该账号下所有令牌的日志；地址优先取「查询地址」，为空则用渠道 `base_url`。**不得使用管理员接口 `/api/log`**：上游账号是经销商的普通客户，管理员接口对它返回 403（已用 nexaxis.ai 真实客户账号实测：`/api/log` 403；`/api/log/self` 200，且 `request_id` 过滤生效）。
+- 触发回退的情形只有「这套凭证拿不到日志」：**没有可用 key**（未填；或多令牌渠道没指定序号且配了账号令牌——此时直接用账号令牌，未配则浏览场景仍提示选择序号、追溯场景按 §4 轮询）、以及**用 key 查询失败**（上游拒绝凭证、没有该接口、响应不兼容）。
+- **不回退的情形**：查询成功但 0 条（空结果是合法答案，换凭证会把「确实没有日志」变成另一套口径的结果）、超时与并发繁忙（瞬时资源状态，换凭证只会让等待翻倍）。**唯一例外**是 §4 的追溯轮询链：那里某个 key 返回 0 条的含义是「不是这个 key」，因此继续试下一个。轮询链中只要有凭证已经答复过「0 条」，之后的凭证即使被拒绝、没有接口或响应不兼容，也如实返回「上游没有这条日志」，而不是报与答案无关的凭证错误；只有所有凭证都没能查询时才报凭证错误。超时、繁忙不在此列（那把 key 可能恰好有日志，不能断言没有），仍按原错误返回。`TestQueryUpstreamLog_TraceProbeLastKeyRejectedAfterEmptyAnswersIsNotFound` / `…AllKeysRejectedStillReportsRejection` 锁定两侧。
+- 上述是**控制器层面的凭证回退**。服务层内部另有一条相反的禁令：账号范围查询遇 404 **不得**降级到令牌接口，否则账号下所有令牌的结果会被悄悄换成单令牌结果而使用者无从察觉（`TestQueryUpstreamLogs_AccountScopeNeverFallsBackToTokenScope` 锁定）。两者不矛盾：前者是换凭证重试，后者是禁止在同一凭证下偷换查询范围。
 - 超时、响应体上限、并发上限作为保守的实现常量；若上线数据证明需要运营可调，再通过 `setting/` 单独设计热配置。
 
 ## 9. 权限与安全
@@ -434,10 +451,10 @@ V1 不新增用户配置，也不新增环境变量：
 
 | 场景 | 行为 |
 |---|---|
-| 非 New API 渠道 | 使用日志目标渠道选项不返回；直接调用查询接口时返回“不支持该渠道类型” |
+| 任意渠道类型 | 不按类型拦截；目标渠道选项只返回配置了 Base URL 的渠道；上游不兼容时按凭证回退链处理，最终提示上游不可用或响应不兼容 |
 | 渠道 Base URL 为空/非法 | 提示先编辑渠道地址 |
-| 渠道 Key 为空 | 提示先填写渠道令牌 |
-| 多令牌未选序号 | 不请求上游，要求选择 |
+| 渠道 Key 为空 | 配置了账号访问令牌时改用它；否则提示先填写渠道令牌 |
+| 多令牌未选序号 | 浏览场景不请求上游，要求选择；追溯场景且日志缺少序号时逐个尝试已启用的 key，命中即停 |
 | 令牌序号越界 | 清空旧结果并提示重新选择 |
 | 令牌在上游无效 | 提示检查令牌或先测试渠道连接 |
 | 上游 403 | 提示该令牌无权查询日志 |
@@ -446,7 +463,7 @@ V1 不新增用户配置，也不新增环境变量：
 | 精确查询无结果 | 新版上游明确提示未找到；旧版提示可能超出近期范围 |
 | 上游返回多个同 ID 日志 | 全部展示，按时间倒序，不擅自选一条 |
 | 渠道已禁用 | 仍允许主动只读查询，但显示渠道禁用状态 |
-| 用户快速重复查询 | 前端取消前次；后端受专用并发上限保护 |
+| 用户快速重复查询 / 关闭对比弹窗 | 前端取消前次；中止不弹全局“canceled”提示（`skipErrorHandler`，错误由页面与对比面板自行展示）；后端受专用并发上限保护 |
 | 响应过大/结构异常 | 中止解析，提示上游响应格式不兼容 |
 
 ## 13. i18n
@@ -823,3 +840,35 @@ i18n：
 - 部署后本机与公网 `/api/status` 均返回 HTTP 200 和新版本；`/usage-logs/upstream` 返回 HTTP 200，首页引用本次构建资源 `static/js/index.29debe06e2.js`。
 - 未认证访问上游渠道列表与查询接口均返回 HTTP 401，管理员鉴权边界保持生效。
 - 2026-08-26 根据实际使用反馈将页头恢复为统一的“全部 / 仅自己 / 上游日志”Tab，并重新部署版本 `zhuzhan-upstreamlog-tabs-unified-20260826-e5465981a`。发布包 SHA-256 为 `1d656aee06ee465581ec76f7693af2915496a60bc6476acce5bf489cf1ee153e`，二进制 SHA-256 为 `66f52a8d7b3d21513b326a2480a5d130750240dfcfd3ab761d2f5ad3d1018233`；旧版本备份到 `/root/backup/20260825_171340/new-api`（服务器使用 UTC 时间）。公网状态、SPA 路由、新资源 `static/js/index.47a3b9ed71.js` 与未认证接口 401 均已复核。
+
+## 18. V5 修订：上游详情与本站详情同一排版（2026-09-16）
+
+### 18.1 问题
+
+- 上游日志详情（对比面板右侧、独立页面详情弹窗）此前使用独立的简版渲染组件，只展示少量标准化字段，与左侧本站日志详情的区块、顺序和样式不一致，对照阅读时需要来回找字段。
+- 关闭对比弹窗或切换查询时，前端中止进行中的请求；全局 HTTP 拦截器把中止当成错误，弹出红色“canceled”提示。
+
+### 18.2 方案
+
+- **共用详情主体**：把本站日志详情弹窗的主体抽出为 `components/dialogs/log-detail-body.tsx` 的 `LogDetailBody`，本站详情弹窗、对比面板右侧、独立页面详情弹窗三处渲染同一组件。组件放在独立文件，避免 `details-dialog ↔ upstream-compare-pane` 循环依赖。
+  - `onQueryUpstream`：仅本站详情传入，上游详情不渲染“查询上游”按钮。
+  - `showStreamDiagnostic`：上游详情固定为 `false`。流式诊断按请求 ID 查询**本站**服务器，而上游日志的请求 ID 属于上游实例，挂载只会得到错误结果。
+  - 弹窗宽度判断抽为 `lib/format.ts` 的 `isTieredBillingLog`，供包装层使用（组件文件只导出组件，满足 `react/only-export-components`）。
+- **数据映射**：`lib/upstream-log-item.ts` 的 `upstreamItemToUsageLog` 把上游条目映射为日志表使用的 schema 版 `UsageLog`（字段全部必填、`other` 为 JSON 字符串）。上游未给出的值映射为空值（渠道 `0`、字符串 `''`），排版据此隐藏对应行，不渲染 `undefined`。
+- **后端字段**：见 §6.4，顶层与 `other` allowlist 扩展到详情排版所需的全部字段，管理信息与可能含凭证的字段继续排除。上游 `admin_info` 不返回，因此上游详情不展示重试链。
+- **`other` 解析缺陷修复**：new-api 的 `Log.Other` 是字符串列，真实上游日志接口返回的 `other` 是「装着 JSON 的字符串」而非对象。旧实现只按对象解析，导致对真实上游 `other` 被整体丢弃（此前简版详情字段少，未暴露；单测夹具用的是对象）。现先剥掉字符串层再做 allowlist 投影，两种形态都支持；`TestProjectUpstreamLogItem_OtherAsJSONString` 以真实形态锁定（含空串、非 JSON、非对象、null）。
+- **本站日志反查慢查询修复**：测试服务器上每次反查耗时约 40s，其中上游调用仅 0.7s。瓶颈是 `GetLogTraceByRequestId` 的 `WHERE request_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`：PostgreSQL（`logs` 约 240 万行）因 `request_id` 选择度估计偏差，选择倒序扫描 `idx_created_at_type` 并逐行过滤 245 万行（EXPLAIN ANALYZE 39.9s），而非 `idx_logs_request_id`（2ms）。改为数据库端不排序、`LIMIT 50` 读取同 ID 行，在 Go 中按 `created_at`、`id` 取最新一条，语义不变。`TestLogTraceByRequestIdQuery_DoesNotSortInDatabase` 锁定生成的 SQL 不含 `ORDER BY`，`TestGetLogTraceByRequestId_PicksNewestRegardlessOfInsertOrder` 锁定重复 ID 的取值规则。
+- **去掉对比面板顶部摘要行**：原先右侧顶部展示「渠道名 (#ID) + 本站请求 ID → 上游请求 ID」，与左侧详情的「渠道」「请求 ID」「上游请求 ID」重复（右侧「请求 ID」即左侧「上游请求 ID」），已移除；仅在本站日志未记录令牌序号时保留琥珀色提示。取代 §17.6 中“结果摘要展示映射”的描述。
+- **中止不提示**：`api.ts` 中 `queryUpstreamLog` 与 `getUpstreamLogChannels` 传 `skipErrorHandler: true`。这两个接口的失败已由页面（错误态）与对比面板（内联错误 + 重试）展示，跳过全局提示不会丢失错误反馈。`http-client.ts` 属于上游文件，不修改。
+- **文案**：查询不再限定 New API 类型，页面中“选择 New API 渠道”改为“选择渠道”；渠道抽屉中账号余额查询说明的“站点全量日志”改为“该账号的请求日志”，与 `/api/log/self` 的实际范围一致。
+
+- **对比时同类分区同行对齐**：左右两栏不再是两个独立列，而是共用详情弹窗正文的一个网格（`lg:grid-cols-2`）。`log-detail-layout.ts` 的 `LOG_DETAIL_ROW` 为每个分区（概览、请求转换、Token 明细、计费详情、动态计费、流式计费……）固定一个网格行号，`LogDetailBody` 在 `compareColumn` 模式下根元素为 `display: contents`，各分区按「行号 × 栏」放入网格，因此 Token 明细、计费详情等左右起点对齐；某侧没有的分区留空。窄屏不定位行列，按文档顺序上下堆叠。上游加载/出错/无结果时，右栏状态块从概览行起跨越全部分区行，不撑高左侧某一行。
+- **本站低于上游的数据项标注警告**：`lib/log-metrics.ts` 从两条日志提取可比较数据项——Token 明细的输入/输出/缓存读取/缓存写入（含 5m、1h）token 数，计费详情的单价（分组倍率前的基础价 $/M；动态计费取命中档位价格并映射到同一键；按次计费取单次价格）、生效分组倍率（专属倍率优先）、总费用。`findLowerMetrics` 返回本站严格低于上游的项（容忍浮点舍入），左栏对应行以琥珀色 + 警告图标标出，悬停提示「低于上游：上游值」；高于或等于不标注，只有一侧存在的项不比较。响应时间等越低越好的项不参与。查询提升到详情弹窗（`useUpstreamCompareQuery`），右栏展示与左栏标注使用同一份结果。
+- **对比口径说明**：总费用按本站的额度单位换算展示与比较；若上游站点额度单位设置不同，总费用比较会失真（单价、倍率、token 数不受影响）。
+
+### 18.3 测试
+
+- `service/upstream_log_test.go`：`TestProjectUpstreamLogItem_KeepsDetailLayoutFields` 锁定详情排版字段保留、`admin_info` / `audit_info` / `stream_diagnostic_available` / 凭证字段排除。
+- `web/src/features/usage-logs/lib/__tests__/upstream-log-item.test.ts`：映射保留排版读取的所有字段；缺失值映射为空值。
+- `web/src/features/usage-logs/lib/__tests__/log-metrics.test.ts`：按倍率/动态计费/按次计费提取数据项、专属倍率优先、other 无法解析时的兜底；只标注严格低于的项、浮点误差与高于/等于不标注、单侧存在的项不比较。
+- `web/src/components/ui/__tests__/combobox-search.test.ts`：选择型下拉在已选中后再次打开时搜索框为空、显示全部选项，已选项作为占位提示。
