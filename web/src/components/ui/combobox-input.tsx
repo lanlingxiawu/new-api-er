@@ -20,6 +20,7 @@ import { Check, ChevronsUpDown } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { comboboxInitialSearch } from '@/components/ui/combobox-search'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
@@ -73,6 +74,12 @@ export function ComboboxInput({
     [options, value]
   )
   const displayValue = open ? searchValue : (selectedOption?.label ?? value)
+  const initialSearch = comboboxInitialSearch(value, allowCustomValue)
+  // 纯选择器打开后搜索框是空的：用已选项的名称作占位提示，免得看不出当前选了什么。
+  const inputPlaceholder =
+    open && !allowCustomValue && !searchValue && selectedOption
+      ? selectedOption.label
+      : placeholder
 
   const filteredOptions = React.useMemo(() => {
     if (!searchValue.trim()) return options
@@ -119,8 +126,8 @@ export function ComboboxInput({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       initialValueRef.current = value
-      setSearchValue(value)
-      onSearchValueChange?.(value)
+      setSearchValue(initialSearch)
+      onSearchValueChange?.(initialSearch)
       setOpen(true)
       return
     }
@@ -192,7 +199,7 @@ export function ComboboxInput({
         }
         autoComplete='off'
         disabled={disabled}
-        placeholder={placeholder}
+        placeholder={inputPlaceholder}
         value={displayValue}
         onChange={(e) => {
           const nextValue = e.target.value
@@ -210,15 +217,15 @@ export function ComboboxInput({
           pointerFocusRef.current = true
           if (document.activeElement === inputRef.current && !open) {
             initialValueRef.current = value
-            setSearchValue(value)
-            onSearchValueChange?.(value)
+            setSearchValue(initialSearch)
+            onSearchValueChange?.(initialSearch)
             setOpen(true)
           }
         }}
         onFocus={() => {
           initialValueRef.current = value
-          setSearchValue(value)
-          onSearchValueChange?.(value)
+          setSearchValue(initialSearch)
+          onSearchValueChange?.(initialSearch)
           if (openOnFocus || pointerFocusRef.current) {
             setOpen(true)
           }
