@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -140,6 +139,28 @@ func selectChannelKey(channel *model.Channel, keyIndex *int) (key string, index 
 	return channel.Key, 0, false, ""
 }
 
+// upstreamLogAttempt 是一次带具体凭证的查询尝试。
+type upstreamLogAttempt struct {
+	baseURL  string
+	cred     service.UpstreamLogCredential
+	keyIndex int
+	isMulti  bool
+	// probe 标记「按请求 ID 追溯时逐个试 key」的尝试。只有这类尝试把「查询成功但 0 条」
+	// 当作「不是这个 key」继续往下试；其他查询的空结果是合法答案，不回退。
+	probe bool
+}
+
+// shouldTryNextCredential 判断某个失败是否值得换一套凭证再试。
+//
+// 只有「这套凭证拿不到日志」才回退：上游拒绝凭证、没有该接口、响应不兼容。
+// 超时与并发繁忙是瞬时资源状态，换凭证只会让等待翻倍；而「查询成功但 0 条」是合法答案，
+// 不在此列——把空结果当成失败去换凭证，会把「那段时间确实没有日志」变成另一套口径的结果。
+func shouldTryNextCredential(err error) bool {
+	return errors.Is(err, service.ErrUpstreamLogUnauthorized) ||
+		errors.Is(err, service.ErrUpstreamLogUnavailable) ||
+		errors.Is(err, service.ErrUpstreamLogInvalidResp)
+}
+
 // mapUpstreamLogServiceError 把服务层错误映射为用户可执行的 i18n 键。
 func mapUpstreamLogServiceError(err error) string {
 	switch {
@@ -249,39 +270,132 @@ func QueryUpstreamLog(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUpstreamLogChannelNotFound)
 		return
 	}
-	if channel.Type != constant.ChannelTypeNewAPI {
-		common.ApiErrorI18n(c, i18n.MsgUpstreamLogUnsupportedChannelType)
-		return
+	// 渠道类型不参与判定：上游是否讲 new-api 的日志接口，取决于上游实现而不是本站给渠道
+	// 贴的类型标签。把 new-api 网关配成 OpenAI / Gemini 兼容类型是常见做法，按类型硬拒会让
+	// 本来可用的配置永远查不了。上游不支持时由 404 分支如实报不可用。
+	setting := channel.GetSetting()
+	channelURL := strings.TrimSpace(channel.GetBaseURL())
+	accountToken := strings.TrimSpace(setting.AccountBalanceToken)
+	accountUser := strings.TrimSpace(setting.AccountBalanceUserID)
+	accountURL := strings.TrimSpace(setting.AccountBalanceURL)
+	if accountURL == "" {
+		accountURL = channelURL
 	}
 
-	baseURL := strings.TrimSpace(channel.GetBaseURL())
-	if baseURL == "" {
-		common.ApiErrorI18n(c, i18n.MsgUpstreamLogBaseURLMissing)
-		return
-	}
-
-	// 老日志可能没有记录多令牌序号：此时允许管理员手动指定的序号兜底，
-	// 而不是让追溯查询彻底走不下去（同一管理员本来就能直接按渠道+序号查询）。
-	if localRequestId != "" && !traceKeyIndexFromLog && channel.ChannelInfo.IsMultiKey {
-		req.KeyIndex = clientKeyIndex
-	}
-
-	key, keyIndex, isMulti, errKey := selectChannelKey(channel, req.KeyIndex)
-	if errKey != "" {
-		if localRequestId != "" && errKey == i18n.MsgUpstreamLogKeyIndexRequired {
-			errKey = i18n.MsgUpstreamLogTraceKeyIndexMissing
+	// 凭证顺序：先渠道中转密钥，拿不到再用账号访问令牌。
+	// 「拿不到」包含两种：没有可用密钥（未填，或多令牌渠道没指定序号），以及用它查询失败。
+	var attempts []upstreamLogAttempt
+	var keyErr string
+	if channelURL != "" {
+		probeKeys := localRequestId != "" && channel.ChannelInfo.IsMultiKey &&
+			!traceKeyIndexFromLog && clientKeyIndex == nil
+		if probeKeys {
+			// 追溯的本站日志没记录用了哪个 key，管理员也没指定。一条日志只可能属于一个 key，
+			// 所以按顺序逐个试、命中即停，而不是让追溯走进「请选择令牌序号」的死路。
+			// 浏览场景不在此列：那里「第一个有数据的 key」是任意的，不能冒充整个渠道。
+			for i, k := range channel.GetKeys() {
+				k = strings.TrimSpace(k)
+				if k == "" {
+					continue
+				}
+				if status, ok := channel.ChannelInfo.MultiKeyStatusList[i]; ok && status != common.ChannelStatusEnabled {
+					continue // 已禁用的 key 不试
+				}
+				attempts = append(attempts, upstreamLogAttempt{
+					baseURL:  channelURL,
+					cred:     service.UpstreamLogCredential{Token: k},
+					keyIndex: i,
+					isMulti:  true,
+					probe:    true,
+				})
+			}
+			if len(attempts) == 0 {
+				keyErr = i18n.MsgUpstreamLogKeyMissing
+			}
+		} else {
+			// 老日志可能没有记录多令牌序号：此时允许管理员手动指定的序号兜底，
+			// 而不是让追溯查询彻底走不下去（同一管理员本来就能直接按渠道+序号查询）。
+			if localRequestId != "" && !traceKeyIndexFromLog && channel.ChannelInfo.IsMultiKey {
+				req.KeyIndex = clientKeyIndex
+			}
+			key, idx, multi, errKey := selectChannelKey(channel, req.KeyIndex)
+			if errKey == "" {
+				attempts = append(attempts, upstreamLogAttempt{
+					baseURL:  channelURL,
+					cred:     service.UpstreamLogCredential{Token: key},
+					keyIndex: idx,
+					isMulti:  multi,
+				})
+			} else {
+				// 多令牌渠道没选序号时不再直接报错：还有账号令牌就用它，没有才把错误抛回去。
+				if localRequestId != "" && errKey == i18n.MsgUpstreamLogKeyIndexRequired {
+					errKey = i18n.MsgUpstreamLogTraceKeyIndexMissing
+				}
+				keyErr = errKey
+			}
 		}
-		common.ApiErrorI18n(c, errKey)
+	}
+	if accountToken != "" && accountUser != "" && accountURL != "" {
+		attempts = append(attempts, upstreamLogAttempt{
+			baseURL: accountURL,
+			cred: service.UpstreamLogCredential{
+				Token: accountToken, APIUser: accountUser, AccountScope: true,
+			},
+		})
+	}
+	if len(attempts) == 0 {
+		if keyErr != "" {
+			common.ApiErrorI18n(c, keyErr)
+			return
+		}
+		if channelURL == "" && accountURL == "" {
+			common.ApiErrorI18n(c, i18n.MsgUpstreamLogBaseURLMissing)
+			return
+		}
+		common.ApiErrorI18n(c, i18n.MsgUpstreamLogKeyMissing)
 		return
 	}
 
-	result, err := service.QueryUpstreamLogs(c.Request.Context(), baseURL, key, filters, page, pageSize)
-	if err != nil {
-		logger.LogError(c, "upstream log query failed for channel "+
+	var result *service.UpstreamLogResult
+	chosen := attempts[0]
+	probeHit := false
+	// 轮询链中已经拿到的「查询成功但 0 条」。之后的凭证若只是被拒绝/不可用，
+	// 如实答复「上游没有这条日志」，而不是报一个与答案无关的凭证错误。
+	var emptyResult *service.UpstreamLogResult
+	var emptyAttempt upstreamLogAttempt
+	for i, attempt := range attempts {
+		// 逐个试 key 可能要很多次往返：客户端已经断开就别再继续打上游。
+		if ctxErr := c.Request.Context().Err(); ctxErr != nil {
+			logger.LogWarn(c, "upstream log query aborted after the client went away")
+			common.ApiErrorI18n(c, i18n.MsgUpstreamLogTimeout)
+			return
+		}
+		result, err = service.QueryUpstreamLogs(c.Request.Context(), attempt.baseURL, attempt.cred, filters, page, pageSize)
+		if err == nil {
+			chosen = attempt
+			// 轮询链里「成功但 0 条」= 不是这个 key，继续试下一个（含其后的账号令牌）。
+			if attempt.probe && len(result.Items) == 0 && i < len(attempts)-1 {
+				emptyResult, emptyAttempt = result, attempt
+				continue
+			}
+			probeHit = attempt.probe && len(result.Items) > 0
+			break
+		}
+		logger.LogWarn(c, "upstream log query attempt failed for channel "+
 			strings.TrimSpace(channel.Name)+": "+err.Error())
-		common.ApiErrorI18n(c, mapUpstreamLogServiceError(err))
-		return
+		if i == len(attempts)-1 || !shouldTryNextCredential(err) {
+			// 只对凭证类失败兜底：超时、繁忙时这把 key 可能恰好有日志，不能断言「没有」。
+			if emptyResult != nil && shouldTryNextCredential(err) {
+				result, chosen = emptyResult, emptyAttempt
+				break
+			}
+			logger.LogError(c, "upstream log query failed for channel "+
+				strings.TrimSpace(channel.Name)+": "+err.Error())
+			common.ApiErrorI18n(c, mapUpstreamLogServiceError(err))
+			return
+		}
 	}
+	keyIndex, isMulti := chosen.keyIndex, chosen.isMulti
 
 	// 审计：只记录管理员 ID、渠道 ID、令牌序号、是否精确、结果状态；绝不记录令牌。
 	logger.LogInfo(c, "upstream log query ok: channel="+
@@ -308,7 +422,8 @@ func QueryUpstreamLog(c *gin.Context) {
 	}
 	if source != nil {
 		// 让前端能明确提示序号来自日志还是管理员手选，避免误以为查询结果一定精确对应该次请求。
-		source["key_index_from_log"] = traceKeyIndexFromLog || !isMulti
+		// 按请求 ID 轮询命中的 key 同样精确对应该次请求，不该提示「不一定精确」。
+		source["key_index_from_log"] = traceKeyIndexFromLog || !isMulti || probeHit
 		response["source"] = source
 	}
 	common.ApiSuccess(c, response)
@@ -325,14 +440,18 @@ type upstreamLogChannelOption struct {
 }
 
 // GetUpstreamLogChannels 处理 GET /api/log/upstream/channels（AdminAuth）。
-// 只返回 New API 渠道的最小信息，绝不返回 Base URL、Key、完整 settings 或成本配置。
+// 返回候选渠道的最小信息，绝不返回 Base URL、Key、完整 settings 或成本配置。
+//
+// 不按渠道类型过滤：上游是否讲 new-api 的日志接口由上游实现决定，而不是本站给渠道贴的
+// 类型标签；按 type=61 过滤会让「上游是 new-api 网关、但配成 OpenAI/Gemini 兼容类型」
+// 这种常见配置在下拉框里完全消失。唯一的硬性前提是有 Base URL，否则无处可查。
 func GetUpstreamLogChannels(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 
 	var channels []model.Channel
 	tx := model.DB.Model(&model.Channel{}).
 		Select("id, name, type, status, channel_info").
-		Where("type = ?", constant.ChannelTypeNewAPI)
+		Where("base_url IS NOT NULL AND base_url != ?", "")
 	if keyword != "" {
 		if id := common.String2Int(keyword); id > 0 {
 			tx = tx.Where("id = ? OR name LIKE ?", id, "%"+keyword+"%")

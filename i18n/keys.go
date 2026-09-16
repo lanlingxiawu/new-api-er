@@ -546,7 +546,6 @@ const (
 // Upstream log query (渠道上游日志查询) — admin only
 const (
 	MsgUpstreamLogChannelNotFound        = "upstream_log.channel_not_found"
-	MsgUpstreamLogUnsupportedChannelType = "upstream_log.unsupported_channel_type"
 	MsgUpstreamLogBaseURLMissing         = "upstream_log.base_url_missing"
 	MsgUpstreamLogKeyMissing             = "upstream_log.key_missing"
 	MsgUpstreamLogKeyIndexRequired       = "upstream_log.key_index_required"

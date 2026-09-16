@@ -27,6 +27,9 @@ const (
 	upstreamLogCapabilityValue   = "filters-v1"
 	upstreamLogQueryPath         = "/api/log/token/query"
 	upstreamLogRecentFallbackURL = "/api/log/token"
+	// 上游账号自己的日志：凭证是上游账号访问令牌（UserAuth）。上游账号是经销商的普通客户而非管理员，
+	// 管理员接口 /api/log 对它返回 403，只能用 /api/log/self（已用 nexaxis.ai 真实客户账号实测）。
+	upstreamLogAccountPath = "/api/log/self"
 )
 
 // 查询范围标记，用于前端明确区分精确、已筛选与仅近期结果。
@@ -47,6 +50,26 @@ var (
 	ErrUpstreamLogInvalidResp    = errors.New("upstream_log: invalid upstream response")
 )
 
+// errUpstreamLogNotFound 表示上游没有该接口（404）。令牌作用域查询据此降级到旧接口；
+// 账号范围查询不能降级，只能如实报告不可用。
+var errUpstreamLogNotFound = errors.New("upstream_log: endpoint not found")
+
+// UpstreamLogCredential 决定用哪种凭证、打哪个上游接口。
+//
+// 两种模式的返回范围**不同**，不能互相回退：
+//   - AccountScope=false：渠道中转密钥 + /api/log/token/query，只能看到该令牌自己的日志；
+//   - AccountScope=true ：上游账号访问令牌 + /api/log/self，看到的是该账号下所有令牌的日志。
+//
+// 把「账号范围」悄悄降级成「单令牌」会让条数与内容的含义变化而使用者无从察觉，因此禁止。
+type UpstreamLogCredential struct {
+	// Token 写入 Authorization: Bearer。
+	Token string
+	// APIUser 非空时作为 New-Api-User 头发送，与账号余额查询保持一致的调用约定。
+	APIUser string
+	// AccountScope 为真时查询上游账号自己的日志（/api/log/self）。
+	AccountScope bool
+}
+
 // UpstreamLogFilters 复用现有日志查询语义的筛选条件；空值不下发。
 type UpstreamLogFilters struct {
 	Type              int
@@ -65,20 +88,25 @@ type UpstreamLogFilters struct {
 // UpstreamLogItem 是投影后的上游日志条目；只保留 UI 所需字段，
 // other 做 allowlist 投影，凭证样式字段一律丢弃。
 type UpstreamLogItem struct {
-	Id                int                    `json:"id"`
-	CreatedAt         int64                  `json:"created_at"`
-	Type              int                    `json:"type"`
-	RequestId         string                 `json:"request_id"`
-	UpstreamRequestId string                 `json:"upstream_request_id,omitempty"`
-	ModelName         string                 `json:"model_name"`
-	TokenName         string                 `json:"token_name,omitempty"`
-	Quota             int                    `json:"quota"`
-	PromptTokens      int                    `json:"prompt_tokens"`
-	CompletionTokens  int                    `json:"completion_tokens"`
-	UseTime           int                    `json:"use_time"`
-	IsStream          bool                   `json:"is_stream"`
-	Content           string                 `json:"content,omitempty"`
-	Other             map[string]interface{} `json:"other,omitempty"`
+	Id                int    `json:"id"`
+	CreatedAt         int64  `json:"created_at"`
+	Type              int    `json:"type"`
+	RequestId         string `json:"request_id"`
+	UpstreamRequestId string `json:"upstream_request_id,omitempty"`
+	ModelName         string `json:"model_name"`
+	TokenName         string `json:"token_name,omitempty"`
+	// 渠道 / 分组 / IP 是上游视角的值，供上游详情复用本站日志详情排版。
+	Channel          int                    `json:"channel,omitempty"`
+	ChannelName      string                 `json:"channel_name,omitempty"`
+	Group            string                 `json:"group,omitempty"`
+	Ip               string                 `json:"ip,omitempty"`
+	Quota            int                    `json:"quota"`
+	PromptTokens     int                    `json:"prompt_tokens"`
+	CompletionTokens int                    `json:"completion_tokens"`
+	UseTime          int                    `json:"use_time"`
+	IsStream         bool                   `json:"is_stream"`
+	Content          string                 `json:"content,omitempty"`
+	Other            map[string]interface{} `json:"other,omitempty"`
 }
 
 // UpstreamLogResult 是服务层返回给控制器的标准化结果。
@@ -91,16 +119,45 @@ type UpstreamLogResult struct {
 }
 
 // other 字段 allowlist：只保留无凭证风险的诊断字段。
+//
+// 上游详情复用本站日志详情的排版，所以这里放行的正是那套排版会读取的键（真实上游
+// 的用户级日志接口确实返回这些字段）。保持白名单而非透传：未列出的键一律丢弃。
+//
+// 刻意不放行：
+//   - admin_info / audit_info / op / login_method / user_agent：管理员与审计内部信息；
+//   - po（参数覆盖记录）：参数覆盖可以改写请求头，记录内容里可能带有凭证值；
+//   - stream_diagnostic_available：会让详情拿上游的请求 ID 去查本站的流式诊断，必然查错。
 var upstreamLogOtherAllowlist = map[string]bool{
-	"frt":                 true,
-	"is_stream":           true,
-	"upstream_model_name": true,
-	"model_ratio":         true,
-	"completion_ratio":    true,
-	"group_ratio":         true,
-	"cache_tokens":        true,
-	"stream_status":       true,
-	"reasoning_effort":    true,
+	// 时延与流
+	"frt": true, "is_stream": true, "stream_status": true, "stream_result": true,
+	// 模型与请求
+	"upstream_model_name": true, "is_model_mapped": true, "reasoning_effort": true,
+	"is_system_prompt_overwritten": true, "request_conversion": true, "request_path": true,
+	"group": true,
+	// 计费
+	"billing_mode": true, "billing_source": true, "model_price": true, "model_ratio": true,
+	"completion_ratio": true, "group_ratio": true, "user_group_ratio": true, "claude": true,
+	"expr_b64": true, "matched_tier": true,
+	// 缓存
+	"cache_tokens": true, "cache_ratio": true, "cache_creation_tokens": true,
+	"cache_creation_ratio": true, "cache_creation_tokens_5m": true, "cache_creation_tokens_1h": true,
+	"cache_creation_ratio_5m": true, "cache_creation_ratio_1h": true,
+	// 多模态
+	"ws": true, "audio": true, "audio_ratio": true, "audio_completion_ratio": true,
+	"audio_input": true, "audio_output": true, "text_input": true, "text_output": true,
+	"image": true, "image_ratio": true, "image_output": true,
+	"audio_input_seperate_price": true, "audio_input_price": true,
+	// 内置工具
+	"web_search": true, "web_search_call_count": true, "web_search_price": true,
+	"file_search": true, "file_search_call_count": true, "file_search_price": true,
+	"image_generation_call": true, "image_generation_call_price": true,
+	// 违规、退款、拒绝
+	"reject_reason": true, "violation_fee_code": true, "violation_fee_marker": true,
+	"fee_quota": true, "task_id": true, "reason": true,
+	// 订阅
+	"subscription_plan_id": true, "subscription_plan_title": true, "subscription_id": true,
+	"subscription_pre_consumed": true, "subscription_post_delta": true,
+	"subscription_consumed": true, "subscription_remain": true, "subscription_total": true,
 }
 
 // 专用的有界信号量与 http.Client，与 relay 连接池完全隔离。
@@ -193,7 +250,7 @@ type upstreamLogRawResponse struct {
 
 // QueryUpstreamLogs 向上游 new-api 实例发起只读日志查询并返回标准化结果。
 // key 为该渠道选定令牌，只写入 Authorization Header，绝不出现在返回值或日志中。
-func QueryUpstreamLogs(ctx context.Context, baseURL string, key string, f UpstreamLogFilters, page int, pageSize int) (*UpstreamLogResult, error) {
+func QueryUpstreamLogs(ctx context.Context, baseURL string, cred UpstreamLogCredential, f UpstreamLogFilters, page int, pageSize int) (*UpstreamLogResult, error) {
 	select {
 	case upstreamLogSem <- struct{}{}:
 		defer func() { <-upstreamLogSem }()
@@ -203,15 +260,38 @@ func QueryUpstreamLogs(ctx context.Context, baseURL string, key string, f Upstre
 
 	start := time.Now()
 
-	queryURL, err := normalizeUpstreamLogURL(baseURL, upstreamLogQueryPath)
+	path := upstreamLogQueryPath
+	if cred.AccountScope {
+		path = upstreamLogAccountPath
+	}
+	queryURL, err := normalizeUpstreamLogURL(baseURL, path)
 	if err != nil {
 		return nil, err
 	}
 	q := buildUpstreamLogQuery(f, page, pageSize)
 
-	result, capable, err := doUpstreamLogRequest(ctx, queryURL+"?"+q.Encode(), key, pageSize)
+	result, capable, err := doUpstreamLogRequest(ctx, queryURL+"?"+q.Encode(), cred, pageSize)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, errUpstreamLogNotFound) {
+			return nil, err
+		}
+		// 账号范围查询没有可降级的对象：降到令牌接口会把账号结果换成单令牌结果。
+		if cred.AccountScope {
+			return nil, ErrUpstreamLogUnavailable
+		}
+		result, capable = &UpstreamLogResult{}, false
+	}
+
+	// 用户日志接口本身就执行完整筛选（含 request_id），不依赖能力头。
+	if cred.AccountScope {
+		if strings.TrimSpace(f.RequestId) != "" {
+			result.Scope = UpstreamLogScopeExact
+		} else {
+			result.Scope = UpstreamLogScopeFiltered
+		}
+		result.SupportsExact = true
+		result.ElapsedMs = time.Since(start).Milliseconds()
+		return result, nil
 	}
 
 	if capable {
@@ -233,8 +313,11 @@ func QueryUpstreamLogs(ctx context.Context, baseURL string, key string, f Upstre
 	if err != nil {
 		return nil, err
 	}
-	fbResult, _, err := doUpstreamLogRequest(ctx, fallbackURL, key, pageSize)
+	fbResult, _, err := doUpstreamLogRequest(ctx, fallbackURL, cred, pageSize)
 	if err != nil {
+		if errors.Is(err, errUpstreamLogNotFound) {
+			return nil, ErrUpstreamLogUnavailable
+		}
 		return nil, err
 	}
 	fbResult.Items = filterRecentItems(fbResult.Items, f)
@@ -249,13 +332,16 @@ func QueryUpstreamLogs(ctx context.Context, baseURL string, key string, f Upstre
 }
 
 // doUpstreamLogRequest 发起单次上游请求并解析响应；capable 表示上游声明了完整筛选能力。
-func doUpstreamLogRequest(ctx context.Context, fullURL string, key string, pageSize int) (result *UpstreamLogResult, capable bool, err error) {
+func doUpstreamLogRequest(ctx context.Context, fullURL string, cred UpstreamLogCredential, pageSize int) (result *UpstreamLogResult, capable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, false, ErrUpstreamLogBaseURLInvalid
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Authorization", "Bearer "+cred.Token)
 	req.Header.Set("Accept", "application/json")
+	if cred.APIUser != "" {
+		req.Header.Set("New-Api-User", cred.APIUser)
+	}
 
 	resp, err := upstreamLogClient.Do(req)
 	if err != nil {
@@ -270,8 +356,8 @@ func doUpstreamLogRequest(ctx context.Context, fullURL string, key string, pageS
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, false, ErrUpstreamLogUnauthorized
 	case resp.StatusCode == http.StatusNotFound:
-		// 旧版上游没有该接口：返回不支持能力，交由调用方降级。
-		return &UpstreamLogResult{}, false, nil
+		// 旧版上游没有该接口：由调用方决定降级还是报不可用。
+		return nil, false, errUpstreamLogNotFound
 	case resp.StatusCode >= 500:
 		return nil, false, ErrUpstreamLogUnavailable
 	case resp.StatusCode != http.StatusOK:
@@ -336,6 +422,10 @@ type upstreamRawLog struct {
 	UpstreamRequestId string          `json:"upstream_request_id"`
 	ModelName         string          `json:"model_name"`
 	TokenName         string          `json:"token_name"`
+	Channel           int             `json:"channel"`
+	ChannelName       string          `json:"channel_name"`
+	Group             string          `json:"group"`
+	Ip                string          `json:"ip"`
 	Quota             int             `json:"quota"`
 	PromptTokens      int             `json:"prompt_tokens"`
 	CompletionTokens  int             `json:"completion_tokens"`
@@ -385,6 +475,10 @@ func projectUpstreamLogItem(r upstreamRawLog) UpstreamLogItem {
 		UpstreamRequestId: truncateUpstreamStr(r.UpstreamRequestId),
 		ModelName:         truncateUpstreamStr(r.ModelName),
 		TokenName:         truncateUpstreamStr(r.TokenName),
+		Channel:           r.Channel,
+		ChannelName:       truncateUpstreamStr(r.ChannelName),
+		Group:             truncateUpstreamStr(r.Group),
+		Ip:                truncateUpstreamStr(r.Ip),
 		Quota:             r.Quota,
 		PromptTokens:      r.PromptTokens,
 		CompletionTokens:  r.CompletionTokens,
@@ -393,8 +487,15 @@ func projectUpstreamLogItem(r upstreamRawLog) UpstreamLogItem {
 		Content:           truncateUpstreamStr(r.Content),
 	}
 	if len(r.Other) > 0 {
+		otherRaw := []byte(r.Other)
+		// new-api 的 Log.Other 是字符串列，上游日志接口返回的是「装着 JSON 的字符串」；
+		// 先剥掉这一层，否则整个 other 会被丢弃。
+		var otherStr string
+		if common.Unmarshal(otherRaw, &otherStr) == nil {
+			otherRaw = []byte(otherStr)
+		}
 		var otherMap map[string]interface{}
-		if err := common.Unmarshal(r.Other, &otherMap); err == nil && len(otherMap) > 0 {
+		if err := common.Unmarshal(otherRaw, &otherMap); err == nil && len(otherMap) > 0 {
 			projected := make(map[string]interface{}, len(upstreamLogOtherAllowlist))
 			for k, v := range otherMap {
 				if upstreamLogOtherAllowlist[k] {
