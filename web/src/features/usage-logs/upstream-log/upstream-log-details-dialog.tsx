@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 
+import { LogDetailBody } from '../components/dialogs/log-detail-body'
+import { upstreamItemToUsageLog } from '../lib/upstream-log-item'
 import { getLogTypeConfig } from '../lib/utils'
 import type { UpstreamLogItem } from '../types'
-import { UpstreamLogDetailBody } from './upstream-log-detail-body'
 
 export function UpstreamLogDetailsDialog({
   item,
@@ -42,7 +43,12 @@ export function UpstreamLogDetailsDialog({
       contentHeight='min(68dvh, 620px)'
       bodyClassName='space-y-3 sm:pr-3'
     >
-      <UpstreamLogDetailBody item={item} />
+      {/* 与本站日志详情共用同一个主体，排版一致；上游日志不挂载本站的流式诊断。 */}
+      <LogDetailBody
+        log={upstreamItemToUsageLog(item)}
+        isAdmin
+        showStreamDiagnostic={false}
+      />
     </Dialog>
   )
 }

@@ -108,7 +108,7 @@ export async function getUserInfo(
 // ============================================================================
 
 /**
- * Query the upstream New API instance's logs for a given channel.
+ * Query the upstream instance's logs for a given channel.
  * Admin-only endpoint: the backend enforces AdminAuth, loads the channel
  * credential server-side, and never returns the channel key to the browser.
  */
@@ -120,11 +120,16 @@ export async function queryUpstreamLog(
   message?: string
   data?: UpstreamLogQueryData
 }> {
-  const res = await api.post('/api/log/upstream/query', body, { signal })
+  // 关闭弹窗或切换查询会中止请求，全局拦截器会把中止当成错误弹出 "canceled"。
+  // 这个接口的失败都已在页面内展示，因此跳过全局提示。
+  const res = await api.post('/api/log/upstream/query', body, {
+    signal,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 
-/** List New API channels available as upstream-log query targets (admin only). */
+/** List channels (with a base URL) available as upstream-log query targets (admin only). */
 export async function getUpstreamLogChannels(
   keyword = '',
   signal?: AbortSignal
@@ -134,7 +139,11 @@ export async function getUpstreamLogChannels(
   data?: UpstreamLogChannelOption[]
 }> {
   const query = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
-  const res = await api.get(`/api/log/upstream/channels${query}`, { signal })
+  // 输入关键字时旧请求会被中止；失败由页面自己提示，跳过全局提示以免弹出 "canceled"。
+  const res = await api.get(`/api/log/upstream/channels${query}`, {
+    signal,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 

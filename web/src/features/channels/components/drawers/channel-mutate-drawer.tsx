@@ -5005,7 +5005,7 @@ export function ChannelMutateDrawer({
                           />
                           <p className='text-muted-foreground -mt-2 text-xs'>
                             {t(
-                              'Queries the remaining quota of an upstream new-api / one-api account. Only needed when this channel’s upstream is itself a gateway; leave blank for direct providers.'
+                              'Queries an upstream new-api / one-api account: its remaining quota, and its request logs on the Upstream Logs page. Only needed when this channel’s upstream is itself a gateway; leave blank for direct providers.'
                             )}
                           </p>
                           <FormField
@@ -5047,7 +5047,7 @@ export function ChannelMutateDrawer({
                                 </FormControl>
                                 <FormDescription>
                                   {t(
-                                    'Used to query account balance. Clear the field and save to disable it.'
+                                    'Used to query account balance and upstream logs. Clear the field and save to disable it.'
                                   )}
                                 </FormDescription>
                                 <FormMessage />
@@ -5065,7 +5065,7 @@ export function ChannelMutateDrawer({
                                 </FormControl>
                                 <FormDescription>
                                   {t(
-                                    'Sent as the New-Api-User header when querying the upstream account.'
+                                    'Sent as the New-Api-User header when querying the upstream account and its logs.'
                                   )}
                                 </FormDescription>
                                 <FormMessage />

@@ -756,7 +756,7 @@ function UpstreamLogsWorkspace({
         placeholder={
           traceMode
             ? t('Resolved from the local request ID')
-            : t('Select a New API channel')
+            : t('Select a channel')
         }
         emptyText={t('No matching channel')}
         disabled={traceMode}
@@ -1022,7 +1022,7 @@ function UpstreamLogsWorkspace({
     ? t('No upstream logs found')
     : t('Search upstream logs')
   let emptyDescription = t(
-    'Enter a local request ID, or select a New API channel to browse upstream logs.'
+    'Enter a local request ID, or select a channel to browse upstream logs.'
   )
   if (submitted?.local_request_id) {
     emptyDescription = t(

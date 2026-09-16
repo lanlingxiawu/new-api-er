@@ -90,6 +90,11 @@ export interface UpstreamLogItem {
   is_stream: boolean
   content?: string
   other?: Record<string, unknown>
+  /** 以下为上游视角的值，供上游详情复用本站日志详情的排版。 */
+  channel?: number
+  channel_name?: string
+  group?: string
+  ip?: string
 }
 
 export type UpstreamLogScope = 'exact' | 'filtered' | 'recent_fallback'

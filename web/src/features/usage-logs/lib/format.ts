@@ -170,6 +170,22 @@ export function parseLogOther(other: unknown): LogOtherData | null {
 }
 
 /**
+ * 是否为按表达式分档计费的消费日志。详情主体据此显示阶梯计价表，
+ * 详情弹窗据此加宽——两处必须用同一个判定，否则会出现表格显示了、弹窗却没加宽。
+ */
+export function isTieredBillingLog(
+  logType: number | undefined,
+  other: LogOtherData | null
+): boolean {
+  return (
+    logType === 2 &&
+    !isViolationFeeLog(other) &&
+    other?.billing_mode === 'tiered_expr' &&
+    !!other?.expr_b64
+  )
+}
+
+/**
  * Get time color based on duration (in seconds)
  */
 export function getTimeColor(
