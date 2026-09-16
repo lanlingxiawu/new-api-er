@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -996,4 +997,55 @@ func TestGetLogTraceByRequestId(t *testing.T) {
 
 	_, err = GetLogTraceByRequestId(uniq("missing-trace"))
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// The newest duplicate is picked by created_at then id, not by insertion order: a row
+// inserted later can still carry an older timestamp.
+func TestGetLogTraceByRequestId_PicksNewestRegardlessOfInsertOrder(t *testing.T) {
+	requireLogDB(t)
+	now := common.GetTimestamp()
+
+	requestID := uniq("trace-order")
+	newest := mkLogRow(t, func(l *Log) {
+		l.RequestId = requestID
+		l.UpstreamRequestId = "upstream-newest"
+		l.CreatedAt = now
+	})
+	mkLogRow(t, func(l *Log) {
+		l.RequestId = requestID
+		l.UpstreamRequestId = "upstream-inserted-later-but-older"
+		l.CreatedAt = now - 10
+	})
+	trace, err := GetLogTraceByRequestId(requestID)
+	require.NoError(t, err)
+	assert.Equal(t, newest.UpstreamRequestId, trace.UpstreamRequestId)
+
+	tieID := uniq("trace-tie")
+	mkLogRow(t, func(l *Log) {
+		l.RequestId = tieID
+		l.UpstreamRequestId = "upstream-lower-id"
+		l.CreatedAt = now
+	})
+	higher := mkLogRow(t, func(l *Log) {
+		l.RequestId = tieID
+		l.UpstreamRequestId = "upstream-higher-id"
+		l.CreatedAt = now
+	})
+	trace, err = GetLogTraceByRequestId(tieID)
+	require.NoError(t, err)
+	assert.Equal(t, higher.UpstreamRequestId, trace.UpstreamRequestId, "same second: higher id wins")
+}
+
+// On a large PostgreSQL logs table, `WHERE request_id = ? ORDER BY created_at DESC LIMIT 1`
+// makes the planner walk idx_created_at_type backwards and filter every row (measured
+// ~40s on 2.4M rows) instead of using idx_logs_request_id (~2ms). The lookup must therefore
+// not sort on the database side.
+func TestLogTraceByRequestIdQuery_DoesNotSortInDatabase(t *testing.T) {
+	requireLogDB(t)
+	var rows []Log
+	stmt := logTraceByRequestIdQuery(LOG_DB.Session(&gorm.Session{DryRun: true}), "rid").Find(&rows).Statement
+	sql := strings.ToUpper(stmt.SQL.String())
+	assert.Contains(t, sql, "REQUEST_ID")
+	assert.NotContains(t, sql, "ORDER BY")
+	assert.Contains(t, sql, "LIMIT")
 }

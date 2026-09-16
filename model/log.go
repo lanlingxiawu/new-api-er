@@ -145,20 +145,38 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	return logs, err
 }
 
-// GetLogTraceByRequestId returns only the trusted routing fields needed to
-// resolve an administrator-initiated upstream log lookup. Request IDs are
-// expected to be unique; ordering makes legacy duplicates deterministic.
-func GetLogTraceByRequestId(requestId string) (*Log, error) {
-	var log Log
-	err := LOG_DB.Model(&Log{}).
-		Select("request_id, upstream_request_id, channel_id, other, created_at").
+// logTraceMaxDuplicates bounds how many rows sharing one request ID are read.
+// Request IDs are expected to be unique; this only caps legacy duplicates.
+const logTraceMaxDuplicates = 50
+
+// logTraceByRequestIdQuery 不在数据库端排序：PostgreSQL 面对
+// `WHERE request_id = ? ORDER BY created_at DESC LIMIT 1` 会倒序扫描 idx_created_at_type
+// 并逐行过滤（240 万行实测约 40s），而不走 idx_logs_request_id（约 2ms）。
+func logTraceByRequestIdQuery(db *gorm.DB, requestId string) *gorm.DB {
+	return db.Model(&Log{}).
+		Select("id, request_id, upstream_request_id, channel_id, other, created_at").
 		Where("request_id = ?", requestId).
-		Order("created_at desc, id desc").
-		Take(&log).Error
-	if err != nil {
+		Limit(logTraceMaxDuplicates)
+}
+
+// GetLogTraceByRequestId returns only the trusted routing fields needed to
+// resolve an administrator-initiated upstream log lookup. Legacy duplicates
+// resolve deterministically to the newest row (created_at, then id).
+func GetLogTraceByRequestId(requestId string) (*Log, error) {
+	var rows []Log
+	if err := logTraceByRequestIdQuery(LOG_DB, requestId).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return &log, nil
+	if len(rows) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	latest := rows[0]
+	for _, row := range rows[1:] {
+		if row.CreatedAt > latest.CreatedAt || (row.CreatedAt == latest.CreatedAt && row.Id > latest.Id) {
+			latest = row
+		}
+	}
+	return &latest, nil
 }
 
 // GetLogByTokenIdWithFilters 按认证令牌 token_id 强制作用域，叠加与通用日志查询一致的
