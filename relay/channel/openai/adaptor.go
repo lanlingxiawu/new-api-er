@@ -325,41 +325,41 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 
 	}
-	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
-	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
-	if isOModel || isGPT5Model {
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
-			request.MaxCompletionTokens = request.MaxTokens
-			request.MaxTokens = nil
-		}
+	// 推理力度后缀（如 -high）会挡住模型名匹配，先剥离后缀再判定模型能力
+	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
+	resolvedModel, resolvedEffort := info.UpstreamModelName, request.ReasoningEffort
+	if effort != "" {
+		resolvedModel, resolvedEffort = originModel, effort
+	}
 
-		if isOModel {
-			request.Temperature = nil
-		}
-
-		// gpt-5系列模型适配 归零不再支持的参数
-		if isGPT5Model {
-			request.Temperature = nil
-			request.TopP = nil
-			request.LogProbs = nil
-		}
-
+	// UseMaxCompletionTokens 为真即 OpenAI 推理系列（o 系列 / gpt-5 系列 / gpt-6-astra）；
+	// 其余模型的能力项全部放行，不改写请求
+	capabilities := dto.GetOpenAIChatCapabilities(resolvedModel, resolvedEffort)
+	if capabilities.UseMaxCompletionTokens {
 		// 转换模型推理力度后缀
-		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
 		if effort != "" {
 			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
 			request.Model = originModel
 		}
-
 		info.ReasoningEffort = request.ReasoningEffort
 
-		// o系列模型developer适配（o1-mini除外）
-		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
-			//修改第一个Message的内容，将system改为developer
-			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
-				request.Messages[0].Role = "developer"
-			}
+		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
+			request.MaxCompletionTokens = request.MaxTokens
+			request.MaxTokens = nil
+		}
+		if !capabilities.SupportsTemperature {
+			request.Temperature = nil
+		}
+		if !capabilities.SupportsTopP {
+			request.TopP = nil
+		}
+		if !capabilities.SupportsLogProbs {
+			request.LogProbs = nil
+			request.TopLogProbs = nil
+		}
+		if capabilities.UseDeveloperRole && len(request.Messages) > 0 && request.Messages[0].Role == "system" {
+			request.Messages[0].Role = "developer"
 		}
 	}
 

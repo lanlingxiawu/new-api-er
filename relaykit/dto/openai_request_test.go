@@ -217,10 +217,141 @@ func TestIsOpenAIReasoningOModel(t *testing.T) {
 }
 
 func TestIsOpenAIGPT5Model(t *testing.T) {
-	assert.True(t, IsOpenAIGPT5Model("gpt-5"))
-	assert.True(t, IsOpenAIGPT5Model("gpt-5-mini"))
-	assert.False(t, IsOpenAIGPT5Model("gpt-4"))
-	assert.False(t, IsOpenAIGPT5Model(""))
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-5", want: true},
+		{model: "gpt-5-mini", want: true},
+		{model: "gpt-5-chat-latest", want: true},
+		{model: "gpt-5.6-luna", want: true},
+		{model: "gpt-5.4-nano", want: true},
+		{model: "gpt-5.2-2025-12-11", want: true},
+		{model: "gpt-6-astra", want: false},
+		{model: "gpt-50", want: false},
+		{model: "gpt-5custom", want: false},
+		{model: " GPT-5 ", want: false},
+		{model: "gpt-4.1", want: false},
+		{model: "gpt-4.1-nano", want: false},
+		{model: "gpt-4o", want: false},
+		{model: "gpt-4.5-preview", want: false},
+		{model: "gpt-oss-120b", want: false},
+		{model: "gpt-image-2", want: false},
+		{model: "gpt-realtime-2.1", want: false},
+		{model: "chatgpt-4o-latest", want: false},
+		{model: "o3-mini", want: false},
+		{model: "gpt-", want: false},
+		{model: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsOpenAIGPT5Model(tt.model))
+		})
+	}
+}
+
+func TestGetOpenAIChatCapabilities(t *testing.T) {
+	tests := []struct {
+		name   string
+		model  string
+		effort string
+		want   OpenAIChatCapabilities
+	}{
+		{
+			name:  "o series drops temperature but keeps top_p and logprobs",
+			model: "o1",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "o1-mini keeps the system role",
+			model: "o1-mini",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "o1-preview keeps the system role",
+			model: "o1-preview",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "gpt-5 drops all sampling parameters",
+			model: "gpt-5",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "gpt-5.1 without reasoning keeps sampling",
+			model: "gpt-5.1",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true, SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:   "gpt-5.1 with effort none keeps sampling",
+			model:  "gpt-5.1",
+			effort: "none",
+			want:   OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true, SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:   "gpt-5.1 with reasoning drops sampling",
+			model:  "gpt-5.1",
+			effort: "high",
+			want:   OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "gpt-5.2 snapshot keeps sampling",
+			model: "gpt-5.2-2025-12-11",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true, SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "named gpt-5.1 variant does not inherit the sampling exception",
+			model: "gpt-5.1-codex",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "gpt-5.3 is not on the sampling list",
+			model: "gpt-5.3",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "gpt-6-astra never supports sampling",
+			model: "gpt-6-astra",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "gpt-6-astra snapshot never supports sampling",
+			model: "gpt-6-astra-2026-09-03",
+			want:  OpenAIChatCapabilities{UseMaxCompletionTokens: true, UseDeveloperRole: true},
+		},
+		{
+			name:  "unknown gpt-6-astra variant keeps its parameters",
+			model: "gpt-6-astra-pro",
+			want:  OpenAIChatCapabilities{SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "invalid gpt-6-astra snapshot keeps its parameters",
+			model: "gpt-6-astra-2026-99-03",
+			want:  OpenAIChatCapabilities{SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "gpt-4.1 keeps its parameters",
+			model: "gpt-4.1-nano",
+			want:  OpenAIChatCapabilities{SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "future generations do not inherit restrictions",
+			model: "gpt-7",
+			want:  OpenAIChatCapabilities{SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+		{
+			name:  "empty model keeps its parameters",
+			model: "",
+			want:  OpenAIChatCapabilities{SupportsTemperature: true, SupportsTopP: true, SupportsLogProbs: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, GetOpenAIChatCapabilities(tt.model, tt.effort))
+		})
+	}
 }
 
 func TestGeneralOpenAIRequest_ParseInput(t *testing.T) {
