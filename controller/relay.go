@@ -313,14 +313,7 @@ func addUsedChannel(c *gin.Context, channelId int) {
 }
 
 func messageWithCurrentRequestId(c *gin.Context, message string) string {
-	requestId := ""
-	if c != nil {
-		requestId = c.GetString(common.RequestIdKey)
-	}
-	if requestId == "" {
-		return common.StripRequestIds(message)
-	}
-	return common.MessageWithRequestId(message, requestId)
+	return service.MessageWithCurrentRequestId(c, message)
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
@@ -358,46 +351,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return service.ShouldRetryRelayError(c, openaiErr, retryTimes)
 }
 
-// processChannelError 处理渠道失败统计、错误日志及渠道状态；流式底层原因单独保存为超级管理员诊断。
-// 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，供分类及记录；relayInfo：本请求中转信息，可为 nil。
+// processChannelError 处理渠道失败统计、错误日志及渠道状态，实现见 service.ProcessChannelError。
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
-	if err == nil {
-		return
-	}
-	publicSummary := service.StreamPublicErrorSummary(c, err)
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(messageWithCurrentRequestId(c, publicSummary))))
-	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
-	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if service.ShouldDisableChannel(err) && channelError.AutoBan {
-		gopool.Go(func() {
-			service.DisableChannel(channelError, publicSummary)
-		})
-	}
-
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		// 保存错误日志到mysql中
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		other := model.NewLogOther()
-		if c.Request != nil && c.Request.URL != nil {
-			other.SetPublic("request_path", c.Request.URL.Path)
-		}
-		other.SetPublic("error_type", err.GetErrorType())
-		other.SetPublic("error_code", err.GetErrorCode())
-		other.SetPublic("status_code", err.StatusCode)
-		service.AppendRelayLogAdminInfo(c, relayInfo, other)
-		service.AppendTaskPluginContextAuditInfo(c, other)
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		service.AppendStreamErrorDiagnostic(c, other, err)
-		model.RecordErrorLog(c, userId, channelError.ChannelId, modelName, tokenName, messageWithCurrentRequestId(c, publicSummary), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
-	}
+	service.ProcessChannelError(c, channelError, err, relayInfo)
 }
 
 func RelayMidjourney(c *gin.Context) {

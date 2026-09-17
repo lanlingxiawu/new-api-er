@@ -288,7 +288,7 @@ func updateConfigFromMap(config any, configMap map[string]string) error {
 				if field.IsNil() {
 					field.Set(reflect.New(field.Type().Elem()))
 				}
-				// 反序列化到指针指向的值
+				// 反序列化到指针指向的值（原地更新：types.RWMap 等并发安全对象被其他代码持有同一指针）
 				err := json.Unmarshal([]byte(strValue), field.Interface())
 				if err != nil {
 					continue
@@ -303,7 +303,15 @@ func updateConfigFromMap(config any, configMap map[string]string) error {
 				continue
 			}
 			field.Set(fresh.Elem())
-		case reflect.Slice, reflect.Struct:
+		case reflect.Slice:
+			// 容量足够时 json.Unmarshal 会复用旧底层数组，而已发布的快照可能仍在读它；
+			// 分配新切片再替换。
+			fresh := reflect.New(field.Type())
+			if err := json.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+				continue
+			}
+			field.Set(fresh.Elem())
+		case reflect.Struct:
 			err := json.Unmarshal([]byte(strValue), field.Addr().Interface())
 			if err != nil {
 				continue

@@ -103,6 +103,11 @@ func readModelPricingMaps(db *gorm.DB) (map[string]map[string]any, map[string]bo
 	existing := make(map[string]bool)
 	counts := make(map[string]int)
 	for _, row := range rows {
+		counts[row.Key]++
+		if strings.TrimSpace(row.Value) == "" {
+			// 行存在但从未保存过值（如按模型改价在无实际改动时由 FirstOrCreate 建出的空行），按未配置处理。
+			continue
+		}
 		var entries map[string]any
 		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", row.Key, err)
@@ -112,7 +117,6 @@ func readModelPricingMaps(db *gorm.DB) (map[string]map[string]any, map[string]bo
 		}
 		values[row.Key] = entries
 		existing[row.Key] = true
-		counts[row.Key]++
 	}
 	var duplicated []string
 	for _, key := range modelPricingOptionKeys {

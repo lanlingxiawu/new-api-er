@@ -83,6 +83,7 @@ func ResolveCommissionTierResetLocation(timezone string) (*time.Location, string
 	return loc, timezone
 }
 
+// IsCommissionTierResetEnabled 按已发布快照返回佣金档位重置是否开启，不读配置草稿。
 func IsCommissionTierResetEnabled() bool {
-	return commissionTierResetSetting.Enabled
+	return GetCommissionTierResetSetting().Enabled
 }

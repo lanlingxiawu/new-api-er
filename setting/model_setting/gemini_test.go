@@ -91,9 +91,9 @@ func TestIsGeminiModelSupportImagine_EmptyList(t *testing.T) {
 }
 
 func TestGeminiSafetySettingsReadNormalization(t *testing.T) {
-	original := geminiSettings.SafetySettings
+	original := *GetGeminiSettings()
 	t.Cleanup(func() {
-		geminiSettings.SafetySettings = original
+		ReplaceGeminiSettings(original)
 	})
 
 	tests := []struct {
@@ -145,7 +145,9 @@ func TestGeminiSafetySettingsReadNormalization(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			geminiSettings.SafetySettings = test.settings
+			settings := original
+			settings.SafetySettings = test.settings
+			ReplaceGeminiSettings(settings)
 
 			assert.Equal(t, test.want, GetGeminiSafetySetting(test.key))
 		})

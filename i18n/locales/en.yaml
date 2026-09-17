@@ -463,6 +463,7 @@ price_monitor.expr_not_editable: "This model uses tiered expression pricing, whi
 price_monitor.too_many_models: "Too many models selected for a single update. Select fewer models and try again."
 price_monitor.below_floor: "Some prices are below the break-even floor required by upstream channel quotes. Raise them, or confirm again to apply anyway."
 price_monitor.completion_ratio_locked: "The completion ratio of model \"{{.Model}}\" is fixed by the system at {{.Ratio}} and cannot be changed here. To raise its output price, raise the model ratio instead; the output price follows the input price."
+price_monitor.pricing_invalid: "The new price for model \"{{.Model}}\" was not applied because the model's pricing configuration would be invalid. Open Settings, Billing, Model pricing to review this model, then try again."
 upstream_log.channel_not_found: "The channel no longer exists. Refresh the channel list and try again."
 upstream_log.base_url_missing: "Set the channel base URL before querying upstream logs."
 upstream_log.key_missing: "Add a channel key before querying upstream logs."

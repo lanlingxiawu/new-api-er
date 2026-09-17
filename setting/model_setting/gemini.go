@@ -2,6 +2,7 @@ package model_setting
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/QuantumNous/new-api/common"
@@ -67,7 +68,15 @@ func init() {
 }
 
 // publishGeminiSettings 只允许在配置草稿锁内调用（由 RegisterSnapshot 保证）。
-func publishGeminiSettings() { geminiSnapshot.Publish(geminiSettings) }
+// map 与 slice 字段复制后再发布：ConfigManager 反序列化 slice 时会复用草稿原有的底层数组，
+// 共享底层存储会让已发布的快照随草稿被原地改写。
+func publishGeminiSettings() {
+	published := geminiSettings
+	published.SafetySettings = maps.Clone(geminiSettings.SafetySettings)
+	published.VersionSettings = maps.Clone(geminiSettings.VersionSettings)
+	published.SupportedImagineModels = slices.Clone(geminiSettings.SupportedImagineModels)
+	geminiSnapshot.Publish(published)
+}
 
 // GetGeminiSettings 返回不可变快照。通过它写入不会生效——
 // 配置变更必须走管理接口，由 ConfigManager 改草稿后重新发布。
@@ -83,9 +92,10 @@ func ReplaceGeminiSettings(s GeminiSettings) {
 	})
 }
 
-// GetGeminiSafetySetting 获取安全设置
+// GetGeminiSafetySetting 从已发布快照读取 key 的安全阈值（relay 路径调用，不读草稿）；
+// key 未配置或为空时回落到 "default"，再回落到 OFF。
 func GetGeminiSafetySetting(key string) string {
-	settings := geminiSettings.SafetySettings
+	settings := GetGeminiSettings().SafetySettings
 	if value := settings[key]; value != "" {
 		return value
 	}
@@ -116,14 +126,16 @@ func ValidateGeminiSafetySettings(value string) error {
 	return nil
 }
 
-// GetGeminiVersionSetting 获取版本设置
+// GetGeminiVersionSetting 从已发布快照读取 key 的 API 版本（relay 路径调用，不读草稿）；未配置时返回 "default" 的值。
 func GetGeminiVersionSetting(key string) string {
-	if value, ok := geminiSettings.VersionSettings[key]; ok {
+	versions := GetGeminiSettings().VersionSettings
+	if value, ok := versions[key]; ok {
 		return value
 	}
-	return geminiSettings.VersionSettings["default"]
+	return versions["default"]
 }
 
+// IsGeminiModelSupportImagine 按已发布快照判断 model 是否在图片生成模型列表中（精确匹配，relay 路径调用，不读草稿）。
 func IsGeminiModelSupportImagine(model string) bool {
-	return slices.Contains(geminiSettings.SupportedImagineModels, model)
+	return slices.Contains(GetGeminiSettings().SupportedImagineModels, model)
 }

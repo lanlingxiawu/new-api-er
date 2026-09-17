@@ -48,15 +48,33 @@ func ShouldRetryRelayError(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+// MessageWithCurrentRequestId 去掉 message 中已有的 request id 标记，再附加当前请求的 request id；
+// 上下文没有 request id 时只去掉旧标记，避免错误日志带上其他请求（如上游或重试前）的 id。
+func MessageWithCurrentRequestId(c *gin.Context, message string) string {
+	requestId := ""
+	if c != nil {
+		requestId = c.GetString(common.RequestIdKey)
+	}
+	if requestId == "" {
+		return common.StripRequestIds(message)
+	}
+	return common.MessageWithRequestId(message, requestId)
+}
+
+// ProcessChannelError 处理渠道失败的本地日志、自动禁用及错误日志，HTTP 中转、渠道测试与 Responses WebSocket 共用。
+// 错误日志内容为公开错误摘要（附当前 request id），流式底层原因单独保存为超级管理员诊断。
+// 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，nil 时直接返回；relayInfo：本请求中转信息，可为 nil。
+// 仅在失败路径执行：渠道禁用在 gopool 中异步执行，错误日志经 model.RecordErrorLog 进入日志写入管线。
 func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
 	if err == nil {
 		return
 	}
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
+	publicSummary := StreamPublicErrorSummary(c, err)
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(MessageWithCurrentRequestId(c, publicSummary))))
+	// 渠道信息取自 channelError 快照而非上下文：异步处理时上下文中的渠道可能已被重试改写。
 	if ShouldDisableChannel(err) && channelError.AutoBan {
-		reason := err.MaskSensitiveErrorWithStatusCode()
 		gopool.Go(func() {
-			DisableChannel(channelError, reason)
+			DisableChannel(channelError, publicSummary)
 		})
 	}
 
@@ -80,6 +98,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelError.ChannelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		AppendStreamErrorDiagnostic(c, other, err)
+		model.RecordErrorLog(c, userId, channelError.ChannelId, modelName, tokenName, MessageWithCurrentRequestId(c, publicSummary), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 }

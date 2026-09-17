@@ -21,7 +21,7 @@ type UserExtension struct {
 	ProfitTotalQuota     int64 `json:"profit_total_quota" gorm:"column:profit_total_quota;default:0"`
 
 	// JSON 预留扩展（不破坏表结构）
-	Extra string `json:"extra,omitempty" gorm:"type:text;default:''"`
+	Extra string `json:"extra,omitempty" gorm:"type:text"`
 
 	CreatedAt int64 `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt int64 `json:"updated_at" gorm:"autoUpdateTime"`

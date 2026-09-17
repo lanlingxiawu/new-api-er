@@ -183,9 +183,13 @@ func ApplyPriceMonitorPrice(c *gin.Context) {
 
 	version, applied, err := model.PatchPricingOptions(request.PricingVersion, patches)
 	if err != nil {
+		var invalid *model.PricingPatchInvalidError
 		switch {
 		case errors.Is(err, model.ErrPricingVersionConflict), errors.Is(err, model.ErrPricingValueConflict):
 			common.ApiErrorI18n(c, i18n.MsgPricingConfigChanged)
+		case errors.As(err, &invalid):
+			logger.LogWarn(c, "price monitor apply price rejected by pricing validation: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgPriceMonitorPricingInvalid, map[string]any{"Model": invalid.Model})
 		default:
 			logger.LogError(c, "price monitor apply price failed: "+err.Error())
 			common.ApiErrorI18n(c, i18n.MsgRetryLater)

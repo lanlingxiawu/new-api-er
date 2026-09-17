@@ -53,7 +53,8 @@ func publishChannelDailyLimitSetting() {
 func GetChannelDailyLimitSnapshot() *ChannelDailyLimitSetting {
 	s := channelDailyLimitSnapshot.Load()
 	if s == nil {
-		fallback := channelDailyLimitSetting
+		// RegisterSnapshot 在 init 时已发布，正常运行不会走到这里；兜底也只在草稿锁内复制。
+		fallback := GetChannelDailyLimitSetting()
 		return &fallback
 	}
 	return s

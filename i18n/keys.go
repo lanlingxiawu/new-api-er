@@ -547,6 +547,7 @@ const (
 	MsgPriceMonitorBelowFloor      = "price_monitor.below_floor"
 
 	MsgPriceMonitorCompletionRatioLocked = "price_monitor.completion_ratio_locked"
+	MsgPriceMonitorPricingInvalid        = "price_monitor.pricing_invalid"
 )
 
 // Upstream log query (渠道上游日志查询) — admin only

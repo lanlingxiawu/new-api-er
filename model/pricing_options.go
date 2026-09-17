@@ -2,7 +2,10 @@ package model
 
 import (
 	"errors"
+	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -24,6 +27,8 @@ var (
 	ErrPricingVersionConflict = errors.New("pricing config version conflict")
 	// ErrPricingValueConflict 表示目标模型的某个字段当前值与客户端所见不一致。
 	ErrPricingValueConflict = errors.New("pricing config value conflict")
+	// ErrPricingPatchInvalid 表示改写后的模型价格未通过 validateModelPricing 校验，整单未写入。
+	ErrPricingPatchInvalid = errors.New("pricing patch is invalid")
 )
 
 // pricingOptionKeys 是承载「模型 -> 数值」映射的价格类 option。
@@ -68,14 +73,19 @@ func GetPricingConfigVersion() int64 {
 	return version
 }
 
-// PatchPricingOptions 在单个事务内完成 行锁 → 校验版本 → 校验目标字段 → 局部改写 → 递增版本。
+// PatchPricingOptions 在单个事务内完成 行锁 → 校验版本 → 校验目标字段 → 局部改写 → 校验改写后的模型价格 → 递增版本。
 //
-// 这是本仓库第一个「按模型局部更新价格」的写入路径。之所以不能沿用
-// UpdateOptionsBulk，是因为它内部只有 FirstOrCreate + Save，没有版本列、没有条件更新、
-// 也没有行锁：在事务之外比对 expected 再调用它，两个并发请求会双双通过比对，后写覆盖先写。
+// 这是「按模型局部更新价格」的写入路径。之所以不能沿用 UpdateOptionsBulk，是因为它内部只有
+// FirstOrCreate + Save，没有版本列、没有条件更新、也没有行锁：在事务之外比对 expected 再调用它，
+// 两个并发请求会双双通过比对，后写覆盖先写。
+//
+// 改写后的每个被改模型都经过与模型定价整块保存（mutateModelPricingOptions）相同的
+// validateModelPricing 校验，失败时整单回滚并返回 *PricingPatchInvalidError（errors.Is 匹配 ErrPricingPatchInvalid）。
+// 与整块保存共用 modelPricingMutationMu：进程内的写库、内存刷新与定价缓存重建按提交顺序串行，
+// 避免后提交的内存状态被先提交者覆盖。成功写入后刷新 OptionMap、定价缓存（RefreshPricing）与对外暴露数据缓存。
 //
 // 返回值 applied 是「实际写入的 option key -> 模型字段列表」；与当前值相同的字段不写，
-// 由调用方归入 unchanged。
+// 由调用方归入 unchanged。没有任何实际写入时版本号不变。
 func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, map[string][]PricingPatch, error) {
 	if len(patches) == 0 {
 		return GetPricingConfigVersion(), map[string][]PricingPatch{}, nil
@@ -94,11 +104,15 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 	}
 	sort.Strings(optionKeys)
 
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
+
 	newVersion := expectedVersion + 1
 	applied := make(map[string][]PricingPatch)
 	written := make(map[string]string)
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 先版本行、后价格行，与 mutateModelPricingOptions / updatePricingOption 的加锁顺序一致。
 		currentVersion, err := readPricingVersionForUpdate(lockedPricingTx(tx))
 		if err != nil {
 			return err
@@ -106,7 +120,14 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 		if currentVersion != expectedVersion {
 			return ErrPricingVersionConflict
 		}
+		// 改写前的整份价格配置（含计费模式、表达式），供校验改写后的模型价格。
+		before, _, _, err := readModelPricingMaps(lockForUpdate(tx))
+		if err != nil {
+			return err
+		}
 
+		patchedValues := make(map[string]map[string]float64)
+		patchedOptions := make(map[string]Option)
 		for _, optionKey := range optionKeys {
 			values, option, err := readPricingOptionForUpdate(lockedPricingTx(tx), optionKey)
 			if err != nil {
@@ -147,6 +168,22 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 				applied[optionKey] = append(applied[optionKey], patch)
 				changed = true
 			}
+			if changed {
+				patchedValues[optionKey] = values
+				patchedOptions[optionKey] = option
+			}
+		}
+
+		if len(patchedValues) == 0 {
+			// 没有任何实际写入，版本号也不该前进，否则会平白让其他客户端的乐观校验失败。
+			newVersion = currentVersion
+			return nil
+		}
+		if err := validatePricingPatches(before, patchedValues, applied); err != nil {
+			return err
+		}
+		for _, optionKey := range optionKeys {
+			values, changed := patchedValues[optionKey]
 			if !changed {
 				continue
 			}
@@ -154,6 +191,7 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 			if err != nil {
 				return err
 			}
+			option := patchedOptions[optionKey]
 			option.Value = string(encoded)
 			if err := tx.Save(&option).Error; err != nil {
 				return err
@@ -161,11 +199,6 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 			written[optionKey] = option.Value
 		}
 
-		if len(written) == 0 {
-			// 没有任何实际写入，版本号也不该前进，否则会平白让其他客户端的乐观校验失败。
-			newVersion = currentVersion
-			return nil
-		}
 		versionOption := Option{Key: PricingConfigVersionKey}
 		if err := tx.Where(Option{Key: PricingConfigVersionKey}).FirstOrCreate(&versionOption).Error; err != nil {
 			return err
@@ -181,12 +214,43 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 	if err != nil {
 		return 0, nil, err
 	}
+	if len(written) == 0 {
+		return newVersion, applied, nil
+	}
 	for key, value := range written {
 		if updateErr := updateOptionMap(key, value); updateErr != nil {
 			common.SysError("failed to refresh pricing option in memory: " + updateErr.Error())
 		}
 	}
+	RefreshPricing()
+	ratio_setting.InvalidateExposedDataCache()
 	return newVersion, applied, nil
+}
+
+// validatePricingPatches 用 validateModelPricing 校验本次实际改动的每个模型改写后的完整价格。
+// 参数 before：改写前的整份价格配置（readModelPricingMaps 结果，不修改）；patched：被改写的 option key -> 改写后的整表；
+// applied：实际写入的补丁，决定需要校验的模型。返回按模型名排序的首个失败模型的 *PricingPatchInvalidError。
+func validatePricingPatches(before map[string]map[string]any, patched map[string]map[string]float64, applied map[string][]PricingPatch) error {
+	after := maps.Clone(before)
+	for optionKey, values := range patched {
+		entries := make(map[string]any, len(values))
+		for name, value := range values {
+			entries[name] = value
+		}
+		after[optionKey] = entries
+	}
+	names := make(map[string]struct{})
+	for _, patches := range applied {
+		for _, patch := range patches {
+			names[patch.Model] = struct{}{}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		if err := validateModelPricing(name, modelPricingValues(after, name), modelPricingValues(before, name)); err != nil {
+			return &PricingPatchInvalidError{Model: name, Err: err}
+		}
+	}
+	return nil
 }
 
 // lockedPricingTx 只在支持行锁的数据库上附加 FOR UPDATE。
@@ -293,4 +357,23 @@ func pricingValueMatches(expected *float64, current float64, exists bool) bool {
 
 func nearlyEqualPricingValue(left, right float64) bool {
 	return math.Abs(left-right) < pricingFloatEpsilon
+}
+
+// PricingPatchInvalidError 表示模型 Model 改价后的完整价格未通过校验；Err 为校验器给出的原因。
+// errors.Is(err, ErrPricingPatchInvalid) 为真，errors.Unwrap 返回 Err。
+type PricingPatchInvalidError struct {
+	Model string
+	Err   error
+}
+
+func (e *PricingPatchInvalidError) Error() string {
+	return fmt.Sprintf("%s: model %s: %v", ErrPricingPatchInvalid.Error(), e.Model, e.Err)
+}
+
+func (e *PricingPatchInvalidError) Is(target error) bool {
+	return target == ErrPricingPatchInvalid
+}
+
+func (e *PricingPatchInvalidError) Unwrap() error {
+	return e.Err
 }

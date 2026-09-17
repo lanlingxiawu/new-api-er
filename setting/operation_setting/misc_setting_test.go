@@ -194,11 +194,13 @@ func TestIsNaturalMonthMode(t *testing.T) {
 }
 
 func TestIsCommissionTierResetEnabled(t *testing.T) {
-	orig := commissionTierResetSetting.Enabled
-	t.Cleanup(func() { commissionTierResetSetting.Enabled = orig })
-	commissionTierResetSetting.Enabled = false
+	orig := *GetCommissionTierResetSetting()
+	t.Cleanup(func() { ReplaceCommissionTierResetSetting(orig) })
+	disabled, enabled := orig, orig
+	disabled.Enabled, enabled.Enabled = false, true
+	ReplaceCommissionTierResetSetting(disabled)
 	assert.False(t, IsCommissionTierResetEnabled())
-	commissionTierResetSetting.Enabled = true
+	ReplaceCommissionTierResetSetting(enabled)
 	assert.True(t, IsCommissionTierResetEnabled())
 }
 

@@ -464,6 +464,7 @@ price_monitor.expr_not_editable: "该模型使用阶梯表达式计费，无法�
 price_monitor.too_many_models: "单次选择的模型过多，请减少数量后重试。"
 price_monitor.below_floor: "部分价格低于上游渠道报价所要求的保本下限。请调高，或再次确认后强制应用。"
 price_monitor.completion_ratio_locked: "模型「{{.Model}}」的补全倍率由系统固定为 {{.Ratio}}，无法在此修改。如需提高输出价，请调高模型倍率，输出价会随输入价同步提高。"
+price_monitor.pricing_invalid: "模型「{{.Model}}」的新价格未生效：改价后该模型的定价配置无效。请前往 设置 → 计费 → 模型定价 检查该模型后重试。"
 upstream_log.channel_not_found: "该渠道已不存在，请刷新渠道列表后重试。"
 upstream_log.base_url_missing: "请先在渠道中填写 Base URL 再查询上游日志。"
 upstream_log.key_missing: "请先为渠道填写令牌再查询上游日志。"

@@ -41,7 +41,7 @@ type EmployeeProfile struct {
 type ChannelCostConfig struct {
 	Id        int     `json:"id"`
 	ChannelId int     `json:"channel_id" gorm:"uniqueIndex;not null"`
-	CostRatio float64 `json:"cost_ratio" gorm:"not null;default:1.0"`
+	CostRatio float64 `json:"cost_ratio" gorm:"not null;default:1"`
 	Remark    string  `json:"remark,omitempty" gorm:"type:varchar(255);default:''"`
 	CreatedAt int64   `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt int64   `json:"updated_at" gorm:"autoUpdateTime"`
