@@ -41,7 +41,6 @@ function newAPIForm(baseUrl: string) {
     base_url: baseUrl,
     key: 'test-key',
     models: 'gpt-5',
-    // 本仓库的成本倍率为必填且无默认值，补上才能隔离出 base_url 的校验结果。
     cost_ratio: 1,
   }
 }
@@ -91,7 +90,6 @@ describe('New API channel', () => {
   test('keeps Sub2API Base URL validation unchanged', () => {
     const result = channelFormSchema.safeParse({
       ...newAPIForm(''),
-      // 上游的 Sub2API 是 59，本仓库顺延到 60。
       type: 60,
     })
 

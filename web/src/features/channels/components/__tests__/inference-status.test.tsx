@@ -35,7 +35,6 @@ import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { CHANNEL_TYPE_VLLM, CHANNEL_TYPE_SGLANG } from '../../constants'
-import { CHANNEL_TYPE_ADVANCED_CUSTOM } from '../../lib/advanced-custom'
 import type { InferenceStatus } from '../../lib/inference-status'
 import { channelSchema } from '../../types'
 import { ChannelRowActionsLayoutContext } from '../channel-row-actions-context'
@@ -464,7 +463,7 @@ it('keeps SGLang worker values separate and wraps long labels below them', async
 it.each([
   { type: CHANNEL_TYPE_VLLM, editable: false },
   { type: CHANNEL_TYPE_SGLANG, editable: false },
-  { type: CHANNEL_TYPE_ADVANCED_CUSTOM, editable: true },
+  { type: 59, editable: true },
 ])(
   'limits the route editor to advanced custom channels: type $type',
   async ({ type, editable }) => {

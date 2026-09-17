@@ -16,35 +16,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { toast } from 'sonner'
 
-type ToastMethod = typeof toast.success
+/** 同一连串通知中，相邻两次触发的最大间隔。 */
+export const TOAST_BURST_WINDOW_MS = 1500
 
-const DEDUPED_TYPES = ['success', 'error', 'info', 'warning', 'message'] as const
-const INSTALLED = Symbol.for('new-api.toast-dedupe')
+const bursts = new Map<string, { id: string; lastAt: number }>()
+let burstSeq = 0
 
 /**
- * 同一条弱提示在显示期间只保留一个。
+ * 为「一次操作内部重复触发」的同一事件生成 sonner toast id。
  *
- * 一次操作叠出多个相同提示的两个来源：设置页逐键保存，每个键都提示一次「设置已更新」；
- * 业务失败时 http-client 的全局拦截器与调用方各提示一次同一条服务端消息。这里给没有指定 id
- * 的纯文本提示按「类型 + 文案」生成 id，sonner 对同 id 的提示原地更新而不是再弹一个。
+ * 设置页逐键保存：一次点击保存会串行提交多个键，每个键成功都走到同一个 onSuccess。
+ * 同一 eventKey 与上一次触发间隔不超过 TOAST_BURST_WINDOW_MS 时复用同一个 id，
+ * sonner 对同 id 原地更新，整串保存只显示一条；间隔更长视为新的操作，得到新 id，照常单独提示。
  *
- * http-client.ts 是上游文件（Rule 6），不能改它，所以在应用启动时包一层。
+ * 只用于调用方明确知道会连发的场景。错误提示不走这里：同一错误对象只提示一次由
+ * handleServerError 的 WeakSet 保证，相互独立的失败即使文案相同也各自提示。
  */
-export function installToastDedupe(): void {
-  const target = toast as unknown as Record<string | symbol, unknown>
-  if (target[INSTALLED]) return
-  target[INSTALLED] = true
-
-  for (const type of DEDUPED_TYPES) {
-    const original: ToastMethod = toast[type].bind(toast)
-    const deduped: ToastMethod = (message, data) => {
-      if (typeof message !== 'string' || data?.id !== undefined) {
-        return original(message, data)
-      }
-      return original(message, { ...data, id: `${type}:${message}` })
-    }
-    target[type] = deduped
+export function burstToastId(eventKey: string, now = Date.now()): string {
+  const burst = bursts.get(eventKey)
+  if (burst && now - burst.lastAt <= TOAST_BURST_WINDOW_MS) {
+    burst.lastAt = now
+    return burst.id
   }
+  burstSeq += 1
+  const id = `burst:${eventKey}:${burstSeq}`
+  bursts.set(eventKey, { id, lastAt: now })
+  return id
 }

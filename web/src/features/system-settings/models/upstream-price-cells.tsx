@@ -58,7 +58,6 @@ export function SyncPriceCell(props: { values: PricingSyncValues }) {
         {parsed ? (
           <div className='space-y-2'>
             {parsed.tiers.map((tier, index) => (
-              // eslint-disable-next-line react/no-array-index-key -- Parsed tiers have no IDs and labels may repeat.
               <div key={`${tier.label}-${index}`} className='space-y-1'>
                 {parsed.tiers.length > 1 && (
                   <div className='text-muted-foreground text-xs!'>

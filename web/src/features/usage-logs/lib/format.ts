@@ -295,7 +295,7 @@ export function decodeBillingExprB64(exprB64: string | undefined): string {
 
     return decodeURIComponent(
       Array.prototype.map
-        .call(bytes, (byte: number) => `%${  byte.toString(16).padStart(2, '0')}`)
+        .call(bytes, (byte: number) => `%${byte.toString(16).padStart(2, '0')}`)
         .join('')
     )
   } catch {
@@ -341,7 +341,7 @@ export interface TieredBillingSummary {
 /**
  * Whether the request payload reports any cache-related token usage. Used to
  * suppress cache pricing rows from the tiered breakdown when the request did
- * not exercise the cache path (mirrors the classic frontend behaviour).
+ * not exercise the cache path.
  */
 export function hasAnyCacheTokens(
   other: LogOtherData | null | undefined
@@ -584,6 +584,7 @@ const AUDIT_TEMPLATES: Record<string, string> = {
     'Reset active plan {{plan_id}} subscriptions for user {{target}}',
   // Logs
   'log.clear': 'Cleared historical logs',
+  'log.cleanup_start': 'Log cleanup task started.',
   // Usage log export (admin background jobs)
   'log_export.job_create':
     'Started a log export ({{columns}} columns, {{format}}) for {{start}}–{{end}}',

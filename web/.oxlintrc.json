@@ -205,6 +205,12 @@
         "no-console": "off",
         "prefer-node-protocol": "off"
       }
+    },
+    {
+      "files": ["src/features/system-settings/models/upstream-price-cells.tsx"],
+      "rules": {
+        "react/no-array-index-key": "off"
+      }
     }
   ]
 }

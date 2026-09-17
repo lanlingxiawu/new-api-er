@@ -69,7 +69,7 @@ export async function getTokenAutoGroups(): Promise<
   return res.data
 }
 
-// Create a NEXAXIS API key
+// Create a new API key
 export async function createApiKey(
   data: ApiKeyFormData
 ): Promise<ApiResponse<ApiKey>> {

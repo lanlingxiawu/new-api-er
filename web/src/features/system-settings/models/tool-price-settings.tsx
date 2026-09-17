@@ -22,11 +22,11 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { StaticDataTable } from '@/components/data-table'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Field, FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -389,12 +389,11 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
         />
       ) : (
         <div className='space-y-2'>
-          <Textarea
+          <JsonCodeEditor
             value={jsonText}
-            onChange={(e) => handleJsonChange(e.target.value)}
-            className='font-mono text-sm'
-            rows={12}
-            spellCheck={false}
+            onChange={handleJsonChange}
+            heightClassName='h-72 min-h-72 max-h-72'
+            aria-invalid={Boolean(jsonError)}
           />
           {jsonError && <p className='text-destructive text-sm'>{jsonError}</p>}
         </div>

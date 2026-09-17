@@ -38,13 +38,16 @@ import routeLineFour from '@/assets/home/Vector 4.png'
 import routeLineFive from '@/assets/home/Vector 5.png'
 import routeLineSix from '@/assets/home/Vector 6.png'
 import routeLineSeven from '@/assets/home/Vector 7.png'
+import { RichContent } from '@/components/rich-content'
 import { Markdown } from '@/components/ui/markdown'
+import { useTheme } from '@/context/theme-provider'
 import { useStatus } from '@/hooks/use-status'
 import {
   INTERFACE_LANGUAGE_OPTIONS,
   normalizeInterfaceLanguage,
 } from '@/i18n/languages'
 import { api } from '@/lib/api'
+import { isLikelyHtml } from '@/lib/content-format'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useHomePageContent } from './hooks'
@@ -838,6 +841,25 @@ export function Home() {
   const { t, i18n } = useTranslation()
   const { status } = useStatus()
   const { content, isLoaded, isUrl } = useHomePageContent()
+  const { resolvedTheme } = useTheme()
+  const customHomeFrameRef = useRef<HTMLIFrameElement>(null)
+  const syncCustomHomePreferences = useCallback(() => {
+    try {
+      customHomeFrameRef.current?.contentWindow?.postMessage(
+        { themeMode: resolvedTheme },
+        '*'
+      )
+      customHomeFrameRef.current?.contentWindow?.postMessage(
+        { lang: i18n.language },
+        '*'
+      )
+    } catch {
+      // Cross-origin frames may reject access while navigating.
+    }
+  }, [i18n.language, resolvedTheme])
+  useEffect(() => {
+    if (isUrl) syncCustomHomePreferences()
+  }, [isUrl, syncCustomHomePreferences])
   const [heroPrompt, setHeroPrompt] = useState('')
   const [isRoutingActive, setIsRoutingActive] = useState(false)
   const routingSectionRef = useRef<HTMLElement | null>(null)
@@ -1051,16 +1073,28 @@ export function Home() {
   }
 
   if (content !== '') {
-    return isUrl ? (
-      // The admin-configured home page is a full external site that needs
-      // scripts, its own origin's cookies/storage and top-level navigation.
-      // A sandbox would have to allow both scripts and same-origin, which
-      // isolates nothing, so it stays unsandboxed as before.
-      // oxlint-disable-next-line react/iframe-missing-sandbox -- external home page needs full capabilities (see above)
-      <iframe
-        src={content}
-        title='Home Page Content'
-        className='figma-home-custom-frame'
+    if (isUrl) {
+      return (
+        // The admin-configured home page is a full external site that needs
+        // scripts, its own origin's cookies/storage and top-level navigation.
+        // A sandbox would have to allow both scripts and same-origin, which
+        // isolates nothing, so it stays unsandboxed.
+        // oxlint-disable-next-line react/iframe-missing-sandbox -- external home page needs full capabilities (see above)
+        <iframe
+          ref={customHomeFrameRef}
+          src={content}
+          title='Home Page Content'
+          className='figma-home-custom-frame'
+          onLoad={syncCustomHomePreferences}
+        />
+      )
+    }
+    return isLikelyHtml(content) ? (
+      <RichContent
+        mode='html'
+        htmlVariant='isolated'
+        content={content}
+        className='figma-home-custom-content custom-home-content'
       />
     ) : (
       <div className='figma-home-custom-content markdown-body'>

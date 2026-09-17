@@ -16,28 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type * as React from 'react'
+// Vitest config used only when the suite has to run under the Bun runtime
+// (see run-vitest.mjs). Bun's native ESM loader drops zod's
+// `export { z }` namespace binding when vitest externalizes the package, so
+// zod is inlined and transformed by vite instead.
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-export type DropdownMenuItemSelectEvent = React.MouseEvent<HTMLElement> & {
-  preventBaseUIHandler?: () => void
-}
+import { mergeConfig } from 'vitest/config'
 
-export type DropdownMenuItemSelectHandler = (
-  event: DropdownMenuItemSelectEvent
-) => void
+import baseConfig from '../vitest.config.ts'
 
-export function handleDropdownMenuItemSelect(
-  event: DropdownMenuItemSelectEvent,
-  onClick?: React.MouseEventHandler<HTMLElement>,
-  onSelect?: DropdownMenuItemSelectHandler
-) {
-  onClick?.(event)
-
-  if (!event.defaultPrevented) {
-    onSelect?.(event)
-  }
-
-  if (event.defaultPrevented) {
-    event.preventBaseUIHandler?.()
-  }
-}
+export default mergeConfig(baseConfig, {
+  root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
+  test: {
+    server: {
+      deps: { inline: [/[\/]node_modules[\/]zod[\/]/] },
+    },
+  },
+})
