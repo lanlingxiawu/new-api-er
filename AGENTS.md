@@ -8,11 +8,12 @@ This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI pro
 
 ## Tech Stack
 
-- **Backend**: Go 1.22+, Gin web framework, GORM v2 ORM
-- **Frontend**: React 19, TypeScript, Rsbuild, Base UI, Tailwind CSS
-- **Databases**: SQLite, MySQL, PostgreSQL (all three must be supported)
+- **Backend**: Go 1.25.1 (see each module's `go.mod`), Gin web framework, GORM v2 ORM
+- **Frontend**: React 19, TypeScript, Rsbuild 2, TanStack Router/Query/Table, Zustand, Base UI, Tailwind CSS 4; tests on Vitest
+- **Databases**: SQLite, MySQL, PostgreSQL for the primary database (all three must be supported); a separately configured log database also supports ClickHouse
 - **Cache**: Redis (go-redis) + in-memory cache
-- **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
+- **Auth**: Dashboard `Authorization: Bearer` access token + httpOnly refresh cookie, API tokens and personal access tokens, WebAuthn/Passkeys, TOTP, OAuth/OIDC; Casbin authorization in `service/authz/`
+- **Extensions**: JavaScript task plugins executed by Sobek (`plugins/tasks/`, `pkg/jsplugin/`); Electron desktop wrapper
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
 
 ## Architecture
@@ -34,7 +35,9 @@ constant/      — Constants (API types, channel types, context keys)
 types/         — Type definitions (relay formats, file sources, errors)
 i18n/          — Backend internationalization (go-i18n, en/zh)
 oauth/         — OAuth provider implementations
-pkg/           — Internal packages (cachex, ionet)
+pkg/           — Internal packages (cachex, ionet, jsplugin runtime, billingexpr)
+plugins/       — Built-in JavaScript task plugins (plugins/tasks/<key>/plugin.js), embedded into the binary
+relaykit/      — Independent Go module: protocol DTOs and conversions (no host imports)
 web/           — Frontend (React 19, TypeScript, Rsbuild, Base UI, Tailwind)
  web/src/i18n/ — Frontend i18n (i18next, en/zh/zh-TW/fr/ru/ja/vi)
  web/dist/     — Build output, embedded into the Go binary via //go:embed
@@ -115,6 +118,8 @@ Do NOT directly import or call `encoding/json` in business code. These wrappers 
 
 Note: `json.RawMessage`, `json.Number`, and other type definitions from `encoding/json` may still be referenced as types, but actual marshal/unmarshal calls must go through `common.*`.
 
+Inside `relaykit/`, use `kitutil.*` from `relaykit/relayconvert/kitutil/json.go`, never host `common`. Direct encoder calls belong only in codec implementations.
+
 ### Rule 2: Database Compatibility — SQLite, MySQL >= 5.7.8, PostgreSQL >= 9.6
 
 All database code MUST be fully compatible with all three databases simultaneously.
@@ -138,6 +143,16 @@ All database code MUST be fully compatible with all three databases simultaneous
 **Migrations:**
 - Ensure all migrations work on all three databases.
 - For SQLite, use `ALTER TABLE ... ADD COLUMN` instead of `ALTER COLUMN` (see `model/main.go` for patterns).
+
+**Row locks:** `SELECT ... FOR UPDATE` built with GORM query methods in `model/` MUST use `lockForUpdate(tx)`. Never use the GORM v1 pattern `tx.Set("gorm:query_option", "FOR UPDATE")` — GORM v2 silently ignores it and no lock is taken. Do not duplicate `clause.Locking{Strength: "UPDATE"}` at call sites.
+
+**Tags that re-migrate on every restart:** AutoMigrate compares tag defaults with what the database reports; a mismatch issues `ALTER TABLE ... MODIFY COLUMN` on every boot. Known traps: `default:1.0` on a float column (MySQL reports `1` — write `default:1`), any `default:` on a MySQL `TEXT` column (TEXT cannot have a literal default), and boolean `default:true` (MySQL/PostgreSQL normalize differently — set such defaults in code instead).
+
+**Verification matrix (mandatory for any change that can affect database behaviour):** ORM/driver dependency changes, DSN/protocol/prepared-statement config, models and GORM tags, migrations/AutoMigrate, constraints and indexes, `Scanner`/`Valuer` behaviour, raw SQL, transactions and row locking.
+- Exercise real SQLite, MySQL and PostgreSQL instances — a build, mocks or a single dialect are not substitutes. Treat GORM core and its dialect/driver packages as one version set.
+- Test schema/migration changes both on a fresh database and by upgrading a database created by the previous release; start at least twice and confirm the second start issues no DDL. Cover the log database when the path touches it.
+- Before deploying a migration to a server, rehearse it against that server's schema (schema-only dump loaded into a scratch database) and check its data for rows that would violate new unique constraints.
+- Record database versions, commands and results in the handoff. If any part cannot be run, say so explicitly.
 
 ### Rule 3: Frontend — Prefer Bun
 
@@ -415,6 +430,15 @@ For backend strings not shown in the UI (internal log messages), i18n is not req
 
 When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
 
+**Built-in model pricing:** New built-in model prices MUST be self-contained billing expressions in `setting/billing_setting/builtin_billing.go`, in real USD per million tokens. Do not add new built-in prices to the legacy ratio tables. Preserve explicit administrator overrides.
+
+**Billing safety invariants:** quota/billing code MUST never produce a negative charge from overflow or unvalidated input.
+- Bound every user-controlled multiplier (image `n`, video `seconds`/`duration`, resolution/quality ratios, batch counts) at request validation with a 400. Reuse `dto.MaxImageN`, `relaycommon.MaxTaskDurationSeconds` and `maxTokensLimit` (`relay/helper/valid_request.go`) instead of new ad hoc limits. Passthrough fields, task `metadata` maps and multipart fields must enforce the same bounds.
+- Never convert a computed quota with a bare cast (`int(float64(q) * ratio)`, `int(decimal.IntPart())`). Use `common/quota_math.go`: `QuotaFromFloat`, `QuotaRound`, `QuotaFromDecimal` and their `*Checked` variants, whose clamp is surfaced via `attachQuotaSaturation` under `other.admin_info.quota_saturation`; wallet/top-up conversion uses `WalletQuotaFromDecimalStrict`.
+- Multiplier maps go through `types.PriceData.AddOtherRatio`; never write `PriceData.OtherRatios` directly.
+- Pre-consume and settle must both be safe: a saturated quota fails pre-consume with insufficient quota. Unsigned request fields need an explicit upper bound.
+- The wallet columns `users.quota`, `used_quota`, `aff_quota`, `aff_history` must be 64-bit on MySQL/PostgreSQL; startup refuses a 32-bit schema unless `SKIP_64BIT_QUOTA_SCHEMA_CHECK=true`.
+
 ### Rule 15: Testing Conventions
 
 #### 15.1 Go backend — test file placement and framework
@@ -469,10 +493,10 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - Do not test framework behaviour (Gin routing, GORM auto-migration) — only test project logic built on top of them.
 - Do not write tests purely for coverage metrics; write tests for logic that can actually break.
 
-#### 15.7 Frontend — no test framework currently
+#### 15.7 Frontend — Vitest
 
-- The frontends have no test runner configured. TypeScript type checking (`bun run typecheck`) and ESLint (`bun run lint`) are the primary correctness gates.
-- Do not add a test runner without user approval. If a bug warrants a regression test, document it in the design document instead.
+- The frontend uses Vitest (`bun run test` from `web/`), following upstream. Tests live next to the code or in `__tests__/` and import `describe`/`it`/`test` from `vitest` — do not use `node:test`.
+- `bun run typecheck` and `bun run lint` remain mandatory gates alongside the tests.
 
 #### 15.8 Mandatory test run after implementation
 
@@ -481,3 +505,36 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - New business logic in `service/` or `model/` with branching or edge-case behaviour MUST have tests covering all branches.
 - Bug fixes MUST add a test that would have caught the original bug.
 - Relay channel adapter changes MUST include a fixture-based test for the changed transform.
+
+#### 15.9 Test quality
+
+- Tests must protect real behaviour, API contracts, billing/accounting invariants, data compatibility or regression paths. Coverage-driven cases (15.2) still have to assert observable behaviour, not private constants or helper internals.
+- For a focused change, extend an existing suitable test file first; do not scatter one small feature's tests across `controller/`, `service/` and `setting/` just because the call chain crosses them.
+- Avoid timing assertions built on short sleeps; when a test must measure time, give it windows large enough to survive a loaded full-suite run.
+- Prefer deterministic table tests with explicit inputs and exact outputs; initialize DB, settings and cache state explicitly in the fixture.
+- Tests taken from upstream stay byte-identical where possible (Rule 6); adapted copies go in fork-named files (e.g. `<name>_upstream_cases_test.go`).
+
+### Rule 16: Authentication Security (OWASP)
+
+- Any implementation, modification or review of authentication-related flows — registration, login/logout, password change/recovery, email verification, MFA, WebAuthn/Passkeys, OAuth/OIDC, account linking/unlinking, sessions, JWTs, API credentials, re-authentication for sensitive actions — MUST comply with the applicable requirements of the latest OWASP ASVS and the relevant OWASP Cheat Sheets (start with the Authentication and Session Management cheat sheets).
+- Enforce controls on the server: credential storage and transport, enumeration and brute-force resistance, CSRF and replay protection, token/challenge expiry and single use, session rotation and invalidation, re-authentication for sensitive changes. Frontend checks never substitute for server enforcement, and alternative login/recovery paths must not bypass the required assurance.
+- Authentication audit events MUST NOT contain passwords, verification or recovery codes, private keys, or usable session/auth tokens.
+- Cover affected controls with focused regression tests including failure, expiry, replay and bypass cases, and record the OWASP references and any unresolved gaps in the change summary.
+
+### Rule 17: Modern Go Conventions
+
+Apply to new or modified Go code (including tests and `relaykit/`) when behaviour is preserved:
+- `any` instead of `interface{}`; `for i := range n` / `for range n` for fixed counts; `strings.SplitSeq`, `strings.Cut`/`CutPrefix`/`CutSuffix`; `slices.Contains`/`slices.Sort`; `maps.Copy` (preserving nil-vs-empty); built-in `min`/`max` (not a substitute for billing validation); `strings.Builder` in loops; `reflect.TypeFor[T]()` and `reflect.Pointer`; `sync.WaitGroup.Go` where its panic contract applies.
+- Remove pre-Go-1.22 loop-variable copies (`tc := tc`) unless they carry real snapshot semantics.
+- Keep code direct: early returns, minimal nested closures, no single-caller helpers that do not name a stable domain concept.
+- `gofmt` modified files and remove unused imports.
+
+### Rule 18: JavaScript Task Plugins
+
+- Before implementing, modifying or reviewing task plugins or the plugin host/runtime, read `docs/plugin-api/v1.md` (keep `v1.schema.json` / `v1.d.ts` consistent when changing the contract).
+- Numeric billing fields in `usageSchema` / `usageProfiles[].schema` use a `description` naming the billing subject + unit price (e.g. `Video generation unit price` / `视频生成单价`), with units in `unit`; descriptions are short, equivalent across languages, without prices or trailing punctuation.
+- Plugins declare claimed channel types with the **fork's** numbering (`constant/channel.go`: ThirdPartySD2=58, AdvancedCustom=59, Sub2API=60, NewAPI=61, TaskPlugin=62, VLLM=63, SGLang=64). After every upstream merge, grep Go code, `web/src` and `plugins/` for hard-coded upstream numbers 58–63.
+- Credentials are only sent to the channel host or hosts the plugin lists in `allowedHosts`.
+- Do not add README/changelog/documentation files under `plugins/`. Run `bun run lint:plugins` and `bun run format:plugins:check` from `web/`.
+
+Upstream AGENTS.md rules intentionally not adopted in this fork: the ban on new files under `docs/` (Rule 7 requires design documents in `docs/design/`), the protected-branding clause (the fork ships its own display branding while keeping module paths), and upstream's GitHub issue/PR templates.
