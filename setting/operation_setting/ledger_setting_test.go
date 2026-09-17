@@ -20,10 +20,10 @@ func TestGetLedgerDetailSetting_ReturnsGlobalPointer(t *testing.T) {
 // Table drives all 12 through their zero / negative / one / custom cases.
 func TestLedgerDetailSetting_IntGetters_Fallback(t *testing.T) {
 	cases := []struct {
-		name    string
-		def     int
-		get     func(s *LedgerDetailSetting) int
-		set     func(s *LedgerDetailSetting, v int)
+		name string
+		def  int
+		get  func(s *LedgerDetailSetting) int
+		set  func(s *LedgerDetailSetting, v int)
 	}{
 		{"ExportUserCooldownSec", DefaultLedgerDetailExportUserCooldownSec,
 			func(s *LedgerDetailSetting) int { return s.GetExportUserCooldownSec() },

@@ -16,13 +16,13 @@ func TestResolveSubjectRoles_HierarchyBoundaries(t *testing.T) {
 		systemRole int
 		want       []string
 	}{
-		{"guest_0", common.RoleGuestUser, nil},          // 0  -> no roles (deny)
-		{"common_1", common.RoleCommonUser, nil},        // 1  -> no roles (deny)
-		{"just_below_admin_9", 9, nil},                  // 9  -> still below admin
+		{"guest_0", common.RoleGuestUser, nil},                               // 0  -> no roles (deny)
+		{"common_1", common.RoleCommonUser, nil},                             // 1  -> no roles (deny)
+		{"just_below_admin_9", 9, nil},                                       // 9  -> still below admin
 		{"admin_exact_10", common.RoleAdminUser, []string{BuiltInRoleAdmin}}, // 10 -> admin
 		{"between_admin_root_11", 11, []string{BuiltInRoleAdmin}},
-		{"just_below_root_99", 99, []string{BuiltInRoleAdmin}}, // 99 -> still admin
-		{"root_exact_100", common.RoleRootUser, []string{BuiltInRoleRoot}},   // 100 -> root
+		{"just_below_root_99", 99, []string{BuiltInRoleAdmin}},             // 99 -> still admin
+		{"root_exact_100", common.RoleRootUser, []string{BuiltInRoleRoot}}, // 100 -> root
 		{"above_root_101", 101, []string{BuiltInRoleRoot}},
 		{"negative", -5, nil}, // below everything -> deny
 	}

@@ -148,7 +148,7 @@ func TestReportBusinessStatsSuccess_ResetsFailuresNotCooldown(t *testing.T) {
 
 	ReportBusinessStatsSuccess()
 	st = GetBusinessStatsCircuitBreakerStatus()
-	assert.Equal(t, 0, st.ConsecutiveFailures) // failures reset
+	assert.Equal(t, 0, st.ConsecutiveFailures)    // failures reset
 	assert.EqualValues(t, 10, st.CooldownSeconds) // cooldown NOT reset (penalty persists)
 
 	// Next open cycle doubles from the retained cooldown -> 20.

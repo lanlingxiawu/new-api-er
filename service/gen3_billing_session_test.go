@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
@@ -262,10 +262,10 @@ func TestBS_ReserveFunding_UnsupportedSource(t *testing.T) {
 // default branch of reserveFunding.
 type fakeFunding struct{}
 
-func (f *fakeFunding) Source() string          { return "mystery" }
+func (f *fakeFunding) Source() string              { return "mystery" }
 func (f *fakeFunding) PreConsume(amount int) error { return nil }
-func (f *fakeFunding) Settle(delta int) error   { return nil }
-func (f *fakeFunding) Refund() error            { return nil }
+func (f *fakeFunding) Settle(delta int) error      { return nil }
+func (f *fakeFunding) Refund() error               { return nil }
 
 var _ FundingSource = (*fakeFunding)(nil)
 var _ = model.DB

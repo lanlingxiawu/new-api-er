@@ -350,4 +350,3 @@ func ListDailyLimitRecoveryCandidates(todayStatDate int64, enabledAfter int64) (
 	err := query.Order("id ASC").Pluck("id", &ids).Error
 	return ids, err
 }
-

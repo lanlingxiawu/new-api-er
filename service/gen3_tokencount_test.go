@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
@@ -106,7 +106,7 @@ func TestTokenCount_EstimateRequestToken_ImageFile(t *testing.T) {
 	// OpenAI text model + a known-type image file => getImageToken path.
 	img := imageMeta(t, 512, 512, "high")
 	meta := &types.TokenCountMeta{
-		TokenType: types.TokenTypeTextNumber,
+		TokenType:   types.TokenTypeTextNumber,
 		CombineText: "hi",
 		Files:       []*types.FileMeta{img},
 	}

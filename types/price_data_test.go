@@ -172,9 +172,9 @@ func TestOtherRatioMultiplier_SkipsOneAndInvalid(t *testing.T) {
 	p := &PriceData{otherRatios: map[string]float64{
 		"a":       2.0,
 		"b":       3.0,
-		"neutral": 1.0,          // skipped (== 1.0)
-		"bad":     math.NaN(),   // skipped (invalid)
-		"bad2":    math.Inf(1),  // skipped (invalid)
+		"neutral": 1.0,         // skipped (== 1.0)
+		"bad":     math.NaN(),  // skipped (invalid)
+		"bad2":    math.Inf(1), // skipped (invalid)
 	}}
 	require.Equal(t, 6.0, p.OtherRatioMultiplier())
 }

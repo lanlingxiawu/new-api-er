@@ -30,10 +30,10 @@ func TestValidConsumptionCostLedgerTag(t *testing.T) {
 
 func TestBuildConsumptionCostLedgerTags(t *testing.T) {
 	cases := []struct {
-		name    string
-		rev     int64
-		cost    int64
-		want    []string
+		name string
+		rev  int64
+		cost int64
+		want []string
 	}{
 		{"zero revenue and cost", 0, 0, []string{ConsumptionCostLedgerTagZeroRevenue}},
 		{"pure profit", 100, 40, []string{ConsumptionCostLedgerTagProfit}},
@@ -211,9 +211,9 @@ func TestAggregateConsumptionCostLedgerStats_RangePath(t *testing.T) {
 	stats, err := AggregateConsumptionCostLedgerStats(context.Background(), f)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, stats.RecordCount)
-	assert.EqualValues(t, 1500, stats.TotalRevenueQuota)   // 1000+500
-	assert.EqualValues(t, 1300, stats.TotalCostQuota)      // 400+900
-	assert.EqualValues(t, 200, stats.TotalProfitQuota)     // 1500-1300
+	assert.EqualValues(t, 1500, stats.TotalRevenueQuota) // 1000+500
+	assert.EqualValues(t, 1300, stats.TotalCostQuota)    // 400+900
+	assert.EqualValues(t, 200, stats.TotalProfitQuota)   // 1500-1300
 	require.NotNil(t, stats.GrossMargin)
 	assert.InDelta(t, 200.0/1500.0, *stats.GrossMargin, 1e-9)
 }
@@ -485,10 +485,30 @@ func TestListConsumptionCostLedger_TagFilters(t *testing.T) {
 	ch := nextTestID()
 	base := ledgerAggBase()
 	// profit, loss, zero-revenue, reversal rows
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 1; c.RevenueQuota = 100; c.CostQuota = 40 })  // profit
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 2; c.RevenueQuota = 40; c.CostQuota = 100 })  // loss
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 3; c.RevenueQuota = 0; c.CostQuota = 0 })     // zero
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 4; c.RevenueQuota = -50; c.CostQuota = 10 })  // reversal(+loss)
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 1
+		c.RevenueQuota = 100
+		c.CostQuota = 40
+	}) // profit
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 2
+		c.RevenueQuota = 40
+		c.CostQuota = 100
+	}) // loss
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 3
+		c.RevenueQuota = 0
+		c.CostQuota = 0
+	}) // zero
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 4
+		c.RevenueQuota = -50
+		c.CostQuota = 10
+	}) // reversal(+loss)
 
 	count := func(tag string) int {
 		f := ConsumptionCostLedgerFilter{Limit: 50}
@@ -520,9 +540,24 @@ func TestListConsumptionCostLedgerWithInAppTagFilter_Direct(t *testing.T) {
 	requireDB(t)
 	ch := nextTestID()
 	base := ledgerAggBase()
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 1; c.RevenueQuota = 100; c.CostQuota = 40 }) // profit
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 2; c.RevenueQuota = 40; c.CostQuota = 100 }) // loss
-	mkCost(t, func(c *ConsumptionCost) { c.ChannelId = ch; c.CreatedAt = base + 3; c.RevenueQuota = 200; c.CostQuota = 10 }) // profit
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 1
+		c.RevenueQuota = 100
+		c.CostQuota = 40
+	}) // profit
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 2
+		c.RevenueQuota = 40
+		c.CostQuota = 100
+	}) // loss
+	mkCost(t, func(c *ConsumptionCost) {
+		c.ChannelId = ch
+		c.CreatedAt = base + 3
+		c.RevenueQuota = 200
+		c.CostQuota = 10
+	}) // profit
 
 	tx := DB.Model(&ConsumptionCost{}).Where("channel_id = ?", ch)
 	page, err := listConsumptionCostLedgerWithInAppTagFilter(tx, ConsumptionCostLedgerTagProfit, 50)

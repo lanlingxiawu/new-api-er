@@ -229,7 +229,7 @@ func TestUpdatePricing_SuffixAndContainsNameRule(t *testing.T) {
 	grp := uniq("pgrp")
 	sfx := uniq("zzsfx")
 	ctn := uniq("zzctn")
-	suffixModel := "variant-" + sfx  // ends with sfx
+	suffixModel := "variant-" + sfx    // ends with sfx
 	containsModel := "a-" + ctn + "-b" // contains ctn
 	mkAbilityModel(t, grp, suffixModel+","+containsModel)
 

@@ -117,10 +117,10 @@ func TestFormatQuota_Tokens(t *testing.T) {
 func TestLogQuota_AllBranches(t *testing.T) {
 	usd := 500000.0 / common.QuotaPerUnit
 	cases := []struct {
-		name             string
-		dtype, symbol    string
-		custom, usd      float64
-		want             string
+		name          string
+		dtype, symbol string
+		custom, usd   float64
+		want          string
 	}{
 		{"usd", operation_setting.QuotaDisplayTypeUSD, "¤", 1, 7.3, fmt.Sprintf("＄%.6f 额度", usd)},
 		{"cny", operation_setting.QuotaDisplayTypeCNY, "¤", 1, 7.3, fmt.Sprintf("¥%.6f 额度", usd*7.3)},

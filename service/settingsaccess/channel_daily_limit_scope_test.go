@@ -57,8 +57,8 @@ func TestChannelDailyLimit_GroupSaveAllowed(t *testing.T) {
 		"enabled": "true",
 	}))
 	assert.True(t, AllowsGroup(dailyLimitScope, "channel_daily_limit_setting", map[string]string{
-		"timezone":               "Asia/Shanghai",
-		"retention_days":         "90",
+		"timezone":       "Asia/Shanghai",
+		"retention_days": "90",
 	}))
 
 	// 未登记的字段被拒绝，防止通过配置组接口写入任意键。

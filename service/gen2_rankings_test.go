@@ -245,7 +245,7 @@ func TestRankings_BuildVendorShareHistory(t *testing.T) {
 func TestRankings_BuildMovers(t *testing.T) {
 	pr := func(v int) *int { return &v }
 	models := []RankedModel{
-		{ModelName: "up", Rank: 1, PreviousRank: pr(5), GrowthPct: 30},   // delta +4 mover
+		{ModelName: "up", Rank: 1, PreviousRank: pr(5), GrowthPct: 30},    // delta +4 mover
 		{ModelName: "down", Rank: 8, PreviousRank: pr(2), GrowthPct: -10}, // delta -6 dropper
 		{ModelName: "same", Rank: 3, PreviousRank: pr(3)},                 // delta 0 skip
 		{ModelName: "new", Rank: 4, PreviousRank: nil},                    // no prev skip

@@ -22,11 +22,11 @@ func TestCalcManualPerfCommissionQuota(t *testing.T) {
 		{"zero profit", 0, 0.1, 0},
 		{"zero rate", 100, 0, 0},
 		{"negative rate", 100, -0.5, 0},
-		{"exact", usdToQuota(5), 0.10, 250000},   // 2_500_000 * 0.10
+		{"exact", usdToQuota(5), 0.10, 250000},        // 2_500_000 * 0.10
 		{"exact_15pct", usdToQuota(10), 0.15, 750000}, // 5_000_000 * 0.15
-		{"tiny positive floors to +1", 3, 0.1, 1},   // 0.3 rounds to 0 -> +1
-		{"tiny negative floors to -1", -3, 0.1, -1}, // -0.3 rounds to 0 -> -1
-		{"rounds half", 5, 0.1, 1},                  // 0.5 -> Round(0)=1? decimal .Round(0) rounds half away
+		{"tiny positive floors to +1", 3, 0.1, 1},     // 0.3 rounds to 0 -> +1
+		{"tiny negative floors to -1", -3, 0.1, -1},   // -0.3 rounds to 0 -> -1
+		{"rounds half", 5, 0.1, 1},                    // 0.5 -> Round(0)=1? decimal .Round(0) rounds half away
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

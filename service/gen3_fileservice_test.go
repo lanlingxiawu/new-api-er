@@ -94,8 +94,8 @@ func TestFileService_CacheKeys(t *testing.T) {
 // --- detectHEIF ------------------------------------------------------------
 
 func TestFileService_DetectHEIF(t *testing.T) {
-	assert.Equal(t, "", detectHEIF([]byte("short")))            // < 12 bytes
-	assert.Equal(t, "", detectHEIF(make([]byte, 20)))          // no ftyp
+	assert.Equal(t, "", detectHEIF([]byte("short")))  // < 12 bytes
+	assert.Equal(t, "", detectHEIF(make([]byte, 20))) // no ftyp
 	assert.Equal(t, "image/heic", detectHEIF(heicBytes("heic", 4, 4)))
 	assert.Equal(t, "image/heic", detectHEIF(heicBytes("hevc", 4, 4)))
 	assert.Equal(t, "image/heif", detectHEIF(heicBytes("mif1", 4, 4)))

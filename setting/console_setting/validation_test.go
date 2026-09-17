@@ -561,7 +561,7 @@ func TestValidateUptimeKumaGroups_ParseError(t *testing.T) {
 func TestValidateUptimeKumaGroups_TooMany(t *testing.T) {
 	items := make([]map[string]interface{}, 21)
 	for i := range items {
-		items[i] = validGroup(string(rune('a'+i)))
+		items[i] = validGroup(string(rune('a' + i)))
 	}
 	err := validateUptimeKumaGroups(marshalArray(t, items))
 	require.Error(t, err)

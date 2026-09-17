@@ -953,7 +953,7 @@ func TestSubscription_ResetDue(t *testing.T) {
 		s.AmountTotal = 1000
 		s.AmountUsed = 500
 		s.LastResetTime = now - 90*86400 // well in the past
-		s.NextResetTime = now - 10        // due
+		s.NextResetTime = now - 10       // due
 		s.EndTime = now + 5*365*86400
 	})
 
@@ -970,7 +970,7 @@ func TestSubscription_CleanupPreConsumeRecords(t *testing.T) {
 		UserId:             u.Id,
 		UserSubscriptionId: 999,
 		PreConsumed:        10,
-		Status:            "consumed",
+		Status:             "consumed",
 	}
 	require.NoError(t, DB.Create(rec).Error)
 	deleteByID(t, &SubscriptionPreConsumeRecord{}, rec.Id)

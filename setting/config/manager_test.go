@@ -80,7 +80,7 @@ func TestLoadFromDB_UpdatesMatchingPrefix(t *testing.T) {
 		"mod.max_items": "50",
 		"mod.name":      "svc",
 		"other.enabled": "true", // different prefix -> ignored
-		"modtypo":       "x",     // no dot -> not the "mod." prefix
+		"modtypo":       "x",    // no dot -> not the "mod." prefix
 	})
 	require.NoError(t, err)
 

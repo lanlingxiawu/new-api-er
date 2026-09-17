@@ -283,7 +283,6 @@ func TestChannel_ValidateSettingsRejectsBadDailyLimit(t *testing.T) {
 	ch = &Channel{Type: 1, DailyQuotaLimit: 1_000_000, DailyLimitRecoverMinutes: 30}
 	require.NoError(t, ch.ValidateSettings())
 
-
 	// 存量渠道（全部默认值）必须继续通过校验。
 	require.NoError(t, (&Channel{Type: 1}).ValidateSettings())
 }

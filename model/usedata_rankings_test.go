@@ -73,13 +73,13 @@ func TestGetRankingQuotaBuckets(t *testing.T) {
 
 	// two rows in bucket #1 (aggregate), one row in bucket #2
 	mkQuotaData(t, func(q *QuotaData) {
-		q.ModelName, q.CreatedAt, q.TokenUsed = model, base + 10, 30
+		q.ModelName, q.CreatedAt, q.TokenUsed = model, base+10, 30
 	})
 	mkQuotaData(t, func(q *QuotaData) {
-		q.ModelName, q.CreatedAt, q.TokenUsed = model, base + 20, 20
+		q.ModelName, q.CreatedAt, q.TokenUsed = model, base+20, 20
 	})
 	mkQuotaData(t, func(q *QuotaData) {
-		q.ModelName, q.CreatedAt, q.TokenUsed = model, base + 3610, 5
+		q.ModelName, q.CreatedAt, q.TokenUsed = model, base+3610, 5
 	})
 
 	rows, err := GetRankingQuotaBuckets(base, base+7200, 3600)
@@ -105,7 +105,7 @@ func TestGetRankingQuotaBuckets_DefaultBucketSize(t *testing.T) {
 	base -= base % 3600
 	model := uniq("rkbd")
 	mkQuotaData(t, func(q *QuotaData) {
-		q.ModelName, q.CreatedAt, q.TokenUsed = model, base + 5, 12
+		q.ModelName, q.CreatedAt, q.TokenUsed = model, base+5, 12
 	})
 
 	// bucketSize <= 0 defaults to 3600

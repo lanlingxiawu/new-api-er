@@ -7,13 +7,13 @@ import (
 
 var (
 	InfiniEnabled       bool
-	InfiniApiKey        string  // keyId，用于请求签名
-	InfiniApiSecret     string  // HMAC-SHA256 请求签名密钥
-	InfiniWebhookSecret string  // HMAC-SHA256 Webhook 验签密钥
+	InfiniApiKey        string // keyId，用于请求签名
+	InfiniApiSecret     string // HMAC-SHA256 请求签名密钥
+	InfiniWebhookSecret string // HMAC-SHA256 Webhook 验签密钥
 	InfiniSandbox       bool
-	InfiniNotifyUrl     string  // Webhook 回调地址（空则自动推导）
-	InfiniReturnUrl     string  // 支付成功后跳转
-	InfiniFailUrl       string  // 支付失败后跳转
+	InfiniNotifyUrl     string        // Webhook 回调地址（空则自动推导）
+	InfiniReturnUrl     string        // 支付成功后跳转
+	InfiniFailUrl       string        // 支付失败后跳转
 	InfiniUnitPrice     float64 = 1.0 // 单币种模式兼容字段，多币种时不使用
 	InfiniMinTopUp      int     = 1   // 单币种模式兼容字段，多币种时不使用
 	InfiniCurrency      string        // 单币种模式兼容字段，默认 USD
@@ -24,7 +24,6 @@ var (
 	// 1=加密货币, 2=银行卡, 3=Binance Pay, 5=Apple Pay, 6=Google Pay
 	// 为空则使用商户在 Infini 控制台配置的默认值
 	InfiniPayMethods string
-
 )
 
 func GetInfiniBaseUrl() string {

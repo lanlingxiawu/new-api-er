@@ -22,11 +22,11 @@ func TestParseIP(t *testing.T) {
 
 func TestIsPrivateIP(t *testing.T) {
 	privates := []string{
-		"127.0.0.1",      // loopback
-		"169.254.0.1",    // link-local unicast
-		"10.1.2.3",       // 10/8
-		"172.16.5.5",     // 172.16/12
-		"192.168.1.100",  // 192.168/16
+		"127.0.0.1",     // loopback
+		"169.254.0.1",   // link-local unicast
+		"10.1.2.3",      // 10/8
+		"172.16.5.5",    // 172.16/12
+		"192.168.1.100", // 192.168/16
 	}
 	for _, ip := range privates {
 		assert.True(t, IsPrivateIP(net.ParseIP(ip)), "%s should be private", ip)

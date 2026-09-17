@@ -375,9 +375,9 @@ func TestBackfill_FullRun_Integration(t *testing.T) {
 				"revenue_quota": 500, "cost_quota": 300, "group_ratio": 1.0, "cost_ratio": 0.6,
 			},
 		}),
-		"{bad json",           // malformed => dead letter, discard
+		"{bad json", // malformed => dead letter, discard
 		backfillLine(t, "totally_unsupported_kind", map[string]any{}), // discard
-		"",                    // empty => skipped, not counted
+		"", // empty => skipped, not counted
 	}
 	content := ""
 	for _, l := range lines {

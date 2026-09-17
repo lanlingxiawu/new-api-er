@@ -129,15 +129,15 @@ func TestSplitDailyAggregatePlan(t *testing.T) {
 
 func TestNormalizeStatsPagination(t *testing.T) {
 	cases := []struct {
-		page, size            int
+		page, size                     int
 		wantPage, wantSize, wantOffset int
 	}{
-		{0, 0, 1, 20, 0},     // page<1 -> 1 ; size<1 -> 20
-		{1, 20, 1, 20, 0},    // valid
-		{3, 10, 3, 10, 20},   // offset (3-1)*10
-		{2, 101, 2, 20, 20},  // size>100 -> 20 ; offset (2-1)*20
-		{-5, -5, 1, 20, 0},   // negatives
-		{1, 100, 1, 100, 0},  // size==100 boundary kept
+		{0, 0, 1, 20, 0},    // page<1 -> 1 ; size<1 -> 20
+		{1, 20, 1, 20, 0},   // valid
+		{3, 10, 3, 10, 20},  // offset (3-1)*10
+		{2, 101, 2, 20, 20}, // size>100 -> 20 ; offset (2-1)*20
+		{-5, -5, 1, 20, 0},  // negatives
+		{1, 100, 1, 100, 0}, // size==100 boundary kept
 	}
 	for _, c := range cases {
 		p, s, off := normalizeStatsPagination(c.page, c.size)

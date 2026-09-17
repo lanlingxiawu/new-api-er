@@ -576,9 +576,9 @@ func TestApplyPlatformDailyStatTx_SkipsExisting(t *testing.T) {
 	})
 
 	costs := []*ConsumptionCost{
-		{LogId: common.GetPointer(dupId), ChannelId: ch, RevenueQuota: 999, CostQuota: 999, CostRatio: 9, CreatedAt: createdAt}, // skipped
+		{LogId: common.GetPointer(dupId), ChannelId: ch, RevenueQuota: 999, CostQuota: 999, CostRatio: 9, CreatedAt: createdAt},  // skipped
 		{LogId: common.GetPointer(newId), ChannelId: ch, RevenueQuota: 100, CostQuota: 40, CostRatio: 0.8, CreatedAt: createdAt}, // counted
-		{LogId: nil, ChannelId: ch, RevenueQuota: 10, CostQuota: 5, CostRatio: 0.1, CreatedAt: createdAt},                         // nil log_id -> counted
+		{LogId: nil, ChannelId: ch, RevenueQuota: 10, CostQuota: 5, CostRatio: 0.1, CreatedAt: createdAt},                        // nil log_id -> counted
 	}
 	existing := map[int]struct{}{dupId: {}}
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -689,7 +689,9 @@ func TestReplayStatFallbacks(t *testing.T) {
 
 	t.Run("platform", func(t *testing.T) {
 		ch := nextTestID()
-		t.Cleanup(func() { DB.Unscoped().Where("stat_date = ? AND channel_id = ?", statDate, ch).Delete(&PlatformChannelDailyStat{}) })
+		t.Cleanup(func() {
+			DB.Unscoped().Where("stat_date = ? AND channel_id = ?", statDate, ch).Delete(&PlatformChannelDailyStat{})
+		})
 		payload, err := common.Marshal(&platformStatDelta{StatDate: statDate, ChannelId: ch, ChannelName: "r", RevenueQuota: 77, CostQuota: 33, RecordCount: 1, CostRatioSum: 0.5, LastCreatedAt: 5})
 		require.NoError(t, err)
 		require.NoError(t, ReplayStatPlatformFallback(payload))
@@ -711,7 +713,9 @@ func TestReplayStatFallbacks(t *testing.T) {
 
 	t.Run("customer commission", func(t *testing.T) {
 		emp, cust := nextTestID(), nextTestID()
-		t.Cleanup(func() { DB.Unscoped().Where("employee_user_id = ?", emp).Delete(&EmployeeCustomerCommissionDailyStat{}) })
+		t.Cleanup(func() {
+			DB.Unscoped().Where("employee_user_id = ?", emp).Delete(&EmployeeCustomerCommissionDailyStat{})
+		})
 		payload, err := common.Marshal(&customerCommissionStatDelta{StatDate: statDate, EmployeeUserId: emp, CustomerUserId: cust, RevenueQuota: 99, RecordCount: 1})
 		require.NoError(t, err)
 		require.NoError(t, ReplayStatCustomerCommissionFallback(payload))
@@ -723,7 +727,9 @@ func TestReplayStatFallbacks(t *testing.T) {
 	t.Run("reset daily", func(t *testing.T) {
 		emp := nextTestID()
 		resetAt := int64(4_100_000_000)
-		t.Cleanup(func() { DB.Unscoped().Where("employee_user_id = ?", emp).Delete(&EmployeeCommissionResetPeriodDailyStat{}) })
+		t.Cleanup(func() {
+			DB.Unscoped().Where("employee_user_id = ?", emp).Delete(&EmployeeCommissionResetPeriodDailyStat{})
+		})
 		payload, err := common.Marshal(&commissionResetPeriodDailyDelta{ResetStartedAt: resetAt, StatDate: statDate, EmployeeUserId: emp, RevenueQuota: 66, RecordCount: 1})
 		require.NoError(t, err)
 		require.NoError(t, ReplayStatResetDailyFallback(payload))

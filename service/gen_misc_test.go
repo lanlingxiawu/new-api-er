@@ -181,7 +181,7 @@ func TestMiscParseAudio(t *testing.T) {
 		format   string
 		expected float64
 	}{
-		{"pcm16 24kHz", 48000, "pcm16", 1.0},        // 24000 samples / 24000
+		{"pcm16 24kHz", 48000, "pcm16", 1.0},       // 24000 samples / 24000
 		{"g711 ulaw 8kHz", 8000, "g711_ulaw", 1.0}, // 8000 samples / 8000
 		{"g711 alaw 8kHz", 4000, "g711_alaw", 0.5},
 		{"default branch 8kHz", 8000, "unknown-format", 1.0},

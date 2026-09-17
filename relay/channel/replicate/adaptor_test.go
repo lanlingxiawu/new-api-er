@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -358,7 +358,7 @@ func TestMapOpenAISizeToFlux(t *testing.T) {
 		{"1024x1792", "9:16", true},
 		{"1536x1024", "3:2", true},
 		{"1024x1536", "2:3", true},
-		{"800x600", "4:3", true},   // reduces to 4:3
+		{"800x600", "4:3", true}, // reduces to 4:3
 		{"1000x1300", "custom", true},
 		{"bad", "", false},
 		{"0x100", "", false},
@@ -374,7 +374,7 @@ func TestMapOpenAISizeToFlux(t *testing.T) {
 }
 
 func TestNormalizeFluxDimension(t *testing.T) {
-	assert.Equal(t, 256, normalizeFluxDimension(100))  // below min
+	assert.Equal(t, 256, normalizeFluxDimension(100))   // below min
 	assert.Equal(t, 1440, normalizeFluxDimension(5000)) // above max
 	assert.Equal(t, 0+512, normalizeFluxDimension(512)) // already aligned
 	// round to nearest step of 32
