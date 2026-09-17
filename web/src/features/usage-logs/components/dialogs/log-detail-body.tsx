@@ -221,6 +221,37 @@ function isUsageBillingPathLocal(
   return adminInfo?.local_count_tokens === true
 }
 
+// Task logs written without usage_facts (per-call xAI tasks and tasks of the
+// former Go task adaptors) carry the same billing dimensions as pricing_*
+// metadata. They are listed under the usage fact names.
+const TASK_PRICING_FACT_KEYS = [
+  ['seconds', 'pricing_duration_seconds'],
+  ['output_resolution', 'pricing_resolution'],
+  ['input_images', 'pricing_reference_image_count'],
+  ['video_input', 'pricing_video_input'],
+] as const
+
+function getTaskUsageFactEntries(
+  other: LogOtherData
+): [string, string | number][] {
+  if (
+    other.usage_facts != null &&
+    typeof other.usage_facts === 'object' &&
+    !Array.isArray(other.usage_facts)
+  ) {
+    return Object.entries(other.usage_facts)
+  }
+  const entries: [string, string | number][] = []
+  for (const [fact, key] of TASK_PRICING_FACT_KEYS) {
+    const value = other[key]
+    if (value != null && value !== '') entries.push([fact, value])
+  }
+  if (entries.length > 0 && other.xai_video_units != null) {
+    entries.push(['xai_video_units', other.xai_video_units])
+  }
+  return entries
+}
+
 function quotaSaturationKindLabel(
   kind: 'overflow' | 'underflow' | 'nan',
   t: (key: string) => string
@@ -424,12 +455,7 @@ function BillingBreakdown(props: {
     metric: 'total_cost',
   }
 
-  const usageFacts =
-    other.usage_facts != null &&
-    typeof other.usage_facts === 'object' &&
-    !Array.isArray(other.usage_facts)
-      ? Object.entries(other.usage_facts)
-      : []
+  const usageFacts = getTaskUsageFactEntries(other)
 
   return (
     <DetailSection label={t('Billing Details')}>

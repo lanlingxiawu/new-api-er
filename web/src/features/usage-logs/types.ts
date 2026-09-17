@@ -326,6 +326,7 @@ export interface LogOtherData {
   pricing_requested_resolution?: string
   pricing_resolution?: string
   pricing_reference_image_count?: string
+  pricing_video_input?: string
   cache_ratio?: number
   cache_creation_ratio?: number
   cache_creation_ratio_5m?: number

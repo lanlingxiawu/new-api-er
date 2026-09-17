@@ -183,8 +183,6 @@ func TestThirdPartySD2SubmitRejectsInvalidRequests(t *testing.T) {
 		message string
 	}{
 		{"missing resolution", sd2Model, map[string]any{"prompt": "p"}, "a recognizable resolution is required"},
-		{"fast model has no 4k", sd2FastModel, map[string]any{"prompt": "p", "size": "3840x2160"}, "does not support 4k resolution"},
-		{"fast model has no 1080p", sd2FastModel, map[string]any{"prompt": "p", "metadata": map[string]any{"resolution": "1080p"}}, "does not support 1080p resolution"},
 		{"missing prompt", sd2Model, map[string]any{"prompt": "", "size": "1280x720"}, "prompt is required"},
 		{"invalid integer metadata", sd2Model, map[string]any{"prompt": "p", "size": "1280x720", "metadata": map[string]any{"frames": "many"}}, "metadata.frames must be an integer"},
 		{"content must be an array", sd2Model, map[string]any{"prompt": "p", "size": "1280x720", "metadata": map[string]any{"content": "x"}}, "metadata.content must be an array"},
@@ -198,6 +196,43 @@ func TestThirdPartySD2SubmitRejectsInvalidRequests(t *testing.T) {
 			assert.Contains(t, taskErr.Message, testCase.message)
 		})
 	}
+}
+
+// The plugin recognizes every resolution tier; the pricing matrix decides which
+// tiers a model accepts, so a tier the administrator adds to the matrix is
+// accepted and billed at its own price instead of the expression's last tier.
+func TestThirdPartySD2AcceptedResolutionsFollowPricingMatrix(t *testing.T) {
+	saved, err := config.ConfigToMap(config.GlobalConfig.Get("thirdpartysd2_pricing"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("thirdpartysd2_pricing", saved))
+		model_setting.RebuildThirdPartySD2PricingIndex()
+	})
+
+	facts1080p := func(t *testing.T, modelName string) map[string]any {
+		t.Helper()
+		adaptor, info, c := sd2Submit(t, modelName, modelName, map[string]any{"prompt": "p", "metadata": map[string]any{"resolution": "1080p"}})
+		require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+		facts, err := adaptor.ExtractUsageFactsValidated(c, info)
+		require.NoError(t, err)
+		assert.Equal(t, "1080p", facts["output_resolution"])
+		return facts
+	}
+
+	facts := facts1080p(t, sd2FastModel)
+	err = billing_setting.ValidateForkTaskUsageFacts("thirdpartysd2", sd2FastModel, sd2FastModel, facts)
+	require.EqualError(t, err, sd2FastModel+" does not support 1080p resolution (supported: 480p, 720p)")
+	require.NoError(t, billing_setting.ValidateForkTaskUsageFacts("thirdpartysd2", sd2Model, sd2Model, facts))
+
+	require.NoError(t, applySD2Matrix(`{"`+sd2FastModel+`":{"1080p":{"no_video":6.6,"with_video":3.9}}}`))
+	facts = facts1080p(t, sd2FastModel)
+	require.NoError(t, billing_setting.ValidateForkTaskUsageFacts("thirdpartysd2", sd2FastModel, sd2FastModel, facts))
+	expression, ok := billing_setting.ResolveTaskBillingExpr("thirdpartysd2", sd2FastModel, "")
+	require.True(t, ok)
+	cost, trace, err := billingexpr.RunExprWithRequest(expression, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts})
+	require.NoError(t, err)
+	assert.InDelta(t, 6.6, cost, 1e-9)
+	assert.Equal(t, "1080p", trace.MatchedTier)
 }
 
 func TestThirdPartySD2UsageFacts(t *testing.T) {
@@ -431,11 +466,66 @@ func TestThirdPartySD2ArtifactContentRequest(t *testing.T) {
 	assert.Empty(t, descriptor.Headers)
 	assert.Equal(t, http.MethodHead, descriptor.Method)
 
+	sameHostDefaultPort := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
+	sameHostDefaultPort.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{"https://sd2.example:443/files/out.mp4"}}})
+	descriptor, err = adaptor.BuildContentRequest(sameHostDefaultPort, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"Authorization": "Bearer sd2-key"}, descriptor.Headers)
+
+	userinfoHost := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
+	userinfoHost.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{"https://sd2.example@cdn.example/out.mp4"}}})
+	descriptor, err = adaptor.BuildContentRequest(userinfoHost, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	require.NoError(t, err)
+	assert.True(t, descriptor.Credentialless)
+	assert.Empty(t, descriptor.Headers)
+
 	empty := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
 	empty.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{}}})
 	artifacts, err = adaptor.ListArtifacts(empty)
 	require.NoError(t, err)
 	assert.Empty(t, artifacts)
+}
+
+// Credential hosts are declared once in the plugin: the same list is the
+// manifest allowedHosts the host validates credentialed requests against.
+func TestThirdPartySD2ArtifactContentRequestDeclaredCredentialHosts(t *testing.T) {
+	source, err := builtinplugins.Source("thirdpartysd2")
+	require.NoError(t, err)
+	const declaration = "const CREDENTIAL_HOSTS = [];"
+	require.Contains(t, source, declaration)
+	source = strings.Replace(source, declaration, `const CREDENTIAL_HOSTS = ["files.sd2cdn.example", "media.sd2cdn.example:8443"];`, 1)
+	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "thirdpartysd2"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"files.sd2cdn.example", "media.sd2cdn.example:8443"}, plugin.Meta.AllowedHosts)
+
+	adaptor := taskplugin.New(plugin)
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "sd2-key", ChannelBaseUrl: "https://sd2.example"}})
+	testCases := []struct {
+		output         string
+		wantCredential bool
+	}{
+		{"https://files.sd2cdn.example/out.mp4", true},
+		{"https://FILES.sd2cdn.example:443/out.mp4", true},
+		{"https://media.sd2cdn.example:8443/out.mp4", true},
+		{"https://media.sd2cdn.example/out.mp4", false},
+		{"https://other.sd2cdn.example/out.mp4", false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.output, func(t *testing.T) {
+			task := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
+			task.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{testCase.output}}})
+			descriptor, err := adaptor.BuildContentRequest(task, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+			require.NoError(t, err)
+			assert.Equal(t, testCase.output, descriptor.URL)
+			if testCase.wantCredential {
+				assert.Equal(t, map[string]string{"Authorization": "Bearer sd2-key"}, descriptor.Headers)
+				assert.False(t, descriptor.Credentialless)
+				return
+			}
+			assert.True(t, descriptor.Credentialless)
+			assert.Empty(t, descriptor.Headers)
+		})
+	}
 }
 
 func sd2HeadRequest() relaychannel.TaskArtifactClientRequest {

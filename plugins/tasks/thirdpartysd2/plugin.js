@@ -34,11 +34,21 @@ function usageExamples(values) {
   return examples;
 }
 
-// Supported output resolutions per model; mirrors the default pricing matrix.
-const MODEL_RESOLUTIONS = {
+// Output resolutions the plugin recognizes. Which of them a model accepts is
+// decided by the host from the admin pricing matrix (thirdpartysd2_pricing), so
+// a tier added to the matrix is accepted without a plugin change.
+const RESOLUTIONS = ["480p", "720p", "1080p", "4k"];
+// Resolutions of the default pricing matrix, used for display examples only.
+const DEFAULT_MODEL_RESOLUTIONS = {
   [STANDARD_MODEL]: ["480p", "720p", "1080p", "4k"],
   [FAST_MODEL]: ["480p", "720p"],
 };
+// Hosts besides the channel base URL host whose task outputs require the
+// channel key. The key is sent only to the channel host and these hosts;
+// outputs on any other host are fetched without credentials. Deployments whose
+// provider serves authenticated downloads on another host list it here in an
+// override plugin (entries are host or host:port).
+const CREDENTIAL_HOSTS = [];
 
 export const meta = {
   apiVersion: 1,
@@ -52,22 +62,23 @@ export const meta = {
   version: "1.0.0",
   author: { name: "NEXAXIS" },
   channelTypes: [58],
+  allowedHosts: CREDENTIAL_HOSTS,
   models: [STANDARD_MODEL, FAST_MODEL],
   fetchMode: "per_task",
   usageSchema: {
     // Upstream billing tokens (reserved at submit, actual usage on completion).
     tokens: TOKENS_SCHEMA,
     // Highest resolution declared by the request, normalized to a pricing tier.
-    output_resolution: resolutionSchema(MODEL_RESOLUTIONS[STANDARD_MODEL]),
+    output_resolution: resolutionSchema(RESOLUTIONS),
     // Whether metadata.content carries a reference video.
     video_input: VIDEO_INPUT_SCHEMA,
   },
-  usageExamples: usageExamples(MODEL_RESOLUTIONS[STANDARD_MODEL]),
+  usageExamples: usageExamples(DEFAULT_MODEL_RESOLUTIONS[STANDARD_MODEL]),
   usageProfiles: [
     {
       models: [FAST_MODEL],
-      schema: { tokens: TOKENS_SCHEMA, output_resolution: resolutionSchema(MODEL_RESOLUTIONS[FAST_MODEL]), video_input: VIDEO_INPUT_SCHEMA },
-      examples: usageExamples(MODEL_RESOLUTIONS[FAST_MODEL]),
+      schema: { tokens: TOKENS_SCHEMA, output_resolution: resolutionSchema(RESOLUTIONS), video_input: VIDEO_INPUT_SCHEMA },
+      examples: usageExamples(DEFAULT_MODEL_RESOLUTIONS[FAST_MODEL]),
     },
   ],
   protocols: [{ name: "openai_responses", supports: ["stream", "sync", "background"] }, "openai_video"],
@@ -173,12 +184,6 @@ function requestDuration(req) {
   return Number.isFinite(duration) && duration > 0 ? Math.trunc(duration) : 0;
 }
 
-function supportedResolutionError(model, resolution) {
-  const supported = MODEL_RESOLUTIONS[model];
-  if (!supported || supported.includes(resolution)) return "";
-  return model + " does not support " + resolution + " resolution (supported: " + supported.join(", ") + ")";
-}
-
 export function buildSubmitRequest(ctx) {
   const req = ctx.requestBody || {};
   if (!trimmed(req.prompt)) throw new Error("prompt is required");
@@ -187,8 +192,6 @@ export function buildSubmitRequest(ctx) {
   if (!model) throw new Error("model is required");
   const resolution = requestResolution(req);
   if (!resolution) throw new Error("a recognizable resolution is required (metadata.resolution or size, e.g. 720p or 1280x720)");
-  const unsupported = supportedResolutionError(model, resolution);
-  if (unsupported) throw new Error(unsupported);
 
   const body = { model: model, content: [] };
   const images = Array.isArray(req.images) ? req.images : [];
@@ -315,18 +318,35 @@ export function listArtifacts(task) {
   return [{ key: "video", type: "video", mimeType: "video/mp4" }];
 }
 
-function urlHost(url) {
-  const match = /^https?:\/\/([^/?#]+)/i.exec(trimmed(url));
-  return match ? match[1].toLowerCase() : "";
+// Lowercased host without userinfo and without the scheme's default port, as
+// the host compares request URLs against the channel host and allowedHosts.
+function canonicalHost(url) {
+  const match = /^(https?):\/\/([^/?#]+)/i.exec(trimmed(url));
+  if (!match) return "";
+  const scheme = match[1].toLowerCase();
+  const authority = match[2].toLowerCase();
+  const host = authority.slice(authority.lastIndexOf("@") + 1);
+  if ((scheme === "https" && host.endsWith(":443")) || (scheme === "http" && host.endsWith(":80"))) return host.replace(/:\d+$/, "");
+  return host;
+}
+
+function sendsCredential(url, baseUrl) {
+  const host = canonicalHost(url);
+  if (!host) return false;
+  if (host === canonicalHost(baseUrl)) return true;
+  const scheme = /^https:/i.test(trimmed(url)) ? "https" : "http";
+  return CREDENTIAL_HOSTS.some(function (entry) {
+    return canonicalHost(scheme + "://" + trimmed(entry)) === host;
+  });
 }
 
 export function buildContentRequest(ctx) {
   const url = ctx.artifactKey === "video" && isObject(ctx.data) ? firstOutput(ctx.data.task) : "";
   if (!url) throw new Error("artifact_not_found");
-  // Outputs on the channel host require the channel bearer key. Outputs on any
-  // other host are fetched without credentials so the key never leaves the
-  // configured upstream.
-  if (urlHost(url) && urlHost(url) === urlHost(ctx.baseUrl)) {
+  // Outputs on the channel host or a declared credential host require the
+  // channel bearer key. Outputs on any other host are fetched without
+  // credentials so the key never leaves the configured upstream.
+  if (sendsCredential(url, ctx.baseUrl)) {
     return { url: url, method: ctx.clientRequest.method, headers: { Authorization: "Bearer " + ctx.apiKey } };
   }
   return { url: url, method: ctx.clientRequest.method, credentialless: true };

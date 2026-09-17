@@ -396,6 +396,14 @@ func updatePricing() {
 			usageSchema, usageExamples := plugin.Meta.UsageForModel(usageModel)
 			pricing.BillingUsageSchema = jsplugin.CloneUsageSchema(usageSchema)
 			pricing.BillingUsageExamples = jsplugin.CloneUsageExamples(usageExamples)
+			// Fork-priced plugin models (thirdpartysd2 pricing matrix) have no
+			// model-level expression; publish the task expression they bill with.
+			if pricing.BillingMode == "" {
+				if expr, found := billing_setting.ResolveForkPublicTaskBillingExpr(plugin.Meta.Key, usageModel); found {
+					pricing.BillingMode = billing_setting.BillingModeTieredExpr
+					pricing.BillingExpr = expr
+				}
+			}
 		}
 		providers := pluginGeneration.PluginsByModel(model)
 		hasProviderOverride := false

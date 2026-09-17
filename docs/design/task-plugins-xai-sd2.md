@@ -52,7 +52,8 @@
 
 - 时长：`metadata.durationSeconds` → `metadata.duration` → `duration` → `seconds` → 默认 5。
 - 宽高比：`metadata.aspect_ratio|aspectRatio` → `size` 推断（横 16:9 / 竖 9:16 / 方 1:1）→ 16:9。
-- 分辨率：`metadata.resolution`（`480`/`720`/`1080` 规范化为带 `p`）→ `size` 短边 → 720p；`grok-imagine-video` 的 1080p 下调为 720p；最终不在 480p/720p/1080p 内返回 400。
+- 分辨率：`metadata.resolution`（`480`/`720`/`1080` 规范化为带 `p`）→ `size` 短边 → 720p；`grok-imagine-video` 的 1080p 下调为 720p；其他值（如 `4k`）返回 400 `resolution "4k" is not supported; use 480p, 720p or 1080p`。
+  - 取舍：xAI 视频接口只接受 `480p`/`720p`（1.5 另有 `1080p`）。旧 Go 适配器的输入校验（时长、参考图、1.5 首图）没有覆盖分辨率，未知值被原样转发并按 480p 倍率计费，属于遗漏而非有意放行，转发后会被上游拒绝。插件在计费前以明确的 400 拒绝。
 - 首图：multipart 文件字段 `input_reference`/`image`（宿主以 data URL 内联，上限 20MiB）→ `metadata.image` → `image` → `input_reference` → 仅一张的 `images`。图片值支持 `file_*`、http(s)/data URL、裸 base64。
 - 参考图：`metadata.reference_images` → 两张及以上的 `images`。
 
@@ -66,7 +67,9 @@
 
 请求体：`model`（映射后上游模型）、`content`（`images` 转 `image_url` 项；`metadata.content` 整体替换；移除 text 项后在末尾追加 `prompt`）、白名单字段 `callback_url/service_tier/ratio`（字符串）、`execution_expires_after/duration/frames/seed`（整数，接受数字字符串）、`return_last_frame/generate_audio/draft/camera_fixed/watermark`（布尔，接受 `"true"/"false"`）、`tools[].type`、`resolution`、`duration`（`seconds` 优先于 `duration`，覆盖 metadata）。其他 metadata 字段丢弃，`metadata.model` 不能覆盖模型。
 
-`resolution` 取 `metadata.resolution` 与 `size` 规范化后较高者（`480p/720p/1080p/4k`，`2160p`→4k，`WxH` 取短边分档）。缺少可识别分辨率返回 400；`dreamina-seedance-2-0-fast-260128` 仅支持 480p/720p，其余分辨率返回 400。
+`resolution` 取 `metadata.resolution` 与 `size` 规范化后较高者（`480p/720p/1080p/4k`，`2160p`→4k，`WxH` 取短边分档）。缺少可识别分辨率时插件返回 400。
+
+模型接受的分辨率由价格矩阵决定：宿主在计费前调用 `billing_setting.ValidateForkTaskUsageFacts`，`output_resolution` 不在该模型（客户端模型优先，再取映射后模型）矩阵中时返回 400 `plugin_request_invalid`，如 `dreamina-seedance-2-0-fast-260128 does not support 1080p resolution (supported: 480p, 720p)`。管理员在矩阵中为 fast 模型加入 1080p 后即被接受并按该档计费。模型保存了 `thirdpartysd2::<model>` 插件表达式时由该表达式定价，不做矩阵检查。插件本身不维护按模型的分辨率白名单。
 
 ## 数据模型变更
 
@@ -90,7 +93,7 @@
 | 插件 | 事实 | 说明 |
 |---|---|---|
 | xai | `seconds`（second）、`output_resolution`（enum 480p/720p/1080p）、`input_images`（count） | 分辨率为实际发往上游的值；图片按 URL/file_id 去重计数，multipart 上传计 1 |
-| thirdpartysd2 | `tokens`（token）、`output_resolution`（enum，fast 模型 profile 仅 480p/720p）、`video_input`（enum none/video） | 提交时 `tokens=1,000,000`；完成时覆盖为上游 `total_tokens`，缺失时 `completion_tokens` |
+| thirdpartysd2 | `tokens`（token）、`output_resolution`（enum 480p/720p/1080p/4k，两个模型相同）、`video_input`（enum none/video） | 提交时 `tokens=1,000,000`；完成时覆盖为上游 `total_tokens`，缺失时 `completion_tokens`。fast 模型 profile 只让展示示例保持默认矩阵的 480p/720p |
 
 事实 key 刻意不用 `resolution`：宿主会按 usage schema 递归校验请求体中同名字段，客户端 `metadata.resolution` 传 `1080P`、`1920x1080` 等原先可接受的写法会被 enum 校验拒绝。
 
@@ -104,7 +107,9 @@ grok-imagine-video:     480p 1.0, 720p 1.4 (0.07/0.05)；image 0.04 (0.002/0.05)
 grok-imagine-video-1.5: 480p 1.0, 720p 1.75 (0.14/0.08), 1080p 3.125 (0.25/0.08)；image 0.125 (0.01/0.08)
 ```
 
-`quota = ModelPrice × QuotaPerUnit × groupRatio × xai_video_units`，按次任务成功后不再差额结算，失败全额退款。任务日志 `other.xai_video_units` 继续展示。管理员若改用表达式，可使用上表事实，例如：
+`quota = ModelPrice × QuotaPerUnit × groupRatio × xai_video_units`，按次任务成功后不再差额结算，失败全额退款。
+
+倍率钩子只返回合成倍率，`RelayTaskSubmit` 在按次分支再以事实模式调用一次 `extractUsage`，由 `recordXaiTaskPricingMetadata` 写入 `PriceData.PricingMetadata`（`duration_seconds`、`resolution`、`reference_image_count`、`xai_video_model`），随 `BillingContext` 持久化，在日志 `other` 与任务 DTO 中为 `pricing_*` 字段，与旧 Go 适配器任务同名；读取失败只记警告，不影响提交。`other.xai_video_units` 继续展示。管理员若改用表达式，可使用上表事实，例如：
 
 ```text
 u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_images") * 0.002) : tier("480p", u("seconds") * 0.05 + u("input_images") * 0.002)
@@ -122,7 +127,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
    ... : tier("4k_video", u("tokens") * 2.4 / 1000000)
    ```
 
-   分辨率按档位排序，最后一个组合作为 else。插件在计费前拒绝模型不支持的分辨率，默认矩阵组合不会被覆盖层删除，所以 else 分支不会承接未定价的组合。
+   分辨率按档位排序，最后一个组合作为 else。宿主在求值前用 `ValidateForkTaskUsageFacts` 拒绝矩阵中没有的分辨率，而每个分辨率都同时有无/有参考视频两个价格，所以 else 分支不会承接未定价的组合。
 
 2. `billing_setting.ResolveTaskBillingExpr` 在插件显式覆盖之后、模型级表达式之前调用 `resolveForkTaskBillingExpr`（`setting/billing_setting/fork_task_billing.go`）：插件为 `thirdpartysd2` 时按客户端模型、再按映射后模型取矩阵表达式。
 
@@ -130,9 +135,17 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 4. 轮询成功时 `extractUsageOnComplete` 返回 `{tokens}`，`settleTaskBillingOnComplete` 覆盖事实后重新求值并差额结算，结果等于旧适配器 `tokens × 单价/1M × QuotaPerUnit × groupRatio`。上游无用量时保留预扣（与旧行为一致）；失败任务全额退款。
 
-5. 日志 `other` 带 `billing_mode=tiered_expr`、`expr_b64`、`matched_tier`（如 `1080p_video`）、`usage_facts`；前端任务成本列在没有 `pricing_*` 元数据时读取 `usage_facts.seconds/output_resolution/resolution/input_images` 显示摘要。
+5. 日志 `other` 带 `billing_mode=tiered_expr`、`expr_b64`、`matched_tier`（如 `1080p_video`）、`usage_facts`。
 
-矩阵表达式不写入 `billing_setting`，因此公开定价页的模型级计费模式仍显示为未配置表达式；价格以矩阵标签页为准。
+矩阵表达式不写入 `billing_setting`。公开定价 `GET /api/pricing`（`model.updatePricing`）在模型没有模型级表达式时调用 `billing_setting.ResolveForkPublicTaskBillingExpr(pluginKey, model)`：对 thirdpartysd2 模型返回实际计费表达式（插件覆盖优先，其次矩阵），填入 `billing_mode=tiered_expr` / `billing_expr`，定价页按任务表达式渲染各档价格；其他插件不受影响。fast 模型的 schema 含四档而默认矩阵只有两档，定价页最后一档以 tier 名（`720p_video`）显示，不展开条件。
+
+### 任务计费维度的展示
+
+| 位置 | 新任务（插件） | 旧 Go 适配器任务 |
+|---|---|---|
+| 任务列表成本列（`task-logs-columns.tsx`） | xAI 读 `pricing_*`；SD2 读 `usage_facts` | 读 `pricing_*` |
+| 管理员日志详情「用量参数」（`log-detail-body.tsx`） | 有 `usage_facts` 时逐项列出；没有时把 `pricing_duration_seconds/resolution/reference_image_count/video_input` 以 `seconds/output_resolution/input_images/video_input` 列出，并附 `xai_video_units` | 同左 |
+| 日志导出 | 管理员「Raw Other JSON」列包含上述字段，没有专门列 | 同左 |
 
 ## 旧任务兼容
 
@@ -140,17 +153,21 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 - `"48" → xai`、`"58" → thirdpartysd2`，`GetTaskAdaptor` / 轮询 / realtime fetch / 协议查询均可解析旧任务。
 - 数据格式未变：旧 xAI 任务 `Data` 为 `{"request_id"}` 或轮询体，旧 SD2 任务为 `{"task":{...}}`，插件按同样结构解析。
-- 旧任务的 `BillingContext` 未变：旧 xAI 任务为按次计费（成功不结算）；旧 SD2 任务带 `ModelRatio`，插件 `parseTaskResult` 返回 `completionTokens/totalTokens`，由 `RecalculateTaskQuotaByTokens` 按原倍率结算。
-- 内容访问：旧任务没有插件执行记录，`VideoProxy` 回落到 `ResultURL`；`controller/video_proxy.go` 的 `thirdPartySD2ContentRequest` 继续为平台 `"58"` 的旧任务附带渠道 Bearer。
+- 旧任务的 `BillingContext` 未变：旧 xAI 任务为按次计费（成功不结算）；旧 SD2 任务带矩阵换算的 `ModelRatio` 与 `PricingMetadata.pricing_mode=resolution_video_matrix`，插件 `parseTaskResult` 返回 `completionTokens/totalTokens`，由 `RecalculateTaskQuotaByTokens` 结算。
+- `RecalculateTaskQuotaByTokens` 与上游一致：按全局 `GetModelRatio` 与分组倍率计算，模型未配置倍率或倍率 ≤ 0 时返回 false 并保留预扣，倍率为 0 的按次任务不会按 0 额度全额退款。例外是旧 SD2 任务（`BillingContext` 无表达式快照、非按次，且 `pricing_mode=resolution_video_matrix` 或平台 `"58"`）：全局倍率中没有这些模型，改用快照里的 `ModelRatio`/`GroupRatio`，倍率 ≤ 0 同样不结算。
+- 内容访问：旧任务没有插件执行记录，`VideoProxy` 回落到 `ResultURL`；`controller/video_proxy.go` 的 `thirdPartySD2ContentRequest` 对平台 `"58"` 的旧任务使用与插件相同的凭据策略：结果地址主机为渠道 Base URL 主机或 thirdpartysd2 插件 `allowedHosts` 中的主机时附带渠道 Bearer（`jsplugin.ValidateRequestURL` 判定），其他主机无凭据访问。
 - 结果地址：SD2 的上游输出地址需要渠道密钥。插件仍返回 `url`，宿主写入 `PrivateData.ResultURL`（旧任务轮询完成后也可继续下载）；`relay_task.go` 的 `isThirdPartySD2Task` 同时匹配 `"58"` 与 `thirdpartysd2`，`getExternalVideoURL` 对外只返回网关内容代理地址。`service/task_polling.go` 在 SD2 渠道成功但无输出时不构造代理地址。
-- `openai_video.render` 不回传 `task.data`（SD2 的 `outputs` 为私有地址），失败时从 `task.error` 取 message/code。旧 Go 适配器在 `metadata.url` 返回代理地址；插件无法获得 `ServerAddress`，客户端改用 `/v1/videos/:id/content`。xAI 结果地址为公开 CDN，`metadata.url` 保留。
+- `openai_video.render` 不回传 `task.data`（SD2 的 `outputs` 为私有地址），失败时从 `task.error` 取 message/code。插件拿不到服务地址，由宿主补齐：`GET /v1/videos/:id` 的 `videoFetchByIDRespBodyBuilder` 对成功且有上游输出的 SD2 任务（新旧平台）调用 `withThirdPartySD2ContentURL`，在 `metadata.url` 写入绝对内容代理地址 `{TaskPublicAddress，未配置时 ServerAddress}/v1/videos/{task_id}/content`（两者都未配置时为相对路径），保留渲染出的其他 metadata；`TaskModel2Dto` 的 `result_url` 使用同一地址。xAI 结果地址为公开 CDN，`metadata.url` 由插件返回。
 
 保留的分叉代码及原因：
 
 | 位置 | 原因 |
 |---|---|
 | `relay/relay_task.go` `getExternalVideoURL` 等 | 隐藏 SD2 私有输出地址（新旧任务） |
-| `controller/video_proxy.go` `thirdPartySD2ContentRequest` | 旧 SD2 任务无插件执行记录，内容代理需渠道密钥 |
+| `relay/relay_task.go` `withThirdPartySD2ContentURL`、`recordXaiTaskPricingMetadata`、`ValidateForkTaskUsageFacts` 调用 | SD2 `metadata.url`；xAI 计费维度；SD2 分辨率按矩阵接受 |
+| `controller/video_proxy.go` `thirdPartySD2ContentRequest` | 旧 SD2 任务无插件执行记录，内容代理需渠道密钥（仅渠道主机与声明主机） |
+| `model/pricing.go` 调用 `ResolveForkPublicTaskBillingExpr` | 公开定价页展示 SD2 矩阵价格 |
+| `service/task_billing.go` `isLegacyThirdPartySD2BillingContext` | 旧 SD2 任务 token 结算读取快照倍率 |
 | `service/task_polling.go` SD2 守卫、`formatPollingTaskLogID` | 无输出时不暴露空代理地址；日志带上游 ID |
 | `controller/channel-test.go` 不支持测试列表中的 SD2 | 类型 58 映射到 OpenAI API 类型，对话测试没有意义 |
 | `controller/model.go` `channelOwnerName` | `/v1/models` 的 `owned_by` 保持 `third-party-sd2` |
@@ -161,7 +178,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 - 模型相关校验（xAI 1.5 必须有图、SD2 fast 分辨率）放在 `buildSubmitRequest`，因为协议 `decodeRequest` 阶段只有客户端模型（可能是别名），渠道映射后才有上游模型。
 - xAI 轮询：空状态且无 error → IN_PROGRESS；无状态但有 error → FAILURE；`expired` → FAILURE（`task expired`）；未知状态 → UNKNOWN（宿主累计轮询失败）。
 - SD2 轮询：未列出的状态保持 IN_PROGRESS 30%（第三方服务未公开完整状态集，旧适配器同样处理），由宿主任务超时兜底；缺少 `task` 对象抛错计轮询失败。
-- SD2 内容请求：输出地址与渠道 base 同主机时带 `Authorization: Bearer`；其他主机按 credentialless 访问，渠道密钥不会发往第三方主机。若服务商把需鉴权的下载放在其他主机，需要在覆盖插件中声明 `allowedHosts` 并调整该分支。
+- SD2 内容请求：输出地址主机（小写、去掉默认端口、忽略 userinfo）等于渠道 Base URL 主机或插件常量 `CREDENTIAL_HOSTS` 中的主机时带 `Authorization: Bearer`；其他主机按 credentialless 访问，渠道密钥不会发往第三方主机。`CREDENTIAL_HOSTS` 同时作为 `meta.allowedHosts`，宿主对带凭据的内容请求按同一列表校验。旧 Go 适配器测试与 fixture 中服务商的输出都在渠道自身主机（`/files/...`），没有其他主机的依据，因此内置列表为空；服务商把需鉴权的下载放在其他主机时，管理员上传覆盖插件，在 `CREDENTIAL_HOSTS` 中列出该主机（`host` 或 `host:port`）。内容始终经网关代理。
 - xAI multipart 上传通过 `__fileRef` 占位由宿主内联为 data URL，JS 不接触文件字节。
 - 插件图标：xai 使用 LobeHub `Grok`，thirdpartysd2 使用 `ByteDance.Color`。
 
@@ -181,8 +198,9 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 同步执行在任务提交请求 goroutine 上：
 
-- 插件 `buildSubmitRequest`、`extractUsage`（xAI 按次模式 1 次；SD2 表达式模式 1 次）——与所有上游内置插件相同的 JS 调用，受宿主执行超时和并发池限制。
-- `ResolveTaskBillingExpr` 的 SD2 回退：一次字符串比较、一次 `atomic.Pointer` 读取和 map 查找；表达式编译由 `billingexpr` 按字符串缓存，矩阵不变时不重复编译。
+- 插件 `buildSubmitRequest`、`extractUsage`（xAI 按次模式 2 次：倍率与计费维度元数据各 1 次；SD2 表达式模式 1 次）——与所有上游内置插件相同的 JS 调用，受宿主执行超时和并发池限制。
+- `ResolveTaskBillingExpr` 的 SD2 回退与 `ValidateForkTaskUsageFacts`：字符串比较、`atomic.Pointer` 读取和 map 查找（分辨率列表至多 4 项排序）；表达式编译由 `billingexpr` 按字符串缓存，矩阵不变时不重复编译。
+- `GET /v1/videos/:id` 对成功的 SD2 任务多一次 JSON 解码与编码。
 
 异步/后台：轮询、完成结算、退款、日志沿用宿主后台任务。
 
@@ -206,7 +224,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 ## Concurrency Analysis（100k RPM 任务提交）
 
 - 新增 DB 调用：0；新增 Redis 调用：0；新增锁：0；新增 goroutine：0。
-- 每次提交 JS 调用次数与上游内置插件一致（decode ≤2、buildSubmit 1、usage 1–2、parseSubmit 1）。
+- 每次提交 JS 调用次数与上游内置插件一致（decode ≤2、buildSubmit 1、usage 1–2、parseSubmit 1）；xAI 按次提交 usage 为 2 次。
 - SD2 表达式解析额外成本为常数级 map 查找。
 
 ## 测试
@@ -215,9 +233,14 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 - Responses 协议通用契约（`testVideoResponsesProtocol`）。
 - 提交 URL/头/体转换、默认值、别名映射、参考图/首图/base64/multipart 占位。
-- 校验错误（xAI 时长/参考图/1.5 首图/分辨率；SD2 分辨率缺失/fast 不支持/prompt/metadata 类型）。
+- 校验错误（xAI 时长/参考图/1.5 首图/未知分辨率文案；SD2 分辨率缺失/prompt/metadata 类型）；SD2 分辨率按矩阵接受（fast 默认拒绝 1080p，矩阵加入 1080p 后接受并按该档计费）。
 - xAI `xai_video_units` 倍率表与表达式事实；SD2 事实、矩阵表达式各档价格、完成覆盖结算、矩阵变更后表达式重建、`TaskExprCompatible`。
 - 提交响应解析、轮询端点与鉴权（`httptest.NewServer`）、状态映射（含 SD2 字符串/对象错误）。
-- 内容请求（xAI credentialless；SD2 同主机带鉴权/异主机 credentialless）、`openai_video` 渲染不泄漏 SD2 输出地址。
+- 内容请求（xAI credentialless；SD2 同主机与默认端口带鉴权，异主机与 userinfo 伪装按 credentialless，`CREDENTIAL_HOSTS` 声明的主机带鉴权并进入 `allowedHosts`）、`openai_video` 渲染不泄漏 SD2 输出地址。
 - 旧平台 `"48"`/`"58"` 解析到插件并可解析旧数据，`TaskModel2Dto` 对新旧 SD2 任务只暴露代理地址。
 - `plugins/builtin_plugins_test.go` 登记两个内置 key 与渠道类型。
+- `relay/relay_task_fork_test.go`：内容地址优先 TaskPublicAddress、`metadata.url` 补齐及不改动的情形、xAI 计费维度元数据。
+- `controller/video_proxy_sd2_test.go`：旧 SD2 内容请求只向渠道主机发送密钥。
+- `setting/billing_setting/fork_task_billing_test.go`：公开定价表达式解析、矩阵分辨率校验（含映射模型与插件覆盖）。
+- `model/pricing_fork_task_expr_test.go`：定价 API 返回 SD2 矩阵表达式。
+- `service/gen3_taskbilling2_test.go`：token 重算——倍率 0 不结算、旧 SD2 读快照、正常倍率差额结算。

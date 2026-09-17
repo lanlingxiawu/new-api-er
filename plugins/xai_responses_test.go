@@ -196,7 +196,7 @@ func TestXaiSubmitRejectsUnsupportedInputs(t *testing.T) {
 		{"version 1.5 rejects reference images", "grok-imagine-video-1.5", map[string]any{"prompt": "refs", "images": []any{"file_1", "file_2"}}, "does not support reference_images"},
 		{"more than seven reference images", "grok-imagine-video", map[string]any{"prompt": "refs", "images": []any{"file_1", "file_2", "file_3", "file_4", "file_5", "file_6", "file_7", "file_8"}}, "must not exceed 7"},
 		{"reference duration exceeds ten seconds", "grok-imagine-video", map[string]any{"prompt": "refs", "duration": 11, "images": []any{"file_1", "file_2"}}, "no greater than 10 seconds"},
-		{"unknown resolution", "grok-imagine-video-1.5", map[string]any{"prompt": "p", "image": "file_1", "metadata": map[string]any{"resolution": "4k"}}, "resolution must be one of"},
+		{"unknown resolution", "grok-imagine-video-1.5", map[string]any{"prompt": "p", "image": "file_1", "metadata": map[string]any{"resolution": "4k"}}, `resolution "4k" is not supported; use 480p, 720p or 1080p`},
 		{"missing prompt", "grok-imagine-video", map[string]any{"prompt": " "}, "prompt is required"},
 	}
 	for _, testCase := range testCases {

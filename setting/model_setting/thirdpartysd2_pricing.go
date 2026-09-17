@@ -165,6 +165,29 @@ func GetThirdPartySD2PricingMatrix() ThirdPartySD2PricingMatrix {
 	return cloneThirdPartySD2PricingMatrix(idx.matrix)
 }
 
+// GetThirdPartySD2Resolutions returns the resolutions priced for a model in the
+// merged matrix, ordered by rank. A model accepts exactly these resolutions.
+func GetThirdPartySD2Resolutions(modelName string) ([]string, bool) {
+	idx := currentThirdPartySD2PricingIndex.Load()
+	if idx == nil || idx.matrix == nil {
+		return nil, false
+	}
+	resolutions, ok := idx.matrix[strings.TrimSpace(modelName)]
+	if !ok {
+		return nil, false
+	}
+	keys := make([]string, 0, len(resolutions))
+	for resolution := range resolutions {
+		if thirdPartySD2ResolutionRank(resolution) > 0 {
+			keys = append(keys, resolution)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return thirdPartySD2ResolutionRank(keys[i]) < thirdPartySD2ResolutionRank(keys[j])
+	})
+	return keys, true
+}
+
 func GetThirdPartySD2TokenPrice(modelName, resolution string, hasVideoInput bool) (float64, bool) {
 	idx := currentThirdPartySD2PricingIndex.Load()
 	if idx == nil || idx.matrix == nil {

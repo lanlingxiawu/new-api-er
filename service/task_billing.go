@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -440,24 +441,20 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	}
 
 	modelName := taskModelName(task)
-	modelRatio := 0.0
-	finalGroupRatio := 0.0
-	hasBillingSnapshot := task.PrivateData.BillingContext != nil
+	var modelRatio, finalGroupRatio float64
 
-	if bc := task.PrivateData.BillingContext; bc != nil {
+	if bc := task.PrivateData.BillingContext; isLegacyThirdPartySD2BillingContext(task) {
+		// 旧 SD2 任务的倍率由提交时的分辨率 × 参考视频矩阵决定，全局模型倍率中没有该模型，
+		// 只能按冻结在计费快照里的倍率与分组倍率结算。
 		modelRatio = bc.ModelRatio
 		finalGroupRatio = bc.GroupRatio
-	}
-
-	if !hasBillingSnapshot {
+	} else {
 		var hasRatioSetting bool
 		modelRatio, hasRatioSetting, _ = ratio_setting.GetModelRatio(modelName)
 		if !hasRatioSetting {
 			return false
 		}
-	}
 
-	if !hasBillingSnapshot {
 		group := task.Group
 		if group == "" {
 			user, err := model.GetUserById(task.UserId, false)
@@ -472,6 +469,11 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		// per-user exclusive (if enabled) -> group-group ratio -> group ratio (design §5.3)
 		finalGroupRatio, _ = ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), group, group)
 	}
+	// 只有按倍率计费（倍率 > 0）的任务才按 token 重算；倍率为 0 的按次任务保持预扣额度，
+	// 否则会按 0 额度把预扣全部退回。
+	if modelRatio <= 0 {
+		return false
+	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
 	otherMultiplier := 1.0
@@ -485,6 +487,26 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
 	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 	return true
+}
+
+// legacyThirdPartySD2PricingMode 是旧 ThirdPartySD2 Go 适配器写入 BillingContext.PricingMetadata 的定价模式。
+const legacyThirdPartySD2PricingMode = "resolution_video_matrix"
+
+// isLegacyThirdPartySD2BillingContext 识别旧 ThirdPartySD2 Go 适配器创建的任务：
+// 计费快照没有表达式快照，并带有矩阵定价元数据或旧的数字平台 "58"。
+// 插件创建的 SD2 任务走表达式结算，不会进入 token 重算。
+func isLegacyThirdPartySD2BillingContext(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.TieredSnapshot != nil || bc.PerCallBilling {
+		return false
+	}
+	if strings.TrimSpace(bc.PricingMetadata["pricing_mode"]) == legacyThirdPartySD2PricingMode {
+		return true
+	}
+	return task.Platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeThirdPartySD2))
 }
 
 // EvaluateTaskCompletionUsage evaluates actual facts against the frozen task

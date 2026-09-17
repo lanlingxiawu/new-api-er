@@ -2,10 +2,12 @@ package relay
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -283,6 +286,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		} else {
 			facts = provider.ExtractUsageFacts(c, info)
 		}
+		if err = billing_setting.ValidateForkTaskUsageFacts(pluginKey, modelName, info.UpstreamModelName, facts); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "plugin_request_invalid", http.StatusBadRequest)
+		}
 		cost, trace, runErr := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts})
 		if runErr != nil || cost < 0 {
 			if runErr == nil {
@@ -321,6 +327,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				info.PriceData.AddOtherRatio(k, v)
 			}
 		}
+		recordXaiTaskPricingMetadata(c, info, pluginKey, adaptor)
 	}
 
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
@@ -511,7 +518,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody = openAIVideoData
+			respBody = withThirdPartySD2ContentURL(originTask, openAIVideoData)
 			return
 		}
 		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
@@ -657,9 +664,97 @@ func getExternalVideoURL(task *model.Task) string {
 		if task.Status != model.TaskStatusSuccess || !hasThirdPartySD2UpstreamResultURL(task) {
 			return ""
 		}
-		return taskcommon.BuildProxyURL(task.TaskID)
+		return thirdPartySD2ContentURL(task.TaskID)
 	}
 	return task.GetResultURL()
+}
+
+// thirdPartySD2ContentURL is the gateway content proxy address of an SD2 task.
+// TaskPublicAddress wins when configured and ServerAddress is the fallback;
+// with neither configured the path stays relative.
+func thirdPartySD2ContentURL(taskID string) string {
+	base := strings.TrimSpace(system_setting.TaskPublicAddress)
+	if base == "" {
+		base = strings.TrimSpace(system_setting.ServerAddress)
+	}
+	return strings.TrimRight(base, "/") + "/v1/videos/" + url.PathEscape(taskID) + "/content"
+}
+
+// withThirdPartySD2ContentURL adds metadata.url to the OpenAI video object of a
+// successful SD2 task. The plugin renderer has no server address and never
+// exposes the credential-gated upstream output, so the host fills in the
+// gateway content proxy address. Other tasks and unparsable bodies are
+// returned unchanged.
+func withThirdPartySD2ContentURL(task *model.Task, body []byte) []byte {
+	if task == nil || task.Status != model.TaskStatusSuccess || !hasThirdPartySD2UpstreamResultURL(task) {
+		return body
+	}
+	var video map[string]any
+	if err := common.Unmarshal(body, &video); err != nil || video == nil {
+		return body
+	}
+	metadata, _ := video["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["url"] = thirdPartySD2ContentURL(task.TaskID)
+	video["metadata"] = metadata
+	encoded, err := common.Marshal(video)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+// xaiTaskPricingMetadataKeys maps xai plugin usage facts to the pricing
+// metadata keys shown by task logs and the task list cost column.
+var xaiTaskPricingMetadataKeys = map[string]string{
+	"seconds":           "duration_seconds",
+	"output_resolution": "resolution",
+	"input_images":      "reference_image_count",
+}
+
+// recordXaiTaskPricingMetadata keeps the billing dimensions of per-call xai
+// tasks (duration, billed resolution, input images) in PricingMetadata. The
+// ratio hook only returns the combined xai_video_units multiplier, so the
+// facts are read from the plugin once more. The metadata is display-only:
+// a failure is logged and never rejects the submission.
+func recordXaiTaskPricingMetadata(c *gin.Context, info *relaycommon.RelayInfo, pluginKey string, adaptor channel.TaskAdaptor) {
+	if pluginKey != "xai" || info == nil {
+		return
+	}
+	provider, ok := adaptor.(channel.TaskValidatedUsageFactsProvider)
+	if !ok {
+		return
+	}
+	facts, err := provider.ExtractUsageFactsValidated(c, info)
+	if err != nil {
+		logger.LogWarn(c, fmt.Sprintf("xai task pricing metadata unavailable: %v", err))
+		return
+	}
+	for factKey, metadataKey := range xaiTaskPricingMetadataKeys {
+		value := ""
+		switch typed := facts[factKey].(type) {
+		case string:
+			value = strings.TrimSpace(typed)
+		case float64:
+			value = strconv.FormatFloat(typed, 'f', -1, 64)
+		case int64:
+			value = strconv.FormatInt(typed, 10)
+		case int:
+			value = strconv.Itoa(typed)
+		}
+		if value == "" {
+			continue
+		}
+		if info.PriceData.PricingMetadata == nil {
+			info.PriceData.PricingMetadata = make(map[string]string, len(xaiTaskPricingMetadataKeys)+1)
+		}
+		info.PriceData.PricingMetadata[metadataKey] = value
+	}
+	if len(info.PriceData.PricingMetadata) > 0 {
+		info.PriceData.PricingMetadata["xai_video_model"] = cmp.Or(info.UpstreamModelName, info.OriginModelName)
+	}
 }
 
 // isThirdPartySD2Task matches tasks persisted by the former Go adaptor
@@ -678,11 +773,11 @@ func hasThirdPartySD2UpstreamResultURL(task *model.Task) bool {
 	if !isThirdPartySD2Task(task) {
 		return false
 	}
-	url := strings.TrimSpace(task.GetResultURL())
-	if url == "" {
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	if resultURL == "" {
 		return false
 	}
-	return !strings.Contains(url, "/v1/videos/"+task.TaskID+"/content")
+	return !strings.Contains(resultURL, "/v1/videos/"+task.TaskID+"/content")
 }
 
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {

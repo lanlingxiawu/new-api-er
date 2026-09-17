@@ -2047,8 +2047,6 @@ func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
 			seedChannel(t, channelID)
 
 			task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
-			// 本分支 token 重算读取提交时冻结的计费快照倍率，而非实时倍率配置。
-			task.PrivateData.BillingContext.ModelRatio = 1
 			settled := settleTaskBillingOnComplete(
 				context.Background(),
 				&mockAdaptor{},

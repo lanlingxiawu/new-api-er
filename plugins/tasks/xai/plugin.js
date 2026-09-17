@@ -250,8 +250,10 @@ function validate(ctx, req) {
   const model = usageModel(ctx);
   const seconds = durationSeconds(req);
   if (seconds > MAX_DURATION_SECONDS) throw new Error("duration must not exceed " + MAX_DURATION_SECONDS + " seconds");
-  const resolution = supportedResolution(model, requestedResolution(req));
-  if (!RESOLUTIONS.includes(resolution)) throw new Error("resolution must be one of " + RESOLUTIONS.join(", "));
+  const requested = requestedResolution(req);
+  if (!RESOLUTIONS.includes(supportedResolution(model, requested))) {
+    throw new Error('resolution "' + requested + '" is not supported; use 480p, 720p or 1080p');
+  }
   const refs = referenceImages(req);
   if (refs.length > MAX_REFERENCE_IMAGES) throw new Error("reference_images must not exceed " + MAX_REFERENCE_IMAGES);
   if (isVideoModel15(model)) {

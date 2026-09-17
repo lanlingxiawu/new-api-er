@@ -19,6 +19,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/relay"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -536,8 +538,10 @@ func isTaskMediaFallbackLoop(rawURL, taskID string) bool {
 	return strings.HasPrefix(path, artifactPrefix) && strings.HasSuffix(path, "/content")
 }
 
-// thirdPartySD2ContentRequest 为非插件的 ThirdPartySD2 任务构造带渠道密钥的视频内容请求：
-// 该上游的结果地址需要 Bearer 鉴权才能下载。其他任务返回 nil，走无凭据的结果地址回退。
+// thirdPartySD2ContentRequest 为旧 ThirdPartySD2 Go 适配器创建的任务（平台 "58"，没有插件执行记录）
+// 构造视频内容请求。结果地址位于渠道 Base URL 主机或 thirdpartysd2 插件 allowedHosts 声明的主机时
+// 附带渠道密钥，其他主机无凭据访问，与插件任务的内容请求策略一致，密钥不会发往任意主机。
+// 其他任务返回 nil，走无凭据的结果地址回退。
 func thirdPartySD2ContentRequest(c *gin.Context, task *model.Task, resultURL string) *relaychannel.TaskContentRequest {
 	if task == nil || task.Platform != constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeThirdPartySD2)) {
 		return nil
@@ -545,6 +549,17 @@ func thirdPartySD2ContentRequest(c *gin.Context, task *model.Task, resultURL str
 	channel, err := model.CacheGetChannel(task.ChannelId)
 	if err != nil || channel == nil {
 		return nil
+	}
+	var allowedHosts []string
+	if plugin, ok := relay.ResolveTaskPluginForPlatform(pluginruntime.DefaultRegistry.Generation(), task.Platform); ok && plugin != nil {
+		allowedHosts = plugin.Meta.AllowedHosts
+	}
+	if pluginruntime.ValidateRequestURL(resultURL, channel.GetBaseURL(), allowedHosts) != nil {
+		return &relaychannel.TaskContentRequest{
+			URL:            resultURL,
+			Method:         c.Request.Method,
+			Credentialless: true,
+		}
 	}
 	return &relaychannel.TaskContentRequest{
 		URL:     resultURL,
