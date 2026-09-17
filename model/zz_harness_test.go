@@ -140,6 +140,11 @@ func TestMain(m *testing.M) {
 
 	initCol()
 
+	// Same pre-AutoMigrate repair as migrateDB: legacy non-unique log_id index.
+	if err := migrateEmployeeCommissionLogIdUniqueIndex(db); err != nil {
+		panic("failed to repair employee_commission_logs.log_id index: " + err.Error())
+	}
+
 	if err := db.AutoMigrate(
 		&Channel{},
 		&Token{},
@@ -198,6 +203,11 @@ func TestMain(m *testing.M) {
 
 	if LOG_DB != nil && LOG_DB != DB {
 		_ = LOG_DB.AutoMigrate(&Log{})
+	}
+	// Audit events (login/security/operation) live in their own audit_logs
+	// table on LOG_DB, independent of usage logs.
+	if err := MigrateAuditLogs(); err != nil {
+		panic("failed to migrate audit logs: " + err.Error())
 	}
 
 	fmt.Println("[TEST] Model tests - Main DB type:", common.MainDatabaseType())

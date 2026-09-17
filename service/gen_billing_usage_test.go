@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/model"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -112,23 +113,22 @@ func TestBillusage_AppendPath_NilOtherNoPanic(t *testing.T) {
 }
 
 func TestBillusage_AppendPath_CreatesAdminInfo(t *testing.T) {
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 	appendUsageBillingPathForLog(other, true, nil)
-	admin, ok := other["admin_info"].(map[string]interface{})
-	require.True(t, ok)
+	admin := logOtherAdmin(other)
+	require.NotNil(t, admin)
 	assert.Equal(t, usageBillingPathLocal, admin["usage_billing_path"])
 }
 
 func TestBillusage_AppendPath_PreservesExistingAdminInfo(t *testing.T) {
-	other := map[string]interface{}{
-		"admin_info": map[string]interface{}{"foo": "bar"},
-	}
+	other := model.NewLogOther()
+	other.SetAdmin("foo", "bar")
 	appendUsageBillingPathForLog(
 		other,
 		false,
 		billingUsageWithPayload(dto.BillingUsageSourceGeminiChat, "", false, payloadGemini),
 	)
-	admin := other["admin_info"].(map[string]interface{})
+	admin := logOtherAdmin(other)
 	assert.Equal(t, "bar", admin["foo"])
 	assert.Equal(t, usageBillingPathGemini, admin["usage_billing_path"])
 }
@@ -201,12 +201,19 @@ func TestBillusage_FromClaude_SplitCacheCreationPrefersStructWithFallback(t *tes
 			InputTokens:                 10,
 			OutputTokens:                2,
 			CacheCreation:               &dto.ClaudeCacheCreationUsage{Ephemeral5mInputTokens: 4},
-			ClaudeCacheCreation1hTokens: 9, // struct 1h is zero -> fallback to flat field
+			ClaudeCacheCreation1hTokens: 9, // ignored: a present struct wins even when its 1h is zero
 		},
 	}
 	got := effectiveBillingUsage(&dto.Usage{BillingUsage: bu})
 	assert.Equal(t, 4, got.ClaudeCacheCreation5mTokens, "from cache_creation struct")
-	assert.Equal(t, 9, got.ClaudeCacheCreation1hTokens, "fallback to flat field when struct is 0")
+	assert.Equal(t, 0, got.ClaudeCacheCreation1hTokens, "present struct is authoritative; zero 1h is not replaced by the flat field")
+
+	// Flat legacy fields are only a fallback when the struct is absent.
+	bu.ClaudeUsage.CacheCreation = nil
+	bu.ClaudeUsage.ClaudeCacheCreation5mTokens = 3
+	got = effectiveBillingUsage(&dto.Usage{BillingUsage: bu})
+	assert.Equal(t, 3, got.ClaudeCacheCreation5mTokens, "fallback to flat 5m field when struct is absent")
+	assert.Equal(t, 9, got.ClaudeCacheCreation1hTokens, "fallback to flat 1h field when struct is absent")
 }
 
 func TestBillusage_FromGemini_AggregatesModalitiesAndThoughts(t *testing.T) {

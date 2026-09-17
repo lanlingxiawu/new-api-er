@@ -131,7 +131,7 @@ func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quo
 			"model_name":       relayInfo.OriginModelName,
 			"channel_id":       relayInfo.ChannelId,
 		}
-		model.RecordLogWithAdminInfo(
+		model.RecordLogWithAdminDetails(
 			inviterId,
 			model.LogTypeSystem,
 			"skipped employee commission because employee and customer are mutual inviters",

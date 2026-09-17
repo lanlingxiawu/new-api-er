@@ -606,7 +606,7 @@ V1 不新增用户配置，也不新增环境变量：
 - `controller/upstream_log.go`
   - 反查模式下，本站日志缺失 `multi_key_index` 且渠道为多令牌时，允许客户端提交的 `key_index` 兜底；日志记录了序号时客户端值仍被忽略。响应新增 `source.key_index_from_log` 标明来源。
   - `logger.LogError/LogWarn` 统一传 `c` 而非 `c.Request.Context()`，保证 requestId 被采集（Rule 10）。
-- `service/upstream_log.go` — `recent_fallback` 分支下 `page > 1` 直接返回空列表，不再把第 1 页内容当成第 2 页重复返回。
+- `service/upstream_log.go` — `recent_fallback` 分支下 `page > 1` 直接返回空列表，不再把第 1 页内容当成第 2 页重复返回。第 1 页先在上游返回的整批近期日志（最多 1000 条）上本地过滤，再截到 `page_size`；若先截到 `page_size` 再过滤，只会在最新几条里匹配，高流量渠道上几分钟前的请求会被误报为上游无日志。
 - `i18n/locales/{en,zh-CN,zh-TW}.yaml` — `upstream_log.trace_key_index_missing` 改为可执行文案，明确告知“清空本站请求 ID，改用渠道 + 上游请求 ID 查询”。
 
 前端：
@@ -872,3 +872,109 @@ i18n：
 - `web/src/features/usage-logs/lib/__tests__/upstream-log-item.test.ts`：映射保留排版读取的所有字段；缺失值映射为空值。
 - `web/src/features/usage-logs/lib/__tests__/log-metrics.test.ts`：按倍率/动态计费/按次计费提取数据项、专属倍率优先、other 无法解析时的兜底；只标注严格低于的项、浮点误差与高于/等于不标注、单侧存在的项不比较。
 - `web/src/components/ui/__tests__/combobox-search.test.ts`：选择型下拉在已选中后再次打开时搜索框为空、显示全部选项，已选项作为占位提示。
+
+## 19. V6 修订：以官方 new-api 为上游（2026-09-17，待确认）
+
+本节取代前文中以 `/api/log/token/query` + `X-NewAPI-Log-Query` 能力头为「新版上游」的设计（§4、§5.2、§12、§17.2 中相关描述）。上游一律按**官方 QuantumNous/new-api** 的接口能力对接；本仓库二开新增的接口不存在于任何官方版本，不能作为上游能力前提。
+
+### 19.1 现状问题
+
+1. **首选接口官方不存在。** 每次查询先请求 `/api/log/token/query`，对官方上游必定 404，再降级到 `/api/log/token`：白白多一次往返，`capable`/`exact` 分支对官方上游永远不成立。
+2. **降级只在最新 `page_size` 条里匹配**（已修复：先在整批近期日志上过滤再截断，`TestQueryUpstreamLogs_RecentFallbackMatchesBeyondPageSize`）。
+3. **单令牌查不到不换账号令牌。** 轮询链里只有多令牌探测在「成功但 0 条」时继续；单令牌渠道拿到 0 条直接结束，即使配置了能查全部历史的账号访问令牌也用不上。
+4. **旧版上游会展示错误日志。** v0.10.8 之前的 `/api/log/self` 忽略 `request_id` 参数，返回账号最新一页日志；当前代码把它标为 `exact` 并展示第一条，内容是别的请求。
+5. **限流被误报为不可用。** 官方 `/api/log/token` 挂 `CriticalRateLimit`（默认同一 IP 20 分钟 20 次），多令牌逐个探测很快触发 429；429 被映射成「上游不可用」，用户无从判断。
+6. **`log_id` 在官方上游无意义。** 官方用户侧日志接口经 `assignDisplayLogIds` 把 `id` 改写为当页序号（自 2026-06-22 起），不是真实日志 ID。
+
+### 19.2 官方接口能力矩阵
+
+以 `upstream/main` 源码与发布 tag 核实（`git tag --contains`）：
+
+| 能力 | < v0.10.8 | v0.10.8 ~ v1.0.0-rc.5 | ≥ v1.0.0-rc.6 |
+|---|---|---|---|
+| 日志表 `request_id` 列 | 无 | 有 | 有 |
+| 日志表 `upstream_request_id` 列 | 无 | 无 | 有 |
+| `/api/log/token` 鉴权 | `?key=sk-…` 查询参数，无 Header 鉴权，无限流 | `Authorization: Bearer sk-…`（`TokenAuthReadOnly`），`CriticalRateLimit` | 同左 |
+| `/api/log/token` 返回范围 | 该令牌全部日志，无条数上限 | 该令牌最近 `MaxRecentItems`（默认 1000）条，不接受任何筛选或分页参数 | 同左 |
+| `/api/log/self`（账号访问令牌 + `New-Api-User`） | 支持 type / 时间 / token_name / model_name / group 筛选，**忽略 `request_id`** | 另支持 `request_id` | 另支持 `upstream_request_id` |
+| `/api/log/self` 分页 | `p` + `page_size`（上限 100） | 同左 | 同左 |
+| `/api/log/self` 限流 | `GlobalAPIRateLimit`（默认 3 分钟 360 次） | 同左 | 同左 |
+
+由此可得：
+
+- **按请求 ID 精确追溯只在 ≥ v0.10.8 可行**；更早的版本日志里根本没有请求 ID，任何凭证都做不到。
+- **账号访问令牌是唯一能查全部历史的方式**；中转密钥最多只能看到该令牌最近 1000 条。
+- v0.10.8 之前 `/api/log/token` 需要把密钥放进 URL 查询参数，可能被上游访问日志、CDN、代理记录。由于这些版本本就无法按请求 ID 追溯，**不为其发送 `?key=`**，直接判定为不支持。
+
+### 19.3 查询策略
+
+**凭证顺序：账号令牌优先，中转密钥兜底。** 账号令牌能查全部历史、限流宽松；中转密钥只有近期数据且限流严。
+
+按本站请求 ID 追溯（上游 `request_id` = 本站日志的 `upstream_request_id`）：
+
+```text
+1. 渠道配置了账号访问令牌：
+   GET {upstream}/api/log/self?request_id=<id>&p=1&page_size=10
+   -> 本地再按 request_id 核对返回条目
+      - 有匹配：scope=exact，结束
+      - 返回了条目但都没有 request_id 字段：上游 < v0.10.8，结束，提示版本不支持
+      - 0 条：上游确实没有该日志（全量历史已查），继续第 2 步（账号与密钥可能不属于同一上游账号）
+2. 中转密钥（单令牌或多令牌逐个）：
+   GET {upstream}/api/log/token   （Bearer，≤1000 条）
+   -> 在整批上本地按 request_id 过滤，再截到 page_size
+      - 有匹配：scope=recent，结束
+      - 条目非空但都没有 request_id 字段：上游 < v0.10.8，提示版本不支持
+      - 0 条：继续下一个密钥
+      - 429：立即停止，不再试后续密钥（同一出口 IP 共用限流桶），提示稍后重试
+3. 全部为 0 条：根据是否查过账号令牌给出不同提示（见 19.5）
+```
+
+版本判定依据：官方 ≥ v0.10.8 的 `request_id` 字段带 `omitempty`，升级前写入的旧行不含该字段。账号令牌路径带 `request_id` 筛选，新版只会返回含该字段的匹配行，因此「有条目但都无该字段」可可靠判定为旧版。中转密钥路径无筛选，若上游刚升级、最近 1000 条全是升级前的旧行，会被判为旧版——此时目标请求本就不在这批数据里，提示升级不产生误导性结果，可接受。
+
+按渠道条件浏览（无请求 ID）：
+
+- 有账号令牌：`/api/log/self` 原样下发 type / 时间 / token_name / model_name / group / request_id / upstream_request_id，分页由上游完成，`scope=filtered`。
+- 仅中转密钥：`/api/log/token` 整批拉取后本地过滤，`scope=recent`，不分页；用户名、分组、渠道、`log_id` 等无法在该接口上可靠应用的条件在 UI 中列为「未应用」。
+
+### 19.4 代码改动范围
+
+- `service/upstream_log.go`
+  - 删除 `/api/log/token/query` 调用与能力头判断；`QueryUpstreamLogs` 按凭证类型直接选择 `/api/log/self` 或 `/api/log/token`。
+  - 账号令牌结果在本地按 `request_id` 核对；识别「条目无 `request_id` 字段」为 `ErrUpstreamLogVersionUnsupported`。
+  - 429 映射为新的 `ErrUpstreamLogRateLimited`。
+  - `scope` 取值：`exact`（账号令牌 + 请求 ID）、`filtered`（账号令牌浏览）、`recent`（中转密钥）。前端类型同步；不再出现 `recent_fallback` 与 `upstream_supports_exact`。
+- `controller/upstream_log.go`
+  - 轮询链改为账号令牌在前；任何凭证「成功但 0 条」都继续试下一个（不再只限多令牌探测）；429 立即终止。
+  - 响应的 `source` 增加 `checked_account: bool` 与 `checked_recent_only: bool`，供前端给出准确提示。
+- 本仓库作为「被查询方」提供的 `/api/log/token/query` 与 `X-NewAPI-Log-Query` 头：下游不再依赖，**是否删除待确认**（删除可减少与官方的分叉；保留无害但无调用方）。
+- 前端：`upstream-compare-pane.tsx`、`upstream-logs-page.tsx` 的空状态与提示文案按 19.5 区分；`types.ts` 的 scope 类型同步。
+
+### 19.5 用户提示（区分原因）
+
+| 情况 | 提示 |
+|---|---|
+| 查过账号令牌，全部 0 条 | 上游没有这次请求的日志，可能已被上游的日志保留策略清理。（沿用现有文案） |
+| 只查了中转密钥，全部 0 条 | 这次请求不在上游令牌最近 1000 条日志中。为该渠道配置上游账号访问令牌后可查询全部历史。 |
+| 上游 < v0.10.8 | 上游 new-api 版本低于 v0.10.8，日志不记录请求 ID，无法按请求追溯。请升级上游。 |
+| 429 | 上游日志接口限流，请稍后再试。 |
+
+新增文案补齐 7 种前端语言与后端 en/zh i18n。
+
+### 19.6 主链影响与资源
+
+仅管理员主动查询触发，不在 relay 链路上；不新增表、列、Redis key、共享内存或工作池。相比现状，每次查询少一次必然 404 的往返；多令牌探测遇 429 即停，不再对上游持续施压。
+
+### 19.7 测试先行
+
+`service/upstream_log_test.go`（扩展现有文件，不新增测试文件）：
+
+- 账号令牌：请求路径为 `/api/log/self`，下发 `request_id`；返回条目 `request_id` 不匹配时被本地剔除；条目无 `request_id` 字段返回版本不支持。
+- 中转密钥：请求路径为 `/api/log/token`，**不**请求 `/api/log/token/query`，不在 URL 中携带密钥；匹配项位于第 page_size 条之后仍能命中（已有）。
+- 429 映射为限流错误。
+
+`controller/upstream_log_test.go`：
+
+- 同时配置账号令牌与密钥时账号令牌先查；账号 0 条后继续查密钥。
+- 单令牌渠道 0 条后继续查账号令牌（覆盖 §19.1 第 3 点）。
+- 多令牌探测遇 429 后不再请求后续密钥（上游请求计数断言）。
+- `source.checked_account` / `checked_recent_only` 取值正确。

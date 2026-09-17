@@ -170,7 +170,7 @@ func AddEmployeePerformance(employeeUserId int, profitQuota int64, reason string
 		return nil, err
 	}
 
-	RecordLogWithAdminInfo(employeeUserId, LogTypeManage, "manual performance adjustment", map[string]interface{}{
+	RecordLogWithAdminDetails(employeeUserId, LogTypeManage, "manual performance adjustment", map[string]interface{}{
 		"operated_by":      operatedBy,
 		"reason":           reason,
 		"profit_quota":     profitQuota,
@@ -262,7 +262,7 @@ func RevertEmployeePerformance(logId int, operatedBy int) error {
 		return err
 	}
 
-	RecordLogWithAdminInfo(orig.EmployeeUserId, LogTypeManage, "revert manual performance adjustment", map[string]interface{}{
+	RecordLogWithAdminDetails(orig.EmployeeUserId, LogTypeManage, "revert manual performance adjustment", map[string]interface{}{
 		"operated_by":      operatedBy,
 		"reverted_log_id":  logId,
 		"compensation_log": comp.Id,

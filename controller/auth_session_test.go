@@ -114,7 +114,7 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	previousSessionSetting := operation_setting.GetUserSessionSetting()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.TwoFA{}, &model.PasskeyCredential{}))
 	model.DB = db
 	common.RedisEnabled = false
 	operation_setting.ReplaceUserSessionSetting(operation_setting.UserSessionSetting{

@@ -19,11 +19,11 @@ func TestJSONValue_Value(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, v)
 
-	// non-nil -> raw bytes
+	// non-nil -> JSON text as string (PostgreSQL simple protocol rejects []byte for json columns)
 	j := JSONValue([]byte(`["a","b"]`))
 	v, err = j.Value()
 	require.NoError(t, err)
-	assert.Equal(t, []byte(`["a","b"]`), v)
+	assert.Equal(t, `["a","b"]`, v)
 }
 
 func TestJSONValue_Scan(t *testing.T) {

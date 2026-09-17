@@ -44,7 +44,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
-import { getLobeIcon } from '@/lib/lobe-icon'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
@@ -55,12 +55,13 @@ import {
 import {
   channelsQueryKeys,
   aggregateChannelsByTag,
+  getChannelTableRowId,
   isTagAggregateRow,
-  getChannelTypeIcon,
   getChannelTypeLabel,
 } from '../lib'
 import type { Channel, ChannelLimitFilter, ChannelSortBy } from '../types'
 import { ChannelCard } from './channel-card'
+import { ChannelTypeLogo } from './channel-type-badge'
 import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
@@ -242,7 +243,7 @@ export function ChannelsTable() {
   // Fetch groups for filter
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: getGroups,
+    queryFn: async () => requireServerSuccess(await getGroups()),
   })
 
   const dailyLimitFilterOptions = useMemo(
@@ -293,49 +294,53 @@ export function ChannelsTable() {
     }),
     queryFn: async () => {
       if (shouldSearch) {
-        return searchChannels({
-          keyword: globalFilter,
-          model: modelFilter,
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          id_sort: idSort,
-          limit_filter: limitFilter,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
+        return requireServerSuccess(
+          await searchChannels({
+            keyword: globalFilter,
+            model: modelFilter,
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            id_sort: idSort,
+            limit_filter: limitFilter,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          })
+        )
       } else {
-        return getChannels({
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          id_sort: idSort,
-          limit_filter: limitFilter,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
+        return requireServerSuccess(
+          await getChannels({
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            id_sort: idSort,
+            limit_filter: limitFilter,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          })
+        )
       }
     },
     placeholderData: (previousData) => previousData,
@@ -384,6 +389,7 @@ export function ChannelsTable() {
     onColumnFiltersChange: handleColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
+    getRowId: getChannelTableRowId,
     getSubRows: (row: Channel & { children?: Channel[] }) => row.children,
     manualPagination: true,
     manualSorting: true,
@@ -440,12 +446,11 @@ export function ChannelsTable() {
         count: totalTypes,
       },
       ...typeIds.map((item) => {
-        const iconName = getChannelTypeIcon(item.type)
         return {
           label: getChannelTypeLabel(item.type),
           value: String(item.type),
           count: item.count,
-          iconNode: getLobeIcon(`${iconName}.Color`, 16),
+          iconNode: <ChannelTypeLogo type={item.type} size={16} />,
         }
       }),
     ]
@@ -482,6 +487,7 @@ export function ChannelsTable() {
       cardGridClassName='grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-3'
       applyHeaderSize
       toolbarProps={{
+        collapsibleOnMobile: true,
         searchPlaceholder: t('Filter by name, ID, or key...'),
         searchDebounceMs: 500,
         onReset: () => {

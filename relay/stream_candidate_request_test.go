@@ -152,7 +152,7 @@ func TestUnifiedStreamCandidateConversionPaths(t *testing.T) {
 				info.InitChannelMeta(c)
 				adaptor := GetAdaptor(info.ApiType)
 				adaptor.Init(info)
-				_, apiErr = chatCompletionsViaResponses(c, info, adaptor, req)
+				_, apiErr = textRequestViaResponses(c, info, adaptor, req)
 			}
 			require.NotNil(t, apiErr)
 			require.Equal(t, 503, apiErr.StatusCode)

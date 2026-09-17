@@ -9,12 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// savePasskeyState snapshots every global GetPasskeySettings() reads or
-// mutates, and restores them on cleanup. GetPasskeySettings lazily writes back
-// into defaultPasskeySettings, so tests must reset it to stay independent.
+// savePasskeyState snapshots the stored passkey settings and ServerAddress,
+// and restores them on cleanup.
 func savePasskeyState(t *testing.T) {
 	t.Helper()
-	origSettings := defaultPasskeySettings
+	origSettings := *GetPasskeySettings()
 	origServer := ServerAddress
 	t.Cleanup(func() {
 		ServerAddress = origServer
@@ -22,22 +21,18 @@ func savePasskeyState(t *testing.T) {
 	})
 }
 
-// setPasskeySettingsForTest 替换存储值并重新发布快照，同时清掉推导缓存。
-// 直接给 defaultPasskeySettings 赋值不会更新 GetPasskeySettings 读的快照，
-// 也不会重置 RPID 的一次性推导结果。
+// setPasskeySettingsForTest 替换存储值并重新发布快照。
+// 直接给 defaultPasskeySettings 赋值不会更新 GetPasskeySettings 读的快照。
 func setPasskeySettingsForTest(s PasskeySettings) {
-	derivedPasskeyRPID.Store(nil)
 	ReplacePasskeySettings(s)
-	derivedPasskeyRPID.Store(nil)
 }
 
 func TestGetPasskeySettings_Defaults(t *testing.T) {
 	savePasskeyState(t)
-	// Force a clean baseline independent of package init side effects.
 	setPasskeySettingsForTest(PasskeySettings{
 		Enabled:              false,
 		RPDisplayName:        common.SystemName,
-		RPID:                 "example.rp", // non-empty so derivation is skipped
+		RPID:                 "example.rp",
 		Origins:              "https://set.example",
 		AllowInsecureOrigin:  false,
 		UserVerification:     "preferred",
@@ -49,16 +44,27 @@ func TestGetPasskeySettings_Defaults(t *testing.T) {
 	require.NotNil(t, got)
 	// 返回不可变快照，不再是可变全局的指针。
 	assert.NotSame(t, &defaultPasskeySettings, got)
-	// Neither RPID nor Origins was empty, so nothing is derived.
 	assert.Equal(t, "example.rp", got.RPID)
 	assert.Equal(t, "https://set.example", got.Origins)
 	assert.Equal(t, "preferred", got.UserVerification)
 }
 
+// GetPasskeySettings returns stored values only; RPID / Origins defaults are
+// applied by WithDefaults / PasskeySettingsSnapshot and never written back.
+func TestGetPasskeySettings_ReturnsStoredValuesWithoutDefaults(t *testing.T) {
+	savePasskeyState(t)
+	setPasskeySettingsForTest(PasskeySettings{RPID: "", Origins: ""})
+	ServerAddress = "https://combined.example"
+
+	got := GetPasskeySettings()
+	assert.Equal(t, "", got.RPID)
+	assert.Equal(t, "", got.Origins)
+}
+
 // RPID derivation — decision/condition coverage of:
 //
-//	if RPID == "" && ServerAddress != "" { ...url.Parse... }
-func TestGetPasskeySettings_RPIDDerivation(t *testing.T) {
+//	if RPID == "" && serverAddress != "" { ...url.Parse... }
+func TestPasskeySettingsWithDefaults_RPIDDerivation(t *testing.T) {
 	tests := []struct {
 		name          string
 		rpid          string
@@ -66,154 +72,100 @@ func TestGetPasskeySettings_RPIDDerivation(t *testing.T) {
 		wantRPID      string
 	}{
 		{
-			// RPID empty + ServerAddress a full URL -> parsed.Host wins.
 			name:          "url_with_scheme_uses_host",
 			rpid:          "",
 			serverAddress: "https://newapi.pro",
 			wantRPID:      "newapi.pro",
 		},
 		{
-			// URL with scheme + port: Host retains the port.
 			name:          "url_with_scheme_and_port_keeps_port",
 			rpid:          "",
 			serverAddress: "https://newapi.pro:8443",
 			wantRPID:      "newapi.pro:8443",
 		},
 		{
-			// Bare host, no scheme: url.Parse succeeds but Host is empty
-			// (the value lands in Path) -> else branch, RPID = trimmed addr.
+			// Bare host, no scheme: url.Parse succeeds but Host is empty -> raw addr.
 			name:          "bare_host_no_scheme_falls_back_to_addr",
 			rpid:          "",
 			serverAddress: "newapi.pro",
 			wantRPID:      "newapi.pro",
 		},
 		{
-			// Surrounding whitespace is trimmed before parsing/fallback.
 			name:          "whitespace_is_trimmed",
 			rpid:          "",
 			serverAddress: "   https://trimmed.example   ",
 			wantRPID:      "trimmed.example",
 		},
 		{
-			// url.Parse returns an error (control byte) -> else branch uses
-			// the trimmed raw address.
+			// url.Parse error (control byte) -> trimmed raw address.
 			name:          "parse_error_falls_back_to_addr",
 			rpid:          "",
-			serverAddress: "http://a\x7fb",
-			wantRPID:      "http://a\x7fb",
+			serverAddress: "http://ab",
+			wantRPID:      "http://ab",
 		},
 		{
-			// RPID already set -> derivation skipped entirely (first
-			// sub-condition false).
 			name:          "existing_rpid_is_preserved",
 			rpid:          "preset.rp",
 			serverAddress: "https://ignored.example",
 			wantRPID:      "preset.rp",
 		},
+		{
+			// RPID empty but no server address -> nothing derived.
+			name:          "empty_server_address_derives_nothing",
+			rpid:          "",
+			serverAddress: "",
+			wantRPID:      "",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			savePasskeyState(t)
-			setPasskeySettingsForTest(PasskeySettings{
-				RPID:    tc.rpid,
-				Origins: "https://origins.set", // non-empty: isolate RPID logic
-			})
-			ServerAddress = tc.serverAddress
-
-			got := GetPasskeySettings()
+			got := PasskeySettings{RPID: tc.rpid, Origins: "https://origins.set"}.WithDefaults(tc.serverAddress)
 			assert.Equal(t, tc.wantRPID, got.RPID)
 		})
 	}
 }
 
-// The second sub-condition of the RPID guard: ServerAddress == "" means no
-// derivation even though RPID is empty (condition coverage: RPID=="" true,
-// ServerAddress!="" false).
-func TestGetPasskeySettings_RPIDNotDerivedWhenServerAddressEmpty(t *testing.T) {
-	savePasskeyState(t)
-	setPasskeySettingsForTest(PasskeySettings{
-		RPID:    "",
-		Origins: "https://origins.set",
-	})
-	ServerAddress = ""
-
-	got := GetPasskeySettings()
-	assert.Equal(t, "", got.RPID)
-}
-
 // Origins fallback — decision/condition coverage of:
 //
-//	if Origins == "" || Origins == "[]" { Origins = ServerAddress }
-func TestGetPasskeySettings_OriginsFallback(t *testing.T) {
+//	if Origins == "" || Origins == "[]" { Origins = serverAddress }
+func TestPasskeySettingsWithDefaults_OriginsFallback(t *testing.T) {
 	tests := []struct {
 		name          string
 		origins       string
 		serverAddress string
 		wantOrigins   string
 	}{
-		{
-			name:          "empty_origins_uses_server_address",
-			origins:       "",
-			serverAddress: "https://srv.example",
-			wantOrigins:   "https://srv.example",
-		},
-		{
-			name:          "empty_json_array_string_uses_server_address",
-			origins:       "[]",
-			serverAddress: "https://srv.example",
-			wantOrigins:   "https://srv.example",
-		},
-		{
-			name:          "non_empty_origins_preserved",
-			origins:       "https://already.example",
-			serverAddress: "https://srv.example",
-			wantOrigins:   "https://already.example",
-		},
-		{
-			name:          "empty_origins_with_empty_server_address_stays_empty",
-			origins:       "",
-			serverAddress: "",
-			wantOrigins:   "",
-		},
+		{"empty_origins_uses_server_address", "", "https://srv.example", "https://srv.example"},
+		{"empty_json_array_string_uses_server_address", "[]", "https://srv.example", "https://srv.example"},
+		{"non_empty_origins_preserved", "https://already.example", "https://srv.example", "https://already.example"},
+		{"empty_origins_with_empty_server_address_stays_empty", "", "", ""},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			savePasskeyState(t)
-			setPasskeySettingsForTest(PasskeySettings{
-				RPID:    "preset.rp", // non-empty: isolate Origins logic
-				Origins: tc.origins,
-			})
-			ServerAddress = tc.serverAddress
-
-			got := GetPasskeySettings()
+			got := PasskeySettings{RPID: "preset.rp", Origins: tc.origins}.WithDefaults(tc.serverAddress)
 			assert.Equal(t, tc.wantOrigins, got.Origins)
 		})
 	}
 }
 
-// Both derivations fire together on a fresh (empty) config — path coverage of
-// the full function with both if-blocks taken.
-func TestGetPasskeySettings_BothDerivationsTogether(t *testing.T) {
+// PasskeySettingsSnapshot applies both defaults from the current ServerAddress
+// on every call, so a ServerAddress change is reflected immediately.
+func TestPasskeySettingsSnapshot_AppliesCurrentServerAddress(t *testing.T) {
 	savePasskeyState(t)
 	setPasskeySettingsForTest(PasskeySettings{RPID: "", Origins: ""})
-	ServerAddress = "https://combined.example"
 
-	got := GetPasskeySettings()
-	assert.Equal(t, "combined.example", got.RPID)
-	assert.Equal(t, "https://combined.example", got.Origins)
-}
-
-// The lazy write-back persists: a second call sees the value the first derived
-// and no longer re-derives (RPID now non-empty).
-func TestGetPasskeySettings_DerivationPersistsAcrossCalls(t *testing.T) {
-	savePasskeyState(t)
-	setPasskeySettingsForTest(PasskeySettings{RPID: "", Origins: ""})
 	ServerAddress = "https://first.example"
-	assert.Equal(t, "first.example", GetPasskeySettings().RPID)
+	got := PasskeySettingsSnapshot()
+	assert.Equal(t, "first.example", got.RPID)
+	assert.Equal(t, "https://first.example", got.Origins)
 
-	// Change ServerAddress; RPID is now set, so it must NOT be re-derived.
 	ServerAddress = "https://second.example"
-	assert.Equal(t, "first.example", GetPasskeySettings().RPID)
+	got = PasskeySettingsSnapshot()
+	assert.Equal(t, "second.example", got.RPID)
+	assert.Equal(t, "https://second.example", got.Origins)
+
+	// stored values untouched
+	assert.Equal(t, "", GetPasskeySettings().RPID)
 }

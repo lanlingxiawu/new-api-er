@@ -254,7 +254,7 @@ func TestBS_ReserveFunding_UnsupportedSource(t *testing.T) {
 		relayInfo: &relaycommon.RelayInfo{},
 		funding:   &fakeFunding{},
 	}
-	err := s.reserveFunding(100)
+	err := s.reserveFunding(100, false)
 	require.Error(t, err)
 }
 

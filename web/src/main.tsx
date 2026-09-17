@@ -16,26 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  QueryCache,
-  QueryClient,
-  QueryClientProvider,
-} from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
-import { AxiosError } from 'axios'
-import i18next from 'i18next'
 import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
-import { toast } from 'sonner'
 
-import { getStatus } from '@/lib/api'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { applyFaviconToDom } from '@/lib/dom-utils'
 import '@/lib/dayjs'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
-import { handleServerError } from '@/lib/handle-server-error'
+import { createAppQueryClient } from '@/lib/query-client'
+import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
 import { installToastDedupe } from '@/lib/toast-dedupe'
-import { useAuthStore } from '@/stores/auth-store'
 
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
@@ -53,56 +45,8 @@ initializeFrontendCache()
 installBuildMetadata()
 installToastDedupe()
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: (failureCount, error) => {
-        // eslint-disable-next-line no-console
-        if (import.meta.env.DEV) console.log({ failureCount, error })
-
-        if (failureCount >= 0 && import.meta.env.DEV) return false
-        if (failureCount > 3 && import.meta.env.PROD) return false
-
-        return !(
-          error instanceof AxiosError &&
-          [401, 403].includes(error.response?.status ?? 0)
-        )
-      },
-      // Keep focused tabs from silently re-running heavy pages like logs.
-      refetchOnWindowFocus: false,
-      staleTime: 10 * 1000, // 10s
-    },
-    mutations: {
-      onError: (error) => {
-        handleServerError(error)
-
-        if (error instanceof AxiosError) {
-          if (error.response?.status === 304) {
-            toast.error(i18next.t('Content not modified!'))
-          }
-        }
-      },
-    },
-  },
-  queryCache: new QueryCache({
-    onError: (error) => {
-      if (error instanceof AxiosError) {
-        if (error.response?.status === 401) {
-          toast.error(i18next.t('Session expired!'))
-          useAuthStore.getState().auth.reset()
-          const redirect = `${router.history.location.href}`
-          router.navigate({ to: '/sign-in', search: { redirect } })
-        }
-        if (error.response?.status === 500) {
-          // 没设 skipErrorHandler 的请求，http-client 的拦截器已经提示过服务端消息，这里只负责跳转。
-          if (error.config?.skipErrorHandler) {
-            toast.error(i18next.t('Internal Server Error!'))
-          }
-          router.navigate({ to: '/500' })
-        }
-      }
-    },
-  }),
+const queryClient = createAppQueryClient(() => {
+  void router.navigate({ to: '/500' })
 })
 
 // Create a new router instance
@@ -121,7 +65,10 @@ declare module '@tanstack/react-router' {
 }
 
 // Render the app
-const rootElement = document.querySelector('#root')
+const rootElement = document.querySelector<HTMLElement>('#root')
+if (!rootElement) {
+  throw new Error('Root element not found')
+}
 // Set document.title and favicon from cached status, then refresh from network
 ;(function initSystemBranding() {
   try {
@@ -134,27 +81,18 @@ const rootElement = document.querySelector('#root')
       if (metaTitle) metaTitle.setAttribute('content', name)
     }
     // Cache-first
-    try {
-      const saved = localStorage.getItem('status')
-      if (saved) {
-        const s = JSON.parse(saved)
-        if (s?.system_name) apply(s.system_name)
-        if (s?.logo) applyFaviconToDom(s.logo)
-      }
-    } catch {
-      /* empty */
-    }
-    // Background refresh
-    getStatus()
+    const cached = readCachedStatus()
+    if (cached?.system_name) apply(cached.system_name as string)
+    if (cached?.logo) applyFaviconToDom(cached.logo as string)
+
+    // Background refresh through the shared cache. This primes ['status']
+    // before React mounts, so the root guard and every status consumer reuse
+    // this one request instead of firing their own. `fetchStatus` owns the
+    // localStorage write and the system-config store sync.
+    queryClient
+      .ensureQueryData(statusQueryOptions)
       .then((s) => {
-        if (s?.system_name) {
-          apply(s.system_name as string)
-          try {
-            localStorage.setItem('status', JSON.stringify(s))
-          } catch {
-            /* empty */
-          }
-        }
+        if (s?.system_name) apply(s.system_name as string)
         if (s?.logo) applyFaviconToDom(s.logo as string)
       })
       .catch(() => {
@@ -164,9 +102,6 @@ const rootElement = document.querySelector('#root')
     /* empty */
   }
 })()
-if (!rootElement) {
-  throw new Error('Root element #root not found')
-}
 if (!rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(

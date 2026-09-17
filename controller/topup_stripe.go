@@ -53,6 +53,10 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup())})
 		return
 	}
+	if req.Amount > 10000 {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值数量不能大于 10000"})
+		return
+	}
 	id := c.GetInt("id")
 	group, err := model.GetUserGroup(id, true)
 	if err != nil {
@@ -64,12 +68,16 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
+	exchangeRate := stripeExchangeRate()
+	if rejectInvalidCreditedQuota(c, id, decimal.NewFromInt(rawQuotaFromPayMoney(decimal.NewFromFloat(payMoney), exchangeRate, operation_setting.Price))) {
+		return
+	}
 	// 同时返回本次报价锁定的到账折算汇率（元/美金），供前端展示实际到账，
 	// 避免前端用独立的实时汇率重新计算导致与后端到账口径不一致。
 	c.JSON(http.StatusOK, gin.H{
 		"message":       "success",
 		"data":          strconv.FormatFloat(payMoney, 'f', 2, 64),
-		"exchange_rate": stripeExchangeRate(),
+		"exchange_rate": exchangeRate,
 	})
 }
 
@@ -102,7 +110,11 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
+	user, err := model.GetUserById(id, false)
+	if err != nil || user == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
+		return
+	}
 
 	// 与报价（RequestAmount）一致，使用带缓存的用户实际分组计算实付美元金额。
 	group, err := model.GetUserGroup(id, true)
@@ -123,6 +135,9 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	// 到账额度 = 实付USD × 汇率 ÷ 系统充值比例(operation_setting.Price) × QuotaPerUnit。
 	exchangeRate := stripeExchangeRate()
 	quotaSnapshot := rawQuotaFromPayMoney(decimal.NewFromFloat(payMoney), exchangeRate, operation_setting.Price)
+	if rejectInvalidCreditedQuota(c, id, decimal.NewFromInt(quotaSnapshot)) {
+		return
+	}
 
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))

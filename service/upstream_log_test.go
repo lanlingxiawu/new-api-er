@@ -207,6 +207,30 @@ func TestQueryUpstreamLogs_RecentFallback(t *testing.T) {
 	assert.Equal(t, "req_a", res.Items[0].RequestId)
 }
 
+// The legacy endpoint returns up to 1000 recent logs, newest first. Truncating
+// to the page size before matching would only search the newest few rows, so an
+// older request on a busy channel was reported as missing upstream.
+func TestQueryUpstreamLogs_RecentFallbackMatchesBeyondPageSize(t *testing.T) {
+	srv := newUpstreamServer(t, false, func(r *http.Request) (int, string) {
+		if r.URL.Path == "/api/log/token/query" {
+			return http.StatusNotFound, `not found`
+		}
+		return http.StatusOK, `{"success":true,"data":[{"id":7,"request_id":"req_7"},{"id":6,"request_id":"req_6"},{"id":5,"request_id":"req_5"},{"id":4,"request_id":"req_4"},{"id":3,"request_id":"req_3"},{"id":2,"request_id":"req_target"},{"id":1,"request_id":"req_target"}]}`
+	})
+	defer srv.Close()
+
+	matched, err := QueryUpstreamLogs(context.Background(), srv.URL, UpstreamLogCredential{Token: "k"}, UpstreamLogFilters{RequestId: "req_target"}, 1, 5)
+	require.NoError(t, err)
+	require.Len(t, matched.Items, 2)
+	assert.Equal(t, 2, matched.Items[0].Id)
+	assert.Equal(t, 2, matched.Total)
+
+	unfiltered, err := QueryUpstreamLogs(context.Background(), srv.URL, UpstreamLogCredential{Token: "k"}, UpstreamLogFilters{}, 1, 5)
+	require.NoError(t, err)
+	assert.Len(t, unfiltered.Items, 5)
+	assert.Equal(t, 7, unfiltered.Total)
+}
+
 // The legacy /api/log/token endpoint takes no page parameter, so it can only
 // ever return one page of recent logs. Pretending page 2 exists would replay
 // page 1 to the caller, so later pages must come back empty.

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/model"
 	"net/http/httptest"
 	"testing"
 
@@ -96,16 +97,17 @@ func TestAffinity_MarkUsedAndAdminInfo(t *testing.T) {
 	MarkChannelAffinityUsed(c, "default", 0)
 	MarkChannelAffinityUsed(c, "vip", 77)
 
-	admin := map[string]interface{}{}
-	AppendChannelAffinityAdminInfo(c, admin)
+	other := model.NewLogOther()
+	AppendChannelAffinityAdminInfo(c, other)
+	admin := logOtherAdmin(other)
 	require.Contains(t, admin, "channel_affinity")
 	info := admin["channel_affinity"].(map[string]interface{})
 	assert.EqualValues(t, 77, info["channel_id"])
 	assert.Equal(t, "vip", info["selected_group"])
 
-	// nil map / nil context => safe no-ops.
+	// nil other / nil context => safe no-ops.
 	AppendChannelAffinityAdminInfo(c, nil)
-	AppendChannelAffinityAdminInfo(nil, admin)
+	AppendChannelAffinityAdminInfo(nil, other)
 	MarkChannelAffinityUsed(nil, "g", 1)
 }
 

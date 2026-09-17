@@ -6,11 +6,13 @@ export type AdminPermissionMatrix = Record<string, Record<string, boolean>>
 export type AdminCapabilities = AdminPermissionMatrix
 
 export const ADMIN_PERMISSION_RESOURCES = {
+  AUDIT: 'audit',
   CHANNEL: 'channel',
   VERIDROP_DETECTION: 'admin_menu.veridrop_detection',
   PRICE_MONITOR: 'admin_menu.price_monitor',
   ADMIN_MENU_PREFIX: 'admin_menu.',
   SYSTEM_SETTINGS_PREFIX: 'system_settings.',
+  TASK_PLUGIN: 'task_plugin',
 } as const
 
 export const ADMIN_PERMISSION_ACTIONS = {
@@ -21,6 +23,7 @@ export const ADMIN_PERMISSION_ACTIONS = {
   SECRET_VIEW: 'secret_view',
   VIEW: 'view',
   EDIT: 'edit',
+  BIND: 'bind',
 } as const
 
 // The role whose baseline grants are used as defaults in the permission editor.

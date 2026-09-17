@@ -154,13 +154,14 @@ func TestUpdatePricing_ModelMetaAndStatus(t *testing.T) {
 	mDisabled := uniq("zzmetaoff")
 	mkAbilityModel(t, grp, mEnabled+","+mDisabled)
 
-	// enabled metadata row -> fields flow into pricing
+	// enabled metadata row -> fields flow into pricing (vendor must exist)
+	vendor := mkVendor(t, nil)
 	metaOn := &Model{
 		ModelName:   mEnabled,
 		Description: "desc-on",
 		Icon:        "icon-on",
 		Tags:        "tag-on",
-		VendorID:    4242,
+		VendorID:    vendor.Id,
 		Status:      1,
 		NameRule:    NameRuleExact,
 	}
@@ -184,7 +185,7 @@ func TestUpdatePricing_ModelMetaAndStatus(t *testing.T) {
 	assert.Equal(t, "desc-on", on.Description)
 	assert.Equal(t, "icon-on", on.Icon)
 	assert.Equal(t, "tag-on", on.Tags)
-	assert.Equal(t, 4242, on.VendorID)
+	assert.Equal(t, vendor.Id, on.VendorID)
 
 	assert.Nil(t, findPricing(list, mDisabled), "disabled model must be excluded from pricing")
 }

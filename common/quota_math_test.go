@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
@@ -39,16 +40,16 @@ func TestSaturateQuota_NaN(t *testing.T) {
 }
 
 func TestSaturateQuota_OverflowBoundary(t *testing.T) {
-	// value == MaxQuota triggers the >= overflow branch (inclusive).
+	// value == MaxQuota is representable and stays un-clamped (exclusive bound).
 	q, clamp := saturateQuota(float64(MaxQuota), "op")
+	assert.Equal(t, MaxQuota, q)
+	assert.Nil(t, clamp)
+
+	// Just above the boundary saturates.
+	q, clamp = saturateQuota(float64(MaxQuota)+1, "op")
 	assert.Equal(t, MaxQuota, q)
 	require.NotNil(t, clamp)
 	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-
-	// Just inside the boundary stays un-clamped.
-	q, clamp = saturateQuota(float64(MaxQuota)-1, "op")
-	assert.Equal(t, MaxQuota-1, q)
-	assert.Nil(t, clamp)
 
 	// Far above.
 	q, clamp = saturateQuota(1e18, "op")
@@ -60,12 +61,12 @@ func TestSaturateQuota_OverflowBoundary(t *testing.T) {
 func TestSaturateQuota_UnderflowBoundary(t *testing.T) {
 	q, clamp := saturateQuota(float64(MinQuota), "op")
 	assert.Equal(t, MinQuota, q)
+	assert.Nil(t, clamp, "MinQuota itself is representable (exclusive bound)")
+
+	q, clamp = saturateQuota(float64(MinQuota)-1, "op")
+	assert.Equal(t, MinQuota, q)
 	require.NotNil(t, clamp)
 	assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
-
-	q, clamp = saturateQuota(float64(MinQuota)+1, "op")
-	assert.Equal(t, MinQuota+1, q)
-	assert.Nil(t, clamp)
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +108,8 @@ func TestQuotaFromFloat(t *testing.T) {
 	assert.Equal(t, -5, QuotaFromFloat(-5.9))
 	assert.Equal(t, MaxQuota, QuotaFromFloat(1e18), "overflow saturates, does NOT wrap")
 	assert.Equal(t, MinQuota, QuotaFromFloat(-1e18))
+	assert.Equal(t, MaxQuota, QuotaFromFloat(math.Inf(1)), "+Inf saturates")
+	assert.Equal(t, MinQuota, QuotaFromFloat(math.Inf(-1)), "-Inf saturates")
 	assert.Equal(t, 0, QuotaFromFloat(math.NaN()))
 }
 
@@ -133,6 +136,11 @@ func TestQuotaFromFloatStrict(t *testing.T) {
 	var clamp *QuotaClamp
 	require.True(t, errors.As(err, &clamp))
 	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+	assert.Equal(t, MaxQuota, clamp.Clamped)
+	assert.ErrorContains(t, err, "QuotaFromFloat")
+	assert.ErrorContains(t, err, "overflow")
+	assert.ErrorContains(t, err, "original=")
+	assert.ErrorContains(t, err, fmt.Sprintf("clamped=%d", MaxQuota))
 }
 
 // ---------------------------------------------------------------------------
@@ -190,5 +198,22 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 	assert.Equal(t, MaxQuota, q)
 	require.NotNil(t, clamp)
 	assert.Equal(t, "QuotaFromDecimal", clamp.Op)
+	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+}
+
+func TestWalletQuotaFromDecimalStrict(t *testing.T) {
+	quota, err := WalletQuotaFromDecimalStrict(decimal.NewFromInt(4_294_500_000))
+	require.NoError(t, err)
+	assert.Equal(t, 4_294_500_000, quota)
+
+	quota, err = WalletQuotaFromDecimalStrict(decimal.NewFromInt(MaxWalletQuota))
+	require.NoError(t, err)
+	assert.Equal(t, MaxWalletQuota, quota)
+
+	quota, err = WalletQuotaFromDecimalStrict(decimal.NewFromInt(MaxWalletQuota + 1))
+	assert.Zero(t, quota)
+	var clamp *QuotaClamp
+	require.ErrorAs(t, err, &clamp)
+	assert.Equal(t, "WalletQuotaFromDecimal", clamp.Op)
 	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
 }

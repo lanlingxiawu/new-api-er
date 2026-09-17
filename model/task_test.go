@@ -62,7 +62,7 @@ func TestTaskStatus_ToVideoStatus(t *testing.T) {
 		{TaskStatusInProgress, dto.VideoStatusInProgress},
 		{TaskStatusSuccess, dto.VideoStatusCompleted},
 		{TaskStatusFailure, dto.VideoStatusFailed},
-		{TaskStatusNotStart, dto.VideoStatusUnknown}, // NOT_START hits default
+		{TaskStatusNotStart, dto.VideoStatusQueued}, // NOT_START is reported as queued
 		{TaskStatus("whatever"), dto.VideoStatusUnknown},
 	}
 	for _, c := range cases {
@@ -87,12 +87,14 @@ func TestProperties_ScanValue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, v)
 
-	// Value() on a populated struct yields JSON bytes
+	// Value() on a populated struct yields JSON text as string (PG simple
+	// protocol would encode []byte as bytea and reject it for json columns)
 	p := Properties{Input: "hi", UpstreamModelName: "up", OriginModelName: "orig"}
 	v, err = p.Value()
 	require.NoError(t, err)
-	b, ok := v.([]byte)
+	str, ok := v.(string)
 	require.True(t, ok)
+	b := []byte(str)
 
 	// Scan round-trips
 	var got Properties
@@ -119,8 +121,9 @@ func TestTaskPrivateData_ScanValue(t *testing.T) {
 	pd := TaskPrivateData{Key: "sk", UpstreamTaskID: "up-1", ResultURL: "http://x", TokenId: 7}
 	v, err = pd.Value()
 	require.NoError(t, err)
-	b, ok := v.([]byte)
+	str, ok := v.(string)
 	require.True(t, ok)
+	b := []byte(str)
 
 	var got TaskPrivateData
 	require.NoError(t, got.Scan(b))
@@ -217,7 +220,8 @@ func TestTask_ToOpenAIVideo(t *testing.T) {
 	assert.Equal(t, 75, v.Progress)
 	assert.EqualValues(t, 111, v.CreatedAt)
 	assert.EqualValues(t, 222, v.CompletedAt)
-	assert.Equal(t, "http://video", v.Metadata["url"])
+	// the private upstream result URL is never exposed in the public video object
+	assert.NotContains(t, v.Metadata, "url")
 }
 
 func TestInitTask(t *testing.T) {
@@ -338,17 +342,26 @@ func TestTask_InsertAndGet(t *testing.T) {
 	assert.False(t, exist)
 }
 
-func TestTask_GetByTaskIds(t *testing.T) {
+func TestTask_GetByTaskIdsForPlatforms(t *testing.T) {
 	uid := nextTestID()
 	a := mkTask(t, func(tk *Task) { tk.UserId = uid })
 	b := mkTask(t, func(tk *Task) { tk.UserId = uid })
+	other := mkTask(t, func(tk *Task) { tk.UserId = uid; tk.Platform = constant.TaskPlatform("zz-other") })
 
-	got, err := GetByTaskIds(uid, []any{a.TaskID, b.TaskID})
+	got, err := GetByTaskIdsForPlatforms(uid, []constant.TaskPlatform{constant.TaskPlatformSuno}, []string{a.TaskID, b.TaskID, other.TaskID})
 	require.NoError(t, err)
-	assert.Len(t, got, 2)
+	assert.Len(t, got, 2, "tasks on a platform outside the allow-list are excluded")
 
-	// empty ids -> nil, nil
-	got, err = GetByTaskIds(uid, nil)
+	// foreign user -> nothing
+	got, err = GetByTaskIdsForPlatforms(uid+1, []constant.TaskPlatform{constant.TaskPlatformSuno}, []string{a.TaskID})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// empty ids / empty platforms -> nil, nil
+	got, err = GetByTaskIdsForPlatforms(uid, []constant.TaskPlatform{constant.TaskPlatformSuno}, nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	got, err = GetByTaskIdsForPlatforms(uid, nil, []string{a.TaskID})
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }

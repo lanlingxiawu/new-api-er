@@ -56,8 +56,8 @@ func TestAuditOperatorInfo_PopulatesFromContext(t *testing.T) {
 
 	info := auditOperatorInfo(ctx)
 	require.NotNil(t, info)
-	assert.Equal(t, 4242, info["admin_id"])
-	assert.Equal(t, "admin1", info["admin_username"])
-	assert.Equal(t, common.RoleAdminUser, info["admin_role"])
-	assert.Equal(t, "access_token", info["auth_method"])
+	assert.Equal(t, 4242, info.AdminID)
+	assert.Equal(t, "admin1", info.AdminUsername)
+	assert.Equal(t, common.RoleAdminUser, info.AdminRole)
+	assert.Equal(t, "access_token", info.AuthMethod)
 }

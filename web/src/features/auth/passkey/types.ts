@@ -32,6 +32,7 @@ export interface PasskeyStatus {
 }
 
 export interface PasskeyOptionsPayload {
+  rp_ids?: string[]
   options?: unknown
   flow_token?: string
   expires_at?: number

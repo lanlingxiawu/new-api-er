@@ -635,3 +635,34 @@ func TestGetCommissionStatsByEmployeeIds(t *testing.T) {
 	assert.EqualValues(t, 18, stats[0].TotalCommission)
 	assert.EqualValues(t, 3, stats[0].RecordCount)
 }
+
+// Regression: gorm.io/driver/mysql v1.5+ fails AutoMigrate with "Duplicate key
+// name" when log_id still carries the legacy non-unique index. The harness runs
+// migrateEmployeeCommissionLogIdUniqueIndex before AutoMigrate, so by now the
+// index must exist and be unique, and a second repair pass must be a no-op.
+func TestMigrateEmployeeCommissionLogIdUniqueIndex(t *testing.T) {
+	requireDB(t)
+
+	assertUniqueLogIdIndex := func() {
+		t.Helper()
+		indexes, err := DB.Migrator().GetIndexes(&EmployeeCommissionLog{})
+		require.NoError(t, err)
+		for _, index := range indexes {
+			if index.Name() != employeeCommissionLogIdIndex {
+				continue
+			}
+			unique, ok := index.Unique()
+			require.True(t, ok)
+			assert.True(t, unique, "log_id index must be unique after migration")
+			return
+		}
+		t.Fatalf("index %s not found", employeeCommissionLogIdIndex)
+	}
+
+	assertUniqueLogIdIndex()
+	require.NoError(t, migrateEmployeeCommissionLogIdUniqueIndex(DB))
+	assertUniqueLogIdIndex()
+
+	// nil db is tolerated
+	require.NoError(t, migrateEmployeeCommissionLogIdUniqueIndex(nil))
+}

@@ -185,7 +185,7 @@ func logBlockedMutualInvitation(action string, employeeUserId, customerUserId, o
 		"customer_user_id": customerUserId,
 		"operated_by":      operatedBy,
 	}
-	model.RecordLogWithAdminInfo(
+	model.RecordLogWithAdminDetails(
 		customerUserId,
 		model.LogTypeManage,
 		"blocked employee customer binding because employee and customer are mutual inviters",

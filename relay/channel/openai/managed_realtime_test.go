@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -187,8 +188,9 @@ func TestRealtimeStreamBetweenRoundsTermination(t *testing.T) {
 				info.StreamSession.ObserveWebSocketHandshake(handshake, nil)
 				info.StreamSession.BindUpstream(target)
 				_, usage := managedRealtimeHandler(c, info)
-				other := map[string]any{}
-				service.AppendStreamLogInfo(info, other)
+				otherLog := model.NewLogOther()
+				service.AppendStreamLogInfo(info, otherLog)
+				other := otherLog.Snapshot()
 				result <- terminationResult{usage: usage, outcome: info.StreamResult, diagnostic: other["stream_diagnostic"].(relaycommon.StreamDiagnostic), reason: info.StreamStatus.EndReason}
 			}))
 			defer proxy.Close()
@@ -308,8 +310,9 @@ func TestRealtimeStreamWebSocketRounds(t *testing.T) {
 				info.StreamSession.ObserveWebSocketHandshake(handshake, err)
 				info.StreamSession.BindUpstream(target)
 				_, usage := managedRealtimeHandler(c, info)
-				other := map[string]any{}
-				service.AppendStreamLogInfo(info, other)
+				otherLog := model.NewLogOther()
+				service.AppendStreamLogInfo(info, otherLog)
+				other := otherLog.Snapshot()
 				diagnostics <- other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 				if info.StreamResult.DiagnosticAvailable != failedSecond {
 					// 由主测试 goroutine 断言，避免 HTTP 工作者内 Fatal 中断连接清理。
@@ -388,8 +391,9 @@ func TestRealtimeStreamEmptyClose(t *testing.T) {
 		info.StreamSession.ObserveWebSocketHandshake(handshake, err)
 		info.StreamSession.BindUpstream(target)
 		_, _ = managedRealtimeHandler(c, info)
-		other := map[string]any{}
-		service.AppendStreamLogInfo(info, other)
+		otherLog := model.NewLogOther()
+		service.AppendStreamLogInfo(info, otherLog)
+		other := otherLog.Snapshot()
 		diagnostics <- other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 		result <- info.StreamResult
 	}))

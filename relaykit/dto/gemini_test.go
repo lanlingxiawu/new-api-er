@@ -114,7 +114,8 @@ func TestGeminiThinkingConfig_Unmarshal(t *testing.T) {
 	// camelCase
 	var c GeminiThinkingConfig
 	require.NoError(t, kitutil.Unmarshal([]byte(`{"includeThoughts":true,"thinkingBudget":100,"thinkingLevel":"high"}`), &c))
-	assert.True(t, c.IncludeThoughts)
+	require.NotNil(t, c.IncludeThoughts)
+	assert.True(t, *c.IncludeThoughts)
 	require.NotNil(t, c.ThinkingBudget)
 	assert.Equal(t, 100, *c.ThinkingBudget)
 	assert.Equal(t, "high", c.ThinkingLevel)
@@ -122,7 +123,8 @@ func TestGeminiThinkingConfig_Unmarshal(t *testing.T) {
 	// snake_case overrides
 	var c2 GeminiThinkingConfig
 	require.NoError(t, kitutil.Unmarshal([]byte(`{"include_thoughts":true,"thinking_budget":50,"thinking_level":"low"}`), &c2))
-	assert.True(t, c2.IncludeThoughts)
+	require.NotNil(t, c2.IncludeThoughts)
+	assert.True(t, *c2.IncludeThoughts)
 	require.NotNil(t, c2.ThinkingBudget)
 	assert.Equal(t, 50, *c2.ThinkingBudget)
 	assert.Equal(t, "low", c2.ThinkingLevel)

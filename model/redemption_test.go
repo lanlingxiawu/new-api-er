@@ -182,6 +182,44 @@ func TestRedeem_NotYetExpired(t *testing.T) {
 	assert.Equal(t, 250, reloaded.Quota)
 }
 
+// A redeem that would push the wallet past MaxWalletQuota must fail atomically:
+// no credit and the code stays redeemable.
+func TestRedeem_RejectsWalletOverflow(t *testing.T) {
+	requireDB(t)
+	u := mkUser(t, nil)
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", u.Id).Update("quota", common.MaxWalletQuota-10).Error)
+	r := mkRedemption(t, func(r *Redemption) { r.Quota = 11 })
+
+	_, err := Redeem(r.Key, u.Id)
+	require.ErrorIs(t, err, ErrRedeemFailed)
+
+	var user User
+	require.NoError(t, DB.First(&user, "id = ?", u.Id).Error)
+	assert.Equal(t, common.MaxWalletQuota-10, user.Quota)
+
+	rr, err := GetRedemptionById(r.Id)
+	require.NoError(t, err)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, rr.Status)
+}
+
+func TestRedemption_InsertUpdateRejectInvalidQuota(t *testing.T) {
+	requireDB(t)
+	overflow := &Redemption{
+		Name:        uniq("rn"),
+		Key:         redKey(),
+		Status:      common.RedemptionCodeStatusEnabled,
+		Quota:       common.MaxWalletQuota + 1,
+		CreatedTime: common.GetTimestamp(),
+	}
+	require.Error(t, overflow.Insert())
+
+	r := mkRedemption(t, nil)
+	r.Quota = 0
+	require.Error(t, r.Update())
+	r.Quota = common.MaxWalletQuota + 1
+	require.Error(t, r.Update())
+}
+
 // ---------------------------------------------------------------------------
 // Listing / search / bulk cleanup
 // ---------------------------------------------------------------------------

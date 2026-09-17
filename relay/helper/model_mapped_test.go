@@ -5,10 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -89,30 +87,4 @@ func TestModelMappedHelper_InvalidMappingJSON(t *testing.T) {
 	err := ModelMappedHelper(c, info, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal_model_mapping_failed")
-}
-
-func TestModelMappedHelper_ResponsesCompact(t *testing.T) {
-	suffix := ratio_setting.CompactModelSuffix
-	origin := "gpt-4o" + suffix
-	c := newModelMapContext(t, "")
-	info := &relaycommon.RelayInfo{
-		OriginModelName: origin,
-		RelayMode:       relayconstant.RelayModeResponsesCompact,
-	}
-	require.NoError(t, ModelMappedHelper(c, info, nil))
-	// mapping trimmed to base then re-suffixed
-	require.Equal(t, "gpt-4o", info.UpstreamModelName)
-	require.Equal(t, ratio_setting.WithCompactModelSuffix("gpt-4o"), info.OriginModelName)
-}
-
-func TestModelMappedHelper_ResponsesCompactWithMapping(t *testing.T) {
-	suffix := ratio_setting.CompactModelSuffix
-	origin := "gpt-4o" + suffix
-	c := newModelMapContext(t, `{"gpt-4o":"gpt-4o-upstream"}`)
-	info := &relaycommon.RelayInfo{
-		OriginModelName: origin,
-		RelayMode:       relayconstant.RelayModeResponsesCompact,
-	}
-	require.NoError(t, ModelMappedHelper(c, info, nil))
-	require.Equal(t, "gpt-4o-upstream", info.UpstreamModelName)
 }

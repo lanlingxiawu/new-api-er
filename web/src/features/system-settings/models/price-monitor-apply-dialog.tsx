@@ -35,10 +35,11 @@ import type {
   PriceMonitorPriceCell,
   PriceMonitorRepairFloor,
 } from '../types'
-import { numericDraftRegex } from './model-pricing-core'
 import { shouldForceApply } from './price-monitor-apply-force'
 import { PriceInput } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
+
+const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
 
 export type PriceMonitorRepairTarget = {
   model: string

@@ -3,6 +3,7 @@ package model_setting
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -59,6 +60,8 @@ var thirdPartySD2PricingSettings = ThirdPartySD2PricingSettings{
 
 type thirdPartySD2PricingIndex struct {
 	matrix ThirdPartySD2PricingMatrix
+	// billingExprs is the matrix rendered as one task usage expression per model.
+	billingExprs map[string]string
 }
 
 var currentThirdPartySD2PricingIndex atomic.Pointer[thirdPartySD2PricingIndex]
@@ -75,8 +78,83 @@ func RebuildThirdPartySD2PricingIndex() {
 	merged := cloneThirdPartySD2PricingMatrix(defaultThirdPartySD2PricingMatrix)
 	overlayThirdPartySD2PricingMatrix(merged, thirdPartySD2PricingSettings.Matrix)
 	currentThirdPartySD2PricingIndex.Store(&thirdPartySD2PricingIndex{
-		matrix: merged,
+		matrix:       merged,
+		billingExprs: buildThirdPartySD2BillingExprs(merged),
 	})
+}
+
+// ThirdPartySD2PluginKey is the task plugin that serves ThirdPartySD2 channels.
+const ThirdPartySD2PluginKey = "thirdpartysd2"
+
+// GetThirdPartySD2BillingExpr returns the pricing matrix of a model as a task
+// usage expression over the thirdpartysd2 plugin facts tokens,
+// output_resolution and video_input. Matrix prices are $/1M tokens, so the
+// expression returns the task cost in USD.
+func GetThirdPartySD2BillingExpr(modelName string) (string, bool) {
+	idx := currentThirdPartySD2PricingIndex.Load()
+	if idx == nil {
+		return "", false
+	}
+	expression, ok := idx.billingExprs[strings.TrimSpace(modelName)]
+	return expression, ok
+}
+
+func buildThirdPartySD2BillingExprs(matrix ThirdPartySD2PricingMatrix) map[string]string {
+	expressions := make(map[string]string, len(matrix))
+	for modelName, resolutions := range matrix {
+		if expression := buildThirdPartySD2BillingExpr(resolutions); expression != "" {
+			expressions[modelName] = expression
+		}
+	}
+	return expressions
+}
+
+// buildThirdPartySD2BillingExpr renders one chained ternary with a tier per
+// resolution and video-input combination, ordered by resolution rank. The
+// plugin rejects resolutions a model does not support before billing and the
+// merged matrix always keeps the default combinations, so the final else is
+// the last listed tier instead of an unpriced fallback.
+func buildThirdPartySD2BillingExpr(resolutions map[string]ThirdPartySD2ResolutionPricing) string {
+	keys := make([]string, 0, len(resolutions))
+	for resolution := range resolutions {
+		if thirdPartySD2ResolutionRank(resolution) > 0 {
+			keys = append(keys, resolution)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return thirdPartySD2ResolutionRank(keys[i]) < thirdPartySD2ResolutionRank(keys[j])
+	})
+	type branch struct{ condition, tier string }
+	branches := make([]branch, 0, len(keys)*2)
+	for _, resolution := range keys {
+		pricing := resolutions[resolution]
+		variants := []struct {
+			videoInput string
+			tierName   string
+			price      float64
+		}{
+			{"none", resolution, pricing.NoVideo},
+			{"video", resolution + "_video", pricing.WithVideo},
+		}
+		for _, variant := range variants {
+			branches = append(branches, branch{
+				condition: fmt.Sprintf(`u("output_resolution") == %q && u("video_input") == %q`, resolution, variant.videoInput),
+				tier:      fmt.Sprintf(`tier(%q, u("tokens") * %s / 1000000)`, variant.tierName, strconv.FormatFloat(variant.price, 'f', -1, 64)),
+			})
+		}
+	}
+	var builder strings.Builder
+	for _, item := range branches[:len(branches)-1] {
+		builder.WriteString(item.condition)
+		builder.WriteString(" ? ")
+		builder.WriteString(item.tier)
+		builder.WriteString(" : ")
+	}
+	builder.WriteString(branches[len(branches)-1].tier)
+	return builder.String()
 }
 
 func GetThirdPartySD2PricingMatrix() ThirdPartySD2PricingMatrix {

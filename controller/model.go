@@ -9,12 +9,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel/ai360"
 	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
 	"github.com/QuantumNous/new-api/relay/channel/minimax"
 	"github.com/QuantumNous/new-api/relay/channel/moonshot"
-	taskthirdpartysd2 "github.com/QuantumNous/new-api/relay/channel/task/thirdpartysd2"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -34,7 +34,7 @@ var channelId2Models map[int][]string
 
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
-	for i := 0; i < constant.APITypeDummy; i++ {
+	for i := range constant.APITypeDummy {
 		if i == constant.APITypeAIProxyLibrary {
 			continue
 		}
@@ -94,6 +94,9 @@ func init() {
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
 		apiType, success := common.ChannelType2APIType(i)
 		if !success || apiType == constant.APITypeAIProxyLibrary {
+			if plugin, ok := jsplugin.DefaultRegistry.GetByChannelType(i); ok {
+				channelId2Models[i] = append([]string(nil), plugin.Meta.Models...)
+			}
 			continue
 		}
 		meta := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
@@ -102,15 +105,11 @@ func init() {
 		adaptor := relay.GetAdaptor(apiType)
 		adaptor.Init(meta)
 		channelId2Models[i] = adaptor.GetModelList()
-	}
-	channelId2Models[constant.ChannelTypeThirdPartySD2] = append([]string(nil), taskthirdpartysd2.ModelList...)
-	for _, modelName := range taskthirdpartysd2.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
-			Id:      modelName,
-			Object:  "model",
-			Created: 1626777600,
-			OwnedBy: taskthirdpartysd2.ChannelName,
-		})
+		if len(channelId2Models[i]) == 0 {
+			if plugin, ok := jsplugin.DefaultRegistry.GetByChannelType(i); ok {
+				channelId2Models[i] = append([]string(nil), plugin.Meta.Models...)
+			}
+		}
 	}
 	openAIModels = lo.UniqBy(openAIModels, func(m dto.OpenAIModels) string {
 		return m.Id
@@ -122,8 +121,10 @@ func init() {
 }
 
 func channelOwnerName(channelType int) string {
+	// ThirdPartySD2 channels map to the OpenAI API type but are served by the
+	// thirdpartysd2 task plugin; keep their established owned_by value.
 	if channelType == constant.ChannelTypeThirdPartySD2 {
-		return taskthirdpartysd2.ChannelName
+		return "third-party-sd2"
 	}
 	apiType, success := common.ChannelType2APIType(channelType)
 	if !success {
@@ -255,7 +256,7 @@ func ListModels(c *gin.Context, modelType int) {
 	models := service.GetGroupsEnabledModels(ownerGroups)
 	for _, modelName := range models {
 		if modelLimitEnable {
-			matchingName := ratio_setting.FormatMatchingModelName(modelName)
+			matchingName := ratio_setting.RoutingMatchModelName(modelName)
 			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
 				continue
 			}
@@ -327,9 +328,26 @@ func ChannelListModels(c *gin.Context) {
 }
 
 func DashboardListModels(c *gin.Context) {
+	modelsByChannel := make(map[int][]string, len(channelId2Models))
+	for channelType, models := range channelId2Models {
+		modelsByChannel[channelType] = append([]string(nil), models...)
+	}
+	for channelType := 1; channelType <= constant.ChannelTypeDummy; channelType++ {
+		plugin, ok := jsplugin.DefaultRegistry.GetByChannelType(channelType)
+		if !ok {
+			continue
+		}
+		// 插件与内置适配器共用渠道类型时（如 xAI 对话 + 视频插件）两份模型都要保留；
+		// ThirdPartySD2 只承载视频任务，其内置映射的 OpenAI 模型不适用。
+		if channelType == constant.ChannelTypeThirdPartySD2 {
+			modelsByChannel[channelType] = append([]string(nil), plugin.Meta.Models...)
+			continue
+		}
+		modelsByChannel[channelType] = lo.Uniq(append(modelsByChannel[channelType], plugin.Meta.Models...))
+	}
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":    channelId2Models,
+		"data":    modelsByChannel,
 	})
 }
 

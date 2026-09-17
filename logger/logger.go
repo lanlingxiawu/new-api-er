@@ -77,10 +77,12 @@ func LogInfo(ctx context.Context, msg string) {
 	logHelper(ctx, loggerINFO, msg)
 }
 
-// LogWarn 输出请求警告；ctx 为请求上下文，私有流的 msg 仅保留公开定位提示。
-func LogWarn(ctx context.Context, msg string) {
+// LogWarn 输出请求警告；ctx 为请求上下文，msg/args 按需格式化，私有流的 msg 仅保留公开定位提示。
+func LogWarn(ctx context.Context, msg string, args ...any) {
 	if common.IsPrivateStream(ctx) {
 		msg = "stream warning; see private upstream diagnostics"
+	} else if len(args) > 0 {
+		msg = fmt.Sprintf(msg, args...)
 	}
 	logHelper(ctx, loggerWarn, msg)
 }

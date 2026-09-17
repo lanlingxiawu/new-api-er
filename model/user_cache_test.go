@@ -106,14 +106,10 @@ func TestUserCache_RedisDisabledNoOps(t *testing.T) {
 	require.False(t, common.RedisEnabled)
 
 	assert.NoError(t, invalidateUserCache(1))
-	assert.NoError(t, InvalidateUserCache(1))
 	assert.NoError(t, populateUserCache(User{Id: 1}))
 	assert.NoError(t, updateUserCache(User{Id: 1, Status: common.UserStatusEnabled}))
 	assert.NoError(t, cacheIncrUserQuota(1, 5))
 	assert.NoError(t, cacheDecrUserQuota(1, 5))
-	assert.NoError(t, updateUserStatusCache(1, true))
-	assert.NoError(t, updateUserStatusCache(1, false))
-	assert.NoError(t, updateUserQuotaCache(1, 10))
 	assert.NoError(t, RefreshUserGroupCache(1))
 	assert.NoError(t, updateUserEmailCache(1, "e"))
 	assert.NoError(t, updateUserNameCache(1, "n"))
@@ -148,9 +144,7 @@ func TestGetUserCache_DBFallbackNoRedis(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1234, q)
 
-	st, err := getUserStatusCache(u.Id)
-	require.NoError(t, err)
-	assert.Equal(t, common.UserStatusEnabled, st)
+	assert.Equal(t, common.UserStatusEnabled, cache.Status)
 
 	name, err := getUserNameCache(u.Id)
 	require.NoError(t, err)
@@ -206,27 +200,25 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 
 	// field-level updates. Group cache is refreshed from the DB (upstream #6329
 	// replaced the direct set with RefreshUserGroupCache), so update the row first.
-	require.NoError(t, updateUserQuotaCache(u.Id, 7777))
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", u.Id).Update("group", "newg").Error)
 	require.NoError(t, RefreshUserGroupCache(u.Id))
 	require.NoError(t, updateUserEmailCache(u.Id, "new@e.com"))
 	require.NoError(t, updateUserNameCache(u.Id, "newname"))
-	require.NoError(t, updateUserStatusCache(u.Id, false))
 	require.NoError(t, updateUserSettingCache(u.Id, `{"language":"fr"}`))
 
 	base, err = cacheGetUserBase(u.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 7777, base.Quota)
+	assert.Equal(t, 1200, base.Quota, "field-level refreshes never overwrite the atomic quota")
 	assert.Equal(t, "newg", base.Group)
 	assert.Equal(t, "new@e.com", base.Email)
 	assert.Equal(t, "newname", base.Username)
-	assert.Equal(t, common.UserStatusDisabled, base.Status)
+	assert.Equal(t, common.UserStatusEnabled, base.Status)
 
 	// GetUserCache now hits Redis (no DB) and returns the mutated snapshot
 	cache, err := GetUserCache(u.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "newg", cache.Group)
-	assert.Equal(t, 7777, cache.Quota)
+	assert.Equal(t, 1200, cache.Quota)
 
 	// language + group-ratios helpers over the cache
 	assert.Equal(t, "fr", GetUserLanguage(u.Id))

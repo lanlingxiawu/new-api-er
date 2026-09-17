@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { Dialog } from '@/components/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -41,7 +42,8 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getDeployment, updateDeployment } from '../../api'
 import { deploymentsQueryKeys } from '../../lib'
@@ -105,7 +107,10 @@ export function UpdateConfigDialog({
 
   const { data: detailsRes, isLoading } = useQuery({
     queryKey: ['deployment-details-for-update', deploymentId],
-    queryFn: () => (deploymentId ? getDeployment(deploymentId) : null),
+    queryFn: async () =>
+      requireServerSuccess(
+        await (deploymentId ? getDeployment(deploymentId) : null)
+      ),
     enabled: open && deploymentId !== null,
   })
 
@@ -202,10 +207,10 @@ export function UpdateConfigDialog({
         onOpenChange(false)
         return
       }
-      toast.error(res.message || t('Update failed'))
+      handleServerError(res, t('Update failed'))
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : t('Update failed')
-      toast.error(msg)
+      handleServerError(err, msg)
     }
   }
 
@@ -398,10 +403,14 @@ export function UpdateConfigDialog({
                         <FormItem>
                           <FormLabel>{t('Env (JSON object)')}</FormLabel>
                           <FormControl>
-                            <Textarea
-                              className='min-h-40 font-mono text-xs'
+                            <JsonCodeEditor
+                              value={field.value || ''}
+                              onChange={field.onChange}
+                              name={field.name}
+                              onBlur={field.onBlur}
+                              textareaRef={field.ref}
                               placeholder='{"KEY":"VALUE"}'
-                              {...field}
+                              heightClassName='h-40 min-h-40 max-h-40'
                             />
                           </FormControl>
                           <FormMessage />
@@ -415,10 +424,14 @@ export function UpdateConfigDialog({
                         <FormItem>
                           <FormLabel>{t('Secret env (JSON object)')}</FormLabel>
                           <FormControl>
-                            <Textarea
-                              className='min-h-40 font-mono text-xs'
+                            <JsonCodeEditor
+                              value={field.value || ''}
+                              onChange={field.onChange}
+                              name={field.name}
+                              onBlur={field.onBlur}
+                              textareaRef={field.ref}
                               placeholder='{"SECRET":"VALUE"}'
-                              {...field}
+                              heightClassName='h-40 min-h-40 max-h-40'
                             />
                           </FormControl>
                           <FormMessage />

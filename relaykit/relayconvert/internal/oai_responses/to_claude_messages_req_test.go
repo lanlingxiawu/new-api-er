@@ -83,9 +83,10 @@ func TestOpenAIResponsesRequestToClaudeMessagesReasoningEffort(t *testing.T) {
 		effort string
 		budget int
 	}{
-		{"low", 1280},
-		{"medium", 2048},
-		{"high", 4096},
+		// Manual budget = default max_tokens (8192) x effort percentage (20/50/80%).
+		{"low", 1638},
+		{"medium", 4096},
+		{"high", 6553},
 	}
 	for _, tt := range tests {
 		t.Run(tt.effort, func(t *testing.T) {
@@ -290,26 +291,6 @@ func TestConvertOpenAIResponsesRequestToClaudeMessagesWrapper(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestResponsesFunctionParametersToClaudeInputSchema(t *testing.T) {
-	// map without type/properties gets defaults filled in
-	schema := responsesFunctionParametersToClaudeInputSchema(map[string]any{"required": []any{"q"}})
-	assert.Equal(t, "object", schema["type"])
-	assert.Equal(t, map[string]interface{}{}, schema["properties"])
-
-	// map with explicit type/properties preserved
-	schema = responsesFunctionParametersToClaudeInputSchema(map[string]any{
-		"type": "object", "properties": map[string]any{"q": map[string]any{"type": "string"}},
-	})
-	assert.Equal(t, "object", schema["type"])
-	props := schema["properties"].(map[string]any)
-	assert.Contains(t, props, "q")
-
-	// non-map -> default object schema
-	schema = responsesFunctionParametersToClaudeInputSchema("not a map")
-	assert.Equal(t, "object", schema["type"])
-	assert.Equal(t, map[string]interface{}{}, schema["properties"])
-}
-
 func TestClaudeMessageContentParts(t *testing.T) {
 	// []ClaudeMediaMessage passthrough
 	in := []dto.ClaudeMediaMessage{{Type: "text"}}
@@ -328,11 +309,11 @@ func TestClaudeMessageContentParts(t *testing.T) {
 }
 
 func TestResponsesClaudeRole(t *testing.T) {
-	assert.Equal(t, "assistant", responsesClaudeRole(map[string]any{"role": "assistant"}))
-	assert.Equal(t, "system", responsesClaudeRole(map[string]any{"role": "system"}))
-	assert.Equal(t, "system", responsesClaudeRole(map[string]any{"role": "developer"}))
-	assert.Equal(t, "user", responsesClaudeRole(map[string]any{"role": "user"}))
-	assert.Equal(t, "user", responsesClaudeRole(map[string]any{}))
+	assert.Equal(t, "assistant", responsesClaudeRole("assistant"))
+	assert.Equal(t, "system", responsesClaudeRole("system"))
+	assert.Equal(t, "system", responsesClaudeRole("developer"))
+	assert.Equal(t, "user", responsesClaudeRole("user"))
+	assert.Equal(t, "user", responsesClaudeRole(""))
 }
 
 func TestResponsesToolOutputValue(t *testing.T) {
@@ -371,8 +352,10 @@ func TestEnsureClaudeMessagesStartWithUser(t *testing.T) {
 	msgs := []dto.ClaudeMessage{{Role: "user"}}
 	assert.Equal(t, msgs, ensureClaudeMessagesStartWithUser(msgs))
 
-	// empty
-	assert.Empty(t, ensureClaudeMessagesStartWithUser(nil))
+	// empty -> a placeholder user turn is prepended (Claude requires a leading user message)
+	empty := ensureClaudeMessagesStartWithUser(nil)
+	require.Len(t, empty, 1)
+	assert.Equal(t, "user", empty[0].Role)
 
 	// starts with assistant -> prepends user
 	out := ensureClaudeMessagesStartWithUser([]dto.ClaudeMessage{{Role: "assistant"}})

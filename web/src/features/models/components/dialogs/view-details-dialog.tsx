@@ -30,6 +30,8 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getDeployment, listDeploymentContainers } from '../../api'
 
@@ -51,7 +53,10 @@ export function ViewDetailsDialog({
     isFetching: isFetchingDetails,
   } = useQuery({
     queryKey: ['deployment-details', deploymentId],
-    queryFn: () => (deploymentId ? getDeployment(deploymentId) : null),
+    queryFn: async () =>
+      requireServerSuccess(
+        await (deploymentId ? getDeployment(deploymentId) : null)
+      ),
     enabled: open && deploymentId !== null,
   })
 
@@ -62,8 +67,10 @@ export function ViewDetailsDialog({
     isFetching: isFetchingContainers,
   } = useQuery({
     queryKey: ['deployment-details-containers', deploymentId],
-    queryFn: () =>
-      deploymentId ? listDeploymentContainers(deploymentId) : null,
+    queryFn: async () =>
+      requireServerSuccess(
+        await (deploymentId ? listDeploymentContainers(deploymentId) : null)
+      ),
     enabled: open && deploymentId !== null,
   })
 
@@ -98,8 +105,8 @@ export function ViewDetailsDialog({
     try {
       await navigator.clipboard.writeText(String(deploymentId))
       toast.success(t('Copied'))
-    } catch {
-      toast.error(t('Copy failed'))
+    } catch (error) {
+      handleServerError(error, t('Copy failed'))
     }
   }
 

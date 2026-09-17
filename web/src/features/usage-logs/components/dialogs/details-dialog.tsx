@@ -35,6 +35,7 @@ import { LogDetailBody } from './log-detail-body'
 interface DetailsDialogProps {
   log: UsageLog // 当前日志，含请求 ID、Unix 秒创建时间和后端已过滤的扩展字段。
   isAdmin: boolean // 控制既有管理员费用字段展示，原始诊断权限由面板与后端独立判断。
+  isRoot: boolean // 超级管理员额外可见 root_info 诊断字段。
   open: boolean // 弹窗是否打开，同时控制私有诊断面板的挂载生命周期。
   onOpenChange: (open: boolean) => void // 向父组件报告显隐变化，参数 open 为新的打开状态。
 }
@@ -117,6 +118,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
       <LogDetailBody
         log={props.log}
         isAdmin={props.isAdmin}
+        isRoot={props.isRoot}
         heading={
           showUpstreamComparison ? (
             <h3 className='border-b pb-2 text-sm font-semibold'>

@@ -16,32 +16,36 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { AxiosError } from 'axios'
-import i18next from 'i18next'
 import { toast } from 'sonner'
 
-export function handleServerError(error: unknown) {
-  // eslint-disable-next-line no-console
-  console.log(error)
+import {
+  getServerErrorMessage,
+  getServerErrorSources,
+  isServerErrorCancelled,
+} from './server-error-message'
 
-  // 没设 skipErrorHandler 的请求失败时，http-client 的全局拦截器已经提示过，再提示就是重复。
-  if (error instanceof AxiosError && !error.config?.skipErrorHandler) return
+const reportedErrors = new WeakSet<object>()
 
-  let errMsg = i18next.t('Something went wrong!')
+/** Also used when a failure has already been presented inline. */
+export function markServerErrorHandled(error: unknown): void {
+  for (const source of getServerErrorSources(error)) reportedErrors.add(source)
+}
 
-  if (
-    error &&
-    typeof error === 'object' &&
-    'status' in error &&
-    Number(error.status) === 204
-  ) {
-    errMsg = i18next.t('Content not found.')
+export function handleServerError(
+  error: unknown,
+  fallbackMessage?: string,
+  presentation?: { title: string; description?: string }
+): void {
+  if (isServerErrorCancelled(error)) return
+  const sources = getServerErrorSources(error)
+  const reported = sources.some((source) => reportedErrors.has(source))
+  markServerErrorHandled(error)
+  if (reported) return
+  const message =
+    presentation?.title || getServerErrorMessage(error, fallbackMessage)
+  if (presentation?.description) {
+    toast.error(message, { description: presentation.description })
+  } else {
+    toast.error(message)
   }
-
-  if (error instanceof AxiosError) {
-    // 后端错误体是 { success, message }，没有 title；原先读 title 会弹出一个空提示。
-    errMsg = error.response?.data?.message || error.message || errMsg
-  }
-
-  toast.error(errMsg)
 }

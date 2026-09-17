@@ -17,10 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import i18next from 'i18next'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 
 import { useIsAdmin } from '@/hooks/use-admin'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import {
   getUserBillingHistory,
@@ -109,6 +110,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [filters, setFilters] = useState<BillingHistoryFilters>(EMPTY_FILTERS)
   const [draftFilters, setDraftFilters] =
     useState<BillingHistoryFilters>(EMPTY_FILTERS)
+  const requestIdRef = useRef(0)
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -151,28 +153,30 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
    * request (no sequential cursor prefetch of every preceding page).
    */
   const fetchBillingHistory = useCallback(async () => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     try {
       const response = await fetchHistoryPage(page, pageSize, filters)
+
+      if (requestId !== requestIdRef.current) return
 
       if (isApiSuccess(response) && response.data) {
         setRecords(response.data.items || [])
         setTotal(response.data.total || 0)
       } else {
-        toast.error(
-          response.message || i18next.t('Failed to load billing history')
-        )
+        handleServerError(response, i18next.t('Failed to load billing history'))
         setRecords([])
         setTotal(0)
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch billing history:', error)
-      toast.error(i18next.t('Failed to load billing history'))
+      if (requestId !== requestIdRef.current) return
+      handleServerError(error, i18next.t('Failed to load billing history'))
       setRecords([])
       setTotal(0)
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [fetchHistoryPage, filters, page, pageSize])
 
@@ -235,13 +239,11 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
           await fetchBillingHistory()
           return true
         } else {
-          toast.error(response.message || i18next.t('Failed to complete order'))
+          handleServerError(response, i18next.t('Failed to complete order'))
           return false
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to complete order:', error)
-        toast.error(i18next.t('Failed to complete order'))
+        handleServerError(error, i18next.t('Failed to complete order'))
         return false
       } finally {
         setCompleting(false)

@@ -27,6 +27,8 @@ const (
 	upstreamLogCapabilityValue   = "filters-v1"
 	upstreamLogQueryPath         = "/api/log/token/query"
 	upstreamLogRecentFallbackURL = "/api/log/token"
+	// 旧版上游 /api/log/token 一次最多返回 MaxRecentItems（默认 1000）条近期日志。
+	upstreamLogRecentFallbackMaxItems = 1000
 	// 上游账号自己的日志：凭证是上游账号访问令牌（UserAuth）。上游账号是经销商的普通客户而非管理员，
 	// 管理员接口 /api/log 对它返回 403，只能用 /api/log/self（已用 nexaxis.ai 真实客户账号实测）。
 	upstreamLogAccountPath = "/api/log/self"
@@ -313,7 +315,9 @@ func QueryUpstreamLogs(ctx context.Context, baseURL string, cred UpstreamLogCred
 	if err != nil {
 		return nil, err
 	}
-	fbResult, _, err := doUpstreamLogRequest(ctx, fallbackURL, cred, pageSize)
+	// 必须先在整批近期日志上过滤、再截到一页：若按 pageSize 先截断，只会在最新几条里匹配，
+	// 高流量渠道上几分钟前的请求就会被误报为「上游没有这条日志」。
+	fbResult, _, err := doUpstreamLogRequest(ctx, fallbackURL, cred, upstreamLogRecentFallbackMaxItems)
 	if err != nil {
 		if errors.Is(err, errUpstreamLogNotFound) {
 			return nil, ErrUpstreamLogUnavailable
@@ -324,6 +328,8 @@ func QueryUpstreamLogs(ctx context.Context, baseURL string, cred UpstreamLogCred
 	fbResult.Total = len(fbResult.Items)
 	if page > 1 {
 		fbResult.Items = []UpstreamLogItem{}
+	} else if len(fbResult.Items) > pageSize {
+		fbResult.Items = fbResult.Items[:pageSize]
 	}
 	fbResult.Scope = UpstreamLogScopeRecentFallback
 	fbResult.SupportsExact = false

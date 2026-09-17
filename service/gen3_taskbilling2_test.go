@@ -51,7 +51,7 @@ func TestTaskBilling_LogTaskConsumption(t *testing.T) {
 		},
 	}
 
-	LogTaskConsumption(c, info)
+	LogTaskConsumption(c, info, nil)
 
 	log := getLastLog(t)
 	require.NotNil(t, log)

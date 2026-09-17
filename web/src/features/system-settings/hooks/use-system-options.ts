@@ -18,12 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 
+import { requireServerSuccess } from '@/lib/server-error-message'
+
 import { getScopedSystemOptions } from '../api'
 
 export function useSystemOptions(scope: string, enabled = true) {
   return useQuery({
     queryKey: ['system-options', scope],
-    queryFn: () => getScopedSystemOptions(scope),
+    queryFn: async () =>
+      requireServerSuccess(await getScopedSystemOptions(scope)),
     enabled: enabled && scope.length > 0,
     staleTime: 5 * 60 * 1000,
   })

@@ -187,7 +187,7 @@ func TestReq_FunctionResponseBecomesToolMessage(t *testing.T) {
 	require.Len(t, out.Messages, 1)
 	msg := out.Messages[0]
 	assert.Equal(t, "tool", msg.Role)
-	assert.Equal(t, "call_0", msg.ToolCallId) // len(toolCalls)==0 at emit time
+	assert.Equal(t, "call_1", msg.ToolCallId) // no pending call to match: a fresh fallback ID is allocated
 	assert.JSONEq(t, `{"temp":20}`, msg.StringContent())
 }
 
@@ -250,8 +250,8 @@ func TestReq_GenerationConfigTemperatureZeroPreserved(t *testing.T) {
 	assert.Equal(t, 0.0, *out.Temperature)
 }
 
-func TestReq_GenerationConfigNonPositiveGuardsDrop(t *testing.T) {
-	// TopP/TopK/MaxOutputTokens/CandidateCount <= 0 are dropped by their >0 guards.
+func TestReq_GenerationConfigExplicitZeroValuesPreserved(t *testing.T) {
+	// Explicit zero TopP/TopK/MaxOutputTokens/CandidateCount are forwarded (Rule 5), not dropped.
 	req := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{
 			TopP:            kitutil.GetPointer(0.0),
@@ -262,10 +262,14 @@ func TestReq_GenerationConfigNonPositiveGuardsDrop(t *testing.T) {
 	}
 	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out.TopP)
-	assert.Nil(t, out.TopK)
-	assert.Nil(t, out.MaxTokens)
-	assert.Nil(t, out.N)
+	require.NotNil(t, out.TopP)
+	assert.Equal(t, 0.0, *out.TopP)
+	require.NotNil(t, out.TopK)
+	assert.Equal(t, 0, *out.TopK)
+	require.NotNil(t, out.MaxTokens)
+	assert.Equal(t, uint(0), *out.MaxTokens)
+	require.NotNil(t, out.N)
+	assert.Equal(t, 0, *out.N)
 }
 
 func TestReq_StopSequencesUnderFourNotTruncated(t *testing.T) {

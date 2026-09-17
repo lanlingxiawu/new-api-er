@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -66,8 +67,9 @@ func TestManagedImageResponseLifecycle(t *testing.T) {
 			if tc.source == "none" {
 				require.Zero(t, selected.TotalTokens)
 			}
-			other := map[string]any{}
-			service.AppendStreamLogInfo(info, other)
+			otherLog := model.NewLogOther()
+			service.AppendStreamLogInfo(info, otherLog)
+			other := otherLog.Snapshot()
 			_, available := other["stream_diagnostic_available"]
 			require.Equal(t, tc.failed, available)
 			if !tc.failed {

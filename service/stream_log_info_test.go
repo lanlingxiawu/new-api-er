@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -37,7 +38,7 @@ func TestClaudeDiagnosticLegacyAndErrorLogPaths(t *testing.T) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 		}
-		other := map[string]interface{}{}
+		other := model.NewLogOther()
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "private-policy")
 		if upstreamErr != nil {
 			AppendStreamErrorDiagnostic(c, other, upstreamErr)
@@ -46,13 +47,14 @@ func TestClaudeDiagnosticLegacyAndErrorLogPaths(t *testing.T) {
 			info := &relaycommon.RelayInfo{StreamDiagnostic: capture, StreamRejectReason: "private-policy"}
 			AppendStreamLogInfo(info, other)
 		}
-		diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+		fields := other.Snapshot()
+		diagnostic := fields["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 		require.Equal(t, "private-response", string(diagnostic.BodyHead)+string(diagnostic.BodyTail))
 		require.Equal(t, status, diagnostic.Attempt)
 		require.Equal(t, "private-policy", diagnostic.RejectReason)
-		require.Equal(t, "private-policy", other["reject_reason"])
-		require.NotContains(t, other, "stream_diagnostic_available", "legacy capture alone is not the new stream failure flow")
-		require.NotContains(t, other, "stream_result", "diagnostics alone must not activate strict billing")
+		require.Equal(t, "private-policy", logOtherAdmin(other)["reject_reason"])
+		require.NotContains(t, fields, "stream_diagnostic_available", "legacy capture alone is not the new stream failure flow")
+		require.NotContains(t, fields, "stream_result", "diagnostics alone must not activate strict billing")
 	}
 	plain := types.NewError(errors.New("private cause"), types.ErrorCodeBadResponseBody)
 	require.NotContains(t, StreamPublicErrorSummary(c, plain), "private cause")
@@ -60,13 +62,13 @@ func TestClaudeDiagnosticLegacyAndErrorLogPaths(t *testing.T) {
 	status.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("private stream cause"))
 	status.RecordError("private soft error")
 	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, IsStream: true, StreamStatus: status, StreamDiagnostic: relaycommon.NewStreamResponseCapture(1)}
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 	appendStreamStatus(info, other)
 	public, err := common.Marshal(other)
 	require.NoError(t, err)
 	require.NotContains(t, string(public), "private")
 	AppendStreamLogInfo(info, other)
-	require.Equal(t, "private stream cause", other["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
+	require.Equal(t, "private stream cause", other.Snapshot()["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
 }
 
 // TestStreamDiagnosticResponsePersistence 验证新流程双日志入口仅在明确上游异常时保存原始响应；t 为测试上下文。
@@ -123,16 +125,17 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 				info.StreamSession.Fail(relaycommon.StreamEndReason(reason), errors.New("upstream fixture error"))
 			}
 			wantContent := wantAvailable && kind != "capture_off"
-			errorOther := map[string]any{}
+			errorOther := model.NewLogOther()
 			AppendStreamErrorDiagnostic(c, errorOther, errors.New("private log cause"))
 			errorSource := info.StreamDiagnostic.Snapshot()
 			if wantAvailable {
 				errorSource.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 			}
 			assertStreamResponseLogContent(t, errorOther, errorSource, wantContent)
-			require.Equal(t, wantAvailable, errorOther["stream_diagnostic_available"] == true)
-			require.Equal(t, "policy-reason", errorOther["reject_reason"])
-			require.Equal(t, "private log cause", errorOther["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
+			errorFields := errorOther.Snapshot()
+			require.Equal(t, wantAvailable, errorFields["stream_diagnostic_available"] == true)
+			require.Equal(t, "policy-reason", logOtherAdmin(errorOther)["reject_reason"])
+			require.Equal(t, "private log cause", errorFields["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
 			if kind != "pending" {
 				FinalizeStreamUsage(c, info, nil)
 				// 详细证据与资金状态独立于响应内容过滤，使用固定哨兵检查没有连带删除。
@@ -141,20 +144,21 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 				info.StreamResult.Diagnostic.SettlementError = "settlement evidence"
 			}
 			before := info.StreamDiagnostic.Snapshot()
-			other := map[string]any{}
+			other := model.NewLogOther()
 			AppendStreamLogInfo(info, other)
+			fields := other.Snapshot()
 			source := before
 			if info.StreamResult != nil {
 				source = info.StreamResult.Diagnostic
-				require.Same(t, info.StreamResult, other["stream_result"])
-				logged := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+				require.Same(t, info.StreamResult, fields["stream_result"])
+				logged := fields["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 				require.Equal(t, source.UsageEvidence, logged.UsageEvidence)
 				require.Equal(t, source.EstimatedUsage, logged.EstimatedUsage)
 				require.Equal(t, source.SettlementError, logged.SettlementError)
 			}
 			assertStreamResponseLogContent(t, other, source, wantContent)
-			require.Equal(t, wantAvailable, other["stream_diagnostic_available"] == true)
-			require.Equal(t, "policy-reason", other["reject_reason"])
+			require.Equal(t, wantAvailable, fields["stream_diagnostic_available"] == true)
+			require.Equal(t, "policy-reason", logOtherAdmin(other)["reject_reason"])
 			require.Equal(t, before, info.StreamDiagnostic.Snapshot(), "生成日志不修改后续终止/轮次可能使用的内存缓存")
 			if kind != "capture_off" {
 				require.Len(t, source.PreviousResponses, 3)
@@ -166,7 +170,7 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 }
 
 // assertStreamResponseLogContent 检查序列化后的主/历史响应及元数据；t 为测试上下文，other 为日志，source 为原快照，keep 指定是否保留内容。
-func assertStreamResponseLogContent(t *testing.T, other map[string]any, source relaycommon.StreamDiagnostic, keep bool) {
+func assertStreamResponseLogContent(t *testing.T, other *model.LogOther, source relaycommon.StreamDiagnostic, keep bool) {
 	t.Helper()
 	raw, err := common.Marshal(other)
 	require.NoError(t, err)
@@ -199,4 +203,10 @@ func assertStreamResponseLogContent(t *testing.T, other map[string]any, source r
 		require.NotContains(t, string(raw), "private-header-")
 		require.Nil(t, stored.Diagnostic.DownstreamBodyBase64)
 	}
+}
+
+// logOtherAdmin 返回日志字段 admin_info 作用域的快照；无管理员字段时返回 nil。
+func logOtherAdmin(other *model.LogOther) map[string]any {
+	adminInfo, _ := other.Snapshot()["admin_info"].(map[string]any)
+	return adminInfo
 }

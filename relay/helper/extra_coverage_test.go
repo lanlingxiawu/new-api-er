@@ -12,9 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/require"
@@ -159,7 +159,7 @@ func TestModelPriceNotConfiguredError_Admin(t *testing.T) {
 	const adminID = 990099
 	// Seed an admin user with a unique id, clean up afterwards.
 	db.Unscoped().Where("id = ?", adminID).Delete(&model.User{})
-	admin := &model.User{Id: adminID, Username: "helper-admin-test", Role: common.RoleAdminUser}
+	admin := &model.User{Id: adminID, Username: "helper-admin-test", Role: common.RoleAdminUser, AffCode: "helper-admin-990099"} // aff_code is uniquely indexed; avoid colliding with other rows that have an empty code.
 	require.NoError(t, db.Create(admin).Error)
 	t.Cleanup(func() { db.Unscoped().Where("id = ?", adminID).Delete(&model.User{}) })
 

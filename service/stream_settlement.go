@@ -47,8 +47,8 @@ func settleStreamQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, param
 
 	if params.Other != nil && relayInfo.BillingSource == BillingSourceSubscription {
 		// Other 生成于结算前；先重置序列化器会省略的零值字段，使全额退款覆盖预扣快照而不是留下旧消耗。
-		params.Other["subscription_consumed"] = int64(0)
-		params.Other["subscription_post_delta"] = int64(0)
+		params.Other.SetPublic("subscription_consumed", int64(0))
+		params.Other.SetPublic("subscription_post_delta", int64(0))
 		appendBillingInfo(relayInfo, params.Other)
 	}
 

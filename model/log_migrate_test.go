@@ -52,6 +52,15 @@ func newLogMigrationTestDB(t *testing.T) (*gorm.DB, *logTableMigrationRecorder) 
 	return db, recorder
 }
 
+// assertNoLogDataProbe: 迁移不得扫描 logs 表数据（例如 ColumnTypes 的
+// SELECT * FROM logs LIMIT 1）。PRAGMA_INDEX_LIST 之类的元数据查询不算。
+func assertNoLogDataProbe(t *testing.T, upperSQL string) {
+	t.Helper()
+	for _, probe := range []string{"SELECT * FROM `LOGS`", `SELECT * FROM "LOGS"`, "SELECT * FROM LOGS"} {
+		assert.NotContains(t, upperSQL, probe)
+	}
+}
+
 func TestMigrateLogTableCreatesMissingTable(t *testing.T) {
 	db, _ := newLogMigrationTestDB(t)
 
@@ -72,7 +81,7 @@ func TestMigrateLogTableUpToDateEmitsNoDDLOrDataProbe(t *testing.T) {
 	sql := strings.ToUpper(recorder.joined())
 	assert.NotContains(t, sql, "ALTER TABLE")
 	assert.NotContains(t, sql, "CREATE INDEX")
-	assert.NotContains(t, sql, "SELECT * FROM")
+	assertNoLogDataProbe(t, sql)
 }
 
 // 只补真正缺失的那一列，不碰其余列。
@@ -95,7 +104,7 @@ func TestMigrateLogTableAddsOnlyMissingColumn(t *testing.T) {
 	assert.Contains(t, sql, "ALTER TABLE")
 	// 只应当出现一次改表：其余 20 列本来就在，不该被碰
 	assert.Equal(t, 1, strings.Count(sql, "ADD"), "补列时动了不该动的列")
-	assert.NotContains(t, sql, "SELECT * FROM")
+	assertNoLogDataProbe(t, sql)
 }
 
 func TestMigrateLogTableMissingIndexDoesNotBuildOnExistingTable(t *testing.T) {

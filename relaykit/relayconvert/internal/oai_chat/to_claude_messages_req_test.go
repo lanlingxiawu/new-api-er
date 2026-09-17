@@ -37,8 +37,8 @@ func TestClaudeReq_ToolsSchemaTranslation(t *testing.T) {
 				"required":             []any{"q"},
 				"additionalProperties": false,
 			}),
-			// Non-map parameters must be skipped entirely.
-			toolWithParams("skipme", "no params", "not-a-map"),
+			// Non-function tools without map parameters must be skipped entirely.
+			{Type: "custom", Function: dto.FunctionRequest{Name: "skipme", Parameters: "not-a-map"}},
 		},
 		Messages: []dto.Message{{Role: "user", Content: "hi"}},
 	}
@@ -71,16 +71,16 @@ func TestClaudeReq_ToolWithoutTypeKey(t *testing.T) {
 	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
 	require.NoError(t, err)
 	tool := got.Tools.([]any)[0].(*dto.Tool)
-	// "type" absent -> not set in schema.
-	_, hasType := tool.InputSchema["type"]
-	assert.False(t, hasType)
+	// "type" absent -> defaults to object.
+	assert.Equal(t, "object", tool.InputSchema["type"])
 }
 
 func TestClaudeReq_WebSearchOptionsWithUserLocationAndContextSizes(t *testing.T) {
+	// search_context_size does not map to Claude max_uses; the hosted tool keeps its own limit.
 	sizes := map[string]int{
-		"low":     webSearchMaxUsesLow,
-		"medium":  webSearchMaxUsesMedium,
-		"high":    webSearchMaxUsesHigh,
+		"low":     0,
+		"medium":  0,
+		"high":    0,
 		"unknown": 0,
 	}
 	for size, wantMax := range sizes {
@@ -174,90 +174,27 @@ func TestClaudeReq_ToolChoiceAndParallel(t *testing.T) {
 	assert.True(t, tc.DisableParallelToolUse)
 }
 
-func TestClaudeReq_EffortSuffixOpus46(t *testing.T) {
-	req := dto.GeneralOpenAIRequest{
-		Model:       "claude-opus-4-6-high",
-		Temperature: ptr(0.5),
-		TopP:        ptr(0.5),
-		Messages:    []dto.Message{{Role: "user", Content: "hi"}},
+// 模型名推理后缀由 relay/helper.ApplyReasoningModelSuffix 在转换前处理，转换器原样保留模型名。
+func TestClaudeReq_ModelSuffixNotInterpretedByConverter(t *testing.T) {
+	for _, model := range []string{"claude-opus-4-6-high", "claude-opus-4-7-low", "claude-3-5-sonnet-thinking"} {
+		t.Run(model, func(t *testing.T) {
+			req := dto.GeneralOpenAIRequest{
+				Model:     model,
+				MaxTokens: ptr(uint(100)),
+				Messages:  []dto.Message{{Role: "user", Content: "hi"}},
+			}
+			got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
+			require.NoError(t, err)
+			assert.Equal(t, model, got.Model)
+			assert.Nil(t, got.Thinking)
+			require.NotNil(t, got.MaxTokens)
+			assert.Equal(t, uint(100), *got.MaxTokens)
+		})
 	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	assert.Equal(t, "claude-opus-4-6", got.Model)
-	require.NotNil(t, got.Thinking)
-	assert.Equal(t, "adaptive", got.Thinking.Type)
-	assert.JSONEq(t, `{"effort":"high"}`, string(got.OutputConfig))
-	// 4-6 branch forces temperature=1.0 and clears top_p.
-	require.NotNil(t, got.Temperature)
-	assert.Equal(t, 1.0, *got.Temperature)
-	assert.Nil(t, got.TopP)
-}
-
-func TestClaudeReq_EffortSuffixOpus47(t *testing.T) {
-	req := dto.GeneralOpenAIRequest{
-		Model:       "claude-opus-4-7-low",
-		Temperature: ptr(0.5),
-		TopP:        ptr(0.5),
-		TopK:        ptr(3),
-		Messages:    []dto.Message{{Role: "user", Content: "hi"}},
-	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	assert.Equal(t, "claude-opus-4-7", got.Model)
-	require.NotNil(t, got.Thinking)
-	assert.Equal(t, "summarized", got.Thinking.Display)
-	// 4-7 branch nils all sampling params.
-	assert.Nil(t, got.Temperature)
-	assert.Nil(t, got.TopP)
-	assert.Nil(t, got.TopK)
-}
-
-func TestClaudeReq_ThinkingAdapterSuffixSonnet(t *testing.T) {
-	req := dto.GeneralOpenAIRequest{
-		Model:     "claude-3-5-sonnet-thinking",
-		MaxTokens: ptr(uint(4000)),
-		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
-	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	assert.Equal(t, "claude-3-5-sonnet", got.Model)
-	require.NotNil(t, got.Thinking)
-	assert.Equal(t, "enabled", got.Thinking.Type)
-	require.NotNil(t, got.Thinking.BudgetTokens)
-	assert.Equal(t, int(float64(4000)*0.8), *got.Thinking.BudgetTokens)
-	require.NotNil(t, got.Temperature)
-	assert.Equal(t, 1.0, *got.Temperature)
-}
-
-func TestClaudeReq_ThinkingAdapterSuffixRaisesLowMaxTokens(t *testing.T) {
-	req := dto.GeneralOpenAIRequest{
-		Model:     "claude-3-5-sonnet-thinking",
-		MaxTokens: ptr(uint(100)), // below the 1280 floor
-		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
-	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	require.NotNil(t, got.MaxTokens)
-	assert.Equal(t, uint(1280), *got.MaxTokens)
-}
-
-func TestClaudeReq_ThinkingAdapterSuffixOpus47(t *testing.T) {
-	req := dto.GeneralOpenAIRequest{
-		Model:       "claude-opus-4-7-thinking",
-		Temperature: ptr(0.3),
-		Messages:    []dto.Message{{Role: "user", Content: "hi"}},
-	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	require.NotNil(t, got.Thinking)
-	assert.Equal(t, "adaptive", got.Thinking.Type)
-	assert.Equal(t, "summarized", got.Thinking.Display)
-	assert.JSONEq(t, `{"effort":"high"}`, string(got.OutputConfig))
-	assert.Nil(t, got.Temperature)
 }
 
 func TestClaudeReq_ReasoningEffortLevels(t *testing.T) {
-	cases := map[string]int{"low": 1280, "medium": 2048, "high": 4096}
+	cases := map[string]int{"low": 1638, "medium": 4096, "high": 6553}
 	for effort, wantBudget := range cases {
 		t.Run(effort, func(t *testing.T) {
 			req := dto.GeneralOpenAIRequest{
@@ -298,15 +235,15 @@ func TestClaudeReq_OpenRouterReasoningInvalidJSON(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestClaudeReq_OpenRouterReasoningZeroBudgetIgnored(t *testing.T) {
+func TestClaudeReq_OpenRouterReasoningZeroBudgetConflict(t *testing.T) {
+	// enabled=true 与 max_tokens=0（关闭思考）互相矛盾，按客户端参数错误拒绝。
 	req := dto.GeneralOpenAIRequest{
 		Model:     "gpt-4",
 		Reasoning: json.RawMessage(`{"enabled":true,"max_tokens":0}`),
 		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
 	}
-	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
-	require.NoError(t, err)
-	assert.Nil(t, got.Thinking)
+	_, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
+	require.Error(t, err)
 }
 
 func TestClaudeReq_StopSequences(t *testing.T) {
@@ -374,17 +311,11 @@ func TestClaudeReq_EmptyRoleDefaultsToUser(t *testing.T) {
 	}
 	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
 	require.NoError(t, err)
-	// BUG: to_claude_messages_req.go:230-234 — the empty-role default is written
-	// to textRequest.Messages[i].Role, but fmtMessage.Role is built from the
-	// loop-local copy `message.Role` which is still "". So the "" -> "user"
-	// default never reaches the emitted message. Because the message's role is
-	// not "user", the first-message guard also injects a synthetic user "..."
-	// ahead of it. Expected: single user message with "hi". Actual: two
-	// messages, the second retaining an empty role.
-	require.Len(t, got.Messages, 2)
+	// The "" -> "user" default reaches the emitted message, so no synthetic
+	// leading user message is injected.
+	require.Len(t, got.Messages, 1)
 	assert.Equal(t, "user", got.Messages[0].Role)
-	assert.Equal(t, "", got.Messages[1].Role)
-	assert.Equal(t, "hi", got.Messages[1].Content)
+	assert.Equal(t, "hi", got.Messages[0].Content)
 }
 
 func TestClaudeReq_ConsecutiveSameRoleMerged(t *testing.T) {
@@ -579,4 +510,75 @@ func TestClaudeReq_MediaPartNilSourceSkipped(t *testing.T) {
 	content := got.Messages[0].Content.([]dto.ClaudeMediaMessage)
 	require.Len(t, content, 1)
 	assert.Equal(t, "text", content[0].Type)
+}
+
+func TestOpenAIChatRequestToClaudeMessagesNormalizesToolInputSchema(t *testing.T) {
+	tests := []struct {
+		name       string
+		parameters any
+		wantSchema map[string]any
+	}{
+		{
+			name:       "omitted parameters",
+			parameters: nil,
+			wantSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			name: "missing type and properties",
+			parameters: map[string]any{
+				"additionalProperties": false,
+			},
+			wantSchema: map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+		},
+		{
+			name: "non-string type",
+			parameters: map[string]any{
+				"type":       123,
+				"properties": map[string]any{},
+			},
+			wantSchema: map[string]any{
+				"type":       123,
+				"properties": map[string]any{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			maxTokens := uint(1024)
+			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
+				Model:     "claude-test",
+				MaxTokens: &maxTokens,
+				Messages: []dto.Message{
+					{Role: "user", Content: "Call the tool."},
+				},
+				Tools: []dto.ToolCallRequest{
+					{
+						Type: "function",
+						Function: dto.FunctionRequest{
+							Name:        "get_current_time",
+							Description: "Get the current time",
+							Parameters:  tt.parameters,
+						},
+					},
+				},
+			})
+
+			require.NoError(t, err)
+			tools, ok := got.Tools.([]any)
+			require.True(t, ok)
+			require.Len(t, tools, 1)
+			tool, ok := tools[0].(*dto.Tool)
+			require.True(t, ok)
+			assert.Equal(t, "get_current_time", tool.Name)
+			assert.Equal(t, tt.wantSchema, tool.InputSchema)
+		})
+	}
 }

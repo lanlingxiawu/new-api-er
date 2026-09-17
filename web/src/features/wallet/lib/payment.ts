@@ -22,7 +22,7 @@ import {
   DEFAULT_PAYMENT_TYPE,
   DEFAULT_MIN_TOPUP,
 } from '../constants'
-import type { PresetAmount, TopupInfo } from '../types'
+import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
 
 // ============================================================================
 // Payment Processing Functions
@@ -34,7 +34,7 @@ import type { PresetAmount, TopupInfo } from '../types'
 function isSafariBrowser(): boolean {
   return (
     navigator.userAgent.includes('Safari') &&
-    navigator.userAgent.indexOf('Chrome') < 1
+    !navigator.userAgent.includes('Chrome')
   )
 }
 
@@ -73,6 +73,13 @@ export function submitPaymentForm(
  */
 export function isStripePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.STRIPE
+}
+
+/**
+ * Check if payment method is Waffo
+ */
+export function isWaffoPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.WAFFO
 }
 
 /**
@@ -124,6 +131,40 @@ export function isSafeHttpCheckoutUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+export interface PaymentProcessors {
+  regular: (
+    topupAmount: number,
+    paymentType: string,
+    currency?: string
+  ) => Promise<boolean>
+  waffo: (topupAmount: number, payMethodIndex: number) => Promise<boolean>
+  waffoPancake: (topupAmount: number) => Promise<boolean>
+}
+
+export async function dispatchSelectedPayment(
+  paymentMethod: PaymentMethod,
+  topupAmount: number,
+  waffoMethodIndex: number | null,
+  processors: PaymentProcessors
+): Promise<boolean> {
+  if (isWaffoPayment(paymentMethod.type)) {
+    if (waffoMethodIndex === null) {
+      return false
+    }
+    return processors.waffo(topupAmount, waffoMethodIndex)
+  }
+
+  if (isWaffoPancakePayment(paymentMethod.type)) {
+    return processors.waffoPancake(topupAmount)
+  }
+
+  return processors.regular(
+    topupAmount,
+    paymentMethod.type,
+    paymentMethod.currency
+  )
 }
 
 /**

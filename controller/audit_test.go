@@ -169,43 +169,36 @@ func TestAuditContentEN(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-func latestManageLog(t *testing.T, operatorID int) *model.Log {
+// latestManageLog returns the newest operation audit row owned by the operator.
+// Management audits are written to the independent audit_logs table.
+func latestManageLog(t *testing.T, operatorID int) *model.AuditLog {
 	t.Helper()
-	var log model.Log
-	err := model.LOG_DB.Where("user_id = ? AND type = ?", operatorID, model.LogTypeManage).
+	var log model.AuditLog
+	err := model.LOG_DB.Where("user_id = ? AND category = ?", operatorID, model.AuditCategoryOperation).
 		Order("id desc").First(&log).Error
 	if err != nil {
-		t.Fatalf("no manage log recorded for operator %d: %v", operatorID, err)
+		t.Fatalf("no manage audit recorded for operator %d: %v", operatorID, err)
 	}
-	t.Cleanup(func() { model.LOG_DB.Unscoped().Delete(&model.Log{}, log.Id) })
+	t.Cleanup(func() { model.LOG_DB.Where("user_id = ?", operatorID).Delete(&model.AuditLog{}) })
 	return &log
 }
 
-func auditLogOther(t *testing.T, log *model.Log) map[string]any {
+func auditLogAction(t *testing.T, log *model.AuditLog) string {
 	t.Helper()
-	m, err := common.StrToMap(log.Other)
-	require.NoError(t, err)
-	return m
+	require.NotNil(t, log.Other.Op, "audit log must carry an op descriptor")
+	return log.Other.Op.Action
 }
 
-func auditLogOp(t *testing.T, log *model.Log) map[string]any {
+// auditLogOpParams decodes op.params (stored as raw JSON values) into plain values.
+func auditLogOpParams(t *testing.T, log *model.AuditLog) map[string]any {
 	t.Helper()
-	op, _ := auditLogOther(t, log)["op"].(map[string]any)
-	require.NotNil(t, op, "audit log must carry an op descriptor")
-	return op
-}
-
-func auditLogAction(t *testing.T, log *model.Log) string {
-	t.Helper()
-	action, _ := auditLogOp(t, log)["action"].(string)
-	return action
-}
-
-func auditLogOpParams(t *testing.T, log *model.Log) map[string]any {
-	t.Helper()
-	params, _ := auditLogOp(t, log)["params"].(map[string]any)
-	if params == nil {
-		return map[string]any{}
+	require.NotNil(t, log.Other.Op, "audit log must carry an op descriptor")
+	params := map[string]any{}
+	if len(log.Other.Op.Params) == 0 {
+		return params
 	}
+	encoded, err := common.Marshal(log.Other.Op.Params)
+	require.NoError(t, err)
+	require.NoError(t, common.Unmarshal(encoded, &params))
 	return params
 }

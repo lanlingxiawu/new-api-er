@@ -64,68 +64,87 @@ const numericString = z.string().refine((value) => {
   return !Number.isNaN(Number(trimmed)) && Number(trimmed) >= 0
 }, 'Enter a non-negative number or leave empty')
 
-const channelTestModes = ['scheduled_all', 'passive_recovery'] as const
+const channelTestModes = [
+  'scheduled_all',
+  'auto_ban_only',
+  'passive_recovery',
+] as const
 type ChannelTestMode = (typeof channelTestModes)[number]
+const MAX_CHANNEL_TEST_CONCURRENCY = 32
 
-const routingReliabilitySchema = z
-  .object({
-    RetryTimes: z.coerce.number().min(0).max(10),
-    ChannelDisableThreshold: numericString,
-    AutomaticDisableChannelEnabled: z.boolean(),
-    AutomaticEnableChannelEnabled: z.boolean(),
-    AutomaticDisableKeywords: z.string(),
-    AutomaticDisableStatusCodes: z.string(),
-    AutomaticRetryStatusCodes: z.string(),
-    monitor_setting: z.object({
-      auto_test_channel_enabled: z.boolean(),
-      auto_test_channel_minutes: z.coerce
-        .number()
-        .int()
-        .min(1, 'Interval must be at least 1 minute'),
-      channel_test_mode: z.enum(channelTestModes),
-    }),
-    // 渠道每日金额上限。取值范围与后端 ValidateChannelDailyLimitSetting 一致，
-    // 后端另有逐键校验（controller/option.go），两边必须保持同步。
-    channel_daily_limit_setting: z.object({
-      enabled: z.boolean(),
-      timezone: z.string().min(1, 'Timezone is required'),
-      retention_days: z.coerce
-        .number()
-        .int()
-        .min(7, 'Retention must be between 7 and 3650 days')
-        .max(3650, 'Retention must be between 7 and 3650 days'),
-    }),
-  })
-  .superRefine((values, ctx) => {
-    const disableParsed = parseHttpStatusCodeRules(
-      values.AutomaticDisableStatusCodes
-    )
-    if (!disableParsed.ok) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['AutomaticDisableStatusCodes'],
-        message: `Invalid status code rules: ${disableParsed.invalidTokens.join(
-          ', '
-        )}`,
-      })
-    }
+const createRoutingReliabilitySchema = (
+  t: (key: string, options?: Record<string, unknown>) => string
+) =>
+  z
+    .object({
+      RetryTimes: z.coerce.number().min(0).max(10),
+      ChannelDisableThreshold: numericString,
+      AutomaticDisableChannelEnabled: z.boolean(),
+      AutomaticEnableChannelEnabled: z.boolean(),
+      AutomaticDisableKeywords: z.string(),
+      AutomaticDisableStatusCodes: z.string(),
+      AutomaticRetryStatusCodes: z.string(),
+      monitor_setting: z.object({
+        auto_test_channel_enabled: z.boolean(),
+        auto_test_channel_minutes: z.coerce
+          .number()
+          .int()
+          .min(1, t('Interval must be at least 1 minute')),
+        channel_test_concurrency: z.coerce
+          .number()
+          .int(t('Enter a positive integer'))
+          .min(1, t('Channel test concurrency must be between 1 and 32'))
+          .max(
+            MAX_CHANNEL_TEST_CONCURRENCY,
+            t('Channel test concurrency must be between 1 and 32')
+          ),
+        channel_test_mode: z.enum(channelTestModes),
+      }),
+      // 渠道每日金额上限。取值范围与后端 ValidateChannelDailyLimitSetting 一致，
+      // 后端另有逐键校验（controller/option.go），两边必须保持同步。
+      channel_daily_limit_setting: z.object({
+        enabled: z.boolean(),
+        timezone: z.string().min(1, t('Timezone is required')),
+        retention_days: z.coerce
+          .number()
+          .int()
+          .min(7, t('Retention must be between 7 and 3650 days'))
+          .max(3650, t('Retention must be between 7 and 3650 days')),
+      }),
+    })
+    .superRefine((values, ctx) => {
+      const disableParsed = parseHttpStatusCodeRules(
+        values.AutomaticDisableStatusCodes
+      )
+      if (!disableParsed.ok) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AutomaticDisableStatusCodes'],
+          message: t('Invalid status code rules: {{tokens}}', {
+            tokens: disableParsed.invalidTokens.join(', '),
+          }),
+        })
+      }
 
-    const retryParsed = parseHttpStatusCodeRules(
-      values.AutomaticRetryStatusCodes
-    )
-    if (!retryParsed.ok) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['AutomaticRetryStatusCodes'],
-        message: `Invalid status code rules: ${retryParsed.invalidTokens.join(
-          ', '
-        )}`,
-      })
-    }
-  })
+      const retryParsed = parseHttpStatusCodeRules(
+        values.AutomaticRetryStatusCodes
+      )
+      if (!retryParsed.ok) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['AutomaticRetryStatusCodes'],
+          message: t('Invalid status code rules: {{tokens}}', {
+            tokens: retryParsed.invalidTokens.join(', '),
+          }),
+        })
+      }
+    })
 
-type RoutingReliabilityFormValues = z.output<typeof routingReliabilitySchema>
-type RoutingReliabilityFormInput = z.input<typeof routingReliabilitySchema>
+type RoutingReliabilitySchema = ReturnType<
+  typeof createRoutingReliabilitySchema
+>
+type RoutingReliabilityFormValues = z.output<RoutingReliabilitySchema>
+type RoutingReliabilityFormInput = z.input<RoutingReliabilitySchema>
 
 type RoutingReliabilitySectionProps = {
   defaultValues: {
@@ -138,6 +157,7 @@ type RoutingReliabilitySectionProps = {
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
+    'monitor_setting.channel_test_concurrency': number
     'monitor_setting.channel_test_mode': ChannelTestMode
     'channel_daily_limit_setting.enabled': boolean
     'channel_daily_limit_setting.timezone': string
@@ -159,6 +179,7 @@ type NormalizedRoutingReliabilityValues = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.channel_test_concurrency': number
   'monitor_setting.channel_test_mode': ChannelTestMode
   'channel_daily_limit_setting.enabled': boolean
   'channel_daily_limit_setting.timezone': string
@@ -166,7 +187,10 @@ type NormalizedRoutingReliabilityValues = {
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
-  return value === 'passive_recovery' ? 'passive_recovery' : 'scheduled_all'
+  if (value === 'auto_ban_only' || value === 'passive_recovery') {
+    return value
+  }
+  return 'scheduled_all'
 }
 
 const buildFormDefaults = (
@@ -186,6 +210,8 @@ const buildFormDefaults = (
       defaults['monitor_setting.auto_test_channel_enabled'],
     auto_test_channel_minutes:
       defaults['monitor_setting.auto_test_channel_minutes'],
+    channel_test_concurrency:
+      defaults['monitor_setting.channel_test_concurrency'],
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
@@ -218,6 +244,8 @@ const normalizeDefaults = (
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
     defaults['monitor_setting.auto_test_channel_minutes'],
+  'monitor_setting.channel_test_concurrency':
+    defaults['monitor_setting.channel_test_concurrency'],
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
@@ -249,6 +277,8 @@ const normalizeFormValues = (
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
+  'monitor_setting.channel_test_concurrency':
+    values.monitor_setting.channel_test_concurrency,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
   'channel_daily_limit_setting.enabled':
     values.channel_daily_limit_setting.enabled,
@@ -264,6 +294,7 @@ export function RoutingReliabilitySection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
+  const routingReliabilitySchema = createRoutingReliabilitySchema(t)
   const baselineRef = useRef<NormalizedRoutingReliabilityValues>(
     normalizeDefaults(defaultValues)
   )
@@ -287,6 +318,23 @@ export function RoutingReliabilitySection({
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
   const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
+  let channelTestModeDescription: string
+  switch (channelTestMode) {
+    case 'auto_ban_only':
+      channelTestModeDescription = t(
+        'Periodically checks only channels with auto-disable enabled, excluding manually disabled channels.'
+      )
+      break
+    case 'passive_recovery':
+      channelTestModeDescription = t(
+        'Does not check healthy channels. It only rechecks auto-disabled channels and restores them after they recover.'
+      )
+      break
+    default:
+      channelTestModeDescription = t(
+        'Periodically checks all channels except manually disabled ones to detect failures and recover channels automatically.'
+      )
+  }
   const autoDisableParsed = useMemo(
     () => parseHttpStatusCodeRules(autoDisableStatusCodes),
     [autoDisableStatusCodes]
@@ -430,11 +478,17 @@ export function RoutingReliabilitySection({
                       items={[
                         {
                           value: 'scheduled_all',
-                          label: t('Scheduled full test'),
+                          label: t('Actively check all channels'),
+                        },
+                        {
+                          value: 'auto_ban_only',
+                          label: t(
+                            'Actively check auto-disable-enabled channels'
+                          ),
                         },
                         {
                           value: 'passive_recovery',
-                          label: t('Passive recovery only'),
+                          label: t('Check channels awaiting recovery only'),
                         },
                       ]}
                       value={field.value}
@@ -448,18 +502,19 @@ export function RoutingReliabilitySection({
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
                           <SelectItem value='scheduled_all'>
-                            {t('Scheduled full test')}
+                            {t('Actively check all channels')}
+                          </SelectItem>
+                          <SelectItem value='auto_ban_only'>
+                            {t('Actively check auto-disable-enabled channels')}
                           </SelectItem>
                           <SelectItem value='passive_recovery'>
-                            {t('Passive recovery only')}
+                            {t('Check channels awaiting recovery only')}
                           </SelectItem>
                         </SelectGroup>
                       </SelectContent>
                     </Select>
                     <FormDescription>
-                      {t(
-                        'Scheduled full test probes non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures.'
-                      )}
+                      {channelTestModeDescription}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -486,6 +541,31 @@ export function RoutingReliabilitySection({
                             'How frequently the system checks auto-disabled channels for recovery'
                           )
                         : t('How frequently the system tests all channels')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.channel_test_concurrency'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Channel test concurrency')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={MAX_CHANNEL_TEST_CONCURRENCY}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Maximum number of channels tested at the same time (1-32)'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -52,8 +53,9 @@ func TestStreamDifyDTOErrorOrigin(t *testing.T) {
 				require.Equal(t, "none", info.StreamResult.UsageSource)
 				require.Zero(t, selected.TotalTokens)
 			}
-			other := map[string]any{}
-			service.AppendStreamLogInfo(info, other)
+			otherLog := model.NewLogOther()
+			service.AppendStreamLogInfo(info, otherLog)
+			other := otherLog.Snapshot()
 			require.Equal(t, true, other["stream_diagnostic_available"])
 			diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 			require.Equal(t, body, string(append(diagnostic.BodyHead, diagnostic.BodyTail...)))

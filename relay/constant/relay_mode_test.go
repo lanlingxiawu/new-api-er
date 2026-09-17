@@ -1,7 +1,6 @@
 package constant
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,39 +101,6 @@ func TestPath2RelayModeMidjourney(t *testing.T) {
 	}
 }
 
-// TestPath2RelaySuno covers the method+path decision matrix: POST /fetch,
-// GET /fetch/, /submit/, and the unknown fall-through — including the condition
-// coverage where method or path individually fails to match.
-func TestPath2RelaySuno(t *testing.T) {
-	cases := []struct {
-		name   string
-		method string
-		path   string
-		want   int
-	}{
-		// POST + /fetch suffix
-		{"post fetch", http.MethodPost, "/suno/fetch", RelayModeSunoFetch},
-		// method mismatch: GET + /fetch suffix does NOT hit SunoFetch;
-		// falls through (no /fetch/ substring, no /submit/) to Unknown
-		{"get fetch suffix only", http.MethodGet, "/suno/fetch", RelayModeUnknown},
-		// GET + /fetch/ substring
-		{"get fetch by id", http.MethodGet, "/suno/fetch/task123", RelayModeSunoFetchByID},
-		// path mismatch: POST + /fetch/ substring -> not POST /fetch suffix,
-		// not GET, but /submit/ absent -> Unknown
-		{"post fetch by id path", http.MethodPost, "/suno/fetch/task123", RelayModeUnknown},
-		// /submit/ substring (any method)
-		{"submit post", http.MethodPost, "/suno/submit/music", RelayModeSunoSubmit},
-		{"submit get", http.MethodGet, "/suno/submit/music", RelayModeSunoSubmit},
-		// unknown
-		{"unknown", http.MethodGet, "/suno/other", RelayModeUnknown},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, Path2RelaySuno(tc.method, tc.path))
-		})
-	}
-}
-
 // TestRelayModeConstants_AreDistinct is a light sanity guard that the iota
 // block did not accidentally collapse two modes to the same value (which would
 // silently misroute requests). Not a bare-constant test — it verifies the
@@ -150,10 +116,9 @@ func TestRelayModeConstants_AreDistinct(t *testing.T) {
 		RelayModeMidjourneyAction, RelayModeMidjourneyModal, RelayModeMidjourneyShorten,
 		RelayModeSwapFace, RelayModeMidjourneyUpload, RelayModeMidjourneyVideo,
 		RelayModeMidjourneyEdits, RelayModeAudioSpeech, RelayModeAudioTranscription,
-		RelayModeAudioTranslation, RelayModeSunoFetch, RelayModeSunoFetchByID,
-		RelayModeSunoSubmit, RelayModeVideoFetchByID, RelayModeVideoSubmit,
+		RelayModeAudioTranslation, RelayModeVideoFetchByID, RelayModeVideoSubmit,
 		RelayModeRerank, RelayModeResponses, RelayModeRealtime, RelayModeGemini,
-		RelayModeResponsesCompact,
+		RelayModeResponsesCompact, RelayModeAlphaSearch,
 	}
 	seen := make(map[int]bool, len(all))
 	for _, v := range all {

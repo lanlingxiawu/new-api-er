@@ -10,12 +10,12 @@ import { LogDetailBody } from '../components/dialogs/log-detail-body'
 import {
   compareCellClassName,
   compareCellStyle,
-} from '../components/dialogs/log-detail-layout'
+} from '../components/dialogs/log-detail-grid'
 import { upstreamItemToUsageLog } from '../lib/upstream-log-item'
 import type { UpstreamCompareQuery } from './use-upstream-compare-query'
 
 // 加载、出错、无结果时占据右栏的行数：覆盖全部分区行，避免只撑高左侧概览那一行。
-const STATE_ROW_SPAN = 25
+const STATE_ROW_SPAN = 28
 
 /**
  * 对比网格的右栏：上游日志与左侧本站日志按同一张行表排列，同类分区左右对齐。

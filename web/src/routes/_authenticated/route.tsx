@@ -19,7 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { AuthenticatedLayout } from '@/components/layout'
-import { bootstrapAuthentication, getSelf } from '@/lib/api'
+import { getSelf } from '@/lib/api'
+import { resolveAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
 // 内存中的验证标记，避免同一会话中重复验证
@@ -27,23 +28,15 @@ let sessionVerified = false
 
 export const Route = createFileRoute('/_authenticated')({
   beforeLoad: async ({ location }) => {
-    let { auth } = useAuthStore.getState()
+    // The root guard may have skipped its refresh because no session hint was
+    // present. That skip is an optimization for public pages and must not
+    // decide a protected route, so resolve against the server before
+    // redirecting. An in-memory session returns without a request.
+    await resolveAuthentication()
 
-    // access token 只存在内存里，刷新页面后必然为空：先用 httpOnly refresh cookie
-    // 换一个回来，换不到才算真的没登录。跳过这一步的话，刷新页面会被踢回登录页。
-    if (!auth.accessToken) {
-      const outcome = await bootstrapAuthentication()
-      auth = useAuthStore.getState().auth
-      if (outcome.kind === 'anonymous' || outcome.kind === 'out_of_sync') {
-        throw redirect({
-          to: '/sign-in',
-          search: { redirect: location.href },
-        })
-      }
-    }
+    const { auth } = useAuthStore.getState()
 
-    // 如果本地没有用户信息，直接跳转登录页
-    if (!auth.user) {
+    if (!auth.user || !auth.accessToken) {
       throw redirect({
         to: '/sign-in',
         search: { redirect: location.href },

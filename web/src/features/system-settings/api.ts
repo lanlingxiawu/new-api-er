@@ -35,6 +35,8 @@ import type {
   UpdateOptionGroupRequest,
   UpdateOptionGroupResponse,
   UpdateOptionResponse,
+  UpdatePasskeyDomainsRequest,
+  UpdatePasskeyDomainsResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
   PriceMonitorApplyPriceItem,
@@ -163,6 +165,20 @@ export async function startRelayLogFallbackReplay() {
   const res = await api.post<RelayLogReplayStartResponse>(
     '/api/admin/system/relay-log-pipeline/replay',
     {}
+  )
+  return res.data
+}
+
+export async function updatePasskeyDomains(
+  request: UpdatePasskeyDomainsRequest
+) {
+  const res = await api.put<UpdatePasskeyDomainsResponse>(
+    '/api/option/passkey/domains',
+    request,
+    {
+      validateStatus: (status) =>
+        (status >= 200 && status < 300) || status === 409,
+    }
   )
   return res.data
 }

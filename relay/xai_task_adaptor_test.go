@@ -10,14 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTaskAdaptorReturnsXaiAdaptor(t *testing.T) {
-	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeXai)))
-
-	require.NotNil(t, adaptor)
-	assert.Equal(t, "xai", adaptor.GetChannelName())
-	assert.Contains(t, adaptor.GetModelList(), "grok-imagine-video-1.5")
-}
-
 func TestTaskModel2DtoIncludesBillingOther(t *testing.T) {
 	task := &model.Task{
 		TaskID:    "task_xai",

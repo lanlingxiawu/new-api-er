@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -33,8 +34,9 @@ func TestStrictDownstreamDiagnostic(t *testing.T) {
 		info.StreamSession.ObserveTransport(resp, nil)
 		_, err := strictClaudeStream(c, resp, info)
 		require.Nil(t, err)
-		other := map[string]any{}
-		service.AppendStreamLogInfo(info, other)
+		otherLog := model.NewLogOther()
+		service.AppendStreamLogInfo(info, otherLog)
+		other := otherLog.Snapshot()
 		diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 		if info.StreamResult.DiagnosticAvailable {
 			require.Equal(t, body, string(diagnostic.BodyHead)+string(diagnostic.BodyTail))
@@ -411,10 +413,9 @@ func TestStrictPassthroughAdapterHTTPRegression(t *testing.T) {
 					storage, err := common.GetBodyStorage(c)
 					require.NoError(t, err)
 					t.Cleanup(func() { _ = storage.Close() })
-					info.UpstreamRequestBodySize = storage.Size()
 					info.ClaudeRequestBody = storage
 					adaptor := &Adaptor{}
-					response, err := adaptor.DoRequest(c, info, common.ReaderOnly(storage))
+					response, err := adaptor.DoRequest(c, info, common.NewReplayableBodyReader(storage))
 					require.NoError(t, err)
 					r := <-received
 					require.NoError(t, r.err)

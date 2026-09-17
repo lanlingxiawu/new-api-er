@@ -242,7 +242,7 @@ func TestExplicitSubjectEffect_NoPolicy(t *testing.T) {
 }
 
 // policyEffect: an effect column that is missing (len<4) or empty defaults to
-// "allow" (matching how ruleToLine backfills legacy p rows); an explicit value
+// "allow" (matching how LoadPolicy backfills legacy p rows); an explicit value
 // is returned verbatim.
 func TestPolicyEffect(t *testing.T) {
 	assert.Equal(t, EffectAllow, policyEffect([]string{"s", "o", "a"}), "len<4 defaults to allow")

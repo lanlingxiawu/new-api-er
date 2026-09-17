@@ -9,22 +9,22 @@ import (
 
 // ConsumptionSettlementParams 汇总终止结算及日志入队所需数据，额度单位为系统内部 quota，不是货币元。
 type ConsumptionSettlementParams struct {
-	ChannelId        int                    // 日志所属渠道；0 时从 relayInfo 补入。
-	PromptTokens     int                    // 最终计费输入 token 数。
-	CompletionTokens int                    // 最终计费输出 token 数。
-	ModelName        string                 // 日志模型名；空时使用请求原模型名。
-	TokenName        string                 // 调用令牌的展示名称，不含令牌密钥。
-	Quota            int                    // 最终用户收费额度；严格流式为 0 时释放预扣。
-	SurchargeQuota   int64                  // 工具等附加费的内部额度，供成本/分账快照使用。
-	Content          string                 // 日志公开说明，不放原始响应或底层私有错误。
-	TokenId          int                    // 调用令牌 ID；0 时从请求信息补入。
-	UseTimeSeconds   int                    // 请求耗时，单位秒。
-	IsStream         bool                   // 本次是否为流式请求。
-	Group            string                 // 实际计费分组；空时使用请求当前分组。
-	Other            map[string]interface{} // 待序列化日志扩展字段，结算会刷新其中的订阅和流式信息。
-	CreatedAt        int64                  // 日志创建时间，Unix 秒，传递给既有日志管线。
-	CountUsage       bool                   // 是否更新用户/渠道消费统计；严格免收费或资金失败时关闭。
-	LedgerQuota      int                    // 成本/佣金使用的额度口径；0 时日志快照逻辑取 Quota。
+	ChannelId        int             // 日志所属渠道；0 时从 relayInfo 补入。
+	PromptTokens     int             // 最终计费输入 token 数。
+	CompletionTokens int             // 最终计费输出 token 数。
+	ModelName        string          // 日志模型名；空时使用请求原模型名。
+	TokenName        string          // 调用令牌的展示名称，不含令牌密钥。
+	Quota            int             // 最终用户收费额度；严格流式为 0 时释放预扣。
+	SurchargeQuota   int64           // 工具等附加费的内部额度，供成本/分账快照使用。
+	Content          string          // 日志公开说明，不放原始响应或底层私有错误。
+	TokenId          int             // 调用令牌 ID；0 时从请求信息补入。
+	UseTimeSeconds   int             // 请求耗时，单位秒。
+	IsStream         bool            // 本次是否为流式请求。
+	Group            string          // 实际计费分组；空时使用请求当前分组。
+	Other            *model.LogOther // 待序列化日志扩展字段，结算会刷新其中的订阅和流式信息。
+	CreatedAt        int64           // 日志创建时间，Unix 秒，传递给既有日志管线。
+	CountUsage       bool            // 是否更新用户/渠道消费统计；严格免收费或资金失败时关闭。
+	LedgerQuota      int             // 成本/佣金使用的额度口径；0 时日志快照逻辑取 Quota。
 	// UpstreamBaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1 的额度）。
 	// nil 时按结算额与分组倍率推导，见 upstreamBaseQuota。
 	UpstreamBaseQuota *int64

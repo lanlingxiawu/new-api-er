@@ -101,35 +101,6 @@ func TestGetModelRatio_UnknownDefaultSelfUseOn(t *testing.T) {
 	assert.True(t, ok, "self-use on -> ok reports true for unknown models")
 }
 
-func TestGetModelRatio_CompactSuffix_WildcardHit(t *testing.T) {
-	snap := snapshotFloatMap(modelRatioMap)
-	t.Cleanup(func() { restoreFloatMap(modelRatioMap, snap) })
-
-	require.NoError(t, UpdateModelRatioByJSONString(`{"`+CompactWildcardModelKey+`":3.5}`))
-	ratio, ok, name := GetModelRatio("some-model" + CompactModelSuffix)
-	assert.True(t, ok)
-	assert.Equal(t, 3.5, ratio)
-	assert.Equal(t, "some-model"+CompactModelSuffix, name)
-}
-
-func TestGetModelRatio_CompactSuffix_NoWildcardFallsToDefault(t *testing.T) {
-	withSelfUseMode(t, false)
-	// wildcard key is absent by default -> compact miss falls to 37.5/ok=false
-	ratio, ok, _ := GetModelRatio("orphan-model" + CompactModelSuffix)
-	assert.Equal(t, 37.5, ratio)
-	assert.False(t, ok)
-}
-
-func TestGetModelRatio_ExplicitCompactKeyExactMatch(t *testing.T) {
-	// An exact entry for a compact-suffixed model wins before the wildcard branch.
-	snap := snapshotFloatMap(modelRatioMap)
-	t.Cleanup(func() { restoreFloatMap(modelRatioMap, snap) })
-	require.NoError(t, UpdateModelRatioByJSONString(`{"foo`+CompactModelSuffix+`":9}`))
-	ratio, ok, _ := GetModelRatio("foo" + CompactModelSuffix)
-	assert.True(t, ok)
-	assert.Equal(t, 9.0, ratio)
-}
-
 // ---------------------------------------------------------------------------
 // GetModelPrice
 // ---------------------------------------------------------------------------
@@ -155,22 +126,6 @@ func TestGetModelPrice_Unknown(t *testing.T) {
 func TestGetModelPrice_UnknownWithPrintErr(t *testing.T) {
 	// printErr=true exercises the SysError branch (no panic, still -1/false).
 	price, ok := GetModelPrice("no-such-price-model", true)
-	assert.False(t, ok)
-	assert.Equal(t, -1.0, price)
-}
-
-func TestGetModelPrice_CompactWildcard(t *testing.T) {
-	snap := snapshotFloatMap(modelPriceMap)
-	t.Cleanup(func() { restoreFloatMap(modelPriceMap, snap) })
-	require.NoError(t, UpdateModelPriceByJSONString(`{"`+CompactWildcardModelKey+`":0.2}`))
-	price, ok := GetModelPrice("x"+CompactModelSuffix, false)
-	assert.True(t, ok)
-	assert.Equal(t, 0.2, price)
-}
-
-func TestGetModelPrice_CompactSuffixNoWildcard(t *testing.T) {
-	// suffix present, wildcard absent, printErr true -> -1/false via SysError path
-	price, ok := GetModelPrice("y"+CompactModelSuffix, true)
 	assert.False(t, ok)
 	assert.Equal(t, -1.0, price)
 }
@@ -277,7 +232,8 @@ func TestGetHardcodedCompletionModelRatio_Matrix(t *testing.T) {
 		{"gemini-2.0-flash", 4, true},
 		{"gemini-2.5-pro", 8, false},
 		{"gemini-2.5-flash-preview-05-20", 3.5 / 0.15, false},
-		{"gemini-2.5-flash-preview-05-20-nothinking", 4, false},
+		// -nothinking is normalized away before pricing; the hardcoded table no longer special-cases it
+		{"gemini-2.5-flash-preview-05-20-nothinking", 3.5 / 0.15, false},
 		{"gemini-2.5-flash-lite-preview-06-17", 4, false},
 		{"gemini-2.5-flash", 2.5 / 0.3, false},
 		{"gemini-robotics-er-1.5-preview", 2.5 / 0.3, false},

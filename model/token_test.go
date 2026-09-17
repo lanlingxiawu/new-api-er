@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -23,9 +24,9 @@ func TestMaskTokenKey(t *testing.T) {
 	}{
 		{"", ""},
 		{"a", "*"},
-		{"abcd", "****"},        // len 4 boundary -> all stars
-		{"abcde", "ab****de"},   // len 5 -> 2+stars+2
-		{"abcdefgh", "ab****gh"}, // len 8 boundary
+		{"abcd", "****"},                    // len 4 boundary -> all stars
+		{"abcde", "ab****de"},               // len 5 -> 2+stars+2
+		{"abcdefgh", "ab****gh"},            // len 8 boundary
 		{"abcdefghi", "abcd**********fghi"}, // len 9 -> 4+10*+4
 	}
 	for _, c := range cases {
@@ -435,36 +436,71 @@ func TestTokenSentinelErrors(t *testing.T) {
 // Redis-backed: token cache mirror + cache_*.go functions
 // ---------------------------------------------------------------------------
 
+// primeTokenCache publishes a token snapshot into Redis (cold hash) and removes
+// both the hash and its mutation fence when the test ends.
+func primeTokenCache(t *testing.T, tk *Token) {
+	t.Helper()
+	t.Cleanup(func() {
+		if common.RDB != nil {
+			ctx := context.Background()
+			common.RDB.Del(ctx, getTokenCacheKey(tk.Key), getTokenCacheFenceKey(tk.Key))
+		}
+	})
+	code, err := cacheInitToken(*tk)
+	require.NoError(t, err)
+	require.Equal(t, 1, code, "cold, unfenced hash must be initialized")
+}
+
 func TestToken_CacheRoundTrip(t *testing.T) {
 	enableRedis(t)
 	u := mkUser(t, nil)
 	tk := mkToken(t, u.Id, func(tk *Token) { tk.RemainQuota = 777 })
 
-	// set cache directly, then read back through cache
-	require.NoError(t, cacheSetToken(*tk))
+	// publish snapshot, then read back through cache
+	primeTokenCache(t, tk)
 	got, err := cacheGetTokenByKey(tk.Key)
 	require.NoError(t, err)
 	assert.Equal(t, tk.Id, got.Id)
 	assert.Equal(t, 777, got.RemainQuota)
 
-	// incr / decr quota in cache
-	require.NoError(t, cacheIncrTokenQuota(tk.Key, 100))
-	require.NoError(t, cacheDecrTokenQuota(tk.Key, 50))
+	// atomic quota deltas in cache (remain +, used -)
+	res, err := cacheApplyTokenQuotaDelta(tk.Id, tk.Key, 100)
+	require.NoError(t, err)
+	assert.Equal(t, cacheQuotaOK, res)
+	res, err = cacheApplyTokenQuotaDelta(tk.Id, tk.Key, -50)
+	require.NoError(t, err)
+	assert.Equal(t, cacheQuotaOK, res)
 	got, err = cacheGetTokenByKey(tk.Key)
 	require.NoError(t, err)
 	assert.Equal(t, 777+100-50, got.RemainQuota)
 
-	// delete from cache -> subsequent get misses
-	require.NoError(t, cacheDeleteToken(tk.Key))
+	// re-init on a live hash only refreshes TTL; the stale snapshot must not win
+	code, err := cacheInitToken(*tk)
+	require.NoError(t, err)
+	assert.Equal(t, 2, code)
+	got, err = cacheGetTokenByKey(tk.Key)
+	require.NoError(t, err)
+	assert.Equal(t, 827, got.RemainQuota)
+
+	// delta against a wrong id -> miss, cache untouched
+	res, err = cacheApplyTokenQuotaDelta(tk.Id+1, tk.Key, 1)
+	require.NoError(t, err)
+	assert.Equal(t, cacheQuotaMiss, res)
+
+	// mutation fence drops the hash and blocks re-publishing
+	require.NoError(t, invalidateTokenCacheForMutation(tk.Key))
 	_, err = cacheGetTokenByKey(tk.Key)
 	assert.Error(t, err)
+	code, err = cacheInitToken(*tk)
+	require.NoError(t, err)
+	assert.Zero(t, code)
 }
 
 func TestGetTokenByKey_RedisFirst(t *testing.T) {
 	enableRedis(t)
 	u := mkUser(t, nil)
 	tk := mkToken(t, u.Id, func(tk *Token) { tk.RemainQuota = 42 })
-	require.NoError(t, cacheSetToken(*tk))
+	primeTokenCache(t, tk)
 
 	// fromDB=false should hit Redis and return the cached token
 	got, err := GetTokenByKey(tk.Key, false)
@@ -477,7 +513,7 @@ func TestIncreaseTokenQuota_RedisPath(t *testing.T) {
 	enableRedis(t)
 	u := mkUser(t, nil)
 	tk := mkToken(t, u.Id, func(tk *Token) { tk.RemainQuota = 1000 })
-	require.NoError(t, cacheSetToken(*tk))
+	primeTokenCache(t, tk)
 
 	// With Redis enabled the async cache path fires; DB is still updated
 	// synchronously because BatchUpdate is disabled.
@@ -490,7 +526,7 @@ func TestToken_RedisMutationBranches(t *testing.T) {
 	enableRedis(t)
 	u := mkUser(t, nil)
 	tk := mkToken(t, u.Id, func(tk *Token) { tk.RemainQuota = 1000 })
-	require.NoError(t, cacheSetToken(*tk))
+	primeTokenCache(t, tk)
 
 	// Decrease redis outer branch
 	require.NoError(t, DecreaseTokenQuota(tk.Id, tk.Key, 100))
@@ -501,7 +537,7 @@ func TestToken_RedisMutationBranches(t *testing.T) {
 
 	// BatchDeleteTokens redis cleanup branch
 	tk2 := mkToken(t, u.Id, nil)
-	require.NoError(t, cacheSetToken(*tk2))
+	primeTokenCache(t, tk2)
 	n, err := BatchDeleteTokens([]int{tk2.Id}, u.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
@@ -542,7 +578,7 @@ func TestInvalidateUserTokensCache_RedisEnabled(t *testing.T) {
 	enableRedis(t)
 	u := mkUser(t, nil)
 	tk := mkToken(t, u.Id, nil)
-	require.NoError(t, cacheSetToken(*tk))
+	primeTokenCache(t, tk)
 
 	// invalid userId guard now reachable because RedisEnabled is true
 	assert.Error(t, InvalidateUserTokensCache(0))

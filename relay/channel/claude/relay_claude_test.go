@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -27,14 +29,14 @@ func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {
 	tests := []struct {
 		name string
 		args string
-		want map[string]interface{}
+		want map[string]any
 	}{
-		{name: "object", args: `{"q":"x"}`, want: map[string]interface{}{"q": "x"}},
-		{name: "empty", args: "", want: map[string]interface{}{}},
-		{name: "invalid", args: "{", want: map[string]interface{}{}},
-		{name: "null", args: "null", want: map[string]interface{}{}},
-		{name: "array", args: `["x"]`, want: map[string]interface{}{}},
-		{name: "string", args: `"x"`, want: map[string]interface{}{}},
+		{name: "object", args: `{"q":"x"}`, want: map[string]any{"q": "x"}},
+		{name: "empty", args: "", want: map[string]any{}},
+		{name: "invalid", args: "{", want: map[string]any{}},
+		{name: "null", args: "null", want: map[string]any{}},
+		{name: "array", args: `["x"]`, want: map[string]any{}},
+		{name: "string", args: `"x"`, want: map[string]any{}},
 	}
 
 	for _, tt := range tests {
@@ -446,8 +448,28 @@ func TestClaudeStreamHandlerBillsEstimateWhenUpstreamSendsNoData(t *testing.T) {
 		"零响应的 usage 不应被判定为有效用量（否则会进入结算扣费）")
 }
 
+func applyOpenAIChatReasoningThroughHandlerOrder(t *testing.T, original dto.GeneralOpenAIRequest) (*dto.GeneralOpenAIRequest, *relaycommon.RelayInfo) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: original.Model,
+		Request:         &original,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: original.Model,
+		},
+	}
+	outbound, err := common.DeepCopy(&original)
+	require.NoError(t, err)
+	require.NoError(t, helper.ModelMappedHelper(c, info, outbound))
+	err = helper.ApplyReasoningModelSuffix(nil, info, outbound)
+	require.NoError(t, err)
+	return outbound, info
+}
+
 func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
+	original := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",
 		Temperature: commonPointer(0.7),
 		TopP:        commonPointer(0.9),
@@ -460,7 +482,8 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(
 		},
 	}
 
-	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, &relaycommon.RelayInfo{}, request)
+	outbound, info := applyOpenAIChatReasoningThroughHandlerOrder(t, original)
+	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, info, *outbound)
 	require.NoError(t, err)
 	require.Equal(t, "claude-opus-4-8", claudeRequest.Model)
 	require.NotNil(t, claudeRequest.Thinking)
@@ -473,7 +496,7 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(
 }
 
 func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
+	original := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-thinking",
 		Temperature: commonPointer(0.7),
 		TopP:        commonPointer(0.9),
@@ -486,7 +509,8 @@ func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighE
 		},
 	}
 
-	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, &relaycommon.RelayInfo{}, request)
+	outbound, info := applyOpenAIChatReasoningThroughHandlerOrder(t, original)
+	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, info, *outbound)
 	require.NoError(t, err)
 	require.Equal(t, "claude-opus-4-8", claudeRequest.Model)
 	require.NotNil(t, claudeRequest.Thinking)

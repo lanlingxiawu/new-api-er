@@ -89,11 +89,11 @@ func TestAdapter_RemoveFilteredPolicy_MixedFilterValues(t *testing.T) {
 	assert.Equal(t, "other", remaining.V1)
 }
 
-// LoadPolicy round-trips rows into a casbin model, including the ruleToLine
-// backfill of an empty effect column to "allow".
+// LoadPolicy round-trips rows into a casbin model, including the backfill of
+// an empty effect column to "allow".
 func TestAdapter_LoadPolicy_RoundTrip(t *testing.T) {
 	a := newGormAdapter(newMigratedDB(t))
-	// A p-rule missing its effect (V3 empty) — ruleToLine must backfill allow.
+	// A p-rule missing its effect (V3 empty) — LoadPolicy must backfill allow.
 	require.NoError(t, a.db.Create(&model.CasbinRule{
 		Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: ResourceChannel, V2: ActionRead,
 	}).Error)
@@ -190,7 +190,7 @@ func TestAdapter_SavePolicy_EmptyModelWipes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// newRule / ruleToLine — pure helpers.
+// newRule — pure helper.
 // ---------------------------------------------------------------------------
 
 // newRule maps up to 6 policy values into V0..V5 and ignores any extra values.
@@ -212,31 +212,69 @@ func TestNewRule_ShortPolicyLeavesTrailingEmpty(t *testing.T) {
 	assert.Equal(t, "", r.V5)
 }
 
-// ruleToLine: a p-rule with a complete sub/obj/act triple but an empty effect
-// (V3) is backfilled to "allow"; empty trailing columns are dropped.
-func TestRuleToLine_BackfillsAllowForLegacyPRule(t *testing.T) {
-	line := ruleToLine(model.CasbinRule{
-		Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: ResourceChannel, V2: ActionRead,
-	})
-	assert.Equal(t, "p, role:admin, channel, read, allow", line)
+// LoadPolicy only loads "p" rows; grouping rows are ignored because the model
+// has no role_definition section.
+func TestAdapter_LoadPolicy_SkipsNonPolicyRows(t *testing.T) {
+	a := newGormAdapter(newMigratedDB(t))
+	require.NoError(t, a.db.Create(&model.CasbinRule{Ptype: "g", V0: "user:1", V1: "role:admin"}).Error)
+
+	m, err := casbinmodel.NewModelFromString(modelText)
+	require.NoError(t, err)
+	require.NoError(t, a.LoadPolicy(m))
+
+	policies, err := m.GetPolicy("p", "p")
+	require.NoError(t, err)
+	assert.Empty(t, policies)
 }
 
-// A p-rule that already has an explicit effect is left untouched.
-func TestRuleToLine_KeepsExplicitEffect(t *testing.T) {
-	line := ruleToLine(model.CasbinRule{
-		Ptype: "p", V0: UserSubject(5), V1: ResourceChannel, V2: ActionWrite, V3: EffectDeny,
-	})
-	assert.Equal(t, "p, user:5, channel, write, deny", line)
+// A p-rule missing subject/resource/action is rejected (each sub-condition).
+func TestAdapter_LoadPolicy_IncompleteRuleErrors(t *testing.T) {
+	cases := map[string]model.CasbinRule{
+		"missing subject":  {Ptype: "p", V1: ResourceChannel, V2: ActionRead},
+		"missing resource": {Ptype: "p", V0: "user:1", V2: ActionRead},
+		"missing action":   {Ptype: "p", V0: "user:1", V1: ResourceChannel},
+	}
+	for name, rule := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := newGormAdapter(newMigratedDB(t))
+			require.NoError(t, a.db.Create(&rule).Error)
+			m, err := casbinmodel.NewModelFromString(modelText)
+			require.NoError(t, err)
+			assert.Error(t, a.LoadPolicy(m))
+		})
+	}
 }
 
-// A g-rule (grouping) is not subject to the p-rule effect backfill.
-func TestRuleToLine_GroupingRuleNotBackfilled(t *testing.T) {
-	line := ruleToLine(model.CasbinRule{Ptype: "g", V0: "user:1", V1: "role:admin"})
-	assert.Equal(t, "g, user:1, role:admin", line)
+// A p-rule whose effect is neither allow nor deny is rejected.
+func TestAdapter_LoadPolicy_InvalidEffectErrors(t *testing.T) {
+	a := newGormAdapter(newMigratedDB(t))
+	require.NoError(t, a.db.Create(&model.CasbinRule{
+		Ptype: "p", V0: "user:1", V1: ResourceChannel, V2: ActionRead, V3: "maybe",
+	}).Error)
+	m, err := casbinmodel.NewModelFromString(modelText)
+	require.NoError(t, err)
+	assert.Error(t, a.LoadPolicy(m))
 }
 
-// A p-rule that is incomplete (missing act) does not trigger the backfill.
-func TestRuleToLine_IncompletePRuleNoBackfill(t *testing.T) {
-	line := ruleToLine(model.CasbinRule{Ptype: "p", V0: "user:1", V1: "channel"})
-	assert.Equal(t, "p, user:1, channel", line)
+// Legacy scoped rows (V4 other than "all", or any V5) load as deny; V4 "all"
+// keeps the stored effect.
+func TestAdapter_LoadPolicy_LegacyScopeLoadsAsDeny(t *testing.T) {
+	a := newGormAdapter(newMigratedDB(t))
+	require.NoError(t, a.db.Create(&[]model.CasbinRule{
+		{Ptype: "p", V0: UserSubject(1), V1: ResourceChannel, V2: ActionRead, V3: EffectAllow, V4: "own"},
+		{Ptype: "p", V0: UserSubject(2), V1: ResourceChannel, V2: ActionRead, V3: EffectAllow, V5: "own"},
+		{Ptype: "p", V0: UserSubject(3), V1: ResourceChannel, V2: ActionRead, V3: EffectAllow, V4: "all"},
+	}).Error)
+	m, err := casbinmodel.NewModelFromString(modelText)
+	require.NoError(t, err)
+	require.NoError(t, a.LoadPolicy(m))
+
+	for _, sub := range []string{UserSubject(1), UserSubject(2)} {
+		denied, err := m.HasPolicy("p", "p", []string{sub, ResourceChannel, ActionRead, EffectDeny})
+		require.NoError(t, err)
+		assert.True(t, denied, sub)
+	}
+	allowed, err := m.HasPolicy("p", "p", []string{UserSubject(3), ResourceChannel, ActionRead, EffectAllow})
+	require.NoError(t, err)
+	assert.True(t, allowed)
 }

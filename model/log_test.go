@@ -80,18 +80,6 @@ func TestAssignDisplayLogIds(t *testing.T) {
 	assert.Equal(t, 13, logs[2].Id)
 }
 
-func TestBuildOpField(t *testing.T) {
-	// action only
-	op := buildOpField("delete_user", nil)
-	assert.Equal(t, "delete_user", op["action"])
-	_, hasParams := op["params"]
-	assert.False(t, hasParams)
-	// action + params
-	op = buildOpField("ban", map[string]interface{}{"id": 5})
-	assert.Equal(t, "ban", op["action"])
-	assert.NotNil(t, op["params"])
-}
-
 func TestEnsureLogRequestId(t *testing.T) {
 	ensureLogRequestId(nil) // nil-safe, must not panic
 	l := &Log{}
@@ -223,63 +211,140 @@ func TestRecordLog_Basic(t *testing.T) {
 	assert.NotEmpty(t, l.RequestId)         // auto-filled
 }
 
+// auditCleanupUser hard-deletes every audit_logs row for a user id on LOG_DB.
+func auditCleanupUser(t *testing.T, userID int) {
+	t.Helper()
+	t.Cleanup(func() {
+		if LOG_DB != nil {
+			LOG_DB.Where("user_id = ?", userID).Delete(&AuditLog{})
+		}
+	})
+}
+
+// firstUserAuditLog returns the newest audit_logs row for a user id.
+func firstUserAuditLog(t *testing.T, userID int) *AuditLog {
+	t.Helper()
+	var row AuditLog
+	require.NoError(t, LOG_DB.Where("user_id = ?", userID).Order("id desc").First(&row).Error)
+	return &row
+}
+
+func countUserAuditLogs(t *testing.T, userID int) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, LOG_DB.Model(&AuditLog{}).Where("user_id = ?", userID).Count(&n).Error)
+	return n
+}
+
 func TestRecordLogWithAdminInfo(t *testing.T) {
 	requireLogDB(t)
 	u := mkUser(t, nil)
 	logCleanupUser(t, u.Id)
+	auditCleanupUser(t, u.Id)
 
-	RecordLogWithAdminInfo(u.Id, LogTypeManage, "admin op", map[string]interface{}{"operator": "root"})
+	// non-manage type -> logs row whose Other carries admin_info + op
+	RecordLogWithAdminInfo(u.Id, LogTypeSystem, "system op",
+		&AuditAdminInfo{AdminID: 1, AdminUsername: "root"},
+		&AuditOperation{Action: "sync"})
 	l := firstUserLog(t, u.Id)
+	assert.Equal(t, LogTypeSystem, l.Type)
 	m, err := common.StrToMap(l.Other)
 	require.NoError(t, err)
 	assert.Contains(t, m, "admin_info")
+	assert.Contains(t, m, "op")
+
+	// manage type -> routed to the independent audit table, not logs
+	beforeLogs := countUserLogs(t, u.Id)
+	RecordLogWithAdminInfo(u.Id, LogTypeManage, "admin op", &AuditAdminInfo{AdminUsername: "root"}, nil)
+	assert.Equal(t, beforeLogs, countUserLogs(t, u.Id))
+	audit := firstUserAuditLog(t, u.Id)
+	assert.Equal(t, AuditCategoryOperation, audit.Category)
+	assert.Equal(t, "admin op", audit.Content)
+	require.NotNil(t, audit.Other.AdminInfo)
+	assert.Equal(t, "root", audit.Other.AdminInfo.AdminUsername)
 
 	// consume + disabled skips
 	prev := common.LogConsumeEnabled
 	common.LogConsumeEnabled = false
 	t.Cleanup(func() { common.LogConsumeEnabled = prev })
 	before := countUserLogs(t, u.Id)
-	RecordLogWithAdminInfo(u.Id, LogTypeConsume, "skip", nil)
+	RecordLogWithAdminInfo(u.Id, LogTypeConsume, "skip", nil, nil)
+	assert.Equal(t, before, countUserLogs(t, u.Id))
+}
+
+func TestRecordLogWithAdminDetails(t *testing.T) {
+	requireLogDB(t)
+	u := mkUser(t, nil)
+	logCleanupUser(t, u.Id)
+
+	// details are nested under admin_info in the logs table (even for manage type)
+	RecordLogWithAdminDetails(u.Id, LogTypeManage, "manual adjustment", map[string]any{"operated_by": 7})
+	l := firstUserLog(t, u.Id)
+	assert.Equal(t, LogTypeManage, l.Type)
+	m, err := common.StrToMap(l.Other)
+	require.NoError(t, err)
+	admin, ok := m["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.EqualValues(t, 7, admin["operated_by"])
+
+	// no details -> empty Other
+	RecordLogWithAdminDetails(u.Id, LogTypeSystem, "plain", nil)
+	assert.Equal(t, "", firstUserLog(t, u.Id).Other)
+
+	// consume + disabled skips
+	prev := common.LogConsumeEnabled
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() { common.LogConsumeEnabled = prev })
+	before := countUserLogs(t, u.Id)
+	RecordLogWithAdminDetails(u.Id, LogTypeConsume, "skip", map[string]any{"x": 1})
 	assert.Equal(t, before, countUserLogs(t, u.Id))
 }
 
 func TestRecordLoginLog(t *testing.T) {
 	requireLogDB(t)
 	u := mkUser(t, nil)
-	logCleanupUser(t, u.Id)
+	auditCleanupUser(t, u.Id)
 
-	RecordLoginLog(u.Id, u.Username, "login ok", "10.0.0.1",
-		"login", map[string]interface{}{"method": "password"},
-		map[string]interface{}{"user_agent": "go-test"})
+	RecordLoginLog(u.Id, common.RoleCommonUser, u.Username, "login ok", "10.0.0.1",
+		"login", map[string]any{"method": "password"},
+		AuditOther{UserAgent: "go-test", LoginMethod: "password"})
 
-	l := firstUserLog(t, u.Id)
-	assert.Equal(t, LogTypeLogin, l.Type)
+	require.EqualValues(t, 1, countUserAuditLogs(t, u.Id))
+	l := firstUserAuditLog(t, u.Id)
+	assert.Equal(t, AuditCategoryLogin, l.Category)
+	assert.Equal(t, "login", l.Action)
 	assert.Equal(t, "10.0.0.1", l.Ip)
-	m, err := common.StrToMap(l.Other)
-	require.NoError(t, err)
-	assert.Equal(t, "go-test", m["user_agent"]) // extra merged
-	op, ok := m["op"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, "login", op["action"])
+	assert.Equal(t, u.Username, l.Username)
+	assert.Equal(t, "go-test", l.Other.UserAgent)
+	require.NotNil(t, l.Other.Op)
+	assert.Equal(t, "login", l.Other.Op.Action)
 }
 
 func TestRecordOperationAuditLog(t *testing.T) {
 	requireLogDB(t)
 	u := mkUser(t, nil)
-	logCleanupUser(t, u.Id)
+	auditCleanupUser(t, u.Id)
 
-	RecordOperationAuditLog(u.Id, "did thing", "10.0.0.2", "ban_user",
-		map[string]interface{}{"target": 9},
-		map[string]interface{}{"operator": "admin"},
-		map[string]interface{}{"route": "/api/x"})
+	RecordOperationAuditLog(u.Id, common.RoleAdminUser, "did thing", "10.0.0.2", "ban_user",
+		map[string]any{"target": 9},
+		&AuditAdminInfo{AdminUsername: "admin"},
+		&AuditRequestInfo{Route: "/api/x", Status: 200, Success: true})
 
-	l := firstUserLog(t, u.Id)
-	assert.Equal(t, LogTypeManage, l.Type)
-	m, err := common.StrToMap(l.Other)
-	require.NoError(t, err)
-	assert.Contains(t, m, "op")
-	assert.Contains(t, m, "admin_info")
-	assert.Contains(t, m, "audit_info")
+	l := firstUserAuditLog(t, u.Id)
+	assert.Equal(t, AuditCategoryOperation, l.Category)
+	assert.Equal(t, "ban_user", l.Action)
+	assert.Equal(t, u.Username, l.Username)
+	require.NotNil(t, l.Other.Op)
+	assert.Equal(t, "ban_user", l.Other.Op.Action)
+	require.NotNil(t, l.Other.AdminInfo)
+	assert.Equal(t, "admin", l.Other.AdminInfo.AdminUsername)
+	require.NotNil(t, l.Other.AuditInfo)
+	assert.Equal(t, "/api/x", l.Other.AuditInfo.Route)
+
+	// no admin info -> security category
+	RecordOperationAuditLog(u.Id, common.RoleCommonUser, "self change", "10.0.0.3", "update_password", nil, nil, nil)
+	l = firstUserAuditLog(t, u.Id)
+	assert.Equal(t, AuditCategorySecurity, l.Category)
 }
 
 func TestRecordTopupLog(t *testing.T) {
@@ -316,8 +381,9 @@ func TestRecordErrorLog(t *testing.T) {
 	c.Set("username", u.Username)
 
 	// default user setting -> RecordIpLog false -> ip stays empty
-	RecordErrorLog(c, u.Id, 42, "gpt-4o", "tok-1", "boom", 7, 3, true, "grpA",
-		map[string]interface{}{"detail": "x"})
+	other := NewLogOther()
+	other.SetPublic("detail", "x")
+	RecordErrorLog(c, u.Id, 42, "gpt-4o", "tok-1", "boom", 7, 3, true, "grpA", other)
 	flushRelayErrorLogsForTest(t)
 
 	l := firstUserLog(t, u.Id)

@@ -39,7 +39,7 @@ func TestValidateMultipartTaskRequest(t *testing.T) {
 	c.Request.Header.Set("Content-Type", w.FormDataContentType())
 
 	info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
-	req, err := validateMultipartTaskRequest(c, info, constant.TaskActionGenerate)
+	req, err := validateMultipartTaskRequest(c, info, constant.TaskActionImageToVideo)
 	require.NoError(t, err)
 	assert.Equal(t, "a cat", req.Prompt)
 	assert.Equal(t, "sora-2", req.Model)

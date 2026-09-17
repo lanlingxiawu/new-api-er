@@ -21,10 +21,11 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 
 import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { updateSystemOption } from '../api'
+import { updatePasskeyDomains, updateSystemOption } from '../api'
 import { useSettingsPageAccess } from '../components/settings-page-access-context'
-import type { UpdateOptionRequest } from '../types'
+import type { UpdateOptionRequest, UpdatePasskeyDomainsRequest } from '../types'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
@@ -41,6 +42,11 @@ const STATUS_RELATED_KEYS = new Set([
   'general_setting.custom_currency_symbol',
   'general_setting.custom_currency_exchange_rate',
   'oidc.display_name',
+  'ServerAddress',
+  'passkey.enabled',
+  'passkey.rp_id',
+  'passkey.legacy_rp_ids',
+  'passkey.origins',
 ])
 
 export function useUpdateOption(explicitScope?: string) {
@@ -49,11 +55,12 @@ export function useUpdateOption(explicitScope?: string) {
   const scope = explicitScope || contextScope
 
   return useMutation({
-    mutationFn: (request: UpdateOptionRequest) =>
-      updateSystemOption(scope ? { ...request, scope } : request),
+    mutationFn: async (request: UpdateOptionRequest) =>
+      requireServerSuccess(
+        await updateSystemOption(scope ? { ...request, scope } : request)
+      ),
     onSuccess: (data, variables) => {
-      // 业务失败已由 http-client 的全局拦截器提示（updateSystemOption 没有设 skipBusinessError），
-      // 这里再提示一次就会叠出两个弱提示。
+      // 业务失败已由 requireServerSuccess 转为 onError 统一提示。
       if (!data.success) return
 
       // Always refresh system-options
@@ -74,6 +81,37 @@ export function useUpdateOption(explicitScope?: string) {
       // 逐键保存时每个键都会走到这里，相同文案由 toast 去重合并为一个（见 lib/toast-dedupe）。
       toast.success(i18next.t('Setting updated successfully'))
     },
-    onError: (error: Error) => handleServerError(error),
+    onError: (error: Error) => {
+      handleServerError(error, i18next.t('Failed to update setting'))
+    },
+  })
+}
+
+export function useUpdatePasskeyDomains() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (request: UpdatePasskeyDomainsRequest) => {
+      const result = await updatePasskeyDomains(request)
+      if (
+        result.code === 'PASSKEY_RP_ID_REMOVAL_CONFIRMATION_REQUIRED' &&
+        result.data
+      ) {
+        return result
+      }
+      return requireServerSuccess(result)
+    },
+    onSuccess: (result, request) => {
+      if (request.preview || !result.success) return
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      queryClient.invalidateQueries({ queryKey: ['status'] })
+      try {
+        window.localStorage.removeItem('status')
+      } catch {
+        /* Storage may be disabled. */
+      }
+      toast.success(i18next.t('Setting updated successfully'))
+    },
+    onError: (error: Error) =>
+      handleServerError(error, i18next.t('Failed to update setting')),
   })
 }

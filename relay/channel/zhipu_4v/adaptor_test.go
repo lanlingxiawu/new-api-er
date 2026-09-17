@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 
@@ -255,7 +255,7 @@ func TestGettersAndUnimplemented(t *testing.T) {
 	_, err = a.ConvertAudioRequest(c, info, dto.AudioRequest{})
 	assert.Error(t, err)
 	_, err = a.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{})
-	assert.Error(t, err)
+	assert.NoError(t, err, "responses requests are passed through")
 	rr, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
 	assert.NoError(t, err)
 	assert.Nil(t, rr)

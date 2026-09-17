@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -70,9 +71,9 @@ func TestStreamResponseGateWSActual(t *testing.T) {
 			require.False(t, info.StreamSession.Active())
 			require.Nil(t, info.StreamResult)
 			require.Empty(t, rec.Body.String())
-			other := map[string]any{}
+			other := model.NewLogOther()
 			service.AppendStreamErrorDiagnostic(c, other, err)
-			require.Empty(t, other)
+			require.Empty(t, other.Snapshot())
 		}
 	}
 }

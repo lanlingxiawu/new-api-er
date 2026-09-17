@@ -1,6 +1,7 @@
 package common
 
 import (
+	"fmt"
 	"testing"
 
 	commonpkg "github.com/QuantumNous/new-api/common"
@@ -864,10 +865,11 @@ func TestRemoveDisabledFields(t *testing.T) {
 		assert.Contains(t, string(out), "service_tier")
 	})
 	t.Run("global passthrough keeps body", func(t *testing.T) {
-		g := model_setting.GetGlobalSettings()
-		old := g.PassThroughRequestEnabled
+		old := *model_setting.GetGlobalSettings()
+		g := old
 		g.PassThroughRequestEnabled = true
-		t.Cleanup(func() { g.PassThroughRequestEnabled = old })
+		model_setting.ReplaceGlobalSettings(g)
+		t.Cleanup(func() { model_setting.ReplaceGlobalSettings(old) })
 		body := []byte(`{"service_tier":"flex"}`)
 		out, err := RemoveDisabledFields(body, dto.ChannelOtherSettings{}, false)
 		require.NoError(t, err)
@@ -884,20 +886,22 @@ func TestRemoveDisabledFields(t *testing.T) {
 
 func TestRemoveGeminiDisabledFields(t *testing.T) {
 	t.Run("disabled setting keeps body", func(t *testing.T) {
-		g := model_setting.GetGeminiSettings()
-		old := g.RemoveFunctionResponseIdEnabled
+		old := *model_setting.GetGeminiSettings()
+		g := old
 		g.RemoveFunctionResponseIdEnabled = false
-		t.Cleanup(func() { g.RemoveFunctionResponseIdEnabled = old })
+		model_setting.ReplaceGeminiSettings(g)
+		t.Cleanup(func() { model_setting.ReplaceGeminiSettings(old) })
 		body := []byte(`{"contents":[{"parts":[{"functionResponse":{"id":"x","name":"f"}}]}]}`)
 		out, err := RemoveGeminiDisabledFields(body)
 		require.NoError(t, err)
 		assert.Equal(t, body, out)
 	})
 	t.Run("enabled removes functionResponse id", func(t *testing.T) {
-		g := model_setting.GetGeminiSettings()
-		old := g.RemoveFunctionResponseIdEnabled
+		old := *model_setting.GetGeminiSettings()
+		g := old
 		g.RemoveFunctionResponseIdEnabled = true
-		t.Cleanup(func() { g.RemoveFunctionResponseIdEnabled = old })
+		model_setting.ReplaceGeminiSettings(g)
+		t.Cleanup(func() { model_setting.ReplaceGeminiSettings(old) })
 		body := []byte(`{"contents":[{"parts":[{"functionResponse":{"id":"x","name":"f"}}]}]}`)
 		out, err := RemoveGeminiDisabledFields(body)
 		require.NoError(t, err)
@@ -908,3 +912,223 @@ func TestRemoveGeminiDisabledFields(t *testing.T) {
 
 // keep imports used
 var _ = commonpkg.Marshal
+
+func TestApplyParamOverrideConditionByUserAndGPTModel(t *testing.T) {
+	paramOverride := map[string]any{
+		"operations": []any{
+			map[string]any{
+				"path":  "service_tier",
+				"mode":  "set",
+				"value": "priority",
+				"logic": "AND",
+				"conditions": []any{
+					map[string]any{
+						"path":  "user_id",
+						"mode":  "full",
+						"value": 1,
+					},
+					map[string]any{
+						"path":  "upstream_model",
+						"mode":  "contains",
+						"value": "gpt",
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		userID   int
+		model    string
+		expected string
+	}{
+		{
+			name:     "target user and GPT model",
+			userID:   1,
+			model:    "gpt-5.2",
+			expected: `{"model":"gpt-5.2","service_tier":"priority"}`,
+		},
+		{
+			name:     "other user",
+			userID:   2,
+			model:    "gpt-5.2",
+			expected: `{"model":"gpt-5.2"}`,
+		},
+		{
+			name:     "non-GPT model",
+			userID:   1,
+			model:    "claude-sonnet-4-5",
+			expected: `{"model":"claude-sonnet-4-5"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &RelayInfo{
+				UserId: tt.userID,
+				ChannelMeta: &ChannelMeta{
+					ParamOverride:     paramOverride,
+					UpstreamModelName: tt.model,
+				},
+			}
+			input := []byte(fmt.Sprintf(`{"model":%q}`, tt.model))
+
+			out, err := ApplyParamOverrideWithRelayInfo(input, info)
+
+			require.NoError(t, err)
+			require.JSONEq(t, tt.expected, string(out))
+		})
+	}
+}
+
+func TestApplyParamOverrideConditionByGroupContext(t *testing.T) {
+	info := &RelayInfo{
+		UserGroup:  "vip",
+		TokenGroup: "premium",
+		UsingGroup: "priority-route",
+	}
+	ctx := BuildParamOverrideContext(info)
+	paramOverride := map[string]any{
+		"operations": []any{
+			map[string]any{
+				"path":  "service_tier",
+				"mode":  "set",
+				"value": "priority",
+				"logic": "AND",
+				"conditions": []any{
+					map[string]any{
+						"path":  "user_group",
+						"mode":  "full",
+						"value": "vip",
+					},
+					map[string]any{
+						"path":  "token_group",
+						"mode":  "full",
+						"value": "premium",
+					},
+					map[string]any{
+						"path":  "using_group",
+						"mode":  "full",
+						"value": "priority-route",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverride([]byte(`{"model":"gpt-5.2"}`), paramOverride, ctx)
+
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-5.2","service_tier":"priority"}`, string(out))
+}
+
+func TestApplyParamOverrideWithRelayInfoSynchronizesReasoningEffort(t *testing.T) {
+	originalDebugEnabled := commonpkg.DebugEnabled
+	commonpkg.DebugEnabled = false
+	t.Cleanup(func() {
+		commonpkg.DebugEnabled = originalDebugEnabled
+	})
+
+	tests := []struct {
+		name          string
+		relayFormat   types.RelayFormat
+		initialEffort string
+		input         string
+		operation     map[string]any
+		expected      string
+	}{
+		{
+			name:          "Responses set",
+			relayFormat:   types.RelayFormatOpenAIResponses,
+			initialEffort: "high",
+			input:         `{"reasoning":{"effort":"high"}}`,
+			operation:     map[string]any{"mode": "set", "path": "reasoning.effort", "value": "max"},
+			expected:      "max",
+		},
+		{
+			name:          "chat delete",
+			relayFormat:   types.RelayFormatOpenAI,
+			initialEffort: "high",
+			input:         `{"reasoning_effort":"high"}`,
+			operation:     map[string]any{"mode": "delete", "path": "reasoning_effort"},
+			expected:      "",
+		},
+		{
+			name:          "OpenRouter nested set",
+			relayFormat:   types.RelayFormatOpenAI,
+			initialEffort: "medium",
+			input:         `{"reasoning":{"effort":"medium"}}`,
+			operation:     map[string]any{"mode": "set", "path": "reasoning.effort", "value": "xhigh"},
+			expected:      "xhigh",
+		},
+		{
+			name:          "Claude output config set",
+			relayFormat:   types.RelayFormatClaude,
+			initialEffort: "high",
+			input:         `{"output_config":{"effort":"high"}}`,
+			operation:     map[string]any{"mode": "set", "path": "output_config.effort", "value": "max"},
+			expected:      "max",
+		},
+		{
+			name:          "Gemini thinking level set",
+			relayFormat:   types.RelayFormatGemini,
+			initialEffort: "medium",
+			input:         `{"generationConfig":{"thinkingConfig":{"thinkingLevel":"medium"}}}`,
+			operation:     map[string]any{"mode": "set", "path": "generationConfig.thinkingConfig.thinkingLevel", "value": "high"},
+			expected:      "high",
+		},
+		{
+			name:          "non-string value clears effort",
+			relayFormat:   types.RelayFormatOpenAIResponses,
+			initialEffort: "high",
+			input:         `{"reasoning":{"effort":"high"}}`,
+			operation:     map[string]any{"mode": "set", "path": "reasoning.effort", "value": 42},
+			expected:      "",
+		},
+		{
+			name:          "unrelated override preserves converter-derived effort",
+			relayFormat:   types.RelayFormatClaude,
+			initialEffort: "high",
+			input:         `{"thinking":{"type":"adaptive"},"max_tokens":4096}`,
+			operation:     map[string]any{"mode": "set", "path": "max_tokens", "value": 8192},
+			expected:      "high",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &RelayInfo{
+				RelayFormat:     tt.relayFormat,
+				ReasoningEffort: tt.initialEffort,
+				ChannelMeta: &ChannelMeta{ParamOverride: map[string]any{
+					"operations": []any{tt.operation},
+				}},
+			}
+
+			_, err := ApplyParamOverrideWithRelayInfo([]byte(tt.input), info)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, info.ReasoningEffort)
+		})
+	}
+}
+
+func TestReasoningEffortOverrideIsAuditedWithoutDebugMode(t *testing.T) {
+	originalDebugEnabled := commonpkg.DebugEnabled
+	commonpkg.DebugEnabled = false
+	t.Cleanup(func() {
+		commonpkg.DebugEnabled = originalDebugEnabled
+	})
+	info := &RelayInfo{
+		RelayFormat: types.RelayFormatOpenAIResponses,
+		ChannelMeta: &ChannelMeta{ParamOverride: map[string]any{
+			"operations": []any{
+				map[string]any{"mode": "set", "path": "reasoning.effort", "value": "max"},
+			},
+		}},
+	}
+
+	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"reasoning":{"effort":"high"}}`), info)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"set reasoning.effort = max"}, info.ParamOverrideAudit)
+}

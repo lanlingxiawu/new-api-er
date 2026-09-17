@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useIsEmployee } from '@/hooks/use-admin'
 import { formatLogQuota } from '@/lib/format'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 import {
@@ -84,7 +85,9 @@ export function CommonLogsStats() {
         scope: logsScope,
       })
 
-      const result = await fetchLogStatsByScope(logsScope, params)
+      const result = requireServerSuccess(
+        await fetchLogStatsByScope(logsScope, params)
+      )
 
       return result.success
         ? result.data || DEFAULT_LOG_STATS

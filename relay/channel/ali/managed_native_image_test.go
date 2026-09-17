@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -83,8 +84,9 @@ func TestManagedNativeImageHandler(t *testing.T) {
 				require.Contains(t, rec.Body.String(), "upstream_stream_error")
 				require.Equal(t, raw, string(info.StreamResult.Diagnostic.BodyHead))
 			}
-			other := map[string]any{}
-			service.AppendStreamLogInfo(info, other)
+			otherLog := model.NewLogOther()
+			service.AppendStreamLogInfo(info, otherLog)
+			other := otherLog.Snapshot()
 			if valid {
 				require.Nil(t, other["stream_diagnostic"].(relaycommon.StreamDiagnostic).BodyHead)
 			}

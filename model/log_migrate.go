@@ -113,10 +113,9 @@ func migrateLogTable(db *gorm.DB) error {
 // missingLogIndexes 优先用一次 GetIndexes 代替逐个 HasIndex：实测真实 PostgreSQL 上
 // 14 次 HasIndex 要 5.8ms，一次 GetIndexes 只要 0.5ms。
 //
-// 但**不是所有方言都支持**：SQLite 驱动（glebarez/sqlite）直接返回 "not support"，
-// 而 SQLite 正是 SQL_DSN 未配置时的默认库。所以这条退路是常态而不是异常，
-// 日志用陈述语气写清楚"该方言不支持批量读取"，不要写成"失败"——
-// 否则每个 SQLite 部署每次启动都会看到一行像故障一样的输出。
+// 但**不是所有方言都支持**（MySQL/PostgreSQL/SQLite 驱动均已支持），不支持时退回
+// 逐个 HasIndex。日志用陈述语气写清楚"该方言不支持批量读取"，不要写成"失败"——
+// 退路结论与批量路径一致，不应在启动日志里看起来像故障。
 func missingLogIndexes(migrator gorm.Migrator, stmt *gorm.Statement) []string {
 	declared := stmt.Schema.ParseIndexes()
 	missing := make([]string, 0)

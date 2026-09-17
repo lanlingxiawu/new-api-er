@@ -76,6 +76,43 @@ type EmployeeCommissionLog struct {
 	CreatedAt    int64 `json:"created_at" gorm:"autoCreateTime;index;index:idx_employee_commission_created_employee,priority:1;index:idx_employee_commission_created_channel,priority:1;index:idx_employee_commission_created_customer,priority:1"`
 }
 
+// employeeCommissionLogIdIndex 是 LogId 字段 uniqueIndex 标签生成的索引名。
+const employeeCommissionLogIdIndex = "idx_employee_commission_logs_log_id"
+
+// migrateEmployeeCommissionLogIdUniqueIndex 在 AutoMigrate 之前把 log_id 上遗留的
+// 普通索引删掉，让 AutoMigrate 以唯一索引重建。
+//
+// 动因：该字段最初是普通 index，后改为 uniqueIndex（提成幂等）。旧库里同名索引仍是
+// 非唯一的；gorm.io/driver/mysql v1.5+ 的 MigrateColumnUnique 发现列非唯一且字段带
+// UniqueIndex 时，会不检查同名索引直接 CREATE UNIQUE INDEX，报
+// "Duplicate key name 'idx_employee_commission_logs_log_id'" 并中断整个启动迁移。
+// 仅 MySQL 走这条驱动路径；PostgreSQL/SQLite 的通用 Migrator 不受影响。
+// 若历史数据里已有重复 log_id，重建唯一索引会失败并阻断启动，需要先人工清理重复行。
+func migrateEmployeeCommissionLogIdUniqueIndex(db *gorm.DB) error {
+	if db == nil || !common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		return nil
+	}
+	migrator := db.Migrator()
+	if !migrator.HasTable(&EmployeeCommissionLog{}) {
+		return nil
+	}
+	indexes, err := migrator.GetIndexes(&EmployeeCommissionLog{})
+	if err != nil {
+		return err
+	}
+	for _, index := range indexes {
+		if index.Name() != employeeCommissionLogIdIndex {
+			continue
+		}
+		if unique, ok := index.Unique(); ok && !unique {
+			common.SysLog("dropping legacy non-unique index " + employeeCommissionLogIdIndex + " so it can be rebuilt as unique")
+			return migrator.DropIndex(&EmployeeCommissionLog{}, employeeCommissionLogIdIndex)
+		}
+		return nil
+	}
+	return nil
+}
+
 // ============================================================================
 // 缓存：渠道成本系数（避免每次结算都查数据库）
 // ============================================================================

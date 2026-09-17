@@ -16,13 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { logout } from '@/features/auth/api'
-import { clearAuthentication } from '@/lib/api'
-import { useAuthStore } from '@/stores/auth-store'
+import { clearAuthenticatedClientState } from '@/lib/auth-session'
+import { handleServerError } from '@/lib/handle-server-error'
 
 interface SignOutDialogProps {
   open: boolean
@@ -31,28 +34,26 @@ interface SignOutDialogProps {
 
 export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
   const { t } = useTranslation()
-  const { auth } = useAuthStore()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [isSigningOut, setIsSigningOut] = useState(false)
 
   const handleSignOut = async () => {
+    setIsSigningOut(true)
     try {
-      await logout()
-    } catch {
-      /* empty */
-    }
-    // clearAuthentication 会一并广播到其他标签页，让它们同步退出。
-    clearAuthentication()
-    auth.reset()
-    try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('uid')
+      const response = await logout()
+      if (!response.success) {
+        handleServerError(response, t('Failed to sign out session'))
+        return
       }
-    } catch {
-      /* empty */
-    }
-    toast.success(t('Signed out'))
-    // Refresh the page to clear all state and update UI
-    if (typeof window !== 'undefined') {
-      window.location.reload()
+
+      clearAuthenticatedClientState(queryClient)
+      toast.success(t('Signed out'))
+      void navigate({ to: '/sign-in', replace: true })
+    } catch (error: unknown) {
+      handleServerError(error, t('Failed to sign out session'))
+    } finally {
+      setIsSigningOut(false)
     }
   }
 
@@ -66,6 +67,7 @@ export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
       )}
       confirmText={t('Sign out')}
       handleConfirm={handleSignOut}
+      isLoading={isSigningOut}
       className='sm:max-w-sm'
     />
   )

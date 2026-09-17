@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -53,8 +54,9 @@ func TestUnifiedStreamPassthroughHTTP(t *testing.T) {
 	require.Empty(t, diag.ResponseHeaders.Get("Authorization"))
 	// 正常透传仍在内存观察响应，但消费日志不持久化原始头/body。
 	service.FinalizeStreamUsage(c, info, nil)
-	other := map[string]any{}
-	service.AppendStreamLogInfo(info, other)
+	otherLog := model.NewLogOther()
+	service.AppendStreamLogInfo(info, otherLog)
+	other := otherLog.Snapshot()
 	logged := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 	require.Empty(t, logged.ResponseHeaders)
 	require.Empty(t, logged.BodyHead)
@@ -90,8 +92,9 @@ func TestStreamDiagnosticPassthroughFailure(t *testing.T) {
 		_ = resp.Body.Close()
 		srv.Close()
 		service.FinalizeStreamUsage(c, info, nil)
-		other := map[string]any{}
-		service.AppendStreamLogInfo(info, other)
+		otherLog := model.NewLogOther()
+		service.AppendStreamLogInfo(info, otherLog)
+		other := otherLog.Snapshot()
 		if tc.status != http.StatusOK {
 			require.Empty(t, other)
 			require.Nil(t, info.StreamResult)

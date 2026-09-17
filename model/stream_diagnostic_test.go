@@ -50,9 +50,11 @@ func TestClaudeDiagnosticReadBoundary(t *testing.T) {
 			require.Equal(t, tc.reason, fields["reject_reason"])
 		}
 	}
+	// reject_reason is admin-scoped (legacy sensitive key): the user projection
+	// strips it together with admin_info / audit_info.
 	log.Other = `{"reject_reason":"policy","admin_info":{"private":1},"audit_info":{"private":2}}`
 	formatUserLogs([]*Log{&log}, 0)
-	require.Contains(t, log.Other, `"reject_reason":"policy"`)
+	require.NotContains(t, log.Other, "reject_reason")
 	require.NotContains(t, log.Other, "private")
 }
 

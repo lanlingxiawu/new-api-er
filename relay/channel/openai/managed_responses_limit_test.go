@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -62,8 +63,9 @@ func TestManagedResponsesLimitLifecycle(t *testing.T) {
 				case types.RelayFormatClaude:
 					require.Contains(t, rec.Body.String(), "event: message_stop")
 				}
-				other := map[string]any{}
-				service.AppendStreamLogInfo(info, other)
+				otherLog := model.NewLogOther()
+				service.AppendStreamLogInfo(info, otherLog)
+				other := otherLog.Snapshot()
 				require.NotContains(t, other, "stream_diagnostic_available")
 			})
 		}

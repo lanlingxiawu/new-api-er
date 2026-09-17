@@ -235,8 +235,8 @@ function UsageLogsContent() {
         <SectionPageLayout.Title>
           {t(pageMeta.titleKey)}
         </SectionPageLayout.Title>
-        {canManageScope && (
-          <SectionPageLayout.Actions>
+        <SectionPageLayout.Actions>
+          {canManageScope && (
             <Tabs
               value={isUpstreamSection ? 'upstream' : viewScope}
               onValueChange={handleHeaderTabChange}
@@ -247,8 +247,8 @@ function UsageLogsContent() {
                 <TabsTrigger value='upstream'>{t('Upstream Logs')}</TabsTrigger>
               </TabsList>
             </Tabs>
-          </SectionPageLayout.Actions>
-        )}
+          )}
+        </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
             <Activity mode={isUpstreamSection ? 'hidden' : 'visible'}>

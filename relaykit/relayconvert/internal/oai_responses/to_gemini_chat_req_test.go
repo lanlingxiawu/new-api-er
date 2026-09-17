@@ -396,12 +396,14 @@ func TestAppendGeminiContentPartFunctionCallInsertOrdering(t *testing.T) {
 
 func TestResponsesFunctionOutputItemToGeminiPartNameFromCallNames(t *testing.T) {
 	callNames := map[string]string{"call_1": "resolved"}
-	part := responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "output": "r"}, callNames)
+	part, err := responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "output": "r"}, callNames)
+	require.NoError(t, err)
 	require.NotNil(t, part.FunctionResponse)
 	assert.Equal(t, "resolved", part.FunctionResponse.Name)
 
 	// explicit name wins
-	part = responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "name": "explicit", "output": "r"}, callNames)
+	part, err = responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "name": "explicit", "output": "r"}, callNames)
+	require.NoError(t, err)
 	assert.Equal(t, "explicit", part.FunctionResponse.Name)
 }
 

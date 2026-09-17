@@ -494,7 +494,7 @@ export function DBPoolHotConfigSection({
         return {
           description: t(
             'Reducing the main database connection limit by more than half can slow AI requests. Current active connections: {{active}}.',
-            { active: status?.main.in_use ?? t('Unavailable') }
+            { active: status?.main.in_use ?? t('Not available') }
           ),
         }
       }}

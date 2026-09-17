@@ -758,13 +758,11 @@ func TestUpdateUserUsedQuotaAndRequestCount(t *testing.T) {
 	assert.Equal(t, 30, reloaded.UsedQuota)
 	assert.Equal(t, 1, reloaded.RequestCount)
 
-	// unexported helpers add on top
-	updateUserUsedQuota(u.Id, 5)
-	updateUserRequestCount(u.Id, 2)
+	// unexported helper adds on top
 	updateUserUsedQuotaAndRequestCount(u.Id, 10, 3)
 	reloaded, _ = GetUserById(u.Id, true)
-	assert.Equal(t, 45, reloaded.UsedQuota)   // 30 + 5 + 10
-	assert.Equal(t, 6, reloaded.RequestCount) // 1 + 2 + 3
+	assert.Equal(t, 40, reloaded.UsedQuota)   // 30 + 10
+	assert.Equal(t, 4, reloaded.RequestCount) // 1 + 3
 
 	// combined quota/used/request; zero-all early-returns without change
 	updateUserQuotaUsedQuotaAndRequestCount(u.Id, 0, 0, 0)

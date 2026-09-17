@@ -56,16 +56,22 @@ const (
 	ChannelTypeReplicate      = 56
 	ChannelTypeCodex          = 57
 	ChannelTypeThirdPartySD2  = 58
+	// 上游编号为 AdvancedCustom=58、Sub2API=59、NewAPI=60、TaskPlugin=61、
+	// VLLM=62、SGLang=63。本仓库 58 已被 ThirdPartySD2 占用且已落库
+	// （channels.type），沿用上游编号会让存量渠道被解释成另一种类型，
+	// 因此其后类型整体顺延一位，编号与上游永久分叉。
 	ChannelTypeAdvancedCustom = 59
-	// 上游把 Sub2API/NewAPI 定为 59/60，本仓库 58/59 已被 ThirdPartySD2 与
-	// AdvancedCustom 占用且已落库（channels.type），沿用上游编号会让存量渠道
-	// 被解释成另一种类型。这里顺延到 61/62，编号与上游永久分叉。
-	ChannelTypeSub2API = 60
-	ChannelTypeNewAPI  = 61
-	ChannelTypeDummy   // this one is only for count, do not add any channel after this
+	ChannelTypeSub2API        = 60
+	ChannelTypeNewAPI         = 61
+	ChannelTypeTaskPlugin     = 62
+	ChannelTypeVLLM           = 63
+	ChannelTypeSGLang         = 64
+	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
 
+// ChannelBaseURLs 保存各渠道类型的内置默认 Base URL。
+// 非空值会通过 /api/channel/default_base_urls 下发到前端，作为渠道表单的 API 地址占位提示。
 var ChannelBaseURLs = []string{
 	"",                                    // 0
 	"https://api.openai.com",              // 1
@@ -129,6 +135,16 @@ var ChannelBaseURLs = []string{
 	"",                                          //59
 	"",                                          //60
 	"",                                          //61
+	"",                                          //62
+	"",                                          //63
+	"",                                          //64
+}
+
+func GetChannelBaseURL(channelType int) string {
+	if channelType < 0 || channelType >= len(ChannelBaseURLs) {
+		return ""
+	}
+	return ChannelBaseURLs[channelType]
 }
 
 var ChannelTypeNames = map[int]string{
@@ -190,6 +206,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAdvancedCustom: "Advanced Custom",
 	ChannelTypeSub2API:        "Sub2API",
 	ChannelTypeNewAPI:         "New API",
+	ChannelTypeTaskPlugin:     "Task Plugin",
+	ChannelTypeVLLM:           "vLLM",
+	ChannelTypeSGLang:         "SGLang",
 }
 
 func GetChannelTypeName(channelType int) string {
@@ -221,4 +240,14 @@ var ChannelSpecialBases = map[string]ChannelSpecialBase{
 		ClaudeBaseURL: "https://ark.cn-beijing.volces.com/api/coding",
 		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
 	},
+}
+
+// IsAdvancedCustomChannel includes named channels backed by route presets.
+func IsAdvancedCustomChannel(channelType int) bool {
+	switch channelType {
+	case ChannelTypeAdvancedCustom, ChannelTypeVLLM, ChannelTypeSGLang:
+		return true
+	default:
+		return false
+	}
 }

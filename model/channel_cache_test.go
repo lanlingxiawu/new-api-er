@@ -165,7 +165,7 @@ func TestInitChannelCache_OrphanGroupNoPanic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ch.Id, got.Id)
 	// ...and routable via its group even though it had no ability rows.
-	sat, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, "")
+	sat, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, sat)
 	assert.Equal(t, ch.Id, sat.Id)
@@ -213,7 +213,7 @@ func TestGetRandomSatisfiedChannel_DBDelegation(t *testing.T) {
 	cleanupAbilities(t, ch.Id)
 
 	// MemoryCacheEnabled false -> delegates to GetChannel (DB path)
-	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, "")
+	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, ch.Id, got.Id)
@@ -229,18 +229,18 @@ func TestGetRandomSatisfiedChannel_MemorySingleAndNone(t *testing.T) {
 	enableMemoryCache(t)
 
 	// exactly one candidate -> returned directly
-	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, "")
+	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, ch.Id, got.Id)
 
 	// unknown model -> nil,nil
-	got, err = GetRandomSatisfiedChannel(grp, "totally-absent", 0, "")
+	got, err = GetRandomSatisfiedChannel(grp, "totally-absent", 0, nil)
 	require.NoError(t, err)
 	assert.Nil(t, got)
 
 	// normalized-model fallback ("gpt-4-gizmo-xyz" -> "gpt-4-gizmo-*")
-	got, err = GetRandomSatisfiedChannel(grp, "gpt-4-gizmo-xyz", 0, "")
+	got, err = GetRandomSatisfiedChannel(grp, "gpt-4-gizmo-xyz", 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, ch.Id, got.Id)
@@ -267,19 +267,19 @@ func TestGetRandomSatisfiedChannel_PriorityAndRetryClamp(t *testing.T) {
 	highSet := map[int]bool{high1.Id: true, high2.Id: true}
 
 	// retry 0 -> highest priority bucket {high1, high2}
-	got, err := GetRandomSatisfiedChannel(grp, model, 0, "")
+	got, err := GetRandomSatisfiedChannel(grp, model, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.True(t, highSet[got.Id], "retry 0 must pick a priority-10 channel")
 
 	// retry 1 -> next priority bucket {low}
-	got, err = GetRandomSatisfiedChannel(grp, model, 1, "")
+	got, err = GetRandomSatisfiedChannel(grp, model, 1, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, low.Id, got.Id)
 
 	// retry beyond number of distinct priorities -> clamps to smallest priority
-	got, err = GetRandomSatisfiedChannel(grp, model, 99, "")
+	got, err = GetRandomSatisfiedChannel(grp, model, 99, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, low.Id, got.Id)
@@ -325,7 +325,7 @@ func TestGetRandomSatisfiedChannel_WeightBranches(t *testing.T) {
 	} {
 		// run a few times: the returned channel must always be in the group's set
 		for i := 0; i < 8; i++ {
-			got, err := GetRandomSatisfiedChannel(tc.grp, model, 0, "")
+			got, err := GetRandomSatisfiedChannel(tc.grp, model, 0, nil)
 			require.NoError(t, err)
 			require.NotNil(t, got)
 			assert.Truef(t, tc.set[got.Id], "group %s returned unexpected channel %d", tc.grp, got.Id)
@@ -334,17 +334,15 @@ func TestGetRandomSatisfiedChannel_WeightBranches(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// filterChannelsByRequestPathAndModel
+// filterCandidateIDs (request_path filter over the memory cache)
 // ---------------------------------------------------------------------------
 
-func TestFilterChannelsByRequestPathAndModel(t *testing.T) {
+func TestFilterCandidateIDs_RequestPath(t *testing.T) {
 	requireDB(t)
 
-	// empty requestPath -> input returned as-is (skip filtering)
-	in := []int{1, 2, 3}
-	assert.Equal(t, in, filterChannelsByRequestPathAndModel(in, "", "gpt-4o"))
 	// empty candidate list -> returned as-is
-	assert.Empty(t, filterChannelsByRequestPathAndModel(nil, "/v1/chat/completions", "gpt-4o"))
+	kept, _ := filterCandidateIDs(nil, "gpt-4o", requestPathFilters("/v1/chat/completions"))
+	assert.Empty(t, kept)
 
 	// plain (non advanced-custom) channel always passes path filtering
 	plain := mkChannelWithAbilities(t, func(c *Channel) { c.Models = "gpt-4o" })
@@ -359,18 +357,23 @@ func TestFilterChannelsByRequestPathAndModel(t *testing.T) {
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
+	// no filters -> input returned as-is
+	in := []int{plain.Id, adv.Id}
+	kept, _ = filterCandidateIDs(in, "gpt-4o", nil)
+	assert.Equal(t, in, kept)
+
 	// matching path+model: both plain and advanced kept
-	out := filterChannelsByRequestPathAndModel([]int{plain.Id, adv.Id}, "/v1/chat/completions", "gpt-4o")
-	assert.ElementsMatch(t, []int{plain.Id, adv.Id}, out)
+	kept, _ = filterCandidateIDs([]int{plain.Id, adv.Id}, "gpt-4o", requestPathFilters("/v1/chat/completions"))
+	assert.ElementsMatch(t, []int{plain.Id, adv.Id}, kept)
 
 	// non-matching path: advanced dropped, plain kept
-	out = filterChannelsByRequestPathAndModel([]int{plain.Id, adv.Id}, "/v1/messages", "gpt-4o")
-	assert.Equal(t, []int{plain.Id}, out)
+	kept, _ = filterCandidateIDs([]int{plain.Id, adv.Id}, "gpt-4o", requestPathFilters("/v1/messages"))
+	assert.Equal(t, []int{plain.Id}, kept)
 
 	// unknown channel id (not in channelsIDM) is kept so the downstream
-	// consistency error is still raised as before
-	out = filterChannelsByRequestPathAndModel([]int{424242}, "/v1/chat/completions", "gpt-4o")
-	assert.Equal(t, []int{424242}, out)
+	// consistency error is still raised
+	kept, _ = filterCandidateIDs([]int{424242}, "gpt-4o", requestPathFilters("/v1/chat/completions"))
+	assert.Equal(t, []int{424242}, kept)
 }
 
 // ---------------------------------------------------------------------------
@@ -391,13 +394,13 @@ func TestCacheUpdateChannelStatus(t *testing.T) {
 	enableMemoryCache(t)
 
 	// precondition: channel is a selectable candidate
-	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, "")
+	got, err := GetRandomSatisfiedChannel(grp, "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
 	// disable -> removed from group2model2channels and status updated in map
 	CacheUpdateChannelStatus(ch.Id, common.ChannelStatusManuallyDisabled)
-	got, err = GetRandomSatisfiedChannel(grp, "gpt-4o", 0, "")
+	got, err = GetRandomSatisfiedChannel(grp, "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	assert.Nil(t, got, "disabled channel removed from selection map")
 	cached, err := CacheGetChannel(ch.Id)

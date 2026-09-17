@@ -46,15 +46,20 @@ func TestPatchClaudeMessageDeltaUsageDataZeroValueChecks(t *testing.T) {
 }
 
 func TestShouldSkipClaudeMessageDeltaUsagePatch(t *testing.T) {
-	originGlobalPassThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	originGlobal := *model_setting.GetGlobalSettings()
 	t.Cleanup(func() {
-		model_setting.GetGlobalSettings().PassThroughRequestEnabled = originGlobalPassThrough
+		model_setting.ReplaceGlobalSettings(originGlobal)
 	})
+	setGlobalPassThrough := func(enabled bool) {
+		settings := originGlobal
+		settings.PassThroughRequestEnabled = enabled
+		model_setting.ReplaceGlobalSettings(settings)
+	}
 
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
+	setGlobalPassThrough(true)
 	assert.True(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{}))
 
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	setGlobalPassThrough(false)
 	assert.True(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true}},
 	}))

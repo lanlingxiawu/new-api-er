@@ -10,9 +10,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -69,10 +69,10 @@ func TestGetRequestURL(t *testing.T) {
 		assert.Equal(t, "http://host/api/embed", got)
 	})
 
-	t.Run("completions path uses /api/generate", func(t *testing.T) {
+	t.Run("completions mode uses /api/generate", func(t *testing.T) {
 		info := newInfo()
 		info.ChannelBaseUrl = "http://host"
-		info.RequestURLPath = "/v1/completions"
+		info.RelayMode = relayconstant.RelayModeCompletions
 		got, err := a.GetRequestURL(info)
 		require.NoError(t, err)
 		assert.Equal(t, "http://host/api/generate", got)
@@ -151,10 +151,13 @@ func TestConvertClaudeRequest(t *testing.T) {
 	}
 	out, err := a.ConvertClaudeRequest(c, newInfo(), req)
 	require.NoError(t, err)
-	chat, ok := out.(*OllamaChatRequest)
+	// Claude requests are forwarded natively to Ollama's Anthropic-compatible endpoint.
+	claudeReq, ok := out.(*dto.ClaudeRequest)
 	require.True(t, ok)
-	assert.Equal(t, "llama3", chat.Model)
-	require.NotEmpty(t, chat.Messages)
+	assert.Equal(t, "llama3", claudeReq.Model)
+	require.NotNil(t, claudeReq.MaxTokens)
+	assert.Equal(t, uint(100), *claudeReq.MaxTokens)
+	require.NotEmpty(t, claudeReq.Messages)
 }
 
 // ---- ConvertEmbeddingRequest / requestOpenAI2Embeddings ----
@@ -239,18 +242,18 @@ func TestOpenAIChatToOllamaChat(t *testing.T) {
 	t.Run("response format json_schema", func(t *testing.T) {
 		req := &dto.GeneralOpenAIRequest{
 			Model:          "m",
-			ResponseFormat: &dto.ResponseFormat{Type: "json_schema", JsonSchema: json.RawMessage(`{"type":"object"}`)},
+			ResponseFormat: &dto.ResponseFormat{Type: "json_schema", JsonSchema: json.RawMessage(`{"name":"out","schema":{"type":"object"}}`)},
 			Messages:       []dto.Message{{Role: "user", Content: "x"}},
 		}
 		out, err := openAIChatToOllamaChat(c, req)
 		require.NoError(t, err)
-		assert.NotNil(t, out.Format)
+		assert.Equal(t, map[string]any{"type": "object"}, out.Format)
 	})
 
 	t.Run("tools mapped", func(t *testing.T) {
 		req := &dto.GeneralOpenAIRequest{
-			Model: "m",
-			Tools: []dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "get_weather", Description: "d"}}},
+			Model:    "m",
+			Tools:    []dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "get_weather", Description: "d"}}},
 			Messages: []dto.Message{{Role: "user", Content: "x"}},
 		}
 		out, err := openAIChatToOllamaChat(c, req)
@@ -620,7 +623,7 @@ func TestGettersAndUnimplemented(t *testing.T) {
 	_, err = a.ConvertImageRequest(c, info, dto.ImageRequest{})
 	assert.Error(t, err)
 	_, err = a.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{})
-	assert.Error(t, err)
+	assert.NoError(t, err, "responses requests are delegated to the OpenAI adaptor")
 	rr, err := a.ConvertRerankRequest(c, 0, dto.RerankRequest{})
 	assert.NoError(t, err)
 	assert.Nil(t, rr)

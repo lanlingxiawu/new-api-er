@@ -246,7 +246,8 @@ func TestReq_OpenRouterThinkingAdaptive(t *testing.T) {
 	}
 	out, err := ClaudeMessagesRequestToOpenAIChat(req, openRouterInfo("anthropic/claude-3"))
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"enabled":true}`, string(out.Reasoning))
+	// Adaptive thinking carries its effective effort (default high) to OpenRouter.
+	assert.JSONEq(t, `{"enabled":true,"effort":"high"}`, string(out.Reasoning))
 }
 
 func TestReq_OpenRouterThinkingOtherTypeStillMarshalsDisabled(t *testing.T) {

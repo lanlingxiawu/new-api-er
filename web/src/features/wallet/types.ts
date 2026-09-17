@@ -126,7 +126,6 @@ export interface WaffoPayMethod {
 }
 
 /**
-/**
  * Infini currency option returned by GetTopUpInfo
  */
 export interface InfiniCurrencyOption {

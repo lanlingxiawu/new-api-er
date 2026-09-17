@@ -293,23 +293,6 @@ func TestChannel_Update_MultiKeyRecomputesSize(t *testing.T) {
 	assert.False(t, exists)
 }
 
-func TestChannel_SaveWithoutKey(t *testing.T) {
-	requireDB(t)
-	// id 0 guard
-	assert.Error(t, (&Channel{}).SaveWithoutKey())
-
-	ch := mkChannel(t, func(c *Channel) { c.Name = "s0" })
-	ch.Name = "s1"
-	origKey := ch.Key
-	ch.Key = "SHOULD-NOT-PERSIST"
-	require.NoError(t, ch.SaveWithoutKey())
-
-	got, err := GetChannelById(ch.Id, true)
-	require.NoError(t, err)
-	assert.Equal(t, "s1", got.Name)
-	assert.Equal(t, origKey, got.Key, "key column omitted from save")
-}
-
 func TestChannel_Delete(t *testing.T) {
 	requireDB(t)
 	ch := mkChannel(t, nil)

@@ -36,16 +36,19 @@ import {
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
-import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
+import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
+import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
+import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
@@ -57,11 +60,13 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  getReasoningEffortVariant,
   renderAuditContent,
   getAuditTargetUser,
   formatAuditTargetUser,
   isTieredBillingLog,
 } from '../../lib/format'
+import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import {
   TIERED_PRICE_METRIC,
   type LogMetricKey,
@@ -69,12 +74,14 @@ import {
 } from '../../lib/log-metrics'
 import { isPerCallBilling, isTimingLogType } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { PluginAuthorLink } from '../plugin-author-link'
 import {
   compareCellClassName,
   compareCellStyle,
   type LogDetailCompareColumn,
   type LogDetailRow,
-} from './log-detail-layout'
+} from './log-detail-grid'
+import { DetailSection } from './log-detail-layout'
 import { StreamDiagnosticPanel } from './stream-diagnostic-panel'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
@@ -172,44 +179,6 @@ function lowerThanUpstreamHint(
   })
 }
 
-function DetailSection(props: {
-  icon?: React.ReactNode
-  iconTone?: IconBadgeTone
-  label: string
-  variant?: 'default' | 'danger'
-  children: React.ReactNode
-}) {
-  const isDanger = props.variant === 'danger'
-  const iconTone = isDanger ? 'destructive' : props.iconTone
-  return (
-    <div className='min-w-0 space-y-1.5'>
-      <Label
-        className={cn(
-          'flex items-center gap-1.5 text-xs font-semibold',
-          isDanger && 'text-red-500'
-        )}
-      >
-        {props.icon && (
-          <IconBadge tone={iconTone} size='xs'>
-            {props.icon}
-          </IconBadge>
-        )}
-        {props.label}
-      </Label>
-      <div
-        className={cn(
-          'min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2',
-          isDanger
-            ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20'
-            : 'bg-muted/30'
-        )}
-      >
-        {props.children}
-      </div>
-    </div>
-  )
-}
-
 function formatRatio(ratio: number | undefined): string {
   if (ratio == null) return '-'
   return ratio.toFixed(4)
@@ -300,14 +269,14 @@ function BillingBreakdown(props: {
       for (const entry of tieredSummary.priceEntries) {
         rows.push({
           label: t(entry.shortLabel),
-          value: `${fmtPrice(entry.price)}/M`,
+          value: `${fmtPrice(entry.price)}/${entry.unit ? t(entry.unit) : 'M'}`,
           metric: TIERED_PRICE_METRIC[entry.field],
         })
       }
     } else {
       rows.push({
         label: t('Matched Tier'),
-        value: t('No matching results'),
+        value: other.matched_tier || t('No matching results'),
       })
     }
   } else if (isPerCall) {
@@ -449,13 +418,18 @@ function BillingBreakdown(props: {
     })
   }
 
-  rows.push({
+  const totalCostRow: MetricRow = {
     label: t('Total Cost'),
     value: formatLogQuota(log.quota),
     metric: 'total_cost',
-  })
+  }
 
-  if (rows.length === 0) return null
+  const usageFacts =
+    other.usage_facts != null &&
+    typeof other.usage_facts === 'object' &&
+    !Array.isArray(other.usage_facts)
+      ? Object.entries(other.usage_facts)
+      : []
 
   return (
     <DetailSection label={t('Billing Details')}>
@@ -473,6 +447,32 @@ function BillingBreakdown(props: {
           )}
         />
       ))}
+      {usageFacts.length > 0 && (
+        <>
+          <Label className='text-xs font-semibold'>
+            {t('Usage parameters')}
+          </Label>
+          {usageFacts.map(([key, value]) => (
+            <DetailRow
+              key={`usage-fact-${key}`}
+              label={key}
+              value={String(value)}
+              mono
+            />
+          ))}
+        </>
+      )}
+      <DetailRow
+        label={totalCostRow.label}
+        value={totalCostRow.value}
+        mono
+        warning={lowerThanUpstreamHint(
+          t,
+          totalCostRow,
+          props.lowerThanUpstream,
+          formatUpstream
+        )}
+      />
     </DetailSection>
   )
 }
@@ -513,6 +513,13 @@ function TokenBreakdown(props: {
       label: t('Cache Read'),
       value: cacheRead.toLocaleString(),
       metric: 'tokens.cache_read',
+    })
+  }
+
+  if (other.image_cache_tokens !== undefined) {
+    rows.push({
+      label: t('Image Cache'),
+      value: other.image_cache_tokens.toLocaleString(),
     })
   }
 
@@ -573,6 +580,29 @@ function TokenBreakdown(props: {
           )}
         />
       ))}
+      {other.billing_tokens && (
+        <div
+          role='group'
+          aria-label={t('Billable token breakdown')}
+          className='space-y-2'
+        >
+          <Label className='text-xs font-semibold'>
+            {t('Billable token breakdown')}
+          </Label>
+          {BILLING_PRICING_VARS.map((variable) => {
+            const count = other.billing_tokens?.[variable.key]
+            if (count === undefined || !Number.isFinite(count)) return null
+            return (
+              <DetailRow
+                key={variable.key}
+                label={t(variable.shortLabel)}
+                value={count.toLocaleString()}
+                mono
+              />
+            )
+          })}
+        </div>
+      )}
     </DetailSection>
   )
 }
@@ -581,6 +611,7 @@ function TokenBreakdown(props: {
 interface LogDetailBodyProps {
   log: UsageLog // 要展示的日志，含请求 ID、Unix 秒创建时间和后端已过滤的扩展字段。
   isAdmin: boolean // 控制既有管理员费用字段展示，原始诊断权限由面板与后端独立判断。
+  isRoot?: boolean // 超级管理员可见 root_info（任务插件版本、上游任务 ID、节点名）。
   heading?: ReactNode // 正文顶部的小标题；对比模式下左右两栏各有一个。
   onQueryUpstream?: () => void // 提供时在请求 ID 旁显示「查询上游」；上游详情不传，避免嵌套查询。
   showStreamDiagnostic: boolean // 是否挂载流式诊断面板。它按请求 ID 查本站服务器，上游日志必须关闭。
@@ -598,7 +629,6 @@ interface LogDetailBodyProps {
 export function LogDetailBody(props: LogDetailBodyProps) {
   const { t } = useTranslation()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
-  const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
 
   const isViolation = isViolationFeeLog(other)
@@ -608,11 +638,20 @@ export function LogDetailBody(props: LogDetailBodyProps) {
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
   const isTieredBilling = isTieredBillingLog(props.log.type, other)
+  const pricingData = usePricingData(isTieredBilling)
+  const billingUsageSchema = pluginUsageSchema(
+    pricingData.models.find(
+      (model) => model.model_name === props.log.model_name
+    ),
+    other?.admin_info?.task_plugin?.key
+  )
   const hasAudioTokens = other?.ws || other?.audio
   const showTiming = isTimingLogType(props.log.type)
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  // 上游日志对比可能来自旧版本服务器，原因仍在顶层字段。
+  const rejectReason = adminInfo?.reject_reason ?? other?.reject_reason
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
       ? ([
@@ -673,9 +712,17 @@ export function LogDetailBody(props: LogDetailBodyProps) {
     return String(adminInfo.auth_method)
   })()
 
-  // Localized operation text rendered from the language-independent op
-  // descriptor (shared by audit type=3 and login type=7).
+  // Top-up, audit, and login logs share the language-independent descriptor.
+  const quotaOperation = isTopup
+    ? buildQuotaAuditOperation(
+        other?.op?.action ?? '',
+        other?.op?.params ?? {},
+        true,
+        t
+      )
+    : null
   const operationText = renderAuditContent(other, t)
+  const details = (isTopup ? operationText : null) ?? props.log.content ?? ''
   const auditRoute = isManage && props.isAdmin ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
@@ -726,12 +773,9 @@ export function LogDetailBody(props: LogDetailBodyProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
-  let reasoningEffortVariant: StatusBadgeProps['variant'] = 'green'
-  if (other?.reasoning_effort === 'high') {
-    reasoningEffortVariant = 'orange'
-  } else if (other?.reasoning_effort === 'medium') {
-    reasoningEffortVariant = 'yellow'
-  }
+  const reasoningEffortVariant = getReasoningEffortVariant(
+    other?.reasoning_effort
+  )
 
   const col = props.compareColumn
 
@@ -952,13 +996,13 @@ export function LogDetailBody(props: LogDetailBodyProps) {
 
       {/* 按 bb6317462 恢复管理员独立原因区块，与流式诊断按钮及 Root 查询无关。 */}
       <CompareCell row='rejectReason' column={col}>
-        {props.isAdmin && other?.reject_reason && (
+        {props.isAdmin && rejectReason && (
           <DetailSection
             icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
             label={t('Reject Reason')}
             variant='danger'
           >
-            <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
+            <p className='text-xs wrap-break-word'>{rejectReason}</p>
           </DetailSection>
         )}
       </CompareCell>
@@ -1007,6 +1051,72 @@ export function LogDetailBody(props: LogDetailBodyProps) {
         )}
       </CompareCell>
 
+      <CompareCell row='taskPlugin' column={col}>
+        {props.isAdmin && adminInfo?.task_plugin ? (
+          <DetailSection label={t('Task Plugin')}>
+            <DetailRow
+              label={t('Plugin key')}
+              value={adminInfo.task_plugin.key}
+              mono
+            />
+            <DetailRow label={t('Name')} value={adminInfo.task_plugin.name} />
+            {adminInfo.task_plugin.version ? (
+              <DetailRow
+                label={t('Version')}
+                value={adminInfo.task_plugin.version}
+                mono
+              />
+            ) : null}
+            {adminInfo.task_plugin.author ? (
+              <DetailRow
+                label={t('Plugin author')}
+                value={
+                  <PluginAuthorLink
+                    author={adminInfo.task_plugin.author}
+                    showUrl
+                  />
+                }
+              />
+            ) : null}
+          </DetailSection>
+        ) : null}
+      </CompareCell>
+
+      <CompareCell row='rootDiagnostics' column={col}>
+        {props.isRoot && other?.root_info ? (
+          <DetailSection label={t('Root Diagnostics')}>
+            {other.root_info.task_plugin ? (
+              <>
+                <DetailRow
+                  label={t('API Version')}
+                  value={String(other.root_info.task_plugin.api_version)}
+                  mono
+                />
+                <DetailRow
+                  label={t('Plugin Generation')}
+                  value={String(other.root_info.task_plugin.generation)}
+                  mono
+                />
+              </>
+            ) : null}
+            {other.root_info.upstream_task_id ? (
+              <DetailRow
+                label={t('Upstream Task ID')}
+                value={other.root_info.upstream_task_id}
+                mono
+              />
+            ) : null}
+            {other.root_info.node_name ? (
+              <DetailRow
+                label={t('Node Name')}
+                value={other.root_info.node_name}
+                mono
+              />
+            ) : null}
+          </DetailSection>
+        ) : null}
+      </CompareCell>
+
       {/* Top-up audit info (type=1, admin only) */}
       <CompareCell row='topupAudit' column={col}>
         {showTopupAuditSection && (
@@ -1033,6 +1143,14 @@ export function LogDetailBody(props: LogDetailBodyProps) {
                 </span>
               </div>
             )}
+          </DetailSection>
+        )}
+      </CompareCell>
+
+      <CompareCell row='quotaOperation' column={col}>
+        {quotaOperation && (
+          <DetailSection label={t('Quota adjustment details')}>
+            <AuditDetailFields fields={quotaOperation.fields} />
           </DetailSection>
         )}
       </CompareCell>
@@ -1262,11 +1380,22 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       <CompareCell row='dynamicPricing' column={col}>
         {isTieredBilling && other?.expr_b64 && (
           <DetailSection label={t('Dynamic Pricing')}>
+            {other.image_count !== undefined && (
+              <DetailRow
+                label={t('Billable image count')}
+                value={other.image_count}
+              />
+            )}
             <DynamicPricingBreakdown
               compact
               billingExpr={decodeBillingExprB64(other.expr_b64)}
               matchedTierLabel={other.matched_tier}
+              matchedBillingUnit={other.billing_unit}
+              matchedFixedPrice={other.fixed_price}
+              requestRules={other.request_rules}
               hideCacheColumns={!hasAnyCacheTokens(other)}
+              usageSchema={billingUsageSchema}
+              usageFacts={other.usage_facts}
             />
           </DetailSection>
         )}

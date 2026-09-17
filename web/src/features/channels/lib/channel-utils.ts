@@ -54,6 +54,8 @@ export function getChannelTypeIcon(type: number): string {
     59: 'NewAPI', // Advanced Custom
     60: 'Sub2API', // Sub2API
     61: 'NewAPI', // New API
+    63: 'Vllm', // vLLM
+    64: 'SGLang', // SGLang
     3: 'Azure', // Azure
 
     // Anthropic
@@ -617,6 +619,14 @@ export type TagRow = Channel & {
  */
 export function isTagAggregateRow(row: Channel | TagRow): row is TagRow {
   return Array.isArray((row as TagRow).children)
+}
+
+export function getChannelTableRowId(row: Channel | TagRow): string {
+  if (isTagAggregateRow(row)) {
+    return `tag:${row.tag || ''}`
+  }
+
+  return `channel:${row.id}`
 }
 
 /**

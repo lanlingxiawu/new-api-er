@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"github.com/QuantumNous/new-api/model"
 	"net/http/httptest"
 	"testing"
 
@@ -160,27 +161,27 @@ func TestClaudeSubscriptionSettlementRefreshesLogSnapshot(t *testing.T) {
 			info.Billing = &BillingSession{relayInfo: info, funding: funding, preConsumedQuota: tc.reserved}
 			other := GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 1, 0, 1)
 			if tc.reserved > 0 {
-				require.Equal(t, int64(tc.reserved), other["subscription_consumed"])
-				require.Equal(t, int64(tc.reserved), other["subscription_pre_consumed"])
+				require.Equal(t, int64(tc.reserved), other.Snapshot()["subscription_consumed"])
+				require.Equal(t, int64(tc.reserved), other.Snapshot()["subscription_pre_consumed"])
 			} else {
-				other["subscription_consumed"] = int64(17)
+				other.SetPublic("subscription_consumed", int64(17))
 			}
-			other["subscription_post_delta"] = int64(19)
-			other["unrelated_metadata"] = "preserved"
+			other.SetPublic("subscription_post_delta", int64(19))
+			other.SetPublic("unrelated_metadata", "preserved")
 			params := ConsumptionSettlementParams{Quota: tc.actual, Other: other, CountUsage: true, LedgerQuota: tc.actual}
 
 			require.True(t, settleStreamQuota(c, info, &params))
 			require.Equal(t, tc.state, info.StreamResult.SettlementState)
 			require.Equal(t, tc.delta, info.SubscriptionPostDelta)
-			require.Equal(t, tc.delta, other["subscription_post_delta"])
-			require.Equal(t, tc.consumed, other["subscription_consumed"])
-			require.Equal(t, tc.used, other["subscription_used"])
-			require.Equal(t, tc.remaining, other["subscription_remain"])
-			require.Equal(t, int64(1000), other["subscription_total"])
-			require.Equal(t, 0, other["wallet_quota_deducted"])
-			require.Equal(t, "preserved", other["unrelated_metadata"])
+			require.Equal(t, tc.delta, other.Snapshot()["subscription_post_delta"])
+			require.Equal(t, tc.consumed, other.Snapshot()["subscription_consumed"])
+			require.Equal(t, tc.used, other.Snapshot()["subscription_used"])
+			require.Equal(t, tc.remaining, other.Snapshot()["subscription_remain"])
+			require.Equal(t, int64(1000), other.Snapshot()["subscription_total"])
+			require.Equal(t, 0, other.Snapshot()["wallet_quota_deducted"])
+			require.Equal(t, "preserved", other.Snapshot()["unrelated_metadata"])
 			if tc.reserved > 0 {
-				require.Equal(t, int64(tc.reserved), other["subscription_pre_consumed"])
+				require.Equal(t, int64(tc.reserved), other.Snapshot()["subscription_pre_consumed"])
 			}
 			if tc.err != nil {
 				require.Zero(t, params.Quota)
@@ -190,7 +191,7 @@ func TestClaudeSubscriptionSettlementRefreshesLogSnapshot(t *testing.T) {
 			}
 			require.False(t, settleStreamQuota(c, info, &params))
 			require.Equal(t, tc.delta, info.SubscriptionPostDelta)
-			require.Equal(t, tc.consumed, other["subscription_consumed"])
+			require.Equal(t, tc.consumed, other.Snapshot()["subscription_consumed"])
 			expectedCalls := 1
 			if tc.actual == tc.reserved {
 				expectedCalls = 0
@@ -227,10 +228,10 @@ func TestClaudeSubscriptionLogReflectsCommittedFundingOnTokenFailure(t *testing.
 		require.True(t, settleStreamQuota(c, info, &params))
 		require.Equal(t, "partial", info.StreamResult.SettlementState)
 		require.Equal(t, actual, params.Quota)
-		require.Equal(t, int64(actual-100), other["subscription_post_delta"])
-		require.Equal(t, int64(actual), other["subscription_consumed"])
-		require.Equal(t, int64(200+actual), other["subscription_used"])
-		require.Equal(t, int64(800-actual), other["subscription_remain"])
+		require.Equal(t, int64(actual-100), other.Snapshot()["subscription_post_delta"])
+		require.Equal(t, int64(actual), other.Snapshot()["subscription_consumed"])
+		require.Equal(t, int64(200+actual), other.Snapshot()["subscription_used"])
+		require.Equal(t, int64(800-actual), other.Snapshot()["subscription_remain"])
 		require.False(t, settleStreamQuota(c, info, &params))
 		require.Equal(t, 1, fixture.calls)
 	}
@@ -245,8 +246,10 @@ func TestClaudeSubscriptionLogRefreshPreservesWalletMetadata(t *testing.T) {
 		Billing:       &claudeSettlementFixture{},
 		StreamResult:  &relaycommon.StreamOutcome{},
 	}
-	other := map[string]interface{}{"wallet_quota_deducted": 13, "unrelated_metadata": "preserved"}
+	other := model.NewLogOther()
+	other.SetPublic("wallet_quota_deducted", 13)
+	other.SetPublic("unrelated_metadata", "preserved")
 	params := ConsumptionSettlementParams{Other: other}
 	require.True(t, settleStreamQuota(c, info, &params))
-	require.Equal(t, map[string]interface{}{"wallet_quota_deducted": 13, "unrelated_metadata": "preserved"}, other)
+	require.Equal(t, map[string]interface{}{"wallet_quota_deducted": 13, "unrelated_metadata": "preserved"}, other.Snapshot())
 }

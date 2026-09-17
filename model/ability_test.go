@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -253,7 +254,7 @@ func TestGetPriority(t *testing.T) {
 func TestGetChannel_NoAbilities(t *testing.T) {
 	requireDB(t)
 	require.False(t, common.MemoryCacheEnabled)
-	ch, err := GetChannel(uniq("empty"), "gpt-4o", 0, "")
+	ch, err := GetChannel(uniq("empty"), "gpt-4o", 0, nil)
 	require.NoError(t, err)
 	assert.Nil(t, ch)
 }
@@ -286,20 +287,20 @@ func TestGetChannel_WeightedAndRetry(t *testing.T) {
 
 	highSet := map[int]bool{high1.Id: true, high2.Id: true}
 	for i := 0; i < 8; i++ {
-		got, err := GetChannel(grp, model, 0, "")
+		got, err := GetChannel(grp, model, 0, nil)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Truef(t, highSet[got.Id], "retry 0 must select a priority-10 channel, got %d", got.Id)
 	}
 
 	// retry 1 -> lower priority bucket
-	got, err := GetChannel(grp, model, 1, "")
+	got, err := GetChannel(grp, model, 1, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, low.Id, got.Id)
 
 	// retry beyond distinct priorities -> smallest priority bucket (getPriority clamp)
-	got, err = GetChannel(grp, model, 5, "")
+	got, err = GetChannel(grp, model, 5, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, low.Id, got.Id)
@@ -319,29 +320,32 @@ func TestGetChannel_RequestPathFiltering(t *testing.T) {
 	cleanupAbilities(t, adv.Id)
 
 	// matching path -> advanced-custom channel selected
-	got, err := GetChannel(grp, "gpt-4o", 0, "/v1/chat/completions")
+	got, err := GetChannel(grp, "gpt-4o", 0, requestPathFilters("/v1/chat/completions"))
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, adv.Id, got.Id)
 
 	// non-matching path -> advanced-custom filtered out, no candidate left
-	got, err = GetChannel(grp, "gpt-4o", 0, "/v1/messages")
+	got, err = GetChannel(grp, "gpt-4o", 0, requestPathFilters("/v1/messages"))
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
 // ---------------------------------------------------------------------------
-// filterAbilitiesByRequestPathAndModel (direct)
+// filterAbilitiesByConstraints (direct, request_path filter)
 // ---------------------------------------------------------------------------
 
-func TestFilterAbilitiesByRequestPathAndModel(t *testing.T) {
+// requestPathFilters builds the request_path constraint that the relay layer
+// attaches for advanced-custom route matching.
+func requestPathFilters(path string) []dto.ChannelFilter {
+	return []dto.ChannelFilter{{Kind: dto.FilterRequestPath, RequestPath: path}}
+}
+
+func TestFilterAbilitiesByConstraints_RequestPath(t *testing.T) {
 	requireDB(t)
 
-	// empty requestPath -> input returned unchanged
-	in := []Ability{{ChannelId: 1}}
-	assert.Equal(t, in, filterAbilitiesByRequestPathAndModel(in, "", "gpt-4o"))
-	// empty abilities -> returned unchanged
-	assert.Empty(t, filterAbilitiesByRequestPathAndModel(nil, "/v1/chat/completions", "gpt-4o"))
+	// empty abilities -> nil
+	assert.Empty(t, filterAbilitiesByConstraints(nil, "gpt-4o", requestPathFilters("/v1/chat/completions")))
 
 	plain := mkChannel(t, func(c *Channel) { c.Models = "gpt-4o" })
 	adv := mkChannel(t, func(c *Channel) {
@@ -352,12 +356,16 @@ func TestFilterAbilitiesByRequestPathAndModel(t *testing.T) {
 
 	abilities := []Ability{{ChannelId: plain.Id}, {ChannelId: adv.Id}}
 
+	// no filters / empty path -> both kept
+	assert.Len(t, filterAbilitiesByConstraints(abilities, "gpt-4o", nil), 2)
+	assert.Len(t, filterAbilitiesByConstraints(abilities, "gpt-4o", requestPathFilters("")), 2)
+
 	// matching path -> both kept
-	out := filterAbilitiesByRequestPathAndModel(abilities, "/v1/chat/completions", "gpt-4o")
+	out := filterAbilitiesByConstraints(abilities, "gpt-4o", requestPathFilters("/v1/chat/completions"))
 	assert.Len(t, out, 2)
 
 	// non-matching path -> advanced-custom dropped, plain kept
-	out = filterAbilitiesByRequestPathAndModel(abilities, "/v1/messages", "gpt-4o")
+	out = filterAbilitiesByConstraints(abilities, "gpt-4o", requestPathFilters("/v1/messages"))
 	require.Len(t, out, 1)
 	assert.Equal(t, plain.Id, out[0].ChannelId)
 }

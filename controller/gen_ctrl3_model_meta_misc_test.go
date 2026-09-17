@@ -134,10 +134,18 @@ func TestUpdateModelMeta_MissingId(t *testing.T) {
 func TestUpdateModelMeta_StatusOnly(t *testing.T) {
 	requireDB(t)
 	m := mkModelMeta(t)
-	ctx, rec := newCtx(t, http.MethodPut, "/api/models_meta?status_only=true", model.Model{Id: m.Id, Status: 2})
+	ctx, rec := newCtx(t, http.MethodPut, "/api/models_meta?status_only=true", model.Model{Id: m.Id, Status: 0})
 	asAdmin(ctx, 1)
 	UpdateModelMeta(ctx)
 	require.True(t, decodeResp(t, rec).Success, "body: %s", rec.Body.String())
+
+	// catalog visibility is binary (0 hidden / 1 visible); other values are rejected
+	ctx, rec = newCtx(t, http.MethodPut, "/api/models_meta?status_only=true", model.Model{Id: m.Id, Status: 2})
+	asAdmin(ctx, 1)
+	UpdateModelMeta(ctx)
+	resp := decodeResp(t, rec)
+	require.False(t, resp.Success)
+	require.Contains(t, resp.Message, "invalid catalog visibility")
 }
 
 func TestDeleteModelMeta_InvalidId(t *testing.T) {

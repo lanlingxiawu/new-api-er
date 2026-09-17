@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -44,7 +45,7 @@ func TestStreamDiagnosticDownstreamBody(t *testing.T) {
 				}
 			}
 			FinalizeStreamUsage(c, info, nil)
-			other := map[string]any{}
+			other := model.NewLogOther()
 			AppendStreamLogInfo(info, other)
 			raw, err := common.Marshal(other)
 			require.NoError(t, err)
@@ -75,13 +76,13 @@ func TestStreamDiagnosticDownstreamRetry(t *testing.T) {
 	require.NoError(t, err)
 	BeginStreamAttempt(c, info)
 	info.StreamSession.ObserveTransport(nil, errors.New("connect"))
-	other := map[string]any{}
+	other := model.NewLogOther()
 	AppendStreamErrorDiagnostic(c, other, errors.New("connect"))
-	require.Empty(t, other, "连接失败没有响应诊断")
+	require.Empty(t, other.Snapshot(), "连接失败没有响应诊断")
 	info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
 	info.StreamSession.EndRead(io.ErrUnexpectedEOF)
 	AppendStreamErrorDiagnostic(c, other, io.ErrUnexpectedEOF)
-	diag := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+	diag := other.Snapshot()["stream_diagnostic"].(relaycommon.StreamDiagnostic)
 	require.NotNil(t, diag.DownstreamBodyBase64)
 	require.Empty(t, *diag.DownstreamBodyBase64)
 	raw, marshalErr := common.Marshal(other)

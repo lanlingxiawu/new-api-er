@@ -149,24 +149,26 @@ func TestMergeModelBucket(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// recentSuccessRates — empty / limit<=0 / tail-of-latest.
+// recentSuccessSeries — empty / hourly merge / zero-request skip / ascending ts.
 // ---------------------------------------------------------------------------
 
-func TestRecentSuccessRates_EmptyOrZeroLimit(t *testing.T) {
-	assert.Nil(t, recentSuccessRates(map[int64]counters{}, 3))
-	assert.Nil(t, recentSuccessRates(map[int64]counters{1: {requestCount: 1}}, 0))
+func TestRecentSuccessSeries_Empty(t *testing.T) {
+	assert.Nil(t, recentSuccessSeries(map[int64]counters{}))
+	assert.Nil(t, recentSuccessSeries(map[int64]counters{3600: {requestCount: 0}}), "hours without requests are skipped")
 }
 
-func TestRecentSuccessRates_KeepsLatestSortedByTs(t *testing.T) {
+func TestRecentSuccessSeries_MergesHoursSortedByTs(t *testing.T) {
 	buckets := map[int64]counters{
-		100: {requestCount: 4, successCount: 4}, // 100%
-		200: {requestCount: 4, successCount: 2}, // 50%
-		300: {requestCount: 4, successCount: 1}, // 25%
-		400: {requestCount: 4, successCount: 3}, // 75%
+		7200:  {requestCount: 4, successCount: 1}, // hour 7200
+		7260:  {requestCount: 2, successCount: 2}, // same hour => 3/6 = 50%
+		3600:  {requestCount: 3, successCount: 1}, // 33.33%
+		10800: {requestCount: 0},                  // skipped
 	}
-	// limit 3 => drop the oldest (ts=100), keep 200,300,400 in ascending order.
-	got := recentSuccessRates(buckets, 3)
-	assert.Equal(t, []float64{50, 25, 75}, got)
+	got := recentSuccessSeries(buckets)
+	assert.Equal(t, []SuccessRatePoint{
+		{Ts: 3600, SuccessRate: 33.33},
+		{Ts: 7200, SuccessRate: 50},
+	}, got)
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +206,7 @@ func TestBucketPoint(t *testing.T) {
 		ttftSumMs: 40, ttftCount: 2, outputTokens: 100, generationMs: 1000,
 	})
 	assert.Equal(t, int64(3600), p.Ts)
-	assert.Equal(t, int64(20), p.AvgTtftMs)    // 40/2
+	assert.Equal(t, int64(20), p.AvgTtftMs)     // 40/2
 	assert.Equal(t, int64(100), p.AvgLatencyMs) // 200/2
 	assert.Equal(t, 50.0, p.SuccessRate)        // 1/2
 	assert.Equal(t, 100.0, p.AvgTps)            // 100/(1000/1000)

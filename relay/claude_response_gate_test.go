@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -57,9 +58,9 @@ func TestStreamResponseGateClaudeLegacy(t *testing.T) {
 			require.False(t, c.GetBool(relaycommon.StreamHandledKey))
 			require.Nil(t, info.StreamResult)
 			require.Empty(t, rec.Body.String())
-			other := map[string]any{}
+			other := model.NewLogOther()
 			service.AppendStreamErrorDiagnostic(c, other, apiErr)
-			require.Empty(t, other)
+			require.Empty(t, other.Snapshot())
 			require.Equal(t, relaycommon.StreamDiagnostic{}, info.StreamDiagnostic.Snapshot())
 		}
 	}

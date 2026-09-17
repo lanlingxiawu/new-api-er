@@ -105,7 +105,7 @@ func GetStreamDiagnostic(ctx context.Context, requestID string, createdAt int64,
 					diagnostic = value
 				}
 			}
-		} else if value := fields["reject_reason"]; len(value) > 0 && wantAttempt == 0 {
+		} else if value := logRejectReason(fields); len(value) > 0 && wantAttempt == 0 {
 			if diagnostic == nil {
 				diagnostic, _ = common.Marshal(map[string]json.RawMessage{"reject_reason": value})
 			}
@@ -115,4 +115,15 @@ func GetStreamDiagnostic(ctx context.Context, requestID string, createdAt int64,
 		return diagnostic, nil
 	}
 	return nil, gorm.ErrRecordNotFound
+}
+
+// logRejectReason 取拒绝原因：当前写在 admin_info.reject_reason，历史日志在顶层。
+func logRejectReason(fields map[string]json.RawMessage) json.RawMessage {
+	var adminInfo struct {
+		RejectReason json.RawMessage `json:"reject_reason"`
+	}
+	if raw := fields["admin_info"]; len(raw) > 0 && common.Unmarshal(raw, &adminInfo) == nil && len(adminInfo.RejectReason) > 0 {
+		return adminInfo.RejectReason
+	}
+	return fields["reject_reason"]
 }

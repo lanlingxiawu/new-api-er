@@ -116,11 +116,13 @@ func TestStreamState_ReasoningFlow(t *testing.T) {
 	types := eventTypes(final)
 	assert.Contains(t, types, responsesEventReasoningSummaryDone)
 	assert.Contains(t, types, responsesEventCompleted)
-	// The reasoning output carries the aggregated summary text.
+	// The reasoning output carries the aggregated text as a summary part (not content).
 	last := final[len(final)-1]
 	require.NotNil(t, last.Payload.Response)
 	require.Len(t, last.Payload.Response.Output, 1)
-	assert.Equal(t, "thinking hard", last.Payload.Response.Output[0].Content[0].Text)
+	require.Len(t, last.Payload.Response.Output[0].Summary, 1)
+	assert.Equal(t, "summary_text", last.Payload.Response.Output[0].Summary[0].Type)
+	assert.Equal(t, "thinking hard", last.Payload.Response.Output[0].Summary[0].Text)
 }
 
 func TestStreamState_ReasoningAddedEvent(t *testing.T) {

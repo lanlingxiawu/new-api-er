@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -115,8 +116,9 @@ func TestManagedNativeTTSResponse(t *testing.T) {
 				require.Equal(t, "https://fixture.invalid/audio", rec.Header().Get("Location"))
 				require.NotEqual(t, "text/event-stream", rec.Header().Get("Content-Type"), "跳转不沿用流式占位头")
 			}
-			other := map[string]any{}
-			service.AppendStreamLogInfo(info, other)
+			otherLog := model.NewLogOther()
+			service.AppendStreamLogInfo(info, otherLog)
+			other := otherLog.Snapshot()
 			if tc.reason == "" {
 				require.Nil(t, other["stream_diagnostic"].(relaycommon.StreamDiagnostic).BodyHead, "正常或用户断开不保存原始响应")
 			}

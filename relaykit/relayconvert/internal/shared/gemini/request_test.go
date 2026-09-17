@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,122 +117,121 @@ func TestAttachFirstTextThoughtSignature_TextAlreadyTagged(t *testing.T) {
 }
 
 // ---- ApplyThinkingConfig ---------------------------------------------------
+//
+// Reasoning suffixes are parsed upstream of the converter and arrive through
+// the conversion state (convmeta.Values.ReasoningConversion); the model name
+// itself is never re-parsed here.
+
+func infoWithState(opts *convmeta.Options, model string, state *dto.ReasoningConversionState) *convmeta.Values {
+	return &convmeta.Values{ChannelMetaAttached: true, UpstreamModelName: model, ReasoningConversion: state, Options: opts}
+}
 
 func TestApplyThinkingConfig_NilRequest(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
-	ApplyThinkingConfig(nil, infoWithModel(opts, "gemini-2.5-flash-thinking")) // must not panic
+	require.NoError(t, ApplyThinkingConfig(nil, infoWithModel(opts, "gemini-2.5-flash")))
 }
 
-func TestApplyThinkingConfig_NilInfo(t *testing.T) {
+func TestApplyThinkingConfig_NilInfoNativeRequestUntouched(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, nil)
+	require.NoError(t, ApplyThinkingConfig(req, nil))
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
-func TestApplyThinkingConfig_AdapterDisabled(t *testing.T) {
-	opts := withGeminiSettings(t, false, true, 0.6)
-	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking"))
-	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
-}
-
-func TestApplyThinkingConfig_ExplicitThinkingBudget(t *testing.T) {
+func TestApplyThinkingConfig_SuffixInModelNameIsNotReparsed(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking-1000"))
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
+	require.NoError(t, ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking-1000")))
+	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
+}
+
+func TestApplyThinkingConfig_NativeLevelRecordsCanonicalEffort(t *testing.T) {
+	opts := withGeminiSettings(t, true, true, 0.6)
+	req := &dto.GeminiChatRequest{}
+	req.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{ThinkingLevel: "HIGH"}
+	info := infoWithModel(opts, "gemini-3-pro-preview")
+	require.NoError(t, ApplyThinkingConfig(req, info))
+	assert.Equal(t, "HIGH", req.GenerationConfig.ThinkingConfig.ThinkingLevel, "native controls are forwarded as sent")
+	assert.Equal(t, "high", info.GetReasoningEffort())
+}
+
+func TestApplyThinkingConfig_NativeBudgetRecordsEffort(t *testing.T) {
+	opts := withGeminiSettings(t, true, true, 0.6)
+	budget := 1000
+	req := &dto.GeminiChatRequest{}
+	req.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{ThinkingBudget: &budget}
+	info := infoWithModel(opts, "gemini-2.5-flash")
+	require.NoError(t, ApplyThinkingConfig(req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, 1000, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	assert.True(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	assert.Equal(t, string(reasoning.EffortFromBudget(1000)), info.GetReasoningEffort())
 }
 
-func TestApplyThinkingConfig_ExplicitThinkingBudgetClamped(t *testing.T) {
+func TestApplyThinkingConfig_SuffixDisabledOnBudgetModel(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	// flash range is [0, 24576]; 99999 clamps down.
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking-99999"))
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	assert.Equal(t, flash25MaxBudget, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-}
-
-func TestApplyThinkingConfig_ThinkingBudgetUnparseable(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking-notanumber"))
-	// Atoi fails -> no ThinkingConfig produced from this branch.
-	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
-}
-
-func TestApplyThinkingConfig_ThinkingSuffixUnsupportedModel(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-pro-preview-05-06-thinking"))
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
-	assert.True(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
-	assert.Nil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-}
-
-func TestApplyThinkingConfig_ThinkingSuffixWithMaxOutputTokens(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{}
-	req.GenerationConfig.MaxOutputTokens = uintPtr(10000)
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking"))
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	assert.Equal(t, 6000, *req.GenerationConfig.ThinkingConfig.ThinkingBudget) // 0.6 * 10000
-	assert.True(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
-}
-
-func TestApplyThinkingConfig_ThinkingSuffixWithEffort(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{} // no MaxOutputTokens
-	oai := dto.GeneralOpenAIRequest{ReasoningEffort: "low"}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking"), oai)
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	// low = flash max * 20% = 24576 * 20 / 100 = 4915
-	assert.Equal(t, flash25MaxBudget*20/100, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-}
-
-func TestApplyThinkingConfig_ThinkingSuffixNoBudgetSource(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{} // no MaxOutputTokens, no oaiRequest
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking"))
-	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
-	assert.True(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
-	assert.Nil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
-}
-
-func TestApplyThinkingConfig_NoThinkingSuffixFlash(t *testing.T) {
-	opts := withGeminiSettings(t, true, true, 0.6)
-	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-nothinking"))
+	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "disabled"})
+	require.NoError(t, ApplyThinkingConfig(req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, 0, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	assert.Equal(t, "none", info.GetReasoningEffort())
 }
 
-func TestApplyThinkingConfig_NoThinkingSuffixNew25Pro(t *testing.T) {
+func TestApplyThinkingConfig_SuffixDisabledUnsupportedModelErrors(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	// new 2.5-pro with -nothinking is a no-op (config stays nil).
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-pro-nothinking"))
+	err := ApplyThinkingConfig(req, infoWithState(opts, "gemini-2.5-pro", &dto.ReasoningConversionState{Mode: "disabled"}))
+	require.ErrorIs(t, err, reasoning.ErrThinkingNotDisabled)
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
-func TestApplyThinkingConfig_EffortSuffix(t *testing.T) {
+func TestApplyThinkingConfig_SuffixEnabledUsesDynamicBudget(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	info := infoWithModel(opts, "gemini-2.5-flash-high")
-	ApplyThinkingConfig(req, info)
+	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "enabled"})
+	require.NoError(t, ApplyThinkingConfig(req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
-	assert.True(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	assert.Equal(t, -1, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
+}
+
+func TestApplyThinkingConfig_SuffixEnabledWithMaxOutputTokensUsesAdapterPercentage(t *testing.T) {
+	opts := withGeminiSettings(t, true, true, 0.6)
+	req := &dto.GeminiChatRequest{}
+	req.GenerationConfig.MaxOutputTokens = uintPtr(10000)
+	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "enabled"})
+	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	assert.Equal(t, 6000, *req.GenerationConfig.ThinkingConfig.ThinkingBudget) // 0.6 * 10000
+}
+
+func TestApplyThinkingConfig_SuffixEffortOnLevelModel(t *testing.T) {
+	opts := withGeminiSettings(t, true, true, 0.6)
+	req := &dto.GeminiChatRequest{}
+	includeThoughts := true
+	info := infoWithState(opts, "gemini-3-pro-preview", &dto.ReasoningConversionState{Effort: "high", IncludeThoughts: &includeThoughts})
+	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	assert.Equal(t, "high", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	assert.True(t, *req.GenerationConfig.ThinkingConfig.IncludeThoughts)
 	assert.Equal(t, "high", info.GetReasoningEffort())
+}
+
+func TestApplyThinkingConfig_CrossProtocolEffort(t *testing.T) {
+	opts := withGeminiSettings(t, true, true, 0.6)
+	req := &dto.GeminiChatRequest{}
+	info := infoWithModel(opts, "gemini-3-pro-preview")
+	require.NoError(t, ApplyThinkingConfig(req, info, dto.GeneralOpenAIRequest{ReasoningEffort: "low"}))
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
+	assert.Equal(t, "low", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	assert.Equal(t, "low", info.GetReasoningEffort())
 }
 
 func TestApplyThinkingConfig_PlainModelNoConfig(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash"))
+	require.NoError(t, ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash")))
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
@@ -271,57 +271,4 @@ func TestSupportedMimeTypesList(t *testing.T) {
 	assert.Len(t, list, len(SupportedMimeTypes))
 	assert.Contains(t, list, "application/pdf")
 	assert.Contains(t, list, "image/png")
-}
-
-// ---- clamp helpers ---------------------------------------------------------
-
-func TestIsNew25ProModel(t *testing.T) {
-	assert.True(t, isNew25ProModel("gemini-2.5-pro"))
-	assert.True(t, isNew25ProModel("gemini-2.5-pro-preview-06-05"))
-	assert.False(t, isNew25ProModel("gemini-2.5-pro-preview-05-06"))
-	assert.False(t, isNew25ProModel("gemini-2.5-pro-preview-03-25"))
-	assert.False(t, isNew25ProModel("gemini-1.5-pro"))
-}
-
-func TestIs25FlashLiteModel(t *testing.T) {
-	assert.True(t, is25FlashLiteModel("gemini-2.5-flash-lite"))
-	assert.False(t, is25FlashLiteModel("gemini-2.5-flash"))
-}
-
-func TestClampThinkingBudget(t *testing.T) {
-	// flash-lite range [512, 24576]
-	assert.Equal(t, flash25LiteMinBudget, clampThinkingBudget("gemini-2.5-flash-lite", 100))
-	assert.Equal(t, flash25LiteMaxBudget, clampThinkingBudget("gemini-2.5-flash-lite", 99999))
-	assert.Equal(t, 1000, clampThinkingBudget("gemini-2.5-flash-lite", 1000))
-	// new 2.5-pro range [128, 32768]
-	assert.Equal(t, pro25MinBudget, clampThinkingBudget("gemini-2.5-pro", 10))
-	assert.Equal(t, pro25MaxBudget, clampThinkingBudget("gemini-2.5-pro", 99999))
-	assert.Equal(t, 5000, clampThinkingBudget("gemini-2.5-pro", 5000))
-	// default (flash) range [0, 24576]
-	assert.Equal(t, 0, clampThinkingBudget("gemini-2.5-flash", -5))
-	assert.Equal(t, flash25MaxBudget, clampThinkingBudget("gemini-2.5-flash", 99999))
-	assert.Equal(t, 1000, clampThinkingBudget("gemini-2.5-flash", 1000))
-}
-
-func TestClampThinkingBudgetByEffort(t *testing.T) {
-	// new 2.5-pro base max 32768
-	assert.Equal(t, pro25MaxBudget*80/100, clampThinkingBudgetByEffort("gemini-2.5-pro", "high"))
-	assert.Equal(t, pro25MaxBudget*50/100, clampThinkingBudgetByEffort("gemini-2.5-pro", "medium"))
-	// flash base max 24576
-	assert.Equal(t, flash25MaxBudget*20/100, clampThinkingBudgetByEffort("gemini-2.5-flash", "low"))
-	assert.Equal(t, flash25MaxBudget*5/100, clampThinkingBudgetByEffort("gemini-2.5-flash", "minimal"))
-	// unknown effort -> full base max, clamped
-	assert.Equal(t, flash25MaxBudget, clampThinkingBudgetByEffort("gemini-2.5-flash", ""))
-
-	// NOTE (latent dead-assignment bug): in clampThinkingBudgetByEffort the
-	// `if is25FlashLite { maxBudget = flash25LiteMaxBudget }` line is
-	// immediately overwritten by the following `if isNew25Pro {...} else {
-	// maxBudget = flash25MaxBudget }`, so flash-lite always uses the plain
-	// flash base rather than its own. It has no observable effect today only
-	// because flash25LiteMaxBudget == flash25MaxBudget (both 24576). The test
-	// below pins the CURRENT behavior: flash-lite effort math equals flash.
-	assert.Equal(t,
-		clampThinkingBudgetByEffort("gemini-2.5-flash", "high"),
-		clampThinkingBudgetByEffort("gemini-2.5-flash-lite", "high"),
-	)
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/model"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -45,7 +46,7 @@ func TestSettleflow_Finalize_DefaultsFromRelayInfoAndLogs(t *testing.T) {
 		CompletionTokens: 5,
 		Quota:            0,
 		CountUsage:       false,
-		Other:            map[string]interface{}{},
+		Other:            model.NewLogOther(),
 	})
 
 	log := getLastLog(t)
@@ -79,7 +80,7 @@ func TestSettleflow_Finalize_CountUsageChargesWallet(t *testing.T) {
 	FinalizeConsumptionSettlement(c, info, ConsumptionSettlementParams{
 		Quota:      1200,
 		CountUsage: true,
-		Other:      map[string]interface{}{},
+		Other:      model.NewLogOther(),
 	})
 	log := getLastLog(t)
 	require.NotNil(t, log)

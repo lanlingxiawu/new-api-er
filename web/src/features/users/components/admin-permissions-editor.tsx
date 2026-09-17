@@ -1,6 +1,7 @@
 import {
   CheckCircle2,
   Circle,
+  FileSearch,
   Menu,
   RadioTower,
   Settings,
@@ -57,6 +58,7 @@ const ADMIN_PERMISSION_SECTION_IDS = [
   'admin-permissions-menu',
   'admin-permissions-channel',
   'admin-permissions-settings',
+  'admin-permissions-other',
 ] as const
 
 const SECTION_IDS = ADMIN_PERMISSION_SECTION_IDS
@@ -90,7 +92,20 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
     resource.resource.startsWith(ADMIN_PERMISSION_RESOURCES.ADMIN_MENU_PREFIX)
   )
   const channelResources = props.catalog.resources.filter(
-    (resource) => resource.resource === ADMIN_PERMISSION_RESOURCES.CHANNEL
+    (resource) =>
+      resource.resource === ADMIN_PERMISSION_RESOURCES.CHANNEL ||
+      resource.resource === ADMIN_PERMISSION_RESOURCES.TASK_PLUGIN
+  )
+  const otherResources = props.catalog.resources.filter(
+    (resource) =>
+      !resource.resource.startsWith(
+        ADMIN_PERMISSION_RESOURCES.ADMIN_MENU_PREFIX
+      ) &&
+      !resource.resource.startsWith(
+        ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
+      ) &&
+      resource.resource !== ADMIN_PERMISSION_RESOURCES.CHANNEL &&
+      resource.resource !== ADMIN_PERMISSION_RESOURCES.TASK_PLUGIN
   )
   const settingsGroups = groupResources(
     props.catalog.resources.filter((resource) =>
@@ -128,8 +143,24 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
         }),
         icon: <Settings className='size-4' aria-hidden='true' />,
       },
+      ...(otherResources.length > 0
+        ? [
+            {
+              id: SECTION_IDS[3],
+              label: t('Other permissions'),
+              description: t('Audit logs and other access'),
+              icon: <FileSearch className='size-4' aria-hidden='true' />,
+            },
+          ]
+        : []),
     ],
-    [enabledMenuCount, menuResources.length, settingsGroups.length, t]
+    [
+      enabledMenuCount,
+      menuResources.length,
+      otherResources.length,
+      settingsGroups.length,
+      t,
+    ]
   )
 
   const updatePermission = (
@@ -370,6 +401,22 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
             </Accordion>
           </SideDrawerSection>
         </div>
+
+        {otherResources.length > 0 && (
+          <div id={SECTION_IDS[3]} className='scroll-mt-4'>
+            <SideDrawerSection>
+              <SideDrawerSectionHeader
+                title={t('Other permissions')}
+                description={t(
+                  'Permissions that are not tied to a management menu, channel or system setting.'
+                )}
+                icon={<FileSearch className='size-4' aria-hidden='true' />}
+                iconTone='info'
+              />
+              {renderResources(otherResources)}
+            </SideDrawerSection>
+          </div>
+        )}
       </div>
     </div>
   )

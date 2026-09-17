@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -59,9 +60,9 @@ func TestStreamResponseGateAWSRetry(t *testing.T) {
 			require.Error(t, err)
 			require.False(t, service.FinalizeStreamFailure(c, info, err))
 			require.Nil(t, info.StreamResult)
-			other := map[string]any{}
+			other := model.NewLogOther()
 			service.AppendStreamErrorDiagnostic(c, other, err)
-			require.Empty(t, other)
+			require.Empty(t, other.Snapshot())
 			require.Equal(t, relaycommon.StreamDiagnostic{}, info.StreamDiagnostic.Snapshot())
 		}
 	}

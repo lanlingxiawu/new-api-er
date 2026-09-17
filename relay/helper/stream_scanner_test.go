@@ -356,14 +356,12 @@ func TestStreamScannerHandler_OwnedDeadlineUsesTimeoutEndReason(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingWriteFailurePreservesOwnedTimeoutReason(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
-	oldEnabled, oldSeconds := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	oldSetting := *operation_setting.GetGeneralSetting()
+	setting := oldSetting
 	setting.PingIntervalEnabled = true
 	setting.PingIntervalSeconds = 1
-	t.Cleanup(func() {
-		setting.PingIntervalEnabled = oldEnabled
-		setting.PingIntervalSeconds = oldSeconds
-	})
+	operation_setting.ReplaceGeneralSetting(setting)
+	t.Cleanup(func() { operation_setting.ReplaceGeneralSetting(oldSetting) })
 
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
@@ -395,11 +393,12 @@ func TestStreamScannerHandler_PingWriteFailurePreservesOwnedTimeoutReason(t *tes
 // ---------- Ping ----------
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
-	oe, os := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	oldSetting := *operation_setting.GetGeneralSetting()
+	setting := oldSetting
 	setting.PingIntervalEnabled = true
 	setting.PingIntervalSeconds = 1
-	t.Cleanup(func() { setting.PingIntervalEnabled = oe; setting.PingIntervalSeconds = os })
+	operation_setting.ReplaceGeneralSetting(setting)
+	t.Cleanup(func() { operation_setting.ReplaceGeneralSetting(oldSetting) })
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -432,11 +431,12 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
-	oe, os := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	oldSetting := *operation_setting.GetGeneralSetting()
+	setting := oldSetting
 	setting.PingIntervalEnabled = true
 	setting.PingIntervalSeconds = 1
-	t.Cleanup(func() { setting.PingIntervalEnabled = oe; setting.PingIntervalSeconds = os })
+	operation_setting.ReplaceGeneralSetting(setting)
+	t.Cleanup(func() { operation_setting.ReplaceGeneralSetting(oldSetting) })
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -457,4 +457,16 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	}
 	assert.Equal(t, int64(5), count.Load())
 	assert.Equal(t, 0, strings.Count(rec.Body.String(), ": PING"))
+}
+
+func TestNewStreamScannerCallerLimit(t *testing.T) {
+	// The smaller buffer must actually constrain a line; a preallocated 64 KiB
+	// buffer would otherwise bypass this caller's 1 KiB limit in bufio.Scanner.
+	scanner := NewStreamScanner(strings.NewReader(strings.Repeat("x", 2048)+"\n"), 1024)
+	assert.False(t, scanner.Scan())
+	require.Error(t, scanner.Err())
+	scanner = NewStreamScanner(strings.NewReader("data: ok\n"), 1024)
+	require.True(t, scanner.Scan())
+	assert.Equal(t, "data: ok", scanner.Text())
+	require.NoError(t, scanner.Err())
 }

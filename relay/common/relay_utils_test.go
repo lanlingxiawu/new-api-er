@@ -161,18 +161,18 @@ func newTaskContext(t *testing.T, body string) (*gin.Context, *RelayInfo) {
 }
 
 func TestValidateMultipartDirect(t *testing.T) {
-	t.Run("normalizes single image and sets generate action", func(t *testing.T) {
+	t.Run("normalizes single image and sets image-to-video action", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"model":"wan2.7-i2v","prompt":"animate","image":" https://x.com/first.png "}`)
 		require.Nil(t, ValidateMultipartDirect(c, info))
 		got, err := GetTaskRequest(c)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"https://x.com/first.png"}, got.Images)
-		assert.Equal(t, constant.TaskActionGenerate, info.Action)
+		assert.Equal(t, constant.TaskActionImageToVideo, info.Action)
 	})
-	t.Run("text-only sets text-generate action", func(t *testing.T) {
+	t.Run("text-only sets text-to-video action", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"model":"sora-2","prompt":"a cat","seconds":"4"}`)
 		require.Nil(t, ValidateMultipartDirect(c, info))
-		assert.Equal(t, constant.TaskActionTextGenerate, info.Action)
+		assert.Equal(t, constant.TaskActionTextToVideo, info.Action)
 	})
 	t.Run("missing model rejected", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"prompt":"a cat"}`)
@@ -197,7 +197,7 @@ func TestValidateMultipartDirect(t *testing.T) {
 		require.Nil(t, ValidateMultipartDirect(c, info))
 		got, _ := GetTaskRequest(c)
 		assert.Equal(t, []string{"ref.png"}, got.Images)
-		assert.Equal(t, constant.TaskActionGenerate, info.Action)
+		assert.Equal(t, constant.TaskActionImageToVideo, info.Action)
 	})
 	t.Run("sora-2 defaults size and seconds", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"model":"sora-2","prompt":"cat"}`)
@@ -244,7 +244,7 @@ func TestTaskDurationBounds(t *testing.T) {
 		})
 		t.Run(tt.name+"/basic", func(t *testing.T) {
 			c, info := newTaskContext(t, tt.body)
-			te := ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+			te := ValidateBasicTaskRequest(c, info, constant.TaskActionImageToVideo)
 			if tt.wantErr {
 				require.NotNil(t, te)
 				assert.Equal(t, "invalid_seconds", te.Code)
@@ -258,18 +258,18 @@ func TestTaskDurationBounds(t *testing.T) {
 func TestValidateBasicTaskRequest(t *testing.T) {
 	t.Run("empty prompt rejected", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"model":"sora-2","prompt":""}`)
-		te := ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+		te := ValidateBasicTaskRequest(c, info, constant.TaskActionImageToVideo)
 		require.NotNil(t, te)
 	})
 	t.Run("single image normalized", func(t *testing.T) {
 		c, info := newTaskContext(t, `{"model":"sora-2","prompt":"cat","image":"img.png"}`)
-		require.Nil(t, ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate))
+		require.Nil(t, ValidateBasicTaskRequest(c, info, constant.TaskActionImageToVideo))
 		got, _ := GetTaskRequest(c)
 		assert.Equal(t, []string{"img.png"}, got.Images)
 	})
 	t.Run("invalid json rejected", func(t *testing.T) {
 		c, info := newTaskContext(t, `bad`)
-		te := ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+		te := ValidateBasicTaskRequest(c, info, constant.TaskActionImageToVideo)
 		require.NotNil(t, te)
 		assert.Equal(t, "invalid_request", te.Code)
 	})

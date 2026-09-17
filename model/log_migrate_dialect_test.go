@@ -258,15 +258,16 @@ func TestRunLogMigrationDDLSetsPostgresLockTimeout(t *testing.T) {
 // missingLogIndexes 的退回分支
 // ---------------------------------------------------------------------------
 
-// SQLite 驱动（glebarez/sqlite）不支持 GetIndexes，直接返回 "not support"，
-// 而 SQLite 是 SQL_DSN 未配置时的默认库——所以退回逐个 HasIndex 是**常态路径**，
-// 不是异常路径。这条用例先把这个前提钉住，避免将来有人误以为退路只在边缘方言上跑。
-func TestSQLiteDoesNotSupportBulkIndexLookup(t *testing.T) {
+// glebarez/sqlite v1.11 起支持 GetIndexes（读 PRAGMA_INDEX_LIST 元数据），
+// 所以 SQLite 默认库也走批量路径；逐个 HasIndex 的退路只在不支持的方言上触发，
+// 下面的退回分支用例用 failingGetIndexesMigrator 显式模拟。这条用例钉住该前提。
+func TestSQLiteSupportsBulkIndexLookup(t *testing.T) {
 	db, _ := newLogMigrationTestDB(t)
 	require.NoError(t, db.Migrator().CreateTable(&Log{}))
 
-	_, err := db.Migrator().GetIndexes(&Log{})
-	require.Error(t, err, "若 SQLite 驱动开始支持 GetIndexes，这里的前提就变了")
+	indexes, err := db.Migrator().GetIndexes(&Log{})
+	require.NoError(t, err, "SQLite 驱动的 GetIndexes 支持情况变了，退回分支的前提需要重新评估")
+	assert.NotEmpty(t, indexes)
 }
 
 // 退回分支：不能把"读不到索引目录"当成"没有索引"，否则每次启动都误报缺失全部索引。
@@ -276,8 +277,8 @@ func TestMissingLogIndexesFallbackDetectsComplete(t *testing.T) {
 	stmt := &gorm.Statement{DB: db}
 	require.NoError(t, stmt.Parse(&Log{}))
 
-	// db.Migrator() 在 SQLite 上本身就走退回分支；再叠一个显式失败的实现，
-	// 覆盖"其他方言也不支持"的情形，两者结论必须一致
+	// db.Migrator() 在 SQLite 上走批量路径；再叠一个显式失败的实现覆盖
+	// "方言不支持 GetIndexes" 的退回分支，两者结论必须一致
 	assert.Empty(t, missingLogIndexes(db.Migrator(), stmt), "索引齐全却报了缺失")
 	failing := failingGetIndexesMigrator{Migrator: db.Migrator()}
 	assert.Empty(t, missingLogIndexes(failing, stmt), "退回分支把已存在的索引误判为缺失了")

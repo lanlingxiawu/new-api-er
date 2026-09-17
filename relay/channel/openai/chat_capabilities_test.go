@@ -54,44 +54,6 @@ func convertChatRequest(t *testing.T, model string) (*dto.GeneralOpenAIRequest, 
 	return result, info
 }
 
-// gpt-6-astra rejects max_tokens, temperature, top_p and logprobs; before the
-// capability rules it only matched the literal "gpt-5" prefix and every one of
-// those parameters was forwarded as-is, so the upstream returned 400.
-func TestConvertOpenAIRequestGPT6AstraStripsUnsupportedParameters(t *testing.T) {
-	for _, model := range []string{"gpt-6-astra", "gpt-6-astra-2026-09-03"} {
-		t.Run(model, func(t *testing.T) {
-			request, _ := convertChatRequest(t, model)
-
-			assert.Nil(t, request.MaxTokens)
-			require.NotNil(t, request.MaxCompletionTokens)
-			assert.Equal(t, uint(16), *request.MaxCompletionTokens)
-			assert.Nil(t, request.Temperature)
-			assert.Nil(t, request.TopP)
-			assert.Nil(t, request.LogProbs)
-			assert.Nil(t, request.TopLogProbs)
-			assert.Equal(t, "developer", request.Messages[0].Role)
-			assert.Equal(t, "user", request.Messages[1].Role)
-		})
-	}
-}
-
-// The reasoning effort suffix has to be stripped before the model name is
-// matched, otherwise "gpt-6-astra-high" is an unrecognized model and keeps the
-// parameters the upstream rejects.
-func TestConvertOpenAIRequestGPT6AstraResolvesEffortSuffix(t *testing.T) {
-	request, info := convertChatRequest(t, "gpt-6-astra-high")
-
-	assert.Equal(t, "gpt-6-astra", request.Model)
-	assert.Equal(t, "gpt-6-astra", info.UpstreamModelName)
-	assert.Equal(t, "high", request.ReasoningEffort)
-	assert.Equal(t, "high", info.ReasoningEffort)
-	assert.Nil(t, request.MaxTokens)
-	require.NotNil(t, request.MaxCompletionTokens)
-	assert.Equal(t, uint(16), *request.MaxCompletionTokens)
-	assert.Nil(t, request.Temperature)
-	assert.Equal(t, "developer", request.Messages[0].Role)
-}
-
 // gpt-5.1 defaults to no reasoning and still accepts sampling parameters, so
 // only the max_completion_tokens and developer-role rules apply.
 func TestConvertOpenAIRequestGPT51KeepsSamplingParameters(t *testing.T) {
@@ -120,34 +82,10 @@ func TestConvertOpenAIRequestGPT51WithEffortStripsSamplingParameters(t *testing.
 	assert.Nil(t, request.TopLogProbs)
 }
 
-func TestConvertOpenAIRequestGPT5StripsSamplingParameters(t *testing.T) {
-	request, _ := convertChatRequest(t, "gpt-5")
-
-	assert.Nil(t, request.MaxTokens)
-	require.NotNil(t, request.MaxCompletionTokens)
-	assert.Nil(t, request.Temperature)
-	assert.Nil(t, request.TopP)
-	assert.Nil(t, request.LogProbs)
-	assert.Equal(t, "developer", request.Messages[0].Role)
-}
-
-// o-series only drops temperature, and o1-mini keeps the system role.
-func TestConvertOpenAIRequestO1MiniKeepsSystemRoleAndTopP(t *testing.T) {
-	request, _ := convertChatRequest(t, "o1-mini")
-
-	assert.Nil(t, request.MaxTokens)
-	require.NotNil(t, request.MaxCompletionTokens)
-	assert.Equal(t, uint(16), *request.MaxCompletionTokens)
-	assert.Nil(t, request.Temperature)
-	require.NotNil(t, request.TopP)
-	require.NotNil(t, request.LogProbs)
-	assert.Equal(t, "system", request.Messages[0].Role)
-}
-
-// Unrecognized models keep every parameter: neither an older generation nor an
-// unknown gpt-6-astra variant may inherit the restrictions.
+// An unknown gpt-6-astra variant must not inherit the restrictions (gpt-4.1 and
+// gpt-7 are covered by the controller-level compatibility tests).
 func TestConvertOpenAIRequestUnrecognizedModelsAreUntouched(t *testing.T) {
-	for _, model := range []string{"gpt-4.1", "gpt-6-astra-pro", "gpt-7"} {
+	for _, model := range []string{"gpt-6-astra-pro"} {
 		t.Run(model, func(t *testing.T) {
 			request, info := convertChatRequest(t, model)
 

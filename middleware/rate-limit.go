@@ -102,7 +102,7 @@ func redisSessionRateLimitKey(mark string, sessionID string) string {
 	return fmt.Sprintf("%s:session:%s:%s", redisRateLimitNamespace, mark, sessionID)
 }
 
-func redisReplyInteger(value interface{}) (int64, error) {
+func redisReplyInteger(value any) (int64, error) {
 	switch typed := value.(type) {
 	case int64:
 		return typed, nil
@@ -287,15 +287,23 @@ func CriticalRateLimit() func(c *gin.Context) {
 // Must be mounted AFTER UserAuth/AdminAuth/RootAuth. A request that somehow
 // arrives without an identity falls back to an IP-keyed bucket under the same
 // mark, which still keeps it out of the login bucket.
-func UserCriticalRateLimit() func(c *gin.Context) {
+//
+// An optional scope gives a class of actions (e.g. "access-token",
+// "security-verification") its own counter, so exhausting one scope does not
+// block a user's unrelated sensitive actions such as payments.
+func UserCriticalRateLimit(scope ...string) func(c *gin.Context) {
+	mark := criticalUserRateLimitMark
+	if len(scope) > 0 && scope[0] != "" {
+		mark = criticalUserRateLimitMark + ":" + scope[0]
+	}
 	return func(c *gin.Context) {
 		bucket := operation_setting.GetRateLimitSnapshot().Critical
 		if !bucket.Enabled {
 			return
 		}
-		key := redisIPRateLimitKey(criticalUserRateLimitMark, c.ClientIP())
+		key := redisIPRateLimitKey(mark, c.ClientIP())
 		if userID := c.GetInt("id"); userID != 0 {
-			key = redisUserRateLimitKey(criticalUserRateLimitMark, userID)
+			key = redisUserRateLimitKey(mark, userID)
 		}
 		takeRateLimit(c, bucket.Num, bucket.Duration, key)
 	}

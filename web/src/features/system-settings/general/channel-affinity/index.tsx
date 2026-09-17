@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 
 import { StaticDataTable } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { StatusBadge, StatusBadgeList } from '@/components/status-badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -35,7 +36,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { Textarea } from '@/components/ui/textarea'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { SettingsSwitchField } from '../../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../../components/settings-page-context'
@@ -197,9 +198,13 @@ export function ChannelAffinitySection(props: Props) {
     setCacheLoading(true)
     try {
       const res = await getCacheStats()
-      if (res.success) setCacheStats(res.data || null)
-    } catch {
-      toast.error(t('Failed to refresh cache stats'))
+      if (res.success) {
+        setCacheStats(res.data || null)
+      } else {
+        handleServerError(res)
+      }
+    } catch (error) {
+      handleServerError(error, t('Failed to refresh cache stats'))
     } finally {
       setCacheLoading(false)
     }
@@ -330,8 +335,8 @@ export function ChannelAffinitySection(props: Props) {
           setSaving(false)
         }
       })
-    } catch {
-      toast.error(t('Failed to save'))
+    } catch (error) {
+      handleServerError(error, t('Failed to save'))
     }
   }
 
@@ -358,22 +363,34 @@ export function ChannelAffinitySection(props: Props) {
   }
 
   const handleClearAll = async () => {
-    const res = await clearAllCache()
-    if (res.success) {
-      toast.success(t('Cleared'))
-      refreshCache()
+    try {
+      const res = await clearAllCache()
+      if (res.success) {
+        toast.success(t('Cleared'))
+        refreshCache()
+      } else {
+        handleServerError(res)
+      }
+      setClearAllDialogOpen(false)
+    } catch (error) {
+      handleServerError(error)
     }
-    setClearAllDialogOpen(false)
   }
 
   const handleClearRule = async () => {
     if (!clearRuleName) return
-    const res = await clearRuleCache(clearRuleName)
-    if (res.success) {
-      toast.success(t('Cleared'))
-      refreshCache()
+    try {
+      const res = await clearRuleCache(clearRuleName)
+      if (res.success) {
+        toast.success(t('Cleared'))
+        refreshCache()
+      } else {
+        handleServerError(res)
+      }
+      setClearRuleName(null)
+    } catch (error) {
+      handleServerError(error)
     }
-    setClearRuleName(null)
   }
 
   const switchToJsonMode = () => {
@@ -666,11 +683,14 @@ export function ChannelAffinitySection(props: Props) {
           />
         ) : (
           <div className='grid gap-1.5'>
-            <Label>{t('Rules JSON')}</Label>
-            <Textarea
-              className='min-h-[300px] font-mono text-xs'
+            <Label htmlFor='channel-affinity-rules-json'>
+              {t('Rules JSON')}
+            </Label>
+            <JsonCodeEditor
+              id='channel-affinity-rules-json'
               value={jsonText}
-              onChange={(e) => setJsonText(e.target.value)}
+              onChange={setJsonText}
+              heightClassName='h-[300px] min-h-[300px] max-h-[300px]'
             />
           </div>
         )}

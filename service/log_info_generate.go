@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -22,22 +23,17 @@ import (
 // admin-only for free, since model.formatUserLogs strips the whole admin_info
 // object for non-admin viewers. Creates admin_info if absent. No-op when the
 // clamp is nil (the common case: no saturation happened).
-func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.QuotaClamp) {
+func attachQuotaSaturationToOther(other *model.LogOther, clamp *common.QuotaClamp) {
 	if clamp == nil || other == nil {
 		return
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
-		adminInfo = map[string]interface{}{}
-		other["admin_info"] = adminInfo
-	}
-	adminInfo["quota_saturation"] = clamp.AuditMap()
+	other.SetAdmin("quota_saturation", clamp.AuditMap())
 }
 
 // attachQuotaSaturation records the request's quota clamp (if any) onto the
 // consume log's other.admin_info and emits a request-correlated backend audit
 // line. Called right before RecordConsumeLog on the text/audio/wss paths.
-func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil {
 		return
 	}
@@ -47,16 +43,16 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	}
 	attachQuotaSaturationToOther(other, clamp)
 	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
-		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
+		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
-func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if other == nil {
 		return
 	}
 	if ctx != nil && ctx.Request != nil && ctx.Request.URL != nil {
 		if path := ctx.Request.URL.Path; path != "" {
-			other["request_path"] = path
+			other.SetPublic("request_path", path)
 			return
 		}
 	}
@@ -65,61 +61,72 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 		if idx := strings.Index(path, "?"); idx != -1 {
 			path = path[:idx]
 		}
-		other["request_path"] = path
+		other.SetPublic("request_path", path)
 	}
+}
+
+// AppendRelayLogAdminInfo records relay routing and conversion diagnostics in
+// the admin-only scope shared by successful and failed request logs.
+func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if ctx == nil || other == nil {
+		return
+	}
+	other.SetAdmin("use_channel", ctx.GetStringSlice("use_channel"))
+	if relayInfo != nil {
+		if billingModel := relayInfo.GetBillingModelName(); billingModel != "" && billingModel != relayInfo.OriginModelName {
+			other.SetAdmin("billing_model", billingModel)
+		}
+		if diagnostics := relayInfo.ConversionDiagnostics(); len(diagnostics) > 0 {
+			other.SetAdmin("conversion_diagnostics", diagnostics)
+		}
+		if relayInfo.ConversionDiagnosticsTruncated() {
+			other.SetAdmin("conversion_diagnostics_truncated", true)
+		}
+	}
+	if common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey) {
+		other.SetAdmin("is_multi_key", true)
+		other.SetAdmin("multi_key_index", common.GetContextKeyInt(ctx, constant.ContextKeyChannelMultiKeyIndex))
+	}
+	if common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens) {
+		other.SetAdmin("local_count_tokens", true)
+	}
+
+	AppendChannelAffinityAdminInfo(ctx, other)
 }
 
 // GenerateTextOtherInfo 生成文本消费日志的扩展字段，整合倍率、首字时间、订阅和流式诊断摘要。
 // 参数 ctx：请求上下文；relayInfo：请求和结算元数据；modelRatio：模型倍率；groupRatio：本次分组倍率；completionRatio：输出倍率。
 // 参数 cacheTokens：缓存读取 token 数；cacheRatio：缓存倍率；modelPrice：配置模型单价；userGroupRatio：用户专属分组倍率。
-// 返回新建的日志字段映射；此时订阅可能尚未结算，严格流式结算后会刷新其中的订阅字段。
+// 返回新建的日志字段；此时订阅可能尚未结算，严格流式结算后会刷新其中的订阅字段。
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
-	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
-	other := make(map[string]interface{})
-	other["model_ratio"] = modelRatio
-	other["group_ratio"] = groupRatio
-	other["completion_ratio"] = completionRatio
-	other["cache_tokens"] = cacheTokens
-	other["cache_ratio"] = cacheRatio
-	other["model_price"] = modelPrice
-	other["user_group_ratio"] = userGroupRatio
-	firstResponseTime := relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli()
-	if firstResponseTime < 0 {
-		firstResponseTime = 0
-	}
-	other["frt"] = float64(firstResponseTime)
+	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) *model.LogOther {
+	other := model.NewLogOther()
+	other.SetPublic("model_ratio", modelRatio)
+	other.SetPublic("group_ratio", groupRatio)
+	other.SetPublic("completion_ratio", completionRatio)
+	other.SetPublic("cache_tokens", cacheTokens)
+	other.SetPublic("cache_ratio", cacheRatio)
+	other.SetPublic("model_price", modelPrice)
+	other.SetPublic("user_group_ratio", userGroupRatio)
+	firstResponseTime := max(relayInfo.FirstResponseTime.UnixMilli()-relayInfo.StartTime.UnixMilli(), 0)
+	other.SetPublic("frt", float64(firstResponseTime))
 	if relayInfo.ReasoningEffort != "" {
-		other["reasoning_effort"] = relayInfo.ReasoningEffort
+		other.SetPublic("reasoning_effort", relayInfo.ReasoningEffort)
 	}
 	if relayInfo.IsModelMapped {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = relayInfo.UpstreamModelName
+		other.SetPublic("is_model_mapped", true)
+		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)
 	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
-		other["is_system_prompt_overwritten"] = true
+		other.SetPublic("is_system_prompt_overwritten", true)
 	}
 
-	adminInfo := make(map[string]interface{})
-	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
-	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
-	if isMultiKey {
-		adminInfo["is_multi_key"] = true
-		adminInfo["multi_key_index"] = common.GetContextKeyInt(ctx, constant.ContextKeyChannelMultiKeyIndex)
-	}
-
-	isLocalCountTokens := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
-	if isLocalCountTokens {
-		adminInfo["local_count_tokens"] = isLocalCountTokens
-	}
-
-	AppendChannelAffinityAdminInfo(ctx, adminInfo)
-
-	other["admin_info"] = adminInfo
+	AppendRelayLogAdminInfo(ctx, relayInfo, other)
 	// 恢复 bb6317462 的上下文原因记录，独立于流式处理、诊断采集和按钮资格。
 	if reason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason); reason != "" {
-		other["reject_reason"] = reason
+		other.SetAdmin("reject_reason", reason)
 	}
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
@@ -127,30 +134,37 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
-	AppendStreamLogInfo(relayInfo, other)
+	appendStreamLogInfo(relayInfo, other, false)
 	return other
 }
 
 // Private evidence is stripped at the log read boundary; only the Root detail
 // API reads the stored envelope. Never pass this payload to application logging.
 // AppendStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
-// 参数 info：请求中转状态，nil 时跳过；other：待原地扩充的日志映射，nil 时跳过。
+// 参数 info：请求中转状态，nil 时跳过；other：待原地刷新的日志字段，nil 时跳过。
 // 无返回值；新流程只在明确上游异常时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
-func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface{}) {
+func AppendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther) {
+	appendStreamLogInfo(info, other, true)
+}
+
+// appendStreamLogInfo 写入流式日志字段；refresh 为 true 时先移除上次写入的诊断字段，新建日志字段无需清理。
+func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, refresh bool) {
 	if info == nil || other == nil {
 		return
 	}
-	delete(other, "claude_diagnostic_available")
-	delete(other, "stream_diagnostic_available")
 	if !info.StreamResponseGate.AllowsStream() {
+		if refresh {
+			deleteLogOtherPublic(other, "claude_diagnostic_available", "stream_diagnostic_available",
+				"stream_diagnostic", "stream_diagnostic_attempt", "stream_result")
+		}
 		// 只排除新流程证据，策略拒绝原因仍按历史独立字段显示。
 		if info.StreamRejectReason != "" {
-			other["reject_reason"] = info.StreamRejectReason
+			other.SetAdmin("reject_reason", info.StreamRejectReason)
 		}
-		delete(other, "stream_diagnostic")
-		delete(other, "stream_diagnostic_attempt")
-		delete(other, "stream_result")
 		return
+	}
+	if refresh {
+		deleteLogOtherPublic(other, "claude_diagnostic_available", "stream_diagnostic_available")
 	}
 	if info.StreamResult == nil && info.StreamDiagnostic == nil && info.StreamRejectReason == "" {
 		return
@@ -160,18 +174,18 @@ func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface
 		diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(info.StreamStatus.EndError)
 	}
 	if info.StreamResult != nil {
-		other["stream_result"] = info.StreamResult
+		other.SetPublic("stream_result", info.StreamResult)
 		diagnostic = info.StreamResult.Diagnostic
 	}
 	if info.StreamRejectReason != "" {
 		diagnostic.RejectReason = info.StreamRejectReason
 	}
 	if diagnostic.RejectReason != "" {
-		other["reject_reason"] = diagnostic.RejectReason
+		other.SetAdmin("reject_reason", diagnostic.RejectReason)
 	}
 	available := info.StreamResult != nil && info.StreamResult.DiagnosticAvailable
 	if available {
-		other["stream_diagnostic_available"] = true
+		other.SetPublic("stream_diagnostic_available", true)
 		// 终止 error 可能晚于结果快照写出；日志入队前取得当前正文，避免漏掉补发帧。
 		diagnostic.DownstreamBodyBase64 = info.StreamDiagnostic.DownstreamBody()
 	}
@@ -179,32 +193,33 @@ func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface
 		// 仅收紧新流程的日志副本；保留正常/客户端断开时的用量与错误，不改旧采集路径。
 		diagnostic = filterStreamDiagnosticResponse(diagnostic, available && info.StreamDiagnostic != nil)
 	}
-	other["stream_diagnostic"] = diagnostic
-	other["stream_diagnostic_attempt"] = diagnostic.Attempt
+	other.SetPublic("stream_diagnostic", diagnostic)
+	other.SetPublic("stream_diagnostic_attempt", diagnostic.Attempt)
 }
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
 // AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算。
-// 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志映射，将原地更新；err：底层错误，nil 时不覆盖已有原因。
-func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
+// 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志字段，将原地更新；err：底层错误，nil 时不覆盖已有原因。
+func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err error) {
+	if other == nil {
+		return
+	}
 	value, _ := c.Get(relaycommon.StreamResponseCaptureKey)
 	capture, _ := value.(*relaycommon.StreamResponseCapture)
 	reject := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
 	if reject != "" {
-		other["reject_reason"] = reject
+		other.SetAdmin("reject_reason", reject)
 	}
-	delete(other, "claude_diagnostic_available")
-	delete(other, "stream_diagnostic_available")
 	value, _ = c.Get(relaycommon.StreamSessionKey)
 	session, _ := value.(*relaycommon.StreamSession)
 	if session != nil && !session.ResponseGate.AllowsStream() {
 		// 非 200、连接失败和响应头之前超时仅沿用原错误日志，不保存私有响应与用量。
-		delete(other, "stream_diagnostic")
-		delete(other, "stream_diagnostic_attempt")
-		delete(other, "stream_result")
+		deleteLogOtherPublic(other, "claude_diagnostic_available", "stream_diagnostic_available",
+			"stream_diagnostic", "stream_diagnostic_attempt", "stream_result")
 		return
 	}
+	deleteLogOtherPublic(other, "claude_diagnostic_available", "stream_diagnostic_available")
 	available := session.DiagnosticAvailable(IsRelayRequestTimeout(c))
 	if capture == nil && reject == "" && !available {
 		return
@@ -212,7 +227,7 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, e
 	capture.SetError(err)
 	diagnostic := capture.Snapshot()
 	if available {
-		other["stream_diagnostic_available"] = true
+		other.SetPublic("stream_diagnostic_available", true)
 		diagnostic.DownstreamBodyBase64 = capture.DownstreamBody()
 		// 关闭响应采集仍保留错误与尝试编号，使无 body 的诊断也能查询。
 		diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
@@ -225,8 +240,41 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, e
 		// 错误日志也以明确上游来源为准，本地错误或提前记录日志不应保存原始响应。
 		diagnostic = filterStreamDiagnosticResponse(diagnostic, available && capture != nil)
 	}
-	other["stream_diagnostic"] = diagnostic
-	other["stream_diagnostic_attempt"] = diagnostic.Attempt
+	other.SetPublic("stream_diagnostic", diagnostic)
+	other.SetPublic("stream_diagnostic_attempt", diagnostic.Attempt)
+}
+
+// deleteLogOtherPublic 从日志字段的公开层移除 keys，保留管理员、超级管理员与审计层；无匹配时不重建。
+func deleteLogOtherPublic(other *model.LogOther, keys ...string) {
+	if other == nil || len(keys) == 0 {
+		return
+	}
+	snapshot := other.Snapshot()
+	removed := false
+	for _, key := range keys {
+		if _, exists := snapshot[key]; exists {
+			delete(snapshot, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return
+	}
+	rebuilt := model.NewLogOther()
+	for key, value := range snapshot {
+		scoped, _ := value.(map[string]any)
+		switch key {
+		case "admin_info":
+			rebuilt.MergeAdmin(scoped)
+		case "root_info":
+			rebuilt.MergeRoot(scoped)
+		case "audit_info":
+			rebuilt.MergeAudit(scoped)
+		default:
+			rebuilt.SetPublic(key, value)
+		}
+	}
+	*other = *rebuilt
 }
 
 // filterStreamDiagnosticResponse 为新流程日志过滤原始响应内容，保留独立错误、读取元数据、用量与结算证据。
@@ -264,16 +312,16 @@ func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
 	return err.MaskSensitiveErrorWithStatusCode()
 }
 
-func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 {
 		return
 	}
-	other["po"] = relayInfo.ParamOverrideAudit
+	other.SetPublic("po", relayInfo.ParamOverrideAudit)
 }
 
 // appendStreamStatus 生成公开流状态；有通用会话、流式结果或响应采集器时省略底层错误文本，旧路径按原逻辑保留。
-// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志映射。任一为 nil、非流式或无状态时跳过。
-func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志字段。任一为 nil、非流式或无状态时跳过。
+func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
 		return
 	}
@@ -283,7 +331,7 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"
 	}
-	streamInfo := map[string]interface{}{
+	streamInfo := map[string]any{
 		"status":     status,
 		"end_reason": string(ss.EndReason),
 	}
@@ -293,7 +341,7 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	if ss.ErrorCount > 0 {
 		streamInfo["error_count"] = ss.ErrorCount
 		if privateErrors {
-			other["stream_status"] = streamInfo
+			other.SetPublic("stream_status", streamInfo)
 			return
 		}
 		messages := make([]string, 0, len(ss.Errors))
@@ -302,36 +350,36 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		}
 		streamInfo["errors"] = messages
 	}
-	other["stream_status"] = streamInfo
+	other.SetPublic("stream_status", streamInfo)
 }
 
-func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil {
 		return
 	}
 	// billing_source: "wallet" or "subscription"
 	if relayInfo.BillingSource != "" {
-		other["billing_source"] = relayInfo.BillingSource
+		other.SetPublic("billing_source", relayInfo.BillingSource)
 	}
 	if relayInfo.UserSetting.BillingPreference != "" {
-		other["billing_preference"] = relayInfo.UserSetting.BillingPreference
+		other.SetPublic("billing_preference", relayInfo.UserSetting.BillingPreference)
 	}
 	if relayInfo.BillingSource == "subscription" {
 		if relayInfo.SubscriptionId != 0 {
-			other["subscription_id"] = relayInfo.SubscriptionId
+			other.SetPublic("subscription_id", relayInfo.SubscriptionId)
 		}
 		if relayInfo.SubscriptionPreConsumed > 0 {
-			other["subscription_pre_consumed"] = relayInfo.SubscriptionPreConsumed
+			other.SetPublic("subscription_pre_consumed", relayInfo.SubscriptionPreConsumed)
 		}
 		// post_delta: settlement delta applied after actual usage is known (can be negative for refund)
 		if relayInfo.SubscriptionPostDelta != 0 {
-			other["subscription_post_delta"] = relayInfo.SubscriptionPostDelta
+			other.SetPublic("subscription_post_delta", relayInfo.SubscriptionPostDelta)
 		}
 		if relayInfo.SubscriptionPlanId != 0 {
-			other["subscription_plan_id"] = relayInfo.SubscriptionPlanId
+			other.SetPublic("subscription_plan_id", relayInfo.SubscriptionPlanId)
 		}
 		if relayInfo.SubscriptionPlanTitle != "" {
-			other["subscription_plan_title"] = relayInfo.SubscriptionPlanTitle
+			other.SetPublic("subscription_plan_title", relayInfo.SubscriptionPlanTitle)
 		}
 		// Compute "this request" subscription consumed + remaining
 		consumed := relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
@@ -343,23 +391,20 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 			usedFinal = 0
 		}
 		if relayInfo.SubscriptionAmountTotal > 0 {
-			remain := relayInfo.SubscriptionAmountTotal - usedFinal
-			if remain < 0 {
-				remain = 0
-			}
-			other["subscription_total"] = relayInfo.SubscriptionAmountTotal
-			other["subscription_used"] = usedFinal
-			other["subscription_remain"] = remain
+			remain := max(relayInfo.SubscriptionAmountTotal-usedFinal, 0)
+			other.SetPublic("subscription_total", relayInfo.SubscriptionAmountTotal)
+			other.SetPublic("subscription_used", usedFinal)
+			other.SetPublic("subscription_remain", remain)
 		}
 		if consumed > 0 {
-			other["subscription_consumed"] = consumed
+			other.SetPublic("subscription_consumed", consumed)
 		}
 		// Wallet quota is not deducted when billed from subscription.
-		other["wallet_quota_deducted"] = 0
+		other.SetPublic("wallet_quota_deducted", 0)
 	}
 }
 
-func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -384,41 +429,41 @@ func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[st
 	if len(chain) == 0 {
 		return
 	}
-	other["request_conversion"] = chain
+	other.SetPublic("request_conversion", chain)
 }
 
-func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil {
 		return
 	}
 	if relayInfo.GetFinalRequestRelayFormat() == types.RelayFormatClaude {
 		// claude indicates the final upstream request format is Claude Messages.
 		// Frontend log rendering uses this to keep the original Claude input display.
-		other["claude"] = true
+		other.SetPublic("claude", true)
 	}
 }
 
-func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) *model.LogOther {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
-	info["ws"] = true
-	info["audio_input"] = usage.InputTokenDetails.AudioTokens
-	info["audio_output"] = usage.OutputTokenDetails.AudioTokens
-	info["text_input"] = usage.InputTokenDetails.TextTokens
-	info["text_output"] = usage.OutputTokenDetails.TextTokens
-	info["audio_ratio"] = audioRatio
-	info["audio_completion_ratio"] = audioCompletionRatio
+	info.SetPublic("ws", true)
+	info.SetPublic("audio_input", usage.InputTokenDetails.AudioTokens)
+	info.SetPublic("audio_output", usage.OutputTokenDetails.AudioTokens)
+	info.SetPublic("text_input", usage.InputTokenDetails.TextTokens)
+	info.SetPublic("text_output", usage.OutputTokenDetails.TextTokens)
+	info.SetPublic("audio_ratio", audioRatio)
+	info.SetPublic("audio_completion_ratio", audioCompletionRatio)
 	return info
 }
 
-func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) *model.LogOther {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
-	info["audio"] = true
-	info["audio_input"] = usage.PromptTokensDetails.AudioTokens
-	info["audio_output"] = usage.CompletionTokenDetails.AudioTokens
-	info["text_input"] = usage.PromptTokensDetails.TextTokens
-	info["text_output"] = usage.CompletionTokenDetails.TextTokens
-	info["audio_ratio"] = audioRatio
-	info["audio_completion_ratio"] = audioCompletionRatio
+	info.SetPublic("audio", true)
+	info.SetPublic("audio_input", usage.PromptTokensDetails.AudioTokens)
+	info.SetPublic("audio_output", usage.CompletionTokenDetails.AudioTokens)
+	info.SetPublic("text_input", usage.PromptTokensDetails.TextTokens)
+	info.SetPublic("text_output", usage.CompletionTokenDetails.TextTokens)
+	info.SetPublic("audio_ratio", audioRatio)
+	info.SetPublic("audio_completion_ratio", audioCompletionRatio)
 	return info
 }
 
@@ -427,28 +472,28 @@ func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	cacheCreationTokens int, cacheCreationRatio float64,
 	cacheCreationTokens5m int, cacheCreationRatio5m float64,
 	cacheCreationTokens1h int, cacheCreationRatio1h float64,
-	modelPrice float64, userGroupRatio float64) map[string]interface{} {
+	modelPrice float64, userGroupRatio float64) *model.LogOther {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice, userGroupRatio)
-	info["claude"] = true
-	info["cache_creation_tokens"] = cacheCreationTokens
-	info["cache_creation_ratio"] = cacheCreationRatio
+	info.SetPublic("claude", true)
+	info.SetPublic("cache_creation_tokens", cacheCreationTokens)
+	info.SetPublic("cache_creation_ratio", cacheCreationRatio)
 	if cacheCreationTokens5m != 0 {
-		info["cache_creation_tokens_5m"] = cacheCreationTokens5m
-		info["cache_creation_ratio_5m"] = cacheCreationRatio5m
+		info.SetPublic("cache_creation_tokens_5m", cacheCreationTokens5m)
+		info.SetPublic("cache_creation_ratio_5m", cacheCreationRatio5m)
 	}
 	if cacheCreationTokens1h != 0 {
-		info["cache_creation_tokens_1h"] = cacheCreationTokens1h
-		info["cache_creation_ratio_1h"] = cacheCreationRatio1h
+		info.SetPublic("cache_creation_tokens_1h", cacheCreationTokens1h)
+		info.SetPublic("cache_creation_ratio_1h", cacheCreationRatio1h)
 	}
 	return info
 }
 
-func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.PriceData) map[string]interface{} {
-	other := make(map[string]interface{})
-	other["model_price"] = priceData.ModelPrice
-	other["group_ratio"] = priceData.GroupRatioInfo.GroupRatio
+func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.PriceData) *model.LogOther {
+	other := model.NewLogOther()
+	other.SetPublic("model_price", priceData.ModelPrice)
+	other.SetPublic("group_ratio", priceData.GroupRatioInfo.GroupRatio)
 	if priceData.GroupRatioInfo.HasSpecialRatio {
-		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
+		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendRequestPath(nil, relayInfo, other)
 	return other
@@ -457,7 +502,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 // InjectTieredBillingInfo overlays tiered billing fields onto an existing
 // module-specific other map. Call this after GenerateTextOtherInfo /
 // GenerateClaudeOtherInfo / etc. when the request used tiered_expr billing.
-func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
+func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -465,9 +510,39 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	if snap == nil {
 		return
 	}
-	other["billing_mode"] = "tiered_expr"
-	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+	other.SetPublic("billing_mode", "tiered_expr")
+	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
 	if result != nil {
-		other["matched_tier"] = result.MatchedTier
+		if tokens := result.BillingTokens; tokens != nil && result.BillingUnit == billingexpr.BillingUnitToken {
+			other.SetPublic("image_cache_tokens", tokens.ImgCR)
+			other.SetPublic("billing_tokens", map[string]float64{
+				"p": tokens.P, "c": tokens.C, "len": tokens.Len,
+				"cr": tokens.CR, "cc": tokens.CC, "cc1h": tokens.CC1h,
+				"img": tokens.Img, "img_cr": tokens.ImgCR, "img_o": tokens.ImgO,
+				"ai": tokens.AI, "ao": tokens.AO,
+			})
+		}
+		if result.ImageCount != nil {
+			other.SetPublic("image_count", *result.ImageCount)
+		}
+		other.SetPublic("matched_tier", result.MatchedTier)
+		if result.BillingUnit != "" {
+			other.SetPublic("billing_unit", result.BillingUnit)
+		}
+		if result.FixedPrice != nil {
+			other.SetPublic("fixed_price", *result.FixedPrice)
+		}
+		if len(result.RequestRules) > 0 {
+			other.SetPublic("request_rules", result.RequestRules)
+		}
+	} else if snap.EstimatedBillingUnit != "" {
+		if snap.EstimatedImageCount != nil {
+			other.SetPublic("image_count", *snap.EstimatedImageCount)
+		}
+		other.SetPublic("matched_tier", snap.EstimatedTier)
+		other.SetPublic("billing_unit", snap.EstimatedBillingUnit)
+		if snap.EstimatedFixedPrice != nil {
+			other.SetPublic("fixed_price", *snap.EstimatedFixedPrice)
+		}
 	}
 }

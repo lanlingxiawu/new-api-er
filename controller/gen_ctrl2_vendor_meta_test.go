@@ -3,8 +3,10 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/require"
 )
@@ -40,12 +42,22 @@ func createVendorViaHandler(t *testing.T, name string) int {
 	return v.Id
 }
 
+// decodeVendorError decodes a vendor API business error. Vendor handlers answer
+// validation failures with HTTP 400 (409 for conflicts) instead of the 200 envelope.
+func decodeVendorError(t *testing.T, rec *httptest.ResponseRecorder) apiResp {
+	t.Helper()
+	require.Contains(t, []int{http.StatusBadRequest, http.StatusConflict}, rec.Code, "body: %s", rec.Body.String())
+	var out apiResp
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out), "body: %s", rec.Body.String())
+	return out
+}
+
 func TestCreateVendorMeta_BadJSON(t *testing.T) {
 	requireDB(t)
 	ctx, rec := newRawCtx(t, http.MethodPost, "/api/vendor", "{not-json")
 	asAdmin(ctx, nextTestID())
 	CreateVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
 }
 
@@ -54,9 +66,9 @@ func TestCreateVendorMeta_EmptyName(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPost, "/api/vendor", map[string]any{"name": ""})
 	asAdmin(ctx, nextTestID())
 	CreateVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "供应商名称")
+	require.Contains(t, resp.Message, "vendor name is required")
 }
 
 func TestCreateVendorMeta_Success(t *testing.T) {
@@ -78,9 +90,9 @@ func TestCreateVendorMeta_DuplicateName(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPost, "/api/vendor", map[string]any{"name": name})
 	asAdmin(ctx, nextTestID())
 	CreateVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "已存在")
+	require.Contains(t, resp.Message, "vendor name already exists")
 }
 
 func TestGetVendorMeta_BadID(t *testing.T) {
@@ -89,7 +101,7 @@ func TestGetVendorMeta_BadID(t *testing.T) {
 	ctx.AddParam("id", "abc")
 	asAdmin(ctx, nextTestID())
 	GetVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
 }
 
@@ -123,7 +135,7 @@ func TestUpdateVendorMeta_BadJSON(t *testing.T) {
 	ctx, rec := newRawCtx(t, http.MethodPut, "/api/vendor", "{bad")
 	asAdmin(ctx, nextTestID())
 	UpdateVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
 }
 
@@ -155,9 +167,9 @@ func TestUpdateVendorMeta_DuplicateName(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPut, "/api/vendor", map[string]any{"id": idB, "name": nameA})
 	asAdmin(ctx, nextTestID())
 	UpdateVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "已存在")
+	require.Contains(t, resp.Message, "vendor name already exists")
 }
 
 func TestDeleteVendorMeta_BadID(t *testing.T) {
@@ -166,7 +178,7 @@ func TestDeleteVendorMeta_BadID(t *testing.T) {
 	ctx.AddParam("id", "xyz")
 	asAdmin(ctx, nextTestID())
 	DeleteVendorMeta(ctx)
-	resp := decodeResp(t, rec)
+	resp := decodeVendorError(t, rec)
 	require.False(t, resp.Success)
 }
 

@@ -92,18 +92,20 @@ func TestCheckModelRequestRateLimitGroup_SuccessBelowOne(t *testing.T) {
 	assert.Contains(t, err.Error(), "negative rate limit values")
 }
 
-func TestCheckModelRequestRateLimitGroup_TotalOverMaxInt32(t *testing.T) {
-	over := int64(math.MaxInt32) + 1
-	err := CheckModelRequestRateLimitGroup(`{"g":[` + itoa(over) + `,5]}`)
+// The upper bound is maxModelRequestRateLimitCount (MaxInt64 / window seconds),
+// so the Redis counter math cannot overflow; values above MaxInt32 are valid.
+func TestCheckModelRequestRateLimitGroup_TotalOverMax(t *testing.T) {
+	require.NoError(t, CheckModelRequestRateLimitGroup(`{"g":[`+itoa(int64(math.MaxInt32)+1)+`,5]}`))
+	require.NoError(t, CheckModelRequestRateLimitGroup(`{"g":[`+itoa(maxModelRequestRateLimitCount)+`,5]}`))
+	err := CheckModelRequestRateLimitGroup(`{"g":[` + itoa(maxModelRequestRateLimitCount+1) + `,5]}`)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max rate limits value 2147483647")
+	assert.Contains(t, err.Error(), "exceeds max rate limit")
 }
 
-func TestCheckModelRequestRateLimitGroup_SuccessOverMaxInt32(t *testing.T) {
-	over := int64(math.MaxInt32) + 1
-	err := CheckModelRequestRateLimitGroup(`{"g":[5,` + itoa(over) + `]}`)
+func TestCheckModelRequestRateLimitGroup_SuccessOverMax(t *testing.T) {
+	err := CheckModelRequestRateLimitGroup(`{"g":[5,` + itoa(maxModelRequestRateLimitCount+1) + `]}`)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max rate limits value 2147483647")
+	assert.Contains(t, err.Error(), "exceeds max rate limit")
 }
 
 func TestCheckModelRequestRateLimitGroup_MaxInt32Boundary(t *testing.T) {

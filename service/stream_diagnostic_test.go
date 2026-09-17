@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -56,15 +57,16 @@ func TestStreamDiagnosticLogEligibility(t *testing.T) {
 				info.StreamSession.ObserveTransport(&http.Response{StatusCode: 503}, nil)
 			}
 			if name == "transport" || name == "http" {
-				other := map[string]any{}
+				other := model.NewLogOther()
 				AppendStreamErrorDiagnostic(c, other, errors.New("attempt failed"))
-				require.Empty(t, other, "非 200 / 连接失败保留原流程，无新诊断字段")
+				require.Empty(t, other.Snapshot(), "非 200 / 连接失败保留原流程，无新诊断字段")
 			}
 			FinalizeStreamUsage(c, info, nil)
-			other := map[string]any{}
+			other := model.NewLogOther()
 			AppendStreamLogInfo(info, other)
-			require.Equal(t, want, other["stream_diagnostic_available"] == true)
-			require.NotContains(t, other, "claude_diagnostic_available")
+			fields := other.Snapshot()
+			require.Equal(t, want, fields["stream_diagnostic_available"] == true)
+			require.NotContains(t, fields, "claude_diagnostic_available")
 			BeginStreamAttempt(c, info)
 			require.False(t, info.StreamSession.Snapshot().DiagnosticAvailable(false))
 		})
@@ -78,9 +80,11 @@ func TestStreamRejectReasonBaseline(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "policy")
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	other := GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 0, 0, 1)
-	require.Equal(t, "policy", other["reject_reason"])
-	require.NotContains(t, other, "stream_diagnostic_available")
-	require.NotContains(t, other, "stream_diagnostic")
+	fields := other.Snapshot()
+	require.Equal(t, "policy", logOtherAdmin(other)["reject_reason"])
+	require.NotContains(t, fields, "reject_reason", "reject_reason is admin-only")
+	require.NotContains(t, fields, "stream_diagnostic_available")
+	require.NotContains(t, fields, "stream_diagnostic")
 }
 
 // TestStreamDiagnosticSwitches 验证实际开关、透传入口和无采集重试编号；t 为测试上下文，结束后恢复全局配置。
@@ -99,7 +103,7 @@ func TestStreamDiagnosticSwitches(t *testing.T) {
 				info.ChannelSetting.PassThroughBodyEnabled = true
 				for attempt := 1; attempt <= 2; attempt++ {
 					BeginStreamAttempt(c, info)
-					other := map[string]any{}
+					other := model.NewLogOther()
 					if enabled && streaming {
 						require.Equal(t, capture, info.StreamDiagnostic != nil)
 						_, observesDownstream := info.StreamWriter.ResponseWriter.(*relaycommon.DownstreamCaptureWriter)
@@ -107,15 +111,15 @@ func TestStreamDiagnosticSwitches(t *testing.T) {
 						info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
 						info.StreamSession.EndRead(io.ErrUnexpectedEOF)
 						AppendStreamErrorDiagnostic(c, other, io.ErrUnexpectedEOF)
-						require.Equal(t, attempt, other["stream_diagnostic_attempt"])
+						require.Equal(t, attempt, other.Snapshot()["stream_diagnostic_attempt"])
 						FinalizeStreamUsage(c, info, nil)
 						AppendStreamLogInfo(info, other)
-						require.Equal(t, attempt, other["stream_diagnostic_attempt"])
+						require.Equal(t, attempt, other.Snapshot()["stream_diagnostic_attempt"])
 					} else {
 						require.Nil(t, info.StreamSession)
 						AppendStreamLogInfo(info, other)
 					}
-					require.Equal(t, enabled && streaming, other["stream_diagnostic_available"] == true)
+					require.Equal(t, enabled && streaming, other.Snapshot()["stream_diagnostic_available"] == true)
 				}
 			}
 		}

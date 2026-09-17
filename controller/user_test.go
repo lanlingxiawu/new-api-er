@@ -71,41 +71,6 @@ func TestGenerateDefaultSidebarConfig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// checkUpdatePassword: empty new pwd is a no-op; wrong original fails; correct
-// original permits the change.
-// ---------------------------------------------------------------------------
-
-func TestCheckUpdatePassword_EmptyNewPasswordNoop(t *testing.T) {
-	requireDB(t)
-	u := mkUser(t, nil)
-	upd, err := checkUpdatePassword("whatever", "", u.Id)
-	require.NoError(t, err)
-	assert.False(t, upd)
-}
-
-func TestCheckUpdatePassword_WrongOriginalFails(t *testing.T) {
-	requireDB(t)
-	hashed, err := common.Password2Hash("correct-horse")
-	require.NoError(t, err)
-	u := mkUser(t, func(u *model.User) { u.Password = hashed })
-
-	upd, err := checkUpdatePassword("wrong-password", "new-secret", u.Id)
-	assert.Error(t, err)
-	assert.False(t, upd)
-}
-
-func TestCheckUpdatePassword_CorrectOriginalSucceeds(t *testing.T) {
-	requireDB(t)
-	hashed, err := common.Password2Hash("correct-horse")
-	require.NoError(t, err)
-	u := mkUser(t, func(u *model.User) { u.Password = hashed })
-
-	upd, err := checkUpdatePassword("correct-horse", "new-secret", u.Id)
-	require.NoError(t, err)
-	assert.True(t, upd)
-}
-
-// ---------------------------------------------------------------------------
 // GetUser: id parse error, same-level permission denial, success + capabilities.
 // ---------------------------------------------------------------------------
 

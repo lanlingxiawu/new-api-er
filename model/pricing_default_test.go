@@ -21,39 +21,6 @@ func TestGetDefaultVendorIcon(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// getOrCreateVendor — found-in-map short-circuit vs create-new (DB insert).
-// ---------------------------------------------------------------------------
-
-func TestGetOrCreateVendor_FoundInMap(t *testing.T) {
-	vendorMap := map[int]*Vendor{
-		77: {Id: 77, Name: "Anthropic"},
-	}
-	// Existing vendor returned without any DB insert.
-	got := getOrCreateVendor("Anthropic", vendorMap)
-	assert.Equal(t, 77, got)
-	assert.Len(t, vendorMap, 1)
-}
-
-func TestGetOrCreateVendor_CreatesNew(t *testing.T) {
-	requireDB(t)
-	name := uniq("zzVendorNew") // guaranteed-unique -> no unique-index conflict
-	vendorMap := map[int]*Vendor{}
-
-	id := getOrCreateVendor(name, vendorMap)
-	require.NotZero(t, id, "new vendor should be inserted and its id returned")
-	deleteByID(t, &Vendor{}, id)
-
-	// The new vendor is registered in the map.
-	require.Contains(t, vendorMap, id)
-	assert.Equal(t, name, vendorMap[id].Name)
-
-	// Persisted in DB.
-	got, err := GetVendorByID(id)
-	require.NoError(t, err)
-	assert.Equal(t, name, got.Name)
-}
-
-// ---------------------------------------------------------------------------
 // initDefaultVendorMapping — skip existing meta, rule match, no-rule fallback.
 // ---------------------------------------------------------------------------
 

@@ -113,7 +113,7 @@ func TestModel_UpdateAndDelete(t *testing.T) {
 
 func TestGetVendorModelCounts(t *testing.T) {
 	requireDB(t)
-	vendorID := 900_000_000 + (nextTestID() % 1000)
+	vendorID := mkVendor(t, nil).Id // Model.Insert validates that the vendor exists
 	mkModel(t, func(m *Model) { m.VendorID = vendorID })
 	mkModel(t, func(m *Model) { m.VendorID = vendorID })
 
@@ -133,36 +133,6 @@ func TestNormalizeLookupValues(t *testing.T) {
 		[]string{"a", "b"},
 		normalizeLookupValues([]string{" a ", "a", "b", "  ", "b"}),
 	)
-}
-
-// ---------------------------------------------------------------------------
-// GetBoundChannelsByModelsMap
-// ---------------------------------------------------------------------------
-
-func TestGetBoundChannelsByModelsMap(t *testing.T) {
-	requireDB(t)
-
-	// empty input -> empty map, no error
-	res, err := GetBoundChannelsByModelsMap(nil)
-	require.NoError(t, err)
-	assert.Empty(t, res)
-
-	model := uniq("zzboundmodel")
-	ch := mkChannel(t, func(c *Channel) {
-		c.Group = uniq("bgrp")
-		c.Models = model
-		c.Status = common.ChannelStatusEnabled
-		c.Type = 3
-	})
-	require.NoError(t, ch.AddAbilities(nil))
-	cleanupAbilities(t, ch.Id)
-
-	res, err = GetBoundChannelsByModelsMap([]string{model})
-	require.NoError(t, err)
-	require.Contains(t, res, model)
-	require.Len(t, res[model], 1)
-	assert.Equal(t, ch.Name, res[model][0].Name)
-	assert.Equal(t, 3, res[model][0].Type)
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +181,7 @@ func TestGetPreferredModelOwnerChannelTypes(t *testing.T) {
 func TestSearchModels(t *testing.T) {
 	requireDB(t)
 	tag := uniq("zzsrchtag")
-	vendorID := 910_000_000 + (nextTestID() % 1000)
+	vendorID := mkVendor(t, nil).Id // Model.Insert validates that the vendor exists
 
 	m1 := mkModel(t, func(m *Model) { m.Tags = tag; m.VendorID = vendorID; m.Status = 1; m.SyncOfficial = 1 })
 	m2 := mkModel(t, func(m *Model) { m.Tags = tag; m.VendorID = vendorID; m.Status = 0; m.SyncOfficial = 0 })
@@ -315,7 +285,7 @@ func TestParseModelStatusFilter(t *testing.T) {
 		{"1", 1, true},
 		{"disabled", 0, true},
 		{"0", 0, true},
-		{"2", 2, true},   // arbitrary numeric
+		{"2", 2, true},    // arbitrary numeric
 		{"xyz", 0, false}, // non-numeric junk
 	}
 	for _, c := range cases {

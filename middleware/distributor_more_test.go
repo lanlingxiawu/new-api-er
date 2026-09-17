@@ -64,40 +64,6 @@ func TestGetModelRequest_VideosPost(t *testing.T) {
 	require.Equal(t, "sora-2", req.Model)
 }
 
-func TestGetModelRequest_SunoSubmit(t *testing.T) {
-	r := gin.New()
-	var model string
-	var shouldSelect bool
-	r.POST("/suno/submit/:action", func(c *gin.Context) {
-		req, ss, err := getModelRequest(c)
-		require.NoError(t, err)
-		model = req.Model
-		shouldSelect = ss
-		require.Equal(t, string(constant.TaskPlatformSuno), c.GetString("platform"))
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/suno/submit/music", strReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
-	require.True(t, shouldSelect)
-	require.NotEmpty(t, model)
-}
-
-func TestGetModelRequest_SunoFetchNoSelect(t *testing.T) {
-	r := gin.New()
-	var shouldSelect bool
-	r.GET("/suno/fetch/:id", func(c *gin.Context) {
-		_, ss, err := getModelRequest(c)
-		require.NoError(t, err)
-		shouldSelect = ss
-		c.Status(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/suno/fetch/abc", nil))
-	require.False(t, shouldSelect)
-}
-
 func TestGetModelRequest_ResponsesCompactSuffix(t *testing.T) {
 	ctx := prepModelReqCtx(t, http.MethodPost, "/v1/responses/compact", "application/json", `{"model":"gpt-4o"}`)
 	req, _, err := getModelRequest(ctx)

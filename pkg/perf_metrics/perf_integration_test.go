@@ -203,7 +203,7 @@ func TestFlushCompletedBuckets_DropsEmptyOldBucket(t *testing.T) {
 	requireDB(t)
 	resetHotBuckets(t)
 	// Empty bucket older than 24h => drained (0 rows) then deleted from hotBuckets.
-	old := bucketStart(time.Now().Add(-48*time.Hour).Unix())
+	old := bucketStart(time.Now().Add(-48 * time.Hour).Unix())
 	hotBuckets.Store(bucketKey{model: "flush-empty", group: "g", bucketTs: old}, &atomicBucket{})
 
 	flushCompletedBuckets()
@@ -220,7 +220,7 @@ func TestFlushCompletedBuckets_DropsEmptyOldBucket(t *testing.T) {
 
 func TestDeleteOldEmptyBucket(t *testing.T) {
 	resetHotBuckets(t)
-	oldTs := bucketStart(time.Now().Add(-48*time.Hour).Unix())
+	oldTs := bucketStart(time.Now().Add(-48 * time.Hour).Unix())
 	recentTs := currentBucketTs()
 	oldKey := bucketKey{model: "d", group: "g", bucketTs: oldTs}
 	recentKey := bucketKey{model: "d", group: "g", bucketTs: recentTs}
@@ -295,7 +295,7 @@ func TestQuerySummaryAll_RanksByRequestCount(t *testing.T) {
 	require.GreaterOrEqual(t, len(res.Models), 2)
 	assert.Equal(t, "big", res.Models[0].ModelName, "highest request count ranks first")
 	assert.InDelta(t, 90.0, res.Models[0].SuccessRate, 0.01)
-	assert.NotEmpty(t, res.Models[0].RecentSuccessRates)
+	assert.NotEmpty(t, res.Models[0].RecentSuccessSeries)
 }
 
 func TestQuerySummaryAll_HotBucketsAndGroupFilter(t *testing.T) {

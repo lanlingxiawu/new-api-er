@@ -206,7 +206,7 @@ func buildAwsRequestBody(c *gin.Context, info *relaycommon.RelayInfo, awsClaudeR
 		if err != nil {
 			return nil, errors.Wrap(err, "get request body bytes fail")
 		}
-		var data map[string]interface{}
+		var data map[string]any
 		if err := common.Unmarshal(body, &data); err != nil {
 			return nil, errors.Wrap(err, "pass-through unmarshal request body fail")
 		}
@@ -326,6 +326,8 @@ streamLoop:
 			switch v := event.(type) {
 			case *bedrockruntimeTypes.ResponseStreamMemberChunk:
 				info.SetFirstResponseTime()
+				// 计入已收上游事件，收尾时的零响应保护据此区分“上游无数据”与正常流，避免有数据的流被清零用量。
+				info.ReceivedResponseCount++
 				// SDK 原始二进制由 HTTP 包装采集；协议观察使用解码后的原始 JSON，早于 Claude 改写。
 				if observeErr := info.StreamSession.ObserveEvent("", v.Value.Bytes); observeErr != nil {
 					return types.NewError(observeErr, types.ErrorCodeBadResponseBody), nil

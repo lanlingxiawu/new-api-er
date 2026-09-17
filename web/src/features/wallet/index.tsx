@@ -33,7 +33,7 @@ import { WechatPayDialog } from './components/dialogs/wechat-pay-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
-import { DEFAULT_DISCOUNT_RATE } from './constants'
+import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from './constants'
 import {
   useTopupInfo,
   usePayment,
@@ -48,7 +48,7 @@ import {
 import {
   getDefaultPaymentType,
   getMinTopupAmount,
-  isWaffoPancakePayment,
+  dispatchSelectedPayment,
   isWechatOfficialPayment,
 } from './lib'
 import { getEnabledPaymentMethods } from './lib/billing'
@@ -57,6 +57,7 @@ import type {
   PaymentMethod,
   PresetAmount,
   CreemProduct,
+  WaffoPayMethod,
 } from './types'
 
 interface WalletProps {
@@ -71,6 +72,9 @@ export function Wallet(props: WalletProps) {
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
     useState<PaymentMethod>()
+  const [selectedWaffoMethodIndex, setSelectedWaffoMethodIndex] = useState<
+    number | null
+  >(null)
   const [paymentLoading, setPaymentLoading] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
@@ -109,7 +113,7 @@ export function Wallet(props: WalletProps) {
   } = useAffiliate()
   const { redeeming, redeemCode } = useRedemption()
   const { processing: creemProcessing, processCreemPayment } = useCreemPayment()
-  const { processWaffoPayment } = useWaffoPayment()
+  const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
   const {
@@ -184,6 +188,7 @@ export function Wallet(props: WalletProps) {
   // Handle payment method selection
   const handlePaymentMethodSelect = async (method: PaymentMethod) => {
     setSelectedPaymentMethod(method)
+    setSelectedWaffoMethodIndex(null)
     setPaymentLoading(method.type)
 
     try {
@@ -215,10 +220,16 @@ export function Wallet(props: WalletProps) {
       return
     }
 
-    const isPancake = isWaffoPancakePayment(selectedPaymentMethod.type)
-    const success = isPancake
-      ? await processWaffoPancakePayment(topupAmount)
-      : await processPayment(topupAmount, selectedPaymentMethod.type, selectedPaymentMethod.currency)
+    const success = await dispatchSelectedPayment(
+      selectedPaymentMethod,
+      topupAmount,
+      selectedWaffoMethodIndex,
+      {
+        regular: processPayment,
+        waffo: processWaffoPayment,
+        waffoPancake: processWaffoPancakePayment,
+      }
+    )
 
     if (success) {
       setConfirmDialogOpen(false)
@@ -276,12 +287,22 @@ export function Wallet(props: WalletProps) {
     }
   }
 
-  const handleWaffoMethodSelect = async (_method: unknown, index: number) => {
+  const handleWaffoMethodSelect = async (
+    method: WaffoPayMethod,
+    index: number
+  ) => {
     const loadingKey = `waffo-${index}`
+    setSelectedPaymentMethod({
+      name: method.name,
+      type: PAYMENT_TYPES.WAFFO,
+      icon: method.icon,
+    })
+    setSelectedWaffoMethodIndex(index)
     setPaymentLoading(loadingKey)
 
     try {
-      await processWaffoPayment(topupAmount, index)
+      await calculatePaymentAmount(topupAmount, PAYMENT_TYPES.WAFFO)
+      setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
     }
@@ -377,7 +398,9 @@ export function Wallet(props: WalletProps) {
         paymentAmount={paymentAmount}
         paymentMethod={selectedPaymentMethod}
         calculating={calculating}
-        processing={processing || pancakeProcessing || wechatProcessing}
+        processing={
+          processing || waffoProcessing || pancakeProcessing || wechatProcessing
+        }
         discountRate={getDiscountRate()}
         usdExchangeRate={effectiveUsdExchangeRate}
         binanceRate={binanceRate}

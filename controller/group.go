@@ -24,7 +24,7 @@ func GetGroups(c *gin.Context) {
 }
 
 func GetUserGroups(c *gin.Context) {
-	usableGroups := make(map[string]map[string]interface{})
+	usableGroups := make(map[string]map[string]any)
 	userId := c.GetInt("id")
 	// Fetch the user cache once and reuse both the group and the parsed
 	// exclusive ratios across the loop below, instead of re-reading the cache
@@ -40,14 +40,14 @@ func GetUserGroups(c *gin.Context) {
 		// UserUsableGroups contains the groups that the user can use
 		if desc, ok := userUsableGroups[groupName]; ok {
 			ratio, _ := ratio_setting.ResolveGroupRatio(userRatios, userGroup, groupName)
-			usableGroups[groupName] = map[string]interface{}{
+			usableGroups[groupName] = map[string]any{
 				"ratio": ratio,
 				"desc":  desc,
 			}
 		}
 	}
 	if _, ok := userUsableGroups["auto"]; ok {
-		usableGroups["auto"] = map[string]interface{}{
+		usableGroups["auto"] = map[string]any{
 			"ratio": "自动",
 			"desc":  setting.GetUsableGroupDescription("auto"),
 		}

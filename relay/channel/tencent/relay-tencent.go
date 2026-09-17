@@ -94,7 +94,7 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 // tencentStreamHandler 转换腾讯 SSE；c 为输出上下文，info 保存计量/异常，resp 为已接入原始观察的响应。
 // 受管 DTO/输出错误在来源处登记并停止，正常完成后的读取错误交由 EndRead 忽略；旧路径保留软错误行为。
 func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	var responseText string
+	var responseText strings.Builder
 	receivedResponseCount := 0
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
@@ -123,7 +123,7 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 
 		response := streamResponseTencent2OpenAI(&tencentResponse)
 		if len(response.Choices) != 0 {
-			responseText += response.Choices[0].Delta.GetContentString()
+			responseText.WriteString(response.Choices[0].Delta.GetContentString())
 		}
 
 		err = helper.ObjectData(c, response)
@@ -145,7 +145,7 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 
 	service.CloseResponseBodyGracefully(resp)
 
-	return service.ResponseText2UsageFromStream(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens(), receivedResponseCount), nil
+	return service.ResponseText2UsageFromStream(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens(), receivedResponseCount), nil
 }
 
 func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

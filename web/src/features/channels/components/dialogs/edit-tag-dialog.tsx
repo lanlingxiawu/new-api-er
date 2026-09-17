@@ -24,27 +24,22 @@ import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { GroupBadge } from '@/components/group-badge'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Textarea } from '@/components/ui/textarea'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
 import { getCurrencyLabel } from '@/lib/currency'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -91,21 +86,24 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
   // Fetch tag models
   const { data: tagModelsData, isLoading: isLoadingTagModels } = useQuery({
     queryKey: ['tag-models', currentTag],
-    queryFn: () => (currentTag ? getTagModels(currentTag) : null),
+    queryFn: async () =>
+      requireServerSuccess(
+        await (currentTag ? getTagModels(currentTag) : null)
+      ),
     enabled: open && !!currentTag,
   })
 
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['all-models'],
-    queryFn: getAllModels,
+    queryFn: async () => requireServerSuccess(await getAllModels()),
     enabled: open,
   })
 
   // Fetch groups
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
-    queryFn: getGroups,
+    queryFn: async () => requireServerSuccess(await getGroups()),
     enabled: open,
   })
 
@@ -243,12 +241,10 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
         onOpenChange(false)
       } else {
-        toast.error(response.message || t('Failed to update tag'))
+        handleServerError(response, t('Failed to update tag'))
       }
     } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to update tag')
-      )
+      handleServerError(error, t('Failed to update tag'))
     } finally {
       setIsSubmitting(false)
     }
@@ -347,35 +343,20 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
                 </div>
 
                 <div className='flex gap-2'>
-                  <Select<string>
-                    items={availableModels.map((model) => ({
-                        value: model,
-                        label: model,
-                      }))}
-                    onValueChange={(value) => {
-                      if (value === null) return
-                      if (!selectedModels.includes(value)) {
+                  <Combobox
+                    options={availableModels.map((model) => ({
+                      value: model,
+                      label: model,
+                    }))}
+                    onValueChange={(value: string | null) => {
+                      if (value !== null && !selectedModels.includes(value)) {
                         setSelectedModels([...selectedModels, value])
                       }
                     }}
-                  >
-                    <SelectTrigger className='flex-1'>
-                      <SelectValue
-                        placeholder={t('Add from available models...')}
-                      />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        <ScrollArea className='h-60'>
-                          {availableModels.map((model) => (
-                            <SelectItem key={model} value={model}>
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </ScrollArea>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                    className='flex-1'
+                    placeholder={t('Add from available models...')}
+                    aria-label={t('Add from available models...')}
+                  />
                 </div>
 
                 <div className='flex gap-2'>
@@ -412,13 +393,12 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
                 {t('(Optional: redirect model names)')}
               </span>
             </Label>
-            <Textarea
+            <JsonCodeEditor
               id='model-mapping'
               value={modelMapping}
-              onChange={(e) => setModelMapping(e.target.value)}
+              onChange={setModelMapping}
               placeholder={'{\n  "gpt-3.5-turbo": "gpt-3.5-turbo-0125"\n}'}
-              rows={4}
-              className='font-mono text-sm'
+              heightClassName='h-40 min-h-40 max-h-40'
             />
             <div className='flex gap-2'>
               <Button

@@ -19,7 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -415,23 +414,16 @@ func logExportFilterScope(filter model.LogExportFilter) string {
 	return strings.Join(parts, " ")
 }
 
-// recordLogExportAudit 异步写一条管理员操作审计日志，失败不影响主流程。
-func recordLogExportAudit(c *gin.Context, action, content string, params map[string]interface{}) {
-	operatorID := c.GetInt("id")
-	adminInfo := map[string]interface{}{
-		"admin_id":       operatorID,
-		"admin_username": c.GetString("username"),
-		"admin_role":     c.GetInt("role"),
+// recordLogExportAudit 写一条管理员操作审计日志，写入失败只记系统日志，不影响导出。
+func recordLogExportAudit(c *gin.Context, action, content string, params map[string]any) {
+	auditInfo := &model.AuditRequestInfo{
+		Method:  c.Request.Method,
+		Route:   c.FullPath(),
+		Path:    c.Request.URL.Path,
+		Status:  http.StatusOK,
+		Success: true,
 	}
-	auditInfo := map[string]interface{}{
-		"method": c.Request.Method,
-		"route":  c.FullPath(),
-		"path":   c.Request.URL.Path,
-	}
-	ip := c.ClientIP()
-	gopool.Go(func() {
-		model.RecordOperationAuditLog(operatorID, content, ip, action, params, adminInfo, auditInfo)
-	})
+	model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), content, c.ClientIP(), action, params, auditOperatorInfo(c), auditInfo, c)
 }
 
 // resolveLogExportRequestShape 归并 columns / template_id / format / options。

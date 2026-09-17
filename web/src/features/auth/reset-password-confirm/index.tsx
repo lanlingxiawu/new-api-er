@@ -29,6 +29,9 @@ import { Label } from '@/components/ui/label'
 import { useCountdown } from '@/hooks/use-countdown'
 import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { handleServerError } from '@/lib/handle-server-error'
+import { AuthOperationError } from '@/lib/secure-verification'
+import { createServerError } from '@/lib/server-error-message'
 
 import { AuthLayout } from '../auth-layout'
 
@@ -82,9 +85,11 @@ export function ResetPasswordConfirm({
         } else {
           toast.success(t('Password reset: {{password}}', { password }))
         }
+      } else {
+        handleServerError(createServerError(res.data, t('Request failed')))
       }
-    } catch {
-      // Errors handled by global interceptor
+    } catch (error) {
+      handleServerError(AuthOperationError.from(error))
     } finally {
       setLoading(false)
     }
@@ -103,17 +108,6 @@ export function ResetPasswordConfirm({
       )
       setTimeout(() => setCopied(false), 2000)
     }
-  }
-
-  let submitLabel: string
-  if (newPassword) {
-    submitLabel = t('auth.resetPasswordConfirm.backToLogin')
-  } else if (isActive) {
-    submitLabel = t('auth.resetPasswordConfirm.retry', {
-      seconds: secondsLeft,
-    })
-  } else {
-    submitLabel = t('auth.resetPasswordConfirm.confirm')
   }
 
   return (
@@ -190,7 +184,15 @@ export function ResetPasswordConfirm({
               newPassword ? false : loading || isActive || !isValidResetLink
             }
           >
-            {submitLabel}
+            {newPassword && t('auth.resetPasswordConfirm.backToLogin')}
+            {!newPassword &&
+              isActive &&
+              t('auth.resetPasswordConfirm.retry', {
+                seconds: secondsLeft,
+              })}
+            {!newPassword &&
+              !isActive &&
+              t('auth.resetPasswordConfirm.confirm')}
           </Button>
 
           {!newPassword && (

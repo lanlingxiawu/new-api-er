@@ -20,9 +20,12 @@ import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
+import { handleServerError } from '@/lib/handle-server-error'
+
 import {
   calculateAmount,
   calculateStripeAmount,
+  calculateWaffoAmount,
   calculateWaffoPancakeAmount,
   calculateAlipayAmount,
   calculateWechatAmount,
@@ -32,9 +35,11 @@ import {
   requestAlipayPayment,
   requestInfiniPayment,
   isApiSuccess,
+  type InfiniAmountRequest,
 } from '../api'
 import {
   isStripePayment,
+  isWaffoPayment,
   isWaffoPancakePayment,
   isAlipayOfficialPayment,
   isWechatOfficialPayment,
@@ -42,37 +47,91 @@ import {
   isSafeHttpCheckoutUrl,
   submitPaymentForm,
 } from '../lib'
-
-// 按支付方式选择对应的金额计算接口
-function requestPaymentAmount(
-  topupAmount: number,
-  paymentType: string,
-  infiniCurrency?: string
-) {
-  if (isStripePayment(paymentType)) {
-    return calculateStripeAmount({ amount: topupAmount })
-  }
-  if (isWaffoPancakePayment(paymentType)) {
-    return calculateWaffoPancakeAmount({ amount: topupAmount })
-  }
-  if (isAlipayOfficialPayment(paymentType)) {
-    return calculateAlipayAmount({ amount: topupAmount })
-  }
-  if (isWechatOfficialPayment(paymentType)) {
-    return calculateWechatAmount({ amount: topupAmount })
-  }
-  if (isInfiniPayment(paymentType)) {
-    return calculateInfiniAmount({
-      amount: topupAmount,
-      currency: infiniCurrency,
-    })
-  }
-  return calculateAmount({ amount: topupAmount })
-}
+import type { AmountResponse } from '../types'
 
 // ============================================================================
 // Payment Hook
 // ============================================================================
+
+type AmountCalculator = (
+  request: InfiniAmountRequest
+) => Promise<AmountResponse>
+
+export interface PaymentAmountCalculators {
+  regular: AmountCalculator
+  stripe: AmountCalculator
+  waffo: AmountCalculator
+  waffoPancake: AmountCalculator
+  alipay?: AmountCalculator
+  wechat?: AmountCalculator
+  infini?: AmountCalculator
+}
+
+const defaultPaymentAmountCalculators: Required<PaymentAmountCalculators> = {
+  regular: calculateAmount,
+  stripe: calculateStripeAmount,
+  waffo: calculateWaffoAmount,
+  waffoPancake: calculateWaffoPancakeAmount,
+  alipay: calculateAlipayAmount,
+  wechat: calculateWechatAmount,
+  infini: calculateInfiniAmount,
+}
+
+export interface PaymentQuote {
+  amount: number
+  // 后端在报价时锁定的到账折算汇率（元/美金），仅动态汇率支付（Stripe/Infini）返回；其它为 0
+  rate: number
+}
+
+// 按支付方式选择对应的金额计算接口
+export async function requestPaymentQuote(
+  topupAmount: number,
+  paymentType: string,
+  infiniCurrency?: string,
+  calculators: PaymentAmountCalculators = defaultPaymentAmountCalculators
+): Promise<PaymentQuote> {
+  const request: InfiniAmountRequest = { amount: topupAmount }
+  let calculator = calculators.regular
+  if (isStripePayment(paymentType)) {
+    calculator = calculators.stripe
+  } else if (isWaffoPayment(paymentType)) {
+    calculator = calculators.waffo
+  } else if (isWaffoPancakePayment(paymentType)) {
+    calculator = calculators.waffoPancake
+  } else if (isAlipayOfficialPayment(paymentType)) {
+    calculator = calculators.alipay ?? defaultPaymentAmountCalculators.alipay
+  } else if (isWechatOfficialPayment(paymentType)) {
+    calculator = calculators.wechat ?? defaultPaymentAmountCalculators.wechat
+  } else if (isInfiniPayment(paymentType)) {
+    calculator = calculators.infini ?? defaultPaymentAmountCalculators.infini
+    request.currency = infiniCurrency
+  }
+
+  const response = await calculator(request)
+  if (!isApiSuccess(response) || !response.data) {
+    return { amount: 0, rate: 0 }
+  }
+
+  const rate = Number((response as { exchange_rate?: number }).exchange_rate)
+  return {
+    amount: Number.parseFloat(response.data),
+    rate: Number.isFinite(rate) && rate > 0 ? rate : 0,
+  }
+}
+
+export async function requestPaymentAmount(
+  topupAmount: number,
+  paymentType: string,
+  calculators: PaymentAmountCalculators = defaultPaymentAmountCalculators
+): Promise<number> {
+  const quote = await requestPaymentQuote(
+    topupAmount,
+    paymentType,
+    undefined,
+    calculators
+  )
+  return quote.amount
+}
 
 export function usePayment() {
   const [amount, setAmount] = useState<number>(0)
@@ -93,27 +152,15 @@ export function usePayment() {
       try {
         setCalculating(true)
 
-        const response = await requestPaymentAmount(
+        // Don't show error for calculation; a failed quote resolves to 0
+        const quote = await requestPaymentQuote(
           topupAmount,
           paymentType,
           infiniCurrency
         )
-
-        if (isApiSuccess(response) && response.data) {
-          const calculatedAmount = Number.parseFloat(response.data)
-          setAmount(calculatedAmount)
-          // 动态汇率支付会附带 exchange_rate（后端锁定的到账折算汇率）；其它支付方式无此字段。
-          const rate = Number(
-            (response as { exchange_rate?: number }).exchange_rate
-          )
-          setPaymentRate(Number.isFinite(rate) && rate > 0 ? rate : 0)
-          return calculatedAmount
-        }
-
-        // Don't show error for calculation, just set to 0
-        setAmount(0)
-        setPaymentRate(0)
-        return 0
+        setAmount(quote.amount)
+        setPaymentRate(quote.rate)
+        return quote.amount
       } catch {
         setAmount(0)
         setPaymentRate(0)
@@ -219,7 +266,7 @@ export function usePayment() {
         })
 
         if (!isApiSuccess(response)) {
-          toast.error(response.message || i18next.t('Payment request failed'))
+          handleServerError(response, i18next.t('Payment request failed'))
           return false
         }
 
@@ -233,8 +280,8 @@ export function usePayment() {
         }
 
         return false
-      } catch {
-        toast.error(i18next.t('Payment request failed'))
+      } catch (error) {
+        handleServerError(error, i18next.t('Payment request failed'))
         return false
       } finally {
         setProcessing(false)

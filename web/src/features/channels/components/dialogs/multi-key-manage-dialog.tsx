@@ -41,6 +41,7 @@ import {
   ADMIN_PERMISSION_RESOURCES,
   hasPermission,
 } from '@/lib/admin-permissions'
+import { handleServerError } from '@/lib/handle-server-error'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -137,12 +138,10 @@ export function MultiKeyManageDialog({
         setManualDisabledCount(response.data.manual_disabled_count || 0)
         setAutoDisabledCount(response.data.auto_disabled_count || 0)
       } else {
-        toast.error(response.message || t('Failed to load key status'))
+        handleServerError(response, t('Failed to load key status'))
       }
     } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to load key status')
-      )
+      handleServerError(error, t('Failed to load key status'))
     } finally {
       setIsLoading(false)
     }
@@ -204,12 +203,10 @@ export function MultiKeyManageDialog({
           loadKeyStatus(currentPage, pageSize)
         }
       } else {
-        toast.error(response?.message || t('Operation failed'))
+        handleServerError(response, t('Operation failed'))
       }
     } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
+      handleServerError(error, t('Operation failed'))
     } finally {
       setIsPerformingAction(false)
       setConfirmAction(null)
@@ -234,73 +231,6 @@ export function MultiKeyManageDialog({
   }
 
   if (!currentRow) return null
-
-  const renderKeysTable = () => {
-    if (isLoading) {
-      return (
-        <div className='flex items-center justify-center py-12'>
-          <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
-        </div>
-      )
-    }
-    if (keys.length === 0) {
-      return (
-        <div className='text-muted-foreground py-12 text-center'>
-          {t('No keys found')}
-        </div>
-      )
-    }
-    return (
-      <StaticDataTable
-        className='rounded-none border-0'
-        tableClassName='min-w-[800px]'
-        data={keys}
-        getRowKey={(key) => key.index}
-        columns={[
-          {
-            id: 'index',
-            header: t('Index'),
-            className: 'w-20',
-            cellClassName: 'font-mono text-sm',
-            cell: (key) => `#${key.index + 1}`,
-          },
-          {
-            id: 'status',
-            header: t('Status'),
-            className: 'w-32',
-            cell: (key) => renderStatusBadge(key.status),
-          },
-          {
-            id: 'reason',
-            header: t('Disabled Reason'),
-            className: 'min-w-[200px]',
-            cellClassName: 'max-w-xs truncate text-sm',
-            cell: (key) => key.reason || '-',
-          },
-          {
-            id: 'disabled-time',
-            header: t('Disabled Time'),
-            className: 'w-44',
-            cellClassName: 'text-muted-foreground text-sm',
-            cell: (key) => formatKeyTimestamp(key.disabled_time),
-          },
-          {
-            id: 'actions',
-            header: t('Actions'),
-            className: 'text-right',
-            cell: (key) => (
-              <MultiKeyTableRowActions
-                keyIndex={key.index}
-                status={key.status}
-                canDelete={canEditSensitive}
-                onAction={setConfirmAction}
-              />
-            ),
-          },
-        ]}
-      />
-    )
-  }
 
   return (
     <>
@@ -362,9 +292,9 @@ export function MultiKeyManageDialog({
           <div className='flex shrink-0 items-center justify-between'>
             <Select
               items={MULTI_KEY_FILTER_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: t(option.label),
-                }))}
+                value: option.value,
+                label: t(option.label),
+              }))}
               value={statusFilter === null ? 'all' : statusFilter.toString()}
               onValueChange={(v) => v !== null && handleStatusFilterChange(v)}
             >
@@ -443,7 +373,66 @@ export function MultiKeyManageDialog({
 
           {/* Table */}
           <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
-            {renderKeysTable()}
+            {isLoading && (
+              <div className='flex items-center justify-center py-12'>
+                <Loader2 className='text-muted-foreground h-8 w-8 animate-spin' />
+              </div>
+            )}
+            {!isLoading && keys.length === 0 && (
+              <div className='text-muted-foreground py-12 text-center'>
+                {t('No keys found')}
+              </div>
+            )}
+            {!isLoading && !(keys.length === 0) && (
+              <StaticDataTable
+                className='rounded-none border-0'
+                tableClassName='min-w-[800px]'
+                data={keys}
+                getRowKey={(key) => key.index}
+                columns={[
+                  {
+                    id: 'index',
+                    header: t('Index'),
+                    className: 'w-20',
+                    cellClassName: 'font-mono text-sm',
+                    cell: (key) => `#${key.index + 1}`,
+                  },
+                  {
+                    id: 'status',
+                    header: t('Status'),
+                    className: 'w-32',
+                    cell: (key) => renderStatusBadge(key.status),
+                  },
+                  {
+                    id: 'reason',
+                    header: t('Disabled Reason'),
+                    className: 'min-w-[200px]',
+                    cellClassName: 'max-w-xs truncate text-sm',
+                    cell: (key) => key.reason || '-',
+                  },
+                  {
+                    id: 'disabled-time',
+                    header: t('Disabled Time'),
+                    className: 'w-44',
+                    cellClassName: 'text-muted-foreground text-sm',
+                    cell: (key) => formatKeyTimestamp(key.disabled_time),
+                  },
+                  {
+                    id: 'actions',
+                    header: t('Actions'),
+                    className: 'text-right',
+                    cell: (key) => (
+                      <MultiKeyTableRowActions
+                        keyIndex={key.index}
+                        status={key.status}
+                        canDelete={canEditSensitive}
+                        onAction={setConfirmAction}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            )}
           </div>
 
           {/* Pagination */}

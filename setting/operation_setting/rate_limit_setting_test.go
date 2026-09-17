@@ -114,6 +114,15 @@ func TestRateLimitDraftAccessIsSerialized(t *testing.T) {
 	t.Cleanup(func() { ReplaceRateLimitSetting(original) })
 
 	const writers, readers, rounds = 4, 4, 500
+	// 读者可能先于任何写者运行；先写入一份字段一致的初值，避免把默认配置
+	// （各字段本就不同）误判为撕裂读。
+	baseline := original
+	baseline.GlobalAPINum = writers + 1
+	baseline.GlobalAPIDurationSec = writers + 1
+	baseline.CriticalNum = writers + 1
+	baseline.SearchNum = writers + 1
+	baseline.LogExportNum = writers + 1
+	ReplaceRateLimitSetting(baseline)
 	var writersWG, observersWG sync.WaitGroup
 	stop := make(chan struct{})
 

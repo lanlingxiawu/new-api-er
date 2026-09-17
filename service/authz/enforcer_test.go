@@ -165,3 +165,90 @@ func TestStartPolicySync_NonPositiveFrequencyReturns(t *testing.T) {
 // global enforcer, racing every subsequent test in this package. Covering it
 // safely would require a source change (a stop signal), which is out of scope
 // for a tests-only task. The guard (frequency <= 0) is fully covered above.
+
+// Ported from upstream authz_test.go: legacy own/other scoped rows must load
+// as deny on both master and slave, and stored rows stay untouched.
+func TestLegacyScopedPoliciesDoNotExpandPermissions(t *testing.T) {
+	for _, master := range []bool{true, false} {
+		name := "master"
+		if !master {
+			name = "slave"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := newAuthzTestDB(t)
+			common.IsMasterNode = master
+			rules := []model.CasbinRule{
+				{Ptype: "p", V0: "role:vendor", V1: "channel", V2: "read", V3: "allow", V4: "own"},
+				{Ptype: "p", V0: UserSubject(42), V1: "channel", V2: "read", V3: "allow", V4: "own"},
+				{Ptype: "p", V0: UserSubject(43), V1: "channel", V2: "sensitive_write", V3: "allow", V4: "all"},
+				{Ptype: "p", V0: UserSubject(44), V1: "channel", V2: "secret_view", V3: "deny", V4: "all"},
+				{Ptype: "p", V0: UserSubject(45), V1: "channel", V2: "read"},
+				{Ptype: "p", V0: UserSubject(46), V1: "channel", V2: "read", V3: "allow", V4: "unknown-scope"},
+				{Ptype: "p", V0: UserSubject(47), V1: "channel", V2: "read", V3: "allow", V5: "own"},
+				{Ptype: "p", V0: UserSubject(48), V1: "channel", V2: "read", V3: "allow", V4: "own"},
+				{Ptype: "p", V0: UserSubject(48), V1: "channel", V2: "read", V3: "allow", V4: "all"},
+				{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "operate", V3: "allow", V4: "own"},
+				{Ptype: "p", V0: UserSubject(50), V1: "channel", V2: "sensitive_write", V3: "allow"},
+				{Ptype: "g", V0: UserSubject(99), V1: RoleSubject(BuiltInRoleAdmin)},
+			}
+			require.NoError(t, db.Create(&rules).Error)
+			ids := make([]uint, len(rules))
+			for i := range rules {
+				ids[i] = rules[i].Id
+			}
+			for range 2 {
+				require.NoError(t, Init(db))
+				require.NoError(t, ReloadPolicy())
+				assert.False(t, Can(42, common.RoleAdminUser, ChannelRead), "own must not fall back to the admin allow baseline")
+				assert.True(t, Can(43, common.RoleAdminUser, ChannelSensitiveWrite))
+				assert.False(t, Can(44, common.RoleAdminUser, ChannelSecretView))
+				assert.True(t, Can(45, common.RoleAdminUser, ChannelRead))
+				for _, userID := range []int{46, 47, 48} {
+					assert.False(t, Can(userID, common.RoleAdminUser, ChannelRead))
+				}
+				assert.False(t, Can(51, common.RoleAdminUser, ChannelOperate), "reseed must not erase a scoped role restriction")
+				assert.True(t, Can(50, common.RoleAdminUser, ChannelSensitiveWrite))
+				assert.False(t, Can(99, common.RoleCommonUser, ChannelRead))
+				var stored []model.CasbinRule
+				require.NoError(t, db.Where("id IN ?", ids).Order("id").Find(&stored).Error)
+				assert.Equal(t, rules, stored, "legacy rows must remain available for administrator review")
+			}
+		})
+	}
+}
+
+// Ported from upstream authz_test.go: task plugin bind has no default roles.
+func TestTaskPluginBindIsRootOnlyUntilGranted(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+
+	var bindAction *ActionDefinition
+	for _, resource := range Catalog() {
+		if resource.Resource != ResourceTaskPlugin {
+			continue
+		}
+		assert.Equal(t, "Task Plugin", resource.LabelKey)
+		for i := range resource.Actions {
+			if resource.Actions[i].Action == ActionBind {
+				bindAction = &resource.Actions[i]
+			}
+		}
+	}
+	require.NotNil(t, bindAction)
+	assert.Equal(t, "Bind task plugins", bindAction.LabelKey)
+	assert.Equal(t, "List registered task plugins and bind them when creating or editing task plugin channels.", bindAction.DescriptionKey)
+	assert.Empty(t, bindAction.DefaultRoles)
+
+	assert.False(t, Can(2, common.RoleAdminUser, TaskPluginBind))
+	assert.True(t, Can(1, common.RoleRootUser, TaskPluginBind))
+
+	enforcer := currentEnforcer()
+	require.NotNil(t, enforcer)
+	_, err := enforcer.AddPolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
+	require.NoError(t, err)
+	assert.True(t, Can(2, common.RoleAdminUser, TaskPluginBind))
+
+	_, err = enforcer.RemovePolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
+	require.NoError(t, err)
+	assert.False(t, Can(2, common.RoleAdminUser, TaskPluginBind))
+}

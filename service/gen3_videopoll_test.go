@@ -34,8 +34,8 @@ type videoStatusAdaptor struct {
 
 func (a *videoStatusAdaptor) Init(_ *relaycommon.RelayInfo) {}
 
-func (a *videoStatusAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
-	taskID, _ := body["task_id"].(string)
+func (a *videoStatusAdaptor) FetchTask(_ string, _ string, task *model.Task, _ string) (*http.Response, error) {
+	taskID := task.GetUpstreamTaskID()
 	resp := dto.TaskResponse[model.Task]{
 		Code: dto.TaskSuccessCode,
 		Data: model.Task{
@@ -55,7 +55,7 @@ func (a *videoStatusAdaptor) FetchTask(_ string, _ string, body map[string]any, 
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(b))}, nil
 }
 
-func (a *videoStatusAdaptor) ParseTaskResult(_ []byte) (*relaycommon.TaskInfo, error) {
+func (a *videoStatusAdaptor) ParseTaskResult(_ *model.Task, _ *http.Response, _ []byte) (*relaycommon.TaskInfo, error) {
 	return &relaycommon.TaskInfo{Status: string(a.status)}, nil
 }
 
@@ -70,7 +70,7 @@ func seedVideoBillingTask(t *testing.T, channelID int, userID, tokenID, quota in
 		Platform:  constant.TaskPlatform("kling"),
 		UserId:    userID,
 		ChannelId: channelID,
-		Action:    constant.TaskActionGenerate,
+		Action:    constant.TaskActionImageToVideo,
 		Status:    model.TaskStatusInProgress,
 		Progress:  "30%",
 		Quota:     quota,

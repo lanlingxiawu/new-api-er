@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -50,7 +51,7 @@ func TestLoginfoGenerateTextOtherInfo_BasicRatios(t *testing.T) {
 	c := loginfoNewCtx()
 	ri := loginfoBaseRelayInfo()
 
-	other := GenerateTextOtherInfo(c, ri, 2.5, 1.5, 3.0, 42, 0.25, 0.01, 0.9)
+	other := GenerateTextOtherInfo(c, ri, 2.5, 1.5, 3.0, 42, 0.25, 0.01, 0.9).Snapshot()
 
 	// Core ratio / price fields carried verbatim from the arguments.
 	assert.Equal(t, 2.5, other["model_ratio"])
@@ -83,7 +84,7 @@ func TestLoginfoGenerateTextOtherInfo_DoesNotRecordNegativeFirstResponseTime(t *
 	ri.StartTime = start
 	ri.FirstResponseTime = start.Add(-time.Second)
 
-	other := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1)
+	other := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1).Snapshot()
 
 	assert.Equal(t, float64(0), other["frt"])
 }
@@ -101,7 +102,7 @@ func TestLoginfoGenerateTextOtherInfo_OptionalFields(t *testing.T) {
 	// the same ChannelMeta instance so the second assignment doesn't clobber the first.
 	ri.ChannelMeta = &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o-upstream", IsModelMapped: true}
 
-	other := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1)
+	other := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1).Snapshot()
 
 	assert.Equal(t, "high", other["reasoning_effort"])
 	assert.Equal(t, true, other["is_model_mapped"])
@@ -127,7 +128,7 @@ func TestLoginfoGenerateClaudeOtherInfo_WithCacheCreationBuckets(t *testing.T) {
 		20, 1.25, // cacheCreation
 		5, 1.1, // 5m
 		8, 2.2, // 1h
-		0.02, 0.8)
+		0.02, 0.8).Snapshot()
 
 	assert.Equal(t, true, other["claude"])
 	// Inherited from the text builder.
@@ -151,7 +152,7 @@ func TestLoginfoGenerateClaudeOtherInfo_ZeroCacheBucketsOmitted(t *testing.T) {
 		20, 1.25, // cacheCreation always present
 		0, 9.9, // 5m tokens == 0 -> both 5m keys omitted
 		0, 9.9, // 1h tokens == 0 -> both 1h keys omitted
-		0.02, 0.8)
+		0.02, 0.8).Snapshot()
 
 	assert.Equal(t, true, other["claude"])
 	assert.Equal(t, 20, other["cache_creation_tokens"])
@@ -176,7 +177,7 @@ func TestLoginfoGenerateAudioOtherInfo(t *testing.T) {
 	usage.CompletionTokenDetails.AudioTokens = 33
 	usage.CompletionTokenDetails.TextTokens = 44
 
-	other := GenerateAudioOtherInfo(c, ri, usage, 2, 1, 3, 4.0, 5.0, 0.02, 0.8)
+	other := GenerateAudioOtherInfo(c, ri, usage, 2, 1, 3, 4.0, 5.0, 0.02, 0.8).Snapshot()
 
 	assert.Equal(t, true, other["audio"])
 	assert.Equal(t, 11, other["audio_input"])
@@ -203,7 +204,7 @@ func TestLoginfoGenerateWssOtherInfo(t *testing.T) {
 	usage.OutputTokenDetails.AudioTokens = 300
 	usage.OutputTokenDetails.TextTokens = 400
 
-	other := GenerateWssOtherInfo(c, ri, usage, 2, 1, 3, 6.0, 7.0, 0.02, 0.8)
+	other := GenerateWssOtherInfo(c, ri, usage, 2, 1, 3, 6.0, 7.0, 0.02, 0.8).Snapshot()
 
 	assert.Equal(t, true, other["ws"])
 	assert.Equal(t, 100, other["audio_input"])
@@ -230,7 +231,7 @@ func TestLoginfoGenerateMjOtherInfo_WithSpecialRatio(t *testing.T) {
 		},
 	}
 
-	other := GenerateMjOtherInfo(ri, price)
+	other := GenerateMjOtherInfo(ri, price).Snapshot()
 
 	assert.Equal(t, 0.5, other["model_price"])
 	assert.Equal(t, 1.5, other["group_ratio"])
@@ -246,7 +247,7 @@ func TestLoginfoGenerateMjOtherInfo_NoSpecialRatio(t *testing.T) {
 		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1.5, HasSpecialRatio: false},
 	}
 
-	other := GenerateMjOtherInfo(ri, price)
+	other := GenerateMjOtherInfo(ri, price).Snapshot()
 
 	assert.Equal(t, 1.5, other["group_ratio"])
 	assert.NotContains(t, other, "user_group_ratio")
@@ -266,8 +267,9 @@ func TestLoginfoAttachQuotaSaturationToOther(t *testing.T) {
 	}
 
 	t.Run("nil clamp is a no-op", func(t *testing.T) {
-		other := map[string]interface{}{}
-		attachQuotaSaturationToOther(other, nil)
+		o := model.NewLogOther()
+		attachQuotaSaturationToOther(o, nil)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "admin_info")
 	})
 
@@ -276,18 +278,19 @@ func TestLoginfoAttachQuotaSaturationToOther(t *testing.T) {
 	})
 
 	t.Run("creates admin_info when absent", func(t *testing.T) {
-		other := map[string]interface{}{}
-		attachQuotaSaturationToOther(other, clamp)
+		o := model.NewLogOther()
+		attachQuotaSaturationToOther(o, clamp)
+		other := o.Snapshot()
 		adminInfo, ok := other["admin_info"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, clamp.AuditMap(), adminInfo["quota_saturation"])
 	})
 
 	t.Run("preserves existing admin_info keys", func(t *testing.T) {
-		other := map[string]interface{}{
-			"admin_info": map[string]interface{}{"existing": 1},
-		}
-		attachQuotaSaturationToOther(other, clamp)
+		o := model.NewLogOther()
+		o.SetAdmin("existing", 1)
+		attachQuotaSaturationToOther(o, clamp)
+		other := o.Snapshot()
 		adminInfo := other["admin_info"].(map[string]interface{})
 		assert.Equal(t, 1, adminInfo["existing"])
 		assert.Equal(t, clamp.AuditMap(), adminInfo["quota_saturation"])
@@ -303,21 +306,24 @@ func TestLoginfoAttachQuotaSaturation(t *testing.T) {
 	clamp := &common.QuotaClamp{Op: "QuotaRound", Kind: common.QuotaClampNaN, Clamped: 0}
 
 	t.Run("nil relayInfo is a no-op", func(t *testing.T) {
-		other := map[string]interface{}{}
-		attachQuotaSaturation(c, nil, other)
+		o := model.NewLogOther()
+		attachQuotaSaturation(c, nil, o)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "admin_info")
 	})
 
 	t.Run("nil clamp is a no-op", func(t *testing.T) {
-		other := map[string]interface{}{}
-		attachQuotaSaturation(c, &relaycommon.RelayInfo{}, other)
+		o := model.NewLogOther()
+		attachQuotaSaturation(c, &relaycommon.RelayInfo{}, o)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "admin_info")
 	})
 
 	t.Run("attaches clamp when present", func(t *testing.T) {
-		other := map[string]interface{}{}
+		o := model.NewLogOther()
 		ri := &relaycommon.RelayInfo{QuotaClamp: clamp, UserId: 5, OriginModelName: "m"}
-		attachQuotaSaturation(c, ri, other)
+		attachQuotaSaturation(c, ri, o)
+		other := o.Snapshot()
 		adminInfo := other["admin_info"].(map[string]interface{})
 		assert.Equal(t, clamp.AuditMap(), adminInfo["quota_saturation"])
 	})
@@ -332,14 +338,16 @@ func TestLoginfoAppendRequestPath(t *testing.T) {
 		c := loginfoNewCtx()
 		req := loginfoRequestWithPath(t, "/v1/chat/completions")
 		c.Request = req
-		other := map[string]interface{}{}
-		appendRequestPath(c, &relaycommon.RelayInfo{RequestURLPath: "/ignored"}, other)
+		o := model.NewLogOther()
+		appendRequestPath(c, &relaycommon.RelayInfo{RequestURLPath: "/ignored"}, o)
+		other := o.Snapshot()
 		assert.Equal(t, "/v1/chat/completions", other["request_path"])
 	})
 
 	t.Run("falls back to relayInfo path and strips query", func(t *testing.T) {
-		other := map[string]interface{}{}
-		appendRequestPath(nil, &relaycommon.RelayInfo{RequestURLPath: "/v1/messages?beta=true"}, other)
+		o := model.NewLogOther()
+		appendRequestPath(nil, &relaycommon.RelayInfo{RequestURLPath: "/v1/messages?beta=true"}, o)
+		other := o.Snapshot()
 		assert.Equal(t, "/v1/messages", other["request_path"])
 	})
 
@@ -350,8 +358,9 @@ func TestLoginfoAppendRequestPath(t *testing.T) {
 	})
 
 	t.Run("no path available leaves key absent", func(t *testing.T) {
-		other := map[string]interface{}{}
-		appendRequestPath(nil, &relaycommon.RelayInfo{}, other)
+		o := model.NewLogOther()
+		appendRequestPath(nil, &relaycommon.RelayInfo{}, o)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "request_path")
 	})
 }
@@ -361,9 +370,10 @@ func TestLoginfoAppendRequestPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoginfoAppendBillingInfo_Wallet(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ri := &relaycommon.RelayInfo{BillingSource: "wallet"}
-	appendBillingInfo(ri, other)
+	appendBillingInfo(ri, o)
+	other := o.Snapshot()
 
 	assert.Equal(t, "wallet", other["billing_source"])
 	// Subscription-only keys absent.
@@ -372,7 +382,7 @@ func TestLoginfoAppendBillingInfo_Wallet(t *testing.T) {
 }
 
 func TestLoginfoAppendBillingInfo_Subscription(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ri := &relaycommon.RelayInfo{
 		BillingSource:                         "subscription",
 		SubscriptionId:                        9,
@@ -383,7 +393,8 @@ func TestLoginfoAppendBillingInfo_Subscription(t *testing.T) {
 		SubscriptionAmountTotal:               100,
 		SubscriptionAmountUsedAfterPreConsume: 40,
 	}
-	appendBillingInfo(ri, other)
+	appendBillingInfo(ri, o)
+	other := o.Snapshot()
 
 	assert.Equal(t, "subscription", other["billing_source"])
 	assert.Equal(t, 9, other["subscription_id"])
@@ -401,7 +412,7 @@ func TestLoginfoAppendBillingInfo_Subscription(t *testing.T) {
 }
 
 func TestLoginfoAppendBillingInfo_SubscriptionClampsNegative(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ri := &relaycommon.RelayInfo{
 		BillingSource:                         "subscription",
 		SubscriptionPreConsumed:               1,
@@ -409,7 +420,8 @@ func TestLoginfoAppendBillingInfo_SubscriptionClampsNegative(t *testing.T) {
 		SubscriptionAmountTotal:               10,
 		SubscriptionAmountUsedAfterPreConsume: 5,
 	}
-	appendBillingInfo(ri, other)
+	appendBillingInfo(ri, o)
+	other := o.Snapshot()
 
 	// usedFinal = 5 + (-50) = -45 -> 0 ; remain = 10 - 0 = 10
 	assert.Equal(t, int64(0), other["subscription_used"])
@@ -423,12 +435,13 @@ func TestLoginfoAppendBillingInfo_SubscriptionClampsNegative(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoginfoAppendStreamStatus_OK(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ss := relaycommon.NewStreamStatus()
 	ss.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	ri := &relaycommon.RelayInfo{IsStream: true, StreamStatus: ss}
 
-	appendStreamStatus(ri, other)
+	appendStreamStatus(ri, o)
+	other := o.Snapshot()
 
 	info, ok := other["stream_status"].(map[string]interface{})
 	require.True(t, ok)
@@ -438,13 +451,14 @@ func TestLoginfoAppendStreamStatus_OK(t *testing.T) {
 }
 
 func TestLoginfoAppendStreamStatus_Error(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ss := relaycommon.NewStreamStatus()
 	ss.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	ss.RecordError("boom")
 	ri := &relaycommon.RelayInfo{IsStream: true, StreamStatus: ss}
 
-	appendStreamStatus(ri, other)
+	appendStreamStatus(ri, o)
+	other := o.Snapshot()
 
 	info := other["stream_status"].(map[string]interface{})
 	assert.Equal(t, "error", info["status"])
@@ -454,11 +468,12 @@ func TestLoginfoAppendStreamStatus_Error(t *testing.T) {
 }
 
 func TestLoginfoAppendStreamStatus_NotStreamNoop(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ss := relaycommon.NewStreamStatus()
 	ss.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	// IsStream false -> skipped entirely.
-	appendStreamStatus(&relaycommon.RelayInfo{IsStream: false, StreamStatus: ss}, other)
+	appendStreamStatus(&relaycommon.RelayInfo{IsStream: false, StreamStatus: ss}, o)
+	other := o.Snapshot()
 	assert.NotContains(t, other, "stream_status")
 }
 
@@ -467,7 +482,7 @@ func TestLoginfoAppendStreamStatus_NotStreamNoop(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoginfoAppendRequestConversionChain(t *testing.T) {
-	other := map[string]interface{}{}
+	o := model.NewLogOther()
 	ri := &relaycommon.RelayInfo{
 		RequestConversionChain: []types.RelayFormat{
 			types.RelayFormatOpenAI,
@@ -476,7 +491,8 @@ func TestLoginfoAppendRequestConversionChain(t *testing.T) {
 			types.RelayFormatOpenAIResponses,
 		},
 	}
-	appendRequestConversionChain(ri, other)
+	appendRequestConversionChain(ri, o)
+	other := o.Snapshot()
 
 	assert.Equal(t, []string{
 		"OpenAI Compatible",
@@ -487,8 +503,9 @@ func TestLoginfoAppendRequestConversionChain(t *testing.T) {
 }
 
 func TestLoginfoAppendRequestConversionChain_EmptyOmitted(t *testing.T) {
-	other := map[string]interface{}{}
-	appendRequestConversionChain(&relaycommon.RelayInfo{}, other)
+	o := model.NewLogOther()
+	appendRequestConversionChain(&relaycommon.RelayInfo{}, o)
+	other := o.Snapshot()
 	assert.NotContains(t, other, "request_conversion")
 }
 
@@ -498,16 +515,18 @@ func TestLoginfoAppendRequestConversionChain_EmptyOmitted(t *testing.T) {
 
 func TestLoginfoAppendFinalRequestFormat(t *testing.T) {
 	t.Run("claude final format sets claude=true", func(t *testing.T) {
-		other := map[string]interface{}{}
+		o := model.NewLogOther()
 		ri := &relaycommon.RelayInfo{FinalRequestRelayFormat: types.RelayFormatClaude}
-		appendFinalRequestFormat(ri, other)
+		appendFinalRequestFormat(ri, o)
+		other := o.Snapshot()
 		assert.Equal(t, true, other["claude"])
 	})
 
 	t.Run("non-claude final format leaves key absent", func(t *testing.T) {
-		other := map[string]interface{}{}
+		o := model.NewLogOther()
 		ri := &relaycommon.RelayInfo{FinalRequestRelayFormat: types.RelayFormatOpenAI}
-		appendFinalRequestFormat(ri, other)
+		appendFinalRequestFormat(ri, o)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "claude")
 	})
 }
@@ -520,30 +539,34 @@ func TestLoginfoInjectTieredBillingInfo(t *testing.T) {
 	snap := &billingexpr.BillingSnapshot{ExprString: `tier("base", p*3+c*15)`}
 
 	t.Run("nil relayInfo is a no-op", func(t *testing.T) {
-		other := map[string]interface{}{}
-		InjectTieredBillingInfo(other, nil, nil)
+		o := model.NewLogOther()
+		InjectTieredBillingInfo(o, nil, nil)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "billing_mode")
 	})
 
 	t.Run("nil snapshot is a no-op", func(t *testing.T) {
-		other := map[string]interface{}{}
-		InjectTieredBillingInfo(other, &relaycommon.RelayInfo{}, nil)
+		o := model.NewLogOther()
+		InjectTieredBillingInfo(o, &relaycommon.RelayInfo{}, nil)
+		other := o.Snapshot()
 		assert.NotContains(t, other, "billing_mode")
 	})
 
 	t.Run("snapshot without result omits matched_tier", func(t *testing.T) {
-		other := map[string]interface{}{}
+		o := model.NewLogOther()
 		ri := &relaycommon.RelayInfo{TieredBillingSnapshot: snap}
-		InjectTieredBillingInfo(other, ri, nil)
+		InjectTieredBillingInfo(o, ri, nil)
+		other := o.Snapshot()
 		assert.Equal(t, "tiered_expr", other["billing_mode"])
 		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(snap.ExprString)), other["expr_b64"])
 		assert.NotContains(t, other, "matched_tier")
 	})
 
 	t.Run("snapshot with result includes matched_tier", func(t *testing.T) {
-		other := map[string]interface{}{}
+		o := model.NewLogOther()
 		ri := &relaycommon.RelayInfo{TieredBillingSnapshot: snap}
-		InjectTieredBillingInfo(other, ri, &billingexpr.TieredResult{MatchedTier: "base"})
+		InjectTieredBillingInfo(o, ri, &billingexpr.TieredResult{MatchedTier: "base"})
+		other := o.Snapshot()
 		assert.Equal(t, "base", other["matched_tier"])
 	})
 }

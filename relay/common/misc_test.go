@@ -66,11 +66,11 @@ func TestAppendRequestConversionFromRequest(t *testing.T) {
 
 func TestNewOutboundJSONBody(t *testing.T) {
 	data := []byte(`{"model":"gpt-4o","stream":true}`)
-	body, size, closer, err := NewOutboundJSONBody(data)
+	body, closer, err := NewOutboundJSONBody(data)
 	require.NoError(t, err)
 	require.NotNil(t, body)
 	require.NotNil(t, closer)
-	assert.Equal(t, int64(len(data)), size)
+	assert.Equal(t, int64(len(data)), body.Size())
 
 	got, err := io.ReadAll(body)
 	require.NoError(t, err)
@@ -79,10 +79,10 @@ func TestNewOutboundJSONBody(t *testing.T) {
 }
 
 func TestNewOutboundJSONBody_Empty(t *testing.T) {
-	body, size, closer, err := NewOutboundJSONBody([]byte{})
+	body, closer, err := NewOutboundJSONBody([]byte{})
 	require.NoError(t, err)
 	require.NotNil(t, closer)
-	assert.Equal(t, int64(0), size)
+	assert.Equal(t, int64(0), body.Size())
 	got, err := io.ReadAll(body)
 	require.NoError(t, err)
 	assert.Empty(t, got)

@@ -386,10 +386,10 @@ func TestValidateAnnouncements_ContentTooLong(t *testing.T) {
 
 func TestValidateAnnouncements_ExtraTooLong(t *testing.T) {
 	item := validAnnouncement()
-	item["extra"] = strings.Repeat("e", 201)
+	item["extra"] = strings.Repeat("e", 101)
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "说明长度不能超过200字符")
+	assert.Contains(t, err.Error(), "公告的说明长度不能超过100字符")
 }
 
 func TestValidateAnnouncements_ExtraNonStringIgnored(t *testing.T) {

@@ -184,6 +184,10 @@ func TestMain(m *testing.M) {
 	} else {
 		_ = db.AutoMigrate(&model.Log{})
 	}
+	// Login/security/operation audit events live in audit_logs on LOG_DB.
+	if err := model.MigrateAuditLogs(); err != nil {
+		panic("failed to migrate audit logs: " + err.Error())
+	}
 
 	fmt.Println("[TEST] Controller tests - Main DB type:", common.MainDatabaseType())
 	os.Exit(m.Run())

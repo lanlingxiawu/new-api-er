@@ -46,10 +46,8 @@ func TestGeminiReq_BasicGenerationConfigAndZeroPreservation(t *testing.T) {
 	assert.Len(t, got.SafetySettings, 4)
 }
 
-func TestGeminiReq_TopPZeroIsDropped(t *testing.T) {
-	// NOTE: TopP is only forwarded when *TopP > 0, so an explicit top_p=0 is
-	// intentionally dropped (Gemini rejects topP=0). Documented deviation from
-	// the general zero-preservation guidance.
+func TestGeminiReq_TopPZeroIsPreserved(t *testing.T) {
+	// Rule 5: an explicit top_p=0 is forwarded rather than silently dropped.
 	req := dto.GeneralOpenAIRequest{
 		Model:    "gemini-1.5-flash",
 		TopP:     ptr(0.0),
@@ -57,7 +55,8 @@ func TestGeminiReq_TopPZeroIsDropped(t *testing.T) {
 	}
 	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
 	require.NoError(t, err)
-	assert.Nil(t, got.GenerationConfig.TopP)
+	require.NotNil(t, got.GenerationConfig.TopP)
+	assert.Equal(t, 0.0, *got.GenerationConfig.TopP)
 }
 
 func TestGeminiReq_StopSequencesTruncatedToFive(t *testing.T) {
@@ -74,7 +73,7 @@ func TestGeminiReq_StopSequencesTruncatedToFive(t *testing.T) {
 func TestGeminiReq_ExtraBodyThinkingConfig(t *testing.T) {
 	req := dto.GeneralOpenAIRequest{
 		Model:     "gemini-2.5-flash",
-		ExtraBody: json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":512,"include_thoughts":true,"thinking_level":"high"}}}`),
+		ExtraBody: json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":512,"include_thoughts":true}}}`),
 		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
 	}
 	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
@@ -83,11 +82,12 @@ func TestGeminiReq_ExtraBodyThinkingConfig(t *testing.T) {
 	require.NotNil(t, tc)
 	require.NotNil(t, tc.ThinkingBudget)
 	assert.Equal(t, 512, *tc.ThinkingBudget)
-	assert.True(t, tc.IncludeThoughts)
-	assert.Equal(t, "high", tc.ThinkingLevel)
+	require.NotNil(t, tc.IncludeThoughts)
+	assert.True(t, *tc.IncludeThoughts)
+	assert.Empty(t, tc.ThinkingLevel)
 }
 
-func TestGeminiReq_ExtraBodyThinkingBudgetZeroDisablesThoughts(t *testing.T) {
+func TestGeminiReq_ExtraBodyThinkingBudgetZeroDisablesThinking(t *testing.T) {
 	req := dto.GeneralOpenAIRequest{
 		Model:     "gemini-2.5-flash",
 		ExtraBody: json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":0}}}`),
@@ -97,7 +97,10 @@ func TestGeminiReq_ExtraBodyThinkingBudgetZeroDisablesThoughts(t *testing.T) {
 	require.NoError(t, err)
 	tc := got.GenerationConfig.ThinkingConfig
 	require.NotNil(t, tc)
-	assert.False(t, tc.IncludeThoughts) // budget 0 -> IncludeThoughts=false
+	require.NotNil(t, tc.ThinkingBudget)
+	assert.Equal(t, 0, *tc.ThinkingBudget)
+	// include_thoughts is only forwarded when the client set it explicitly.
+	assert.Nil(t, tc.IncludeThoughts)
 }
 
 func TestGeminiReq_ExtraBodyErrors(t *testing.T) {
@@ -114,6 +117,8 @@ func TestGeminiReq_ExtraBodyErrors(t *testing.T) {
 		{"camelCase aspectRatio", `{"google":{"image_config":{"aspectRatio":"1:1"}}}`},
 		{"camelCase imageSize", `{"google":{"image_config":{"imageSize":"1K"}}}`},
 		{"invalid json", `{not-json`},
+		// Gemini accepts either a budget or a level, never both.
+		{"budget and level both set", `{"google":{"thinking_config":{"thinking_budget":512,"thinking_level":"high"}}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,27 +146,28 @@ func TestGeminiReq_ExtraBodyImageConfig(t *testing.T) {
 	assert.Contains(t, string(got.GenerationConfig.ImageConfig), "imageSize")
 }
 
-func TestGeminiReq_ExtraBodyNothinkingModelSkipsThinking(t *testing.T) {
-	// With a -nothinking suffix, the google thinking branch is skipped and the
-	// request stays adaptorWithExtraBody=false path but no thinking config set.
+func TestGeminiReq_ExtraBodyThinkingKeptRegardlessOfModelNameSuffix(t *testing.T) {
+	// Reasoning suffixes are resolved before conversion (via the conversion
+	// state); the converter does not re-parse "-nothinking" from the model name,
+	// so an explicit extra_body thinking_config is forwarded.
 	req := dto.GeneralOpenAIRequest{
 		Model:     "gemini-2.5-flash-nothinking",
 		ExtraBody: json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":512}}}`),
 		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
 	}
-	// info has empty upstream model name -> uses textRequest.Model for suffix check.
 	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
 	require.NoError(t, err)
-	assert.Nil(t, got.GenerationConfig.ThinkingConfig)
+	require.NotNil(t, got.GenerationConfig.ThinkingConfig)
+	require.NotNil(t, got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	assert.Equal(t, 512, *got.GenerationConfig.ThinkingConfig.ThinkingBudget)
 }
 
 func TestGeminiReq_ToolsSpecialAndFunctions(t *testing.T) {
 	req := dto.GeneralOpenAIRequest{
 		Model: "gemini-1.5-pro",
 		Tools: []dto.ToolCallRequest{
+			// Function names that match Gemini hosted tools stay ordinary functions.
 			{Type: "function", Function: dto.FunctionRequest{Name: "googleSearch"}},
-			{Type: "function", Function: dto.FunctionRequest{Name: "codeExecution"}},
-			{Type: "function", Function: dto.FunctionRequest{Name: "urlContext"}},
 			{Type: "function", Function: dto.FunctionRequest{Name: "lookup", Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"q": map[string]any{"type": "string"}},
@@ -178,8 +184,13 @@ func TestGeminiReq_ToolsSpecialAndFunctions(t *testing.T) {
 	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
 	require.NoError(t, err)
 	tools := got.GetTools()
-	// codeExecution, googleSearch, urlContext, functionDeclarations => 4 tools.
-	require.Len(t, tools, 4)
+	// All functions are grouped into a single functionDeclarations tool.
+	require.Len(t, tools, 1)
+	declarations, ok := tools[0].FunctionDeclarations.([]any)
+	require.True(t, ok, "%T", tools[0].FunctionDeclarations)
+	require.Len(t, declarations, 3)
+	assert.Equal(t, "googleSearch", declarations[0].(map[string]any)["name"])
+	assert.NotContains(t, declarations[2].(map[string]any), "parameters", "empty-properties schema is dropped")
 	assert.NotNil(t, got.ToolConfig)
 }
 
@@ -445,24 +456,6 @@ func TestGeminiReq_EmptyTextPartSkipped(t *testing.T) {
 }
 
 // --- supplementary branch coverage -----------------------------------------
-
-func TestGeminiReq_UpstreamModelNameOverride(t *testing.T) {
-	// When the RelayInfo carries an upstream model name, it is used in place of
-	// textRequest.Model for the -nothinking suffix check.
-	info := &convmeta.Values{
-		ChannelMetaAttached: true,
-		UpstreamModelName:   "gemini-2.5-flash-nothinking",
-	}
-	req := dto.GeneralOpenAIRequest{
-		Model:     "gemini-2.5-flash", // no suffix here
-		ExtraBody: json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":512}}}`),
-		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
-	}
-	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, info)
-	require.NoError(t, err)
-	// upstream name ends with -nothinking -> the google thinking branch is skipped.
-	assert.Nil(t, got.GenerationConfig.ThinkingConfig)
-}
 
 func TestGeminiReq_ToolMessageNameFromToolCallIDs(t *testing.T) {
 	// An assistant tool_call records call.ID -> name in toolCallIDs; a later tool
