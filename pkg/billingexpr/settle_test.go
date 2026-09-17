@@ -48,7 +48,7 @@ func TestComputeTieredQuota_GroupRatioApplied(t *testing.T) {
 	assert.Equal(t, 1500, res.ActualQuotaAfterGroup)
 }
 
-func TestComputeTieredQuota_ZeroTokens(t *testing.T) {
+func TestComputeTieredQuota_ZeroTokensNoClamp(t *testing.T) {
 	snap := snapFor(`tier("default", p * 2 + c * 10)`, "default", 1.0, 500_000)
 	res, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{})
 	require.NoError(t, err)

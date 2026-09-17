@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -172,45 +172,9 @@ func TestGetAndValidateTextRequest(t *testing.T) {
 // max_tokens bounds (billing invariant, Rule 5)
 // ---------------------------------------------------------------------------
 
-func TestMaxTokensBounds(t *testing.T) {
-	const hugeN = "18446744073686646784"
-
-	t.Run("openai max_tokens overflow rejected", func(t *testing.T) {
-		c := newJSONContext(t, "/v1/chat/completions", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"max_tokens":`+hugeN+`}`)
-		_, err := GetAndValidateTextRequest(c, relayconstant.RelayModeChatCompletions)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
-	})
-	t.Run("openai max_completion_tokens overflow rejected", func(t *testing.T) {
-		c := newJSONContext(t, "/v1/chat/completions", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":`+hugeN+`}`)
-		_, err := GetAndValidateTextRequest(c, relayconstant.RelayModeChatCompletions)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
-	})
-	t.Run("claude max_tokens overflow rejected", func(t *testing.T) {
-		c := newJSONContext(t, "/v1/messages", `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"max_tokens":`+hugeN+`}`)
-		_, err := GetAndValidateClaudeRequest(c)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
-	})
-	t.Run("claude normal max_tokens accepted", func(t *testing.T) {
-		c := newJSONContext(t, "/v1/messages", `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"max_tokens":8192}`)
-		req, err := GetAndValidateClaudeRequest(c)
-		require.NoError(t, err)
-		require.EqualValues(t, 8192, *req.MaxTokens)
-	})
-	t.Run("gemini maxOutputTokens overflow rejected", func(t *testing.T) {
-		c := newJSONContext(t, "/v1beta/models/gemini:generateContent", `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":`+hugeN+`}}`)
-		_, err := GetAndValidateGeminiRequest(c)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "maxOutputTokens is invalid")
-	})
-	t.Run("responses max_output_tokens overflow rejected", func(t *testing.T) {
-		c := newJSONContext(t, "/v1/responses", `{"model":"gpt-4o","input":"hi","max_output_tokens":`+hugeN+`}`)
-		_, err := GetAndValidateResponsesRequest(c)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_output_tokens is invalid")
-	})
+// Per-format overflow rejection is covered by TestMaxTokensBounds in
+// max_tokens_bounds_test.go; this pins the exact maxTokensLimit edge.
+func TestMaxTokensLimitBoundary(t *testing.T) {
 	t.Run("boundary at limit accepted", func(t *testing.T) {
 		limit := fmt.Sprintf("%d", maxTokensLimit)
 		c := newJSONContext(t, "/v1/chat/completions", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"max_tokens":`+limit+`}`)

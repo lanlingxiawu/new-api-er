@@ -12,34 +12,21 @@ package controller
 
 import (
 	"bytes"
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"math/big"
-	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/oauth2"
 	"gorm.io/gorm"
 )
 
@@ -252,183 +239,6 @@ func withTieredBillingConfig(t *testing.T, modes map[string]string, exprs map[st
 		"billing_setting.billing_expr": string(exprBytes),
 	}))
 	model.InvalidatePricingCache()
-}
-
-// ---------------------------------------------------------------------------
-// controller/telegram_test.go 的 Telegram OAuth 夹具。
-//
-// telegram_test.go 本身没有携带；auth_flow_test.go 与 security_enrollment_test.go
-// 仍要用这组夹具，按 Rule 6 放在这里。与上游逐字节一致。
-// ---------------------------------------------------------------------------
-
-type telegramTestTransport struct{ target *url.URL }
-
-func (transport telegramTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.URL.Host != "oauth.telegram.org" {
-		return nil, fmt.Errorf("unexpected OAuth host: %s", request.URL.Host)
-	}
-	clone := request.Clone(request.Context())
-	clone.URL.Scheme, clone.URL.Host = transport.target.Scheme, transport.target.Host
-	return http.DefaultTransport.RoundTrip(clone)
-}
-
-type telegramTestGrant struct {
-	challenge string
-	claims    jwt.MapClaims
-	key       *rsa.PrivateKey
-}
-
-type telegramOAuthFixture struct {
-	user        *model.User
-	identity    service.AuthIdentity
-	client      *http.Client
-	key         *rsa.PrivateKey
-	mutex       sync.Mutex
-	grants      map[string]telegramTestGrant
-	tokenStatus int
-	jwksStatus  int
-}
-
-func setupTelegramOAuthTest(t *testing.T) *telegramOAuthFixture {
-	t.Helper()
-	user, identity := setupSecurityEnrollmentTest(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.ExternalIdentityClaim{}, &model.Option{}))
-	previousEnabled := common.TelegramOAuthEnabled
-	previousSettings := *system_setting.GetTelegramSettings()
-	previousAddress := system_setting.ServerAddress
-	previousProvider := oauth.GetProvider("telegram")
-	common.OptionMapRWMutex.Lock()
-	previousOptions := common.OptionMap
-	common.OptionMap = make(map[string]string)
-	maps.Copy(common.OptionMap, previousOptions)
-	common.OptionMapRWMutex.Unlock()
-	common.TelegramOAuthEnabled = true
-	*system_setting.GetTelegramSettings() = system_setting.TelegramSettings{ClientID: "12345", ClientSecret: "telegram-client-secret"}
-	system_setting.ServerAddress = "https://example.com"
-	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = previousOptions
-		common.OptionMapRWMutex.Unlock()
-		common.TelegramOAuthEnabled = previousEnabled
-		*system_setting.GetTelegramSettings() = previousSettings
-		system_setting.ServerAddress = previousAddress
-		oauth.Register("telegram", previousProvider)
-		oauth.UnregisterCustomProvider("telegram")
-	})
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	fixture := &telegramOAuthFixture{user: user, identity: identity, key: key, grants: map[string]telegramTestGrant{}}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		fixture.mutex.Lock()
-		defer fixture.mutex.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/.well-known/jwks.json":
-			if fixture.jwksStatus != 0 {
-				w.WriteHeader(fixture.jwksStatus)
-				return
-			}
-			payload, err := common.Marshal(map[string]any{"keys": []any{map[string]any{
-				"kty": "RSA", "kid": "telegram-test-key", "alg": "RS256", "use": "sig",
-				"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
-				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
-			}}})
-			if assert.NoError(t, err) {
-				_, _ = w.Write(payload)
-			}
-		case "/token":
-			if fixture.tokenStatus != 0 {
-				w.WriteHeader(fixture.tokenStatus)
-				return
-			}
-			clientID, secret, ok := request.BasicAuth()
-			if !ok || clientID != "12345" || secret != "telegram-client-secret" {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			if request.ParseForm() != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			code := request.Form.Get("code")
-			grant, ok := fixture.grants[code]
-			if !ok || request.Form.Get("grant_type") != "authorization_code" ||
-				request.Form.Get("client_id") != "12345" || request.Form.Get("redirect_uri") != "https://example.com/oauth/telegram" ||
-				oauth2.S256ChallengeFromVerifier(request.Form.Get("code_verifier")) != grant.challenge {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			delete(fixture.grants, code)
-			token := jwt.NewWithClaims(jwt.SigningMethodRS256, grant.claims)
-			token.Header["kid"] = "telegram-test-key"
-			signed, err := token.SignedString(grant.key)
-			if !assert.NoError(t, err) {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			payload, err := common.Marshal(map[string]any{"access_token": "test-access-token", "id_token": signed, "token_type": "Bearer"})
-			if assert.NoError(t, err) {
-				_, _ = w.Write(payload)
-			}
-		default:
-			t.Errorf("unexpected Telegram endpoint: %s", request.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(server.Close)
-	target, err := url.Parse(server.URL)
-	require.NoError(t, err)
-	fixture.client = &http.Client{Transport: telegramTestTransport{target: target}, Timeout: 5 * time.Second}
-	oauth.Register("telegram", oauth.NewTelegramProvider(fixture.client))
-	return fixture
-}
-
-func (fixture *telegramOAuthFixture) authorization(t *testing.T, intent string, identity service.AuthIdentity, scope string, claims jwt.MapClaims) (string, string) {
-	t.Helper()
-	request, err := common.Marshal(oauthStateRequest{Provider: "telegram", Intent: intent, Scope: scope})
-	require.NoError(t, err)
-	proof := ""
-	if intent == "bind" {
-		proof = issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: []byte(`{"provider":"telegram"}`)}, service.VerificationMethodPassword)
-	}
-	response := securityEnrollmentRequest("POST", "/api/oauth/state", string(request), proof, identity, GenerateOAuthCode)
-	var body securityEnrollmentResponse
-	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
-	require.True(t, body.Success, response.Body.String())
-	var data struct {
-		State string `json:"flow_token"`
-		URL   string `json:"authorization_url"`
-	}
-	require.NoError(t, common.Unmarshal(body.Data, &data))
-	authorizationURL, err := url.Parse(data.URL)
-	require.NoError(t, err)
-	assert.Equal(t, "https://oauth.telegram.org/auth", authorizationURL.Scheme+"://"+authorizationURL.Host+authorizationURL.Path)
-	assert.Equal(t, "openid profile", authorizationURL.Query().Get("scope"))
-	assert.Equal(t, "S256", authorizationURL.Query().Get("code_challenge_method"))
-	assert.Equal(t, data.State, authorizationURL.Query().Get("state"))
-	assert.Empty(t, authorizationURL.Query().Get("code_verifier"))
-	assert.NotContains(t, response.Body.String(), "telegram-client-secret")
-	code := "code-" + data.State
-	fixture.mutex.Lock()
-	fixture.grants[code] = telegramTestGrant{challenge: authorizationURL.Query().Get("code_challenge"), claims: claims, key: fixture.key}
-	fixture.mutex.Unlock()
-	return data.State, code
-}
-
-func telegramIdentityClaims(id any) jwt.MapClaims {
-	return jwt.MapClaims{
-		"iss": oauth.TelegramIssuer, "aud": "12345", "sub": "different-oidc-subject",
-		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(),
-		"id": id, "name": "Telegram User", "preferred_username": "telegram-user",
-	}
-}
-
-func telegramOAuthCallback(state, code string, identity service.AuthIdentity) *httptest.ResponseRecorder {
-	path := "/api/oauth/telegram?" + url.Values{"state": {state}, "code": {code}}.Encode()
-	return securityEnrollmentRequest("GET", path, "", "", identity, func(c *gin.Context) {
-		c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
-		HandleOAuth(c)
-	})
 }
 
 // closeDBHandlesOnCleanup closes database pools opened inside a test (for example by

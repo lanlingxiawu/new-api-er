@@ -18,7 +18,7 @@ import (
 // value is 2147483646. Documented in pkg-billingexpr.md.
 // ---------------------------------------------------------------------------
 
-func TestQuotaRound(t *testing.T) {
+func TestQuotaRoundSaturationTable(t *testing.T) {
 	tests := []struct {
 		name string
 		in   float64

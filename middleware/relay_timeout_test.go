@@ -47,20 +47,20 @@ func waitForTimeout(t *testing.T, ctx context.Context) {
 	t.Helper()
 	select {
 	case <-ctx.Done():
-	case <-time.After(time.Second):
+	case <-time.After(timeoutTestMs(1000)):
 		require.Fail(t, "timeout control did not cancel the request")
 	}
 }
 
 func TestRelayTimeoutResponseLimitWins(t *testing.T) {
-	_, ctx, control := timeoutTestContext(t, 15*time.Millisecond, 200*time.Millisecond, true)
+	_, ctx, control := timeoutTestContext(t, timeoutTestMs(15), timeoutTestMs(200), true)
 	waitForTimeout(t, ctx)
 	assert.Equal(t, relayTimeoutKindResponse, control.ExpiredKind())
 	assert.ErrorIs(t, context.Cause(ctx), errRelayResponseTimeout)
 }
 
 func TestRelayTimeoutTotalLimitWins(t *testing.T) {
-	_, ctx, control := timeoutTestContext(t, 200*time.Millisecond, 15*time.Millisecond, true)
+	_, ctx, control := timeoutTestContext(t, timeoutTestMs(200), timeoutTestMs(15), true)
 	waitForTimeout(t, ctx)
 	assert.Equal(t, relayTimeoutKindTotal, control.ExpiredKind())
 	assert.ErrorIs(t, context.Cause(ctx), errRelayTotalTimeout)
@@ -68,10 +68,10 @@ func TestRelayTimeoutTotalLimitWins(t *testing.T) {
 
 func TestRelayTimeoutStreamOutputStopsResponseButNotTotal(t *testing.T) {
 	startedAt := time.Now()
-	c, ctx, control := timeoutTestContext(t, 500*time.Millisecond, 100*time.Millisecond, true)
+	c, ctx, control := timeoutTestContext(t, timeoutTestMs(500), timeoutTestMs(100), true)
 
 	for range 3 {
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(timeoutTestMs(25))
 		_, err := c.Writer.Write([]byte("data: output\n\n"))
 		require.NoError(t, err)
 		assert.NoError(t, ctx.Err())
@@ -79,15 +79,15 @@ func TestRelayTimeoutStreamOutputStopsResponseButNotTotal(t *testing.T) {
 
 	waitForTimeout(t, ctx)
 	assert.Equal(t, relayTimeoutKindTotal, control.ExpiredKind(), "stream output must not reset the absolute total limit")
-	assert.Less(t, time.Since(startedAt), 170*time.Millisecond, "stream output must not move the total deadline")
+	assert.Less(t, time.Since(startedAt), timeoutTestMs(170), "stream output must not move the total deadline")
 }
 
 func TestRelayTimeoutStreamFirstOutputStopsResponseTimeout(t *testing.T) {
-	c, ctx, control := timeoutTestContext(t, 25*time.Millisecond, 120*time.Millisecond, true)
-	time.Sleep(15 * time.Millisecond)
+	c, ctx, control := timeoutTestContext(t, timeoutTestMs(25), timeoutTestMs(120), true)
+	time.Sleep(timeoutTestMs(15))
 	_, err := c.Writer.Write([]byte("data: output\n\n"))
 	require.NoError(t, err)
-	time.Sleep(45 * time.Millisecond)
+	time.Sleep(timeoutTestMs(45))
 	assert.NoError(t, ctx.Err(), "valid output must stop the stream response timeout window")
 	assert.False(t, control.responseActive.Load())
 
@@ -96,14 +96,14 @@ func TestRelayTimeoutStreamFirstOutputStopsResponseTimeout(t *testing.T) {
 }
 
 func TestRelayTimeoutStreamIdleOutputResetsResponseTimeout(t *testing.T) {
-	c, ctx, control := timeoutTestContextWithMode(t, 35*time.Millisecond, 180*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
-	time.Sleep(25 * time.Millisecond)
+	c, ctx, control := timeoutTestContextWithMode(t, timeoutTestMs(35), timeoutTestMs(180), true, service.RelayStreamResponseTimeoutModeIdle)
+	time.Sleep(timeoutTestMs(25))
 	_, err := c.Writer.Write([]byte("data: first\n\n"))
 	require.NoError(t, err)
-	time.Sleep(25 * time.Millisecond)
+	time.Sleep(timeoutTestMs(25))
 	_, err = c.Writer.Write([]byte("data: second\n\n"))
 	require.NoError(t, err)
-	time.Sleep(25 * time.Millisecond)
+	time.Sleep(timeoutTestMs(25))
 	assert.NoError(t, ctx.Err(), "each valid stream output must refresh the idle response timeout")
 	assert.True(t, control.responseActive.Load())
 
@@ -112,7 +112,7 @@ func TestRelayTimeoutStreamIdleOutputResetsResponseTimeout(t *testing.T) {
 }
 
 func TestRelayTimeoutStreamIdleHeartbeatDoesNotResetResponseLimit(t *testing.T) {
-	c, ctx, control := timeoutTestContextWithMode(t, 30*time.Millisecond, 300*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
+	c, ctx, control := timeoutTestContextWithMode(t, timeoutTestMs(30), timeoutTestMs(300), true, service.RelayStreamResponseTimeoutModeIdle)
 	for _, data := range [][]byte{[]byte(": PING\n\n"), []byte("\n"), []byte(": upstream comment\n\n")} {
 		_, err := c.Writer.Write(data)
 		require.NoError(t, err)
@@ -123,26 +123,26 @@ func TestRelayTimeoutStreamIdleHeartbeatDoesNotResetResponseLimit(t *testing.T) 
 
 func TestRelayTimeoutStreamIdleTotalLimitWinsEvenWithOutput(t *testing.T) {
 	startedAt := time.Now()
-	c, ctx, control := timeoutTestContextWithMode(t, 90*time.Millisecond, 125*time.Millisecond, true, service.RelayStreamResponseTimeoutModeIdle)
+	c, ctx, control := timeoutTestContextWithMode(t, timeoutTestMs(90), timeoutTestMs(125), true, service.RelayStreamResponseTimeoutModeIdle)
 	for index := 0; index < 3; index++ {
 		_, err := c.Writer.Write([]byte("data: chunk\n\n"))
 		require.NoError(t, err)
 		if index < 2 {
-			time.Sleep(40 * time.Millisecond)
+			time.Sleep(timeoutTestMs(40))
 		}
 	}
 
 	waitForTimeout(t, ctx)
 	assert.Equal(t, relayTimeoutKindTotal, control.ExpiredKind())
-	assert.Less(t, time.Since(startedAt), 190*time.Millisecond)
+	assert.Less(t, time.Since(startedAt), timeoutTestMs(190))
 }
 
 func TestRelayTimeoutStreamFirstOutputModeDoesNotResetAfterFirstOutput(t *testing.T) {
-	c, ctx, control := timeoutTestContextWithMode(t, 25*time.Millisecond, 120*time.Millisecond, true, service.RelayStreamResponseTimeoutModeFirstOutput)
-	time.Sleep(15 * time.Millisecond)
+	c, ctx, control := timeoutTestContextWithMode(t, timeoutTestMs(25), timeoutTestMs(120), true, service.RelayStreamResponseTimeoutModeFirstOutput)
+	time.Sleep(timeoutTestMs(15))
 	_, err := c.Writer.Write([]byte("data: first\n\n"))
 	require.NoError(t, err)
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(timeoutTestMs(35))
 	_, err = c.Writer.Write([]byte("data: second\n\n"))
 	require.NoError(t, err)
 	assert.False(t, control.responseActive.Load())
@@ -150,7 +150,7 @@ func TestRelayTimeoutStreamFirstOutputModeDoesNotResetAfterFirstOutput(t *testin
 }
 
 func TestRelayTimeoutHeartbeatDoesNotResetResponseLimit(t *testing.T) {
-	c, ctx, control := timeoutTestContext(t, 20*time.Millisecond, 300*time.Millisecond, true)
+	c, ctx, control := timeoutTestContext(t, timeoutTestMs(20), timeoutTestMs(300), true)
 	for _, data := range [][]byte{[]byte(": PING\n\n"), []byte("\n"), []byte(": upstream comment\n\n")} {
 		_, err := c.Writer.Write(data)
 		require.NoError(t, err)
@@ -160,10 +160,10 @@ func TestRelayTimeoutHeartbeatDoesNotResetResponseLimit(t *testing.T) {
 }
 
 func TestRelayTimeoutNonStreamFirstResponseStopsOnlyResponseLimit(t *testing.T) {
-	c, ctx, control := timeoutTestContext(t, 20*time.Millisecond, 55*time.Millisecond, false)
-	time.Sleep(10 * time.Millisecond)
+	c, ctx, control := timeoutTestContext(t, timeoutTestMs(20), timeoutTestMs(55), false)
+	time.Sleep(timeoutTestMs(10))
 	service.MarkRelayResponse(c)
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(timeoutTestMs(20))
 	assert.NoError(t, ctx.Err(), "first response must stop the non-stream response timer")
 
 	waitForTimeout(t, ctx)
@@ -171,12 +171,12 @@ func TestRelayTimeoutNonStreamFirstResponseStopsOnlyResponseLimit(t *testing.T) 
 }
 
 func TestRelayTimeoutNonStreamRetryRestartsResponseLimit(t *testing.T) {
-	_, ctx, control := timeoutTestContext(t, 50*time.Millisecond, 300*time.Millisecond, false)
-	time.Sleep(20 * time.Millisecond)
+	_, ctx, control := timeoutTestContext(t, timeoutTestMs(50), timeoutTestMs(300), false)
+	time.Sleep(timeoutTestMs(20))
 	assert.True(t, control.MarkResponse(false))
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(timeoutTestMs(20))
 	assert.True(t, control.RestartResponse(false))
-	time.Sleep(35 * time.Millisecond)
+	time.Sleep(timeoutTestMs(35))
 	assert.NoError(t, ctx.Err(), "retry must receive a fresh response timeout window")
 
 	waitForTimeout(t, ctx)
@@ -502,4 +502,12 @@ func TestRelayNonOutputClassification(t *testing.T) {
 		assert.False(t, isRelayNonOutput([]byte(output)))
 		assert.False(t, isRelayNonOutputString(output))
 	}
+}
+
+// timeoutTestScale 放大本文件所有计时窗口：全量测试并行负载下调度抖动可达数十毫秒，
+// 放大后先后顺序关系不变，抖动容忍度随之放大。
+const timeoutTestScale = 8
+
+func timeoutTestMs(n int) time.Duration {
+	return time.Duration(n*timeoutTestScale) * time.Millisecond
 }
