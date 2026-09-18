@@ -28,7 +28,7 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 17
+	priceMonitorMatrixVersion           = 18
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -36,6 +36,7 @@ const (
 	priceMonitorLaneCacheWrite          = "cache_write"
 	priceMonitorLaneCacheWrite1h        = "cache_write_1h"
 	priceMonitorLaneImageInput          = "image_input"
+	priceMonitorLaneImageCacheRead      = "image_cache_read"
 	priceMonitorLaneImageOutput         = "image_output"
 	priceMonitorLaneAudioInput          = "audio_input"
 	priceMonitorLaneAudioOutput         = "audio_output"
@@ -1032,11 +1033,33 @@ func priceMonitorOptionFields(data map[string]any, modelName string) map[string]
 
 func floatPointer(value float64) *float64 { return &value }
 
+// priceMonitorExpressionVariables 必须覆盖 pkg/billingexpr 的全部 token 计费变量
+// （见 pkg/billingexpr/expr.md 与 compileEnvPrototypeV1）。三处正则共用同一份清单：
+// 少写一个变量会让含该变量的模型整行静默退出价格比对、亏损判定与保本下限。
+const priceMonitorExpressionVariables = `p|c|cr|cc|cc1h|img|img_cr|img_o|ai|ao`
+
+// priceMonitorNumberPattern 匹配表达式里的字面系数，含科学计数法与负号。
+const priceMonitorNumberPattern = `-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?`
+
+// priceMonitorDynamicMarkers 是让表达式变成「随请求或时间浮动」的记号。
+// 命中任意一个即判为动态价，不与上游静态价比对——否则按时间/请求变价的模型会被误报为亏损。
+// 必须覆盖 pkg/billingexpr 的 usesRequestProbe 全部函数。
+var priceMonitorDynamicMarkers = []string{
+	"|||",
+	"header(",
+	"param(",
+	"hour(",
+	"minute(",
+	"weekday(",
+	"month(",
+	"day(",
+}
+
 var (
 	priceMonitorTierPattern   = regexp.MustCompile(`tier\("[^"]*",\s*([^)]+)\)`)
-	priceMonitorCoefficient   = regexp.MustCompile(`\b(p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)`)
-	priceMonitorTierCondition = regexp.MustCompile(`(len|p|c)\s*(<=|<|>=|>)\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*\?\s*$`)
-	priceMonitorSafeTierBody  = regexp.MustCompile(`^\s*(?:(?:p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\s*\+\s*(?:p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*\s*$`)
+	priceMonitorCoefficient   = regexp.MustCompile(`\b(` + priceMonitorExpressionVariables + `)\s*\*\s*(` + priceMonitorNumberPattern + `)`)
+	priceMonitorTierCondition = regexp.MustCompile(`(len|p|c)\s*(<=|<|>=|>)\s*(` + priceMonitorNumberPattern + `)\s*\?\s*$`)
+	priceMonitorSafeTierBody  = regexp.MustCompile(`^\s*(?:(?:` + priceMonitorExpressionVariables + `)\s*\*\s*` + priceMonitorNumberPattern + `)(?:\s*\+\s*(?:` + priceMonitorExpressionVariables + `)\s*\*\s*` + priceMonitorNumberPattern + `)*\s*$`)
 )
 
 var priceMonitorRatioLanes = []struct {
@@ -1051,19 +1074,25 @@ var priceMonitorRatioLanes = []struct {
 }
 
 var priceMonitorExpressionLaneKeys = map[string]string{
-	"cr":    priceMonitorLaneCacheRead,
-	"cc":    priceMonitorLaneCacheWrite,
-	"cc1h":  priceMonitorLaneCacheWrite1h,
-	"img":   priceMonitorLaneImageInput,
-	"img_o": priceMonitorLaneImageOutput,
-	"ai":    priceMonitorLaneAudioInput,
-	"ao":    priceMonitorLaneAudioOutput,
+	"cr":     priceMonitorLaneCacheRead,
+	"cc":     priceMonitorLaneCacheWrite,
+	"cc1h":   priceMonitorLaneCacheWrite1h,
+	"img":    priceMonitorLaneImageInput,
+	"img_cr": priceMonitorLaneImageCacheRead,
+	"img_o":  priceMonitorLaneImageOutput,
+	"ai":     priceMonitorLaneAudioInput,
+	"ao":     priceMonitorLaneAudioOutput,
 }
 
 func parsePriceMonitorExpression(expression string) ([]PriceMonitorPriceTier, bool) {
 	expression = strings.TrimSpace(expression)
-	if expression == "" || strings.Contains(expression, "|||") || strings.Contains(expression, "header(") || strings.Contains(expression, "param(") || strings.Contains(expression, "hour(") || strings.Contains(expression, "minute(") || strings.Contains(expression, "weekday(") {
+	if expression == "" {
 		return nil, true
+	}
+	for _, marker := range priceMonitorDynamicMarkers {
+		if strings.Contains(expression, marker) {
+			return nil, true
+		}
 	}
 	matches := priceMonitorTierPattern.FindAllStringSubmatchIndex(expression, -1)
 	if len(matches) == 0 || len(matches) > 2 {

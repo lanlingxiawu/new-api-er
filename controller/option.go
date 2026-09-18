@@ -464,10 +464,8 @@ func UpdateOption(c *gin.Context) {
 	case "thirdpartysd2_pricing.matrix":
 		err = model_setting.ValidateThirdPartySD2PricingMatrixJSON(option.Value.(string))
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "thirdpartysd2 定价设置失败: " + err.Error(),
-			})
+			logger.LogError(c, "thirdpartysd2 pricing matrix rejected: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgThirdPartySD2PricingInvalid, map[string]any{"Detail": err.Error()})
 			return
 		}
 	case "ModelRequestRateLimitGroup":

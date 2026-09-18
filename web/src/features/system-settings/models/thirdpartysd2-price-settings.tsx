@@ -39,17 +39,26 @@ import { useUpdateOption } from '../hooks/use-update-option'
 
 const OPTION_KEY = 'thirdpartysd2_pricing.matrix'
 
+// A price entry omits a price the built-in matrix still supplies, and is null
+// when the resolution is removed from the model. Both are meaningful to the
+// server, so an empty input must never be sent as 0.
 type ThirdPartySD2PriceEntry = {
-  no_video: number
-  with_video: number
+  no_video?: number | null
+  with_video?: number | null
 }
 
 type ThirdPartySD2PricingMatrix = Record<
   string,
-  Record<string, ThirdPartySD2PriceEntry>
+  Record<string, ThirdPartySD2PriceEntry | null>
 >
 
-const DEFAULT_MATRIX: ThirdPartySD2PricingMatrix = {
+type ThirdPartySD2DefaultMatrix = Record<
+  string,
+  Record<string, { no_video: number; with_video: number }>
+>
+
+// Mirrors the built-in matrix the server merges overrides onto.
+const DEFAULT_MATRIX: ThirdPartySD2DefaultMatrix = {
   'dreamina-seedance-2-0-260128': {
     '480p': { no_video: 7.0, with_video: 4.3 },
     '720p': { no_video: 7.0, with_video: 4.3 },
@@ -62,47 +71,157 @@ const DEFAULT_MATRIX: ThirdPartySD2PricingMatrix = {
   },
 }
 
+const SUPPORTED_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
+
 type ThirdPartySD2PriceRow = {
   id: number
   model: string
   resolution: string
-  noVideo: number
-  withVideo: number
+  noVideo: number | null
+  withVideo: number | null
 }
 
+function classifyResolution(height: number): string {
+  if (height >= 2160) return '4k'
+  if (height >= 1080) return '1080p'
+  if (height >= 720) return '720p'
+  if (height > 0) return '480p'
+  return ''
+}
+
+function parseWholeNumber(value: string): number | null {
+  if (!/^[+-]?\d+$/.test(value)) return null
+  return Number(value)
+}
+
+// Mirrors the server's resolution normalization so the table shows the same
+// tiers the server prices.
+function normalizeResolution(raw: string): string {
+  const value = raw.trim().toLowerCase().replaceAll(' ', '')
+  if ((SUPPORTED_RESOLUTIONS as readonly string[]).includes(value)) return value
+  if (value === '2160p') return '4k'
+  if (value.endsWith('p')) {
+    const height = parseWholeNumber(value.slice(0, -1))
+    if (height !== null) return classifyResolution(height)
+  }
+  const separator = value.indexOf('x')
+  if (separator < 0) return ''
+  const width = parseWholeNumber(value.slice(0, separator))
+  const height = parseWholeNumber(value.slice(separator + 1))
+  if (width === null || height === null || width <= 0 || height <= 0) return ''
+  return classifyResolution(Math.min(width, height))
+}
+
+function resolutionRank(resolution: string): number {
+  const rank = (SUPPORTED_RESOLUTIONS as readonly string[]).indexOf(resolution)
+  return rank < 0 ? SUPPORTED_RESOLUTIONS.length : rank
+}
+
+function pickPrice(
+  value: number | null | undefined,
+  fallback: number | null
+): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return fallback
+}
+
+// matrixToRows applies the saved overrides to the built-in matrix exactly the
+// way the server does: an absent price keeps the built-in one, and a null
+// resolution removes the row.
 function matrixToRows(
   matrix: ThirdPartySD2PricingMatrix
 ): ThirdPartySD2PriceRow[] {
+  const merged = new Map<
+    string,
+    Map<string, { noVideo: number | null; withVideo: number | null }>
+  >()
+  for (const [model, resolutions] of Object.entries(DEFAULT_MATRIX)) {
+    const bucket = new Map<
+      string,
+      { noVideo: number | null; withVideo: number | null }
+    >()
+    for (const [resolution, pricing] of Object.entries(resolutions)) {
+      bucket.set(resolution, {
+        noVideo: pricing.no_video,
+        withVideo: pricing.with_video,
+      })
+    }
+    merged.set(model, bucket)
+  }
+
+  for (const [rawModel, resolutions] of Object.entries(matrix ?? {})) {
+    const model = rawModel.trim()
+    if (!model) continue
+    let bucket = merged.get(model)
+    if (!bucket) {
+      bucket = new Map()
+      merged.set(model, bucket)
+    }
+    for (const [rawResolution, pricing] of Object.entries(resolutions ?? {})) {
+      // an unrecognized key is kept as typed so it can be corrected
+      const resolution =
+        normalizeResolution(rawResolution) || rawResolution.trim()
+      if (!resolution) continue
+      if (pricing === null) {
+        bucket.delete(resolution)
+        continue
+      }
+      const base = bucket.get(resolution)
+      bucket.set(resolution, {
+        noVideo: pickPrice(pricing?.no_video, base?.noVideo ?? null),
+        withVideo: pickPrice(pricing?.with_video, base?.withVideo ?? null),
+      })
+    }
+  }
+
   let nextId = 1
   const rows: ThirdPartySD2PriceRow[] = []
-  for (const [model, resolutions] of Object.entries(matrix)) {
-    for (const [resolution, pricing] of Object.entries(resolutions ?? {})) {
+  for (const [model, bucket] of merged) {
+    const resolutions = [...bucket.entries()].sort(
+      ([a], [b]) => resolutionRank(a) - resolutionRank(b)
+    )
+    for (const [resolution, pricing] of resolutions) {
       rows.push({
         id: nextId++,
         model,
         resolution,
-        noVideo: Number(pricing?.no_video) || 0,
-        withVideo: Number(pricing?.with_video) || 0,
+        noVideo: pricing.noVideo,
+        withVideo: pricing.withVideo,
       })
     }
   }
   return rows
 }
 
+// rowsToMatrix writes every row with both prices, and writes null for a
+// built-in row the administrator removed — without that tombstone the server
+// would merge the built-in price back in and the row would reappear.
 function rowsToMatrix(
   rows: ThirdPartySD2PriceRow[]
 ): ThirdPartySD2PricingMatrix {
   const matrix: ThirdPartySD2PricingMatrix = {}
+  const kept = new Set<string>()
   for (const row of rows) {
     const model = row.model.trim()
     const resolution = row.resolution.trim()
     if (!model || !resolution) continue
+    if (row.noVideo === null || row.withVideo === null) continue
     if (!matrix[model]) {
       matrix[model] = {}
     }
     matrix[model][resolution] = {
-      no_video: Number(row.noVideo) || 0,
-      with_video: Number(row.withVideo) || 0,
+      no_video: row.noVideo,
+      with_video: row.withVideo,
+    }
+    kept.add(`${model}\u0000${normalizeResolution(resolution) || resolution}`)
+  }
+  for (const [model, resolutions] of Object.entries(DEFAULT_MATRIX)) {
+    for (const resolution of Object.keys(resolutions)) {
+      if (kept.has(`${model}\u0000${resolution}`)) continue
+      if (!matrix[model]) {
+        matrix[model] = {}
+      }
+      matrix[model][resolution] = null
     }
   }
   return matrix
@@ -116,7 +235,7 @@ function findDuplicateModelResolution(
     const model = row.model.trim()
     const resolution = row.resolution.trim()
     if (!model || !resolution) continue
-    const key = `${model}\u0000${resolution}`
+    const key = `${model}\u0000${normalizeResolution(resolution) || resolution}`
     if (seen.has(key)) {
       return { model, resolution }
     }
@@ -128,21 +247,16 @@ function findDuplicateModelResolution(
 function parseInitialMatrix(
   rawValue: string | undefined
 ): ThirdPartySD2PricingMatrix {
-  if (!rawValue) return { ...DEFAULT_MATRIX }
+  if (!rawValue) return {}
   try {
     const parsed = JSON.parse(rawValue) as unknown
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      !Array.isArray(parsed) &&
-      Object.keys(parsed as object).length > 0
-    ) {
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed as ThirdPartySD2PricingMatrix
     }
   } catch {
-    // fall through to defaults
+    // fall through to the built-in matrix
   }
-  return { ...DEFAULT_MATRIX }
+  return {}
 }
 
 type ThirdPartySD2PriceSettingsProps = {
@@ -163,17 +277,19 @@ export const ThirdPartySD2PriceSettings = memo(
     const [nextRowId, setNextRowId] = useState(1)
 
     useEffect(() => {
-      const matrix = parseInitialMatrix(defaultValue)
-      const initialRows = matrixToRows(matrix)
+      const initialRows = matrixToRows(parseInitialMatrix(defaultValue))
       setRows(initialRows)
-      setJsonText(JSON.stringify(matrix, null, 2))
+      setJsonText(JSON.stringify(rowsToMatrix(initialRows), null, 2))
       setJsonError('')
       setNextRowId(initialRows.length + 1)
     }, [defaultValue])
 
     const currentMatrix = useMemo(() => rowsToMatrix(rows), [rows])
     const savedMatrix = useMemo(
-      () => JSON.stringify(parseInitialMatrix(defaultValue)),
+      () =>
+        JSON.stringify(
+          rowsToMatrix(matrixToRows(parseInitialMatrix(defaultValue)))
+        ),
       [defaultValue]
     )
 
@@ -213,7 +329,7 @@ export const ThirdPartySD2PriceSettings = memo(
       (
         id: number,
         field: 'model' | 'resolution' | 'noVideo' | 'withVideo',
-        value: string | number
+        value: string | number | null
       ) => {
         syncFromRows(
           rows.map((row) => (row.id === id ? { ...row, [field]: value } : row))
@@ -227,8 +343,8 @@ export const ThirdPartySD2PriceSettings = memo(
         id: nextRowId,
         model: '',
         resolution: '720p',
-        noVideo: 0,
-        withVideo: 0,
+        noVideo: null,
+        withVideo: null,
       }
       setNextRowId((prev) => prev + 1)
       syncFromRows([...rows, newRow])
@@ -242,9 +358,9 @@ export const ThirdPartySD2PriceSettings = memo(
     )
 
     const resetToDefault = useCallback(() => {
-      const initialRows = matrixToRows(DEFAULT_MATRIX)
+      const initialRows = matrixToRows({})
       setRows(initialRows)
-      setJsonText(JSON.stringify(DEFAULT_MATRIX, null, 2))
+      setJsonText(JSON.stringify(rowsToMatrix(initialRows), null, 2))
       setJsonError('')
       setNextRowId(initialRows.length + 1)
     }, [])
@@ -258,9 +374,48 @@ export const ThirdPartySD2PriceSettings = memo(
       }
     }, [jsonText, t])
 
+    const findRowIssue = useCallback(
+      (candidates: ThirdPartySD2PriceRow[]) => {
+        for (const row of candidates) {
+          const model = row.model.trim()
+          const resolution = row.resolution.trim()
+          if (!model || !resolution) {
+            return t(
+              'Enter a model and a resolution for every price row, or remove the row.'
+            )
+          }
+          if (!normalizeResolution(resolution)) {
+            return t(
+              'Resolution "{{resolution}}" is not supported. Use 480p, 720p, 1080p or 4k.',
+              { resolution }
+            )
+          }
+          if (row.noVideo === null || row.withVideo === null) {
+            return t(
+              'Enter both prices for model {{model}} at {{resolution}}, or remove the row.',
+              { model, resolution }
+            )
+          }
+          if (row.noVideo < 0 || row.withVideo < 0) {
+            return t(
+              'Prices for model {{model}} at {{resolution}} cannot be negative.',
+              { model, resolution }
+            )
+          }
+        }
+        return ''
+      },
+      [t]
+    )
+
     const handleSave = useCallback(async () => {
       if (editMode === 'json' && jsonError) {
         toast.error(t('Please fix JSON errors before saving'))
+        return
+      }
+      const rowIssue = findRowIssue(rows)
+      if (rowIssue) {
+        toast.error(rowIssue)
         return
       }
       const duplicate = findDuplicateModelResolution(rows)
@@ -290,6 +445,7 @@ export const ThirdPartySD2PriceSettings = memo(
     }, [
       currentMatrix,
       editMode,
+      findRowIssue,
       jsonError,
       requestSaveConfirmation,
       rows,
@@ -314,6 +470,11 @@ export const ThirdPartySD2PriceSettings = memo(
             <div>
               {t(
                 'These prices override the generic model ratio only for the third-party SD2 task channel.'
+              )}
+            </div>
+            <div>
+              {t(
+                'A model accepts exactly the resolutions listed here: deleting a row makes that resolution unavailable for the model.'
               )}
             </div>
           </AlertDescription>
@@ -412,12 +573,14 @@ export const ThirdPartySD2PriceSettings = memo(
                           type='number'
                           min={0}
                           step={0.1}
-                          value={row.noVideo}
+                          value={row.noVideo ?? ''}
                           onChange={(e) =>
                             updateRow(
                               row.id,
                               'noVideo',
-                              Number(e.target.value) || 0
+                              e.target.value === ''
+                                ? null
+                                : Number(e.target.value)
                             )
                           }
                         />
@@ -427,12 +590,14 @@ export const ThirdPartySD2PriceSettings = memo(
                           type='number'
                           min={0}
                           step={0.1}
-                          value={row.withVideo}
+                          value={row.withVideo ?? ''}
                           onChange={(e) =>
                             updateRow(
                               row.id,
                               'withVideo',
-                              Number(e.target.value) || 0
+                              e.target.value === ''
+                                ? null
+                                : Number(e.target.value)
                             )
                           }
                         />

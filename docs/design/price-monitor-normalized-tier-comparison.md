@@ -229,3 +229,27 @@ gpt-4.1 的平台补全倍率配置为 4.000424808836024（输出价 $8.00085，
 `controller/price_monitor_single_tier_test.go`：同价单档不再计入「平台对比官方」；价格不同时标到具体字段；
 多档 / 不可表达分项 / 动态表达式保持模式不同；平台单档时平台单元格不被改写；单档渠道重新参与亏损判定、
 保本下限与「高于平台」。
+
+## 15. 表达式识别的两份清单
+
+`controller/price_monitor.go` 里有两份必须跟着 `pkg/billingexpr` 走的清单，各自对应一种失效方式：
+
+**`priceMonitorDynamicMarkers`（动态记号）** —— `|||`、`header(`、`param(`、`hour(`、`minute(`、
+`weekday(`、`month(`、`day(`，覆盖 `pkg/billingexpr/compile.go` 的 `usesRequestProbe` 全部函数。
+少写一个，随时间或请求浮动的表达式会被当成固定价与上游静态价比对，把按月 / 按日促销的模型误报成亏损。
+注意有些写法只在**单个** `tier(...)` 之外带时间条件（例如 `tier("standard", p*2 + c*8) * (month("UTC") == 11 ? 0.5 : 1)`），
+阶梯本身能安全解析，只有这份记号清单能拦住它。
+
+**`priceMonitorExpressionVariables`（计费变量）** —— `p|c|cr|cc|cc1h|img|img_cr|img_o|ai|ao`，
+三处正则（系数提取、安全阶梯主体、阶梯条件的数字格式）共用同一份常量拼接，避免再次漂移。
+少写一个变量，`priceMonitorSafeTierBody` 会拒绝整个阶梯主体、该表达式被判为动态，含该变量的模型整行
+**静默**退出价格比对、亏损判定与保本下限——没有任何告警，只是永远不再报差异。`img_cr` 就是这样漏掉的
+（`setting/billing_setting/builtin_billing.go` 的 `gpt-image-2` 系列内置价就带它）。
+
+`img_cr` 对应新的分项键 `image_cache_read`（前端文案见 `price-monitor-panel.tsx` 的 `laneLabel`）。
+与 `img_o` 一样，平台侧没有对应的按量配置项，因此 `priceMonitorTokenLaneKey` 不认它：含该分项的单档
+表达式不会被换算成按量单元格，而是保留阶梯形态按分项逐项比较。
+
+改动 `priceMonitorMatrixVersion`（现为 18）会让已存快照在下次巡检时重建，解析口径变更必须一并提升。
+
+**测试**：`controller/price_monitor_expression_variables_test.go`。

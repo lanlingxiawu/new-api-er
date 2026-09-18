@@ -69,7 +69,7 @@
 
 `resolution` 取 `metadata.resolution` 与 `size` 规范化后较高者（`480p/720p/1080p/4k`，`2160p`→4k，`WxH` 取短边分档）。缺少可识别分辨率时插件返回 400。
 
-模型接受的分辨率由价格矩阵决定：宿主在计费前调用 `billing_setting.ValidateForkTaskUsageFacts`，`output_resolution` 不在该模型（客户端模型优先，再取映射后模型）矩阵中时返回 400 `plugin_request_invalid`，如 `dreamina-seedance-2-0-fast-260128 does not support 1080p resolution (supported: 480p, 720p)`。管理员在矩阵中为 fast 模型加入 1080p 后即被接受并按该档计费。模型保存了 `thirdpartysd2::<model>` 插件表达式时由该表达式定价，不做矩阵检查。插件本身不维护按模型的分辨率白名单。
+模型接受的分辨率由价格矩阵决定：宿主在计费前调用 `billing_setting.ValidateForkTaskUsageFacts`，`output_resolution` 不在该模型（客户端模型优先，再取映射后模型）矩阵中时返回 400 `plugin_request_invalid`，如 `dreamina-seedance-2-0-fast-260128 does not support 1080p resolution (supported: 480p, 720p)`。管理员在矩阵中为 fast 模型加入 1080p 后即被接受并按该档计费；删除某一档后该分辨率同样立即被拒绝（见「配置参数」的矩阵合并语义）。模型的档位被全部删除时，`ValidateForkTaskUsageFacts` 与按次分支前的 `billing_setting.ValidateForkTaskModelPricing` 都返回 `<model> has no priced resolution; an administrator must price it before it can be used`，不会退回通用按次价格/倍率计费。模型保存了 `thirdpartysd2::<model>` 插件表达式时由该表达式定价，不做矩阵检查。插件本身不维护按模型的分辨率白名单。
 
 ## 级联：下游网关接入
 
@@ -134,6 +134,19 @@
 
 - `ModelPrice`：`grok-imagine-video`（默认 0.05）、`grok-imagine-video-1.5`（默认 0.08），即 480p 每秒基础价。
 - `thirdpartysd2_pricing.matrix`：SD2 分辨率 × 是否含参考视频的 $/1M tokens 价格矩阵，管理后台「分组与模型计费」中的 ThirdPartySD2 标签页继续生效。
+
+  矩阵是内置矩阵（`defaultThirdPartySD2PricingMatrix`，含两个模型的默认档位）之上的覆盖层，合并语义按字段生效：
+
+  | 保存的 JSON | 生效结果 |
+  |---|---|
+  | `{"model":{"1080p":{"with_video":5}}}` | `with_video=5`，`no_video` 保留内置价；两个价格都是 `*float64`，省略即继承，不是 0 |
+  | `{"model":{"1080p":{"no_video":0,"with_video":0}}}` | 显式 0 是真实的免费档，照常生效 |
+  | `{"model":{"4k":null}}` | 删除该档位：矩阵即可用分辨率，删掉后该分辨率的请求被拒绝，不会被内置矩阵重新合并回来 |
+  | 内置矩阵没有的分辨率只给一个价格 | 拒绝保存：没有可继承的底价，必须同时给出 `no_video` 与 `with_video` |
+
+  内置矩阵没有的模型可以整模型新增；内置模型的档位被 `null` 删空时该模型仍登记在矩阵里，只是没有任何可用分辨率。
+
+  保存校验（`model_setting.ValidateThirdPartySD2PricingMatrixJSON`，`PUT /api/option` 的 `thirdpartysd2_pricing.matrix` 分支）除 JSON 形状外，还会对合并后每个模型生成的表达式做一次编译与逐档 smoke（`tokens ∈ {0, 1, 1M}` × 每个分辨率 × 有无参考视频，校验金额、命中档位、结果有限非负），失败即拒绝保存并返回 `thirdpartysd2_pricing.invalid`（中英双语，带具体原因），避免错误表达式直到用户请求时才以 400 暴露。管理界面按同一语义编辑：行删除会写入 `null` 墓碑，价格输入为空不会落成 0 而是阻止提交并提示补齐。
 - `billing_setting.plugin_billing_expr`：管理员可为 `xai::<model>` / `thirdpartysd2::<model>` 保存插件表达式，优先级最高。
 
 ## 计费
@@ -177,7 +190,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
    ... : tier("4k_video", u("tokens") * 2.4 / 1000000)
    ```
 
-   分辨率按档位排序，最后一个组合作为 else。宿主在求值前用 `ValidateForkTaskUsageFacts` 拒绝矩阵中没有的分辨率，而每个分辨率都同时有无/有参考视频两个价格，所以 else 分支不会承接未定价的组合。
+   分辨率按档位排序，最后一个组合作为 else。宿主在求值前用 `ValidateForkTaskUsageFacts` 拒绝矩阵中没有的分辨率，而每个分辨率都同时有无/有参考视频两个价格（合并阶段保证：缺一个价格的档位会被丢弃并记 `SysError`），所以 else 分支不会承接未定价的组合。档位被删空的模型不生成表达式，请求在计费前就被拒绝。
 
 2. `billing_setting.ResolveTaskBillingExpr` 在插件显式覆盖之后、模型级表达式之前调用 `resolveForkTaskBillingExpr`（`setting/billing_setting/fork_task_billing.go`）：插件为 `thirdpartysd2` 时按客户端模型、再按映射后模型取矩阵表达式。
 
@@ -214,7 +227,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 | 位置 | 原因 |
 |---|---|
 | `relay/relay_task.go` `getExternalVideoURL` 等 | 隐藏 SD2 私有输出地址（新旧任务） |
-| `relay/relay_task.go` `withThirdPartySD2ContentURL`、`recordXaiTaskPricingMetadata`、`ValidateForkTaskUsageFacts` 调用 | SD2 `metadata.url`；xAI 计费维度；SD2 分辨率按矩阵接受 |
+| `relay/relay_task.go` `withThirdPartySD2ContentURL`、`recordXaiTaskPricingMetadata`、`ValidateForkTaskUsageFacts` 与 `ValidateForkTaskModelPricing` 调用 | SD2 `metadata.url`；xAI 计费维度；SD2 分辨率按矩阵接受；档位删空的 SD2 模型不落到通用按次计费 |
 | `controller/video_proxy.go` `thirdPartySD2ContentRequest` | 旧 SD2 任务无插件执行记录，内容代理需渠道密钥（仅渠道主机与声明主机） |
 | `model/pricing.go` 调用 `ResolveForkPublicTaskBillingExpr` | 公开定价页展示 SD2 矩阵价格 |
 | `service/task_billing.go` `isLegacyThirdPartySD2BillingContext` | 旧 SD2 任务 token 结算读取快照倍率 |
@@ -250,6 +263,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 
 - 插件 `buildSubmitRequest`、`extractUsage`（xAI 按次模式 2 次：倍率与计费维度元数据各 1 次；SD2 表达式模式 1 次）——与所有上游内置插件相同的 JS 调用，受宿主执行超时和并发池限制。
 - `ResolveTaskBillingExpr` 的 SD2 回退与 `ValidateForkTaskUsageFacts`：字符串比较、`atomic.Pointer` 读取和 map 查找（分辨率列表至多 4 项排序）；表达式编译由 `billingexpr` 按字符串缓存，矩阵不变时不重复编译。
+- `ValidateForkTaskModelPricing` 只在按次分支（无任何表达式）执行，非 SD2 插件是一次字符串比较后立即返回。
 - `GET /v1/videos/:id` 对成功的 SD2 任务多一次 JSON 解码与编码。
 
 异步/后台：轮询、完成结算、退款、日志沿用宿主后台任务。
@@ -292,6 +306,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 - `plugins/inbound_cascade_routes_test.go`：入站路由登记（方法/路径/类型/钩子/`taskIdParam`）、`native` 解码后转发给厂商的请求与入站请求逐字段一致、渲染出的提交/查询响应被同一插件的 `parseSubmitResponse`/`parseTaskResult` 解析、输出地址为网关相对路径且不含厂商地址、下游 `buildContentRequest` 按渠道 origin 还原并附带密钥、入站校验错误。
 - `relay/relay_task_fork_test.go`：内容地址优先 TaskPublicAddress、`metadata.url` 补齐及不改动的情形、xAI 计费维度元数据。
 - `controller/video_proxy_sd2_test.go`：旧 SD2 内容请求只向渠道主机发送密钥。
-- `setting/billing_setting/fork_task_billing_test.go`：公开定价表达式解析、矩阵分辨率校验（含映射模型与插件覆盖）。
+- `setting/billing_setting/fork_task_billing_test.go`：公开定价表达式解析、矩阵分辨率校验（含映射模型与插件覆盖）、删除档位后该分辨率被拒、模型档位删空后 `ValidateForkTaskModelPricing` 拒绝提交。
+- `setting/model_setting/thirdpartysd2_pricing_test.go`：分辨率规范化与档位排序、矩阵合并（只给一个价格时保留内置价、显式 0 生效、`null` 删除档位、删空模型、缺底价的新档位被丢弃）、保存校验（负数/非有限价格/新档位缺价）、生成表达式的编译与逐档 smoke。
 - `model/pricing_fork_task_expr_test.go`：定价 API 返回 SD2 矩阵表达式。
 - `service/gen3_taskbilling2_test.go`：token 重算——倍率 0 不结算、旧 SD2 读快照、正常倍率差额结算。
