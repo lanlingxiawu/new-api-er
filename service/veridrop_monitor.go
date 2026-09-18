@@ -922,14 +922,21 @@ func inferVeridropProtocol(channel *model.Channel) string {
 		constant.ChannelTypeSub2API,
 		constant.ChannelTypeNewAPI:
 		return "openai"
-	case constant.ChannelTypeAdvancedCustom:
-		return inferAdvancedCustomVeridropProtocol(channel.GetOtherSettings().AdvancedCustom)
 	default:
+		if constant.IsAdvancedCustomChannel(channel.Type) {
+			return inferAdvancedCustomVeridropProtocol(channel.Type, channel.GetOtherSettings().AdvancedCustom)
+		}
 		return ""
 	}
 }
 
-func inferAdvancedCustomVeridropProtocol(config *dto.AdvancedCustomConfig) string {
+func inferAdvancedCustomVeridropProtocol(channelType int, config *dto.AdvancedCustomConfig) string {
+	// vLLM 与 SGLang 的路由由内置预设固定下发，同时暴露 OpenAI 与 Anthropic 形状的入站路径，
+	// 但上游服务器本身只说 OpenAI。按路径推断会因两种形状冲突而返回空协议，导致整条渠道被静默
+	// 标记为 "unsupported channel protocol" 而跳过检测。
+	if channelType == constant.ChannelTypeVLLM || channelType == constant.ChannelTypeSGLang {
+		return "openai"
+	}
 	if config == nil {
 		return ""
 	}

@@ -33,11 +33,16 @@ const (
 // Pending work is merged rather than queued: a burst of group edits must cost
 // one table scan, not one scan per edit. A single worker drains the queue, so
 // scans never overlap. Guarded by groupRatioQueueMu.
+//
+// groupRatioCleanupFinished holds, per target group, the moment its scan ended.
+// The gate below keeps reporting such a group as active for one user-cache TTL
+// afterwards; see groupRatioCleanupGrace.
 var (
-	groupRatioQueueMu       sync.Mutex
-	groupRatioQueuePending  map[string]struct{}
-	groupRatioQueueRunning  map[string]struct{}
-	groupRatioQueueDraining bool
+	groupRatioQueueMu         sync.Mutex
+	groupRatioQueuePending    map[string]struct{}
+	groupRatioQueueRunning    map[string]struct{}
+	groupRatioQueueDraining   bool
+	groupRatioCleanupFinished map[string]time.Time
 )
 
 type userGroupRatioRow struct {
@@ -116,20 +121,69 @@ func drainUserGroupRatioCleanupQueue() {
 	}
 }
 
+// groupRatioCleanupGrace is how long a finished cleanup keeps reporting its
+// groups as active: one user-cache TTL.
+//
+// The scan ending is not the end of the exposure. A relay request that missed
+// the user cache before the compare-and-set write holds the pre-cleanup row in
+// hand; it can install that row into Redis after the scan has already checked
+// "does this user have a cached copy?" and decided there was nothing to
+// refresh. Without the grace window, an admin recreating the same group name
+// right then would bill traffic at the deleted group's exclusive ratio for up
+// to a full cache TTL. Broadcasting an unconditional invalidation does not fix
+// it — writeUserCache's script is a no-op on a hash that does not exist yet.
+//
+// Without Redis there is no user cache to poison, so the gate ends with the
+// scan.
+func groupRatioCleanupGrace() time.Duration {
+	if !common.RedisEnabled {
+		return 0
+	}
+	return time.Duration(userCacheTTLSeconds()) * time.Second
+}
+
+// markGroupRatioCleanupFinished records the scan-completion moment for every
+// target so the gate can extend past the scan. Safe to call while panicking.
+func markGroupRatioCleanupFinished(targets []string, finishedAt time.Time) {
+	groupRatioQueueMu.Lock()
+	defer groupRatioQueueMu.Unlock()
+	if groupRatioCleanupFinished == nil {
+		groupRatioCleanupFinished = make(map[string]time.Time, len(targets))
+	}
+	for _, name := range targets {
+		groupRatioCleanupFinished[name] = finishedAt
+	}
+}
+
+// pruneGroupRatioCleanupFinishedLocked drops entries past the grace window so
+// the map cannot grow without bound. Caller holds groupRatioQueueMu.
+func pruneGroupRatioCleanupFinishedLocked(now time.Time, grace time.Duration) {
+	for name, finishedAt := range groupRatioCleanupFinished {
+		if now.Sub(finishedAt) >= grace {
+			delete(groupRatioCleanupFinished, name)
+		}
+	}
+}
+
 // GroupRatioCleanupsActive returns, sorted, the given group names whose cleanup
-// is still queued or scanning.
+// is still queued, scanning, or inside the post-scan grace window.
 //
 // Saving a new exclusive ratio for such a group is refused (see UpdateUser): the
 // scan may not have reached that user yet and would strip the new rule as a
-// stale leftover. A cleanup normally finishes within about a minute.
+// stale leftover. Re-creating the name is refused too (see planGroupRatioCleanup).
+// A cleanup normally finishes within about a minute, plus one user-cache TTL.
 func GroupRatioCleanupsActive(groups []string) []string {
+	now := time.Now()
+	grace := groupRatioCleanupGrace()
 	groupRatioQueueMu.Lock()
 	defer groupRatioQueueMu.Unlock()
+	pruneGroupRatioCleanupFinishedLocked(now, grace)
 	var active []string
 	for _, name := range groups {
 		_, pending := groupRatioQueuePending[name]
 		_, running := groupRatioQueueRunning[name]
-		if pending || running {
+		_, cooling := groupRatioCleanupFinished[name]
+		if pending || running || cooling {
 			active = append(active, name)
 		}
 	}
@@ -202,6 +256,9 @@ func CleanupUserGroupRatios(targets []string) {
 			common.SysError(fmt.Sprintf("panic in user group ratio cleanup: %v", r))
 		}
 	}()
+	// Registered after the recover above so it also runs when the scan aborts:
+	// an incomplete scan needs the grace window at least as much as a clean one.
+	defer func() { markGroupRatioCleanupFinished(targets, time.Now()) }()
 
 	targetSet := make(map[string]struct{}, len(targets))
 	for _, name := range targets {

@@ -591,3 +591,30 @@ func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	assert.Contains(t, noAvailableChannelMessage(c, "default", "task-model"), "alpha, beta")
 }
+
+// 亲和性绑定用不上时的清缓存策略。三种「用不上」的原因语义不同：
+// 渠道被删/禁用、渠道不再承载该分组+模型（ability 里没有）都说明绑定本身失效，该清；
+// 而「渠道还在、只是不满足本次请求的过滤器」（任务插件身份、请求路径等约束）描述的是这次
+// 请求而不是渠道——为一次不相关的约束清掉整条绑定，会让后续本可复用的请求在渠道间漂移。
+func TestShouldClearChannelAffinity(t *testing.T) {
+	cases := []struct {
+		name             string
+		channelAvailable bool
+		satisfiesFilters bool
+		keepOnDisabled   bool
+		want             bool
+	}{
+		{"channel gone or disabled", false, false, false, true},
+		{"channel gone, operator keeps binding", false, false, true, false},
+		{"alive channel fails this request's filters", true, false, false, false},
+		{"alive channel fails filters, keep flag is irrelevant", true, false, true, false},
+		{"alive and satisfying but not serving this group+model", true, true, false, true},
+		{"alive and satisfying, operator keeps binding", true, true, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, shouldClearChannelAffinity(tc.channelAvailable, tc.satisfiesFilters, tc.keepOnDisabled))
+		})
+	}
+}

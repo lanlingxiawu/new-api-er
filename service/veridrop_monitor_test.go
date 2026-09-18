@@ -72,6 +72,19 @@ func TestInferVeridropProtocol(t *testing.T) {
 			}(),
 			want: "",
 		},
+		// vLLM 与 SGLang 由内置路由预设驱动（common.GetAdvancedCustomPreset），预设同时暴露
+		// OpenAI 与 Anthropic 形状的入站路径，但上游服务器本身只说 OpenAI。按路径推断会因两种
+		// 形状冲突而返回空协议，整条渠道被标记 "unsupported channel protocol" 静默跳过检测。
+		{
+			name:    "vllm channel",
+			channel: &model.Channel{Type: constant.ChannelTypeVLLM},
+			want:    "openai",
+		},
+		{
+			name:    "sglang channel",
+			channel: &model.Channel{Type: constant.ChannelTypeSGLang},
+			want:    "openai",
+		},
 		{
 			name:    "unknown channel",
 			channel: &model.Channel{Type: constant.ChannelTypeMidjourney},
@@ -88,6 +101,27 @@ func TestInferVeridropProtocol(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, inferVeridropProtocol(tt.channel))
 		})
+	}
+}
+
+// 推不出协议的渠道会被整条标记为 skipped，检测页上既没有结果也没有失败原因可查，
+// 所以预设驱动的渠道类型必须一路走到真正的检测目标。
+func TestBuildVeridropDetectionTargetCoversPresetBackedChannels(t *testing.T) {
+	for _, channelType := range []int{constant.ChannelTypeAdvancedCustom, constant.ChannelTypeVLLM, constant.ChannelTypeSGLang} {
+		channel := &model.Channel{Id: 1, Name: "local-inference", Type: channelType, Models: "qwen3-32b"}
+		if channelType == constant.ChannelTypeAdvancedCustom {
+			channel.SetOtherSettings(dto.ChannelOtherSettings{
+				AdvancedCustom: &dto.AdvancedCustomConfig{
+					Routes: []dto.AdvancedCustomRoute{{IncomingPath: "/v1/chat/completions"}},
+				},
+			})
+		}
+
+		target := buildVeridropDetectionTarget(channel, VeridropDetectionTaskPayload{})
+
+		require.Equal(t, "openai", target.Protocol, "channel type %d", channelType)
+		require.Empty(t, target.SkippedReason, "channel type %d", channelType)
+		require.Equal(t, []string{"qwen3-32b"}, target.Models)
 	}
 }
 

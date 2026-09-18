@@ -1194,3 +1194,19 @@ type VeridropMonitorSetting struct {
 检测记录页签现已与批量检测页签共同复用现有目标查询。渠道组合框从目标中按渠道名称去重并显示“名称 · #ID”，模型组合框将所有目标模型去空、去重并按名称排序。两个控件均使用项目现有可输入 `Combobox`：点击或聚焦即可展开候选项，支持键盘选择，同时保持自定义关键词输入和原有 400ms 防抖请求。
 
 目标查询失败时组合框仍可自由输入；重置筛选继续清空渠道和模型。新增的空候选提示已通过脚本写入全部七种 locale。TypeScript、目标文件 oxlint、Prettier、七语言根节点与词条检查、生产构建均通过。完整 Go 回归除共享 MySQL 中残留 `profit` 记录导致 `TestListConsumptionCostLedgerWithInAppTagFilter_Direct` 预期 2 条实际 3 条外均通过；该失败与本次前端快捷选择无关。
+
+## 协议推断：预设驱动的渠道类型
+
+`inferVeridropProtocol`（`service/veridrop_monitor.go`）对高级自定义家族统一走
+`constant.IsAdvancedCustomChannel`（AdvancedCustom / vLLM / SGLang），再交给
+`inferAdvancedCustomVeridropProtocol` 判定。
+
+vLLM 与 SGLang 的路由不是管理员配置的，而是 `common.GetAdvancedCustomPreset` 固定下发的内置预设，
+其中同时包含 `/v1/chat/completions`（OpenAI 形状）与 `/v1/messages`（Anthropic 形状）。按路径推断会因两种
+形状冲突而返回空协议，整条渠道被 `buildVeridropDetectionTarget` 标记为
+`unsupported channel protocol` 静默跳过——检测页上既没有结果也没有可查的失败原因。这两种渠道类型的
+上游服务器本身只说 OpenAI，因此直接判定为 `openai`；真正由管理员配置路由的 AdvancedCustom 仍保留
+「多协议即不可探测」的保守判定。
+
+**测试**：`service/veridrop_monitor_test.go` 的 `TestInferVeridropProtocol`（vLLM / SGLang 用例）与
+`TestBuildVeridropDetectionTargetCoversPresetBackedChannels`（不再 skipped）。

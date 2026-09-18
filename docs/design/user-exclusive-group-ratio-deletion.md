@@ -344,3 +344,24 @@ controller 测试进程里 `InitEnv` 不运行，`IsMasterNode` 零值为 false�
 - `model/user_group_ratio_cleanup_test.go`：`TestCleanupUserGroupRatios_RefreshesCachedRatiosKeepsQuota`（取代原 `LeavesUserCacheIntact`：断言缓存仍在、`Quota` 不变、`GroupRatios` 已去掉被删分组）；`TestCleanupUserGroupRatios_DoesNotCreateMissingUserCache`（无缓存的用户不回库、不新建缓存）。
 - `controller/group_ratio_cleanup_plan_test.go`：`TestPlanGroupRatioCleanupRejectsRecreatingGroupUnderCleanup`、`TestPlanGroupRatioCleanupAllowsOtherChangesDuringCleanup`。
 - HK 套件 D：调用中删除专属倍率、修改分组倍率、删除其它分组、删除并重建用户所在分组，逐条核对日志倍率、扣费与余额（39/39）；套件 E3：5 万用户清理 349 秒、清理中重建被拒、清理完成后重建并设置倍率（10/10）；套件 F：懒删除与遗留（10/11，失败项即上面的已知残余）。
+
+## 14. 门禁覆盖扫描结束后的一个缓存 TTL
+
+`GroupRatioCleanupsActive` 报告的「清理中」除了队列的 pending / running，还包含**扫描结束后的一个用户缓存
+TTL**（`userCacheTTLSeconds()`，即 `SyncFrequency`）。扫描结束时刻按目标分组记在
+`groupRatioCleanupFinished`（`model/user_group_ratio_cleanup.go`，与队列共用 `groupRatioQueueMu`），
+读取时顺带剔除过期条目，映射不会无限增长。未启用 Redis 时没有用户缓存可污染，宽限期为 0、门禁随扫描结束。
+
+**动因（防复发）**：§13 的缓存刷新是「CAS 写库 → 判断该用户是否有缓存 → 有才刷新」。在 CAS 之前就缓存未
+命中的请求，手里握着清理前的旧行；它可以在存在性判断之后才把这一行写进 Redis（`GetUserCache` 未命中即
+`populateUserCache`）。此时扫描已结束，门禁若同步解除，管理员立刻重建同名分组并挂渠道，最长一个缓存 TTL
+内按已删分组的专属倍率计费。改成「无条件广播失效」治不了这个竞态：`writeUserCache` 的 Lua 对尚不存在的
+哈希是 no-op，而广播发生在旧行被写回之前。
+
+**代价**：删除分组后重建同名分组的等待时间，从「扫描完成」延长到「扫描完成 + 一个缓存 TTL」（默认 60 秒）。
+`UpdateUser` 为该分组新增专属倍率同样多等这一个 TTL。
+
+**用例**（`model/user_group_ratio_cleanup_test.go`）：
+`TestGroupRatioCleanupsActive_CoversUserCacheTTLAfterScan`（真实 Redis：扫描结束后注入一次旧行缓存回填，
+断言门禁仍生效）、`TestGroupRatioCleanupsActive_GraceWindowExpires`（到点解除且过期条目被剔除）、
+`TestGroupRatioCleanupsActive_NoGraceWithoutRedis`。

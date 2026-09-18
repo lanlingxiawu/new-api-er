@@ -330,3 +330,81 @@ func TestScheduleUserGroupRatioCleanup_EmptyIsNoop(t *testing.T) {
 	defer groupRatioQueueMu.Unlock()
 	assert.False(t, groupRatioQueueDraining, "an empty schedule must not start a worker")
 }
+
+// 扫描结束不等于风险结束：CAS 写库与「该用户有没有缓存」判断之间，一个更早缓存未命中的
+// 请求手里握着 CAS 之前的旧行，它会在判断之后把已删分组的专属倍率写回 Redis。此时扫描已
+// 结束、重建门禁若同时解除，管理员立刻重建同名分组并挂渠道，最长一个缓存 TTL 内按旧倍率
+// 计费。无条件广播失效治不了这个竞态——writeUserCache 的 Lua 对不存在的哈希是 no-op。
+func TestGroupRatioCleanupsActive_CoversUserCacheTTLAfterScan(t *testing.T) {
+	requireDB(t)
+	enableRedis(t)
+	gone := uniq("gone")
+
+	u := mkUser(t, func(u *User) {
+		u.GroupRatios = `{"` + gone + `":3}`
+		u.AuthVersion = 1
+	})
+	require.NoError(t, common.RDB.Del(context.Background(), getUserCacheKey(u.Id)).Err())
+	t.Cleanup(func() {
+		groupRatioQueueMu.Lock()
+		delete(groupRatioCleanupFinished, gone)
+		groupRatioQueueMu.Unlock()
+	})
+
+	CleanupUserGroupRatios([]string{gone})
+	require.Equal(t, "{}", readGroupRatios(t, u.Id))
+
+	// 竞态注入：扫描判定「无缓存、无需刷新」之后，旧行被写回缓存。
+	stale := *u
+	stale.GroupRatios = `{"` + gone + `":3}`
+	require.NoError(t, populateUserCache(stale))
+	cached, err := common.RDB.HGet(context.Background(), getUserCacheKey(u.Id), "GroupRatios").Result()
+	require.NoError(t, err)
+	require.Contains(t, cached, gone, "precondition: 缓存里仍是已删分组的旧倍率")
+
+	assert.Equal(t, []string{gone}, GroupRatioCleanupsActive([]string{gone}),
+		"扫描结束后的一个缓存 TTL 内，重建与新规则门禁必须继续拦截")
+}
+
+// 宽限期到点后门禁解除，过期条目同时被清掉——否则记录扫描结束时刻的映射会无限增长。
+func TestGroupRatioCleanupsActive_GraceWindowExpires(t *testing.T) {
+	prevRedis := common.RedisEnabled
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RedisEnabled = prevRedis
+		groupRatioQueueMu.Lock()
+		groupRatioCleanupFinished = nil
+		groupRatioQueueMu.Unlock()
+	})
+
+	name := uniq("cooling")
+	markGroupRatioCleanupFinished([]string{name}, time.Now())
+	require.Equal(t, []string{name}, GroupRatioCleanupsActive([]string{name}))
+
+	groupRatioQueueMu.Lock()
+	groupRatioCleanupFinished[name] = time.Now().Add(-time.Duration(userCacheTTLSeconds()+1) * time.Second)
+	groupRatioQueueMu.Unlock()
+
+	assert.Empty(t, GroupRatioCleanupsActive([]string{name}))
+	groupRatioQueueMu.Lock()
+	_, present := groupRatioCleanupFinished[name]
+	groupRatioQueueMu.Unlock()
+	assert.False(t, present, "过期条目必须被剔除")
+}
+
+// 没有 Redis 就没有用户缓存可被污染，门禁跟着扫描结束。
+func TestGroupRatioCleanupsActive_NoGraceWithoutRedis(t *testing.T) {
+	prevRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = prevRedis
+		groupRatioQueueMu.Lock()
+		groupRatioCleanupFinished = nil
+		groupRatioQueueMu.Unlock()
+	})
+
+	name := uniq("nocache")
+	markGroupRatioCleanupFinished([]string{name}, time.Now())
+
+	assert.Empty(t, GroupRatioCleanupsActive([]string{name}))
+}

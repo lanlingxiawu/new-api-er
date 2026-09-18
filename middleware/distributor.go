@@ -127,7 +127,8 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					affinitySatisfied := false
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled {
+					affinityChannelAvailable := err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled
+					if affinityChannelAvailable {
 						affinitySatisfied, _ = model.ChannelSatisfiesFilters(preferred, modelRequest.Model, constraints.Filters)
 					}
 					if affinitySatisfied {
@@ -151,7 +152,7 @@ func Distribute() func(c *gin.Context) {
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
 					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+					if !affinityUsable && shouldClearChannelAffinity(affinityChannelAvailable, affinitySatisfied, service.ShouldKeepChannelAffinityOnChannelDisabled()) {
 						service.ClearCurrentChannelAffinityCache(c)
 					}
 				}
@@ -201,6 +202,23 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+// shouldClearChannelAffinity decides whether an affinity binding that could not
+// serve this request must be evicted from the affinity cache.
+//
+// Only channel unavailability justifies eviction: the channel is gone/disabled,
+// or it no longer carries the group+model ability. A channel that is alive but
+// fails this request's constraint filters (task-plugin identity, request path,
+// …) keeps its binding — those filters describe the request, not the channel,
+// and dropping the entry would scatter an otherwise sticky session across
+// channels on the next call. keepOnDisabled is the operator's override for the
+// unavailable case.
+func shouldClearChannelAffinity(channelAvailable, satisfiesFilters, keepOnDisabled bool) bool {
+	if channelAvailable && !satisfiesFilters {
+		return false
+	}
+	return !keepOnDisabled
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.
