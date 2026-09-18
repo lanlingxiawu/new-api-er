@@ -27,7 +27,7 @@ func setTaskAddresses(t *testing.T, taskPublicAddress, serverAddress string) {
 	})
 }
 
-func TestThirdPartySD2ContentURLPrefersTaskPublicAddress(t *testing.T) {
+func TestTaskContentProxyURLPrefersTaskPublicAddress(t *testing.T) {
 	tests := []struct {
 		name, taskPublic, server, want string
 	}{
@@ -38,7 +38,7 @@ func TestThirdPartySD2ContentURLPrefersTaskPublicAddress(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			setTaskAddresses(t, testCase.taskPublic, testCase.server)
-			assert.Equal(t, testCase.want, thirdPartySD2ContentURL("task_1"))
+			assert.Equal(t, testCase.want, taskContentProxyURL("task_1"))
 		})
 	}
 }

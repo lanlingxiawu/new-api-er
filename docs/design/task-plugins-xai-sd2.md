@@ -37,7 +37,7 @@
 
 ## API 合约
 
-不新增端点，鉴权沿用视频/任务路由的 `TokenAuth`。
+客户端端点沿用视频/任务路由的 `TokenAuth`；两个插件各自新增一组 `meta.routes` 入站端点（见「级联：下游网关接入」），鉴权同为 `TokenAuth`。
 
 ### xai
 
@@ -70,6 +70,56 @@
 `resolution` 取 `metadata.resolution` 与 `size` 规范化后较高者（`480p/720p/1080p/4k`，`2160p`→4k，`WxH` 取短边分档）。缺少可识别分辨率时插件返回 400。
 
 模型接受的分辨率由价格矩阵决定：宿主在计费前调用 `billing_setting.ValidateForkTaskUsageFacts`，`output_resolution` 不在该模型（客户端模型优先，再取映射后模型）矩阵中时返回 400 `plugin_request_invalid`，如 `dreamina-seedance-2-0-fast-260128 does not support 1080p resolution (supported: 480p, 720p)`。管理员在矩阵中为 fast 模型加入 1080p 后即被接受并按该档计费。模型保存了 `thirdpartysd2::<model>` 插件表达式时由该表达式定价，不做矩阵检查。插件本身不维护按模型的分辨率白名单。
+
+## 级联：下游网关接入
+
+### 认领语义与它带来的限制
+
+上游 #7076 的插件认领语义：模型被插件认领后，只能由该插件声明的 `channelTypes` 渠道，或渠道类型为「任务插件」（`ChannelTypeTaskPlugin = 61`，本分叉为 62）且 `setting.task_plugin_key` 等于该插件 key 的渠道承载（`middleware/distributor.go` 的 `channelMatchesExpectedTaskPlugin`）。
+
+因此，改造成插件后，**用 OpenAI(1)/Sora(55) 等普通渠道类型指向另一台网关来转售这些模型不再可行**：分发阶段就返回 503「该模型由任务插件「thirdpartysd2」认领」。上游自带插件（alibaba/doubao/kling 等）同样受此限制，本分叉不改动认领语义，而是像上游插件那样声明厂商形状的入站路由，让级联改走「任务插件」渠道。
+
+### 入站路由
+
+| 插件 | 方法与路径 | 类型 | 钩子 | 对应上游端点 |
+|---|---|---|---|---|
+| thirdpartysd2 | `POST /sd2/v1/video/generate` | submit | `native.createTask` / `native.taskCreated` | `POST {base}/v1/video/generate` |
+| thirdpartysd2 | `GET /sd2/v1/video/tasks/:task_id` | query | `native.taskStatus` | `GET {base}/v1/video/tasks/{id}` |
+| xai | `POST /xai/v1/videos/generations` | submit | `native.createVideoTask` / `native.videoCreated` | `POST {base}/v1/videos/generations` |
+| xai | `GET /xai/v1/videos/:request_id` | query（`taskIdParam: request_id`） | `native.videoStatus` | `GET {base}/v1/videos/{request_id}` |
+
+`/sd2`、`/xai` 前缀是必需的：`router/plugin-router.go` 的 `routeIntersectsStaticRoute` 拒绝与静态路由相交的插件路由，而不带前缀的 `/v1/video/generate`、`/v1/videos/:id` 与本网关自身的任务路由冲突。
+
+请求与响应体与厂商 API 同形，因此下游网关运行同一插件即可把本网关当作厂商：
+
+- SD2 提交体即厂商提交体（`model`、`content`、`resolution`、`duration`、白名单字段），`native.createTask` 把整个 body 作为 `metadata`、从 `content` 的 text 项取 `prompt`，因此本网关转发给厂商的请求与入站请求逐字段一致；响应为 `{"task":{id,model,status,created_at}}`。
+- SD2 查询响应为 `{"task":{id,status,outputs,usage,duration_seconds,ratio,error}}`：`id` 为本网关公开任务 ID，`status` 由本网关任务状态映射（queued/processing/succeeded/failed），`usage` 透传厂商用量（下游据此按 token 结算）。
+- xai 提交体即厂商提交体（`model`、`prompt`、`duration`、`aspect_ratio`、`resolution`、`seed`、`image`、`reference_images`），`native.createVideoTask` 把除 `model`/`prompt` 外的字段作为 `metadata`，转发请求与入站请求一致；响应为 `{"request_id"}`，查询响应为 `{"request_id",status,model,video{url,duration},error}`，状态映射为 queued/processing/done/failed。
+
+### 结果地址：网关相对路径
+
+插件拿不到自己的服务地址（`native` 渲染钩子只有请求上下文与任务视图），因此查询响应里的结果地址是本网关上的**绝对路径** `/v1/videos/{task_id}/content`，而不是厂商地址：
+
+- 厂商地址不外泄：SD2 的输出地址需要渠道密钥，xai 的 CDN 地址也不下发给下游。
+- 下游插件（`buildContentRequest`）把以 `/` 开头的地址按渠道 Base URL 的 origin 还原为绝对地址，并附带渠道密钥——该地址就在渠道主机上，符合宿主的 `ValidateRequestURL` 与凭据边界。
+- 下游对自己的客户端只暴露自己的内容代理地址：`relay/relay_task.go` 的 `getExternalVideoURL` 把相对结果地址改写为本网关的 `taskContentProxyURL`，xai 的 `openai_video` 渲染只在结果地址是 http(s) 时才给出 `metadata.url`。
+- 内容下载始终经网关代理：下游 `GET /v1/videos/:id/content` → 上游 `GET /v1/videos/:id/content`（渠道密钥即上游 token）→ 厂商。
+
+### 下游部署需要的渠道配置
+
+| 项 | 值 |
+|---|---|
+| 渠道类型 | 任务插件（`ChannelTypeTaskPlugin`，本分叉编号 62） |
+| 渠道设置 | `{"task_plugin_key":"thirdpartysd2"}` 或 `{"task_plugin_key":"xai"}` |
+| Base URL | `https://<上游网关>/sd2` 或 `https://<上游网关>/xai` |
+| 密钥 | 上游网关上的 API token（该 token 的用户即上游任务归属者，轮询与内容下载都用它） |
+| 模型 | `dreamina-seedance-2-0-260128` / `dreamina-seedance-2-0-fast-260128`，或 `grok-imagine-video` / `grok-imagine-video-1.5` |
+
+上游网关侧需要配置 `ServerAddress`（或 `TaskPublicAddress`）以便自身对外地址正确；级联结果地址本身是相对路径，不依赖该配置。原先用普通渠道类型转售这些模型的下游渠道必须改成上述配置，否则提交返回 503。
+
+「任务插件」渠道只在宿主协议端点与插件自有路由上参与渠道选择：分发前的 `PinTaskPluginEndpoint` 只认 `pluginruntime.LookupHostProtocolOperation` 登记的协议路径，旧版 `POST /v1/video/generations` 不在其中，`expected_task_plugin_key` 为空时 `FilterTaskPluginIdentity` 会排除类型 62 的渠道。因此下游网关的客户端要走 `POST /v1/videos`（以及 `GET /v1/videos/:id`、`GET /v1/videos/:id/content`）或 `POST /v1/responses`，而不是旧版 `POST /v1/video/generations`。这是上游的既有语义，对所有插件一致。
+
+计费两端各自独立：下游按自己的定价向自己的用户计费，上游按 token（SD2 矩阵表达式）或按次（xai）向下游 token 计费。
 
 ## 数据模型变更
 
@@ -239,6 +289,7 @@ u("output_resolution") == "720p" ? tier("720p", u("seconds") * 0.07 + u("input_i
 - 内容请求（xAI credentialless；SD2 同主机与默认端口带鉴权，异主机与 userinfo 伪装按 credentialless，`CREDENTIAL_HOSTS` 声明的主机带鉴权并进入 `allowedHosts`）、`openai_video` 渲染不泄漏 SD2 输出地址。
 - 旧平台 `"48"`/`"58"` 解析到插件并可解析旧数据，`TaskModel2Dto` 对新旧 SD2 任务只暴露代理地址。
 - `plugins/builtin_plugins_test.go` 登记两个内置 key 与渠道类型。
+- `plugins/inbound_cascade_routes_test.go`：入站路由登记（方法/路径/类型/钩子/`taskIdParam`）、`native` 解码后转发给厂商的请求与入站请求逐字段一致、渲染出的提交/查询响应被同一插件的 `parseSubmitResponse`/`parseTaskResult` 解析、输出地址为网关相对路径且不含厂商地址、下游 `buildContentRequest` 按渠道 origin 还原并附带密钥、入站校验错误。
 - `relay/relay_task_fork_test.go`：内容地址优先 TaskPublicAddress、`metadata.url` 补齐及不改动的情形、xAI 计费维度元数据。
 - `controller/video_proxy_sd2_test.go`：旧 SD2 内容请求只向渠道主机发送密钥。
 - `setting/billing_setting/fork_task_billing_test.go`：公开定价表达式解析、矩阵分辨率校验（含映射模型与插件覆盖）。

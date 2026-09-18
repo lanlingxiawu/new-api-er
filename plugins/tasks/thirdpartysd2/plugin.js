@@ -63,6 +63,14 @@ export const meta = {
   author: { name: "NEXAXIS" },
   channelTypes: [58],
   allowedHosts: CREDENTIAL_HOSTS,
+  // Provider-shaped inbound API, so a downstream gateway can cascade these
+  // models to this gateway through a Task Plugin channel keyed thirdpartysd2
+  // with base URL https://<host>/sd2. The prefix is required: the unprefixed
+  // provider paths would intersect this gateway's own static task routes.
+  routes: [
+    { method: "POST", path: "/sd2/v1/video/generate", type: "submit", decode: "createTask", render: "taskCreated" },
+    { method: "GET", path: "/sd2/v1/video/tasks/:task_id", type: "query", render: "taskStatus" },
+  ],
   models: [STANDARD_MODEL, FAST_MODEL],
   fetchMode: "per_task",
   usageSchema: {
@@ -318,6 +326,21 @@ export function listArtifacts(task) {
   return [{ key: "video", type: "video", mimeType: "video/mp4" }];
 }
 
+// Gateway-hosted outputs are returned as an absolute path by the inbound
+// query route (a plugin cannot know its own server address), so they are
+// resolved against the channel base URL origin: the content lives on the
+// channel host and takes the channel credential.
+function baseOrigin(baseUrl) {
+  const match = /^https?:\/\/[^/?#]+/i.exec(trimmed(baseUrl));
+  return match ? match[0] : "";
+}
+
+function resolveOutput(url, baseUrl) {
+  if (!url.startsWith("/")) return url;
+  const origin = baseOrigin(baseUrl);
+  return origin ? origin + url : "";
+}
+
 // Lowercased host without userinfo and without the scheme's default port, as
 // the host compares request URLs against the channel host and allowedHosts.
 function canonicalHost(url) {
@@ -341,7 +364,8 @@ function sendsCredential(url, baseUrl) {
 }
 
 export function buildContentRequest(ctx) {
-  const url = ctx.artifactKey === "video" && isObject(ctx.data) ? firstOutput(ctx.data.task) : "";
+  const output = ctx.artifactKey === "video" && isObject(ctx.data) ? firstOutput(ctx.data.task) : "";
+  const url = output ? resolveOutput(output, ctx.baseUrl) : "";
   if (!url) throw new Error("artifact_not_found");
   // Outputs on the channel host or a declared credential host require the
   // channel bearer key. Outputs on any other host are fetched without
@@ -351,6 +375,76 @@ export function buildContentRequest(ctx) {
   }
   return { url: url, method: ctx.clientRequest.method, credentialless: true };
 }
+
+// ---------------------------------------------------------------------------
+// Inbound provider-shaped API (cascade): POST /sd2/v1/video/generate and
+// GET /sd2/v1/video/tasks/:task_id answer with the upstream service's own
+// request and response shapes, so this gateway can serve another gateway that
+// runs this plugin.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_STATUS = { NOT_START: "queued", SUBMITTED: "queued", QUEUED: "queued", IN_PROGRESS: "processing", SUCCESS: "succeeded", FAILURE: "failed" };
+
+function gatewayContentPath(taskId) {
+  return "/v1/videos/" + encodeURIComponent(taskId) + "/content";
+}
+
+// The persisted upstream snapshot with this gateway's identity: public task id,
+// gateway status, and the content proxy path instead of the credential-gated
+// upstream output URL.
+function providerTaskObject(task) {
+  const upstream = isObject(task.data) && isObject(task.data.task) ? task.data.task : {};
+  const result = Object.assign({}, upstream);
+  delete result.outputs;
+  result.id = task.task_id;
+  result.status = GATEWAY_STATUS[task.status] || "queued";
+  const model = trimmed((task.properties || {}).origin_model_name);
+  if (model) result.model = model;
+  if (task.status === "SUCCESS" && firstOutput(upstream)) result.outputs = [gatewayContentPath(task.task_id)];
+  if (task.status === "FAILURE" && !errorReason(result.error)) result.error = { code: "task_failed", message: trimmed(task.fail_reason) || "task failed" };
+  return result;
+}
+
+export const native = {
+  createTask: function (ctx) {
+    if (!ctx.body || ctx.body.kind !== "json") throw new Error("JSON body required");
+    const body = ctx.body.value;
+    if (!isObject(body)) throw new Error("request body must be an object");
+    const model = trimmed(body.model);
+    if (!model) throw new Error("model is required");
+    if (body.content !== undefined && !Array.isArray(body.content)) throw new Error("content must be an array");
+    const texts = [];
+    let hasReference = false;
+    for (const item of Array.isArray(body.content) ? body.content : []) {
+      if (!isObject(item)) continue;
+      if (item.type === "text" && typeof item.text === "string") texts.push(item.text);
+      else hasReference = true;
+    }
+    const prompt = texts
+      .filter(function (text) {
+        return trimmed(text);
+      })
+      .join("\n");
+    if (!prompt) throw new Error("content must contain a text item with the prompt");
+    // The whole body becomes metadata: buildSubmitRequest applies the same
+    // field whitelist to it, so the upstream request repeats this request.
+    return {
+      kind: "submit",
+      model: model,
+      action: hasReference ? "image_to_video" : "text_to_video",
+      requestBody: { model: model, prompt: prompt, metadata: body },
+    };
+  },
+  taskCreated: function (_ctx, task) {
+    return { task: providerTaskObject(task) };
+  },
+  taskStatus: function (_ctx, task) {
+    return { task: providerTaskObject(task) };
+  },
+  error: function (_ctx, error) {
+    return { error: { code: error.code, message: error.message } };
+  },
+};
 
 function responsesInput(req) {
   const texts = [],

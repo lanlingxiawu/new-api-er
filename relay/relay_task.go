@@ -664,15 +664,25 @@ func getExternalVideoURL(task *model.Task) string {
 		if task.Status != model.TaskStatusSuccess || !hasThirdPartySD2UpstreamResultURL(task) {
 			return ""
 		}
-		return thirdPartySD2ContentURL(task.TaskID)
+		return taskContentProxyURL(task.TaskID)
 	}
-	return task.GetResultURL()
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	// 级联：上游网关把内容地址返回为它自己主机上的绝对路径（插件无法得知服务地址），
+	// 该地址需要上游渠道密钥，对客户端只暴露本网关的内容代理地址。
+	if strings.HasPrefix(resultURL, "/") {
+		if task.Status != model.TaskStatusSuccess {
+			return ""
+		}
+		return taskContentProxyURL(task.TaskID)
+	}
+	return resultURL
 }
 
-// thirdPartySD2ContentURL is the gateway content proxy address of an SD2 task.
-// TaskPublicAddress wins when configured and ServerAddress is the fallback;
-// with neither configured the path stays relative.
-func thirdPartySD2ContentURL(taskID string) string {
+// taskContentProxyURL is the gateway content proxy address of a task whose
+// result URL must not reach the client. TaskPublicAddress wins when configured
+// and ServerAddress is the fallback; with neither configured the path stays
+// relative.
+func taskContentProxyURL(taskID string) string {
 	base := strings.TrimSpace(system_setting.TaskPublicAddress)
 	if base == "" {
 		base = strings.TrimSpace(system_setting.ServerAddress)
@@ -697,7 +707,7 @@ func withThirdPartySD2ContentURL(task *model.Task, body []byte) []byte {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	metadata["url"] = thirdPartySD2ContentURL(task.TaskID)
+	metadata["url"] = taskContentProxyURL(task.TaskID)
 	video["metadata"] = metadata
 	encoded, err := common.Marshal(video)
 	if err != nil {

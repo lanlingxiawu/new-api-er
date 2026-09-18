@@ -22,6 +22,14 @@ export const meta = {
   author: { name: "NEXAXIS" },
   // xAI chat and video share the same channel type, base URL and bearer key.
   channelTypes: [48],
+  // Provider-shaped inbound API, so a downstream gateway can cascade these
+  // models to this gateway through a Task Plugin channel keyed xai with base
+  // URL https://<host>/xai. The prefix is required: the unprefixed provider
+  // paths would intersect this gateway's own static video routes.
+  routes: [
+    { method: "POST", path: "/xai/v1/videos/generations", type: "submit", decode: "createVideoTask", render: "videoCreated" },
+    { method: "GET", path: "/xai/v1/videos/:request_id", type: "query", render: "videoStatus", taskIdParam: "request_id" },
+  ],
   models: ["grok-imagine-video", "grok-imagine-video-1.5"],
   fetchMode: "per_task",
   usageSchema: {
@@ -382,12 +390,78 @@ export function listArtifacts(task) {
   return [{ key: "video", type: "video", mimeType: "video/mp4" }];
 }
 
+function baseOrigin(baseUrl) {
+  const match = /^https?:\/\/[^/?#]+/i.exec(trimmed(baseUrl));
+  return match ? match[0] : "";
+}
+
 // xAI result URLs are public signed CDN links; no channel credential is sent.
+// A cascaded gateway instead returns an absolute path on its own host (it
+// cannot know its server address), which takes the channel credential.
 export function buildContentRequest(ctx) {
   const url = ctx.artifactKey === "video" ? videoURL(ctx.data) : "";
   if (!url) throw new Error("artifact_not_found");
+  if (url.startsWith("/")) {
+    const origin = baseOrigin(ctx.baseUrl);
+    if (!origin) throw new Error("artifact_not_found");
+    return { url: origin + url, method: ctx.clientRequest.method, headers: { Authorization: "Bearer " + ctx.apiKey } };
+  }
   return { url: url, method: ctx.clientRequest.method, credentialless: true };
 }
+
+// ---------------------------------------------------------------------------
+// Inbound provider-shaped API (cascade): POST /xai/v1/videos/generations and
+// GET /xai/v1/videos/:request_id answer with xAI's own request and response
+// shapes, so this gateway can serve another gateway that runs this plugin.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_STATUS = { NOT_START: "processing", SUBMITTED: "processing", QUEUED: "queued", IN_PROGRESS: "processing", SUCCESS: "done", FAILURE: "failed" };
+
+export const native = {
+  createVideoTask: function (ctx) {
+    if (!ctx.body || ctx.body.kind !== "json") throw new Error("JSON body required");
+    const body = ctx.body.value;
+    if (!isObject(body)) throw new Error("request body must be an object");
+    const model = trimmed(body.model);
+    if (!model) throw new Error("model is required");
+    if (!trimmed(body.prompt)) throw new Error("prompt is required");
+    // The whole request minus model and prompt becomes metadata, which is
+    // where this plugin reads duration, resolution, aspect ratio, seed and
+    // image inputs from, so the upstream request repeats this request.
+    const metadata = Object.assign({}, body);
+    delete metadata.model;
+    delete metadata.prompt;
+    const hasImage = !!videoInput(metadata.image) || referenceImages({ metadata: metadata }).length > 0;
+    return {
+      kind: "submit",
+      model: model,
+      action: hasImage ? "image_to_video" : "text_to_video",
+      requestBody: { model: model, prompt: String(body.prompt), metadata: metadata },
+    };
+  },
+  videoCreated: function (_ctx, task) {
+    return { request_id: task.task_id };
+  },
+  videoStatus: function (_ctx, task) {
+    const output = { request_id: task.task_id, status: GATEWAY_STATUS[task.status] || "processing" };
+    const model = trimmed((task.properties || {}).origin_model_name);
+    if (model) output.model = model;
+    if (task.status === "SUCCESS" && videoURL(task.data)) {
+      const upstream = isObject(task.data) && isObject(task.data.video) ? task.data.video : {};
+      // The provider URL needs no credential but stays private; clients of the
+      // cascade download through this gateway's content proxy.
+      output.video = Object.assign({}, upstream, { url: "/v1/videos/" + encodeURIComponent(task.task_id) + "/content" });
+    }
+    if (task.status === "FAILURE") {
+      const upstream = isObject(task.data) && isObject(task.data.error) ? task.data.error : {};
+      output.error = { code: trimmed(upstream.code) || "task_failed", message: trimmed(task.fail_reason) || trimmed(upstream.message) || "task failed" };
+    }
+    return output;
+  },
+  error: function (_ctx, error) {
+    return { error: { code: error.code, message: error.message } };
+  },
+};
 
 function responsesInput(req) {
   const texts = [],
@@ -508,7 +582,10 @@ function renderOpenAIVideo(task) {
     created_at: Number(task.created_at || 0),
   };
   const url = videoURL(task.data);
-  if (task.status === "SUCCESS" && url) output.metadata = { url: url };
+  // A cascaded gateway stores an absolute path on the upstream gateway; only a
+  // public provider URL is handed to clients, who otherwise use the content
+  // endpoint of this gateway.
+  if (task.status === "SUCCESS" && /^https?:\/\//i.test(url)) output.metadata = { url: url };
   if (task.status === "FAILURE" && trimmed(task.fail_reason)) output.error = { message: task.fail_reason, code: "task_failed" };
   return output;
 }
