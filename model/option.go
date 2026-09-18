@@ -165,6 +165,8 @@ func InitOptionMap() {
 	common.OptionMap["InfiniCurrency"] = setting.InfiniCurrency
 	common.OptionMap["InfiniCurrencies"] = setting.InfiniCurrencies2JsonString()
 	common.OptionMap["InfiniPayMethods"] = setting.InfiniPayMethods
+	common.OptionMap["InfiniUseRealtimeRate"] = strconv.FormatBool(setting.InfiniUseRealtimeRate)
+	common.OptionMap["InfiniExchangeRate"] = strconv.FormatFloat(setting.InfiniExchangeRate, 'f', -1, 64)
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
@@ -713,6 +715,10 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.InfiniCurrencies = value
 	case "InfiniPayMethods":
 		setting.InfiniPayMethods = value
+	case "InfiniUseRealtimeRate":
+		setting.InfiniUseRealtimeRate = value == "true"
+	case "InfiniExchangeRate":
+		setting.InfiniExchangeRate, _ = strconv.ParseFloat(value, 64)
 	case "TopupGroupRatio":
 		err = common.UpdateTopupGroupRatioByJSONString(value)
 	case "GitHubClientId":

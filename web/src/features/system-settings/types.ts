@@ -732,6 +732,10 @@ export type BillingSettings = {
   InfiniCurrencies: string
   // JSON 数组，限定 Infini 结账页支付方式，如 [1,2]
   InfiniPayMethods: string
+  // true=用实时 USD/CNY 汇率折算到账，取不到时回退到手动汇率
+  InfiniUseRealtimeRate: boolean
+  // 手动 USD→CNY 汇率（元/美金）
+  InfiniExchangeRate: number
   'checkin_setting.enabled': boolean
   'checkin_setting.min_quota': number
   'checkin_setting.max_quota': number

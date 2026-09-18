@@ -166,18 +166,44 @@ func TestRecharge_Stripe_HappyPath(t *testing.T) {
 	assert.Equal(t, 50000, reloaded2.Quota) // unchanged
 }
 
-func TestRecharge_Stripe_PromoLowerAmountAccepted(t *testing.T) {
+// A Stripe promotion code lowers the amount actually paid on a dynamic
+// price_data checkout. The credit is scaled by paid/expected, so a 99%-off
+// coupon cannot buy the full snapshot for a cent.
+func TestRecharge_Stripe_PromoLowerAmountScalesCredit(t *testing.T) {
 	requireDB(t)
-	u := mkUser(t, func(u *User) { u.Quota = 0 })
-	tp := mkTopUp(t, u.Id, func(tp *TopUp) {
-		tp.Money = 10.0
-		tp.Amount = 50000
-		tp.PaymentCurrency = "usd"
-	})
-	// Promo code -> lower actual paid (500 cents < 1000) still credits full snapshot.
-	require.NoError(t, Recharge(tp.TradeNo, "cus", "ip", 500, "usd"))
-	reloaded, _ := GetUserById(u.Id, false)
-	assert.Equal(t, 50000, reloaded.Quota)
+
+	cases := []struct {
+		name          string
+		money         float64
+		amount        int64
+		notifiedCents int64
+		wantQuota     int
+	}{
+		{name: "paid equals expected credits the full snapshot", money: 10.0, amount: 50000, notifiedCents: 1000, wantQuota: 50000},
+		{name: "paid 50% credits half", money: 10.0, amount: 50000, notifiedCents: 500, wantQuota: 25000},
+		{name: "paid 1% credits 1%", money: 10.0, amount: 50000, notifiedCents: 10, wantQuota: 500},
+		{name: "one cent of a large order credits the exact ratio", money: 100.0, amount: 50000, notifiedCents: 1, wantQuota: 5},
+		// Scaled below one quota: credited as 1 rather than failing, so the order
+		// completes instead of staying pending with the webhook retrying forever.
+		{name: "scaled below one quota credits one", money: 10.0, amount: 2, notifiedCents: 1, wantQuota: 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u := mkUser(t, func(u *User) { u.Quota = 0 })
+			tp := mkTopUp(t, u.Id, func(tp *TopUp) {
+				tp.Money = tc.money
+				tp.Amount = tc.amount
+				tp.PaymentCurrency = "usd"
+			})
+
+			require.NoError(t, Recharge(tp.TradeNo, "cus", "ip", tc.notifiedCents, "usd"))
+
+			reloaded, _ := GetUserById(u.Id, false)
+			assert.Equal(t, tc.wantQuota, reloaded.Quota)
+			assert.Equal(t, common.TopUpStatusSuccess, GetTopUpById(tp.Id).Status)
+		})
+	}
 }
 
 func TestRecharge_Stripe_Rejections(t *testing.T) {

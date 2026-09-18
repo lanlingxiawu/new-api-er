@@ -138,6 +138,8 @@ const defaultBillingSettings: BillingSettings = {
   InfiniCurrency: 'USD',
   InfiniCurrencies: '',
   InfiniPayMethods: '',
+  InfiniUseRealtimeRate: true,
+  InfiniExchangeRate: 8,
   'checkin_setting.enabled': false,
   'checkin_setting.min_quota': 1000,
   'checkin_setting.max_quota': 10000,

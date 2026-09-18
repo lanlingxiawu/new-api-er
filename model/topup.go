@@ -313,7 +313,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 //
 // notifiedAmountCents / notifiedCurrency 为 Stripe webhook 通知的实付金额（美分）与币种：
 // 币种必须与下单币种一致；实付金额必须落在 (0, 下单快照金额] 区间内（允许 Stripe 促销码带来的更低实付），
-// 校验通过后按下单时锁定的额度快照（topUp.Amount）发放。
+// 到账额度 = 下单快照（topUp.Amount）× 实付 / 预期，即按实付比例缩放。
 func Recharge(referenceId string, customerId string, callerIp string, notifiedAmountCents int64, notifiedCurrency string) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
@@ -349,9 +349,24 @@ func Recharge(referenceId string, customerId string, callerIp string, notifiedAm
 		if notifiedAmountCents <= 0 || notifiedAmountCents > expectedCents {
 			return fmt.Errorf("充值金额不匹配 notified_cents=%d expected_cents<=%d", notifiedAmountCents, expectedCents)
 		}
-		quota, err = common.WalletQuotaFromDecimalStrict(decimal.NewFromInt(topUp.Amount))
-		if err != nil || quota <= 0 {
+		if topUp.Amount <= 0 {
 			return ErrInvalidTopUpQuota
+		}
+		// 本仓分叉点：按实付比例缩放到账额度，而不是无条件发放下单快照。
+		// 本仓的 Stripe 结账用动态 price_data 并开放促销码，实付可以远低于下单金额；
+		// 若仍按快照满额发放，一张 99% off 的券就能用 $0.01 换走 $100 的额度。
+		// 「实付高于预期则拒绝」的守卫保留在上面，这里只处理实付更低的情况。
+		credited := decimal.NewFromInt(topUp.Amount).
+			Mul(decimal.NewFromInt(notifiedAmountCents)).
+			Div(decimal.NewFromInt(expectedCents))
+		quota, err = common.WalletQuotaFromDecimalStrict(credited)
+		if err != nil {
+			return ErrInvalidTopUpQuota
+		}
+		if quota <= 0 {
+			// 实付为正但缩放后不足 1 额度：按 1 额度入账并结单。
+			// 直接失败会让订单永久 pending、webhook 无限重试，用户付了钱却拿不到任何结果。
+			quota = 1
 		}
 
 		topUp.CompleteTime = common.GetTimestamp()

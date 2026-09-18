@@ -1,6 +1,8 @@
 package setting
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 )
@@ -24,7 +26,69 @@ var (
 	// 1=加密货币, 2=银行卡, 3=Binance Pay, 5=Apple Pay, 6=Google Pay
 	// 为空则使用商户在 Infini 控制台配置的默认值
 	InfiniPayMethods string
+	// InfiniUseRealtimeRate 控制到账折算用的 USD→CNY 汇率取值方式：
+	// true=使用实时 USD/CNY 汇率（获取失败回退到手动汇率 InfiniExchangeRate）；false=始终使用手动汇率。
+	InfiniUseRealtimeRate = true
+	// InfiniExchangeRate 是「手动汇率（元/美金）」——USD→CNY：1 美元折算多少人民币。
+	// 到账额度 = 实付美元 × 汇率 ÷ 系统充值比例(Price) × QuotaPerUnit。
+	// 手动模式下直接使用它；实时模式下仅作为实时汇率获取失败时的兜底值。
+	InfiniExchangeRate = 8.0
 )
+
+// InfiniSupportedCurrency 是 Infini 充值唯一受支持的结算币种。
+//
+// 到账换算公式只在实付金额为美元时成立（rawQuotaFromPayMoney 用 USD→CNY 汇率折算），
+// 若放行其它币种，按该币种单价收款却按美元口径发放额度会造成成倍超发/少发，
+// 且 webhook 只比对同币种金额、无法发现错额。因此币种在下单、报价与配置保存三处都限定为 USD。
+const InfiniSupportedCurrency = "USD"
+
+// IsInfiniCurrencySupported 判断币种代码是否受支持（大小写与空白不敏感）。
+func IsInfiniCurrencySupported(currency string) bool {
+	return strings.EqualFold(strings.TrimSpace(currency), InfiniSupportedCurrency)
+}
+
+// UnsupportedInfiniCurrency 校验单币种兼容字段，返回不受支持的币种代码；
+// 返回空串表示配置合法（空值视为合法，运行时会退回默认的 USD）。
+func UnsupportedInfiniCurrency(currency string) string {
+	trimmed := strings.TrimSpace(currency)
+	if trimmed == "" || IsInfiniCurrencySupported(trimmed) {
+		return ""
+	}
+	return strings.ToUpper(trimmed)
+}
+
+// UnsupportedInfiniCurrencyInJSON 校验多币种 JSON 配置。
+// 返回第一个不受支持的币种代码；JSON 无法解析时返回 error。
+// 空串与空数组视为「未配置多币种」，合法。
+func UnsupportedInfiniCurrencyInJSON(jsonStr string) (string, error) {
+	trimmed := strings.TrimSpace(jsonStr)
+	if trimmed == "" || trimmed == "[]" {
+		return "", nil
+	}
+	var opts []constant.InfiniCurrencyOption
+	if err := common.UnmarshalJsonStr(trimmed, &opts); err != nil {
+		return "", err
+	}
+	for _, opt := range opts {
+		if unsupported := UnsupportedInfiniCurrency(opt.Currency); unsupported != "" {
+			return unsupported, nil
+		}
+	}
+	return "", nil
+}
+
+// GetSupportedInfiniCurrencyOptions 返回只含受支持币种的配置列表，供对用户展示的接口使用，
+// 避免把下单时必然被拒的币种暴露到充值页。
+func GetSupportedInfiniCurrencyOptions() []constant.InfiniCurrencyOption {
+	opts := GetInfiniCurrencyOptions()
+	supported := make([]constant.InfiniCurrencyOption, 0, len(opts))
+	for _, opt := range opts {
+		if IsInfiniCurrencySupported(opt.Currency) {
+			supported = append(supported, opt)
+		}
+	}
+	return supported
+}
 
 func GetInfiniBaseUrl() string {
 	if InfiniSandbox {

@@ -221,6 +221,8 @@ const paymentSchema = z.object({
   InfiniCurrency: z.string(),
   InfiniCurrencies: z.string(),
   InfiniPayMethods: z.string(),
+  InfiniUseRealtimeRate: z.boolean(),
+  InfiniExchangeRate: z.coerce.number().min(0),
 })
 
 type PaymentFormValues = z.infer<typeof paymentSchema>
@@ -593,6 +595,8 @@ export function PaymentSettingsSection({
       InfiniCurrency: values.InfiniCurrency.trim() || 'USD',
       InfiniCurrencies: values.InfiniCurrencies.trim(),
       InfiniPayMethods: values.InfiniPayMethods.trim(),
+      InfiniUseRealtimeRate: values.InfiniUseRealtimeRate,
+      InfiniExchangeRate: values.InfiniExchangeRate,
     }
 
     const initial = {
@@ -683,6 +687,8 @@ export function PaymentSettingsSection({
       InfiniCurrency: initialRef.current.InfiniCurrency.trim() || 'USD',
       InfiniCurrencies: initialRef.current.InfiniCurrencies.trim(),
       InfiniPayMethods: initialRef.current.InfiniPayMethods.trim(),
+      InfiniUseRealtimeRate: initialRef.current.InfiniUseRealtimeRate,
+      InfiniExchangeRate: initialRef.current.InfiniExchangeRate,
     }
 
     const updates: Array<{ key: string; value: string | number | boolean }> = []
@@ -1031,6 +1037,20 @@ export function PaymentSettingsSection({
       })
     }
 
+    if (sanitized.InfiniUseRealtimeRate !== initial.InfiniUseRealtimeRate) {
+      updates.push({
+        key: 'InfiniUseRealtimeRate',
+        value: sanitized.InfiniUseRealtimeRate,
+      })
+    }
+
+    if (sanitized.InfiniExchangeRate !== initial.InfiniExchangeRate) {
+      updates.push({
+        key: 'InfiniExchangeRate',
+        value: sanitized.InfiniExchangeRate,
+      })
+    }
+
     const hasWaffoPancakeChanges =
       sanitized.WaffoPancakeMerchantID !== initial.WaffoPancakeMerchantID ||
       sanitized.WaffoPancakePrivateKey.length > 0 ||
@@ -1166,6 +1186,8 @@ export function PaymentSettingsSection({
     InfiniCurrency: currentFormValues.InfiniCurrency,
     InfiniCurrencies: currentFormValues.InfiniCurrencies,
     InfiniPayMethods: currentFormValues.InfiniPayMethods,
+    InfiniUseRealtimeRate: currentFormValues.InfiniUseRealtimeRate,
+    InfiniExchangeRate: currentFormValues.InfiniExchangeRate,
   }
 
   return (

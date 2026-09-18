@@ -151,8 +151,9 @@ func GetTopUpInfo(c *gin.Context) {
 			}
 		}
 		if !hasInfini {
-			// 取第一个配置币种作为单币种默认值，确保前端收到 currency 字段
-			infiniCurrOpts := setting.GetInfiniCurrencyOptions()
+			// 取第一个受支持币种作为单币种默认值，确保前端收到 currency 字段。
+			// Infini 只受理 USD，非 USD 配置不向用户展示（下单同样会被拒）。
+			infiniCurrOpts := setting.GetSupportedInfiniCurrencyOptions()
 			infiniDefaultCurrency := "USD"
 			infiniDefaultMinTopUp := setting.InfiniMinTopUp
 			if len(infiniCurrOpts) > 0 {
@@ -181,7 +182,7 @@ func GetTopUpInfo(c *gin.Context) {
 		"infini_min_topup":             setting.InfiniMinTopUp,
 		"infini_currencies": func() interface{} {
 			if enableInfini {
-				return setting.GetInfiniCurrencyOptions()
+				return setting.GetSupportedInfiniCurrencyOptions()
 			}
 			return nil
 		}(),

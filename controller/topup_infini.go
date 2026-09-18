@@ -16,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -158,9 +159,13 @@ func getInfiniPayMoney(amount int64, group string, unitPrice float64, currency s
 	)
 }
 
-// rawQuotaFromPayMoney 按下单时刻的动态汇率把实付外币金额换算为原始额度（raw quota）。
+// rawQuotaFromPayMoney 按下单时刻的动态汇率把实付美元金额换算为原始额度（raw quota）。
 // 公式：rawQuota = round(payMoney × exchangeRate / systemPrice × QuotaPerUnit)。
 // Infini 与 Stripe 动态汇率充值共用此函数，保证两条链路的换算精度完全一致。
+//
+// 结果先与 common.MaxWalletQuota 比较再取整：decimal.IntPart() 对超出 int64 的值会截断出
+// 无意义（可能为负）的结果，直接写进订单快照就会变成负额度。超限时返回 MaxWalletQuota+1，
+// 由调用方的 validateCreditedQuota 统一拒绝。
 func rawQuotaFromPayMoney(payMoney decimal.Decimal, exchangeRate float64, systemPrice float64) int64 {
 	if systemPrice <= 0 {
 		systemPrice = 1.0
@@ -177,12 +182,52 @@ func rawQuotaFromPayMoney(payMoney decimal.Decimal, exchangeRate float64, system
 		Mul(decimal.NewFromInt(rateInt)).
 		Div(decimal.NewFromInt(priceInt)).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Round(0).
-		IntPart()
-	if rawQuota < 1 {
+		Round(0)
+	if rawQuota.GreaterThan(decimal.NewFromInt(int64(common.MaxWalletQuota))) {
+		return int64(common.MaxWalletQuota) + 1
+	}
+	if rawQuota.LessThan(decimal.NewFromInt(1)) {
 		return 1
 	}
-	return rawQuota
+	return rawQuota.IntPart()
+}
+
+// infiniExchangeRate 返回 Infini 到账折算使用的 USD→CNY 汇率（元/美金：1 美元折算多少人民币）。
+//   - 实时模式（InfiniUseRealtimeRate=true）：取实时 USD/CNY 汇率；获取失败时回退到手动汇率 InfiniExchangeRate。
+//   - 手动模式：始终使用管理员填写的手动汇率 InfiniExchangeRate。
+//
+// InfiniExchangeRate <= 0 时统一回退到系统兜底汇率，避免到账额度被算成 0。
+// 与 Stripe 的 stripeExchangeRate 完全对齐；每个请求只取一次，报价与下单的换算口径一致。
+func infiniExchangeRate() float64 {
+	manual := setting.InfiniExchangeRate
+	if setting.InfiniUseRealtimeRate {
+		if rate, ok := service.GetUSDCNYRateWithOK(); ok && rate > 0 {
+			return rate
+		}
+	}
+	if manual > 0 {
+		return manual
+	}
+	return service.GetUSDCNYRate()
+}
+
+// infiniMaxTopUpAmount 是单笔 Infini 充值数量上限，与 Stripe 保持一致。
+// 没有上限时，超大 amount 会让报价金额与额度快照溢出到无意义的取值。
+const infiniMaxTopUpAmount = 10000
+
+// rejectUnsupportedInfiniCurrency 在非 USD 币种时写入用户可理解的错误响应并返回 true。
+// 空串表示请求未指定币种，由配置决定，交给解析后的币种再校验。
+func rejectUnsupportedInfiniCurrency(c *gin.Context, currency string) bool {
+	if strings.TrimSpace(currency) == "" || setting.IsInfiniCurrencySupported(currency) {
+		return false
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "error",
+		"data": i18n.T(c, i18n.MsgPaymentInfiniCurrencyUnsupported, map[string]any{
+			"Currency": strings.ToUpper(strings.TrimSpace(currency)),
+		}),
+	})
+	return true
 }
 
 // ─── 用户接口 ──────────────────────────────────────────────────────────────────
@@ -200,14 +245,27 @@ func RequestInfiniAmount(c *gin.Context) {
 		return
 	}
 
+	// 客户端显式指定的非 USD 币种直接给出具体原因，而不是笼统的「不支持的币种」
+	if rejectUnsupportedInfiniCurrency(c, req.Currency) {
+		return
+	}
+
 	currOpt, ok := resolveInfiniCurrency(req.Currency)
 	if !ok {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的币种"})
 		return
 	}
 
+	if rejectUnsupportedInfiniCurrency(c, currOpt.Currency) {
+		return
+	}
+
 	if req.Amount < int64(currOpt.MinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", currOpt.MinTopUp)})
+		return
+	}
+	if req.Amount > infiniMaxTopUpAmount {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能大于 %d", infiniMaxTopUpAmount)})
 		return
 	}
 
@@ -225,12 +283,19 @@ func RequestInfiniAmount(c *gin.Context) {
 		return
 	}
 
+	// 报价与下单用同一口径预校验：到账额度必须可表示且不会撑爆钱包上限，
+	// 否则用户付完款后 creditTopUpQuota 会整事务回滚，订单永久 pending、webhook 反复重试。
+	exchangeRate := infiniExchangeRate()
+	if rejectInvalidCreditedQuota(c, id, decimal.NewFromInt(rawQuotaFromPayMoney(payMoney, exchangeRate, operation_setting.Price))) {
+		return
+	}
+
 	// 同时返回本次报价锁定的到账折算汇率（元/美金），供前端展示实际到账，
 	// 避免前端用独立的实时汇率重新计算导致与后端到账口径不一致。
 	c.JSON(http.StatusOK, gin.H{
 		"message":       "success",
 		"data":          formatInfiniAmount(payMoney, currency),
-		"exchange_rate": service.GetUSDCNYRate(),
+		"exchange_rate": exchangeRate,
 	})
 }
 
@@ -247,6 +312,11 @@ func RequestInfiniPay(c *gin.Context) {
 		return
 	}
 
+	// 客户端显式指定的非 USD 币种直接给出具体原因，而不是笼统的「不支持的币种」
+	if rejectUnsupportedInfiniCurrency(c, req.Currency) {
+		return
+	}
+
 	// 校验币种：必须在允许列表内，服务端解析，不信任客户端传入的原始字符串
 	currOpt, ok := resolveInfiniCurrency(req.Currency)
 	if !ok {
@@ -254,8 +324,16 @@ func RequestInfiniPay(c *gin.Context) {
 		return
 	}
 
+	if rejectUnsupportedInfiniCurrency(c, currOpt.Currency) {
+		return
+	}
+
 	if req.Amount < int64(currOpt.MinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", currOpt.MinTopUp)})
+		return
+	}
+	if req.Amount > infiniMaxTopUpAmount {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能大于 %d", infiniMaxTopUpAmount)})
 		return
 	}
 
@@ -275,7 +353,13 @@ func RequestInfiniPay(c *gin.Context) {
 	}
 
 	// Store the final raw quota snapshot, matching the admin amount adjustment precision.
-	amount := rawQuotaFromPayMoney(payMoney, service.GetUSDCNYRate(), operation_setting.Price)
+	amount := rawQuotaFromPayMoney(payMoney, infiniExchangeRate(), operation_setting.Price)
+
+	// 与报价同一口径的「不可入账订单先拒付」预校验：额度必须可表示、为正，
+	// 且加上后不超过钱包上限，否则不创建订单，避免用户付款后无法入账。
+	if rejectInvalidCreditedQuota(c, id, decimal.NewFromInt(amount)) {
+		return
+	}
 
 	tradeNo := fmt.Sprintf("INFINI-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 

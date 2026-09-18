@@ -225,6 +225,8 @@ const BILLING_SECTIONS = [
           InfiniCurrency: settings.InfiniCurrency ?? 'USD',
           InfiniCurrencies: settings.InfiniCurrencies ?? '',
           InfiniPayMethods: settings.InfiniPayMethods ?? '',
+          InfiniUseRealtimeRate: settings.InfiniUseRealtimeRate ?? true,
+          InfiniExchangeRate: settings.InfiniExchangeRate ?? 8,
         }}
         complianceDefaults={{
           confirmed: settings['payment_setting.compliance_confirmed'] ?? false,

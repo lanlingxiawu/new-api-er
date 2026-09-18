@@ -1,6 +1,7 @@
 package setting
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -139,6 +140,76 @@ func TestGetInfiniCurrencyOptions_SingleCurrencyDefaults(t *testing.T) {
 	assert.Equal(t, 1, opts[0].MinTopUp)
 }
 
+// Infini settles in USD only: the credited quota is converted with a USD->CNY
+// rate, so any other currency would credit the wrong amount while the webhook's
+// same-currency amount check still passes.
+func TestUnsupportedInfiniCurrency(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty is allowed (defaults to USD)", input: "", want: ""},
+		{name: "blank is allowed", input: "   ", want: ""},
+		{name: "usd", input: "USD", want: ""},
+		{name: "lowercase usd", input: " usd ", want: ""},
+		{name: "eur rejected", input: "eur", want: "EUR"},
+		{name: "jpy rejected", input: "JPY", want: "JPY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, UnsupportedInfiniCurrency(tc.input))
+			assert.Equal(t, tc.want == "" && strings.TrimSpace(tc.input) != "", IsInfiniCurrencySupported(tc.input))
+		})
+	}
+}
+
+func TestUnsupportedInfiniCurrencyInJSON(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "empty array", input: "[]", want: ""},
+		{name: "usd only", input: `[{"currency":"USD","unit_price":1,"min_topup":1}]`, want: ""},
+		{name: "first unsupported", input: `[{"currency":"JPY","unit_price":150,"min_topup":1}]`, want: "JPY"},
+		{name: "second unsupported", input: `[{"currency":"usd","unit_price":1,"min_topup":1},{"currency":"eur","unit_price":0.92,"min_topup":1}]`, want: "EUR"},
+		{name: "malformed json", input: `{not-an-array`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := UnsupportedInfiniCurrencyInJSON(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Unsupported currencies already stored in the database must keep loading (no
+// startup failure); they are simply not offered to users.
+func TestGetSupportedInfiniCurrencyOptions_FiltersUnsupported(t *testing.T) {
+	setOptionMapFresh(t)
+	saveInfiniSingleCurrency(t)
+	setOption("InfiniCurrencies", `[{"currency":"JPY","unit_price":150,"min_topup":1},{"currency":"USD","unit_price":1,"min_topup":2}]`)
+
+	all := GetInfiniCurrencyOptions()
+	require.Len(t, all, 2, "raw config stays readable")
+
+	supported := GetSupportedInfiniCurrencyOptions()
+	require.Len(t, supported, 1)
+	assert.Equal(t, "USD", supported[0].Currency)
+	assert.Equal(t, 2, supported[0].MinTopUp)
+
+	setOption("InfiniCurrencies", `[{"currency":"EUR","unit_price":0.92,"min_topup":1}]`)
+	assert.Empty(t, GetSupportedInfiniCurrencyOptions())
+}
+
 func TestSetInfiniCurrencies_WritesOptionMap(t *testing.T) {
 	setOptionMapFresh(t)
 	err := SetInfiniCurrencies([]constant.InfiniCurrencyOption{
@@ -227,6 +298,8 @@ func TestPaymentDefaults(t *testing.T) {
 	assert.False(t, CreemTestMode)
 	assert.Equal(t, 1.0, InfiniUnitPrice)
 	assert.Equal(t, 1, InfiniMinTopUp)
+	assert.True(t, InfiniUseRealtimeRate)
+	assert.Equal(t, 8.0, InfiniExchangeRate)
 	assert.True(t, StripeEnabled)
 	assert.Equal(t, 8.0, StripeUnitPrice)
 	assert.True(t, StripeUseRealtimeRate)

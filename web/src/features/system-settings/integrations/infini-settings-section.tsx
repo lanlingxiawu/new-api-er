@@ -39,6 +39,35 @@ export interface InfiniSettingsValues {
   InfiniCurrencies: string
   /** JSON 数组，限定结账页支付方式。例：[1,2] 表示仅显示加密货币和银行卡 */
   InfiniPayMethods: string
+  InfiniUseRealtimeRate: boolean
+  /** 手动 USD→CNY 汇率（元/美金），实时汇率关闭或不可用时使用 */
+  InfiniExchangeRate: number
+}
+
+/** Infini 结算币种只支持美元；其它币种的到账换算口径不成立，后端会拒绝下单与保存。 */
+const INFINI_SUPPORTED_CURRENCY = 'USD'
+
+function isUnsupportedCurrency(value: string): boolean {
+  const trimmed = value.trim()
+  return trimmed !== '' && trimmed.toUpperCase() !== INFINI_SUPPORTED_CURRENCY
+}
+
+function hasUnsupportedCurrencyInJson(value: string): boolean {
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed === '[]') return false
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (!Array.isArray(parsed)) return false
+    return parsed.some(
+      (item) =>
+        !!item &&
+        typeof item === 'object' &&
+        typeof (item as { currency?: unknown }).currency === 'string' &&
+        isUnsupportedCurrency((item as { currency: string }).currency)
+    )
+  } catch {
+    return false
+  }
 }
 
 interface Props {
@@ -51,6 +80,10 @@ interface Props {
 
 export function InfiniSettingsSection({ values, onValueChange }: Props) {
   const { t } = useTranslation()
+  const currencyUnsupported = isUnsupportedCurrency(values.InfiniCurrency)
+  const currenciesUnsupported = hasUnsupportedCurrencyInJson(
+    values.InfiniCurrencies
+  )
 
   return (
     <div className='space-y-4 pt-4'>
@@ -120,6 +153,14 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
             value={values.InfiniCurrency}
             onChange={(e) => onValueChange('InfiniCurrency', e.target.value)}
           />
+          <p className='text-muted-foreground text-xs'>
+            {t('Only USD is supported. Top-ups in other currencies are rejected at checkout.')}
+          </p>
+          {currencyUnsupported && (
+            <p className='text-destructive text-xs'>
+              {t('This currency is not supported and cannot be saved. Change it to USD.')}
+            </p>
+          )}
         </div>
         <div className='grid gap-1.5'>
           <Label>{t('Unit price (USD per unit)')}</Label>
@@ -149,6 +190,38 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
               )
             }
           />
+        </div>
+      </div>
+
+      <div className='grid gap-4 sm:grid-cols-2'>
+        <SettingsSwitchField
+          checked={values.InfiniUseRealtimeRate}
+          onCheckedChange={(v) => onValueChange('InfiniUseRealtimeRate', v)}
+          label={t('Use real-time exchange rate')}
+          description={t(
+            'Use the live USD/CNY rate; fall back to the manual price below if it is unavailable'
+          )}
+          className='border-b-0 py-0'
+        />
+        <div className='grid gap-1.5'>
+          <Label>{t('Manual exchange rate (local currency per USD)')}</Label>
+          <Input
+            type='number'
+            min={0}
+            step={0.01}
+            value={values.InfiniExchangeRate}
+            onChange={(e) =>
+              onValueChange(
+                'InfiniExchangeRate',
+                e.target.value === '' ? 0 : e.target.valueAsNumber
+              )
+            }
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'How much local currency 1 USD converts to; only used when real-time rate is off or unavailable. Credit = paid USD x this rate / system top-up ratio'
+            )}
+          </p>
         </div>
       </div>
 
@@ -188,12 +261,17 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
           onChange={(e) => onValueChange('InfiniCurrencies', e.target.value)}
           className='font-mono text-xs'
         />
+        {currenciesUnsupported && (
+          <p className='text-destructive text-xs'>
+            {t('This currency is not supported and cannot be saved. Change it to USD.')}
+          </p>
+        )}
         <div className='text-muted-foreground space-y-1 text-xs'>
           <p>{t('JSON array. Each item configures one selectable currency for users. Overrides single currency fields above.')}</p>
           <ul className='ml-3 list-disc space-y-0.5'>
-            <li><code className='text-xs'>currency</code> — {t('Settlement currency code (uppercase). Supported: USD, EUR, GBP, SGD, AUD, HKD, JPY, KRW')}</li>
-            <li><code className='text-xs'>unit_price</code> — {t('Price per quota unit in this currency. Example: if 1 unit costs $1 USD, set 1.0; if 1 unit costs €0.92 EUR, set 0.92')}</li>
-            <li><code className='text-xs'>min_topup</code> — {t('Minimum quota units for this currency. JPY/KRW are zero-decimal currencies and should use whole-number amounts.')}</li>
+            <li><code className='text-xs'>currency</code> — {t('Settlement currency code. Only USD is supported; entries in any other currency are rejected on save and at checkout.')}</li>
+            <li><code className='text-xs'>unit_price</code> — {t('Price per quota unit in USD. Example: if 1 unit costs $1 USD, set 1.0')}</li>
+            <li><code className='text-xs'>min_topup</code> — {t('Minimum quota units users must buy in one order')}</li>
           </ul>
         </div>
       </div>

@@ -468,6 +468,29 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgThirdPartySD2PricingInvalid, map[string]any{"Detail": err.Error()})
 			return
 		}
+	case "InfiniCurrency":
+		// Infini 只受理 USD；拒绝保存而不是静默接受，让管理员当场看到问题，
+		// 而不是等到用户付款后才发现到账额度按错误口径换算。
+		// 已存在于数据库的非 USD 配置仍可正常加载（此校验只在保存路径生效），
+		// 运行时由下单/报价路径拒绝，不会导致服务启动失败。
+		if unsupported := setting.UnsupportedInfiniCurrency(option.Value.(string)); unsupported != "" {
+			common.ApiErrorMsg(c, i18n.T(c, i18n.MsgPaymentInfiniCurrencyConfigUnsupported, map[string]any{
+				"Currency": unsupported,
+			}))
+			return
+		}
+	case "InfiniCurrencies":
+		unsupported, parseErr := setting.UnsupportedInfiniCurrencyInJSON(option.Value.(string))
+		if parseErr != nil {
+			common.ApiErrorI18n(c, i18n.MsgPaymentInfiniCurrenciesInvalid)
+			return
+		}
+		if unsupported != "" {
+			common.ApiErrorMsg(c, i18n.T(c, i18n.MsgPaymentInfiniCurrencyConfigUnsupported, map[string]any{
+				"Currency": unsupported,
+			}))
+			return
+		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {
