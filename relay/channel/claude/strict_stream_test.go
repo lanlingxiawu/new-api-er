@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -61,6 +62,94 @@ const strictStop = "event: content_block_stop\ndata: {\"type\":\"content_block_s
 func TestStrictStreamSharedSizeLimit(t *testing.T) {
 	require.Equal(t, 209715200, maxClaudeFrameBytes)
 	require.Equal(t, relaycommon.MaxStreamFrameBytes, maxClaudeFrameBytes)
+}
+
+func TestStrictStreamFailureLogMessageAfterDTOError(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"usage array", `{"type":"error","error":{"message":"original api_key:secret (request id: upstream)"},"usage":[]}`, "original api_key:***"},
+		{"invalid index", `{"type":"error","error":{"message":"original"},"index":"bad"}`, "original"},
+		{"invalid message field", `{"type":"error","error":{"message":"original"},"message":[]}`, "original"},
+		{"blank message", `{"type":"error","error":{"message":" (request id: upstream)"},"usage":[]}`, ""},
+		{"non-string message", `{"type":"error","error":{"message":42},"usage":[]}`, ""},
+		{"malformed JSON", `{"type":"error","error":{"message":"private-message"},`, ""},
+		{"not an error event", `{"type":"message_delta","message":"private-message","usage":[]}`, ""},
+		{"missing error type", `{"error":{"message":"private-message"},"usage":[]}`, ""},
+		{"non-string type", `{"type":123,"error":{"message":"private-message"},"usage":[]}`, ""},
+	} {
+		for _, prefix := range []string{"", strictStart + strictText} {
+			t.Run(fmt.Sprintf("%s/delivered=%t", tc.name, prefix != ""), func(t *testing.T) {
+				frame := "data: " + tc.payload + "\n\n"
+				c, rec, resp, info := strictTestContext(io.NopCloser(strings.NewReader(prefix + frame)))
+				usage, apiErr := strictClaudeStream(c, resp, info)
+				require.Nil(t, apiErr)
+				require.True(t, info.StreamResult.Failed)
+				require.False(t, info.StreamResult.ClientGone)
+				require.Equal(t, relaycommon.StreamEndReason("upstream_json_error"), info.StreamStatus.EndReason)
+				var response dto.ClaudeResponse
+				decodeErr := common.UnmarshalJsonStr(tc.payload, &response)
+				require.Error(t, decodeErr)
+				require.Equal(t, relaycommon.BoundedStreamDiagnosticError(decodeErr), info.StreamResult.Diagnostic.Error)
+				fallback := i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+				payload, err := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": fallback}})
+				require.NoError(t, err)
+				require.Equal(t, prefix+"event: error\ndata: "+string(payload)+"\n\n", rec.Body.String(), "keep the existing terminal response")
+				require.Equal(t, http.StatusOK, rec.Code)
+				if prefix == "" {
+					require.Equal(t, "none", info.StreamResult.UsageSource)
+					require.Zero(t, usage.TotalTokens)
+				} else {
+					require.Equal(t, "mixed", info.StreamResult.UsageSource)
+					require.Equal(t, 100, usage.PromptTokens)
+					require.Equal(t, service.EstimateTokenByModel("claude", "hello"), usage.CompletionTokens)
+				}
+				want := tc.want
+				if want == "" {
+					want = fallback
+				}
+				require.Equal(t, want, info.StreamResult.ErrorMessage)
+			})
+		}
+	}
+}
+
+func TestStrictStreamFailureLogMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"explicit", `{"type":"error","error":{"message":"overloaded api_key:secret (request id: upstream)"},"private":"body-secret"}`, "overloaded api_key:***"},
+		{"blank nested", `{"type":"error","error":{"message":" (request id: upstream)"},"message":"top error"}`, "top error"},
+		{"empty", `{"type":"error","error":{"message":" "}}`, ""},
+		{"invalid", `<html>private</html>`, ""},
+	} {
+		for _, prefix := range []string{"", strictStart + strictText} {
+			t.Run(fmt.Sprintf("%s/delivered=%t", tc.name, prefix != ""), func(t *testing.T) {
+				frame := "event: error\ndata: " + tc.payload + "\n\n"
+				c, rec, resp, info := strictTestContext(io.NopCloser(strings.NewReader(prefix + frame)))
+				usage, err := strictClaudeStream(c, resp, info)
+				require.Nil(t, err)
+				require.True(t, info.StreamResult.Failed)
+				require.Equal(t, prefix+frame, rec.Body.String(), "upstream error frames remain byte-identical")
+				want := tc.want
+				if want == "" {
+					want = i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+				}
+				require.Equal(t, want, info.StreamResult.ErrorMessage)
+				if prefix == "" {
+					require.Zero(t, usage.TotalTokens)
+					require.Equal(t, "none", info.StreamResult.UsageSource)
+				} else {
+					require.Equal(t, 100, usage.PromptTokens)
+					require.Greater(t, usage.CompletionTokens, 0)
+				}
+			})
+		}
+	}
+	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(strictStart + strictText + strictStop)))
+	_, err := strictClaudeStream(c, resp, info)
+	require.Nil(t, err)
+	require.Empty(t, info.StreamResult.ErrorMessage)
 }
 
 // TestStrictStreamMixedLineEndings 验证原生 Claude 同样接受 CR 与混合空行，保留真实结束和计量；t 为上下文。

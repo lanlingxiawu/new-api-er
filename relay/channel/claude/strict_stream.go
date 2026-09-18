@@ -420,6 +420,7 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 	var endErr error                                                   // 底层终止错误，只写入私有诊断。
 	upstreamError := false                                             // 上游已给出 error 时只透传，不另生成本地错误事件。
 	var upstreamErrorFrame []byte                                      // 保存上游 error 帧原始字节，供结束读取后原样写出。
+	var errorLogFrame []byte                                           // DTO 解码失败时独立保留明确错误帧，仅用于日志，不参与下游透传。
 	outputUsageCurrent := false                                        // 最近 message_delta 输出报告后尚无新内容块；显式 0 也算报告。
 	estimatedOutput := 0                                               // 已成功交付内容的估算输出 token 累计值。
 	var outputEstimator service.StreamTokenEstimator                   // 仅消费成功写出并刷新后的内容；跨帧保留词类和权重，避免分批取整。
@@ -503,6 +504,10 @@ loop:
 			if err := common.UnmarshalJsonStr(data, &response); err != nil {
 				reason = "upstream_json_error"
 				endErr = err
+				// 无关字段类型冲突不遮挡明确错误消息；保留原解析错误和终止响应。
+				if gjson.Valid(data) && gjson.Get(data, "type").Str == "error" {
+					errorLogFrame = frame.raw
+				}
 				break loop
 			}
 			v := gjson.Parse(data)
@@ -629,6 +634,12 @@ loop:
 		// 即使内容块尚未关闭，也只发送官方格式 error，不伪造 stop_reason 或成功结束事件。
 		payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)}})
 		service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
+	}
+	if result.Failed && !result.ClientGone {
+		if len(upstreamErrorFrame) > 0 {
+			errorLogFrame = upstreamErrorFrame
+		}
+		result.ErrorMessage = service.StreamFailureLogMessage(relaycommon.StreamSnapshot{ErrorFrame: errorLogFrame, Err: endErr})
 	}
 	if info.StreamDiagnostic != nil {
 		snapshot := info.StreamDiagnostic.Snapshot()
