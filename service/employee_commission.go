@@ -38,7 +38,11 @@ func relayChannelName(relayInfo *relaycommon.RelayInfo) string {
 	return ""
 }
 
-func buildConsumptionCostRecord(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int, createdAt int64) *model.ConsumptionCost {
+// buildConsumptionCostRecord 构造一条逐笔成本记录。
+//
+// 成本口径：工具附加费（联网搜索等）是营收的一部分，和 token 费用一样整体套用渠道成本
+// 系数——附加费没有独立的成本系数，也不单独存列。
+func buildConsumptionCostRecord(relayInfo *relaycommon.RelayInfo, quota int, logId int, createdAt int64) *model.ConsumptionCost {
 	revenueQuota := int64(quota)
 	costRatio := model.GetChannelCostRatio(relayInfo.ChannelId)
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
@@ -81,12 +85,12 @@ func businessStatsCostCommissionFallbackPayload(cost *model.ConsumptionCost, com
 	return payload
 }
 
-func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int) {
+func RecordCostAndSettleEmployeeCommission(relayInfo *relaycommon.RelayInfo, quota int, logId int) {
 	if quota == 0 {
 		return
 	}
 	createdAt := employeeCommissionNow()
-	costRec := buildConsumptionCostRecord(relayInfo, quota, surchargeQuota, logId, createdAt)
+	costRec := buildConsumptionCostRecord(relayInfo, quota, logId, createdAt)
 	guard, ok := model.BeginBusinessStatsSideEffect("business_stats_skipped", businessStatsCostFallbackPayload(costRec))
 	if !ok {
 		return
@@ -219,7 +223,6 @@ type costCommissionSnapshot struct {
 	OriginModelName string
 	GroupRatio      float64
 	Quota           int
-	SurchargeQuota  int64
 	// BaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1），在 relay goroutine 上算好。
 	BaseQuota int64
 }
@@ -229,7 +232,7 @@ func init() {
 		costCommissionSnapshot{
 			UserID: payload.UserID, ChannelID: payload.ChannelID, ChannelName: payload.ChannelName,
 			UsingGroup: payload.UsingGroup, OriginModelName: payload.OriginModelName,
-			GroupRatio: payload.GroupRatio, Quota: payload.Quota, SurchargeQuota: payload.SurchargeQuota,
+			GroupRatio: payload.GroupRatio, Quota: payload.Quota,
 			BaseQuota: payload.BaseQuota,
 		}.record(logID)
 	})
@@ -239,7 +242,7 @@ func (s costCommissionSnapshot) accountingPayload() model.RelayLogAccountingPayl
 	return model.RelayLogAccountingPayload{
 		Version: 1, UserID: s.UserID, ChannelID: s.ChannelID, ChannelName: s.ChannelName,
 		UsingGroup: s.UsingGroup, OriginModelName: s.OriginModelName,
-		GroupRatio: s.GroupRatio, Quota: s.Quota, SurchargeQuota: s.SurchargeQuota,
+		GroupRatio: s.GroupRatio, Quota: s.Quota,
 		BaseQuota: s.BaseQuota,
 	}
 }
@@ -256,13 +259,13 @@ func (s costCommissionSnapshot) upstreamBaseQuota() int64 {
 	return 0
 }
 
-func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, explicitBase *int64) costCommissionSnapshot {
+func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, explicitBase *int64) costCommissionSnapshot {
 	if relayInfo == nil {
-		return costCommissionSnapshot{Quota: quota, SurchargeQuota: surchargeQuota}
+		return costCommissionSnapshot{Quota: quota}
 	}
 	snapshot := costCommissionSnapshot{
 		UserID: relayInfo.UserId, UsingGroup: relayInfo.UsingGroup, OriginModelName: relayInfo.OriginModelName,
-		GroupRatio: relayInfo.PriceData.GroupRatioInfo.GroupRatio, Quota: quota, SurchargeQuota: surchargeQuota,
+		GroupRatio: relayInfo.PriceData.GroupRatioInfo.GroupRatio, Quota: quota,
 		BaseQuota: upstreamBaseQuota(&relayInfo.PriceData, quota, explicitBase),
 	}
 	// ChannelId/ChannelName are promoted from the embedded *ChannelMeta, which
@@ -285,28 +288,7 @@ func (s costCommissionSnapshot) record(logID int) {
 	// 之前——免费分组的结算额为 0，会在那里的 quota == 0 处提前返回；而且业务统计熔断打开导致成本
 	// 台账不落库时，限额仍要照常累计（限额是止损控制，宁可算到也不能漏算）。
 	recordChannelDailyUpstream(s.ChannelID, s.upstreamBaseQuota())
-	RecordCostAndSettleEmployeeCommission(info, s.Quota, s.SurchargeQuota, logID)
-}
-
-// RecordTransactionCost 在每笔消费结算后异步调用，记录逐笔精确成本到 consumption_costs。
-// 覆盖全平台所有消费（不仅员工归属流量），用于平台级成本/利润精确统计。
-// 成本算法与提成一致：全部收入统一套用渠道成本系数。
-func RecordTransactionCost(relayInfo *relaycommon.RelayInfo, quota int, surchargeQuota int64, logId int) {
-	if quota == 0 {
-		return
-	}
-	rec := buildConsumptionCostRecord(relayInfo, quota, surchargeQuota, logId, employeeCommissionNow())
-	guard, ok := model.BeginBusinessStatsSideEffect("business_stats_skipped", businessStatsCostFallbackPayload(rec))
-	if !ok {
-		return
-	}
-	defer guard.Done()
-	if err := model.CreateConsumptionCost(rec); err != nil {
-		common.SysError("consumption_cost: failed to create record: " + err.Error())
-		guard.Fail("consumption_cost_create", err, rec)
-		return
-	}
-	guard.Success()
+	RecordCostAndSettleEmployeeCommission(info, s.Quota, logID)
 }
 
 // calcCostQuota 用 decimal 精度计算成本额度。

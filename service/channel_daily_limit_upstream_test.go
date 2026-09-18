@@ -1,12 +1,17 @@
 package service
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // 上游消耗口径：基础消耗（不乘用户分组倍率）× 渠道成本系数。
@@ -107,3 +112,44 @@ func TestRecordChannelDailyUpstream_Gates(t *testing.T) {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+// 免费分组（倍率 0）+ 表达式计价的任务：预扣额与结算额都恒为 0，PriceData 里
+// ModelPrice 也是 0 且不是按次计费，兜底分支还原不出任何基数。只有提交时显式传入
+// 「表达式乘分组倍率之前的额度」才能让渠道每日上限看到真实的上游消耗。
+func TestTaskSubmitUpstreamBase_FreeGroupTieredTask(t *testing.T) {
+	assert.Nil(t, taskSubmitUpstreamBase(nil, &relaycommon.RelayInfo{}), "非表达式任务沿用既有推导")
+
+	info := &relaycommon.RelayInfo{
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			GroupRatio:                0,
+			EstimatedQuotaBeforeGroup: 12000.4,
+			TaskUsageBilling:          true,
+		},
+	}
+	base := taskSubmitUpstreamBase(nil, info)
+	require.NotNil(t, base)
+	assert.EqualValues(t, 12000, *base)
+
+	// 提交即完成的结算值走请求上下文，优先于快照里的预估值（快照不被改写）。
+	settledCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	SetTaskSettledUpstreamBase(settledCtx, 20800.6)
+	settledBase := taskSubmitUpstreamBase(settledCtx, info)
+	require.NotNil(t, settledBase)
+	assert.EqualValues(t, 20801, *settledBase)
+	assert.EqualValues(t, 12000.4, info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup, "快照的预估口径保持不变")
+
+	freeGroup := priceDataWithGroupRatio(0)
+	assert.Zero(t, upstreamBaseQuota(freeGroup, 0, nil), "没有显式基数时止损口径恒为 0")
+	assert.EqualValues(t, 12000, upstreamBaseQuota(freeGroup, 0, base))
+}
+
+// 差额结算的基数增量：只增不减，四舍五入到 quota。
+func TestTaskUpstreamBaseDelta(t *testing.T) {
+	var absent *TaskUpstreamBase
+	assert.Zero(t, absent.delta(), "非表达式任务不给基数")
+	assert.EqualValues(t, 500, (&TaskUpstreamBase{Before: 1000, After: 1500}).delta())
+	assert.Zero(t, (&TaskUpstreamBase{Before: 1500, After: 1000}).delta(), "结算下调不回减累计")
+	assert.EqualValues(t, 1, (&TaskUpstreamBase{Before: 0.4, After: 1.4}).delta())
+	assert.Zero(t, (&TaskUpstreamBase{Before: 800, After: 800}).delta())
+}

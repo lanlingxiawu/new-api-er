@@ -253,6 +253,26 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 	return total
 }
 
+// applyTieredTextQuota 用表达式结算结果改写摘要里全部的费用口径。
+//
+// 表达式计费的 PriceData 里 ModelRatio / ModelPrice 都是 0（见 modelPriceHelperTiered），
+// 因此 calculateTextQuotaSummary 按倍率算出的 Quota / LedgerQuota / UpstreamBaseQuota 只是
+// 「工具附加费 + Gemini 独立音频输入价」这点残值，三者必须一起被表达式结果覆盖：
+// 只改 Quota 会让 consumption_costs.revenue_quota 和员工佣金只记到那点零头。
+func applyTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) {
+	summary.Quota = composeTieredTextQuota(relayInfo, *summary, tieredQuota, tieredResult)
+	// hasBillableUsage 读 FixedPriceBilling，必须先定。
+	summary.FixedPriceBilling = isFixedPriceSettlement(relayInfo, tieredResult)
+	// 表达式是唯一定价来源：音频输入由 ai 变量计价，composeTieredTextQuota 从不叠加
+	// 独立音频价。清零后日志里也不会出现与实扣无关的 Audio Input 花费行。
+	summary.AudioInputPrice = 0
+	// 成本账与实扣口径一致：只要计了费就按实扣额记账。
+	if summary.hasBillableUsage() {
+		summary.LedgerQuota = summary.Quota
+	}
+	summary.UpstreamBaseQuota = tieredUpstreamBaseQuota(*summary, tieredResult)
+}
+
 // calculateTextQuotaSummary expects a usage already remapped by
 // effectiveBillingUsage; PostTextConsumeQuota performs that remap once and shares
 // the result with tiered billing, affinity observation and logging.
@@ -501,15 +521,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if tieredOk {
 			tieredBillingApplied = true
 			tieredResult = tieredRes
-			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
-			summary.FixedPriceBilling = isFixedPriceSettlement(relayInfo, tieredRes)
-			if summary.FixedPriceBilling {
-				summary.AudioInputPrice = 0
-				if summary.LedgerQuota == 0 {
-					summary.LedgerQuota = summary.Quota
-				}
-			}
-			summary.UpstreamBaseQuota = tieredUpstreamBaseQuota(summary, tieredRes)
+			applyTieredTextQuota(relayInfo, &summary, tieredQuota, tieredRes)
 		}
 	}
 
@@ -639,7 +651,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:             relayInfo.UsingGroup,
 		Other:             other,
 		CountUsage:        countUsage,
-		SurchargeQuota:    int64(summary.ToolCallSurchargeQuota.Round(0).IntPart()),
 		LedgerQuota:       summary.LedgerQuota,
 		UpstreamBaseQuota: &summary.UpstreamBaseQuota,
 	})

@@ -302,6 +302,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		priceData = types.PriceData{Quota: quota, QuotaToPreConsume: quota, GroupRatioInfo: groupRatioInfo}
 		info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: billing_setting.BillingModeTieredExpr, ModelName: modelName, ExprString: exprStr, ExprHash: billingexpr.ExprHashString(exprStr), GroupRatio: groupRatioInfo.GroupRatio, EstimatedQuotaBeforeGroup: cost * common.QuotaPerUnit, EstimatedQuotaAfterGroup: quota, EstimatedTier: trace.MatchedTier, QuotaPerUnit: common.QuotaPerUnit, ExprVersion: billingexpr.ExprVersion(exprStr), TaskUsageBilling: true, UsageFacts: facts}
 	} else {
+		// A fork-priced model that lost its own pricing must not be billed by
+		// the generic per-call fallback.
+		if err = billing_setting.ValidateForkTaskModelPricing(pluginKey, modelName, info.UpstreamModelName); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "plugin_request_invalid", http.StatusBadRequest)
+		}
 		priceData, err = helper.ModelPriceHelperPerCall(c, info)
 		if err != nil {
 			return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
@@ -398,6 +403,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				finalQuota = settlement.ActualQuotaAfterGroup
 				snap.UsageFacts = facts
 				snap.EstimatedTier = settlement.MatchedTier
+				// 消费日志的「上游消耗」基数要用结算值：免费分组下结算额恒为 0，
+				// 只有它能还原上游真实消耗。快照里的预估值按上游约定保持不变。
+				service.SetTaskSettledUpstreamBase(c, settlement.ActualQuotaBeforeGroup)
 				noteTaskQuotaClamp(info, settlement.Clamp)
 			}
 		}

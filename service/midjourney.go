@@ -19,6 +19,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -93,6 +94,36 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 	return true, billingErr
 }
 
+// midjourneyLedgerRelayInfo 从 MJ 记录重建成本/提成记账所需的最小 relayInfo。
+// midjourneys 表没有分组列，只能按用户当前分组解析倍率：用户在提交与退款之间换了分组时，
+// 冲销额会与原始记账有偏差。成本系数由记账侧按渠道现取，与消费侧同源。
+func midjourneyLedgerRelayInfo(task *model.Midjourney) *relaycommon.RelayInfo {
+	group, err := model.GetUserGroup(task.UserId, false)
+	if err != nil {
+		group = ""
+	}
+	groupRatio, _ := ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), group, group)
+	info := &relaycommon.RelayInfo{
+		UserId:          task.UserId,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: task.GetBillingChannelId()},
+		TokenId:         task.TokenId,
+		UsingGroup:      group,
+		OriginModelName: CovertMjpActionToModelName(task.Action),
+	}
+	info.PriceData.GroupRatioInfo.GroupRatio = groupRatio
+	return info
+}
+
+// recordMidjourneyCostAndCommission 记录/冲销一笔 MJ 成本与提成。
+// 同步执行：调用方是 MJ 任务轮询循环（非中继协程），台账写入本身只进内存缓冲，
+// 顺序与退款日志一致更利于对账。渠道每日上限不在此累计：退款额为负，累计器只增不减。
+func recordMidjourneyCostAndCommission(task *model.Midjourney, quota int, logId int) {
+	if task == nil || quota == 0 {
+		return
+	}
+	RecordCostAndSettleEmployeeCommission(midjourneyLedgerRelayInfo(task), quota, logId)
+}
+
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.
 func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
 	quota := task.Quota
@@ -120,7 +151,7 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	other := model.NewLogOther()
 	other.SetPublic("task_id", task.MjId)
 	other.SetPublic("reason", reason)
-	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+	logId := model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
 		Content:   "",
@@ -130,6 +161,11 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		TokenId:   task.TokenId,
 		Other:     other,
 	})
+	// 冲销成本账与员工提成（fork 记账）。用户额度、令牌额度、users.used_quota 和
+	// channels.used_quota 都已回减，成本账不冲销会让营收口径系统性高于已用额度，
+	// 失败的任务照样计提佣金。退款日志是新的 logId，与消费日志的
+	// employee_commission_logs.log_id 唯一索引不冲突。
+	recordMidjourneyCostAndCommission(task, -quota, logId)
 
 	task.Quota = 0
 	if err := task.UpdateBillingState(); err != nil {

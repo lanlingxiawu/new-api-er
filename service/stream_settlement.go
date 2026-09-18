@@ -40,7 +40,6 @@ func settleStreamQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, param
 			params.Quota = 0
 			params.CountUsage = false
 			params.LedgerQuota = 0
-			params.SurchargeQuota = 0
 		}
 		logger.LogError(ctx, "Stream settlement needs review")
 	}

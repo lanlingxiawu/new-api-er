@@ -282,7 +282,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			TokenId:   midjourneyTask.TokenId,
 			Group:     info.UsingGroup,
 			Other:     other,
-		}, midjourneyTask.Quota, 0)
+		}, midjourneyTask.Quota, nil)
 		model.UpdateUserUsedQuotaAndRequestCount(info.UserId, midjourneyTask.Quota)
 		model.UpdateChannelUsedQuota(billingChannelId, midjourneyTask.Quota)
 	}
@@ -649,7 +649,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			TokenId:   midjourneyTask.TokenId,
 			Group:     relayInfo.UsingGroup,
 			Other:     other,
-		}, midjourneyTask.Quota, 0)
+		}, midjourneyTask.Quota, nil)
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, midjourneyTask.Quota)
 		model.UpdateChannelUsedQuota(billingChannelId, midjourneyTask.Quota)
 	}

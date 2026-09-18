@@ -72,6 +72,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 	}
 	appendTaskLogInfo(task, other)
 	attachQuotaSaturation(c, info, other)
+	upstreamBase := taskSubmitUpstreamBase(c, info)
 	EnqueueConsumeLogWithCost(c, info, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
@@ -81,7 +82,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 		TokenId:   info.TokenId,
 		Group:     info.UsingGroup,
 		Other:     other,
-	}, info.PriceData.Quota, 0)
+	}, info.PriceData.Quota, upstreamBase)
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
 }
@@ -234,9 +235,17 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+// taskFallbackGroupRatio 在计费快照缺失时解析任务的分组倍率。
+// 必须走 ResolveGroupRatio：用户专属倍率与分组对分组倍率都会改变实际计费倍率，
+// 只读全局分组倍率会低估成本基准，让成本账与提成偏离真实扣费。
+func taskFallbackGroupRatio(task *model.Task) float64 {
+	ratio, _ := ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), task.Group, task.Group)
+	return ratio
+}
+
 func buildTaskLedgerRelayInfo(task *model.Task) *relaycommon.RelayInfo {
 	modelName := taskModelName(task)
-	groupRatio := ratio_setting.GetGroupRatio(task.Group)
+	groupRatio := taskFallbackGroupRatio(task)
 	modelRatio := float64(0)
 	modelPrice := float64(0)
 	usePrice := false
@@ -296,15 +305,78 @@ func appendTaskPricingMetadata(other *model.LogOther, metadata map[string]string
 	}
 }
 
-func recordTaskCostAndCommission(task *model.Task, quota int, logId int) {
+// TaskUpstreamBase 是差额结算的「上游消耗」基数（分组倍率取 1 的额度，quota 单位）。
+// 表达式计价的任务在免费分组下预扣额与结算额都恒为 0，无法用「结算额 ÷ 分组倍率」倒推基数；
+// 提交时已按 Before 累计过，结算只需补 After - Before。
+type TaskUpstreamBase struct {
+	Before float64 // 提交时已累计的基数（表达式乘分组倍率之前的额度）。
+	After  float64 // 本次结算后的基数。
+}
+
+// delta 求本次结算应补累的基数增量。基数只增不减：结算额下调时返回 0。
+func (b *TaskUpstreamBase) delta() int64 {
+	if b == nil {
+		return 0
+	}
+	d := int64(common.QuotaRound(b.After)) - int64(common.QuotaRound(b.Before))
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// taskSettledUpstreamBaseKey 承载「提交即完成」结算出的、乘分组倍率之前的额度。
+// 快照的 EstimatedQuotaBeforeGroup 按上游约定恒为提交前的预估值（重试换分组时还要拿它
+// 重算预估），不能被结算值覆盖；而消费日志的「上游消耗」要的是结算值，因此单独用请求
+// 上下文传递。
+const taskSettledUpstreamBaseKey = "task_settled_upstream_base"
+
+// SetTaskSettledUpstreamBase 供提交即完成的结算路径登记实际上游消耗基数。
+func SetTaskSettledUpstreamBase(c *gin.Context, quotaBeforeGroup float64) {
+	if c == nil {
+		return
+	}
+	c.Set(taskSettledUpstreamBaseKey, quotaBeforeGroup)
+}
+
+// taskSubmitUpstreamBase 求任务提交时的「上游消耗」基数。表达式计价的任务必须显式给出：
+// 快照里 ModelPrice 为 0 且不是按次计费，免费分组下 upstreamBaseQuota 的兜底会算出 0，
+// 渠道每日上限对这类流量彻底失效。
+func taskSubmitUpstreamBase(c *gin.Context, info *relaycommon.RelayInfo) *int64 {
+	if c != nil {
+		if settled, ok := c.Get(taskSettledUpstreamBaseKey); ok {
+			if quotaBeforeGroup, ok := settled.(float64); ok {
+				base := int64(common.QuotaRound(quotaBeforeGroup))
+				return &base
+			}
+		}
+	}
+	snap := info.TieredBillingSnapshot
+	if snap == nil {
+		return nil
+	}
+	base := int64(common.QuotaRound(snap.EstimatedQuotaBeforeGroup))
+	return &base
+}
+
+// recordTaskUpstreamOnly 只累计渠道每日上限。免费分组的差额恒为 0，没有台账可记，
+// 但上游消耗照常发生——限额是止损控制，口径独立于成本/提成台账。
+func recordTaskUpstreamOnly(channelId int, baseQuota int64) {
+	if baseQuota <= 0 {
+		return
+	}
+	go recordChannelDailyUpstream(channelId, baseQuota)
+}
+
+func recordTaskCostAndCommission(task *model.Task, quota int, logId int, explicitBase *int64) {
 	if task == nil || quota == 0 {
 		return
 	}
 	ledgerInfo := buildTaskLedgerRelayInfo(task)
 	go func() {
 		// 差额补扣也是上游消耗；退款（quota < 0）不减少限额累计，upstreamBaseQuota 返回 0。
-		recordChannelDailyUpstream(task.ChannelId, upstreamBaseQuota(&ledgerInfo.PriceData, quota, nil))
-		RecordCostAndSettleEmployeeCommission(ledgerInfo, quota, 0, logId)
+		recordChannelDailyUpstream(task.ChannelId, upstreamBaseQuota(&ledgerInfo.PriceData, quota, explicitBase))
+		RecordCostAndSettleEmployeeCommission(ledgerInfo, quota, logId)
 	}()
 }
 
@@ -347,7 +419,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	})
 	// 4. 记录成本与提成（fork 记账）。必须在清除 task.Quota 之前，
 	// 因为提成结算依赖退款额度。
-	recordTaskCostAndCommission(task, -quota, logId)
+	recordTaskCostAndCommission(task, -quota, logId, nil)
 
 	// 5. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
 	// 由后续对账重试。回写失败必须显式告警，避免漏掉潜在的重复退款风险。
@@ -361,15 +433,19 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // RecalculateTaskQuota 通用的异步差额结算。
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
+// upstreamBase 可选：表达式计价的任务传入「上游消耗」基数，免费分组只有它能还原真实消耗。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, upstreamBase *TaskUpstreamBase, clamps ...*common.QuotaClamp) {
 	if actualQuota < 0 {
 		return
 	}
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota
+	baseDelta := upstreamBase.delta()
 
 	if quotaDelta == 0 {
+		// 免费分组的预扣额与结算额都是 0，差额为 0，但上游用量可能已经涨了。
+		recordTaskUpstreamOnly(task.ChannelId, baseDelta)
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
 		return
@@ -429,7 +505,11 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Other:     other,
 		NodeName:  task.PrivateData.NodeName,
 	})
-	recordTaskCostAndCommission(task, quotaDelta, logId)
+	var explicitBase *int64
+	if upstreamBase != nil {
+		explicitBase = &baseDelta
+	}
+	recordTaskCostAndCommission(task, quotaDelta, logId, explicitBase)
 }
 
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。
@@ -455,19 +535,26 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 			return false
 		}
 
-		group := task.Group
-		if group == "" {
-			user, err := model.GetUserById(task.UserId, false)
-			if err == nil {
-				group = user.Group
+		if bc != nil && bc.GroupRatio > 0 {
+			// 预扣时冻结在计费快照里的倍率是唯一权威口径。任务只存了实际使用的分组，
+			// 重新解析时只能把它同时当作用户分组，分组对分组倍率（GroupGroupRatio）就会
+			// 落空：预扣按 0.3、重算按 0.5，用户会被多扣。
+			finalGroupRatio = bc.GroupRatio
+		} else {
+			group := task.Group
+			if group == "" {
+				user, err := model.GetUserById(task.UserId, false)
+				if err == nil {
+					group = user.Group
+				}
 			}
-		}
-		if group == "" {
-			return false
-		}
+			if group == "" {
+				return false
+			}
 
-		// per-user exclusive (if enabled) -> group-group ratio -> group ratio (design §5.3)
-		finalGroupRatio, _ = ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), group, group)
+			// per-user exclusive (if enabled) -> group-group ratio -> group ratio (design §5.3)
+			finalGroupRatio, _ = ratio_setting.ResolveGroupRatio(model.GetUserGroupRatios(task.UserId), group, group)
+		}
 	}
 	// 只有按倍率计费（倍率 > 0）的任务才按 token 重算；倍率为 0 的按次任务保持预扣额度，
 	// 否则会按 0 额度把预扣全部退回。
@@ -485,7 +572,7 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
-	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason, nil, clamp)
 	return true
 }
 

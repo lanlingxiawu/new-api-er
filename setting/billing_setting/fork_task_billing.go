@@ -24,17 +24,20 @@ func resolveForkTaskBillingExpr(pluginKey, model, mappedModel string) (string, b
 	return model_setting.GetThirdPartySD2BillingExpr(matrixModel)
 }
 
-// thirdPartySD2MatrixModel returns the model whose matrix expression prices a
-// thirdpartysd2 request: the client model first, then the mapped model.
+// thirdPartySD2MatrixModel returns the model the pricing matrix configures for
+// a thirdpartysd2 request: the client model first, then the mapped model. A
+// model whose resolutions were all removed is still configured — it simply
+// prices nothing — so selection follows matrix membership rather than the
+// presence of an expression.
 func thirdPartySD2MatrixModel(pluginKey, model, mappedModel string) (string, bool) {
 	if pluginKey != model_setting.ThirdPartySD2PluginKey {
 		return "", false
 	}
-	if _, ok := model_setting.GetThirdPartySD2BillingExpr(model); ok {
+	if _, ok := model_setting.GetThirdPartySD2Resolutions(model); ok {
 		return model, true
 	}
 	if mappedModel != "" && mappedModel != model {
-		if _, ok := model_setting.GetThirdPartySD2BillingExpr(mappedModel); ok {
+		if _, ok := model_setting.GetThirdPartySD2Resolutions(mappedModel); ok {
 			return mappedModel, true
 		}
 	}
@@ -84,5 +87,31 @@ func ValidateForkTaskUsageFacts(pluginKey, model, mappedModel string, facts map[
 	if slices.Contains(resolutions, resolution) {
 		return nil
 	}
+	if len(resolutions) == 0 {
+		return forkTaskModelUnpricedError(model)
+	}
 	return fmt.Errorf("%s does not support %s resolution (supported: %s)", model, resolution, strings.Join(resolutions, ", "))
+}
+
+// ValidateForkTaskModelPricing rejects a submission whose fork-priced model has
+// no price at all, before it can fall back to a generic per-call price.
+//
+// thirdpartysd2: removing every resolution of a model makes the model
+// unavailable. Its matrix expression disappears with the last resolution, so
+// without this check the request would leave the task expression path and be
+// priced by the generic model price / ratio fallback.
+func ValidateForkTaskModelPricing(pluginKey, model, mappedModel string) error {
+	matrixModel, ok := thirdPartySD2MatrixModel(pluginKey, model, mappedModel)
+	if !ok {
+		return nil
+	}
+	resolutions, ok := model_setting.GetThirdPartySD2Resolutions(matrixModel)
+	if !ok || len(resolutions) > 0 {
+		return nil
+	}
+	return forkTaskModelUnpricedError(model)
+}
+
+func forkTaskModelUnpricedError(model string) error {
+	return fmt.Errorf("%s has no priced resolution; an administrator must price it before it can be used", model)
 }

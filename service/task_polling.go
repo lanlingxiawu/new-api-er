@@ -693,9 +693,15 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		if result.Clamp != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算额度发生饱和: %+v", task.TaskID, result.Clamp))
 		}
+		// 免费分组的预扣与结算额都是 0，「结算额 ÷ 分组倍率」还原不出上游消耗，
+		// 必须把表达式乘分组倍率之前的额度显式交给渠道每日上限。
+		upstreamBase := &TaskUpstreamBase{
+			Before: bc.TieredSnapshot.EstimatedQuotaBeforeGroup,
+			After:  result.ActualQuotaBeforeGroup,
+		}
 		bc.TieredSnapshot.UsageFacts = usageFacts
 		bc.TieredSnapshot.EstimatedTier = result.MatchedTier
-		RecalculateTaskQuota(ctx, task, result.ActualQuotaAfterGroup, "任务用量表达式结算", result.Clamp)
+		RecalculateTaskQuota(ctx, task, result.ActualQuotaAfterGroup, "任务用量表达式结算", upstreamBase, result.Clamp)
 		return true
 	}
 	// 按次计费的成功任务保持预扣；失败任务由调用方全额退款。
@@ -705,7 +711,7 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 优先让 adaptor 决定最终额度。
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
+		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整", nil)
 		return true
 	}
 	// 回退到 token 重算。

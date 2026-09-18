@@ -177,6 +177,69 @@ func TestTaskBilling_RecalculateByTokens_ConfiguredRatio(t *testing.T) {
 	assert.Equal(t, 2000, task.Quota)
 }
 
+// setGroupGroupRatio 临时配置分组对分组倍率矩阵并在用例结束后还原。
+func setGroupGroupRatio(t *testing.T, jsonStr string) {
+	t.Helper()
+	previous := ratio_setting.GroupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(previous))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(jsonStr))
+}
+
+// 计费快照缺失（历史任务或反序列化失败）时，成本基准必须按 ResolveGroupRatio 解析，
+// 而不是只读全局分组倍率——否则专属/分组对分组倍率被忽略，成本与提成被低估。
+func TestTaskBilling_LedgerRelayInfoResolvesGroupRatioWithoutBillingContext(t *testing.T) {
+	previousRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"ledger-grp":2}`))
+	setGroupGroupRatio(t, `{"ledger-grp":{"ledger-grp":5}}`)
+
+	task := makeTask(8206, 8206, 1000, 0, BillingSourceWallet, 0)
+	task.Group = "ledger-grp"
+	task.PrivateData.BillingContext = nil
+
+	info := buildTaskLedgerRelayInfo(task)
+	assert.Equal(t, 5.0, info.PriceData.GroupRatioInfo.GroupRatio,
+		"分组对分组倍率优先于全局分组倍率")
+}
+
+// 计费快照存在时用冻结的倍率重算：任务只存了实际使用的分组，重新解析会把它同时
+// 当成用户分组，分组对分组倍率落空，预扣 0.3 / 重算 0.5 会多扣用户。
+func TestTaskBilling_RecalculateByTokens_UsesFrozenGroupRatio(t *testing.T) {
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":2}`))
+	// 重新解析只会拿到这个 0.5；预扣冻结的是 0.3。
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"frozen-grp":0.5}`))
+	setGroupGroupRatio(t, `{}`)
+
+	truncate(t)
+	const uid, tid, chid = 8207, 8207, 8207
+	const initQuota, preConsumed = 100000, 600
+	seedUser(t, uid, initQuota)
+	seedToken(t, tid, uid, "sk-taskrecalc-frozen", 90000)
+	seedChannel(t, chid)
+
+	task := makeTask(uid, chid, preConsumed, tid, BillingSourceWallet, 0)
+	task.Platform = "kling"
+	task.Group = "frozen-grp"
+	task.PrivateData.BillingContext.GroupRatio = 0.3
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.True(t, RecalculateTaskQuotaByTokens(context.Background(), task, 1000))
+
+	// 1000 tokens × 模型倍率 2 × 冻结分组倍率 0.3 = 600，与预扣一致，不产生差额。
+	assert.Equal(t, 600, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, uid))
+}
+
 func TestTaskBilling_RecalculateByTokens_ZeroTokens(t *testing.T) {
 	truncate(t)
 	const uid = 8203

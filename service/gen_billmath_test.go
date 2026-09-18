@@ -459,6 +459,79 @@ func TestBillmathComposeTieredTextQuota_SurchargeWithResultAndSnapshot(t *testin
 }
 
 // ---------------------------------------------------------------------------
+// text_quota.go — applyTieredTextQuota
+//
+// 表达式计费的 PriceData 里 ModelRatio / ModelPrice 都是 0，按倍率算出的费用只剩
+// 「工具附加费 + Gemini 独立音频输入价」这点残值。实扣、成本账（LedgerQuota）和上游消耗
+// 基数必须一起被表达式结果覆盖，否则 consumption_costs.revenue_quota 与员工佣金只记零头。
+// ---------------------------------------------------------------------------
+
+func billmathTieredRelayInfo(model string, groupRatio float64) *relaycommon.RelayInfo {
+	pd := hosttypes.PriceData{
+		UsePrice:       false,
+		ModelRatio:     0, // 表达式计费不写倍率
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: groupRatio},
+	}
+	ri := billmathTextRelayInfo(pd, model, types.RelayFormatOpenAI)
+	ri.TieredBillingSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr",
+		GroupRatio:  groupRatio,
+	}
+	return ri
+}
+
+func TestBillmathApplyTieredTextQuota_LedgerFollowsExpressionWithSurcharge(t *testing.T) {
+	ctx := billmathCtx()
+	// "search-preview" 后缀触发 web_search 附加费（单价 10 / 1000 次）。
+	ri := billmathTieredRelayInfo("billmath-search-preview", 1)
+
+	summary := calculateTextQuotaSummary(ctx, ri, &dto.Usage{PromptTokens: 1000, CompletionTokens: 500})
+	// 倍率为 0，token 费用全部落空，只剩附加费 10/1000 × 1 × 500000 = 5000。
+	require.Equal(t, 5000, summary.Quota)
+	require.Equal(t, 5000, summary.LedgerQuota)
+
+	applyTieredTextQuota(ri, &summary, 105000, &billingexpr.TieredResult{ActualQuotaBeforeGroup: 105000})
+
+	assert.Equal(t, 110000, summary.Quota, "表达式额度 + 附加费")
+	assert.Equal(t, summary.Quota, summary.LedgerQuota, "成本账口径必须与实扣一致")
+	assert.EqualValues(t, 110000, summary.UpstreamBaseQuota)
+}
+
+func TestBillmathApplyTieredTextQuota_DropsSeparateAudioInputPrice(t *testing.T) {
+	ctx := billmathCtx()
+	ri := billmathTieredRelayInfo("gemini-2.5-flash", 1)
+	usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100}
+	usage.PromptTokensDetails = dto.InputTokenDetails{AudioTokens: 400}
+
+	summary := calculateTextQuotaSummary(ctx, ri, usage)
+	// 旧倍率口径的独立音频输入价：1.0 USD / 1M tokens。
+	require.Equal(t, 1.0, summary.AudioInputPrice)
+	require.Equal(t, 200, summary.Quota)
+
+	applyTieredTextQuota(ri, &summary, 70000, &billingexpr.TieredResult{ActualQuotaBeforeGroup: 70000})
+
+	assert.Zero(t, summary.AudioInputPrice, "表达式用 ai 变量给音频计价，不再叠加独立音频价")
+	assert.Equal(t, 70000, summary.Quota)
+	assert.Equal(t, 70000, summary.LedgerQuota)
+}
+
+// 没有可计费用量时不收费，成本账也保持 0。
+func TestBillmathApplyTieredTextQuota_NoBillableUsageKeepsLedgerZero(t *testing.T) {
+	ctx := billmathCtx()
+	ri := billmathTieredRelayInfo("billmath-tiered-empty", 1)
+
+	summary := calculateTextQuotaSummary(ctx, ri, &dto.Usage{})
+	require.Zero(t, summary.Quota)
+	require.Zero(t, summary.LedgerQuota)
+
+	applyTieredTextQuota(ri, &summary, 0, &billingexpr.TieredResult{})
+
+	assert.Zero(t, summary.Quota)
+	assert.Zero(t, summary.LedgerQuota)
+	assert.Zero(t, summary.UpstreamBaseQuota)
+}
+
+// ---------------------------------------------------------------------------
 // text_quota.go — calculateTextToolCallSurcharge
 // ---------------------------------------------------------------------------
 

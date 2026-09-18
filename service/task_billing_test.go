@@ -983,6 +983,53 @@ func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testi
 	assert.Equal(t, int64(1), countLogs(t))
 }
 
+// MJ 退款回减了用户额度、令牌额度、users.used_quota 和 channels.used_quota，
+// 成本账必须一起冲销：否则营收口径系统性高于已用额度，失败任务照样计提佣金。
+func TestMidjourneyRefundReversesConsumptionCostLedger(t *testing.T) {
+	truncate(t)
+
+	// 熔断器闭合，台账写入不被跳过（Enabled=false 表示只关自动熔断，不开路）。
+	circuit := operation_setting.GetBusinessStatsCircuitBreakerSetting()
+	savedCircuit := *circuit
+	circuit.Enabled = false
+	circuit.ManualDisabled = false
+	t.Cleanup(func() { *circuit = savedCircuit })
+
+	const userID, tokenID, channelID = 58, 58, 58
+	const initialUserQuota, initialTokenQuota, chargedQuota = 50000, 40000, 6000
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-midjourney-ledger", initialTokenQuota)
+	seedChannel(t, channelID)
+	t.Cleanup(func() {
+		model.DB.Exec("DELETE FROM consumption_costs WHERE user_id = ?", userID)
+	})
+
+	task := &model.Midjourney{
+		UserId:           userID,
+		Action:           "IMAGINE",
+		MjId:             "mj-ledger-refund",
+		ChannelId:        channelID,
+		Progress:         "0%",
+		Quota:            chargedQuota,
+		TokenId:          tokenID,
+		BillingChannelId: channelID,
+	}
+	require.NoError(t, task.Insert())
+	seedChargedAccounting(t, userID, channelID, tokenID, chargedQuota, 1)
+
+	ctx := context.Background()
+	require.True(t, RefundMidjourneyQuota(ctx, task, "构图失败"))
+	model.FlushBusinessStatBuffers()
+
+	var costs []model.ConsumptionCost
+	require.NoError(t, model.DB.Where("user_id = ?", userID).Find(&costs).Error)
+	require.Len(t, costs, 1, "退款必须落一条冲销记录")
+	assert.EqualValues(t, -chargedQuota, costs[0].RevenueQuota)
+	assert.Equal(t, channelID, costs[0].ChannelId)
+	assert.Equal(t, "mj_imagine", costs[0].ModelName)
+	assert.Negative(t, costs[0].CostQuota, "成本也必须是负数才能净为 0")
+}
+
 func TestSettleMidjourneyTaskBillingFundingFailureClearsMarkers(t *testing.T) {
 	truncate(t)
 
@@ -1299,7 +1346,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment", nil)
 
 	// User quota should decrease by the delta (1000 additional charge)
 	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
@@ -1338,7 +1385,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment", nil)
 
 	// User quota should increase by abs(delta) = 2000 (refund overpayment)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -1372,7 +1419,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, preConsumed, "exact match")
+	RecalculateTaskQuota(ctx, task, preConsumed, "exact match", nil)
 
 	// No change to user quota
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
@@ -1393,7 +1440,7 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 	require.NoError(t, model.DB.Create(task).Error)
 
-	RecalculateTaskQuota(ctx, task, 0, "zero actual")
+	RecalculateTaskQuota(ctx, task, 0, "zero actual", nil)
 
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
 	assert.Zero(t, task.Quota)
@@ -1412,7 +1459,7 @@ func TestRecalculate_RejectsNegativeActualQuota(t *testing.T) {
 	seedUser(t, userID, initQuota)
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, -1, "invalid negative actual")
+	RecalculateTaskQuota(ctx, task, -1, "invalid negative actual", nil)
 
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
 	assert.Equal(t, preConsumed, task.Quota)
@@ -1437,7 +1484,7 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge")
+	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge", nil)
 
 	// Subscription used should decrease by delta (refund 3000)
 	assert.Equal(t, subUsed-int64(preConsumed-actualQuota), getSubscriptionUsed(t, subID))
@@ -1504,7 +1551,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 	}
 
 	if shouldSettle && actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "test settle")
+		RecalculateTaskQuota(ctx, task, actualQuota, "test settle", nil)
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -2062,4 +2109,35 @@ func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
 			assert.Equal(t, testCase.wantQuota, task.Quota)
 		})
 	}
+}
+
+// TaskBillingOther 才是任务 DTO 实际下发的那一层：taskBillingOther 的分级字段必须在这里被剥掉，
+// 否则任务列表会把渠道/插件/上游任务 ID 这些管理员与 root 视角的诊断信息发给普通用户。
+func TestTaskBillingOtherStripsRoleScopedSections(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_public"
+	task.PrivateData.UpstreamTaskID = "upstream-private"
+	task.PrivateData.NodeName = "node-a"
+	task.PrivateData.Execution = &model.TaskExecutionSnapshot{
+		TaskPlugin: &model.TaskPluginSnapshot{
+			Key:        "document-parser",
+			Name:       "Document Parser",
+			Version:    "1.2.3",
+			APIVersion: 1,
+			Generation: 42,
+		},
+	}
+
+	internal := taskBillingOther(task).Snapshot()
+	require.Contains(t, internal, "admin_info", "precondition: 内部快照带管理员分区")
+	require.Contains(t, internal, "root_info", "precondition: 内部快照带 root 分区")
+
+	other := TaskBillingOther(task)
+
+	assert.NotContains(t, other, "admin_info")
+	assert.NotContains(t, other, "root_info")
+	assert.NotContains(t, other, "audit_info")
+	assert.Equal(t, "task_public", other["task_id"], "用户可见字段必须保留")
+	assert.Equal(t, 0.02, other["model_price"])
+	assert.Equal(t, 1.0, other["group_ratio"])
 }

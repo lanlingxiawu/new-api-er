@@ -64,7 +64,7 @@ func TestEmployeeCommission_RecordCostAndSettle(t *testing.T) {
 	seedUser(t, uid, 100000)
 
 	// quota == 0 => early return.
-	RecordCostAndSettleEmployeeCommission(&relaycommon.RelayInfo{UserId: uid}, 0, 0, 0)
+	RecordCostAndSettleEmployeeCommission(&relaycommon.RelayInfo{UserId: uid}, 0, 0)
 
 	info := &relaycommon.RelayInfo{
 		UserId:          uid,
@@ -74,7 +74,7 @@ func TestEmployeeCommission_RecordCostAndSettle(t *testing.T) {
 		PriceData:       hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
 	}
 	// User has no inviter => cost-only ledger write (or circuit-breaker skip). No panic.
-	RecordCostAndSettleEmployeeCommission(info, 1000, 0, 123)
+	RecordCostAndSettleEmployeeCommission(info, 1000, 123)
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM consumption_costs WHERE user_id = ?", uid)
 	})

@@ -8,10 +8,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -154,32 +152,6 @@ func TestSubscriptionReset_RunOnce(t *testing.T) {
 	require.True(t, subscriptionResetRunning.CompareAndSwap(false, true))
 	runSubscriptionQuotaResetOnce() // returns immediately
 	subscriptionResetRunning.Store(false)
-}
-
-// --- employee_commission.go RecordTransactionCost --------------------------
-
-func TestEmployeeCommission_RecordTransactionCost(t *testing.T) {
-	truncate(t)
-	const uid, chid = 6100, 6101
-	// quota==0 => no-op.
-	RecordTransactionCost(&relaycommon.RelayInfo{UserId: uid}, 0, 0, 0)
-
-	info := &relaycommon.RelayInfo{
-		UserId:          uid,
-		OriginModelName: "gpt-4o",
-		UsingGroup:      "default",
-		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: chid, ChannelName: "c"},
-		PriceData:       hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
-	}
-	RecordTransactionCost(info, 1000, 0, 0)
-	t.Cleanup(func() { model.DB.Exec("DELETE FROM consumption_costs WHERE user_id = ?", uid) })
-
-	// The record is written unless the business-stats circuit breaker is open
-	// (a shared global that other tests may trip); accept 0 or 1 rows but require
-	// the code path to run without panicking.
-	var count int64
-	model.DB.Model(&model.ConsumptionCost{}).Where("user_id = ?", uid).Count(&count)
-	assert.LessOrEqual(t, count, int64(1))
 }
 
 // --- file_service.go leftovers ---------------------------------------------

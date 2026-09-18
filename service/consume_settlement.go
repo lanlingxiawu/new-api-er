@@ -15,7 +15,6 @@ type ConsumptionSettlementParams struct {
 	ModelName        string          // 日志模型名；空时使用请求原模型名。
 	TokenName        string          // 调用令牌的展示名称，不含令牌密钥。
 	Quota            int             // 最终用户收费额度；严格流式为 0 时释放预扣。
-	SurchargeQuota   int64           // 工具等附加费的内部额度，供成本/分账快照使用。
 	Content          string          // 日志公开说明，不放原始响应或底层私有错误。
 	TokenId          int             // 调用令牌 ID；0 时从请求信息补入。
 	UseTimeSeconds   int             // 请求耗时，单位秒。
@@ -33,11 +32,13 @@ type ConsumptionSettlementParams struct {
 // EnqueueConsumeLogWithCost is the relay-safe entry point for legacy relay
 // paths that already performed billing. It retains only a primitive snapshot
 // and schedules cost/commission work after the async log insert.
-func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, params model.RecordConsumeLogParams, ledgerQuota int, surchargeQuota int64) {
+// upstreamBase 为渠道每日上限的「上游消耗」基数（分组倍率取 1 的额度）；nil 时按
+// 「结算额 ÷ 分组倍率」推导，免费分组必须显式传入，否则基数恒为 0、止损失效。
+func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, params model.RecordConsumeLogParams, ledgerQuota int, upstreamBase *int64) {
 	if relayInfo == nil {
 		return
 	}
-	snapshot := snapshotCostAndCommission(relayInfo, ledgerQuota, surchargeQuota, nil)
+	snapshot := snapshotCostAndCommission(relayInfo, ledgerQuota, upstreamBase)
 	if params.ChannelId != 0 {
 		snapshot.ChannelID = params.ChannelId
 	}
@@ -118,7 +119,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 	if params.LedgerQuota != 0 {
 		quotaCopy = params.LedgerQuota
 	}
-	snapshot := snapshotCostAndCommission(relayInfo, quotaCopy, params.SurchargeQuota, params.UpstreamBaseQuota)
+	snapshot := snapshotCostAndCommission(relayInfo, quotaCopy, params.UpstreamBaseQuota)
 	if params.ChannelId != 0 {
 		snapshot.ChannelID = params.ChannelId
 	}

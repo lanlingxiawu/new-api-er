@@ -31,14 +31,13 @@ func TestSnapshotCostAndCommissionToleratesMissingChannelMeta(t *testing.T) {
 	require.Nil(t, info.ChannelMeta)
 
 	var snapshot costCommissionSnapshot
-	require.NotPanics(t, func() { snapshot = snapshotCostAndCommission(info, 700, 30, nil) })
+	require.NotPanics(t, func() { snapshot = snapshotCostAndCommission(info, 700, nil) })
 
 	assert.Equal(t, 42, snapshot.UserID)
 	assert.Equal(t, "vip", snapshot.UsingGroup)
 	assert.Equal(t, "gpt-4o", snapshot.OriginModelName)
 	assert.Equal(t, 1.5, snapshot.GroupRatio)
 	assert.Equal(t, 700, snapshot.Quota)
-	assert.Equal(t, int64(30), snapshot.SurchargeQuota)
 	assert.Zero(t, snapshot.ChannelID)
 	assert.Empty(t, snapshot.ChannelName)
 }
@@ -49,7 +48,7 @@ func TestSnapshotCostAndCommissionCopiesChannelMeta(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 9, ChannelName: "azure-east"},
 	}
 
-	snapshot := snapshotCostAndCommission(info, 100, 0, nil)
+	snapshot := snapshotCostAndCommission(info, 100, nil)
 
 	assert.Equal(t, 9, snapshot.ChannelID)
 	assert.Equal(t, "azure-east", snapshot.ChannelName)
@@ -57,9 +56,8 @@ func TestSnapshotCostAndCommissionCopiesChannelMeta(t *testing.T) {
 
 func TestSnapshotCostAndCommissionToleratesNilRelayInfo(t *testing.T) {
 	var snapshot costCommissionSnapshot
-	require.NotPanics(t, func() { snapshot = snapshotCostAndCommission(nil, 5, 1, nil) })
+	require.NotPanics(t, func() { snapshot = snapshotCostAndCommission(nil, 5, nil) })
 
 	assert.Equal(t, 5, snapshot.Quota)
-	assert.Equal(t, int64(1), snapshot.SurchargeQuota)
 	assert.Zero(t, snapshot.UserID)
 }

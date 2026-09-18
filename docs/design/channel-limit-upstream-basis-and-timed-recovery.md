@@ -132,13 +132,15 @@ BaseQuota 在 relay goroutine 构造记账快照时算出（纯算术），经�
 | 阶梯表达式 | `TieredResult.ActualQuotaBeforeGroup` + 工具附加费基础额度（`tieredUpstreamBaseQuota`） |
 | Wss / Audio（`service/quota.go`） | 不显式传入，按 `quota ÷ 分组倍率` 推导 |
 | MJ（`EnqueueConsumeLogWithCost`） | 同上；免费分组按次计费走模型价格兜底 |
-| 异步任务 | 预扣走 `EnqueueConsumeLogWithCost`（同上）；结算差额在 `recordTaskCostAndCommission` 里按任务账本价格推导。预扣 + 差额 = 最终额度，不重复计 |
+| 异步任务（倍率 / 按次计价） | 预扣走 `EnqueueConsumeLogWithCost`（不传显式基数，按 `quota ÷ 分组倍率` 推导）；结算差额在 `recordTaskCostAndCommission` 里按任务账本价格推导。预扣 + 差额 = 最终额度，不重复计 |
+| 异步任务（表达式计价） | 提交时 `taskSubmitUpstreamBase` 取快照的 `EstimatedQuotaBeforeGroup` 显式传入；差额结算由 `TaskUpstreamBase{Before, After}` 给出增量（`After - Before`，只增不减），`Before` 即提交时已累计的基数，`After` 取 `TieredResult.ActualQuotaBeforeGroup`。免费分组的额度恒为 0，除此之外还原不出基数 |
 
 与结算保持一致的细节：没有可计费用量时为 0；`UsageSource == "none"`（上游未交付）时与结算额一起清零。
 
 已知偏差（均为保守方向或极小范围，接受）：
 
-- 免费分组的 Wss / Audio / 按 token 重算的任务无法还原基础消耗，计 0（分组倍率 0 的实时音频流量极少）。
+- 免费分组的 Wss / Audio / 按 token 重算的任务无法还原基础消耗，计 0（分组倍率 0 的实时音频流量极少）。表达式计价的任务不在此列，见 §4.2 的显式基数。
+- 表达式计价的任务在免费分组下差额结算的收费差为 0（`RecalculateTaskQuota` 提前返回），此时只累计基数增量，不写成本台账——限额与台账口径本就独立。
 - 任务失败退款不回减累计（上游多半也已受理；限额是止损控制，宁多勿少）。
 - 渠道成本系数显式配置为 0 时，上游消耗恒为 0，上限永远不会触发（`upstreamQuota` 对非正系数返回 0）。这是「成本系数 = 上游倍率」的字面语义；给这类渠道设上限前需先配置真实的成本系数。
 

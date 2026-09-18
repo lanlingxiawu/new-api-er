@@ -206,7 +206,7 @@ relay 结算 → model.UpdateChannelUsedQuota(channelId, quota)
 
 ② 成本流（异步，复用正式成本路径的计算结果）
 relay 结算 → EnqueueConsumeLogWithCost → 日志管线 worker（异步）
-   └─ RecordCostAndSettleEmployeeCommission / RecordTransactionCost
+   └─ RecordCostAndSettleEmployeeCommission
         costRec := buildConsumptionCostRecord(...)           ← 既有：读一次成本系数并算好
         pending[(statDate, channelId)].cost += costRec.CostQuota   ← 新增一行，纯内存
         本地预判越限 → 提交禁用（在守卫之前，不受熔断影响）
@@ -232,14 +232,14 @@ v3 让成本观察者挂在日志管线上并**自己再算一遍** `calcCostQuo
 
 ```go
 // service/employee_commission.go —— 两个调用点，各加一行
-costRec := buildConsumptionCostRecord(relayInfo, quota, surchargeQuota, logId, createdAt)
+costRec := buildConsumptionCostRecord(relayInfo, quota, logId, createdAt)
 recordChannelDailyCost(costRec.ChannelId, costRec.CostQuota)   // ← 新增，纯内存
 guard, ok := model.BeginBusinessStatsSideEffect(...)
 ```
 
 放在 `buildConsumptionCostRecord` 之后、`BeginBusinessStatsSideEffect` 守卫之前，因此**不受熔断器开启与缓冲丢弃影响**——熔断时成本台账可能不落库，但每日限额仍然照常累计（限额是止损控制，宁可算到也不能漏算）。
 
-调用点共两处，都在同一文件内：`RecordCostAndSettleEmployeeCommission`（`:84`）与 `RecordTransactionCost`（`:272`）。测试对两处各断言一次。
+调用点只有 `service/employee_commission.go` 的 `RecordCostAndSettleEmployeeCommission` 一处。
 
 **口径承诺相应收紧**（v3 把两件事混为一谈）：
 
@@ -1106,7 +1106,7 @@ v2 曾把「批量/按 Tag 设置」与「筛选/排序」列为本期不做，*
 6. `setting/operation_setting/channel_daily_limit_setting.go` — 全局配置 + 快照 + 时区解析缓存。
 7. `service/channel_daily_limit.go` — 分片累计器（键含日期）、配置快照周期刷新 + `tripped` 重新武装（§5.5.1、§5.6）、flusher + 退避重试、越限判定、**有界禁用队列 + 2 worker**（§6.4）、收入观察者注册。
 8. `service/channel_daily_limit_task.go` — master 幂等恢复扫描 + 历史清理。
-9. `service/employee_commission.go` — 在 `RecordCostAndSettleEmployeeCommission`（`:84`）与 `RecordTransactionCost`（`:272`）各加一行，把 `costRec.CostQuota` 交给累计器（守卫之前），公式本身不改（§5.3）。
+9. `service/employee_commission.go` — 在 `RecordCostAndSettleEmployeeCommission` 里加一行，把 `costRec.CostQuota` 交给累计器（守卫之前），公式本身不改（§5.3）。
 10. `service/channel.go` — `ShouldEnableChannel` 改签名 + 每日上限豁免；`DisableChannel` / `EnableChannel` 入口调用 `ClearDailyLimitMarks`（§6.3）。
 11. `controller/channel-test.go` — `selectChannelsForAutomaticTest` 跳过 + 调用点适配新签名。
 12. `controller/channel.go` — `buildChannelListQuery` 增加 `limit_filter` + `statDate`（§9.4）；列表填充 `daily_usage`；`ChannelTag` 扩展三字段 + 敏感权限校验（§9.6）；新增批量设置每日上限 handler。
