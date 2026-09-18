@@ -47,6 +47,7 @@ const defaultOperationsSettings: OperationsSettings = {
   WorkerValidKey: '',
   WorkerAllowHttpImageRequestEnabled: false,
   LogConsumeEnabled: false,
+  'audit_log_setting.retention_days': 180,
   RequestLogEnabled: false,
   RequestLogUsername: '',
   RequestLogMaxBodyKB: 64,

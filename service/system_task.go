@@ -101,6 +101,8 @@ type LogCleanupState struct {
 
 type LogCleanupResult struct {
 	DeletedCount int64 `json:"deleted_count"`
+	// AuditDeletedCount 同一次任务里按保留期清理掉的审计日志行数。
+	AuditDeletedCount int64 `json:"audit_deleted_count,omitempty"`
 }
 
 var (
@@ -419,10 +421,49 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 		return
 	}
 
-	result := LogCleanupResult{DeletedCount: state.Processed}
+	// 审计日志按自己的保留期清理，不受本任务的 target_timestamp 影响。
+	// 失败只记日志：消费日志已经删干净了，不该因为审计表把任务判失败。
+	auditDeleted, err := runAuditLogCleanup(ctx, payload.BatchSize)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("audit log cleanup failed: deleted=%d err=%v", auditDeleted, err))
+	}
+
+	result := LogCleanupResult{DeletedCount: state.Processed, AuditDeletedCount: auditDeleted}
 	if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
+}
+
+// auditLogCleanupMaxBatches 限定单次任务最多删多少批审计日志。
+// 与消费日志清理共用 LOG_DB 连接池，不能让审计表的首次清理（可能积压数百万行）
+// 把连接占到任务超时；剩余行数留给下一次清理任务。
+const auditLogCleanupMaxBatches = 2000
+
+// runAuditLogCleanup 按 audit_log_setting.retention_days 分批删除过期审计日志。
+// 保留期配置为 0 时直接返回。返回已删除行数。
+func runAuditLogCleanup(ctx context.Context, batchSize int) (int64, error) {
+	target := model.AuditLogCleanupTargetTimestamp()
+	if target <= 0 {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = logCleanupBatchSize
+	}
+	var deleted int64
+	for range auditLogCleanupMaxBatches {
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
+		rows, err := model.DeleteOldAuditLogBatch(ctx, target, batchSize)
+		if err != nil {
+			return deleted, err
+		}
+		if rows == 0 {
+			return deleted, nil
+		}
+		deleted += rows
+	}
+	return deleted, nil
 }
 
 func syncLogCleanupStateFromRemaining(state *LogCleanupState, remaining int64) {

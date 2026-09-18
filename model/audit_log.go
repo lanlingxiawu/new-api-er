@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -239,19 +240,94 @@ func GetUserAccessTokenStatus(userId int) (*UserAccessTokenStatus, error) {
 }
 
 // MigrateAuditLogs also supports independently configured ClickHouse log stores.
-// No TTL clause or usage-log cleanup integration is intentional.
+// The ClickHouse table carries a TTL matching the default retention; relational
+// stores are pruned by the log cleanup system task (CountOldAuditLog /
+// DeleteOldAuditLogBatch), which also covers ClickHouse when an operator
+// shortens the configured retention below the DDL TTL.
 func MigrateAuditLogs() error {
 	if !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return LOG_DB.AutoMigrate(&AuditLog{})
 	}
-	return LOG_DB.Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+	return LOG_DB.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS audit_logs (
 		id Int64 DEFAULT 0, event_id String, user_id Int64, username String, actor_role Int32,
 		created_at Int64, category String, action String, token_ref String,
 		auth_method String, ip String, user_agent String, method String, route String,
 		status Int32, success UInt8, request_id String, content String, other JSON
 	) ENGINE = MergeTree()
 	PARTITION BY toYYYYMM(toDateTime(created_at))
-	ORDER BY (created_at, event_id)`).Error
+	ORDER BY (created_at, event_id)
+	TTL toDateTime(created_at) + INTERVAL %d DAY`,
+		operation_setting.DefaultAuditLogRetentionDays)).Error
+}
+
+// AuditLogCleanupTargetTimestamp 返回审计日志清理的时间上界（早于它的行可删）。
+// 保留天数配置为 0 时返回 0，表示不清理。
+func AuditLogCleanupTargetTimestamp() int64 {
+	days := operation_setting.GetAuditLogSetting().GetRetentionDays()
+	if days <= 0 {
+		return 0
+	}
+	return common.GetTimestamp() - int64(days)*24*60*60
+}
+
+// CountOldAuditLog 统计早于 targetTimestamp 的审计日志行数，走 created_at 索引。
+func CountOldAuditLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	var total int64
+	if err := LOG_DB.WithContext(ctx).Model(&AuditLog{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// DeleteOldAuditLogBatch 分批删除早于 targetTimestamp 的审计日志。
+// 批量删除而非一条大 DELETE：这张表与消费日志异步管线共用 LOG_DB 连接池，
+// 长事务会把连接和行锁一起占住。
+func DeleteOldAuditLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse DELETE 是重写数据分区的 mutation，按批下发会病态地慢。
+		// 与 logs 清理一致：一次同步 mutation 删完，返回行数让调用方的进度循环一轮结束。
+		total, err := CountOldAuditLog(ctx, targetTimestamp)
+		if err != nil {
+			return 0, err
+		}
+		if total == 0 {
+			return 0, nil
+		}
+		if err := LOG_DB.WithContext(ctx).Exec(
+			"ALTER TABLE audit_logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+			targetTimestamp,
+		).Error; err != nil {
+			return 0, err
+		}
+		return total, nil
+	}
+
+	// 先取一批主键再按主键删：`DELETE ... LIMIT` 只有 MySQL 支持，
+	// PostgreSQL 下 GORM 会静默丢掉 LIMIT，一条语句删空整段区间并长时间
+	// 持有事务与连接——那正是这里要避免的（Rule 0 / Rule 2）。
+	var ids []int
+	if err := LOG_DB.WithContext(ctx).Model(&AuditLog{}).
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at").
+		Limit(limit).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&AuditLog{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
 
 func ValidAuditCategory(category string) bool {

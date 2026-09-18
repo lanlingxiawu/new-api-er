@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import type { TFunction } from 'i18next'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -42,6 +43,7 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
@@ -83,15 +85,39 @@ import { useSettingsSaveConfirmation } from '../components/settings-save-confirm
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { LogCleanupTask } from '../types'
+import { safeNumberFieldProps } from '../utils/numeric-field'
 
-const logSettingsSchema = z.object({
-  LogConsumeEnabled: z.boolean(),
-})
+const AUDIT_RETENTION_MIN_DAYS = 7
+const AUDIT_RETENTION_MAX_DAYS = 3650
 
-type LogSettingsFormValues = z.infer<typeof logSettingsSchema>
+const createLogSettingsSchema = (t: TFunction) =>
+  z.object({
+    LogConsumeEnabled: z.boolean(),
+    // 0 = 永久保留；其余值必须落在后端的合法区间内，否则保存后会被静默夹紧。
+    auditRetentionDays: z
+      .number()
+      .int()
+      .refine(
+        (value) =>
+          value === 0 ||
+          (value >= AUDIT_RETENTION_MIN_DAYS &&
+            value <= AUDIT_RETENTION_MAX_DAYS),
+        {
+          message: t(
+            'Enter 0 to keep audit logs forever, or a value between {{min}} and {{max}} days.',
+            { min: AUDIT_RETENTION_MIN_DAYS, max: AUDIT_RETENTION_MAX_DAYS }
+          ),
+        }
+      ),
+  })
+
+type LogSettingsFormValues = z.infer<
+  ReturnType<typeof createLogSettingsSchema>
+>
 
 type LogSettingsSectionProps = {
   defaultEnabled: boolean
+  defaultAuditRetentionDays: number
 }
 
 type ServerLogInfo = {
@@ -147,14 +173,16 @@ function isActiveLogCleanupTask(task: LogCleanupTask | null) {
 
 export function LogSettingsSection({
   defaultEnabled,
+  defaultAuditRetentionDays,
 }: LogSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const form = useForm<LogSettingsFormValues>({
-    resolver: zodResolver(logSettingsSchema),
+    resolver: zodResolver(createLogSettingsSchema(t)),
     defaultValues: {
       LogConsumeEnabled: defaultEnabled,
+      auditRetentionDays: defaultAuditRetentionDays,
     },
   })
 
@@ -182,8 +210,11 @@ export function LogSettingsSection({
   }, [])
 
   useEffect(() => {
-    form.reset({ LogConsumeEnabled: defaultEnabled })
-  }, [defaultEnabled, form])
+    form.reset({
+      LogConsumeEnabled: defaultEnabled,
+      auditRetentionDays: defaultAuditRetentionDays,
+    })
+  }, [defaultAuditRetentionDays, defaultEnabled, form])
 
   useEffect(() => {
     fetchServerLogInfo()
@@ -265,12 +296,26 @@ export function LogSettingsSection({
   }, [logCleanupActive, logCleanupTaskId, t])
 
   const onSubmit = async (values: LogSettingsFormValues) => {
-    if (values.LogConsumeEnabled === defaultEnabled) return
+    const consumeChanged = values.LogConsumeEnabled !== defaultEnabled
+    const retentionChanged =
+      values.auditRetentionDays !== defaultAuditRetentionDays
+    if (!consumeChanged && !retentionChanged) {
+      toast.info(t('No changes to save'))
+      return
+    }
     await requestSaveConfirmation(async () => {
-      await updateOption.mutateAsync({
-        key: 'LogConsumeEnabled',
-        value: values.LogConsumeEnabled,
-      })
+      if (consumeChanged) {
+        await updateOption.mutateAsync({
+          key: 'LogConsumeEnabled',
+          value: values.LogConsumeEnabled,
+        })
+      }
+      if (retentionChanged) {
+        await updateOption.mutateAsync({
+          key: 'audit_log_setting.retention_days',
+          value: values.auditRetentionDays,
+        })
+      }
     })
   }
 
@@ -374,6 +419,30 @@ export function LogSettingsSection({
                 </FormControl>
                 <FormMessage />
               </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='auditRetentionDays'
+            render={({ field }) => (
+              <FormItem className='max-w-xs'>
+                <FormLabel>{t('Audit log retention (days)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={AUDIT_RETENTION_MAX_DAYS}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Audit records older than this are removed when the log cleanup task runs. Enter 0 to keep them forever.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
             )}
           />
 

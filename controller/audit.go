@@ -74,6 +74,10 @@ var auditContentTemplates = map[string]string{
 	"redemption.create":       "Created ${count} redemption codes named ${name} (${quota} each)",
 	"redemption.delete_batch": "Batch deleted ${count} redemption codes",
 
+	"employee.performance_adjust": "Adjusted performance of employee ${target_username} (ID: ${target_user_id}) by ${profit_quota} (commission ${commission_quota})",
+	"employee.performance_revert": "Reverted performance adjustment ${commission_ref} of employee ${target_username} (ID: ${target_user_id})",
+	"customer.bind_blocked":       "Blocked binding customer ${target_username} (ID: ${target_user_id}) to employee ${employee_user_id}: ${reason}",
+
 	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
 	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_username} (ID: ${target_user_id})",
 }

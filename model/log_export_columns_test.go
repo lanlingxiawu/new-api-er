@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,10 +18,11 @@ func newTestRowCtx() *rowCtx {
 	}
 }
 
-// renderOne 渲染单列，便于逐列断言。
+// renderOne 渲染单列，便于逐列断言。按 root 解析，使 root 专属列也能取值；
+// 角色过滤本身由 TestResolveLogExportColumns_RootOnly* 覆盖。
 func renderOne(t *testing.T, key string, l *Log, ctx *rowCtx) string {
 	t.Helper()
-	set, err := ResolveLogExportColumns([]string{key}, true)
+	set, err := ResolveLogExportColumnsForRole([]string{key}, common.RoleRootUser)
 	require.NoError(t, err)
 	row := set.Render(l, ctx, nil)
 	require.Len(t, row, 1)
@@ -67,7 +70,7 @@ func TestLogExportColumns_BuiltinTemplatesResolve(t *testing.T) {
 	for _, tpl := range BuiltinLogExportTemplates() {
 		tpl := tpl
 		t.Run(tpl.ID, func(t *testing.T) {
-			set, err := ResolveLogExportColumns(tpl.Columns, true)
+			set, err := ResolveLogExportColumnsForRole(tpl.Columns, common.RoleRootUser)
 			require.NoError(t, err, "builtin template %s references an unknown column", tpl.ID)
 			assert.Equal(t, len(tpl.Columns), len(set.Keys))
 			assert.LessOrEqual(t, len(tpl.Columns), LogExportMaxColumns)
@@ -341,6 +344,68 @@ func TestLogExportColumns_TargetUserIsAdminOnly(t *testing.T) {
 func TestLogExportColumns_AuditTemplateIncludesTargetUser(t *testing.T) {
 	assert.Contains(t, auditColumns, "target_user_id")
 	assert.Contains(t, auditColumns, "target_username")
+}
+
+// other_raw 原样导出整条 other（含 root_info），普通管理员必须拿不到——
+// 导出不能成为绕过角色投影的旁路。
+func TestResolveLogExportColumns_RootOnlyDroppedForAdmin(t *testing.T) {
+	keys := []string{"created_at", "other_raw", "upstream_task_id", "task_node_name", "task_plugin_runtime"}
+
+	adminSet, err := ResolveLogExportColumnsForRole(keys, common.RoleAdminUser)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"created_at"}, adminSet.Keys)
+	assert.ElementsMatch(t, keys[1:], adminSet.Dropped)
+
+	rootSet, err := ResolveLogExportColumnsForRole(keys, common.RoleRootUser)
+	require.NoError(t, err)
+	assert.Equal(t, keys, rootSet.Keys)
+	assert.Empty(t, rootSet.Dropped)
+
+	// 旧的两档入口按管理员判权，同样挡住 root 专属列。
+	_, err = ResolveLogExportColumns([]string{"other_raw"}, true)
+	assert.ErrorIs(t, err, ErrLogExportNoColumns)
+}
+
+// root_info 里的任务诊断只有 root 能导出，且必须真的从 root_info 取值。
+func TestLogExportExtract_RootInfoColumns(t *testing.T) {
+	other := NewLogOther()
+	other.SetAdmin("task_plugin", map[string]any{"key": "sora"})
+	other.SetRoot("upstream_task_id", "up-42")
+	other.SetRoot("node_name", "node-a")
+	l := &Log{Other: other.JSONString()}
+	ctx := newTestRowCtx()
+
+	assert.Equal(t, "up-42", renderOne(t, "upstream_task_id", l, ctx))
+	assert.Equal(t, "node-a", renderOne(t, "task_node_name", l, ctx))
+	// admin_info 的 node_name 列不能被 root_info 的同名字段污染。
+	assert.Equal(t, "", renderOne(t, "node_name", l, ctx))
+	assert.Contains(t, renderOne(t, "task_plugin", l, ctx), "sora")
+}
+
+// 计费模板必须能复算按次固定价 / 按图片数 / 任务用量账单，
+// 并且不再依赖已经停写的逐工具字段。
+func TestLogExportColumns_BillingTemplateCoversCurrentBillingShapes(t *testing.T) {
+	for _, key := range []string{
+		"billing_unit", "fixed_price", "image_count", "request_rules",
+		"billing_tokens", "image_cache_tokens", "tool_surcharges", "usage_facts",
+	} {
+		assert.Contains(t, billingColumns, key, "billing template must expose %s", key)
+	}
+	assert.NotContains(t, billingColumns, "web_search_price")
+	assert.NotContains(t, billingColumns, "file_search_price")
+}
+
+// 合并新增的 other 字段都要有列，否则导出永远看不到它们。
+func TestLogExportColumns_RegistryCoversCurrentOtherFields(t *testing.T) {
+	for _, key := range []string{
+		"usage_facts", "billing_unit", "fixed_price", "image_count",
+		"billing_tokens", "image_cache_tokens", "request_rules", "tool_surcharges",
+		"billing_model", "conversion_diagnostics", "channel_affinity", "task_plugin",
+		"upstream_task_id", "task_node_name", "task_plugin_runtime",
+	} {
+		_, ok := LookupLogExportColumn(key)
+		assert.True(t, ok, "missing export column %s", key)
+	}
 }
 
 func TestLogExportExtract_ChannelNameFromCacheAndRow(t *testing.T) {

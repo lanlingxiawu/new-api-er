@@ -63,7 +63,11 @@ type LogExportJob struct {
 	JobID    string `json:"job_id"`
 	UserID   int    `json:"user_id"`
 	Username string `json:"username"`
-	Status   string `json:"status"`
+	// CreatorRole 创建任务时的操作者角色，决定 root 专属列是否参与导出。
+	// 升级前创建的任务该字段为 0，按「非 root」处理——宁可少一列，
+	// 也不能让普通管理员从导出文件里拿到 root 专属诊断。
+	CreatorRole int    `json:"creator_role,omitempty"`
+	Status      string `json:"status"`
 	// Progress 0-100，按时间轴推进，不做 COUNT。
 	Progress int    `json:"progress"`
 	RowCount int64  `json:"row_count"`
@@ -578,7 +582,7 @@ func logExportErrorCode(err error) string {
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	setting := operation_setting.GetLogExportSetting()
 
-	columnSet, err := ResolveLogExportColumns(job.Columns, true)
+	columnSet, err := ResolveLogExportColumnsForRole(job.Columns, max(job.CreatorRole, common.RoleAdminUser))
 	if err != nil {
 		return err
 	}

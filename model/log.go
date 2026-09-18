@@ -126,6 +126,16 @@ func formatUserLogs(logs []*Log, startIdx int) {
 	assignDisplayLogIds(logs, startIdx)
 }
 
+// formatNonAdminLogOther 只做 other 的普通用户可见性投影：剥离
+// admin_info/root_info/audit_info 与历史敏感顶层字段，保留 ChannelName 与真实
+// Id。员工的客户日志视角需要它——员工只有 RoleCommonUser，不能看到渠道 key
+// 指纹、重试链、拒绝原因等运维诊断，但页面按渠道名展示并按真实日志 id 定位。
+func formatNonAdminLogOther(logs []*Log) {
+	for i := range logs {
+		logs[i].Other = formatLogOtherJSON(logs[i].Other, logOtherVisibilityUser)
+	}
+}
+
 // FormatAdminLogs removes root-only diagnostics while retaining operational
 // admin_info. Root callers must not pass their results through this formatter.
 func FormatAdminLogs(logs []*Log) {
@@ -519,8 +529,25 @@ func contextWantsIPLog(c *gin.Context) bool {
 	return ok && settingMap.RecordIpLog
 }
 
+const (
+	// ChannelNameSnapshotLookbackDays 限定渠道名兜底查询的时间窗。
+	// `other LIKE` 不走索引，命中数又永远凑不满 limit，不加时间窗就会沿着
+	// channel_id 索引把整个区间扫穿；这条查询占的是消费日志异步管线同一个
+	// LOG_DB 连接池，不能让它长期占住连接（Rule 0 共享资源）。
+	// 更早的已删渠道靠 platform_channel_daily_stats 的名称快照解析。
+	ChannelNameSnapshotLookbackDays = 30
+	// channelNameSnapshotQueryTimeout 是兜底闸门：解析不出名字只让「渠道」列
+	// 留空，绝不值得拖住连接。
+	channelNameSnapshotQueryTimeout = 3 * time.Second
+	// channelNameSnapshotLikePattern 匹配 JSON 里的 channel_name 键本身，
+	// 而不是任意含该子串的取值。
+	channelNameSnapshotLikePattern = `%"channel_name":%`
+)
+
 func GetChannelNameSnapshotsFromLogs(ids []int) map[int]string {
-	return GetChannelNameSnapshotsFromLogsWithContext(context.Background(), ids)
+	ctx, cancel := context.WithTimeout(context.Background(), channelNameSnapshotQueryTimeout)
+	defer cancel()
+	return GetChannelNameSnapshotsFromLogsWithContext(ctx, ids)
 }
 
 func GetChannelNameSnapshotsFromLogsWithContext(ctx context.Context, ids []int) map[int]string {
@@ -538,10 +565,11 @@ func GetChannelNameSnapshotsFromLogsWithContext(ctx context.Context, ids []int) 
 		return result
 	}
 
+	since := common.GetTimestamp() - int64(ChannelNameSnapshotLookbackDays)*24*60*60
 	var logs []Log
 	err := LOG_DB.WithContext(safeDBContext(ctx)).Model(&Log{}).
 		Select("channel_id, other").
-		Where("channel_id IN ? AND other LIKE ?", uniq, "%channel_name%").
+		Where("channel_id IN ? AND created_at >= ? AND other LIKE ?", uniq, since, channelNameSnapshotLikePattern).
 		Order("created_at desc, id desc").
 		Limit(len(uniq) * 20).
 		Find(&logs).Error
@@ -557,12 +585,14 @@ func GetChannelNameSnapshotsFromLogsWithContext(ctx context.Context, ids []int) 
 		if otherMap == nil {
 			continue
 		}
-		// 历史日志把 channel_name 写在顶层；按角色隔离后写在 admin_info 下。
-		name, _ := otherMap["channel_name"].(string)
+		// 中继链路把 channel_name 写在 admin_info 下（service.AppendRelayLogAdminInfo）；
+		// 顶层是角色隔离之前的历史形状，仍然读一次以兼容窗口内的旧行。
+		var name string
+		if adminInfo, ok := otherMap[logOtherAdminInfoKey].(map[string]any); ok {
+			name, _ = adminInfo["channel_name"].(string)
+		}
 		if strings.TrimSpace(name) == "" {
-			if adminInfo, ok := otherMap[logOtherAdminInfoKey].(map[string]any); ok {
-				name, _ = adminInfo["channel_name"].(string)
-			}
+			name, _ = otherMap["channel_name"].(string)
 		}
 		if name = strings.TrimSpace(name); name != "" {
 			result[log.ChannelId] = name
@@ -950,6 +980,8 @@ func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, tot
 	if err = tx.Order("logs.created_at desc, logs.id desc").Limit(filter.PageSize).Offset(filter.StartIdx).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
+	// 投影必须发生在任何返回之前：fillLogChannelNames 出错时也要返回已剥离的 other。
+	formatNonAdminLogOther(logs)
 	if err = fillLogChannelNames(logs); err != nil {
 		return logs, total, err
 	}

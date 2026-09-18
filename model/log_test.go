@@ -542,6 +542,43 @@ func TestGetChannelNameSnapshotsFromLogs(t *testing.T) {
 	assert.Equal(t, "NewName", m[chID])
 }
 
+// 渠道名兜底必须认得中继链路当前写出的形状。上游删掉写入点后这条链路曾整条失效：
+// admin_info.channel_name 才是现在的落库位置，顶层是角色隔离之前的历史形状。
+func TestGetChannelNameSnapshotsFromLogs_AdminInfoShape(t *testing.T) {
+	requireLogDB(t)
+	chID := nextTestID()
+	uid := nextTestID()
+	logCleanupUser(t, uid)
+
+	other := NewLogOther()
+	other.SetAdmin("channel_name", "AdminScopedName")
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.ChannelId, l.CreatedAt = uid, chID, common.GetTimestamp()
+		l.Other = other.JSONString()
+	})
+
+	assert.Equal(t, "AdminScopedName", GetChannelNameSnapshotsFromLogs([]int{chID})[chID])
+}
+
+// 时间窗是这条查询唯一的上界：LIKE 不走索引且命中数凑不满 limit，
+// 没有窗口就会沿 channel_id 索引扫穿整个区间并长期占住 LOG_DB 连接。
+func TestGetChannelNameSnapshotsFromLogs_LookbackWindow(t *testing.T) {
+	requireLogDB(t)
+	chID := nextTestID()
+	uid := nextTestID()
+	logCleanupUser(t, uid)
+
+	other := NewLogOther()
+	other.SetAdmin("channel_name", "TooOldToScan")
+	beyondWindow := common.GetTimestamp() - int64(ChannelNameSnapshotLookbackDays+1)*24*60*60
+	mkLogRow(t, func(l *Log) {
+		l.UserId, l.ChannelId, l.CreatedAt = uid, chID, beyondWindow
+		l.Other = other.JSONString()
+	})
+
+	assert.Empty(t, GetChannelNameSnapshotsFromLogs([]int{chID}))
+}
+
 // ---------------------------------------------------------------------------
 // GetAllLogs — filters, pagination, channel-name fill
 // ---------------------------------------------------------------------------
@@ -896,6 +933,52 @@ func TestSumUsedToken(t *testing.T) {
 
 	token := SumUsedToken(LogTypeConsume, now-10, now+10, model, uname, "")
 	assert.Equal(t, 20, token) // (7+3)+(5+5)
+}
+
+// 员工只有 RoleCommonUser，员工视角的客户日志必须做 other 可见性投影：
+// 渠道 key 指纹、重试链、拒绝原因、root 与审计层都不能下发给员工。
+// 渠道名与真实日志 id 要保留——页面按它们展示和定位。
+func TestGetEmployeeCustomerLogs_StripsPrivilegedOther(t *testing.T) {
+	requireLogDB(t)
+
+	employee := mkUser(t, nil)
+	customer := mkUser(t, func(u *User) { u.InviterId = employee.Id })
+	ch := mkChannel(t, nil)
+	logCleanupUser(t, employee.Id)
+	logCleanupUser(t, customer.Id)
+
+	other := NewLogOther()
+	other.SetPublic("model_ratio", 2.5)
+	other.SetAdmin("channel_name", ch.Name)
+	other.SetAdmin("use_channel", []string{"7", "9"})
+	other.SetAdmin("reject_reason", "blocked by policy")
+	other.SetRoot("upstream_task_id", "task-secret")
+	other.SetAudit("route", "/api/x")
+
+	row := mkLogRow(t, func(l *Log) {
+		l.UserId, l.Username, l.CreatedAt = customer.Id, customer.Username, common.GetTimestamp()
+		l.ChannelId = ch.Id
+		l.Other = other.JSONString()
+	})
+
+	logs, _, err := GetEmployeeCustomerLogs(EmployeeCustomerLogFilter{
+		EmployeeUserId: employee.Id, CustomerUserId: customer.Id, PageSize: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+
+	got, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	assert.NotContains(t, got, "admin_info")
+	assert.NotContains(t, got, "root_info")
+	assert.NotContains(t, got, "audit_info")
+	assert.NotContains(t, got, "channel_name")
+	assert.NotContains(t, got, "reject_reason")
+	assert.EqualValues(t, 2.5, got["model_ratio"])
+
+	// 投影不得动展示字段：渠道名与真实日志 id 仍要在。
+	assert.Equal(t, ch.Name, logs[0].ChannelName)
+	assert.Equal(t, row.Id, logs[0].Id)
 }
 
 // ---------------------------------------------------------------------------

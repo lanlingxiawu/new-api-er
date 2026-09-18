@@ -61,7 +61,6 @@ export interface UpstreamLogFilters {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
-  log_id?: number
   group?: string
   request_id?: string
   upstream_request_id?: string
@@ -91,6 +90,8 @@ export interface UpstreamLogItem {
   is_stream: boolean
   content?: string
   other?: Record<string, unknown>
+  /** 上游账号自己的用户名，用于按用户名本地复核。 */
+  username?: string
   /** 以下为上游视角的值，供上游详情复用本站日志详情的排版。 */
   channel?: number
   channel_name?: string
@@ -98,7 +99,7 @@ export interface UpstreamLogItem {
   ip?: string
 }
 
-export type UpstreamLogScope = 'exact' | 'filtered' | 'recent_fallback'
+export type UpstreamLogScope = 'exact' | 'filtered' | 'recent'
 
 export interface UpstreamLogQueryData {
   source?: {
@@ -117,7 +118,12 @@ export interface UpstreamLogQueryData {
   query: {
     filters: UpstreamLogFilters
     scope: UpstreamLogScope
-    upstream_supports_exact: boolean
+    /**
+     * True when an upstream account access token searched the account's whole history.
+     * False means only a channel key's most recent logs were searched, so "no result"
+     * does not mean the upstream no longer has the log.
+     */
+    checked_account: boolean
     page: number
     page_size: number
   }

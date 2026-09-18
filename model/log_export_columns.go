@@ -24,7 +24,7 @@ const (
 
 // LogExportMaxColumns 单次导出的列数上限，防止拼出畸形宽表拖慢写入。
 // 必须容得下 builtin:full（注册表全部列），由 TestLogExportColumns_BuiltinTemplatesResolve 兜底。
-const LogExportMaxColumns = 100
+const LogExportMaxColumns = 150
 
 // LogExportColumnI18nKey 返回列表头的后端 i18n key。
 // 与列 Key 一一对应推导，杜绝注册表与 locale 文件脱节。
@@ -98,6 +98,10 @@ type LogExportColumn struct {
 	// AdminOnly 仅管理员可见。新的后台导出链路本身即管理员专属，该标记供
 	// 旧的自助同步导出路径复用，守住「self 导出隐藏渠道/重试列」的不变量。
 	AdminOnly bool
+	// RootOnly 仅超级管理员可见。other.root_info 里的字段（以及原样导出的
+	// other_raw）含 root 专属诊断，普通管理员在接口侧看不到它们，导出侧
+	// 必须同样挡住，否则导出就成了绕过角色投影的旁路。
+	RootOnly bool
 	// NeedOther 是否依赖 logs.other 字段。任何一列为 true 时 SQL 才 SELECT other
 	// 并做 JSON 解析——other 是行宽大头，这个开关对 IO 与 CPU 都是数量级影响。
 	NeedOther bool
@@ -142,6 +146,15 @@ func (ctx *rowCtx) auditInfo(l *Log) map[string]any {
 		return nil
 	}
 	sub, _ := m["audit_info"].(map[string]any)
+	return sub
+}
+
+func (ctx *rowCtx) rootInfo(l *Log) map[string]any {
+	m := ctx.otherMap(l)
+	if m == nil {
+		return nil
+	}
+	sub, _ := m["root_info"].(map[string]any)
 	return sub
 }
 
@@ -237,6 +250,17 @@ func opParamsCol(key, otherKey, label string) LogExportColumn {
 	}
 }
 
+// rootInfoCol 生成一个从 other.root_info 取值的列（一律 RootOnly）。
+func rootInfoCol(key, otherKey, label, group string) LogExportColumn {
+	return LogExportColumn{
+		Key: key, Label: label, Group: group,
+		AdminOnly: true, RootOnly: true, NeedOther: true,
+		Extract: func(l *Log, ctx *rowCtx) string {
+			return otherValue(ctx.rootInfo(l), otherKey)
+		},
+	}
+}
+
 // auditInfoCol 生成一个从 other.audit_info 取值的列。
 func auditInfoCol(key, otherKey, label string) LogExportColumn {
 	return LogExportColumn{
@@ -308,8 +332,11 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("audio_input", "Audio Input Tokens", LogExportGroupTokens),
 		otherCol("audio_output", "Audio Output Tokens", LogExportGroupTokens),
 		otherCol("image_output", "Image Input Tokens", LogExportGroupTokens),
-		otherCol("web_search_call_count", "Web Search Calls", LogExportGroupTokens),
-		otherCol("file_search_call_count", "File Search Calls", LogExportGroupTokens),
+		otherCol("image_cache_tokens", "Image Cache Read Tokens", LogExportGroupTokens),
+		otherCol("billing_tokens", "Billing Token Breakdown", LogExportGroupTokens),
+		// 以下两列只在历史日志里有值：新日志按工具逐项记进 tool_surcharges。
+		otherCol("web_search_call_count", "Web Search Calls (legacy)", LogExportGroupTokens),
+		otherCol("file_search_call_count", "File Search Calls (legacy)", LogExportGroupTokens),
 
 		// ── billing ──────────────────────────────────────────
 		{Key: "quota", Label: "Quota", Group: LogExportGroupBilling,
@@ -335,8 +362,15 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("audio_completion_ratio", "Audio Completion Ratio", LogExportGroupBilling),
 		otherCol("image_ratio", "Image Input Ratio", LogExportGroupBilling),
 		otherCol("model_price", "Model Price", LogExportGroupBilling),
-		otherCol("web_search_price", "Web Search Price", LogExportGroupBilling),
-		otherCol("file_search_price", "File Search Price", LogExportGroupBilling),
+		otherCol("billing_unit", "Billing Unit", LogExportGroupBilling),
+		otherCol("fixed_price", "Fixed Price", LogExportGroupBilling),
+		otherCol("image_count", "Billed Image Count", LogExportGroupBilling),
+		otherCol("request_rules", "Request Billing Rules", LogExportGroupBilling),
+		otherCol("tool_surcharges", "Tool Surcharges", LogExportGroupBilling),
+		otherCol("usage_facts", "Usage Facts", LogExportGroupBilling),
+		// 以下两列只在历史日志里有值：新日志按工具逐项记进 tool_surcharges。
+		otherCol("web_search_price", "Web Search Price (legacy)", LogExportGroupBilling),
+		otherCol("file_search_price", "File Search Price (legacy)", LogExportGroupBilling),
 
 		// ── performance ──────────────────────────────────────
 		{Key: "use_time", Label: "Duration (s)", Group: LogExportGroupPerformance,
@@ -396,8 +430,16 @@ func buildLogExportColumns() []LogExportColumn {
 		adminInfoCol("usage_billing_path", "usage_billing_path", "Usage Billing Path", LogExportGroupAdmin),
 		adminInfoCol("local_count_tokens", "local_count_tokens", "Local Token Counting", LogExportGroupAdmin),
 		adminInfoCol("quota_saturation", "quota_saturation", "Quota Saturation", LogExportGroupAdmin),
+		adminInfoCol("billing_model", "billing_model", "Billing Model", LogExportGroupAdmin),
+		adminInfoCol("conversion_diagnostics", "conversion_diagnostics", "Conversion Diagnostics", LogExportGroupAdmin),
+		adminInfoCol("channel_affinity", "channel_affinity", "Channel Affinity", LogExportGroupAdmin),
+		adminInfoCol("task_plugin", "task_plugin", "Task Plugin", LogExportGroupAdmin),
+		rootInfoCol("upstream_task_id", "upstream_task_id", "Upstream Task ID", LogExportGroupAdmin),
+		rootInfoCol("task_node_name", "node_name", "Task Node", LogExportGroupAdmin),
+		rootInfoCol("task_plugin_runtime", "task_plugin", "Task Plugin Runtime", LogExportGroupAdmin),
+		// other_raw 原样导出整条 other，其中含 root_info，只有超级管理员能取。
 		{Key: "other_raw", Label: "Raw Other JSON", Group: LogExportGroupAdmin,
-			AdminOnly: true, NeedOther: true,
+			AdminOnly: true, RootOnly: true, NeedOther: true,
 			Extract: func(l *Log, _ *rowCtx) string { return l.Other }},
 
 		// ── audit ────────────────────────────────────────────
@@ -474,15 +516,20 @@ var legacyColumns = []string{
 	"ip", "retry_chain", "content",
 }
 
+// billingColumns 必须让人能把账单复算回来：按 token 计费靠倍率 + 各类
+// token 明细，按次固定价靠 billing_unit/fixed_price，按图片数靠 image_count，
+// 任务类用量靠 usage_facts，工具调用附加费靠 tool_surcharges。
 var billingColumns = []string{
 	"created_at", "username", "token_name", "group", "model_name",
 	"prompt_tokens", "completion_tokens", "total_tokens",
 	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h",
 	"text_input", "text_output", "audio_input", "audio_output", "image_output",
+	"image_cache_tokens", "billing_tokens",
 	"quota", "cost_usd", "billing_source", "billing_mode", "matched_tier",
+	"billing_unit", "fixed_price", "image_count", "request_rules",
 	"model_ratio", "completion_ratio", "group_ratio", "user_group_ratio",
 	"cache_ratio", "cache_creation_ratio", "audio_ratio", "audio_completion_ratio",
-	"image_ratio", "model_price", "web_search_price", "file_search_price",
+	"image_ratio", "model_price", "tool_surcharges", "usage_facts",
 }
 
 var performanceColumns = []string{
@@ -491,6 +538,9 @@ var performanceColumns = []string{
 	"prompt_tokens", "completion_tokens", "request_id", "upstream_request_id",
 }
 
+// auditColumns 覆盖 logs 表里仍在写入的带操作者信息的记录（充值、系统事件），
+// 以及迁移到审计表之前留下的历史登录/管理记录。
+// 新的登录、管理与安全事件写在 audit_logs，由审计日志页面及其自己的导出负责。
 var auditColumns = []string{
 	"created_at", "type", "username", "user_id",
 	"admin_username", "admin_id", "admin_role", "auth_method",
@@ -511,7 +561,7 @@ func BuiltinLogExportTemplates() []BuiltinLogExportTemplate {
 		{ID: LogExportTemplateLegacy, Name: "Legacy Export", Columns: legacyColumns},
 		{ID: LogExportTemplateBilling, Name: "Billing Details", Columns: billingColumns},
 		{ID: LogExportTemplatePerformance, Name: "Performance Diagnostics", Columns: performanceColumns},
-		{ID: LogExportTemplateAudit, Name: "Audit", Columns: auditColumns},
+		{ID: LogExportTemplateAudit, Name: "Top-up & Legacy Audit", Columns: auditColumns},
 		{ID: LogExportTemplateFull, Name: "All Columns", Columns: full},
 	}
 }
@@ -559,10 +609,22 @@ type LogExportColumnSet struct {
 	NeedChannelName bool
 }
 
-// ResolveLogExportColumns 校验并解析列集合。
-// keys 为空时回落到默认模板；isAdmin=false 时静默剔除 AdminOnly 列并记入 Dropped
-// ——静默而非报错，是为了让管理员共享的模板被普通用户套用时仍能正常导出。
+// ResolveLogExportColumns 校验并解析列集合，按「管理员 / 非管理员」两档判权。
+// 管理员一档不含 root 专属列：需要 root 列的调用方用 ResolveLogExportColumnsForRole。
 func ResolveLogExportColumns(keys []string, isAdmin bool) (*LogExportColumnSet, error) {
+	role := common.RoleCommonUser
+	if isAdmin {
+		role = common.RoleAdminUser
+	}
+	return ResolveLogExportColumnsForRole(keys, role)
+}
+
+// ResolveLogExportColumnsForRole 校验并解析列集合。
+// keys 为空时回落到默认模板；权限不足的列被静默剔除并记入 Dropped
+// ——静默而非报错，是为了让管理员共享的模板被权限更低的用户套用时仍能正常导出。
+func ResolveLogExportColumnsForRole(keys []string, viewerRole int) (*LogExportColumnSet, error) {
+	isAdmin := viewerRole >= common.RoleAdminUser
+	isRoot := viewerRole >= common.RoleRootUser
 	if len(keys) == 0 {
 		keys = DefaultLogExportColumns()
 	}
@@ -587,7 +649,7 @@ func ResolveLogExportColumns(keys []string, isAdmin bool) (*LogExportColumnSet, 
 			continue // 去重，保留首次出现的顺序
 		}
 		seen[key] = true
-		if col.AdminOnly && !isAdmin {
+		if (col.AdminOnly && !isAdmin) || (col.RootOnly && !isRoot) {
 			set.Dropped = append(set.Dropped, key)
 			continue
 		}

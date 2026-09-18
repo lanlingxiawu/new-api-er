@@ -127,24 +127,28 @@ type LogExportColumn struct {
 
 **basic**：`created_at`、`id`、`type`、`username`、`user_id`、`token_name`、`token_id`、`group`、`model_name`、`upstream_model_name`、`is_model_mapped`、`ip`、`request_id`、`upstream_request_id`、`content`
 
-**tokens**：`prompt_tokens`、`completion_tokens`、`total_tokens`(计算)、`cache_tokens`、`cache_creation_tokens`、`cache_creation_tokens_5m`、`cache_creation_tokens_1h`、`text_input`、`text_output`、`audio_input`、`audio_output`、`image_output`、`web_search_call_count`、`file_search_call_count`
+**tokens**：`prompt_tokens`、`completion_tokens`、`total_tokens`(计算)、`cache_tokens`、`cache_creation_tokens`、`cache_creation_tokens_5m`、`cache_creation_tokens_1h`、`text_input`、`text_output`、`audio_input`、`audio_output`、`image_output`、`image_cache_tokens`、`billing_tokens`、`web_search_call_count`（历史）、`file_search_call_count`（历史）
+（带「历史」标注的两列只在旧日志里有值：逐工具计次改由 `tool_surcharges` 承载。）
 
-**billing**：`quota`、`cost_usd`(计算)、`billing_source`（订阅扣费标记）、`billing_mode`、`matched_tier`、`model_ratio`、`completion_ratio`、`group_ratio`、`user_group_ratio`、`cache_ratio`、`cache_creation_ratio`、`cache_creation_ratio_5m`、`cache_creation_ratio_1h`、`audio_ratio`、`audio_completion_ratio`、`image_ratio`、`model_price`、`web_search_price`、`file_search_price`
+**billing**：`quota`、`cost_usd`(计算)、`billing_source`（订阅扣费标记）、`billing_mode`、`matched_tier`、`billing_unit`、`fixed_price`、`image_count`、`request_rules`、`tool_surcharges`、`usage_facts`、`model_ratio`、`completion_ratio`、`group_ratio`、`user_group_ratio`、`cache_ratio`、`cache_creation_ratio`、`cache_creation_ratio_5m`、`cache_creation_ratio_1h`、`audio_ratio`、`audio_completion_ratio`、`image_ratio`、`model_price`、`web_search_price`（历史）、`file_search_price`（历史）
 
 **performance**：`use_time`、`frt`（首字延迟 ms）、`tokens_per_sec`(计算)、`is_stream`、`stream_status`、`reasoning_effort`
 
-**admin**（`AdminOnly=true`）：`channel_id`、`channel_name`（查询时解析，见 §6.3）、`retry_chain`（`use_channel` join `->`）、`is_multi_key`、`multi_key_index`、`usage_billing_path`、`local_count_tokens`、`quota_saturation`、`other_raw`（原始 JSON 全文）
+**admin**（`AdminOnly=true`）：`channel_id`、`channel_name`（查询时解析，见 §6.3）、`retry_chain`（`use_channel` join `->`）、`is_multi_key`、`multi_key_index`、`usage_billing_path`、`local_count_tokens`、`quota_saturation`、`billing_model`、`conversion_diagnostics`、`channel_affinity`、`task_plugin`
 
-**audit**（`AdminOnly=true`，对 type=1/3/7 有值）：`admin_username`、`admin_id`、`admin_role`、`auth_method`、`payment_method`、`callback_payment_method`、`caller_ip`、`server_ip`、`node_name`、`version`、`audit_method`、`audit_route`、`audit_path`、`audit_status`、`audit_success`
+**root**（`RootOnly=true`，取自 `other.root_info`）：`upstream_task_id`、`task_node_name`、`task_plugin_runtime`、`other_raw`（原始 JSON 全文，含 `root_info`）
+
+**audit**（`AdminOnly=true`）：新的登录、管理与安全事件写在 `audit_logs`，不再进 `logs`；这组列覆盖 `logs` 里仍在写入的充值/系统记录，以及迁移前留下的历史行。列：`admin_username`、`admin_id`、`admin_role`、`auth_method`、`payment_method`、`callback_payment_method`、`caller_ip`、`server_ip`、`node_name`、`version`、`audit_method`、`audit_route`、`audit_path`、`audit_status`、`audit_success`
 （`login_method`、`user_agent`、`request_path` 属登录日志，日志属主本人可见，标 `AdminOnly=false`）
 
 ### 4.3 校验规则
 
 - `columns[]` 逐项按注册表校验，**未知 key 直接报错**（防止模板写坏后静默少列）。
-- 新链路是管理员专属，不做权限裁剪；`AdminOnly` 标记仅供旧的自助同步导出路径复用（保持现有「self 导出隐藏渠道/重试列」的安全不变量）。
+- 新链路是管理员专属；`AdminOnly` 标记供旧的自助同步导出路径复用（保持现有「self 导出隐藏渠道/重试列」的安全不变量）。
+- `RootOnly` 列按操作者角色裁剪：`ResolveLogExportColumnsForRole` 对非 root 静默剔除并记入 `Dropped`，列目录接口也不把它们下发给普通管理员。任务里存 `creator_role`，后台执行时按同一角色重新解析——导出不能成为绕过 `other` 角色投影的旁路。
 - `columns[]` 为空 → 用默认模板 `builtin:as_displayed`。
 - 列顺序 = 提交顺序（模板即有序列表）。
-- 单次导出列数上限 100（`LogExportMaxColumns`）。上限必须容得下 `builtin:full` 的全部 81 列，由 `TestLogExportColumns_BuiltinTemplatesResolve` 兜底。
+- 单次导出列数上限 150（`LogExportMaxColumns`）。上限必须容得下 `builtin:full` 的全部列（当前 98 列），由 `TestLogExportColumns_BuiltinTemplatesResolve` 兜底。
 
 ---
 
@@ -156,9 +160,9 @@ type LogExportColumn struct {
 |---|---|---|
 | **`builtin:as_displayed`** | **页面所见（默认）** | 见 §5.2 |
 | `builtin:legacy` | 兼容旧导出 | 时间/渠道/用户/令牌/分组/类型/模型/用时·首字/输入/输出/花费/IP/重试/详情（= 现有 14 列，保证老用户拿到的文件结构不变） |
-| `builtin:billing` | 计费明细 | 时间/用户/令牌/分组/模型/全部 tokens/quota/cost_usd/全部倍率/计费模式/命中档位 |
+| `builtin:billing` | 计费明细 | 时间/用户/令牌/分组/模型/全部 tokens/quota/cost_usd/全部倍率/计费模式/命中档位/计费单位/固定单价/计费图片数/请求计费规则/工具附加费/任务用量（覆盖按 token、按次固定价、按图片数、任务用量四种账单形态，可逐条复算） |
 | `builtin:performance` | 性能诊断 | 时间/模型/渠道/重试链/是否流式/use_time/frt/tokens_per_sec/上游请求 ID |
-| `builtin:audit` | 审计 | 时间/类型/用户/操作者/auth_method/audit_*/IP/user_agent/详情 |
+| `builtin:audit` | 充值与历史审计 | 时间/类型/用户/操作者/auth_method/audit_*/IP/user_agent/详情。覆盖 `logs` 里仍在写的充值与系统记录及历史登录/管理行；新的审计事件在 `audit_logs`，由审计日志页面负责 |
 | `builtin:full` | 全量 | 注册表全部列 |
 
 ### 5.2 默认模板：`builtin:as_displayed`（页面所见）

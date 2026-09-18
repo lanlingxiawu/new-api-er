@@ -77,6 +77,42 @@ func TestLoginfoGenerateTextOtherInfo_BasicRatios(t *testing.T) {
 	assert.NotContains(t, adminInfo, "local_count_tokens")
 }
 
+// 渠道名快照必须随每条中继日志落库：渠道删除后 channels 表答不出这条日志跑在
+// 哪个渠道，佣金明细的「渠道」列就只能靠它。写在 admin_info 下，普通用户读不到。
+func TestLoginfoAppendRelayLogAdminInfo_RecordsChannelNameSnapshot(t *testing.T) {
+	c := loginfoNewCtx()
+	ri := loginfoBaseRelayInfo()
+	ri.ChannelName = "azure-east"
+
+	adminInfo, ok := GenerateTextOtherInfo(c, ri, 1, 1, 1, 0, 0, 0, 1).
+		Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "azure-east", adminInfo["channel_name"])
+}
+
+// relayInfo 尚未构造出来的早期错误日志退回 distributor 写入的上下文键。
+func TestLoginfoAppendRelayLogAdminInfo_ChannelNameFromContext(t *testing.T) {
+	c := loginfoNewCtx()
+	common.SetContextKey(c, constant.ContextKeyChannelName, "ctx-channel")
+
+	other := model.NewLogOther()
+	AppendRelayLogAdminInfo(c, nil, other)
+
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "ctx-channel", adminInfo["channel_name"])
+}
+
+// 取不到渠道名时不写空字段，避免每条日志多出一个无意义的键。
+func TestLoginfoAppendRelayLogAdminInfo_OmitsEmptyChannelName(t *testing.T) {
+	other := model.NewLogOther()
+	AppendRelayLogAdminInfo(loginfoNewCtx(), loginfoBaseRelayInfo(), other)
+
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, adminInfo, "channel_name")
+}
+
 func TestLoginfoGenerateTextOtherInfo_DoesNotRecordNegativeFirstResponseTime(t *testing.T) {
 	c := loginfoNewCtx()
 	start := time.Now()

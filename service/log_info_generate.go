@@ -72,6 +72,12 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		return
 	}
 	other.SetAdmin("use_channel", ctx.GetStringSlice("use_channel"))
+	// 渠道名快照：渠道删除后 channels 表再也回答不了「这条日志跑在哪个渠道」，
+	// 而佣金明细等页面必须显示渠道名。写进 admin_info 即自动对普通用户不可见。
+	// 只读上下文/relayInfo 里已有的值，不新增任何查询（Rule 0）。
+	if channelName := relayLogChannelName(ctx, relayInfo); channelName != "" {
+		other.SetAdmin("channel_name", channelName)
+	}
 	if relayInfo != nil {
 		if billingModel := relayInfo.GetBillingModelName(); billingModel != "" && billingModel != relayInfo.OriginModelName {
 			other.SetAdmin("billing_model", billingModel)
@@ -92,6 +98,19 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, other)
+}
+
+// relayLogChannelName 取本次请求实际使用的渠道名；relayInfo 里的快照优先，
+// 未构造 relayInfo 的早期错误日志退回 distributor 写入的上下文键。
+// 两条来源都是内存读取，不新增数据库查询。
+func relayLogChannelName(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
+	if name := relayChannelName(relayInfo); name != "" {
+		return name
+	}
+	if ctx == nil {
+		return ""
+	}
+	return common.GetContextKeyString(ctx, constant.ContextKeyChannelName)
 }
 
 // GenerateTextOtherInfo 生成文本消费日志的扩展字段，整合倍率、首字时间、订阅和流式诊断摘要。

@@ -177,26 +177,21 @@ func buildCustomerQuotaLogsWithUser(logs []*model.CustomerQuotaLog) []CustomerQu
 	return items
 }
 
-func logBlockedMutualInvitation(action string, employeeUserId, customerUserId, operatedBy int) {
-	adminInfo := map[string]interface{}{
-		"action":           action,
+// logBlockedMutualInvitation 记录一次被拒的员工-客户绑定。写审计表而非 logs：
+// 这是管理员操作的留痕，必须带上请求上下文（IP / request_id / 操作者身份）。
+func logBlockedMutualInvitation(c *gin.Context, entry string, employeeUserId, customerUserId int) {
+	recordManageAuditFor(c, customerUserId, "customer.bind_blocked", map[string]any{
+		"entry":            entry,
 		"reason":           "mutual_invitation",
 		"employee_user_id": employeeUserId,
 		"customer_user_id": customerUserId,
-		"operated_by":      operatedBy,
-	}
-	model.RecordLogWithAdminDetails(
-		customerUserId,
-		model.LogTypeManage,
-		"blocked employee customer binding because employee and customer are mutual inviters",
-		adminInfo,
-	)
+	})
 	common.SysLog(fmt.Sprintf(
-		"employee_customer: blocked mutual invitation action=%s employee_user_id=%d customer_user_id=%d operated_by=%d",
-		action,
+		"employee_customer: blocked mutual invitation entry=%s employee_user_id=%d customer_user_id=%d operated_by=%d",
+		entry,
 		employeeUserId,
 		customerUserId,
-		operatedBy,
+		c.GetInt("id"),
 	))
 }
 
@@ -542,7 +537,7 @@ func AdminCreateCustomer(c *gin.Context) {
 	}
 	if err := validateCustomerBinding(req.EmployeeUserId, req.CustomerUserId); err != nil {
 		if errors.Is(err, errMutualInvitation) {
-			logBlockedMutualInvitation("admin_create_customer", req.EmployeeUserId, req.CustomerUserId, c.GetInt("id"))
+			logBlockedMutualInvitation(c, "admin_create_customer", req.EmployeeUserId, req.CustomerUserId)
 		}
 		common.ApiError(c, err)
 		return

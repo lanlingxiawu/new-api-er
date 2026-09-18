@@ -182,13 +182,28 @@ export const TASK_ACTIONS = {
   MUSIC: 'MUSIC', // 生成音乐
   LYRICS: 'LYRICS', // 生成歌词
 
-  // Video generation (camelCase)
-  GENERATE: 'generate', // 图生视频
-  TEXT_GENERATE: 'textGenerate', // 文生视频
-  FIRST_TAIL_GENERATE: 'firstTailGenerate', // 首尾生视频
-  REFERENCE_GENERATE: 'referenceGenerate', // 参照生视频
-  REMIX_GENERATE: 'remixGenerate', // 视频 Remix
+  // Video generation (snake_case, 与 constant/task.go 一致)
+  IMAGE_TO_VIDEO: 'image_to_video', // 图生视频
+  TEXT_TO_VIDEO: 'text_to_video', // 文生视频
+  FIRST_TAIL_TO_VIDEO: 'first_tail_to_video', // 首尾生视频
+  REFERENCE_TO_VIDEO: 'reference_to_video', // 参照生视频
+  REMIX: 'remix', // 视频 Remix
 } as const
+
+/**
+ * Legacy camelCase action names, mapped to the canonical snake_case values.
+ * Mirrors legacyTaskActionAliases in constant/task.go: the backend rewrites
+ * persisted rows on read, and these aliases keep the labels correct for any
+ * row or plugin payload that still carries an old value — a mismatch here
+ * renders every video task action as "Unknown".
+ */
+export const LEGACY_TASK_ACTION_ALIASES: Record<string, string> = {
+  generate: TASK_ACTIONS.IMAGE_TO_VIDEO,
+  textGenerate: TASK_ACTIONS.TEXT_TO_VIDEO,
+  firstTailGenerate: TASK_ACTIONS.FIRST_TAIL_TO_VIDEO,
+  referenceGenerate: TASK_ACTIONS.REFERENCE_TO_VIDEO,
+  remixGenerate: TASK_ACTIONS.REMIX,
+}
 
 /**
  * Task status
@@ -287,23 +302,34 @@ export const MJ_SUBMIT_RESULT_MAPPINGS: Record<string, StatusMapping> = {
 /**
  * Task action type mappings
  */
-export const TASK_ACTION_MAPPINGS: Record<string, StatusMapping> = {
-  [TASK_ACTIONS.MUSIC]: { label: 'Generate Music', variant: 'neutral' },
-  [TASK_ACTIONS.LYRICS]: { label: 'Generate Lyrics', variant: 'pink' },
-  [TASK_ACTIONS.GENERATE]: { label: 'Image to Video', variant: 'blue' },
-  [TASK_ACTIONS.TEXT_GENERATE]: { label: 'Text to Video', variant: 'blue' },
-  [TASK_ACTIONS.FIRST_TAIL_GENERATE]: {
+const VIDEO_ACTION_MAPPINGS: Record<string, StatusMapping> = {
+  [TASK_ACTIONS.IMAGE_TO_VIDEO]: { label: 'Image to Video', variant: 'blue' },
+  [TASK_ACTIONS.TEXT_TO_VIDEO]: { label: 'Text to Video', variant: 'blue' },
+  [TASK_ACTIONS.FIRST_TAIL_TO_VIDEO]: {
     label: 'First/Last Frame to Video',
     variant: 'blue',
   },
-  [TASK_ACTIONS.REFERENCE_GENERATE]: {
+  [TASK_ACTIONS.REFERENCE_TO_VIDEO]: {
     label: 'Reference Video',
     variant: 'blue',
   },
-  [TASK_ACTIONS.REMIX_GENERATE]: {
+  [TASK_ACTIONS.REMIX]: {
     label: 'Video Remix',
     variant: 'blue',
   },
+}
+
+export const TASK_ACTION_MAPPINGS: Record<string, StatusMapping> = {
+  [TASK_ACTIONS.MUSIC]: { label: 'Generate Music', variant: 'neutral' },
+  [TASK_ACTIONS.LYRICS]: { label: 'Generate Lyrics', variant: 'pink' },
+  ...VIDEO_ACTION_MAPPINGS,
+  // 旧驼峰动作名沿用同一条目，历史任务日志不会退化成 "Unknown"
+  ...Object.fromEntries(
+    Object.entries(LEGACY_TASK_ACTION_ALIASES).map(([legacy, canonical]) => [
+      legacy,
+      VIDEO_ACTION_MAPPINGS[canonical],
+    ])
+  ),
 }
 
 /**

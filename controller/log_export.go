@@ -32,10 +32,15 @@ type logExportColumnDTO struct {
 }
 
 // GetLogExportColumns 返回可导出的列目录与内置模板。
+// root 专属列不出现在普通管理员的目录里——列在那儿却导不出来只会让人以为出了故障。
 func GetLogExportColumns(c *gin.Context) {
 	columns := model.LogExportColumns()
+	isRoot := c.GetInt("role") >= common.RoleRootUser
 	out := make([]logExportColumnDTO, 0, len(columns))
 	for i := range columns {
+		if columns[i].RootOnly && !isRoot {
+			continue
+		}
 		out = append(out, logExportColumnDTO{
 			Key:       columns[i].Key,
 			Label:     columns[i].Label,
@@ -340,13 +345,14 @@ func CreateLogExportJob(c *gin.Context) {
 	go model.CleanupOrphanLogExportFiles()
 
 	job := &model.LogExportJob{
-		JobID:    jobID,
-		UserID:   userId,
-		Username: c.GetString("username"),
-		Format:   format,
-		Columns:  columns,
-		Options:  options,
-		Lang:     i18n.GetLangFromContext(c),
+		JobID:       jobID,
+		UserID:      userId,
+		Username:    c.GetString("username"),
+		CreatorRole: c.GetInt("role"),
+		Format:      format,
+		Columns:     columns,
+		Options:     options,
+		Lang:        i18n.GetLangFromContext(c),
 		Filters: model.LogExportFilter{
 			LogType:        req.LogType,
 			StartTimestamp: req.StartTimestamp,
@@ -457,7 +463,9 @@ func resolveLogExportRequestShape(c *gin.Context, req createLogExportJobRequest)
 		}
 	}
 
-	set, err := model.ResolveLogExportColumns(columns, true)
+	// 按操作者角色解析：root 专属列（other_raw、root_info 诊断）对普通管理员
+	// 静默剔除，任务里就不会留下他无权导出的列。
+	set, err := model.ResolveLogExportColumnsForRole(columns, c.GetInt("role"))
 	if err != nil {
 		return nil, "", options, err
 	}

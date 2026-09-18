@@ -115,6 +115,9 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+        defaultAuditRetentionDays={
+          Number(settings['audit_log_setting.retention_days']) || 0
+        }
       />
     ),
   },

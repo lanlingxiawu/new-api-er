@@ -1501,7 +1501,7 @@ func AdminAssignCustomerToEmployee(c *gin.Context) {
 	}
 	if err := validateCustomerBinding(emp.UserId, req.UserId); err != nil {
 		if errors.Is(err, errMutualInvitation) {
-			logBlockedMutualInvitation("admin_assign_customer", emp.UserId, req.UserId, c.GetInt("id"))
+			logBlockedMutualInvitation(c, "admin_assign_customer", emp.UserId, req.UserId)
 		}
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return

@@ -758,6 +758,7 @@ export type OperationsSettings = {
   WorkerValidKey: string
   WorkerAllowHttpImageRequestEnabled: boolean
   LogConsumeEnabled: boolean
+  'audit_log_setting.retention_days': number
   RequestLogEnabled: boolean
   RequestLogUsername: string
   RequestLogMaxBodyKB: number

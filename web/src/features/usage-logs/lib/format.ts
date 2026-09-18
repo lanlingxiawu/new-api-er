@@ -582,6 +582,13 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'subscription.plan_reset': 'Reset active subscriptions for plan {{plan_id}}',
   'subscription.user_plan_reset':
     'Reset active plan {{plan_id}} subscriptions for user {{target}}',
+  // Employees / customers
+  'employee.performance_adjust':
+    'Adjusted performance of employee {{target}} by {{profit_quota}} (commission {{commission_quota}})',
+  'employee.performance_revert':
+    'Reverted performance adjustment {{commission_ref}} of employee {{target}}',
+  'customer.bind_blocked':
+    'Blocked binding customer {{target}} to employee {{employee_user_id}}: {{reason}}',
   // Logs
   'log.clear': 'Cleared historical logs',
   'log.cleanup_start': 'Log cleanup task started.',
