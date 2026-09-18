@@ -174,6 +174,11 @@ const (
 	MsgPaymentPriceIdNotConfig   = "payment.price_id_not_configured"
 	MsgPaymentCreemNotConfig     = "payment.creem_not_configured"
 	MsgPaymentComplianceRequired = "payment.compliance_required"
+	// Infini settles top-ups in USD only; these cover the checkout-side refusal
+	// and the admin-side configuration refusal.
+	MsgPaymentInfiniCurrencyUnsupported       = "payment.infini_currency_unsupported"
+	MsgPaymentInfiniCurrencyConfigUnsupported = "payment.infini_currency_config_unsupported"
+	MsgPaymentInfiniCurrenciesInvalid         = "payment.infini_currencies_invalid"
 )
 
 // Topup related messages
@@ -469,6 +474,8 @@ const (
 	MsgLogExportColAudioInput            = "log_export.col.audio_input"
 	MsgLogExportColAudioOutput           = "log_export.col.audio_output"
 	MsgLogExportColImageOutput           = "log_export.col.image_output"
+	MsgLogExportColImageCacheTokens      = "log_export.col.image_cache_tokens"
+	MsgLogExportColBillingTokens         = "log_export.col.billing_tokens"
 	MsgLogExportColWebSearchCallCount    = "log_export.col.web_search_call_count"
 	MsgLogExportColFileSearchCallCount   = "log_export.col.file_search_call_count"
 
@@ -489,6 +496,12 @@ const (
 	MsgLogExportColAudioCompletionRatio = "log_export.col.audio_completion_ratio"
 	MsgLogExportColImageRatio           = "log_export.col.image_ratio"
 	MsgLogExportColModelPrice           = "log_export.col.model_price"
+	MsgLogExportColBillingUnit          = "log_export.col.billing_unit"
+	MsgLogExportColFixedPrice           = "log_export.col.fixed_price"
+	MsgLogExportColImageCount           = "log_export.col.image_count"
+	MsgLogExportColRequestRules         = "log_export.col.request_rules"
+	MsgLogExportColToolSurcharges       = "log_export.col.tool_surcharges"
+	MsgLogExportColUsageFacts           = "log_export.col.usage_facts"
 	MsgLogExportColWebSearchPrice       = "log_export.col.web_search_price"
 	MsgLogExportColFileSearchPrice      = "log_export.col.file_search_price"
 
@@ -511,6 +524,13 @@ const (
 	MsgLogExportColUsageBillingPath = "log_export.col.usage_billing_path"
 	MsgLogExportColLocalCountTokens = "log_export.col.local_count_tokens"
 	MsgLogExportColQuotaSaturation  = "log_export.col.quota_saturation"
+	MsgLogExportColBillingModel     = "log_export.col.billing_model"
+	MsgLogExportColConversionDiag   = "log_export.col.conversion_diagnostics"
+	MsgLogExportColChannelAffinity  = "log_export.col.channel_affinity"
+	MsgLogExportColTaskPlugin       = "log_export.col.task_plugin"
+	MsgLogExportColUpstreamTaskId   = "log_export.col.upstream_task_id"
+	MsgLogExportColTaskNodeName     = "log_export.col.task_node_name"
+	MsgLogExportColTaskPluginRt     = "log_export.col.task_plugin_runtime"
 	MsgLogExportColOtherRaw         = "log_export.col.other_raw"
 
 	MsgLogExportColAdminUsername         = "log_export.col.admin_username"
@@ -550,6 +570,11 @@ const (
 	MsgPriceMonitorPricingInvalid        = "price_monitor.pricing_invalid"
 )
 
+// Third-party SD2 price matrix (第三方 SD2 价格矩阵)
+const (
+	MsgThirdPartySD2PricingInvalid = "thirdpartysd2_pricing.invalid"
+)
+
 // Upstream log query (渠道上游日志查询) — admin only
 const (
 	MsgUpstreamLogChannelNotFound      = "upstream_log.channel_not_found"
@@ -566,4 +591,6 @@ const (
 	MsgUpstreamLogLocalRequestNotFound = "upstream_log.local_request_not_found"
 	MsgUpstreamLogRequestIdMissing     = "upstream_log.upstream_request_id_missing"
 	MsgUpstreamLogTraceKeyIndexMissing = "upstream_log.trace_key_index_missing"
+	MsgUpstreamLogRateLimited          = "upstream_log.rate_limited"
+	MsgUpstreamLogVersionUnsupported   = "upstream_log.version_unsupported"
 )
