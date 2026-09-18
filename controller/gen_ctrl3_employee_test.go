@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,6 +221,75 @@ func TestAdminAddEmployeePerformance_Success(t *testing.T) {
 			model.DB.Exec("DELETE FROM employee_performance_adjust_logs WHERE employee_user_id = ?", emp.UserId)
 		}
 	})
+}
+
+// 手工业绩调整与撤销的留痕写审计表，不再往 logs 写 type=3。
+// 前端已把「管理」类型标为 deprecated 并指向审计日志；写回 logs 会让审计口径断成两半。
+func TestAdminEmployeePerformance_WritesAuditLogNotManageLog(t *testing.T) {
+	requireDB(t)
+	requireLogDB(t)
+	_, emp := mkEmployee(t, nil)
+	// 审计日志归属操作者，被操作用户放在 op.params，所以要用独立的操作者用户查回来。
+	operator := mkUser(t, nil)
+	t.Cleanup(func() {
+		if model.DB != nil {
+			model.DB.Exec("DELETE FROM employee_commission_logs WHERE employee_user_id = ?", emp.UserId)
+		}
+		if model.LOG_DB != nil {
+			model.LOG_DB.Where("user_id = ?", operator.Id).Delete(&model.AuditLog{})
+			model.LOG_DB.Where("user_id = ?", emp.UserId).Delete(&model.Log{})
+		}
+	})
+
+	ctx, rec := newCtx(t, http.MethodPost, "/api/admin/employee/"+strconv.Itoa(emp.Id)+"/performance",
+		AddEmployeePerformanceRequest{ProfitUsd: 1.5, Reason: "bonus"})
+	idParam(ctx, "id", strconv.Itoa(emp.Id))
+	asAdmin(ctx, operator.Id)
+	AdminAddEmployeePerformance(ctx)
+	require.True(t, decodeResp(t, rec).Success, "body: %s", rec.Body.String())
+
+	adjust := latestAuditLogForUser(t, operator.Id)
+	require.NotNil(t, adjust)
+	require.Equal(t, "employee.performance_adjust", adjust.Action)
+	require.NotNil(t, adjust.Other.AdminInfo)
+	assert.Equal(t, operator.Id, adjust.Other.AdminInfo.AdminID)
+	require.NotNil(t, adjust.Other.Op)
+	assert.Contains(t, adjust.Other.Op.Params, "commission_ref")
+	assert.Contains(t, adjust.Other.Op.Params, "target_user_id")
+	assert.Contains(t, adjust.Content, "Adjusted performance of employee")
+
+	var commissionLog model.EmployeeCommissionLog
+	require.NoError(t, model.DB.Where("employee_user_id = ? AND model_name = ?",
+		emp.UserId, model.ManualPerformanceModelName).First(&commissionLog).Error)
+
+	revertCtx, revertRec := newCtx(t, http.MethodPost,
+		"/api/admin/employee/performance/"+strconv.Itoa(commissionLog.Id)+"/revert", nil)
+	idParam(revertCtx, "logId", strconv.Itoa(commissionLog.Id))
+	asAdmin(revertCtx, operator.Id)
+	AdminRevertPerformanceAdjustment(revertCtx)
+	require.True(t, decodeResp(t, revertRec).Success, "body: %s", revertRec.Body.String())
+
+	revert := latestAuditLogForUser(t, operator.Id)
+	require.NotNil(t, revert)
+	assert.Equal(t, "employee.performance_revert", revert.Action)
+
+	// 这两步不得再往 logs 落管理类型日志。
+	var manageLogs int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).
+		Where("user_id = ? AND type = ?", emp.UserId, model.LogTypeManage).
+		Count(&manageLogs).Error)
+	assert.Zero(t, manageLogs)
+}
+
+// latestAuditLogForUser 返回某用户最新一条审计日志；没有则返回 nil。
+func latestAuditLogForUser(t *testing.T, userID int) *model.AuditLog {
+	t.Helper()
+	var row model.AuditLog
+	err := model.LOG_DB.Where("user_id = ?", userID).Order("id desc").First(&row).Error
+	if err != nil {
+		return nil
+	}
+	return &row
 }
 
 func TestAdminAddEmployeePerformance_AllowsAmountBeyondBillingQuotaLimit(t *testing.T) {

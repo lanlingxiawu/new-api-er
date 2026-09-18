@@ -8,12 +8,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 不属于系统设置页分区的作用域：权限映射在 middleware/system_settings_auth.go 里单独指定。
+var nonSystemSettingsScopes = []string{
+	ScopeChannelProfitPreview,
+	ScopeVeridropDetection,
+	ScopeCommissionTierReset,
+}
+
 func TestRegistryCoversEverySystemSettingsScope(t *testing.T) {
 	for _, scope := range authz.SystemSettingsScopes() {
 		_, ok := Resolve(scope)
 		assert.True(t, ok, "scope %s must have an access definition", scope)
 	}
-	assert.Len(t, Scopes(), len(authz.SystemSettingsScopes())+2)
+	for _, scope := range nonSystemSettingsScopes {
+		_, ok := Resolve(scope)
+		assert.True(t, ok, "scope %s must have an access definition", scope)
+	}
+	assert.Len(t, Scopes(), len(authz.SystemSettingsScopes())+len(nonSystemSettingsScopes),
+		"每个作用域要么是系统设置分区，要么登记在 nonSystemSettingsScopes 里")
 }
 
 func TestOptionKeyAllowlist(t *testing.T) {
@@ -24,6 +36,22 @@ func TestOptionKeyAllowlist(t *testing.T) {
 	assert.False(t, AllowsOption("unknown.scope", "Notice"))
 	assert.False(t, AllowsOption("billing.model-pricing", "price_monitor_setting.enabled"))
 	assert.False(t, AllowsOption("billing.model-pricing", "price_monitor_setting.model_whitelist"))
+}
+
+// 审计日志保留期由 ConfigManager 支撑，必须用 configScope 登记：
+// 普通 scope() 的 GroupKeys 是空 map，AllowsGroup 会一律拒绝，
+// 设置页既读不出也存不进。
+func TestAuditLogRetentionScope(t *testing.T) {
+	assert.True(t, AllowsOption("operations.logs", "audit_log_setting.retention_days"))
+	// 该分区原有的键不能因为换成 configScope 丢掉。
+	assert.True(t, AllowsOption("operations.logs", "LogConsumeEnabled"))
+
+	assert.True(t, AllowsGroup("operations.logs", "audit_log_setting",
+		map[string]string{"retention_days": "180"}))
+	assert.False(t, AllowsGroup("operations.logs", "audit_log_setting",
+		map[string]string{"retention_days": "180", "unknown_key": "1"}))
+	assert.False(t, AllowsGroup("operations.logs", "log_query_setting",
+		map[string]string{"query_timeout_ms": "1000"}))
 }
 
 func TestChannelProfitPreviewOnlyExposesGroupRatio(t *testing.T) {

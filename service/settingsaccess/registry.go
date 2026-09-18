@@ -4,6 +4,10 @@ const (
 	ScopeBillingGroupPricing  = "billing.group-pricing"
 	ScopeChannelProfitPreview = "channel.profit-preview"
 	ScopeVeridropDetection    = "veridrop-detection"
+	// ScopeCommissionTierReset 覆盖员工页的「提成周期重置」卡片。它不是系统设置页的分区，
+	// 权限跟随员工管理菜单（见 middleware/system_settings_auth.go），与同一张卡片上的
+	// 「立即重置」「安全切换」保持同一道门槛。
+	ScopeCommissionTierReset = "employees.commission-tier-reset"
 )
 
 type Definition struct {

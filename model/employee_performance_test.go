@@ -61,7 +61,7 @@ func TestAddEmployeePerformance_CurrentPeriod(t *testing.T) {
 	ctMkTierLevel(t, u.Id, l1.Id, B)
 
 	profit := usdToQuota(5) // $5 -> stays L1
-	res, err := AddEmployeePerformance(u.Id, profit, "bonus", 42, 0)
+	res, err := AddEmployeePerformance(u.Id, profit, "bonus", 0)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.False(t, res.IsHistorical)
@@ -103,11 +103,11 @@ func TestAddEmployeePerformance_Errors(t *testing.T) {
 	empCleanupStats(t, u.Id)
 
 	// zero profit rejected before any DB write.
-	_, err := AddEmployeePerformance(u.Id, 0, "x", 1, 0)
+	_, err := AddEmployeePerformance(u.Id, 0, "x", 0)
 	assert.ErrorContains(t, err, "zero")
 
 	// unknown employee user id rejected.
-	_, err = AddEmployeePerformance(880_000_123, 100, "x", 1, 0)
+	_, err = AddEmployeePerformance(880_000_123, 100, "x", 0)
 	assert.ErrorContains(t, err, "employee profile not found")
 }
 
@@ -124,7 +124,7 @@ func TestAddEmployeePerformance_TriggersUpgrade(t *testing.T) {
 	ctMkTierLevel(t, u.Id, l1.Id, B)
 
 	// $15 of profit -> reevaluate promotes L1 -> L2 (current-period, bidirectional).
-	_, err := AddEmployeePerformance(u.Id, usdToQuota(15), "big", 1, 0)
+	_, err := AddEmployeePerformance(u.Id, usdToQuota(15), "big", 0)
 	require.NoError(t, err)
 	assert.Equal(t, l2.Id, reloadTierLevel(t, u.Id).TierId)
 }
@@ -143,7 +143,7 @@ func TestAddEmployeePerformance_HistoricalPeriod(t *testing.T) {
 	prev := ResolveCommissionMonthlyPeriod(now - 40*86400)
 
 	profit := usdToQuota(8)
-	res, err := AddEmployeePerformance(u.Id, profit, "backfill", 5, prev.PeriodStartAt)
+	res, err := AddEmployeePerformance(u.Id, profit, "backfill", prev.PeriodStartAt)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.True(t, res.IsHistorical)
@@ -175,10 +175,15 @@ func TestRevertEmployeePerformance(t *testing.T) {
 	ctMkTierLevel(t, u.Id, l1.Id, B)
 
 	profit := usdToQuota(5)
-	res, err := AddEmployeePerformance(u.Id, profit, "bonus", 1, 0)
+	res, err := AddEmployeePerformance(u.Id, profit, "bonus", 0)
 	require.NoError(t, err)
 
-	require.NoError(t, RevertEmployeePerformance(res.LogId, 9))
+	revertResult, err := RevertEmployeePerformance(res.LogId)
+	require.NoError(t, err)
+	require.NotNil(t, revertResult)
+	assert.Equal(t, u.Id, revertResult.EmployeeUserId)
+	assert.Equal(t, res.LogId, revertResult.RevertedLogId)
+	assert.EqualValues(t, -profit, revertResult.ProfitQuota)
 
 	// original row marked reverted (settle_status=2).
 	var orig EmployeeCommissionLog
@@ -204,7 +209,7 @@ func TestRevertEmployeePerformance(t *testing.T) {
 	assert.EqualValues(t, 0, ds.RecordCount)
 
 	// double revert rejected.
-	err = RevertEmployeePerformance(res.LogId, 9)
+	_, err = RevertEmployeePerformance(res.LogId)
 	assert.ErrorContains(t, err, "already reverted")
 }
 
@@ -215,7 +220,7 @@ func TestRevertEmployeePerformance_Errors(t *testing.T) {
 	empCleanupStats(t, u.Id)
 
 	// missing log id.
-	err := RevertEmployeePerformance(880_000_777, 1)
+	_, err := RevertEmployeePerformance(880_000_777)
 	assert.ErrorContains(t, err, "adjustment not found")
 
 	// a non-manual commission log cannot be reverted.
@@ -227,7 +232,7 @@ func TestRevertEmployeePerformance_Errors(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(log).Error)
 	deleteByID(t, &EmployeeCommissionLog{}, log.Id)
-	err = RevertEmployeePerformance(log.Id, 1)
+	_, err = RevertEmployeePerformance(log.Id)
 	assert.ErrorContains(t, err, "not a manual performance adjustment")
 }
 

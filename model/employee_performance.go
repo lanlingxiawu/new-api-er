@@ -16,7 +16,7 @@ import (
 // 设计见 docs/employee-performance-adjustment-design.md。核心：不新增表，把手工
 // 调整建模成一笔与真实结算同构的加法——往 employee_commission_logs 插一条 sentinel
 // 流水行，并同步上盘到「本期」「累计」两张日聚合表，从而所有既有列表/日历/导出/等级
-// 逻辑零改动即可显示。谁/为何写入既有系统日志（RecordLogWithAdminInfo）。
+// 逻辑零改动即可显示。谁/为何操作的留痕写在审计日志（audit_logs），由控制器写入。
 //
 //   - sentinel：model_name = ManualPerformanceModelName，channel_id/customer_user_id=0，
 //     log_id=nil（三库均允许多个 NULL 唯一值）。
@@ -47,6 +47,17 @@ type PerformanceAdjustmentResult struct {
 	CommissionQuota int64   `json:"commission_quota"`
 	CommissionRate  float64 `json:"commission_rate"`
 	IsHistorical    bool    `json:"is_historical"`
+	// Reason 原样回传调用方给出的调整理由，供审计留痕使用。
+	Reason string `json:"reason,omitempty"`
+}
+
+// PerformanceRevertResult 手工业绩调整的撤销结果（用于回执与审计留痕）。
+type PerformanceRevertResult struct {
+	EmployeeUserId    int   `json:"employee_user_id"`
+	RevertedLogId     int   `json:"reverted_log_id"`
+	CompensationLogId int   `json:"compensation_log_id"`
+	ProfitQuota       int64 `json:"profit_quota"`
+	CommissionQuota   int64 `json:"commission_quota"`
 }
 
 // calcManualPerfCommissionQuota 计算手工业绩对应的提成额度（decimal 精度）。
@@ -84,7 +95,7 @@ func resolveManualPerfBucket(userId int, createdAt int64) (resetStartedAt int64,
 
 // AddEmployeePerformance 给员工手工追加业绩（profitQuota 可负）。
 // targetPeriodStartAt<=0 表示当前周期；>0 表示补录到该历史周期（取其自然起点所在周期）。
-func AddEmployeePerformance(employeeUserId int, profitQuota int64, reason string, operatedBy int, targetPeriodStartAt int64) (*PerformanceAdjustmentResult, error) {
+func AddEmployeePerformance(employeeUserId int, profitQuota int64, reason string, targetPeriodStartAt int64) (*PerformanceAdjustmentResult, error) {
 	if profitQuota == 0 {
 		return nil, errors.New("profit amount cannot be zero")
 	}
@@ -170,16 +181,8 @@ func AddEmployeePerformance(employeeUserId int, profitQuota int64, reason string
 		return nil, err
 	}
 
-	RecordLogWithAdminDetails(employeeUserId, LogTypeManage, "manual performance adjustment", map[string]interface{}{
-		"operated_by":      operatedBy,
-		"reason":           reason,
-		"profit_quota":     profitQuota,
-		"commission_quota": commissionQuota,
-		"commission_rate":  rate,
-		"reset_started_at": resetStartedAt,
-		"is_historical":    isHistorical,
-		"log_id":           commLog.Id,
-	})
+	// 操作留痕由调用方写入审计表（controller.AdminAddEmployeePerformance），
+	// 那里才拿得到请求上下文（IP / request_id / 操作者身份）。
 
 	// 决策 A：仅当前周期触发等级双向重估；历史周期封存不动。
 	if !isHistorical {
@@ -195,24 +198,25 @@ func AddEmployeePerformance(employeeUserId int, profitQuota int64, reason string
 		CommissionQuota: commissionQuota,
 		CommissionRate:  rate,
 		IsHistorical:    isHistorical,
+		Reason:          reason,
 	}, nil
 }
 
 // RevertEmployeePerformance 撤销一笔手工业绩调整：标记原行 settle_status=2，并插一条相反数
 // 补偿行、对两张日聚合表上盘负增量（含 record_count=-1），使聚合精确净为 0。
-func RevertEmployeePerformance(logId int, operatedBy int) error {
+func RevertEmployeePerformance(logId int) (*PerformanceRevertResult, error) {
 	var orig EmployeeCommissionLog
 	if err := DB.Where("id = ?", logId).First(&orig).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("adjustment not found")
+			return nil, errors.New("adjustment not found")
 		}
-		return err
+		return nil, err
 	}
 	if orig.ModelName != ManualPerformanceModelName {
-		return errors.New("not a manual performance adjustment")
+		return nil, errors.New("not a manual performance adjustment")
 	}
 	if orig.SettleStatus == settleStatusReverted {
-		return errors.New("adjustment already reverted")
+		return nil, errors.New("adjustment already reverted")
 	}
 
 	now := employeePerfNow()
@@ -259,22 +263,23 @@ func RevertEmployeePerformance(logId int, operatedBy int) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
-	RecordLogWithAdminDetails(orig.EmployeeUserId, LogTypeManage, "revert manual performance adjustment", map[string]interface{}{
-		"operated_by":      operatedBy,
-		"reverted_log_id":  logId,
-		"compensation_log": comp.Id,
-		"profit_quota":     -orig.ProfitQuota,
-		"commission_quota": -orig.CommissionQuota,
-	})
+	// 操作留痕由调用方写入审计表（controller.AdminRevertPerformanceAdjustment），
+	// 那里才拿得到请求上下文（IP / request_id / 操作者身份）。
 
 	// 撤销的是当前周期的调整时，触发一次双向重估，使等级回落到与净业绩匹配的档位。
 	if ResolveCommissionMonthlyPeriod(orig.CreatedAt).PeriodStartAt == ResolveCommissionMonthlyPeriod(now).PeriodStartAt {
 		reevaluateTierByPeriodProfit(orig.EmployeeUserId)
 	}
-	return nil
+	return &PerformanceRevertResult{
+		EmployeeUserId:    orig.EmployeeUserId,
+		RevertedLogId:     logId,
+		CompensationLogId: comp.Id,
+		ProfitQuota:       -orig.ProfitQuota,
+		CommissionQuota:   -orig.CommissionQuota,
+	}, nil
 }
 
 // reevaluateTierByPeriodProfit 依当前周期业绩对员工等级做双向重估（升/降）。

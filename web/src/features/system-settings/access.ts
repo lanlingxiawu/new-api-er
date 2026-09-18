@@ -71,6 +71,7 @@ export const SYSTEM_SETTINGS_SECTIONS: Record<SystemSettingsGroup, string[]> = {
     'log-export',
     'ledger-detail',
     'fallback-backfill',
+    'relay-timeout',
   ],
 }
 

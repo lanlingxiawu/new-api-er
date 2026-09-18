@@ -26,6 +26,20 @@ func buildDefinitions() map[string]Definition {
 				"submit_timeout_seconds", "poll_interval_seconds", "job_timeout_seconds",
 				"auto_detection_enabled", "detection_interval_minutes",
 			}),
+		configScope(ScopeCommissionTierReset, "commission_tier_reset_setting",
+			[]string{
+				"commission_tier_reset_setting.enabled",
+				"commission_tier_reset_setting.period_mode",
+				"commission_tier_reset_setting.reset_day",
+				"commission_tier_reset_setting.reset_hour",
+				"commission_tier_reset_setting.reset_minute",
+				"commission_tier_reset_setting.reset_second",
+				"commission_tier_reset_setting.timezone",
+			},
+			[]string{
+				"enabled", "period_mode", "reset_day", "reset_hour",
+				"reset_minute", "reset_second", "timezone",
+			}),
 		scope("site.system-info", "theme.frontend", "SystemName", "Logo", "Footer", "About", "HomePageContent", "ServerAddress", "legal.user_agreement", "legal.privacy_policy", "TaskPublicAddress"),
 		scope("site.notice", "Notice"),
 		scope("site.header-navigation", "HeaderNavModules"),
@@ -39,7 +53,7 @@ func buildDefinitions() map[string]Definition {
 		scope("billing.currency", "QuotaPerUnit", "USDExchangeRate", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "general_setting.quota_display_type", "general_setting.custom_currency_symbol", "general_setting.custom_currency_exchange_rate"),
 		scope("billing.model-pricing", "ModelPrice", "ModelRatio", "CacheRatio", "CreateCacheRatio", "CompletionRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio", "ExposeRatioEnabled", "billing_setting.billing_mode", "billing_setting.billing_expr", "billing_setting.plugin_billing_expr", "tool_price_setting.prices", "thirdpartysd2_pricing.matrix", "CompletionRatioMeta"),
 		scope(ScopeBillingGroupPricing, "TopupGroupRatio", "GroupRatio", "UserUsableGroups", "GroupGroupRatio", "AutoGroups", "MaxTokenAutoGroups", "DefaultUseAutoGroup", "UserExclusiveGroupRatioEnabled", "UserExclusiveGroupRatioCacheMax", "group_ratio_setting.group_special_usable_group"),
-		scope("billing.payment", "PayAddress", "EpayId", "EpayKey", "Price", "MinTopUp", "CustomCallbackAddress", "PayMethods", "payment_setting.amount_options", "payment_setting.amount_discount", "payment_setting.compliance_confirmed", "payment_setting.compliance_terms_version", "payment_setting.compliance_confirmed_at", "payment_setting.compliance_confirmed_by", "payment_setting.compliance_confirmed_ip", "StripeEnabled", "StripeApiSecret", "StripeWebhookSecret", "StripePriceId", "StripeUnitPrice", "StripeUseRealtimeRate", "StripeMinTopUp", "StripePromotionCodesEnabled", "CreemApiKey", "CreemWebhookSecret", "CreemTestMode", "CreemProducts", "WaffoEnabled", "WaffoApiKey", "WaffoPrivateKey", "WaffoPublicCert", "WaffoSandboxPublicCert", "WaffoSandboxApiKey", "WaffoSandboxPrivateKey", "WaffoSandbox", "WaffoMerchantId", "WaffoCurrency", "WaffoUnitPrice", "WaffoMinTopUp", "WaffoNotifyUrl", "WaffoReturnUrl", "WaffoPayMethods", "WaffoPancakeMerchantID", "WaffoPancakePrivateKey", "WaffoPancakeReturnURL", "WaffoPancakeStoreID", "WaffoPancakeProductID", "AlipayEnabled", "AlipayAppId", "AlipayPrivateKey", "AlipayPublicKey", "AlipaySandbox", "AlipayMinTopUp", "AlipayNotifyUrl", "AlipayReturnUrl", "WechatEnabled", "WechatAppId", "WechatMchId", "WechatApiV3Key", "WechatMchPrivateKey", "WechatMchCertSerialNo", "WechatMinTopUp", "WechatNotifyUrl", "InfiniEnabled", "InfiniApiKey", "InfiniApiSecret", "InfiniWebhookSecret", "InfiniSandbox", "InfiniNotifyUrl", "InfiniReturnUrl", "InfiniFailUrl", "InfiniUnitPrice", "InfiniMinTopUp", "InfiniCurrency", "InfiniCurrencies", "InfiniPayMethods"),
+		scope("billing.payment", "PayAddress", "EpayId", "EpayKey", "Price", "MinTopUp", "CustomCallbackAddress", "PayMethods", "payment_setting.amount_options", "payment_setting.amount_discount", "payment_setting.compliance_confirmed", "payment_setting.compliance_terms_version", "payment_setting.compliance_confirmed_at", "payment_setting.compliance_confirmed_by", "payment_setting.compliance_confirmed_ip", "StripeEnabled", "StripeApiSecret", "StripeWebhookSecret", "StripePriceId", "StripeUnitPrice", "StripeUseRealtimeRate", "StripeMinTopUp", "StripePromotionCodesEnabled", "CreemApiKey", "CreemWebhookSecret", "CreemTestMode", "CreemProducts", "WaffoEnabled", "WaffoApiKey", "WaffoPrivateKey", "WaffoPublicCert", "WaffoSandboxPublicCert", "WaffoSandboxApiKey", "WaffoSandboxPrivateKey", "WaffoSandbox", "WaffoMerchantId", "WaffoCurrency", "WaffoUnitPrice", "WaffoMinTopUp", "WaffoNotifyUrl", "WaffoReturnUrl", "WaffoPayMethods", "WaffoPancakeMerchantID", "WaffoPancakePrivateKey", "WaffoPancakeReturnURL", "WaffoPancakeStoreID", "WaffoPancakeProductID", "AlipayEnabled", "AlipayAppId", "AlipayPrivateKey", "AlipayPublicKey", "AlipaySandbox", "AlipayMinTopUp", "AlipayNotifyUrl", "AlipayReturnUrl", "WechatEnabled", "WechatAppId", "WechatMchId", "WechatApiV3Key", "WechatMchPrivateKey", "WechatMchCertSerialNo", "WechatMinTopUp", "WechatNotifyUrl", "InfiniEnabled", "InfiniApiKey", "InfiniApiSecret", "InfiniWebhookSecret", "InfiniSandbox", "InfiniNotifyUrl", "InfiniReturnUrl", "InfiniFailUrl", "InfiniUnitPrice", "InfiniMinTopUp", "InfiniCurrency", "InfiniCurrencies", "InfiniPayMethods", "InfiniUseRealtimeRate", "InfiniExchangeRate"),
 		scope("billing.checkin", "checkin_setting.enabled", "checkin_setting.min_quota", "checkin_setting.max_quota"),
 		scope("models.global", "global.pass_through_request_enabled", "global.thinking_model_blacklist", "global.chat_completions_to_responses_policy", "general_setting.ping_interval_enabled", "general_setting.ping_interval_seconds"),
 		// 每日金额上限用 configScope：它由 ConfigManager 支撑，保存走 SaveConfigGroup，
@@ -76,7 +90,12 @@ func buildDefinitions() map[string]Definition {
 		scope("operations.alerts", "QuotaRemindThreshold", "perf_metrics_setting.enabled", "perf_metrics_setting.flush_interval", "perf_metrics_setting.bucket_time", "perf_metrics_setting.retention_days"),
 		scope("operations.email", "SMTPServer", "SMTPPort", "SMTPAccount", "SMTPFrom", "SMTPToken", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin"),
 		scope("operations.worker", "WorkerUrl", "WorkerValidKey", "WorkerAllowHttpImageRequestEnabled"),
-		scope("operations.logs", "LogConsumeEnabled"),
+		// 审计日志保留期由 ConfigManager 支撑，保存走 SaveConfigGroup，
+		// 因此该分区必须用 configScope（普通 scope() 的 GroupKeys 是空 map，
+		// AllowsGroup 会一律拒绝）。
+		configScope("operations.logs", "audit_log_setting",
+			[]string{"LogConsumeEnabled", "audit_log_setting.retention_days"},
+			[]string{"retention_days"}),
 		scope("operations.request-log", "RequestLogEnabled", "RequestLogUsername", "RequestLogMaxBodyKB", "RequestLogMinCount", "RequestLogMaxCount"),
 		scope("operations.performance", "performance_setting.disk_cache_enabled", "performance_setting.disk_cache_threshold_mb", "performance_setting.disk_cache_max_size_mb", "performance_setting.disk_cache_path", "performance_setting.monitor_enabled", "performance_setting.monitor_cpu_threshold", "performance_setting.monitor_memory_threshold", "performance_setting.monitor_disk_threshold"),
 		scope("operations.update-checker"),

@@ -454,12 +454,21 @@ func AdminAddEmployeePerformance(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "profit amount is too small"})
 		return
 	}
-	operatedBy := c.GetInt("id")
-	result, err := model.AddEmployeePerformance(emp.UserId, profitQuota, strings.TrimSpace(req.Reason), operatedBy, req.PeriodStartAt)
+	result, err := model.AddEmployeePerformance(emp.UserId, profitQuota, strings.TrimSpace(req.Reason), req.PeriodStartAt)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	recordManageAuditFor(c, emp.UserId, "employee.performance_adjust", map[string]any{
+		"employee_id":      emp.Id,
+		"commission_ref":   result.LogId,
+		"profit_quota":     result.ProfitQuota,
+		"commission_quota": result.CommissionQuota,
+		"commission_rate":  result.CommissionRate,
+		"reset_started_at": result.ResetStartedAt,
+		"is_historical":    result.IsHistorical,
+		"reason":           result.Reason,
+	})
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
 }
 
@@ -470,11 +479,17 @@ func AdminRevertPerformanceAdjustment(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
-	operatedBy := c.GetInt("id")
-	if err := model.RevertEmployeePerformance(logId, operatedBy); err != nil {
+	result, err := model.RevertEmployeePerformance(logId)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	recordManageAuditFor(c, result.EmployeeUserId, "employee.performance_revert", map[string]any{
+		"commission_ref":   result.RevertedLogId,
+		"compensation_ref": result.CompensationLogId,
+		"profit_quota":     result.ProfitQuota,
+		"commission_quota": result.CommissionQuota,
+	})
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 

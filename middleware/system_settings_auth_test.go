@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/service/settingsaccess"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -134,4 +135,58 @@ func systemSettingsContext(t *testing.T, method string, url string, body string)
 		ctx.Request.Header.Set("Content-Type", "application/json")
 	}
 	return ctx, recorder
+}
+
+// 员工页的「提成周期重置」卡片保存走 /api/option，所以必须有一个已登记的 scope；
+// 权限门槛跟随员工管理菜单，与同一张卡片上的「立即重置」「安全切换」保持一致。
+// 不带 scope 时非 root 管理员会被判「参数错误」直接 abort——这正是卡片保存失败的原因。
+func TestRequireSystemSettingsScope_CommissionTierResetUsesEmployeeMenuPermission(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:settings-auth-commission?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	require.NoError(t, authz.Init(db))
+	require.NoError(t, authz.SetUserPermissions(71004, authz.PermissionsMap{
+		authz.ResourceAdminMenuEmployees: {authz.ActionView: true},
+	}))
+	require.NoError(t, authz.SetUserPermissions(71005, authz.PermissionsMap{
+		authz.ResourceAdminMenuEmployees: {authz.ActionView: false},
+	}))
+
+	const body = `{"scope":"employees.commission-tier-reset","key":"commission_tier_reset_setting.reset_day","value":"5"}`
+	editCtx, _ := systemSettingsContext(t, http.MethodPut, "/api/option/", body)
+	editCtx.Set("id", 71004)
+	editCtx.Set("role", common.RoleAdminUser)
+	RequireSystemSettingsScope(authz.ActionEdit)(editCtx)
+	assert.False(t, editCtx.IsAborted(), "能管理员工的管理员必须能保存提成周期重置配置")
+	assert.Equal(t, settingsaccess.ScopeCommissionTierReset, editCtx.GetString(SystemSettingsScopeContextKey))
+
+	deniedCtx, deniedRecorder := systemSettingsContext(t, http.MethodPut, "/api/option/", body)
+	deniedCtx.Set("id", 71005)
+	deniedCtx.Set("role", common.RoleAdminUser)
+	RequireSystemSettingsScope(authz.ActionEdit)(deniedCtx)
+	assert.True(t, deniedCtx.IsAborted(), "没有员工管理权限的管理员不能保存")
+	assert.Equal(t, http.StatusForbidden, deniedRecorder.Code)
+}
+
+// 该 scope 只放行提成周期重置这一组键，不能变成写任意配置的后门。
+func TestCommissionTierResetScopeAllowsOnlyItsOwnKeys(t *testing.T) {
+	for _, key := range []string{
+		"commission_tier_reset_setting.enabled",
+		"commission_tier_reset_setting.period_mode",
+		"commission_tier_reset_setting.reset_day",
+		"commission_tier_reset_setting.reset_hour",
+		"commission_tier_reset_setting.reset_minute",
+		"commission_tier_reset_setting.reset_second",
+		"commission_tier_reset_setting.timezone",
+	} {
+		assert.True(t, settingsaccess.AllowsOption(settingsaccess.ScopeCommissionTierReset, key), key)
+	}
+	// last_reset_at 由重置任务维护，不接受手工写入。
+	assert.False(t, settingsaccess.AllowsOption(settingsaccess.ScopeCommissionTierReset, "commission_tier_reset_setting.last_reset_at"))
+	assert.False(t, settingsaccess.AllowsOption(settingsaccess.ScopeCommissionTierReset, "SystemName"))
+	assert.True(t, settingsaccess.AllowsGroup(settingsaccess.ScopeCommissionTierReset, "commission_tier_reset_setting", map[string]string{"reset_day": "5"}))
+	assert.False(t, settingsaccess.AllowsGroup(settingsaccess.ScopeCommissionTierReset, "commission_tier_reset_setting", map[string]string{"last_reset_at": "1"}))
 }

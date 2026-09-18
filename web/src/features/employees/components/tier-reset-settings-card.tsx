@@ -53,6 +53,11 @@ type PeriodMode = (typeof periodModeOptions)[number]['value']
 
 const resetDayOptions = Array.from({ length: 31 }, (_, index) => index + 1)
 
+// 保存走 /api/option，该路由要求携带设置作用域（middleware.RequireSystemSettingsScope）。
+// 不带 scope 时只有 root 能保存，普通管理员会直接收到「参数错误」。
+// 与后端 settingsaccess.ScopeCommissionTierReset 保持一致。
+const COMMISSION_TIER_RESET_SCOPE = 'employees.commission-tier-reset'
+
 function normalizeTimezone(timezone?: string) {
   return timezone === 'Local' ? 'Local' : 'Asia/Shanghai'
 }
@@ -152,7 +157,10 @@ export function TierResetSettingsCard() {
         { key: 'commission_tier_reset_setting.reset_second', value: '0' }
       )
       for (const update of updates) {
-        const res = await updateSystemOption(update)
+        const res = await updateSystemOption({
+          ...update,
+          scope: COMMISSION_TIER_RESET_SCOPE,
+        })
         if (!res.success) throw new Error(res.message)
       }
       // 口径变化时执行"安全切换"：把本期对齐到新边界，按两个开关分别控制等级与数据。

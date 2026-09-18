@@ -47,8 +47,13 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 		}
 
 		permission := authz.Permission{Resource: authz.SystemSettingsResource(scope), Action: action}
-		if scope == settingsaccess.ScopeVeridropDetection {
+		switch scope {
+		case settingsaccess.ScopeVeridropDetection:
 			permission = authz.Permission{Resource: authz.ResourceAdminMenuVeridropDetection, Action: action}
+		case settingsaccess.ScopeCommissionTierReset:
+			// 提成周期重置配置属于员工管理页，不是系统设置页的分区：门槛与同一张卡片上的
+			// 「立即重置」「安全切换」一致（员工管理菜单只注册了 view 动作）。
+			permission = authz.AdminMenuEmployeesView
 		}
 		allowed := authz.Can(c.GetInt("id"), role, permission)
 		if !allowed && scope == settingsaccess.ScopeChannelProfitPreview && action == authz.ActionView {
