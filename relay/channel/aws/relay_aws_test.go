@@ -15,6 +15,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
@@ -285,6 +286,50 @@ func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
 			assert.Equal(t, test.wantSkipRetry, relaytypes.IsSkipRetryError(err))
 		})
 	}
+}
+
+func TestAwsInvokeErrorPreservesExplicitUpstreamMessage(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "validation", body: `{"message":"tool type 'web_search_20260209' is not supported for this model","private":"body-only-secret"}`, want: "tool type 'web_search_20260209' is not supported for this model"},
+		{name: "empty", body: `{"message":""}`},
+		{name: "whitespace", body: `{"message":" \t\n"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Amzn-Errortype", "ValidationException")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			client := newAwsTestClient(server.Client())
+			_, sdkErr := client.InvokeModel(context.Background(), newAwsInvokeModelInput(), func(options *bedrockruntime.Options) {
+				options.BaseEndpoint = aws.String(server.URL)
+			})
+			require.Error(t, sdkErr)
+			apiErr := newAwsInvokeError(context.Background(), sdkErr, "InvokeModel")
+			require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+			require.Equal(t, relaytypes.ErrorCodeAwsInvokeError, apiErr.GetErrorCode())
+			require.Equal(t, common.StripRequestIds("InvokeModel: "+sdkErr.Error()), apiErr.Error())
+			require.False(t, relaytypes.IsSkipRetryError(apiErr))
+			c := newAwsTestContext(httptest.NewRecorder(), context.Background())
+			c.Set(relaycommon.StreamResponseOnlyKey, true)
+			want := "upstream response failed (status=400, code=aws_invoke_error)"
+			if test.want != "" {
+				want = "status_code=400, " + test.want
+			}
+			require.Equal(t, want, service.StreamPublicErrorSummary(c, apiErr))
+		})
+	}
+
+	c := newAwsTestContext(httptest.NewRecorder(), context.Background())
+	c.Set(relaycommon.StreamResponseOnlyKey, true)
+	transportErr := newAwsInvokeError(context.Background(), context.DeadlineExceeded, "InvokeModel")
+	require.Equal(t, "upstream response failed (status=500, code=aws_invoke_error)", service.StreamPublicErrorSummary(c, transportErr))
 }
 
 func TestAwsHandlersCancelSdkRequestAndSkipRetry(t *testing.T) {

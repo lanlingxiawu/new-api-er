@@ -160,6 +160,9 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	if outcome.Failed && !outcome.ClientGone && !snapshot.ErrorDelivered && (c.Request.Context().Err() == nil || IsRelayRequestTimeout(c)) {
 		WriteStreamTerminalError(c, info, snapshot)
 	}
+	if outcome.Failed && !outcome.ClientGone {
+		outcome.ErrorMessage = StreamFailureLogMessage(snapshot)
+	}
 	selected := usage
 	if !outcome.Failed && confirmed && snapshot.EstimatedOutput > 0 {
 		// 适配器可能已经估算过零输出；先保留原始确认输入/缓存，再按统一内容口径补估。

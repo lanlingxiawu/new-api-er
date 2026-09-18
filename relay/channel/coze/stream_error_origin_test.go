@@ -1,6 +1,7 @@
 package coze
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +12,42 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStreamCozeChatFailedLogMessage(t *testing.T) {
+	for _, prefix := range []string{"", "event: conversation.message.delta\ndata: {\"content\":\"hello\"}\n\n"} {
+		t.Run(fmt.Sprintf("delivered=%t", prefix != ""), func(t *testing.T) {
+			c, rec := newContext()
+			info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fixture"}}
+			service.BeginStreamAttempt(c, info)
+			frame := "event: conversation.chat.failed\ndata: " + `{"status":"failed","last_error":{"code":123,"msg":"coze failure api_key:secret (request id: upstream)"}}` + "\n\n"
+			resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(prefix + frame))}
+			info.StreamSession.ObserveTransport(resp, nil)
+			info.StreamDiagnostic.Observe(resp)
+			info.StreamSession.ObserveHTTP(resp)
+			usage, apiErr := cozeChatStreamHandler(c, info, resp)
+			require.Nil(t, apiErr)
+			snapshot := info.StreamSession.Snapshot()
+			selected := service.FinalizeStreamUsage(c, info, usage)
+			require.Equal(t, relaycommon.StreamEndReason("upstream_error"), snapshot.Reason)
+			require.Equal(t, frame, string(snapshot.ErrorFrame))
+			require.Equal(t, snapshot.Err.Error(), info.StreamResult.Diagnostic.Error)
+			require.True(t, info.StreamResult.DiagnosticAvailable)
+			require.Equal(t, prefix != "", info.StreamResult.EffectiveContent)
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.Contains(t, rec.Body.String(), "upstream_stream_error")
+			require.NotContains(t, rec.Body.String(), "coze failure")
+			require.NotContains(t, rec.Body.String(), "[DONE]")
+			if prefix == "" {
+				require.Equal(t, "none", info.StreamResult.UsageSource)
+				require.Zero(t, selected.TotalTokens)
+			} else {
+				require.Equal(t, "estimated", info.StreamResult.UsageSource)
+				require.Equal(t, service.EstimateTokenByModel("fixture", "hello"), selected.CompletionTokens)
+			}
+			require.Equal(t, "coze failure api_key:***", info.StreamResult.ErrorMessage)
+		})
+	}
+}
 
 // TestStreamCozeDTOErrorOrigin 验证独立扫描器的嵌套字段解析错误停流，不补成功尾帧；t 为上下文。
 func TestStreamCozeDTOErrorOrigin(t *testing.T) {
