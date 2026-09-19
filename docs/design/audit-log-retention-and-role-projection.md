@@ -98,9 +98,11 @@
 
 ### 3.4 三库兼容（Rule 2）
 
-`DELETE ... LIMIT` 只有 MySQL 支持，PostgreSQL 下 GORM 会**静默丢掉 LIMIT**，
-一条语句删空整段区间并长时间持有事务与连接。因此 `DeleteOldAuditLogBatch`
-先 `Pluck` 一批主键再按主键删——两条语句，三库行为一致，且真正是分批。
+`DELETE ... LIMIT` 只有 MySQL 支持，PostgreSQL 与默认编译的 SQLite 下 GORM 会
+**静默丢掉 LIMIT**，一条语句删空整段区间并长时间持有事务与连接。因此
+`DeleteOldAuditLogBatch` 先 `Pluck` 一批主键再按主键删——两条语句，三库行为一致，
+且真正是分批。`logs` 的 `DeleteOldLogBatch` 同样有这个缺陷，已按同一形状修正，
+取主键的排序（`created_at, id`）跟索引 `idx_created_at_id` 一致。
 ClickHouse 分支与 `logs` 一致：`ALTER TABLE ... DELETE ... SETTINGS mutations_sync = 1`
 一次删完并返回行数，让调用方的进度循环一轮结束。
 

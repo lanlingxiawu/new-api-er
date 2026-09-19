@@ -1186,7 +1186,22 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return total, nil
 	}
 
-	result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+	// 先取一批主键再按主键删：`DELETE ... LIMIT` 只有 MySQL 支持，PostgreSQL
+	// 与默认编译的 SQLite 都会静默丢掉这个 LIMIT，一条语句就把整段区间删空，
+	// 并长时间持有事务与连接——而这条连接池正是消费日志异步管线在用的
+	// （Rule 0 / Rule 2）。取主键的排序跟索引 idx_created_at_id 一致。
+	var ids []int
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at, id").
+		Limit(limit).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
 	if nil != result.Error {
 		return 0, result.Error
 	}

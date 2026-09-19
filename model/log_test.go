@@ -1044,6 +1044,47 @@ func TestDeleteOldLog(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// PostgreSQL 与默认编译的 SQLite 都会静默丢掉 DELETE 的 LIMIT，一条语句会把
+// 整段区间删空，并长时间占着消费日志异步管线在用的连接与行锁。
+// 这条用例锁住「一次只删 limit 行」的分批语义。
+func TestDeleteOldLogBatch_HonoursBatchLimit(t *testing.T) {
+	requireLogDB(t)
+	uid := nextTestID()
+	logCleanupUser(t, uid)
+	// 真实日志落在 1.7e9 量级，这个时间带里只可能有测试自己造的行。
+	oldTs := int64(5_000) + int64(nextTestID())
+	for i := range 5 {
+		mkLogRow(t, func(l *Log) { l.UserId, l.CreatedAt = uid, oldTs+int64(i) })
+	}
+	cutoff := oldTs + 10
+	ctx := context.Background()
+
+	eligible, err := CountOldLog(ctx, cutoff)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, eligible, int64(5))
+
+	deleted, err := DeleteOldLogBatch(ctx, cutoff, 2)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, deleted, "一次只能删 limit 行")
+
+	remaining, err := CountOldLog(ctx, cutoff)
+	require.NoError(t, err)
+	assert.EqualValues(t, eligible-2, remaining)
+
+	// 删干净，不给同库里的其它用例留脏行；最后一批不足 limit 时返回实际行数，
+	// 删空后返回 0，调用方的进度循环才能收敛。
+	for {
+		n, err := DeleteOldLogBatch(ctx, cutoff, 100)
+		require.NoError(t, err)
+		if n == 0 {
+			break
+		}
+	}
+	scoped, err := countScopedOld(uid, cutoff)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, scoped)
+}
+
 func countScopedOld(userID int, ts int64) (int64, error) {
 	var n int64
 	err := LOG_DB.Model(&Log{}).Where("user_id = ? AND created_at < ?", userID, ts).Count(&n).Error
