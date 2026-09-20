@@ -255,6 +255,9 @@ func TestCreateLogExportJob_RejectsUnknownColumnAndTemplate(t *testing.T) {
 
 func TestCreateLogExportJob_CooldownAndSlotAreEnforced(t *testing.T) {
 	enableRedis(t)
+	// 上一轮测试进程被杀时留下的孤儿槽位会让本用例的第一次创建就失败。
+	// 回收一次，拿到确定的起点——这正是 RecoverStaleLogExportJobs 该做的事。
+	model.RecoverStaleLogExportJobs()
 	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
 		s.Enabled = true
 		s.MaxConcurrentJobs = 1
@@ -279,7 +282,17 @@ func TestCreateLogExportJob_CooldownAndSlotAreEnforced(t *testing.T) {
 	require.NotEmpty(t, created.JobID)
 	cleanupExportJob(t, created.JobID)
 
-	// 并发槽只有 1 个，另一个用户此刻应被挡住（且不消耗他的冷却）。
+	// 并发槽只有 1 个，占满时另一个用户应被挡住（且不消耗他的冷却）。
+	//
+	// 这里显式占槽，而不是指望上面那个任务「还在跑」：闸门改成按实际行数计费之后，
+	// 小数据量的导出几乎瞬间完成并释放槽位，靠任务耗时来制造竞争的写法会随机失败。
+	// 上限传 2 而不是 1：上面那个任务是异步跑的，此刻可能还占着唯一的槽位，
+	// 传 1 会让这次占槽失败。传 2 则无论它是否已释放都能占到，而下面的请求
+	// 走的是配置里的 max_concurrent_jobs=1，两种情况下都必然被挡住。
+	const slotHolder = "test-slot-holder"
+	require.True(t, model.AcquireLogExportSlot(slotHolder, 2, time.Minute))
+	t.Cleanup(func() { model.ReleaseLogExportSlot(slotHolder) })
+
 	ctx, rec = newCtx(t, http.MethodPost, "/api/log/export/jobs", validExportJobBody())
 	CreateLogExportJob(asAdmin(ctx, userB))
 	resp = decodeResp(t, rec)
@@ -693,4 +706,311 @@ func TestLogExportTemplateAPI_InvalidId(t *testing.T) {
 	ctx.Params = gin.Params{{Key: "id", Value: "abc"}}
 	UpdateLogExportTemplate(asAdmin(ctx, 1))
 	assert.False(t, decodeResp(t, rec).Success)
+}
+
+// ── 新增筛选条件的接口层校验 ──────────────────────────────────────
+
+func TestCreateLogExportJob_ValidatesNewFilters(t *testing.T) {
+	enableRedis(t)
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.Enabled = true
+		s.MaxFilterValues = 3
+	})
+
+	cases := []struct {
+		name     string
+		mutate   func(body map[string]any)
+		contains string
+	}{
+		{
+			name:     "用量来源取值非法",
+			mutate:   func(b map[string]any) { b["usage_source"] = []string{"guessed"} },
+			contains: "guessed",
+		},
+		{
+			name:     "异常种类取值非法",
+			mutate:   func(b map[string]any) { b["anomaly_kinds"] = []string{"made_up"} },
+			contains: "made_up",
+		},
+		{
+			name: "单个条件取值过多",
+			mutate: func(b map[string]any) {
+				b["stream_end_reason"] = []string{"a", "b", "c", "d"}
+			},
+			contains: "3",
+		},
+		{
+			name: "最小值大于最大值",
+			mutate: func(b map[string]any) {
+				b["quota_min"] = 100
+				b["quota_max"] = 10
+			},
+		},
+		{
+			name: "耗时区间反了",
+			mutate: func(b map[string]any) {
+				b["use_time_min"] = 60
+				b["use_time_max"] = 10
+			},
+		},
+		{
+			name:   "重试次数为负",
+			mutate: func(b map[string]any) { b["min_retry_count"] = -1 },
+		},
+		{
+			name:   "聚合模式未选维度",
+			mutate: func(b map[string]any) { b["mode"] = "summary" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := validExportJobBody()
+			tc.mutate(body)
+			ctx, rec := newCtx(t, http.MethodPost, "/api/log/export/jobs", body)
+			CreateLogExportJob(asAdmin(ctx, nextTestID()))
+			resp := decodeResp(t, rec)
+			require.False(t, resp.Success, "非法条件必须被拒绝")
+			if tc.contains != "" {
+				assert.Contains(t, resp.Message, tc.contains)
+			}
+		})
+	}
+}
+
+// 结束原因与结算状态刻意不做白名单：取值随协议演进增加，
+// 白名单只会挡住刚出现的那种异常——而那正是最需要被查出来的。
+func TestCreateLogExportJob_DoesNotWhitelistEvolvingFilterValues(t *testing.T) {
+	enableRedis(t)
+	model.RecoverStaleLogExportJobs()
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.Enabled = true
+		// 孤儿槽位与上一轮进程留下的冷却键都不该让这条用例失败。
+		s.MaxConcurrentJobs = 20
+		s.TimeoutSec = 30
+	})
+
+	// UserCooldownSec 置 0 不会关闭冷却（getter 对 <=0 回落到默认 300 秒），
+	// 而 nextTestID 跨进程重复，上一轮留下的冷却键仍然有效。显式清掉。
+	userID := nextTestID()
+	model.ClearLogExportCooldown(userID)
+	t.Cleanup(func() { model.ClearLogExportCooldown(userID) })
+
+	body := validExportJobBody()
+	body["stream_end_reason"] = []string{"some_brand_new_reason"}
+	body["settlement_state"] = []string{"whatever_comes_next"}
+	ctx, rec := newCtx(t, http.MethodPost, "/api/log/export/jobs", body)
+	CreateLogExportJob(asAdmin(ctx, userID))
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, "未知的结束原因不该被拒绝: %s", resp.Message)
+	var created struct {
+		JobID string `json:"job_id"`
+	}
+	require.NoError(t, common.Unmarshal(resp.Data, &created))
+	cleanupExportJob(t, created.JobID)
+}
+
+// 数值条件里 0 是有意义的取值（quota_max=0 = 只看零费用的行），
+// 必须真的传到筛选条件里，不能被当成「未设置」丢掉（Rule 5）。
+func TestCreateLogExportJob_ZeroValuedNumericFilterIsPreserved(t *testing.T) {
+	enableRedis(t)
+	model.RecoverStaleLogExportJobs()
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.Enabled = true
+		// 孤儿槽位与上一轮进程留下的冷却键都不该让这条用例失败。
+		s.MaxConcurrentJobs = 20
+		s.TimeoutSec = 30
+	})
+
+	userID := nextTestID()
+	model.ClearLogExportCooldown(userID)
+	t.Cleanup(func() { model.ClearLogExportCooldown(userID) })
+
+	body := validExportJobBody()
+	body["quota_max"] = 0
+	ctx, rec := newCtx(t, http.MethodPost, "/api/log/export/jobs", body)
+	CreateLogExportJob(asAdmin(ctx, userID))
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+
+	var created struct {
+		JobID string `json:"job_id"`
+	}
+	require.NoError(t, common.Unmarshal(resp.Data, &created))
+	require.NotEmpty(t, created.JobID)
+	cleanupExportJob(t, created.JobID)
+
+	job, err := model.GetLogExportJob(created.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	require.NotNil(t, job.Filters.QuotaMax, "显式传入的 0 必须保留为非 nil 指针")
+	assert.Equal(t, 0, *job.Filters.QuotaMax)
+	assert.Nil(t, job.Filters.QuotaMin, "未传的条件仍应为 nil")
+}
+
+// 列目录要把受众、异常种类、聚合维度一并下发——前端据此渲染，
+// 硬编码一份必然与后端漂移。
+func TestGetLogExportColumns_ExposesAudienceAndFilterVocabulary(t *testing.T) {
+	ctx, rec := newCtx(t, http.MethodGet, "/api/log/export/columns", nil)
+	GetLogExportColumns(asAdmin(ctx, nextTestID()))
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success)
+
+	var data map[string]any
+	require.NoError(t, common.Unmarshal(resp.Data, &data))
+	require.NotEmpty(t, data["anomaly_kinds"])
+	require.NotEmpty(t, data["summary_dimensions"])
+	assert.NotNil(t, data["max_filter_values"])
+
+	columns, ok := data["columns"].([]any)
+	require.True(t, ok)
+	audiences := map[string]bool{}
+	for _, raw := range columns {
+		col, ok := raw.(map[string]any)
+		require.True(t, ok)
+		audience, _ := col["audience"].(string)
+		require.Contains(t, []string{"internal", "customer"}, audience,
+			"列 %v 的受众取值非法", col["key"])
+		audiences[audience] = true
+	}
+	assert.True(t, audiences["customer"], "必须有可发给客户的列")
+	assert.True(t, audiences["internal"], "必须有仅内部的列")
+
+	templates, ok := data["builtin_templates"].([]any)
+	require.True(t, ok)
+	var customerTemplates int
+	for _, raw := range templates {
+		tpl, _ := raw.(map[string]any)
+		require.NotEmpty(t, tpl["purpose"], "模板 %v 缺少用途", tpl["id"])
+		if tpl["audience"] == "customer" {
+			customerTemplates++
+		}
+	}
+	assert.Equal(t, 1, customerTemplates, "只应有「客户对账单」一个面向客户的模板")
+}
+
+// 「明细 + 汇总」模式下两种分片同在一个压缩包里，下载文件名必须能区分，
+// 否则拿到包的人得逐个解开才知道哪个是明细、哪个是汇总。
+func TestLogExportPartFileName_DistinguishesSummary(t *testing.T) {
+	job := &model.LogExportJob{
+		CreatedAt: time.Date(2026, 9, 20, 15, 30, 27, 0, time.Local).Unix(),
+		Format:    model.LogExportFormatCSVGz,
+	}
+	detail := logExportPartFileName(job, &model.LogExportPart{Index: 1})
+	summary := logExportPartFileName(job, &model.LogExportPart{
+		Index: 2, Kind: model.LogExportPartKindSummary,
+	})
+	assert.Contains(t, detail, "-part-0001.csv.gz")
+	assert.Contains(t, summary, "-summary-0002.csv.gz")
+	assert.NotEqual(t, detail, summary)
+
+	// 空 Kind 按明细处理，升级前创建的任务文件名不变。
+	legacy := logExportPartFileName(job, &model.LogExportPart{Index: 1, Kind: ""})
+	assert.Equal(t, detail, legacy)
+
+	job.Format = model.LogExportFormatXlsx
+	assert.Contains(t, logExportPartFileName(job, &model.LogExportPart{
+		Index: 3, Kind: model.LogExportPartKindSummary,
+	}), "-summary-0003.xlsx")
+}
+
+// mode=both 必须带着聚合维度落库。
+//
+// 这条用例对应一个真实发生的缺陷：前端校验改成了「非明细模式都要有维度」，
+// 但组装请求体那行仍是「只有纯汇总才发维度」，于是 both 模式带着空维度提交，
+// 前端校验通过、后端却回「请至少选择一个聚合维度」。后端这侧必须把两种模式
+// 一视同仁地校验并保存，才能在前端再犯同类错误时立刻暴露。
+func TestCreateLogExportJob_BothModeRequiresAndKeepsDimensions(t *testing.T) {
+	enableRedis(t)
+	model.RecoverStaleLogExportJobs()
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.Enabled = true
+		s.MaxConcurrentJobs = 20
+		s.TimeoutSec = 30
+	})
+
+	// 缺维度必须被拒——与纯汇总模式同样对待。
+	body := validExportJobBody()
+	body["mode"] = "both"
+	ctx, rec := newCtx(t, http.MethodPost, "/api/log/export/jobs", body)
+	CreateLogExportJob(asAdmin(ctx, nextTestID()))
+	require.False(t, decodeResp(t, rec).Success, "both 模式缺维度必须被拒绝")
+
+	// 带了维度就要原样存进任务，且 Mode 保持 both（不能被写成 summary）。
+	userID := nextTestID()
+	model.ClearLogExportCooldown(userID)
+	t.Cleanup(func() { model.ClearLogExportCooldown(userID) })
+
+	body = validExportJobBody()
+	body["mode"] = "both"
+	body["summary_dims"] = []string{"model_name", "date"}
+	ctx, rec = newCtx(t, http.MethodPost, "/api/log/export/jobs", body)
+	CreateLogExportJob(asAdmin(ctx, userID))
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, resp.Message)
+
+	var created struct {
+		JobID string `json:"job_id"`
+	}
+	require.NoError(t, common.Unmarshal(resp.Data, &created))
+	cleanupExportJob(t, created.JobID)
+
+	job, err := model.GetLogExportJob(created.JobID)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	assert.Equal(t, model.LogExportModeBoth, job.Mode, "Mode 必须保持 both")
+	assert.Equal(t, []string{"date", "model_name"}, job.SummaryDims, "维度按固定顺序规整后保存")
+	assert.NotEmpty(t, job.Columns, "both 模式同时需要明细列")
+}
+
+// 估算必须把能下推 SQL 的数值条件算进去。
+//
+// 否则设了「最多输出 tokens = 0」（实际只会导出个位数行），弹窗却笃定地
+// 报出整段时间范围的行数，管理员据此判断 xlsx 可行性会被彻底误导。
+func TestGetLogExportEstimate_HonoursNumericFilters(t *testing.T) {
+	requireLogDB(t)
+	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
+		s.AdminMaxRangeSec = 86400
+		s.XlsxMaxRows = 1000
+	})
+
+	username := uniq("est_num")
+	base := time.Now().Unix() - 3600
+	// 3 条有输出，1 条输出为 0 且计费。
+	for i := 0; i < 3; i++ {
+		i := i
+		mkCtrlExportLog(t, func(l *model.Log) {
+			l.Username = username
+			l.CreatedAt = base + int64(i)
+			l.CompletionTokens = 20
+			l.Quota = 100
+		})
+	}
+	mkCtrlExportLog(t, func(l *model.Log) {
+		l.Username = username
+		l.CreatedAt = base + 5
+		l.CompletionTokens = 0
+		l.Quota = 100
+	})
+
+	estimate := func(extra string) int64 {
+		target := fmt.Sprintf(
+			"/api/log/export/estimate?start_timestamp=%d&end_timestamp=%d&username=%s%s",
+			base-10, base+100, username, extra)
+		ctx, rec := newCtx(t, http.MethodGet, target, nil)
+		GetLogExportEstimate(asAdmin(ctx, nextTestID()))
+		resp := decodeResp(t, rec)
+		require.True(t, resp.Success, resp.Message)
+		var data struct {
+			Rows int64 `json:"rows"`
+		}
+		require.NoError(t, common.Unmarshal(resp.Data, &data))
+		return data.Rows
+	}
+
+	assert.EqualValues(t, 4, estimate(""), "无数值条件时计入全部")
+	assert.EqualValues(t, 1, estimate("&completion_tokens_max=0"),
+		"completion_tokens_max=0 必须参与估算，且 0 不能被当成未设置")
+	assert.EqualValues(t, 1, estimate("&completion_tokens_max=0&charged=true"),
+		"charged 同样要参与估算")
+	assert.EqualValues(t, 0, estimate("&charged=false"), "全部都计费了，未计费应为 0")
 }

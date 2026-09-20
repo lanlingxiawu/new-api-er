@@ -32,6 +32,7 @@ const GROUP_LABELS: Record<ExportColumnGroup, string> = {
   tokens: 'Tokens',
   billing: 'Billing',
   performance: 'Performance',
+  diagnostic: 'Diagnostics',
   admin: 'Channel & Routing',
   audit: 'Audit',
 }
@@ -41,6 +42,7 @@ const GROUP_ORDER: ExportColumnGroup[] = [
   'tokens',
   'billing',
   'performance',
+  'diagnostic',
   'admin',
   'audit',
 ]
@@ -139,7 +141,20 @@ export function ColumnPicker({
                       className='hover:bg-accent flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50'
                     >
                       <span className='truncate'>{t(col.label)}</span>
-                      <Plus className='text-muted-foreground size-3.5 shrink-0' />
+                      <span className='flex shrink-0 items-center gap-1.5'>
+                        {/*
+                          Internal columns are flagged, not blocked: an admin
+                          exporting for their own investigation has every right
+                          to them. The badge only has to make "do not forward
+                          this file to the customer" impossible to miss.
+                        */}
+                        {col.audience === 'internal' && (
+                          <Badge variant='outline' className='px-1 py-0 text-[10px]'>
+                            {t('Internal')}
+                          </Badge>
+                        )}
+                        <Plus className='text-muted-foreground size-3.5' />
+                      </span>
                     </button>
                   ))}
                 </div>

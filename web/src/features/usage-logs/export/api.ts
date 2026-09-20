@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 
 import type {
   ExportColumnCatalog,
+  NumericFilters,
   ExportJob,
   ExportTemplate,
   CreateExportJobRequest,
@@ -108,10 +109,23 @@ export async function getExportEstimate(params: {
   token_name?: string
   channel?: number
   group?: string
-}): Promise<{ rows: number; capped: boolean; available: boolean }> {
+  /**
+   * Row-level (anomaly) filters cannot be counted here, so the server flags the
+   * result as an upper bound rather than a prediction.
+   */
+  has_row_filter?: boolean
+  // 数值条件能下推 SQL，必须一并参与估算，否则设了「最多输出 tokens=0」
+  // 只会导出几行，弹窗却笃定地报出全时段的行数。
+} & NumericFilters): Promise<{
+  rows: number
+  capped: boolean
+  available: boolean
+  upper_bound: boolean
+}> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === '') continue
+    // null 必须一起挡掉：数值条件清空后是 null，漏判会把字符串 "null" 发上去。
+    if (value === undefined || value === null || value === '') continue
     query.set(key, String(value))
   }
   const res = await api.get(`${BASE}/estimate?${query.toString()}`, {
@@ -123,8 +137,16 @@ export async function getExportEstimate(params: {
     rows: number
     capped: boolean
     available: boolean
+    upper_bound: boolean
   }>
-  if (!body.success) return { rows: 0, capped: false, available: false }
+  if (!body.success) {
+    return {
+      rows: 0,
+      capped: false,
+      available: false,
+      upper_bound: Boolean(params.has_row_filter),
+    }
+  }
   return body.data
 }
 

@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +11,9 @@ import (
 )
 
 // LogExportFilter 导出的筛选条件，字段语义与使用日志列表接口完全一致。
+//
+// 新增字段一律 omitempty：任务状态整体序列化进 Redis，升级前创建的任务反序列化后
+// 新字段为零值/nil，行为与升级前完全一致。
 type LogExportFilter struct {
 	LogType        int    `json:"type"`
 	StartTimestamp int64  `json:"start_timestamp"`
@@ -21,6 +25,76 @@ type LogExportFilter struct {
 	Group          string `json:"group"`
 	// UserId > 0 时只导出该用户的日志。
 	UserId int `json:"user_id"`
+
+	// ── 数值条件：logs 表真实列，直接下推 SQL ──────────────────
+	// 一律用指针：0 是有意义的取值（quota_max=0 就是「只看零费用的行」），
+	// 非指针 + omitempty 会把它静默丢掉（Rule 5）。
+
+	// Charged 是否产生了费用。quota 是整数额度列，「计费了」在系统里就是 quota > 0。
+	//
+	// 用 QuotaMin=1 也能表达同一件事，但那要求使用者先知道 quota 存的是整数额度、
+	// 而不是界面上那一栏美元（1 额度 = 1/QuotaPerUnit 美元，本站默认 $0.000002）。
+	// 拿美元数字去填额度阈值会差出五个数量级，所以这里给出不需要换算的写法。
+	Charged             *bool `json:"charged,omitempty"`
+	QuotaMin            *int  `json:"quota_min,omitempty"`
+	QuotaMax            *int  `json:"quota_max,omitempty"`
+	PromptTokensMin     *int  `json:"prompt_tokens_min,omitempty"`
+	PromptTokensMax     *int  `json:"prompt_tokens_max,omitempty"`
+	CompletionTokensMin *int  `json:"completion_tokens_min,omitempty"`
+	// CompletionTokensMax 配合 QuotaMin 才能表达「输出为 0 却计费」这类问题：
+	// 只有下限就写不出「等于 0」。
+	CompletionTokensMax *int  `json:"completion_tokens_max,omitempty"`
+	UseTimeMin          *int  `json:"use_time_min,omitempty"`
+	UseTimeMax          *int  `json:"use_time_max,omitempty"`
+	IsStream            *bool `json:"is_stream,omitempty"`
+
+	// ── other 条件：无索引可走，在扫描管线里逐行判定 ────────────
+	// AnomalyKinds 命中任一即保留；为空但 AnomalyOnly=true 时表示「任意异常」。
+	AnomalyKinds    []string `json:"anomaly_kinds,omitempty"`
+	AnomalyOnly     bool     `json:"anomaly_only,omitempty"`
+	UsageSource     []string `json:"usage_source,omitempty"`
+	StreamEndReason []string `json:"stream_end_reason,omitempty"`
+	SettlementState []string `json:"settlement_state,omitempty"`
+	MinRetryCount   *int     `json:"min_retry_count,omitempty"`
+}
+
+// HasRowFilter 是否存在需要逐行判定的条件。为真时扫描必须取 other 并解析 JSON，
+// 即使用户选的列一个都不依赖它。
+func (f LogExportFilter) HasRowFilter() bool {
+	return f.AnomalyOnly || len(f.AnomalyKinds) > 0 || len(f.UsageSource) > 0 ||
+		len(f.StreamEndReason) > 0 || len(f.SettlementState) > 0 || f.MinRetryCount != nil
+}
+
+// matchesRow 判定一行是否满足全部 other 条件。多个条件之间是 AND；
+// 单个条件内部的多个取值之间是 OR。
+func (f LogExportFilter) matchesRow(l *Log, ctx *rowCtx) bool {
+	if f.AnomalyOnly || len(f.AnomalyKinds) > 0 {
+		if !logExportRowMatchesAnomaly(l, ctx, f.AnomalyKinds) {
+			return false
+		}
+	}
+	if len(f.UsageSource) > 0 {
+		if !slices.Contains(f.UsageSource, otherValue(ctx.streamResult(l), "usage_source")) {
+			return false
+		}
+	}
+	if len(f.SettlementState) > 0 {
+		if !slices.Contains(f.SettlementState, otherValue(ctx.streamResult(l), "settlement_state")) {
+			return false
+		}
+	}
+	if len(f.StreamEndReason) > 0 {
+		if !slices.Contains(f.StreamEndReason, otherValue(ctx.streamStatus(l), "end_reason")) {
+			return false
+		}
+	}
+	if f.MinRetryCount != nil {
+		chain, _ := ctx.adminInfo(l)["use_channel"].([]any)
+		if len(chain) < *f.MinRetryCount {
+			return false
+		}
+	}
+	return true
 }
 
 // logExportCursor 是 keyset 游标。SQL 库用 (created_at, id)，ClickHouse 用
@@ -59,6 +133,45 @@ func applyLogExportFilter(tx *gorm.DB, filter LogExportFilter) (*gorm.DB, error)
 	}
 	if filter.UserId > 0 {
 		tx = tx.Where("logs.user_id = ?", filter.UserId)
+	}
+
+	// 数值条件下推 SQL：它们是 logs 表真实列，加在已有的时间窗口 range scan 之上
+	// 只是多一个过滤谓词，不增加扫描量，还能减少返回的行数。
+	// 刻意不为它们建索引——永远与时间窗口同时出现，而 logs 是关系链路的写入目标，
+	// 多一个索引就是多一份写入放大。
+	if filter.Charged != nil {
+		if *filter.Charged {
+			tx = tx.Where("logs.quota > 0")
+		} else {
+			tx = tx.Where("logs.quota <= 0")
+		}
+	}
+	if filter.QuotaMin != nil {
+		tx = tx.Where("logs.quota >= ?", *filter.QuotaMin)
+	}
+	if filter.QuotaMax != nil {
+		tx = tx.Where("logs.quota <= ?", *filter.QuotaMax)
+	}
+	if filter.PromptTokensMin != nil {
+		tx = tx.Where("logs.prompt_tokens >= ?", *filter.PromptTokensMin)
+	}
+	if filter.CompletionTokensMin != nil {
+		tx = tx.Where("logs.completion_tokens >= ?", *filter.CompletionTokensMin)
+	}
+	if filter.CompletionTokensMax != nil {
+		tx = tx.Where("logs.completion_tokens <= ?", *filter.CompletionTokensMax)
+	}
+	if filter.PromptTokensMax != nil {
+		tx = tx.Where("logs.prompt_tokens <= ?", *filter.PromptTokensMax)
+	}
+	if filter.UseTimeMin != nil {
+		tx = tx.Where("logs.use_time >= ?", *filter.UseTimeMin)
+	}
+	if filter.UseTimeMax != nil {
+		tx = tx.Where("logs.use_time <= ?", *filter.UseTimeMax)
+	}
+	if filter.IsStream != nil {
+		tx = tx.Where("logs.is_stream = ?", *filter.IsStream)
 	}
 	return tx, nil
 }

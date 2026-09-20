@@ -46,7 +46,7 @@ import {
 
 import { deleteExportJob, downloadExportPart, getExportJobs } from './api'
 import { NewExportSheet, type NewExportPrefill } from './components/new-export-sheet'
-import type { ExportJob, ExportJobStatus } from './types'
+import type { AnomalyFilters, ExportJob, ExportJobStatus } from './types'
 
 /** Stable backend error codes → user-facing copy. Raw Go errors never reach the UI. */
 const ERROR_MESSAGES: Record<string, string> = {
@@ -54,7 +54,10 @@ const ERROR_MESSAGES: Record<string, string> = {
     'Not enough server storage for this export. Please free up space or narrow the range.',
   too_many_parts:
     'Too much data for one export. Please narrow the time range and try again.',
-  timeout: 'The export took too long and was stopped. Try a smaller time range.',
+  timeout:
+    'The export took too long and was stopped. Anomaly filters still scan the whole time range, so try a shorter one.',
+  too_many_groups:
+    'Too many dimension combinations. Please use fewer dimensions or a shorter time range.',
   internal: 'Export failed. Please try again or contact an administrator.',
 }
 
@@ -124,6 +127,22 @@ export function LogExportCenter() {
   // 从使用日志页「高级导出」跳转过来时，URL 上带着当时的筛选条件，
   // 用它预填新建表单，用户不必再填一遍。
   const search = route.useSearch()
+
+  // 「查同类」的三项特征都为空时返回 undefined，让下面照常走普通预填。
+  const anomalyPrefill = useMemo<AnomalyFilters | undefined>(() => {
+    const filters: AnomalyFilters = {}
+    if (search.anomalyUsageSource) {
+      filters.usage_source = [search.anomalyUsageSource]
+    }
+    if (search.anomalyEndReason) {
+      filters.stream_end_reason = [search.anomalyEndReason]
+    }
+    if (search.anomalyMinRetry) {
+      filters.min_retry_count = search.anomalyMinRetry
+    }
+    return Object.keys(filters).length ? filters : undefined
+  }, [search.anomalyUsageSource, search.anomalyEndReason, search.anomalyMinRetry])
+
   const prefill = useMemo<NewExportPrefill>(
     () => ({
       start: toDate(search.startTime),
@@ -134,8 +153,11 @@ export function LogExportCenter() {
       token: search.token || undefined,
       channel: search.channel || undefined,
       group: search.group || undefined,
+      // 「查同类」跳转：带着该行可观察的特征进来，直接落进异常排查模板。
+      anomaly: anomalyPrefill,
+      templateId: anomalyPrefill ? 'builtin:anomaly' : undefined,
     }),
-    [search]
+    [search, anomalyPrefill]
   )
 
   const { data, isLoading, isFetching, refetch, error } = useQuery({
@@ -257,6 +279,20 @@ export function LogExportCenter() {
                   </TableCell>
                   <TableCell className='text-right font-mono text-xs tabular-nums'>
                     {job.row_count.toLocaleString()}
+                    {/*
+                      With an anomaly filter, a job can scan a million rows and
+                      write three hundred. Showing only the written count makes
+                      a long-running job look broken, so the scanned count sits
+                      right underneath it.
+                    */}
+                    {job.scanned_rows != null &&
+                      job.scanned_rows > job.row_count && (
+                        <div className='text-muted-foreground'>
+                          {t('of {{scanned}} scanned', {
+                            scanned: job.scanned_rows.toLocaleString(),
+                          })}
+                        </div>
+                      )}
                     {job.bytes_out > 0 && (
                       <div className='text-muted-foreground'>
                         {formatBytes(job.bytes_out)}
@@ -332,13 +368,24 @@ export function LogExportCenter() {
                               >
                                 <div className='flex flex-col'>
                                   <span>
-                                    {t('Part {{index}}', { index: part.index })} ·{' '}
-                                    {part.rows.toLocaleString()} {t('rows')}
+                                    {part.kind === 'summary'
+                                      ? t('Summary file')
+                                      : t('Part {{index}}', {
+                                          index: part.index,
+                                        })}{' '}
+                                    · {part.rows.toLocaleString()} {t('rows')}
                                   </span>
                                   <span className='text-muted-foreground text-[11px]'>
-                                    {dayjs.unix(part.start_time).format('MM-DD HH:mm')}
-                                    {' – '}
-                                    {dayjs.unix(part.end_time).format('MM-DD HH:mm')}
+                                    {/* 汇总覆盖整个导出范围，逐行时间跨度对它没有意义；
+                                        与明细分片并排显示同一种时间格式只会让人以为
+                                        它漏了数据或范围搞错了。 */}
+                                    {part.kind === 'summary'
+                                      ? t('Aggregated over the whole range')
+                                      : `${dayjs
+                                          .unix(part.start_time)
+                                          .format('MM-DD HH:mm')} – ${dayjs
+                                          .unix(part.end_time)
+                                          .format('MM-DD HH:mm')}`}
                                     {' · '}
                                     {formatBytes(part.bytes)}
                                   </span>

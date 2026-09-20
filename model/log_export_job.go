@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,9 +41,16 @@ const (
 
 const logExportRedisOpTimeout = 3 * time.Second
 
+// logExportWindowShrinkBatches 一个扫描窗口用掉这么多批次就把下个窗口宽度减半。
+// 取 4 而不是 2：偶尔用满两三批属于正常波动，减半太敏感会让宽度在两个值之间反复横跳。
+const logExportWindowShrinkBatches = 4
+
 // LogExportPart 一个分片文件。
 type LogExportPart struct {
 	Index int `json:"index"`
+	// Kind "detail"（默认，向后兼容空值）或 "summary"。
+	// 「明细 + 汇总」模式下一次任务同时产出两种分片，下载时要能分得清哪个是哪个。
+	Kind string `json:"kind,omitempty"`
 	// Path 服务端绝对路径。必须参与序列化——任务状态存在 Redis 里，重新载入后
 	// 还要靠它定位文件；下发前端前用 PublicView 抹掉。
 	Path      string `json:"path,omitempty"`
@@ -50,6 +59,12 @@ type LogExportPart struct {
 	StartTime int64  `json:"start_time"`
 	EndTime   int64  `json:"end_time"`
 }
+
+// 分片种类。空值按 detail 处理，保证升级前创建的任务行为不变。
+const (
+	LogExportPartKindDetail  = "detail"
+	LogExportPartKindSummary = "summary"
+)
 
 // LogExportOptions 导出的呈现选项。
 type LogExportOptions struct {
@@ -65,16 +80,25 @@ type LogExportJob struct {
 	Username string `json:"username"`
 	Status   string `json:"status"`
 	// Progress 0-100，按时间轴推进，不做 COUNT。
-	Progress int    `json:"progress"`
-	RowCount int64  `json:"row_count"`
-	BytesOut int64  `json:"bytes_out"`
-	Format   string `json:"format"`
+	Progress int `json:"progress"`
+	// RowCount 实际写进文件的行数。带行级筛选时它远小于扫描量。
+	RowCount int64 `json:"row_count"`
+	// ScannedRows 扫描过的行数。没有它，管理员看到「跑了 8 分钟只出 340 行」
+	// 会以为出了故障——而那正是异常筛选该有的样子。
+	ScannedRows int64  `json:"scanned_rows,omitempty"`
+	BytesOut    int64  `json:"bytes_out"`
+	Format      string `json:"format"`
 	// FormatDowngraded 结果超出 xlsx 行数上限而自动降级为 csv.gz。
-	FormatDowngraded bool             `json:"format_downgraded"`
-	Columns          []string         `json:"columns"`
-	Filters          LogExportFilter  `json:"filters"`
-	Options          LogExportOptions `json:"options"`
-	Lang             string           `json:"lang"`
+	FormatDowngraded bool            `json:"format_downgraded"`
+	Columns          []string        `json:"columns"`
+	Filters          LogExportFilter `json:"filters"`
+	// Mode "detail"（默认，向后兼容空值）或 "summary"。
+	// summary 模式忽略 Columns，改按 SummaryDims 聚合。
+	Mode string `json:"mode,omitempty"`
+	// SummaryDims 聚合维度，仅 summary 模式有效。
+	SummaryDims []string         `json:"summary_dims,omitempty"`
+	Options     LogExportOptions `json:"options"`
+	Lang        string           `json:"lang"`
 	// NodeName 执行该任务的节点（common.NodeName）。任务状态存共享 Redis、
 	// 分片文件却写在执行节点本地，重启回收必须只认自己的任务，否则一个节点重启
 	// 会把另一个节点正在跑的导出标记为失败并删掉分片。
@@ -467,6 +491,11 @@ func RecoverStaleLogExportJobs() {
 		job.FinishedAt = time.Now().Unix()
 		UpdateLogExportJob(job)
 		RemoveLogExportJobFiles(job)
+		// 必须连槽位一起释放。槽位由执行 goroutine 的 defer 释放，而进程被杀时
+		// 那个 defer 根本没机会跑，槽位会一直占到 TTL（默认等于 timeout_sec，2 小时）。
+		// max_concurrent_jobs 默认是 1 —— 少了这一行，一次重启就能让导出功能
+		// 瘫痪两个小时，且日志里看不出任何原因，只会回「已有导出正在运行」。
+		ReleaseLogExportSlot(job.JobID)
 	}
 	CleanupOrphanLogExportFiles()
 }
@@ -568,15 +597,41 @@ func logExportErrorCode(err error) string {
 		return "too_many_parts"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
+	case errors.Is(err, ErrLogSummaryTooManyGroups):
+		return "too_many_groups"
 	default:
 		common.SysError("log export: job failed: " + err.Error())
 		return "internal"
 	}
 }
 
+// 导出模式。
+const (
+	LogExportModeDetail  = "detail"
+	LogExportModeSummary = "summary"
+	// LogExportModeBoth 一次扫描同时产出明细与汇总。
+	// 分两次导出会把同一段日志扫两遍——对大表来说这是最贵的一步。
+	LogExportModeBoth = "both"
+)
+
+// IsSummary 报告任务是否**只**产出聚合汇总。空值按 detail 处理，
+// 保证升级前创建的任务行为不变。
+func (j *LogExportJob) IsSummary() bool { return j.Mode == LogExportModeSummary }
+
+// NeedsSummary 是否需要聚合累加（纯汇总或明细+汇总）。
+func (j *LogExportJob) NeedsSummary() bool {
+	return j.Mode == LogExportModeSummary || j.Mode == LogExportModeBoth
+}
+
 // writeLogExport 执行一次完整导出：按时间窗口倒序扫描，逐批写入分片文件。
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	setting := operation_setting.GetLogExportSetting()
+
+	// 聚合导出复用同一套扫描循环（限速、CPU 闸门、超时、取消全部原样生效），
+	// 只把「逐行写文件」换成「逐行累加，扫完一次性写出」。
+	if job.IsSummary() {
+		return writeLogExportSummary(ctx, job)
+	}
 
 	columnSet, err := ResolveLogExportColumns(job.Columns, true)
 	if err != nil {
@@ -608,9 +663,13 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	}
 
 	fields := columnSet.SelectFields()
-	gate := newExportGate()
-
-	exportStart := job.Filters.StartTimestamp
+	// 行级条件要读 other，即使勾选的列一个都不依赖它。other 是行宽的大头，
+	// 这会明显抬高单批的传输与解析开销——代价在新建导出时已向管理员说明。
+	rowFilter := job.Filters.HasRowFilter()
+	if rowFilter && !slices.Contains(fields, "other") {
+		fields = append(fields, "other")
+		sort.Strings(fields)
+	}
 	exportEnd := job.Filters.EndTimestamp
 
 	// 第一个分片。
@@ -650,120 +709,108 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		return nil
 	}
 
+	// acc 非 nil 表示本次还要顺带产出汇总分片（mode=both）。
+	var acc *logSummaryAccumulator
+	if job.NeedsSummary() {
+		var accErr error
+		acc, accErr = newLogSummaryAccumulator(job.SummaryDims, loc, GetLogSummaryMaxGroups())
+		if accErr != nil {
+			return accErr
+		}
+	}
 	rowBuf := make([]string, len(columnSet.Columns))
-	lastSaved := time.Now()
 	xlsxMaxRows := int64(setting.GetXlsxMaxRows())
 
-	// 超时预算按实际工作时间计：总耗时减去闸门让出的时间。
-	// timeout_sec 在任务启动时读一次并固化，改配置不影响运行中的任务（见 §8.1）。
-	startedAt := time.Now()
-	timeout := time.Duration(setting.GetTimeoutSec()) * time.Second
-	exceededBudget := func(throttledMs int64) bool {
-		worked := time.Since(startedAt) - time.Duration(throttledMs)*time.Millisecond
-		return worked > timeout
-	}
-
-	// 窗口是闭区间 [windowStart, windowEnd]，所以下一个窗口必须从 windowStart-1 收尾，
-	// 否则边界那一秒会被相邻两个窗口各扫一次——每个窗口的游标是独立重置的，
-	// 重复扫到的行会真的写进文件。时间戳是整秒，减 1 既不重叠也不留缝。
-	windowEnd := exportEnd
-	for windowEnd >= exportStart {
-		windowStart := windowEnd - operation_setting.GetLogExportSetting().GetWindowSec() + 1
-		if windowStart < exportStart {
-			windowStart = exportStart
-		}
-		var cursor *logExportCursor
-		for {
-			if err := ctx.Err(); err != nil {
-				return err
+	scanner := newLogExportScanner(job, fields, columnSet.NeedChannelName, rctx)
+	err = scanner.run(ctx, func(logs []*Log) error {
+		for _, l := range logs {
+			// 行级条件在这里判定。other 的解析缓存按行归属失效（见 rowCtx.otherMap），
+			// 所以先判定、后渲染只会解析一次。
+			if rowFilter && !job.Filters.matchesRow(l, rctx) {
+				continue
 			}
-			if isLogExportJobCanceled(job.JobID) {
-				return context.Canceled
+			if job.Format == LogExportFormatXlsx && job.RowCount >= xlsxMaxRows {
+				return errXlsxRowLimit
 			}
-
-			batchSize := operation_setting.GetLogExportSetting().GetBatchSize()
-			gate.Wait(ctx, batchSize)
-			job.ThrottledMs = gate.ThrottledMs()
-			if exceededBudget(job.ThrottledMs) {
-				return context.DeadlineExceeded
-			}
-
-			queryCtx, queryCancel := context.WithTimeout(ctx,
-				logExportQueryTimeout(operation_setting.GetLogExportSetting().GetBatchQueryTimeoutSec()))
-			started := time.Now()
-			logs, err := scanLogExportBatch(queryCtx, job.Filters, fields, windowStart, windowEnd, cursor, batchSize)
-			queryCancel()
-			if err != nil {
-				return err
-			}
-			gate.Observe(time.Since(started))
-
-			if columnSet.NeedChannelName {
-				fillLogExportChannelNames(ctx, logs, rctx.channelNames)
-			}
-
-			for _, l := range logs {
-				if job.Format == LogExportFormatXlsx && job.RowCount >= xlsxMaxRows {
-					return errXlsxRowLimit
-				}
-				rowsPerFile := int64(operation_setting.GetLogExportSetting().GetRowsPerFile())
-				if partRows >= rowsPerFile {
-					if err := closePart(); err != nil {
-						return err
-					}
-					if len(job.Parts) >= operation_setting.GetLogExportSetting().GetMaxParts() {
-						return ErrLogExportTooManyParts
-					}
-					// 每个分片写完复检磁盘，避免把磁盘写满拖垮整个服务。
-					if err := CheckLogExportDiskSpace(); err != nil {
-						return err
-					}
-					nextIndex := len(job.Parts) + 1
-					partPath = LogExportPartFilePath(job.JobID, nextIndex, job.Format)
-					// 压缩等级在此刻现取：改动只对新分片生效，不影响已打开的文件。
-					writerOpts.GzipLevel = operation_setting.GetLogExportSetting().GetGzipLevel()
-					writer, err = newLogExportPartWriter(partPath, job.Format, writerOpts)
-					if err != nil {
-						return err
-					}
-					currentPart = LogExportPart{Index: nextIndex, Path: partPath}
-					partRows = 0
-				}
-				if partRows == 0 {
-					currentPart.EndTime = l.CreatedAt
-				}
-				currentPart.StartTime = l.CreatedAt
-
-				rowBuf = columnSet.Render(l, rctx, rowBuf)
-				if err := writer.WriteRow(rowBuf); err != nil {
+			rowsPerFile := int64(operation_setting.GetLogExportSetting().GetRowsPerFile())
+			if partRows >= rowsPerFile {
+				if err := closePart(); err != nil {
 					return err
 				}
-				partRows++
-				job.RowCount++
+				if len(job.Parts) >= operation_setting.GetLogExportSetting().GetMaxParts() {
+					return ErrLogExportTooManyParts
+				}
+				// 每个分片写完复检磁盘，避免把磁盘写满拖垮整个服务。
+				if err := CheckLogExportDiskSpace(); err != nil {
+					return err
+				}
+				nextIndex := len(job.Parts) + 1
+				partPath = LogExportPartFilePath(job.JobID, nextIndex, job.Format)
+				// 压缩等级在此刻现取：改动只对新分片生效，不影响已打开的文件。
+				writerOpts.GzipLevel = operation_setting.GetLogExportSetting().GetGzipLevel()
+				var writerErr error
+				writer, writerErr = newLogExportPartWriter(partPath, job.Format, writerOpts)
+				if writerErr != nil {
+					return writerErr
+				}
+				currentPart = LogExportPart{Index: nextIndex, Path: partPath}
+				partRows = 0
 			}
+			if partRows == 0 {
+				currentPart.EndTime = l.CreatedAt
+			}
+			currentPart.StartTime = l.CreatedAt
 
-			if len(logs) > 0 {
-				cursor = nextLogExportCursor(logs)
+			rowBuf = columnSet.Render(l, rctx, rowBuf)
+			if err := writer.WriteRow(rowBuf); err != nil {
+				return err
 			}
-			// 进度取游标当前所在时刻；没有游标（窗口空/已扫完）才退回窗口起点。
-			// 直接用 windowStart 会让进度在窗口刚开始时就跳到窗口末尾，虚报进度。
-			position := windowStart
-			if cursor != nil && cursor.CreatedAt > 0 {
-				position = cursor.CreatedAt
-			}
-			job.Progress = logExportProgress(exportStart, exportEnd, position)
-			if time.Since(lastSaved) >= 500*time.Millisecond {
-				UpdateLogExportJob(job)
-				lastSaved = time.Now()
-			}
-			if len(logs) < batchSize {
-				break
+			partRows++
+			job.RowCount++
+			// 「明细 + 汇总」：同一行既写进明细，也累加进汇总。
+			// 这样两份产出只扫一遍库——分两次导出会把同一段日志扫两遍，
+			// 而扫描正是整条链路上最贵的一步。
+			if acc != nil {
+				if err := acc.Add(l); err != nil {
+					return err
+				}
 			}
 		}
-		windowEnd = windowStart - 1
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	return closePart()
+	if err := closePart(); err != nil {
+		return err
+	}
+	if acc != nil {
+		return appendLogExportSummaryPart(job, acc, rctx.translate)
+	}
+	return nil
+}
+
+// nextLogExportWindowSec 根据刚扫完的窗口的产出，决定下一个窗口的宽度。
+//
+//   - 整个窗口连一批都没读满 → 窗口太窄，翻倍。稀疏时间段里这能把「31 天 744 次
+//     空转往返」迅速收敛到几十次。
+//   - 窗口用掉了很多批 → 数据密集，减半收回，重新把单次索引区间限死。
+//
+// 下限是配置的 window_sec（配置调大时立刻跟上），上限沿用配置层的硬上限，
+// 不另设一套阈值。
+func nextLogExportWindowSec(current, cfgWindowSec int64, windowRows, windowBatches, batchSize int) int64 {
+	if batchSize <= 0 {
+		return current
+	}
+	switch {
+	case windowRows < batchSize:
+		return min(current*2, operation_setting.MaxLogExportWindowSec)
+	case windowBatches >= logExportWindowShrinkBatches:
+		return max(current/2, cfgWindowSec)
+	default:
+		return current
+	}
 }
 
 // logExportProgress 按时间轴推进计算进度，避免对大表做 COUNT。

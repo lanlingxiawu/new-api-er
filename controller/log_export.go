@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,9 @@ type logExportColumnDTO struct {
 	Label     string `json:"label"`
 	Group     string `json:"group"`
 	AdminOnly bool   `json:"admin_only"`
+	// Audience "customer" 表示该列可以出现在发给客户的文件里。
+	// 前端据此在列选择器里给内部列打角标——靠标注提醒，不阻断选择。
+	Audience string `json:"audience"`
 }
 
 // GetLogExportColumns 返回可导出的列目录与内置模板。
@@ -42,6 +46,7 @@ func GetLogExportColumns(c *gin.Context) {
 			Label:     columns[i].Label,
 			Group:     columns[i].Group,
 			AdminOnly: columns[i].AdminOnly,
+			Audience:  columns[i].Audience.String(),
 		})
 	}
 	setting := operation_setting.GetLogExportSetting()
@@ -50,6 +55,15 @@ func GetLogExportColumns(c *gin.Context) {
 		"builtin_templates": model.BuiltinLogExportTemplates(),
 		"default_template":  model.LogExportTemplateAsDisplayed,
 		"max_columns":       model.LogExportMaxColumns,
+		// 异常种类由后端下发而不是前端硬编码：判定规则住在后端，
+		// 前端另写一份迟早会与 logAnomalyFlags 漂移。
+		"anomaly_kinds":     model.LogExportAnomalyKinds(),
+		"max_filter_values": setting.GetMaxFilterValues(),
+		// 聚合汇总可选维度。时间粒度只有「天」——小时会把组合数乘 24。
+		"summary_dimensions": model.LogSummaryDimensions(),
+		// 额度→美元的换算率。quota 是整数额度列，而界面上花费一栏显示的是美元；
+		// 不把换算率下发，数值筛选框的单位就只能靠使用者猜，必然填错数量级。
+		"quota_per_unit": common.QuotaPerUnit,
 		// 下发给前端做可行性判断与预估提示，避免前端硬编码这些阈值。
 		"xlsx_max_rows": setting.GetXlsxMaxRows(),
 		"rows_per_file": setting.GetRowsPerFile(),
@@ -235,6 +249,23 @@ func GetLogExportEstimate(c *gin.Context) {
 		ChannelId:      channel,
 		Group:          c.Query("group"),
 	}
+	// 估算只覆盖能下推 SQL 的条件。行级条件（异常、用量来源等）没有索引可走，
+	// 无法在一次有界计数里算出来，因此带这些条件时估算结果是**上限**而非预测值。
+	// 前端据此把「约 N 行」改成「最多 N 行」——这个方向是保守的：
+	// 可能把实际能用 xlsx 的判成要降级，但绝不会反过来。
+	upperBound := c.Query("has_row_filter") == "true"
+
+	// 数值条件同样下推 SQL，必须计入估算——否则设了「最多输出 tokens=0」
+	// 明明只会导出几行，弹窗却笃定地显示「预计 15 万行」。
+	filter.Charged = queryBool(c, "charged")
+	filter.QuotaMin = queryInt(c, "quota_min")
+	filter.QuotaMax = queryInt(c, "quota_max")
+	filter.PromptTokensMin = queryInt(c, "prompt_tokens_min")
+	filter.PromptTokensMax = queryInt(c, "prompt_tokens_max")
+	filter.CompletionTokensMin = queryInt(c, "completion_tokens_min")
+	filter.CompletionTokensMax = queryInt(c, "completion_tokens_max")
+	filter.UseTimeMin = queryInt(c, "use_time_min")
+	filter.UseTimeMax = queryInt(c, "use_time_max")
 
 	// 数到「xlsx 上限 + 1」就够：再多也只是用来判断超没超限。
 	limit := setting.GetXlsxMaxRows() + 1
@@ -248,10 +279,10 @@ func GetLogExportEstimate(c *gin.Context) {
 	if err != nil {
 		// 估算只影响提示，失败不该挡住导出。
 		common.SysError("log export: estimate failed: " + err.Error())
-		common.ApiSuccess(c, gin.H{"rows": 0, "capped": false, "available": false})
+		common.ApiSuccess(c, gin.H{"rows": 0, "capped": false, "available": false, "upper_bound": upperBound})
 		return
 	}
-	common.ApiSuccess(c, gin.H{"rows": rows, "capped": capped, "available": true})
+	common.ApiSuccess(c, gin.H{"rows": rows, "capped": capped, "available": true, "upper_bound": upperBound})
 }
 
 // ── 任务 ─────────────────────────────────────────────────────────
@@ -270,7 +301,122 @@ type createLogExportJobRequest struct {
 	Format         string                 `json:"format"`
 	EstRows        int64                  `json:"est_rows"`
 	Options        model.LogExportOptions `json:"options"`
+
+	// 数值条件：指针类型，0 是有意义的取值（Rule 5）。
+	Charged             *bool `json:"charged"`
+	QuotaMin            *int  `json:"quota_min"`
+	QuotaMax            *int  `json:"quota_max"`
+	PromptTokensMin     *int  `json:"prompt_tokens_min"`
+	PromptTokensMax     *int  `json:"prompt_tokens_max"`
+	CompletionTokensMin *int  `json:"completion_tokens_min"`
+	CompletionTokensMax *int  `json:"completion_tokens_max"`
+	UseTimeMin          *int  `json:"use_time_min"`
+	UseTimeMax          *int  `json:"use_time_max"`
+	IsStream            *bool `json:"is_stream"`
+
+	// Mode "detail"（默认）或 "summary"；summary 时 Columns 被忽略，按 SummaryDims 聚合。
+	Mode        string   `json:"mode"`
+	SummaryDims []string `json:"summary_dims"`
+
+	// 异常条件。
+	AnomalyOnly     bool     `json:"anomaly_only"`
+	AnomalyKinds    []string `json:"anomaly_kinds"`
+	UsageSource     []string `json:"usage_source"`
+	StreamEndReason []string `json:"stream_end_reason"`
+	SettlementState []string `json:"settlement_state"`
+	MinRetryCount   *int     `json:"min_retry_count"`
 }
+
+// logExportUsageSources 是 stream_result.usage_source 的闭集，可以校验。
+// stream_end_reason / settlement_state 刻意**不校验**——它们随协议演进增加，
+// 白名单只会挡住刚出现的那种异常，而那正是最需要被查出来的。
+var logExportUsageSources = []string{"upstream", "estimated", "mixed", "none"}
+
+// buildLogExportFilter 把请求体翻译成筛选条件，并做取值校验。
+func buildLogExportFilter(req createLogExportJobRequest) (model.LogExportFilter, error) {
+	maxValues := operation_setting.GetLogExportSetting().GetMaxFilterValues()
+	checkList := func(name string, values []string, allowed []string) error {
+		if len(values) > maxValues {
+			return &logExportFilterError{key: i18n.MsgLogExportTooManyFilterValues,
+				args: map[string]any{"Max": maxValues}}
+		}
+		if allowed == nil {
+			return nil
+		}
+		for _, v := range values {
+			if !slices.Contains(allowed, v) {
+				return &logExportFilterError{key: i18n.MsgLogExportInvalidFilterValue,
+					args: map[string]any{"Field": name, "Value": v,
+						"Allowed": strings.Join(allowed, ", ")}}
+			}
+		}
+		return nil
+	}
+	if err := checkList("usage_source", req.UsageSource, logExportUsageSources); err != nil {
+		return model.LogExportFilter{}, err
+	}
+	if err := checkList("stream_end_reason", req.StreamEndReason, nil); err != nil {
+		return model.LogExportFilter{}, err
+	}
+	if err := checkList("settlement_state", req.SettlementState, nil); err != nil {
+		return model.LogExportFilter{}, err
+	}
+	if err := checkList("anomaly_kinds", req.AnomalyKinds, model.LogExportAnomalyKinds()); err != nil {
+		return model.LogExportFilter{}, err
+	}
+	if req.QuotaMin != nil && req.QuotaMax != nil && *req.QuotaMin > *req.QuotaMax {
+		return model.LogExportFilter{}, &logExportFilterError{key: i18n.MsgLogExportRangeMinGtMax}
+	}
+	if req.UseTimeMin != nil && req.UseTimeMax != nil && *req.UseTimeMin > *req.UseTimeMax {
+		return model.LogExportFilter{}, &logExportFilterError{key: i18n.MsgLogExportRangeMinGtMax}
+	}
+	if req.PromptTokensMin != nil && req.PromptTokensMax != nil && *req.PromptTokensMin > *req.PromptTokensMax {
+		return model.LogExportFilter{}, &logExportFilterError{key: i18n.MsgLogExportRangeMinGtMax}
+	}
+	if req.CompletionTokensMin != nil && req.CompletionTokensMax != nil && *req.CompletionTokensMin > *req.CompletionTokensMax {
+		return model.LogExportFilter{}, &logExportFilterError{key: i18n.MsgLogExportRangeMinGtMax}
+	}
+	if req.MinRetryCount != nil && *req.MinRetryCount < 0 {
+		return model.LogExportFilter{}, &logExportFilterError{key: i18n.MsgLogExportInvalidFilterValue,
+			args: map[string]any{"Field": "min_retry_count", "Value": strconv.Itoa(*req.MinRetryCount),
+				"Allowed": ">= 0"}}
+	}
+
+	return model.LogExportFilter{
+		LogType:             req.LogType,
+		StartTimestamp:      req.StartTimestamp,
+		EndTimestamp:        req.EndTimestamp,
+		ModelName:           req.ModelName,
+		Username:            req.Username,
+		TokenName:           req.TokenName,
+		ChannelId:           req.Channel,
+		Group:               req.Group,
+		Charged:             req.Charged,
+		QuotaMin:            req.QuotaMin,
+		QuotaMax:            req.QuotaMax,
+		PromptTokensMin:     req.PromptTokensMin,
+		PromptTokensMax:     req.PromptTokensMax,
+		CompletionTokensMin: req.CompletionTokensMin,
+		CompletionTokensMax: req.CompletionTokensMax,
+		UseTimeMin:          req.UseTimeMin,
+		UseTimeMax:          req.UseTimeMax,
+		IsStream:            req.IsStream,
+		AnomalyOnly:         req.AnomalyOnly,
+		AnomalyKinds:        req.AnomalyKinds,
+		UsageSource:         req.UsageSource,
+		StreamEndReason:     req.StreamEndReason,
+		SettlementState:     req.SettlementState,
+		MinRetryCount:       req.MinRetryCount,
+	}, nil
+}
+
+// logExportFilterError 携带 i18n key 与参数的筛选条件校验错误。
+type logExportFilterError struct {
+	key  string
+	args map[string]any
+}
+
+func (e *logExportFilterError) Error() string { return e.key }
 
 // CreateLogExportJob 创建后台导出任务（管理员）。
 func CreateLogExportJob(c *gin.Context) {
@@ -304,6 +450,29 @@ func CreateLogExportJob(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportRangeTooLong,
 			map[string]any{"Days": maxRange / 86400})
 		return
+	}
+
+	filters, err := buildLogExportFilter(req)
+	if err != nil {
+		var filterErr *logExportFilterError
+		if errors.As(err, &filterErr) {
+			common.ApiErrorI18n(c, filterErr.key, filterErr.args)
+			return
+		}
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	// 聚合模式走维度校验，不解析列集合——两者是互斥的两种产出形态。
+	// 聚合模式（纯汇总或明细+汇总）都要校验维度；both 还会照常解析明细列集。
+	needsSummary := req.Mode == model.LogExportModeSummary || req.Mode == model.LogExportModeBoth
+	var summaryDims []string
+	if needsSummary {
+		summaryDims = model.NormalizeLogSummaryDimensions(req.SummaryDims, true)
+		if len(summaryDims) == 0 {
+			common.ApiErrorI18n(c, i18n.MsgLogExportSummaryNoDimensions)
+			return
+		}
 	}
 
 	columns, format, options, err := resolveLogExportRequestShape(c, req)
@@ -348,16 +517,11 @@ func CreateLogExportJob(c *gin.Context) {
 		Columns:  columns,
 		Options:  options,
 		Lang:     i18n.GetLangFromContext(c),
-		Filters: model.LogExportFilter{
-			LogType:        req.LogType,
-			StartTimestamp: req.StartTimestamp,
-			EndTimestamp:   req.EndTimestamp,
-			ModelName:      req.ModelName,
-			Username:       req.Username,
-			TokenName:      req.TokenName,
-			ChannelId:      req.Channel,
-			Group:          req.Group,
-		},
+		Filters:  filters,
+	}
+	if needsSummary {
+		job.Mode = req.Mode
+		job.SummaryDims = summaryDims
 	}
 	if err := model.CreateLogExportJob(job); err != nil {
 		model.ReleaseLogExportSlot(jobID)
@@ -412,6 +576,40 @@ func logExportFilterScope(filter model.LogExportFilter) string {
 	if filter.ChannelId != 0 {
 		parts = append(parts, "channel="+strconv.Itoa(filter.ChannelId))
 	}
+	// 异常与数值条件同样要留痕：审计记录的价值就是回答「谁导了什么」，
+	// 只记前六个字段的话，最关键的筛选范围恰好是缺的那部分。
+	addInt := func(name string, v *int) {
+		if v != nil {
+			parts = append(parts, name+"="+strconv.Itoa(*v))
+		}
+	}
+	addInt("quota_min", filter.QuotaMin)
+	addInt("quota_max", filter.QuotaMax)
+	addInt("prompt_tokens_min", filter.PromptTokensMin)
+	addInt("completion_tokens_min", filter.CompletionTokensMin)
+	addInt("completion_tokens_max", filter.CompletionTokensMax)
+	addInt("prompt_tokens_max", filter.PromptTokensMax)
+	addInt("use_time_min", filter.UseTimeMin)
+	addInt("use_time_max", filter.UseTimeMax)
+	addInt("min_retry_count", filter.MinRetryCount)
+	if filter.IsStream != nil {
+		parts = append(parts, "is_stream="+strconv.FormatBool(*filter.IsStream))
+	}
+	if filter.Charged != nil {
+		parts = append(parts, "charged="+strconv.FormatBool(*filter.Charged))
+	}
+	if filter.AnomalyOnly {
+		parts = append(parts, "anomaly=any")
+	}
+	addList := func(name string, values []string) {
+		if len(values) > 0 {
+			parts = append(parts, name+"="+strings.Join(values, "|"))
+		}
+	}
+	addList("anomaly", filter.AnomalyKinds)
+	addList("usage_source", filter.UsageSource)
+	addList("stream_end_reason", filter.StreamEndReason)
+	addList("settlement_state", filter.SettlementState)
 	return strings.Join(parts, " ")
 }
 
@@ -475,7 +673,11 @@ func resolveLogExportRequestShape(c *gin.Context, req createLogExportJobRequest)
 		format = model.LogExportFormatCSVGz
 	}
 	// xlsx 只服务小结果集：预估行数超阈值时直接落到 csv.gz，避免白跑一趟再降级。
-	if format == model.LogExportFormatXlsx {
+	//
+	// 聚合模式不参与这个判断：est_rows 估的是**要扫描的日志行数**，而聚合的产出是
+	// 维度组合数——扫 100 万行可能只出 50 行汇总。拿扫描量去否决 xlsx，
+	// 会让所有大范围的汇总导出都拿不到 Excel 文件，而那恰恰是最该给 Excel 的场景。
+	if format == model.LogExportFormatXlsx && req.Mode != model.LogExportModeSummary {
 		if req.EstRows > int64(operation_setting.GetLogExportSetting().GetXlsxMaxRows()) {
 			format = model.LogExportFormatCSVGz
 		}
@@ -706,13 +908,21 @@ func logExportDownloaderAllowed(userID int) bool {
 	return user.Role >= common.RoleAdminUser && user.Status == common.UserStatusEnabled
 }
 
-func logExportPartFileName(job *model.LogExportJob, index int) string {
+// logExportPartFileName 生成下载时呈现给用户的文件名。
+//
+// 汇总分片必须用不同的名字：「明细 + 汇总」模式下两种分片同在一个压缩包里，
+// 全叫 part-000N 的话，拿到文件的人得逐个解开才知道哪个是哪个。
+func logExportPartFileName(job *model.LogExportJob, part *model.LogExportPart) string {
 	ext := ".csv.gz"
 	if job.Format == model.LogExportFormatXlsx {
 		ext = ".xlsx"
 	}
+	kind := "part"
+	if part.Kind == model.LogExportPartKindSummary {
+		kind = "summary"
+	}
 	stamp := time.Unix(job.CreatedAt, 0).Format("20060102-150405")
-	return fmt.Sprintf("log-export-%s-part-%04d%s", stamp, index, ext)
+	return fmt.Sprintf("log-export-%s-%s-%04d%s", stamp, kind, part.Index, ext)
 }
 
 func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {
@@ -734,7 +944,7 @@ func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {
 		return
 	}
 
-	filename := logExportPartFileName(job, index)
+	filename := logExportPartFileName(job, part)
 	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
 	if job.Format == model.LogExportFormatXlsx {
 		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -760,7 +970,7 @@ func serveLogExportZip(c *gin.Context, job *model.LogExportJob) {
 		}
 		// 分片已是 gz/xlsx（内部即 zip），Store 不做二次压缩，省 CPU。
 		w, err := zw.CreateHeader(&zip.FileHeader{
-			Name:   logExportPartFileName(job, part.Index),
+			Name:   logExportPartFileName(job, &part),
 			Method: zip.Store,
 		})
 		if err != nil {
@@ -773,4 +983,28 @@ func serveLogExportZip(c *gin.Context, job *model.LogExportJob) {
 		}
 		_ = f.Close()
 	}
+}
+
+// queryInt 读取可选的整数查询参数。返回 nil 表示「未传」——不能退化成 0，
+// 0 在这些条件里是有意义的取值（quota_max=0 就是「只看零费用的行」）。
+func queryInt(c *gin.Context, key string) *int {
+	raw := c.Query(key)
+	if raw == "" {
+		return nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// queryBool 读取可选的布尔查询参数，语义同 queryInt。
+func queryBool(c *gin.Context, key string) *bool {
+	raw := c.Query(key)
+	if raw == "" {
+		return nil
+	}
+	v := raw == "true" || raw == "1"
+	return &v
 }

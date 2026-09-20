@@ -211,3 +211,15 @@ func (w *xlsxPartWriter) Close() (int64, error) {
 	}
 	return size, nil
 }
+
+// LogExportSummaryPartFilePath 返回聚合汇总分片的路径。
+//
+// 与明细分片用不同的文件名：「明细 + 汇总」模式下两种分片同在一个 zip 里，
+// 拿到文件的人必须一眼能分出哪个是哪个。
+func LogExportSummaryPartFilePath(jobID string, part int, format string) string {
+	ext := ".csv.gz"
+	if format == LogExportFormatXlsx {
+		ext = ".xlsx"
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s%s-summary-%04d%s", logExportFilePrefix, jobID, part, ext))
+}
