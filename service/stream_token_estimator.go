@@ -11,9 +11,11 @@ import (
 // InitStreamReceivedEstimator binds per-attempt estimation without retaining response text.
 // Realtime calls this again after replacing the round session; SDK retries invoke the factory.
 func InitStreamReceivedEstimator(info *relaycommon.RelayInfo) {
-	info.StreamSession.SetReceivedEstimator(func() func(string) int {
+	info.StreamSession.SetReceivedEstimator(func() func(string, int) int {
 		var estimator StreamTokenEstimator
-		return func(text string) int { return estimator.Add(info.UpstreamModelName, text) }
+		return func(text string, media int) int {
+			return estimator.Add(info.UpstreamModelName, text) + estimator.AddMedia(media)
+		}
 	})
 }
 
@@ -100,4 +102,17 @@ func (e *StreamTokenEstimator) Add(model, text string) int {
 	delta := total - e.tokens
 	e.tokens = total
 	return delta
+}
+
+// AddMedia 接收本批原生内联媒体分片数 n，返回本批新增估算 token。
+// 与 Add 共用同一份媒体累计，因此同一张图无论以 data URL 还是 inlineData 形态出现都只计一次；
+// 两种形态按下游协议互斥（转换后走文本通道才有 data URL，原生协议才有 inlineData）。
+func (e *StreamTokenEstimator) AddMedia(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	e.media += n
+	added := n * DataURLMediaTokens
+	e.tokens += added
+	return added
 }

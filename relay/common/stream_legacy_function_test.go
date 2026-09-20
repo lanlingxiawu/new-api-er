@@ -125,7 +125,7 @@ func TestStreamLegacyFunctionDeliveryGate(t *testing.T) {
 			case "flush":
 				underlying = streamFlushFailure{underlying}
 			}
-			w := NewStreamWriter(underlying, s, func(text string) int { return len(text) })
+			w := NewStreamWriter(underlying, s, func(text string, _ int) int { return len(text) })
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, err := w.Write([]byte(frame))
 			require.False(t, s.Snapshot().Effective)

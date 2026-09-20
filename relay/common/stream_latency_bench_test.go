@@ -34,7 +34,7 @@ func BenchmarkStreamEventDelivery(b *testing.B) {
 			}
 			if mode != "disabled" {
 				var estimator service.StreamTokenEstimator
-				c.Writer = relaycommon.NewStreamWriter(c.Writer, s, func(text string) int { return estimator.Add("gpt-4o", text) })
+				c.Writer = relaycommon.NewStreamWriter(c.Writer, s, func(text string, media int) int { return estimator.Add("gpt-4o", text) + estimator.AddMedia(media) })
 			}
 			b.ReportAllocs()
 			b.SetBytes(int64(len(frame)))

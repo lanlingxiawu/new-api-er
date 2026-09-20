@@ -48,29 +48,30 @@ type StreamSnapshot struct {
 
 // StreamSession 保存单次中转尝试的协议和交付状态；短锁不跨网络读取、写出或刷新。
 type StreamSession struct {
-	ResponseGate       *StreamResponseGate     // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
-	OpaqueSSE          bool                    // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
-	ChannelType        int                     // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
-	RelayMode          int                     // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
-	ExpectedImages     int                     // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
-	mu                 sync.Mutex              // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
-	format             types.RelayFormat       // 下游协议，错误输出按此格式选择。
-	state              StreamSnapshot          // 当前可变状态，外部读取须经 Snapshot 复制。
-	disabled           bool                    // 原生 Claude 专用处理器已接管时禁用通用观察。
-	text               strings.Builder         // 仅保存一个写出批次的文本，调用者及时取走估算。
-	tools              map[string]*streamTool  // 有界的未完成工具调用，完整参数交付后才计入有效内容。
-	toolBytes          int                     // 所有未完成工具名称和参数共享单帧预算，不为每个工具单独分配上限。
-	toolDeliveries     *streamToolDeliveries   // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
-	choices            map[int]bool            // 当前上游协议按索引累计的候选结束状态，最多 128 项。
-	ExpectedChoices    int                     // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
-	claudeStarted      bool                    // Claude 转换路径是否看到了 message_start。
-	claudeStop         bool                    // Claude 转换路径是否确认 stop_reason。
-	claudeBlocks       map[int]bool            // 尚未关闭的 Claude 内容块。
-	closeBody          io.Closer               // 当前上游资源，终止时由所有者关闭以停止生成。
-	requestContext     context.Context         // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
-	received           *StreamSession          // 独立接收内容跟踪器，复用有界工具去重，不参与协议与交付状态。
-	receivedFactory    func() func(string) int // 新实际响应/轮次创建独立增量估算器。
-	receivedEstimate   func(string) int
+	ResponseGate       *StreamResponseGate          // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
+	OpaqueSSE          bool                         // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
+	ChannelType        int                          // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
+	RelayMode          int                          // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
+	ExpectedImages     int                          // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
+	mu                 sync.Mutex                   // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
+	format             types.RelayFormat            // 下游协议，错误输出按此格式选择。
+	state              StreamSnapshot               // 当前可变状态，外部读取须经 Snapshot 复制。
+	disabled           bool                         // 原生 Claude 专用处理器已接管时禁用通用观察。
+	text               strings.Builder              // 仅保存一个写出批次的文本，调用者及时取走估算。
+	media              int                          // 本批已交付/已接收的内联媒体分片数，按张折算，取走即清零。
+	tools              map[string]*streamTool       // 有界的未完成工具调用，完整参数交付后才计入有效内容。
+	toolBytes          int                          // 所有未完成工具名称和参数共享单帧预算，不为每个工具单独分配上限。
+	toolDeliveries     *streamToolDeliveries        // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
+	choices            map[int]bool                 // 当前上游协议按索引累计的候选结束状态，最多 128 项。
+	ExpectedChoices    int                          // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
+	claudeStarted      bool                         // Claude 转换路径是否看到了 message_start。
+	claudeStop         bool                         // Claude 转换路径是否确认 stop_reason。
+	claudeBlocks       map[int]bool                 // 尚未关闭的 Claude 内容块。
+	closeBody          io.Closer                    // 当前上游资源，终止时由所有者关闭以停止生成。
+	requestContext     context.Context              // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
+	received           *StreamSession               // 独立接收内容跟踪器，复用有界工具去重，不参与协议与交付状态。
+	receivedFactory    func() func(string, int) int // 新实际响应/轮次创建独立增量估算器；参数为文本与媒体张数。
+	receivedEstimate   func(string, int) int
 	receivedOnly       bool // 内容跟踪器专用：按接收片段计工具文本，不等待完整交付。
 	receivedTranscript bool // 接收侧已计入转录 delta，完成快照不再重复估算。
 }
@@ -826,7 +827,7 @@ func (s *StreamSession) ObserveFrame(raw []byte) error {
 				if s.receivedEstimate == nil {
 					s.receivedEstimate = s.receivedFactory()
 				}
-				s.state.ReceivedOutput += s.receivedEstimate(string(data))
+				s.state.ReceivedOutput += s.receivedEstimate(string(data), 0)
 			}
 		}
 		s.mu.Unlock()
@@ -1026,6 +1027,8 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 			text.WriteString(part.Get("text").String())
 			if part.Get("inlineData.data").String() != "" {
 				s.state.Effective = true
+				// 原生内联媒体不进文本，交由估算器按张折算；不把 base64 字节冒充 token。
+				s.media++
 			}
 			if fn := part.Get("functionCall"); fn.IsObject() && fn.Get("name").String() != "" && fn.Get("args").IsObject() {
 				s.state.Effective = true
@@ -1114,6 +1117,16 @@ func (s *StreamSession) TakeDeliveredText() string {
 	text := s.text.String()
 	s.text.Reset()
 	return text
+}
+
+// TakeDeliveredMedia 取走本批内联媒体分片数并清零，与 TakeDeliveredText 成对调用。
+// 媒体按张交给估算器折算，不按字节；调用者不取走即在下一批累计。
+func (s *StreamSession) TakeDeliveredMedia() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	media := s.media
+	s.media = 0
+	return media
 }
 
 // AddEstimatedOutput 累计本地估算，不混入上游确认映射；参数 n 为本批已交付 token 数。

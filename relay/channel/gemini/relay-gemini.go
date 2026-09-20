@@ -50,10 +50,8 @@ func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo,
 		return
 	}
 	estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, usage.PromptTokens)
-	usage.CompletionTokens = estimated.CompletionTokens
-	if imageCount != 0 && usage.CompletionTokens == 0 {
-		usage.CompletionTokens = imageCount * 1400
-	}
+	// 图片是文本之外的额外产出，按张叠加而不是只在无文本时替补，否则"文字+图"会把图白送。
+	usage.CompletionTokens = estimated.CompletionTokens + imageCount*service.DataURLMediaTokens
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	// Overwrite the metadata-derived billing usage: effectiveBillingUsage prefers
 	// BillingUsage during settlement, so keeping the prompt-only metadata there
@@ -96,6 +94,11 @@ func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, r
 		return usage
 	}
 	usage := service.ResponseText2Usage(c, geminiResponseUsageText(response), info.UpstreamModelName, info.GetEstimatePromptTokens())
+	// 无 usageMetadata 时图片同样要按张计入，否则纯图片响应按 0 输出结算。
+	if imageCount := geminiResponseInlineImageCount(response); imageCount > 0 {
+		usage.CompletionTokens += imageCount * service.DataURLMediaTokens
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
 	attachEstimatedGeminiBillingUsage(usage)
 	return *usage
 }
@@ -193,8 +196,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		} else {
 			usage = &dto.Usage{}
 		}
-		if imageCount != 0 && usage.CompletionTokens == 0 {
-			usage.CompletionTokens = imageCount * 1400
+		if imageCount != 0 && info.ReceivedResponseCount > 0 {
+			// 按张叠加在文本估算之上：图片是额外产出，不是"没有文本时"的替补。
+			usage.CompletionTokens += imageCount * service.DataURLMediaTokens
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		}

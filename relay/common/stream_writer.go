@@ -18,22 +18,22 @@ const StreamWriteTimeout = 30 * time.Second
 
 // StreamWriter 是 Gin 透明包装；只缓存一批有界 SSE 帧，不保留完整下游响应。
 type StreamWriter struct {
-	gin.ResponseWriter                    // 原始下游写入器，保留 Gin 的状态码、头与连接接口。
-	mu                 sync.Mutex         // 串行化帧缓存及刷新，不与上游读取共享此锁。
-	session            *StreamSession     // 当前尝试的协议、终止和有效交付状态。
-	estimate           func(string) int   // 增量估算回调，参数为本批成功交付正文，返回新增而非累计 token。
-	pending            []byte             // 尚未组成完整 SSE 帧的尾部。
-	framing            StreamFrameScanner // 下游 SSE 增量行游标，与当前 pending 同步推进。
-	delivered          [][]byte           // 已完整 Write、尚待 Flush 确认的事件数据。
-	buffered           int                // 当前交付批次字节数，受单帧上限约束。
-	media              int                // 当前等待刷新确认的裸媒体字节。
-	jsonBody           []byte             // 入口流式而渠道返回完整 JSON 时，最多一帧大小的待确认交付。
-	writeErr           error              // 底层写/刷新错误；后续调用沿用同一错误。
+	gin.ResponseWriter                       // 原始下游写入器，保留 Gin 的状态码、头与连接接口。
+	mu                 sync.Mutex            // 串行化帧缓存及刷新，不与上游读取共享此锁。
+	session            *StreamSession        // 当前尝试的协议、终止和有效交付状态。
+	estimate           func(string, int) int // 增量估算回调，参数为本批成功交付正文与内联媒体张数，返回新增而非累计 token。
+	pending            []byte                // 尚未组成完整 SSE 帧的尾部。
+	framing            StreamFrameScanner    // 下游 SSE 增量行游标，与当前 pending 同步推进。
+	delivered          [][]byte              // 已完整 Write、尚待 Flush 确认的事件数据。
+	buffered           int                   // 当前交付批次字节数，受单帧上限约束。
+	media              int                   // 当前等待刷新确认的裸媒体字节。
+	jsonBody           []byte                // 入口流式而渠道返回完整 JSON 时，最多一帧大小的待确认交付。
+	writeErr           error                 // 底层写/刷新错误；后续调用沿用同一错误。
 }
 
-// NewStreamWriter 为下游 writer 安装语义观察，session 提供流状态；estimate 返回成功交付文本的新增 token，可为 nil。
+// NewStreamWriter 为下游 writer 安装语义观察，session 提供流状态；estimate 按交付正文与媒体张数返回新增 token，可为 nil。
 // 返回请求局部包装器，不执行写入；非活动会话的 Write 直接转交底层。
-func NewStreamWriter(writer gin.ResponseWriter, session *StreamSession, estimate func(string) int) *StreamWriter {
+func NewStreamWriter(writer gin.ResponseWriter, session *StreamSession, estimate func(string, int) int) *StreamWriter {
 	return &StreamWriter{ResponseWriter: writer, session: session, estimate: estimate}
 }
 
@@ -186,8 +186,9 @@ func (w *StreamWriter) FlushError() (err error) {
 			w.jsonBody = nil
 		}
 		text := w.session.TakeDeliveredText()
-		if w.estimate != nil && text != "" {
-			w.session.AddEstimatedOutput(w.estimate(text))
+		mediaParts := w.session.TakeDeliveredMedia()
+		if w.estimate != nil && (text != "" || mediaParts > 0) {
+			w.session.AddEstimatedOutput(w.estimate(text, mediaParts))
 		}
 	}
 	w.delivered = nil

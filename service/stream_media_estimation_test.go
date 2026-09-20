@@ -85,3 +85,33 @@ func TestStreamTokenEstimatorNoDataURLUnchanged(t *testing.T) {
 		require.Equal(t, EstimateTokenByModel("gpt-4o", text), e.Add("gpt-4o", text), text)
 	}
 }
+
+// TestStreamTokenEstimatorAddMedia 断言原生内联媒体按张折算，且与 data URL 剥离共用同一份累计
+// （同一张图不会既按 data URL 又按 inlineData 计两次）。
+func TestStreamTokenEstimatorAddMedia(t *testing.T) {
+	var e StreamTokenEstimator
+	require.Zero(t, e.AddMedia(0))
+	require.Zero(t, e.AddMedia(-1))
+
+	textOnly := e.Add("gemini-2.5-flash-image", "here it is")
+	require.Equal(t, DataURLMediaTokens, e.AddMedia(1), "一张图的增量就是折算单价")
+	require.Equal(t, 2*DataURLMediaTokens, e.AddMedia(2))
+	require.Zero(t, e.Add("gemini-2.5-flash-image", ""), "空分片不产生增量")
+
+	// 再补一段文本时，增量只包含新文本，不重复计入已交付的媒体。
+	more := e.Add("gemini-2.5-flash-image", " and more text")
+	require.Equal(t, EstimateTokenByModel("gemini-2.5-flash-image", "here it is and more text"), textOnly+more)
+}
+
+// TestStreamTokenEstimatorMediaFormsDoNotDoubleCount 断言两种媒体形态各计一次。
+func TestStreamTokenEstimatorMediaFormsDoNotDoubleCount(t *testing.T) {
+	dataURL := "![image](data:image/png;base64," + strings.Repeat("QUJD", 1024) + ")"
+
+	var viaText StreamTokenEstimator
+	fromDataURL := viaText.Add("gemini-2.5-flash-image", dataURL)
+
+	var viaParts StreamTokenEstimator
+	fromInline := viaParts.Add("gemini-2.5-flash-image", "![image]()") + viaParts.AddMedia(1)
+
+	require.Equal(t, fromDataURL, fromInline, "转换后的 data URL 与原生 inlineData 折算结果一致")
+}

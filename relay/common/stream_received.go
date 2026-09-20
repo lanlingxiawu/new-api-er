@@ -9,7 +9,7 @@ import (
 )
 
 // SetReceivedEstimator installs a request-local factory; SDK retries reset its state.
-func (s *StreamSession) SetReceivedEstimator(factory func() func(string) int) {
+func (s *StreamSession) SetReceivedEstimator(factory func() func(string, int) int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.receivedFactory = factory
@@ -50,6 +50,7 @@ func (s *StreamSession) observeReceivedLocked(event string, data []byte, v gjson
 		s.receivedEstimate = s.receivedFactory()
 	}
 	s.received.CommitDelivery(data)
+	mediaParts := s.received.TakeDeliveredMedia()
 	text := s.received.TakeDeliveredText()
 	// Native adapters convert these text fields later; collect them before that write.
 	if text == "" {
@@ -88,7 +89,7 @@ func (s *StreamSession) observeReceivedLocked(event string, data []byte, v gjson
 			text = v.Get("message.content").String() + v.Get("response").String()
 		}
 	}
-	if text != "" {
-		s.state.ReceivedOutput += s.receivedEstimate(text)
+	if text != "" || mediaParts > 0 {
+		s.state.ReceivedOutput += s.receivedEstimate(text, mediaParts)
 	}
 }

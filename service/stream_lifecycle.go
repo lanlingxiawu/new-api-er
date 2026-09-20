@@ -88,7 +88,9 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 		c.Writer = relaycommon.NewDownstreamCaptureWriter(c.Writer, info.StreamDiagnostic)
 	}
 	var estimator StreamTokenEstimator // 每次尝试重新累计，刷新批次边界不改变最终估算。
-	info.StreamWriter = relaycommon.NewStreamWriter(c.Writer, info.StreamSession, func(text string) int { return estimator.Add(info.UpstreamModelName, text) })
+	info.StreamWriter = relaycommon.NewStreamWriter(c.Writer, info.StreamSession, func(text string, media int) int {
+		return estimator.Add(info.UpstreamModelName, text) + estimator.AddMedia(media)
+	})
 	c.Writer = info.StreamWriter
 }
 
@@ -183,10 +185,7 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 			selected = BuildConfirmedStreamUsage(info, snapshot.Evidence)
 		case "estimated":
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: snapshot.EstimatedOutput}
-			if clientGone {
-				selected.CompletionTokens = snapshot.ReceivedOutput
-			}
+			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: estimatedStreamOutput(snapshot, clientGone)}
 			if (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) && info.PriceData.UsePrice {
 				// 只有预览而无完成用量时按一张估算，不把原请求的多张数量全部收费。
 				info.PriceData.AddOtherRatio("n", 1)
@@ -200,15 +199,24 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		selected = &dto.Usage{}
 	}
 	if info.RelayFormat != types.RelayFormatOpenAIRealtime {
-		output := snapshot.EstimatedOutput
-		if clientGone {
-			output = snapshot.ReceivedOutput
-		}
-		selected = SupplementStreamZeroOutput(c, info, selected, output, 0)
+		selected = SupplementStreamZeroOutput(c, info, selected, estimatedStreamOutput(snapshot, clientGone), 0)
 	}
 	info.StreamFinalUsage = selected
 	c.Set(relaycommon.StreamHandledKey, true)
 	return selected
+}
+
+// estimatedStreamOutput 选择本地估算的输出量：正常取交付侧，用户断开取接收侧。
+// 接收侧读不出该上游方言（fallback 表未覆盖）而确实交付过有效内容时回落到交付侧，
+// 避免"有产出却按 0 结算"的漏收；两侧都读不出时仍为 0，因为没有任何可计量的产出证据。
+func estimatedStreamOutput(snapshot relaycommon.StreamSnapshot, clientGone bool) int {
+	if !clientGone {
+		return snapshot.EstimatedOutput
+	}
+	if snapshot.ReceivedOutput == 0 && snapshot.Effective {
+		return snapshot.EstimatedOutput
+	}
+	return snapshot.ReceivedOutput
 }
 
 // BuildConfirmedStreamUsage 按实际上游语义构造收费对象，绝不把本地估算标成上游用量。

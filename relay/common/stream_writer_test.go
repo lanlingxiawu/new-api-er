@@ -125,7 +125,7 @@ func TestStreamWriterCandidateEndFrames(t *testing.T) {
 				c, _ := gin.CreateTestContext(rec)
 				s := NewStreamSession(types.RelayFormatOpenAI)
 				s.ResponseGate = &StreamResponseGate{}
-				w := NewStreamWriter(c.Writer, s, func(text string) int { return len(text) })
+				w := NewStreamWriter(c.Writer, s, func(text string, _ int) int { return len(text) })
 				w.Header().Set("Content-Type", "text/event-stream")
 				body := "data: " + strings.Join(tc.frames, "\n\ndata: ") + "\n\n"
 				resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
@@ -217,7 +217,7 @@ func TestStreamWriterCandidateThenFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	s := NewStreamSession(types.RelayFormatOpenAI)
-	w := NewStreamWriter(c.Writer, s, func(text string) int { return len(text) })
+	w := NewStreamWriter(c.Writer, s, func(text string, _ int) int { return len(text) })
 	w.Header().Set("Content-Type", "text/event-stream")
 	require.NoError(t, s.ObserveEvent("", []byte(`{"choices":[{"index":0,"delta":{}},{"index":1,"delta":{}}]}`)))
 	end := `{"choices":[{"index":0,"delta":{"content":"tail"},"finish_reason":"stop"}]}`
