@@ -281,3 +281,124 @@ func TestUnifiedStreamRealtimeReserve(t *testing.T) {
 	require.ErrorIs(t, ReserveRealtimeStreamUsage(info, u), f.reserveErr)
 	require.Zero(t, f.calls)
 }
+
+// TestEstimatedStreamOutputNeverZeroWhenDelivered 断言接收侧读不出上游方言时不按 0 结算：
+// 已成功交付过有效内容就回落到交付侧估算，避免"有产出却零收费"的漏收。
+func TestEstimatedStreamOutputNeverZeroWhenDelivered(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		snapshot   relaycommon.StreamSnapshot
+		clientGone bool
+		want       int
+	}{
+		{
+			name:     "正常终止取交付侧",
+			snapshot: relaycommon.StreamSnapshot{EstimatedOutput: 1415, ReceivedOutput: 1500, Effective: true},
+			want:     1415,
+		},
+		{
+			name:       "客户端断开取接收侧",
+			snapshot:   relaycommon.StreamSnapshot{EstimatedOutput: 1415, ReceivedOutput: 1500, Effective: true},
+			clientGone: true,
+			want:       1500,
+		},
+		{
+			name:       "接收侧为 0 但交付过内容时回落交付侧",
+			snapshot:   relaycommon.StreamSnapshot{EstimatedOutput: 1415, ReceivedOutput: 0, Effective: true},
+			clientGone: true,
+			want:       1415,
+		},
+		{
+			name:       "没有有效交付仍为 0",
+			snapshot:   relaycommon.StreamSnapshot{EstimatedOutput: 1415, ReceivedOutput: 0, Effective: false},
+			clientGone: true,
+			want:       0,
+		},
+		{
+			name:       "两侧都读不出仍为 0",
+			snapshot:   relaycommon.StreamSnapshot{EstimatedOutput: 0, ReceivedOutput: 0, Effective: true},
+			clientGone: true,
+			want:       0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, estimatedStreamOutput(tc.snapshot, tc.clientGone))
+		})
+	}
+}
+
+// TestFinalizeStreamUsageBillsInlineMediaOnClientGone 端到端验证"客户端断开"口径会把原生内联媒体
+// 按张计入：接收侧是该口径的唯一来源，修复前 inlineData 在这里不产生任何量，纯图片响应按 0 结算。
+func TestFinalizeStreamUsageBillsInlineMediaOnClientGone(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest("POST", "/v1beta/models/gemini-2.5-flash-image:streamGenerateContent", nil).WithContext(reqCtx)
+
+	info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatGemini,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.5-flash-image"}}
+	info.SetEstimatePromptTokens(7)
+	BeginStreamAttempt(c, info)
+	info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
+
+	// 上游只回一张内联图片，没有文本、也没有 usageMetadata（断开发生在确认用量到达之前）。
+	imageEvent := []byte(`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"QUJDRA=="}}]}}]}`)
+	require.NoError(t, info.StreamSession.ObserveEvent("", imageEvent))
+	info.StreamSession.CommitDelivery(imageEvent)
+	cancel()
+
+	usage := FinalizeStreamUsage(c, info, nil)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
+	require.Equal(t, DataURLMediaTokens, usage.CompletionTokens, "一张内联图片按张折算，不再按 0 结算")
+	require.Equal(t, 7, usage.PromptTokens)
+}
+
+// TestFinalizeStreamUsageFallsBackWhenDialectUnreadable 端到端验证兜底：接收侧读不出该上游方言时，
+// 只要确实交付过有效内容就用交付侧估算，不按 0 结算。
+func TestFinalizeStreamUsageFallsBackWhenDialectUnreadable(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil).WithContext(reqCtx)
+
+	info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "some-native-model"}}
+	info.SetEstimatePromptTokens(5)
+	BeginStreamAttempt(c, info)
+	info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
+
+	// 上游方言用通用键和 fallback 表都读不出内容：接收侧计不出量。
+	require.NoError(t, info.StreamSession.ObserveEvent("", []byte(`{"unknown_dialect":{"answer":"opaque payload"}}`)))
+	// 但转换后确实成功交付给了客户端，交付侧有估算量。
+	info.StreamSession.CommitDelivery([]byte(`{"choices":[{"delta":{"content":"converted answer"}}]}`))
+	info.StreamSession.AddEstimatedOutput(777)
+	cancel()
+
+	usage := FinalizeStreamUsage(c, info, nil)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
+	require.Zero(t, info.StreamSession.Snapshot().ReceivedOutput, "接收侧确实读不出该方言")
+	require.Equal(t, 777, usage.CompletionTokens, "回落到交付侧估算而不是 0")
+}
+
+// TestFinalizeStreamUsageSupplementsZeroCompletionWithMedia 验证上游给了确认用量但 completion=0
+// （不少图片模型就这么回）时，零输出补估会把已交付的内联媒体按张计入，而不是结算 0 输出。
+func TestFinalizeStreamUsageSupplementsZeroCompletionWithMedia(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1beta/models/gemini-2.5-flash-image:streamGenerateContent", nil)
+
+	info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatGemini,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.5-flash-image"}}
+	info.SetEstimatePromptTokens(7)
+	BeginStreamAttempt(c, info)
+	info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
+
+	imageEvent := []byte(`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"QUJDRA=="}}]}}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":0,"totalTokenCount":9}}`)
+	require.NoError(t, info.StreamSession.ObserveEvent("", imageEvent))
+	info.StreamSession.CommitDelivery(imageEvent)
+	info.StreamSession.AddEstimatedOutput(DataURLMediaTokens) // 写入器刷新后的交付侧估算
+	info.StreamSession.Complete()
+
+	usage := FinalizeStreamUsage(c, info, &dto.Usage{PromptTokens: 9, CompletionTokens: 0})
+	require.Equal(t, 9, usage.PromptTokens, "确认的输入量保持原样")
+	require.Equal(t, DataURLMediaTokens, usage.CompletionTokens, "输出为 0 时按已交付张数补估")
+}

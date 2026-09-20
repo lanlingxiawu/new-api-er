@@ -103,7 +103,7 @@ func TestStreamToolCompletionDeliveryGate(t *testing.T) {
 			underlying = streamFlushFailure{underlying}
 		}
 		var delivered string
-		w := NewStreamWriter(underlying, s, func(text string) int {
+		w := NewStreamWriter(underlying, s, func(text string, _ int) int {
 			delivered += text // 捕获刷新回调收到的成功交付候选，不在夹具中执行真实 token 估算。
 			return len(text)
 		})
