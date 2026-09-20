@@ -25,6 +25,9 @@ type StreamTokenEstimator struct {
 	word    uint8       // 前一字符所属词类：0 分隔符、1 字母、2 数字。
 	weight  float64     // 累计未取整权重，保持与单次估算相同的字符处理顺序。
 	tokens  int         // 上次已经交付给调用者的累计整数估算。
+
+	scrub DataURLScrubber // base64 媒体不按字符计费，改按张折算。
+	media int             // 本轮已确认剥离的媒体数量。
 }
 
 // Add 接收模型 model 和完整 JSON 解码后的已交付文本 text，返回本批新增估算 token，而非累计值。
@@ -44,6 +47,12 @@ func (e *StreamTokenEstimator) Add(model, text string) int {
 		e.weights = getMultipliers(provider)
 		e.ready = true
 	}
+	clean, media := e.scrub.Feed(text)
+	if media > 0 {
+		e.media += media
+		e.word = 0 // 剥离区两侧不属于同一个词，避免把断点当成词内延续。
+	}
+	text = clean
 	m := e.weights
 	for _, r := range text {
 		switch {
@@ -87,7 +96,7 @@ func (e *StreamTokenEstimator) Add(model, text string) int {
 			}
 		}
 	}
-	total := int(math.Ceil(e.weight)) + m.BasePad
+	total := int(math.Ceil(e.weight)) + m.BasePad + e.media*DataURLMediaTokens
 	delta := total - e.tokens
 	e.tokens = total
 	return delta
