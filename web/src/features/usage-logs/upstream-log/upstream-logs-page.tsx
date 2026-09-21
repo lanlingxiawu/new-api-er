@@ -900,14 +900,7 @@ function UpstreamLogsWorkspace({
     draft.keyIndex != null ||
     activeAdvancedCount
   )
-  const isRecentFallback = logsQuery.data?.query.scope === 'recent_fallback'
-  // 近期降级只能拿到上游最近一页日志，用户名/分组这类字段不在返回体里，无法本地过滤。
-  const droppedFallbackFilters = isRecentFallback
-    ? [
-        submitted?.filters?.username ? t('Username') : '',
-        submitted?.filters?.group ? t('Group') : '',
-      ].filter(Boolean)
-    : []
+  const isRecentOnly = logsQuery.data?.query.scope === 'recent'
   const queryBadge = logsQuery.data
     ? scopeBadge(logsQuery.data.query.scope, t)
     : null
@@ -1001,17 +994,13 @@ function UpstreamLogsWorkspace({
           {t('Loading channel information...')}
         </div>
       )}
-      {logsQuery.data?.query.scope === 'recent_fallback' && (
+      {isRecentOnly && (
         <Alert>
           <AlertTitle>{t('Recent upstream results')}</AlertTitle>
           <AlertDescription>
             {t(
-              'The upstream instance does not support exact filters yet, so only its most recent logs were matched locally and there are no further pages.'
+              'A channel key can only read the upstream log for that key, and only its most recent entries, so results were matched locally and there are no further pages. Add an upstream account access token to the channel to search the full history.'
             )}
-            {droppedFallbackFilters.length > 0 &&
-              ` ${t('These filters could not be applied: {{filters}}.', {
-                filters: droppedFallbackFilters.join(', '),
-              })}`}
           </AlertDescription>
         </Alert>
       )}
@@ -1025,9 +1014,13 @@ function UpstreamLogsWorkspace({
     'Enter a local request ID, or select a channel to browse upstream logs.'
   )
   if (submitted?.local_request_id) {
-    emptyDescription = t(
-      'The upstream instance has no log for this request. It may have been trimmed by the upstream retention policy.'
-    )
+    emptyDescription = logsQuery.data?.query.checked_account
+      ? t(
+          'The upstream instance has no log for this request. It may have been trimmed by the upstream retention policy.'
+        )
+      : t(
+          'This request is not among the most recent logs the channel key can read. Add an upstream account access token to the channel to search the full history.'
+        )
   } else if (submitted) {
     emptyDescription = t(
       'Check the request ID or adjust the channel filters, then search again.'
@@ -1058,7 +1051,7 @@ function UpstreamLogsWorkspace({
           isWorkspaceActive &&
             submitted &&
             logsQuery.data?.total &&
-            !isRecentFallback
+            !isRecentOnly
         )}
         tableClassName='[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:py-2'
       />

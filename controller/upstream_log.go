@@ -23,7 +23,6 @@ type upstreamLogFiltersDTO struct {
 	StartTimestamp    int64  `json:"start_timestamp"`
 	EndTimestamp      int64  `json:"end_timestamp"`
 	Channel           int    `json:"channel"`
-	LogId             int    `json:"log_id"`
 	Group             string `json:"group"`
 	RequestId         string `json:"request_id"`
 	UpstreamRequestId string `json:"upstream_request_id"`
@@ -77,7 +76,6 @@ func normalizeAndValidateFilters(in upstreamLogFiltersDTO) (service.UpstreamLogF
 		StartTimestamp: in.StartTimestamp,
 		EndTimestamp:   in.EndTimestamp,
 		Channel:        in.Channel,
-		LogId:          in.LogId,
 	}
 	ok := true
 	var good bool
@@ -99,7 +97,7 @@ func normalizeAndValidateFilters(in upstreamLogFiltersDTO) (service.UpstreamLogF
 	if out.UpstreamRequestId, good = trimLimit(in.UpstreamRequestId, upstreamLogMaxReqId); !good {
 		ok = false
 	}
-	if out.LogId < 0 || out.Channel < 0 {
+	if out.Channel < 0 {
 		ok = false
 	}
 	if out.StartTimestamp != 0 && out.EndTimestamp != 0 && out.StartTimestamp > out.EndTimestamp {
@@ -158,6 +156,7 @@ type upstreamLogAttempt struct {
 func shouldTryNextCredential(err error) bool {
 	return errors.Is(err, service.ErrUpstreamLogUnauthorized) ||
 		errors.Is(err, service.ErrUpstreamLogUnavailable) ||
+		errors.Is(err, service.ErrUpstreamLogEndpointMissing) ||
 		errors.Is(err, service.ErrUpstreamLogInvalidResp)
 }
 
@@ -176,11 +175,41 @@ func mapUpstreamLogServiceError(err error) string {
 		return i18n.MsgUpstreamLogUnauthorized
 	case errors.Is(err, service.ErrUpstreamLogUnavailable):
 		return i18n.MsgUpstreamLogUnavailable
+	case errors.Is(err, service.ErrUpstreamLogEndpointMissing):
+		return i18n.MsgUpstreamLogEndpointMissing
 	case errors.Is(err, service.ErrUpstreamLogInvalidResp):
 		return i18n.MsgUpstreamLogInvalidResponse
+	case errors.Is(err, service.ErrUpstreamLogRateLimited):
+		return i18n.MsgUpstreamLogRateLimited
+	case errors.Is(err, service.ErrUpstreamLogVersionUnsupported):
+		return i18n.MsgUpstreamLogVersionUnsupported
 	default:
 		return i18n.MsgUpstreamLogUnavailable
 	}
+}
+
+// upstreamLogErrorMessage 在可执行的提示后面附上上游真实的状态码与正文片段。
+//
+// 只有一句「上游不可用」时，管理员无法区分是网关拦截、鉴权失败还是上游自己报错，只能
+// 去翻上游日志或抓包。正文已在服务层截断并抹掉凭证，本接口又只对管理员开放，因此这里
+// 如实展示。连接层失败（超时、拨号失败）没有上游响应，也就不附加——那类错误的原文里
+// 带着上游地址与 dial 细节，不能外泄。
+func upstreamLogErrorMessage(c *gin.Context, err error) string {
+	msg := i18n.T(c, mapUpstreamLogServiceError(err))
+	var detail *service.UpstreamLogHTTPError
+	if !errors.As(err, &detail) {
+		return msg
+	}
+	if detail.Snippet == "" {
+		// 上游只给了状态码（空正文、或正文读失败）：状态码本身仍是有用线索，但不拖一个空冒号。
+		return msg + i18n.T(c, i18n.MsgUpstreamLogUpstreamStatus, map[string]any{
+			"Status": detail.StatusCode,
+		})
+	}
+	return msg + i18n.T(c, i18n.MsgUpstreamLogUpstreamDetail, map[string]any{
+		"Status": detail.StatusCode,
+		"Body":   detail.Snippet,
+	})
 }
 
 // QueryUpstreamLog 处理 POST /api/log/upstream/query（AdminAuth）。
@@ -282,10 +311,19 @@ func QueryUpstreamLog(c *gin.Context) {
 		accountURL = channelURL
 	}
 
-	// 凭证顺序：先渠道中转密钥，拿不到再用账号访问令牌。
-	// 「拿不到」包含两种：没有可用密钥（未填，或多令牌渠道没指定序号），以及用它查询失败。
+	// 凭证顺序：账号访问令牌优先，渠道中转密钥兜底。
+	// 官方 new-api 上，账号令牌走 /api/log/self，覆盖该账号全部历史且限流宽松；中转密钥只能
+	// 走 /api/log/token，只有该令牌最近 1000 条，且同一 IP 20 分钟仅 20 次。
 	var attempts []upstreamLogAttempt
 	var keyErr string
+	if accountToken != "" && accountUser != "" && accountURL != "" {
+		attempts = append(attempts, upstreamLogAttempt{
+			baseURL: accountURL,
+			cred: service.UpstreamLogCredential{
+				Token: accountToken, APIUser: accountUser, AccountScope: true,
+			},
+		})
+	}
 	if channelURL != "" {
 		probeKeys := localRequestId != "" && channel.ChannelInfo.IsMultiKey &&
 			!traceKeyIndexFromLog && clientKeyIndex == nil
@@ -335,14 +373,6 @@ func QueryUpstreamLog(c *gin.Context) {
 			}
 		}
 	}
-	if accountToken != "" && accountUser != "" && accountURL != "" {
-		attempts = append(attempts, upstreamLogAttempt{
-			baseURL: accountURL,
-			cred: service.UpstreamLogCredential{
-				Token: accountToken, APIUser: accountUser, AccountScope: true,
-			},
-		})
-	}
 	if len(attempts) == 0 {
 		if keyErr != "" {
 			common.ApiErrorI18n(c, keyErr)
@@ -359,8 +389,9 @@ func QueryUpstreamLog(c *gin.Context) {
 	var result *service.UpstreamLogResult
 	chosen := attempts[0]
 	probeHit := false
-	// 轮询链中已经拿到的「查询成功但 0 条」。之后的凭证若只是被拒绝/不可用，
-	// 如实答复「上游没有这条日志」，而不是报一个与答案无关的凭证错误。
+	checkedAccount := false
+	// 轮询链中已经拿到的「查询成功但 0 条」。后续凭证若失败，如实答复「上游没有这条日志」，
+	// 而不是报一个与答案无关的凭证错误。
 	var emptyResult *service.UpstreamLogResult
 	var emptyAttempt upstreamLogAttempt
 	for i, attempt := range attempts {
@@ -373,8 +404,12 @@ func QueryUpstreamLog(c *gin.Context) {
 		result, err = service.QueryUpstreamLogs(c.Request.Context(), attempt.baseURL, attempt.cred, filters, page, pageSize)
 		if err == nil {
 			chosen = attempt
-			// 轮询链里「成功但 0 条」= 不是这个 key，继续试下一个（含其后的账号令牌）。
-			if attempt.probe && len(result.Items) == 0 && i < len(attempts)-1 {
+			if attempt.cred.AccountScope {
+				checkedAccount = true
+			}
+			// 「成功但 0 条」只说明这套凭证看不到该日志：账号令牌与各把密钥的可见范围互不覆盖，
+			// 都要继续往下试，不能就此断言上游没有这条日志。
+			if len(result.Items) == 0 && i < len(attempts)-1 {
 				emptyResult, emptyAttempt = result, attempt
 				continue
 			}
@@ -383,15 +418,17 @@ func QueryUpstreamLog(c *gin.Context) {
 		}
 		logger.LogWarn(c, "upstream log query attempt failed for channel "+
 			strings.TrimSpace(channel.Name)+": "+err.Error())
-		if i == len(attempts)-1 || !shouldTryNextCredential(err) {
-			// 只对凭证类失败兜底：超时、繁忙时这把 key 可能恰好有日志，不能断言「没有」。
-			if emptyResult != nil && shouldTryNextCredential(err) {
+		// 上游限流按出口 IP 计数，继续试后面的密钥只会加深限流且必然同样失败。
+		rateLimited := errors.Is(err, service.ErrUpstreamLogRateLimited)
+		if rateLimited || i == len(attempts)-1 || !shouldTryNextCredential(err) {
+			// 只对凭证类失败与限流兜底：超时、繁忙时这把 key 可能恰好有日志，不能断言「没有」。
+			if emptyResult != nil && (rateLimited || shouldTryNextCredential(err)) {
 				result, chosen = emptyResult, emptyAttempt
 				break
 			}
 			logger.LogError(c, "upstream log query failed for channel "+
 				strings.TrimSpace(channel.Name)+": "+err.Error())
-			common.ApiErrorI18n(c, mapUpstreamLogServiceError(err))
+			common.ApiErrorMsg(c, upstreamLogErrorMessage(c, err))
 			return
 		}
 	}
@@ -410,11 +447,13 @@ func QueryUpstreamLog(c *gin.Context) {
 			"is_multi_key": isMulti,
 		},
 		"query": gin.H{
-			"filters":                 req.Filters,
-			"scope":                   result.Scope,
-			"upstream_supports_exact": result.SupportsExact,
-			"page":                    page,
-			"page_size":               pageSize,
+			"filters": req.Filters,
+			"scope":   result.Scope,
+			// 有没有用账号访问令牌查过上游全部历史。为假时「查不到」只代表该令牌最近 1000 条
+			// 日志里没有，页面据此提示配置账号令牌，而不是断言上游已清理日志。
+			"checked_account": checkedAccount,
+			"page":            page,
+			"page_size":       pageSize,
 		},
 		"total":      result.Total,
 		"items":      result.Items,

@@ -500,4 +500,7 @@ upstream_log.upstream_request_id_missing: "该本站日志未记录上游请求 
 upstream_log.trace_key_index_missing: "该本站日志未记录实际使用的渠道令牌序号。请清空本站请求 ID，改用「渠道 + 上游请求 ID」查询。"
 upstream_log.rate_limited: "上游日志接口正在限流，请过几分钟再试。"
 upstream_log.version_unsupported: "上游 new-api 版本低于 v0.10.8，日志不记录请求 ID，无法按请求追溯。请升级上游。"
+upstream_log.endpoint_missing: "该上游没有提供 new-api 的日志接口，无法在本站查询它的日志。请到该上游自己的后台查这条请求。"
+upstream_log.upstream_detail: "上游返回 HTTP {{.Status}}：{{.Body}}"
+upstream_log.upstream_status: "上游返回 HTTP {{.Status}}，正文为空。"
 relay.claude_stream_failed: "上游流式响应异常，请重试。"

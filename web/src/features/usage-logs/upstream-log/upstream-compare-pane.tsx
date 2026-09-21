@@ -100,9 +100,13 @@ export function UpstreamComparePane({
   } else {
     state = (
       <p className='text-muted-foreground text-sm'>
-        {t(
-          'The upstream instance has no log for this request. It may have been trimmed by the upstream retention policy.'
-        )}
+        {query.data?.query.checked_account
+          ? t(
+              'The upstream instance has no log for this request. It may have been trimmed by the upstream retention policy.'
+            )
+          : t(
+              'This request is not among the most recent logs the channel key can read. Add an upstream account access token to the channel to search the full history.'
+            )}
       </p>
     )
   }

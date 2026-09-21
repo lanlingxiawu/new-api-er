@@ -593,4 +593,7 @@ const (
 	MsgUpstreamLogTraceKeyIndexMissing = "upstream_log.trace_key_index_missing"
 	MsgUpstreamLogRateLimited          = "upstream_log.rate_limited"
 	MsgUpstreamLogVersionUnsupported   = "upstream_log.version_unsupported"
+	MsgUpstreamLogEndpointMissing      = "upstream_log.endpoint_missing"
+	MsgUpstreamLogUpstreamDetail       = "upstream_log.upstream_detail"
+	MsgUpstreamLogUpstreamStatus       = "upstream_log.upstream_status"
 )

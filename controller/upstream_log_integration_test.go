@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -202,12 +204,11 @@ func TestQueryUpstreamLog_LocalRequestIdResolvesTrustedRoute(t *testing.T) {
 	requireDB(t)
 
 	var hits int32
-	var gotRequestID string
+	// 官方 /api/log/token 不接受任何筛选参数，映射是否正确只能看返回的条目：
+	// 上游这批近期日志里只有 req-upstream 能匹配本站日志记录的上游请求 ID。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
-		gotRequestID = r.URL.Query().Get("request_id")
-		w.Header().Set("X-NewAPI-Log-Query", "filters-v1")
-		_, _ = w.Write([]byte(`{"success":true,"data":{"total":1,"items":[{"id":1,"request_id":"req-upstream"}]}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":2,"request_id":"req-other"},{"id":1,"request_id":"req-upstream"}]}`))
 	}))
 	defer srv.Close()
 
@@ -234,9 +235,10 @@ func TestQueryUpstreamLog_LocalRequestIdResolvesTrustedRoute(t *testing.T) {
 	resp := decodeResp(t, rec)
 	require.True(t, resp.Success, "local trace query failed: %s", resp.Message)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hits))
-	assert.Equal(t, "req-upstream", gotRequestID)
 	assert.Contains(t, rec.Body.String(), localRequestID)
 	assert.Contains(t, rec.Body.String(), "req-upstream")
+	assert.NotContains(t, rec.Body.String(), "req-other",
+		"只有与本站日志的上游请求 ID 一致的条目才能返回")
 	assert.NotContains(t, rec.Body.String(), channelKey)
 	assert.NotContains(t, rec.Body.String(), "client-override")
 }
@@ -291,13 +293,10 @@ func TestQueryUpstreamLog_TraceKeyIndexFallback(t *testing.T) {
 
 	var hits int32
 	var gotAuth string
-	var gotRequestID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
 		gotAuth = r.Header.Get("Authorization")
-		gotRequestID = r.URL.Query().Get("request_id")
-		w.Header().Set("X-NewAPI-Log-Query", "filters-v1")
-		_, _ = w.Write([]byte(`{"success":true,"data":{"total":1,"items":[{"id":7,"request_id":"req-upstream"}]}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":7,"request_id":"req-upstream"}]}`))
 	}))
 	defer srv.Close()
 	baseURL := srv.URL
@@ -327,7 +326,7 @@ func TestQueryUpstreamLog_TraceKeyIndexFallback(t *testing.T) {
 		resp := decodeResp(t, rec)
 		require.True(t, resp.Success, "fallback trace query failed: %s", resp.Message)
 		assert.Equal(t, "Bearer key-1", gotAuth)
-		assert.Equal(t, "req-upstream", gotRequestID)
+		assert.Contains(t, rec.Body.String(), "req-upstream")
 		// The UI needs to know the key index was guessed, not recorded.
 		assert.Contains(t, rec.Body.String(), `"key_index_from_log":false`)
 	})
@@ -530,7 +529,10 @@ func TestQueryUpstreamLog_TraceProbeAllKeysRejectedStillReportsRejection(t *test
 
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	assert.Equal(t, i18n.T(ctx, i18n.MsgUpstreamLogUnauthorized), resp.Message)
+	// 提示后面跟着上游真实的状态码（正文为空时只报状态码），前面的可执行提示不变。
+	assert.True(t, strings.HasPrefix(resp.Message, i18n.T(ctx, i18n.MsgUpstreamLogUnauthorized)),
+		"the actionable hint must still lead the message, got %q", resp.Message)
+	assert.Contains(t, resp.Message, "401")
 }
 
 // Browsing a multi-key channel is unchanged: probing only applies to request-ID traces,
@@ -552,4 +554,69 @@ func TestQueryUpstreamLog_BrowseMultiKeyWithoutIndexStillRequiresSelection(t *te
 
 	assert.False(t, decodeResp(t, rec).Success, "browsing a multi-key channel still needs an explicit key")
 	assert.EqualValues(t, 0, atomic.LoadInt32(&hits), "browsing must never probe keys")
+}
+
+// TestQueryUpstreamLog_ChannelFilterIsNotFakedByTheUpstream pins the contract that made a
+// channel filter look like it worked: the official user log endpoint reads none of
+// username / channel / log_id, so sending them changes nothing and the untouched page of
+// logs came back labelled "filtered". Everything the upstream cannot filter must be
+// rechecked here before it reaches the browser.
+func TestQueryUpstreamLog_ChannelFilterIsNotFakedByTheUpstream(t *testing.T) {
+	requireDB(t)
+
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.WriteHeader(http.StatusOK)
+		// The upstream answers with whatever its own filters matched: two channels.
+		_, _ = w.Write([]byte(`{"success":true,"data":{"total":2,"items":[
+		  {"id":1,"request_id":"req_wanted","channel":5,"username":"alice","model_name":"gpt-5"},
+		  {"id":2,"request_id":"req_other","channel":7,"username":"alice","model_name":"gpt-5"}]}}`))
+	}))
+	defer srv.Close()
+
+	baseURL := srv.URL
+	ch := mkChannel(t, func(c *model.Channel) {
+		c.Type = constant.ChannelTypeNewAPI
+		c.Key = "sk-channel-filter"
+		c.BaseURL = &baseURL
+		c.SetSetting(dto.ChannelSettings{
+			AccountBalanceToken:  "pat-account",
+			AccountBalanceUserID: "7",
+		})
+	})
+
+	body := map[string]any{
+		"channel_id": ch.Id,
+		"filters": map[string]any{
+			"channel":  5,
+			"username": "alice",
+			"log_id":   2,
+			"group":    "vip",
+		},
+	}
+	ctx, rec := newCtx(t, http.MethodPost, "/api/log/upstream/query", body)
+	asAdmin(ctx, 1)
+	QueryUpstreamLog(ctx)
+
+	resp := decodeResp(t, rec)
+	require.True(t, resp.Success, "query failed: %s", resp.Message)
+	for _, k := range []string{"username", "channel", "log_id"} {
+		assert.False(t, gotQuery.Has(k), "官方接口不读 %q，下发它只会让未筛选的一页看起来已筛选", k)
+	}
+	assert.Equal(t, "vip", gotQuery.Get("group"), "官方接口认识的条件仍要下发")
+
+	var data struct {
+		Total int `json:"total"`
+		Items []struct {
+			Id      int `json:"id"`
+			Channel int `json:"channel"`
+		} `json:"items"`
+	}
+	require.NoError(t, common.Unmarshal(resp.Data, &data))
+	require.Len(t, data.Items, 1, "别的渠道的日志不能出现在按渠道筛选的结果里")
+	assert.Equal(t, 5, data.Items[0].Channel)
+	assert.Equal(t, 1, data.Total)
+	// log_id 是上游改写过的页内序号，本站无法用它筛选，因此不再接受这个条件。
+	assert.NotContains(t, rec.Body.String(), "log_id")
 }
