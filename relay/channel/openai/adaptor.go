@@ -336,7 +336,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	// 其余模型的能力项全部放行，不改写请求
 	capabilities := dto.GetOpenAIChatCapabilities(resolvedModel, resolvedEffort)
 	if capabilities.UseMaxCompletionTokens {
-		// 转换模型推理力度后缀
+		// 本分支特有：确认是推理系列后才落实后缀剥离，其余模型的模型名保持原样
 		if effort != "" {
 			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
@@ -344,23 +344,29 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 		info.ReasoningEffort = request.ReasoningEffort
 
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
-			request.MaxCompletionTokens = request.MaxTokens
+		// 这些模型只要看见 max_tokens 字段就返回 400，与取值无关，所以一律摘除：
+		// 显式的 max_tokens: 0 会被 Rule 5 的指针语义保留成非 nil，客户端同时带
+		// max_tokens 和 max_completion_tokens 时也必须把前者去掉。
+		// max_tokens: 0 不折算成 max_completion_tokens: 0——上游要求该值 >= 1。
+		if request.MaxTokens != nil {
+			if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && *request.MaxTokens > 0 {
+				request.MaxCompletionTokens = request.MaxTokens
+			}
 			request.MaxTokens = nil
 		}
-		if !capabilities.SupportsTemperature {
-			request.Temperature = nil
-		}
-		if !capabilities.SupportsTopP {
-			request.TopP = nil
-		}
-		if !capabilities.SupportsLogProbs {
-			request.LogProbs = nil
-			request.TopLogProbs = nil
-		}
-		if capabilities.UseDeveloperRole && len(request.Messages) > 0 && request.Messages[0].Role == "system" {
-			request.Messages[0].Role = "developer"
-		}
+	}
+	if !capabilities.SupportsTemperature {
+		request.Temperature = nil
+	}
+	if !capabilities.SupportsTopP {
+		request.TopP = nil
+	}
+	if !capabilities.SupportsLogProbs {
+		request.LogProbs = nil
+		request.TopLogProbs = nil
+	}
+	if capabilities.UseDeveloperRole && len(request.Messages) > 0 && request.Messages[0].Role == "system" {
+		request.Messages[0].Role = "developer"
 	}
 
 	return request, nil

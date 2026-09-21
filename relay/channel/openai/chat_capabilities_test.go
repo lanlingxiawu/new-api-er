@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -163,4 +164,212 @@ func TestConvertOpenAIRequestUnrecognizedModelsAreUntouched(t *testing.T) {
 			assert.Empty(t, info.ReasoningEffort)
 		})
 	}
+}
+
+// convertChatRequestFromJSON starts from the raw client body so the pointer
+// semantics of max_tokens (Rule 5) are exercised the same way TextHelper does:
+// an explicit zero survives unmarshalling as a non-nil pointer.
+func convertChatRequestFromJSON(t *testing.T, body string) *dto.GeneralOpenAIRequest {
+	t.Helper()
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	var request dto.GeneralOpenAIRequest
+	require.NoError(t, common.UnmarshalJsonStr(body, &request))
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeAzure,
+			UpstreamModelName: request.Model,
+		},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIRequest(c, info, &request)
+	require.NoError(t, err)
+	result, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok, "expected *dto.GeneralOpenAIRequest, got %T", converted)
+	return result
+}
+
+// Azure rejects the request as soon as max_tokens is present, whatever its
+// value, so an explicit zero must be dropped rather than forwarded. It is not
+// carried over to max_completion_tokens either: upstream requires that to be >= 1.
+func TestConvertOpenAIRequestDropsExplicitZeroMaxTokens(t *testing.T) {
+	for _, model := range []string{"gpt-5.5", "gpt-6-astra", "o3"} {
+		t.Run(model, func(t *testing.T) {
+			request := convertChatRequestFromJSON(t,
+				`{"model":"`+model+`","messages":[{"role":"user","content":"hi"}],"max_tokens":0}`)
+
+			assert.Nil(t, request.MaxTokens)
+			assert.Nil(t, request.MaxCompletionTokens)
+		})
+	}
+}
+
+// A client that already sends max_completion_tokens but keeps max_tokens for
+// backwards compatibility must still have max_tokens removed, and the value it
+// asked for must not be overwritten.
+func TestConvertOpenAIRequestDropsMaxTokensWhenBothPresent(t *testing.T) {
+	request := convertChatRequestFromJSON(t,
+		`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"max_tokens":128,"max_completion_tokens":256}`)
+
+	assert.Nil(t, request.MaxTokens)
+	require.NotNil(t, request.MaxCompletionTokens)
+	assert.Equal(t, uint(256), *request.MaxCompletionTokens)
+}
+
+// The ordinary case keeps working: max_tokens is renamed, value preserved.
+func TestConvertOpenAIRequestRenamesMaxTokensFromClientBody(t *testing.T) {
+	request := convertChatRequestFromJSON(t,
+		`{"model":"gpt-5.6-terra","messages":[{"role":"user","content":"hi"}],"max_tokens":128}`)
+
+	assert.Nil(t, request.MaxTokens)
+	require.NotNil(t, request.MaxCompletionTokens)
+	assert.Equal(t, uint(128), *request.MaxCompletionTokens)
+}
+
+// Unrecognized models are still left alone, including the zero value.
+func TestConvertOpenAIRequestKeepsZeroMaxTokensForUnrecognizedModel(t *testing.T) {
+	request := convertChatRequestFromJSON(t,
+		`{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"max_tokens":0}`)
+
+	require.NotNil(t, request.MaxTokens)
+	assert.Equal(t, uint(0), *request.MaxTokens)
+	assert.Nil(t, request.MaxCompletionTokens)
+}
+
+// maxTokensCase is one cell of the max_tokens x max_completion_tokens matrix.
+// want* are the values expected on the upstream request; a nil want means the
+// field must be absent.
+type maxTokensCase struct {
+	name    string
+	body    string
+	wantMT  *uint
+	wantMCT *uint
+}
+
+func runMaxTokensMatrix(t *testing.T, model string, cases []maxTokensCase) {
+	t.Helper()
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := convertChatRequestFromJSON(t,
+				`{"model":"`+model+`","messages":[{"role":"user","content":"hi"}]`+testCase.body+`}`)
+
+			if testCase.wantMT == nil {
+				assert.Nil(t, request.MaxTokens)
+			} else {
+				require.NotNil(t, request.MaxTokens)
+				assert.Equal(t, *testCase.wantMT, *request.MaxTokens)
+			}
+			if testCase.wantMCT == nil {
+				assert.Nil(t, request.MaxCompletionTokens)
+			} else {
+				require.NotNil(t, request.MaxCompletionTokens)
+				assert.Equal(t, *testCase.wantMCT, *request.MaxCompletionTokens)
+			}
+		})
+	}
+}
+
+// Every combination of the two fields for a model that rejects max_tokens:
+// absent / explicit zero / positive, on both sides. max_tokens never survives;
+// max_completion_tokens is only filled in from it when the client left it at
+// zero-or-absent and max_tokens carries a usable value.
+func TestConvertOpenAIRequestMaxTokensMatrixForRestrictedModel(t *testing.T) {
+	runMaxTokensMatrix(t, "gpt-5.5", []maxTokensCase{
+		{name: "both absent", body: ``, wantMT: nil, wantMCT: nil},
+		{name: "mct zero only", body: `,"max_completion_tokens":0`, wantMT: nil, wantMCT: lo.ToPtr(uint(0))},
+		{name: "mct positive only", body: `,"max_completion_tokens":128`, wantMT: nil, wantMCT: lo.ToPtr(uint(128))},
+		{name: "mt zero only", body: `,"max_tokens":0`, wantMT: nil, wantMCT: nil},
+		{name: "mt zero + mct zero", body: `,"max_tokens":0,"max_completion_tokens":0`, wantMT: nil, wantMCT: lo.ToPtr(uint(0))},
+		{name: "mt zero + mct positive", body: `,"max_tokens":0,"max_completion_tokens":128`, wantMT: nil, wantMCT: lo.ToPtr(uint(128))},
+		{name: "mt one is the lower bound that carries over", body: `,"max_tokens":1`, wantMT: nil, wantMCT: lo.ToPtr(uint(1))},
+		{name: "mt positive only", body: `,"max_tokens":64`, wantMT: nil, wantMCT: lo.ToPtr(uint(64))},
+		{name: "mt positive + mct zero keeps legacy carry-over", body: `,"max_tokens":64,"max_completion_tokens":0`, wantMT: nil, wantMCT: lo.ToPtr(uint(64))},
+		{name: "mt positive + mct positive keeps the client value", body: `,"max_tokens":64,"max_completion_tokens":128`, wantMT: nil, wantMCT: lo.ToPtr(uint(128))},
+	})
+}
+
+// The same matrix on a model outside the capability rules must be the identity
+// transform: nothing is renamed, dropped or carried over.
+func TestConvertOpenAIRequestMaxTokensMatrixForUnrestrictedModel(t *testing.T) {
+	runMaxTokensMatrix(t, "gpt-4.1", []maxTokensCase{
+		{name: "both absent", body: ``, wantMT: nil, wantMCT: nil},
+		{name: "mct zero only", body: `,"max_completion_tokens":0`, wantMT: nil, wantMCT: lo.ToPtr(uint(0))},
+		{name: "mt zero only", body: `,"max_tokens":0`, wantMT: lo.ToPtr(uint(0)), wantMCT: nil},
+		{name: "mt positive only", body: `,"max_tokens":64`, wantMT: lo.ToPtr(uint(64)), wantMCT: nil},
+		{name: "both positive", body: `,"max_tokens":64,"max_completion_tokens":128`, wantMT: lo.ToPtr(uint(64)), wantMCT: lo.ToPtr(uint(128))},
+	})
+}
+
+// o-series shares the max_completion_tokens rule but keeps its own role and
+// sampling behaviour, so the zero value must be dropped there too.
+func TestConvertOpenAIRequestMaxTokensMatrixForOSeries(t *testing.T) {
+	runMaxTokensMatrix(t, "o1-mini", []maxTokensCase{
+		{name: "mt zero only", body: `,"max_tokens":0`, wantMT: nil, wantMCT: nil},
+		{name: "mt positive + mct positive", body: `,"max_tokens":64,"max_completion_tokens":128`, wantMT: nil, wantMCT: lo.ToPtr(uint(128))},
+	})
+}
+
+// The reasoning-effort suffix is stripped before the capability lookup, so the
+// max_tokens rule has to apply to the suffixed form as well.
+func TestConvertOpenAIRequestDropsZeroMaxTokensWithEffortSuffix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	var request dto.GeneralOpenAIRequest
+	require.NoError(t, common.UnmarshalJsonStr(
+		`{"model":"gpt-6-astra-high","messages":[{"role":"system","content":"sys"},{"role":"user","content":"hi"}],"max_tokens":0}`,
+		&request))
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeAzure,
+			UpstreamModelName: request.Model,
+		},
+	}
+	converted, err := (&Adaptor{}).ConvertOpenAIRequest(c, info, &request)
+	require.NoError(t, err)
+	result := converted.(*dto.GeneralOpenAIRequest)
+
+	assert.Nil(t, result.MaxTokens)
+	assert.Nil(t, result.MaxCompletionTokens)
+	assert.Equal(t, "gpt-6-astra", result.Model)
+	assert.Equal(t, "gpt-6-astra", info.UpstreamModelName)
+	assert.Equal(t, "high", result.ReasoningEffort)
+	assert.Equal(t, "developer", result.Messages[0].Role)
+}
+
+// Anthropic clients always send max_tokens because the Messages API requires
+// it; that request reaches the same code through ConvertClaudeRequest, so the
+// rename must happen on this entry point too.
+func TestConvertClaudeRequestRenamesMaxTokensForRestrictedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	var request dto.ClaudeRequest
+	require.NoError(t, common.UnmarshalJsonStr(
+		`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"max_tokens":64}`,
+		&request))
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeAzure,
+			UpstreamModelName: "gpt-5.5",
+		},
+	}
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(c, info, &request)
+	require.NoError(t, err)
+	result, ok := converted.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok, "expected *dto.GeneralOpenAIRequest, got %T", converted)
+
+	assert.Nil(t, result.MaxTokens)
+	require.NotNil(t, result.MaxCompletionTokens)
+	assert.Equal(t, uint(64), *result.MaxCompletionTokens)
 }
