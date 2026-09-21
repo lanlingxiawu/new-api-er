@@ -89,10 +89,11 @@ func TestWriteLogExport_EndToEnd(t *testing.T) {
 	rows, _ := readCSVGz(t, job.Parts[0].Path)
 	require.Len(t, rows, total+1, "header + data rows")
 	assert.Equal(t, []string{"Time", "User", "Model", "Quota"}, rows[0])
-	// 倒序导出：首行数据是时间最大的那条。
+	// 正序导出：首行数据是时间最早的那条，末行是最晚的那条。
 	assert.Equal(t, username, rows[1][1])
 	assert.Equal(t, "gpt-4o", rows[1][2])
-	assert.Equal(t, "111", rows[1][3])
+	assert.Equal(t, "100", rows[1][3])
+	assert.Equal(t, "111", rows[total][3])
 
 	// 分片覆盖的时间范围应与数据一致，便于用户判断下载哪一片。
 	assert.Equal(t, base+int64(total)-1, job.Parts[0].EndTime)

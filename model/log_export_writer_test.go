@@ -170,12 +170,12 @@ func TestJobIDFromExportFileName(t *testing.T) {
 }
 
 func TestLogExportProgress(t *testing.T) {
-	// 刚开始扫描（position 接近 end）→ 下限 1。
-	assert.Equal(t, 1, logExportProgress(0, 1000, 1000))
+	// 扫描由早到晚。刚开始（position 停在 start）→ 下限 1。
+	assert.Equal(t, 1, logExportProgress(0, 1000, 0))
 	// 扫过一半 → 约 49。
 	assert.Equal(t, 49, logExportProgress(0, 1000, 500))
-	// 扫到起点 → 99（100 留给完成态）。
-	assert.Equal(t, 99, logExportProgress(0, 1000, 0))
+	// 扫到终点 → 99（100 留给完成态）。
+	assert.Equal(t, 99, logExportProgress(0, 1000, 1000))
 	// 退化区间不应除零。
 	assert.Equal(t, 99, logExportProgress(500, 500, 500))
 }

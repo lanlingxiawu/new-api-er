@@ -187,14 +187,14 @@ const (
 | `text_input`/`text_output`/`audio_input`/`audio_output` | 多模态按类分别计价，缺一项就对不上 |
 | `image_output`（图片输入 token）、`image_cache_tokens` | 同上 |
 | `billing_tokens` | 计费 token 拆分总表 |
-| `model_ratio`、`completion_ratio`、`group_ratio`、`user_group_ratio` | 倍率，复算必需 |
+| `model_ratio`、`completion_ratio`、`group_ratio` | 倍率，复算必需 |
 | `cache_ratio`、`cache_creation_ratio`(+`_5m`/`_1h`)、`audio_ratio`、`audio_completion_ratio`、`image_ratio` | 同上 |
 | `model_price`、`billing_unit`、`fixed_price` | 按次固定价的复算依据 |
 | `image_count` | 按张计费的复算依据 |
 | `tool_surcharges` | 工具调用附加费，不给就是一笔说不清的差额 |
 | `usage_facts` | 任务类（视频/图片）计费的用量事实 |
 | `matched_tier` | 阶梯计费命中的档位。**客户按哪一档被收费，是他有权知道的** |
-| `quota`、`cost_usd` | 结果 |
+| `cost_usd` | 结果，只给金额 |
 
 **排除（`Internal`），逐条给理由**
 
@@ -208,11 +208,17 @@ const (
 | `request_rules` | 计费规则表达式原文，等于把定价策略发出去 |
 | `stream_result`/`stream_status` 系列、`frt`、`tokens_per_sec`、`use_time`、`is_stream` | 诊断与性能字段，与对账无关；放进去只会引出「为什么这条慢」的二次追问 |
 | `login_method`、`user_agent`、`request_path` | 登录审计字段，与用量对账无关 |
+| `user_group_ratio` | 该用户的专属分组倍率是逐客户谈出来的定价，写进发给客户的文件等于把议价结果落在纸面上；复算用通用的 `group_ratio` 即可 |
+| `quota` | 本站的内部计量单位，客户既核对不了账单、又要反过来问换算关系，金额一列 `cost_usd` 才是他要的 |
 
 **两处曾有争议的判断，已确认收录**（2026-09-20）：
 
 1. `matched_tier`——客户按哪一档阶梯价计费，属于他该知道的信息，收录。
 2. `request_id`——本站自己的请求 ID，不含上游信息，是客户报障的唯一凭据，收录。
+
+**两处改判为排除**（2026-09-21）：`user_group_ratio` 与 `quota` 原本收录在客户对账单里，
+经复核确认不该发给客户，理由见上表。`logExportCustomerColumns` 同时驱动模板内容与
+「可发给客户」徽章，两处随之一起收紧。
 
 ---
 

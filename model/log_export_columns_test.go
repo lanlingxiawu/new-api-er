@@ -472,6 +472,8 @@ func TestLogExportTemplates_CustomerInvoiceExcludesSensitiveFields(t *testing.T)
 		"stream_end_reason":   "诊断字段，与对账无关",
 		"anomaly_flags":       "诊断字段，与对账无关",
 		"other_raw":           "原始 other 含全部内部信息",
+		"user_group_ratio":    "命中专属价时与 group_ratio 同值、没命中时为空，给客户只会引出这两列什么关系的追问",
+		"quota":               "额度是内部计量单位，客户核对账单只看 cost_usd",
 	}
 	for _, key := range tpl.Columns {
 		if why, bad := excluded[key]; bad {
@@ -514,4 +516,36 @@ func TestLogExportTemplates_AnomalyCoversDiagnosticColumns(t *testing.T) {
 		"stream_end_reason", "retry_count", "quota_saturation"} {
 		assert.Contains(t, tpl.Columns, key, "异常排查模板缺少 %s", key)
 	}
+}
+
+// user_group_ratio 只在命中专属价时才有值。没命中时日志里躺的是哨兵值 -1
+// （HandleGroupRatio 的初值，文本计费路径曾无条件写入，历史数据里百万量级），
+// 导出必须渲染成空——打印 -1 会被当成一个负倍率。
+func TestLogExportColumns_UserGroupRatioHidesSentinel(t *testing.T) {
+	cases := []struct {
+		name  string
+		other string
+		want  string
+	}{
+		{name: "命中专属价", other: `{"group_ratio":10,"user_group_ratio":10}`, want: "10"},
+		{name: "专属价为零", other: `{"group_ratio":10,"user_group_ratio":0}`, want: "0"},
+		{name: "小数专属价", other: `{"group_ratio":1,"user_group_ratio":0.7}`, want: "0.7"},
+		{name: "哨兵值 -1", other: `{"group_ratio":10,"user_group_ratio":-1}`, want: ""},
+		{name: "新日志不再写该字段", other: `{"group_ratio":10}`, want: ""},
+		{name: "没有 other", other: ``, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderOne(t, "user_group_ratio", &Log{Other: tc.other}, newTestRowCtx())
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// 其余取 other 的倍率列不受影响：哨兵判定只属于 user_group_ratio，
+// 别的列出现负值是真的负值，不能一起吞掉。
+func TestLogExportColumns_OtherRatiosKeepNegativeValues(t *testing.T) {
+	l := &Log{Other: `{"group_ratio":-1,"model_ratio":-1}`}
+	assert.Equal(t, "-1", renderOne(t, "group_ratio", l, newTestRowCtx()))
+	assert.Equal(t, "-1", renderOne(t, "model_ratio", l, newTestRowCtx()))
 }

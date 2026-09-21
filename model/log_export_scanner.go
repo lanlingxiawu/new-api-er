@@ -7,7 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-// logExportScanner 按时间窗口倒序扫描日志，逐批回调。
+// logExportScanner 按时间窗口由早到晚扫描日志，逐批回调。
 //
 // 明细导出与聚合汇总共用它：限速闸门、CPU 水位、超时预算、取消检查、进度推进、
 // 窗口宽度自适应全部只有这一份实现。聚合模式另写一套循环会让「窗口边界不重不漏」
@@ -52,24 +52,27 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 	exportStart := job.Filters.StartTimestamp
 	exportEnd := job.Filters.EndTimestamp
 
-	// 窗口是闭区间 [windowStart, windowEnd]，所以下一个窗口必须从 windowStart-1 收尾，
+	// 由早到晚推进：第一个分片装的是区间最早的数据。日志是异步批量落库的，正序扫描时
+	// 尚未落库的近期行还在游标前方，等扫到时已经写入，比逆序更不容易漏掉靠近当前时刻的日志。
+	//
+	// 窗口是闭区间 [windowStart, windowEnd]，所以下一个窗口必须从 windowEnd+1 起步，
 	// 否则边界那一秒会被相邻两个窗口各扫一次——每个窗口的游标是独立重置的，
-	// 重复扫到的行会真的写进文件。时间戳是整秒，减 1 既不重叠也不留缝。
+	// 重复扫到的行会真的写进文件。时间戳是整秒，加 1 既不重叠也不留缝。
 	//
 	// 窗口宽度自适应：配置的 window_sec 是**起点与下限**而不是固定值。稀疏时间段里
 	// 一个窗口连一批都读不满，固定 1 小时窗口会让 31 天的导出白跑 744 次数据库往返；
 	// 读不满就把下个窗口翻倍，读得很满就减半收回。密集数据下宽度收敛回配置值，
 	// 「把单次索引区间限死」的原始意图不变。
 	windowSec := operation_setting.GetLogExportSetting().GetWindowSec()
-	windowEnd := exportEnd
-	for windowEnd >= exportStart {
+	windowStart := exportStart
+	for windowStart <= exportEnd {
 		cfgWindowSec := operation_setting.GetLogExportSetting().GetWindowSec()
 		// 配置被调大时立刻跟上；上限沿用配置层的硬上限，不另设一套。
 		windowSec = min(max(windowSec, cfgWindowSec), operation_setting.MaxLogExportWindowSec)
 
-		windowStart := windowEnd - windowSec + 1
-		if windowStart < exportStart {
-			windowStart = exportStart
+		windowEnd := windowStart + windowSec - 1
+		if windowEnd > exportEnd {
+			windowEnd = exportEnd
 		}
 		var cursor *logExportCursor
 		// windowRows/windowBatches 只服务于窗口宽度自适应，不参与计费与进度。
@@ -122,9 +125,9 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 			if len(logs) > 0 {
 				cursor = nextLogExportCursor(logs)
 			}
-			// 进度取游标当前所在时刻；没有游标（窗口空/已扫完）才退回窗口起点。
-			// 直接用 windowStart 会让进度在窗口刚开始时就跳到窗口末尾，虚报进度。
-			position := windowStart
+			// 进度取游标当前所在时刻；没有游标（窗口空/已扫完）才退回窗口末尾。
+			// 直接用 windowEnd 会让进度在窗口刚开始时就跳到窗口末尾，虚报进度。
+			position := windowEnd
 			if cursor != nil && cursor.CreatedAt > 0 {
 				position = cursor.CreatedAt
 			}
@@ -138,12 +141,12 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 			}
 		}
 
-		// 宽度自适应。只在窗口跑满整个宽度时调整——被 exportStart 截断的最后一个
+		// 宽度自适应。只在窗口跑满整个宽度时调整——被 exportEnd 截断的最后一个
 		// 窗口行数天然偏少，拿它当「稀疏」的证据会得出错误结论。
-		if windowStart > exportStart {
+		if windowEnd < exportEnd {
 			windowSec = nextLogExportWindowSec(windowSec, cfgWindowSec, windowRows, windowBatches, lastBatchSize)
 		}
-		windowEnd = windowStart - 1
+		windowStart = windowEnd + 1
 	}
 	return nil
 }

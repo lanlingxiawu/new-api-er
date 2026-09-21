@@ -179,7 +179,7 @@ func applyLogExportFilter(tx *gorm.DB, filter LogExportFilter) (*gorm.DB, error)
 // ensureCursorFields 保证游标字段一定出现在 SELECT 里。
 //
 // ClickHouse 的排序键是 (created_at, request_id)，游标也用这一对。如果用户选的列
-// 里没有 request_id，取出的行该字段为空，游标条件 `created_at = ? AND request_id < ”`
+// 里没有 request_id，取出的行该字段为空，游标条件 `created_at = ? AND request_id > ”`
 // 永远不成立，翻页会直接跳过该秒剩余的行——静默丢数据。SQL 库用 id 做次键，
 // id 本来就无条件选取，不受影响。
 func ensureCursorFields(fields []string) []string {
@@ -207,8 +207,8 @@ func logExportSelectClause(fields []string) string {
 
 // scanLogExportBatch 取一批日志。
 //
-// 走 (created_at, id) 倒序 keyset，命中现有复合索引 idx_created_at_id；带 type
-// 过滤时命中 idx_created_at_type。游标条件用 `a < ? OR (a = ? AND b < ?)` 的 OR
+// 走 (created_at, id) 正序 keyset，命中现有复合索引 idx_created_at_id；带 type
+// 过滤时命中 idx_created_at_type。游标条件用 `a > ? OR (a = ? AND b > ?)` 的 OR
 // 形式而非行值比较，SQLite/MySQL/PostgreSQL 三库通用。
 //
 // 调用方按时间窗口切分区间（见 runLogExport），把单次扫描的索引区间限死，
@@ -232,17 +232,21 @@ func scanLogExportBatch(
 	clickHouse := usingClickHouseLogDB()
 	if cursor != nil {
 		if clickHouse {
-			tx = tx.Where("logs.created_at < ? OR (logs.created_at = ? AND logs.request_id < ?)",
+			tx = tx.Where("logs.created_at > ? OR (logs.created_at = ? AND logs.request_id > ?)",
 				cursor.CreatedAt, cursor.CreatedAt, cursor.RequestId)
 		} else {
-			tx = tx.Where("logs.created_at < ? OR (logs.created_at = ? AND logs.id < ?)",
+			tx = tx.Where("logs.created_at > ? OR (logs.created_at = ? AND logs.id > ?)",
 				cursor.CreatedAt, cursor.CreatedAt, cursor.Id)
 		}
 	}
 
-	order := "logs.created_at desc, logs.id desc"
+	// 导出按时间正序：文件从所选区间的最早一条写起，命中分片上限或中途失败时留下的是
+	// 一段完整的期初数据，对账能说清「某日之前已对完」。列表接口的倒序是给人翻页看的，
+	// 与这里无关，所以不复用 clickHouseLogOrder。
+	order := "logs.created_at asc, logs.id asc"
 	if clickHouse {
-		order = clickHouseLogOrder("logs.")
+		// CH 的实际排序键是 (created_at, request_id)，方向翻转后仍走同一个键。
+		order = "logs.created_at asc, logs.request_id asc"
 	}
 
 	var logs []*Log

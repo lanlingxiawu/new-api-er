@@ -627,3 +627,34 @@ func loginfoRequestWithPath(t *testing.T, path string) *http.Request {
 	t.Helper()
 	return httptest.NewRequest(http.MethodPost, path, nil)
 }
+
+// 没配专属分组倍率时 HandleGroupRatio 把 GroupSpecialRatio 停在哨兵值 -1，
+// 它不能被当成倍率写进日志：导出的「用户分组倍率」列会原样打印出 -1，
+// 而历史数据里这样的行是百万量级。命中专属价（含 0）时照常记录。
+func TestGenerateTextOtherInfo_UserGroupRatioSentinelIsNotRecorded(t *testing.T) {
+	cases := []struct {
+		name          string
+		userGroupRate float64
+		wantPresent   bool
+	}{
+		{name: "未配置专属倍率", userGroupRate: -1, wantPresent: false},
+		{name: "专属倍率为零", userGroupRate: 0, wantPresent: true},
+		{name: "专属倍率小于一", userGroupRate: 0.7, wantPresent: true},
+		{name: "专属倍率大于一", userGroupRate: 10, wantPresent: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			other := GenerateTextOtherInfo(loginfoNewCtx(), loginfoBaseRelayInfo(),
+				2.5, 1.5, 3.0, 0, 0, 0, tc.userGroupRate)
+
+			got, ok := other["user_group_ratio"]
+			require.Equal(t, tc.wantPresent, ok,
+				"user_group_ratio 是否入库应由是否命中专属价决定")
+			if tc.wantPresent {
+				assert.Equal(t, tc.userGroupRate, got)
+			}
+			// 通用分组倍率不受影响，始终记录。
+			assert.Equal(t, 1.5, other["group_ratio"])
+		})
+	}
+}

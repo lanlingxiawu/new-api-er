@@ -86,7 +86,15 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["cache_tokens"] = cacheTokens
 	other["cache_ratio"] = cacheRatio
 	other["model_price"] = modelPrice
-	other["user_group_ratio"] = userGroupRatio
+	// 只在确有专属分组倍率时才记。userGroupRatio 传的是 GroupRatioInfo.GroupSpecialRatio，
+	// 没配专属倍率时它停在初值 -1；以前无条件写入，于是绝大多数日志里躺着一个
+	// user_group_ratio: -1，导出该列会原样打印出来。倍率合法取值不小于 0，据此判断。
+	// 任务计费路径（GenerateMjOtherInfo / task_billing）一直是按 HasSpecialRatio 加的守卫，
+	// 这里与之对齐。注意有专属倍率时它与 group_ratio 同值——HandleGroupRatio 把专属倍率
+	// 同时赋给两个字段，这一项的作用是标出「这条用的是专属价」，不是另一个乘数。
+	if userGroupRatio >= 0 {
+		other["user_group_ratio"] = userGroupRatio
+	}
 	firstResponseTime := relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli()
 	if firstResponseTime < 0 {
 		firstResponseTime = 0

@@ -623,7 +623,7 @@ func (j *LogExportJob) NeedsSummary() bool {
 	return j.Mode == LogExportModeSummary || j.Mode == LogExportModeBoth
 }
 
-// writeLogExport 执行一次完整导出：按时间窗口倒序扫描，逐批写入分片文件。
+// writeLogExport 执行一次完整导出：按时间窗口由早到晚扫描，逐批写入分片文件。
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	setting := operation_setting.GetLogExportSetting()
 
@@ -670,7 +670,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		fields = append(fields, "other")
 		sort.Strings(fields)
 	}
-	exportEnd := job.Filters.EndTimestamp
+	exportStart := job.Filters.StartTimestamp
 
 	// 第一个分片。
 	writerOpts.GzipLevel = setting.GetGzipLevel()
@@ -679,8 +679,9 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	if err != nil {
 		return err
 	}
-	// 倒序扫描：分片内第一行时间最大（EndTime），最后一行时间最小（StartTime）。
-	currentPart := LogExportPart{Index: 1, Path: partPath, StartTime: exportEnd, EndTime: exportEnd}
+	// 正序扫描：分片内第一行时间最小（StartTime），最后一行时间最大（EndTime）。
+	// 一行都没写到时退化成所选区间的起点，下载列表不至于显示 1970。
+	currentPart := LogExportPart{Index: 1, Path: partPath, StartTime: exportStart, EndTime: exportStart}
 	var partRows int64
 	defer func() {
 		if writer == nil {
@@ -757,9 +758,9 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 				partRows = 0
 			}
 			if partRows == 0 {
-				currentPart.EndTime = l.CreatedAt
+				currentPart.StartTime = l.CreatedAt
 			}
-			currentPart.StartTime = l.CreatedAt
+			currentPart.EndTime = l.CreatedAt
 
 			rowBuf = columnSet.Render(l, rctx, rowBuf)
 			if err := writer.WriteRow(rowBuf); err != nil {
@@ -814,11 +815,12 @@ func nextLogExportWindowSec(current, cfgWindowSec int64, windowRows, windowBatch
 }
 
 // logExportProgress 按时间轴推进计算进度，避免对大表做 COUNT。
+// 扫描由早到晚，position 越接近 end 进度越高。
 func logExportProgress(start, end, position int64) int {
 	if end <= start {
 		return 99
 	}
-	elapsed := end - position
+	elapsed := position - start
 	if elapsed <= 0 {
 		return 1
 	}

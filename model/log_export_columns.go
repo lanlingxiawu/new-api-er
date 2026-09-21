@@ -251,6 +251,24 @@ func formatAny(v any) string {
 	}
 }
 
+// isUnsetUserGroupRatio 判断 other.user_group_ratio 是不是「没有专属倍率」的哨兵值。
+//
+// -1 来自 HandleGroupRatio 的 GroupRatioInfo 初值，文本计费路径以前无条件把它写进日志，
+// 所以历史数据里大量存在（测试库单是 group_ratio=10 的就有 141 万条）。倍率合法取值
+// 不小于 0，因此负数一律当作未设置。类型集与 formatAny 保持一致。
+func isUnsetUserGroupRatio(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return n < 0
+	case int:
+		return n < 0
+	case int64:
+		return n < 0
+	default:
+		return false
+	}
+}
+
 func otherValue(m map[string]any, key string) string {
 	if m == nil {
 		return ""
@@ -337,6 +355,12 @@ func auditInfoCol(key, otherKey, label string) LogExportColumn {
 //   - ip / content —— 与对账无关；content 会携带错误信息与内部提示文本
 //   - 全部 stream_* 诊断列、frt、tokens_per_sec、use_time —— 与对账无关，
 //     放进去只会引出「为什么这条慢」的二次追问
+//   - user_group_ratio —— 它不是另一个乘数：HandleGroupRatio 在命中专属倍率时把同一个
+//     值同时写进 group_ratio 和 user_group_ratio，没命中时它是哨兵值 -1。给客户的文件里
+//     放一列要么与 group_ratio 逐字重复、要么为空的列，只会引出「这两列什么关系」的追问。
+//     它的实际用途是内部核账时标出「这条用的是专属价」，留在内部模板即可
+//   - quota —— 本站的内部计量单位，客户既核对不了账单，又要反过来问换算关系；
+//     金额一列 cost_usd 才是他要的
 //
 // 本分支未收录的另外五项：billing_tokens / billing_unit / fixed_price /
 // image_cache_tokens / usage_facts。**不是因为不该给客户，而是本分支的计费代码
@@ -352,7 +376,7 @@ var logExportCustomerColumns = []string{
 	"text_input", "text_output", "audio_input", "audio_output",
 	"image_output",
 	// 倍率与单价：不给这些，客户就只能核对总额、对不上就只能找客服
-	"model_ratio", "completion_ratio", "group_ratio", "user_group_ratio",
+	"model_ratio", "completion_ratio", "group_ratio",
 	"cache_ratio", "cache_creation_ratio", "cache_creation_ratio_5m", "cache_creation_ratio_1h",
 	"audio_ratio", "audio_completion_ratio", "image_ratio",
 	"model_price",
@@ -360,8 +384,9 @@ var logExportCustomerColumns = []string{
 	"image_count", "tool_surcharges",
 	// 客户按哪一档阶梯价计费，属于他该知道的信息
 	"matched_tier",
-	// 结果
-	"quota", "cost_usd",
+	// 结果：只给金额。额度是本站的内部计量单位，客户拿它既核对不了账单、
+	// 又要反过来问「额度怎么换算成钱」，给 cost_usd 就够了。
+	"cost_usd",
 }
 
 func init() {
@@ -454,7 +479,21 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("model_ratio", "Model Ratio", LogExportGroupBilling),
 		otherCol("completion_ratio", "Completion Ratio", LogExportGroupBilling),
 		otherCol("group_ratio", "Group Ratio", LogExportGroupBilling),
-		otherCol("user_group_ratio", "User Group Ratio", LogExportGroupBilling),
+		// user_group_ratio 只在该用户配了专属分组倍率时才有意义，值与 group_ratio 相同
+		// （HandleGroupRatio 把专属倍率同时写进两个字段）；没配时历史日志里是哨兵值 -1。
+		// 这一列的作用是标出「这条用的是专属价」，所以哨兵值渲染成空，不能打印 -1。
+		{Key: "user_group_ratio", Label: "User Group Ratio", Group: LogExportGroupBilling, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				m := ctx.otherMap(l)
+				if m == nil {
+					return ""
+				}
+				v, ok := m["user_group_ratio"]
+				if !ok || isUnsetUserGroupRatio(v) {
+					return ""
+				}
+				return formatAny(v)
+			}},
 		otherCol("cache_ratio", "Cache Ratio", LogExportGroupBilling),
 		otherCol("cache_creation_ratio", "Cache Write Ratio", LogExportGroupBilling),
 		otherCol("cache_creation_ratio_5m", "Cache Write Ratio (5m)", LogExportGroupBilling),
