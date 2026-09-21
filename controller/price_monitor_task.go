@@ -5,13 +5,13 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/price_monitor_setting"
@@ -131,7 +131,8 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		common.SysError("price monitor failed to load channels: " + err.Error())
 		return
 	}
-	upstreams := make([]dto.UpstreamDTO, 0, len(channels)+2)
+	rememberedEndpoints := getPriceMonitorStore().Get().SourceEndpoints
+	plans := make([]priceMonitorSourcePlan, 0, len(channels)+2)
 	sourceTypes := make(map[string]string)
 	sourceModels := make(map[string]map[string]struct{})
 	sourceURLs := make(map[string]string)
@@ -141,12 +142,11 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		if channel.Status != common.ChannelStatusEnabled || !strings.HasPrefix(baseURL, "http") {
 			continue
 		}
-		endpoint := defaultEndpoint
-		if channel.Type == constant.ChannelTypeOpenRouter {
-			endpoint = "openrouter"
-		}
-		upstream := dto.UpstreamDTO{ID: channel.Id, Name: channel.Name, BaseURL: baseURL, Endpoint: endpoint}
-		upstreams = append(upstreams, upstream)
+		upstream := dto.UpstreamDTO{ID: channel.Id, Name: channel.Name, BaseURL: baseURL}
+		plans = append(plans, priceMonitorSourcePlan{
+			upstream:   upstream,
+			candidates: priceMonitorEndpointCandidates(channel.Type, setting.CustomEndpointFor(channel.Id), rememberedEndpoints[strconv.Itoa(channel.Id)]),
+		})
 		sourceName := pricingSourceDisplayName(upstream)
 		channelSourceNames[channel.Id] = sourceName
 		sourceTypes[sourceName] = priceSourceChannel
@@ -160,48 +160,66 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		}
 		sourceModels[sourceName] = enabledModels
 	}
-	officialUpstream := dto.UpstreamDTO{ID: officialRatioPresetID, Name: officialRatioPresetName, BaseURL: officialRatioPresetBaseURL, Endpoint: officialRatioPresetEndpoint}
-	upstreams = append(upstreams, officialUpstream)
+	officialUpstream := dto.UpstreamDTO{ID: officialRatioPresetID, Name: officialRatioPresetName, BaseURL: officialRatioPresetBaseURL}
+	plans = append(plans, priceMonitorSourcePlan{upstream: officialUpstream, candidates: []string{officialRatioPresetEndpoint}})
 	sourceTypes[pricingSourceDisplayName(officialUpstream)] = priceSourceOfficial
 	if setting.IncludeModelsDev {
-		upstream := dto.UpstreamDTO{ID: modelsDevPresetID, Name: modelsDevPresetName, BaseURL: modelsDevPresetBaseURL, Endpoint: modelsDevPresetBaseURL + modelsDevPath}
-		upstreams = append(upstreams, upstream)
+		upstream := dto.UpstreamDTO{ID: modelsDevPresetID, Name: modelsDevPresetName, BaseURL: modelsDevPresetBaseURL}
+		plans = append(plans, priceMonitorSourcePlan{upstream: upstream, candidates: []string{modelsDevPresetBaseURL + modelsDevPath}})
 		sourceTypes[pricingSourceDisplayName(upstream)] = priceSourceModelsDev
 	}
-	if len(upstreams) == 0 {
+	if len(plans) == 0 {
 		setPriceMonitorRuntimeError("no enabled pricing sources are available")
 		return
 	}
 
-	differences, testResults, successfulSources := fetchUpstreamPricingSnapshotData(ctx, upstreams, setting.TimeoutSeconds)
+	outcomes := resolvePriceMonitorSources(ctx, plans, setting.TimeoutSeconds)
 	sourceOK := 0
-	for _, result := range testResults {
-		if result.Status == "success" {
-			sourceOK++
+	resolvedEndpoints := make(map[string]string, len(plans))
+	comparableSources := make([]pricingSource, 0, len(plans))
+	matrixSources := make([]pricingSource, 0, len(plans))
+	for _, plan := range plans {
+		name := pricingSourceDisplayName(plan.upstream)
+		outcome := outcomes[name]
+		source := pricingSource{name: name}
+		endpoint := ""
+		if outcome != nil {
+			endpoint = outcome.endpoint
+			if outcome.ok {
+				source = outcome.source
+			} else {
+				source.failed = true
+				source.failureReason = priceMonitorFailureKind(outcome.failure)
+			}
+		} else {
+			source.failed = true
+			source.failureReason = priceMonitorFailureFetch
 		}
+		source.endpoint = priceMonitorEndpointDisplay(endpoint)
+		if sourceTypes[name] == priceSourceChannel {
+			source.applicableModels = sourceModels[name]
+			source.apiURL = sourceURLs[name]
+		}
+		status := resolvePriceMonitorSourceStatus(source, sourceTypes[name], marketplaceModels)
+		source.status = status.status
+		source.failureReason = status.failureReason
+		source.fetchedModels = status.fetchedModels
+		source.matchedModels = status.matchedModels
+		if source.status == priceMonitorSourceStatusOK {
+			sourceOK++
+			comparableSources = append(comparableSources, source)
+			if plan.upstream.ID > 0 && endpoint != "" {
+				resolvedEndpoints[strconv.Itoa(plan.upstream.ID)] = endpoint
+			}
+		}
+		matrixSources = append(matrixSources, source)
 	}
 	if sourceOK == 0 {
 		setPriceMonitorRuntimeError("all pricing sources failed")
 		return
 	}
+	differences := buildDifferences(getLocalPricingSyncData(), comparableSources)
 	items := buildPriceMonitorItems(differences, marketplaceModels, sourceTypes, sourceModels)
-	successfulByName := make(map[string]pricingSource, len(successfulSources))
-	for _, source := range successfulSources {
-		successfulByName[source.name] = source
-	}
-	matrixSources := make([]pricingSource, 0, len(upstreams))
-	for _, upstream := range upstreams {
-		name := pricingSourceDisplayName(upstream)
-		source, ok := successfulByName[name]
-		if !ok {
-			source = pricingSource{name: name, failed: true}
-		}
-		if sourceTypes[name] == priceSourceChannel {
-			source.applicableModels = sourceModels[name]
-			source.apiURL = sourceURLs[name]
-		}
-		matrixSources = append(matrixSources, source)
-	}
 	sourceHeaders, matrixItems := buildPriceMonitorMatrix(getLocalPricingSyncData(), matrixSources, marketplaceModels, sourceTypes)
 	// 亏损判定单独走一遍已构建的矩阵，above_platform 的既有路径完全不受影响。
 	contexts := buildPriceMonitorLossContexts(channels, channelSourceNames)
@@ -215,16 +233,16 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 	}
 	checkedAt := time.Now()
 	status := "success"
-	if sourceOK < len(upstreams) {
+	if sourceOK < len(plans) {
 		status = "partial"
 	}
 	comparisonModelCounts := countPriceMonitorComparisonModels(sourceHeaders, matrixItems)
 	snapshot := PriceMonitorSnapshot{
 		CheckedAt:             checkedAt.Unix(),
 		Status:                status,
-		SourceTotal:           len(upstreams),
+		SourceTotal:           len(plans),
 		SourceOK:              sourceOK,
-		SourceError:           len(upstreams) - sourceOK,
+		SourceError:           len(plans) - sourceOK,
 		ModelCount:            len(matrixItems),
 		ItemCount:             len(items),
 		ComparisonModelCounts: comparisonModelCounts,
@@ -234,6 +252,7 @@ func runPriceMonitorCheck(ctx context.Context, startedAt time.Time) {
 		SourceHeaders:         sourceHeaders,
 		MatrixItems:           matrixItems,
 		MatrixVersion:         priceMonitorMatrixVersion,
+		SourceEndpoints:       resolvedEndpoints,
 	}
 	if err := getPriceMonitorStore().Save(snapshot); err != nil {
 		setPriceMonitorRuntimeError("failed to save the latest price check")

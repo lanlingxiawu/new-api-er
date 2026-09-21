@@ -7152,6 +7152,17 @@
     "Charged (cost > 0)": "Charged (cost > 0)",
     "Free (cost = 0)": "Free (cost = 0)",
     "Summary file": "Summary file",
-    "Aggregated over the whole range": "Aggregated over the whole range"
+    "Aggregated over the whole range": "Aggregated over the whole range",
+    "Channel price endpoints": "Points de terminaison de prix des canaux",
+    "All channels are probed automatically.": "Tous les canaux sont sondés automatiquement.",
+    "Channel #{{id}}": "Canal #{{id}}",
+    "Select channels and endpoints": "Choisir les canaux et points de terminaison",
+    "Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.": "Les canaux configurés utilisent uniquement ce point de terminaison. Les autres sont sondés automatiquement : /api/pricing puis /api/ratio_config.",
+    "Compared {{matched}} of {{fetched}} models": "{{matched}} modèles comparés sur {{fetched}}",
+    "{{count}} sources did not take part in this comparison": "{{count}} sources n ont pas participé à cette comparaison",
+    "No models configured on this channel, nothing to compare": "Aucun modèle configuré sur ce canal, rien à comparer",
+    "Model names do not match the platform, nothing to compare": "Les noms de modèles ne correspondent pas à la plateforme, rien à comparer",
+    "The source returned no price data": "La source n a renvoyé aucune donnée de prix",
+    "Source check failed, waiting for the next run": "Échec de la vérification de la source, en attente du prochain contrôle"
   }
 }

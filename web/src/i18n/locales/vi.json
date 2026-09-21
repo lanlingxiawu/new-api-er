@@ -7152,6 +7152,17 @@
     "Charged (cost > 0)": "Charged (cost > 0)",
     "Free (cost = 0)": "Free (cost = 0)",
     "Summary file": "Summary file",
-    "Aggregated over the whole range": "Aggregated over the whole range"
+    "Aggregated over the whole range": "Aggregated over the whole range",
+    "Channel price endpoints": "Điểm cuối giá của kênh",
+    "All channels are probed automatically.": "Tất cả các kênh được dò tự động.",
+    "Channel #{{id}}": "Kênh #{{id}}",
+    "Select channels and endpoints": "Chọn kênh và điểm cuối",
+    "Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.": "Các kênh đã cấu hình chỉ dùng điểm cuối đó. Các kênh còn lại được dò tự động: /api/pricing trước, rồi /api/ratio_config.",
+    "Compared {{matched}} of {{fetched}} models": "Đã so sánh {{matched}} trong {{fetched}} mô hình",
+    "{{count}} sources did not take part in this comparison": "{{count}} nguồn giá không tham gia lần so sánh này",
+    "No models configured on this channel, nothing to compare": "Kênh này chưa cấu hình mô hình, không có gì để so sánh",
+    "Model names do not match the platform, nothing to compare": "Tên mô hình không khớp với nền tảng, không thể so sánh",
+    "The source returned no price data": "Nguồn không trả về dữ liệu giá",
+    "Source check failed, waiting for the next run": "Kiểm tra nguồn thất bại, chờ lần chạy tiếp theo"
   }
 }

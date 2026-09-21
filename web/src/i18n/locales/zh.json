@@ -7152,6 +7152,17 @@
     "Charged (cost > 0)": "已计费（费用 > 0）",
     "Free (cost = 0)": "未计费（费用 = 0）",
     "Summary file": "汇总",
-    "Aggregated over the whole range": "覆盖整个时间范围"
+    "Aggregated over the whole range": "覆盖整个时间范围",
+    "Channel price endpoints": "渠道价格接口",
+    "All channels are probed automatically.": "所有渠道均自动探测价格接口。",
+    "Channel #{{id}}": "渠道 #{{id}}",
+    "Select channels and endpoints": "选择渠道与接口",
+    "Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.": "已配置的渠道只使用该接口，不再自动探测；未配置的渠道依次尝试 /api/pricing、/api/ratio_config。",
+    "Compared {{matched}} of {{fetched}} models": "已比对 {{matched}} / {{fetched}} 个模型",
+    "{{count}} sources did not take part in this comparison": "{{count}} 个价格来源未参与本次对比",
+    "No models configured on this channel, nothing to compare": "该渠道未配置模型，没有可对比的范围",
+    "Model names do not match the platform, nothing to compare": "该来源的模型名与平台不一致，无法对比",
+    "The source returned no price data": "该来源返回的价格数据为空",
+    "Source check failed, waiting for the next run": "价格来源检查失败，请等待下次巡检"
   }
 }

@@ -17,15 +17,24 @@ import (
 )
 
 type priceMonitorSettingsRequest struct {
-	Enabled          bool   `json:"enabled"`
-	IntervalMinutes  int    `json:"interval_minutes"`
-	TimeoutSeconds   int    `json:"timeout_seconds"`
-	IncludeModelsDev bool   `json:"include_models_dev"`
-	ModelWhitelist   string `json:"model_whitelist"`
+	Enabled          bool              `json:"enabled"`
+	IntervalMinutes  int               `json:"interval_minutes"`
+	TimeoutSeconds   int               `json:"timeout_seconds"`
+	IncludeModelsDev bool              `json:"include_models_dev"`
+	ModelWhitelist   string            `json:"model_whitelist"`
+	CustomEndpoints  map[string]string `json:"custom_endpoints"`
 }
 
 func validatePriceMonitorSettingsRequest(request priceMonitorSettingsRequest) (map[string]string, bool) {
 	if request.IntervalMinutes < 5 || request.TimeoutSeconds < 1 || request.TimeoutSeconds > 120 {
+		return nil, false
+	}
+	endpoints, err := price_monitor_setting.ValidateCustomEndpoints(request.CustomEndpoints)
+	if err != nil {
+		return nil, false
+	}
+	encodedEndpoints, err := common.Marshal(endpoints)
+	if err != nil {
 		return nil, false
 	}
 	return map[string]string{
@@ -35,6 +44,7 @@ func validatePriceMonitorSettingsRequest(request priceMonitorSettingsRequest) (m
 		"include_official":   "true",
 		"include_models_dev": strconv.FormatBool(request.IncludeModelsDev),
 		"model_whitelist":    request.ModelWhitelist,
+		"custom_endpoints":   string(encodedEndpoints),
 	}, true
 }
 

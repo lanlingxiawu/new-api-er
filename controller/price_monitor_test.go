@@ -77,9 +77,9 @@ func TestBuildPriceMonitorMatrixConvertsEverySourceIndependently(t *testing.T) {
 	headers, items := buildPriceMonitorMatrix(localData, sources, map[string]struct{}{"model-a": {}}, map[string]string{"官方价格": priceSourceOfficial, "渠道乙(2)": priceSourceChannel})
 
 	require.Equal(t, []PriceMonitorSourceHeader{
-		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey},
-		{Key: "官方价格", Name: "官方价格", Type: priceSourceOfficial},
-		{Key: "渠道乙(2)", Name: "渠道乙", Type: priceSourceChannel},
+		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
+		{Key: "官方价格", Name: "官方价格", Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
+		{Key: "渠道乙(2)", Name: "渠道乙", Type: priceSourceChannel, Status: priceMonitorSourceStatusOK},
 	}, headers)
 	require.Len(t, items, 1)
 	require.Equal(t, 2.0, *items[0].Prices[priceMonitorPlatformKey].Input)
@@ -122,9 +122,9 @@ func TestPriceMonitorSourceHeadersKeepModelsDevDistinctFromOfficial(t *testing.T
 	)
 
 	require.Equal(t, []PriceMonitorSourceHeader{
-		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey},
-		{Key: officialRatioPresetName, Name: "官方价格", Type: priceSourceOfficial},
-		{Key: modelsDevPresetName, Name: "models.dev 价格", Type: priceSourceModelsDev},
+		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
+		{Key: officialRatioPresetName, Name: "官方价格", Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
+		{Key: modelsDevPresetName, Name: "models.dev 价格", Type: priceSourceModelsDev, Status: priceMonitorSourceStatusOK},
 	}, headers)
 }
 
@@ -1208,4 +1208,32 @@ func TestValidatePriceMonitorSettingsRequestBoundaries(t *testing.T) {
 		require.False(t, ok)
 		require.Nil(t, values)
 	}
+}
+
+func TestValidatePriceMonitorSettingsRequestCustomEndpoints(t *testing.T) {
+	t.Run("no endpoints serializes to an empty object", func(t *testing.T) {
+		values, ok := validatePriceMonitorSettingsRequest(priceMonitorSettingsRequest{IntervalMinutes: 5, TimeoutSeconds: 10})
+		require.True(t, ok)
+		require.Equal(t, "{}", values["custom_endpoints"])
+	})
+
+	t.Run("endpoints are sanitized before persisting", func(t *testing.T) {
+		values, ok := validatePriceMonitorSettingsRequest(priceMonitorSettingsRequest{
+			IntervalMinutes: 5,
+			TimeoutSeconds:  10,
+			CustomEndpoints: map[string]string{"7": " https://user:pw@example.com/p ", "8": "  "},
+		})
+		require.True(t, ok)
+		require.Equal(t, `{"7":"https://example.com/p"}`, values["custom_endpoints"])
+	})
+
+	t.Run("invalid endpoint is rejected", func(t *testing.T) {
+		values, ok := validatePriceMonitorSettingsRequest(priceMonitorSettingsRequest{
+			IntervalMinutes: 5,
+			TimeoutSeconds:  10,
+			CustomEndpoints: map[string]string{"7": "ftp://example.com"},
+		})
+		require.False(t, ok)
+		require.Nil(t, values)
+	})
 }

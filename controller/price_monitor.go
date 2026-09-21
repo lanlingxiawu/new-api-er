@@ -28,17 +28,28 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 17
+	priceMonitorMatrixVersion           = 18
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
-	priceMonitorLaneCacheRead           = "cache_read"
-	priceMonitorLaneCacheWrite          = "cache_write"
-	priceMonitorLaneCacheWrite1h        = "cache_write_1h"
-	priceMonitorLaneImageInput          = "image_input"
-	priceMonitorLaneImageOutput         = "image_output"
-	priceMonitorLaneAudioInput          = "audio_input"
-	priceMonitorLaneAudioOutput         = "audio_output"
+
+	// 来源状态：只有 ok 的来源参与价格对比，其余三种都在表头说明原因，
+	// 不再伪装成"该来源未提供此模型"的价格差异。
+	priceMonitorSourceStatusOK        = "ok"
+	priceMonitorSourceStatusFailed    = "failed"
+	priceMonitorSourceStatusNoOverlap = "no_overlap"
+	priceMonitorSourceStatusNoModels  = "no_models"
+
+	// 失败细分，只回传固定枚举，不把上游错误串透给页面。
+	priceMonitorFailureFetch     = "fetch"
+	priceMonitorFailureEmpty     = "empty"
+	priceMonitorLaneCacheRead    = "cache_read"
+	priceMonitorLaneCacheWrite   = "cache_write"
+	priceMonitorLaneCacheWrite1h = "cache_write_1h"
+	priceMonitorLaneImageInput   = "image_input"
+	priceMonitorLaneImageOutput  = "image_output"
+	priceMonitorLaneAudioInput   = "audio_input"
+	priceMonitorLaneAudioOutput  = "audio_output"
 )
 
 type PriceMonitorSource struct {
@@ -59,6 +70,17 @@ type PriceMonitorSourceHeader struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	APIURL string `json:"api_url,omitempty"`
+	// Status 说明这个来源本轮是否真的参与了价格对比，取值见 priceMonitorSourceStatus*。
+	// 历史快照没有这个字段，读取方把空值当作 ok。
+	Status string `json:"status,omitempty"`
+	// FailureReason 只在 Status 为 failed 时有意义，取 fetch / empty。
+	FailureReason string `json:"failure_reason,omitempty"`
+	// FetchedModels 是来源返回的模型价格条数，MatchedModels 是其中与本平台同名、
+	// 真正进入对比的条数。两者一起回答"这个来源到底比了多少模型"。
+	FetchedModels int `json:"fetched_models,omitempty"`
+	MatchedModels int `json:"matched_models,omitempty"`
+	// Endpoint 是本轮实际使用的价格接口路径，便于管理员确认人工配置是否生效。
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type PriceMonitorPriceCell struct {
@@ -162,6 +184,9 @@ type PriceMonitorSnapshot struct {
 	SourceHeaders         []PriceMonitorSourceHeader        `json:"source_headers"`
 	MatrixItems           []PriceMonitorMatrixItem          `json:"matrix_items"`
 	MatrixVersion         int                               `json:"matrix_version"`
+	// SourceEndpoints 记住上轮每个渠道真正取到价格的端点（key 为渠道 ID），
+	// 下轮直接从它开始，省掉重复探测。纯派生缓存，丢了只是多试一次。
+	SourceEndpoints map[string]string `json:"source_endpoints,omitempty"`
 }
 
 type priceMonitorSnapshotStore struct {
@@ -884,6 +909,11 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 		prices := map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform}
 		hasDifference := false
 		for _, source := range sources {
+			// 取不到同名价格的来源不生成单元格：它们的问题是接口或渠道配置，
+			// 写成 missing 会被当成价格差异，污染对比统计。
+			if source.status == priceMonitorSourceStatusNoOverlap || source.status == priceMonitorSourceStatusNoModels {
+				continue
+			}
 			if source.applicableModels != nil {
 				if _, applicable := source.applicableModels[modelName]; !applicable {
 					continue
@@ -917,7 +947,7 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 }
 
 func buildPriceMonitorSourceHeaders(sources []pricingSource, sourceTypes map[string]string) []PriceMonitorSourceHeader {
-	headers := []PriceMonitorSourceHeader{{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey}}
+	headers := []PriceMonitorSourceHeader{{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK}}
 	labelCounts := make(map[string]int)
 	for _, source := range sources {
 		sourceType := sourceTypes[source.name]
@@ -926,7 +956,21 @@ func buildPriceMonitorSourceHeaders(sources []pricingSource, sourceTypes map[str
 		if labelCounts[label] > 1 {
 			label += "（" + strconv.Itoa(labelCounts[label]) + "）"
 		}
-		headers = append(headers, PriceMonitorSourceHeader{Key: source.name, Name: label, Type: sourceType, APIURL: source.apiURL})
+		status := source.status
+		if status == "" {
+			status = priceMonitorSourceStatusOK
+		}
+		headers = append(headers, PriceMonitorSourceHeader{
+			Key:           source.name,
+			Name:          label,
+			Type:          sourceType,
+			APIURL:        source.apiURL,
+			Status:        status,
+			FailureReason: source.failureReason,
+			FetchedModels: source.fetchedModels,
+			MatchedModels: source.matchedModels,
+			Endpoint:      source.endpoint,
+		})
 	}
 	return headers
 }

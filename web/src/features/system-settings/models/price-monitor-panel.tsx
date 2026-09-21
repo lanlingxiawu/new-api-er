@@ -35,6 +35,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
   Combobox,
   ComboboxCollection,
   ComboboxContent,
@@ -89,6 +94,7 @@ import {
   applyPriceMonitorPrice,
   getPriceMonitorResults,
   getPriceMonitorStatus,
+  getUpstreamChannels,
   runPriceMonitor,
   updatePriceMonitorSettings,
 } from '../api'
@@ -104,7 +110,10 @@ import type {
   PriceMonitorPriceTier,
   PriceMonitorSourceHeader,
   PriceMonitorStatusResponse,
+  UpstreamChannel,
 } from '../types'
+import { ChannelSelectorDialog } from './channel-selector-dialog'
+import { OPENROUTER_CHANNEL_TYPE } from './constants'
 import {
   PriceMonitorApplyDialog,
   type PriceMonitorRepairTarget,
@@ -427,6 +436,8 @@ type PriceMonitorForm = {
   timeoutSeconds: number
   includeModelsDev: boolean
   modelWhitelist: string
+  /** 渠道 ID -> 价格接口。配了就只用它，不配的渠道由巡检自动探测。 */
+  customEndpoints: Record<string, string>
 }
 
 type PriceMonitorPanelProps = {
@@ -442,6 +453,7 @@ const DEFAULT_FORM: PriceMonitorForm = {
   timeoutSeconds: 10,
   includeModelsDev: false,
   modelWhitelist: '',
+  customEndpoints: {},
 }
 
 function priceMonitorFormFromConfig(
@@ -453,6 +465,7 @@ function priceMonitorFormFromConfig(
     timeoutSeconds: config.timeout_seconds,
     includeModelsDev: config.include_models_dev,
     modelWhitelist: config.model_whitelist,
+    customEndpoints: { ...config.custom_endpoints },
   }
 }
 
@@ -881,6 +894,40 @@ export function PriceMonitorPanel({
   const formInitializedRef = useRef(false)
   const priceMatrixRef = useRef<HTMLDivElement | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [endpointPickerOpen, setEndpointPickerOpen] = useState(false)
+  // 选择渠道与端点复用同步上游倍率的那套弹窗，两处交互保持一致。
+  const [endpointDraft, setEndpointDraft] = useState<Record<number, string>>({})
+  const [endpointSelection, setEndpointSelection] = useState<number[]>([])
+
+  const upstreamChannelsQuery = useQuery({
+    queryKey: ['upstream-channels'],
+    queryFn: getUpstreamChannels,
+    enabled: endpointPickerOpen,
+  })
+  // 巡检只认真实渠道：官方与 models.dev 预设地址固定，OpenRouter 用的是
+  // /v1/models + 渠道密钥，都不接受人工指定端点。
+  const endpointChannels = useMemo<UpstreamChannel[]>(
+    () =>
+      (upstreamChannelsQuery.data?.data ?? []).filter(
+        (channel) => channel.id > 0 && channel.type !== OPENROUTER_CHANNEL_TYPE
+      ),
+    [upstreamChannelsQuery.data]
+  )
+  const endpointChannelNames = useMemo(() => {
+    const names = new Map<string, string>()
+    for (const channel of endpointChannels) {
+      names.set(String(channel.id), channel.name)
+    }
+    return names
+  }, [endpointChannels])
+  const customEndpointEntries = useMemo(
+    () =>
+      Object.entries(form.customEndpoints).sort((left, right) =>
+        Number(left[0]) - Number(right[0])
+      ),
+    [form.customEndpoints]
+  )
+
   const [shareOpen, setShareOpen] = useState(false)
   const [page, setPage] = useState(1)
   const [draftModel, setDraftModel] = useState('')
@@ -924,6 +971,7 @@ export function PriceMonitorPanel({
         timeout_seconds: form.timeoutSeconds,
         include_models_dev: form.includeModelsDev,
         model_whitelist: form.modelWhitelist,
+        custom_endpoints: form.customEndpoints,
       })
       if (!response.success) throw new Error(response.message)
       return response
@@ -1155,6 +1203,32 @@ export function PriceMonitorPanel({
     if (header.type === 'official') return t('Required comparison')
     if (header.type === 'models_dev') return t('Optional comparison')
     return header.api_url || ''
+  }
+
+  // 覆盖率回答「这个来源到底比了多少模型」：取到的价格条数和其中真正同名可比的条数。
+  const sourceCoverage = (header: PriceMonitorSourceHeader) => {
+    if (header.type === 'platform' || !header.fetched_models) return ''
+    return t('Compared {{matched}} of {{fetched}} models', {
+      matched: header.matched_models ?? 0,
+      fetched: header.fetched_models,
+    })
+  }
+
+  // 没参与对比的来源不会出现在矩阵列里，只能在这里说明，否则管理员看不到它们被跳过。
+  const inactiveSources = (results?.available_source_headers ?? []).filter(
+    (header) => header.status && header.status !== 'ok'
+  )
+  const inactiveSourceReason = (header: PriceMonitorSourceHeader) => {
+    if (header.status === 'no_models') {
+      return t('No models configured on this channel, nothing to compare')
+    }
+    if (header.status === 'no_overlap') {
+      return t('Model names do not match the platform, nothing to compare')
+    }
+    if (header.failure_reason === 'empty') {
+      return t('The source returned no price data')
+    }
+    return t('Source check failed, waiting for the next run')
   }
 
   // 亏损视图里每行的操作列。
@@ -1540,6 +1614,34 @@ export function PriceMonitorPanel({
                   refreshKey={sourceHeadersKey}
                 />
               </div>
+              {inactiveSources.length > 0 && (
+                <Collapsible className='mb-2'>
+                  <CollapsibleTrigger className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs data-[panel-open]:[&_svg]:rotate-90'>
+                    <ChevronRight className='size-3.5 shrink-0 transition-transform' />
+                    {t(
+                      '{{count}} sources did not take part in this comparison',
+                      { count: inactiveSources.length }
+                    )}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <ul className='mt-1 max-h-40 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border px-3 py-2'>
+                      {inactiveSources.map((header) => (
+                        <li
+                          key={header.key}
+                          className='text-muted-foreground text-xs'
+                        >
+                          <span className='font-medium'>
+                            {sourceLabel(header)}
+                          </span>
+                          {header.api_url ? ` · ${header.api_url}` : ''}
+                          {header.endpoint ? ` · ${header.endpoint}` : ''}
+                          {` · ${inactiveSourceReason(header)}`}
+                        </li>
+                      ))}
+                    </ul>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
               <Table
                 className='min-w-max'
                 containerClassName='isolate min-h-0 flex-1 max-w-full overflow-auto'
@@ -1565,6 +1667,11 @@ export function PriceMonitorPanel({
                         <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
                           {sourceSubtitle(header)}
                         </span>
+                        {sourceCoverage(header) && (
+                          <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
+                            {sourceCoverage(header)}
+                          </span>
+                        )}
                       </TableHead>
                     ))}
                   </TableRow>
@@ -1748,9 +1855,93 @@ export function PriceMonitorPanel({
                 {t('Listed models are skipped; leave empty to check all.')}
               </FieldDescription>
             </Field>
+            <Field data-disabled={!canEdit} className='md:col-span-2'>
+              <FieldLabel>{t('Channel price endpoints')}</FieldLabel>
+              <div className='space-y-2'>
+                {customEndpointEntries.length === 0 && (
+                  <p className='text-muted-foreground text-sm'>
+                    {t('All channels are probed automatically.')}
+                  </p>
+                )}
+                {customEndpointEntries.map(([channelId, endpoint]) => (
+                  <div
+                    key={channelId}
+                    className='flex min-w-0 items-center gap-2 rounded-md border px-3 py-2'
+                  >
+                    <span className='min-w-0 flex-1 truncate text-sm font-medium'>
+                      {endpointChannelNames.get(channelId) ??
+                        t('Channel #{{id}}', { id: channelId })}
+                    </span>
+                    <span className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
+                      {endpoint}
+                    </span>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      disabled={!canEdit}
+                      onClick={() =>
+                        setForm((current) => {
+                          const next = { ...current.customEndpoints }
+                          delete next[channelId]
+                          return { ...current, customEndpoints: next }
+                        })
+                      }
+                    >
+                      {t('Remove')}
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={!canEdit}
+                  onClick={() => {
+                    const draft: Record<number, string> = {}
+                    for (const [channelId, endpoint] of Object.entries(
+                      form.customEndpoints
+                    )) {
+                      draft[Number(channelId)] = endpoint
+                    }
+                    setEndpointDraft(draft)
+                    setEndpointSelection(
+                      Object.keys(form.customEndpoints).map(Number)
+                    )
+                    setEndpointPickerOpen(true)
+                  }}
+                >
+                  {t('Select channels and endpoints')}
+                </Button>
+              </div>
+              <FieldDescription>
+                {t(
+                  'Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.'
+                )}
+              </FieldDescription>
+            </Field>
           </FieldGroup>
         </fieldset>
       </Dialog>
+
+      <ChannelSelectorDialog
+        open={endpointPickerOpen}
+        onOpenChange={setEndpointPickerOpen}
+        channels={endpointChannels}
+        selectedChannelIds={endpointSelection}
+        onSelectedChannelIdsChange={setEndpointSelection}
+        channelEndpoints={endpointDraft}
+        onChannelEndpointsChange={setEndpointDraft}
+        onConfirm={(selectedIds) => {
+          const endpoints: Record<string, string> = {}
+          for (const channelId of selectedIds) {
+            const endpoint = (endpointDraft[channelId] ?? '').trim()
+            if (endpoint) endpoints[String(channelId)] = endpoint
+          }
+          setForm((current) => ({ ...current, customEndpoints: endpoints }))
+          setEndpointPickerOpen(false)
+        }}
+      />
 
       <Dialog
         open={shareOpen}

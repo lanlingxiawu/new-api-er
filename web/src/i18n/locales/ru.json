@@ -7152,6 +7152,17 @@
     "Charged (cost > 0)": "Charged (cost > 0)",
     "Free (cost = 0)": "Free (cost = 0)",
     "Summary file": "Summary file",
-    "Aggregated over the whole range": "Aggregated over the whole range"
+    "Aggregated over the whole range": "Aggregated over the whole range",
+    "Channel price endpoints": "Эндпоинты цен канала",
+    "All channels are probed automatically.": "Все каналы проверяются автоматически.",
+    "Channel #{{id}}": "Канал #{{id}}",
+    "Select channels and endpoints": "Выбрать каналы и эндпоинты",
+    "Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.": "Настроенные каналы используют только указанный эндпоинт. Остальные проверяются автоматически: сначала /api/pricing, затем /api/ratio_config.",
+    "Compared {{matched}} of {{fetched}} models": "Сравнено {{matched}} из {{fetched}} моделей",
+    "{{count}} sources did not take part in this comparison": "{{count}} источников не участвовали в сравнении",
+    "No models configured on this channel, nothing to compare": "В канале не настроены модели, сравнивать нечего",
+    "Model names do not match the platform, nothing to compare": "Имена моделей не совпадают с платформой, сравнивать нечего",
+    "The source returned no price data": "Источник не вернул данных о ценах",
+    "Source check failed, waiting for the next run": "Проверка источника не удалась, ожидается следующий запуск"
   }
 }

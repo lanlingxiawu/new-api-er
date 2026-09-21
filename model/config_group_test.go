@@ -270,6 +270,9 @@ func TestSavePriceMonitorConfigGroupRejectsInvalidValues(t *testing.T) {
 
 	for _, values := range []map[string]string{
 		{"interval_minutes": "4"},
+		{"custom_endpoints": "not-json"},
+		{"custom_endpoints": `{"7":"ftp://example.com"}`},
+		{"custom_endpoints": `{"abc":"/api/pricing"}`},
 		{"timeout_seconds": "0"},
 		{"timeout_seconds": "121"},
 		{"include_official": "false"},
@@ -528,4 +531,32 @@ func TestPersistOptionsTxOnRealDatabase(t *testing.T) {
 	var count int64
 	require.NoError(t, DB.Model(&Option{}).Where(&Option{Key: key}).Count(&count).Error)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestSavePriceMonitorConfigGroupPersistsCustomEndpoints(t *testing.T) {
+	useConfigGroupDB(t)
+	original := *price_monitor_setting.GetPriceMonitorSetting()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("price_monitor_setting", map[string]string{
+			"custom_endpoints": "{}",
+		}))
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("price_monitor_setting", map[string]string{
+			"enabled":          strconv.FormatBool(original.Enabled),
+			"interval_minutes": strconv.Itoa(original.IntervalMinutes),
+			"timeout_seconds":  strconv.Itoa(original.TimeoutSeconds),
+		}))
+	})
+
+	applied, err := SaveConfigGroup("price_monitor_setting", map[string]string{
+		"interval_minutes": "60",
+		"timeout_seconds":  "10",
+		"custom_endpoints": `{"7":"/api/ratio_config","8":"https://example.com/price.json"}`,
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	snapshot := price_monitor_setting.GetPriceMonitorSetting()
+	assert.Equal(t, "/api/ratio_config", snapshot.CustomEndpointFor(7))
+	assert.Equal(t, "https://example.com/price.json", snapshot.CustomEndpointFor(8))
+	assert.Equal(t, "", snapshot.CustomEndpointFor(9))
 }

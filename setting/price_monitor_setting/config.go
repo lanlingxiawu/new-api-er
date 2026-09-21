@@ -16,6 +16,9 @@ type PriceMonitorSetting struct {
 	IncludeOfficial  bool   `json:"include_official"`
 	IncludeModelsDev bool   `json:"include_models_dev"`
 	ModelWhitelist   string `json:"model_whitelist"`
+	// CustomEndpoints 是人工指定的渠道价格接口：key 为渠道 ID，value 为端点路径或完整地址。
+	// 没有配置的渠道由巡检自动按 /api/pricing、/api/ratio_config 顺序探测。
+	CustomEndpoints map[string]string `json:"custom_endpoints"`
 }
 
 var (
@@ -51,5 +54,6 @@ func (setting PriceMonitorSetting) Normalized() PriceMonitorSetting {
 	} else if setting.TimeoutSeconds > maximumTimeoutSeconds {
 		setting.TimeoutSeconds = maximumTimeoutSeconds
 	}
+	setting.CustomEndpoints = normalizeCustomEndpoints(setting.CustomEndpoints)
 	return setting
 }

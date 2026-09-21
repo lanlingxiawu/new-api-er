@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -43,7 +44,20 @@ const (
 	modelsDevHost               = "models.dev"
 	modelsDevPath               = "/api.json"
 	modelsDevInputCostRatioBase = 1000.0
+	// emptyPricingPayloadError 表示来源返回了可解析的响应，但里面一个模型价格都没有。
+	// 这种来源必须判为失败：当成功来源处理会让它的每个模型都被标成"未提供"，
+	// 把接口故障伪装成价格差异。
+	emptyPricingPayloadError = "empty pricing payload"
 )
+
+// pricingPayloadHasPrices 判断转换后的数据里是否存在可比较的价格基准：
+// 按量倍率、按次价格或阶梯表达式，三者有其一即可。
+// completion_ratio、cache_ratio 之类都是相对倍率，没有基准价时无法单独构成一个价格。
+func pricingPayloadHasPrices(data map[string]any) bool {
+	return len(valueMap(data["model_ratio"])) > 0 ||
+		len(valueMap(data["model_price"])) > 0 ||
+		len(valueMap(data[billing_setting.BillingExprField])) > 0
+}
 
 func nearlyEqual(a, b float64) bool {
 	if a > b {
@@ -97,6 +111,12 @@ type pricingSource struct {
 	data             map[string]any
 	applicableModels map[string]struct{}
 	failed           bool
+	// 以下字段只由价格巡检填充，用于在表头说明这个来源本轮是否真的参与了对比。
+	status        string
+	failureReason string
+	endpoint      string
+	fetchedModels int
+	matchedModels int
 }
 
 func valueMap(value any) map[string]any {
@@ -215,6 +235,13 @@ func fetchUpstreamPricingData(requestContext context.Context, upstreams []dto.Up
 }
 
 func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int) (map[string]map[string]dto.DifferenceItem, []dto.TestResult, []pricingSource) {
+	testResults, successfulChannels := fetchUpstreamPricingSources(requestContext, upstreams, timeoutSeconds)
+	return buildDifferences(getLocalPricingSyncData(), successfulChannels), testResults, successfulChannels
+}
+
+// fetchUpstreamPricingSources 只负责抓取和解析。价格巡检需要按端点分多轮抓取、
+// 合并之后再统一算一次差异，所以差异计算留给调用方。
+func fetchUpstreamPricingSources(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int) ([]dto.TestResult, []pricingSource) {
 	var wg sync.WaitGroup
 	ch := make(chan upstreamResult, len(upstreams))
 
@@ -403,6 +430,11 @@ func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams 
 					}
 				}
 				if isType1 {
+					if !pricingPayloadHasPrices(type1Data) {
+						logger.LogWarn(requestContext, "empty pricing payload from "+chItem.Name)
+						ch <- upstreamResult{Name: uniqueName, Err: emptyPricingPayloadError}
+						return
+					}
 					ch <- upstreamResult{Name: uniqueName, Data: type1Data}
 					return
 				}
@@ -519,14 +551,18 @@ func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams 
 				converted[billing_setting.BillingExprField] = valueMap(billingExprMap)
 			}
 
+			if !pricingPayloadHasPrices(converted) {
+				logger.LogWarn(requestContext, "empty pricing payload from "+chItem.Name)
+				ch <- upstreamResult{Name: uniqueName, Err: emptyPricingPayloadError}
+				return
+			}
+
 			ch <- upstreamResult{Name: uniqueName, Data: converted}
 		}(chn)
 	}
 
 	wg.Wait()
 	close(ch)
-
-	localData := getLocalPricingSyncData()
 
 	var testResults []dto.TestResult
 	var successfulChannels []pricingSource
@@ -547,9 +583,7 @@ func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams 
 		}
 	}
 
-	differences := buildDifferences(localData, successfulChannels)
-
-	return differences, testResults, successfulChannels
+	return testResults, successfulChannels
 }
 
 func buildDifferences(localData map[string]any, successfulChannels []pricingSource) map[string]map[string]dto.DifferenceItem {
@@ -817,6 +851,9 @@ func convertOpenRouterToRatioData(reader io.Reader) (map[string]any, error) {
 	}
 	if len(cacheRatioMap) > 0 {
 		converted["cache_ratio"] = cacheRatioMap
+	}
+	if !pricingPayloadHasPrices(converted) {
+		return nil, errors.New(emptyPricingPayloadError)
 	}
 
 	return converted, nil

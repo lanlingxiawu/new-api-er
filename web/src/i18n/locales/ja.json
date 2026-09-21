@@ -7152,6 +7152,17 @@
     "Charged (cost > 0)": "Charged (cost > 0)",
     "Free (cost = 0)": "Free (cost = 0)",
     "Summary file": "Summary file",
-    "Aggregated over the whole range": "Aggregated over the whole range"
+    "Aggregated over the whole range": "Aggregated over the whole range",
+    "Channel price endpoints": "チャネル価格エンドポイント",
+    "All channels are probed automatically.": "すべてのチャネルを自動的に検出します。",
+    "Channel #{{id}}": "チャネル #{{id}}",
+    "Select channels and endpoints": "チャネルとエンドポイントを選択",
+    "Configured channels use only that endpoint. Channels left out are probed automatically: /api/pricing first, then /api/ratio_config.": "設定したチャネルはそのエンドポイントのみを使用します。未設定のチャネルは /api/pricing、次に /api/ratio_config を自動的に試します。",
+    "Compared {{matched}} of {{fetched}} models": "{{fetched}} 件中 {{matched}} 件のモデルを比較",
+    "{{count}} sources did not take part in this comparison": "{{count}} 件の価格ソースが今回の比較に参加していません",
+    "No models configured on this channel, nothing to compare": "このチャネルにモデルが設定されていないため、比較できません",
+    "Model names do not match the platform, nothing to compare": "モデル名がプラットフォームと一致しないため、比較できません",
+    "The source returned no price data": "このソースは価格データを返しませんでした",
+    "Source check failed, waiting for the next run": "ソースの確認に失敗しました。次回の巡回をお待ちください"
   }
 }

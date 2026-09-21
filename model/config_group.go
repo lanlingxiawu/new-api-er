@@ -121,7 +121,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
 			return false, err
 		}
-		if draft != draft.Normalized() {
+		if !draft.IsNormalized() {
 			return false, fmt.Errorf("invalid price monitor configuration")
 		}
 		for k, v := range values {
@@ -242,6 +242,16 @@ func validatePriceMonitorFields(values map[string]string) error {
 			if _, err := strconv.Atoi(value); err != nil {
 				return fmt.Errorf("invalid integer configuration value")
 			}
+		case "custom_endpoints":
+			// updateConfigFromMap 对 map 字段解析失败时是 continue，非法 JSON 会被静默丢弃、
+			// option 行却照样落库，所以必须在这里显式拦下来。
+			endpoints := make(map[string]string)
+			if err := common.UnmarshalJsonStr(value, &endpoints); err != nil {
+				return fmt.Errorf("invalid price endpoint configuration")
+			}
+			if _, err := price_monitor_setting.ValidateCustomEndpoints(endpoints); err != nil {
+				return fmt.Errorf("invalid price endpoint configuration")
+			}
 		}
 	}
 	return nil
@@ -285,7 +295,7 @@ var veridropMonitorFields = fieldSet(
 )
 var priceMonitorFields = fieldSet(
 	"enabled", "interval_minutes", "timeout_seconds", "include_official",
-	"include_models_dev", "model_whitelist",
+	"include_models_dev", "model_whitelist", "custom_endpoints",
 )
 var channelDailyLimitFields = fieldSet("enabled", "timezone", "retention_days")
 

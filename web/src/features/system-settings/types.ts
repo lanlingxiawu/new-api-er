@@ -116,6 +116,12 @@ export type PriceMonitorSourceHeader = {
   name: string
   type: 'platform' | 'official' | 'models_dev' | 'channel'
   api_url?: string
+  /** 这个来源本轮是否真的参与了价格对比；旧快照没有该字段，按 ok 处理。 */
+  status?: 'ok' | 'failed' | 'no_overlap' | 'no_models'
+  failure_reason?: 'fetch' | 'empty'
+  fetched_models?: number
+  matched_models?: number
+  endpoint?: string
 }
 
 export type PriceMonitorMatrixItem = {
@@ -135,6 +141,7 @@ export type PriceMonitorStatusResponse = {
       include_official: boolean
       include_models_dev: boolean
       model_whitelist: string
+      custom_endpoints?: Record<string, string>
     }
     snapshot: {
       checked_at: number

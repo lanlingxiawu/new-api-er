@@ -100,6 +100,7 @@ export type PriceMonitorSettingsRequest = {
   timeout_seconds: number
   include_models_dev: boolean
   model_whitelist: string
+  custom_endpoints: Record<string, string>
 }
 
 export async function updatePriceMonitorSettings(
