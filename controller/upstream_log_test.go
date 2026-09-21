@@ -39,8 +39,8 @@ func TestNormalizeAndValidateFilters(t *testing.T) {
 	_, ok = normalizeAndValidateFilters(upstreamLogFiltersDTO{StartTimestamp: 200, EndTimestamp: 100})
 	assert.False(t, ok)
 
-	// negative log id rejected
-	_, ok = normalizeAndValidateFilters(upstreamLogFiltersDTO{LogId: -1})
+	// negative channel rejected
+	_, ok = normalizeAndValidateFilters(upstreamLogFiltersDTO{Channel: -1})
 	assert.False(t, ok)
 }
 

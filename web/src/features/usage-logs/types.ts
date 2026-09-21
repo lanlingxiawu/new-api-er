@@ -97,7 +97,7 @@ export interface UpstreamLogItem {
   ip?: string
 }
 
-export type UpstreamLogScope = 'exact' | 'filtered' | 'recent_fallback'
+export type UpstreamLogScope = 'exact' | 'filtered' | 'recent'
 
 export interface UpstreamLogQueryData {
   source?: {
@@ -116,7 +116,12 @@ export interface UpstreamLogQueryData {
   query: {
     filters: UpstreamLogFilters
     scope: UpstreamLogScope
-    upstream_supports_exact: boolean
+    /**
+     * True when an upstream account access token searched the account's whole history.
+     * False means only a channel key's most recent logs were searched, so "no result"
+     * does not mean the upstream no longer has the log.
+     */
+    checked_account: boolean
     page: number
     page_size: number
   }
