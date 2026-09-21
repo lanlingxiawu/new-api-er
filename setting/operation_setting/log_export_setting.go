@@ -31,6 +31,12 @@ type LogExportSetting struct {
 	JobTTLHours int `json:"job_ttl_hours"`
 	// MaxTemplatesPerUser 单用户自定义模板数上限。
 	MaxTemplatesPerUser int `json:"max_templates_per_user"`
+	// MaxFilterValues 单个数组型筛选条件（用量来源、结束原因等）的取值个数上限，
+	// 防止拼出畸形条件让逐行判定退化。
+	MaxFilterValues int `json:"max_filter_values"`
+	// SummaryMaxGroups 聚合汇总导出的维度组合数上限。聚合结果驻留内存，
+	// 组合数失控会直接把进程 OOM 掉；超限时任务失败并提示减少维度。
+	SummaryMaxGroups int `json:"summary_max_groups"`
 
 	// ── 资源治理 ────────────────────────────────────────────
 	// BatchSize 每批从 LOG_DB 读取的行数。
@@ -81,6 +87,8 @@ const (
 	DefaultLogExportTimeoutSec           = 7200
 	DefaultLogExportJobTTLHours          = 24
 	DefaultLogExportMaxTemplatesPerUser  = 50
+	DefaultLogExportMaxFilterValues      = 20
+	DefaultLogExportSummaryMaxGroups     = 200000
 
 	DefaultLogExportBatchSize            = 3000
 	DefaultLogExportBatchSleepMs         = 100
@@ -172,6 +180,8 @@ var logExportSetting = LogExportSetting{
 	TimeoutSec:           DefaultLogExportTimeoutSec,
 	JobTTLHours:          DefaultLogExportJobTTLHours,
 	MaxTemplatesPerUser:  DefaultLogExportMaxTemplatesPerUser,
+	MaxFilterValues:      DefaultLogExportMaxFilterValues,
+	SummaryMaxGroups:     DefaultLogExportSummaryMaxGroups,
 
 	BatchSize:            DefaultLogExportBatchSize,
 	BatchSleepMs:         DefaultLogExportBatchSleepMs,
@@ -430,3 +440,23 @@ func init() {
 // GetLogExportSetting 返回配置。调用方必须在使用点现调，不得跨请求/跨批次缓存指针，
 // 否则热更新失效（见 docs/design/usage-log-export.md §8.1）。
 func GetLogExportSetting() *LogExportSetting { return &logExportSetting }
+
+// GetMaxFilterValues 单个数组型筛选条件的取值个数上限。
+func (s *LogExportSetting) GetMaxFilterValues() int {
+	if s.MaxFilterValues <= 0 {
+		return DefaultLogExportMaxFilterValues
+	}
+	return clampInt(s.MaxFilterValues, 1, 200)
+}
+
+// GetSummaryMaxGroups 聚合汇总的维度组合数上限。
+//
+// 默认 200,000（约 30 MB）刻意偏小：`date × model` 31 天 × 200 个模型只有 6,200 组，
+// 而 `date × username × model` 在几千活跃用户下可达千万级。宁可让人重试，
+// 也不要在导出跑了十分钟之后才 OOM。
+func (s *LogExportSetting) GetSummaryMaxGroups() int {
+	if s.SummaryMaxGroups <= 0 {
+		return DefaultLogExportSummaryMaxGroups
+	}
+	return clampInt(s.SummaryMaxGroups, 1000, 2000000)
+}

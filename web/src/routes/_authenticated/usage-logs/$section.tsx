@@ -48,6 +48,13 @@ const usageLogsSearchSchema = z.object({
   upstreamRequestId: z.string().optional().catch(''),
   startTime: z.number().optional(),
   endTime: z.number().optional(),
+  // 「查同类」带过来的特征。刻意只传该行**直接可观察的字段值**，
+  // 它们与导出筛选项一一对应，等同于「按这一行的用量来源筛选」，
+  // 不包含任何异常判定规则——规则只有后端 logAnomalyFlags 一份，
+  // 前端再写一遍必然漂移。
+  anomalyUsageSource: z.string().optional().catch(''),
+  anomalyEndReason: z.string().optional().catch(''),
+  anomalyMinRetry: z.number().int().positive().optional(),
   localSection: z
     .enum(['common', 'drawing', 'task', 'export'])
     .optional()

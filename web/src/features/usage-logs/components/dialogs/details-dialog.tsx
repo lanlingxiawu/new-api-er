@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -49,6 +50,7 @@ interface DetailsDialogProps {
  */
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [showUpstreamComparison, setShowUpstreamComparison] = useState(false)
   const typeConfig = getLogTypeConfig(props.log.type)
   const upstreamQuery = useUpstreamCompareQuery(
@@ -69,6 +71,46 @@ export function DetailsDialog(props: DetailsDialogProps) {
         : undefined,
     [props.log, upstreamItem]
   )
+
+  // 「查同类」：带着这一行可观察的特征跳到导出中心。
+  //
+  // 这里只读取字段值（用量来源、流结束原因、重试链长度），它们与导出的筛选项
+  // 一一对应；异常「判定规则」只有后端一份，前端不复制。
+  // 刻意不带用户名与令牌：要回答的是「这个异常影响了多少人」，
+  // 预填用户名会把视野锁死在最先被发现的那一个人身上。
+  const findSimilar = useMemo(() => {
+    const other = parseLogOther(props.log.other)
+    const usageSource = other?.stream_result?.usage_source
+    const endReason =
+      other?.stream_status?.status === 'error'
+        ? other?.stream_status?.end_reason
+        : undefined
+    const retries = other?.admin_info?.use_channel?.length ?? 0
+
+    const search: Record<string, string | number> = {}
+    if (usageSource && usageSource !== 'upstream') {
+      search.anomalyUsageSource = usageSource
+    }
+    if (endReason) search.anomalyEndReason = endReason
+    if (retries > 1) search.anomalyMinRetry = 2
+    if (!Object.keys(search).length) return undefined
+
+    // 时间窗口取该行前后各 3 天，夹在后端的跨度上限内。
+    const created = props.log.created_at * 1000
+    const threeDays = 3 * 24 * 3600 * 1000
+    return () => {
+      void navigate({
+        to: '/usage-logs/$section',
+        params: { section: 'export' },
+        search: {
+          ...search,
+          model: props.log.model_name || undefined,
+          startTime: created - threeDays,
+          endTime: created + threeDays,
+        },
+      })
+    }
+  }, [props.log, navigate])
 
   let dialogWidthClassName = 'sm:max-w-lg'
   if (isTieredBillingLog(props.log.type, parseLogOther(props.log.other))) {
@@ -131,6 +173,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             ? undefined
             : () => setShowUpstreamComparison(true)
         }
+        onFindSimilar={findSimilar}
         showStreamDiagnostic={props.open}
         compareColumn={showUpstreamComparison ? 1 : undefined}
         lowerThanUpstream={lowerThanUpstream}

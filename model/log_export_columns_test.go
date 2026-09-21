@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -455,4 +456,161 @@ func TestFormatAny_Values(t *testing.T) {
 	assert.Equal(t, "5.25", formatAny(float64(5.25)))
 	assert.Equal(t, "1|2", formatAny([]any{float64(1), float64(2)}))
 	assert.Equal(t, "-3", formatAny(float64(-3)))
+}
+
+// 每个导出列都必须在三个 locale 里有表头译文。
+//
+// 缺失时 i18n.Translate 返回 key 本身（那是为了避免 panic 的兜底），于是导出文件的
+// 表头会变成 `log_export.col.usage_source` 这样的裸 key——文件照常生成、任务照常成功，
+// 没有任何报错，只有拿到文件的人才会发现。注册表加列、locale 忘了加，是最容易犯且
+// 最难在评审里看出来的一种疏漏，因此必须由测试锁住。
+func TestLogExportColumns_EveryColumnHasHeaderTranslation(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	for _, col := range LogExportColumns() {
+		key := LogExportColumnI18nKey(col.Key)
+		for _, lang := range []string{"en", "zh-CN", "zh-TW"} {
+			got := i18n.Translate(lang, key)
+			assert.NotEqual(t, key, got,
+				"列 %s 在 %s 下没有表头译文，导出的表头会是裸 key", col.Key, lang)
+			assert.NotEmpty(t, got, "列 %s 在 %s 下的表头译文为空", col.Key, lang)
+		}
+	}
+}
+
+// ── 受众分级与模板 ────────────────────────────────────────────────
+
+// 标为「可发给客户」的模板，其每一列都必须是 AudienceCustomer。
+//
+// 这是整套受众分级里最重要的一条断言：模板列清单和列的受众标记是两处独立维护的
+// 数据，某天有人往对账单模板里加一列渠道名、或者把某列改成 AdminOnly 却忘了从
+// 对账单里摘掉，人工评审很难发现，而后果是把内部信息直接发到客户手里。
+func TestLogExportTemplates_CustomerAudienceIsClosed(t *testing.T) {
+	customerTemplates := 0
+	for _, tpl := range BuiltinLogExportTemplates() {
+		if tpl.Audience != LogExportAudienceCustomer.String() {
+			continue
+		}
+		customerTemplates++
+		require.NotEmpty(t, tpl.Columns, "模板 %s 没有列", tpl.ID)
+		for _, key := range tpl.Columns {
+			col, ok := LookupLogExportColumn(key)
+			require.True(t, ok, "模板 %s 引用了不存在的列 %s", tpl.ID, key)
+			assert.Equal(t, LogExportAudienceCustomer, col.Audience,
+				"模板 %s 标为可发给客户，但列 %s 是内部列", tpl.ID, key)
+			assert.False(t, col.AdminOnly, "列 %s 是管理员专属，不能出现在客户文件里", key)
+			assert.False(t, col.RootOnly, "列 %s 是 root 专属，不能出现在客户文件里", key)
+		}
+	}
+	assert.Equal(t, 1, customerTemplates, "目前只应有「客户对账单」一个面向客户的模板")
+}
+
+// 反向守卫：被标为可发给客户的列，不能同时是管理员/root 专属。
+// init() 里有同样的检查（启动即 panic），这里让它在测试阶段就暴露。
+func TestLogExportColumns_CustomerColumnsAreNotPrivileged(t *testing.T) {
+	for _, key := range logExportCustomerColumns {
+		col, ok := LookupLogExportColumn(key)
+		require.True(t, ok, "客户列清单里的 %s 不在注册表中", key)
+		assert.False(t, col.AdminOnly || col.RootOnly,
+			"列 %s 既标为可发给客户又是特权列，两者不可兼得", key)
+	}
+}
+
+// 明确排除的字段不得混进客户对账单。逐条列出而不是笼统断言，
+// 是为了让「为什么这列不给客户」的结论留在测试里，而不是只留在文档里。
+func TestLogExportTemplates_CustomerInvoiceExcludesSensitiveFields(t *testing.T) {
+	tpl, ok := LookupBuiltinLogExportTemplate(LogExportTemplateCustomerInvoice)
+	require.True(t, ok)
+
+	excluded := map[string]string{
+		"upstream_model_name": "暴露模型映射关系",
+		"is_model_mapped":     "暴露模型映射关系",
+		"upstream_request_id": "泄露上游供应商身份",
+		"channel_id":          "内部供应链",
+		"channel_name":        "内部供应链",
+		"retry_chain":         "内部供应链",
+		"billing_source":      "内部计费路径",
+		"billing_mode":        "内部计费路径",
+		"request_rules":       "计费规则原文等于把定价策略发出去",
+		"ip":                  "个人数据且与对账无关",
+		"content":             "会携带错误信息与内部提示文本",
+		"usage_source":        "诊断字段，与对账无关",
+		"stream_end_reason":   "诊断字段，与对账无关",
+		"anomaly_flags":       "诊断字段，与对账无关",
+		"other_raw":           "原始 other 含全部内部信息",
+		"user_group_ratio":    "命中专属价时与 group_ratio 同值、没命中时为空，给客户只会引出这两列什么关系的追问",
+		"quota":               "额度是内部计量单位，客户核对账单只看 cost_usd",
+	}
+	for _, key := range tpl.Columns {
+		if why, bad := excluded[key]; bad {
+			t.Errorf("客户对账单不得包含 %s：%s", key, why)
+		}
+	}
+}
+
+// 模板的用途分组必须是已知取值，否则前端分组会漏掉整组模板。
+func TestLogExportTemplates_PurposeIsKnown(t *testing.T) {
+	known := map[string]bool{
+		LogExportPurposeReconciliation: true,
+		LogExportPurposeAnalytics:      true,
+		LogExportPurposeDiagnostic:     true,
+		LogExportPurposeAudit:          true,
+	}
+	for _, tpl := range BuiltinLogExportTemplates() {
+		assert.True(t, known[tpl.Purpose], "模板 %s 的用途 %q 未知", tpl.ID, tpl.Purpose)
+		assert.Contains(t, []string{"internal", "customer"}, tpl.Audience,
+			"模板 %s 的受众取值非法", tpl.ID)
+	}
+}
+
+// 运营统计模板刻意不依赖 other——这是它「最快、文件最小」的全部理由，
+// 一旦有人往里加一个 other 字段，这个性质就没了且无人察觉。
+func TestLogExportTemplates_OperationsAvoidsOtherParsing(t *testing.T) {
+	tpl, ok := LookupBuiltinLogExportTemplate(LogExportTemplateOperations)
+	require.True(t, ok)
+	set, err := ResolveLogExportColumns(tpl.Columns, true)
+	require.NoError(t, err)
+	assert.False(t, set.NeedOther, "运营统计模板不得依赖 other")
+	assert.NotContains(t, set.SelectFields(), "other", "SQL 不该取 other")
+}
+
+// 异常排查模板必须真的覆盖异常诊断列，否则它只是另一个性能模板。
+func TestLogExportTemplates_AnomalyCoversDiagnosticColumns(t *testing.T) {
+	tpl, ok := LookupBuiltinLogExportTemplate(LogExportTemplateAnomaly)
+	require.True(t, ok)
+	for _, key := range []string{"anomaly_flags", "usage_source", "settlement_state",
+		"stream_end_reason", "retry_count", "quota_saturation"} {
+		assert.Contains(t, tpl.Columns, key, "异常排查模板缺少 %s", key)
+	}
+}
+
+// user_group_ratio 只在命中专属价时才有值。没命中时日志里躺的是哨兵值 -1
+// （HandleGroupRatio 的初值，文本计费路径曾无条件写入，历史数据里百万量级），
+// 导出必须渲染成空——打印 -1 会被当成一个负倍率。
+func TestLogExportColumns_UserGroupRatioHidesSentinel(t *testing.T) {
+	cases := []struct {
+		name  string
+		other string
+		want  string
+	}{
+		{name: "命中专属价", other: `{"group_ratio":10,"user_group_ratio":10}`, want: "10"},
+		{name: "专属价为零", other: `{"group_ratio":10,"user_group_ratio":0}`, want: "0"},
+		{name: "小数专属价", other: `{"group_ratio":1,"user_group_ratio":0.7}`, want: "0.7"},
+		{name: "哨兵值 -1", other: `{"group_ratio":10,"user_group_ratio":-1}`, want: ""},
+		{name: "新日志不再写该字段", other: `{"group_ratio":10}`, want: ""},
+		{name: "没有 other", other: ``, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderOne(t, "user_group_ratio", &Log{Other: tc.other}, newTestRowCtx())
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// 其余取 other 的倍率列不受影响：哨兵判定只属于 user_group_ratio，
+// 别的列出现负值是真的负值，不能一起吞掉。
+func TestLogExportColumns_OtherRatiosKeepNegativeValues(t *testing.T) {
+	l := &Log{Other: `{"group_ratio":-1,"model_ratio":-1}`}
+	assert.Equal(t, "-1", renderOne(t, "group_ratio", l, newTestRowCtx()))
+	assert.Equal(t, "-1", renderOne(t, "model_ratio", l, newTestRowCtx()))
 }

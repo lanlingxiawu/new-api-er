@@ -18,6 +18,7 @@ const (
 	LogExportGroupTokens      = "tokens"
 	LogExportGroupBilling     = "billing"
 	LogExportGroupPerformance = "performance"
+	LogExportGroupDiagnostic  = "diagnostic"
 	LogExportGroupAdmin       = "admin"
 	LogExportGroupAudit       = "audit"
 )
@@ -59,6 +60,8 @@ func LogExportTypeI18nKey(logType int) string {
 type rowCtx struct {
 	other       map[string]any
 	otherParsed bool
+	// otherOwner 当前缓存的 other 属于哪一行，用于跨行自动失效（见 otherMap）。
+	otherOwner *Log
 	// channelNames 跨整次导出复用的渠道名缓存（含负缓存），由扫描层填充。
 	channelNames map[int]string
 	// loc 导出使用的时区。
@@ -107,8 +110,34 @@ type LogExportColumn struct {
 	NeedOther bool
 	// NeedChannelName 是否需要查询时解析渠道名。
 	NeedChannelName bool
+	// Audience 该列是否可以出现在发给客户的文件里。
+	//
+	// 它比 AdminOnly 更严：AdminOnly 管「技术上谁能读到」，Audience 管「我们愿不愿意
+	// 主动把它写进客户手里的文件」——用户在自己的日志详情页点开能看到某字段，
+	// 不代表我们要把它批量导出成一份文件发过去。
+	// 零值是 Internal：新增列不标注就自动落在安全的一侧。
+	// AdminOnly / RootOnly 的列一律是 Internal，无需重复标注。
+	Audience LogExportAudience
 	// Extract 取值。返回 string，内部一律用 strconv 而非 fmt.Sprintf。
 	Extract func(l *Log, ctx *rowCtx) string
+}
+
+// LogExportAudience 见 LogExportColumn.Audience。
+type LogExportAudience uint8
+
+const (
+	// LogExportAudienceInternal 仅内部使用（零值）。
+	LogExportAudienceInternal LogExportAudience = iota
+	// LogExportAudienceCustomer 可以出现在发给客户的文件里。
+	LogExportAudienceCustomer
+)
+
+// String 返回下发前端的取值。
+func (a LogExportAudience) String() string {
+	if a == LogExportAudienceCustomer {
+		return "customer"
+	}
+	return "internal"
 }
 
 var (
@@ -118,9 +147,16 @@ var (
 
 // ── other 取值辅助 ────────────────────────────────────────────────
 
+// otherMap 解析并缓存本行的 other。
+//
+// 缓存按「属于哪一行」失效，而不是靠调用方在每行开头显式重置：行级筛选要在渲染
+// **之前**读 other，若靠顺序重置，筛选解析一次、渲染再解析一次——而 other 的 JSON
+// 解析占了整个渲染成本的约九成。用行指针做归属判断，先判定后渲染只解析一次，
+// 且不可能因为调用顺序变化而读到上一行的数据。
 func (ctx *rowCtx) otherMap(l *Log) map[string]any {
-	if !ctx.otherParsed {
+	if !ctx.otherParsed || ctx.otherOwner != l {
 		ctx.otherParsed = true
+		ctx.otherOwner = l
 		ctx.other = nil
 		if l.Other != "" {
 			if m, err := common.StrToMap(l.Other); err == nil {
@@ -137,6 +173,27 @@ func (ctx *rowCtx) adminInfo(l *Log) map[string]any {
 		return nil
 	}
 	sub, _ := m["admin_info"].(map[string]any)
+	return sub
+}
+
+// streamResult 取 other.stream_result（公有）。只有流式请求才有这个字段，
+// 返回 nil 表示「非流式 / 旧日志」，不代表异常。
+func (ctx *rowCtx) streamResult(l *Log) map[string]any {
+	m := ctx.otherMap(l)
+	if m == nil {
+		return nil
+	}
+	sub, _ := m["stream_result"].(map[string]any)
+	return sub
+}
+
+// streamStatus 取 other.stream_status（公有）。同样仅流式请求才有。
+func (ctx *rowCtx) streamStatus(l *Log) map[string]any {
+	m := ctx.otherMap(l)
+	if m == nil {
+		return nil
+	}
+	sub, _ := m["stream_status"].(map[string]any)
 	return sub
 }
 
@@ -207,6 +264,24 @@ func formatAny(v any) string {
 	}
 }
 
+// isUnsetUserGroupRatio 判断 other.user_group_ratio 是不是「没有专属倍率」的哨兵值。
+//
+// -1 来自 HandleGroupRatio 的 GroupRatioInfo 初值，文本计费路径以前无条件把它写进日志，
+// 所以历史数据里大量存在（测试库单是 group_ratio=10 的就有 141 万条）。倍率合法取值
+// 不小于 0，因此负数一律当作未设置。类型集与 formatAny 保持一致。
+func isUnsetUserGroupRatio(v any) bool {
+	switch n := v.(type) {
+	case float64:
+		return n < 0
+	case int:
+		return n < 0
+	case int64:
+		return n < 0
+	default:
+		return false
+	}
+}
+
 func otherValue(m map[string]any, key string) string {
 	if m == nil {
 		return ""
@@ -261,6 +336,27 @@ func rootInfoCol(key, otherKey, label, group string) LogExportColumn {
 	}
 }
 
+// streamResultCol 生成一个从 other.stream_result 取值的列。
+// stream_result 由 SetPublic 写入，属主本人可见，因此不标 AdminOnly。
+func streamResultCol(key, otherKey, label string) LogExportColumn {
+	return LogExportColumn{
+		Key: key, Label: label, Group: LogExportGroupDiagnostic, NeedOther: true,
+		Extract: func(l *Log, ctx *rowCtx) string {
+			return otherValue(ctx.streamResult(l), otherKey)
+		},
+	}
+}
+
+// streamStatusCol 生成一个从 other.stream_status 取值的列。
+func streamStatusCol(key, otherKey, label string) LogExportColumn {
+	return LogExportColumn{
+		Key: key, Label: label, Group: LogExportGroupDiagnostic, NeedOther: true,
+		Extract: func(l *Log, ctx *rowCtx) string {
+			return otherValue(ctx.streamStatus(l), otherKey)
+		},
+	}
+}
+
 // auditInfoCol 生成一个从 other.audit_info 取值的列。
 func auditInfoCol(key, otherKey, label string) LogExportColumn {
 	return LogExportColumn{
@@ -272,11 +368,61 @@ func auditInfoCol(key, otherKey, label string) LogExportColumn {
 	}
 }
 
+// logExportCustomerColumns 是可以出现在「客户对账单」里的列。
+//
+// 收录标准：客户要能凭这份文件把账自己复算一遍，且不含任何暴露上游供应链或
+// 内部定价策略的字段。逐列裁决理由见 docs/design/usage-log-export-anomaly-and-templates.md §4.3。
+//
+// 明确排除且不要再加回来的：
+//   - upstream_model_name / is_model_mapped / upstream_request_id —— 暴露模型映射与上游身份
+//   - billing_source / billing_mode / request_rules —— 内部计费路径与规则原文
+//   - ip / content —— 与对账无关；content 会携带错误信息与内部提示文本
+//   - 全部 stream_* 诊断列、frt、tokens_per_sec、use_time —— 与对账无关，
+//     放进去只会引出「为什么这条慢」的二次追问
+//   - user_group_ratio —— 它不是另一个乘数：HandleGroupRatio 在命中专属倍率时把同一个
+//     值同时写进 group_ratio 和 user_group_ratio，没命中时它是哨兵值 -1。给客户的文件里
+//     放一列要么与 group_ratio 逐字重复、要么为空的列，只会引出「这两列什么关系」的追问。
+//     它的实际用途是内部核账时标出「这条用的是专属价」，留在内部模板即可
+//   - quota —— 本站的内部计量单位，客户既核对不了账单，又要反过来问换算关系；
+//     金额一列 cost_usd 才是他要的
+var logExportCustomerColumns = []string{
+	// 标识
+	"created_at", "request_id", "model_name", "token_name", "group",
+	// 计费基数
+	"prompt_tokens", "completion_tokens", "total_tokens",
+	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h",
+	"text_input", "text_output", "audio_input", "audio_output",
+	"image_output", "image_cache_tokens", "billing_tokens",
+	// 倍率与单价：不给这些，客户就只能核对总额、对不上就只能找客服
+	"model_ratio", "completion_ratio", "group_ratio",
+	"cache_ratio", "cache_creation_ratio", "cache_creation_ratio_5m", "cache_creation_ratio_1h",
+	"audio_ratio", "audio_completion_ratio", "image_ratio",
+	"model_price", "billing_unit", "fixed_price", "image_count",
+	"tool_surcharges", "usage_facts",
+	// 客户按哪一档阶梯价计费，属于他该知道的信息
+	"matched_tier",
+	// 结果：只给金额。额度是本站的内部计量单位，客户拿它既核对不了账单、
+	// 又要反过来问「额度怎么换算成钱」，给 cost_usd 就够了。
+	"cost_usd",
+}
+
 func init() {
 	logExportColumns = buildLogExportColumns()
 	logExportColumnMap = make(map[string]*LogExportColumn, len(logExportColumns))
 	for i := range logExportColumns {
 		logExportColumnMap[logExportColumns[i].Key] = &logExportColumns[i]
+	}
+	for _, key := range logExportCustomerColumns {
+		col, ok := logExportColumnMap[key]
+		if !ok {
+			// 注册表里没有这个 key：清单写错了。此处 panic 在进程启动时就暴露，
+			// 好过让「客户对账单」静默少一列。测试也会先一步抓到。
+			panic("log export: unknown customer column " + key)
+		}
+		if col.AdminOnly || col.RootOnly {
+			panic("log export: admin-only column marked as customer-facing: " + key)
+		}
+		col.Audience = LogExportAudienceCustomer
 	}
 }
 
@@ -353,7 +499,21 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("model_ratio", "Model Ratio", LogExportGroupBilling),
 		otherCol("completion_ratio", "Completion Ratio", LogExportGroupBilling),
 		otherCol("group_ratio", "Group Ratio", LogExportGroupBilling),
-		otherCol("user_group_ratio", "User Group Ratio", LogExportGroupBilling),
+		// user_group_ratio 只在该用户配了专属分组倍率时才有意义，值与 group_ratio 相同
+		// （HandleGroupRatio 把专属倍率同时写进两个字段）；没配时历史日志里是哨兵值 -1。
+		// 这一列的作用是标出「这条用的是专属价」，所以哨兵值渲染成空，不能打印 -1。
+		{Key: "user_group_ratio", Label: "User Group Ratio", Group: LogExportGroupBilling, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				m := ctx.otherMap(l)
+				if m == nil {
+					return ""
+				}
+				v, ok := m["user_group_ratio"]
+				if !ok || isUnsetUserGroupRatio(v) {
+					return ""
+				}
+				return formatAny(v)
+			}},
 		otherCol("cache_ratio", "Cache Ratio", LogExportGroupBilling),
 		otherCol("cache_creation_ratio", "Cache Write Ratio", LogExportGroupBilling),
 		otherCol("cache_creation_ratio_5m", "Cache Write Ratio (5m)", LogExportGroupBilling),
@@ -388,6 +548,43 @@ func buildLogExportColumns() []LogExportColumn {
 			Extract: func(l *Log, _ *rowCtx) string { return strconv.FormatBool(l.IsStream) }},
 		otherCol("stream_status", "Stream Status", LogExportGroupPerformance),
 		otherCol("reasoning_effort", "Reasoning Effort", LogExportGroupPerformance),
+
+		// ── diagnostic ───────────────────────────────────────
+		// 这些字段原本埋在 other 的嵌套 JSON 里：stream_status 列整块吐 JSON，
+		// 在表格软件里既不能排序也不能筛选。拍平成独立列之后，
+		// 「把所有按估算收费的单子按费用倒序排一遍」才成为一次点击的事。
+		streamResultCol("usage_source", "usage_source", "Usage Source"),
+		streamResultCol("settlement_state", "settlement_state", "Settlement State"),
+		streamResultCol("stream_failed", "failed", "Stream Failed"),
+		streamResultCol("client_gone", "client_gone", "Client Disconnected"),
+		streamResultCol("effective_content", "effective_content", "Effective Content Delivered"),
+		streamResultCol("confirmed_usage", "confirmed_usage", "Upstream Usage Confirmed"),
+		streamResultCol("intended_quota", "intended_quota", "Intended Quota"),
+		streamResultCol("reserved_quota", "reserved_quota", "Reserved Quota"),
+		streamStatusCol("stream_status_text", "status", "Stream Result"),
+		streamStatusCol("stream_end_reason", "end_reason", "Stream End Reason"),
+		streamStatusCol("stream_error_count", "error_count", "Stream Error Count"),
+		otherCol("stream_diagnostic_attempt", "Diagnostic Attempt", LogExportGroupDiagnostic),
+		// 既有的 retry_chain 是文本，无法按次数排序或筛选；重试次数单独成列。
+		{Key: "retry_count", Label: "Retry Count", Group: LogExportGroupDiagnostic,
+			AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				adminInfo := ctx.adminInfo(l)
+				if adminInfo == nil {
+					return ""
+				}
+				chain, ok := adminInfo["use_channel"].([]any)
+				if !ok {
+					return ""
+				}
+				return strconv.Itoa(len(chain))
+			}},
+		// anomaly_flags 与异常筛选共用 logAnomalyFlags，口径永远一致。
+		{Key: "anomaly_flags", Label: "Anomaly Flags", Group: LogExportGroupDiagnostic,
+			AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				return strings.Join(logAnomalyFlags(l, ctx), ",")
+			}},
 
 		// 登录日志字段：属于日志属主本人可见，不标 AdminOnly。
 		otherCol("login_method", "Login Method", LogExportGroupAudit),
@@ -482,6 +679,10 @@ const (
 	LogExportTemplatePerformance = "builtin:performance"
 	LogExportTemplateAudit       = "builtin:audit"
 	LogExportTemplateFull        = "builtin:full"
+	// LogExportTemplateCustomerInvoice 唯一一个可以直接发给客户的模板。
+	LogExportTemplateCustomerInvoice = "builtin:customer_invoice"
+	LogExportTemplateOperations      = "builtin:operations"
+	LogExportTemplateAnomaly         = "builtin:anomaly"
 )
 
 // BuiltinLogExportTemplate 内置模板定义。Name 为英文原文，前端按自身 i18n 约定 t(name)。
@@ -490,7 +691,22 @@ type BuiltinLogExportTemplate struct {
 	Name      string   `json:"name"`
 	Columns   []string `json:"columns"`
 	IsDefault bool     `json:"is_default"`
+	// Purpose 用途分组：reconciliation / analytics / diagnostic / audit。
+	// 前端按它给模板下拉分组，避免九个模板平铺成一长条。
+	Purpose string `json:"purpose"`
+	// Audience 为 "customer" 表示该模板的列全部可发给客户，前端据此打徽章。
+	// 这条性质由 TestLogExportTemplates_CustomerAudienceIsClosed 强制，
+	// 不靠人工维护——否则某天有人往对账单模板里加了一列渠道名，没人会发现。
+	Audience string `json:"audience"`
 }
+
+// 模板用途。
+const (
+	LogExportPurposeReconciliation = "reconciliation"
+	LogExportPurposeAnalytics      = "analytics"
+	LogExportPurposeDiagnostic     = "diagnostic"
+	LogExportPurposeAudit          = "audit"
+)
 
 // asDisplayedColumns 对齐 web 前端使用日志表格（管理员视角）的列。
 // 页面上一个单元格常承载多个数据点（例如「渠道」格里同时有渠道 ID、名称、
@@ -550,6 +766,33 @@ var auditColumns = []string{
 	"login_method", "user_agent", "request_path", "ip", "content",
 }
 
+// customerInvoiceColumns 客户对账单：唯一一个可以直接发给客户的列集。
+// 内容就是 logExportCustomerColumns 本身——两者必须一致，否则「可发给客户」
+// 这个徽章就名不副实。顺序在这里定，保证文件里列的排布是给人看的。
+var customerInvoiceColumns = logExportCustomerColumns
+
+// operationsColumns 运营统计：刻意**不依赖 other**，于是 SQL 不 SELECT other、
+// 也不做 JSON 解析。这是所有模板里最快、文件最小的一个（实测渲染 0.23µs/行 vs
+// 依赖 other 的 10.3µs/行），适合拉整月数据丢进 Excel 透视。
+var operationsColumns = []string{
+	"created_at", "username", "user_id", "group", "token_name", "model_name",
+	"is_stream", "prompt_tokens", "completion_tokens", "total_tokens",
+	"quota", "cost_usd", "use_time",
+}
+
+// anomalyColumns 异常排查：配合异常筛选使用。筛 usage_source=estimated，
+// 导出后按 cost_usd 倒序，一眼看到所有被多收的单子。
+var anomalyColumns = []string{
+	"created_at", "request_id", "username", "model_name",
+	"channel_id", "channel_name", "retry_count", "retry_chain",
+	"anomaly_flags", "usage_source", "settlement_state",
+	"stream_status_text", "stream_end_reason", "stream_error_count",
+	"confirmed_usage", "effective_content", "client_gone",
+	"prompt_tokens", "completion_tokens", "quota", "cost_usd",
+	"intended_quota", "reserved_quota", "quota_saturation",
+	"use_time", "frt", "content",
+}
+
 // BuiltinLogExportTemplates 返回内置模板列表（默认模板排在首位）。
 func BuiltinLogExportTemplates() []BuiltinLogExportTemplate {
 	full := make([]string, 0, len(logExportColumns))
@@ -557,12 +800,24 @@ func BuiltinLogExportTemplates() []BuiltinLogExportTemplate {
 		full = append(full, logExportColumns[i].Key)
 	}
 	return []BuiltinLogExportTemplate{
-		{ID: LogExportTemplateAsDisplayed, Name: "As Displayed", Columns: asDisplayedColumns, IsDefault: true},
-		{ID: LogExportTemplateLegacy, Name: "Legacy Export", Columns: legacyColumns},
-		{ID: LogExportTemplateBilling, Name: "Billing Details", Columns: billingColumns},
-		{ID: LogExportTemplatePerformance, Name: "Performance Diagnostics", Columns: performanceColumns},
-		{ID: LogExportTemplateAudit, Name: "Top-up & Legacy Audit", Columns: auditColumns},
-		{ID: LogExportTemplateFull, Name: "All Columns", Columns: full},
+		{ID: LogExportTemplateAsDisplayed, Name: "As Displayed", Columns: asDisplayedColumns, IsDefault: true,
+			Purpose: LogExportPurposeAnalytics, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateCustomerInvoice, Name: "Customer Invoice", Columns: customerInvoiceColumns,
+			Purpose: LogExportPurposeReconciliation, Audience: LogExportAudienceCustomer.String()},
+		{ID: LogExportTemplateBilling, Name: "Billing Details", Columns: billingColumns,
+			Purpose: LogExportPurposeReconciliation, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateOperations, Name: "Operations Summary", Columns: operationsColumns,
+			Purpose: LogExportPurposeAnalytics, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateAnomaly, Name: "Anomaly Investigation", Columns: anomalyColumns,
+			Purpose: LogExportPurposeDiagnostic, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplatePerformance, Name: "Performance Diagnostics", Columns: performanceColumns,
+			Purpose: LogExportPurposeDiagnostic, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateLegacy, Name: "Legacy Export", Columns: legacyColumns,
+			Purpose: LogExportPurposeReconciliation, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateAudit, Name: "Top-up & Legacy Audit", Columns: auditColumns,
+			Purpose: LogExportPurposeAudit, Audience: LogExportAudienceInternal.String()},
+		{ID: LogExportTemplateFull, Name: "All Columns", Columns: full,
+			Purpose: LogExportPurposeDiagnostic, Audience: LogExportAudienceInternal.String()},
 	}
 }
 
@@ -743,9 +998,8 @@ func (s *LogExportColumnSet) Render(l *Log, ctx *rowCtx, buf []string) []string 
 		buf = make([]string, len(s.Columns))
 	}
 	buf = buf[:len(s.Columns)]
-	// 每行重置解析缓存：other 在本行内只解析一次，跨行不复用。
-	ctx.otherParsed = false
-	ctx.other = nil
+	// other 的解析缓存由 rowCtx.otherMap 按行归属自动失效，这里无需重置：
+	// 行级筛选可能已经为本行解析过一次，重置会让它白白再解析一遍。
 	for i, col := range s.Columns {
 		buf[i] = col.Extract(l, ctx)
 	}

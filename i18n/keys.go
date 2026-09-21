@@ -408,27 +408,30 @@ const (
 
 // Usage log export messages
 const (
-	MsgLogExportDisabled          = "log_export.disabled"
-	MsgLogExportUnavailable       = "log_export.unavailable"
-	MsgLogExportCooldown          = "log_export.cooldown"
-	MsgLogExportBusy              = "log_export.busy"
-	MsgLogExportTooManyJobs       = "log_export.too_many_jobs"
-	MsgLogExportRangeRequired     = "log_export.range_required"
-	MsgLogExportRangeInvalid      = "log_export.range_invalid"
-	MsgLogExportRangeTooLong      = "log_export.range_too_long"
-	MsgLogExportNoColumns         = "log_export.no_columns"
-	MsgLogExportInvalidColumn     = "log_export.invalid_column"
-	MsgLogExportTooManyColumns    = "log_export.too_many_columns"
-	MsgLogExportDiskFull          = "log_export.disk_full"
-	MsgLogExportCreateFailed      = "log_export.create_failed"
-	MsgLogExportJobNotFound       = "log_export.job_not_found"
-	MsgLogExportJobNotReady       = "log_export.job_not_ready"
-	MsgLogExportPartNotFound      = "log_export.part_not_found"
-	MsgLogExportTemplateNotFound  = "log_export.template_not_found"
-	MsgLogExportTemplateNameEmpty = "log_export.template_name_empty"
-	MsgLogExportTemplateNameLong  = "log_export.template_name_long"
-	MsgLogExportTemplateExists    = "log_export.template_exists"
-	MsgLogExportTemplateLimit     = "log_export.template_limit"
+	MsgLogExportDisabled            = "log_export.disabled"
+	MsgLogExportUnavailable         = "log_export.unavailable"
+	MsgLogExportCooldown            = "log_export.cooldown"
+	MsgLogExportBusy                = "log_export.busy"
+	MsgLogExportTooManyJobs         = "log_export.too_many_jobs"
+	MsgLogExportRangeRequired       = "log_export.range_required"
+	MsgLogExportRangeInvalid        = "log_export.range_invalid"
+	MsgLogExportRangeTooLong        = "log_export.range_too_long"
+	MsgLogExportNoColumns           = "log_export.no_columns"
+	MsgLogExportInvalidColumn       = "log_export.invalid_column"
+	MsgLogExportTooManyColumns      = "log_export.too_many_columns"
+	MsgLogExportRangeMinGtMax       = "log_export.range_min_gt_max"
+	MsgLogExportTooManyFilterValues = "log_export.too_many_filter_values"
+	MsgLogExportInvalidFilterValue  = "log_export.invalid_filter_value"
+	MsgLogExportDiskFull            = "log_export.disk_full"
+	MsgLogExportCreateFailed        = "log_export.create_failed"
+	MsgLogExportJobNotFound         = "log_export.job_not_found"
+	MsgLogExportJobNotReady         = "log_export.job_not_ready"
+	MsgLogExportPartNotFound        = "log_export.part_not_found"
+	MsgLogExportTemplateNotFound    = "log_export.template_not_found"
+	MsgLogExportTemplateNameEmpty   = "log_export.template_name_empty"
+	MsgLogExportTemplateNameLong    = "log_export.template_name_long"
+	MsgLogExportTemplateExists      = "log_export.template_exists"
+	MsgLogExportTemplateLimit       = "log_export.template_limit"
 )
 
 // Usage log export: log type cell values
@@ -512,6 +515,23 @@ const (
 	MsgLogExportColStreamStatus    = "log_export.col.stream_status"
 	MsgLogExportColReasoningEffort = "log_export.col.reasoning_effort"
 
+	// Diagnostic columns: stream settlement facts flattened out of other.stream_result
+	// and other.stream_status, plus the derived anomaly marker.
+	MsgLogExportColUsageSource             = "log_export.col.usage_source"
+	MsgLogExportColSettlementState         = "log_export.col.settlement_state"
+	MsgLogExportColStreamFailed            = "log_export.col.stream_failed"
+	MsgLogExportColClientGone              = "log_export.col.client_gone"
+	MsgLogExportColEffectiveContent        = "log_export.col.effective_content"
+	MsgLogExportColConfirmedUsage          = "log_export.col.confirmed_usage"
+	MsgLogExportColIntendedQuota           = "log_export.col.intended_quota"
+	MsgLogExportColReservedQuota           = "log_export.col.reserved_quota"
+	MsgLogExportColStreamStatusText        = "log_export.col.stream_status_text"
+	MsgLogExportColStreamEndReason         = "log_export.col.stream_end_reason"
+	MsgLogExportColStreamErrorCount        = "log_export.col.stream_error_count"
+	MsgLogExportColStreamDiagnosticAttempt = "log_export.col.stream_diagnostic_attempt"
+	MsgLogExportColRetryCount              = "log_export.col.retry_count"
+	MsgLogExportColAnomalyFlags            = "log_export.col.anomaly_flags"
+
 	MsgLogExportColLoginMethod = "log_export.col.login_method"
 	MsgLogExportColUserAgent   = "log_export.col.user_agent"
 	MsgLogExportColRequestPath = "log_export.col.request_path"
@@ -537,6 +557,8 @@ const (
 	MsgLogExportColAdminId               = "log_export.col.admin_id"
 	MsgLogExportColAdminRole             = "log_export.col.admin_role"
 	MsgLogExportColAuthMethod            = "log_export.col.auth_method"
+	MsgLogExportColTargetUsername        = "log_export.col.target_username"
+	MsgLogExportColTargetUserId          = "log_export.col.target_user_id"
 	MsgLogExportColPaymentMethod         = "log_export.col.payment_method"
 	MsgLogExportColCallbackPaymentMethod = "log_export.col.callback_payment_method"
 	MsgLogExportColCallerIp              = "log_export.col.caller_ip"
@@ -596,4 +618,25 @@ const (
 	MsgUpstreamLogEndpointMissing      = "upstream_log.endpoint_missing"
 	MsgUpstreamLogUpstreamDetail       = "upstream_log.upstream_detail"
 	MsgUpstreamLogUpstreamStatus       = "upstream_log.upstream_status"
+)
+
+// Usage log export: summary (aggregate) mode headers.
+// Key layout mirrors model.logSummaryDimI18nKey / logSummaryMetricI18nKey.
+const (
+	MsgLogExportSummaryDimDate      = "log_export.summary.dim.date"
+	MsgLogExportSummaryDimUsername  = "log_export.summary.dim.username"
+	MsgLogExportSummaryDimGroup     = "log_export.summary.dim.group"
+	MsgLogExportSummaryDimModelName = "log_export.summary.dim.model_name"
+	MsgLogExportSummaryDimTokenName = "log_export.summary.dim.token_name"
+	MsgLogExportSummaryDimChannel   = "log_export.summary.dim.channel"
+
+	MsgLogExportSummaryMetricCalls            = "log_export.summary.metric.calls"
+	MsgLogExportSummaryMetricPromptTokens     = "log_export.summary.metric.prompt_tokens"
+	MsgLogExportSummaryMetricCompletionTokens = "log_export.summary.metric.completion_tokens"
+	MsgLogExportSummaryMetricTotalTokens      = "log_export.summary.metric.total_tokens"
+	MsgLogExportSummaryMetricQuota            = "log_export.summary.metric.quota"
+	MsgLogExportSummaryMetricCostUsd          = "log_export.summary.metric.cost_usd"
+
+	MsgLogExportSummaryNoDimensions  = "log_export.summary_no_dimensions"
+	MsgLogExportSummaryTooManyGroups = "log_export.summary_too_many_groups"
 )

@@ -640,6 +640,7 @@ interface LogDetailBodyProps {
   isRoot?: boolean // 超级管理员可见 root_info（任务插件版本、上游任务 ID、节点名）。
   heading?: ReactNode // 正文顶部的小标题；对比模式下左右两栏各有一个。
   onQueryUpstream?: () => void // 提供时在请求 ID 旁显示「查询上游」；上游详情不传，避免嵌套查询。
+  onFindSimilar?: () => void // 提供时显示「查同类」，跳到导出中心并带上该行的异常特征；该行无异常特征时调用方不传。
   showStreamDiagnostic: boolean // 是否挂载流式诊断面板。它按请求 ID 查本站服务器，上游日志必须关闭。
   compareColumn?: LogDetailCompareColumn // 对比模式下所在的栏；提供时各分区按固定行号放入父级对比网格。
   lowerThanUpstream?: LogMetrics // 本站低于上游的数据项及其上游值；对应行以警告样式标出。
@@ -839,6 +840,18 @@ export function LogDetailBody(props: LogDetailBodyProps) {
                         {t('Query Upstream')}
                       </Button>
                     )}
+                  {/* 该行一个异常特征都没有时按钮不显示——按钮在那儿却点不出
+                      东西，比没有这个按钮更糟。 */}
+                  {props.isAdmin && props.onFindSimilar && (
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      className='h-6 shrink-0 px-2 text-xs'
+                      onClick={props.onFindSimilar}
+                    >
+                      {t('Find similar')}
+                    </Button>
+                  )}
                 </span>
               }
               mono

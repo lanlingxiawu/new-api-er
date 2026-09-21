@@ -98,9 +98,11 @@ func TestScanLogExportBatch_KeysetCrossesSameSecondBoundary(t *testing.T) {
 	}
 }
 
-func TestScanLogExportBatch_DescendingOrderAndNoOverlap(t *testing.T) {
+// 导出按时间正序：第一个分片装区间最早的数据，命中上限或中途失败时留下的是一段
+// 完整的期初数据。列表接口的倒序与此无关。
+func TestScanLogExportBatch_AscendingOrderAndNoOverlap(t *testing.T) {
 	requireLogDB(t)
-	username := uniq("desc")
+	username := uniq("asc")
 	base := time.Now().Unix() - 7200
 	for i := 0; i < 10; i++ {
 		i := i
@@ -117,7 +119,7 @@ func TestScanLogExportBatch_DescendingOrderAndNoOverlap(t *testing.T) {
 	got := scanAllForExport(t, filter, exportTestFields(), 3)
 	require.Len(t, got, 10)
 	for i := 1; i < len(got); i++ {
-		assert.GreaterOrEqual(t, got[i-1].CreatedAt, got[i].CreatedAt, "results must be time-descending")
+		assert.LessOrEqual(t, got[i-1].CreatedAt, got[i].CreatedAt, "results must be time-ascending")
 	}
 }
 
