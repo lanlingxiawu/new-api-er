@@ -186,6 +186,9 @@ func TestOpenAIChatSamplingCompatibility(t *testing.T) {
 	}
 }
 
+// 本仓在此有意与上游分叉：上游保留客户端原样传来的 max_tokens，本仓一律摘除。
+// 这些模型只要请求体里出现该字段就返回 400（与取值无关），生产上「两个字段并存」
+// 与「显式零值」正是最常见的两种失败形状。因此下面三例的预期与上游相反。
 func TestOpenAIChatTokenLimitCompatibility(t *testing.T) {
 	for _, modelName := range []string{"gpt-5", "o3-mini", "gpt-6-astra"} {
 		for _, tt := range []struct {
@@ -196,11 +199,11 @@ func TestOpenAIChatTokenLimitCompatibility(t *testing.T) {
 			{name: "omitted", input: `{}`, want: `{}`},
 			{name: "legacy only", input: `{"max_tokens":100}`, want: `{"max_completion_tokens":100}`},
 			{name: "completion only", input: `{"max_completion_tokens":50}`, want: `{"max_completion_tokens":50}`},
-			{name: "both positive stay present", input: `{"max_tokens":100,"max_completion_tokens":50}`, want: `{"max_tokens":100,"max_completion_tokens":50}`},
+			{name: "both positive keeps the client value", input: `{"max_tokens":100,"max_completion_tokens":50}`, want: `{"max_completion_tokens":50}`},
 			{name: "zero completion falls back", input: `{"max_tokens":100,"max_completion_tokens":0}`, want: `{"max_completion_tokens":100}`},
-			{name: "legacy zero stays present", input: `{"max_tokens":0}`, want: `{"max_tokens":0}`},
+			{name: "legacy zero is dropped", input: `{"max_tokens":0}`, want: `{}`},
 			{name: "completion zero stays present", input: `{"max_completion_tokens":0}`, want: `{"max_completion_tokens":0}`},
-			{name: "both zero stay present", input: `{"max_tokens":0,"max_completion_tokens":0}`, want: `{"max_tokens":0,"max_completion_tokens":0}`},
+			{name: "both zero keeps completion only", input: `{"max_tokens":0,"max_completion_tokens":0}`, want: `{"max_completion_tokens":0}`},
 		} {
 			t.Run(modelName+"/"+tt.name, func(t *testing.T) {
 				request := &dto.GeneralOpenAIRequest{Model: modelName, Messages: []dto.Message{{Role: "user", Content: "hi"}}}

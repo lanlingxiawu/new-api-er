@@ -410,8 +410,14 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	capabilities := dto.GetOpenAIChatCapabilities(info.UpstreamModelName, info.ReasoningEffort)
 	if capabilities.UseMaxCompletionTokens {
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
-			request.MaxCompletionTokens = request.MaxTokens
+		// 这些模型只要看见 max_tokens 字段就返回 400，与取值无关，所以一律摘除：
+		// 显式的 max_tokens: 0 会被 Rule 5 的指针语义保留成非 nil，客户端同时带
+		// max_tokens 和 max_completion_tokens 时也必须把前者去掉。
+		// max_tokens: 0 不折算成 max_completion_tokens: 0——上游要求该值 >= 1。
+		if request.MaxTokens != nil {
+			if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && *request.MaxTokens > 0 {
+				request.MaxCompletionTokens = request.MaxTokens
+			}
 			request.MaxTokens = nil
 		}
 	}
