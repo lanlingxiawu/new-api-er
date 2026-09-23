@@ -828,47 +828,11 @@ func applyEmployeeCustomerLogFilters(tx *gorm.DB, filter EmployeeCustomerLogFilt
 	return tx, nil
 }
 
-func fillLogChannelNames(logs []*Log) error {
-	channelIds := types.NewSet[int]()
-	for _, log := range logs {
-		if log.ChannelId != 0 {
-			channelIds.Add(log.ChannelId)
-		}
-	}
-
-	if channelIds.Len() == 0 {
-		return nil
-	}
-
-	var channels []struct {
-		Id   int    `gorm:"column:id"`
-		Name string `gorm:"column:name"`
-	}
-	if common.MemoryCacheEnabled {
-		for _, channelId := range channelIds.Items() {
-			if cacheChannel, err := CacheGetChannel(channelId); err == nil {
-				channels = append(channels, struct {
-					Id   int    `gorm:"column:id"`
-					Name string `gorm:"column:name"`
-				}{
-					Id:   channelId,
-					Name: cacheChannel.Name,
-				})
-			}
-		}
-	} else {
-		if err := DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
-			return err
-		}
-	}
-	channelMap := make(map[int]string, len(channels))
-	for _, channel := range channels {
-		channelMap[channel.Id] = channel.Name
-	}
+// stripLogChannelNames 抹掉渠道名称。员工只看渠道编号定位问题，供应渠道的名称属于内部信息。
+func stripLogChannelNames(logs []*Log) {
 	for i := range logs {
-		logs[i].ChannelName = channelMap[logs[i].ChannelId]
+		logs[i].ChannelName = ""
 	}
-	return nil
 }
 
 func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, total int64, err error) {
@@ -888,9 +852,7 @@ func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, tot
 	if err = tx.Order("logs.created_at desc, logs.id desc").Limit(filter.PageSize).Offset(filter.StartIdx).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
-	if err = fillLogChannelNames(logs); err != nil {
-		return logs, total, err
-	}
+	stripLogChannelNames(logs)
 	return logs, total, nil
 }
 

@@ -793,7 +793,7 @@ func TestGetEmployeeCustomerLogs(t *testing.T) {
 
 	mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.Quota, l.CreatedAt, l.PromptTokens = cust1.Id, cust1.Username, 10, now, 3
-		l.ChannelId = ch.Id // exercises fillLogChannelNames DB path
+		l.ChannelId = ch.Id // employee view keeps the channel id but must not expose its name
 	})
 	mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.Quota, l.CreatedAt, l.CompletionTokens = cust2.Id, cust2.Username, 20, now, 4
@@ -816,7 +816,9 @@ func TestGetEmployeeCustomerLogs(t *testing.T) {
 		}
 	}
 	require.NotNil(t, cust1Log)
-	assert.Equal(t, ch.Name, cust1Log.ChannelName) // fillLogChannelNames resolved it
+	require.NotEmpty(t, ch.Name)               // guard: the channel really has a name that could leak
+	assert.Equal(t, ch.Id, cust1Log.ChannelId) // channel id stays visible so employees can report issues
+	assert.Empty(t, cust1Log.ChannelName)      // channel name is withheld from employees
 	assert.True(t, got[cust1.Id])
 	assert.True(t, got[cust2.Id])
 	assert.True(t, got[employee.Id])
