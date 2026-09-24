@@ -50,6 +50,10 @@ func newAwsInvokeContext(parent context.Context, managed bool) (context.Context,
 
 func newAwsInvokeError(requestContext context.Context, err error, operation string) *types.NewAPIError {
 	options := make([]types.NewAPIErrorOptions, 0, 1)
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		options = append(options, types.ErrOptionWithUpstreamMessage(apiErr.ErrorMessage()))
+	}
 	if requestContext.Err() != nil {
 		options = append(options, types.ErrOptionWithSkipRetry())
 	}

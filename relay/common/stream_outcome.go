@@ -81,6 +81,7 @@ type StreamOutcome struct {
 	IntendedQuota       int              `json:"intended_quota"`    // 本次策略期望收取的内部额度，0 表示释放预扣。
 	ReservedQuota       int              `json:"reserved_quota"`    // 结算前实际预扣的内部额度，用于核对差额。
 	SettlementAttempted bool             `json:"-"`                 // 单次结算保护标记，失败后也保持 true，避免重复资金运算。
+	ErrorMessage        string           `json:"-"`                 // 终止时选定并脱敏的日志消息；仅明确上游消息或既有本地提示，不含私有诊断。
 	Diagnostic          StreamDiagnostic `json:"-"`                 // 私有诊断，仅由日志封装逻辑单独保存。
 	DiagnosticAvailable bool             `json:"-"`                 // 新流程明确的上游异常资格，单独写入 stream_diagnostic_available；不参与计费。
 }

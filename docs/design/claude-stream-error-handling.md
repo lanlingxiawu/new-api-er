@@ -1,5 +1,7 @@
 # Claude stream termination, partial billing and private diagnostics
 
+2026-09-18 使用日志更新：摘要出口优先保留已解析的明确上游错误消息并脱敏，缺少明确消息时才使用状态码/错误码兜底；本条覆盖历史响应专用模式一律隐藏消息的规则，见 [上游错误消息保留](usage-log-upstream-error-message.md)。原始诊断权限及中转行为保持。
+
 后续确认：撤销 `/messages` 及私有流对普通请求日志的排除，恢复原采集/投递规则，见 [请求日志恢复](restore-original-request-logging.md)。仅请求日志行为更新，私有诊断和使用日志规则保持。
 
 最新确认：共用大小上限已提升为 **200 MiB**，覆盖下文历史 100 MiB/8 MiB 数值，见 [实施记录](stream-size-limit-100mib.md)。

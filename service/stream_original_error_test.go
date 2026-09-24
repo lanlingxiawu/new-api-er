@@ -1,17 +1,134 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/i18n"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnifiedStreamFailureLogMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"openai", `{"error":{"message":"original api_key:secret (request id: upstream)","metadata":{"raw":"private"}},"private":"body-secret"}`, "original api_key:***"},
+		{"blank nested message", `{"error":{"message":" \t"},"message":"top error"}`, "top error"},
+		{"responses", `{"type":"response.failed","response":{"error":{"message":"response error"}}}`, "response error"},
+		{"gemini", `{"error":{"code":503,"message":"gemini error"}}`, "gemini error"},
+		{"ollama", `{"error":"ollama error"}`, "ollama error"},
+		{"xunfei", `{"header":{"code":100,"message":"header error"}}`, "header error"},
+		{"tencent", `{"Response":{"Error":{"Code":"bad","Message":"tencent error"}}}`, "tencent error"},
+		{"minimax", `{"base_resp":{"status_code":100,"status_msg":"minimax error"}}`, "minimax error"},
+		{"ali", `{"output":{"message":"ali error"}}`, "ali error"},
+		{"blank native message", `{"base_resp":{"status_msg":" (request id: upstream)"},"output":{"message":"ali error"}}`, "ali error"},
+		{"realtime", `{"response":{"status_details":{"error":{"message":"realtime error"}}}}`, "realtime error"},
+		{"coze chat error", `{"status":"failed","last_error":{"code":123,"msg":"coze error api_key:secret (request id: upstream)"}}`, "coze error api_key:***"},
+		{"coze with conflicting detail", `{"status":"failed","last_error":{"msg":"coze error"},"detail":[]}`, "coze error"},
+		{"coze standard message priority", `{"message":"top error","last_error":{"msg":"coze error"}}`, "top error"},
+		{"coze after blank top message", `{"message":" (request id: upstream)","last_error":{"msg":"coze error"}}`, "coze error"},
+		{"coze blank message", `{"last_error":{"msg":" \t (request id: upstream)"}}`, ""},
+		{"coze numeric message", `{"last_error":{"msg":123}}`, ""},
+		{"coze object message", `{"last_error":{"msg":{"private":"body-secret"}}}`, ""},
+		{"coze array message", `{"last_error":{"msg":["body-secret"]}}`, ""},
+		{"coze null message", `{"last_error":{"msg":null}}`, ""},
+		{"coze invalid JSON", `{"last_error":{"msg":"body-secret"},`, ""},
+		{"invalid usage", `{"error":{"message":"original"},"usage":"invalid"}`, "original"},
+		{"array detail", `{"error":{"message":"original"},"detail":[]}`, "original"},
+		{"object detail", `{"error":{"message":"original"},"detail":{"raw":"private"}}`, "original"},
+		{"numeric top message", `{"error":{"message":"original"},"message":42}`, "original"},
+		{"invalid header", `{"error":{"message":"original"},"header":[]}`, "original"},
+		{"invalid nested message", `{"error":{"message":{}},"message":[],"msg":"fallback","detail":false}`, "fallback"},
+		{"string error priority", `{"error":"first","message":"second","detail":[]}`, "first"},
+		{"blank error priority", `{"error":{"message":" (request id: stale)"},"message":"second","msg":"third","detail":[]}`, "second"},
+		{"native with invalid message", `{"message":{},"base_resp":{"status_msg":"native"}}`, "native"},
+		{"tencent with invalid detail", `{"Response":{"Error":{"Message":"tencent error"}},"detail":[]}`, "tencent error"},
+		{"realtime with invalid message", `{"message":{},"response":{"status_details":{"error":{"message":"realtime error"}}}}`, "realtime error"},
+		{"invalid JSON with message prefix", `{"error":{"message":"private"},`, ""},
+		{"no string candidates", `{"error":{"message":{}},"message":[],"msg":42,"detail":false}`, ""},
+		{"no message", `{"error":{"code":"bad"},"metadata":{"raw":"private"}}`, ""},
+		{"blank message", `{"error":{"message":" (request id: upstream)"}}`, ""},
+		{"numeric error", `{"error":400}`, ""},
+		{"html", `<html>private</html>`, ""},
+		{"empty", "", ""},
+	} {
+		for _, framing := range []string{"sse", "sdk"} {
+			t.Run(tc.name+"/"+framing, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest("POST", "/fixture", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{}}
+				BeginStreamAttempt(c, info)
+				info.StreamSession.ObserveTransport(&http.Response{StatusCode: http.StatusOK}, nil)
+				if framing == "sse" {
+					_ = info.StreamSession.ObserveFrame([]byte("event: error\ndata: " + tc.payload + "\n\n"))
+				} else {
+					_ = info.StreamSession.ObserveEvent("error", []byte(tc.payload))
+				}
+				FinalizeStreamUsage(c, info, nil)
+				want := tc.want
+				if want == "" {
+					want = i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+				}
+				require.True(t, info.StreamResult.Failed)
+				require.Equal(t, want, info.StreamResult.ErrorMessage)
+				require.NotContains(t, info.StreamResult.ErrorMessage, "body-secret")
+				require.NotContains(t, info.StreamResult.ErrorMessage, "private")
+				body := rec.Body.String()
+				FinalizeStreamUsage(c, info, nil)
+				require.Equal(t, body, rec.Body.String(), "logging must not emit another error")
+			})
+		}
+	}
+}
+
+func TestUnifiedStreamFailureLogLocalAndClientBoundaries(t *testing.T) {
+	for _, scenario := range []string{"normal", "client", "read", "typed error", "hidden error", "hidden SDK error"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c.Request = httptest.NewRequest("POST", "/fixture", nil).WithContext(ctx)
+			info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{}}
+			BeginStreamAttempt(c, info)
+			info.StreamSession.ObserveTransport(&http.Response{StatusCode: http.StatusOK}, nil)
+			want := ""
+			switch scenario {
+			case "normal":
+				info.StreamSession.Complete()
+			case "client":
+				cancel()
+			case "read":
+				info.StreamSession.EndRead(errors.New("private transport details"))
+				want = i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+			case "typed error", "hidden error":
+				err := types.WithOpenAIError(types.OpenAIError{Message: "SDK explicit error"}, 500)
+				want = "SDK explicit error"
+				if scenario == "hidden error" {
+					types.ErrOptionWithHideErrMsg("hidden")(err)
+					want = i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+				}
+				info.StreamSession.FailRelay("upstream_error", err)
+			case "hidden SDK error":
+				err := types.NewOpenAIError(&smithy.GenericAPIError{Code: "provider_error", Message: "private SDK message"}, types.ErrorCodeAwsInvokeError, 500,
+					types.ErrOptionWithUpstreamMessage("private SDK message"), types.ErrOptionWithHideErrMsg("hidden"))
+				info.StreamSession.FailRelay("upstream_error", err)
+				want = i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+			}
+			FinalizeStreamUsage(c, info, nil)
+			require.Equal(t, want, info.StreamResult.ErrorMessage)
+		})
+	}
+}
 
 // TestUnifiedStreamSDKErrorCompatibility 用 t 验证原 SDK 载荷的协议匹配、形状筛选及 HTTP 响应门控。
 func TestUnifiedStreamSDKErrorCompatibility(t *testing.T) {

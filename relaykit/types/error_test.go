@@ -15,6 +15,44 @@ import (
 // nil-receiver safety on every method
 // ---------------------------------------------------------------------------
 
+func TestUpstreamErrorMessageProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  *NewAPIError
+		want string
+	}{
+		{name: "nil"},
+		{name: "openai missing code", err: WithOpenAIError(OpenAIError{Message: "unsupported tool (request id: upstream)"}, 400), want: "unsupported tool"},
+		{name: "claude", err: WithClaudeError(ClaudeError{Message: "unsupported tool", Type: "invalid_request_error"}, 400), want: "unsupported tool"},
+		{name: "metadata excluded", err: WithOpenAIError(OpenAIError{Message: "unsupported tool", Metadata: json.RawMessage(`{"private":"raw-body"}`)}, 400), want: "unsupported tool"},
+		{name: "whitespace", err: WithOpenAIError(OpenAIError{Message: " \t\n"}, 400)},
+		{name: "only request id", err: WithClaudeError(ClaudeError{Message: " (request id: upstream)"}, 400)},
+		{name: "local wrapper", err: NewOpenAIError(errors.New("private transport error"), ErrorCodeDoRequestFailed, 502)},
+		{name: "empty initialized error", err: InitOpenAIError(ErrorCodeBadResponseStatusCode, 502)},
+		{name: "local error", err: NewError(errors.New("private conversion error"), ErrorCodeBadResponseBody)},
+		{name: "explicit message", err: NewOpenAIError(errors.New("SDK envelope"), ErrorCodeAwsInvokeError, 400, ErrOptionWithUpstreamMessage(" unsupported tool (request id: upstream) ")), want: "unsupported tool"},
+		{name: "hidden message", err: WithOpenAIError(OpenAIError{Message: "private cause"}, 400, ErrOptionWithHideErrMsg("hidden"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, test.err.UpstreamErrorMessage())
+		})
+	}
+}
+
+func TestUpstreamErrorMessageSurvivesWrappingWithoutChangingResponse(t *testing.T) {
+	inner := WithClaudeError(ClaudeError{Message: "unsupported tool", Type: "invalid_request_error"}, 400)
+	wrapped := NewOpenAIError(fmt.Errorf("adapter: %w", inner), ErrorCodeDoRequestFailed, 502, ErrOptionWithSkipRetry())
+	require.Same(t, inner, wrapped)
+	require.Equal(t, "unsupported tool", wrapped.UpstreamErrorMessage())
+	require.Equal(t, 400, wrapped.StatusCode)
+	require.True(t, IsSkipRetryError(wrapped))
+	wrapped.SetMessage("unsupported tool (request id: current)")
+	require.Equal(t, "unsupported tool", wrapped.UpstreamErrorMessage())
+	require.Equal(t, "unsupported tool (request id: current)", wrapped.ToClaudeError().Message)
+	ErrOptionWithHideErrMsg("hidden")(wrapped)
+	require.Empty(t, wrapped.UpstreamErrorMessage())
+}
+
 func TestNewAPIError_NilReceiverMethods(t *testing.T) {
 	var e *NewAPIError
 

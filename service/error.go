@@ -85,6 +85,30 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 	return claudeErr
 }
 
+// upstreamErrorMessage selects only explicit strings for logs. Normalize each
+// candidate before deciding whether it shadows the next supported field; the
+// response parser and its retry/status decisions remain independent.
+func upstreamErrorMessage(response dto.GeneralErrorResponse) string {
+	var nested string
+	switch common.GetJsonType(response.Error) {
+	case "object":
+		var object struct {
+			Message string `json:"message"`
+		}
+		if common.Unmarshal(response.Error, &object) == nil {
+			nested = object.Message
+		}
+	case "string":
+		_ = common.Unmarshal(response.Error, &nested)
+	}
+	for _, candidate := range []string{nested, response.Message, response.Msg, response.Err, response.ErrorMsg, response.Detail, response.Header.Message, response.Response.Error.Message} {
+		if message := common.StripRequestIds(candidate); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
 // RelayErrorHandler 把非成功 HTTP 响应转换为统一中转错误并关闭响应体，响应诊断模式避免普通日志带出 body。
 // 参数 ctx：含响应专用标记的请求上下文；resp：上游 HTTP 错误响应；showBodyWhenFail：解析失败时是否把预览附入错误。
 // 返回 newApiErr：转换后的状态码及错误信息；读取失败时保留初始化的 HTTP 状态错误。
@@ -121,11 +145,13 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		return
 	}
 
+	logMessage := types.ErrOptionWithUpstreamMessage(upstreamErrorMessage(errResponse))
 	if common.GetJsonType(errResponse.Error) == "object" {
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
 			newAPIErrorOptions := quotaExhaustedErrorOptions(oaiError.Message)
+			newAPIErrorOptions = append(newAPIErrorOptions, logMessage)
 			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode, newAPIErrorOptions...)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
@@ -140,6 +166,7 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
 	}
 	newAPIErrorOptions := quotaExhaustedErrorOptions(message)
+	newAPIErrorOptions = append(newAPIErrorOptions, logMessage)
 	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode, newAPIErrorOptions...)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())

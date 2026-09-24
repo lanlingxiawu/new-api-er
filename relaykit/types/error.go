@@ -97,6 +97,9 @@ type NewAPIError struct {
 	errorCode      ErrorCode
 	StatusCode     int
 	Metadata       json.RawMessage
+	// upstreamMessage holds only an explicit protocol/API message, never a local
+	// transport error, body preview or metadata. It is used only for log selection.
+	upstreamMessage string
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -119,6 +122,15 @@ func (e *NewAPIError) GetErrorType() ErrorType {
 		return ""
 	}
 	return e.errorType
+}
+
+// UpstreamErrorMessage returns the explicit message retained at the error source.
+// Local wrappers intentionally leave this empty; response formatting is unchanged.
+func (e *NewAPIError) UpstreamErrorMessage() string {
+	if e == nil {
+		return ""
+	}
+	return e.upstreamMessage
 }
 
 func (e *NewAPIError) Error() string {
@@ -311,7 +323,14 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	e := WithOpenAIError(openaiError, statusCode)
+	// This constructor also wraps local I/O and conversion errors. Only an
+	// explicit source option may promote its message into the upstream log slot.
+	e.upstreamMessage = ""
+	for _, op := range ops {
+		op(e)
+	}
+	return e
 }
 
 func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
@@ -354,11 +373,12 @@ func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIError
 		openAIError.Type = "upstream_error"
 	}
 	e := &NewAPIError{
-		RelayError: openAIError,
-		errorType:  ErrorTypeOpenAIError,
-		StatusCode: statusCode,
-		Err:        errors.New(openAIError.Message),
-		errorCode:  ErrorCode(code),
+		RelayError:      openAIError,
+		errorType:       ErrorTypeOpenAIError,
+		StatusCode:      statusCode,
+		Err:             errors.New(openAIError.Message),
+		errorCode:       ErrorCode(code),
+		upstreamMessage: strings.TrimSpace(openAIError.Message),
 	}
 	// OpenRouter
 	if len(openAIError.Metadata) > 0 {
@@ -379,11 +399,12 @@ func WithClaudeError(claudeError ClaudeError, statusCode int, ops ...NewAPIError
 		claudeError.Type = "upstream_error"
 	}
 	e := &NewAPIError{
-		RelayError: claudeError,
-		errorType:  ErrorTypeClaudeError,
-		StatusCode: statusCode,
-		Err:        errors.New(claudeError.Message),
-		errorCode:  ErrorCode(claudeError.Type),
+		RelayError:      claudeError,
+		errorType:       ErrorTypeClaudeError,
+		StatusCode:      statusCode,
+		Err:             errors.New(claudeError.Message),
+		errorCode:       ErrorCode(claudeError.Type),
+		upstreamMessage: strings.TrimSpace(claudeError.Message),
 	}
 	for _, op := range ops {
 		op(e)
@@ -437,6 +458,15 @@ func ErrOptionWithHideErrMsg(replaceStr string) NewAPIErrorOptions {
 			fmt.Printf("ErrOptionWithHideErrMsg: %s, origin error: %s", replaceStr, e.Err)
 		}
 		e.Err = errors.New(replaceStr)
+		e.upstreamMessage = ""
+	}
+}
+
+// ErrOptionWithUpstreamMessage records a parsed upstream message without changing
+// the error response, status, retry decision or private diagnostic evidence.
+func ErrOptionWithUpstreamMessage(message string) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.upstreamMessage = strings.TrimSpace(kitutil.StripRequestIds(message))
 	}
 }
 

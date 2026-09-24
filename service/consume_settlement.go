@@ -81,6 +81,12 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 			return
 		}
 		AppendStreamLogInfo(relayInfo, params.Other)
+		if stream.Failed && !stream.ClientGone && stream.ErrorMessage != "" {
+			if params.Content != "" {
+				params.Content += "; "
+			}
+			params.Content += MessageWithCurrentRequestId(ctx, stream.ErrorMessage)
+		}
 		// 零收费异常保留错误日志和诊断，不再进入消费计数/消费日志分支。
 		if params.Quota == 0 && (stream.Failed || stream.SettlementState == "failed" || stream.SettlementState == "partial") {
 			model.RecordErrorLog(ctx, relayInfo.UserId, params.ChannelId, params.ModelName, params.TokenName, params.Content, params.TokenId, params.UseTimeSeconds, params.IsStream, params.Group, params.Other)

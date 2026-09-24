@@ -2,11 +2,13 @@ package service
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -15,7 +17,9 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
+	"github.com/aws/smithy-go"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // attachQuotaSaturationToOther nests a quota saturation marker under
@@ -328,15 +332,76 @@ func filterStreamDiagnosticResponse(diagnostic relaycommon.StreamDiagnostic, kee
 	return diagnostic
 }
 
-// Keep low-level causes in Root evidence, not ordinary console/usage summaries.
-// StreamPublicErrorSummary 生成普通日志使用的错误摘要，响应诊断专用模式仅公开状态码和错误码。
+// Keep low-level causes in Root evidence; explicit upstream messages remain useful in ordinary logs.
+// StreamPublicErrorSummary 优先保留明确上游消息，仅在响应专用模式缺少消息时使用状态码摘要。
 // 参数 c：请求上下文，用于读取响应专用标记；err：非 nil 的中转错误。
-// 返回公开摘要字符串；底层错误与原始 body 由独立诊断保存。
+// 返回脱敏后的公开摘要；底层原因、附加 metadata 与原始 body 由独立诊断保存。
 func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
 	if c.GetBool(relaycommon.StreamResponseOnlyKey) {
+		if message := err.UpstreamErrorMessage(); message != "" {
+			message = common.MaskSensitiveInfo(message)
+			if err.StatusCode == 0 {
+				return message
+			}
+			return fmt.Sprintf("status_code=%d, %s", err.StatusCode, message)
+		}
 		return fmt.Sprintf("upstream response failed (status=%d, code=%s)", err.StatusCode, err.GetErrorCode())
 	}
 	return err.MaskSensitiveErrorWithStatusCode()
+}
+
+// StreamFailureLogMessage selects a public message once at stream termination.
+// Only original error payload fields or a typed upstream API error qualify;
+// transport errors and private diagnostic previews use the existing local hint.
+// The caller excludes normal completion and client disconnects. Request IDs are
+// added at the common log sink, not here, and no response/settlement state changes.
+func StreamFailureLogMessage(snapshot relaycommon.StreamSnapshot) string {
+	data := snapshot.ErrorPayload
+	if len(snapshot.ErrorFrame) > 0 {
+		_, data = relaycommon.StreamFramePayload(snapshot.ErrorFrame)
+	}
+	message := ""
+	if len(data) > 0 {
+		var response dto.GeneralErrorResponse
+		if common.Unmarshal(data, &response) == nil {
+			message = upstreamErrorMessage(response)
+		}
+		// A type mismatch in an unrelated DTO field must not hide a valid message.
+		// Preserve field priority, only accept strings, and never salvage malformed JSON.
+		if message == "" && gjson.ValidBytes(data) {
+			value := gjson.ParseBytes(data)
+			for _, path := range []string{
+				"error.message", "error", "message", "msg", "err", "error_msg", "detail",
+				"header.message", "response.error.message", "Response.Error.Message",
+				"base_resp.status_msg", "output.message", "response.status_details.error.message",
+				"last_error.msg",
+			} {
+				candidate := value.Get(path)
+				if candidate.Type == gjson.String {
+					message = common.StripRequestIds(candidate.Str)
+					if message != "" {
+						break
+					}
+				}
+			}
+		}
+	}
+	if message == "" {
+		var apiErr *types.NewAPIError
+		var sdkErr smithy.APIError
+		switch {
+		case errors.As(snapshot.Err, &apiErr):
+			// An explicit wrapper (including hidden/empty provenance) takes precedence.
+			message = apiErr.UpstreamErrorMessage()
+		case errors.As(snapshot.Err, &sdkErr):
+			// EventStream exceptions have no JSON error frame; keep the SDK cause untouched.
+			message = common.StripRequestIds(sdkErr.ErrorMessage())
+		}
+	}
+	if message == "" {
+		return i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+	}
+	return common.MaskSensitiveInfo(message)
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
