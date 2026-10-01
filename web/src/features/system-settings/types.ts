@@ -316,6 +316,10 @@ export type RelayLogQueueStatus = {
   backlog: number
   capacity: number
   dropped: number
+  /** Logs of this kind written by the most recent flush that wrote any; 0 before the first. */
+  last_flush_items?: number
+  /** Duration of that flush in milliseconds. */
+  last_flush_took_ms?: number
 }
 
 export type RelayLogReplayState =
@@ -345,12 +349,20 @@ export type RelayLogPipelineStatus = {
   persisted_total: number
   fallback_total: number
   db_timeout_total: number
+  /** How long the oldest log still waiting in memory has waited, in ms; 0 when none waits. */
+  oldest_event_age_ms?: number
   last_success_at: number
   last_error_at: number
   continuation_backlog: number
+  /** Accounting that was lost: both lanes full, or arrived after shutdown. */
   continuation_dropped: number
+  /** Accounting rerouted to the fallback worker; it still runs, nothing lost. */
+  continuation_overflowed: number
   fallback_backlog: number
   fallback_errors: number
+  intake_state: 'accepting' | 'stopped'
+  intake_refused: number
+  fallback_retention_full: boolean
   replay: RelayLogReplayStatus
 }
 

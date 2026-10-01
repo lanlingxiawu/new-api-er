@@ -521,11 +521,18 @@ func TestRelayLogContinuationRunsOnlyOnce(t *testing.T) {
 func TestDropRelayLogShutdownRemainderClearsQueuesInBulk(t *testing.T) {
 	resetRelayLogPipelineForTest()
 	t.Cleanup(resetRelayLogPipelineForTest)
-	relayLogConsumeBuf = make([]*relayLogEvent, 10_000)
-	relayLogErrorBuf = make([]*relayLogEvent, 5_000)
-	relayLogRetryBuf = make([]*relayLogEvent, 7_000)
-	relayLogPendingConsume = make([]*relayLogEvent, 3_000)
-	relayLogPendingError = make([]*relayLogEvent, 2_000)
+	logEvents := func(n int) []*relayLogEvent {
+		events := make([]*relayLogEvent, n)
+		for i := range events {
+			events[i] = &relayLogEvent{Log: &Log{}}
+		}
+		return events
+	}
+	relayLogConsumeBuf = logEvents(10_000)
+	relayLogErrorBuf = logEvents(5_000)
+	relayLogRetryBuf = logEvents(7_000)
+	relayLogPendingConsume = logEvents(3_000)
+	relayLogPendingError = logEvents(2_000)
 
 	dropRelayLogShutdownRemainder()
 

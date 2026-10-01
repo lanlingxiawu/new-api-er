@@ -25,8 +25,19 @@ func TestAdminGetRelayLogPipelineStatusReturnsInMemorySnapshot(t *testing.T) {
 	for _, key := range []string{
 		"enabled", "circuit_state", "consume", "error", "retry",
 		"persisted_total", "fallback_total", "db_timeout_total", "replay",
+		"intake_state", "intake_refused", "fallback_retention_full",
+		"continuation_dropped", "continuation_overflowed", "fallback_errors",
+		"oldest_event_age_ms",
 	} {
 		assert.Contains(t, data, key)
+	}
+	// 设计文档 §5 的刷盘指标：每个队列都带最近一次刷盘的条数与耗时。
+	for _, queue := range []string{"consume", "error", "retry"} {
+		fields, ok := data[queue].(map[string]any)
+		require.True(t, ok, queue)
+		for _, key := range []string{"backlog", "capacity", "dropped", "last_flush_items", "last_flush_took_ms"} {
+			assert.Contains(t, fields, key, queue)
+		}
 	}
 }
 

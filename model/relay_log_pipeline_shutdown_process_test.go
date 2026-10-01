@@ -108,3 +108,70 @@ func runRelayLogShutdownChild(t *testing.T) {
 
 	t.Log("SHUTDOWN_CHILD_OK")
 }
+
+// A relay goroutine can pass the intake check in enqueueAsyncRelayLog just
+// before shutdown starts and reach the buffer after shutdown has already
+// drained it and closed the aux channels. That late event must be refused and
+// counted — never parked in a buffer nobody drains again, and never sent on a
+// closed channel (a panic on the relay goroutine). Runs in a child process for
+// the same reason as the test above.
+const relayLogLateEnqueueChildEnv = "RELAY_LOG_LATE_ENQUEUE_CHILD"
+
+func TestShutdownRelayLogFlushRefusesLateEnqueue(t *testing.T) {
+	if os.Getenv(relayLogLateEnqueueChildEnv) == "1" {
+		runRelayLogLateEnqueueChild(t)
+		return
+	}
+	dbPath := filepath.Join(t.TempDir(), "late.db")
+	cmd := exec.Command(os.Args[0],
+		"-test.run", "^TestShutdownRelayLogFlushRefusesLateEnqueue$",
+		"-test.v", "-test.timeout", "120s")
+	cmd.Env = append(os.Environ(),
+		relayLogLateEnqueueChildEnv+"=1",
+		"RELAY_LOG_SHUTDOWN_DB="+dbPath,
+		"SQL_DSN=", "LOG_SQL_DSN=")
+	output, err := cmd.CombinedOutput()
+	t.Logf("child output:\n%s", output)
+	require.NoError(t, err, "child failed")
+	assert.Contains(t, string(output), "LATE_ENQUEUE_CHILD_OK")
+}
+
+func runRelayLogLateEnqueueChild(t *testing.T) {
+	dbPath := os.Getenv("RELAY_LOG_SHUTDOWN_DB")
+	require.NotEmpty(t, dbPath)
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&Log{}))
+	LOG_DB = db
+	relayLogFallbackDir = filepath.Join(filepath.Dir(dbPath), "fallback")
+
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	cfg.Enabled = true
+	cfg.ConsumeBufMaxEntries = 2
+	cfg.FlushIntervalMs = 60_000
+
+	StartRelayLogFlushLoop()
+	ShutdownRelayLogFlush(10 * time.Second)
+	require.True(t, relayLogAuxClosed.Load(), "precondition: shutdown closed the aux channels")
+
+	before := GetRelayLogPipelineStatus()
+	// Enter below the intake check, exactly where a racing relay goroutine
+	// would be. The third call would overflow a buffer of 2.
+	for i := 0; i < 3; i++ {
+		require.NotPanics(t, func() {
+			require.False(t, enqueueRelayLog(relayLogKindConsume,
+				&relayLogEvent{Log: &Log{RequestId: "late", Type: LogTypeConsume}}),
+				"events arriving after the final drain must be refused")
+		})
+	}
+	require.NotPanics(t, func() {
+		dispatchRelayLogFallbackJob(&relayLogEvent{Log: &Log{RequestId: "late-fallback"}}, true)
+	}, "fallback dispatch after shutdown must not send on a closed channel")
+	require.Zero(t, relayLogBacklog(), "nothing may be parked in a buffer that is never drained again")
+	after := GetRelayLogPipelineStatus()
+	require.EqualValues(t, 3, after.IntakeRefused-before.IntakeRefused)
+	require.EqualValues(t, 3, after.Consume.Dropped-before.Consume.Dropped)
+	require.Equal(t, "stopped", after.IntakeState)
+
+	t.Log("LATE_ENQUEUE_CHILD_OK")
+}

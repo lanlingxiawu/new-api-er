@@ -173,18 +173,42 @@ Authorization: AdminAuth
       "last_flush_items": 500,
       "last_flush_took_ms": 42
     },
-    "error": {},
-    "retry": {},
-    "continuation": {},
+    "error": {"backlog": 0, "capacity": 5000, "dropped": 0, "last_flush_items": 3, "last_flush_took_ms": 42},
+    "retry": {"backlog": 0, "capacity": 5000, "dropped": 0, "last_flush_items": 0, "last_flush_took_ms": 0},
     "persisted_total": 123456,
     "fallback_total": 0,
     "db_timeout_total": 0,
     "oldest_event_age_ms": 85,
     "last_success_at": 0,
-    "last_error_at": 0
+    "last_error_at": 0,
+    "continuation_backlog": 0,
+    "continuation_dropped": 0,
+    "continuation_overflowed": 0,
+    "fallback_backlog": 0,
+    "fallback_errors": 0,
+    "error_logs_yielded": 0,
+    "intake_state": "accepting",
+    "intake_refused": 0,
+    "fallback_retention_full": false,
+    "replay": {"state": "idle", "pending_files": 0, "running_file": "", "processed_total": 0,
+               "failed_total": 0, "started_at": 0, "finished_at": 0, "last_error": ""}
   }
 }
 ```
+
+字段口径（与 `model.RelayLogPipelineStatus` 一致）：
+
+- `consume` / `error` / `retry`：`backlog` 含入队缓冲与刷盘 worker 的待写车道（积压时可超过 `capacity`，最多两倍）；
+  `last_flush_items` 是最近一次**写出过该类日志**的刷盘里本类的条数（交给落库的条数，写失败转入重试的也计入），
+  `last_flush_took_ms` 是那一轮落库的总耗时（消费与错误日志同轮落库，耗时相同；`retry` 为最近一次非空重试刷盘）。
+  空轮不覆盖，进程启动后尚未刷过时为 0。
+- `oldest_event_age_ms`：仍在内存里等待落库的日志（入队缓冲、待写车道、重试队列）中最早入队那条已等待的毫秒数，
+  全部为空时为 0。入队缓冲与待写车道取队首（入队在抢缓冲锁前打戳，锁争用时相邻事件可能倒挂几微秒，展示用途足够）；
+  重试队列按失败先后追加，逐条取最早（有 `retry_buf_max_entries` 上界，只在状态接口扫描）；正在落库、尚未返回的批次
+  由刷盘 worker 在落库前记下其最早入队时间、返回后清零，所以日志库故障期间不会因事件"在路上"而低报。
+- 这三项只由刷盘 worker 写原子量（待写车道的队首时间与其长度在同一处更新），状态接口在读长度时顺带读取队首，
+  relay goroutine 的入队路径不读写它们，无新增锁。
+- 管理后台「中继日志管道」面板在每个队列卡片显示最近一次刷盘（条数 · 耗时），并显示最早待写日志的等待时长。
 
 路由放入现有 `systemAdminRoute`（该 group 已使用 `middleware.AdminAuth()`），与
 `GET /api/admin/system/ledger-pipeline/status` 同级。状态读取仅访问内存原子计数和短锁快照，
@@ -558,6 +582,29 @@ buffer 超限时对齐台账的 oldest-eviction 策略：
   小批次探测；成功关闭熔断，失败重新打开。
 - fallback 队列也满时丢弃批次并发出限频的高等级系统告警。
 
+#### 8.3.1 提交确认丢失：带 id 的重试与回放必须幂等
+
+写库超时（`write_timeout_sec`）时，服务端可能已经提交，客户端只看到 `context deadline exceeded`。
+这批事件的 `Log.Id` 已被 RETURNING/LastInsertId 回填，带着 id 进入重试、进而进入兜底文件。
+直接 INSERT 会撞主键，而且次次都撞；同批里从未提交的行被拖着一起失败，重试耗尽后整批进兜底文件，
+logs 表缺行（2026-09-25 本机压测复现：PG 卡顿 14 秒，1740 条兜底记录中 248 条其实已在库、
+1492 条缺失；余额与记账不受影响）。兜底回放也会因同样的主键冲突整批失败、永远留在文件里。
+
+`insertRelayLogs`（主写入、重试、回放共用）的处理：
+
+1. 批内没有任何行带 id（首次写入的常态）→ 直接批量 INSERT，不做额外查询。
+2. 有带 id 的行 → 按主键回查 `id, request_id, created_at, user_id, type`：
+   - 库里这一行与本条身份字段一致 → 那次尝试已提交，跳过，保留 id（continuation 用它作 `log_id`）；
+   - 不存在或身份不一致 → 清掉 id，当新行插入。
+3. 其余行一次批量 INSERT。
+
+不用 `ON CONFLICT (id) DO NOTHING` 的原因：回滚事务分到的 id 在 SQLite（无独立序列）与 MySQL 5.7
+重启后会被别的行复用，按主键冲突跳过会把本条当成“已存在”悄悄丢掉；另外 GORM 在 DoNothing 模式下
+回填 RETURNING 会跳过已带 id 的元素，与新行混在同一条语句里时新行 id 整体错位，记账会用错 `log_id`。
+
+回放写入失败时，保留下来的记录按本次分到的 id 重新序列化（而不是原样写回），下一次回放才能认出
+“其实已提交”的行。
+
 ### 8.4 兜底文件
 
 - 使用独立命名空间/目录，例如 `{LogDir}/relay-log-fallback/`，不与请求日志、业务统计 dead-letter
@@ -565,10 +612,13 @@ buffer 超限时对齐台账的 oldest-eviction 策略：
 - JSON 编解码必须使用 `common.Marshal` / `common.Unmarshal`。
 - 文件滚动和总文件数均有上限；不能耗尽磁盘。
 - 后台 replayer 以单 worker、小批量、数据库超时方式重放；数据库仍异常时停止本轮，指数退避。
-- 兜底文件只保存日志，不保存待执行的账务 continuation。事件进入兜底文件前，continuation
-  已以 `logID=0/nil` 执行一次，因此重放日志不会重复计费或重复提成。
-- 为避免给 4 亿行 `logs` 表新增唯一索引，fallback 重放采用“至少一次”日志语义；进程在
-  “数据库写成功但确认前崩溃”的极端窗口可能生成重复日志，但账务不会重复。
+- 兜底文件只保存待补写的日志行，不保存待执行的账务 continuation，也不保存已入库的日志或
+  不带日志行的纯记账事件。未入库的日志进入兜底文件时，其 continuation 已以 `logID=0/nil`
+  执行一次；已入库日志因 continuation 车道溢出转到 fallback worker 时，只执行记账并带着已知
+  的 `logs.id`。因此重放日志不会重复计费或重复提成。
+- 为避免给 4 亿行 `logs` 表新增唯一索引，fallback 重放按 §8.3.1 以主键回查去重：带 id 的记录
+  （提交确认丢失）不会重复写入。剩余的“至少一次”窗口只在记录从未拿到 id 时存在——进程在
+  “数据库写成功、RETURNING 回填之前”崩溃；此时可能生成重复日志，但账务不会重复。
 
 ### 8.5 落库顺序：按 relay 响应完成顺序
 
@@ -882,7 +932,18 @@ continuation 再进入既有成本/提成处理流程；日志 writer 不直接�
 - fallback JSONL 只保存待补写的日志，不保存可重放账务任务。启动时先快速轮转 active 文件，再由后台按顺序补写 active-history 和 rotated 文件；重放不会再次执行成本、提成或 `QuotaData`。
 - fallback 文件数达到配置上限时保留已有未重放文件、停止继续轮转并严重告警，不删除未恢复数据，也不允许磁盘无界增长。
 - shutdown 使用一个绝对截止时间，前 75% 用于数据库排空，后 25% 预留给剩余事件的 fallback 交接和辅助 worker 排空。
-- 状态接口实际返回 consume/error/retry backlog、capacity、dropped，以及 persisted、fallback、DB timeout、熔断状态、continuation backlog/dropped、fallback backlog/errors 和最近成功/失败时间。页面每 10 秒刷新并突出显示 continuation/fallback 故障。
+- 状态接口实际返回 consume/error/retry backlog、capacity、dropped，以及 persisted、fallback、DB timeout、熔断状态、continuation backlog/dropped/overflowed、fallback backlog/errors、error_logs_yielded、`intake_state`、`intake_refused`、`fallback_retention_full` 和最近成功/失败时间。页面每 10 秒刷新；红色“需要处理”提示只由真实丢失触发（`continuation_dropped > 0`、`fallback_errors > 0` 或 `fallback_retention_full`），`continuation_overflowed` 作为普通运行指标显示在常规状态区，不触发告警。
+- consume/error 的 `backlog` 包含 relay 侧缓冲与 worker 侧 pending 车道（与关停统计 `relayLogBacklog()` 同口径），积压时可超过 `capacity`，最多为其两倍。pending 切片只由持有 `relayLogFlushMu` 的 worker 读写，长度另存原子量供状态接口无锁读取。
+- `dropped` 同时计入 intake 关闭时被拒收的日志；`intake_refused` 单独给出其中被拒收的条数。
+- continuation 车道溢出时，任务交给 fallback worker 只执行记账（`continuationOnly`）：日志已入库的带着已知 `logs.id` 执行，纯记账事件（无日志行）同样只执行记账；两者都不写 JSONL、不计 `fallback_total`、不计 `fallback_errors`。fallback 车道也放不下时走最后一条路：直接投进 continuation channel（只受物理容量约束，不看软上限），仍带着同一个 `logs.id`。
+- 三个计数器的口径互不重叠，一次事件在每个计数器上最多计一次：
+  - `continuation_overflowed`：continuation 车道放不下、改道执行的记账。改道不是丢失，记账照常执行，只说明 continuation 车道在承压。
+  - `continuation_dropped`：确实没有执行的记账。只在两处计数——最后一条路也满（两条车道都耗尽），或事件到达时辅助车道已在关停中关闭。
+  - `fallback_errors`：既没进日志库、也没写进兜底文件的日志行。只借道执行记账的任务（`continuationOnly`、无日志行的纯记账事件）不计入。
+- 错误日志的让位（占用 fallback 通道 1/2 后直接丢弃、计 `error_logs_yielded`）只作用于不带记账负载的事件；万一带了记账负载就走正常的软/硬上限分支，保证记账要么执行、要么计入 `continuation_dropped`。
+- 两个辅助 worker 都按单条（continuation）/单批（fallback）recover，worker 继续消费，不关闭 intake：
+  - continuation 记账回调 panic 只输出系统日志。它是代码缺陷而不是容量事件，回调可能已部分执行，不计入任何丢弃计数器。
+  - fallback 批 panic 时，本批里尚未计入 `fallback_total` / `fallback_errors` 的日志行计入 `fallback_errors`；已按单条计过错误或已写入成功的行不重复计数。本批的记账在 defer 中照常执行，因此借道记账的任务不算丢失。
 
 - 未修改任何数据库表、列或索引。SQLite 已验证 `CreateInBatches` 的 ID 回填；当前环境未提供可隔离的 PostgreSQL/MySQL 集成库，因此这两种数据库的真实驱动 ID 回填仍是上线前验证项。若驱动未回填某行 ID，该行后续安全使用 `logID=0`，不猜测 ID。
 
@@ -890,7 +951,19 @@ continuation 再进入既有成本/提成处理流程；日志 writer 不直接�
 
 额度预扣与最终结算在日志入队之前完成，不依赖日志管道。成本/提成和额度导出后续由固定 worker 执行。
 
-当内存队列、continuation、fallback queue 和有限磁盘同时耗尽时，在“relay 永不阻塞、内存和磁盘都必须有界”的约束下，无法继续无损接收无限事件。实现会停止日志 intake、增加 dropped/error 指标并输出严重系统告警；不会等待数据库、文件或 channel，也不会改变已经完成的主额度结算。运维页面会明确展示该故障，管理员需要恢复日志数据库或 fallback 目录容量/权限后再重新启用 intake。
+当内存队列、continuation、fallback queue 和有限磁盘同时耗尽时，在“relay 永不阻塞、内存和磁盘都必须有界”的约束下，无法继续无损接收无限事件。每条通道本身都有硬上限，放不下的事件按所在环节计数丢弃（`dropped`、`fallback_errors`、`continuation_dropped`、`error_logs_yielded`，口径见 §19）并输出限频告警；不会等待数据库、文件或 channel，也不会改变已经完成的主额度结算。
+
+**压力从不关闭 intake。** intake 只随生命周期开关：`StartRelayLogFlushLoop` 之后接收，`ShutdownRelayLogFlush` 开始后拒收。兜底目录满、两条辅助车道都满、辅助 worker panic 都不影响 relay 日志进入内存缓冲——日志库健康时这些日志照常落库，只有进不了日志库、又进不了兜底文件的溢出部分会丢失。不要在压力点关闭 intake：它对有界性没有任何帮助（所有通道本来就有上限），却要求一个可靠的重新打开时机——做不到时，日志库恢复后仍会拒收全部日志直到重启，手动回填也会被当成“正在关停”拒绝（分支审计 H2）。
+
+兜底目录满（文件数达到 `fallback_max_files` 且 active 文件达到轮转阈值）时：
+
+- fallback worker 的写入被拒绝，计入 `fallback_errors`，系统日志只在进入该状态时输出一次（任一批写入成功后复位），告警按 60 秒限频；
+- 状态接口的 `fallback_retention_full` 按目录元数据实时计算，空间释放（手动回填完成、运维清理）后自动恢复为 false，页面随之撤下提示；
+- 手动回填照常可用；只有关停中拒绝启动（`ErrRelayLogReplayShuttingDown`）。
+
+intake 关闭时被拒收的日志计入 `intake_refused` 与对应种类的 `dropped`，关停完成的系统日志会带上拒收条数。关停在最后一次取缓冲前持有两把缓冲锁置位“封口”：已经越过 intake 检查的在途 relay goroutine 在锁内看到封口即拒收并计数，不会把事件留在再也没人排空的缓冲里；向 fallback 通道投递统一持有 `relayLogAuxSendMu` 读锁并检查通道是否已关闭，关停后到达的投递只计数，不会向已关闭的通道发送。
+
+**已知限制：关停不中断正在运行的 flush/retry 周期。** 关停关闭停止信号后，只在截止时间内等待后台 flush 与 retry goroutine 退出；正在执行的周期会一直跑完它的全部批次（每批受 `write_timeout_sec` 约束，一个周期可以有多批）。若某个周期越过了整个关停截止时间，关停照常结束（最后一次取缓冲拿不到这个周期已经取到手的事件），而这个周期稍后返回时：写库失败的事件进入 retry 缓冲、成功写入的事件派发记账——这些都发生在最后一次取缓冲之后，没有人再排空，进程退出即丢失（辅助车道若已关闭，派发的记账计入 `continuation_dropped`；停在 retry 缓冲里的日志行不计入任何丢弃计数器）。pending 车道只在持有 `relayLogFlushMu` 时读写：关停在截止时间内 `TryLock` 这把锁，拿到才取走 pending；拿不到说明超时的周期仍持有 pending，关停不碰它，只按原子长度写一条系统错误日志（不计入丢弃计数器）。截止时间到达时丢弃的剩余事件与其它地方同一口径计数：日志行计入 `fallback_errors`，未执行的记账计入 `continuation_dropped`。这是“关停有绝对截止时间”的代价，不做结构性改造；运维侧应让 `shutdown_timeout_sec` 明显大于 `write_timeout_sec`，把该窗口压到只在日志库长时间挂起时才会出现。
 
 这是一项明确的 graceful-degradation 边界，不应被描述为绝对零丢失。若未来要求成本/提成后续也具有严格零丢失语义，需要在请求预扣费之前预留持久化槽位或引入独立持久消息系统，属于请求生命周期级别的后续改造。
 
@@ -898,6 +971,7 @@ continuation 再进入既有成本/提成处理流程；日志 writer 不直接�
 
 - buffer 边界、reject-new、热缩容后台淘汰、重试上限、熔断和进程内 continuation 单次执行；
 - fallback retention 上限、active/rotated 后台重放，以及重放绝不重复账务；
+- 丢弃计数口径：continuation 溢出改道只计 `continuation_overflowed`；两条车道都耗尽时记账丢失只计一次 `continuation_dropped`、日志已入库不计 `fallback_errors`，intake 保持接收；最后一条路带真实 `logs.id`；continuation 回调 panic 与 fallback 批 panic 均被隔离，后者只计本批未计数的日志行；
 - SQLite 批量插入 ID 回填；
 - relay 事件快照不保留 `gin.Context`、请求体、WebSocket 或 API key；
 - 后端相关包编译及聚焦测试；
@@ -989,7 +1063,7 @@ Content-Type: application/json
 
 - 已有任务运行时再次触发：业务失败，提示“回填任务正在运行”。
 - 没有待回填文件：成功返回 `started=false`，页面提示当前无需回填。
-- 服务正在 shutdown：拒绝启动，提示稍后重试。
+- 服务正在 shutdown：拒绝启动，提示稍后重试。管道处于压力状态（兜底目录满、队列满）不影响启动回填——回填正是释放兜底目录的手段。
 - 接口通过 CAS 建立 `running` 状态，同步完成目录元数据枚举后启动后台任务；不逐行扫描文件、不等待数据库写入。
 - 路由放入现有 `systemAdminRoute`，复用 `middleware.AdminAuth()`。
 
@@ -1012,9 +1086,10 @@ idle -> running -> succeeded
 - 数据库批次成功后，对应行不再写入临时文件；失败批次、无法解析的行和不支持的记录版本保留在临时文件中。任务结束时通过 `source -> target` 两阶段替换，仅在全部成功时删除源文件。
 - 启动、状态查询和手动触发会恢复替换中断遗留物：目标缺失时恢复 `.replay.source` 或 `.replay.tmp`，目标已存在时清理对应的陈旧遗留物。正在处理的文件受文件互斥和 active-path 标记保护。
 - panic 在任务边界 recover，状态改为 failed，错误仅写系统日志并显示清理后的提示。
-- shutdown 不启动新任务；正在运行的任务收到取消信号后停止读取，并保留未完成文件，下次可再次手动触发。
+- shutdown 不启动新任务；正在运行的任务收到取消信号后停止读取。当前文件中已提交的批次没有可回写的 id，若整体保留源文件，下次回填会把它们再插一遍，因此取消时把尚未写库的部分——失败保留行、当前未提交的批次、读了一半的记录（`readRelayLogJSONLRecord` 取消时交回已读出的字节）和未读的剩余字节——按原样写入临时文件，再走与失败保留相同的两阶段替换。结果文件只含未写库的记录，下次可再次手动触发。若取消时当前文件既没有提交过任何批次、也没有失败保留行，源文件原样就是全部未写库内容：不拷贝剩余字节、不替换源文件，只删除空的临时文件。拷贝量不超过单个兜底文件大小；关停只在自己的截止时间内等待回填任务。
+- 回填状态：本次任务因取消结束时 `last_error` 为 `relay_log_replay_shutdown`。
 
-日志回填采用“至少一次”语义。由于本次明确不修改 4 亿级日志表结构，也没有可用于幂等写入的唯一恢复键，如果进程恰好在某批 `INSERT` 已提交、但 fallback 文件尚未完成替换前崩溃，该批日志下次人工回填时可能重复。此风险只影响日志记录，不会导致账务 continuation 或 `QuotaData` 重放。
+日志回填采用“至少一次”语义。由于本次明确不修改 4 亿级日志表结构，也没有可用于幂等写入的唯一恢复键，以下窗口中已提交的批次下次人工回填时可能重复：进程在某批 `INSERT` 已提交、但 fallback 文件尚未完成替换前崩溃；关停截止时间先于取消后的文件改写完成（遗留的 `.replay.tmp` 在下次启动时被丢弃、源文件保留）；读取源文件或写临时文件出错（放弃临时文件、保留源文件）。带 id 的失败行按 §8.3.1 回查去重，不在此列。此风险只影响日志记录，不会导致账务 continuation 或 `QuotaData` 重放。
 
 ### 20.5 页面设计
 
@@ -1026,7 +1101,7 @@ idle -> running -> succeeded
 - `running` 时按钮显示“回填中…”并禁用，状态每 2 秒刷新；任务结束后恢复现有 10 秒轮询。
 - 无待回填文件时按钮禁用，并显示“当前没有待回填日志”。
 - API 启动失败时显示用户可操作的提示，例如检查任务是否正在运行、日志数据库是否可用。
-- 后端文件恢复失败、单文件回填失败或任务 panic 会写 `SysError`；页面通过清理后的 `last_error` 显示错误告警。现有 continuation 丢弃数或 fallback 写入错误数非零时，页面继续显示管道关注告警。
+- 后端文件恢复失败、单文件回填失败或任务 panic 会写 `SysError`；页面通过清理后的 `last_error` 显示错误告警。现有 continuation 丢弃数或 fallback 写入错误数非零、或 `fallback_retention_full` 为 true 时，页面显示管道关注告警；目录已满时告警中额外说明“进不了日志库的日志正在被丢弃，日志库可用后开始回填以释放兜底存储”。
 - 不提供“删除 fallback”按钮，避免误删未恢复日志。
 - 所有新增文案均通过 `t(...)`，已同步到 `en/zh/zh-TW/fr/ru/ja/vi` 七个 locale。
 
@@ -1057,7 +1132,7 @@ relay goroutine 不读取回填状态、不扫描目录、不访问文件，也�
 4. 无文件返回 `started=false`，已有任务返回 `ErrRelayLogReplayRunning`。
 5. `.replay.source`、`.replay.tmp` 及完成替换崩溃窗口的恢复。
 6. 单任务、8 路并发触发只有一个成功。
-7. 成功回填、失败批次保留、取消保留、panic 恢复和清理后的状态错误。
+7. 成功回填、失败批次保留、panic 恢复和清理后的状态错误；取消时只保留未写库部分（三库验证已提交批次不重复插入，另验证未提交批次、读了一半的超长记录与剩余字节逐字节保留；未提交也未保留任何行时源文件原样不动、不被替换）；压力状态下可回填、关停中拒绝。
 8. 回填与正常 flush 共用 writer mutex。
 9. 大于 16 MiB 的单条 JSONL 记录可流式读取。
 10. 回填不执行 accounting；实现同样忽略 `QuotaData`。
@@ -1066,7 +1141,9 @@ relay goroutine 不读取回填状态、不扫描目录、不访问文件，也�
 
 已知验证边界：
 
-- PostgreSQL/MySQL 的真实批量 ID 回填仍应在隔离环境做上线前验证；当前聚焦集成测试使用 SQLite。
+- 带 id 的幂等写入（§8.3.1）由 `model/relay_log_idempotent_insert_test.go` 在 SQLite、真实 MySQL、
+  真实 PostgreSQL 三库上逐一验证：已提交/已回滚/新行混批的重试、id 被别的行复用、回放去重、
+  回放失败后保留记录带 id；其余管道测试仍使用 SQLite。
 - 未注入进程级 kill 精确复现“数据库提交后、文件替换前”窗口；该窗口按上述至少一次语义处理。
 - 前端交互没有自动化浏览器测试，依赖 typecheck/lint 和人工页面验收。
 

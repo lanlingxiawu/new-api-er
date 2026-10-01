@@ -154,14 +154,24 @@ const logTraceMaxDuplicates = 50
 // 并逐行过滤（240 万行实测约 40s），而不走 idx_logs_request_id（约 2ms）。
 func logTraceByRequestIdQuery(db *gorm.DB, requestId string) *gorm.DB {
 	return db.Model(&Log{}).
-		Select("id, request_id, upstream_request_id, channel_id, other, created_at").
+		Select("id, request_id, upstream_request_id, channel_id, type, other, created_at").
 		Where("request_id = ?", requestId).
 		Limit(logTraceMaxDuplicates)
 }
 
 // GetLogTraceByRequestId returns only the trusted routing fields needed to
-// resolve an administrator-initiated upstream log lookup. Legacy duplicates
-// resolve deterministically to the newest row (created_at, then id).
+// resolve an administrator-initiated upstream log lookup. A retried request
+// has one row per failed attempt plus its final row; the trace must resolve to
+// the final attempt: newest created_at, then the consume row, then id.
+//
+// Id order alone does not follow response order: under backlog the async
+// pipeline flushes consume logs before error logs, and retry-buffer and
+// fallback-replay inserts land late too, so an earlier attempt's error log can
+// get a higher id than the final consume log within the same second. Only the
+// final attempt writes a consume log, so it wins such a tie. Rows written after
+// that consume log (a relay-timeout error log for the same attempt, a
+// violation-fee consume log) carry the same channel, so either choice routes
+// the lookup to the right upstream.
 func GetLogTraceByRequestId(requestId string) (*Log, error) {
 	var rows []Log
 	if err := logTraceByRequestIdQuery(LOG_DB, requestId).Find(&rows).Error; err != nil {
@@ -172,11 +182,22 @@ func GetLogTraceByRequestId(requestId string) (*Log, error) {
 	}
 	latest := rows[0]
 	for _, row := range rows[1:] {
-		if row.CreatedAt > latest.CreatedAt || (row.CreatedAt == latest.CreatedAt && row.Id > latest.Id) {
+		if logTraceNewer(row, latest) {
 			latest = row
 		}
 	}
 	return &latest, nil
+}
+
+func logTraceNewer(a, b Log) bool {
+	if a.CreatedAt != b.CreatedAt {
+		return a.CreatedAt > b.CreatedAt
+	}
+	aConsume, bConsume := a.Type == LogTypeConsume, b.Type == LogTypeConsume
+	if aConsume != bConsume {
+		return aConsume
+	}
+	return a.Id > b.Id
 }
 
 func RecordLog(userId int, logType int, content string) {

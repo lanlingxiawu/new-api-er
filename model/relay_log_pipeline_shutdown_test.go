@@ -335,11 +335,16 @@ func TestErrorLogsYieldFallbackCapacityToConsumeLogs(t *testing.T) {
 	resetRelayLogPipelineForTest()
 
 	// 用一个可控的闸门堵住记账回调，让 fallback 通道能积压起来
-	const fillerCount = 6
+	const fillerCount = 4
 	blocked := make(chan struct{})
+	entered := make(chan struct{}, 1)
 	var accountingCalls int64
 	previousHandler := relayLogAccountingHandler
 	RegisterRelayLogAccountingHandler(func(RelayLogAccountingPayload, int) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		<-blocked
 		atomic.AddInt64(&accountingCalls, 1)
 	})
@@ -348,13 +353,25 @@ func TestErrorLogsYieldFallbackCapacityToConsumeLogs(t *testing.T) {
 		RegisterRelayLogAccountingHandler(previousHandler)
 	})
 
-	for i := 0; i < fillerCount; i++ {
+	dispatchFiller := func() {
 		dispatchRelayLogFallbackJob(&relayLogEvent{
 			Kind:       relayLogKindConsume,
 			Log:        &Log{RequestId: "filler"},
 			Accounting: &RelayLogAccountingPayload{Version: 1, UserID: 1, Quota: 1},
 		}, true)
 	}
+	// 先让 worker 卡在第一条的记账里，再积压其余几条：否则 worker 可能在全部
+	// 投递完之前就把它们一批取走，通道达不到水位线。
+	dispatchFiller()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fallback worker never reached the blocked accounting handler")
+	}
+	for i := 1; i < fillerCount; i++ {
+		dispatchFiller()
+	}
+	require.Equal(t, fillerCount-1, len(relayLogFallbackCh), "precondition: fillers queued above the error watermark")
 
 	yieldedBefore := relayLogErrorYielded.Load()
 	for i := 0; i < 10; i++ {
@@ -500,4 +517,83 @@ func TestFallbackSoftCapacityGrowsWithoutRestart(t *testing.T) {
 		"扩容在下一次投递就该生效，不需要重启")
 
 	unblock()
+}
+
+// Events abandoned at the shutdown deadline are counted with the same meaning
+// as everywhere else: log rows under fallback_errors, accounting under
+// continuation_dropped (an accounting-only event is not a lost log row).
+func TestDropShutdownRemainderCountsLogsAndAccountingSeparately(t *testing.T) {
+	resetRelayLogPipelineForTest()
+	t.Cleanup(resetRelayLogPipelineForTest)
+
+	relayLogConsumeMu.Lock()
+	relayLogConsumeBuf = []*relayLogEvent{
+		{Log: &Log{}, Accounting: &RelayLogAccountingPayload{}},
+		{Accounting: &RelayLogAccountingPayload{}},
+	}
+	relayLogConsumeMu.Unlock()
+	relayLogPendingError = []*relayLogEvent{{Log: &Log{}}, {QuotaData: &QuotaDataLogParams{}}}
+
+	logsBefore, accountingBefore := relayLogFallbackErrors.Load(), relayLogContinuationDrop.Load()
+	dropRelayLogShutdownRemainder()
+
+	assert.EqualValues(t, logsBefore+2, relayLogFallbackErrors.Load())
+	assert.EqualValues(t, accountingBefore+3, relayLogContinuationDrop.Load())
+	assert.Zero(t, relayLogBacklog())
+}
+
+func TestHandoffPastDeadlineCountsDroppedAccounting(t *testing.T) {
+	useRelayLogFallbackDir(t)
+	useRelayLogAccountingSpy(t)
+	resetRelayLogPipelineForTest()
+	t.Cleanup(resetRelayLogPipelineForTest)
+
+	events := []*relayLogEvent{
+		{Log: &Log{}, Accounting: &RelayLogAccountingPayload{}},
+		{Log: &Log{}},
+	}
+	logsBefore, accountingBefore := relayLogFallbackErrors.Load(), relayLogContinuationDrop.Load()
+	handoffRelayLogEventsUntil(events, time.Now().Add(-time.Second))
+	assert.EqualValues(t, logsBefore+2, relayLogFallbackErrors.Load())
+	assert.EqualValues(t, accountingBefore+1, relayLogContinuationDrop.Load())
+}
+
+// A flush cycle that overran the shutdown deadline still owns the pending
+// lanes (they are only touched under relayLogFlushMu). Shutdown must neither
+// wait for it nor read or clear those slices.
+func TestDropShutdownRemainderLeavesPendingToOverrunFlush(t *testing.T) {
+	resetRelayLogPipelineForTest()
+	t.Cleanup(resetRelayLogPipelineForTest)
+
+	owned := []*relayLogEvent{{Log: &Log{}}, {Log: &Log{}}}
+	relayLogPendingConsume = owned
+	storeRelayLogPendingLen(relayLogKindConsume)
+
+	relayLogFlushMu.Lock()
+	before := relayLogFallbackErrors.Load()
+	done := make(chan struct{})
+	go func() {
+		dropRelayLogShutdownRemainder()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown must not wait for a flush cycle that holds the lock")
+	}
+	relayLogFlushMu.Unlock()
+
+	assert.Equal(t, owned, relayLogPendingConsume, "pending lanes belong to the running flush cycle")
+	assert.Equal(t, before, relayLogFallbackErrors.Load(), "events still owned by the flush cycle are not counted as dropped")
+}
+
+func TestLockRelayLogFlushUntilGivesUpAtDeadline(t *testing.T) {
+	relayLogFlushMu.Lock()
+	start := time.Now()
+	assert.False(t, lockRelayLogFlushUntil(start.Add(20*time.Millisecond)))
+	assert.Less(t, time.Since(start), time.Second)
+	relayLogFlushMu.Unlock()
+
+	require.True(t, lockRelayLogFlushUntil(time.Now().Add(time.Second)))
+	relayLogFlushMu.Unlock()
 }
