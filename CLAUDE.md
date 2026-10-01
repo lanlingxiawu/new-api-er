@@ -464,3 +464,29 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - New business logic in `service/` or `model/` with branching or edge-case behaviour MUST have tests covering all branches.
 - Bug fixes MUST add a test that would have caught the original bug.
 - Relay channel adapter changes MUST include a fixture-based test for the changed transform.
+
+### Rule 16: Mandatory Review Before Reporting Completion
+
+Tests only verify the scenarios the author thought of; they cannot catch a wrong assumption. **Before reporting any change as complete** — new feature, modification, or bug fix — review the full change against the fixed checklist below. The checklist is the same for every change and does not depend on the feature. Rule 15.8 (tests pass) is necessary, not sufficient.
+
+**Method:**
+- Review the complete `git diff` plus new files, not what you remember changing.
+- Assume the change contains bugs and look for them; verify every finding against the code before acting on it.
+- When possible, run an independent review in a fresh context (the code-review workflow or a separate agent) so the author's assumptions are not reused.
+- Fix confirmed findings (with a regression test per Rule 15.8), then review the fixes the same way.
+
+**Checklist — every item, every time:**
+
+1. **Scope** — every changed function: grep all its callers and check each one still holds.
+2. **Correctness** — every branch and boundary (empty, 0, -1, nil, oversized, repeated calls, concurrency); error paths; ignored return values.
+3. **Parity** — when replacing, bypassing, or re-implementing existing logic, compare step by step with the original and confirm each step has a counterpart.
+4. **Interactions** — effects on retry, billing, timeouts, cache, logging, permissions, config. Can it multiply upstream calls, double-bill, or bypass a limit or budget?
+5. **Resources and concurrency** — lifetimes (defer/Close, goroutines, temp files) cover the real consumer; locks, shared state, pools (Rule 0).
+6. **Failure modes** — behaviour when upstream or a dependency errors, times out, panics, or partially succeeds.
+7. **Data and security** — every place sensitive data is written (grep, do not enumerate from memory); auth; input validation.
+8. **Project rules** — check Rules 0–15 one by one (e.g. no hardcoded user-facing text per Rule 13, DB compatibility per Rule 2).
+9. **The tests themselves** — do assertions encode requirements or just restate the implementation? Are failure paths covered? Does a mock hide timing or real behaviour?
+10. **Compatibility and operations** — all three databases, migrations, defaults, rollback, conflict surface with upstream merges (Rule 6).
+11. **Maintainability** — duplicated constants/logic, dead code, comments describing only the current state.
+
+When reporting completion, state that the review was done and list what it found and fixed.
