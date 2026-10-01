@@ -13,6 +13,8 @@ import (
 )
 
 // 磁盘正文的回收：内存索引是唯一真值，磁盘上没有对应索引的文件即为孤儿。
+// 分段文件整体判定——只要还有一条记录被索引引用、或仍是某个 writer 的活动分段，
+// 就整体保留。
 //
 // 索引淘汰（条数超上限时截断）刻意不删文件，写入路径因此完全不含删除 IO；
 // 回收全部集中到这里，每 REQUEST_LOG_SWEEP_INTERVAL_SEC 一轮。
@@ -70,13 +72,33 @@ func SweepRequestLogFiles() requestLogSweepStats {
 		return stats
 	}
 
-	keep := make(map[string]struct{})
+	// 顺序不能反：先快照分段登记表，再快照索引（论证见 requestLogSegmentSnapshot 上方）。
+	active, snapSeq := requestLogSegmentSnapshot()
+	keep := requestLogSweepKeep{
+		files:    make(map[string]struct{}),
+		segments: make(map[string]struct{}, len(active)),
+		snapSeq:  snapSeq,
+	}
 	datesInUse := make(map[string]struct{})
-	for _, entry := range requestLogIndexSnapshot() {
-		keep[entry.rel] = struct{}{}
-		if idx := strings.IndexByte(entry.rel, '/'); idx > 0 {
-			datesInUse[entry.rel[:idx]] = struct{}{}
+	markDate := func(rel string) {
+		if idx := strings.IndexByte(rel, '/'); idx > 0 {
+			datesInUse[rel[:idx]] = struct{}{}
 		}
+	}
+	for rel := range active {
+		keep.segments[rel] = struct{}{}
+		markDate(rel)
+	}
+	for _, entry := range requestLogIndexSnapshot() {
+		if segRel, _, _, ok := parseRequestLogRecordRel(entry.rel); ok {
+			if _, seen := keep.segments[segRel]; !seen {
+				keep.segments[segRel] = struct{}{}
+				markDate(segRel)
+			}
+			continue
+		}
+		keep.files[entry.rel] = struct{}{}
+		markDate(entry.rel)
 	}
 
 	now := time.Now()
@@ -127,8 +149,15 @@ func SweepRequestLogFiles() requestLogSweepStats {
 	return stats
 }
 
-// sweepRequestLogDateDir 处理单个日期目录下的 8 个桶。
-func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, today string, stats *requestLogSweepStats) {
+// requestLogSweepKeep 是一轮清理的保留集合。
+type requestLogSweepKeep struct {
+	files    map[string]struct{} // 旧格式整文件条目
+	segments map[string]struct{} // 被索引引用或仍活动的分段
+	snapSeq  int64
+}
+
+// sweepRequestLogDateDir 处理单个日期目录：直接存放的分段文件，以及旧格式的 8 个桶。
+func sweepRequestLogDateDir(date, dateFull string, keep requestLogSweepKeep, today string, stats *requestLogSweepStats) {
 	buckets, err := os.ReadDir(dateFull)
 	if err != nil {
 		stats.Errors++
@@ -139,12 +168,16 @@ func sweepRequestLogDateDir(date, dateFull string, keep map[string]struct{}, tod
 		bucketFull := filepath.Join(dateFull, bucket.Name())
 		if !bucket.IsDir() {
 			stats.Scanned++
+			if keepRequestLogSegment(date+"/"+bucket.Name(), bucket.Name(), keep.segments, keep.snapSeq) {
+				remaining++
+				continue
+			}
 			if !removeRequestLogPath(bucketFull, false, stats) {
 				remaining++
 			}
 			continue
 		}
-		left := sweepRequestLogBucketDir(date, bucket.Name(), bucketFull, keep, stats)
+		left := sweepRequestLogBucketDir(date, bucket.Name(), bucketFull, keep.files, stats)
 		if left > 0 {
 			remaining++
 			continue

@@ -3,8 +3,6 @@ package model
 import (
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,100 +11,14 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// 路径推导：<date>/<created_at%8>/<created_at>_<request_id>.json
+// 读取：分段记录按偏移读；旧格式整文件条目继续可读（升级前的快照会带回它们）
 // ---------------------------------------------------------------------------
 
-func TestRequestLogRelPath_BucketAndDate(t *testing.T) {
-	// 秒级时间戳逐秒轮转，8 个桶各命中一次
-	for ts := int64(0); ts < 8; ts++ {
-		rel := requestLogRelPath(ts, "rid", 1)
-		parts := strings.Split(rel, "/")
-		require.Len(t, parts, 3, "rel must be <date>/<bucket>/<file>")
-		assert.Equal(t, time.Unix(ts, 0).Format("2006-01-02"), parts[0])
-		assert.Equal(t, strconv.FormatInt(ts, 10), parts[1], "bucket must be created_at%%8")
-		assert.Equal(t, strconv.FormatInt(ts, 10)+"_rid.json", parts[2])
-	}
-	// 非零起点同样按取余落桶
-	rel := requestLogRelPath(1000, "rid", 1)
-	assert.Equal(t, "0", strings.Split(rel, "/")[1], "1000%%8 == 0")
-	rel = requestLogRelPath(1003, "rid", 1)
-	assert.Equal(t, "3", strings.Split(rel, "/")[1])
-}
-
-// 负时间戳（时钟异常）不得产生 "-3" 这样的目录名。
-func TestRequestLogRelPath_NegativeTimestamp(t *testing.T) {
-	rel := requestLogRelPath(-3, "rid", 1)
-	bucket := strings.Split(rel, "/")[1]
-	assert.NotContains(t, bucket, "-")
-	n, err := strconv.Atoi(bucket)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, n, 0)
-	assert.Less(t, n, 8)
-}
-
-// 跨日的两个时间戳必须落进不同日期目录。
-func TestRequestLogRelPath_SplitsByDay(t *testing.T) {
-	now := time.Now()
-	today := requestLogRelPath(now.Unix(), "rid", 1)
-	yesterday := requestLogRelPath(now.AddDate(0, 0, -1).Unix(), "rid", 1)
-	assert.NotEqual(t, strings.Split(today, "/")[0], strings.Split(yesterday, "/")[0])
-}
-
-// ---------------------------------------------------------------------------
-// request id 净化
-// ---------------------------------------------------------------------------
-
-func TestSanitizeRequestId(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"plain", "20260807abcdef", "20260807abcdef"},
-		{"allowed punctuation", "a.b_c-d", "a.b_c-d"},
-		{"forward slash", "a/b", "a_b"},
-		{"backslash", `a\b`, "a_b"},
-		{"traversal", "../../etc/passwd", ".._.._etc_passwd"},
-		{"space and colon", "a b:c", "a_b_c"},
-		{"unicode", "日志", strings.Repeat("_", len("日志"))},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := sanitizeRequestId(c.in, 7)
-			assert.Equal(t, c.want, got)
-			assert.NotContains(t, got, "/")
-			assert.NotContains(t, got, `\`)
-		})
-	}
-}
-
-func TestSanitizeRequestId_Fallbacks(t *testing.T) {
-	// 空串、纯点号都不能变成路径元素
-	assert.Equal(t, "noreqid-7", sanitizeRequestId("", 7))
-	assert.Equal(t, "noreqid-7", sanitizeRequestId(".", 7))
-	assert.Equal(t, "noreqid-7", sanitizeRequestId("..", 7))
-	assert.Equal(t, "noreqid-7", sanitizeRequestId("...", 7))
-}
-
-func TestSanitizeRequestId_LengthCap(t *testing.T) {
-	got := sanitizeRequestId(strings.Repeat("a", 500), 7)
-	assert.Len(t, got, requestLogIdMaxLen)
-	// 恰好等于上限时不截断
-	got = sanitizeRequestId(strings.Repeat("b", requestLogIdMaxLen), 7)
-	assert.Len(t, got, requestLogIdMaxLen)
-	// 截断后若只剩点号仍走兜底
-	assert.Equal(t, "noreqid-7", sanitizeRequestId(strings.Repeat(".", requestLogIdMaxLen+10)+"a", 7))
-}
-
-// ---------------------------------------------------------------------------
-// 读写
-// ---------------------------------------------------------------------------
-
-func TestWriteReadRequestLogFile(t *testing.T) {
+func TestReadRequestLogFile_SegmentRecord(t *testing.T) {
 	requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
 
 	log := &RequestLog{
-		Id:              9,
 		CreatedAt:       1000,
 		Username:        "alice",
 		UseTimeMs:       55,
@@ -115,8 +27,8 @@ func TestWriteReadRequestLogFile(t *testing.T) {
 		ResponseHeaders: `{"Content-Type":["application/json"]}`,
 		ResponseBody:    `{"ok":true}`,
 	}
-	rel := requestLogRelPath(log.CreatedAt, "rid-1", int64(log.Id))
-	require.NoError(t, writeRequestLogFile(rel, log))
+	RecordRequestLog(log)
+	rel := requestLogIndexSnapshot()[0].rel
 
 	assert.True(t, requestLogFileExists(rel))
 	got, err := readRequestLogFile(rel)
@@ -129,6 +41,20 @@ func TestWriteReadRequestLogFile(t *testing.T) {
 	assert.Equal(t, log.RequestHeaders, got.RequestHeaders)
 }
 
+func TestReadRequestLogFile_LegacyFile(t *testing.T) {
+	requestLogTestStore(t)
+	rel := "2026-01-01/0/1000_rid.json"
+	full := filepath.Join(requestLogRoot, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+	require.NoError(t, os.WriteFile(full, []byte(`{"id":7,"request_body":"legacy"}`), 0o644))
+
+	assert.True(t, requestLogFileExists(rel))
+	got, err := readRequestLogFile(rel)
+	require.NoError(t, err)
+	assert.Equal(t, 7, got.Id)
+	assert.Equal(t, "legacy", got.RequestBody)
+}
+
 func TestReadRequestLogFile_MissingAndCorrupted(t *testing.T) {
 	requestLogTestStore(t)
 
@@ -136,11 +62,24 @@ func TestReadRequestLogFile_MissingAndCorrupted(t *testing.T) {
 	assert.Error(t, err)
 	assert.False(t, requestLogFileExists("2026-01-01/0/missing.json"))
 
+	_, err = readRequestLogFile(requestLogRecordRel("2026-01-01/seg-missing.jsonl", 0, 10))
+	assert.Error(t, err)
+
 	rel := "2026-01-01/0/broken.json"
 	full := filepath.Join(requestLogRoot, filepath.FromSlash(rel))
 	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 	require.NoError(t, os.WriteFile(full, []byte("not json"), 0o644))
 	_, err = readRequestLogFile(rel)
+	assert.Error(t, err)
+
+	// 偏移指向记录中间：读出来不是完整 JSON，必须报错而不是返回半条数据。
+	seg := "2026-01-01/seg-broken.jsonl"
+	segFull := filepath.Join(requestLogRoot, filepath.FromSlash(seg))
+	require.NoError(t, os.WriteFile(segFull, []byte(`{"id":1}`+"\n"+`{"id":2}`+"\n"), 0o644))
+	_, err = readRequestLogFile(requestLogRecordRel(seg, 3, 5))
+	assert.Error(t, err)
+	// 超出文件末尾
+	_, err = readRequestLogFile(requestLogRecordRel(seg, 10, 100))
 	assert.Error(t, err)
 }
 
@@ -150,27 +89,20 @@ func TestRequestLogStore_NotReady(t *testing.T) {
 	requestLogReady = false
 	t.Cleanup(func() { requestLogReady = prev })
 
-	assert.ErrorIs(t, writeRequestLogFile("a/0/b.json", &RequestLog{}), errRequestLogStoreUnavailable)
 	_, err := readRequestLogFile("a/0/b.json")
 	assert.ErrorIs(t, err, errRequestLogStoreUnavailable)
 	assert.False(t, requestLogFileExists("a/0/b.json"))
+	assert.False(t, requestLogFileExists(requestLogRecordRel("a/seg-b.jsonl", 0, 1)))
 }
 
-// 清理协程回收目录后，同一个 <date>/<bucket> 的后续写入必须自愈：
-// 目录创建结果被记忆，不作废就会永久失败。
-func TestWriteRequestLogFile_RecreatesSweptDirectory(t *testing.T) {
+// 切换根目录时，共享 writer 的活动分段属于旧目录，必须先关掉。
+func TestInitRequestLogStore_ClosesDefaultWriterSegment(t *testing.T) {
 	requestLogTestStore(t)
+	RecordRequestLog(&RequestLog{Username: "u"})
+	require.NotNil(t, defaultRequestLogWriter.file)
 
-	rel := requestLogRelPath(1000, "rid-1", 1)
-	require.NoError(t, writeRequestLogFile(rel, &RequestLog{Id: 1}))
-
-	// 模拟清理协程删掉整个日期目录
-	dateDir := filepath.Join(requestLogRoot, strings.Split(rel, "/")[0])
-	require.NoError(t, os.RemoveAll(dateDir))
-
-	rel2 := requestLogRelPath(1000, "rid-2", 2)
-	require.NoError(t, writeRequestLogFile(rel2, &RequestLog{Id: 2}), "write must recreate the removed directory")
-	assert.True(t, requestLogFileExists(rel2))
+	InitRequestLogStore()
+	assert.Nil(t, defaultRequestLogWriter.file)
 }
 
 // ---------------------------------------------------------------------------

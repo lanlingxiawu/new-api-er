@@ -115,6 +115,11 @@ func getUserAuthVersionFloor(userId int) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return parseUserAuthVersionFloor(values)
+}
+
+// parseUserAuthVersionFloor 取 fence 与已提交版本中较大者；两个键都不存在时为 0。
+func parseUserAuthVersionFloor(values []interface{}) (int64, error) {
 	var floor int64
 	for _, value := range values {
 		if value == nil {

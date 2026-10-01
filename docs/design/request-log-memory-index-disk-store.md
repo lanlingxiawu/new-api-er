@@ -1,5 +1,7 @@
 # 请求日志改造：内存索引 + 本地磁盘正文 + Redis 快照
 
+> 正文的磁盘格式（按 writer 追加的分段文件、索引记 `分段#偏移#长度`、分段级回收与批量写入）以 `request-log-and-redis-hotpath-optimization.md` §3.1 为准；本文中"每条一个 JSON 文件、`<date>/<ts%8>/` 桶目录"的描述只适用于升级前留下、仍被兼容读取与回收的旧条目。内存索引、快照、队列与丢弃语义仍以本文为准。
+>
 > 最近修订：2026-08-10。本文为权威设计，全文一致。历史草案中的“孤儿文件宽限期”“pending/ready 两阶段索引”“清空立即触发扫描”均已废弃，不再出现在本文。
 
 ## 0. 设计前提与核心取舍
@@ -136,17 +138,17 @@ type requestLogIndexEntry struct {
 
 ### 6.2 容器与淘汰
 
-用**尾部追加**的切片替换现有的头部插入：
+索引是按 `created_at` 升序的切片：
 
 ```go
 var (
     reqLogMu    sync.Mutex
-    reqLogItems []requestLogIndexEntry // 尾部为最新
+    reqLogItems []requestLogIndexEntry // 按 created_at 升序，尾部为最新
     reqLogSeq   int64                  // 进程内自增 id
 )
 ```
 
-现实现每条日志都执行 `append([]*RequestLog{log}, memRequestLogs...)`，即每次插入复制整个 5000 元素切片。改为尾部 `append` 后插入是 O(1) 摊还；淘汰在 `len > max` 时执行一次 `copy(items, items[len-min:])` + 截断，即每 `max-min` 次插入才付一次 O(min) 拷贝。读取端倒序遍历得到“最新在前”。
+登记（`insertRequestLogIndexLocked`）：`created_at` 不小于尾部的条目直接尾部 `append`，O(1) 摊还；否则二分找到第一个 `created_at` 更大的位置插入（相同 `created_at` 保持提交顺序），只搬移该位置之后的尾段。提交顺序不等于 `created_at` 顺序——多个 writer 并发时，先出队的旧批次可能后提交——但 `created_at` 在请求结束时取值、紧接着入队，乱序幅度受写队列深度约束，搬移的尾段通常只有几条到几千条（微秒级），不随索引规模增长。淘汰在 `len > max` 时执行一次 `copy(items, items[len-min:])` + 截断，即每 `max-min` 次插入才付一次 O(min) 拷贝，丢弃的是 `created_at` 最旧的条目。读取端倒序遍历得到“最新在前”。id 在写盘时分配，不保证与 `created_at` 同序；详情按 id 线性查找，不依赖 id 有序。
 
 淘汰阈值沿用现有 `effectiveRequestLogLimits()`（保证 `0 <= min < max`，配置错配时退化为 `max/2`，杜绝“永不清理”）。**淘汰只删索引，不碰磁盘文件**——磁盘回收统一交给 §8 的扫描协程，写入路径因此不含任何删除 IO；被淘汰文件作为孤儿等下一轮周期扫描删除。
 
@@ -171,7 +173,7 @@ var (
 | `request_log:snapshot` | string（JSON 数组） | 进程退出 | 进程启动，读后立即 `DEL` |
 
 - **退出**：`main.go` 关停序列在 `ShutdownRelayLogFlush` 之后追加两步——先 `middleware.DrainRequestLogQueue(3 * time.Second)` 排空写队列（让在途条目落盘并进索引），再 `model.SnapshotRequestLogs()` 把整个索引（含 `rel`）序列化为一个 JSON 数组 `SET ... EX 86400`。TTL 防止“进程再没起来”时快照永久驻留。两步各自设超时、失败只记日志，不阻塞退出。
-- **启动**：`main.go` 在 `InitRedisClient` 之后、HTTP 端口绑定之前调用 `model.RestoreRequestLogs()`：`GET` → `Unmarshal` → 装入索引（超过 `max` 时只保留最新 `max` 条）→ `DEL`。恢复条目里 `rel` 对应文件已不存在的直接跳过，避免详情 404。读取设 5 秒超时，失败视为无快照。**必须在扫描协程启动之前完成**，否则第一次扫描会把有效文件当孤儿删掉。
+- **启动**：`main.go` 在 `InitRedisClient` 之后、HTTP 端口绑定之前调用 `model.RestoreRequestLogs()`：`GET` → `Unmarshal` → 按 `created_at` 稳定排序（不信任快照里的顺序）→ 装入索引（超过 `max` 时只保留 `created_at` 最新的 `max` 条）→ `DEL`。恢复条目里 `rel` 对应文件已不存在的直接跳过，避免详情 404。读取设 5 秒超时，失败视为无快照。**必须在扫描协程启动之前完成**，否则第一次扫描会把有效文件当孤儿删掉。
 - **Redis 未启用**：快照与恢复都是 no-op。重启后索引为空，磁盘上的旧文件将在下一轮扫描时因“无索引”被删除——这正是需求语义，需在设置页文案说明“未启用 Redis 时重启会丢失请求日志”。
 - **单键大小**：5000 条 × ~400 B ≈ 2 MB，一次 SET/GET。实现中对快照条数额外加 `min(len, max)` 上限，避免 `MaxCount` 被配置成极大值时单键无限膨胀。
 
@@ -216,7 +218,7 @@ var (
 | 抓请求头/体、包装 ResponseWriter、抓返回体 | relay goroutine | 不变 |
 | 组装 `RequestLog` + 计算 `use_time_ms` + 投递队列 | relay goroutine | 由 gopool 派发改为非阻塞 channel 发送，更轻 |
 | 序列化 + 写磁盘文件 | writer 池（4 个常驻 goroutine） | **新增**，替代原 Redis Incr + 3 条 pipeline 命令 |
-| 单次持锁 append 索引 + 按需淘汰 | writer 池 | 新增，一次加锁，O(1) 摊还 |
+| 单次持锁按 `created_at` 登记索引 + 按需淘汰 | writer 池 | 新增，一次加锁；顺序到达 O(1) 摊还，乱序只搬移尾段（§6.2） |
 | Redis 写 | — | **移除** |
 
 relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次 gopool 调度）；实际变化全部发生在异步 writer 内部。
@@ -241,7 +243,7 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 - **relay goroutine**：新增 0 次 DB、0 次 Redis、0 次磁盘 IO、0 次加锁；仅一次 `time.Now()` 与一次非阻塞 channel 发送。
 - **writer 池**：1667 次/秒 `WriteFile`，平均 8 KB/条（典型 relay 请求体+响应体），约 13 MB/s 顺序写，由 4 个 writer 承担。SSD 可承受；机械盘或网络盘（NFS/EFS）不可承受——文档明确要求 `relay_log` 落本地 SSD，或用用户名过滤把量级压到个位数 QPS。
 - **背压**：写盘变慢时队列（1000）迅速打满，超出部分丢弃并按 1/1000 频率告警。这是既有的优雅降级机制，不新增阻塞点。
-- **锁竞争**：`reqLogMu` 每条日志**一次** O(1) 操作，1667 次/秒下最多 4 个 writer 争用；管理端列表持锁只做一次页大小切片复制，清空只做一次置空。
+- **锁竞争**：`reqLogMu` 每批日志**一次**持锁，顺序到达的条目 O(1)、乱序条目二分 + 尾段搬移，1667 次/秒下最多 4 个 writer 争用；管理端列表持锁只做一次页大小切片复制，清空只做一次置空。
 - **磁盘容量**：稳态文件数受 `MaxCount` 约束（扫描协程回收），不随 RPM 增长。峰值上限 ≈ `MaxCount × 单文件上限` 加上一个扫描周期（默认 5 min）内的新增量与淘汰/清空尚未回收的孤儿量。
 
 ## 10. `use_time` 补齐
@@ -329,7 +331,7 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 **查询与清理**
 - 六个过滤条件各自命中/不命中及组合过滤
 - 分页：`startIdx` 越界、`num <= 0`、跨页边界、中间页窗口取值正确、`total` 与过滤后条数一致（而非当前页条数）
-- 排序：结果严格按 `created_at` 倒序（尾部追加 + 倒序遍历的回归锁）
+- 排序：结果严格按 `created_at` 倒序，多 writer 乱序提交、批内乱序、同秒多条（保持提交顺序）、快照乱序恢复均覆盖（`model/request_log_branch_audit_regression_test.go`、`TestRequestLogSnapshot_RestoreSortsByCreatedAt`）
 - 详情：命中返回大字段；文件被删后返回 `errRequestLogNotFound`
 - `ClearAllRequestLogs`：只清索引、返回正确条数、**不删磁盘文件**（断言清空后文件仍在，随后一轮扫描才删除）
 

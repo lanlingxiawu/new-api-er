@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -80,7 +81,7 @@ type requestLogIndexEntry struct {
 
 var (
 	reqLogMu    sync.Mutex
-	reqLogItems []requestLogIndexEntry // 尾部为最新
+	reqLogItems []requestLogIndexEntry // 按 created_at 升序，尾部为最新
 	reqLogSeq   int64
 
 	requestLogWriteFailures atomic.Int64
@@ -96,29 +97,31 @@ func cloneRequestLogMeta(log *RequestLog) *RequestLog {
 	return &m
 }
 
+// 写盘 worker 各自持有 RequestLogWriter；这个共享实例只服务于逐条写入的调用方。
+var (
+	defaultRequestLogWriterMu sync.Mutex
+	defaultRequestLogWriter   = NewRequestLogWriter()
+)
+
 // RecordRequestLog 落盘一条请求日志并登记索引，按 min/max 阈值触发索引淘汰。
-// 由写盘 worker 调用，绝不能在 relay goroutine 上执行。
+// 绝不能在 relay goroutine 上执行；批量写入走 RequestLogWriter.Record。
 //
-// 顺序是"先写文件、成功后才进索引"：这保证索引 ⊆ 磁盘，详情接口永远不会拿到指向
-// 缺失文件的条目；反过来则会让清理协程在两步之间把刚写的文件当孤儿删掉。
+// 顺序是"先写盘、成功后才进索引"：这保证索引 ⊆ 磁盘，详情接口永远不会拿到指向
+// 缺失正文的条目。
 func RecordRequestLog(log *RequestLog) {
 	if log == nil {
 		return
 	}
-	if log.CreatedAt == 0 {
-		log.CreatedAt = common.GetTimestamp()
-	}
-	if !RequestLogStoreReady() {
-		return
-	}
-	id := atomic.AddInt64(&reqLogSeq, 1)
-	log.Id = int(id)
-	rel := requestLogRelPath(log.CreatedAt, log.RequestId, id)
-	if err := writeRequestLogFile(rel, log); err != nil {
-		reportRequestLogWriteFailure(err)
-		return
-	}
-	appendRequestLogIndex(cloneRequestLogMeta(log), rel)
+	defaultRequestLogWriterMu.Lock()
+	defer defaultRequestLogWriterMu.Unlock()
+	defaultRequestLogWriter.Record([]*RequestLog{log})
+}
+
+// closeDefaultRequestLogWriter 关闭共享实例的活动分段（根目录切换、测试收尾时）。
+func closeDefaultRequestLogWriter() {
+	defaultRequestLogWriterMu.Lock()
+	defer defaultRequestLogWriterMu.Unlock()
+	defaultRequestLogWriter.Close()
 }
 
 // reportRequestLogWriteFailure 限流打印写盘失败，避免磁盘故障时刷屏。
@@ -128,14 +131,39 @@ func reportRequestLogWriteFailure(err error) {
 	}
 }
 
-func appendRequestLogIndex(meta *RequestLog, rel string) {
+// appendRequestLogIndexBatch 一次持锁登记一批条目，保持索引按 created_at 升序。
+func appendRequestLogIndexBatch(entries []requestLogIndexEntry) {
+	if len(entries) == 0 {
+		return
+	}
 	maxCount, minCount := effectiveRequestLogLimits()
 	reqLogMu.Lock()
 	defer reqLogMu.Unlock()
-	reqLogItems = append(reqLogItems, requestLogIndexEntry{meta: meta, rel: rel})
+	for _, entry := range entries {
+		insertRequestLogIndexLocked(entry)
+	}
 	if len(reqLogItems) > maxCount {
 		trimRequestLogIndexLocked(minCount)
 	}
+}
+
+// insertRequestLogIndexLocked 按 created_at 插入一条（相同 created_at 保持提交顺序）。
+//
+// 提交顺序不等于 created_at 顺序：多个写盘 worker 并发时，先出队的旧批次可能后提交。
+// 常见情况是追加到尾部；乱序条目只会落在"排队期间"产生的那一小段尾部里，二分定位后
+// 搬移的也只是这段尾部，而不是整个索引。
+func insertRequestLogIndexLocked(entry requestLogIndexEntry) {
+	n := len(reqLogItems)
+	if n == 0 || reqLogItems[n-1].meta.CreatedAt <= entry.meta.CreatedAt {
+		reqLogItems = append(reqLogItems, entry)
+		return
+	}
+	i := sort.Search(n, func(j int) bool {
+		return reqLogItems[j].meta.CreatedAt > entry.meta.CreatedAt
+	})
+	reqLogItems = append(reqLogItems, requestLogIndexEntry{})
+	copy(reqLogItems[i+1:], reqLogItems[i:n])
+	reqLogItems[i] = entry
 }
 
 // trimRequestLogIndexLocked 只丢弃索引，不删除磁盘文件——被淘汰条目的正文由清理
@@ -204,7 +232,7 @@ func GetAllRequestLogs(username string, modelName string, channel int, requestId
 	// relay goroutine 从不参与，扫描期间短暂持有可以接受。
 	matched := 0
 	reqLogMu.Lock()
-	// 索引尾部为最新，倒序遍历即得到"最新在前"。
+	// 索引按 created_at 升序，倒序遍历即得到"最新在前"。
 	for i := len(reqLogItems) - 1; i >= 0; i-- {
 		meta := reqLogItems[i].meta
 		if !matchRequestLog(meta, username, modelName, channel, requestId, statusCode, startTimestamp, endTimestamp) {

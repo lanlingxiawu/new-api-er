@@ -85,6 +85,7 @@ func TestRequestLogSnapshot_SkipsEntriesWithMissingBody(t *testing.T) {
 
 	RecordRequestLog(&RequestLog{Username: "u", CreatedAt: 1000, RequestId: "gone"})
 	SnapshotRequestLogs()
+	closeDefaultRequestLogWriter()
 
 	// 删掉磁盘正文后再恢复
 	require.NoError(t, os.RemoveAll(root))
@@ -123,6 +124,38 @@ func TestRequestLogSnapshot_CapsRestoredCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 3)
 	assert.EqualValues(t, 1005, list[0].CreatedAt, "the newest entries are the ones kept")
+}
+
+// 快照里的顺序不可信（旧版本按提交顺序写出）：恢复后仍须按 created_at 排好，
+// 且上限裁剪保留的是 created_at 最新的条目。
+func TestRequestLogSnapshot_RestoreSortsByCreatedAt(t *testing.T) {
+	enableRedis(t)
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
+	requestLogClearSnapshot(t)
+
+	for i, ts := range []int64{1003, 1001, 1004, 1002} {
+		RecordRequestLog(&RequestLog{Username: "u", CreatedAt: ts, RequestId: "rid-" + strconv.Itoa(i)})
+	}
+	// 人为打乱索引，模拟旧版本写出的乱序快照。
+	reqLogMu.Lock()
+	reqLogItems[0], reqLogItems[3] = reqLogItems[3], reqLogItems[0]
+	reqLogMu.Unlock()
+	SnapshotRequestLogs()
+
+	reqLogMu.Lock()
+	reqLogItems = nil
+	reqLogMu.Unlock()
+	requestLogWithLimits(t, 1, 3)
+	RestoreRequestLogs()
+
+	list, _, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	got := make([]int64, 0, len(list))
+	for _, l := range list {
+		got = append(got, l.CreatedAt)
+	}
+	assert.Equal(t, []int64{1004, 1003, 1002}, got)
 }
 
 func TestRequestLogSnapshot_CorruptedSnapshotDiscarded(t *testing.T) {

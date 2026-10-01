@@ -367,9 +367,16 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
-		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		// relayInfo.UserQuota 是本请求 TokenAuth 刚从同一份用户缓存读到的额度。够用时
+		// 直接采信，省掉每请求一次 Redis 往返；可能不够时再实时读，判定与报错都以
+		// 实时值为准。两次读之间的并发扣减窗口与"读额度→扣额度"之间原本就有的窗口同阶。
+		userQuota := relayInfo.UserQuota
+		if userQuota <= 0 || userQuota < preConsumedQuota {
+			var err error
+			userQuota, err = model.GetUserQuota(relayInfo.UserId, false)
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+			}
 		}
 		if userQuota <= 0 {
 			return nil, types.NewErrorWithStatusCode(

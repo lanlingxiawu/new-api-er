@@ -1,9 +1,14 @@
 package middleware
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/stretchr/testify/assert"
@@ -172,10 +177,62 @@ func TestDrainRequestLogQueue_NoQueue(t *testing.T) {
 }
 
 // worker 内部出错不得终结 worker：后续条目仍要被处理。
-func TestRunRequestLogTask_RecoversPanic(t *testing.T) {
+func TestRunRequestLogBatch_RecoversPanic(t *testing.T) {
 	require.NotPanics(t, func() {
-		runRequestLogTask(requestLogTask{entry: nil})
+		// nil writer 必然在写入时 panic，必须被 worker 自己兜住。
+		runRequestLogBatch(nil, []requestLogTask{{entry: &model.RequestLog{Username: "u"}}})
 	})
+	require.NotPanics(t, func() {
+		runRequestLogBatch(model.NewRequestLogWriter(), []requestLogTask{{entry: nil}})
+	})
+}
+
+// worker 按批写入：每条恰好写一次、用户名过滤逐条生效、文件句柄数不随条数增长。
+func TestRequestLogWriters_BatchWritesEachEntryOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("REQUEST_LOG_DIR", dir)
+	t.Setenv("REQUEST_LOG_SWEEP_INTERVAL_SEC", "0")
+	t.Setenv("REQUEST_LOG_WRITERS", "2")
+	t.Setenv("REQUEST_LOG_MAX_INFLIGHT", "1000")
+	model.InitRequestLogStore()
+	_, _ = model.ClearAllRequestLogs()
+	prevUser := common.RequestLogUsername
+	common.RequestLogUsername = "keep"
+	StartRequestLogWriters()
+	t.Cleanup(func() {
+		StopRequestLogWriters()
+		common.RequestLogUsername = prevUser
+		_, _ = model.ClearAllRequestLogs()
+	})
+
+	const kept, filtered = 300, 50
+	for i := 0; i < kept+filtered; i++ {
+		name := "keep"
+		if i%7 == 0 && i/7 < filtered {
+			name = "other"
+		}
+		enqueueRequestLog(requestLogTask{entry: &model.RequestLog{Username: name, RequestId: "rid-" + strconv.Itoa(i)}})
+	}
+	require.Zero(t, DrainRequestLogQueue(5*time.Second))
+
+	list, total, err := model.GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, kept+filtered)
+	require.NoError(t, err)
+	require.EqualValues(t, kept, total, "filtered users are skipped, every other entry is written exactly once")
+	seen := make(map[string]bool, len(list))
+	for _, l := range list {
+		require.Equal(t, "keep", l.Username)
+		require.False(t, seen[l.RequestId], "duplicate %s", l.RequestId)
+		seen[l.RequestId] = true
+	}
+
+	segments := 0
+	require.NoError(t, filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(info.Name(), ".jsonl") {
+			segments++
+		}
+		return err
+	}))
+	assert.LessOrEqual(t, segments, 2, "one active segment per worker, not one file per entry")
 }
 
 // 被丢弃的条目必须把记账退回，否则关停排空会永远等一个不存在的在途条目。

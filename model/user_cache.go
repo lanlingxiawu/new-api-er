@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -167,16 +168,25 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
+	// 哈希与版本下限放进同一个 pipeline：每个 relay 请求都会走到这里，两次往返合为一次。
+	// 命令顺序必须保持"先哈希、后下限"——下限读在快照之后，才能拦住读快照之后
+	// 才发布的 fence。
+	ctx := context.Background()
+	key := getUserCacheKey(userId)
+	pipe := common.RDB.Pipeline()
+	hashCmd := pipe.HGetAll(ctx, key)
+	floorCmd := pipe.MGet(ctx, getUserAuthFenceKey(userId), getUserAuthVersionKey(userId))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("failed to load user cache from Redis: %w", err)
+	}
 	var userCache UserBase
-	// Try getting from Redis first
-	err := common.RedisHGetObj(getUserCacheKey(userId), &userCache)
-	if err != nil {
+	if err := common.DecodeRedisHash(key, hashCmd.Val(), &userCache); err != nil {
 		return nil, err
 	}
 	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
-	floor, err := getUserAuthVersionFloor(userId)
+	floor, err := parseUserAuthVersionFloor(floorCmd.Val())
 	if err != nil {
 		return nil, err
 	}

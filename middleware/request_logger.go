@@ -111,11 +111,28 @@ func DrainRequestLogQueue(timeout time.Duration) int {
 	}
 }
 
+// requestLogWriterLoop 每次取到一条后，再非阻塞地捎带队列里已有的条目凑成一批
+// （不等待，不引入延迟），整批一次写盘、一次登记索引。
 func requestLogWriterLoop(handle *requestLogQueueHandle) {
 	defer handle.workers.Done()
-	process := func(task requestLogTask) {
-		defer handle.pending.Add(-1)
-		runRequestLogTask(task)
+	writer := model.NewRequestLogWriter()
+	defer writer.Close()
+	batch := make([]requestLogTask, 0, model.RequestLogMaxBatch)
+	process := func(first requestLogTask) {
+		batch = append(batch[:0], first)
+	fill:
+		for len(batch) < model.RequestLogMaxBatch {
+			select {
+			case task := <-handle.ch:
+				batch = append(batch, task)
+			default:
+				break fill
+			}
+		}
+		defer handle.pending.Add(-int64(len(batch)))
+		runRequestLogBatch(writer, batch)
+		// 复用的切片不能继续引用已写完的条目（每条带着完整正文）。
+		clear(batch)
 	}
 	for {
 		select {
@@ -135,22 +152,26 @@ func requestLogWriterLoop(handle *requestLogQueueHandle) {
 	}
 }
 
-func runRequestLogTask(task requestLogTask) {
+func runRequestLogBatch(writer *model.RequestLogWriter, tasks []requestLogTask) {
 	defer func() {
 		if r := recover(); r != nil {
 			common.SysError(fmt.Sprintf("request log writer panic recovered: %v", r))
 		}
 	}()
-	if task.entry == nil {
-		return
+	logs := make([]*model.RequestLog, 0, len(tasks))
+	for _, task := range tasks {
+		if task.entry == nil {
+			continue
+		}
+		if task.resolveUserId > 0 {
+			task.entry.Username = resolveRequestLogUsername(task.resolveUserId)
+		}
+		if !requestLogUsernameMatches(task.entry.Username) {
+			continue
+		}
+		logs = append(logs, task.entry)
 	}
-	if task.resolveUserId > 0 {
-		task.entry.Username = resolveRequestLogUsername(task.resolveUserId)
-	}
-	if !requestLogUsernameMatches(task.entry.Username) {
-		return
-	}
-	model.RecordRequestLog(task.entry)
+	writer.Record(logs)
 }
 
 // enqueueRequestLog 非阻塞投递。队列满即丢弃并限流告警——绝不阻塞 relay goroutine。
