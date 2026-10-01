@@ -39,6 +39,8 @@ export interface RequestLogItem {
   request_body?: string
   response_headers?: string
   response_body?: string
+  /** 头部超过采集上限被截断、无法可靠遮蔽凭据时，非超级管理员的详情不返回该段头部。 */
+  headers_withheld?: boolean
 }
 
 export interface RequestLogsPage {

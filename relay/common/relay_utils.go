@@ -67,35 +67,10 @@ func SanitizeURLForLog(rawURL string) string {
 	return parsedURL.String()
 }
 
+// isSensitiveURLQueryKey uses the same credential predicate as the access log
+// and the request log, so every logged URL masks the same parameters.
 func isSensitiveURLQueryKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	switch normalized {
-	case "key",
-		"api_key",
-		"api-key",
-		"apikey",
-		"x-api-key",
-		"access_token",
-		"refresh_token",
-		"id_token",
-		"token",
-		"authorization",
-		"auth",
-		"client_secret",
-		"secret",
-		"password",
-		"passwd",
-		"signature",
-		"sig",
-		"awsaccesskeyid",
-		"x-amz-credential",
-		"x-amz-security-token",
-		"x-amz-signature":
-		return true
-	}
-	return strings.Contains(normalized, "token") ||
-		strings.Contains(normalized, "secret") ||
-		strings.Contains(normalized, "signature")
+	return common.IsCredentialQueryName(key)
 }
 
 func GetAPIVersion(c *gin.Context) string {

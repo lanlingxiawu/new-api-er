@@ -250,9 +250,10 @@ func RequestResponseLogger() gin.HandlerFunc {
 			maxBytes = 64 * 1024
 		}
 
-		// 捕获下游请求头与请求体快照（请求体读取后会复位，供后续 relay 复用）
+		// 捕获下游请求头与请求体前缀。请求体只读 maxBytes+1 字节，读到的前缀原样拼回
+		// c.Request.Body，下游（鉴权、Distribute、relay）看到的仍是完整请求体。
 		requestHeaders := headersToString(http.Header(c.Request.Header), maxBytes)
-		requestBody, reqTruncated, reqBodySize := captureRequestBody(c, maxBytes)
+		reqBody := captureRequestBody(c, maxBytes)
 
 		// 包装 writer 以捕获返回体
 		rbw := &responseBodyWriter{
@@ -270,9 +271,7 @@ func RequestResponseLogger() gin.HandlerFunc {
 			recordRequestLogEntry(c, requestLogCapture{
 				started:        started,
 				requestHeaders: requestHeaders,
-				requestBody:    requestBody,
-				reqTruncated:   reqTruncated,
-				reqBodySize:    reqBodySize,
+				requestBody:    reqBody,
 				maxBytes:       maxBytes,
 				writer:         rbw,
 				completed:      completed,
@@ -287,9 +286,7 @@ func RequestResponseLogger() gin.HandlerFunc {
 type requestLogCapture struct {
 	started        time.Time
 	requestHeaders string
-	requestBody    string
-	reqTruncated   bool
-	reqBodySize    int64
+	requestBody    requestBodyCapture
 	maxBytes       int
 	writer         *responseBodyWriter
 	completed      bool
@@ -320,6 +317,7 @@ func recordRequestLogEntry(c *gin.Context, snap requestLogCapture) {
 		status = http.StatusInternalServerError
 	}
 
+	// Url 会出现在对非 root 管理员开放的列表里，记录时即去掉查询串里的凭据。
 	entry := &model.RequestLog{
 		CreatedAt:        common.GetTimestamp(),
 		UserId:           userId,
@@ -328,16 +326,16 @@ func recordRequestLogEntry(c *gin.Context, snap requestLogCapture) {
 		ModelName:        c.GetString("original_model"),
 		ChannelId:        c.GetInt("channel_id"),
 		Method:           c.Request.Method,
-		Url:              truncateString(c.Request.URL.RequestURI(), 2000),
+		Url:              truncateString(common.RedactRequestURI(c.Request.URL), 2000),
 		StatusCode:       status,
 		Ip:               c.ClientIP(),
 		RequestId:        c.GetString(common.RequestIdKey),
 		UseTimeMs:        time.Since(snap.started).Milliseconds(),
 		IsStream:         c.GetBool("is_stream"),
-		RequestBodySize:  snap.reqBodySize,
+		RequestBodySize:  snap.requestBody.size(),
 		ResponseBodySize: snap.writer.totalSize,
 		RequestHeaders:   snap.requestHeaders,
-		RequestBody:      appendTruncatedMark(snap.requestBody, snap.reqTruncated),
+		RequestBody:      appendTruncatedMark(snap.requestBody.content, snap.requestBody.truncated),
 		ResponseHeaders:  headersToString(http.Header(snap.writer.Header()), snap.maxBytes),
 		ResponseBody:     appendTruncatedMark(captureResponseBody(c, snap.writer), snap.writer.truncated),
 	}
@@ -366,33 +364,103 @@ func resolveRequestLogUsername(userId int) string {
 	return strings.TrimSpace(userCache.Username)
 }
 
-// captureRequestBody 读取请求体快照并复位 body，返回 (内容, 是否截断, 实际字节数)。
-// 非文本场景只统计大小、不保留正文。
-func captureRequestBody(c *gin.Context, maxBytes int) (string, bool, int64) {
-	if c.Request == nil || c.Request.Body == nil {
-		return "", false, 0
+// requestBodyCapture 是请求体的日志快照：正文前缀在进入下游前读取，总字节数要等
+// 请求结束（下游已按需读完请求体）才能确定。
+type requestBodyCapture struct {
+	content   string
+	truncated bool
+	tap       *requestLogBodyTap
+	// contentLength 是请求声明的长度（未知为 -1），下游没读完请求体时参与估算总大小。
+	contentLength int64
+}
+
+// size 返回请求体字节数：已读到 EOF 时为实际读到的字节数；下游没读完（如鉴权拒绝、
+// 超限）时取声明的 Content-Length 与已读字节数中的较大者——未声明长度（chunked）时
+// 只能给出下界；压缩请求经 DecompressRequestMiddleware 解压后，声明长度是压缩前的，
+// 可能小于已读到的解压字节数。
+func (rc requestBodyCapture) size() int64 {
+	if rc.tap == nil {
+		return 0
 	}
-	storage, err := common.GetBodyStorage(c)
-	if err != nil {
-		return "", false, 0
+	read, drained := rc.tap.consumed()
+	if drained {
+		return read
 	}
-	size := storage.Size()
-	contentType := c.Request.Header.Get("Content-Type")
-	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr == nil {
-		c.Request.Body = io.NopCloser(storage)
+	return max(read, rc.contentLength)
+}
+
+// captureRequestBody 读取请求体的前 maxBytes+1 字节作为日志内容，并把 c.Request.Body
+// 换成"回放已读前缀 + 继续读原始流"的读取器。非文本请求体不读正文，只统计大小。
+//
+// 只读有界前缀：本中间件排在鉴权之前，整读会让每个被拒请求都付出最多
+// MAX_REQUEST_BODY_MB 的读取与缓存。也不调用 common.GetBodyStorage——它失败时已把
+// 原始 body 读空并关闭，relay 随后只能拿到 "invalid Read on closed Body"，超限请求
+// 得不到 413。读前缀时遇到的读错误在前缀回放完后原样交给下游，由 relay 自己处理。
+func captureRequestBody(c *gin.Context, maxBytes int) requestBodyCapture {
+	if c.Request == nil || c.Request.Body == nil || c.Request.Body == http.NoBody {
+		return requestBodyCapture{}
 	}
-	if !isTextualContentType(contentType) {
-		return "[non-textual request body omitted]", false, size
+	rc := requestBodyCapture{contentLength: c.Request.ContentLength}
+	tap := &requestLogBodyTap{src: c.Request.Body}
+	if isTextualContentType(c.Request.Header.Get("Content-Type")) {
+		prefix, eof, err := readBodyPrefix(tap.src, maxBytes+1, rc.contentLength)
+		tap.prefix, tap.prefixLen, tap.srcErr = prefix, int64(len(prefix)), err
+		if eof {
+			tap.drained.Store(true)
+		}
+		if len(prefix) > maxBytes {
+			rc.content, rc.truncated = string(prefix[:maxBytes]), true
+		} else {
+			rc.content = string(prefix)
+		}
+	} else {
+		rc.content = "[non-textual request body omitted]"
 	}
-	if _, err = storage.Seek(0, io.SeekStart); err != nil {
-		return "", false, size
+	rc.tap = tap
+	c.Request.Body = tap
+	return rc
+}
+
+// requestLogBodyTap 先回放日志已读走的前缀，再继续读原始请求体，并统计读到的总
+// 字节数。计数用原子量：个别路径把请求体交给 http.Transport 的写 goroutine 读取。
+type requestLogBodyTap struct {
+	src       io.ReadCloser
+	prefix    []byte
+	prefixLen int64
+	// srcErr 是读前缀时原始请求体返回的错误，前缀回放完后原样交给下游。
+	srcErr  error
+	srcRead atomic.Int64
+	drained atomic.Bool
+}
+
+func (t *requestLogBodyTap) Read(p []byte) (int, error) {
+	if len(t.prefix) > 0 {
+		n := copy(p, t.prefix)
+		t.prefix = t.prefix[n:]
+		if len(t.prefix) == 0 {
+			t.prefix = nil // 回放完即释放，不跟着请求存活到结束
+		}
+		return n, nil
 	}
-	data, truncated := readLimited(storage, maxBytes)
-	// 复位，保证后续 relay 仍可读取完整请求体
-	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr == nil {
-		c.Request.Body = io.NopCloser(storage)
+	if t.srcErr != nil {
+		return 0, t.srcErr
 	}
-	return string(data), truncated, size
+	if t.drained.Load() {
+		return 0, io.EOF
+	}
+	n, err := t.src.Read(p)
+	t.srcRead.Add(int64(n))
+	if err == io.EOF {
+		t.drained.Store(true)
+	}
+	return n, err
+}
+
+func (t *requestLogBodyTap) Close() error { return t.src.Close() }
+
+// consumed 返回从原始请求体读到的总字节数，以及是否已读到 EOF。
+func (t *requestLogBodyTap) consumed() (int64, bool) {
+	return t.prefixLen + t.srcRead.Load(), t.drained.Load()
 }
 
 // captureResponseBody 根据返回 Content-Type 决定是否保留缓存的返回体。
@@ -404,18 +472,61 @@ func captureResponseBody(c *gin.Context, rbw *responseBodyWriter) string {
 	return rbw.body.String()
 }
 
-func readLimited(r io.Reader, maxBytes int) ([]byte, bool) {
-	if maxBytes <= 0 {
-		return nil, false
+// readBodyPrefix 从 r 最多读 limit 字节，返回 (内容, 是否已读到 EOF, 非 EOF 的读错误)。
+//
+// sizeHint 为声明的总字节数（未知传 -1），只用来一次性精确分配：该函数在每个 relay
+// 请求上执行，按上限（默认 64 KB）预分配会让小请求体也付出大块分配与 GC 成本。
+// 提示不准时照样按实际读到的内容判定。
+//
+// 只有 r 自己返回的 io.EOF 才算读完。不用 io.ReadFull：它把"读了一部分后遇到
+// EOF"改写成 io.ErrUnexpectedEOF，与 net/http 在客户端没发完 Content-Length /
+// chunked 请求体就断开时返回的 io.ErrUnexpectedEOF 无法区分——后者当成正常结束，
+// relay 会拿着截断的请求体报 400，日志也会把它记成完整读完。
+func readBodyPrefix(r io.Reader, limit int, sizeHint int64) ([]byte, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
 	}
-	// 多读 1 字节以判断是否被截断
-	buf := make([]byte, 0, maxBytes)
-	limited := io.LimitReader(r, int64(maxBytes)+1)
-	data, _ := io.ReadAll(limited)
-	if len(data) > maxBytes {
-		return append(buf, data[:maxBytes]...), true
+	want := limit
+	if sizeHint >= 0 && sizeHint < int64(limit) {
+		// 多要 1 字节：读满说明提示偏小，读不满即已到 EOF。
+		want = int(sizeHint) + 1
 	}
-	return append(buf, data...), false
+	buf := make([]byte, want)
+	n, eof, err := readUntilFull(r, buf)
+	data := buf[:n]
+	switch {
+	case err != nil:
+		return data, false, err
+	case eof:
+		return data, true, nil
+	case n == limit:
+		return data, false, nil
+	}
+	// 提示偏小：实际内容比提示长，按上限扩容后补读。
+	grown := make([]byte, limit)
+	copy(grown, data)
+	m, eof, err := readUntilFull(r, grown[n:])
+	data = grown[:n+m]
+	if err != nil {
+		return data, false, err
+	}
+	return data, eof, nil
+}
+
+// readUntilFull 反复读 r 直到填满 buf、r 返回 io.EOF 或其他错误。eof 只在 r 自己
+// 返回 io.EOF 时为 true；其余错误原样返回。
+func readUntilFull(r io.Reader, buf []byte) (n int, eof bool, err error) {
+	for n < len(buf) {
+		m, readErr := r.Read(buf[n:])
+		n += m
+		if readErr == io.EOF {
+			return n, true, nil
+		}
+		if readErr != nil {
+			return n, false, readErr
+		}
+	}
+	return n, false, nil
 }
 
 func isTextualContentType(contentType string) bool {

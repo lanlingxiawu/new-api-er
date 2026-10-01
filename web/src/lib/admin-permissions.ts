@@ -9,6 +9,7 @@ export const ADMIN_PERMISSION_RESOURCES = {
   CHANNEL: 'channel',
   VERIDROP_DETECTION: 'admin_menu.veridrop_detection',
   PRICE_MONITOR: 'admin_menu.price_monitor',
+  REQUEST_LOGS: 'admin_menu.request_logs',
   ADMIN_MENU_PREFIX: 'admin_menu.',
   SYSTEM_SETTINGS_PREFIX: 'system_settings.',
 } as const
@@ -21,6 +22,7 @@ export const ADMIN_PERMISSION_ACTIONS = {
   SECRET_VIEW: 'secret_view',
   VIEW: 'view',
   EDIT: 'edit',
+  VIEW_DETAIL: 'view_detail',
 } as const
 
 // The role whose baseline grants are used as defaults in the permission editor.
@@ -137,6 +139,23 @@ export function roleGrants(
 
 // normalizeAdminPermissions produces a full matrix for the catalog, filling any
 // value missing from `value` with the admin role's baseline grant.
+// Actions that only make sense together with view: granting one implies view,
+// revoking view revokes them. Mirrors viewDependentActions in the backend authz
+// package, which normalizes the stored grants the same way.
+export function viewDependentActions(resource: string): string[] {
+  if (
+    resource.startsWith(ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX) ||
+    resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR ||
+    resource === ADMIN_PERMISSION_RESOURCES.VERIDROP_DETECTION
+  ) {
+    return [ADMIN_PERMISSION_ACTIONS.EDIT]
+  }
+  if (resource === ADMIN_PERMISSION_RESOURCES.REQUEST_LOGS) {
+    return [ADMIN_PERMISSION_ACTIONS.VIEW_DETAIL]
+  }
+  return []
+}
+
 export function normalizeAdminPermissions(
   value: AdminPermissionMatrix | null | undefined,
   catalog: PermissionCatalog
@@ -151,18 +170,11 @@ export function normalizeAdminPermissions(
         baseline[resource.resource]?.[action.action] ??
         false
     }
-    if (
-      resource.resource.startsWith(
-        ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX
-      ) ||
-      resource.resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR ||
-      resource.resource === ADMIN_PERMISSION_RESOURCES.VERIDROP_DETECTION
-    ) {
-      if (actions[ADMIN_PERMISSION_ACTIONS.VIEW] === false) {
-        actions[ADMIN_PERMISSION_ACTIONS.EDIT] = false
-      } else if (actions[ADMIN_PERMISSION_ACTIONS.EDIT] === true) {
-        actions[ADMIN_PERMISSION_ACTIONS.VIEW] = true
-      }
+    const dependents = viewDependentActions(resource.resource)
+    if (actions[ADMIN_PERMISSION_ACTIONS.VIEW] === false) {
+      for (const action of dependents) actions[action] = false
+    } else if (dependents.some((action) => actions[action] === true)) {
+      actions[ADMIN_PERMISSION_ACTIONS.VIEW] = true
     }
     normalized[resource.resource] = actions
   }

@@ -29,8 +29,14 @@ var (
 	AdminMenuEmployeesView         = Permission{Resource: ResourceAdminMenuEmployees, Action: ActionView}
 	AdminMenuBusinessOverviewView  = Permission{Resource: ResourceAdminMenuBusinessOverview, Action: ActionView}
 	AdminMenuRequestLogsView       = Permission{Resource: ResourceAdminMenuRequestLogs, Action: ActionView}
+	AdminMenuRequestLogsViewDetail = Permission{Resource: ResourceAdminMenuRequestLogs, Action: ActionViewDetail}
 	AdminMenuSystemInfoView        = Permission{Resource: ResourceAdminMenuSystemInfo, Action: ActionView}
 )
+
+// ActionViewDetail opens a single request log's full record (bodies and
+// headers). It is granted separately from the menu's view action: the list
+// only carries metadata, a detail carries user prompts and responses.
+const ActionViewDetail = "view_detail"
 
 var adminMenuDefinitions = []struct {
 	Resource string
@@ -42,6 +48,9 @@ var adminMenuDefinitions = []struct {
 	DefaultRoles       []string
 	Editable           bool
 	EditDescriptionKey string
+	// ExtraActions are registered after view (and edit). Each of them
+	// depends on view, see normalizePermissionActions.
+	ExtraActions []ActionDefinition
 }{
 	{Resource: ResourceAdminMenuChannels, LabelKey: "Channels", Sort: 1, DefaultRoles: []string{BuiltInRoleAdmin}},
 	{Resource: ResourceAdminMenuModels, LabelKey: "Models", Sort: 2, DefaultRoles: []string{BuiltInRoleAdmin}},
@@ -58,8 +67,14 @@ var adminMenuDefinitions = []struct {
 	{Resource: ResourceAdminMenuBusinessOverview, LabelKey: "Business Overview", Sort: 9, DefaultRoles: []string{BuiltInRoleAdmin}},
 	// Request logs can contain full upstream request/response bodies and headers,
 	// and system info exposes node topology — both stay off by default and must
-	// be granted to a specific administrator by root.
-	{Resource: ResourceAdminMenuRequestLogs, LabelKey: "Request Logs", Sort: 10, DefaultRoles: nil},
+	// be granted to a specific administrator by root. Opening a single log's
+	// full record is a separate grant on top of the list.
+	{Resource: ResourceAdminMenuRequestLogs, LabelKey: "Request Logs", Sort: 10, DefaultRoles: nil,
+		ExtraActions: []ActionDefinition{{
+			Action:         ActionViewDetail,
+			LabelKey:       "View details",
+			DescriptionKey: "Open a request's full record, including request and response bodies. Credential headers are masked for administrators other than the super administrator.",
+		}}},
 	{Resource: ResourceAdminMenuSystemInfo, LabelKey: "System Info", Sort: 11, DefaultRoles: nil},
 }
 
@@ -80,6 +95,7 @@ func init() {
 				DescriptionKey: definition.EditDescriptionKey,
 			})
 		}
+		actions = append(actions, definition.ExtraActions...)
 		RegisterResource(ResourceDefinition{
 			Resource:      definition.Resource,
 			LabelKey:      definition.LabelKey,

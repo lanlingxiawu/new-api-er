@@ -283,6 +283,8 @@ func GetRequestLogById(id int) (*RequestLog, error) {
 		}
 		return nil, errRequestLogNotFound
 	}
+	// 早于脱敏上线写下的正文文件里 Url 仍是原样；读出时再脱敏一次（幂等）。
+	log.Url = common.RedactURIString(log.Url)
 	return log, nil
 }
 

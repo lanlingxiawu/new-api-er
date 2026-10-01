@@ -32,6 +32,16 @@ import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
+  hasPermission,
+} from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getRequestLogs } from './api'
@@ -70,13 +80,19 @@ function statusVariant(
 }
 
 /**
- * RequestLogs 展示请求日志列表；原始详情按钮仅对超级管理员启用，服务端另行校验权限。
- * 无参数；返回带筛选、分页和详情弹窗的页面，权限变化会同步重建操作列。
+ * RequestLogs 展示请求日志列表；详情按钮只对持有「请求日志 · 查看详情」权限的账号启用，
+ * 服务端另行校验权限。无参数；返回带筛选、分页和详情弹窗的页面，权限变化会同步重建操作列。
  */
 export function RequestLogs() {
   const { t } = useTranslation()
   // 选择器 s 是认证状态快照；仅订阅派生权限值，避免无关账户字段变化触发重绘。
-  const isRoot = useAuthStore((s) => (s.auth.user?.role ?? 0) >= 100)
+  const canViewDetail = useAuthStore((s) =>
+    hasPermission(
+      s.auth.user,
+      ADMIN_PERMISSION_RESOURCES.REQUEST_LOGS,
+      ADMIN_PERMISSION_ACTIONS.VIEW_DETAIL
+    )
+  )
   const [pagination, setPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 20,
@@ -189,20 +205,35 @@ export function RequestLogs() {
       {
         id: 'actions',
         header: t('Actions'),
-        // row 为当前表格行；无参点击回调选中其日志 ID，非 Root 禁用按钮，后端仍保留最终鉴权。
+        // row 为当前表格行；无参点击回调选中其日志 ID。没有查看详情权限时禁用按钮并说明原因，
+        // 后端仍保留最终鉴权。
         cell: ({ row }) => (
-          <Button
-            variant='outline'
-            size='sm'
-            disabled={!isRoot}
-            onClick={() => setDetailId(row.original.id)}
-          >
-            {t('View')}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger render={<span className='inline-flex' />}>
+              <Button
+                variant='outline'
+                size='sm'
+                disabled={!canViewDetail}
+                onClick={() => {
+                  if (!canViewDetail) return
+                  setDetailId(row.original.id)
+                }}
+              >
+                {t('View')}
+              </Button>
+            </TooltipTrigger>
+            {!canViewDetail && (
+              <TooltipContent>
+                {t(
+                  'Ask a super administrator to grant the View details permission for Request Logs'
+                )}
+              </TooltipContent>
+            )}
+          </Tooltip>
         ),
       },
     ],
-    [t, isRoot] // 语言或权限变化时刷新列定义，不沿用旧账号的详情按钮状态。
+    [t, canViewDetail] // 语言或权限变化时刷新列定义，不沿用旧账号的详情按钮状态。
   )
 
   const table = useReactTable({

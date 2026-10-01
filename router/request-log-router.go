@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// registerRequestLogRoutes 按权限声明注册请求日志路由，原始详情 GET /:id 额外限制为超级管理员。
+// registerRequestLogRoutes 按权限声明注册请求日志路由。
 // 参数 apiRouter：已建立的 API 路由分组，在该分组下挂载请求日志处理器。
 func registerRequestLogRoutes(apiRouter *gin.RouterGroup) {
 	requestLogRoute := apiRouter.Group("/request-log")
@@ -20,10 +20,6 @@ func registerRequestLogRoutes(apiRouter *gin.RouterGroup) {
 		handlers := make([]gin.HandlerFunc, 0, 2)
 		if route.permission != (authz.Permission{}) {
 			handlers = append(handlers, middleware.RequirePermission(route.permission))
-		}
-		if route.method == http.MethodGet && route.path == "/:id" {
-			// 原始请求日志详情有敏感内容，普通管理员权限之外额外要求超级管理员身份。
-			handlers = append(handlers, middleware.RootAuth())
 		}
 		handlers = append(handlers, route.handler)
 		requestLogRoute.Handle(route.method, route.path, handlers...)
@@ -36,9 +32,11 @@ func registerRequestLogRoutes(apiRouter *gin.RouterGroup) {
 
 // requestLogPermissionRoutes lists every route under /api/request-log beyond
 // the group-level admin_menu.request_logs:view gate. A zero-value permission
-// means the menu view permission is the only requirement.
+// means the menu view permission is the only requirement. The full record
+// (bodies and headers) needs its own view_detail grant; the handler masks
+// credential headers for everyone but root.
 var requestLogPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/", handler: controller.GetAllRequestLogs},
-	{method: http.MethodGet, path: "/:id", handler: controller.GetRequestLogDetail},
+	{method: http.MethodGet, path: "/:id", permission: authz.AdminMenuRequestLogsViewDetail, handler: controller.GetRequestLogDetail},
 	{method: http.MethodDelete, path: "/", permission: authz.SystemSettingsEdit("operations.request-log"), handler: controller.DeleteHistoryRequestLogs},
 }

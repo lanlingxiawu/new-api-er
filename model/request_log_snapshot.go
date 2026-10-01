@@ -123,6 +123,8 @@ func RestoreRequestLogs() {
 		if !requestLogBodyExists(entry.Rel, segSizes) {
 			continue
 		}
+		// 早于脱敏上线写下的条目 Url 里可能带着 ?key=<token>，而列表对非 root 管理员开放。
+		entry.Meta.Url = common.RedactURIString(entry.Meta.Url)
 		items = append(items, requestLogIndexEntry{meta: entry.Meta, rel: entry.Rel})
 		if int64(entry.Meta.Id) > maxId {
 			maxId = int64(entry.Meta.Id)

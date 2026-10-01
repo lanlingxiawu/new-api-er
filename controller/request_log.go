@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// GetAllRequestLogs 分页查询请求日志（仅超级管理员）。
+// GetAllRequestLogs 分页查询请求日志（列表不含请求/响应头与正文）。
 func GetAllRequestLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	username := c.Query("username")
@@ -32,7 +32,17 @@ func GetAllRequestLogs(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
-// GetRequestLogDetail 读取已保存的请求日志详情（正文可能受采集预算截断），返回禁止缓存的响应，由路由层限制为超级管理员访问。
+// requestLogDetailView is the detail response. HeadersWithheld tells the
+// dialog that a header block was cut at the size limit and could not be
+// masked, so it was left out rather than shown with a partial credential.
+type requestLogDetailView struct {
+	*model.RequestLog
+	HeadersWithheld bool `json:"headers_withheld,omitempty"`
+}
+
+// GetRequestLogDetail 读取已保存的请求日志详情（正文可能受采集预算截断），返回禁止缓存的响应。
+// 路由层要求 admin_menu.request_logs 的 view_detail 权限；超级管理员看到原始请求头，
+// 其他管理员看到的凭据类请求/响应头被替换为 ***，无法可靠打码（被截断）的头部整段不返回。
 // 参数 c：含日志路径参数 id 及已认证身份的 Gin 上下文，结果写入其响应。
 func GetRequestLogDetail(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
@@ -48,7 +58,18 @@ func GetRequestLogDetail(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgRequestLogNotFound)
 		return
 	}
-	common.ApiSuccess(c, log)
+	view := requestLogDetailView{RequestLog: log}
+	if c.GetInt("role") < common.RoleRootUser {
+		var requestOK, responseOK bool
+		log.RequestHeaders, requestOK = common.RedactCredentialHeadersJSON(log.RequestHeaders)
+		log.ResponseHeaders, responseOK = common.RedactCredentialHeadersJSON(log.ResponseHeaders)
+		view.HeadersWithheld = !requestOK || !responseOK
+		// A client that put its token into the path (model%3Fkey=<token>)
+		// gets it echoed in error bodies; mask credential assignments there too.
+		log.RequestBody = common.RedactTextCredentials(log.RequestBody)
+		log.ResponseBody = common.RedactTextCredentials(log.ResponseBody)
+	}
+	common.ApiSuccess(c, view)
 }
 
 // DeleteHistoryRequestLogs 删除指定时间戳之前的请求日志。

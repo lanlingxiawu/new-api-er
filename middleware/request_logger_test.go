@@ -2,11 +2,13 @@ package middleware
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -90,18 +92,126 @@ func TestTruncateString(t *testing.T) {
 	require.Equal(t, "abcd", truncateString("abcd", 0)) // max<=0 -> unchanged
 }
 
-func TestReadLimited(t *testing.T) {
-	data, truncated := readLimited(strings.NewReader("abcdef"), 3)
-	require.Equal(t, "abc", string(data))
-	require.True(t, truncated)
-
-	data, truncated = readLimited(strings.NewReader("ab"), 3)
-	require.Equal(t, "ab", string(data))
-	require.False(t, truncated)
-
-	data, truncated = readLimited(strings.NewReader("abc"), 0)
+func TestReadBodyPrefix_ZeroLimit(t *testing.T) {
+	r := strings.NewReader("abc")
+	data, eof, err := readBodyPrefix(r, 0, 3)
+	require.NoError(t, err)
 	require.Nil(t, data)
-	require.False(t, truncated)
+	require.False(t, eof)
+	require.Equal(t, 3, r.Len(), "a zero limit must not consume the body")
+}
+
+// readBodyPrefix 按已知大小精确分配；大小提示只影响分配，不能影响结果——
+// 提示偏小或偏大时内容与 EOF 判定都必须与实际读到的一致。
+func TestReadBodyPrefix_SizeHint(t *testing.T) {
+	const limit = 9 // 日志上限 8 字节 + 1 字节截断探测
+	cases := []struct {
+		name string
+		body string
+		hint int64
+		want string
+		eof  bool
+	}{
+		{"empty", "", 0, "", true},
+		{"one byte", "a", 1, "a", true},
+		{"exactly max", "abcdefgh", 8, "abcdefgh", true},
+		{"exactly limit", "abcdefghi", 9, "abcdefghi", false},
+		{"far over limit", strings.Repeat("x", 100), 100, "xxxxxxxxx", false},
+		{"unknown size under limit", "abc", -1, "abc", true},
+		{"unknown size exactly limit", "abcdefghi", -1, "abcdefghi", false},
+		{"unknown size over limit", "abcdefghij", -1, "abcdefghi", false},
+		{"hint understates", "abcdef", 2, "abcdef", true},
+		{"hint understates past limit", "abcdefghij", 2, "abcdefghi", false},
+		{"hint overstates", "abc", 50, "abc", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := strings.NewReader(tc.body)
+			data, eof, err := readBodyPrefix(r, limit, tc.hint)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(data))
+			require.Equal(t, tc.eof, eof)
+			// 只读到上限，剩余部分留给下游。
+			require.Equal(t, len(tc.body)-len(tc.want), r.Len())
+			if tc.hint < 0 || tc.hint >= int64(len(tc.body)) {
+				// 提示偏小时的补读是回退路径，允许扩容；其余情况一次分配封顶。
+				require.LessOrEqual(t, cap(data), limit, "allocation must be bounded by the limit")
+			}
+		})
+	}
+}
+
+// 读错误（客户端断开、外层 MaxBytesReader 超限）原样返回，已读到的字节保留。
+func TestReadBodyPrefix_ReadErrorReturned(t *testing.T) {
+	boom := errors.New("client went away")
+	r := io.MultiReader(strings.NewReader("ab"), iotest.ErrReader(boom))
+	data, eof, err := readBodyPrefix(r, 9, -1)
+	require.ErrorIs(t, err, boom)
+	require.False(t, eof)
+	require.Equal(t, "ab", string(data))
+
+	// 提示偏小后的补读阶段同样上报错误。
+	r = io.MultiReader(strings.NewReader("abcd"), iotest.ErrReader(boom))
+	data, eof, err = readBodyPrefix(r, 9, 1)
+	require.ErrorIs(t, err, boom)
+	require.False(t, eof)
+	require.Equal(t, "abcd", string(data))
+}
+
+// 客户端没发完 Content-Length / chunked 请求体就断开时，net/http 返回
+// io.ErrUnexpectedEOF。它不是正常结束：必须作为读错误上报，不能判成已读完。
+func TestReadBodyPrefix_UnexpectedEOFIsAReadError(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		hint int64
+	}{
+		{"unknown size", `{"model":"gpt`, -1},
+		{"declared size larger than sent", `{"model":"gpt`, 200},
+		{"hint understates, cut during top-up", `{"model":"gpt`, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := io.MultiReader(strings.NewReader(tc.body), iotest.ErrReader(io.ErrUnexpectedEOF))
+			data, eof, err := readBodyPrefix(r, 64, tc.hint)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.False(t, eof, "a truncated body must not be reported as fully read")
+			require.Equal(t, tc.body, string(data))
+		})
+	}
+
+	// A reader that hands back the final bytes together with io.EOF still ends cleanly.
+	data, eof, err := readBodyPrefix(iotest.DataErrReader(strings.NewReader("abc")), 64, -1)
+	require.NoError(t, err)
+	require.True(t, eof)
+	require.Equal(t, "abc", string(data))
+}
+
+// 下游（relay）读到的是回放的前缀加上原始错误，而不是干净的 EOF；日志大小也不能
+// 按"已读完"记录。
+func TestCaptureRequestBody_ClientDisconnectSurfacesToRelay(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	sent := `{"model":"gpt`
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
+	ctx.Request.Body = io.NopCloser(io.MultiReader(strings.NewReader(sent), iotest.ErrReader(io.ErrUnexpectedEOF)))
+	ctx.Request.ContentLength = 200
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	rc := captureRequestBody(ctx, 1024)
+	require.Equal(t, sent, rc.content)
+
+	data, err := io.ReadAll(ctx.Request.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "relay must see the read error, not a clean EOF")
+	require.Equal(t, sent, string(data))
+	_, drained := rc.tap.consumed()
+	require.False(t, drained)
+	require.EqualValues(t, 200, rc.size(), "not drained: declared length is the best estimate")
+}
+
+// 小请求体不能再按上限分配：以前每个请求固定 make 64 KB。
+func TestReadBodyPrefix_SmallBodyAllocatesSmall(t *testing.T) {
+	data, _, _ := readBodyPrefix(strings.NewReader(`{"a":1}`), 64*1024+1, 7)
+	require.LessOrEqual(t, cap(data), 8)
 }
 
 func TestHeadersToString(t *testing.T) {
@@ -192,14 +302,15 @@ func TestCaptureRequestBody_TextualResets(t *testing.T) {
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
 
-	content, truncated, size := captureRequestBody(ctx, 1024)
-	require.Equal(t, `{"a":1}`, content)
-	require.False(t, truncated)
-	require.EqualValues(t, 7, size)
+	rc := captureRequestBody(ctx, 1024)
+	require.Equal(t, `{"a":1}`, rc.content)
+	require.False(t, rc.truncated)
+	require.EqualValues(t, 7, rc.size())
 
-	// 请求体复位，后续 relay 仍可完整读取
+	// 请求体被拼回，后续 relay 仍可完整读取
 	data, _ := io.ReadAll(ctx.Request.Body)
 	require.Equal(t, `{"a":1}`, string(data))
+	require.EqualValues(t, 7, rc.size())
 }
 
 func TestCaptureRequestBody_NonTextualOmitted(t *testing.T) {
@@ -209,20 +320,54 @@ func TestCaptureRequestBody_NonTextualOmitted(t *testing.T) {
 	ctx.Request.Header.Set("Content-Type", "application/octet-stream")
 	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
 
-	content, truncated, size := captureRequestBody(ctx, 4)
-	require.Equal(t, "[non-textual request body omitted]", content)
-	require.False(t, truncated)
-	require.EqualValues(t, len(body), size)
+	rc := captureRequestBody(ctx, 4)
+	require.Equal(t, "[non-textual request body omitted]", rc.content)
+	require.False(t, rc.truncated)
+	// 下游未读：取声明的 Content-Length
+	require.EqualValues(t, len(body), rc.size())
+	data, _ := io.ReadAll(ctx.Request.Body)
+	require.Equal(t, body, string(data), "non-textual body is passed through untouched")
+	require.EqualValues(t, len(body), rc.size())
 }
 
 func TestCaptureRequestBody_NilBody(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 	ctx.Request.Body = nil
-	content, truncated, size := captureRequestBody(ctx, 1024)
-	require.Equal(t, "", content)
-	require.False(t, truncated)
-	require.Zero(t, size)
+	rc := captureRequestBody(ctx, 1024)
+	require.Equal(t, "", rc.content)
+	require.False(t, rc.truncated)
+	require.Zero(t, rc.size())
+	require.Nil(t, ctx.Request.Body)
+}
+
+// 压缩请求解压后，声明的 Content-Length 是压缩前的长度：下游没读完时，记录的大小
+// 不能小于实际已读到的字节数；读完后以实际字节数为准。
+func TestCaptureRequestBody_SizeWhenDeclaredLengthUnderstates(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	body := strings.Repeat("d", 5000)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	ctx.Request.ContentLength = 100
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	rc := captureRequestBody(ctx, 1024)
+	require.True(t, rc.truncated)
+	require.Equal(t, body[:1024], rc.content)
+	require.EqualValues(t, 1025, rc.size(), "unread: max(declared, read)")
+
+	data, err := io.ReadAll(ctx.Request.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, string(data))
+	require.EqualValues(t, len(body), rc.size(), "drained: exact bytes read")
+}
+
+func TestCaptureRequestBody_NoBodyLeftAlone(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx.Request.Body = http.NoBody
+	rc := captureRequestBody(ctx, 1024)
+	require.Zero(t, rc.size())
+	require.Equal(t, http.NoBody, ctx.Request.Body, "http.NoBody must stay recognisable downstream")
 }
 
 // ---------------------------------------------------------------------------

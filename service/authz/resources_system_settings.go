@@ -115,8 +115,21 @@ func IsSystemSettingsResource(resource string) bool {
 	return strings.HasPrefix(resource, SystemSettingsResourcePrefix)
 }
 
+// viewDependentActions lists, per resource, the actions that only make sense
+// together with view: granting one implies view, revoking view revokes them.
+func viewDependentActions(resource string) []string {
+	switch {
+	case IsSystemSettingsResource(resource), resource == ResourceAdminMenuPriceMonitor, resource == ResourceAdminMenuVeridropDetection:
+		return []string{ActionEdit}
+	case resource == ResourceAdminMenuRequestLogs:
+		return []string{ActionViewDetail}
+	}
+	return nil
+}
+
 func normalizePermissionActions(resource string, actions map[string]bool) map[string]bool {
-	if !IsSystemSettingsResource(resource) && resource != ResourceAdminMenuPriceMonitor && resource != ResourceAdminMenuVeridropDetection {
+	dependents := viewDependentActions(resource)
+	if len(dependents) == 0 {
 		return actions
 	}
 
@@ -125,11 +138,16 @@ func normalizePermissionActions(resource string, actions map[string]bool) map[st
 		normalized[action] = allowed
 	}
 	if visible, explicitlySet := normalized[ActionView]; explicitlySet && !visible {
-		normalized[ActionEdit] = false
+		for _, action := range dependents {
+			normalized[action] = false
+		}
 		return normalized
 	}
-	if normalized[ActionEdit] {
-		normalized[ActionView] = true
+	for _, action := range dependents {
+		if normalized[action] {
+			normalized[ActionView] = true
+			break
+		}
 	}
 	return normalized
 }
