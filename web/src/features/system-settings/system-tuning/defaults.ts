@@ -2,6 +2,9 @@ import type { SystemTuningSettings } from '../types'
 
 // Safe UI fallbacks for the runtime-parameter page. Server-side `setting/` remains the source of truth.
 export const systemTuningFallbackSettings: SystemTuningSettings = {
+  GroupRetryTimes: '',
+  'group_retry_status_setting.enabled': false,
+  'group_retry_status_setting.rules': '{}',
   'relay_timeout_setting.enabled': true,
   'relay_timeout_setting.response_timeout_seconds': 300,
   'relay_timeout_setting.total_timeout_seconds': 0,

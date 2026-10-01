@@ -254,6 +254,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
+		_, err := operation_setting.ParseGroupRetryStatusUpdate(map[string]string{field: value})
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -408,6 +412,10 @@ func normalizeStoredUserGroupRatioCacheMax(value string) string {
 }
 
 func UpdateOption(key string, value string) error {
+	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
+		_, err := SaveConfigGroup("group_retry_status_setting", map[string]string{field: value})
+		return err
+	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}

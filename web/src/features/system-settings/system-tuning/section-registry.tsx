@@ -30,6 +30,7 @@ import {
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { systemTuningFallbackSettings } from './defaults'
+import { GroupRetrySection } from './group-retry-section'
 import {
   DBPoolHotConfigSection,
   RateLimitHotConfigSection,
@@ -554,6 +555,17 @@ const SYSTEM_TUNING_SECTIONS = [
     titleKey: 'AI Request Timeout',
     build: (settings: SystemTuningSettings) => (
       <RelayTimeoutHotConfigSection settings={settings} />
+    ),
+  },
+  {
+    id: 'group-retry-times',
+    titleKey: 'Per-group retry attempts',
+    build: (settings: SystemTuningSettings) => (
+      <GroupRetrySection
+        value={settings.GroupRetryTimes ?? ''}
+        statusRules={settings['group_retry_status_setting.rules'] ?? '{}'}
+        statusEnabled={settings['group_retry_status_setting.enabled'] ?? false}
+      />
     ),
   },
   {

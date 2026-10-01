@@ -23,6 +23,21 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "group_retry_status_setting":
+		draft, err := operation_setting.ParseGroupRetryStatusUpdate(values)
+		if err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if _, ok := values["enabled"]; ok {
+			prefixed[module+".enabled"] = strconv.FormatBool(draft.Enabled)
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceGroupRetryStatusSetting(draft)
 	case "probe_routing_setting":
 		if len(values) != 1 {
 			return false, fmt.Errorf("invalid probe routing configuration")

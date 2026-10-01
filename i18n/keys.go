@@ -1,5 +1,7 @@
 package i18n
 
+const MsgGroupRetryStatusInvalid = "setting.group_retry_status_invalid"
+
 // MsgClaudeStreamFailed 是 Claude 本地流内 error 的通用展示消息键，文案不包含底层错误或原始上游数据。
 const MsgClaudeStreamFailed = "relay.claude_stream_failed"
 

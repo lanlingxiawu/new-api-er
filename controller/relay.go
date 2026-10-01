@@ -434,6 +434,9 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
 	}
+	if allowed, overridden := service.GroupRetryStatusAllowed(c, code); overridden {
+		return allowed
+	}
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
@@ -746,6 +749,11 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
+	}
+	if taskErr.StatusCode >= 100 && taskErr.StatusCode <= 599 {
+		if allowed, overridden := service.GroupRetryStatusAllowed(c, taskErr.StatusCode); overridden {
+			return allowed && !taskErr.LocalError
+		}
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		return true

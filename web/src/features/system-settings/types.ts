@@ -320,6 +320,7 @@ export type PriceMonitorResultsResponse = {
 export type UpdateOptionGroupRequest = {
   scope?: string
   module:
+    | 'group_retry_status_setting'
     | 'rate_limit_setting'
     | 'db_pool_setting'
     | 'user_session_setting'
@@ -861,6 +862,11 @@ export type OperationsSettings = {
 }
 
 export type SystemTuningSettings = {
+  // Bare option key holding a JSON map of group -> retry count, same shape
+  // as GroupRatio; edited by GroupRetrySection.
+  GroupRetryTimes: string
+  'group_retry_status_setting.enabled': boolean
+  'group_retry_status_setting.rules': string
   'relay_timeout_setting.enabled': boolean
   'relay_timeout_setting.response_timeout_seconds': number
   'relay_timeout_setting.total_timeout_seconds': number
