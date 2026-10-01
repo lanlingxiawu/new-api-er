@@ -52,6 +52,7 @@ export const userSchema = z.object({
   stream_total_timeout: z.number().optional(),
   non_stream_response_timeout: z.number().optional(),
   non_stream_total_timeout: z.number().optional(),
+  non_stream_timeout_billing: z.enum(['refund', 'charge', 'input']).optional(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -143,6 +144,7 @@ export interface UserFormData {
   stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables
   non_stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
   non_stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables
+  non_stream_timeout_billing?: 'refund' | 'charge' | 'input' // on timeout: refund the hold, charge the usage upstream already produced, or charge the input only
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }

@@ -45,15 +45,25 @@ func TestRelayHTTPClientOnlyRemovesGlobalTimeoutForManagedRequests(t *testing.T)
 	resolved := RelayHTTPClient(managed, source)
 	require.NotSame(t, source, resolved)
 	assert.Zero(t, resolved.Timeout)
-	assert.Same(t, source.Transport, resolved.Transport)
+	wrapped, ok := resolved.Transport.(relayUpstreamTransport)
+	require.True(t, ok, "managed calls go through the timeout-link transport")
+	assert.Equal(t, transport, wrapped.base, "the wrapper shares the cached transport and its pool")
 	assert.Equal(t, 30*time.Second, source.Timeout, "the cached shared client must remain unchanged")
+	assert.Equal(t, transport, source.Transport, "the cached shared client must remain unchanged")
 }
 
-func TestRelayHTTPClientDoesNotCopyClientWithoutTimeout(t *testing.T) {
+// A managed client is cloned even without a global timeout: the clone carries
+// the transport wrapper that releases a bound call's timeout link with its body.
+func TestRelayHTTPClientWrapsDefaultTransportWithoutMutatingSource(t *testing.T) {
 	managed, _ := gin.CreateTestContext(httptest.NewRecorder())
 	common.SetContextKey(managed, constant.ContextKeyRelayTimeoutControl, struct{}{})
 	source := &http.Client{}
-	assert.Same(t, source, RelayHTTPClient(managed, source))
+	resolved := RelayHTTPClient(managed, source)
+	require.NotSame(t, source, resolved)
+	assert.Nil(t, source.Transport)
+	wrapped, ok := resolved.Transport.(relayUpstreamTransport)
+	require.True(t, ok)
+	assert.Equal(t, http.DefaultTransport, wrapped.base)
 }
 
 func TestNewRelayHTTPClientKeepsLegacyTimeoutForUnmanagedCalls(t *testing.T) {

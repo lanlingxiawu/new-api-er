@@ -39,7 +39,8 @@ func TestClaudeBillingDecision(t *testing.T) {
 		client, confirmed, effective bool   // 依次表示用户断开、上游已有确认用量、已有有效交付。
 		want                         string // 预期计费来源：upstream、estimated 或 none。
 	}{
-		{true, true, false, "upstream"}, {true, true, true, "upstream"}, {true, false, true, "estimated"}, {true, false, false, "none"},
+		// 用户断开时上游已接受请求：即使没有业务响应也按估算收费（与主分支一致），不释放。
+		{true, true, false, "upstream"}, {true, true, true, "upstream"}, {true, false, true, "estimated"}, {true, false, false, "estimated"},
 		{false, true, true, "upstream"}, {false, true, false, "none"}, {false, false, true, "estimated"}, {false, false, false, "none"},
 	} {
 		s := StreamOutcome{ClientGone: tc.client, ReceivedResponse: tc.effective, ConfirmedUsage: tc.confirmed, EffectiveContent: tc.effective, Failed: true}

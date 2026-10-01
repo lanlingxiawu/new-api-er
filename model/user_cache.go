@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+const userCacheSchemaVersion = 4
 
 type UserBase struct {
 	Id          int    `json:"id"`
@@ -32,6 +32,7 @@ type UserBase struct {
 	StreamTotalTimeout        int    `json:"stream_total_timeout"`
 	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout"`
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout"`
+	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -44,12 +45,17 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, user.StreamResponseTimeout)
 	streamResponseTimeoutMode := user.StreamResponseTimeoutMode
 	if streamResponseTimeoutMode == "" {
-		streamResponseTimeoutMode = "first_output"
+		streamResponseTimeoutMode = constant.RelayStreamResponseTimeoutModeFirstOutput
 	}
 	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeoutMode, streamResponseTimeoutMode)
 	common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, user.StreamTotalTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamResponseTimeout, user.NonStreamResponseTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, user.NonStreamTotalTimeout)
+	nonStreamTimeoutBilling := user.NonStreamTimeoutBilling
+	if nonStreamTimeoutBilling == "" {
+		nonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
+	}
+	common.SetContextKey(c, constant.ContextKeyUserNonStreamTimeoutBilling, nonStreamTimeoutBilling)
 	// Per-user exclusive group ratios. Only parse when the feature is enabled:
 	// when the flag is off the map is ignored by ResolveGroupRatio anyway, so
 	// this avoids a per-request JSON unmarshal + map allocation on the auth hot

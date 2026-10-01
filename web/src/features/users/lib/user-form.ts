@@ -45,6 +45,7 @@ export const userFormSchema = z.object({
   stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
   non_stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
   non_stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
+  non_stream_timeout_billing: z.enum(['refund', 'charge', 'input']).optional(),
   // Per-user exclusive group ratios, edited as rows and serialized to JSON on submit
   groupRatios: z
     .array(
@@ -108,6 +109,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   stream_total_timeout: 0,
   non_stream_response_timeout: 0,
   non_stream_total_timeout: 0,
+  non_stream_timeout_billing: 'refund',
   groupRatios: [],
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
@@ -157,6 +159,8 @@ export function transformFormDataToPayload(
     payload.stream_total_timeout = data.stream_total_timeout ?? 0
     payload.non_stream_response_timeout = data.non_stream_response_timeout ?? 0
     payload.non_stream_total_timeout = data.non_stream_total_timeout ?? 0
+    payload.non_stream_timeout_billing =
+      data.non_stream_timeout_billing ?? 'refund'
     payload.remark = data.remark || undefined
     payload.id = userId
   }
@@ -183,6 +187,7 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     stream_total_timeout: user.stream_total_timeout ?? 0,
     non_stream_response_timeout: user.non_stream_response_timeout ?? 0,
     non_stream_total_timeout: user.non_stream_total_timeout ?? 0,
+    non_stream_timeout_billing: user.non_stream_timeout_billing ?? 'refund',
     groupRatios: parseGroupRatioRows(user.group_ratios),
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},

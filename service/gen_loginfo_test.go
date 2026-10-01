@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -657,4 +658,23 @@ func TestGenerateTextOtherInfo_UserGroupRatioSentinelIsNotRecorded(t *testing.T)
 			assert.Equal(t, 1.5, other["group_ratio"])
 		})
 	}
+}
+
+// A non-stream client request sent upstream as a stream (UpstreamStreamAdapted)
+// records how that stream ended, like a native stream: the admin sees an answer
+// delivered half-way and why. is_stream stays false (what the client asked for).
+func TestLoginfoAppendStreamStatus_AdaptedNonStream(t *testing.T) {
+	other := map[string]interface{}{}
+	ss := relaycommon.NewStreamStatus()
+	ss.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("unexpected EOF"))
+	appendStreamStatus(&relaycommon.RelayInfo{IsStream: false, UpstreamStreamAdapted: true, StreamStatus: ss}, other)
+
+	info, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", info["status"])
+	assert.Equal(t, "scanner_error", info["end_reason"])
+	// The raw error ("read tcp …: connection reset by peer" names the upstream
+	// address) is not written where the user's log view can show it; the end
+	// reason is enough there, and the server log keeps the text.
+	assert.NotContains(t, info, "end_error")
 }

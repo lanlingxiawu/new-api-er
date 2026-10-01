@@ -23,6 +23,11 @@ import (
 )
 
 func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+	// info is reused across retry attempts. An earlier attempt may have been
+	// adapted to an upstream stream on a channel that supports it; this
+	// attempt's channel may not, and a leftover true would make the response
+	// side treat an unmodified request as SSE. Decided afresh below.
+	info.UpstreamStreamAdapted = false
 	info.InitChannelMeta(c)
 
 	textReq, ok := info.Request.(*dto.GeneralOpenAIRequest)
@@ -64,6 +69,14 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	info.ShouldIncludeUsage = includeUsage
 
+	// A non-stream request whose user opted into timeout billing talks to
+	// upstream in streaming mode, so a deadline hit still has real usage to
+	// settle. The client-facing shape is unchanged: the stream is re-assembled
+	// into one JSON body below.
+	if shouldAdaptUpstreamStream(c, info, request) {
+		applyUpstreamStreamAdaptation(c, info, request)
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -93,6 +106,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	var requestBody io.Reader
+	// Kept only for an adapted request, so a 400 on it can be re-sent plain.
+	// The storage, not the bytes: disk mode relies on the []byte being freed.
+	var adaptedRequestBody common.BodyStorage
 
 	if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
@@ -181,6 +197,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
+		if info.UpstreamStreamAdapted {
+			adaptedRequestBody, _ = closer.(common.BodyStorage)
+		}
 		jsonData = nil
 		info.UpstreamRequestBodySize = size
 		requestBody = body
@@ -196,7 +215,19 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		var fallbackErr *types.NewAPIError
+		var plainRequestBody io.Closer
+		if httpResp, plainRequestBody, fallbackErr = fallBackFromRejectedAdaptation(c, info, adaptor, httpResp, adaptedRequestBody); fallbackErr != nil {
+			return fallbackErr
+		}
+		if plainRequestBody != nil {
+			defer plainRequestBody.Close()
+		}
+		// An adapted request asked upstream for SSE on the client's behalf; the
+		// client is still non-stream, so its mode must not flip here.
+		if !info.UpstreamStreamAdapted {
+			info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
@@ -205,11 +236,26 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 	}
 
-	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
+	var usage any
+	var newApiErr *types.NewAPIError
+	if info.UpstreamStreamAdapted && httpResp != nil &&
+		strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream") {
+		usage, newApiErr = handleAdaptedUpstreamStream(c, info, httpResp)
+	} else {
+		// Upstream ignored stream:true and answered with a plain body, so the
+		// ordinary non-stream path still applies. Nothing was adapted after all.
+		abandonUpstreamStreamAdaptation(c, info)
+		usage, newApiErr = adaptor.DoResponse(c, httpResp, info)
+	}
 	if newApiErr != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
 		return newApiErr
+	}
+	// The adapted path settles its own usage when the deadline fires and marks
+	// the request handled; the controller must not settle or refund again.
+	if c.GetBool(relaycommon.StreamHandledKey) {
+		return nil
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0

@@ -183,7 +183,7 @@ func (ctx *rowCtx) streamResult(l *Log) map[string]any {
 	return sub
 }
 
-// streamStatus 取 other.stream_status（公有）。同样仅流式请求才有。
+// streamStatus 取 other.stream_status（公有）。只有流式请求与非流式转流式请求才有。
 func (ctx *rowCtx) streamStatus(l *Log) map[string]any {
 	m := ctx.otherMap(l)
 	if m == nil {

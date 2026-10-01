@@ -105,7 +105,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 1. 用户鉴权从现有 UserBase Redis 缓存读取四个时长字段和一个模式字段并写入 Gin context；缓存 miss 或未启用 Redis 时仍沿用原有 DB fallback。
 2. 超时中间件只读取一次全局不可变快照，不提前包装 writer。总开关关闭则直接放行。
 3. 提交类 controller 在请求解析完成并确定 `stream` 后显式启动超时；四个用户时长字段全部为 `0` 时直接回退旧链路；fetch、回调和 Realtime controller 不启动，因此保持原 writer 和原请求逻辑。
-4. 用户任一时长字段非 `0` 时，从当前请求快照选择全局默认并解析对应的两个用户覆盖值，同时读取 `stream_response_timeout_mode`。两个值都解析为 `0` 且该模式没有显式 `-1` 时同样回退旧链路（见 §2 接管前提）；否则创建请求本地控制器，管理响应 timer、总时长 timer、响应 writer 和可取消 request context。
+4. 用户任一时长字段非 `0` 时，从当前请求快照选择全局默认并解析对应的两个用户覆盖值，同时读取 `stream_response_timeout_mode`。两个值都解析为 `0` 且该模式没有显式 `-1` 时同样回退旧链路（见 §2 接管前提）；否则创建请求本地控制器，管理响应 timer、总时长 timer、响应 writer 和可取消 request context；上游调用使用与客户端连接脱钩、只在控制器截止时刻取消的 context（`service.BindRelayRequestContext` / `RelayUpstreamContext`）。
 5. 主上游请求继承该 context；流式有效输出按模式停止或重置响应 timer，非流式首响应停止响应 timer。
 6. 可重试的非流式请求在下一次尝试前重启响应 timer；总时长 timer 始终不重置。
 7. 任一 timer 到期取消上游并记录 `response_timeout` 或 `total_timeout`；响应包装器拒绝到期后的业务输出，并通过请求本地放行门闩允许 controller 穿过后续 writer 包装层写入标准化超时响应；handler 结束时停止 timer。
@@ -124,7 +124,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 - 未提交响应：返回 HTTP `504` 和现有 `relay_timeout` 错误语义。
 - Midjourney 兼容响应保持 `code` 为整数 `4`，在 `description` 中表达 relay 超时，避免破坏客户端反序列化。
 - 已提交流式响应：取消上游并结束流，不能改写已经发送的状态码。
-- 客户端主动断开和父 context 更早取消不归类为 relay 超时。
+- 客户端主动断开不归类为 relay 超时，也不取消上游调用：受管的非流式、任务提交、轮询与 WebSocket 调用继续执行到完成或我方截止时刻并按实际用量结算；流式在客户端断开时关闭上游并按估算结算（与主分支相同）。
 - 超时后停止当前重试链，沿用现有错误日志记录路径；超时错误携带项目既有 `skipRetry` 属性，因此原 `ShouldDisableChannel` 逻辑自然跳过渠道故障/自动禁用，不修改 `processChannelError` 的原有判断。功能关闭时，原有渠道错误处理逻辑不变。
 - 已提交响应后若仍有业务代码尝试写入，写入会返回 `context.DeadlineExceeded`，并在请求结束时记录拒写告警，使已提交响应被截断的窄窗口可被观测。
 - ping 写入与超时同时发生时，结束原因保持为 `timeout`，不被 `ping_fail` 抢占。
@@ -132,7 +132,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 ## 8. 与现有 HTTP Client 的关系
 
-功能开启且请求已托管时，AI relay 主调用通过请求 context 实施每用户总时长，浅拷贝 client 并移除共享 `Client.Timeout`，但继续复用同一 Transport/连接池。准备性调用继承同一个可取消 context，明确设置 `-1` 即允许关闭限制。总开关关闭、用户四项全为 `0` 或非 relay 调用时，完整保留共享 Client 的旧行为。
+功能开启且请求已托管时，AI relay 主调用通过只受控制器截止时刻约束的上游 context 实施每用户总时长，浅拷贝 client 并移除共享 `Client.Timeout`，但继续复用同一 Transport/连接池。准备性调用继承同一个可取消 context，明确设置 `-1` 即允许关闭限制。总开关关闭、用户四项全为 `0` 或非 relay 调用时，完整保留共享 Client 的旧行为。
 
 仅非流式主上游请求安装首字节 trace；没有响应计时器、流式请求或非主调用不创建 trace/request 副本。
 

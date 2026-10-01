@@ -214,7 +214,10 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	header := http.Header{}
 	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
 
-	conn, resp, dialErr := websocket.DefaultDialer.DialContext(service.RelayRequestContext(c), requestURL, header)
+	// 只有我方时限断开上游连接：客户端离开后合成仍在进行并计费（与主分支一致）；流式由会话写失败关闭上游。
+	upstreamContext, release := service.RelayUpstreamContext(c)
+	defer release()
+	conn, resp, dialErr := websocket.DefaultDialer.DialContext(upstreamContext, requestURL, header)
 	if info.StreamSession != nil { // 响应前只预备会话，真实 101 握手才激活。
 		info.StreamSession.ObserveWebSocketHandshake(resp, dialErr)
 		info.StreamDiagnostic.ObserveStreamHandshake(resp, dialErr)
@@ -237,7 +240,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	if info.StreamSession.Active() {
 		info.StreamSession.BindUpstream(conn)
 		conn.SetReadLimit(relaycommon.MaxStreamFrameBytes)
-		defer relaycommon.StreamConnectionLifetime(service.RelayRequestContext(c), conn)()
+		defer relaycommon.StreamConnectionLifetime(upstreamContext, conn)()
 		_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 	}
 	if deadline, ok := service.RelayRequestDeadline(c); ok {

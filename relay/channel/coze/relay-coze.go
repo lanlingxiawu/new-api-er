@@ -2,6 +2,7 @@ package coze
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -235,12 +236,12 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 	}
 }
 
-func checkIfChatComplete(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (error, bool) {
+func checkIfChatComplete(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo, ctx context.Context) (error, bool) {
 	requestURL := fmt.Sprintf("%s/v3/chat/retrieve", info.ChannelBaseUrl)
 
 	requestURL = requestURL + "?conversation_id=" + c.GetString("coze_conversation_id") + "&chat_id=" + c.GetString("coze_chat_id")
 	// 将 conversationId和chatId作为参数发送get请求
-	req, err := http.NewRequest("GET", requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return err, false
 	}
@@ -281,11 +282,11 @@ func checkIfChatComplete(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo
 	}
 }
 
-func getChatDetail(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (*http.Response, error) {
+func getChatDetail(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo, ctx context.Context) (*http.Response, error) {
 	requestURL := fmt.Sprintf("%s/v3/chat/message/list", info.ChannelBaseUrl)
 
 	requestURL = requestURL + "?conversation_id=" + c.GetString("coze_conversation_id") + "&chat_id=" + c.GetString("coze_chat_id")
-	req, err := http.NewRequest("GET", requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -300,13 +301,13 @@ func getChatDetail(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo) (*ht
 	return resp, nil
 }
 
-// doRequest 发送扣子上游请求；req 仅转交，c/info 决定超时和响应观察，返回原响应/传输错误，不采集请求。
+// doRequest 发送扣子轮询请求；req 的 context 由调用方给出（service.RelayUpstreamContext：只受我方时限约束，
+// 客户端离开后轮询照常进行），c/info 决定超时和响应观察，返回原响应/传输错误，不采集请求。
 func doRequest(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) (*http.Response, error) {
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
-	req = service.BindRelayRequestContext(c, req)
 	diagnosticClient := relaycommon.StreamDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, client), Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 	resp, err := diagnosticClient.Do(req)
 	if err != nil {

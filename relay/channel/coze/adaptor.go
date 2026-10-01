@@ -86,9 +86,12 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	}
 	c.Set("coze_conversation_id", cozeResponse.Data.ConversationId)
 	c.Set("coze_chat_id", cozeResponse.Data.Id)
-	// 轮询检查消息是否完成
+	// 轮询检查消息是否完成。只有我方时限结束轮询：客户端离开后上游仍在生成并计费，
+	// 与主分支一样等它完成再按用量结算。
+	upstreamContext, release := service.RelayUpstreamContext(c)
+	defer release()
 	for {
-		err, isComplete := checkIfChatComplete(a, c, info)
+		err, isComplete := checkIfChatComplete(a, c, info, upstreamContext)
 		if err != nil {
 			return nil, err
 		} else {
@@ -98,12 +101,12 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 		}
 		select {
 		case <-time.After(time.Second):
-		case <-service.RelayRequestContext(c).Done():
-			return nil, c.Request.Context().Err()
+		case <-upstreamContext.Done():
+			return nil, upstreamContext.Err()
 		}
 	}
 	// 发送获取消息请求
-	return getChatDetail(a, c, info)
+	return getChatDetail(a, c, info, upstreamContext)
 }
 
 // DoResponse implements channel.Adaptor.

@@ -345,13 +345,19 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 }
 
 // appendStreamStatus 生成公开流状态；有通用会话、流式结果或响应采集器时省略底层错误文本，旧路径按原逻辑保留。
-// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志映射。任一为 nil、非流式或无状态时跳过。
+// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志映射。任一为 nil、无状态、
+// 或既非流式又非「非流式转流式」时跳过。转流请求对客户是非流式（is_stream 为假），
+// 但上游是流式，同样要记下流是怎样结束的：中途断开时管理员才能看出这是半截交付及其原因。
 func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
-	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+	if relayInfo == nil || other == nil || (!relayInfo.IsStream && !relayInfo.UpstreamStreamAdapted) || relayInfo.StreamStatus == nil {
 		return
 	}
 	ss := relayInfo.StreamStatus
-	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil
+	// A non-stream request sent upstream as a stream keeps its raw read error out
+	// of the log too: text such as "read tcp …: connection reset by peer" names
+	// the upstream address and would reach the user's log view. The end reason
+	// says enough there; the server log keeps the text.
+	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil || relayInfo.UpstreamStreamAdapted
 	status := "ok"
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"

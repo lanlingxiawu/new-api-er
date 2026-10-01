@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -119,6 +120,7 @@ type User struct {
 	StreamTotalTimeout        int    `json:"stream_total_timeout" gorm:"type:int;not null;default:0;column:stream_total_timeout"`
 	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout" gorm:"type:int;not null;default:0;column:non_stream_response_timeout"`
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout" gorm:"type:int;not null;default:0;column:non_stream_total_timeout"`
+	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing" gorm:"type:varchar(16);not null;default:'refund';column:non_stream_timeout_billing"`
 
 	// 非持久化：仅在用户搜索（分配客户场景）中填充
 	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
@@ -147,11 +149,15 @@ func (user *User) ToBaseUser() *UserBase {
 	cache.StreamResponseTimeout = user.StreamResponseTimeout
 	cache.StreamResponseTimeoutMode = strings.TrimSpace(user.StreamResponseTimeoutMode)
 	if cache.StreamResponseTimeoutMode == "" {
-		cache.StreamResponseTimeoutMode = "first_output"
+		cache.StreamResponseTimeoutMode = constant.RelayStreamResponseTimeoutModeFirstOutput
 	}
 	cache.StreamTotalTimeout = user.StreamTotalTimeout
 	cache.NonStreamResponseTimeout = user.NonStreamResponseTimeout
 	cache.NonStreamTotalTimeout = user.NonStreamTotalTimeout
+	cache.NonStreamTimeoutBilling = strings.TrimSpace(user.NonStreamTimeoutBilling)
+	if cache.NonStreamTimeoutBilling == "" {
+		cache.NonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
+	}
 	return cache
 }
 
@@ -989,6 +995,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	updates["stream_total_timeout"] = newUser.StreamTotalTimeout
 	updates["non_stream_response_timeout"] = newUser.NonStreamResponseTimeout
 	updates["non_stream_total_timeout"] = newUser.NonStreamTotalTimeout
+	updates["non_stream_timeout_billing"] = newUser.NonStreamTimeoutBilling
 	if updatePassword {
 		updates["password"] = newUser.Password
 	}

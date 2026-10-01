@@ -699,6 +699,7 @@ type updateUserRequest struct {
 	StreamTotalTimeout        *int    `json:"stream_total_timeout"`
 	NonStreamResponseTimeout  *int    `json:"non_stream_response_timeout"`
 	NonStreamTotalTimeout     *int    `json:"non_stream_total_timeout"`
+	NonStreamTimeoutBilling   *string `json:"non_stream_timeout_billing"`
 	// Omitting group_ratios must inherit the stored rules; only an explicit
 	// "{}" clears them. Without the shadow field a caller that leaves the
 	// optional field out would silently wipe every exclusive ratio.
@@ -790,6 +791,15 @@ func UpdateUser(c *gin.Context) {
 			return
 		}
 		updatedUser.StreamResponseTimeoutMode = service.NormalizeRelayStreamResponseTimeoutMode(*request.StreamResponseTimeoutMode)
+	}
+	if request.NonStreamTimeoutBilling == nil {
+		updatedUser.NonStreamTimeoutBilling = service.NormalizeNonStreamTimeoutBilling(originUser.NonStreamTimeoutBilling)
+	} else {
+		if err := service.ValidateNonStreamTimeoutBilling(*request.NonStreamTimeoutBilling); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		updatedUser.NonStreamTimeoutBilling = service.NormalizeNonStreamTimeoutBilling(*request.NonStreamTimeoutBilling)
 	}
 	if updatedUser.Role != common.RoleGuestUser && updatedUser.Role != originUser.Role {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)

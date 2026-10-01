@@ -200,17 +200,20 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 	if err != nil {
 		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "create_request_failed", http.StatusInternalServerError), nullBytes, err
 	}
-	var ctx context.Context
 	cancel := func() {}
 	if _, owned := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl); owned {
 		// The unified request-local controller is authoritative for managed
-		// requests. Keep the legacy provider cap only when the feature is off.
-		ctx = c.Request.Context()
+		// requests: only our own deadline cancels the submit, a client that
+		// leaves does not (the upstream bills the task either way, and main
+		// does not bind it to the client). Keep the legacy provider cap only
+		// when the feature is off.
+		req = BindRelayRequestContext(c, req)
 	} else {
+		var ctx context.Context
 		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		req = req.WithContext(ctx)
 	}
-	// Bind either the unified managed context or the legacy local timeout.
-	req = req.WithContext(RelayResponseTraceContext(c, ctx))
+	req = req.WithContext(RelayResponseTraceContext(c, req.Context()))
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	req.Header.Set("Accept", c.Request.Header.Get("Accept"))
 	auth := common.GetContextKeyString(c, constant.ContextKeyChannelKey)

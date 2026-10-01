@@ -194,6 +194,11 @@ type RelayInfo struct {
 	streamCaptureEnabled *bool                  // 本请求冻结的通用响应采集设置。
 	StreamDiagnostic     *StreamResponseCapture `json:"-"` // 当前尝试的上游响应及下游正文采集器，每次渠道重试单独重建。
 	StreamRejectReason   string                 `json:"-"` // 独立策略停止原因，日志生成时写入顶层 reject_reason，与诊断资格无关。
+
+	// UpstreamStreamAdapted 标记「下游非流式、上游改走流式」的请求。为的是超时中断时
+	// 手里有已接收用量可结算，否则非流式在上游首字节前被掐断，输出用量为零信息。
+	// 单独成段而不是插进上面的字段块：插在块中间会让 gofmt 重排周边未改动的行。
+	UpstreamStreamAdapted bool `json:"-"`
 	// ClaudeRequestBody 借用已有出站存储，仅在终止时缺少用量的估算路径读取；不序列化或复制到诊断。
 	ClaudeRequestBody            common.BodyStorage `json:"-"`
 	claudeStreamStrict           *bool              // nil 表示尚未冻结严格处理配置；false 与尚未读取区别保留。

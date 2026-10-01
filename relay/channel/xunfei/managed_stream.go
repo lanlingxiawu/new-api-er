@@ -22,13 +22,16 @@ func managedXunfeiStream(c *gin.Context, request dto.GeneralOpenAIRequest, domai
 	value, _ := c.Get(relaycommon.StreamResponseCaptureKey)
 	capture, _ := value.(*relaycommon.StreamResponseCapture)
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	conn, resp, err := dialer.DialContext(service.RelayRequestContext(c), authURL, nil)
+	// 只有我方时限断开上游连接；客户端离开由流式会话的写失败关闭上游（与 HTTP 流式一致）。
+	upstreamContext, release := service.RelayUpstreamContext(c)
+	defer release()
+	conn, resp, err := dialer.DialContext(upstreamContext, authURL, nil)
 	session.ObserveWebSocketHandshake(resp, err)
 	capture.ObserveStreamHandshake(resp, err)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
 	}
-	defer relaycommon.StreamConnectionLifetime(service.RelayRequestContext(c), conn)()
+	defer relaycommon.StreamConnectionLifetime(upstreamContext, conn)()
 	session.BindUpstream(conn)
 	conn.SetReadLimit(relaycommon.MaxStreamFrameBytes)
 	data, err := common.Marshal(requestOpenAI2Xunfei(request, appID, domain))

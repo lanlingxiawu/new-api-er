@@ -148,6 +148,10 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		outcome.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(cause)
 	}
 	outcome.UsageSource = outcome.SelectUsageSource()
+	if outcome.UsageSource == "estimated" && clientGone && !snapshot.ReceivedResponse && info.RelayFormat == types.RelayFormatOpenAIRealtime {
+		// Realtime 按轮次计费：握手后没有开始任何轮次就断开，上游没有可计的轮次。
+		outcome.UsageSource = "none"
+	}
 	info.StreamResult = outcome
 	info.StreamStatus = relaycommon.NewStreamStatus()
 	if reason == "" {
@@ -183,6 +187,17 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 			selected = &dto.Usage{}
 		case "upstream":
 			selected = BuildConfirmedStreamUsage(info, snapshot.Evidence)
+			if _, ok := snapshot.Evidence["input_tokens"]; !ok && !info.PriceData.UsePrice && info.RelayFormat != types.RelayFormatOpenAIRealtime {
+				// 中途结束时上游可能只报过部分字段；缺输入字段不等于输入为 0，按估算输入补齐（显式 0 仍保留）。
+				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+				selected.PromptTokens = info.GetEstimatePromptTokens()
+				selected.PromptTokensDetails.TextTokens = max(0, selected.PromptTokens-selected.PromptTokensDetails.AudioTokens)
+				selected.TotalTokens = selected.PromptTokens + selected.CompletionTokens
+				if billing := selected.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
+					billing.ClaudeUsage.InputTokens = selected.PromptTokens
+					billing.Estimated = true
+				}
+			}
 		case "estimated":
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: estimatedStreamOutput(snapshot, clientGone)}

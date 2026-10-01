@@ -1,6 +1,7 @@
 package coze
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/samber/lo"
 
@@ -218,13 +219,13 @@ func TestCheckIfChatCompleteAndDetail(t *testing.T) {
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: srv.URL, ApiKey: "tok"}}
 		info.ApiKey = "tok"
 
-		err, complete := checkIfChatComplete(a, c, info)
+		err, complete := checkIfChatComplete(a, c, info, context.Background())
 		require.NoError(t, err)
 		require.True(t, complete)
 		assert.Equal(t, 10, c.GetInt("coze_token_count"))
 		assert.Equal(t, 4, c.GetInt("coze_input_count"))
 
-		resp, err := getChatDetail(a, c, info)
+		resp, err := getChatDetail(a, c, info, context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		_ = resp.Body.Close()
@@ -237,7 +238,7 @@ func TestCheckIfChatCompleteAndDetail(t *testing.T) {
 		c, _ := newContext()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: srv.URL, ApiKey: "tok"}}
 		info.ApiKey = "tok"
-		err, complete := checkIfChatComplete(a, c, info)
+		err, complete := checkIfChatComplete(a, c, info, context.Background())
 		require.NoError(t, err)
 		assert.False(t, complete)
 	})
@@ -249,7 +250,7 @@ func TestCheckIfChatCompleteAndDetail(t *testing.T) {
 		c, _ := newContext()
 		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: srv.URL, ApiKey: "tok"}}
 		info.ApiKey = "tok"
-		err, complete := checkIfChatComplete(a, c, info)
+		err, complete := checkIfChatComplete(a, c, info, context.Background())
 		require.Error(t, err)
 		assert.False(t, complete)
 		assert.Contains(t, err.Error(), "failed")

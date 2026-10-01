@@ -39,6 +39,7 @@ type StreamSnapshot struct {
 	EstimatedOutput     int               // 成功交付文本的累计增量估算，不对每个分片独立取整。
 	ReceivedResponse    bool              // 已解析上游业务响应，不要求下游写入成功。
 	ReceivedOutput      int               // 接收侧文本估算，仅用户断开且无确认用量时采用。
+	OutputReportCurrent bool              // 最近的上游输出计数晚于最后一段已接收内容（message_start 的初值不算）；异常结束时据此决定是否用估算补足。
 	ReceivedAudioOutput int               // Realtime 已接收音频的专用估算，不按压缩字节计量。
 	MediaBytes          int64             // 成功交付的裸媒体字节，仅作为证据，不直接换算成 token。
 	UpstreamFailure     bool              // 首个终止原因确认为上游异常；与兼容计费原因字符串分开记录。
@@ -500,7 +501,14 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		s.state.Complete = false
 		return s.state.Err
 	}
+	receivedBefore := s.state.ReceivedOutput
 	s.observeReceivedLocked(event, data, v)
+	if _, reported := updates["output_tokens"]; reported {
+		// 同帧内容已计入该帧的累计报告（OpenAI 末帧、Gemini 逐块 usageMetadata、Claude message_delta）。
+		s.state.OutputReportCurrent = kind != "message_start"
+	} else if s.state.ReceivedOutput > receivedBefore {
+		s.state.OutputReportCurrent = false
+	}
 	return nil
 }
 

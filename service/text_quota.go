@@ -608,6 +608,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+	if relayInfo.UpstreamStreamAdapted {
+		// The client sent a non-stream request; we asked upstream to stream so a
+		// timeout would still have usage to settle. is_stream stays false because
+		// it records what the client asked for, so record the adaptation here.
+		other["upstream_stream_adapted"] = true
+	}
 
 	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
 		ChannelId:         relayInfo.ChannelId,
