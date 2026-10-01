@@ -46,18 +46,230 @@ func TestGeminiReq_BasicGenerationConfigAndZeroPreservation(t *testing.T) {
 	assert.Len(t, got.SafetySettings, 4)
 }
 
-func TestGeminiReq_TopPZeroIsDropped(t *testing.T) {
-	// NOTE: TopP is only forwarded when *TopP > 0, so an explicit top_p=0 is
-	// intentionally dropped (Gemini rejects topP=0). Documented deviation from
-	// the general zero-preservation guidance.
+// D-3 (Rule 5): top_p, seed and max tokens the client set to 0 reach Gemini.
+func TestGeminiReq_ExplicitZeroSamplingParamsForwarded(t *testing.T) {
 	req := dto.GeneralOpenAIRequest{
-		Model:    "gemini-1.5-flash",
-		TopP:     ptr(0.0),
+		Model:     "gemini-2.5-flash",
+		TopP:      ptr(0.0),
+		Seed:      ptr(0.0),
+		MaxTokens: ptr(uint(0)),
+		Messages:  []dto.Message{{Role: "user", Content: "hi"}},
+	}
+	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+	require.NoError(t, err)
+	require.NotNil(t, got.GenerationConfig.TopP)
+	assert.Equal(t, 0.0, *got.GenerationConfig.TopP)
+	require.NotNil(t, got.GenerationConfig.Seed)
+	assert.Equal(t, int64(0), *got.GenerationConfig.Seed)
+	require.NotNil(t, got.GenerationConfig.MaxOutputTokens)
+	assert.Equal(t, uint(0), *got.GenerationConfig.MaxOutputTokens)
+
+	body, err := json.Marshal(got.GenerationConfig)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"topP":0`)
+	assert.Contains(t, string(body), `"seed":0`)
+}
+
+func TestGeminiReq_AbsentSamplingParamsOmitted(t *testing.T) {
+	req := dto.GeneralOpenAIRequest{
+		Model:    "gemini-2.5-flash",
 		Messages: []dto.Message{{Role: "user", Content: "hi"}},
 	}
 	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
 	require.NoError(t, err)
 	assert.Nil(t, got.GenerationConfig.TopP)
+	assert.Nil(t, got.GenerationConfig.Seed)
+	assert.Nil(t, got.GenerationConfig.MaxOutputTokens)
+	assert.Nil(t, got.GenerationConfig.PresencePenalty)
+	assert.Nil(t, got.GenerationConfig.FrequencyPenalty)
+}
+
+// max_completion_tokens is the newer field and wins over max_tokens, also
+// when the client set it to 0.
+func TestGeminiReq_MaxCompletionTokensWinsOverMaxTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		completion *uint
+		maxTokens  *uint
+		want       uint
+	}{
+		{"completion only", ptr(uint(64)), nil, 64},
+		{"both set", ptr(uint(64)), ptr(uint(128)), 64},
+		{"completion zero", ptr(uint(0)), ptr(uint(128)), 0},
+		{"max_tokens only", nil, ptr(uint(128)), 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := dto.GeneralOpenAIRequest{
+				Model:               "gemini-2.5-flash",
+				MaxCompletionTokens: tc.completion,
+				MaxTokens:           tc.maxTokens,
+				Messages:            []dto.Message{{Role: "user", Content: "hi"}},
+			}
+			got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+			require.NoError(t, err)
+			require.NotNil(t, got.GenerationConfig.MaxOutputTokens)
+			assert.Equal(t, tc.want, *got.GenerationConfig.MaxOutputTokens)
+		})
+	}
+}
+
+// Penalties are not mapped (as upstream): Gemini 2.5/3 answer 400 "Penalty is
+// not enabled", and many OpenAI SDKs always send them.
+func TestGeminiReq_PenaltiesNotForwarded(t *testing.T) {
+	for _, value := range []float64{0, 0.5, -0.25} {
+		req := dto.GeneralOpenAIRequest{
+			Model:            "gemini-2.5-flash",
+			PresencePenalty:  ptr(value),
+			FrequencyPenalty: ptr(value),
+			Messages:         []dto.Message{{Role: "user", Content: "hi"}},
+		}
+		got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+		require.NoError(t, err)
+		assert.Nil(t, got.GenerationConfig.PresencePenalty)
+		assert.Nil(t, got.GenerationConfig.FrequencyPenalty)
+	}
+}
+
+// D-4: reasoning_effort on a plain Gemini model name becomes a thinkingConfig
+// the model accepts, and the applied effort is recorded for the log.
+func TestGeminiReq_ReasoningEffortBecomesThinkingConfig(t *testing.T) {
+	for _, tc := range []struct {
+		model, effort string
+		budget        *int
+		level         string
+		logged        string
+	}{
+		{"gemini-2.5-flash", "none", ptr(0), "", "none"},
+		{"gemini-2.5-flash", "NONE", ptr(0), "", "none"},
+		{"gemini-2.5-flash", "minimal", ptr(1024), "", "low"},
+		{"gemini-2.5-flash", "low", ptr(1024), "", "low"},
+		{"gemini-2.5-flash", "medium", ptr(8192), "", "medium"},
+		{"gemini-2.5-flash", "high", ptr(24576), "", "high"},
+		{"gemini-2.5-flash", "xhigh", ptr(24576), "", "high"},
+		{"gemini-2.5-flash-lite", "none", ptr(0), "", "none"},
+		{"gemini-2.5-flash-lite", "low", ptr(1024), "", "low"},
+		// 2.5 Pro cannot turn thinking off: its minimum budget is the closest.
+		{"gemini-2.5-pro", "none", ptr(128), "", "low"},
+		{"gemini-2.5-pro", "high", ptr(24576), "", "high"},
+		// Gemini 3 uses levels and always thinks: none becomes the lowest level.
+		{"gemini-3-flash-preview", "none", nil, "minimal", "minimal"},
+		{"gemini-3-flash-preview", "medium", nil, "medium", "medium"},
+		{"gemini-3-flash-preview", "max", nil, "high", "high"},
+		{"gemini-3-pro-preview", "none", nil, "low", "low"},
+		{"gemini-3-pro-preview", "medium", nil, "high", "high"},
+		{"gemini-3.1-pro-preview", "minimal", nil, "low", "low"},
+		{"gemini-3.1-pro-preview", "medium", nil, "medium", "medium"},
+	} {
+		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
+			info := geminiInfo()
+			req := dto.GeneralOpenAIRequest{
+				Model:           tc.model,
+				ReasoningEffort: tc.effort,
+				Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+			}
+			got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, info)
+			require.NoError(t, err)
+			config := got.GenerationConfig.ThinkingConfig
+			require.NotNil(t, config)
+			assert.Equal(t, tc.budget, config.ThinkingBudget)
+			assert.Equal(t, tc.level, config.ThinkingLevel)
+			assert.False(t, config.IncludeThoughts)
+			assert.Equal(t, tc.logged, info.GetReasoningEffort())
+		})
+	}
+}
+
+// The report's C1 case on the wire: thinkingBudget 0 must be sent, not
+// dropped by omitempty.
+func TestGeminiReq_ReasoningEffortNoneSerializesZeroBudget(t *testing.T) {
+	req := dto.GeneralOpenAIRequest{
+		Model:           "gemini-2.5-flash",
+		ReasoningEffort: "none",
+		MaxTokens:       ptr(uint(20)),
+		Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+	}
+	got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+	require.NoError(t, err)
+	body, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"thinkingConfig":{"thinkingBudget":0}`)
+}
+
+func TestGeminiReq_ReasoningEffortLeftAloneWhenNotApplicable(t *testing.T) {
+	for _, tc := range []struct{ name, model, effort string }{
+		{"no effort", "gemini-2.5-flash", ""},
+		{"unknown effort", "gemini-2.5-flash", "turbo"},
+		{"model without thinking", "gemini-2.0-flash", "low"},
+		{"thinking not configurable", "gemini-2.5-flash-image", "none"},
+		{"unknown effort on level model", "gemini-3-pro-preview", "turbo"},
+		// Adapter disabled: the alias is sent upstream as is, and the alias,
+		// not reasoning_effort, states the reasoning setting.
+		{"thinking alias", "gemini-2.5-flash-thinking", "none"},
+		{"budget alias", "gemini-2.5-flash-thinking-512", "none"},
+		{"nothinking alias", "gemini-2.5-pro-nothinking", "high"},
+		{"effort alias", "gemini-3-pro-preview-low", "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := geminiInfo()
+			req := dto.GeneralOpenAIRequest{
+				Model:           tc.model,
+				ReasoningEffort: tc.effort,
+				Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+			}
+			got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, info)
+			require.NoError(t, err)
+			assert.Nil(t, got.GenerationConfig.ThinkingConfig)
+			assert.Empty(t, info.GetReasoningEffort())
+		})
+	}
+}
+
+// More specific controls win: a model-name alias (adapter on) and
+// extra_body.google.thinking_config are not overridden by reasoning_effort.
+func TestGeminiReq_ReasoningEffortDoesNotOverrideSpecificControls(t *testing.T) {
+	t.Run("nothinking alias", func(t *testing.T) {
+		info := &convmeta.Values{
+			ChannelMetaAttached: true,
+			UpstreamModelName:   "gemini-2.5-flash-nothinking",
+			Options:             &convmeta.Options{Gemini: convmeta.GeminiOptions{ThinkingAdapterEnabled: true}},
+		}
+		req := dto.GeneralOpenAIRequest{
+			Model:           "gemini-2.5-flash-nothinking",
+			ReasoningEffort: "high",
+			Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+		}
+		got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, info)
+		require.NoError(t, err)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+		assert.Equal(t, 0, *got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	})
+	t.Run("extra_body thinking_config", func(t *testing.T) {
+		req := dto.GeneralOpenAIRequest{
+			Model:           "gemini-2.5-flash",
+			ReasoningEffort: "none",
+			ExtraBody:       json.RawMessage(`{"google":{"thinking_config":{"thinking_budget":300}}}`),
+			Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+		}
+		got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+		require.NoError(t, err)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+		assert.Equal(t, 300, *got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	})
+	t.Run("extra_body without thinking_config", func(t *testing.T) {
+		req := dto.GeneralOpenAIRequest{
+			Model:           "gemini-2.5-flash",
+			ReasoningEffort: "none",
+			ExtraBody:       json.RawMessage(`{"google":{"image_config":{"aspect_ratio":"1:1"}}}`),
+			Messages:        []dto.Message{{Role: "user", Content: "hi"}},
+		}
+		got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+		require.NoError(t, err)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig)
+		require.NotNil(t, got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+		assert.Equal(t, 0, *got.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	})
 }
 
 func TestGeminiReq_StopSequencesTruncatedToFive(t *testing.T) {

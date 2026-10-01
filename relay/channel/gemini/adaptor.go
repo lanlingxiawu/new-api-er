@@ -153,6 +153,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return fmt.Sprintf("%s/%s/models/%s:predict", info.ChannelBaseUrl, version, info.UpstreamModelName), nil
 	}
 
+	// A native embed path decides the action, whatever the model is called:
+	// the body is an embed request and DoResponse parses an embed response.
+	if action := nativeGeminiEmbedAction(info); action != "" {
+		return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+	}
+
 	if strings.HasPrefix(info.UpstreamModelName, "text-embedding") ||
 		strings.HasPrefix(info.UpstreamModelName, "embedding") ||
 		strings.HasPrefix(info.UpstreamModelName, "gemini-embedding") {
@@ -263,8 +269,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if info.RelayMode == constant.RelayModeGemini {
-		if strings.Contains(info.RequestURLPath, ":embedContent") ||
-			strings.Contains(info.RequestURLPath, ":batchEmbedContents") {
+		if nativeGeminiEmbedAction(info) != "" {
 			return NativeGeminiEmbeddingHandler(c, resp, info)
 		}
 		if info.IsStream {
@@ -291,6 +296,23 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return GeminiChatHandler(c, info, resp)
 	}
 
+}
+
+// nativeGeminiEmbedAction returns the embed action named by a native Gemini
+// path (/models/{model}:embedContent or :batchEmbedContents), or "" for any
+// other request.
+func nativeGeminiEmbedAction(info *relaycommon.RelayInfo) string {
+	if info.RelayMode != constant.RelayModeGemini {
+		return ""
+	}
+	switch {
+	case strings.Contains(info.RequestURLPath, ":batchEmbedContents"):
+		return "batchEmbedContents"
+	case strings.Contains(info.RequestURLPath, ":embedContent"):
+		return "embedContent"
+	default:
+		return ""
+	}
 }
 
 func (a *Adaptor) GetModelList() []string {

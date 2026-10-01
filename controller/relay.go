@@ -104,6 +104,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError, responseMessage = service.PresentRelayError(c, newAPIError, responseMessage, requestId)
 			newAPIError.SetMessage(responseMessage)
 			writeError := func() {
+				if relayFormat != types.RelayFormatOpenAIRealtime {
+					helper.ClearEventStreamHeaders(c)
+				}
 				switch relayFormat {
 				case types.RelayFormatOpenAIRealtime:
 					helper.WssError(c, ws, newAPIError.ToOpenAIError())

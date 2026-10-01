@@ -22,15 +22,20 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		},
 	}
 
-	if textRequest.TopP != nil && *textRequest.TopP > 0 {
+	// Rule 5: a field the client sent is forwarded even when it is zero.
+	if textRequest.TopP != nil {
 		geminiRequest.GenerationConfig.TopP = kitutil.GetPointer(*textRequest.TopP)
 	}
-	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
-		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(maxTokens)
+	if textRequest.MaxCompletionTokens != nil {
+		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*textRequest.MaxCompletionTokens)
+	} else if textRequest.MaxTokens != nil {
+		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*textRequest.MaxTokens)
 	}
-	if textRequest.Seed != nil && *textRequest.Seed != 0 {
+	if textRequest.Seed != nil {
 		geminiRequest.GenerationConfig.Seed = kitutil.GetPointer(int64(*textRequest.Seed))
 	}
+	// presence_penalty / frequency_penalty are not mapped (as upstream): Gemini
+	// 2.5 and 3 models answer 400 "Penalty is not enabled for models/...".
 
 	upstreamModelName := textRequest.Model
 	if modelName := convmeta.UpstreamModelName(info); modelName != "" {
@@ -149,6 +154,11 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 
 	if !adaptorWithExtraBody {
 		sharedgemini.ApplyThinkingConfig(&geminiRequest, info, textRequest)
+	}
+	// Model-name suffixes and extra_body.google.thinking_config are more
+	// specific and have already been applied; reasoning_effort fills the gap.
+	if geminiRequest.GenerationConfig.ThinkingConfig == nil {
+		sharedgemini.ApplyReasoningEffort(&geminiRequest, info, upstreamModelName, textRequest.ReasoningEffort)
 	}
 
 	var safetySettings []dto.GeminiChatSafetySettings

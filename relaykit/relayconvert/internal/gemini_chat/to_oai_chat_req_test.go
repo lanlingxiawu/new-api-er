@@ -250,22 +250,322 @@ func TestReq_GenerationConfigTemperatureZeroPreserved(t *testing.T) {
 	assert.Equal(t, 0.0, *out.Temperature)
 }
 
-func TestReq_GenerationConfigNonPositiveGuardsDrop(t *testing.T) {
-	// TopP/TopK/MaxOutputTokens/CandidateCount <= 0 are dropped by their >0 guards.
+// D-3 (Rule 5): values the client set to 0 are forwarded, not dropped.
+func TestReq_GenerationConfigExplicitZerosForwarded(t *testing.T) {
 	req := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{
 			TopP:            kitutil.GetPointer(0.0),
 			TopK:            kitutil.GetPointer(0.0),
 			MaxOutputTokens: kitutil.GetPointer(uint(0)),
 			CandidateCount:  kitutil.GetPointer(0),
+			Seed:            kitutil.GetPointer(int64(0)),
 		},
 	}
 	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.TopP)
+	assert.Equal(t, 0.0, *out.TopP)
+	require.NotNil(t, out.TopK)
+	assert.Equal(t, 0, *out.TopK)
+	require.NotNil(t, out.MaxTokens)
+	assert.Equal(t, uint(0), *out.MaxTokens)
+	require.NotNil(t, out.N)
+	assert.Equal(t, 0, *out.N)
+	require.NotNil(t, out.Seed)
+	assert.Equal(t, 0.0, *out.Seed)
+
+	body, err := json.Marshal(out)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"top_p":0`)
+	assert.Contains(t, string(body), `"seed":0`)
+}
+
+func TestReq_GenerationConfigAbsentFieldsOmitted(t *testing.T) {
+	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.TopP)
 	assert.Nil(t, out.TopK)
 	assert.Nil(t, out.MaxTokens)
 	assert.Nil(t, out.N)
+	assert.Nil(t, out.Seed)
+	assert.Nil(t, out.PresencePenalty)
+	assert.Nil(t, out.FrequencyPenalty)
+	assert.Nil(t, out.ResponseFormat)
+	assert.Empty(t, out.ReasoningEffort)
+	assert.Nil(t, out.ToolChoice)
+}
+
+// seed is mapped; penalties are not (as upstream): OpenAI reasoning models and
+// the Claude target reject them.
+func TestReq_SeedMappedPenaltiesNot(t *testing.T) {
+	req := &dto.GeminiChatRequest{
+		GenerationConfig: dto.GeminiChatGenerationConfig{
+			Seed:             kitutil.GetPointer(int64(42)),
+			PresencePenalty:  kitutil.GetPointer(float32(0.5)),
+			FrequencyPenalty: kitutil.GetPointer(float32(-0.25)),
+		},
+	}
+	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.Seed)
+	assert.Equal(t, 42.0, *out.Seed)
+	assert.Nil(t, out.PresencePenalty)
+	assert.Nil(t, out.FrequencyPenalty)
+}
+
+// --- responseMimeType -> response_format ---
+
+func TestReq_ResponseMimeTypeJSONWithoutSchemaIsJSONObject(t *testing.T) {
+	req := &dto.GeminiChatRequest{
+		GenerationConfig: dto.GeminiChatGenerationConfig{ResponseMimeType: "application/json"},
+	}
+	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.ResponseFormat)
+	assert.Equal(t, "json_object", out.ResponseFormat.Type)
+	assert.Empty(t, out.ResponseFormat.JsonSchema)
+}
+
+// responseSchema is Gemini's Schema dialect (nullable, propertyOrdering, ...),
+// which OpenAI's validator may reject: JSON mode is kept, the schema is not sent.
+func TestReq_GeminiResponseSchemaBecomesJSONObject(t *testing.T) {
+	var generationConfig dto.GeminiChatGenerationConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"responseMimeType": "application/json",
+		"responseSchema": {"type": "OBJECT", "nullable": true, "propertyOrdering": ["a"], "properties": {"a": {"type": "INTEGER"}}}
+	}`), &generationConfig))
+	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.ResponseFormat)
+	assert.Equal(t, "json_object", out.ResponseFormat.Type)
+	assert.Empty(t, out.ResponseFormat.JsonSchema)
+}
+
+func TestReq_ResponseJSONSchemaPassedThrough(t *testing.T) {
+	req := &dto.GeminiChatRequest{
+		GenerationConfig: dto.GeminiChatGenerationConfig{
+			ResponseMimeType:   "application/json",
+			ResponseJsonSchema: json.RawMessage(`{"type":"object","required":["a"]}`),
+			ResponseSchema:     map[string]any{"type": "STRING"},
+		},
+	}
+	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.ResponseFormat)
+	assert.Equal(t, "json_schema", out.ResponseFormat.Type)
+	assert.JSONEq(t, `{"name":"response","schema":{"type":"object","required":["a"]}}`, string(out.ResponseFormat.JsonSchema))
+}
+
+func TestReq_NullResponseJSONSchemaTreatedAsAbsent(t *testing.T) {
+	var generationConfig dto.GeminiChatGenerationConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"responseMimeType":"application/json","responseJsonSchema":null}`), &generationConfig))
+	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, out.ResponseFormat)
+	assert.Equal(t, "json_object", out.ResponseFormat.Type)
+}
+
+func TestReq_NonJSONResponseMimeTypeNotMapped(t *testing.T) {
+	for _, mimeType := range []string{"text/plain", "text/x.enum", ""} {
+		req := &dto.GeminiChatRequest{
+			GenerationConfig: dto.GeminiChatGenerationConfig{ResponseMimeType: mimeType},
+		}
+		out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+		require.NoError(t, err)
+		assert.Nil(t, out.ResponseFormat, mimeType)
+	}
+}
+
+// --- thinkingConfig -> reasoning_effort (D-4) ---
+
+// How the thinkingConfig is read, on a target that accepts every effort the
+// config can express (gemini-2.5-flash through an OpenAI-compatible endpoint).
+func TestReq_ThinkingConfigBecomesReasoningEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config *dto.GeminiThinkingConfig
+		want   string
+	}{
+		{"budget 0 turns thinking off", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(0)}, "none"},
+		{"budget 1", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(1)}, "low"},
+		{"budget 1024", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(1024)}, "low"},
+		{"budget 1025", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(1025)}, "medium"},
+		{"budget 8192", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(8192)}, "medium"},
+		{"budget 8193", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(8193)}, "high"},
+		{"level", &dto.GeminiThinkingConfig{ThinkingLevel: "LOW"}, "low"},
+		{"level wins over budget", &dto.GeminiThinkingConfig{ThinkingLevel: "high", ThinkingBudget: kitutil.GetPointer(0)}, "high"},
+		{"unknown level falls back to budget", &dto.GeminiThinkingConfig{ThinkingLevel: "turbo", ThinkingBudget: kitutil.GetPointer(0)}, "none"},
+		// -1 is "dynamic", the model default: the target keeps its own default.
+		{"dynamic budget", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(-1)}, ""},
+		{"negative budget", &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(-5)}, ""},
+		{"includeThoughts only", &dto.GeminiThinkingConfig{IncludeThoughts: true}, ""},
+		{"no thinkingConfig", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := infoWith(chanTypeGemini, "gemini-2.5-flash", false)
+			req := &dto.GeminiChatRequest{GenerationConfig: dto.GeminiChatGenerationConfig{ThinkingConfig: tc.config}}
+			out, err := GeminiGenerateContentRequestToOpenAIChat(req, info)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out.ReasoningEffort)
+			assert.Equal(t, tc.want, info.GetReasoningEffort())
+		})
+	}
+}
+
+// reasoning_effort is only sent to target models known to accept it, clamped
+// to a value that model accepts. Everything else (gpt-4o, Claude, unknown
+// OpenAI-compatible models) gets no reasoning_effort, as before.
+func TestReq_ReasoningEffortOnlyForModelsThatAcceptIt(t *testing.T) {
+	off := &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(0)}
+	minimal := &dto.GeminiThinkingConfig{ThinkingLevel: "minimal"}
+	medium := &dto.GeminiThinkingConfig{ThinkingBudget: kitutil.GetPointer(4096)}
+	for _, tc := range []struct {
+		model  string
+		config *dto.GeminiThinkingConfig
+		want   string
+	}{
+		{"gpt-4o", off, ""},
+		{"gpt-4o", medium, ""},
+		{"claude-sonnet-4-5", medium, ""},
+		{"deepseek-chat", medium, ""},
+		{"gemini-2.0-flash", off, ""},
+		{"gemini-2.5-flash-image", medium, ""},
+		{"o1-mini", medium, ""},
+		{"o3", off, "low"},
+		{"o4-mini", minimal, "low"},
+		{"o3", medium, "medium"},
+		{"gpt-5", off, "minimal"},
+		{"gpt-5-mini-2025-08-07", off, "minimal"},
+		{"gpt-5-nano", minimal, "minimal"},
+		{"gpt-5.1", off, "none"},
+		{"gpt-5.2-2025-12-11", off, "none"},
+		{"gpt-5.1", minimal, "low"},
+		{"gpt-5-codex", off, "low"},
+		{"gpt-5.1-codex", minimal, "low"},
+		{"gpt-5-pro", medium, ""},
+		{"gemini-2.5-flash", off, "none"},
+		{"gemini-2.5-flash", minimal, "low"},
+		{"gemini-2.5-pro", off, "low"},
+		{"gemini-3-flash-preview", off, "minimal"},
+		{"gemini-3-pro-preview", off, "low"},
+		{"gemini-3-pro-preview", medium, "high"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			info := infoWith(1, tc.model, false)
+			req := &dto.GeminiChatRequest{GenerationConfig: dto.GeminiChatGenerationConfig{ThinkingConfig: tc.config}}
+			out, err := GeminiGenerateContentRequestToOpenAIChat(req, info)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out.ReasoningEffort)
+			assert.Equal(t, tc.want, info.GetReasoningEffort())
+		})
+	}
+}
+
+// The report's O3 case on the wire: thinkingBudget 0 reaches the OpenAI
+// channel as reasoning_effort "none".
+func TestReq_ThinkingBudgetZeroSerializesReasoningEffortNone(t *testing.T) {
+	var req dto.GeminiChatRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+		"generationConfig": {"maxOutputTokens": 16, "thinkingConfig": {"thinkingBudget": 0}}
+	}`), &req))
+	out, err := GeminiGenerateContentRequestToOpenAIChat(&req, infoWith(chanTypeGemini, "gemini-2.5-flash", false))
+	require.NoError(t, err)
+	body, err := json.Marshal(out)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"reasoning_effort":"none"`)
+}
+
+// --- toolConfig -> tool_choice ---
+
+func TestReq_ToolConfigBecomesToolChoice(t *testing.T) {
+	tools := json.RawMessage(`[{"functionDeclarations":[{"name":"get_weather"},{"name":"get_time"},{"name":"get_date"}]}]`)
+	all := []string{"get_weather", "get_time", "get_date"}
+	for _, tc := range []struct {
+		name      string
+		config    *dto.FunctionCallingConfig
+		want      any
+		wantTools []string
+	}{
+		{"auto", &dto.FunctionCallingConfig{Mode: "AUTO"}, "auto", all},
+		{"validated", &dto.FunctionCallingConfig{Mode: "VALIDATED"}, "auto", all},
+		{"none", &dto.FunctionCallingConfig{Mode: "NONE"}, "none", all},
+		{"lowercase mode", &dto.FunctionCallingConfig{Mode: "any"}, "required", all},
+		{"any", &dto.FunctionCallingConfig{Mode: "ANY"}, "required", all},
+		// Several allowed functions: the tool list is narrowed to them.
+		{"any with two functions", &dto.FunctionCallingConfig{Mode: "ANY", AllowedFunctionNames: []string{"get_weather", "get_time"}},
+			"required", []string{"get_weather", "get_time"}},
+		{"any with one function", &dto.FunctionCallingConfig{Mode: "ANY", AllowedFunctionNames: []string{"get_weather"}},
+			map[string]any{"type": "function", "function": map[string]any{"name": "get_weather"}}, all},
+		// Naming an undeclared function would be rejected upstream.
+		{"any with undeclared function", &dto.FunctionCallingConfig{Mode: "ANY", AllowedFunctionNames: []string{"missing"}}, "required", all},
+		{"unspecified mode", &dto.FunctionCallingConfig{Mode: "MODE_UNSPECIFIED"}, nil, all},
+		{"no functionCallingConfig", nil, nil, all},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &dto.GeminiChatRequest{Tools: tools, ToolConfig: &dto.ToolConfig{FunctionCallingConfig: tc.config}}
+			out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out.ToolChoice)
+			names := make([]string, 0, len(out.Tools))
+			for _, tool := range out.Tools {
+				names = append(names, tool.Function.Name)
+			}
+			assert.Equal(t, tc.wantTools, names)
+		})
+	}
+}
+
+// OpenAI rejects tool_choice when no tools are sent.
+func TestReq_ToolConfigWithoutFunctionToolsDropped(t *testing.T) {
+	req := &dto.GeminiChatRequest{
+		Tools:      json.RawMessage(`[{"googleSearch":{}}]`),
+		ToolConfig: &dto.ToolConfig{FunctionCallingConfig: &dto.FunctionCallingConfig{Mode: "ANY"}},
+	}
+	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	assert.Nil(t, out.Tools)
+	assert.Nil(t, out.ToolChoice)
+}
+
+// The report's E12 case: Gemini Schema type names are uppercase; OpenAI
+// requires JSON Schema's lowercase names.
+func TestReq_FunctionSchemaTypesLowercased(t *testing.T) {
+	req := &dto.GeminiChatRequest{Tools: json.RawMessage(`[{"functionDeclarations":[{"name":"f","parameters":{
+		"type": "OBJECT",
+		"properties": {
+			"city": {"type": "STRING", "enum": ["OBJECT"]},
+			"type": {"type": "STRING"},
+			"when": {"anyOf": [{"type": "STRING"}, {"type": "NULL"}]},
+			"list": {"type": ["ARRAY", "NULL"], "items": {"type": "INTEGER"}}
+		},
+		"required": ["city"]
+	}}]}]`)}
+	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	require.NoError(t, err)
+	require.Len(t, out.Tools, 1)
+	params, err := json.Marshal(out.Tools[0].Function.Parameters)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"type": "object",
+		"properties": {
+			"city": {"type": "string", "enum": ["OBJECT"]},
+			"type": {"type": "string"},
+			"when": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+			"list": {"type": ["array", "null"], "items": {"type": "integer"}}
+		},
+		"required": ["city"]
+	}`, string(params))
+}
+
+func TestLowercaseSchemaTypes_DepthGuardAndNonMaps(t *testing.T) {
+	assert.Equal(t, "x", lowercaseSchemaTypes("x", 0))
+	assert.Nil(t, lowercaseSchemaTypes(nil, 0))
+	deep := map[string]any{"type": "OBJECT"}
+	assert.Equal(t, deep, lowercaseSchemaTypes(deep, maxSchemaDepth+1))
+	// The input is not mutated.
+	lowercaseSchemaTypes(deep, 0)
+	assert.Equal(t, "OBJECT", deep["type"])
 }
 
 func TestReq_StopSequencesUnderFourNotTruncated(t *testing.T) {

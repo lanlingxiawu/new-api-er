@@ -42,10 +42,11 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 			Temperature: req.Temperature,
 		},
 	}
-	if req.TopP != nil && *req.TopP > 0 {
+	// Rule 5: a field the client sent is forwarded even when it is zero.
+	if req.TopP != nil {
 		geminiRequest.GenerationConfig.TopP = kitutil.GetPointer(*req.TopP)
 	}
-	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
+	if req.MaxOutputTokens != nil {
 		geminiRequest.GenerationConfig.MaxOutputTokens = kitutil.GetPointer(*req.MaxOutputTokens)
 	}
 
@@ -64,6 +65,11 @@ func OpenAIResponsesRequestToGeminiChat(c context.Context, req *dto.OpenAIRespon
 		MaxCompletionTokens: req.MaxOutputTokens,
 		ReasoningEffort:     ReasoningEffort(req),
 	})
+	// Same order as the chat converter: model-name aliases first, then
+	// reasoning.effort fills the gap.
+	if geminiRequest.GenerationConfig.ThinkingConfig == nil {
+		sharedgemini.ApplyReasoningEffort(geminiRequest, info, upstreamModelName, ReasoningEffort(req))
+	}
 
 	var safetySettings []dto.GeminiChatSafetySettings
 	for _, category := range sharedgemini.SafetySettingCategories {

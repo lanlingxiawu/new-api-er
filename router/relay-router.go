@@ -1,6 +1,8 @@
 package router
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -69,6 +71,7 @@ func SetRelayRouter(router *gin.Engine) {
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
 	relayV1Router := router.Group("/v1")
+	relayV1Router.Use(rejectGeminiCountTokens)
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.RequestResponseLogger())
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
@@ -200,6 +203,7 @@ func SetRelayRouter(router *gin.Engine) {
 	}
 
 	relayGeminiRouter := router.Group("/v1beta")
+	relayGeminiRouter.Use(rejectGeminiCountTokens)
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))
 	relayGeminiRouter.Use(middleware.RequestResponseLogger())
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
@@ -212,6 +216,20 @@ func SetRelayRouter(router *gin.Engine) {
 		relayGeminiRouter.POST("/models/*path", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})
+	}
+}
+
+// rejectGeminiCountTokens answers Gemini :countTokens like an unregistered
+// route. The gateway does not implement token counting, and every other native
+// Gemini action is relayed as a generation, so letting it through would run a
+// real generateContent upstream and bill it (upstream #7388). It is the first
+// middleware of the /v1beta and /v1 relay groups, so it runs before auth, rate
+// limiting and channel selection. The check is one suffix comparison; no other
+// /v1 relay path ends in ":countTokens".
+func rejectGeminiCountTokens(c *gin.Context) {
+	if strings.HasSuffix(c.Request.URL.Path, ":countTokens") {
+		controller.RelayNotFound(c)
+		c.Abort()
 	}
 }
 
