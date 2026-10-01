@@ -48,6 +48,8 @@ type ConfigGroupField = {
   type?: 'switch'
   min?: number
   max?: number
+  // Shown under the input when a field only takes effect together with another.
+  description?: string
 }
 
 type ConfigGroupSectionProps = {
@@ -196,6 +198,11 @@ function ConfigGroupSection({
                       }))
                     }
                   />
+                )}
+                {field.description && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t(field.description)}
+                  </p>
                 )}
               </div>
             )
@@ -349,6 +356,20 @@ const relayTimeoutFields: ConfigGroupField[] = [
     label: 'Default total timeout (seconds)',
     min: 0,
     max: 604800,
+  },
+  {
+    key: 'retry_min_budget_seconds',
+    label: 'Stop retrying below remaining budget (seconds)',
+    min: 0,
+    max: 604800,
+    description:
+      '0 = off (default). Only applies when a total timeout is set (system or per-user). Without one, retries are limited only by the retry count and max attempts.',
+  },
+  {
+    key: 'max_total_attempts',
+    label: 'Max attempts per request (0 = unlimited)',
+    min: 0,
+    max: 100,
   },
 ]
 

@@ -5,6 +5,8 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'relay_timeout_setting.enabled': true,
   'relay_timeout_setting.response_timeout_seconds': 300,
   'relay_timeout_setting.total_timeout_seconds': 0,
+  'relay_timeout_setting.retry_min_budget_seconds': 0,
+  'relay_timeout_setting.max_total_attempts': 0,
   'business_stats_circuit_breaker_setting.enabled': true,
   'business_stats_circuit_breaker_setting.manual_disabled': false,
   'business_stats_circuit_breaker_setting.failure_threshold': 3,

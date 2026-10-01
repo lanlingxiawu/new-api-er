@@ -188,6 +188,10 @@ func fallBackFromRejectedAdaptation(c *gin.Context, info *relaycommon.RelayInfo,
 	if info == nil || !info.UpstreamStreamAdapted || resp == nil || adaptedBody == nil || !adaptedFailureWorthPlainResend(resp.StatusCode) {
 		return resp, nil, nil
 	}
+	if allowed, reason := service.ReserveRelayFallbackCall(c); !allowed {
+		logger.LogWarn(c, "skip adapted-stream plain fallback: "+reason)
+		return resp, nil, nil
+	}
 	sent, err := adaptedBody.Bytes()
 	if err != nil {
 		return resp, nil, nil
@@ -231,7 +235,8 @@ func fallBackFromRejectedAdaptation(c *gin.Context, info *relaycommon.RelayInfo,
 // upstream's own stream-path code. Auth, upstream balance (402), payload size
 // (413, and re-sending would upload the large body again), rate limiting,
 // timeouts and overload (502/503/529 and the like) cannot. The re-send does not
-// consume the retry quota.
+// consume the per-group retry quota, but ReserveRelayFallbackCall counts it
+// against the request-wide upstream-call and time budgets.
 func adaptedFailureWorthPlainResend(status int) bool {
 	if status == http.StatusInternalServerError {
 		return true

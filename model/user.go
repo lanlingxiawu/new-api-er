@@ -121,6 +121,8 @@ type User struct {
 	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout" gorm:"type:int;not null;default:0;column:non_stream_response_timeout"`
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout" gorm:"type:int;not null;default:0;column:non_stream_total_timeout"`
 	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing" gorm:"type:varchar(16);not null;default:'refund';column:non_stream_timeout_billing"`
+	// RetryTimes: 0 inherits the group/global quota, -1 disables retry (one attempt).
+	RetryTimes int `json:"retry_times" gorm:"type:int;not null;default:0;column:retry_times"`
 
 	// 非持久化：仅在用户搜索（分配客户场景）中填充
 	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
@@ -154,6 +156,7 @@ func (user *User) ToBaseUser() *UserBase {
 	cache.StreamTotalTimeout = user.StreamTotalTimeout
 	cache.NonStreamResponseTimeout = user.NonStreamResponseTimeout
 	cache.NonStreamTotalTimeout = user.NonStreamTotalTimeout
+	cache.RetryTimes = user.RetryTimes
 	cache.NonStreamTimeoutBilling = strings.TrimSpace(user.NonStreamTimeoutBilling)
 	if cache.NonStreamTimeoutBilling == "" {
 		cache.NonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
@@ -996,6 +999,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	updates["non_stream_response_timeout"] = newUser.NonStreamResponseTimeout
 	updates["non_stream_total_timeout"] = newUser.NonStreamTotalTimeout
 	updates["non_stream_timeout_billing"] = newUser.NonStreamTimeoutBilling
+	updates["retry_times"] = newUser.RetryTimes
 	if updatePassword {
 		updates["password"] = newUser.Password
 	}

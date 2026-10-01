@@ -236,6 +236,7 @@ setting.gotify_token_empty: "Gotify token cannot be empty"
 setting.gotify_url_invalid: "Invalid Gotify server URL"
 setting.url_must_http: "URL must start with http:// or https://"
 setting.saved: "Settings updated"
+setting.group_retry_times_invalid: "Invalid per-group retry attempts: each group must be -1, or a whole number from 0 to 20"
 
 # Deployment messages (io.net)
 deployment.not_enabled: "io.net model deployment is not enabled or API key is missing"

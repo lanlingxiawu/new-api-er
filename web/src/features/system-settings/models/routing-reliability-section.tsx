@@ -349,7 +349,10 @@ export function RoutingReliabilitySection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Number of times to retry failed requests (0-10)')}
+                      {t('Number of times to retry failed requests (0-10)')}{' '}
+                      {t(
+                        'Attempts per request can additionally be capped by "Max attempts per request" under Runtime Parameters › AI Request Timeout (unlimited by default).'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

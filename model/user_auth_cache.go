@@ -83,7 +83,7 @@ redis.call('HSET', KEYS[1],
   'StreamResponseTimeout', ARGV[14], 'StreamResponseTimeoutMode', ARGV[15],
   'StreamTotalTimeout', ARGV[16],
   'NonStreamResponseTimeout', ARGV[17], 'NonStreamTotalTimeout', ARGV[18],
-  'NonStreamTimeoutBilling', ARGV[19])
+  'NonStreamTimeoutBilling', ARGV[19], 'RetryTimes', ARGV[20])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
@@ -96,7 +96,7 @@ return 1`
 		user.GroupRatios,
 		user.StreamResponseTimeout, user.StreamResponseTimeoutMode, user.StreamTotalTimeout,
 		user.NonStreamResponseTimeout, user.NonStreamTotalTimeout,
-		user.NonStreamTimeoutBilling,
+		user.NonStreamTimeoutBilling, user.RetryTimes,
 	).Int()
 	if err != nil {
 		return err

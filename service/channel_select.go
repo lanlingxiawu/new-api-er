@@ -17,6 +17,10 @@ type RetryParam struct {
 	RequestPath  string
 	Retry        *int
 	resetNextTry bool
+	// totalAttempts counts attempts across the whole request. Unlike Retry it is
+	// never reset by SetRetry, so switching auto-groups cannot restart it — that
+	// reset is what let a request reach 分组数 × (RetryTimes+1) attempts.
+	totalAttempts int
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -25,6 +29,12 @@ func (p *RetryParam) GetRetry() int {
 	}
 	return *p.Retry
 }
+
+// TotalAttempts returns how many attempts this request has already made.
+func (p *RetryParam) TotalAttempts() int { return p.totalAttempts }
+
+// CountAttempt records that an attempt is about to be made.
+func (p *RetryParam) CountAttempt() { p.totalAttempts++ }
 
 func (p *RetryParam) SetRetry(retry int) {
 	p.Retry = &retry
@@ -134,12 +144,17 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 			// Prepare state for next retry
 			// 为下一次重试准备状态
-			if crossGroupRetry && priorityRetry >= common.RetryTimes {
+			// The threshold is the same per-user/per-group quota the retry loop
+			// uses, so both agree on when a group is spent. Whether the prepared
+			// switch is ever taken is still the loop's call, as on main: it needs
+			// retry budget left (design §5.2).
+			groupQuota := ResolveRetryTimesForRequest(param.Ctx, autoGroup, common.RetryTimes)
+			if crossGroupRetry && priorityRetry >= groupQuota {
 				// Current group has exhausted all retries, prepare to switch to next group
 				// This request still uses current group, but next retry will use next group
 				// 当前分组已用完所有重试次数，准备切换到下一个分组
 				// 本次请求仍使用当前分组，但下次重试将使用下一个分组
-				logger.LogDebug(param.Ctx, "Current group %s retries exhausted (priorityRetry=%d >= RetryTimes=%d), preparing switch to next group for next retry", autoGroup, priorityRetry, common.RetryTimes)
+				logger.LogDebug(param.Ctx, "Current group %s retries exhausted (priorityRetry=%d >= groupQuota=%d), preparing switch to next group for next retry", autoGroup, priorityRetry, groupQuota)
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
 				// Reset retry counter so outer loop can continue for next group
 				// 重置重试计数器，以便外层循环可以为下一个分组继续

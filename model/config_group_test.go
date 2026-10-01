@@ -195,7 +195,7 @@ func TestConfigGroupWhitelistsCoverEveryStructField(t *testing.T) {
 	assert.Len(t, rateLimitFields, 26, "rate_limit_setting 字段数与白名单不一致")
 	assert.Len(t, dbPoolFields, 5, "db_pool_setting 字段数与白名单不一致")
 	assert.Len(t, userSessionFields, 5, "user_session_setting 字段数与白名单不一致")
-	assert.Len(t, relayTimeoutFields, 3, "relay_timeout_setting 字段数与白名单不一致")
+	assert.Len(t, relayTimeoutFields, 5, "relay_timeout_setting 字段数与白名单不一致")
 }
 
 func TestSaveVeridropMonitorConfigGroupPersistsAndPublishes(t *testing.T) {

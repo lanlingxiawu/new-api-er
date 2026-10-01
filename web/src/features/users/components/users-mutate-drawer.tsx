@@ -25,6 +25,7 @@ import {
   Link2,
   Pencil,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Timer,
   Trash2,
@@ -125,12 +126,16 @@ type TimeoutOverrideFieldName =
   | 'stream_total_timeout'
   | 'non_stream_response_timeout'
   | 'non_stream_total_timeout'
+  | 'retry_times'
 
 type TimeoutOverrideFieldProps = {
   control: Control<UserFormValues>
   name: TimeoutOverrideFieldName
   label: ReactNode
   description: ReactNode
+  // Bounds default to the timeout range; retry counts pass their own.
+  min?: number
+  max?: number
 }
 
 type TimeoutNumberInputProps = Omit<
@@ -179,6 +184,8 @@ function TimeoutOverrideField({
   name,
   label,
   description,
+  min = -1,
+  max = 604800,
 }: TimeoutOverrideFieldProps) {
   return (
     <FormField
@@ -189,8 +196,8 @@ function TimeoutOverrideField({
           <FormLabel>{label}</FormLabel>
           <FormControl>
             <TimeoutNumberInput
-              min={-1}
-              max={604800}
+              min={min}
+              max={max}
               step={1}
               name={field.name}
               ref={field.ref}
@@ -211,6 +218,7 @@ const USER_SECTION_IDS = {
   BASIC: 'user-basic-information',
   GROUP_QUOTA: 'user-group-quota',
   TIMEOUT: 'user-request-timeout',
+  RETRY: 'user-retry',
   EMPLOYEE: 'user-assigned-employee',
   BINDINGS: 'user-binding-information',
 } as const
@@ -314,6 +322,11 @@ export function UsersMutateDrawer({
               id: USER_SECTION_IDS.TIMEOUT,
               label: t('AI Request Timeout'),
               icon: <Timer className='size-4' aria-hidden='true' />,
+            },
+            {
+              id: USER_SECTION_IDS.RETRY,
+              label: t('Retry'),
+              icon: <RotateCcw className='size-4' aria-hidden='true' />,
             },
           ]
         : []),
@@ -970,6 +983,26 @@ export function UsersMutateDrawer({
                               )}
                             />
                           </div>
+                        </div>
+                      </SideDrawerSection>
+                    </div>
+                  )}
+
+                  {isUpdate && (
+                    <div id={USER_SECTION_IDS.RETRY} className='scroll-mt-4'>
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>{t('Retry')}</h3>
+                        <div className='grid items-start gap-4 sm:grid-cols-2'>
+                          <TimeoutOverrideField
+                            control={form.control}
+                            name='retry_times'
+                            min={-1}
+                            max={20}
+                            label={t('Retry attempts')}
+                            description={t(
+                              'How many times a failed request may be retried on another channel. 0 follows the group or system default, -1 never retries.'
+                            )}
+                          />
                         </div>
                       </SideDrawerSection>
                     </div>

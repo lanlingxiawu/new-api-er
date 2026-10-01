@@ -328,6 +328,13 @@ func UpdateOption(c *gin.Context) {
 		if aborted {
 			return
 		}
+	case "GroupRetryTimes":
+		err = operation_setting.CheckGroupRetryTimes(option.Value.(string))
+		if err != nil {
+			logger.LogWarn(c, "rejected GroupRetryTimes: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgSettingGroupRetryTimesInvalid)
+			return
+		}
 	case "gemini.safety_settings":
 		err = model_setting.ValidateGeminiSafetySettings(option.Value.(string))
 		if err != nil {

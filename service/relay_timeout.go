@@ -13,7 +13,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -567,6 +569,287 @@ func RelayRequestTimeoutSeconds(c *gin.Context) int {
 		return common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds)
 	}
 	return common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds)
+}
+
+// RetryTimesInherit means "fall through to the next level"; RetryTimesDisabled
+// means "no retry" (one attempt) and does not fall through. They must be
+// distinct values: a global RetryTimes of 0 already means "no retry", so 0
+// cannot also carry the "inherit" meaning at the user/group levels — the same
+// distinction the per-user timeout fields make.
+const (
+	RetryTimesInherit  = 0
+	RetryTimesDisabled = -1
+)
+
+// MaxUserRetryTimes bounds a per-user override. A user needing more retries
+// than this has a routing problem that retrying will not solve.
+const MaxUserRetryTimes = 20
+
+func ValidateRetryTimes(times int) error {
+	if times == RetryTimesDisabled || times == RetryTimesInherit {
+		return nil
+	}
+	if times < 0 || times > MaxUserRetryTimes {
+		return fmt.Errorf("retry times must be -1, 0, or between 1 and %d", MaxUserRetryTimes)
+	}
+	return nil
+}
+
+// ResolveRetryTimes resolves the effective retry quota with priority
+// user > group > global, mirroring ratio_setting.ResolveGroupRatio.
+//
+// The returned value is a retry count in the same units as common.RetryTimes:
+// 0 means no retry (one attempt), N means up to N retries after the first
+// attempt. It is never negative, so callers can use it directly in the loop
+// bound without reintroducing the zero-attempt hazard (design §7.2).
+func ResolveRetryTimes(userRetryTimes int, group string, globalRetryTimes int) int {
+	// Any negative value means "no retry", not just the documented -1. Treating
+	// an unexpected negative as "inherit" would silently hand the request the
+	// global quota, which is the opposite of what an operator typing a negative
+	// number intends.
+	if userRetryTimes < 0 {
+		return 0
+	}
+	if userRetryTimes > 0 {
+		return userRetryTimes
+	}
+	if groupTimes, ok := operation_setting.GetGroupRetryTimes(group); ok {
+		if groupTimes < 0 {
+			return 0
+		}
+		if groupTimes > 0 {
+			return groupTimes
+		}
+		// An explicit 0 for the group means "inherit", same as absent.
+	}
+	if globalRetryTimes < 0 {
+		return 0
+	}
+	return globalRetryTimes
+}
+
+// ResolveRetryTimesForRequest reads the per-user quota from the request context
+// and resolves it against the group currently being used. It must be called
+// again after a group switch, because the group level is per-group by design
+// (design §5.2).
+func ResolveRetryTimesForRequest(c *gin.Context, group string, globalRetryTimes int) int {
+	userRetryTimes := 0
+	if c != nil {
+		userRetryTimes = common.GetContextKeyInt(c, constant.ContextKeyUserRetryTimes)
+	}
+	return ResolveRetryTimes(userRetryTimes, group, globalRetryTimes)
+}
+
+// ShouldAttemptRelay reports whether the retry loop may run another attempt.
+//
+// totalAttempts is the number of attempts already made in this request and is
+// NOT reset when auto-group routing switches groups; retry is the per-group
+// counter that is. retryQuota comes from ResolveRetryTimes, maxTotalAttempts
+// from RelayTimeoutSetting.RelayMaxTotalAttempts (0 = unlimited).
+//
+// The first attempt is always allowed, unconditionally. This is the invariant
+// that keeps a pre-consumed request from ending without ever entering the loop:
+// the refund defer in controller.Relay only fires when an error was produced,
+// so a zero-attempt request would strand the user's quota — neither refunded
+// nor settled (design §7.2). Encoding it here rather than relying on every
+// caller to order its conditions correctly.
+func ShouldAttemptRelay(retry, retryQuota, totalAttempts, maxTotalAttempts int) bool {
+	if totalAttempts <= 0 {
+		return true
+	}
+	if retry > retryQuota {
+		return false
+	}
+	if maxTotalAttempts > 0 && totalAttempts >= maxTotalAttempts {
+		return false
+	}
+	return true
+}
+
+// The retry loops in controller call only ContinueRelayAttempts,
+// BeginRelayAttempt and RemainingRetryBudget, one line each. The quota, attempt
+// cap and time budget are resolved here instead of being threaded through the
+// controller, because controller/relay.go is upstream-owned code that upstream
+// keeps rewriting: every extra fork line there becomes a merge conflict.
+
+// relayAttemptGroup is the group the current attempt is routed through: the
+// auto-group routing picked, else the request's group. It is the same rule
+// HandleGroupRatio uses to price the attempt. The context is read rather than
+// RelayInfo because auto-group routing records its choice there.
+func relayAttemptGroup(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if group, ok := common.GetContextKey(c, constant.ContextKeyAutoGroup); ok {
+		if name, ok := group.(string); ok {
+			return name
+		}
+	}
+	return common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+}
+
+func relayRetryQuota(c *gin.Context) int {
+	return ResolveRetryTimesForRequest(c, relayAttemptGroup(c), common.RetryTimes)
+}
+
+const relayRetryParamContextKey = "relay_retry_param"
+
+func relayMaxTotalCalls(c *gin.Context) int {
+	return relayTimeoutSettingForRequest(c).RelayMaxTotalAttempts()
+}
+
+// ContinueRelayAttempts is the retry loop condition: per-group quota, the
+// request-wide attempt cap, then the remaining time budget.
+//
+// It is evaluated before an attempt's channel is selected, so the group it
+// resolves is still the previous attempt's — exactly the group whose quota that
+// attempt spent. The first attempt is always allowed (see ShouldAttemptRelay).
+func ContinueRelayAttempts(c *gin.Context, p *RetryParam) bool {
+	maxTotal := relayMaxTotalCalls(c)
+	if !ShouldAttemptRelay(p.GetRetry(), relayRetryQuota(c), p.TotalAttempts(), maxTotal) {
+		return false
+	}
+	if p.TotalAttempts() > 0 && c != nil && c.Request != nil && c.Request.Context().Err() != nil && !IsRelayRequestTimeout(c) {
+		// The client has left: another attempt would only cost upstream calls for
+		// an answer nobody reads (a managed attempt is refused before sending and
+		// would log a do_request_failed against a channel it never touched).
+		logger.LogInfo(c, "stop retrying: the client has gone")
+		return false
+	}
+	if p.TotalAttempts() > 0 {
+		// Another attempt would only send upstream a request that is bound to be
+		// cut off: upstream bills it and the user gets a 504. Stop and return the
+		// last real error instead.
+		if stop, reason := RelayRetryBudgetExhausted(c); stop {
+			logger.LogWarn(c, "stop retrying: "+reason)
+			return false
+		}
+	}
+	return true
+}
+
+// BeginRelayAttempt runs at the top of every retry loop iteration.
+func BeginRelayAttempt(c *gin.Context, p *RetryParam) {
+	// TotalAttempts, not GetRetry: a group switch resets GetRetry to 0, which
+	// would skip the restart on the new group's first attempt and leave it on
+	// the previous group's remaining — or already stopped — response timer.
+	if p.TotalAttempts() > 0 {
+		RestartRelayResponseTimeout(c)
+	}
+	p.CountAttempt()
+	if c != nil {
+		c.Set(relayRetryParamContextKey, p)
+	}
+}
+
+// ReserveRelayFallbackCall reserves one request-wide upstream-call slot for an
+// internal compatibility fallback (currently an adapted stream re-sent as a
+// plain non-stream request). It deliberately does not advance the per-group
+// retry counter: the fallback stays in the same relay attempt, but it is still
+// a real upstream call and must consume max_total_attempts and time budget.
+//
+// A missing RetryParam is allowed for isolated helper callers/tests. Production
+// relay paths always install it through BeginRelayAttempt before TextHelper.
+func ReserveRelayFallbackCall(c *gin.Context) (bool, string) {
+	if c == nil {
+		return false, "relay context is unavailable"
+	}
+	value, exists := c.Get(relayRetryParamContextKey)
+	if !exists {
+		return true, ""
+	}
+	p, ok := value.(*RetryParam)
+	if !ok || p == nil {
+		return false, "relay call counter is unavailable"
+	}
+	maxTotal := relayMaxTotalCalls(c)
+	if maxTotal > 0 && p.TotalAttempts() >= maxTotal {
+		return false, fmt.Sprintf("the total upstream call limit of %d has been reached", maxTotal)
+	}
+	if stop, reason := RelayRetryBudgetExhausted(c); stop {
+		return false, reason
+	}
+	p.CountAttempt()
+	return true, ""
+}
+
+// RemainingRetryBudget is the retry count handed to the retry decision after a
+// failed attempt, resolved for the group that attempt used.
+func RemainingRetryBudget(c *gin.Context, p *RetryParam) int {
+	return remainingRetryBudget(relayRetryQuota(c), p)
+}
+
+// remainingRetryBudget is main's RetryTimes - retry with the quota resolved per
+// user and group. A spent quota ends the request even when auto-group routing
+// has lined up another group — main behaves the same way, and switching groups
+// on a zero quota would spend attempts the operator never granted.
+func remainingRetryBudget(quota int, p *RetryParam) int {
+	return quota - p.GetRetry()
+}
+
+// relayTotalDeadlineReader is implemented by the timeout controller.
+type relayTotalDeadlineReader interface {
+	RelayTotalDeadline() (time.Time, bool)
+}
+
+// RelayTotalDeadline returns the request-wide deadline, if one is configured.
+// Unlike RelayRequestDeadline it never falls back to the per-attempt response
+// window, so it is the only safe basis for decisions that span attempts.
+func RelayTotalDeadline(c *gin.Context) (time.Time, bool) {
+	value, ok := relayTimeoutControlValue(c)
+	if !ok {
+		return time.Time{}, false
+	}
+	reader, ok := value.(relayTotalDeadlineReader)
+	if !ok {
+		return time.Time{}, false
+	}
+	return reader.RelayTotalDeadline()
+}
+
+// RelayRetryBudgetExhausted reports whether too little of the total budget
+// remains to be worth another attempt, along with a reason for the log.
+//
+// Callers must use this only to decide whether to CONTINUE retrying, never as a
+// loop precondition: a request whose budget is already gone must still make its
+// first attempt so the ordinary error/refund path runs (design §7.2). With no
+// total timeout configured there is no budget, and this always reports false.
+// A deadline that has already passed is always exhausted, even when
+// retry_min_budget_seconds is 0 or the feature was switched off mid-request:
+// the request context is cancelled by then, so another attempt could only fail
+// and be blamed on a channel it never reached. The minimum budget comes from
+// the settings snapshot the request started with, like its timers.
+func RelayRetryBudgetExhausted(c *gin.Context) (bool, string) {
+	deadline, ok := RelayTotalDeadline(c)
+	if !ok {
+		return false, ""
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return true, "the request-wide deadline has passed"
+	}
+	setting := relayTimeoutSettingForRequest(c)
+	if setting == nil || !setting.Enabled || setting.RetryMinBudgetSeconds <= 0 {
+		return false, ""
+	}
+	minBudget := time.Duration(setting.RetryMinBudgetSeconds) * time.Second
+	if remaining >= minBudget {
+		return false, ""
+	}
+	return true, fmt.Sprintf("only %s of the request budget remains, below the %s needed for another attempt",
+		remaining.Truncate(time.Millisecond), minBudget)
+}
+
+// relayTimeoutSettingForRequest returns the settings snapshot the timeout
+// middleware stored when the request started, falling back to the live
+// snapshot for callers outside that middleware.
+func relayTimeoutSettingForRequest(c *gin.Context) *operation_setting.RelayTimeoutSetting {
+	if value, ok := common.GetContextKey(c, constant.ContextKeyRelayTimeoutSetting); ok {
+		if setting, ok := value.(*operation_setting.RelayTimeoutSetting); ok && setting != nil {
+			return setting
+		}
+	}
+	return operation_setting.GetRelayTimeoutSnapshot()
 }
 
 // RelayResponseHolder is implemented by the timeout controller so the relay

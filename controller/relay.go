@@ -222,11 +222,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for ; service.ContinueRelayAttempts(c, retryParam); retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		if retryParam.GetRetry() > 0 {
-			service.RestartRelayResponseTimeout(c)
-		}
+		service.BeginRelayAttempt(c, retryParam)
 		// relayInfo 在整个重试循环里复用，ReceivedResponseCount 会跨尝试累积。
 		// 必须每次尝试前归零：否则「上一尝试收到过 SSE 数据后报可重试错、本次尝试
 		// 上游返回 200 却零响应」时，计费守卫（service.ResponseText2UsageFromStream /
@@ -298,7 +296,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetry(c, newAPIError, service.RemainingRetryBudget(c, retryParam)) {
 			break
 		}
 	}
@@ -607,10 +605,8 @@ func RelayTask(c *gin.Context) {
 		Retry:       common.GetPointer(0),
 	}
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		if retryParam.GetRetry() > 0 {
-			service.RestartRelayResponseTimeout(c)
-		}
+	for ; service.ContinueRelayAttempts(c, retryParam); retryParam.IncreaseRetry() {
+		service.BeginRelayAttempt(c, retryParam)
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
@@ -660,7 +656,7 @@ func RelayTask(c *gin.Context) {
 				channelErr)
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetryTaskRelay(c, channel.Id, taskErr, service.RemainingRetryBudget(c, retryParam)) {
 			break
 		}
 	}

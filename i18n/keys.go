@@ -281,6 +281,8 @@ const (
 	MsgSettingGotifyUrlInvalid = "setting.gotify_url_invalid"
 	MsgSettingUrlMustHttp      = "setting.url_must_http"
 	MsgSettingSaved            = "setting.saved"
+
+	MsgSettingGroupRetryTimesInvalid   = "setting.group_retry_times_invalid"
 )
 
 // Deployment related messages (io.net)

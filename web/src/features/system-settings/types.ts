@@ -753,6 +753,8 @@ export type SystemTuningSettings = {
   'relay_timeout_setting.enabled': boolean
   'relay_timeout_setting.response_timeout_seconds': number
   'relay_timeout_setting.total_timeout_seconds': number
+  'relay_timeout_setting.retry_min_budget_seconds': number
+  'relay_timeout_setting.max_total_attempts': number
   'business_stats_circuit_breaker_setting.enabled': boolean
   'business_stats_circuit_breaker_setting.manual_disabled': boolean
   'business_stats_circuit_breaker_setting.failure_threshold': number

@@ -177,6 +177,18 @@ func (control *relayTimeoutControl) RestartResponse(isStream bool) bool {
 		return false
 	}
 	control.responseStopped = false
+	// The full window applies even when less total budget is left: trimming it
+	// would end the request no sooner (both timers then fire at the total
+	// deadline) but would let the response timer win, reporting a spent total
+	// budget as a response timeout. The total timer owns that case.
+	if !control.totalDeadline.IsZero() && time.Until(control.totalDeadline) <= 0 {
+		// Budget already gone. Leave the timer stopped rather than arming it;
+		// the total timer owns the cancellation.
+		control.responseTimer.Stop()
+		control.responseActive.Store(false)
+		control.responseHeld.Store(false)
+		return true
+	}
 	control.responseDeadline = time.Now().Add(control.responseTimeout)
 	control.responseTimer.Stop()
 	control.responseTimer.Reset(control.responseTimeout)
@@ -284,6 +296,24 @@ func (control *relayTimeoutControl) NextDeadline() (time.Time, bool) {
 
 func (control *relayTimeoutControl) RelayTimeoutDeadline() (time.Time, bool) {
 	return control.NextDeadline()
+}
+
+// RelayTotalDeadline reports only the request-wide deadline, never the
+// per-attempt response window. Budget decisions that span attempts must use
+// this: NextDeadline() returns whichever limit fires first, so with no total
+// timeout configured it yields the response window and would make every retry
+// look unaffordable. The deadline is still reported after a timer has fired, so
+// a spent budget reads as spent rather than as "no budget configured".
+func (control *relayTimeoutControl) RelayTotalDeadline() (time.Time, bool) {
+	if control == nil {
+		return time.Time{}, false
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.closed || control.totalDeadline.IsZero() {
+		return time.Time{}, false
+	}
+	return control.totalDeadline, true
 }
 
 type relayTimeoutWriterState struct {

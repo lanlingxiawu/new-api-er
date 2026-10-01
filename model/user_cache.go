@@ -33,6 +33,7 @@ type UserBase struct {
 	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout"`
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout"`
 	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing"`
+	RetryTimes                int    `json:"retry_times"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -56,6 +57,7 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 		nonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
 	}
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamTimeoutBilling, nonStreamTimeoutBilling)
+	common.SetContextKey(c, constant.ContextKeyUserRetryTimes, user.RetryTimes)
 	// Per-user exclusive group ratios. Only parse when the feature is enabled:
 	// when the flag is off the map is ignored by ResolveGroupRatio anyway, so
 	// this avoids a per-request JSON unmarshal + map allocation on the auth hot

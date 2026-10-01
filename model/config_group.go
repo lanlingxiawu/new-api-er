@@ -286,7 +286,7 @@ func validateChannelDailyLimitFields(values map[string]string) error {
 var rateLimitFields = fieldSet("global_api_enabled", "global_api_num", "global_api_duration_sec", "global_api_user_enabled", "global_api_user_num", "global_api_user_duration_sec", "global_web_enabled", "global_web_num", "global_web_duration_sec", "critical_enabled", "critical_num", "critical_duration_sec", "register_cooldown_enabled", "register_cooldown_num", "register_cooldown_sec", "auth_refresh_enabled", "auth_refresh_num", "auth_refresh_ip_num", "auth_refresh_duration_sec", "search_enabled", "search_num", "search_duration_sec", "log_export_enabled", "log_export_num", "log_export_duration_sec", "redis_timeout_ms")
 var dbPoolFields = fieldSet("max_idle_conns", "max_open_conns", "max_lifetime_sec", "log_max_idle_conns", "log_max_open_conns")
 var userSessionFields = fieldSet("active_limit", "issuance_limit", "issuance_window_sec", "revoked_retention_days", "hourly_alert_threshold")
-var relayTimeoutFields = fieldSet("enabled", "response_timeout_seconds", "total_timeout_seconds")
+var relayTimeoutFields = fieldSet("enabled", "response_timeout_seconds", "total_timeout_seconds", "retry_min_budget_seconds", "max_total_attempts")
 var veridropMonitorFields = fieldSet(
 	"enabled", "base_url", "admin_api_key", "default_mode", "default_openai_wire_api",
 	"include_long_context", "include_long_context_extreme", "max_concurrent", "batch_size",
