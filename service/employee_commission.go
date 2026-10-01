@@ -251,7 +251,7 @@ func (s costCommissionSnapshot) upstreamBaseQuota() int64 {
 		return s.BaseQuota
 	}
 	if s.Quota > 0 && s.GroupRatio > 0 {
-		return decimal.NewFromInt(int64(s.Quota)).Div(decimal.NewFromFloat(s.GroupRatio)).Round(0).IntPart()
+		return eventCostQuota(decimal.NewFromInt(int64(s.Quota)).Div(decimal.NewFromFloat(s.GroupRatio)))
 	}
 	return 0
 }
@@ -329,8 +329,7 @@ func calcCostQuota(revenueQuota int64, groupRatio, costRatio float64) int64 {
 		dBaseCost = decimal.Zero
 	}
 
-	dCost := dBaseCost.Mul(decimal.NewFromFloat(costRatio)).Round(0)
-	return dCost.IntPart()
+	return eventCostQuota(dBaseCost.Mul(decimal.NewFromFloat(costRatio)))
 }
 
 // calcSettlementCommissionQuota 计算单笔结算应产生的佣金增量。
@@ -364,5 +363,5 @@ func calcCommissionQuota(profitQuota int64, commissionRate float64) int64 {
 		}
 		return -1
 	}
-	return result.IntPart()
+	return eventCostQuota(result)
 }

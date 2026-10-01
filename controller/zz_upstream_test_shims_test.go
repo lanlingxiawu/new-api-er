@@ -34,8 +34,12 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	// 自建的 SQLite 并在 cleanup 里关闭它，若不还原，后续测试拿到的就是已关闭的
 	// 句柄（表现为 "sql: database is closed"）。这里前后成对保存/还原。
 	prevDB, prevLogDB := model.DB, model.LOG_DB
+	prevMainType, prevLogType, prevRedis := common.MainDatabaseType(), common.LogDatabaseType(), common.RedisEnabled
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = prevDB, prevLogDB
+		// Later tests on the shared MySQL/PostgreSQL harness build dialect-specific SQL from these.
+		common.SetDatabaseTypes(prevMainType, prevLogType)
+		common.RedisEnabled = prevRedis
 	})
 
 	initModelListColumnNames(t)
@@ -118,8 +122,12 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	prevDB, prevLogDB := model.DB, model.LOG_DB
+	prevMainType, prevLogType, prevRedis := common.MainDatabaseType(), common.LogDatabaseType(), common.RedisEnabled
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = prevDB, prevLogDB
+		// Later tests on the shared MySQL/PostgreSQL harness build dialect-specific SQL from these.
+		common.SetDatabaseTypes(prevMainType, prevLogType)
+		common.RedisEnabled = prevRedis
 	})
 
 	gin.SetMode(gin.TestMode)

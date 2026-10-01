@@ -111,13 +111,9 @@ func TestUserCache_RedisDisabledNoOps(t *testing.T) {
 	assert.NoError(t, updateUserCache(User{Id: 1, Status: common.UserStatusEnabled}))
 	assert.NoError(t, cacheIncrUserQuota(1, 5))
 	assert.NoError(t, cacheDecrUserQuota(1, 5))
-	assert.NoError(t, updateUserStatusCache(1, true))
-	assert.NoError(t, updateUserStatusCache(1, false))
 	assert.NoError(t, updateUserQuotaCache(1, 10))
 	assert.NoError(t, RefreshUserGroupCache(1))
-	assert.NoError(t, updateUserEmailCache(1, "e"))
-	assert.NoError(t, updateUserNameCache(1, "n"))
-	assert.NoError(t, updateUserSettingCache(1, "s"))
+	assert.NoError(t, updateUserCacheFieldAtVersion(1, "Setting", "s", 1, 0))
 
 	// cacheGetUserBase errors when redis disabled
 	_, err := cacheGetUserBase(1)
@@ -209,18 +205,16 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	require.NoError(t, updateUserQuotaCache(u.Id, 7777))
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", u.Id).Update("group", "newg").Error)
 	require.NoError(t, RefreshUserGroupCache(u.Id))
-	require.NoError(t, updateUserEmailCache(u.Id, "new@e.com"))
-	require.NoError(t, updateUserNameCache(u.Id, "newname"))
-	require.NoError(t, updateUserStatusCache(u.Id, false))
-	require.NoError(t, updateUserSettingCache(u.Id, `{"language":"fr"}`))
+	// Field-level refreshes as done by the GetUsernameById / GetUserSetting DB
+	// fallbacks, at the versions of the populated row.
+	require.NoError(t, updateUserCacheFieldAtVersion(u.Id, "Username", "newname", u.AuthVersion, u.ProfileVersion))
+	require.NoError(t, updateUserCacheFieldAtVersion(u.Id, "Setting", `{"language":"fr"}`, u.AuthVersion, u.ProfileVersion))
 
 	base, err = cacheGetUserBase(u.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 7777, base.Quota)
 	assert.Equal(t, "newg", base.Group)
-	assert.Equal(t, "new@e.com", base.Email)
 	assert.Equal(t, "newname", base.Username)
-	assert.Equal(t, common.UserStatusDisabled, base.Status)
 
 	// GetUserCache now hits Redis (no DB) and returns the mutated snapshot
 	cache, err := GetUserCache(u.Id)

@@ -393,8 +393,10 @@ func SetApiRouter(router *gin.Engine) {
 
 		// 分组路由
 		groupRoute := apiRouter.Group("/group")
+		groupRoute.Use(middleware.UserAuth())
 		{
-			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup) // 获取分组的可用模型列表
+			// 分组近期有消费流量的模型；非管理员只能查自己可用的分组（控制器内校验）。
+			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup)
 		}
 
 		usageRoute := apiRouter.Group("/usage")

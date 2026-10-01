@@ -31,6 +31,20 @@ func getUserAuthVersionKey(userId int) string {
 	return fmt.Sprintf("auth:user:version:%d", userId)
 }
 
+// getUserProfileVersionKey holds the highest users.profile_version written to
+// the cache. Writes of the non-auth cached fields (group_ratios, setting,
+// timeouts, retry, ...) keep auth_version unchanged but bump profile_version,
+// so without this floor a cache fill that read the row before such a write
+// could land after its publish with an equal auth_version and cache the old
+// values until the hash expires. The floor expires with the pending-fence TTL
+// (longer than any user hash): a fill delayed past that is not plausible, and
+// the expiry bounds the damage should the column ever fall below the floor
+// (every fill rejected until then). No code path writes profile_version back
+// from an earlier read. The key only exists for users written recently.
+func getUserProfileVersionKey(userId int) string {
+	return fmt.Sprintf("auth:user:profile:%d", userId)
+}
+
 // A pending fence only covers the interval between publishing the next
 // version and the surrounding database transaction reaching a decision. Its
 // TTL must outlive every user hash that could have been populated before the
@@ -66,11 +80,19 @@ local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
 if pending > incoming or committed > incoming or current > incoming then
   return 0
 end
+local incomingProfile = tonumber(ARGV[21])
+local profileFloor = tonumber(redis.call('GET', KEYS[4]) or '0')
+if profileFloor > incomingProfile then
+  return 2
+end
 if committed < incoming then
   redis.call('SET', KEYS[3], ARGV[1])
 end
 if pending > 0 and pending <= incoming then
   redis.call('DEL', KEYS[2])
+end
+if profileFloor < incomingProfile then
+  redis.call('SET', KEYS[4], ARGV[21], 'EX', ARGV[22])
 end
 if ARGV[10] == '0' and redis.call('EXISTS', KEYS[1]) == 0 then
   return 1
@@ -90,13 +112,15 @@ end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id)},
+		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id),
+			getUserProfileVersionKey(user.Id)},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
 		user.GroupRatios,
 		user.StreamResponseTimeout, user.StreamResponseTimeoutMode, user.StreamTotalTimeout,
 		user.NonStreamResponseTimeout, user.NonStreamTotalTimeout,
 		user.NonStreamTimeoutBilling, user.RetryTimes,
+		user.ProfileVersion, userAuthFenceTTLSeconds(),
 	).Int()
 	if err != nil {
 		return err
@@ -104,6 +128,10 @@ return 1`
 	if result == 0 {
 		return ErrUserAuthCachePending
 	}
+	// result 2: the snapshot predates a profile edit that is already published
+	// and the newer snapshot owns the cache. Not an error for the caller — a
+	// fill still serves its row to the current request, a publish has nothing
+	// left to do.
 	return nil
 }
 
@@ -248,16 +276,31 @@ func PublishUserAuthCache(userId int) error {
 	return updateUserCache(*user)
 }
 
-// userCacheExists reports whether the user's cache hash is present, so bulk
-// callers can skip the database read when there is no cached copy to refresh (a
-// later fill reads the current row anyway). On a Redis error it answers true:
-// attempting a refresh is safer than leaving a possibly stale entry behind.
-func userCacheExists(userId int) bool {
-	n, err := common.RDB.Exists(context.Background(), getUserCacheKey(userId)).Result()
+// advanceProfileFloorUnlessCached is the bulk cleanup's per-user Redis step,
+// one round trip. When the user's hash exists it returns true and the caller
+// publishes the row (a DB read + EVAL). Otherwise it only advances the profile
+// floor to profileVersion, so a fill that read the row before the caller's
+// write cannot cache the old value, and the DB read is skipped (a later fill
+// reads the new row anyway). profileVersion must not exceed the committed
+// profile_version, or fills of the current row would be rejected. On a Redis
+// error it answers true: attempting a publish is safer than skipping.
+func advanceProfileFloorUnlessCached(userId int, profileVersion int64) bool {
+	const script = `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return 1
+end
+if tonumber(redis.call('GET', KEYS[2]) or '0') < tonumber(ARGV[1]) then
+  redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2])
+end
+return 0`
+	cached, err := common.RDB.Eval(context.Background(), script,
+		[]string{getUserCacheKey(userId), getUserProfileVersionKey(userId)},
+		profileVersion, userAuthFenceTTLSeconds(),
+	).Int()
 	if err != nil {
 		return true
 	}
-	return n > 0
+	return cached == 1
 }
 
 // InitializeUserAuthVersions must run after AutoMigrate when upgrading an
@@ -266,7 +309,26 @@ func InitializeUserAuthVersions() error {
 	return DB.Model(&User{}).Where("auth_version IS NULL OR auth_version < ?", 1).Update("auth_version", 1).Error
 }
 
-func updateUserCacheFieldAtVersion(userId int, field string, value interface{}, authVersion int64) error {
+// profileUnfenced is passed as the profile version for fields outside the
+// profile fence (Group follows the auth-version / re-read scheme instead).
+const profileUnfenced int64 = -1
+
+// updateUserCacheFieldAtVersion writes one field into an existing user hash.
+// authVersion (and profileVersion, unless profileUnfenced) must come from the
+// same row read as value, so a value read before an edit cannot overwrite the
+// edit's published hash.
+//
+// The write never touches CacheSchema, and it still happens when the hash was
+// written under another schema (rolling deploy). Stamping the current schema
+// onto an old node's hash would make the fields that schema lacks (e.g.
+// GroupRatios) read as empty on new nodes; skipping the write would leave old
+// nodes serving the stale field (e.g. the previous Group) until the hash
+// expires. Writing only the field is correct for both: every field written
+// here means the same in all schemas, old nodes see the fresh value, and new
+// nodes keep treating the foreign hash as stale and refill it in full.
+// Deleting the foreign hash instead is not an option: it would drop the
+// Redis-only quota deductions that the batch updater has not flushed yet.
+func updateUserCacheFieldAtVersion(userId int, field string, value interface{}, authVersion int64, profileVersion int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -293,11 +355,16 @@ end
 if current ~= incoming then
   return 1
 end
-redis.call('HSET', KEYS[1], ARGV[2], ARGV[3], 'CacheSchema', ARGV[4])
+local incomingProfile = tonumber(ARGV[4])
+if incomingProfile >= 0 and tonumber(redis.call('GET', KEYS[4]) or '0') > incomingProfile then
+  return 1
+end
+redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)},
-		authVersion, field, value, userCacheSchemaVersion,
+		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId),
+			getUserProfileVersionKey(userId)},
+		authVersion, field, value, profileVersion,
 	).Int()
 	if err != nil {
 		return err

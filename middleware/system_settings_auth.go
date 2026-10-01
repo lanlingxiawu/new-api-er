@@ -11,6 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SystemSettingsScopeContextKey carries the scope this middleware authorized.
+// It is set on every request the middleware lets through: the granted scope for
+// a scoped caller, "" for a root caller that named no scope. Handlers must
+// authorize against this value instead of re-reading the scope themselves.
 const SystemSettingsScopeContextKey = "system_settings_scope"
 
 type systemSettingsScopeRequest struct {
@@ -21,6 +25,14 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		scope := strings.TrimSpace(c.Query("scope"))
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			// Handlers behind this middleware decode the body as JSON. Accepting any
+			// other media type would let the scope come from a different reading of
+			// the same bytes (form / multipart) than the one the handler acts on.
+			if c.ContentType() != gin.MIMEJSON {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				c.Abort()
+				return
+			}
 			var request systemSettingsScopeRequest
 			if err := common.UnmarshalBodyReusable(c, &request); err != nil {
 				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -33,6 +45,7 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 		role := c.GetInt("role")
 		if scope == "" {
 			if role == common.RoleRootUser {
+				c.Set(SystemSettingsScopeContextKey, "")
 				c.Next()
 				return
 			}

@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -710,17 +711,49 @@ type updateUserRequest struct {
 // activeGroupRatioCleanups 是包级变量，只为测试能模拟「分组清理进行中」。
 var activeGroupRatioCleanups = model.GroupRatioCleanupsActive
 
-// parseUserGroupRatiosForEdit 解析管理员提交（或库里已有）的专属倍率 JSON；空串与 "{}" 得到空表。
-// 不走 ratio_setting.ParseUserGroupRatios：那是 relay 用的解析缓存，管理端的原始串不该挤进去。
-func parseUserGroupRatiosForEdit(raw string) (map[string]float64, error) {
-	ratios := make(map[string]float64)
+// parseStoredUserGroupRatios 按 relay 的语义解析库里已有的专属倍率：null 条目不生效，
+// 从结果里剔除并单独列出（库里的 null 早于"拒绝 null"的校验写入）。损坏的值按空表处理。
+// 管理端的两个解析函数都不走 ratio_setting.ParseUserGroupRatios：那是 relay 用的解析
+// 缓存，管理端的原始串不该挤进去。
+func parseStoredUserGroupRatios(raw string) (map[string]float64, []string) {
 	if raw == "" || raw == "{}" {
-		return ratios, nil
+		return map[string]float64{}, nil
 	}
-	if err := common.Unmarshal([]byte(raw), &ratios); err != nil {
-		return map[string]float64{}, err
+	ratios, nullGroups, err := ratio_setting.DecodeUserGroupRatios(raw)
+	if err != nil {
+		return map[string]float64{}, nil
 	}
-	return ratios, nil
+	return ratios, nullGroups
+}
+
+// parseSubmittedUserGroupRatios 解析管理员提交的专属倍率 JSON；空串与 "{}" 得到空表。
+// 倍率必须是数字：null 会被解成 0（免费），因此按无效处理并报出分组名——唯一的例外是
+// 库里本来就是 null 的分组（storedNull）允许原样回传：表单回传的是它加载到的值，否则
+// 一个历史 null 会挡住对该用户的所有编辑。被容忍的 null 按 relay 语义跳过（该分组
+// 回落到配置的倍率），skippedNull 报告是否跳过过。
+func parseSubmittedUserGroupRatios(raw string, storedNull []string) (ratios map[string]float64, skippedNull bool, err error) {
+	if raw == "" || raw == "{}" {
+		return map[string]float64{}, false, nil
+	}
+	ratios, nullGroups, err := ratio_setting.DecodeUserGroupRatios(raw)
+	if err != nil {
+		return map[string]float64{}, false, err
+	}
+	for _, name := range nullGroups {
+		if !slices.Contains(storedNull, name) {
+			return map[string]float64{}, false, &invalidGroupRatioError{Group: name}
+		}
+	}
+	return ratios, len(nullGroups) > 0, nil
+}
+
+// invalidGroupRatioError 标出第一个倍率不是数字的分组，供接口返回具体分组名。
+type invalidGroupRatioError struct {
+	Group string
+}
+
+func (e *invalidGroupRatioError) Error() string {
+	return "exclusive group ratio for " + e.Group + " is not a number"
 }
 
 // changedGroupRatioNames returns the groups whose exclusive ratio is new in next
@@ -827,14 +860,22 @@ func UpdateUser(c *gin.Context) {
 	}
 	// Per-user exclusive group ratios (admin-only field). The shadow field wins
 	// during decoding, so the embedded User's own GroupRatios is never populated
-	// and has to be filled in here.
-	updatedUser.GroupRatios = originUser.GroupRatios
+	// and has to be filled in here. The column is only written when this request
+	// changes it (on the master, after validation): originUser was read outside
+	// the transaction, and writing its value back would restore a ratio that the
+	// group-deletion cleanup removed in between.
+	writeGroupRatios := false
 	var removedGroupRatios []string
 	if request.GroupRatios != nil {
-		// 库里的旧值损坏时按空表处理。
-		current, _ := parseUserGroupRatiosForEdit(originUser.GroupRatios)
-		submitted, err := parseUserGroupRatiosForEdit(*request.GroupRatios)
+		// 库里的旧值损坏时按空表处理；库里的 null 与 relay 一样跳过，原样回传不算改动。
+		current, storedNull := parseStoredUserGroupRatios(originUser.GroupRatios)
+		submitted, skippedNull, err := parseSubmittedUserGroupRatios(*request.GroupRatios, storedNull)
 		if err != nil {
+			var invalid *invalidGroupRatioError
+			if errors.As(err, &invalid) {
+				common.ApiErrorI18n(c, i18n.MsgUserGroupRatiosInvalid, map[string]any{"Group": invalid.Group})
+				return
+			}
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
@@ -867,8 +908,17 @@ func UpdateUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserGroupRatioCleanupInProgress, map[string]any{"Groups": strings.Join(busy, ", ")})
 				return
 			}
+			// 与库里一致（原样回传，或只多带了已不存在的分组）就不写这一列；库里的 null
+			// 仍要重新序列化去掉，库里损坏的值（按空表比较）要被提交的值覆盖。
+			storedCorrupt := false
+			if originUser.GroupRatios != "" && originUser.GroupRatios != "{}" {
+				_, _, decodeErr := ratio_setting.DecodeUserGroupRatios(originUser.GroupRatios)
+				storedCorrupt = decodeErr != nil
+			}
+			writeGroupRatios = !maps.Equal(current, submitted) || skippedNull || storedCorrupt
 			updatedUser.GroupRatios = *request.GroupRatios
-			if len(removedGroupRatios) > 0 {
+			if len(removedGroupRatios) > 0 || skippedNull {
+				// 重新序列化时回传的历史 null 一并去掉：它本就不生效，去掉后计费不变。
 				sort.Strings(removedGroupRatios)
 				encoded, err := common.Marshal(submitted)
 				if err != nil {
@@ -885,7 +935,7 @@ func UpdateUser(c *gin.Context) {
 	updatePassword := updatedUser.Password != ""
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
+		if err := updatedUser.EditWithTxGroupRatios(tx, updatePassword, writeGroupRatios); err != nil {
 			return err
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)

@@ -123,6 +123,12 @@ type User struct {
 	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing" gorm:"type:varchar(16);not null;default:'refund';column:non_stream_timeout_billing"`
 	// RetryTimes: 0 inherits the group/global quota, -1 disables retry (one attempt).
 	RetryTimes int `json:"retry_times" gorm:"type:int;not null;default:0;column:retry_times"`
+	// ProfileVersion 版本化缓存里「不影响鉴权」的字段（用户名、邮箱、设置、专属倍率、超时、重试等）：
+	// 每一次改写这些字段的数据库写入都在同一条 UPDATE 或同一事务里用 profile_version + 1 自增
+	// （EditWithTx、UpdateWithTx、UpdateUserSetting、ClearBinding("email")、充值补填邮箱、
+	// 分组删除清理），任何路径都不从旧读值回写它。这些字段变更不递增 AuthVersion（否则会踢掉
+	// 用户会话），缓存写入改由它拦住写入前读到的旧快照（design §14.2）。
+	ProfileVersion int64 `json:"-" gorm:"type:bigint;not null;default:0;column:profile_version"`
 
 	// 非持久化：仅在用户搜索（分配客户场景）中填充
 	IsAssignedCustomer     bool   `json:"is_assigned_customer,omitempty" gorm:"-:all"`
@@ -157,6 +163,7 @@ func (user *User) ToBaseUser() *UserBase {
 	cache.NonStreamResponseTimeout = user.NonStreamResponseTimeout
 	cache.NonStreamTotalTimeout = user.NonStreamTotalTimeout
 	cache.RetryTimes = user.RetryTimes
+	cache.ProfileVersion = user.ProfileVersion
 	cache.NonStreamTimeoutBilling = strings.TrimSpace(user.NonStreamTimeoutBilling)
 	if cache.NonStreamTimeoutBilling == "" {
 		cache.NonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
@@ -203,11 +210,19 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	if err != nil {
 		return err
 	}
-	settingValue := string(settingBytes)
-	if err = DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue).Error; err != nil {
+	// setting is a cached field: bump profile_version and publish the whole row
+	// like EditWithTx, so a cache fill that read the row before this write
+	// cannot land afterwards and restore the old setting.
+	if err = DB.Model(&User{}).Where("id = ?", userId).Updates(map[string]interface{}{
+		"setting":         string(settingBytes),
+		"profile_version": gorm.Expr("profile_version + ?", 1),
+	}).Error; err != nil {
 		return err
 	}
-	return updateUserSettingCache(userId, settingValue)
+	if !common.RedisEnabled {
+		return nil
+	}
+	return PublishUserAuthCache(userId)
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -685,15 +700,23 @@ func HardDeleteUserById(id int) error {
 	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
+// inviteUser credits the inviter with targeted increments. A whole-row Save of
+// a row read earlier would write back every column as read, rolling back
+// concurrent edits and profile_version (the cache would then reject every
+// fill for this user until the profile floor expires).
+func inviteUser(inviterId int) error {
+	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
+		"aff_count":   gorm.Expr("aff_count + ?", 1),
+		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
+		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	user.AffCount++
-	user.AffQuota += common.QuotaForInviter
-	user.AffHistoryQuota += common.QuotaForInviter
-	return DB.Save(user).Error
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
@@ -720,14 +743,15 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 		return errors.New("邀请额度不足！")
 	}
 
-	// 更新用户额度
-	user.AffQuota -= quota
-	user.Quota += quota
-
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
+	// 更新用户额度：只写这两列（整行 Save 会把读到的其他列原样写回）。
+	if err := tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+		"aff_quota": gorm.Expr("aff_quota - ?", quota),
+		"quota":     gorm.Expr("quota + ?", quota),
+	}).Error; err != nil {
 		return err
 	}
+	user.AffQuota -= quota
+	user.Quota += quota
 
 	// 提交事务
 	return tx.Commit().Error
@@ -780,6 +804,16 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 	}
 	if count > 0 {
 		return ErrEmailAlreadyTaken
+	}
+	return nil
+}
+
+// BeforeCreate 给没带邀请码的新用户补一个。aff_code 是唯一索引，空串也只能有一行：
+// 初始化 root（createRootAccountIfNeed、Setup）不经 Insert、不带邀请码，占住空串后，
+// 任何其他不带邀请码的建用户路径都会撞唯一键失败。
+func (user *User) BeforeCreate(_ *gorm.DB) error {
+	if user.AffCode == "" {
+		user.AffCode = common.GetRandomString(4)
 	}
 	return nil
 }
@@ -950,7 +984,19 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 			return err
 		}
 	}
-	if err = tx.Model(&current).Omit("quota", "used_quota", "request_count", "auth_version").Updates(newUser).Error; err != nil {
+	// Callers pass a full row read earlier (ManageUser, access token, aff code,
+	// OAuth/WeChat bind, customer remark), so every non-zero field is written
+	// back. For the upstream columns that is upstream's read-modify-write
+	// behaviour; the fork's admin-owned columns are omitted so such a call can
+	// never undo a concurrent admin edit of them. profile_version is omitted
+	// too (a stale value would roll it back) and bumped separately: the
+	// written fields can still include cached ones (username, email,
+	// setting), and every caller publishes the row afterwards.
+	omit := append([]string{"quota", "used_quota", "request_count", "auth_version", "profile_version"}, adminOwnedUserColumns...)
+	if err = tx.Model(&current).Omit(omit...).Updates(newUser).Error; err != nil {
+		return err
+	}
+	if err = tx.Model(&User{}).Where("id = ?", user.Id).Update("profile_version", gorm.Expr("profile_version + ?", 1)).Error; err != nil {
 		return err
 	}
 	return tx.First(user, user.Id).Error
@@ -976,7 +1022,32 @@ func (user *User) Edit(updatePassword bool) error {
 	return nil
 }
 
+// adminOwnedUserColumns are the fork-added user columns that only the admin
+// edit (EditWithTx) writes, plus the group-deletion cleanup for group_ratios.
+// UpdateWithTx never writes them.
+var adminOwnedUserColumns = []string{
+	"group_ratios",
+	"stream_response_timeout",
+	"stream_response_timeout_mode",
+	"stream_total_timeout",
+	"non_stream_response_timeout",
+	"non_stream_total_timeout",
+	"non_stream_timeout_billing",
+	"retry_times",
+}
+
+// EditWithTx is the admin edit: it writes every admin-owned column, including
+// group_ratios.
 func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
+	return user.EditWithTxGroupRatios(tx, updatePassword, true)
+}
+
+// EditWithTxGroupRatios is EditWithTx with group_ratios written only when
+// writeGroupRatios is true. An edit that does not change the exclusive ratios
+// must leave the column alone: user.GroupRatios was read before the
+// transaction, and writing it back would restore a ratio that the
+// group-deletion cleanup removed in between.
+func (user *User) EditWithTxGroupRatios(tx *gorm.DB, updatePassword bool, writeGroupRatios bool) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
@@ -990,8 +1061,10 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 		"username":     newUser.Username,
 		"display_name": newUser.DisplayName,
 		"group":        newUser.Group,
-		"group_ratios": newUser.GroupRatios,
 		"remark":       newUser.Remark,
+	}
+	if writeGroupRatios {
+		updates["group_ratios"] = newUser.GroupRatios
 	}
 	updates["stream_response_timeout"] = newUser.StreamResponseTimeout
 	updates["stream_response_timeout_mode"] = newUser.StreamResponseTimeoutMode
@@ -1000,6 +1073,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	updates["non_stream_total_timeout"] = newUser.NonStreamTotalTimeout
 	updates["non_stream_timeout_billing"] = newUser.NonStreamTimeoutBilling
 	updates["retry_times"] = newUser.RetryTimes
+	updates["profile_version"] = gorm.Expr("profile_version + ?", 1)
 	if updatePassword {
 		updates["password"] = newUser.Password
 	}
@@ -1041,8 +1115,15 @@ func (user *User) ClearBinding(bindingType string) error {
 		return errors.New("invalid binding type")
 	}
 
+	updates := map[string]interface{}{column: ""}
+	if column == "email" {
+		// Email is cached: bump profile_version so a cache fill that read the
+		// row before this write cannot restore the old address after the
+		// publish below.
+		updates["profile_version"] = gorm.Expr("profile_version + ?", 1)
+	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
+		if err := tx.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
 			return err
 		}
 		if bindingType == ExternalIdentityProviderTelegram {
@@ -1481,15 +1562,11 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
 func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
-	var setting string
+	var row userCacheFieldRow
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserSettingCache(id, setting); err != nil {
-					common.SysLog("failed to update user setting cache: " + err.Error())
-				}
-			})
+			refreshUserCacheFieldAsync(id, "Setting", row)
 		}
 	}()
 	if !fromDB && common.RedisEnabled {
@@ -1501,20 +1578,47 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	}
 	fromDB = true
 	// can be nil setting
-	var safeSetting sql.NullString
-	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
+	row, err = readUserCacheField(id, "setting")
 	if err != nil {
 		return settingMap, err
 	}
-	if safeSetting.Valid {
-		setting = safeSetting.String
-	} else {
-		setting = ""
-	}
 	userBase := &UserBase{
-		Setting: setting,
+		Setting: row.FieldValue.String,
 	}
 	return userBase.GetSetting(), nil
+}
+
+// userCacheFieldRow is one cached column read together with the versions that
+// fence writing it back into the user hash.
+type userCacheFieldRow struct {
+	Id             int
+	FieldValue     sql.NullString
+	AuthVersion    int64
+	ProfileVersion int64
+}
+
+// readUserCacheField reads column (a plain, non-reserved column name) and the
+// fence versions in one query, so the value can never be older than the
+// versions it is written back with. A missing user yields a zero row.
+func readUserCacheField(id int, column string) (userCacheFieldRow, error) {
+	var row userCacheFieldRow
+	err := DB.Model(&User{}).Where("id = ?", id).
+		Select("id", column+" AS field_value", "auth_version", "profile_version").
+		Limit(1).Scan(&row).Error
+	return row, err
+}
+
+// refreshUserCacheFieldAsync writes a DB-read field into the existing user
+// hash off the caller's goroutine. Missing users are skipped.
+func refreshUserCacheFieldAsync(id int, field string, row userCacheFieldRow) {
+	if row.Id == 0 || !common.RedisEnabled {
+		return
+	}
+	gopool.Go(func() {
+		if err := updateUserCacheFieldAtVersion(id, field, row.FieldValue.String, row.AuthVersion, row.ProfileVersion); err != nil {
+			common.SysLog("failed to refresh user " + field + " cache: " + err.Error())
+		}
+	})
 }
 
 func IncreaseUserQuota(id int, quota int, db bool) (err error) {
@@ -1658,14 +1762,11 @@ func updateUserRequestCount(id int, count int) {
 
 // GetUsernameById gets username from Redis first, falls back to DB if needed
 func GetUsernameById(id int, fromDB bool) (username string, err error) {
+	var row userCacheFieldRow
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserNameCache(id, username); err != nil {
-					common.SysLog("failed to update user name cache: " + err.Error())
-				}
-			})
+			refreshUserCacheFieldAsync(id, "Username", row)
 		}
 	}()
 	if !fromDB && common.RedisEnabled {
@@ -1676,12 +1777,12 @@ func GetUsernameById(id int, fromDB bool) (username string, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
+	row, err = readUserCacheField(id, "username")
 	if err != nil {
 		return "", err
 	}
 
-	return username, nil
+	return row.FieldValue.String, nil
 }
 
 func IsLinuxDOIdAlreadyTaken(linuxDOId string) bool {

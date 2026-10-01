@@ -223,3 +223,43 @@ func TestResolveGroupRatio_UserExclusiveZeroWins(t *testing.T) {
 	assert.Equal(t, 0.0, ratio)
 	assert.True(t, special)
 }
+
+// ---- UserExclusiveGroupRatioCacheMax option parsing ----
+
+func TestParseUserGroupRatioCacheMax(t *testing.T) {
+	for value, want := range map[string]int{"0": 0, "1": 1, "4096": 4096, " 12 ": 12} {
+		got, err := ParseUserGroupRatioCacheMax(value)
+		require.NoError(t, err, value)
+		assert.Equal(t, want, got, value)
+	}
+	for _, value := range []string{"-1", "-5", "abc", "1.5", "", "1e3"} {
+		_, err := ParseUserGroupRatioCacheMax(value)
+		assert.Error(t, err, value)
+	}
+}
+
+// An all-null config has no effective rule, but its users still send relay
+// requests: the parse result (nil) is memoized so it is decoded once, not per
+// request. Mixed configs keep their numeric entries.
+func TestParseUserGroupRatios_AllNullIsMemoizedAsNil(t *testing.T) {
+	t.Cleanup(resetUserGroupRatioCache)
+	resetUserGroupRatioCache()
+	const raw = `{"memo-null-a":null,"memo-null-b":null}`
+
+	assert.Nil(t, ParseUserGroupRatios(raw))
+	cached, ok := parsedUserGroupRatios.Load(raw)
+	require.True(t, ok, "all-null config must be memoized")
+	assert.Nil(t, cached.(*userGroupRatioEntry).ratios)
+	assert.Equal(t, int64(1), parsedUserGroupRatiosCount.Load())
+
+	assert.Nil(t, ParseUserGroupRatios(raw), "cache hit still yields no rules")
+	assert.Equal(t, int64(1), parsedUserGroupRatiosCount.Load(), "second call is a hit, not a new entry")
+
+	assert.Equal(t, map[string]float64{"vip": 0.5}, ParseUserGroupRatios(`{"memo-null-a":null,"vip":0.5}`))
+
+	// Caching disabled: still nil, nothing stored.
+	resetUserGroupRatioCache()
+	SetUserGroupRatioCacheMax(0)
+	assert.Nil(t, ParseUserGroupRatios(raw))
+	assert.Equal(t, int64(0), parsedUserGroupRatiosCount.Load())
+}

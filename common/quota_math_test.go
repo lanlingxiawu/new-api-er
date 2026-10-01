@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +192,61 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 	require.NotNil(t, clamp)
 	assert.Equal(t, "QuotaFromDecimal", clamp.Op)
 	assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+}
+
+// ---------------------------------------------------------------------------
+// Int64FromDecimal — saturating conversion for int64 accumulators.
+// ---------------------------------------------------------------------------
+
+func TestInt64FromDecimal(t *testing.T) {
+	maxD := decimal.NewFromInt(math.MaxInt64)
+	minD := decimal.NewFromInt(math.MinInt64)
+	for _, tc := range []struct {
+		name  string
+		in    decimal.Decimal
+		limit int64
+		want  int64
+	}{
+		{"zero", decimal.Zero, 0, 0},
+		{"rounds half away from zero", decimal.RequireFromString("2.5"), 0, 3},
+		{"negative rounds half away from zero", decimal.RequireFromString("-2.5"), 0, -3},
+		{"just below half", decimal.RequireFromString("2.4999"), 0, 2},
+		{"full range: exact max", maxD, 0, math.MaxInt64},
+		{"full range: max plus fraction rounding down", maxD.Add(decimal.RequireFromString("0.4")), 0, math.MaxInt64},
+		{"full range: max plus one saturates", maxD.Add(decimal.NewFromInt(1)), 0, math.MaxInt64},
+		{"full range: far above saturates", maxD.Mul(decimal.NewFromInt(100)), 0, math.MaxInt64},
+		{"full range is symmetric: min clamps to -MaxInt64", minD, 0, -math.MaxInt64},
+		{"full range: far below saturates", minD.Mul(decimal.NewFromInt(100)), 0, -math.MaxInt64},
+		{"negative limit means full range", maxD.Add(decimal.NewFromInt(1)), -5, math.MaxInt64},
+		{"limit: exactly at limit kept", decimal.NewFromInt(1000), 1000, 1000},
+		{"limit: one above clamps", decimal.NewFromInt(1001), 1000, 1000},
+		{"limit: rounds before comparing", decimal.RequireFromString("1000.4"), 1000, 1000},
+		{"limit: rounding up crosses it", decimal.RequireFromString("1000.5"), 1000, 1000},
+		{"limit: exactly at negative limit kept", decimal.NewFromInt(-1000), 1000, -1000},
+		{"limit: below negative limit clamps", decimal.NewFromInt(-1001), 1000, -1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Int64FromDecimal(tc.in, tc.limit))
+		})
+	}
+}
+
+func TestLogInt64ClampIsRateLimited(t *testing.T) {
+	prevLast, prevSuppressed := int64ClampLastLog.Load(), int64ClampSuppressed.Load()
+	t.Cleanup(func() {
+		int64ClampLastLog.Store(prevLast)
+		int64ClampSuppressed.Store(prevSuppressed)
+	})
+	int64ClampLastLog.Store(0)
+	int64ClampSuppressed.Store(0)
+
+	for i := 0; i < 100; i++ {
+		Int64FromDecimal(decimal.NewFromInt(2000), 1000)
+	}
+	assert.EqualValues(t, 99, int64ClampSuppressed.Load(), "only the first clamp in the interval is logged")
+
+	// Once the interval has passed, the next clamp logs and resets the count.
+	int64ClampLastLog.Store(time.Now().Add(-2 * int64ClampLogInterval).UnixNano())
+	Int64FromDecimal(decimal.NewFromInt(-2000), 1000)
+	assert.Zero(t, int64ClampSuppressed.Load())
 }

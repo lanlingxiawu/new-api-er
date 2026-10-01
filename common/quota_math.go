@@ -3,6 +3,8 @@ package common
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -145,4 +147,49 @@ func QuotaFromDecimal(d decimal.Decimal) int {
 func QuotaFromDecimalChecked(d decimal.Decimal) (int, *QuotaClamp) {
 	f, _ := d.Round(0).Float64()
 	return saturateQuota(f, "QuotaFromDecimal")
+}
+
+// Int64FromDecimal rounds d (half away from zero) and saturates it to
+// [-limit, limit]; a non-positive limit means the full int64 range.
+// decimal.IntPart silently wraps out-of-range values, which turns a huge
+// positive cost into a negative one that is then discarded or booked as a
+// credit. Values that are summed afterwards (per-event costs feeding daily
+// accumulators and BIGINT `col + ?` updates) must pass a limit far below
+// MaxInt64, otherwise the saturated value overflows at the next addition.
+func Int64FromDecimal(d decimal.Decimal, limit int64) int64 {
+	if limit <= 0 {
+		limit = math.MaxInt64
+	}
+	r := d.Round(0)
+	upper := decimal.NewFromInt(limit)
+	switch {
+	case r.GreaterThan(upper):
+		logInt64Clamp("overflow", r, limit)
+		return limit
+	case r.LessThan(upper.Neg()):
+		logInt64Clamp("underflow", r, -limit)
+		return -limit
+	}
+	return r.IntPart()
+}
+
+// int64ClampLogInterval bounds the clamp log: a misconfigured ratio clamps on
+// every request, and one line per request would flood the system log.
+const int64ClampLogInterval = time.Minute
+
+var (
+	int64ClampLastLog    atomic.Int64 // unix nanos of the last emitted line
+	int64ClampSuppressed atomic.Int64
+)
+
+func logInt64Clamp(kind string, original decimal.Decimal, clamped int64) {
+	now := time.Now().UnixNano()
+	last := int64ClampLastLog.Load()
+	if now-last < int64(int64ClampLogInterval) || !int64ClampLastLog.CompareAndSwap(last, now) {
+		int64ClampSuppressed.Add(1)
+		return
+	}
+	suppressed := int64ClampSuppressed.Swap(0)
+	SysError(fmt.Sprintf("int64 conversion %s: original=%s, clamped=%d (%d similar clamps suppressed in the last %s)",
+		kind, original.String(), clamped, suppressed, int64ClampLogInterval))
 }

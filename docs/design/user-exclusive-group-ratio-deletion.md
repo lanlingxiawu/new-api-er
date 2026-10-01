@@ -329,7 +329,7 @@ controller 测试进程里 `InitEnv` 不运行，`IsMasterNode` 零值为 false�
 
 **代价**：
 
-- 清理对每个**真正持有该分组倍率**的用户多一次 Redis `EXISTS`；只有该用户的缓存存在（近期活跃）时，才再做一次按主键的用户读取和一次 Redis `EVAL`。没有缓存的用户无需刷新——之后回填缓存时读到的就是已清理的数据库值。首版对每个用户都读库刷新，HK E3 的 5 万用户清理从 322 秒拖到 400 秒以上，因此加了这层判断。
+- 清理对每个**真正持有该分组倍率**的用户多一次 Redis `EVAL`（`advanceProfileFloorUnlessCached`）；只有该用户的缓存存在（近期活跃）时，才再做一次按主键的用户读取和一次 Redis `EVAL`（`PublishUserAuthCache`）。没有缓存的用户不读库——之后回填缓存时读到的就是已清理的数据库值；同一次 `EVAL` 只把该用户的 profile 下限推进到扫描时读到的 `profile_version + 1`（§14.2），挡住改写前读到旧行的回填。首版对每个用户都读库刷新，HK E3 的 5 万用户清理从 322 秒拖到 400 秒以上，因此加了这层判断。
 - 删除分组后要等清理完成才能重建同名分组（通常数秒；5 万用户约数分钟）。
 
 **仍存在（已知残余，用户决定暂不处理，2026-09-16）**：
@@ -344,3 +344,99 @@ controller 测试进程里 `InitEnv` 不运行，`IsMasterNode` 零值为 false�
 - `model/user_group_ratio_cleanup_test.go`：`TestCleanupUserGroupRatios_RefreshesCachedRatiosKeepsQuota`（取代原 `LeavesUserCacheIntact`：断言缓存仍在、`Quota` 不变、`GroupRatios` 已去掉被删分组）；`TestCleanupUserGroupRatios_DoesNotCreateMissingUserCache`（无缓存的用户不回库、不新建缓存）。
 - `controller/group_ratio_cleanup_plan_test.go`：`TestPlanGroupRatioCleanupRejectsRecreatingGroupUnderCleanup`、`TestPlanGroupRatioCleanupAllowsOtherChangesDuringCleanup`。
 - HK 套件 D：调用中删除专属倍率、修改分组倍率、删除其它分组、删除并重建用户所在分组，逐条核对日志倍率、扣费与余额（39/39）；套件 E3：5 万用户清理 349 秒、清理中重建被拒、清理完成后重建并设置倍率（10/10）；套件 F：懒删除与遗留（10/11，失败项即上面的已知残余）。
+
+## 14. 专属倍率取值与缓存写入围栏
+
+### 14.1 倍率必须是数字；null 不是 0
+
+`group_ratios` 里某个分组的值为 `null` 时，按 `map[string]float64` 解码会得到 0，也就是「该分组免费」。三处解析统一走 `ratio_setting.DecodeUserGroupRatios`：它按 `map[string]*float64` 解码，把 null 条目剔除并单独报出分组名；字符串、布尔等非数字值直接解码失败。显式 `0` 仍然表示免费。
+
+| 入口 | 遇到 null 的行为 |
+|---|---|
+| `controller.UpdateUser`（`parseSubmittedUserGroupRatios`） | 新提交的 null 拒绝保存，返回 `user.group_ratios_invalid` 并带出第一个出错的分组名；库里原值不变。库里**本来就是 null** 的分组允许原样回传（见下） |
+| relay 解析 `ParseUserGroupRatios` | 跳过该条目，该分组回落到分组倍率 / 分组间倍率；打一条系统日志，每 60 秒最多一条。全部条目都是 null 时结果（无规则）照样进记忆化缓存，不会每个请求重新解码（缓存关闭时除外） |
+| 清理重写 `FilterUserGroupRatios` | 有条目被删、需要重新序列化时一并丢弃 null 条目，不会把它写成 `0`；没有条目被删时原串不动 |
+
+**库里已有的 null**（校验上线前写入）：编辑表单回传的是它加载到的值，若按新提交处理，这个用户的任何编辑都会被拒（从节点上更糟：旧值解析失败被当成空表，回传必然「有改动」）。因此编辑路径按 relay 语义解析库里的值（`parseStoredUserGroupRatios`：null 条目剔除并列出），提交里**同一分组**的 null 视为原样回传、同样剔除后比较：
+
+- 从节点：剔除 null 后与库里一致即放行，库里的值不动（仍含 null，relay 照旧跳过）；
+- 主节点：放行并重新序列化保存，null 条目被去掉——它本就不生效，计费不变；
+- 库里没有、新出现的 null 仍然拒绝。
+
+### 14.2 编辑后的旧快照不能回写缓存
+
+专属倍率、超时、重试次数等字段的修改不递增 `auth_version`（递增会吊销用户会话）。因此，一个在编辑提交前读到旧行、在编辑发布之后才写入的缓存回填，带着相同的 `auth_version` 能通过原有围栏，把旧倍率写回 `user:{id}` 并一直生效到哈希过期。
+
+现在 `users.profile_version`（bigint，默认 0，AutoMigrate 加列，三种数据库通用）随每一次改写缓存字段的数据库写入在**同一条 UPDATE** 里用 `profile_version + 1` 自增，写完都发布整行：
+
+| 写入 | 改写的缓存字段 | 发布 |
+|---|---|---|
+| `EditWithTx`（管理员编辑用户） | 用户名、分组、专属倍率、超时、重试等 | `PublishUserAuthCache` |
+| `UpdateWithTx`（自助资料、改密、绑定邮箱、OAuth/微信补全、启用/禁用/升降级、访问令牌、邀请码、客户备注） | 结构体里的非零**上游列**，可能含用户名、邮箱、设置；本仓新增的管理端列一律不写（§14.4） | 所有调用方随后 `updateUserCache` / `PublishUserAuthCache`；显式 `Omit` 这一列，调用方带进来的旧值不会把它改回去，自增在同一事务里单独一条 UPDATE |
+| `UpdateUserSetting`（设置页、订阅偏好） | `setting` | `PublishUserAuthCache`（Redis 关闭时跳过） |
+| `ClearBinding("email")`（解绑邮箱） | `email` | 重读整行后 `updateUserCache`；其它绑定列不进缓存，不自增 |
+| `RechargeCreem` 补填空邮箱 | `email` | 提交后 `PublishUserAuthCache`（Redis 关闭时跳过；失败只记日志，充值已入账） |
+| 分组删除清理 `casUpdateUserGroupRatios` | `group_ratios` | 有缓存哈希的用户 `PublishUserAuthCache`；没有的只推进 profile 下限（§13 代价） |
+
+不改缓存字段的写入不动这一列，并且一律是**定向更新**，不再整行 `Save`：`inviteUser`（邀请计数与邀请额度，原先读行后 `DB.Save` 整行，会把期间提交的编辑和 `profile_version` 一起写回旧值，使库里版本低于 Redis 下限、该用户的每次回填都被拒到下限过期）与 `TransferAffQuotaToQuota`（`aff_quota` / `quota`）都改为 `Updates` + `gorm.Expr`。额度、已用额度、请求数、登录时间等列本来就是定向更新。
+
+`writeUserCache` 的 Lua 在原有 auth 围栏之后多比较一个 Redis 键 `auth:user:profile:{id}`：
+
+- 快照的 `profile_version` 小于该键：不写（返回成功，由更新的快照负责缓存；回填请求照常使用自己读到的行）；
+- 大于该键：先把键推进到该版本（TTL 取 pending fence 的 TTL，即缓存 TTL + max(缓存 TTL, 60 秒)），再按原逻辑写哈希。发布时哈希不存在也会推进该键，所以随后到达的旧回填会被拦下。
+
+**字段级写入**（`updateUserCacheFieldAtVersion`：`GetUserSetting` / `GetUsernameById` 回源后的异步回填、`RefreshUserGroupCache`）同样受这两道围栏约束：
+
+- 值与 `auth_version`、`profile_version` 在同一条查询里读出（`readUserCacheField`），避免「先读值、后读版本」之间插入的编辑让旧值带着新版本通过；
+- 下限大于传入的 `profile_version` 时不写；`Group` 不属于 profile 围栏（沿用 auth 版本 + 重读校验），传 `profileUnfenced`；
+- 只写这一个字段，**从不改 `CacheSchema`**；哈希的 schema 与当前不一致（滚动发布）时照写。三种做法的比较：
+  - 把 `CacheSchema` 改成当前版本（早期实现）：旧节点写的哈希没有 `GroupRatios` / 超时字段，被新节点单字段刷新后就成了「当前 schema、专属倍率为空」，relay 会按分组倍率计费直至哈希过期。
+  - schema 不一致就整条跳过：`RefreshUserGroupCache` 的新分组到不了旧节点，旧节点按旧分组放行 / 计费直至哈希过期。
+  - DEL 外来哈希让各节点重载：会丢掉批量更新器尚未落库、只在 Redis 里的扣费（§4 的配额回滚），不可取。
+
+  只写字段、不动 schema 对两边都安全：这里写的字段（`Group`、`Setting`、`Username`）在所有 schema 里含义相同，旧节点立刻看到新值；新节点仍把外来哈希当作过期，读到时回源整行重写（保留 `Quota`）。
+
+从未被编辑过的用户 `profile_version` 为 0，不会产生这个键。键带 TTL 是兜底自愈：万一版本被改回旧值，该用户的缓存写入最多被拒一个 TTL，而不是永久回源数据库。
+
+**主链影响**：relay 读缓存路径不变（不读该键）；只有缓存未命中后的回填、编辑发布与字段级回填这几次 `EVAL` 多一次同一脚本内的 `GET`，没有新增往返。回填被拒时该请求直接使用已读到的数据库行，不报错。
+
+**已知残余**：清理给没有缓存的用户推进的下限是扫描时读到的版本 + 1。若扫描与 CAS 之间恰有另一次改写缓存字段的写入（它也会发布、推进下限），而又有回填恰好在那次写入之后、CAS 之前读行并在 CAS 之后落地，这次回填不会被拦住，被删分组的旧条目会留在缓存里直至过期。需要三者同时落在毫秒级窗口内，且被删分组已无启用渠道，影响限于重建同名分组的窗口（§13）。
+
+**滚动发布**：本次发布把用户缓存 schema 从线上的 2 升到 4（非流超时计费字段 2→3，见 `non-stream-timeout-loss-prevention.md`；重试次数 3→4，见 `relay-retry-time-budget.md`）。新旧节点并存期间，一方写的哈希在另一方看来都是过期 schema：读到时回源数据库并按自己的 schema 重写，于是活跃用户的哈希会被两边来回改写，**在所有节点升级完成前，这些用户的 relay 请求大多要多一次数据库读取**（外加回填的一次 `EVAL`）。新节点不会把自己的 schema 盖到旧哈希上（见上），计费正确；但旧节点不认识 profile 下限，它的回填不受 §14.2 围栏约束，这一保护要到全部升级后才完整生效。并存期间数据库负载会升高：应尽量缩短新旧节点并存的时间，并避开流量高峰；全部升级后按缓存 TTL 自然收敛。
+
+**加列的 DDL 代价**（AutoMigrate 在新节点启动时执行）：`users` 上 `retry_times`、`non_stream_timeout_billing`、`profile_version` 三列都是 `ADD COLUMN ... NOT NULL DEFAULT`。
+
+- PostgreSQL ≥ 11：带常量默认值的加列只改目录，瞬时完成。**PostgreSQL 9.6 / 10 会重写整张 `users` 表，期间持有 ACCESS EXCLUSIVE 锁**，所有读写（含 relay 缓存未命中时的用户回源）都会阻塞，三列各重写一次。这类版本应在维护窗口手动预先加列，或先升级数据库。
+- MySQL 5.7：InnoDB 在线 DDL（`ALGORITHM=INPLACE`）重建表，期间允许并发读写，但会占用 IO 并在开始 / 结束时短暂持有元数据锁；前面有长事务时，排队的元数据锁会挡住后续所有访问 `users` 的语句。应避开高峰并确认没有长事务。MySQL 8.0 为 `INSTANT`。
+- SQLite：`ADD COLUMN` 只改 schema，不重写数据。
+
+**用例**：`model/user_cache_branch_audit_regression_test.go`（延迟回填不再恢复旧倍率、并发发布旧快照不覆盖新值、当前版本快照正常写入且键带 TTL、未编辑用户不建键、`UpdateWithTx` 不回退版本并递增）；`model/user_profile_fence_test.go`（设置更新与清理 CAS 递增版本并挡住旧回填、未缓存用户只推进下限、`inviteUser` 与转账不回滚并发编辑、字段级写入对他人 schema 的哈希只写字段不改 schema 且遵守下限、回源读取的异步回填、`UpdateWithTx` 旧整行不撤销管理员编辑、`ClearBinding("email")` 与 Creem 补填邮箱递增版本并发布）；`controller/user_group_ratio_cleanup_race_test.go`（§14.4）；`controller/group_ratio_branch_audit_regression_test.go`、`controller/user_group_ratio_stored_null_test.go`、`setting/ratio_setting/branch_audit_regression_test.go`、`setting/ratio_setting/user_exclusive_ratio_test.go`（null 的各入口、库里历史 null 的回传、全 null 结果的记忆化）。
+
+### 14.3 解析缓存上限的历史非法值
+
+`UserExclusiveGroupRatioCacheMax` 的保存入口会拒绝非法值（负数、非整数）。校验上线前存进库里的非法值由 `SyncOptions` 周期性重新加载：加载时回退到默认值 4096（运行时与设置页显示一致），同一个非法值只打一条系统错误日志，不再每次同步都报 `failed to update option map`；管理员重新保存合法值后恢复正常。未设上限：记忆化表的条目数本就不超过出现过的不同配置串数，填一个很大的值只意味着几乎不淘汰。
+
+### 14.4 整行回写不能撤销管理员对专属倍率等列的编辑
+
+**`UpdateWithTx`**：调用方传入的是之前读出的整行（`ManageUser` 启用 / 禁用 / 升降级、生成访问令牌、`GetAffCode`、OAuth / 微信绑定、客户备注等），`Updates(struct)` 会写回每个非零字段。期间提交的管理员编辑因此被撤销，而且 `profile_version` 已递增，缓存围栏反过来保护旧值。
+
+现在 `UpdateWithTx` 在 `Omit` 里排除本仓新增、只归管理员编辑（`EditWithTx`）所有的列 `adminOwnedUserColumns`：`group_ratios`、`stream_response_timeout`、`stream_response_timeout_mode`、`stream_total_timeout`、`non_stream_response_timeout`、`non_stream_total_timeout`、`non_stream_timeout_billing`、`retry_times`（`profile_version` 原本就排除）。所有调用方都不需要写这些列（逐个核对过；新用户的初始值由 `Insert` 写入）。
+
+**上游列（`status`、`role`、`group`、`username`、`email`、`setting`、`remark` 等）保持上游 main 的读-改-写行为不变**：这些调用方与控制器都是上游代码，改成定向更新会让每次合并上游都要手工解冲突；它们的并发覆盖窗口与上游一致，不属于本功能引入的问题。
+
+**`UpdateUser` 的 `group_ratios`**：`originUser` 在事务外读取。以前不论请求是否带 `group_ratios`，`EditWithTx` 都把 `originUser.GroupRatios`（或原样回传的值）写回；分组删除清理若恰好在「读取」与「事务提交」之间改写了该用户，被删分组的倍率就被复活。现在只有请求**确实改变**专属倍率时才写这一列（主节点、校验通过之后）：
+
+- 省略 `group_ratios`、从节点原样回传、主节点原样回传（含只多带了已不存在分组的条目）：不写，列保持提交时刻的库值（`EditWithTxGroupRatios(tx, updatePassword, false)`）；
+- 解析后与库里不同、需要去掉库里的 null、或库里的值已损坏（按空表比较会被误判为「未改动」）：写入。
+
+**残余**：请求确实改变了专属倍率时，写入的是整张表；若某个原样保留的分组恰好在「读取」与「提交」之间被清理，它会被写回。窗口是同一请求内的毫秒级，且触发需要管理员恰好在该分组的清理扫描走到这位用户的那一刻保存；消除它需要对 `group_ratios` 做 CAS 并新增冲突提示，暂不做。
+
+用例：`model/user_profile_fence_test.go`（`TestUpdateWithTxStaleRowDoesNotUndoAdminEdit`、`TestEditWithTxGroupRatiosLeavesColumnWhenNotWriting`）；`controller/user_group_ratio_cleanup_race_test.go`（清理落在读取与事务之间：省略字段 / 主节点原样回传 / 从节点原样回传都不复活；改动照常写入；损坏旧值可被 `{}` 覆盖）。
+
+### 14.5 relay 解析的日志限速
+
+`ParseUserGroupRatios` 不记忆化损坏的 JSON（修好之前不该占一个缓存槽），因此该用户的每个 relay 请求都会重新解析。解析失败的系统日志与 null 条目的日志一样每 60 秒最多一条，两者各自限速、互不遮挡。用例：`setting/ratio_setting/branch_audit_regression_test.go`（`TestParseUserGroupRatiosCorruptLogIsRateLimited`）。
+
+### 14.6 按分组查可用模型（`GetAvailableModelsByGroup`）
+
+该接口对 `logs` 近 30 分钟做一次 DISTINCT，仍然**没有覆盖索引**（只有 `idx_created_at_type` 与单列 `group` / `model_name`）。结果按分组缓存 60 秒，同分组并发未命中合并为一次查询，因此每个节点每个分组每分钟最多执行一次。为避免在大表 `logs` 上做迁移，接受这一代价（见 `controller/token.go` 注释）。

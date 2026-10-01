@@ -286,6 +286,8 @@ const (
 	MsgSettingRelayErrorDisplayInvalid = "setting.relay_error_display_invalid"
 	MsgSettingRelayErrorEditInvalid    = "setting.relay_error_edit_invalid"
 
+	MsgSettingUserGroupRatioCacheMaxInvalid = "setting.user_group_ratio_cache_max_invalid"
+
 	// Relay error display: built-in fallback text and preset rules.
 	MsgRelayErrorDefaultMessage         = "relay_error.default_message"
 	MsgRelayErrorPresetKeepParamsName   = "relay_error.preset.keep_params.name"

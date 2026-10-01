@@ -1,10 +1,14 @@
 package ratio_setting
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -36,11 +40,13 @@ var (
 	parsedUserGroupRatiosMax atomic.Int64
 )
 
-const defaultUserGroupRatioCacheMax = 4096
+// DefaultUserGroupRatioCacheMax is the memoization cap used until the option is
+// set, and when a stored value is unusable.
+const DefaultUserGroupRatioCacheMax = 4096
 
 func init() {
 	userExclusiveGroupRatioEnabled.Store(false)
-	parsedUserGroupRatiosMax.Store(defaultUserGroupRatioCacheMax)
+	parsedUserGroupRatiosMax.Store(DefaultUserGroupRatioCacheMax)
 }
 
 // SetUserGroupRatioCacheMax sets the memoization cap (0 = disable caching).
@@ -50,6 +56,17 @@ func SetUserGroupRatioCacheMax(n int) {
 		n = 0
 	}
 	parsedUserGroupRatiosMax.Store(int64(n))
+}
+
+// ParseUserGroupRatioCacheMax parses the UserExclusiveGroupRatioCacheMax option:
+// a whole number >= 0 (0 disables the memo cache). Anything else is an error so
+// the option is never stored with a value the runtime would ignore.
+func ParseUserGroupRatioCacheMax(value string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("UserExclusiveGroupRatioCacheMax must be a whole number >= 0, got %q", value)
+	}
+	return n, nil
 }
 
 // GetUserGroupRatioCacheMax returns the current memoization cap.
@@ -65,9 +82,65 @@ func IsUserExclusiveGroupRatioEnabled() bool {
 	return userExclusiveGroupRatioEnabled.Load()
 }
 
+// DecodeUserGroupRatios decodes a raw group_ratios JSON object without touching
+// the memo table. A null amount is not a ratio: decoding it into a float64
+// would yield 0, i.e. a free-usage override. Such entries are left out of the
+// map and reported in nullGroups (sorted) so callers can reject or skip them;
+// an explicit 0 stays a deliberate free override. Any other non-number value is
+// a decode error.
+func DecodeUserGroupRatios(raw string) (ratios map[string]float64, nullGroups []string, err error) {
+	decoded := make(map[string]*float64)
+	if err := common.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, nil, err
+	}
+	ratios = make(map[string]float64, len(decoded))
+	for name, r := range decoded {
+		if r == nil {
+			nullGroups = append(nullGroups, name)
+			continue
+		}
+		ratios[name] = *r
+	}
+	sort.Strings(nullGroups)
+	return ratios, nullGroups, nil
+}
+
+// userGroupRatioLogIntervalSeconds bounds how often a bad stored group_ratios
+// value is logged: ParseUserGroupRatios runs per relay request for values it
+// does not memoize (corrupt JSON always, everything when the memo cache is
+// disabled), and one bad row must not flood the log. Null entries and corrupt
+// JSON are limited separately so one kind cannot hide the other.
+const userGroupRatioLogIntervalSeconds = 60
+
+var (
+	nullUserGroupRatioLastLog    atomic.Int64
+	corruptUserGroupRatioLastLog atomic.Int64
+)
+
+// allowUserGroupRatioLog reports whether the caller may log now, at most once
+// per interval per limiter.
+func allowUserGroupRatioLog(last *atomic.Int64) bool {
+	now := time.Now().Unix()
+	prev := last.Load()
+	return now-prev >= userGroupRatioLogIntervalSeconds && last.CompareAndSwap(prev, now)
+}
+
+func logNullUserGroupRatios(groups []string) {
+	if allowUserGroupRatioLog(&nullUserGroupRatioLastLog) {
+		common.SysError("user group_ratios contains null amounts, ignored (configured pricing applies) for groups: " + strings.Join(groups, ", "))
+	}
+}
+
+func logCorruptUserGroupRatios(err error) {
+	if allowUserGroupRatioLog(&corruptUserGroupRatioLastLog) {
+		common.SysError("failed to parse user group_ratios (configured pricing applies): " + err.Error())
+	}
+}
+
 // ParseUserGroupRatios parses the per-user exclusive group ratio JSON
 // (e.g. `{"vip":0.8}`). Returns nil for empty/invalid input so callers
-// silently degrade to the global ratio logic.
+// silently degrade to the global ratio logic. Null amounts are skipped (see
+// DecodeUserGroupRatios), so those groups fall back to configured pricing.
 //
 // The result is memoized by the raw JSON string, so repeated calls with the same
 // config avoid re-deserializing on the hot path. Because a cached map is shared
@@ -85,13 +158,23 @@ func ParseUserGroupRatios(jsonStr string) map[string]float64 {
 		}
 		return e.ratios
 	}
-	m := make(map[string]float64)
-	if err := common.Unmarshal([]byte(jsonStr), &m); err != nil {
-		common.SysError("failed to parse user group_ratios: " + err.Error())
+	m, nullGroups, err := DecodeUserGroupRatios(jsonStr)
+	if err != nil {
+		// Not memoized: a corrupt value is repaired by an edit and must not
+		// hold a cap slot until evicted. The log is rate limited instead.
+		logCorruptUserGroupRatios(err)
 		return nil
 	}
+	if len(nullGroups) > 0 {
+		logNullUserGroupRatios(nullGroups)
+	}
 	if len(m) == 0 {
-		return nil
+		if len(nullGroups) == 0 {
+			return nil // "{ }", "null": cheap to decode, not worth a cap slot
+		}
+		// All entries null: memoized as nil, otherwise every relay request of the
+		// user would decode it again.
+		m = nil
 	}
 	max := parsedUserGroupRatiosMax.Load()
 	if max <= 0 {
@@ -176,8 +259,11 @@ func FilterUserGroupRatios(raw string, drop func(group string) bool) (string, []
 	if raw == "" || raw == "{}" || drop == nil {
 		return raw, nil, false, nil
 	}
-	ratios := make(map[string]float64)
-	if err := common.Unmarshal([]byte(raw), &ratios); err != nil {
+	// Null amounts never take effect; re-serializing them through a float64 map
+	// would turn them into explicit free-usage zeros, so they are dropped with
+	// whatever else gets removed.
+	ratios, _, err := DecodeUserGroupRatios(raw)
+	if err != nil {
 		return raw, nil, false, err
 	}
 	var removed []string

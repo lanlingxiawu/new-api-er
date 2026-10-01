@@ -35,7 +35,7 @@ func TestUpdateOptionGroupRatioRequiresMasterNode(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPut, "/api/option/", map[string]any{
 		"key": "GroupRatio", "value": `{"default":2}`,
 	})
-	asAdmin(ctx, nextTestID())
+	asRoot(ctx, nextTestID())
 	UpdateOption(ctx)
 
 	resp := decodeResp(t, rec)

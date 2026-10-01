@@ -21,6 +21,7 @@ func TestUpdateOptionRejectsNegativeClaudeDefaultMaxTokens(t *testing.T) {
 		strings.NewReader(`{"key":"claude.default_max_tokens","value":"{\"default\":-1}"}`),
 	)
 
+	context.Set("role", common.RoleRootUser) // the unscoped write path is root-only
 	UpdateOption(context)
 
 	assert.Equal(t, http.StatusOK, response.Code)

@@ -187,7 +187,8 @@ func TestCleanupUserGroupRatios_RefreshesCachedRatiosKeepsQuota(t *testing.T) {
 }
 
 // Users without a cached copy are not read back or re-cached: a later cache
-// fill reads the already-cleaned row anyway.
+// fill reads the already-cleaned row anyway. Only their profile floor moves,
+// see TestCleanupUserGroupRatios_RejectsFillReadBeforeCleanup.
 func TestCleanupUserGroupRatios_DoesNotCreateMissingUserCache(t *testing.T) {
 	requireDB(t)
 	enableRedis(t)

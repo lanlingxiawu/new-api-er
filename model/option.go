@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -163,7 +164,7 @@ func InitOptionMap() {
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["UserExclusiveGroupRatioEnabled"] = strconv.FormatBool(ratio_setting.IsUserExclusiveGroupRatioEnabled())
-	common.OptionMap["UserExclusiveGroupRatioCacheMax"] = strconv.Itoa(ratio_setting.GetUserGroupRatioCacheMax())
+	common.OptionMap[userGroupRatioCacheMaxOptionKey] = strconv.Itoa(ratio_setting.GetUserGroupRatioCacheMax())
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
@@ -258,6 +259,10 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == userGroupRatioCacheMaxOptionKey {
+		_, err := ratio_setting.ParseUserGroupRatioCacheMax(value)
+		return err
 	}
 	if field, ok := strings.CutPrefix(key, relayErrorDisplayOptionPrefix); ok {
 		return validateRelayErrorDisplayOption(field, value)
@@ -376,6 +381,32 @@ func relayErrorDisplayRuleKey(rule operation_setting.RelayErrorRule) (string, bo
 	return string(encoded), true
 }
 
+const userGroupRatioCacheMaxOptionKey = "UserExclusiveGroupRatioCacheMax"
+
+var (
+	invalidUserGroupRatioCacheMaxMu     sync.Mutex
+	invalidUserGroupRatioCacheMaxLogged string
+)
+
+// normalizeStoredUserGroupRatioCacheMax returns value when it is a valid cache
+// cap, otherwise the default. SyncOptions reloads every option periodically,
+// so the fallback is logged once per distinct bad value, not on every sync.
+func normalizeStoredUserGroupRatioCacheMax(value string) string {
+	_, err := ratio_setting.ParseUserGroupRatioCacheMax(value)
+	invalidUserGroupRatioCacheMaxMu.Lock()
+	defer invalidUserGroupRatioCacheMaxMu.Unlock()
+	if err == nil {
+		invalidUserGroupRatioCacheMaxLogged = ""
+		return value
+	}
+	if invalidUserGroupRatioCacheMaxLogged != value {
+		invalidUserGroupRatioCacheMaxLogged = value
+		common.SysError(fmt.Sprintf("stored %s is invalid (%v); using the default %d until it is saved again",
+			userGroupRatioCacheMaxOptionKey, err, ratio_setting.DefaultUserGroupRatioCacheMax))
+	}
+	return strconv.Itoa(ratio_setting.DefaultUserGroupRatioCacheMax)
+}
+
 func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
@@ -482,6 +513,13 @@ func updateOptionMap(key string, value string) (err error) {
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
 		return nil
+	}
+	// Checked before OptionMap is written: the settings page reads OptionMap, and
+	// a value the runtime ignores must not show up there as saved. Save paths
+	// validate first, so an invalid value here was stored before validation
+	// existed; it falls back to the default instead of failing every sync.
+	if key == userGroupRatioCacheMaxOptionKey {
+		value = normalizeStoredUserGroupRatioCacheMax(value)
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
@@ -610,10 +648,10 @@ func updateOptionMap(key string, value string) (err error) {
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue > 0 {
 			common.RequestLogMaxBodyKB = intValue
 		}
-	case "UserExclusiveGroupRatioCacheMax":
-		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {
-			ratio_setting.SetUserGroupRatioCacheMax(intValue)
-		}
+	case userGroupRatioCacheMaxOptionKey:
+		// Normalized to a valid value before OptionMap was written above.
+		intValue, _ := ratio_setting.ParseUserGroupRatioCacheMax(value)
+		ratio_setting.SetUserGroupRatioCacheMax(intValue)
 	case "RequestLogMinCount":
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {
 			common.RequestLogMinCount = intValue

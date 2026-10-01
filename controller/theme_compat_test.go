@@ -21,6 +21,7 @@ func TestUpdateOptionRejectsRetiredFrontendTheme(t *testing.T) {
 		strings.NewReader(`{"key":"theme.frontend","value":"classic"}`),
 	)
 
+	context.Set("role", common.RoleRootUser) // the unscoped write path is root-only
 	UpdateOption(context)
 
 	assert.Equal(t, http.StatusOK, response.Code)

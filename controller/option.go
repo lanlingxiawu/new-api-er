@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/settingsaccess"
@@ -166,13 +167,33 @@ type OptionGroupUpdateRequest struct {
 	Values map[string]string `json:"values"`
 }
 
+// settingsWriteScope returns the scope a settings write must be restricted to.
+// RequireSystemSettingsScope records the scope it authorized in the context and
+// the handler acts on exactly that scope; the scope repeated in the decoded body
+// must match it, so a request cannot be authorized under one reading of the body
+// and applied under another. "" (no allowlist) is only ever recorded for root.
+// Without the middleware in front (direct calls), only root may write.
+func settingsWriteScope(c *gin.Context, bodyScope string) (string, bool) {
+	bodyScope = strings.TrimSpace(bodyScope)
+	if authorized, exists := c.Get(middleware.SystemSettingsScopeContextKey); exists {
+		scope, isString := authorized.(string)
+		return scope, isString && scope == bodyScope
+	}
+	return bodyScope, c.GetInt("role") == common.RoleRootUser
+}
+
 func UpdateOptionGroup(c *gin.Context) {
 	var request OptionGroupUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	request.Scope = strings.TrimSpace(request.Scope)
+	scope, ok := settingsWriteScope(c, request.Scope)
+	if !ok {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	request.Scope = scope
 	if request.Scope != "" && !settingsaccess.AllowsGroup(request.Scope, request.Module, request.Values) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -205,7 +226,12 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
-	option.Scope = strings.TrimSpace(option.Scope)
+	scope, ok := settingsWriteScope(c, option.Scope)
+	if !ok {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	option.Scope = scope
 	if option.Scope != "" && !settingsaccess.AllowsOption(option.Scope, option.Key) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -338,6 +364,12 @@ func UpdateOption(c *gin.Context) {
 		if err != nil {
 			logger.LogWarn(c, "rejected GroupRetryTimes: "+err.Error())
 			common.ApiErrorI18n(c, i18n.MsgSettingGroupRetryTimesInvalid)
+			return
+		}
+	case "UserExclusiveGroupRatioCacheMax":
+		if _, err = ratio_setting.ParseUserGroupRatioCacheMax(option.Value.(string)); err != nil {
+			logger.LogWarn(c, "rejected UserExclusiveGroupRatioCacheMax: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgSettingUserGroupRatioCacheMaxInvalid)
 			return
 		}
 	case "gemini.safety_settings":

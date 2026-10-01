@@ -221,7 +221,7 @@ func TestUpdateOptionDispatchesCleanupOnGroupRemoval(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodPut, "/api/option/", map[string]any{
 		"key": "GroupRatio", "value": `{"default":1}`,
 	})
-	asAdmin(ctx, nextTestID())
+	asRoot(ctx, nextTestID())
 	UpdateOption(ctx)
 	require.True(t, decodeResp(t, rec).Success)
 

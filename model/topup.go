@@ -468,6 +468,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 	}
 
 	var quota int64
+	emailFilled := false
 	topUp := &TopUp{}
 
 	refCol := "`trade_no`"
@@ -513,9 +514,12 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 				return err
 			}
 
-			// 如果用户邮箱为空，则更新为支付时使用的邮箱
+			// 如果用户邮箱为空，则更新为支付时使用的邮箱。邮箱是缓存字段：同一条 UPDATE
+			// 递增 profile_version，提交后发布，写入前读到行的缓存回填不能再写回空邮箱。
 			if user.Email == "" {
 				updateFields["email"] = customerEmail
+				updateFields["profile_version"] = gorm.Expr("profile_version + ?", 1)
+				emailFilled = true
 			}
 		}
 
@@ -530,6 +534,12 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 	if err != nil {
 		common.SysError("creem topup failed: " + err.Error())
 		return errors.New("充值失败，请稍后重试")
+	}
+	if emailFilled && common.RedisEnabled {
+		// 充值已入账；缓存刷新失败只记日志，由缓存 TTL 兜底。
+		if err := PublishUserAuthCache(topUp.UserId); err != nil {
+			common.SysError(fmt.Sprintf("creem topup: failed to refresh cache of user %d after filling email: %s", topUp.UserId, err.Error()))
+		}
 	}
 
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %v，支付金额：%.2f", quota, topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodCreem)

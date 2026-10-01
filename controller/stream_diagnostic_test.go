@@ -55,7 +55,8 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
 	require.NotContains(t, unauthenticated.Body.String(), "root-private")
 	for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser, common.RoleRootUser} {
-		token := common.NewRequestId()
+		// access_token 是 char(32)：更长的令牌在 MySQL 上被截断后按原值查不到，鉴权会变成 401。
+		token := common.GetRandomString(32)
 		user := model.User{Username: "diag-" + token, Password: "fixture", Role: role, Status: common.UserStatusEnabled, Group: "default", AccessToken: &token, AffCode: token}
 		require.NoError(t, db.Create(&user).Error)
 		t.Cleanup(func() { db.Unscoped().Where("id = ?", user.Id).Delete(&model.User{}) })
