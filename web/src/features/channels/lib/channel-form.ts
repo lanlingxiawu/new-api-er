@@ -298,6 +298,7 @@ export const channelFormSchema = z
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
+    disable_probe_requests: z.boolean().optional(),
     allow_safety_identifier: z.boolean().optional(), // OpenAI only
     allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
@@ -512,6 +513,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
+  disable_probe_requests: false,
   allow_safety_identifier: false,
   allow_include_obfuscation: false,
   allow_inference_geo: false,
@@ -561,8 +563,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -583,6 +584,7 @@ export function transformChannelToFormDefaults(
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
   let allowServiceTier = false
   let disableStore = false
+  let disableProbeRequests = false
   let allowSafetyIdentifier = false
   let allowIncludeObfuscation = false
   let allowInferenceGeo = false
@@ -603,6 +605,7 @@ export function transformChannelToFormDefaults(
       awsKeyType = parsed.aws_key_type || 'ak_sk'
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
+      disableProbeRequests = parsed.disable_probe_requests === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
       allowIncludeObfuscation = parsed.allow_include_obfuscation === true
       allowInferenceGeo = parsed.allow_inference_geo === true
@@ -663,6 +666,7 @@ export function transformChannelToFormDefaults(
     aws_key_type: awsKeyType,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
+    disable_probe_requests: disableProbeRequests,
     allow_include_obfuscation: allowIncludeObfuscation,
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
@@ -843,6 +847,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       console.error('Failed to parse existing settings:', error)
     }
   }
+
+  settingsObj.disable_probe_requests = formData.disable_probe_requests === true
 
   // Add vertex_key_type for Vertex AI channels (type 41)
   if (formData.type === 41) {

@@ -71,6 +71,8 @@ const MODELS_SECTIONS = [
     build: (settings: ModelSettings) => (
       <RoutingReliabilitySection
         defaultValues={{
+          'probe_routing_setting.max_input_chars':
+            settings['probe_routing_setting.max_input_chars'],
           RetryTimes: settings.RetryTimes,
           ChannelDisableThreshold: settings.ChannelDisableThreshold,
           AutomaticDisableChannelEnabled:

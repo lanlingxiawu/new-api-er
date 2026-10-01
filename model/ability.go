@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -105,13 +106,24 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+func GetChannel(group string, model string, retry int, requestPath string, policies ...*ChannelProbePolicy) (*Channel, error) {
 	var abilities []Ability
 
+	var policy *ChannelProbePolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
-	if err != nil {
-		return nil, err
+	var channelQuery *gorm.DB
+	if policy != nil {
+		// One existing candidate query, expanded to all priorities so filtering
+		// cannot leave a forbidden high-priority tier hiding usable lower tiers.
+		channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	} else {
+		channelQuery, err = getChannelQuery(group, model, retry)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		err = channelQuery.Order("weight DESC").Find(&abilities).Error
@@ -122,6 +134,42 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		return nil, err
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	if policy != nil && len(abilities) > 0 {
+		allowed := make([]Ability, 0, len(abilities))
+		priorities := make([]int, 0)
+		seen := make(map[int]bool)
+		for _, ability := range abilities {
+			if policy.Blocks(ability.ChannelId) {
+				continue
+			}
+			allowed = append(allowed, ability)
+			priority := 0
+			if ability.Priority != nil {
+				priority = int(*ability.Priority)
+			}
+			if !seen[priority] {
+				seen[priority] = true
+				priorities = append(priorities, priority)
+			}
+		}
+		if len(allowed) == 0 {
+			return nil, ErrProbeChannelUnavailable
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(priorities)))
+		if retry >= len(priorities) {
+			retry = len(priorities) - 1
+		}
+		abilities = allowed[:0]
+		for _, ability := range allowed {
+			priority := 0
+			if ability.Priority != nil {
+				priority = int(*ability.Priority)
+			}
+			if priority == priorities[retry] {
+				abilities = append(abilities, ability)
+			}
+		}
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one

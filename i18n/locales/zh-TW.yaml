@@ -639,3 +639,5 @@ setting.relay_error_rule_skipped: "規則 {{.Rule}} 無效，已被略過：請�
 setting.relay_error_default_message_skipped: "預設文案超過 500 字，未被使用，使用者看到的是內建文案。請縮短後儲存"
 setting.relay_error_rules_unreadable: "已儲存的規則無法讀取，全部未生效。請重新新增規則後儲存"
 setting.relay_error_rules_over_limit: "已儲存的規則超過 {{.Max}} 條，只有前 {{.Max}} 條生效。請刪除多餘的規則後儲存"
+probe.channel_unavailable: "目前群組暫無接受探針請求的渠道，請稍後重試或聯絡管理員。"
+probe.channel_forbidden: "指定渠道不接受探針請求，請調整渠道綁定或聯絡管理員。"

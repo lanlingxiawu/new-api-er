@@ -69,6 +69,9 @@ type ChannelTestMode = (typeof channelTestModes)[number]
 
 const routingReliabilitySchema = z
   .object({
+    probe_routing_setting: z.object({
+      max_input_chars: z.coerce.number().int().min(1).max(1024),
+    }),
     RetryTimes: z.coerce.number().min(0).max(10),
     ChannelDisableThreshold: numericString,
     AutomaticDisableChannelEnabled: z.boolean(),
@@ -129,6 +132,7 @@ type RoutingReliabilityFormInput = z.input<typeof routingReliabilitySchema>
 
 type RoutingReliabilitySectionProps = {
   defaultValues: {
+    'probe_routing_setting.max_input_chars': number
     RetryTimes: number
     ChannelDisableThreshold: string
     AutomaticDisableChannelEnabled: boolean
@@ -150,6 +154,7 @@ function normalizeLineEndings(value: string) {
 }
 
 type NormalizedRoutingReliabilityValues = {
+  'probe_routing_setting.max_input_chars': number
   RetryTimes: number
   ChannelDisableThreshold: string
   AutomaticDisableChannelEnabled: boolean
@@ -172,6 +177,9 @@ function normalizeChannelTestMode(value?: string): ChannelTestMode {
 const buildFormDefaults = (
   defaults: RoutingReliabilitySectionProps['defaultValues']
 ): RoutingReliabilityFormInput => ({
+  probe_routing_setting: {
+    max_input_chars: defaults['probe_routing_setting.max_input_chars'] ?? 128,
+  },
   RetryTimes: defaults.RetryTimes ?? 0,
   ChannelDisableThreshold: defaults.ChannelDisableThreshold ?? '',
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
@@ -201,6 +209,8 @@ const buildFormDefaults = (
 const normalizeDefaults = (
   defaults: RoutingReliabilitySectionProps['defaultValues']
 ): NormalizedRoutingReliabilityValues => ({
+  'probe_routing_setting.max_input_chars':
+    defaults['probe_routing_setting.max_input_chars'] ?? 128,
   RetryTimes: defaults.RetryTimes ?? 0,
   ChannelDisableThreshold: (defaults.ChannelDisableThreshold ?? '').trim(),
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
@@ -232,6 +242,8 @@ const normalizeDefaults = (
 const normalizeFormValues = (
   values: RoutingReliabilityFormValues
 ): NormalizedRoutingReliabilityValues => ({
+  'probe_routing_setting.max_input_chars':
+    values.probe_routing_setting.max_input_chars,
   RetryTimes: values.RetryTimes,
   ChannelDisableThreshold: values.ChannelDisableThreshold.trim(),
   AutomaticDisableChannelEnabled: values.AutomaticDisableChannelEnabled,
@@ -328,6 +340,41 @@ export function RoutingReliabilitySection({
             onSave={form.handleSubmit(onSubmit)}
             isSaving={updateOption.isPending}
           />
+
+          <FormField
+            control={form.control}
+            name='probe_routing_setting.max_input_chars'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('Maximum input length for probe detection')}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='1'
+                    max='1024'
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  <span className='block'>
+                    {t(
+                      'For example, a limit of 128 treats text requests of up to 128 input characters, including system instructions, as potential probes when they have no conversation history, tools or images.'
+                    )}
+                  </span>
+                  <span className='mt-1 block'>
+                    {t(
+                      'These requests skip channels with probe blocking enabled and use another eligible channel in the same group. A higher limit widens detection and may reroute more normal short questions; a lower limit narrows it.'
+                    )}
+                  </span>
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <Separator />
 
           <div className='flex min-w-0 flex-col gap-4'>
             <div className='flex flex-col gap-1'>

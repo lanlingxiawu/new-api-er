@@ -95,6 +95,15 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	probe := GetRequestProbeRouting(param.Ctx)
+	var policy *model.ChannelProbePolicy
+	if probe != nil {
+		policy = probe.Policy
+		if probe.Group != "" {
+			channel, err = model.GetRandomSatisfiedChannel(probe.Group, param.ModelName, param.GetRetry(), param.RequestPath, policy)
+			return channel, probe.Group, err
+		}
+	}
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -125,7 +134,18 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			selected, selectionErr := model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath, policy)
+			channel = selected
+			if probe != nil && (selectionErr != nil || channel != nil) {
+				probe.Group = autoGroup
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+				if selectionErr != nil {
+					return nil, autoGroup, selectionErr
+				}
+				// Probe routing pins this actual group; do not prepare an auto
+				// group transition or reset the retry/total-attempt counters.
+				return channel, autoGroup, nil
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -168,7 +188,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, policy)
+		if probe != nil {
+			probe.Group = param.TokenGroup
+		}
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

@@ -23,6 +23,27 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "probe_routing_setting":
+		if len(values) != 1 {
+			return false, fmt.Errorf("invalid probe routing configuration")
+		}
+		raw, ok := values["max_input_chars"]
+		if !ok {
+			return false, fmt.Errorf("configuration field is not editable")
+		}
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return false, fmt.Errorf("invalid integer configuration value")
+		}
+		draft := operation_setting.ProbeRoutingSetting{MaxInputChars: limit}
+		if err := operation_setting.ValidateProbeRoutingSetting(draft); err != nil {
+			return false, err
+		}
+		prefixed[module+".max_input_chars"] = raw
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceProbeRoutingSetting(draft)
 	case "rate_limit_setting":
 		draft := operation_setting.GetRateLimitSetting()
 		if err := validateGroupFields(values, rateLimitFields); err != nil {

@@ -129,6 +129,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	AppendProbeRoutingAdminInfo(ctx, adminInfo)
 	// 恢复 bb6317462 的上下文原因记录，独立于流式处理、诊断采集和按钮资格。
 	if reason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason); reason != "" {
 		other["reject_reason"] = reason

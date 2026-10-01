@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
@@ -1227,6 +1228,11 @@ func UpdateChannel(c *gin.Context) {
 	}
 
 	preserveSensitiveChannelSettingsForUpdate(&channel.Channel, originChannel)
+	if err := channel.Channel.PreserveProbeSetting(originChannel); err != nil {
+		logger.LogError(c, "invalid channel probe setting: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo

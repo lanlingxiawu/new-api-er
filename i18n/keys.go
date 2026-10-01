@@ -300,6 +300,8 @@ const (
 	MsgRelayErrorPresetModelMessage     = "relay_error.preset.model.message"
 	MsgRelayErrorPresetTimeoutName      = "relay_error.preset.timeout.name"
 	MsgRelayErrorPresetTimeoutMessage   = "relay_error.preset.timeout.message"
+	MsgProbeChannelUnavailable          = "probe.channel_unavailable"
+	MsgProbeChannelForbidden            = "probe.channel_forbidden"
 )
 
 // Deployment related messages (io.net)

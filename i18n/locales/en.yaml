@@ -637,3 +637,5 @@ setting.relay_error_rule_skipped: "Rule {{.Rule}} is invalid and is being skippe
 setting.relay_error_default_message_skipped: "The default message is longer than 500 characters and is not used; users see the built-in message instead. Shorten it, then save"
 setting.relay_error_rules_unreadable: "The saved rules cannot be read, so none of them apply. Add the rules again, then save"
 setting.relay_error_rules_over_limit: "More than {{.Max}} rules are saved; only the first {{.Max}} apply. Delete the extra rules, then save"
+probe.channel_unavailable: "No channel in this group currently accepts probe requests. Try again later or contact an administrator."
+probe.channel_forbidden: "The selected channel does not accept probe requests. Change the channel binding or contact an administrator."

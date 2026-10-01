@@ -110,5 +110,8 @@ func buildDefinitions() map[string]Definition {
 	for _, item := range items {
 		result[item.Scope] = item
 	}
+	routing := result["models.routing-reliability"]
+	routing.OptionKeys["probe_routing_setting.max_input_chars"] = struct{}{}
+	routing.GroupKeys["probe_routing_setting"] = keys("max_input_chars")
 	return result
 }

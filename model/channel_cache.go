@@ -24,6 +24,7 @@ var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
+	defer RefreshChannelProbePolicy()
 	if !common.MemoryCacheEnabled {
 		InvalidatePricingCache()
 		return
@@ -114,10 +115,14 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, policies ...*ChannelProbePolicy) (*Channel, error) {
+	var policy *ChannelProbePolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannel(group, model, retry, requestPath, policy)
 	}
 
 	channelSyncLock.RLock()
@@ -134,6 +139,19 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	if policy != nil {
+		allowed := make([]int, 0, len(channels))
+		for _, id := range channels {
+			if !policy.Blocks(id) {
+				allowed = append(allowed, id)
+			}
+		}
+		if len(allowed) == 0 {
+			return nil, ErrProbeChannelUnavailable
+		}
+		channels = allowed
 	}
 
 	if len(channels) == 1 {

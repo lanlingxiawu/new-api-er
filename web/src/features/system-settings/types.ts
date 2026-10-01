@@ -687,6 +687,7 @@ export type ModelSettings = {
   'channel_daily_limit_setting.enabled': boolean
   'channel_daily_limit_setting.timezone': string
   'channel_daily_limit_setting.retention_days': number
+  'probe_routing_setting.max_input_chars': number
   'channel_affinity_setting.enabled': boolean
   'channel_affinity_setting.switch_on_success': boolean
   'channel_affinity_setting.keep_on_channel_disabled': boolean

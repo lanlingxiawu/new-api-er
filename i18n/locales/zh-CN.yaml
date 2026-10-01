@@ -639,3 +639,5 @@ setting.relay_error_rule_skipped: "规则 {{.Rule}} 无效，已被跳过：请�
 setting.relay_error_default_message_skipped: "默认文案超过 500 字，未被使用，用户看到的是内置文案。请缩短后保存"
 setting.relay_error_rules_unreadable: "已保存的规则无法读取，全部未生效。请重新添加规则后保存"
 setting.relay_error_rules_over_limit: "已保存的规则超过 {{.Max}} 条，只有前 {{.Max}} 条生效。请删除多余的规则后保存"
+probe.channel_unavailable: "当前分组暂无接受探针请求的渠道，请稍后重试或联系管理员。"
+probe.channel_forbidden: "指定渠道不接受探针请求，请调整渠道绑定或联系管理员。"
