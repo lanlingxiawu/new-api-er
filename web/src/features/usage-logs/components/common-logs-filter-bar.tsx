@@ -48,6 +48,7 @@ import {
 import { useIsEmployee } from '@/hooks/use-admin'
 
 import { exportLogs, LogExportError } from '../api'
+import { EmployeeCustomerExport } from '../export/components/employee-customer-export'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
@@ -332,7 +333,9 @@ export function CommonLogsFilterBar<TData>(
 
   // 普通用户只有「快速导出」（同步小范围）；管理员多一条通往后台导出中心的路。
   let exportButton: React.ReactNode = null
-  if (canExport && exportScope === 'admin') {
+  if (logsScope === 'employee') {
+    exportButton = <EmployeeCustomerExport prefill={{ start: filters.startTime, end: filters.endTime, customerId: Number(filters.customerUserId) || undefined }} />
+  } else if (canExport && exportScope === 'admin') {
     exportButton = (
       <DropdownMenu>
         <DropdownMenuTrigger

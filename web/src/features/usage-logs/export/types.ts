@@ -146,9 +146,7 @@ export interface ExportOptions {
   header: boolean
 }
 
-export interface ExportFilters
-  extends AnomalyFilters,
-    NumericFilters {
+export interface ExportFilters extends AnomalyFilters, NumericFilters {
   type: number
   start_timestamp: number
   end_timestamp: number
@@ -176,6 +174,11 @@ export interface ExportPart {
 }
 
 export interface ExportJob {
+  employee_scope?: {
+    template_name: string
+    template_key: string
+    customer_ids: number[]
+  }
   job_id: string
   user_id: number
   username: string
@@ -219,9 +222,7 @@ export interface ExportTemplate {
   options: ExportOptions
 }
 
-export interface CreateExportJobRequest
-  extends AnomalyFilters,
-    NumericFilters {
+export interface CreateExportJobRequest extends AnomalyFilters, NumericFilters {
   start_timestamp: number
   end_timestamp: number
   type?: number

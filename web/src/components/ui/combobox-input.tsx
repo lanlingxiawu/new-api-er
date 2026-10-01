@@ -42,6 +42,7 @@ interface ComboboxInputProps {
   openOnFocus?: boolean
   onSearchValueChange?: (value: string) => void
   disabled?: boolean
+  dropdownFooter?: React.ReactNode
 }
 
 export function ComboboxInput({
@@ -56,13 +57,14 @@ export function ComboboxInput({
   openOnFocus = true,
   onSearchValueChange,
   disabled = false,
+  dropdownFooter,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
   const [searchValue, setSearchValue] = React.useState('')
   const [highlightedIndex, setHighlightedIndex] = React.useState(-1)
   const generatedId = React.useId()
-  const inputId = id ?? `combobox-${generatedId.replace(/:/g, '')}`
+  const inputId = id ?? `combobox-${generatedId.replaceAll(':', '')}`
   const listboxId = `${inputId}-listbox`
   const containerRef = React.useRef<HTMLDivElement>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -291,6 +293,7 @@ export function ComboboxInput({
               )}
             </div>
           )}
+          {dropdownFooter}
         </div>
       )}
     </div>

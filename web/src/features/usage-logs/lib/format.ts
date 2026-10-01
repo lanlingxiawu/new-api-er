@@ -484,6 +484,8 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'log_export.template_create': 'Created a log export template',
   'log_export.template_update': 'Updated a log export template',
   'log_export.template_delete': 'Deleted a log export template',
+  'employee_export.template_save': 'Saved an employee export template',
+  'employee_export.template_delete': 'Deleted an employee export template',
   // Generic middleware fallback
   generic: '{{method}} {{route}}',
 }

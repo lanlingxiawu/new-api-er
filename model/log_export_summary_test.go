@@ -275,6 +275,42 @@ func TestWriteLogExport_BothModeScansOnceAndEmitsTwoKinds(t *testing.T) {
 	assert.Equal(t, "300", sRows[1][5])
 }
 
+// 「明细 + 汇总」的汇总维度不在明细列里时，也必须把维度列查出来：
+// 漏查时该维度全为空，所有行被并成一组。
+func TestWriteLogExport_BothModeSelectsDimensionMissingFromColumns(t *testing.T) {
+	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, nil)
+
+	username := uniq("bothdim")
+	base := time.Now().Unix() - 7500
+	for i := range 4 {
+		mkExportLog(t, func(l *Log) {
+			l.Username = username
+			l.CreatedAt = base + int64(i)
+			l.Group = []string{"alpha", "beta"}[i%2]
+			l.Quota = 100
+		})
+	}
+
+	job := newExportJobFor(username, base-10, base+100, []string{"created_at", "quota"})
+	job.Mode = LogExportModeBoth
+	job.SummaryDims = []string{LogSummaryDimGroup}
+	require.NoError(t, runExportJob(t, job))
+
+	var summary *LogExportPart
+	for i := range job.Parts {
+		if job.Parts[i].Kind == LogExportPartKindSummary {
+			summary = &job.Parts[i]
+		}
+	}
+	require.NotNil(t, summary)
+	rows, _ := readCSVGz(t, summary.Path)
+	require.Len(t, rows, 3, "表头 + 两个分组")
+	assert.Equal(t, []string{"alpha", "beta"}, []string{rows[1][0], rows[2][0]})
+	assert.Equal(t, "2", rows[1][1])
+}
+
 // 纯汇总模式产出的分片同样要标成 summary，否则下载后分不清。
 func TestWriteLogExport_SummaryOnlyPartIsTagged(t *testing.T) {
 	requireLogDB(t)

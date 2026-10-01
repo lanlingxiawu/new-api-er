@@ -539,7 +539,7 @@ func CreateLogExportJob(c *gin.Context) {
 // auditLogExportJobCreated 手动埋点：中间件兜底只会记下「POST 了哪个路由」，
 // 而导出的关键信息是「谁、取了哪段时间、哪些筛选条件、多少列」。
 // 设置 ContextKeyAuditLogged 以避免与兜底记录重复。
-func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob) {
+func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob, extra ...map[string]interface{}) {
 	common.SetContextKey(c, constant.ContextKeyAuditLogged, true)
 	params := map[string]interface{}{
 		"job_id":  job.JobID,
@@ -550,6 +550,11 @@ func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob) {
 	}
 	if scope := logExportFilterScope(job.Filters); scope != "" {
 		params["filters"] = scope
+	}
+	for _, fields := range extra {
+		for key, value := range fields {
+			params[key] = value
+		}
 	}
 	recordLogExportAudit(c, "log_export.job_create",
 		"created log export job "+job.JobID, params)
@@ -700,6 +705,9 @@ func GetLogExportJobs(c *gin.Context) {
 	}
 	views := make([]*model.LogExportJob, 0, len(jobs))
 	for _, job := range jobs {
+		if (isEmployeeExportRoute(c) || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil {
+			continue
+		}
 		views = append(views, job.PublicView())
 	}
 	common.ApiSuccess(c, gin.H{
@@ -722,6 +730,12 @@ func loadOwnedLogExportJob(c *gin.Context) (*model.LogExportJob, bool) {
 	}
 	if job.UserID != c.GetInt("id") && !isRootRequest(c) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
+		return nil, false
+	}
+	employeeRoute := isEmployeeExportRoute(c)
+	if ((employeeRoute || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil) ||
+		(employeeRoute && job.UserID != c.GetInt("id")) {
+		employeeExportError(c, model.ErrEmployeeExportAccess)
 		return nil, false
 	}
 	return job, true
@@ -768,6 +782,10 @@ func GetLogExportDownloadURL(c *gin.Context) {
 	}
 	job, ok := loadOwnedLogExportJob(c)
 	if !ok {
+		return
+	}
+	if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+		employeeExportError(c, err)
 		return
 	}
 	if job.Status != model.LogExportStatusReady {
@@ -863,14 +881,18 @@ func DownloadLogExport(c *gin.Context) {
 
 	// 令牌不经过鉴权中间件，这里必须自己复核当前身份：管理员被降权或被封禁后，
 	// 已签发的链接要立刻失效（否则续传窗口内仍能取数）。
-	if !logExportDownloaderAllowed(userID) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "access denied"})
-		return
-	}
-
 	job, err := model.GetLogExportJob(jobID)
 	if err != nil || job == nil || job.UserID != userID || job.Status != model.LogExportStatusReady {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "export not available"})
+		return
+	}
+	if job.EmployeeScope != nil {
+		if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+			employeeExportError(c, err)
+			return
+		}
+	} else if !logExportDownloaderAllowed(userID) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return
 	}
 	if len(job.Parts) == 0 {

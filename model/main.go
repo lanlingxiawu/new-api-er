@@ -299,6 +299,7 @@ func migrateDB() error {
 		&CasbinRule{},
 		&AuthzRole{},
 		&LogExportTemplate{},
+		&EmployeeExportTemplate{},
 	)
 	if err != nil {
 		return err

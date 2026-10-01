@@ -321,6 +321,11 @@ const SYSTEM_TUNING_SECTIONS = [
     build: (settings: SystemTuningSettings) => (
       <LogExportSection
         defaultValues={{
+          'log_export_setting.employee_export_enabled':
+            settings['log_export_setting.employee_export_enabled'] ?? false,
+          'log_export_setting.employee_max_customers_per_job':
+            settings['log_export_setting.employee_max_customers_per_job'] ||
+            100,
           'log_export_setting.enabled':
             settings['log_export_setting.enabled'] ??
             systemTuningFallbackSettings['log_export_setting.enabled'],

@@ -53,6 +53,8 @@ import {
 const schema = z.object({
   log_export_setting: z.object({
     enabled: z.boolean(),
+    employee_export_enabled: z.boolean(),
+    employee_max_customers_per_job: z.number().int().min(1).max(1000),
     user_cooldown_sec: z.number().int().min(0).max(86400),
     // 0 是有意义的取值：停止接受新任务，但不打断运行中的任务。
     max_concurrent_jobs: z.number().int().min(0).max(16),
@@ -96,6 +98,8 @@ type LogExportSectionProps = { defaultValues: LogExportFlatDefaults }
 
 const FIELD_KEYS = [
   'enabled',
+  'employee_export_enabled',
+  'employee_max_customers_per_job',
   'user_cooldown_sec',
   'max_concurrent_jobs',
   'max_active_jobs_per_user',
@@ -142,7 +146,7 @@ function normalizeFormValues(v: FormValues): LogExportFlatDefaults {
 }
 
 type NumberField = {
-  name: Exclude<keyof Settings, 'enabled' | 'offpeak_only' | 'offpeak_window'>
+  name: Exclude<keyof Settings, 'enabled' | 'employee_export_enabled' | 'offpeak_only' | 'offpeak_window'>
   label: string
   description: string
   min: number
@@ -150,6 +154,13 @@ type NumberField = {
 }
 
 const quotaFields: NumberField[] = [
+  {
+    name: 'employee_max_customers_per_job',
+    label: 'Customers per export',
+    description: 'Maximum customers in one employee export, including all-customer exports.',
+    min: 1,
+    max: 1000,
+  },
   {
     name: 'user_cooldown_sec',
     label: 'Export Cooldown (s)',
@@ -442,6 +453,28 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
           <div>
             <h4 className='text-sm font-medium'>{t('Quotas and Limits')}</h4>
           </div>
+          <FormField
+            control={form.control}
+            name='log_export_setting.employee_export_enabled'
+            render={({ field }) => (
+              <FormItem className='flex flex-row items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <FormLabel>{t('Enable employee customer exports')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Applies to every active employee. Employees export only their own customers, using the built-in reconciliation templates and enabled custom templates.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
           {renderNumberFields(quotaFields)}
 
           <Separator />

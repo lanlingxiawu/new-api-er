@@ -75,10 +75,11 @@ type LogExportOptions struct {
 
 // LogExportJob 一次导出任务的完整状态，序列化后存 Redis。
 type LogExportJob struct {
-	JobID    string `json:"job_id"`
-	UserID   int    `json:"user_id"`
-	Username string `json:"username"`
-	Status   string `json:"status"`
+	EmployeeScope *EmployeeExportScope `json:"employee_scope,omitempty"`
+	JobID         string               `json:"job_id"`
+	UserID        int                  `json:"user_id"`
+	Username      string               `json:"username"`
+	Status        string               `json:"status"`
 	// Progress 0-100，按时间轴推进，不做 COUNT。
 	Progress int `json:"progress"`
 	// RowCount 实际写进文件的行数。带行级筛选时它远小于扫描量。
@@ -633,7 +634,8 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		return writeLogExportSummary(ctx, job)
 	}
 
-	columnSet, err := ResolveLogExportColumns(job.Columns, true)
+	// Employee jobs never render admin-only columns, even if a template snapshot contains one.
+	columnSet, err := ResolveLogExportColumns(job.Columns, job.EmployeeScope == nil)
 	if err != nil {
 		return err
 	}
@@ -663,6 +665,14 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	}
 
 	fields := columnSet.SelectFields()
+	// 明细+汇总共用一次扫描：汇总维度即使没有对应的明细列也必须 SELECT，否则该维度全为空值、所有行被并成一组。
+	if job.NeedsSummary() {
+		for _, field := range summaryScanFields(job.SummaryDims) {
+			if !slices.Contains(fields, field) {
+				fields = append(fields, field)
+			}
+		}
+	}
 	// 行级条件要读 other，即使勾选的列一个都不依赖它。other 是行宽的大头，
 	// 这会明显抬高单批的传输与解析开销——代价在新建导出时已向管理员说明。
 	rowFilter := job.Filters.HasRowFilter()

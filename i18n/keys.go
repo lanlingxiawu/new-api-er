@@ -794,3 +794,14 @@ const (
 	MsgRelayImageRequestInvalid     = "relay.image_request_invalid"
 	MsgRelayRequestPrepareFailed    = "relay.request_prepare_failed"
 )
+
+// Employee export messages already used by the connected export controllers.
+const (
+	MsgEmployeeExportInvalid         = "employee_export.invalid"
+	MsgEmployeeExportTemplateSaved   = "employee_export.template_saved"
+	MsgEmployeeExportTemplateDeleted = "employee_export.template_deleted"
+	MsgEmployeeExportNoCustomers     = "employee_export.no_customers"
+	MsgEmployeeExportTooMany         = "employee_export.too_many_customers"
+	MsgEmployeeExportNameTaken       = "employee_export.name_taken"
+	MsgEmployeeExportConflict        = "employee_export.conflict"
+)

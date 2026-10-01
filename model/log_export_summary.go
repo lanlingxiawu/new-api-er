@@ -378,9 +378,16 @@ func writeLogExportSummary(ctx context.Context, job *LogExportJob) (retErr error
 // 供「明细 + 汇总」模式复用：明细分片写完之后再追加一个汇总分片，
 // 两者同在一个 zip 里，靠文件名区分。
 func appendLogExportSummaryPart(job *LogExportJob, acc *logSummaryAccumulator, translate func(string) string) error {
+	// 员工任务的汇总只在模板勾选了「额度」列时才输出额度，与明细保持一致；
+	// 管理员任务始终输出。
+	dropQuota := job.EmployeeScope != nil && !slices.Contains(job.Columns, "quota")
+	quotaIndex := len(acc.dims) + 4
 	var header []string
 	if job.Options.Header {
 		header = acc.Header(translate)
+		if dropQuota {
+			header = append(header[:quotaIndex], header[quotaIndex+1:]...)
+		}
 	}
 	writerOpts := LogExportWriterOptions{
 		CSVBOM:    job.Options.CSVBOM,
@@ -395,6 +402,9 @@ func appendLogExportSummaryPart(job *LogExportJob, acc *logSummaryAccumulator, t
 	}
 	rows := acc.Rows()
 	for _, row := range rows {
+		if dropQuota {
+			row = append(row[:quotaIndex], row[quotaIndex+1:]...)
+		}
 		if err := writer.WriteRow(row); err != nil {
 			_, _ = writer.Close()
 			_ = os.Remove(path)

@@ -985,6 +985,8 @@ export type SystemTuningSettings = {
 
   // 使用日志导出（管理员后台任务）
   'log_export_setting.enabled': boolean
+  'log_export_setting.employee_export_enabled': boolean
+  'log_export_setting.employee_max_customers_per_job': number
   'log_export_setting.offpeak_only': boolean
   'log_export_setting.user_cooldown_sec': number
   'log_export_setting.max_concurrent_jobs': number

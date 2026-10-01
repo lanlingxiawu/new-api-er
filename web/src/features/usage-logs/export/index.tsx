@@ -43,9 +43,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { canViewAdminMenu } from '@/lib/admin-permissions'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { deleteExportJob, downloadExportPart, getExportJobs } from './api'
-import { NewExportSheet, type NewExportPrefill } from './components/new-export-sheet'
+import { EmployeeTemplateManager } from './components/employee-template-manager'
+import {
+  NewExportSheet,
+  type NewExportPrefill,
+} from './components/new-export-sheet'
 import type { AnomalyFilters, ExportJob, ExportJobStatus } from './types'
 
 /** Stable backend error codes → user-facing copy. Raw Go errors never reach the UI. */
@@ -120,6 +126,9 @@ function toDate(value?: number | string): Date | undefined {
 }
 
 export function LogExportCenter() {
+  const canManageEmployees = useAuthStore((state) =>
+    canViewAdminMenu(state.auth.user, 'employees')
+  )
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -141,7 +150,11 @@ export function LogExportCenter() {
       filters.min_retry_count = search.anomalyMinRetry
     }
     return Object.keys(filters).length ? filters : undefined
-  }, [search.anomalyUsageSource, search.anomalyEndReason, search.anomalyMinRetry])
+  }, [
+    search.anomalyUsageSource,
+    search.anomalyEndReason,
+    search.anomalyMinRetry,
+  ])
 
   const prefill = useMemo<NewExportPrefill>(
     () => ({
@@ -186,7 +199,9 @@ export function LogExportCenter() {
     mutationFn: ({ jobId, part }: { jobId: string; part?: number }) =>
       downloadExportPart(jobId, part),
     onError: (err: Error) =>
-      toast.error(err.message || t('Download link expired. Click download again.')),
+      toast.error(
+        err.message || t('Download link expired. Click download again.')
+      ),
   })
 
   const jobs = data?.jobs ?? []
@@ -199,8 +214,11 @@ export function LogExportCenter() {
             <Plus />
             {t('New Export')}
           </Button>
+          {canManageEmployees && <EmployeeTemplateManager />}
           {data && !data.enabled && (
-            <Badge variant='destructive'>{t('Log export is currently turned off')}</Badge>
+            <Badge variant='destructive'>
+              {t('Log export is currently turned off')}
+            </Badge>
           )}
         </div>
         <Button
@@ -217,7 +235,9 @@ export function LogExportCenter() {
       {error && (
         <p className='text-destructive text-sm'>
           {(error as Error).message ||
-            t('Background export is unavailable. You can still use Quick Export for smaller ranges.')}
+            t(
+              'Background export is unavailable. You can still use Quick Export for smaller ranges.'
+            )}
         </p>
       )}
 
@@ -246,7 +266,10 @@ export function LogExportCenter() {
 
             {!isLoading && jobs.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className='text-muted-foreground py-10 text-center'>
+                <TableCell
+                  colSpan={7}
+                  className='text-muted-foreground py-10 text-center'
+                >
                   {t('No exports yet. Create one to get started.')}
                 </TableCell>
               </TableRow>
@@ -254,13 +277,16 @@ export function LogExportCenter() {
 
             {jobs.map((job) => {
               const parts = job.parts ?? []
-              const isActive = job.status === 'running' || job.status === 'pending'
+              const isActive =
+                job.status === 'running' || job.status === 'pending'
               return (
                 <TableRow key={job.job_id}>
                   <TableCell className='font-mono text-xs whitespace-nowrap'>
                     {dayjs.unix(job.created_at).format('MM-DD HH:mm:ss')}
                     {job.username && (
-                      <div className='text-muted-foreground'>{job.username}</div>
+                      <div className='text-muted-foreground'>
+                        {job.username}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className='text-xs whitespace-nowrap'>
@@ -309,16 +335,22 @@ export function LogExportCenter() {
                           <Progress value={job.progress} className='h-1.5' />
                           {job.throttled_ms > 3000 && (
                             <p className='text-muted-foreground text-[11px]'>
-                              {t('Yielded {{seconds}}s to keep the service responsive', {
-                                seconds: Math.round(job.throttled_ms / 1000),
-                              })}
+                              {t(
+                                'Yielded {{seconds}}s to keep the service responsive',
+                                {
+                                  seconds: Math.round(job.throttled_ms / 1000),
+                                }
+                              )}
                             </p>
                           )}
                         </>
                       )}
                       {job.status === 'failed' && (
                         <p className='text-muted-foreground text-[11px]'>
-                          {t(ERROR_MESSAGES[job.error ?? 'internal'] ?? ERROR_MESSAGES.internal)}
+                          {t(
+                            ERROR_MESSAGES[job.error ?? 'internal'] ??
+                              ERROR_MESSAGES.internal
+                          )}
                         </p>
                       )}
                     </div>

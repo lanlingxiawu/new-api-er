@@ -121,6 +121,8 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'log_query_setting.query_timeout_ms': 10000,
 
   'log_export_setting.enabled': true,
+  'log_export_setting.employee_export_enabled': false,
+  'log_export_setting.employee_max_customers_per_job': 100,
   'log_export_setting.offpeak_only': false,
   'log_export_setting.user_cooldown_sec': 300,
   'log_export_setting.max_concurrent_jobs': 1,
