@@ -203,12 +203,16 @@ func ApplyPriceMonitorPrice(c *gin.Context) {
 		auditMeta["below_floor"] = violations
 	}
 	recordManageAudit(c, "price_monitor.price.apply", auditMeta)
+	// 就地重算后页面直接重新查询即可看到新结果；refreshed 为假（非主节点、重算失败，
+	// 或恰好被新一轮巡检取代）时，页面提示等下一轮刷新。
+	refreshed := refreshPriceMonitorAfterChange(c)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
 			"pricing_version": version,
 			"results":         priceMonitorApplyResults(request.Items, applied),
+			"refreshed":       refreshed,
 		},
 	})
 }

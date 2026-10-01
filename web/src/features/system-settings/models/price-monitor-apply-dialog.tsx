@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next'
 import { Dialog } from '@/components/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   InputGroup,
   InputGroupAddon,
@@ -36,8 +37,8 @@ import type {
   PriceMonitorRepairFloor,
 } from '../types'
 import { numericDraftRegex } from './model-pricing-core'
-import { shouldForceApply } from './price-monitor-apply-force'
 import { PriceInput } from './model-pricing-inputs'
+import { shouldForceApply } from './price-monitor-apply-force'
 import { formatPricingNumber } from './pricing-format'
 
 export type PriceMonitorRepairTarget = {
@@ -45,19 +46,24 @@ export type PriceMonitorRepairTarget = {
   /** 平台当前的展示价（计费实际使用的价格）。 */
   platform: PriceMonitorPriceCell
   /**
-   * 该行的改价数据：fields 的键是可改的字段，highest 是每一项的渠道最高价，
-   * current 是平台现值（也是改价请求的 expected）。
+   * 该行的改价数据：fields/display 是保本下限（没有可比渠道时为空），current 是平台现值
+   * （也是改价请求的 expected），official/lowest/highest 是参考价。
    */
-  floor: PriceMonitorRepairFloor & { fields: Record<string, number> }
+  floor: PriceMonitorRepairFloor
 }
 
-type RepairMode = 'highest' | 'manual'
+/** 保本价 / 官方价 / 最高渠道价 / 手动。 */
+type RepairMode = 'floor' | 'official' | 'highest' | 'manual'
 
 /** 一行价格。价格一律是展示价：按量为每百万 token，按次为每次。 */
 type PriceRow = {
   field: string
   labelKey: string
   current?: number
+  /** 保本价：低于它就会在某个渠道上亏。 */
+  floor?: number
+  official?: number
+  lowest?: number
   highest?: number
   /** 补全倍率被系统锁定时的输出行：跟随输入价，不能单独改。 */
   derived?: boolean
@@ -111,16 +117,31 @@ function lockedRatio(target: PriceMonitorRepairTarget) {
   return target.floor.locked_completion_ratio ?? 0
 }
 
+function hasEntries(values?: Record<string, number>) {
+  return values !== undefined && Object.keys(values).length > 0
+}
+
 function buildRows(target: PriceMonitorRepairTarget): PriceRow[] {
   const { platform, floor } = target
-  const highest = floor.highest ?? {}
+  const floorFields = floor.fields ?? {}
+  const refs = (field: string) => ({
+    // display 里的值只有同时出现在 fields 里才是保本约束。
+    floor:
+      floorFields[field] !== undefined ? floor.display?.[field] : undefined,
+    official: floor.official?.[field],
+    lowest: floor.lowest?.[field],
+    highest: floor.highest?.[field],
+  })
+  const referenced = (field: string) =>
+    Object.values(refs(field)).some((value) => value !== undefined)
+
   if (platform.mode === 'per_request') {
     return [
       {
         field: 'model_price',
         labelKey: FIELD_LABELS.model_price,
         current: platform.price,
-        highest: highest.model_price,
+        ...refs('model_price'),
       },
     ]
   }
@@ -130,29 +151,27 @@ function buildRows(target: PriceMonitorRepairTarget): PriceRow[] {
       field: 'model_ratio',
       labelKey: FIELD_LABELS.model_ratio,
       current: platform.input,
-      highest: highest.model_ratio,
+      ...refs('model_ratio'),
     },
   ]
   const locked = lockedRatio(target) > 0
-  if (
-    floor.fields.completion_ratio !== undefined ||
-    (locked && highest.completion_ratio !== undefined)
-  ) {
+  if (platform.output !== undefined || referenced('completion_ratio')) {
     rows.push({
       field: 'completion_ratio',
       labelKey: FIELD_LABELS.completion_ratio,
       current: platform.output,
-      highest: highest.completion_ratio,
+      ...refs('completion_ratio'),
       derived: locked,
     })
   }
   for (const { field, lane } of LANE_ROWS) {
-    if (floor.fields[field] === undefined) continue
+    const current = platform.lanes?.find((entry) => entry.key === lane)?.price
+    if (current === undefined && !referenced(field)) continue
     rows.push({
       field,
       labelKey: FIELD_LABELS[field],
-      current: platform.lanes?.find((entry) => entry.key === lane)?.price,
-      highest: highest[field],
+      current,
+      ...refs(field),
     })
   }
   return rows
@@ -162,6 +181,27 @@ function maxDefined(left: number | undefined, right: number | undefined) {
   if (left === undefined) return right
   if (right === undefined) return left
   return Math.max(left, right)
+}
+
+/**
+ * 「保本价」档：每一项低于保本价时抬到保本价，已经高于的保持现价——只抬不降，不会把利润压到零。
+ * 补全倍率锁定时，后端已把输出侧的要求折算进输入价的保本下限。
+ */
+function floorPrices(rows: PriceRow[]) {
+  const prices: RowPrices = {}
+  for (const row of rows) {
+    prices[row.field] = maxDefined(row.current, row.floor)
+  }
+  return prices
+}
+
+/** 「官方价」档：有官方价的项改成官方价（可升可降），没有的项保持现价。 */
+function officialPrices(rows: PriceRow[]) {
+  const prices: RowPrices = {}
+  for (const row of rows) {
+    prices[row.field] = row.official ?? row.current
+  }
+  return prices
 }
 
 /**
@@ -191,6 +231,24 @@ function manualPrices(rows: PriceRow[], drafts: Record<string, string>) {
       raw === '' || !Number.isFinite(parsed) ? undefined : parsed
   }
   return prices
+}
+
+function modePrices(
+  mode: RepairMode,
+  target: PriceMonitorRepairTarget,
+  rows: PriceRow[],
+  drafts: Record<string, string>
+) {
+  switch (mode) {
+    case 'floor':
+      return floorPrices(rows)
+    case 'official':
+      return officialPrices(rows)
+    case 'highest':
+      return highestPrices(target, rows)
+    default:
+      return manualPrices(rows, drafts)
+  }
 }
 
 /** 行的新价格。锁定模型的输出行 = 新输入价 × 锁定倍率。 */
@@ -269,6 +327,24 @@ function seedDrafts(targets: PriceMonitorRepairTarget[]) {
   )
 }
 
+function modeAvailable(mode: RepairMode, targets: PriceMonitorRepairTarget[]) {
+  switch (mode) {
+    case 'floor':
+      return targets.some((target) => hasEntries(target.floor.fields))
+    case 'official':
+      return targets.some((target) => hasEntries(target.floor.official))
+    case 'highest':
+      return targets.some((target) => hasEntries(target.floor.highest))
+    default:
+      return true
+  }
+}
+
+function defaultMode(targets: PriceMonitorRepairTarget[]): RepairMode {
+  const preferred: RepairMode[] = ['floor', 'official', 'highest']
+  return preferred.find((mode) => modeAvailable(mode, targets)) ?? 'manual'
+}
+
 function RatioHint({
   row,
   prices,
@@ -295,6 +371,14 @@ function RatioHint({
   )
 }
 
+function channelRange(row: PriceRow) {
+  if (row.lowest === undefined || row.highest === undefined) {
+    return formatPrice(row.highest ?? row.lowest)
+  }
+  if (nearlyEqual(row.lowest, row.highest)) return formatPrice(row.highest)
+  return `${formatPrice(row.lowest)} – ${formatPrice(row.highest)}`
+}
+
 function ModelPriceCard({
   target,
   rows,
@@ -302,6 +386,9 @@ function ModelPriceCard({
   drafts,
   prices,
   flagged,
+  included,
+  selectable,
+  onIncludedChange,
   onDraftChange,
   t,
 }: {
@@ -311,132 +398,165 @@ function ModelPriceCard({
   drafts: Record<string, string>
   prices: RowPrices
   flagged: Set<string>
+  included: boolean
+  selectable: boolean
+  onIncludedChange: (included: boolean) => void
   onDraftChange: (field: string, value: string) => void
   t: TFunction
 }) {
   const belowCount = rows.filter((row) =>
-    isBelow(rowPrice(target, row, prices), row.highest)
+    isBelow(rowPrice(target, row, prices), row.floor)
   ).length
+  const hasFloor = hasEntries(target.floor.fields)
   const perRequest = target.platform.mode === 'per_request'
 
+  let floorBadge: ReactNode = null
+  if (belowCount > 0) {
+    floorBadge = (
+      <Badge variant='warning'>
+        {t('{{count}} below break-even', { count: belowCount })}
+      </Badge>
+    )
+  } else if (hasFloor) {
+    floorBadge = <Badge variant='outline'>{t('Not below break-even')}</Badge>
+  }
+
   return (
-    <section className='overflow-hidden rounded-lg border'>
+    <section
+      className={cn(
+        'overflow-hidden rounded-lg border',
+        !included && 'opacity-60'
+      )}
+    >
       <div className='bg-muted/40 flex items-center justify-between gap-3 border-b px-4 py-2.5'>
-        <span className='truncate text-sm font-medium'>{target.model}</span>
-        {belowCount > 0 ? (
-          <Badge variant='warning'>
-            {t('{{count}} below channel price', {
-              count: belowCount,
-            })}
-          </Badge>
-        ) : (
-          <Badge variant='outline'>{t('Not below channel prices')}</Badge>
-        )}
+        <label className='flex min-w-0 items-center gap-2'>
+          {selectable && (
+            <Checkbox
+              checked={included}
+              aria-label={t('Include this model')}
+              onCheckedChange={(checked) => onIncludedChange(checked === true)}
+            />
+          )}
+          <span className='truncate text-sm font-medium'>{target.model}</span>
+        </label>
+        {included && floorBadge}
       </div>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className='ps-4'>{t('Item')}</TableHead>
-            <TableHead className='text-end'>{t('Current price')}</TableHead>
-            <TableHead className='text-end'>
-              {t('Highest channel price')}
-            </TableHead>
-            <TableHead
-              className={cn('pe-4', mode === 'manual' ? 'w-64' : 'text-end')}
-            >
-              {t('New price')}
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const price = rowPrice(target, row, prices)
-            const below = isBelow(price, row.highest)
-            const error =
-              mode === 'manual' ? rowError(row, prices, t) : undefined
-            const editable = mode === 'manual' && !row.derived
-            const onValueChange = (value: string) => {
-              if (numericDraftRegex.test(value)) onDraftChange(row.field, value)
-            }
-            let valueCell: ReactNode = (
-              <span
-                className={cn(
-                  'font-medium tabular-nums',
-                  below && 'text-warning'
-                )}
+      {included && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className='ps-4'>{t('Item')}</TableHead>
+              <TableHead className='text-end'>{t('Current price')}</TableHead>
+              <TableHead className='text-end'>
+                {t('Break-even price')}
+              </TableHead>
+              <TableHead className='text-end'>{t('Official price')}</TableHead>
+              <TableHead className='text-end'>{t('Channel prices')}</TableHead>
+              <TableHead
+                className={cn('pe-4', mode === 'manual' ? 'w-56' : 'text-end')}
               >
-                {formatPrice(price)}
-              </span>
-            )
-            if (editable && perRequest) {
-              valueCell = (
-                <InputGroup>
-                  <InputGroupAddon>$</InputGroupAddon>
-                  <InputGroupInput
-                    inputMode='decimal'
-                    aria-invalid={Boolean(error) || below}
-                    value={drafts[row.field] ?? ''}
-                    onChange={(event) => onValueChange(event.target.value)}
-                  />
-                  <InputGroupAddon align='inline-end'>
-                    {t('per request')}
-                  </InputGroupAddon>
-                </InputGroup>
-              )
-            } else if (editable) {
-              valueCell = (
-                <PriceInput
-                  value={drafts[row.field] ?? ''}
-                  onChange={onValueChange}
-                />
-              )
-            }
-            return (
-              <TableRow key={row.field}>
-                <TableCell className='ps-4 align-top'>
-                  {t(row.labelKey)}
-                </TableCell>
-                <TableCell className='text-muted-foreground text-end align-top tabular-nums'>
-                  {formatPrice(row.current)}
-                </TableCell>
-                <TableCell className='text-end align-top tabular-nums'>
-                  {formatPrice(row.highest)}
-                </TableCell>
-                <TableCell
-                  className={cn('pe-4 align-top', !editable && 'text-end')}
+                {t('New price')}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const price = rowPrice(target, row, prices)
+              const below = isBelow(price, row.floor)
+              const error =
+                mode === 'manual' ? rowError(row, prices, t) : undefined
+              const editable = mode === 'manual' && !row.derived
+              const onValueChange = (value: string) => {
+                if (numericDraftRegex.test(value)) {
+                  onDraftChange(row.field, value)
+                }
+              }
+              let valueCell: ReactNode = (
+                <span
+                  className={cn(
+                    'font-medium tabular-nums',
+                    below && 'text-warning'
+                  )}
                 >
-                  <div className='space-y-1'>
-                    {valueCell}
-                    {editable && !error && (
-                      <RatioHint row={row} prices={prices} t={t} />
-                    )}
-                    {row.derived && (
-                      <p className='text-muted-foreground text-xs'>
-                        {t('Input price × {{ratio}} (locked)', {
-                          ratio: formatPricingNumber(lockedRatio(target)),
-                        })}
-                      </p>
-                    )}
-                    {error && (
-                      <p className='text-destructive text-xs'>{error}</p>
-                    )}
-                    {!error && below && (
-                      <p className='text-warning text-xs'>
-                        {t('Below channel price')}
-                      </p>
-                    )}
-                    {flagged.has(row.field) && (
-                      <p className='text-warning text-xs'>
-                        {t('Below cost after group discounts')}
-                      </p>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            )
-          })}
-        </TableBody>
-      </Table>
+                  {formatPrice(price)}
+                </span>
+              )
+              if (editable && perRequest) {
+                valueCell = (
+                  <InputGroup>
+                    <InputGroupAddon>$</InputGroupAddon>
+                    <InputGroupInput
+                      inputMode='decimal'
+                      aria-invalid={Boolean(error) || below}
+                      value={drafts[row.field] ?? ''}
+                      onChange={(event) => onValueChange(event.target.value)}
+                    />
+                    <InputGroupAddon align='inline-end'>
+                      {t('per request')}
+                    </InputGroupAddon>
+                  </InputGroup>
+                )
+              } else if (editable) {
+                valueCell = (
+                  <PriceInput
+                    value={drafts[row.field] ?? ''}
+                    onChange={onValueChange}
+                  />
+                )
+              }
+              return (
+                <TableRow key={row.field}>
+                  <TableCell className='ps-4 align-top'>
+                    {t(row.labelKey)}
+                  </TableCell>
+                  <TableCell className='text-muted-foreground text-end align-top tabular-nums'>
+                    {formatPrice(row.current)}
+                  </TableCell>
+                  <TableCell className='text-end align-top tabular-nums'>
+                    {formatPrice(row.floor)}
+                  </TableCell>
+                  <TableCell className='text-end align-top tabular-nums'>
+                    {formatPrice(row.official)}
+                  </TableCell>
+                  <TableCell className='text-end align-top tabular-nums'>
+                    {channelRange(row)}
+                  </TableCell>
+                  <TableCell
+                    className={cn('pe-4 align-top', !editable && 'text-end')}
+                  >
+                    <div className='space-y-1'>
+                      {valueCell}
+                      {editable && !error && (
+                        <RatioHint row={row} prices={prices} t={t} />
+                      )}
+                      {row.derived && (
+                        <p className='text-muted-foreground text-xs'>
+                          {t('Input price × {{ratio}} (locked)', {
+                            ratio: formatPricingNumber(lockedRatio(target)),
+                          })}
+                        </p>
+                      )}
+                      {error && (
+                        <p className='text-destructive text-xs'>{error}</p>
+                      )}
+                      {!error && below && (
+                        <p className='text-warning text-xs'>
+                          {t('Below break-even price')}
+                        </p>
+                      )}
+                      {flagged.has(row.field) && (
+                        <p className='text-warning text-xs'>
+                          {t('Below cost after group discounts')}
+                        </p>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      )}
     </section>
   )
 }
@@ -459,11 +579,12 @@ export function PriceMonitorApplyDialog({
   ) => Promise<PriceMonitorFloorViolation[]>
 }) {
   const { t } = useTranslation()
-  const [mode, setMode] = useState<RepairMode>('highest')
+  const [mode, setMode] = useState<RepairMode>('floor')
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>(
     {}
   )
-  // 有低于渠道最高价（或服务端判定仍亏损）的项时，要求再点一次确认。
+  const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set())
+  // 有低于保本价（或服务端判定仍亏损）的项时，要求再点一次确认。
   const [confirmed, setConfirmed] = useState(false)
   const [serverViolations, setServerViolations] = useState<
     PriceMonitorFloorViolation[]
@@ -475,8 +596,9 @@ export function PriceMonitorApplyDialog({
   if (open !== wasOpen) {
     setWasOpen(open)
     if (open) {
-      setMode('highest')
+      setMode(defaultMode(targets))
       setDrafts(seedDrafts(targets))
+      setExcluded(new Set())
       setConfirmed(false)
       setServerViolations([])
     }
@@ -491,21 +613,27 @@ export function PriceMonitorApplyDialog({
     () =>
       targets.map((target) => {
         const rows = buildRows(target)
-        const prices =
-          mode === 'highest'
-            ? highestPrices(target, rows)
-            : manualPrices(rows, drafts[target.model] ?? {})
+        const prices = modePrices(
+          mode,
+          target,
+          rows,
+          drafts[target.model] ?? {}
+        )
+        const included = !excluded.has(target.model)
         const errors =
-          mode === 'manual'
+          included && mode === 'manual'
             ? rows.filter((row) => rowError(row, prices, t)).length
             : 0
-        const below = rows.filter((row) =>
-          isBelow(rowPrice(target, row, prices), row.highest)
-        ).length
-        const item = errors === 0 ? buildItem(target, rows, prices) : null
-        return { target, rows, prices, errors, below, item }
+        const below = included
+          ? rows.filter((row) =>
+              isBelow(rowPrice(target, row, prices), row.floor)
+            ).length
+          : 0
+        const item =
+          included && errors === 0 ? buildItem(target, rows, prices) : null
+        return { target, rows, prices, included, errors, below, item }
       }),
-    [drafts, mode, targets, t]
+    [drafts, excluded, mode, targets, t]
   )
 
   const items = models.flatMap((entry) => (entry.item ? [entry.item] : []))
@@ -550,9 +678,7 @@ export function PriceMonitorApplyDialog({
     if (!needsConfirm) return t('Apply new pricing')
     if (confirmed) return t('Apply anyway')
     return belowCount > 0
-      ? t('{{count}} below channel price', {
-          count: belowCount,
-        })
+      ? t('{{count}} below break-even', { count: belowCount })
       : t('Apply anyway')
   })()
 
@@ -570,15 +696,32 @@ export function PriceMonitorApplyDialog({
     })
   })()
 
+  const modeHints: Record<RepairMode, string> = {
+    floor: t(
+      'Raises each price below its break-even price to break-even; prices already above it stay.'
+    ),
+    official: t(
+      'Sets each price to the official price; items without one keep their current price.'
+    ),
+    highest: t('Uses the higher of the current and highest channel price.'),
+    manual: t('Enter prices; they are saved as ratios.'),
+  }
+  const modeLabels: Array<[RepairMode, string]> = [
+    ['floor', t('Break-even price')],
+    ['official', t('Official price')],
+    ['highest', t('Highest price')],
+    ['manual', t('Set manually')],
+  ]
+
   return (
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t('Repair platform pricing')}
+      title={t('Change platform pricing')}
       description={t(
         'USD per 1M tokens; per-request models in USD per request.'
       )}
-      contentClassName='sm:max-w-4xl'
+      contentClassName='sm:max-w-5xl'
       footer={
         <>
           <Button
@@ -614,18 +757,17 @@ export function PriceMonitorApplyDialog({
             size='sm'
             spacing={2}
           >
-            <ToggleGroupItem value='highest'>
-              {t('Highest price')}
-            </ToggleGroupItem>
-            <ToggleGroupItem value='manual'>
-              {t('Set manually')}
-            </ToggleGroupItem>
+            {modeLabels.map(([value, label]) => (
+              <ToggleGroupItem
+                key={value}
+                value={value}
+                disabled={!modeAvailable(value, targets)}
+              >
+                {label}
+              </ToggleGroupItem>
+            ))}
           </ToggleGroup>
-          <p className='text-muted-foreground text-sm'>
-            {mode === 'highest'
-              ? t('Uses the higher of the current and highest channel price.')
-              : t('Enter prices; they are saved as ratios.')}
-          </p>
+          <p className='text-muted-foreground text-sm'>{modeHints[mode]}</p>
         </div>
 
         {serverViolations.length > 0 && (
@@ -647,7 +789,7 @@ export function PriceMonitorApplyDialog({
         )}
 
         <div className='max-h-[55vh] space-y-3 overflow-y-auto pe-1'>
-          {models.map(({ target, rows, prices }) => (
+          {models.map(({ target, rows, prices, included }) => (
             <ModelPriceCard
               key={target.model}
               target={target}
@@ -656,6 +798,17 @@ export function PriceMonitorApplyDialog({
               drafts={drafts[target.model] ?? {}}
               prices={prices}
               flagged={flaggedByModel.get(target.model) ?? new Set()}
+              included={included}
+              selectable={targets.length > 1}
+              onIncludedChange={(include) => {
+                setExcluded((current) => {
+                  const next = new Set(current)
+                  if (include) next.delete(target.model)
+                  else next.add(target.model)
+                  return next
+                })
+                resetConfirmation()
+              }}
               onDraftChange={(field, value) => {
                 setDrafts((current) => ({
                   ...current,

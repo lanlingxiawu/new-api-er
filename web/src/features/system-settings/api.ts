@@ -39,6 +39,8 @@ import type {
   UpstreamRatiosResponse,
   PriceMonitorApplyPriceItem,
   PriceMonitorApplyPriceResponse,
+  PriceMonitorChannelCostsResponse,
+  PriceMonitorCostRatioResponse,
   PriceMonitorResultsResponse,
   PriceMonitorStatusResponse,
 } from './types'
@@ -89,6 +91,25 @@ export async function applyPriceMonitorPrice(request: {
   return res.data
 }
 
+export async function getPriceMonitorChannelCosts() {
+  const res = await api.get<PriceMonitorChannelCostsResponse>(
+    '/api/price_monitor/channels',
+    { disableDuplicate: true }
+  )
+  return res.data
+}
+
+export async function updatePriceMonitorCostRatio(
+  channelId: number,
+  costRatio: number
+) {
+  const res = await api.put<PriceMonitorCostRatioResponse>(
+    `/api/price_monitor/channels/${channelId}/cost_ratio`,
+    { cost_ratio: costRatio }
+  )
+  return res.data
+}
+
 export async function runPriceMonitor() {
   const res = await api.post<UpdateOptionResponse>('/api/price_monitor/run', {})
   return res.data
@@ -101,6 +122,9 @@ export type PriceMonitorSettingsRequest = {
   include_models_dev: boolean
   model_whitelist: string
   custom_endpoints: Record<string, string>
+  upstream_log_queries_per_host: number
+  upstream_ratio_refresh_hours: number
+  upstream_ratio_max_age_days: number
 }
 
 export async function updatePriceMonitorSettings(

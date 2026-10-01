@@ -238,7 +238,8 @@ func validatePriceMonitorFields(values map[string]string) error {
 			if err != nil || !includeOfficial {
 				return fmt.Errorf("official price comparison is required")
 			}
-		case "interval_minutes", "timeout_seconds":
+		case "interval_minutes", "timeout_seconds",
+			"upstream_log_queries_per_host", "upstream_ratio_refresh_hours", "upstream_ratio_max_age_days":
 			if _, err := strconv.Atoi(value); err != nil {
 				return fmt.Errorf("invalid integer configuration value")
 			}
@@ -296,6 +297,7 @@ var veridropMonitorFields = fieldSet(
 var priceMonitorFields = fieldSet(
 	"enabled", "interval_minutes", "timeout_seconds", "include_official",
 	"include_models_dev", "model_whitelist", "custom_endpoints",
+	"upstream_log_queries_per_host", "upstream_ratio_refresh_hours", "upstream_ratio_max_age_days",
 )
 var channelDailyLimitFields = fieldSet("enabled", "timezone", "retention_days")
 

@@ -620,3 +620,37 @@ func TestQueryUpstreamLog_ChannelFilterIsNotFakedByTheUpstream(t *testing.T) {
 	// log_id 是上游改写过的页内序号，本站无法用它筛选，因此不再接受这个条件。
 	assert.NotContains(t, rec.Body.String(), "log_id")
 }
+
+// A Sub2API channel is still queried (the type does not gate the query), but when
+// the upstream turns out to have no new-api log API the admin is told why: sub2api
+// only exposes per-request logs to a logged-in account, which is not supported yet.
+// Any other channel type keeps the generic "no new-api log API" message.
+func TestQueryUpstreamLog_Sub2APIChannelExplainsWhy(t *testing.T) {
+	requireDB(t)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	baseURL := srv.URL
+
+	query := func(channelType int) string {
+		ch := mkChannel(t, func(c *model.Channel) {
+			c.Type = channelType
+			c.Key = "sk-sub"
+			c.BaseURL = &baseURL
+		})
+		ctx, rec := newCtx(t, http.MethodPost, "/api/log/upstream/query", map[string]any{"channel_id": ch.Id})
+		asAdmin(ctx, 1)
+		QueryUpstreamLog(ctx)
+		resp := decodeResp(t, rec)
+		require.False(t, resp.Success)
+		return resp.Message
+	}
+
+	ctx, _ := newCtx(t, http.MethodGet, "/", nil)
+	assert.Equal(t, i18n.T(ctx, i18n.MsgUpstreamLogSub2APIUnsupported), query(constant.ChannelTypeSub2API))
+	assert.Greater(t, atomic.LoadInt32(&hits), int32(0), "the upstream is still asked")
+	assert.True(t, strings.HasPrefix(query(constant.ChannelTypeOpenAI), i18n.T(ctx, i18n.MsgUpstreamLogEndpointMissing)))
+}

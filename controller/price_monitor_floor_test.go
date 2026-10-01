@@ -82,19 +82,57 @@ func TestRepairFloor_SkipsIncomparableSources(t *testing.T) {
 }
 
 // 没有任何可比渠道时不产出下限——给 0 会被误读成「随便填都安全」。
-func TestRepairFloor_NoComparableChannelsProducesNothing(t *testing.T) {
+// Without comparable channels there is no break-even floor, but the row can still
+// be repriced (against the official price or by hand), so the pricing data is there.
+func TestRepairFloor_NoComparableChannelsHasNoFloorButCanBeRepriced(t *testing.T) {
 	headers := floorHeaders("only")
+	platform := tokenCell(2, 2)
+	platform.optionFields = map[string]float64{"model_ratio": 1}
 	items := []PriceMonitorMatrixItem{{
 		Model: "m",
 		Prices: map[string]PriceMonitorPriceCell{
-			priceMonitorPlatformKey: tokenCell(2, 2),
+			priceMonitorPlatformKey: platform,
 			"only":                  {Mode: priceMonitorModeToken, UnavailableReason: "missing"},
 		},
 	}}
 	applyPriceMonitorRepairFloors(headers, items, map[string]priceMonitorLossContext{
 		"only": {ChannelId: 1, SellFactor: 1, Valid: true},
 	})
-	assert.Nil(t, items[0].RepairFloor)
+	require.NotNil(t, items[0].RepairFloor)
+	assert.Empty(t, items[0].RepairFloor.Fields, "no floor")
+	assert.Equal(t, map[string]float64{"model_ratio": 1}, items[0].RepairFloor.Current)
+	assert.Empty(t, items[0].RepairFloor.Highest)
+	assert.Empty(t, items[0].RepairFloor.Lowest)
+}
+
+// The official price and the channel range are offered as reference prices.
+// The official price still never drives the floor (see below).
+func TestRepairFloor_ReferencePrices(t *testing.T) {
+	headers := []PriceMonitorSourceHeader{
+		{Key: priceMonitorPlatformKey, Type: "platform"},
+		{Key: "official", Type: priceSourceOfficial},
+		{Key: "cheap", Type: priceSourceChannel},
+		{Key: "dear", Type: priceSourceChannel},
+	}
+	items := []PriceMonitorMatrixItem{{
+		Model: "m",
+		Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: tokenCell(2, 2),
+			"official":              tokenCell(3, 2),
+			"cheap":                 tokenCell(1, 2),
+			"dear":                  tokenCell(5, 2),
+		},
+	}}
+	applyPriceMonitorRepairFloors(headers, items, map[string]priceMonitorLossContext{
+		"cheap": {ChannelId: 1, SellFactor: 1, Valid: true},
+		"dear":  {ChannelId: 2, SellFactor: 1, Valid: true},
+	})
+	floor := items[0].RepairFloor
+	require.NotNil(t, floor)
+	assert.InDelta(t, 3, floor.Official["model_ratio"], 1e-9)
+	assert.InDelta(t, 1, floor.Lowest["model_ratio"], 1e-9)
+	assert.InDelta(t, 5, floor.Highest["model_ratio"], 1e-9)
+	assert.InDelta(t, 5, floor.Display["model_ratio"], 1e-9)
 }
 
 // 官方价是对比基准而非采购成本，不得抬高下限。

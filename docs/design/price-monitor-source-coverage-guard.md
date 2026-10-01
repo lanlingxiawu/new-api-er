@@ -39,7 +39,7 @@
 
 ### 3.1 空结果判为失败（修复点 1、2）
 
-`fetchUpstreamPricingSnapshotData` 在把结果投递给 channel 之前增加统一守卫：转换结果中 `model_ratio` 与 `model_price` 均为空（或整个 `converted` 为空）时，按失败返回，错误信息固定为 `empty pricing payload`。type1（ratio_config）、type2（pricing）、OpenRouter 三条路径共用该守卫；models.dev 已有的 `no valid models.dev pricing entries found` 保持不变。
+`fetchUpstreamPricingSnapshotData` 在把结果投递给 channel 之前增加统一守卫：转换结果中没有任何一个可用的价格基准时，按失败返回，错误信息固定为 `empty pricing payload`。可用指 `model_ratio` 或 `model_price` 中至少一个值是有限、非负的数值，或 `billing_expr` 中至少一个非空表达式；只有键、值为 null 或非数字（如 `{"model_ratio":{"m":null}}`）不算。type1（ratio_config）、type2（pricing）、OpenRouter 三条路径共用该守卫；models.dev 已有的 `no valid models.dev pricing entries found` 保持不变。
 
 此改动同时作用于手动同步接口 `FetchUpstreamRatios`——原本它也会把空来源当成功来源参与 `buildDifferences`，修复后会在测试结果里显示为错误，属于同一个缺陷的修复，不是行为倒退。
 
@@ -50,7 +50,7 @@
 端点优先级（每个渠道逐个确定）：
 
 1. **人工指定**：价格巡检设置里为该渠道配置的端点，取值范围与同步弹窗一致（`/api/pricing`、`/api/ratio_config`、custom 完整 URL）。
-2. **上次探测命中的端点**（仅当没有人工指定时）。
+2. **上次探测命中的端点**（仅当没有人工指定时）。只接受自动探测候选本身（`/api/pricing`、`/api/ratio_config`、`sub2api`），它们都是相对路径、总是请求渠道自己的 BaseURL。
 3. `/api/pricing`。
 4. `/api/ratio_config`。
 
@@ -67,9 +67,9 @@
 **两类端点数据分开存放：**
 
 - **人工指定**是用户配置，按 Rule 12 存进 `price_monitor_setting`（DB 持久化、多节点一致、可随时改）。
-- **探测命中**是派生缓存，存在价格巡检自己的快照文件里（`source_endpoints`，key 为渠道 ID），丢失或损坏时退化为重新探测，不影响正确性。
+- **探测命中**是派生缓存，存在价格巡检自己的快照文件里（`source_endpoints`，key 为渠道 ID），只用来调整探测顺序，丢失或损坏时退化为重新探测，不影响正确性。只有没有人工指定端点的渠道、且命中的是自动探测候选时才写入记忆；读取时同样只接受自动探测候选（`priceMonitorRememberableEndpoint`）。因此人工指定的完整地址永远不会进入记忆：管理员去掉固定端点后，下一轮立即回到自动探测，不会继续按那个别处主机的价格比较（旧版本快照里残留的完整地址在读取时被丢弃）。
 
-两者都不写 `channels` 表（Rule 0 共享资源检查）：`channels` 是中继主链路读取的热表，写它会触发渠道缓存失效并与中继查询争锁。渠道被删除或 BaseURL 变更时，探测记忆在下次巡检自然失效；人工配置里已不存在的渠道 ID 在巡检时忽略，并在设置页标灰提示可删除。
+两者都不写 `channels` 表（Rule 0 共享资源检查）：`channels` 是中继主链路读取的热表，写它会触发渠道缓存失效并与中继查询争锁。渠道被删除时探测记忆随下一轮快照消失；BaseURL 变更时记忆里的相对路径仍作用于新地址，取不到就按顺序继续探测；人工配置里已不存在的渠道 ID 在巡检时忽略，并在设置页标灰提示可删除。
 
 稳态成本：每渠道每轮巡检 1 次 HTTP 请求（默认间隔 360 分钟）；仅在端点变化或上游故障时退化为 2 次。
 
@@ -95,7 +95,7 @@
 | `no_overlap` | 取到 N 个模型价格，但与该来源应比较的模型无同名交集 | 否 |
 | `no_models` | 渠道未配置任何模型，无可比较范围 | 否 |
 
-- `fetched_models`：来源返回数据中出现过价格的去重模型名数量（`model_ratio` ∪ `model_price` ∪ 阶梯表达式）。
+- `fetched_models`：来源给出了可用价格的去重模型名数量（`model_ratio` ∪ `model_price` ∪ 阶梯表达式）。"可用"与空结果守卫同一判断（`pricingPayloadUsablePrice`）：值为 null、非数字、负数、NaN/Inf 或空表达式的模型不计入。只看键会让 `{"model_ratio":{"x":1,"m":null}}` 把 m 算作已覆盖：来源因 m 判为可对比，m 却显示成"缺失"并计为价差。
 - `matched_models`：`fetched_models` 与"该来源应比较的模型集合"的交集大小。渠道来源的应比较集合 = 平台模型白名单结果 ∩ 渠道启用模型；官方与 models.dev 来源 = 平台模型白名单结果。
 - `no_overlap` 与 `no_models` 不写入 `missing` 差异，避免把"接口/配置问题"计成价格不一致；其对应的模型格子不生成，整列由表头状态解释。
 
@@ -194,7 +194,7 @@
 
 落地位置：
 
-- 空结果守卫：`controller/ratio_sync.go` 的 `pricingPayloadHasPrices` + `emptyPricingPayloadError`，作用于 type1（ratio_config）、type2（pricing）、OpenRouter 三条路径；models.dev 沿用自己的 `no valid models.dev pricing entries found`。阶梯表达式算价格，只有相对倍率（`completion_ratio`、`cache_ratio`）不算。
+- 空结果守卫：`controller/ratio_sync.go` 的 `pricingPayloadHasPrices` + `emptyPricingPayloadError`，作用于 type1（ratio_config）、type2（pricing）、OpenRouter 三条路径；models.dev 沿用自己的 `no valid models.dev pricing entries found`。逐个值检查：有限且非负的 `model_ratio` / `model_price` 数值、非空的阶梯表达式才算价格；null、非数字、负数、NaN/Inf 与只有相对倍率（`completion_ratio`、`cache_ratio`）都不算。单个值的判断在 `pricingPayloadUsablePrice`，覆盖计数 `pricingPayloadModels`（`fetched_models` / `matched_models`）用同一判断。
 - 抓取拆分：`fetchUpstreamPricingSources` 只抓取解析，`fetchUpstreamPricingSnapshotData` 保持原语义（抓取 + 算差异），手动同步走后者，巡检走前者并在合并后统一算一次差异。
 - 端点编排：`controller/price_monitor_source.go` 的 `priceMonitorEndpointCandidates` / `resolvePriceMonitorSources`，轮数由候选个数决定（人工指定 1 轮、自动探测最多 2 轮），每轮内部仍受 `maxConcurrentFetches` 和 `TimeoutSeconds` 约束。
 - 来源状态：`resolvePriceMonitorSourceStatus` 产出 `ok / failed / no_overlap / no_models` 与 `fetched/matched` 计数，写进 `PriceMonitorSourceHeader`；`buildPriceMonitorMatrix` 对 `no_overlap`、`no_models` 直接跳过，不生成单元格、不计差异。

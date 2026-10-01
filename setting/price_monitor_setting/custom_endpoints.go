@@ -84,7 +84,10 @@ func (setting PriceMonitorSetting) IsNormalized() bool {
 		setting.IncludeOfficial == normalized.IncludeOfficial &&
 		setting.IncludeModelsDev == normalized.IncludeModelsDev &&
 		setting.ModelWhitelist == normalized.ModelWhitelist &&
-		maps.Equal(setting.CustomEndpoints, normalized.CustomEndpoints)
+		maps.Equal(setting.CustomEndpoints, normalized.CustomEndpoints) &&
+		setting.UpstreamLogQueriesPerHost == normalized.UpstreamLogQueriesPerHost &&
+		setting.UpstreamRatioRefreshHours == normalized.UpstreamRatioRefreshHours &&
+		setting.UpstreamRatioMaxAgeDays == normalized.UpstreamRatioMaxAgeDays
 }
 
 // CustomEndpointFor 返回渠道的人工指定端点，未配置时返回空串。

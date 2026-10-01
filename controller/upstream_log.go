@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -428,6 +429,11 @@ func QueryUpstreamLog(c *gin.Context) {
 			}
 			logger.LogError(c, "upstream log query failed for channel "+
 				strings.TrimSpace(channel.Name)+": "+err.Error())
+			// sub2api 没有 new-api 的日志接口是预料之中的：说清楚原因，而不是附上上游的 404 正文。
+			if channel.Type == constant.ChannelTypeSub2API && errors.Is(err, service.ErrUpstreamLogEndpointMissing) {
+				common.ApiErrorI18n(c, i18n.MsgUpstreamLogSub2APIUnsupported)
+				return
+			}
 			common.ApiErrorMsg(c, upstreamLogErrorMessage(c, err))
 			return
 		}

@@ -82,7 +82,8 @@ profit  = P × tokens × (g − r)
 [管理端 · 巡检页]
   GET /api/price_monitor/results?comparison=loss_risk
     -> 命中行带 loss_kinds / sell_factor / measured_factor /
-       configured_factor / suggestion
+       configured_factor / suggestion；页面显示的是 loss_lines 逐项价格对比
+       而不是这些系数（见 price-monitor-channel-cost-check.md §6）
     -> 含 measured：可勾选 -> 批量预览（现值 / 建议值 / 改后系数 / 改后判定）-> 一次确认
     -> 仅 configured：不显示改价按钮，显示指向 渠道成本系数 / 分组倍率 的链接
     -> POST /api/price_monitor/apply_price
@@ -140,7 +141,7 @@ for _, using := range usingGroups {
     candidates = append(candidates, userGroups...)
     for _, user := range candidates {
         ratio, _ := ratio_setting.ResolveGroupRatio(nil, user, using)
-        if ratio == 0 {                        // 免费分组
+        if ratio <= 0 {                        // 免费分组（及非法的负值）
             continue
         }
         if !found || ratio < sellFactor {
@@ -149,14 +150,14 @@ for _, using := range usingGroups {
     }
 }
 if !found {
-    return                                     // 无可用分组，不判定
+    sellFactor = 1.0                           // 无分组或分组倍率全为 0：退化为现状口径
 }
 ```
 
 - 第一个参数传 `nil`：语义即「不含用户专属倍率的最低售价系数」，与 §1.3 的覆盖声明一致。
 - **可达性**：`using` 只取该渠道实际服务的分组。不遍历全部分组组合——那会把用户无法使用的组合算进最小值，制造误报。`GetGroupGroupRatio` 是 `userGroup → usingGroup → ratio` 的嵌套表（`setting/ratio_setting/group_ratio.go:112`），逐对求值天然只覆盖已配置的组合。
-- `ratio == 0` 表示免费分组，与 `calcCostQuota` 中 `groupRatio == 0` 视为免费赠送的处理一致：跳过；全部为 0 则该 source 不判定。
-- 渠道分组为空 → `sellFactor = 1.0`，退化为现状口径。
+- `ratio == 0` 表示免费分组，与 `calcCostQuota` 中 `groupRatio == 0` 视为免费赠送的处理一致：不参与取最小值。
+- 渠道分组为空，或所有分组倍率都为 0 → `sellFactor = 1.0`，退化为现状口径，该 source 照常判定（`controller/price_monitor_loss.go` `buildPriceMonitorLossContexts`）。
 - **正式官方来源不参与 `loss_risk`。** 官方价不是我们的采购成本，把它当成本会把「官方涨价」误报成「我们在亏」。官方价继续由 `above_platform` 承担市场信号的角色。
 
 ### 3.3 覆盖范围提示
@@ -211,7 +212,7 @@ Suggestion       *PriceMonitorPriceAdvice `json:"suggestion,omitempty"`
 | 渠道 `missing` / `placeholder` / `source_failed` | 不判定 |
 | 计费方式不同 / 动态表达式 / 档位结构不一致 | 不判定 |
 | 渠道分组为空 | `sellFactor = 1.0` |
-| 分组倍率全为 0 | 跳过该 source |
+| 分组倍率全为 0 | `sellFactor = 1.0`，照常判定 |
 | `GetChannelCostRatio` 查询失败 | 返回既有默认 1.0；`configured` 类按 `1.0 > sellFactor` 判定。分组倍率 < 1 时会命中，这是正确的保守行为 |
 | 正式官方 / models.dev 来源 | 不参与 |
 | 一个模型多个渠道命中 | 统计只计一次 |
@@ -476,7 +477,7 @@ SQLite 不加 `FOR UPDATE`，不受影响。
 | 判定拆分 | 仅 measured / 仅 configured / 两者都命中 / 都不命中，`loss_kinds` 内容精确断言 |
 | 关键回归 | **仅 configured 的行不产生 `suggestion`**（防止给出数学上无效的改价动作） |
 | 边界值 | `measured` 恰等于 `sellFactor`（不亏）；容差内（不亏）；容差外（亏） |
-| 边界值 | `sellFactor = 0`（免费分组）跳过；平台维度值为 0 跳过；全部维度不可比则不判定 |
+| 边界值 | 倍率为 0 的免费分组不参与取最小值，全部为 0 时 `sellFactor = 1.0`；平台维度值为 0 跳过；全部维度不可比则不判定 |
 | 条件覆盖 | `GroupGroupRatio` 更低 / 全局 `GroupRatio` 更低 / 两者都配置时取最小；渠道未服务的分组被可达性过滤掉 |
 | 路径覆盖 | 三种计费模式各自的 `measured` 计算与逐维度建议价 |
 | 建议价 | 保本价满足「改后 `measured' ≤ sellFactor`」；`target_margin = 0` 时等于保本价；逐维度独立而非统一缩放 |

@@ -142,7 +142,7 @@ GET /api/price_monitor/inconsistencies
 ```go
 type PriceMonitorSetting struct {
     Enabled          bool `json:"enabled"`            // 总开关，默认 false
-    IntervalMinutes  int  `json:"interval_minutes"`   // 巡检间隔，默认 360（6h），下限 5
+    IntervalMinutes  int  `json:"interval_minutes"`   // 巡检间隔，默认 360（6h），范围 5–43200（30 天；它同时是分享密码有效期）
     TimeoutSeconds   int  `json:"timeout_seconds"`    // 单上游超时，默认 10，范围 1~120
     IncludeOfficial  bool `json:"include_official"`   // 是否含官方预设，默认 true
     IncludeModelsDev bool `json:"include_models_dev"` // 是否含 models.dev，默认 false
@@ -152,7 +152,7 @@ type PriceMonitorSetting struct {
 - Getter `GetPriceMonitorSetting()`，调用方不缓存指针。
 - 后台 UI：复用系统设置页现有卡片样式，放在"模型价格"相关设置区（`web/src/features/system-settings/models/`）。
 
-定时器读取该配置：**每分钟 tick 检查**是否到达 `IntervalMinutes` 且 `Enabled`，到点则运行（配置改动无需重启，下个 tick 生效）。
+定时器读取该配置：**每分钟 tick 检查**是否到达 `IntervalMinutes` 且 `Enabled`，到点则运行（配置改动无需重启，下个 tick 生效）。到点的判断以「上次成功检查时间」与「上次尝试时间（进程内存）」中较晚者为起点，失败的检查不会每个 tick 重跑。两者都是墙钟时间，晚于当前时间的一律不算：系统时钟往回调（如 NTP 校时）后它们来自调整之前，当真的话要多等"回拨量 + 间隔"才会再检查；忽略后下一个 tick 就检查，并记下新的尝试时间。这次检查若失败，调整前的成功时间在时钟追上它之后重新生效，额外等待不超过回拨量本身。快照缺少来源表头或矩阵版本过旧（新装、升级）时，本进程还没尝试过就立即检查一次，不等间隔；之后同样按间隔。
 
 ## 5.1 对比字段（决策 4）
 
@@ -171,9 +171,9 @@ type PriceMonitorSetting struct {
   - 单次运行加互斥（`atomic.Bool` CompareAndSwap），防止手动触发与定时重叠。
   - 仅 master 节点运行（`common.IsMasterNode`），与现有定时任务一致。
 
-### 6.2 中文价格矩阵分享页
+### 6.2 价格矩阵分享页
 
-本轮按“只看中文、直接看实际输入输出价格、所有来源放在一个表里横向对比”重构公开分享页。现有倍率明细接口继续供后台诊断，分享页改用面向阅读的价格矩阵，不再展示 `model_ratio`、`completion_ratio` 等原始倍率。
+公开分享页按“直接看实际输入输出价格、所有来源放在一个表里横向对比”设计，整页按访问者语言显示（见 6.2.2）。现有倍率明细接口继续供后台诊断，分享页改用面向阅读的价格矩阵，不再展示 `model_ratio`、`completion_ratio` 等原始倍率。
 
 #### 6.2.1 价格换算口径
 
@@ -189,9 +189,9 @@ type PriceMonitorSetting struct {
 
 #### 6.2.2 单表矩阵布局
 
-- 页面只保留中文，移除英文词典、语言切换按钮和所有中英双语文案。
+- 整页只用一种语言，没有语言切换按钮。`PriceMonitorView` 用查询接口同一套解析（`i18n.GetLangFromContext`：Accept-Language，支持 en / zh-CN / zh-TW，其他语言回退英文）确定语言，由 `renderPriceMonitorPage` 渲染：HTML 里的 `__T_<name>__` 替换成转义后的文字，脚本用到的文字以 JSON 字典 `T` 注入（带参数的文字用 `{count}` 这类占位，由页面脚本填入），日期与金额按同一语言格式化。页面脚本查询 `public_query` 时带上同一个 `Accept-Language`，所以界面文字与接口返回的固定来源表头、阶梯档位说明始终是同一种语言。文字全部来自后端 i18n（`price_monitor.page_*`，en / zh-CN / zh-TW）；口令错误的判断是把接口返回的 message 与同语言的 `price_monitor.invalid_password` 比较，不再匹配中文字样。页面仍是一个自包含的 HTML（内联样式与脚本，无外部资源）。
 - 一个模型占一行；第一列固定为“模型”，后续每个数据来源各占一列。
-- 表头顺序固定：**模型 → 平台配置 → 官方价格 → 启用渠道（按名称排序）**。来源名称直接作为表头。
+- 表头顺序固定：**模型 → 平台配置 → 官方价格 → 启用渠道（按名称排序）**。渠道列用渠道名称作表头；平台、官方、models.dev 三个固定来源的 `name` 与阶梯档位的 `range` 不写进快照，由结果接口与分享查询接口按请求语言（后端 i18n `price_monitor.source_*`、`price_monitor.tier_*`）从来源类型与档位条件生成，后台页则直接按类型与条件用前端 i18n 渲染。
 - 每个价格单元格按来源实际支持的字段显示：输入、输出、缓存读取、缓存写入、图片输入、音频输入、音频输出；固定价格与阶梯表达式沿用各自布局。
 - 页面顶部已说明统一价格口径，单元格不再重复显示“每百万 tokens”，以减少视觉噪声。
 - 平台配置列为对比基准；来源的输入或输出与平台不一致时，只高亮对应价格行，并在右侧显示相对差值百分比。
@@ -262,7 +262,7 @@ type PriceMonitorSetting struct {
 
 - 服务端按模型筛选和分页；表头来源集合随筛选条件返回，但同一查询的翻页过程保持稳定。
 - 桌面端使用单一横向价格矩阵。移动端仍是同一张表，不改为卡片；模型列固定，单元格宽度约 190px，通过表格内部横向滚动逐列对比。
-- 空数据、网络失败、密码过期、部分来源失败沿用现有状态逻辑，全部改为纯中文。
+- 空数据、网络失败、密码过期、部分来源失败沿用现有状态逻辑，文案随页面语言。
 - 密码仍仅保存在页面内存，不进入 URL、日志或浏览器持久化存储。
 - 真实浏览器验收至少覆盖：3/10/30 个来源、20/100 个模型、极小价格、固定价格、表达式计费、缺失数据、移动端横向滚动。
 
@@ -275,7 +275,7 @@ type PriceMonitorSetting struct {
 
 - 巡检同时保留后台使用的字段级差异 `items`，并生成分享页使用的 `source_headers` 与 `matrix_items`；后台接口保持兼容，公开查询改为按模型分页返回矩阵。
 - 每个来源分别使用自身的模型倍率和输出倍率换算输入、输出美元价格，避免交叉使用平台倍率；固定价格与表达式计费分别显示为“每次”和“表达式计费”。
-- 公开页面为自包含纯中文 HTML，来源动态生成表头，平台列和模型列在桌面端固定，差异单元格高亮，缺失或不可信来源显示“无可靠数据”。
+- 公开页面为自包含 HTML、按访问者语言整页渲染，来源动态生成表头，平台列和模型列在桌面端固定，差异单元格高亮，缺失或不可信来源显示“无可靠数据”。
 - 旧快照没有矩阵字段时，master 节点启动后会立即发起一次巡检，成功后原子替换 JSON 并刷新周期密码；巡检失败仍保留旧快照。
 - 矩阵价格单元格保存输入、输出、固定价格各自的差异标记，以及可安全解析的表达式阶梯。页面仅高亮真正不同的价格行；显示值按价格大小自适应保留最多 6 位小数，悬停标题保留原始精度。
 - 价格矩阵覆盖全部同步计价字段：`model_ratio`、`completion_ratio`、`cache_ratio`、`create_cache_ratio`、`image_ratio`、`audio_ratio`、`audio_completion_ratio`、`model_price`、`billing_mode`、`billing_expr`。倍率字段均换算为同一来源自身基准下的实际美元价格后展示和比较。

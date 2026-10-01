@@ -142,7 +142,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const [editData, setEditData] = useState<ModelRatioData | null>(null)
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [globalFilter, setGlobalFilter] = useState('')
+  // 价格巡检的「去模型定价修改」链接带 ?model=，打开时直接定位到该模型。
+  const [globalFilter, setGlobalFilter] = useState(
+    () => new URLSearchParams(window.location.search).get('model') ?? ''
+  )
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const editorPanelRef = useRef<ModelPricingEditorPanelHandle>(null)
   const [pagination, setPagination] = useState<PaginationState>({

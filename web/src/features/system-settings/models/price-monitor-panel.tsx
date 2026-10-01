@@ -25,7 +25,14 @@ import {
   Settings2,
   Share2,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -52,6 +59,7 @@ import {
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
@@ -92,18 +100,22 @@ import { cn } from '@/lib/utils'
 
 import {
   applyPriceMonitorPrice,
+  getPriceMonitorChannelCosts,
   getPriceMonitorResults,
   getPriceMonitorStatus,
   getUpstreamChannels,
   runPriceMonitor,
+  updatePriceMonitorCostRatio,
   updatePriceMonitorSettings,
 } from '../api'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import type {
   PriceMonitorApplyPriceItem,
   PriceMonitorApplyPriceResponse,
+  PriceMonitorChannelCost,
   PriceMonitorFloorViolation,
   PriceMonitorLossKind,
+  PriceMonitorLossLine,
   PriceMonitorMatrixItem,
   PriceMonitorPriceCell,
   PriceMonitorPriceLane,
@@ -118,26 +130,33 @@ import {
   PriceMonitorApplyDialog,
   type PriceMonitorRepairTarget,
 } from './price-monitor-apply-dialog'
+import {
+  formatCostFactor,
+  isCostRatioMismatch,
+} from './price-monitor-channel-cost-utils'
+import { PriceMonitorChannelCosts } from './price-monitor-channel-costs'
 
 const PAGE_SIZE = 20
 const PLATFORM_KEY = 'platform'
-const MEASURED_LOSS: PriceMonitorLossKind = 'measured'
+const CONFIGURED_LOSS: PriceMonitorLossKind = 'configured'
 const NO_MODELS: ReadonlySet<string> = new Set()
+/** 成本系数核对是页面内的另一个视图，不是矩阵的比对筛选。 */
+const COST_RATIO_VIEW = 'cost_ratio'
 
 /**
- * 只有实测成本风险能靠改平台价解决。配置成本风险来自 cost = revenue / g * r：
- * 成本正比于收入，平台价是 profit = P*(g-r) 的公因子，改价不改变毛利率，
- * 只会等比放大绝对亏损额——所以这类行不给改价按钮。
+ * 配置成本风险来自 cost = revenue / g * r：成本正比于收入，平台价是 profit = P*(g-r) 的公因子，
+ * 改价不改变毛利率——要调的是成本系数（或分组倍率）。返回命中这类风险的第一个渠道。
  */
-function hasMeasuredLoss(
+function configuredLossChannelId(
   item: PriceMonitorMatrixItem,
   headers: PriceMonitorSourceHeader[]
 ) {
-  return headers.some(
-    (header) =>
-      header.type === 'channel' &&
-      (item.prices[header.key]?.loss_kinds ?? []).includes(MEASURED_LOSS)
+  const header = headers.find(
+    (entry) =>
+      entry.type === 'channel' &&
+      (item.prices[entry.key]?.loss_kinds ?? []).includes(CONFIGURED_LOSS)
   )
+  return header?.channel_id
 }
 
 /** 阶梯表达式（或动态价格）无法在这里改价，服务端也会拒绝。 */
@@ -146,27 +165,23 @@ function isTieredPlatformPrice(platform: PriceMonitorPriceCell | undefined) {
 }
 
 /**
- * 保本价是整行的联合下限 repair_floor.fields（后端按所有可比渠道算出），
- * 与具体哪个渠道命中无关。
+ * 任何按量/按次计价的行都能改价（设计 docs/design/price-monitor-channel-cost-check.md §5.1）：
+ * repair_floor 带着现值与参考价，保本下限 fields 可能为空（没有可比渠道）。
  */
 function buildRepairTarget(
-  item: PriceMonitorMatrixItem,
-  headers: PriceMonitorSourceHeader[]
+  item: PriceMonitorMatrixItem
 ): PriceMonitorRepairTarget | null {
   const platform = item.prices[PLATFORM_KEY]
-  const fields = item.repair_floor?.fields
-  if (!item.repair_floor || !fields || Object.keys(fields).length === 0) {
-    return null
-  }
+  if (!item.repair_floor) return null
   if (platform?.mode !== 'per_token' && platform?.mode !== 'per_request') {
     return null
   }
-  if (platform.dynamic || !hasMeasuredLoss(item, headers)) return null
-  return {
-    model: item.model,
-    platform,
-    floor: { ...item.repair_floor, fields },
-  }
+  if (platform.dynamic) return null
+  return { model: item.model, platform, floor: item.repair_floor }
+}
+
+function modelPricingLink(model: string) {
+  return `/system-settings/billing/model-pricing?model=${encodeURIComponent(model)}`
 }
 
 const primaryComparisonFilters = [
@@ -178,6 +193,7 @@ const primaryComparisonFilters = [
   ['platform_models_dev', 'Platform vs models.dev'],
   ['above_platform', 'Priced above platform'],
   ['loss_risk', 'Loss risk'],
+  [COST_RATIO_VIEW, 'Cost ratio check'],
 ] as const
 
 const additionalComparisonFilters = [
@@ -438,6 +454,9 @@ type PriceMonitorForm = {
   modelWhitelist: string
   /** 渠道 ID -> 价格接口。配了就只用它，不配的渠道由巡检自动探测。 */
   customEndpoints: Record<string, string>
+  upstreamLogQueriesPerHost: number
+  upstreamRatioRefreshHours: number
+  upstreamRatioMaxAgeDays: number
 }
 
 type PriceMonitorPanelProps = {
@@ -445,6 +464,8 @@ type PriceMonitorPanelProps = {
   /** 改价按钮的权限：后端 apply_price 要的是 billing.model-pricing 编辑权，
       与巡检页自身的编辑权不同，必须分开传。 */
   canRepairPricing: boolean
+  /** 改成本系数还要渠道编辑权（与渠道编辑抽屉一致）。 */
+  canEditCostRatio: boolean
 }
 
 const DEFAULT_FORM: PriceMonitorForm = {
@@ -454,6 +475,9 @@ const DEFAULT_FORM: PriceMonitorForm = {
   includeModelsDev: false,
   modelWhitelist: '',
   customEndpoints: {},
+  upstreamLogQueriesPerHost: 8,
+  upstreamRatioRefreshHours: 6,
+  upstreamRatioMaxAgeDays: 7,
 }
 
 function priceMonitorFormFromConfig(
@@ -466,7 +490,35 @@ function priceMonitorFormFromConfig(
     includeModelsDev: config.include_models_dev,
     modelWhitelist: config.model_whitelist,
     customEndpoints: { ...config.custom_endpoints },
+    upstreamLogQueriesPerHost:
+      config.upstream_log_queries_per_host ??
+      DEFAULT_FORM.upstreamLogQueriesPerHost,
+    upstreamRatioRefreshHours:
+      config.upstream_ratio_refresh_hours ??
+      DEFAULT_FORM.upstreamRatioRefreshHours,
+    upstreamRatioMaxAgeDays:
+      config.upstream_ratio_max_age_days ??
+      DEFAULT_FORM.upstreamRatioMaxAgeDays,
   }
+}
+
+/**
+ * 区间与后端 validatePriceMonitorSettingsRequest 一致。后端按整数解码，小数（如 7.5）会让整个
+ * 保存请求以"参数错误"失败，所以前端同时要求是整数。
+ */
+const INTERVAL_MINUTES_RANGE = { min: 5, max: 43200 }
+const TIMEOUT_SECONDS_RANGE = { min: 1, max: 120 }
+
+function wholeNumberWithin(value: number, range: { min: number; max: number }) {
+  return Number.isInteger(value) && value >= range.min && value <= range.max
+}
+
+function costCheckSettingsValid(form: PriceMonitorForm) {
+  return (
+    wholeNumberWithin(form.upstreamLogQueriesPerHost, { min: 0, max: 20 }) &&
+    wholeNumberWithin(form.upstreamRatioRefreshHours, { min: 1, max: 168 }) &&
+    wholeNumberWithin(form.upstreamRatioMaxAgeDays, { min: 1, max: 30 })
+  )
 }
 
 function formatPrice(value?: number) {
@@ -541,6 +593,22 @@ function tierLabel(tier: PriceMonitorPriceTier, t: TFunction) {
   return `${variable} ${tier.condition_operator} ${tier.condition_value.toLocaleString()} tokens`
 }
 
+/** 亏损明细一行的名称：分项名，阶梯价前面加阶梯条件。 */
+function lossLineLabel(
+  line: PriceMonitorLossLine,
+  tiers: PriceMonitorPriceTier[] | undefined,
+  t: TFunction
+) {
+  const labels: Record<string, string> = {
+    input: t('Input'),
+    output: t('Output'),
+    price: t('Fixed price'),
+  }
+  const name = labels[line.key] ?? laneLabel(line.key, t)
+  const tier = line.tier === undefined ? undefined : tiers?.[line.tier]
+  return tier ? `${tierLabel(tier, t)} · ${name}` : name
+}
+
 function PriceCell({
   price,
   sourceType,
@@ -553,14 +621,17 @@ function PriceCell({
   if (!price?.highest && lossKinds.length === 0) {
     return <PriceCellContent price={price} sourceType={sourceType} />
   }
-  const formatFactor = (value?: number) =>
+  const formatRatio = (value?: number) =>
     value === undefined ? '—' : Number(value.toFixed(4)).toString()
+  const lossLines = lossKinds.includes('measured')
+    ? (price?.loss_lines ?? [])
+    : []
   return (
     <div className='space-y-1.5'>
       {/*
         价格行必须排在最前面。同一模型行里各来源是并排的独立单元格，横向对比只有在
         「输入 / 输出 / 缓存读取」处于同一水平线时才成立。徽标与系数是对价格的标注，
-        高度随命中情况变化（0 个徽标 ~ 2 个徽标 + 3 行系数），一旦放在价格上方，
+        高度随命中情况变化（0 个徽标 ~ 2 个徽标 + 若干行价格对比），一旦放在价格上方，
         带徽标的单元格就会把自己的价格行整体下推，出现「左侧输入 ↔ 右侧徽标、
         左侧输出 ↔ 右侧输入」的错位——对比表就失去意义了。
         放到下面之后，各单元格的价格行都从顶部开始，天然平行。
@@ -577,21 +648,32 @@ function PriceCell({
           <Badge variant='destructive'>{t('Configured loss')}</Badge>
         )}
       </div>
-      {lossKinds.length > 0 && (
+      {lossLines.length > 0 && (
         <div className='text-muted-foreground space-y-0.5 text-xs'>
-          <div className='flex justify-between gap-2'>
-            <span>{t('Sell factor')}</span>
-            <span>{formatFactor(price?.sell_factor)}</span>
-          </div>
-          <div className='flex justify-between gap-2'>
-            <span>{t('Measured factor')}</span>
-            <span>{formatFactor(price?.measured_factor)}</span>
-          </div>
-          <div className='flex justify-between gap-2'>
-            <span>{t('Configured factor')}</span>
-            <span>{formatFactor(price?.configured_factor)}</span>
-          </div>
+          <p>{t('Upstream cost / our lowest price')}</p>
+          {lossLines.map((line) => (
+            <div
+              key={`${line.tier ?? ''}:${line.key}`}
+              className='flex justify-between gap-2'
+            >
+              <span>{lossLineLabel(line, price?.tiers, t)}</span>
+              <span className='text-destructive whitespace-nowrap'>
+                {formatPrice(line.cost)} / {formatPrice(line.sell)}
+              </span>
+            </div>
+          ))}
+          {price?.upstream_factor === undefined && (
+            <p>{t('Upstream group ratio unknown; list price used')}</p>
+          )}
         </div>
+      )}
+      {lossKinds.includes('configured') && (
+        <p className='text-muted-foreground text-xs'>
+          {t('Cost ratio {{cost}} is above the lowest group ratio {{sell}}', {
+            cost: formatRatio(price?.configured_factor),
+            sell: formatRatio(price?.sell_factor),
+          })}
+        </p>
       )}
     </div>
   )
@@ -886,11 +968,20 @@ function PriceMonitorHorizontalScrollControls({
 export function PriceMonitorPanel({
   canEdit,
   canRepairPricing,
+  canEditCostRatio,
 }: PriceMonitorPanelProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [form, setForm] = useState(DEFAULT_FORM)
+  const intervalValid = wholeNumberWithin(
+    form.intervalMinutes,
+    INTERVAL_MINUTES_RANGE
+  )
+  const timeoutValid = wholeNumberWithin(
+    form.timeoutSeconds,
+    TIMEOUT_SECONDS_RANGE
+  )
   const formInitializedRef = useRef(false)
   const priceMatrixRef = useRef<HTMLDivElement | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -922,8 +1013,8 @@ export function PriceMonitorPanel({
   }, [endpointChannels])
   const customEndpointEntries = useMemo(
     () =>
-      Object.entries(form.customEndpoints).sort((left, right) =>
-        Number(left[0]) - Number(right[0])
+      Object.entries(form.customEndpoints).sort(
+        (left, right) => Number(left[0]) - Number(right[0])
       ),
     [form.customEndpoints]
   )
@@ -946,7 +1037,9 @@ export function PriceMonitorPanel({
     queryFn: getPriceMonitorStatus,
     refetchInterval: runBaseline ? 1_000 : 15_000,
   })
+  const isCostView = filters.comparison === COST_RATIO_VIEW
   const resultsQuery = useQuery({
+    enabled: !isCostView,
     queryKey: ['price-monitor-results', filters, page],
     queryFn: () =>
       getPriceMonitorResults({
@@ -962,6 +1055,30 @@ export function PriceMonitorPanel({
     refetchInterval: 30_000,
     placeholderData: keepPreviousData,
   })
+  // 渠道列头也要显示成本系数核对结果，所以不只在核对视图里加载。
+  const channelCostsQuery = useQuery({
+    queryKey: ['price-monitor-channel-costs'],
+    queryFn: getPriceMonitorChannelCosts,
+    refetchInterval: 30_000,
+  })
+  const channelCosts = channelCostsQuery.data?.data
+  const costByChannel = useMemo(() => {
+    const costs = new Map<number, PriceMonitorChannelCost>()
+    for (const cost of channelCosts?.items ?? []) {
+      costs.set(cost.channel_id, cost)
+    }
+    return costs
+  }, [channelCosts?.items])
+  // 不一致数取实时列表（按当前成本系数重算），快照里的计数只在列表还没加载时兜底。
+  const costMismatchCount = channelCosts
+    ? channelCosts.items.filter(isCostRatioMismatch).length
+    : undefined
+  const [highlightChannelId, setHighlightChannelId] = useState<number>()
+  const openCostView = (channelId?: number) => {
+    setHighlightChannelId(channelId)
+    setPage(1)
+    setFilters((current) => ({ ...current, comparison: COST_RATIO_VIEW }))
+  }
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -972,6 +1089,9 @@ export function PriceMonitorPanel({
         include_models_dev: form.includeModelsDev,
         model_whitelist: form.modelWhitelist,
         custom_endpoints: form.customEndpoints,
+        upstream_log_queries_per_host: form.upstreamLogQueriesPerHost,
+        upstream_ratio_refresh_hours: form.upstreamRatioRefreshHours,
+        upstream_ratio_max_age_days: form.upstreamRatioMaxAgeDays,
       })
       if (!response.success) throw new Error(response.message)
       return response
@@ -989,6 +1109,9 @@ export function PriceMonitorPanel({
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
         queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['price-monitor-channel-costs'],
+        }),
       ])
     },
     onError: (error: Error) =>
@@ -1006,6 +1129,47 @@ export function PriceMonitorPanel({
 
   // 结果统一在 handleApplyPrice 里处理，这里不挂 onSuccess / onError，避免重复提示。
   const applyPriceMutation = useMutation({ mutationFn: applyPriceMonitorPrice })
+
+  const refreshMonitorQueries = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
+      queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['price-monitor-channel-costs'],
+      }),
+    ])
+
+  const costRatioMutation = useMutation({
+    mutationFn: ({
+      channelId,
+      costRatio,
+    }: {
+      channelId: number
+      costRatio: number
+    }) => updatePriceMonitorCostRatio(channelId, costRatio),
+  })
+  const handleSaveCostRatio = async (channelId: number, costRatio: number) => {
+    try {
+      const response = await costRatioMutation.mutateAsync({
+        channelId,
+        costRatio,
+      })
+      if (!response.success) {
+        toast.error(response.message || t('Failed to update the cost ratio'))
+        return false
+      }
+      toast.success(
+        response.data?.refreshed
+          ? t('Cost ratio updated; results recalculated')
+          : t('Cost ratio updated; results refresh after the next check')
+      )
+      void refreshMonitorQueries()
+      return true
+    } catch {
+      toast.error(t('Failed to update the cost ratio'))
+      return false
+    }
+  }
 
   const runMutation = useMutation({
     mutationFn: runPriceMonitor,
@@ -1034,16 +1198,14 @@ export function PriceMonitorPanel({
   const snapshot = status?.snapshot
   const results = resultsQuery.data?.data
   const checkedAt = snapshot?.checked_at ?? 0
-  const isLossView = filters.comparison === 'loss_risk'
   const repairTargets = useMemo(() => {
     const targets = new Map<string, PriceMonitorRepairTarget>()
-    if (!isLossView) return targets
     for (const item of results?.items ?? []) {
-      const target = buildRepairTarget(item, results?.source_headers ?? [])
+      const target = buildRepairTarget(item)
       if (target) targets.set(item.model, target)
     }
     return targets
-  }, [isLossView, results?.items, results?.source_headers])
+  }, [results?.items])
   const appliedInSnapshot =
     appliedModels.checkedAt === checkedAt ? appliedModels.models : NO_MODELS
   const selectableModels = useMemo(
@@ -1094,21 +1256,29 @@ export function PriceMonitorPanel({
       (total, result) => total + result.applied.length,
       0
     )
-    setAppliedModels((current) => ({
-      checkedAt,
-      models: new Set([
-        ...(current.checkedAt === checkedAt ? current.models : []),
-        ...items.map((item) => item.model),
-      ]),
-    }))
+    const refreshed = response.data?.refreshed === true
+    if (!refreshed) {
+      // 结果没能就地重算（非主节点等）：快照仍是旧价格，再提交会与刚写入的新价冲突，
+      // 这些行的改价入口先锁住，快照一换（checked_at 变化）自动解锁。
+      setAppliedModels((current) => ({
+        checkedAt,
+        models: new Set([
+          ...(current.checkedAt === checkedAt ? current.models : []),
+          ...items.map((item) => item.model),
+        ]),
+      }))
+    }
     setRepairOpen(false)
     setSelectedModels(new Set())
     toast.success(
-      t('Updated {{count}} pricing fields', { count: appliedCount })
+      refreshed
+        ? t('Updated {{count}} pricing fields; results recalculated', {
+            count: appliedCount,
+          })
+        : t('Updated {{count}} pricing fields', { count: appliedCount })
     )
     void Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
-      queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+      refreshMonitorQueries(),
       queryClient.invalidateQueries({ queryKey: ['system-options'] }),
     ])
     return []
@@ -1146,6 +1316,9 @@ export function PriceMonitorPanel({
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
       queryClient.invalidateQueries({ queryKey: ['price-monitor-results'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['price-monitor-channel-costs'],
+      }),
     ])
   }, [queryClient, runBaseline, snapshot?.checked_at, status])
 
@@ -1228,28 +1401,54 @@ export function PriceMonitorPanel({
     if (header.failure_reason === 'empty') {
       return t('The source returned no price data')
     }
+    if (header.failure_reason === 'sub2api_plaza_disabled') {
+      return t(
+        'The sub2api upstream has not opened its model plaza, so its prices are unavailable'
+      )
+    }
+    if (header.failure_reason === 'sub2api_group_unknown') {
+      return t(
+        "The key's group is not visible in the sub2api model plaza (possibly an exclusive group)"
+      )
+    }
     return t('Source check failed, waiting for the next run')
   }
 
-  // 亏损视图里每行的操作列。
+  // 每行的操作列：任何按量/按次计价的行都能改价；阶梯价跳到模型定价页；
+  // 命中配置成本风险的行另给「调整成本系数」（改价解决不了这类风险）。
   const renderRepairAction = (item: PriceMonitorMatrixItem) => {
+    const costChannelId = configuredLossChannelId(
+      item,
+      results?.source_headers ?? []
+    )
+    const costAction = costChannelId !== undefined && (
+      <Button
+        size='sm'
+        variant='link'
+        className='h-auto p-0 text-xs'
+        onClick={() => openCostView(costChannelId)}
+      >
+        {t('Adjust cost ratio')}
+      </Button>
+    )
+    let priceAction: ReactNode = (
+      <span className='text-muted-foreground text-xs'>—</span>
+    )
     if (repairTargets.has(item.model)) {
-      if (appliedInSnapshot.has(item.model)) {
-        return (
-          <div className='space-y-1'>
-            <Button size='sm' variant='outline' disabled>
-              {t('Repair pricing')}
-            </Button>
-            <p className='text-muted-foreground text-xs'>
-              {t('Updated — refreshes after the next check')}
-            </p>
-          </div>
-        )
-      }
-      return (
+      priceAction = appliedInSnapshot.has(item.model) ? (
+        <div className='space-y-1'>
+          <Button size='sm' variant='outline' disabled>
+            {t('Change price')}
+          </Button>
+          <p className='text-muted-foreground text-xs'>
+            {t('Updated — refreshes after the next check')}
+          </p>
+        </div>
+      ) : (
         <div className='flex items-start gap-2'>
           <Checkbox
             className='mt-0.5'
+            aria-label={t('Select {{model}}', { model: item.model })}
             checked={selectedModels.has(item.model)}
             onCheckedChange={(checked) =>
               setSelectedModels((current) => {
@@ -1264,31 +1463,69 @@ export function PriceMonitorPanel({
             size='sm'
             variant='outline'
             disabled={!canRepairPricing}
+            title={
+              canRepairPricing
+                ? undefined
+                : t('Requires permission to edit model pricing')
+            }
             onClick={() => {
               setSelectedModels(new Set([item.model]))
               setRepairOpen(true)
             }}
           >
-            {t('Repair pricing')}
+            {t('Change price')}
           </Button>
         </div>
       )
-    }
-    if (
-      isTieredPlatformPrice(item.prices[PLATFORM_KEY]) &&
-      hasMeasuredLoss(item, results?.source_headers ?? [])
-    ) {
-      return (
-        <p className='text-muted-foreground text-xs'>
-          {t('Tiered price. Edit it in model pricing.')}
-        </p>
+    } else if (isTieredPlatformPrice(item.prices[PLATFORM_KEY])) {
+      priceAction = (
+        <Button
+          size='sm'
+          variant='link'
+          className='h-auto p-0 text-xs'
+          render={
+            <a
+              href={modelPricingLink(item.model)}
+              target='_blank'
+              rel='noreferrer'
+            />
+          }
+        >
+          {t('Edit in model pricing')}
+          <ExternalLink data-icon='inline-end' className='size-3' />
+        </Button>
       )
     }
     return (
-      <div className='text-muted-foreground space-y-1 text-xs'>
-        <p>{t('Raising the price does not change this margin.')}</p>
-        <p>{t('Adjust the group ratio or cost ratio.')}</p>
+      <div className='space-y-1.5'>
+        {priceAction}
+        {costAction}
       </div>
+    )
+  }
+
+  // 渠道列头：成本系数与上游倍率，不一致时标红，点击进入核对视图。
+  const renderChannelCost = (header: PriceMonitorSourceHeader) => {
+    if (header.type !== 'channel' || header.channel_id === undefined) {
+      return null
+    }
+    const cost = costByChannel.get(header.channel_id)
+    if (!cost) return null
+    const mismatch = isCostRatioMismatch(cost)
+    return (
+      <button
+        type='button'
+        className={cn(
+          'mt-0.5 block text-left text-xs font-normal hover:underline',
+          mismatch ? 'text-destructive' : 'text-muted-foreground'
+        )}
+        onClick={() => openCostView(cost.channel_id)}
+      >
+        {t('Cost ratio {{cost}} · upstream {{upstream}}', {
+          cost: formatCostFactor(cost.cost_ratio),
+          upstream: formatCostFactor(cost.upstream_ratio),
+        })}
+      </button>
     )
   }
 
@@ -1344,8 +1581,8 @@ export function PriceMonitorPanel({
               className={cn(
                 'grid min-w-0 gap-3 md:grid-cols-2',
                 hasModelsDev
-                  ? 'xl:grid-cols-4 2xl:grid-cols-9'
-                  : 'xl:grid-cols-4 2xl:grid-cols-7'
+                  ? 'xl:grid-cols-5 2xl:grid-cols-10'
+                  : 'xl:grid-cols-4 2xl:grid-cols-8'
               )}
             >
               <div className='rounded-lg border p-3'>
@@ -1411,6 +1648,27 @@ export function PriceMonitorPanel({
                   {snapshot?.comparison_model_counts?.loss_risk ?? 0}
                 </p>
               </div>
+              <button
+                type='button'
+                className='hover:bg-muted/50 rounded-lg border p-3 text-left transition-colors'
+                onClick={() => openCostView()}
+              >
+                <p className='text-muted-foreground text-sm'>
+                  {t('Channels with a cost ratio mismatch')}
+                </p>
+                <p
+                  className={cn(
+                    'mt-1 text-xl font-semibold',
+                    (costMismatchCount ??
+                      snapshot?.comparison_model_counts?.cost_ratio_mismatch ??
+                      0) > 0 && 'text-destructive'
+                  )}
+                >
+                  {costMismatchCount ??
+                    snapshot?.comparison_model_counts?.cost_ratio_mismatch ??
+                    0}
+                </p>
+              </button>
               <div className='rounded-lg border p-3'>
                 <p className='text-muted-foreground text-sm'>
                   {t('Models priced above platform')}
@@ -1566,160 +1824,169 @@ export function PriceMonitorPanel({
               </div>
             </div>
 
-            <div
-              ref={priceMatrixRef}
-              className='flex min-h-0 max-w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border'
-              aria-busy={resultsQuery.isFetching}
-            >
-              <div className='bg-background flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-3'>
-                {/* 批量修复放进表格工具栏，而不是单独占一行：切换筛选时页面结构保持一致，不会上下跳动。 */}
-                {isLossView && repairTargets.size > 0 && (
-                  <div className='flex items-center gap-2'>
-                    <Checkbox
-                      aria-label={t('Select all')}
-                      checked={
-                        selectedModels.size > 0 &&
-                        selectedModels.size === selectableModels.length
-                      }
-                      disabled={selectableModels.length === 0}
-                      onCheckedChange={(checked) =>
-                        setSelectedModels(
-                          checked ? new Set(selectableModels) : new Set()
-                        )
-                      }
-                    />
-                    <span className='text-sm whitespace-nowrap'>
-                      {t('Selected {{count}}', { count: selectedModels.size })}
-                    </span>
-                    <Button
-                      size='sm'
-                      title={t('Only measured losses can be repaired.')}
-                      disabled={!canRepairPricing || selectedModels.size === 0}
-                      onClick={() => setRepairOpen(true)}
-                    >
-                      {t('Repair selected')}
-                    </Button>
-                    <div aria-hidden='true' className='bg-border h-6 w-px' />
-                  </div>
-                )}
-                <PriceMonitorPagination
-                  page={page}
-                  pageSize={PAGE_SIZE}
-                  total={totalResults}
-                  isFetching={resultsQuery.isFetching}
-                  onPageChange={setPage}
-                />
-                <PriceMonitorHorizontalScrollControls
-                  containerRef={priceMatrixRef}
-                  refreshKey={sourceHeadersKey}
+            {isCostView ? (
+              <div className='flex min-h-0 max-w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border'>
+                <PriceMonitorChannelCosts
+                  items={channelCosts?.items ?? []}
+                  isLoading={channelCostsQuery.isLoading}
+                  canEdit={canEditCostRatio}
+                  saving={costRatioMutation.isPending}
+                  highlightChannelId={highlightChannelId}
+                  onSave={handleSaveCostRatio}
                 />
               </div>
-              {inactiveSources.length > 0 && (
-                <Collapsible className='mb-2'>
-                  <CollapsibleTrigger className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs data-[panel-open]:[&_svg]:rotate-90'>
-                    <ChevronRight className='size-3.5 shrink-0 transition-transform' />
-                    {t(
-                      '{{count}} sources did not take part in this comparison',
-                      { count: inactiveSources.length }
-                    )}
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <ul className='mt-1 max-h-40 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border px-3 py-2'>
-                      {inactiveSources.map((header) => (
-                        <li
-                          key={header.key}
-                          className='text-muted-foreground text-xs'
-                        >
-                          <span className='font-medium'>
-                            {sourceLabel(header)}
-                          </span>
-                          {header.api_url ? ` · ${header.api_url}` : ''}
-                          {header.endpoint ? ` · ${header.endpoint}` : ''}
-                          {` · ${inactiveSourceReason(header)}`}
-                        </li>
-                      ))}
-                    </ul>
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
-              <Table
-                className='min-w-max'
-                containerClassName='isolate min-h-0 flex-1 max-w-full overflow-auto'
+            ) : (
+              <div
+                ref={priceMatrixRef}
+                className='flex min-h-0 max-w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border'
+                aria-busy={resultsQuery.isFetching}
               >
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className='bg-muted sticky top-0 left-0 z-50 w-56 max-w-56 min-w-56'>
-                      {t('Model')}
-                    </TableHead>
-                    {isLossView && (
+                <div className='bg-background flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-3'>
+                  {/* 批量修复放进表格工具栏，而不是单独占一行：切换筛选时页面结构保持一致，不会上下跳动。 */}
+                  {repairTargets.size > 0 && (
+                    <div className='flex items-center gap-2'>
+                      <Checkbox
+                        aria-label={t('Select all')}
+                        checked={
+                          selectedModels.size > 0 &&
+                          selectedModels.size === selectableModels.length
+                        }
+                        disabled={selectableModels.length === 0}
+                        onCheckedChange={(checked) =>
+                          setSelectedModels(
+                            checked ? new Set(selectableModels) : new Set()
+                          )
+                        }
+                      />
+                      <span className='text-sm whitespace-nowrap'>
+                        {t('Selected {{count}}', {
+                          count: selectedModels.size,
+                        })}
+                      </span>
+                      <Button
+                        size='sm'
+                        disabled={
+                          !canRepairPricing || selectedModels.size === 0
+                        }
+                        onClick={() => setRepairOpen(true)}
+                      >
+                        {t('Change selected prices')}
+                      </Button>
+                      <div aria-hidden='true' className='bg-border h-6 w-px' />
+                    </div>
+                  )}
+                  <PriceMonitorPagination
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    total={totalResults}
+                    isFetching={resultsQuery.isFetching}
+                    onPageChange={setPage}
+                  />
+                  <PriceMonitorHorizontalScrollControls
+                    containerRef={priceMatrixRef}
+                    refreshKey={sourceHeadersKey}
+                  />
+                </div>
+                {inactiveSources.length > 0 && (
+                  <Collapsible className='mb-2'>
+                    <CollapsibleTrigger className='text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs data-[panel-open]:[&_svg]:rotate-90'>
+                      <ChevronRight className='size-3.5 shrink-0 transition-transform' />
+                      {t(
+                        '{{count}} sources did not take part in this comparison',
+                        { count: inactiveSources.length }
+                      )}
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <ul className='mt-1 max-h-40 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border px-3 py-2'>
+                        {inactiveSources.map((header) => (
+                          <li
+                            key={header.key}
+                            className='text-muted-foreground text-xs'
+                          >
+                            <span className='font-medium'>
+                              {sourceLabel(header)}
+                            </span>
+                            {header.api_url ? ` · ${header.api_url}` : ''}
+                            {header.endpoint ? ` · ${header.endpoint}` : ''}
+                            {` · ${inactiveSourceReason(header)}`}
+                          </li>
+                        ))}
+                      </ul>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+                <Table
+                  className='min-w-max'
+                  containerClassName='isolate min-h-0 flex-1 max-w-full overflow-auto'
+                >
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className='bg-muted sticky top-0 left-0 z-50 w-56 max-w-56 min-w-56'>
+                        {t('Model')}
+                      </TableHead>
                       <TableHead className='bg-muted sticky top-0 z-30 w-40 max-w-40 min-w-40'>
                         {t('Action')}
                       </TableHead>
-                    )}
-                    {(results?.source_headers ?? []).map((header) => (
-                      <TableHead
-                        key={header.key}
-                        className={`bg-muted sticky top-0 z-30 w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'header')}`}
-                      >
-                        <span className='block font-semibold break-all'>
-                          {sourceLabel(header)}
-                        </span>
-                        <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
-                          {sourceSubtitle(header)}
-                        </span>
-                        {sourceCoverage(header) && (
-                          <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
-                            {sourceCoverage(header)}
+                      {(results?.source_headers ?? []).map((header) => (
+                        <TableHead
+                          key={header.key}
+                          className={`bg-muted sticky top-0 z-30 w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'header')}`}
+                        >
+                          <span className='block font-semibold break-all'>
+                            {sourceLabel(header)}
                           </span>
-                        )}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(results?.items ?? []).map((item) => {
-                    return (
-                      <TableRow key={item.model}>
-                        <TableCell className='bg-background sticky left-0 z-30 w-56 max-w-56 min-w-56 align-top font-semibold'>
-                          {item.model}
-                        </TableCell>
-                        {isLossView && (
+                          <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
+                            {sourceSubtitle(header)}
+                          </span>
+                          {sourceCoverage(header) && (
+                            <span className='text-muted-foreground mt-0.5 block text-xs font-normal'>
+                              {sourceCoverage(header)}
+                            </span>
+                          )}
+                          {renderChannelCost(header)}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(results?.items ?? []).map((item) => {
+                      return (
+                        <TableRow key={item.model}>
+                          <TableCell className='bg-background sticky left-0 z-30 w-56 max-w-56 min-w-56 align-top font-semibold'>
+                            {item.model}
+                          </TableCell>
                           <TableCell className='bg-background w-40 max-w-40 min-w-40 align-top'>
                             {renderRepairAction(item)}
                           </TableCell>
-                        )}
-                        {(results?.source_headers ?? []).map((header) => (
+                          {(results?.source_headers ?? []).map((header) => (
+                            <TableCell
+                              key={header.key}
+                              className={`bg-background w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'body')}`}
+                            >
+                              <PriceCell
+                                price={item.prices[header.key]}
+                                sourceType={header.type}
+                              />
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      )
+                    })}
+                    {!resultsQuery.isLoading &&
+                      (results?.items.length ?? 0) === 0 && (
+                        <TableRow>
                           <TableCell
-                            key={header.key}
-                            className={`bg-background w-64 max-w-64 min-w-64 align-top ${sourceStickyClass(header.type, fixedSourcePositions.get(header.key), 'body')}`}
+                            colSpan={2 + (results?.source_headers.length ?? 0)}
+                            className='text-muted-foreground text-center'
                           >
-                            <PriceCell
-                              price={item.prices[header.key]}
-                              sourceType={header.type}
-                            />
+                            {t('No price differences found')}
                           </TableCell>
-                        ))}
-                      </TableRow>
-                    )
-                  })}
-                  {!resultsQuery.isLoading &&
-                    (results?.items.length ?? 0) === 0 && (
-                      <TableRow>
-                        <TableCell
-                          colSpan={
-                            1 +
-                            (isLossView ? 1 : 0) +
-                            (results?.source_headers.length ?? 0)
-                          }
-                          className='text-muted-foreground text-center'
-                        >
-                          {t('No price differences found')}
-                        </TableCell>
-                      </TableRow>
-                    )}
-                </TableBody>
-              </Table>
-            </div>
+                        </TableRow>
+                      )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
@@ -1761,9 +2028,9 @@ export function PriceMonitorPanel({
               disabled={
                 !canEdit ||
                 saveMutation.isPending ||
-                form.intervalMinutes < 5 ||
-                form.timeoutSeconds < 1 ||
-                form.timeoutSeconds > 120
+                !intervalValid ||
+                !timeoutValid ||
+                !costCheckSettingsValid(form)
               }
             >
               <Save data-icon='inline-start' className='size-4' />
@@ -1800,15 +2067,18 @@ export function PriceMonitorPanel({
                 }
               />
             </Field>
-            <Field data-disabled={!canEdit}>
+            <Field data-disabled={!canEdit} data-invalid={!intervalValid}>
               <FieldLabel htmlFor='price-monitor-interval'>
                 {t('Check interval (minutes)')}
               </FieldLabel>
               <Input
                 id='price-monitor-interval'
                 type='number'
-                min={5}
+                step={1}
+                min={INTERVAL_MINUTES_RANGE.min}
+                max={INTERVAL_MINUTES_RANGE.max}
                 value={form.intervalMinutes}
+                aria-invalid={!intervalValid}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
@@ -1816,17 +2086,27 @@ export function PriceMonitorPanel({
                   }))
                 }
               />
+              {!intervalValid && (
+                <FieldError>
+                  {t(
+                    'Enter a whole number of minutes from {{min}} to {{max}}.',
+                    INTERVAL_MINUTES_RANGE
+                  )}
+                </FieldError>
+              )}
             </Field>
-            <Field data-disabled={!canEdit}>
+            <Field data-disabled={!canEdit} data-invalid={!timeoutValid}>
               <FieldLabel htmlFor='price-monitor-timeout'>
                 {t('Source timeout (seconds)')}
               </FieldLabel>
               <Input
                 id='price-monitor-timeout'
                 type='number'
-                min={1}
-                max={120}
+                step={1}
+                min={TIMEOUT_SECONDS_RANGE.min}
+                max={TIMEOUT_SECONDS_RANGE.max}
                 value={form.timeoutSeconds}
+                aria-invalid={!timeoutValid}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
@@ -1834,6 +2114,83 @@ export function PriceMonitorPanel({
                   }))
                 }
               />
+              {!timeoutValid && (
+                <FieldError>
+                  {t(
+                    'Enter a whole number of seconds from {{min}} to {{max}}.',
+                    TIMEOUT_SECONDS_RANGE
+                  )}
+                </FieldError>
+              )}
+            </Field>
+            <Field data-disabled={!canEdit}>
+              <FieldLabel htmlFor='price-monitor-ratio-refresh'>
+                {t('Upstream ratio refresh (hours)')}
+              </FieldLabel>
+              <Input
+                id='price-monitor-ratio-refresh'
+                type='number'
+                min={1}
+                max={168}
+                value={form.upstreamRatioRefreshHours}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    upstreamRatioRefreshHours: Number(event.target.value),
+                  }))
+                }
+              />
+              <FieldDescription>
+                {t(
+                  "How often each channel's upstream group ratio is fetched again. 1 to 168."
+                )}
+              </FieldDescription>
+            </Field>
+            <Field data-disabled={!canEdit}>
+              <FieldLabel htmlFor='price-monitor-log-queries'>
+                {t('Upstream log lookups per host')}
+              </FieldLabel>
+              <Input
+                id='price-monitor-log-queries'
+                type='number'
+                min={0}
+                max={20}
+                value={form.upstreamLogQueriesPerHost}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    upstreamLogQueriesPerHost: Number(event.target.value),
+                  }))
+                }
+              />
+              <FieldDescription>
+                {t(
+                  'For channels without an upstream account token, the ratio is read from the upstream log. The upstream rate-limits this, so each host is queried at most this many times per check. 0 turns it off; up to 20.'
+                )}
+              </FieldDescription>
+            </Field>
+            <Field data-disabled={!canEdit}>
+              <FieldLabel htmlFor='price-monitor-ratio-age'>
+                {t('Keep an upstream ratio for (days)')}
+              </FieldLabel>
+              <Input
+                id='price-monitor-ratio-age'
+                type='number'
+                min={1}
+                max={30}
+                value={form.upstreamRatioMaxAgeDays}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    upstreamRatioMaxAgeDays: Number(event.target.value),
+                  }))
+                }
+              />
+              <FieldDescription>
+                {t(
+                  'When fetching fails, the last ratio is used for up to this long. 1 to 30.'
+                )}
+              </FieldDescription>
             </Field>
             <Field data-disabled={!canEdit} className='md:col-span-2'>
               <FieldLabel htmlFor='price-monitor-model-whitelist'>

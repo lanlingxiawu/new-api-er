@@ -21,18 +21,18 @@ func TestPriceMonitorEndpointCandidates(t *testing.T) {
 		want        []string
 	}{
 		{
-			name: "no configuration probes both defaults",
-			want: []string{"/api/pricing", "/api/ratio_config"},
+			name: "no configuration probes the new-api defaults, then the sub2api plaza",
+			want: []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
 		},
 		{
 			name:       "remembered endpoint goes first and is not repeated",
 			remembered: "/api/ratio_config",
-			want:       []string{"/api/ratio_config", "/api/pricing"},
+			want:       []string{"/api/ratio_config", "/api/pricing", sub2apiPricingEndpoint},
 		},
 		{
 			name:       "remembered default keeps the original order",
 			remembered: "/api/pricing",
-			want:       []string{"/api/pricing", "/api/ratio_config"},
+			want:       []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
 		},
 		{
 			name:       "pinned endpoint is used alone",
@@ -50,13 +50,38 @@ func TestPriceMonitorEndpointCandidates(t *testing.T) {
 		{
 			name:   "blank pinned endpoint falls back to probing",
 			pinned: "   ",
-			want:   []string{"/api/pricing", "/api/ratio_config"},
+			want:   []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
+		},
+		{
+			name:       "a remembered absolute URL (a removed pin) is ignored",
+			remembered: "https://other.example.com/api/pricing",
+			want:       []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
+		},
+		{
+			name:       "a remembered path outside the probe set (a removed relative pin) is ignored",
+			remembered: "/custom/ratio.json",
+			want:       []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
+		},
+		{
+			name:       "a remembered openrouter marker is ignored for other channel types",
+			remembered: openRouterPricingEndpoint,
+			want:       []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint},
 		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			require.Equal(t, testCase.want, priceMonitorEndpointCandidates(testCase.channelType, testCase.pinned, testCase.remembered))
 		})
+	}
+}
+
+// Only the auto-probe endpoints may enter the endpoint memory; pins and absolute URLs are config.
+func TestPriceMonitorRememberableEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"/api/pricing", "/api/ratio_config", sub2apiPricingEndpoint} {
+		require.True(t, priceMonitorRememberableEndpoint(endpoint), endpoint)
+	}
+	for _, endpoint := range []string{"", " /api/pricing", "/custom", "https://example.com/api/pricing", openRouterPricingEndpoint} {
+		require.False(t, priceMonitorRememberableEndpoint(endpoint), endpoint)
 	}
 }
 

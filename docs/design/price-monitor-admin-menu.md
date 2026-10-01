@@ -110,7 +110,11 @@
   "interval_minutes": 360,
   "timeout_seconds": 10,
   "include_models_dev": false,
-  "model_whitelist": ""
+  "model_whitelist": "",
+  "custom_endpoints": {},
+  "upstream_log_queries_per_host": 8,
+  "upstream_ratio_refresh_hours": 6,
+  "upstream_ratio_max_age_days": 7
 }
 ```
 
@@ -126,7 +130,7 @@
 }
 ```
 
-字段约束继续采用现有配置边界：巡检间隔至少 5 分钟，来源超时为 1 至 120 秒，白名单按现有标准化逻辑处理。参数错误使用 `ApiErrorI18n`；数据库或配置发布失败记录底层错误并返回可重试提示，不向前端暴露内部错误。
+字段约束：巡检间隔 5 至 43200 分钟（30 天，间隔同时是分享密码有效期，上限防止有效期计算溢出），来源超时为 1 至 120 秒，白名单按现有标准化逻辑处理；三项成本系数核对字段可省略（省略时保留已存值），范围见 price-monitor-channel-cost-check.md §8。请求里的每个字段都必须在 `model/config_group.go` 的 `priceMonitorFields` 中，`SaveConfigGroup` 再按 `IsNormalized` 校验全部字段后才落库。参数错误使用 `ApiErrorI18n`；数据库或配置发布失败记录底层错误并返回可重试提示，不向前端暴露内部错误。
 
 以下公开接口保持原授权和契约：
 

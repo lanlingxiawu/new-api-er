@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -77,8 +77,8 @@ func TestBuildPriceMonitorMatrixConvertsEverySourceIndependently(t *testing.T) {
 	headers, items := buildPriceMonitorMatrix(localData, sources, map[string]struct{}{"model-a": {}}, map[string]string{"官方价格": priceSourceOfficial, "渠道乙(2)": priceSourceChannel})
 
 	require.Equal(t, []PriceMonitorSourceHeader{
-		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
-		{Key: "官方价格", Name: "官方价格", Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
+		{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
+		{Key: "官方价格", Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
 		{Key: "渠道乙(2)", Name: "渠道乙", Type: priceSourceChannel, Status: priceMonitorSourceStatusOK},
 	}, headers)
 	require.Len(t, items, 1)
@@ -101,7 +101,7 @@ func TestBuildPriceMonitorMatrixExplainsUnavailableSources(t *testing.T) {
 
 	headers, items := buildPriceMonitorMatrix(localData, sources, map[string]struct{}{"model-a": {}}, types)
 
-	require.Equal(t, "官方价格", headers[1].Name)
+	require.Empty(t, headers[1].Name, "fixed source names are localized per request, not stored")
 	require.Equal(t, "占位渠道", headers[2].Name)
 	require.Equal(t, "缺失渠道", headers[3].Name)
 	require.Len(t, items, 1)
@@ -122,10 +122,58 @@ func TestPriceMonitorSourceHeadersKeepModelsDevDistinctFromOfficial(t *testing.T
 	)
 
 	require.Equal(t, []PriceMonitorSourceHeader{
-		{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
-		{Key: officialRatioPresetName, Name: "官方价格", Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
-		{Key: modelsDevPresetName, Name: "models.dev 价格", Type: priceSourceModelsDev, Status: priceMonitorSourceStatusOK},
+		{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK},
+		{Key: officialRatioPresetName, Type: priceSourceOfficial, Status: priceMonitorSourceStatusOK},
+		{Key: modelsDevPresetName, Type: priceSourceModelsDev, Status: priceMonitorSourceStatusOK},
 	}, headers)
+}
+
+// Fixed source names and tier ranges come from i18n in the request language (Rule 13), and are
+// derived from type/condition codes, so text left in an older snapshot is replaced too.
+// Localizing must not write into the stored snapshot, which is shared by concurrent readers.
+func TestLocalizePriceMonitorMatrixResult(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	snapshot := PriceMonitorSnapshot{
+		SourceHeaders: []PriceMonitorSourceHeader{
+			{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey},
+			{Key: officialRatioPresetName, Type: priceSourceOfficial},
+			{Key: modelsDevPresetName, Type: priceSourceModelsDev},
+			{Key: "ch(1)", Name: "ch", Type: priceSourceChannel},
+		},
+		MatrixItems: []PriceMonitorMatrixItem{{Model: "gemini", Prices: map[string]PriceMonitorPriceCell{
+			priceMonitorPlatformKey: {Mode: priceMonitorModeExpression, Tiers: []PriceMonitorPriceTier{
+				{Range: "旧文字", ConditionVariable: "len", ConditionOperator: "<=", ConditionValue: floatPointer(200000)},
+				{ConditionVariable: "c", ConditionOperator: ">", ConditionValue: floatPointer(-1500.5)},
+				{},
+			}},
+			"ch(1)": {Different: true},
+		}}},
+	}
+	for lang, want := range map[string][]string{
+		i18n.LangEn:   {"Platform configuration", "Official price", "models.dev price", "Input length ≤ 200,000 tokens", "Output length > -1,500.5 tokens", "All input lengths"},
+		i18n.LangZhCN: {"平台配置", "官方价格", "models.dev 价格", "输入长度 ≤ 200,000 tokens", "输出长度 > -1,500.5 tokens", "全部输入长度"},
+		i18n.LangZhTW: {"平台設定", "官方價格", "models.dev 價格", "輸入長度 ≤ 200,000 tokens", "輸出長度 > -1,500.5 tokens", "全部輸入長度"},
+	} {
+		t.Run(lang, func(t *testing.T) {
+			result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{})
+			localizePriceMonitorMatrixResult(&result, func(key string, args map[string]any) string { return i18n.Translate(lang, key, args) })
+			names := map[string]string{}
+			for _, header := range result.AvailableSourceHeaders {
+				names[header.Key] = header.Name
+			}
+			require.Equal(t, want[0], names[priceMonitorPlatformKey])
+			require.Equal(t, want[1], names[officialRatioPresetName])
+			require.Equal(t, want[2], names[modelsDevPresetName])
+			require.Equal(t, "ch", names["ch(1)"], "channel names are data and stay as-is")
+			require.Equal(t, want[0], result.SourceHeaders[0].Name)
+			require.Len(t, result.Items, 1)
+			tiers := result.Items[0].Prices[priceMonitorPlatformKey].Tiers
+			require.Equal(t, []string{want[3], want[4], want[5]}, []string{tiers[0].Range, tiers[1].Range, tiers[2].Range})
+		})
+	}
+	require.Equal(t, "旧文字", snapshot.MatrixItems[0].Prices[priceMonitorPlatformKey].Tiers[0].Range, "the stored snapshot is not modified")
+	require.Equal(t, "平台配置", snapshot.SourceHeaders[0].Name)
+	require.Empty(t, snapshot.SourceHeaders[1].Name)
 }
 
 func TestBuildPriceMonitorMatrixOnlyComparesEnabledChannelModels(t *testing.T) {
@@ -202,8 +250,8 @@ func TestPriceMonitorCellParsesStandardTieredExpression(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, priceMonitorModeExpression, cell.Mode)
 	require.Equal(t, []PriceMonitorPriceTier{
-		{Range: "输入长度 ≤ 200,000 tokens", ConditionVariable: "len", ConditionOperator: "<=", ConditionValue: floatPointer(200000), Input: 1.25, Output: 10, Lanes: []PriceMonitorPriceLane{{Key: priceMonitorLaneCacheRead, Price: floatPointer(.125)}}},
-		{Range: "输入长度 > 200,000 tokens", ConditionVariable: "len", ConditionOperator: ">", ConditionValue: floatPointer(200000), Input: 2.5, Output: 15, Lanes: []PriceMonitorPriceLane{{Key: priceMonitorLaneCacheRead, Price: floatPointer(.25)}}},
+		{ConditionVariable: "len", ConditionOperator: "<=", ConditionValue: floatPointer(200000), Input: 1.25, Output: 10, Lanes: []PriceMonitorPriceLane{{Key: priceMonitorLaneCacheRead, Price: floatPointer(.125)}}},
+		{ConditionVariable: "len", ConditionOperator: ">", ConditionValue: floatPointer(200000), Input: 2.5, Output: 15, Lanes: []PriceMonitorPriceLane{{Key: priceMonitorLaneCacheRead, Price: floatPointer(.25)}}},
 	}, cell.Tiers)
 }
 
@@ -776,8 +824,8 @@ func TestQueryPriceMonitorMatrixTrimsHeadersAndRowPricesForComparison(t *testing
 
 	require.Equal(t, []PriceMonitorSourceHeader{snapshot.SourceHeaders[1], snapshot.SourceHeaders[2], snapshot.SourceHeaders[3]}, result.SourceHeaders, "headers must be based on all filtered models, not only the current page")
 	require.Len(t, result.Items, 1)
-	require.Equal(t, map[string]PriceMonitorPriceCell{"official": official, "channel-a": channelA}, result.Items[0].Prices)
-	require.NotContains(t, result.Items[0].Prices, priceMonitorPlatformKey)
+	// The platform cell rides along for repricing; its column is not shown in this view (headers above).
+	require.Equal(t, map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform, "official": official, "channel-a": channelA}, result.Items[0].Prices)
 	require.NotContains(t, result.Items[0].Prices, "channel-b")
 }
 
@@ -809,7 +857,8 @@ func TestQueryPriceMonitorMatrixComparisonHeaderMappings(t *testing.T) {
 		t.Run(test.comparison, func(t *testing.T) {
 			result := queryPriceMonitorMatrix(snapshot, priceMonitorQuery{Comparison: test.comparison, Page: 1, PageSize: 20})
 			require.Equal(t, test.headers, result.SourceHeaders)
-			allowed := make(map[string]struct{}, len(test.headers))
+			// The platform cell always rides along for repricing, shown or not.
+			allowed := map[string]struct{}{priceMonitorPlatformKey: {}}
 			for _, header := range test.headers {
 				allowed[header.Key] = struct{}{}
 			}
@@ -842,65 +891,33 @@ func TestQueryPriceMonitorSnapshotPaginationBoundaries(t *testing.T) {
 	require.Equal(t, 200, clamped.PageSize)
 }
 
-func legacyPriceMonitorPageRedesignContract(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="price-matrix-table"`)
-	require.Contains(t, priceMonitorHTML, `class="table-scroll"`)
-	require.Contains(t, priceMonitorHTML, `id="page-size-picker"`)
-	require.NotContains(t, priceMonitorHTML, `id="reauthenticate"`)
-	require.Contains(t, priceMonitorHTML, `prefers-color-scheme:dark`)
-	require.Contains(t, priceMonitorHTML, `prefers-reduced-motion:reduce`)
-	require.Contains(t, priceMonitorHTML, `平台配置`)
-	require.Contains(t, priceMonitorHTML, `输入`)
-	require.Contains(t, priceMonitorHTML, `输出`)
-	require.Contains(t, priceMonitorHTML, `Token 用量价格统一按百万计`)
-	require.Contains(t, priceMonitorHTML, `price-different`)
-	require.NotContains(t, priceMonitorHTML, `relativeDifference`)
-	require.NotContains(t, priceMonitorHTML, `difference-rate`)
-	require.Contains(t, priceMonitorHTML, `maximumFractionDigits:digits`)
-	require.Contains(t, priceMonitorHTML, `.000001?10:6`)
-	require.Contains(t, priceMonitorHTML, `动态规则计费`)
-	require.Contains(t, priceMonitorHTML, `该来源未提供此模型价格`)
-	require.Contains(t, priceMonitorHTML, `tier-prices`)
-	require.NotContains(t, priceMonitorHTML, `max-height:calc(100vh`)
-	require.Contains(t, priceMonitorHTML, `缓存读取`)
-	require.Contains(t, priceMonitorHTML, `缓存写入`)
-	require.Contains(t, priceMonitorHTML, `图片输入`)
-	require.Contains(t, priceMonitorHTML, `音频输入`)
-	require.Contains(t, priceMonitorHTML, `音频输出`)
-	require.NotContains(t, priceMonitorHTML, `每百万 tokens`)
-	require.NotContains(t, priceMonitorHTML, `localStorage`)
-	require.NotContains(t, priceMonitorHTML, `sessionStorage`)
-	require.NotContains(t, priceMonitorHTML, `language-toggle`)
-	require.False(t, strings.Contains(priceMonitorHTML, "Model price"), "the share page is Chinese-only")
-}
-
 func TestPriceMonitorPageAvailabilityContract(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="price-matrix-table"`)
-	require.Contains(t, priceMonitorHTML, `class="table-scroll"`)
-	require.Contains(t, priceMonitorHTML, `id="page-size-picker"`)
-	require.NotContains(t, priceMonitorHTML, `id="reauthenticate"`)
-	require.Contains(t, priceMonitorHTML, `prefers-color-scheme:dark`)
-	require.Contains(t, priceMonitorHTML, `prefers-reduced-motion:reduce`)
-	require.Contains(t, priceMonitorHTML, `Token 用量价格统一按百万计算`)
-	require.Contains(t, priceMonitorHTML, `官方价格预设未收录此模型`)
-	require.Contains(t, priceMonitorHTML, `models.dev 价格预设未收录此模型`)
-	require.Contains(t, priceMonitorHTML, `该渠道价格接口未提供此模型`)
-	require.Contains(t, priceMonitorHTML, `data-comparison="platform_models_dev"`)
-	require.Contains(t, priceMonitorHTML, `data-comparison="channel_models_dev"`)
-	require.Contains(t, priceMonitorHTML, `models_dev_missing`)
-	require.Contains(t, priceMonitorHTML, `header.type==='models_dev'`)
-	require.Contains(t, priceMonitorHTML, `fixed-source-2`)
-	require.Contains(t, priceMonitorHTML, `仅提供输入价格`)
-	require.Contains(t, priceMonitorHTML, `价格来源检查失败，请等待下次巡检`)
-	require.Contains(t, priceMonitorHTML, `该渠道未启用此模型，不参与对比`)
-	require.Contains(t, priceMonitorHTML, `来源返回占位价格，未参与对比`)
-	require.NotContains(t, priceMonitorHTML, `relativeDifference`)
-	require.NotContains(t, priceMonitorHTML, `difference-rate`)
-	require.Contains(t, priceMonitorHTML, `.000001?10:6`)
-	require.NotContains(t, priceMonitorHTML, `max-height:calc(100vh`)
-	require.NotContains(t, priceMonitorHTML, `localStorage`)
-	require.NotContains(t, priceMonitorHTML, `sessionStorage`)
-	require.False(t, strings.Contains(priceMonitorHTML, "Model price"), "the share page is Chinese-only")
+	require.Contains(t, zhPriceMonitorPage(t), `id="price-matrix-table"`)
+	require.Contains(t, zhPriceMonitorPage(t), `class="table-scroll"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="page-size-picker"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `id="reauthenticate"`)
+	require.Contains(t, zhPriceMonitorPage(t), `prefers-color-scheme:dark`)
+	require.Contains(t, zhPriceMonitorPage(t), `prefers-reduced-motion:reduce`)
+	require.Contains(t, zhPriceMonitorPage(t), `Token 用量价格统一按百万计算`)
+	require.Contains(t, zhPriceMonitorPage(t), `官方价格预设未收录此模型`)
+	require.Contains(t, zhPriceMonitorPage(t), `models.dev 价格预设未收录此模型`)
+	require.Contains(t, zhPriceMonitorPage(t), `该渠道价格接口未提供此模型`)
+	require.Contains(t, zhPriceMonitorPage(t), `data-comparison="platform_models_dev"`)
+	require.Contains(t, zhPriceMonitorPage(t), `data-comparison="channel_models_dev"`)
+	require.Contains(t, zhPriceMonitorPage(t), `models_dev_missing`)
+	require.Contains(t, zhPriceMonitorPage(t), `header.type==='models_dev'`)
+	require.Contains(t, zhPriceMonitorPage(t), `fixed-source-2`)
+	require.Contains(t, zhPriceMonitorPage(t), `仅提供输入价格`)
+	require.Contains(t, zhPriceMonitorPage(t), `价格来源检查失败，请等待下次巡检`)
+	require.Contains(t, zhPriceMonitorPage(t), `该渠道未启用此模型，不参与对比`)
+	require.Contains(t, zhPriceMonitorPage(t), `来源返回占位价格，未参与对比`)
+	require.NotContains(t, zhPriceMonitorPage(t), `relativeDifference`)
+	require.NotContains(t, zhPriceMonitorPage(t), `difference-rate`)
+	require.Contains(t, zhPriceMonitorPage(t), `.000001?10:6`)
+	require.NotContains(t, zhPriceMonitorPage(t), `max-height:calc(100vh`)
+	require.NotContains(t, zhPriceMonitorPage(t), `localStorage`)
+	require.NotContains(t, zhPriceMonitorPage(t), `sessionStorage`)
+	require.NotContains(t, zhPriceMonitorPage(t), "Model price comparison", "a zh-CN visitor gets the whole page in Chinese")
 }
 
 func TestPriceMonitorSourceHeadersIncludeAPIURL(t *testing.T) {
@@ -941,136 +958,138 @@ func TestQueryPriceMonitorMatrixFiltersChannelByAPIURLAndKeepsOfficial(t *testin
 }
 
 func TestPriceMonitorPageSourceNavigationContract(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="source-picker"`)
-	require.Contains(t, priceMonitorHTML, `id="scroll-left"`)
-	require.Contains(t, priceMonitorHTML, `id="scroll-right"`)
-	require.Contains(t, priceMonitorHTML, `id="scroll-left-top"`)
-	require.Contains(t, priceMonitorHTML, `id="scroll-right-top"`)
-	require.Contains(t, priceMonitorHTML, `id="scroll-progress-top"`)
-	require.Contains(t, priceMonitorHTML, `function scrollTable(direction)`)
-	require.Contains(t, priceMonitorHTML, `function syncScrollControls()`)
-	require.Contains(t, priceMonitorHTML, `addEventListener('resize',syncScrollControls)`)
-	require.Contains(t, priceMonitorHTML, `.app{width:min(1600px,100%);margin:auto;padding:22px 22px 40px;height:100vh;display:flex;flex-direction:column}`)
-	require.Contains(t, priceMonitorHTML, `.table-scroll{position:relative;min-height:0;flex:1 1 auto;overflow:auto`)
-	require.Contains(t, priceMonitorHTML, `.matrix-sticky-controls{position:sticky`)
-	require.Contains(t, priceMonitorHTML, `.matrix-scroll-tools{`)
-	require.Contains(t, priceMonitorHTML, `.matrix-scroll-tools{display:none}`)
-	require.Contains(t, priceMonitorHTML, `.app{height:auto;min-height:100vh`)
-	require.Contains(t, priceMonitorHTML, `<div class="matrix-sticky-controls">`)
-	require.Contains(t, priceMonitorHTML, `available_source_headers`)
-	require.Contains(t, priceMonitorHTML, `status-pill`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="source-picker"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="scroll-left"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="scroll-right"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="scroll-left-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="scroll-right-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="scroll-progress-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `function scrollTable(direction)`)
+	require.Contains(t, zhPriceMonitorPage(t), `function syncScrollControls()`)
+	require.Contains(t, zhPriceMonitorPage(t), `addEventListener('resize',syncScrollControls)`)
+	require.Contains(t, zhPriceMonitorPage(t), `.app{width:min(1600px,100%);margin:auto;padding:22px 22px 40px;height:100vh;display:flex;flex-direction:column}`)
+	require.Contains(t, zhPriceMonitorPage(t), `.table-scroll{position:relative;min-height:0;flex:1 1 auto;overflow:auto`)
+	require.Contains(t, zhPriceMonitorPage(t), `.matrix-sticky-controls{position:sticky`)
+	require.Contains(t, zhPriceMonitorPage(t), `.matrix-scroll-tools{`)
+	require.Contains(t, zhPriceMonitorPage(t), `.matrix-scroll-tools{display:none}`)
+	require.Contains(t, zhPriceMonitorPage(t), `.app{height:auto;min-height:100vh`)
+	require.Contains(t, zhPriceMonitorPage(t), `<div class="matrix-sticky-controls">`)
+	require.Contains(t, zhPriceMonitorPage(t), `available_source_headers`)
+	require.Contains(t, zhPriceMonitorPage(t), `status-pill`)
 }
 
 func TestPriceMonitorPageShowsChannelAPIURLBelowName(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `const title=header.name,subtitle=header.type==='platform'?'平台基准':header.type==='official'?'必须对比':header.type==='models_dev'?'可选对比':(header.api_url||'')`)
-	require.NotContains(t, priceMonitorHTML, `const title=header.type==='channel'?(header.api_url||header.name):header.name`)
+	require.Contains(t, zhPriceMonitorPage(t), `const title=header.name,subtitle=header.type==='platform'?T.platform_baseline:header.type==='official'?T.required_comparison:header.type==='models_dev'?T.optional_comparison:(header.api_url||'')`)
+	require.Contains(t, zhPriceMonitorPage(t), `"platform_baseline":"平台基准"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `const title=header.type==='channel'?(header.api_url||header.name):header.name`)
 }
 
 func TestPriceMonitorPageFilterAndStickyOfficialContract(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `th.fixed-source-0,td.fixed-source-0`)
-	require.Contains(t, priceMonitorHTML, `th.fixed-source-1,td.fixed-source-1`)
-	require.Contains(t, priceMonitorHTML, `th.fixed-source-2,td.fixed-source-2`)
-	require.Contains(t, priceMonitorHTML, `fixedClasses[header.key]=header.type+' fixed-source-'+fixedIndex`)
-	require.Contains(t, priceMonitorHTML, `left:230px`)
-	require.Contains(t, priceMonitorHTML, `left:450px`)
-	require.Contains(t, priceMonitorHTML, `left:670px`)
-	require.Contains(t, priceMonitorHTML, `id="model-suggestions"`)
-	require.Contains(t, priceMonitorHTML, `id="source-options"`)
-	require.Contains(t, priceMonitorHTML, `data-comparison="channel_official"`)
-	require.Contains(t, priceMonitorHTML, `id="comparison-more"`)
-	require.Contains(t, priceMonitorHTML, `source_keys:`)
+	require.Contains(t, zhPriceMonitorPage(t), `th.fixed-source-0,td.fixed-source-0`)
+	require.Contains(t, zhPriceMonitorPage(t), `th.fixed-source-1,td.fixed-source-1`)
+	require.Contains(t, zhPriceMonitorPage(t), `th.fixed-source-2,td.fixed-source-2`)
+	require.Contains(t, zhPriceMonitorPage(t), `fixedClasses[header.key]=header.type+' fixed-source-'+fixedIndex`)
+	require.Contains(t, zhPriceMonitorPage(t), `left:230px`)
+	require.Contains(t, zhPriceMonitorPage(t), `left:450px`)
+	require.Contains(t, zhPriceMonitorPage(t), `left:670px`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="model-suggestions"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="source-options"`)
+	require.Contains(t, zhPriceMonitorPage(t), `data-comparison="channel_official"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="comparison-more"`)
+	require.Contains(t, zhPriceMonitorPage(t), `source_keys:`)
 }
 
 func TestPriceMonitorPageUsesTopPagerControls(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="pager-top"`)
-	require.Contains(t, priceMonitorHTML, `id="range-top"`)
-	require.Contains(t, priceMonitorHTML, `id="previous-top"`)
-	require.Contains(t, priceMonitorHTML, `id="next-top"`)
-	require.NotContains(t, priceMonitorHTML, `id="previous"`)
-	require.NotContains(t, priceMonitorHTML, `id="next"`)
-	require.NotContains(t, priceMonitorHTML, `id="range"`)
-	require.NotContains(t, priceMonitorHTML, `<footer class="footer pager-bar">`)
-	require.Contains(t, priceMonitorHTML, `function setRange(text)`)
-	require.Contains(t, priceMonitorHTML, `function setPagerDisabled(end)`)
-	require.Contains(t, priceMonitorHTML, `function goPage(delta)`)
-	require.Contains(t, priceMonitorHTML, `$('previous-top').onclick=()=>goPage(-1)`)
-	require.Contains(t, priceMonitorHTML, `$('next-top').onclick=()=>goPage(1)`)
-	require.NotContains(t, priceMonitorHTML, `$('previous').onclick`)
-	require.NotContains(t, priceMonitorHTML, `$('next').onclick`)
-	require.Contains(t, priceMonitorHTML, `.pager-bar.top{display:none}`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="pager-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="range-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="previous-top"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="next-top"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `id="previous"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `id="next"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `id="range"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `<footer class="footer pager-bar">`)
+	require.Contains(t, zhPriceMonitorPage(t), `function setRange(text)`)
+	require.Contains(t, zhPriceMonitorPage(t), `function setPagerDisabled(end)`)
+	require.Contains(t, zhPriceMonitorPage(t), `function goPage(delta)`)
+	require.Contains(t, zhPriceMonitorPage(t), `$('previous-top').onclick=()=>goPage(-1)`)
+	require.Contains(t, zhPriceMonitorPage(t), `$('next-top').onclick=()=>goPage(1)`)
+	require.NotContains(t, zhPriceMonitorPage(t), `$('previous').onclick`)
+	require.NotContains(t, zhPriceMonitorPage(t), `$('next').onclick`)
+	require.Contains(t, zhPriceMonitorPage(t), `.pager-bar.top{display:none}`)
 }
 
 func TestPriceMonitorPageUsesCompactPasswordPrompt(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `<section class="auth-card"><form id="auth-form"><label for="password">请输入访问口令</label>`)
-	require.Contains(t, priceMonitorHTML, `id="auth-error"`)
-	require.NotContains(t, priceMonitorHTML, `<div class="mark">`)
-	require.NotContains(t, priceMonitorHTML, `输入管理员提供的周期访问密码`)
-	require.NotContains(t, priceMonitorHTML, `密码仅保存在当前页面内存中`)
+	require.Contains(t, zhPriceMonitorPage(t), `<section class="auth-card"><form id="auth-form"><label for="password">请输入访问口令</label>`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="auth-error"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `<div class="mark">`)
+	require.NotContains(t, zhPriceMonitorPage(t), `输入管理员提供的周期访问密码`)
+	require.NotContains(t, zhPriceMonitorPage(t), `密码仅保存在当前页面内存中`)
 }
 
 func TestPriceMonitorPageUsesAnchoredModelSuggestions(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `.model-picker{position:relative}`)
-	require.Contains(t, priceMonitorHTML, `.model-suggestions{position:absolute`)
-	require.Contains(t, priceMonitorHTML, `max-height:260px`)
-	require.Contains(t, priceMonitorHTML, `overflow-y:auto`)
-	require.Contains(t, priceMonitorHTML, `id="model-suggestions"`)
-	require.Contains(t, priceMonitorHTML, `availableModels=data.available_models||[]`)
-	require.Contains(t, priceMonitorHTML, `model-suggestion-check`)
-	require.Contains(t, priceMonitorHTML, `id="model-empty"`)
-	require.NotContains(t, priceMonitorHTML, `<datalist`)
+	require.Contains(t, zhPriceMonitorPage(t), `.model-picker{position:relative}`)
+	require.Contains(t, zhPriceMonitorPage(t), `.model-suggestions{position:absolute`)
+	require.Contains(t, zhPriceMonitorPage(t), `max-height:260px`)
+	require.Contains(t, zhPriceMonitorPage(t), `overflow-y:auto`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="model-suggestions"`)
+	require.Contains(t, zhPriceMonitorPage(t), `availableModels=data.available_models||[]`)
+	require.Contains(t, zhPriceMonitorPage(t), `model-suggestion-check`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="model-empty"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `<datalist`)
 }
 
 func TestPriceMonitorPageUsesDraftedSearchableSourcePicker(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="source-search"`)
-	require.Contains(t, priceMonitorHTML, `id="source-apply"`)
-	require.Contains(t, priceMonitorHTML, `id="source-selected-count"`)
-	require.Contains(t, priceMonitorHTML, `draftSourceKeys`)
-	require.Contains(t, priceMonitorHTML, `function applySourceSelection()`)
-	require.Contains(t, priceMonitorHTML, `sourceSearch`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="source-search"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="source-apply"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="source-selected-count"`)
+	require.Contains(t, zhPriceMonitorPage(t), `draftSourceKeys`)
+	require.Contains(t, zhPriceMonitorPage(t), `function applySourceSelection()`)
+	require.Contains(t, zhPriceMonitorPage(t), `sourceSearch`)
 }
 
 func TestPriceMonitorPageUsesAnchoredComparisonMenu(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="comparison-picker"`)
-	require.Contains(t, priceMonitorHTML, `id="comparison-menu"`)
-	require.Contains(t, priceMonitorHTML, `comparison-option-check`)
-	require.Contains(t, priceMonitorHTML, `function renderComparisonMenu()`)
-	require.NotContains(t, priceMonitorHTML, `<select id="comparison-more"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="comparison-picker"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="comparison-menu"`)
+	require.Contains(t, zhPriceMonitorPage(t), `comparison-option-check`)
+	require.Contains(t, zhPriceMonitorPage(t), `function renderComparisonMenu()`)
+	require.NotContains(t, zhPriceMonitorPage(t), `<select id="comparison-more"`)
 }
 
 func TestPriceMonitorPageUsesConsistentDropdownsWithoutReauthentication(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="page-size-picker"`)
-	require.Contains(t, priceMonitorHTML, `id="page-size-menu"`)
-	require.Contains(t, priceMonitorHTML, `data-page-size="20"`)
-	require.Contains(t, priceMonitorHTML, `border-right:2px solid currentColor`)
-	require.Contains(t, priceMonitorHTML, `details[open]>summary:after`)
-	require.NotContains(t, priceMonitorHTML, `<select id="page-size"`)
-	require.NotContains(t, priceMonitorHTML, `id="reauthenticate"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="page-size-picker"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="page-size-menu"`)
+	require.Contains(t, zhPriceMonitorPage(t), `data-page-size="20"`)
+	require.Contains(t, zhPriceMonitorPage(t), `border-right:2px solid currentColor`)
+	require.Contains(t, zhPriceMonitorPage(t), `details[open]>summary:after`)
+	require.NotContains(t, zhPriceMonitorPage(t), `<select id="page-size"`)
+	require.NotContains(t, zhPriceMonitorPage(t), `id="reauthenticate"`)
 }
 
 func TestPriceMonitorPageUsesMobileInfiniteLoading(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `id="load-more"`)
-	require.Contains(t, priceMonitorHTML, `id="load-more-retry"`)
-	require.Contains(t, priceMonitorHTML, `window.matchMedia('(max-width:760px)')`)
-	require.Contains(t, priceMonitorHTML, `new IntersectionObserver`)
-	require.Contains(t, priceMonitorHTML, `if(loadingMore)return`)
-	require.Contains(t, priceMonitorHTML, `requestVersion`)
-	require.Contains(t, priceMonitorHTML, `data-result-model`)
-	require.Contains(t, priceMonitorHTML, `load(true)`)
-	require.Contains(t, priceMonitorHTML, `已加载 '+loaded+' 个，共 '+total+' 个模型`)
-	require.Contains(t, priceMonitorHTML, `.pager{display:none}`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="load-more"`)
+	require.Contains(t, zhPriceMonitorPage(t), `id="load-more-retry"`)
+	require.Contains(t, zhPriceMonitorPage(t), `window.matchMedia('(max-width:760px)')`)
+	require.Contains(t, zhPriceMonitorPage(t), `new IntersectionObserver`)
+	require.Contains(t, zhPriceMonitorPage(t), `if(loadingMore)return`)
+	require.Contains(t, zhPriceMonitorPage(t), `requestVersion`)
+	require.Contains(t, zhPriceMonitorPage(t), `data-result-model`)
+	require.Contains(t, zhPriceMonitorPage(t), `load(true)`)
+	require.Contains(t, zhPriceMonitorPage(t), `setRange(fmt(T.loaded_of_total,{loaded,total}))`)
+	require.Contains(t, zhPriceMonitorPage(t), `"loaded_of_total":"已加载 {loaded} 个，共 {total} 个模型"`)
+	require.Contains(t, zhPriceMonitorPage(t), `.pager{display:none}`)
 }
 
 func TestPriceMonitorPagePreservesRenderedTableWhileFiltering(t *testing.T) {
-	require.Contains(t, priceMonitorHTML, `comparison='all',hasRendered=false,hasModelsDev=false,availableModels=[]`)
-	require.Contains(t, priceMonitorHTML, `const preserveTable=hasRendered`)
-	require.Contains(t, priceMonitorHTML, `$('table-scroll').classList.toggle('is-loading',preserveTable)`)
-	require.Contains(t, priceMonitorHTML, `hasRendered=true`)
-	require.NotContains(t, priceMonitorHTML, `$('state').classList.remove('hidden');$('price-matrix-table').classList.add('hidden');try`)
+	require.Contains(t, zhPriceMonitorPage(t), `comparison='all',hasRendered=false,hasModelsDev=false,availableModels=[]`)
+	require.Contains(t, zhPriceMonitorPage(t), `const preserveTable=hasRendered`)
+	require.Contains(t, zhPriceMonitorPage(t), `$('table-scroll').classList.toggle('is-loading',preserveTable)`)
+	require.Contains(t, zhPriceMonitorPage(t), `hasRendered=true`)
+	require.NotContains(t, zhPriceMonitorPage(t), `$('state').classList.remove('hidden');$('price-matrix-table').classList.add('hidden');try`)
 }
 
 func TestPriceMonitorPageOmitsEnabledModelSubtitle(t *testing.T) {
-	require.NotContains(t, priceMonitorHTML, "仅对比已启用模型")
-	require.NotContains(t, priceMonitorHTML, "渠道只对比自身已启用的模型")
+	require.NotContains(t, zhPriceMonitorPage(t), "仅对比已启用模型")
+	require.NotContains(t, zhPriceMonitorPage(t), "渠道只对比自身已启用的模型")
 }
 
 func TestBuildPriceMonitorShareSummary(t *testing.T) {
@@ -1236,4 +1255,43 @@ func TestValidatePriceMonitorSettingsRequestCustomEndpoints(t *testing.T) {
 		require.False(t, ok)
 		require.Nil(t, values)
 	})
+}
+
+func TestValidatePriceMonitorSettingsRequestChannelCostCheck(t *testing.T) {
+	intPtr := func(v int) *int { return &v }
+
+	t.Run("omitted fields are not written, so older clients keep the stored values", func(t *testing.T) {
+		values, ok := validatePriceMonitorSettingsRequest(priceMonitorSettingsRequest{IntervalMinutes: 5, TimeoutSeconds: 10})
+		require.True(t, ok)
+		for _, key := range []string{"upstream_log_queries_per_host", "upstream_ratio_refresh_hours", "upstream_ratio_max_age_days"} {
+			require.NotContains(t, values, key)
+		}
+	})
+
+	t.Run("boundary values are accepted", func(t *testing.T) {
+		values, ok := validatePriceMonitorSettingsRequest(priceMonitorSettingsRequest{
+			IntervalMinutes:           5,
+			TimeoutSeconds:            10,
+			UpstreamLogQueriesPerHost: intPtr(20),
+			UpstreamRatioRefreshHours: intPtr(1),
+			UpstreamRatioMaxAgeDays:   intPtr(30),
+		})
+		require.True(t, ok)
+		require.Equal(t, "20", values["upstream_log_queries_per_host"])
+		require.Equal(t, "1", values["upstream_ratio_refresh_hours"])
+		require.Equal(t, "30", values["upstream_ratio_max_age_days"])
+	})
+
+	invalid := map[string]priceMonitorSettingsRequest{
+		"log queries above 20":  {IntervalMinutes: 5, TimeoutSeconds: 10, UpstreamLogQueriesPerHost: intPtr(21)},
+		"refresh of zero hours": {IntervalMinutes: 5, TimeoutSeconds: 10, UpstreamRatioRefreshHours: intPtr(0)},
+		"refresh above a week":  {IntervalMinutes: 5, TimeoutSeconds: 10, UpstreamRatioRefreshHours: intPtr(169)},
+		"max age of zero days":  {IntervalMinutes: 5, TimeoutSeconds: 10, UpstreamRatioMaxAgeDays: intPtr(0)},
+		"max age above 30 days": {IntervalMinutes: 5, TimeoutSeconds: 10, UpstreamRatioMaxAgeDays: intPtr(31)},
+	}
+	for name, request := range invalid {
+		values, ok := validatePriceMonitorSettingsRequest(request)
+		require.False(t, ok, name)
+		require.Nil(t, values, name)
+	}
 }
