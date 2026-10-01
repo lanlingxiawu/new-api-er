@@ -255,6 +255,18 @@ export interface LogOtherData {
     // Upstream error text of a charged stream that failed midway; the consume
     // log content only carries our own message (admin only).
     stream_error?: string
+    // What the platform bore when our own time limit ended the request
+    // (refund: input and received output; input-only billing: the output).
+    // absorbed_quota_min is a lower bound in quota units (admin only).
+    timeout_absorbed?: {
+      mode: 'refund' | 'input' | 'charge' | string
+      kind: 'non_stream' | 'stream' | string
+      input_tokens: number
+      input_estimated: boolean
+      received_output_tokens: number
+      absorbed_quota_min: number
+      per_call?: boolean
+    }
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

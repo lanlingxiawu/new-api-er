@@ -20,9 +20,11 @@ import (
 
 type relayTimeoutKind string
 
+// relayTimeoutKindResponse is shared with service, which classifies the expiry
+// for the timeout message; a separate literal could drift and misreport it.
 const (
 	relayTimeoutKindNone     relayTimeoutKind = ""
-	relayTimeoutKindResponse relayTimeoutKind = "response_timeout"
+	relayTimeoutKindResponse relayTimeoutKind = service.RelayTimeoutKindResponse
 	relayTimeoutKindTotal    relayTimeoutKind = "total_timeout"
 )
 
@@ -567,8 +569,5 @@ func RelayRequestTimeoutKind(c *gin.Context) string {
 }
 
 func RelayRequestTimeoutSeconds(c *gin.Context) int {
-	if RelayRequestTimeoutKind(c) == string(relayTimeoutKindResponse) {
-		return common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds)
-	}
-	return common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds)
+	return service.RelayRequestTimeoutSeconds(c)
 }

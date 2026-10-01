@@ -198,9 +198,11 @@ func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
-// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算。
+// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算；
+// 我方超时且平台承担成本（退款）的非流式请求另记 admin_info.timeout_absorbed。
 // 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志映射，将原地更新；err：底层错误，nil 时不覆盖已有原因。
 func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
+	appendRelayTimeoutAbsorbedToErrorLog(c, other, err)
 	value, _ := c.Get(relaycommon.StreamResponseCaptureKey)
 	capture, _ := value.(*relaycommon.StreamResponseCapture)
 	reject := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)

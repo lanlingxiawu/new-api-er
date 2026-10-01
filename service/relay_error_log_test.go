@@ -12,9 +12,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -245,17 +247,23 @@ func TestStreamFailureMessagesReachSettlementLogs(t *testing.T) {
 			}.record(logID)
 		})
 	})
+	const upstreamText = "overloaded api_key:***"
 	for i, tc := range []struct {
-		name    string
-		quota   int
-		content string
+		name     string
+		quota    int
+		content  string
+		timedOut bool
 	}{
-		{"no output", 0, ""},
-		{"partial charged output", 42, "billing note"},
+		{"no output", 0, "", false},
+		{"no output, cut by our time limit", 0, "", true},
+		{"partial charged output", 42, "billing note", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tokenID := 91000110 + i
 			c, _ := processChannelErrorLogFixture(t, tokenID, "stream-current")
+			if tc.timedOut {
+				common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, settlementTimeoutControl{})
+			}
 			billing := &claudeSettlementFixture{}
 			info := &relaycommon.RelayInfo{
 				UserId: c.GetInt("id"), TokenId: tokenID, Billing: billing,
@@ -279,23 +287,70 @@ func TestStreamFailureMessagesReachSettlementLogs(t *testing.T) {
 			var logs []model.Log
 			require.NoError(t, model.LOG_DB.Where("token_id = ?", tokenID).Find(&logs).Error)
 			require.Len(t, logs, 1)
-			want := "overloaded api_key:*** (request id: stream-current)"
-			if tc.content != "" {
-				want = tc.content + "; " + want
-			}
-			require.Equal(t, want, logs[0].Content)
 			require.Equal(t, tc.quota, logs[0].Quota)
-			wantType := model.LogTypeError
-			if tc.quota > 0 {
-				wantType = model.LogTypeConsume
-			}
-			require.Equal(t, wantType, logs[0].Type)
 			require.Equal(t, "stream-current", logs[0].RequestId)
 			require.Equal(t, 1, billing.calls)
 			require.Equal(t, tc.quota, billing.actual)
 			require.NotContains(t, logs[0].Content, "body-secret")
+			require.NotContains(t, logs[0].Other, "body-secret")
+			other, err := common.StrToMap(logs[0].Other)
+			require.NoError(t, err)
+
+			if tc.quota > 0 {
+				// A consume log's content is ours and never rewritten for users, so
+				// the upstream's text is kept only where admins read it.
+				require.Equal(t, model.LogTypeConsume, logs[0].Type)
+				require.Equal(t, tc.content+"; "+i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)+" (request id: stream-current)", logs[0].Content)
+				require.NotContains(t, logs[0].Content, "overloaded")
+				adminInfo, ok := other["admin_info"].(map[string]interface{})
+				require.True(t, ok, logs[0].Other)
+				require.Equal(t, upstreamText, adminInfo["stream_error"])
+				require.NotContains(t, other, "error_code", "a consume log is not an error log")
+				return
+			}
+
+			// An error log keeps the original for admins and says how the stream
+			// ended, so the user's view decides it as the terminal frame was. Cut
+			// by our time limit, the content is our timeout text (users read it
+			// as a local error) and the upstream text is admin-only.
+			require.Equal(t, model.LogTypeError, logs[0].Type)
+			wantCode, wantContent := operation_setting.RelayStreamErrorCode, upstreamText
+			if tc.timedOut {
+				wantCode = operation_setting.RelayTimeoutErrorCode
+				wantContent = i18n.Translate(i18n.LangEn, i18n.MsgRelayTimeout, map[string]any{"Seconds": RelayRequestTimeoutSeconds(c)})
+				adminInfo, ok := other["admin_info"].(map[string]interface{})
+				require.True(t, ok, logs[0].Other)
+				require.Equal(t, upstreamText, adminInfo["stream_error"])
+			}
+			require.Equal(t, wantContent+" (request id: stream-current)", logs[0].Content)
+			require.Equal(t, wantCode, other["error_code"])
+			require.NotContains(t, other, "error_type")
+
+			withRelayErrorDisplay(t, operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, DefaultMessage: "Unavailable",
+				Rules: displayRules(t, operation_setting.RelayErrorRule{Source: operation_setting.RelayErrorSourceLocal,
+					ErrorCodes: []string{operation_setting.RelayTimeoutErrorCode}, Action: operation_setting.RelayErrorActionReplace, Message: "Timed out"})})
+			wantUserText := "Unavailable (request id: stream-current)"
+			if tc.timedOut {
+				wantUserText = "Timed out (request id: stream-current)"
+			}
+			require.Equal(t, wantUserText, model.MaskErrorLogContentForUser(&logs[0], "en"))
 		})
 	}
+}
+
+// settlementTimeoutControl marks the request as cut by our own time limit.
+type settlementTimeoutControl struct{}
+
+func (settlementTimeoutControl) RelayTimeoutKind() string { return "total" }
+
+// The terminal frame of a stream cut by our time limit is a local relay_timeout
+// with status 504, like the error log of the same stream; the constant this
+// package cannot import must stay the relay's own code.
+func TestStreamFailureRelayErrorInputMatchesRelayTimeoutCode(t *testing.T) {
+	assert.Equal(t, string(types.ErrorCodeRelayTimeout), operation_setting.RelayTimeoutErrorCode)
+	in := operation_setting.StreamFailureRelayErrorInput(true, "m")
+	assert.False(t, in.Upstream)
+	assert.Equal(t, 504, in.StatusCode)
 }
 
 // processChannelErrorLogFixture 构造一个已鉴权中转请求的上下文并打开错误日志开关；token_id 取唯一值，
@@ -347,6 +402,10 @@ func TestProcessChannelErrorRecordsPublicSummaryWithCurrentRequestId(t *testing.
 	assert.Equal(t, float64(http.StatusBadGateway), other["status_code"])
 	assert.Equal(t, string(types.ErrorCodeBadResponseStatusCode), other["error_code"])
 	assert.NotContains(t, other, "stream_diagnostic")
+	// The channel is recorded in the channel_id column only, as upstream does.
+	for _, key := range []string{"channel_id", "channel_name", "channel_type"} {
+		assert.NotContains(t, other, key)
+	}
 }
 
 func TestProcessChannelErrorResponseOnlyModeHidesCauseAndKeepsDiagnostic(t *testing.T) {
@@ -365,10 +424,9 @@ func TestProcessChannelErrorResponseOnlyModeHidesCauseAndKeepsDiagnostic(t *test
 	assert.NotContains(t, logs[0].Other, "low-level private cause")
 	// 策略原因触发流式诊断：日志保存诊断尝试编号与策略原因。
 	assert.Contains(t, other, "stream_diagnostic_attempt", logs[0].Other)
+	// 策略原因存在顶层：管理员日志详情读的就是 other.reject_reason；
+	// 普通用户视图由 model 的读侧投影剥掉（见 log_channel_name_user_view_test.go）。
 	assert.Equal(t, "policy-blocked", other["reject_reason"], logs[0].Other)
-	adminInfo, ok := other["admin_info"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "policy-blocked", adminInfo["reject_reason"])
 	assert.NotContains(t, other, "stream_diagnostic_available")
 }
 

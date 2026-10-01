@@ -41,6 +41,7 @@ import { Button } from '@/components/ui/button'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
+import { useIsAdmin } from '@/hooks/use-admin'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
@@ -269,6 +270,9 @@ function BillingBreakdown(props: {
 }) {
   const { t } = useTranslation()
   const { log, other, isAdmin } = props
+  // The platform's cost of a timed-out request is for real admins only;
+  // employees also get isAdmin (admin fields) on the customer log page.
+  const isRealAdmin = useIsAdmin()
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
@@ -449,6 +453,15 @@ function BillingBreakdown(props: {
     })
   }
 
+  if (isAdmin && isRealAdmin && other.admin_info?.timeout_absorbed) {
+    rows.push({
+      label: t('Absorbed by platform on timeout (min)'),
+      value: formatLogQuota(
+        other.admin_info.timeout_absorbed.absorbed_quota_min
+      ),
+    })
+  }
+
   rows.push({
     label: t('Total Cost'),
     value: formatLogQuota(log.quota),
@@ -605,6 +618,7 @@ export function LogDetailBody(props: LogDetailBodyProps) {
   const isViolation = isViolationFeeLog(other)
   const isRefund = props.log.type === 6
   const isConsume = props.log.type === 2
+  const isRealAdmin = useIsAdmin()
   const isTopup = props.log.type === 1
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
@@ -1291,21 +1305,32 @@ export function LogDetailBody(props: LogDetailBodyProps) {
           !isConsume &&
           props.log.type !== 6 &&
           other?.admin_info && (
-            <DetailRow
-              label={t('Billing Path')}
-              value={
-                <span className='flex items-center gap-1'>
-                  {isUsageBillingPathLocal(other.admin_info) ? (
-                    <Monitor className='size-3 text-blue-500' />
-                  ) : (
-                    <Cloud className='size-3 text-emerald-500' />
-                  )}
-                  <span className='text-xs'>
-                    {getUsageBillingPathLabel(t, other.admin_info)}
+            <>
+              <DetailRow
+                label={t('Billing Path')}
+                value={
+                  <span className='flex items-center gap-1'>
+                    {isUsageBillingPathLocal(other.admin_info) ? (
+                      <Monitor className='size-3 text-blue-500' />
+                    ) : (
+                      <Cloud className='size-3 text-emerald-500' />
+                    )}
+                    <span className='text-xs'>
+                      {getUsageBillingPathLabel(t, other.admin_info)}
+                    </span>
                   </span>
-                </span>
-              }
-            />
+                }
+              />
+              {isRealAdmin && other.admin_info.timeout_absorbed && (
+                <DetailRow
+                  label={t('Absorbed by platform on timeout (min)')}
+                  value={formatLogQuota(
+                    other.admin_info.timeout_absorbed.absorbed_quota_min
+                  )}
+                  mono
+                />
+              )}
+            </>
           )}
       </CompareCell>
 

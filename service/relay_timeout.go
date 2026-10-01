@@ -506,19 +506,24 @@ func RelayHTTPClient(c *gin.Context, client *http.Client) *http.Client {
 // RelayResponseTraceContext marks the first upstream byte for non-streaming
 // requests. It captures the request-local marker rather than the pooled Gin
 // context because transport callbacks may run after client.Do returns.
+// For every managed request (stream or not) it also records whether the
+// request was written to the upstream in full, which decides whether a
+// timed-out request is billed (relay-timeout-cost-bearing.md §3.2).
 func RelayResponseTraceContext(c *gin.Context, parent context.Context) context.Context {
-	if c == nil || parent == nil || common.GetContextKeyBool(c, constant.ContextKeyIsStream) {
+	if c == nil || parent == nil {
 		return parent
 	}
-	marker, ok := RelayResponseMarkerFromContext(c)
-	if !ok {
+	trace := &httptrace.ClientTrace{WroteRequest: relayUpstreamWroteRequestTrace(c)}
+	if !common.GetContextKeyBool(c, constant.ContextKeyIsStream) {
+		if marker, ok := RelayResponseMarkerFromContext(c); ok {
+			if pending, ok := marker.(relayResponsePending); ok && pending.RelayResponsePending() {
+				trace.GotFirstResponseByte = func() { marker.MarkResponse(false) }
+			}
+		}
+	}
+	if trace.WroteRequest == nil && trace.GotFirstResponseByte == nil {
 		return parent
 	}
-	pending, ok := marker.(relayResponsePending)
-	if !ok || !pending.RelayResponsePending() {
-		return parent
-	}
-	trace := &httptrace.ClientTrace{GotFirstResponseByte: func() { marker.MarkResponse(false) }}
 	return httptrace.WithClientTrace(parent, trace)
 }
 
@@ -737,6 +742,7 @@ func BeginRelayAttempt(c *gin.Context, p *RetryParam) {
 		RestartRelayResponseTimeout(c)
 	}
 	p.CountAttempt()
+	resetRelayUpstreamSent(c)
 	if c != nil {
 		c.Set(relayRetryParamContextKey, p)
 	}
@@ -770,6 +776,7 @@ func ReserveRelayFallbackCall(c *gin.Context) (bool, string) {
 		return false, reason
 	}
 	p.CountAttempt()
+	resetRelayUpstreamSent(c)
 	return true, ""
 }
 

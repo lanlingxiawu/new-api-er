@@ -15,9 +15,9 @@
 | `non_stream_response_timeout` | 非流式上游首次响应超时 |
 | `non_stream_total_timeout` | 非流式请求绝对总时长 |
 
-同一请求同时启动对应模式的响应计时器和总时长计时器，任一先到期都会取消上游请求。计费、平台实际成本、提成和消费日志继续沿用现有逻辑，不由本功能修改。
+同一请求同时启动对应模式的响应计时器和总时长计时器，任一先到期都会取消上游请求。上游调用只由这两个计时器取消，不随客户端断开而取消（与主分支一致，见 non-stream-timeout-loss-prevention.md §23）。超时本身的计费见该文档与 [relay-timeout-cost-bearing.md](relay-timeout-cost-bearing.md)（按用户 `non_stream_timeout_billing`：退款、按用量计费或只收输入）。
 
-本次覆盖普通 relay、Gemini 原生路由、异步任务提交路由及视频任务提交路由。异步任务提交后的查询、回调和后台执行生命周期不受提交超时控制。客户端 Realtime/WebSocket 长连接不在范围内；提供商内部使用 WebSocket 的普通 relay 请求仍继承请求超时。
+本功能覆盖普通 relay 与 Gemini 原生路由。提交即计费的请求不启用单用户超时（与主分支一致）：Midjourney 提交、任务 / 视频提交（`RelayTask`）、Coze 非流式、阿里图片生成与编辑，见 [relay-timeout-cost-bearing.md](relay-timeout-cost-bearing.md) §2。客户端 Realtime/WebSocket 长连接不在范围内；提供商内部使用 WebSocket 的普通 relay 请求仍继承请求超时。
 
 ## 2. 热更新全局配置与环境变量回退
 
@@ -122,7 +122,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 ## 7. 错误处理和协议兼容
 
 - 未提交响应：返回 HTTP `504` 和现有 `relay_timeout` 错误语义。
-- Midjourney 兼容响应保持 `code` 为整数 `4`，在 `description` 中表达 relay 超时，避免破坏客户端反序列化。
+- Midjourney 兼容响应保持 `code` 为整数 `4`，在 `description` 中表达 relay 超时，避免破坏客户端反序列化（Midjourney 提交不启用单用户超时，此分支不会触发）。
 - 已提交流式响应：取消上游并结束流，不能改写已经发送的状态码。
 - 客户端主动断开不归类为 relay 超时，也不取消上游调用：受管的非流式、任务提交、轮询与 WebSocket 调用继续执行到完成或我方截止时刻并按实际用量结算；流式在客户端断开时关闭上游并按估算结算（与主分支相同）。
 - 超时后停止当前重试链，沿用现有错误日志记录路径；超时错误携带项目既有 `skipRetry` 属性，因此原 `ShouldDisableChannel` 逻辑自然跳过渠道故障/自动禁用，不修改 `processChannelError` 的原有判断。功能关闭时，原有渠道错误处理逻辑不变。
@@ -134,7 +134,7 @@ NonStreamTotalTimeout    int `json:"non_stream_total_timeout" gorm:"type:int;not
 
 功能开启且请求已托管时，AI relay 主调用通过只受控制器截止时刻约束的上游 context 实施每用户总时长，浅拷贝 client 并移除共享 `Client.Timeout`，但继续复用同一 Transport/连接池。准备性调用继承同一个可取消 context，明确设置 `-1` 即允许关闭限制。总开关关闭、用户四项全为 `0` 或非 relay 调用时，完整保留共享 Client 的旧行为。
 
-仅非流式主上游请求安装首字节 trace；没有响应计时器、流式请求或非主调用不创建 trace/request 副本。
+仅非流式、仍在等待首字节的主上游请求安装首字节回调；受管请求（流式与非流式）的主上游请求另装 `WroteRequest` 回调，记录请求是否已完整写给上游（我方超时时据此决定是否计费，见 relay-timeout-cost-bearing.md §15）。未受管请求与非主调用不创建 trace。
 
 实现按职责集中，避免把超时算法散落到原 relay 逻辑：
 

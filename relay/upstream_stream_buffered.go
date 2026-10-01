@@ -190,7 +190,13 @@ func handleAdaptedUpstreamStream(c *gin.Context, info *relaycommon.RelayInfo, re
 		// same; the streaming handler counts them on a cut-off stream too.
 		aggregator.CountBillableToolCalls(info)
 		recordAdaptedContentFilter(c, aggregator)
-		settleAdaptedTimeout(c, info, usage, nil)
+		var note []string
+		if !aggregator.HasOutput() {
+			// No output to deliver: bill at least the input, as the input mode
+			// would for the same request (relay-timeout-cost-bearing.md §3.2).
+			usage, note = service.AdaptedTimeoutWithoutOutput(c, info, usage)
+		}
+		settleAdaptedTimeout(c, info, usage, note)
 		c.Set(relaycommon.StreamHandledKey, true)
 		if aggregator.HasOutput() && writeAdaptedPartialResponse(c, info, resp, aggregator, usage, !completed || aggregator.OverBudget()) {
 			logger.LogWarn(c, fmt.Sprintf(
@@ -200,7 +206,7 @@ func handleAdaptedUpstreamStream(c *gin.Context, info *relaycommon.RelayInfo, re
 		}
 		writeAdaptedStreamTimeout(c)
 		logger.LogWarn(c, fmt.Sprintf(
-			"adapted upstream stream timed out after %d received chunks with no output; settled its usage instead of refunding",
+			"adapted upstream stream timed out after %d received chunks with no output; settled at least the input instead of refunding",
 			info.ReceivedResponseCount))
 		return usage, nil
 	}

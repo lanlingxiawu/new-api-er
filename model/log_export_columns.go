@@ -647,6 +647,14 @@ func buildLogExportColumns() []LogExportColumn {
 		adminInfoCol("usage_billing_path", "usage_billing_path", "Usage Billing Path", LogExportGroupAdmin),
 		adminInfoCol("local_count_tokens", "local_count_tokens", "Local Token Counting", LogExportGroupAdmin),
 		adminInfoCol("quota_saturation", "quota_saturation", "Quota Saturation", LogExportGroupAdmin),
+		// 我方超时结束请求时平台至少承担的额度（admin_info.timeout_absorbed，见
+		// docs/design/relay-timeout-cost-bearing.md §4），可按用户/渠道汇总；其余日志为空。
+		{Key: "timeout_absorbed_quota_min", Label: "Timeout Absorbed Quota (min)", Group: LogExportGroupAdmin,
+			AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				absorbed, _ := ctx.adminInfo(l)["timeout_absorbed"].(map[string]any)
+				return otherValue(absorbed, "absorbed_quota_min")
+			}},
 		{Key: "other_raw", Label: "Raw Other JSON", Group: LogExportGroupAdmin,
 			AdminOnly: true, NeedOther: true,
 			Extract: func(l *Log, _ *rowCtx) string { return l.Other }},

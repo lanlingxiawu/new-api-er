@@ -640,7 +640,14 @@ loop:
 	}
 	if result.Failed && !result.ClientGone && !upstreamError && (c.Request.Context().Err() == nil || service.IsRelayRequestTimeout(c)) {
 		// 即使内容块尚未关闭，也只发送官方格式 error，不伪造 stop_reason 或成功结束事件。
-		payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)}})
+		// 我方时限切断时说明是超时（timeout_error 与带秒数的提示），不说成上游失败。
+		fallback, timedOut := service.StreamTerminalFailureText(c)
+		errorType := "api_error"
+		if timedOut {
+			errorType = "timeout_error"
+		}
+		message, _ := service.PresentStreamTerminalMessage(c, nil, fallback)
+		payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": errorType, "message": message}})
 		service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
 	}
 	if result.Failed && !result.ClientGone {
@@ -662,38 +669,38 @@ loop:
 	}
 	result.ConfirmedUsage = len(result.Diagnostic.UsageEvidence) > 0
 	result.UsageSource = result.SelectUsageSource()
+	// 我方时限切断且没有有效交付：按用户的超时计费方式（service.StreamTimeoutSettlement）——charge 至少按主分支
+	// 口径收（确认用量，否则估算输入与已接收输出），input 只收确认输入（否则估算输入）、输出 0，refund 不收。
+	timedOutWithoutDelivery := result.UsageSource == "none" && reason == relaycommon.StreamEndReasonTimeout
+	chargedTimeout, inputOnlyTimeout := false, false
+	if timedOutWithoutDelivery {
+		if source, inputOnly := service.StreamTimeoutSettlement(c, info, result.ConfirmedUsage); source != "" {
+			result.UsageSource, chargedTimeout, inputOnlyTimeout = source, true, inputOnly
+		}
+	}
+	evidence := result.Diagnostic.UsageEvidence
+	if inputOnlyTimeout {
+		evidence = service.StreamInputOnlyEvidence(evidence)
+	}
+	_, inputConfirmed := result.Diagnostic.UsageEvidence["input_tokens"]
 	usage := &dto.Usage{UsageSemantic: "anthropic"}
 	switch result.UsageSource {
 	case "upstream":
-		usage = confirmedClaudeUsage(result.Diagnostic.UsageEvidence)
+		usage = confirmedClaudeUsage(evidence)
 		c.Set("claude_web_search_requests", result.Diagnostic.UsageEvidence["server_tool_use.web_search_requests"])
-	case "estimated":
-		usage.PromptTokens = info.GetEstimatePromptTokens()
-		if storage := info.ClaudeRequestBody; storage != nil {
-			var request dto.ClaudeRequest
-			if _, err := storage.Seek(0, io.SeekStart); err == nil {
-				if err = common.DecodeJson(storage, &request); err == nil {
-					meta := request.GetTokenCountMeta()
-					usage.PromptTokens = service.EstimateTokenByModel(info.UpstreamModelName, meta.CombineText)
-					// 复用既有 Claude 媒体固定估算值，不为估算访问外部资源。
-					for _, file := range meta.Files {
-						switch file.FileType {
-						case types.FileTypeImage:
-							usage.PromptTokens += 520
-						case types.FileTypeAudio:
-							usage.PromptTokens += 256
-						case types.FileTypeVideo:
-							usage.PromptTokens += 8192
-						default:
-							usage.PromptTokens += 4096
-						}
-					}
-				}
-			}
+		if result.Failed && !inputConfirmed && !info.PriceData.UsePrice {
+			// 中途结束时上游可能没报输入；缺字段不等于输入为 0，按估算输入补齐（显式 0 仍保留），与通用流一致。
+			fillStrictEstimatedInput(usage, estimateStrictClaudePrompt(info))
+			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		}
+	case "estimated":
+		usage.PromptTokens = estimateStrictClaudePrompt(info)
 		usage.CompletionTokens = estimatedOutput
-		if result.ClientGone {
+		if result.ClientGone || chargedTimeout {
 			usage.CompletionTokens = receivedOutput
+		}
+		if inputOnlyTimeout {
+			usage.CompletionTokens = 0
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildFinalClaudeUsage(usage))
@@ -702,9 +709,93 @@ loop:
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	}
 	output := estimatedOutput
-	if result.ClientGone {
+	if result.ClientGone || chargedTimeout {
 		output = receivedOutput
 	}
-	usage = service.SupplementStreamZeroOutput(c, info, usage, output, 0)
+	if inputOnlyTimeout {
+		output = 0
+	}
+	if result.Failed && !outputUsageCurrent {
+		// 中途报错/断开/超时，且最近的输出报告不覆盖此后的内容（通常只有 message_start 的 1）：
+		// 取确认值与已交付（断开时为已接收）估算的较大者。最后一段内容之后的 message_delta 用量
+		// 是上游对全部内容的计数，流随后中断也照收。
+		usage = service.SupplementStreamPartialOutput(c, info, usage, output, 0)
+	} else {
+		usage = service.SupplementStreamZeroOutput(c, info, usage, output, 0)
+	}
+	if timedOutWithoutDelivery && service.RelayTimeoutBillingMode(c) != service.NonStreamTimeoutBillingCharge {
+		// 平台承担记录：refund 为输入＋已接收输出，input 为已接收输出（charge 由用户承担，不记）。
+		input, inputEstimated := usage, !result.ConfirmedUsage || !inputConfirmed
+		if !inputOnlyTimeout {
+			input, inputEstimated = strictTimeoutInputUsage(info, result.Diagnostic.UsageEvidence, result.ConfirmedUsage)
+		}
+		if searches, ok := result.Diagnostic.UsageEvidence["server_tool_use.web_search_requests"]; ok {
+			// 上游报告的搜索次数计入平台承担（不向只收输入或退款的用户收取附加费）。
+			c.Set("claude_web_search_requests", searches)
+		}
+		service.NoteStreamTimeoutAbsorbed(c, info, input, inputEstimated, receivedOutput, inputOnlyTimeout)
+	}
 	return usage, nil
+}
+
+// fillStrictEstimatedInput 把缺输入字段的确认用量按估算输入补齐，并同步嵌套的 Claude 计费对象。
+func fillStrictEstimatedInput(usage *dto.Usage, prompt int) {
+	usage.PromptTokens = prompt
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if billing := usage.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
+		billing.ClaudeUsage.InputTokens = usage.PromptTokens
+	} else {
+		// 全零证据时构造器不建计费对象；补上输入后按非零用量重建。
+		usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildFinalClaudeUsage(usage))
+	}
+	if usage.BillingUsage != nil {
+		usage.BillingUsage.Estimated = true
+	}
+}
+
+// strictTimeoutInputUsage 是我方超时流「只含输入」的用量（确认输入与确认缓存，缺输入字段或无确认证据时为估算输入），
+// 供平台承担记录计价；estimated 表示输入是否来自估算。
+func strictTimeoutInputUsage(info *relaycommon.RelayInfo, evidence map[string]int, confirmed bool) (*dto.Usage, bool) {
+	if !confirmed {
+		prompt := estimateStrictClaudePrompt(info)
+		return &dto.Usage{PromptTokens: prompt, TotalTokens: prompt, UsageSemantic: "anthropic"}, true
+	}
+	usage := confirmedClaudeUsage(service.StreamInputOnlyEvidence(evidence))
+	if _, ok := evidence["input_tokens"]; ok || info.PriceData.UsePrice {
+		return usage, false
+	}
+	fillStrictEstimatedInput(usage, estimateStrictClaudePrompt(info))
+	return usage, true
+}
+
+// estimateStrictClaudePrompt 按实际出站的 Claude 请求体估算输入 token（媒体沿用既有固定估算值，不访问外部资源）；
+// 请求体不可读时退回请求入口的估算。
+func estimateStrictClaudePrompt(info *relaycommon.RelayInfo) int {
+	prompt := info.GetEstimatePromptTokens()
+	storage := info.ClaudeRequestBody
+	if storage == nil {
+		return prompt
+	}
+	var request dto.ClaudeRequest
+	if _, err := storage.Seek(0, io.SeekStart); err != nil {
+		return prompt
+	}
+	if err := common.DecodeJson(storage, &request); err != nil {
+		return prompt
+	}
+	meta := request.GetTokenCountMeta()
+	prompt = service.EstimateTokenByModel(info.UpstreamModelName, meta.CombineText)
+	for _, file := range meta.Files {
+		switch file.FileType {
+		case types.FileTypeImage:
+			prompt += 520
+		case types.FileTypeAudio:
+			prompt += 256
+		case types.FileTypeVideo:
+			prompt += 8192
+		default:
+			prompt += 4096
+		}
+	}
+	return prompt
 }

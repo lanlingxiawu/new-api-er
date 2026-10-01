@@ -33,7 +33,12 @@ const (
 	MsgBatchTooMany      = "common.batch_too_many"
 )
 
-const MsgRelayTimeout = "relay.timeout"
+const (
+	MsgRelayTimeout = "relay.timeout"
+	// MsgRelayTimeoutInputOnly is the consume-log note of a request our deadline
+	// ended that was charged for its input only.
+	MsgRelayTimeoutInputOnly = "relay.timeout_input_only"
+)
 
 const (
 	MsgVeridropDisabled       = "veridrop.disabled"
@@ -569,6 +574,7 @@ const (
 	MsgLogExportColAuditPath             = "log_export.col.audit_path"
 	MsgLogExportColAuditStatus           = "log_export.col.audit_status"
 	MsgLogExportColAuditSuccess          = "log_export.col.audit_success"
+	MsgLogExportColTimeoutAbsorbedMin    = "log_export.col.timeout_absorbed_quota_min"
 )
 
 // Request log (relay 请求日志)

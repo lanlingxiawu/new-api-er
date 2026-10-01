@@ -1,9 +1,11 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,6 +39,7 @@ func EnqueueConsumeLogWithCost(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	if relayInfo == nil {
 		return
 	}
+	markRelaySettlementDone(ctx)
 	snapshot := snapshotCostAndCommission(relayInfo, ledgerQuota, surchargeQuota, nil)
 	if params.ChannelId != 0 {
 		snapshot.ChannelID = params.ChannelId
@@ -60,6 +63,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		logger.LogError(ctx, "consume settlement skipped: relayInfo is nil")
 		return
 	}
+	markRelaySettlementDone(ctx)
 
 	if params.ChannelId == 0 && relayInfo.ChannelMeta != nil {
 		params.ChannelId = relayInfo.ChannelMeta.ChannelId
@@ -73,22 +77,80 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 	if params.TokenId == 0 {
 		params.TokenId = relayInfo.TokenId
 	}
+	// 我方超时结束的请求：平台承担记录（仅管理员可见）写进本请求唯一的结算日志。
+	timeoutCost := takeRelayTimeoutCost(ctx)
+	if timeoutCost != nil && timeoutCost.absorbed != nil {
+		if params.Other == nil {
+			params.Other = map[string]interface{}{}
+		}
+		streamLogAdminInfo(params.Other)[relayTimeoutAbsorbedKey] = timeoutCost.absorbed
+	}
 
 	if stream := relayInfo.StreamResult; stream != nil {
 		// 先完成唯一资金结算与订阅字段刷新，再构造流式日志摘要，避免记录预扣旧值。
 		if !settleStreamQuota(ctx, relayInfo, &params) {
 			return
 		}
+		if params.Other == nil {
+			params.Other = map[string]interface{}{}
+		}
 		AppendStreamLogInfo(relayInfo, params.Other)
-		if stream.Failed && !stream.ClientGone && stream.ErrorMessage != "" {
-			if params.Content != "" {
-				params.Content += "; "
-			}
-			params.Content += MessageWithCurrentRequestId(ctx, stream.ErrorMessage)
+		failureText := ""
+		if stream.Failed && !stream.ClientGone {
+			failureText = stream.ErrorMessage
 		}
 		// 零收费异常保留错误日志和诊断，不再进入消费计数/消费日志分支。
 		if params.Quota == 0 && (stream.Failed || stream.SettlementState == "failed" || stream.SettlementState == "partial") {
-			model.RecordErrorLog(ctx, relayInfo.UserId, params.ChannelId, params.ModelName, params.TokenName, params.Content, params.TokenId, params.UseTimeSeconds, params.IsStream, params.Group, params.Other)
+			// 上游失败：错误日志 content 记录原文（上游的 error.message），供管理员排障；
+			// 用户视图读取时按 error_code（流式失败标记 upstream_stream_error）判定为上游
+			// 流式错误，并用 admin_info 里记下的终止帧匹配输入改写，与实时终止帧逐项同一
+			// 输入（model.maskErrorLogForUser）。
+			// 我方超时（relay_timeout）：用户视图按本地错误判定，未命中规则时原样显示
+			// content，所以 content 只写我方的超时提示，结束原因的原文（上游帧在截止前
+			// 已读到时就是上游的 error.message）只进仅管理员可见的 admin_info.stream_error。
+			content := appendStreamFailureContent(ctx, params.Content, failureText)
+			if stream.Failed && !stream.ClientGone {
+				timedOut := streamFailureTimedOut(ctx)
+				if in, ok := streamTerminalInput(ctx); ok {
+					adminInfo := streamLogAdminInfo(params.Other)
+					adminInfo[operation_setting.RelayStreamMatchCodeKey] = in.ErrorCode
+					adminInfo[operation_setting.RelayStreamMatchMessageKey] = in.Message
+					if in.Truncated {
+						adminInfo[operation_setting.RelayStreamMatchTruncatedKey] = true
+					}
+				}
+				params.Other["error_code"] = operation_setting.RelayStreamErrorCode
+				if timedOut {
+					params.Other["error_code"] = operation_setting.RelayTimeoutErrorCode
+					content = appendStreamFailureContent(ctx, params.Content, relayTimeoutNote(ctx))
+					if failureText != "" {
+						streamLogAdminInfo(params.Other)["stream_error"] = failureText
+					}
+				}
+			}
+			model.RecordErrorLog(ctx, relayInfo.UserId, params.ChannelId, params.ModelName, params.TokenName, content, params.TokenId, params.UseTimeSeconds, params.IsStream, params.Group, params.Other)
+			return
+		}
+		inputOnly := timeoutCost != nil && timeoutCost.inputOnly
+		if failureText != "" || inputOnly {
+			// 消费日志 content 是我方文本、用户视图不改写（设计 relay-error-message-masking §4.1），
+			// 只写我方的提示（被我方时限切断时写超时提示，只收输入时写明）；上游原文只放进仅管理员可见的 admin_info。
+			note := streamFailureConsumeNote(ctx)
+			if inputOnly {
+				note = relayTimeoutInputOnlyNote(ctx)
+			}
+			params.Content = appendStreamFailureContent(ctx, params.Content, note)
+			if failureText != "" {
+				streamLogAdminInfo(params.Other)["stream_error"] = failureText
+			}
+		}
+	}
+
+	// 非流式只收输入的超时结算先于用量统计完成：资金未提交就失败时回退为退款，不计用量、不写消费日志。
+	timeoutSettled := false
+	if relayInfo.StreamResult == nil {
+		var ok bool
+		if timeoutSettled, ok = settleRelayTimeoutInputQuota(ctx, relayInfo, timeoutCost, params.Quota); !ok {
 			return
 		}
 	}
@@ -98,7 +160,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		model.UpdateChannelUsedQuota(params.ChannelId, params.Quota)
 	}
 
-	if relayInfo.StreamResult == nil {
+	if relayInfo.StreamResult == nil && !timeoutSettled {
 		if err := SettleBilling(ctx, relayInfo, params.Quota); err != nil {
 			logger.LogError(ctx, "error settling billing: "+err.Error())
 		}
@@ -135,4 +197,54 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 	// Intake may only be false during shutdown. Never re-enter either database
 	// from the relay goroutine; the accounting payload is independently queued.
 	model.DispatchRelayLogAccounting(payload, 0)
+}
+
+// streamLogAdminInfo returns other's admin_info object (admin-only in every
+// user view), creating it when missing.
+func streamLogAdminInfo(other map[string]interface{}) map[string]interface{} {
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		adminInfo = map[string]interface{}{}
+		other["admin_info"] = adminInfo
+	}
+	return adminInfo
+}
+
+// streamFailureConsumeNote is our own note on a charged stream that failed: the
+// relay-timeout text when our time limit cut it (classified as its terminal
+// frame was), otherwise the generic upstream stream failure text. English, like
+// the rest of the stored content.
+func streamFailureConsumeNote(ctx *gin.Context) string {
+	if streamFailureTimedOut(ctx) {
+		return relayTimeoutNote(ctx)
+	}
+	return i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
+}
+
+// streamFailureTimedOut reports whether our own time limit ended a failed
+// stream. The terminal frame's classification wins when one was written, so
+// the log and the frame never disagree (the deadline may fire after the frame).
+func streamFailureTimedOut(ctx *gin.Context) bool {
+	if in, ok := streamTerminalInput(ctx); ok {
+		return !in.Upstream
+	}
+	return IsRelayRequestTimeout(ctx)
+}
+
+// relayTimeoutNote is our relay-timeout text, in English like the rest of the
+// stored content, with the configured number of seconds.
+func relayTimeoutNote(ctx *gin.Context) string {
+	return i18n.Translate(i18n.LangEn, i18n.MsgRelayTimeout, map[string]any{"Seconds": RelayRequestTimeoutSeconds(ctx)})
+}
+
+// appendStreamFailureContent appends a stream's failure text, with the current
+// request id, to a settlement log's content. An empty text leaves it unchanged.
+func appendStreamFailureContent(ctx *gin.Context, content, failureText string) string {
+	if failureText == "" {
+		return content
+	}
+	if content != "" {
+		content += "; "
+	}
+	return content + MessageWithCurrentRequestId(ctx, failureText)
 }

@@ -145,7 +145,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	if relayFormat != types.RelayFormatOpenAIRealtime {
-		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
+		startRelayRequestTimeout(c, relayInfo)
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -204,7 +204,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
+			if !service.SettleRelayTimeoutInputIfNeeded(c, relayInfo, newAPIError) && relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}
 			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
@@ -273,6 +273,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
+			reportAdaptedRelayTimeout(c, relayInfo, channel)
 			return
 		}
 		if relayInfo.StreamSession.Active() {
@@ -507,9 +508,6 @@ func RelayMidjourney(c *gin.Context) {
 		})
 		return
 	}
-	if shouldStartMidjourneyTimeout(relayInfo.RelayMode) {
-		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
-	}
 
 	var mjErr *taskdto.MidjourneyResponse
 	switch relayInfo.RelayMode {
@@ -523,13 +521,6 @@ func RelayMidjourney(c *gin.Context) {
 		mjErr = relay.RelaySwapFace(c, relayInfo)
 	default:
 		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
-	}
-	if middleware.IsRelayRequestTimeout(c) {
-		if !c.Writer.Written() {
-			respondMidjourneyTimeout(c)
-		}
-		logger.LogError(c, "midjourney relay timed out")
-		return
 	}
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
@@ -598,10 +589,9 @@ func RelayTask(c *gin.Context) {
 		})
 		return
 	}
-	middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
 
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
-		respondTaskError(c, normalizeRelayTaskTimeout(c, taskErr))
+		respondTaskError(c, taskErr)
 		return
 	}
 
@@ -656,16 +646,12 @@ func RelayTask(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bodyStorage)
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
-		taskErr = normalizeRelayTaskTimeout(c, taskErr)
 		if taskErr == nil {
 			break
 		}
 
-		if shouldProcessTaskChannelError(taskErr) {
+		if !taskErr.LocalError {
 			channelErr := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
-			if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
-				channelErr = relayTimeoutAPIError(c)
-			}
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
@@ -733,9 +719,6 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
-		return false
-	}
-	if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
 		return false
 	}
 	if taskErr.SkipRetry {

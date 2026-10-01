@@ -227,7 +227,11 @@ func TestRealtimeStreamBetweenRoundsTermination(t *testing.T) {
 					if tc.ending == "native error" {
 						require.Equal(t, originalError, string(raw))
 					} else {
-						require.Equal(t, "upstream_stream_error", gjson.GetBytes(raw, "error.code").String())
+						wantCode := "upstream_stream_error"
+						if tc.ending == "timeout" {
+							wantCode = "relay_timeout" // 我方时限切断，与非流式 504 及消费日志一致
+						}
+						require.Equal(t, wantCode, gjson.GetBytes(raw, "error.code").String())
 						require.Equal(t, "server_error", gjson.GetBytes(raw, "error.type").String())
 					}
 				}
