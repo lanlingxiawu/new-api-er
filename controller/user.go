@@ -1424,9 +1424,21 @@ func ManageUser(c *gin.Context) {
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
-			oldQuota := user.Quota
-			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
-				common.ApiError(c, err)
+			oldQuota, err := model.OverrideUserQuota(user.Id, myRole, req.Value)
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				// A deleted user has no balance to set.
+				common.ApiErrorI18n(c, i18n.MsgUserNotExists)
+				return
+			case errors.Is(err, model.ErrUserQuotaOutOfRange):
+				common.ApiErrorI18n(c, i18n.MsgQuotaExceedMax)
+				return
+			case errors.Is(err, model.ErrUserQuotaPermission):
+				common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+				return
+			case err != nil:
+				logger.LogError(c, fmt.Sprintf("failed to override quota of user %d: %s", user.Id, err.Error()))
+				common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 				return
 			}
 			recordManageAuditForUser(c, user.Id, user.Username, "user.quota_override", map[string]interface{}{

@@ -241,7 +241,8 @@ func recordTaskCostAndCommission(task *model.Task, quota int, logId int) {
 }
 
 // RefundTaskQuota 统一的任务失败退款逻辑。
-// 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
+// 当异步任务失败时，退还资金来源（钱包或订阅）与令牌额度，并回减提交时累计的
+// 用户和渠道用量（used_quota），请求次数保持不变。
 // 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
@@ -258,7 +259,11 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
 
-	// 3. 记录日志
+	// 3. 回减提交时累计的用户和渠道用量，请求次数保持不变
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
+
+	// 4. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
@@ -273,11 +278,11 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		Group:     task.Group,
 		Other:     other,
 	})
-	// 4. 记录成本与提成（fork 记账）。必须在清除 task.Quota 之前，
+	// 5. 记录成本与提成（fork 记账）。必须在清除 task.Quota 之前，
 	// 因为提成结算依赖退款额度。
 	recordTaskCostAndCommission(task, -quota, logId)
 
-	// 5. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
+	// 6. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
 	// 由后续对账重试。回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
 	if err := task.UpdateQuota(); err != nil {
@@ -325,13 +330,15 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
 
+	// 提交时已累计过一次请求；差额结算只把用量调整到实际额度（补扣加、退差减）。
+	model.UpdateUserUsedQuota(task.UserId, quotaDelta)
+	model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
+
 	var logType int
 	var logQuota int
 	if quotaDelta > 0 {
 		logType = model.LogTypeConsume
 		logQuota = quotaDelta
-		model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
-		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta

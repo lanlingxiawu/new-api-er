@@ -592,6 +592,10 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 			tx.Rollback()
 			return 0, err
 		}
+		if err := deleteChannelCostConfigsTx(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
@@ -736,6 +740,10 @@ func (channel *Channel) Delete() error {
 		return err
 	}
 	if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := deleteChannelCostConfigsTx(tx, []int{channel.Id}); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -1113,53 +1121,54 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return 0, tx.Error
-	}
-	var ids []int
-	if err := tx.Model(&Channel{}).Where("status = ?", status).Pluck("id", &ids).Error; err != nil {
-		tx.Rollback()
-		return 0, err
-	}
-	// 删除前捕获渠道名，名称快照移到删除后异步处理。
-	names := captureChannelNamesForSnapshot(tx, ids)
-	result := tx.Where("status = ?", status).Delete(&Channel{})
-	if result.Error != nil {
-		tx.Rollback()
-		return 0, result.Error
-	}
-	if err := tx.Commit().Error; err != nil {
-		return 0, err
-	}
-	finalizeChannelDeletionAsync(names, ids)
-	return result.RowsAffected, nil
+	return deleteChannelsByStatus(int(status))
 }
 
 func DeleteDisabledChannel() (int64, error) {
+	return deleteChannelsByStatus(common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled)
+}
+
+// deleteChannelsByStatus deletes every channel whose status is one of statuses,
+// together with its cost config, in one transaction. The matching ids are
+// selected once, with the rows locked (FOR UPDATE; SQLite's single writer
+// serializes instead), and that one id list drives every delete: a status
+// change committed by another transaction between two statements (possible
+// under PostgreSQL READ COMMITTED) can therefore neither delete a surviving
+// channel's cost config nor leave a deleted channel's behind.
+func deleteChannelsByStatus(statuses ...int) (int64, error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return 0, tx.Error
 	}
 	var ids []int
-	if err := tx.Model(&Channel{}).
-		Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).
-		Pluck("id", &ids).Error; err != nil {
+	if err := lockForUpdate(tx.Model(&Channel{})).Where("status IN ?", statuses).Pluck("id", &ids).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
+	if len(ids) == 0 {
+		tx.Rollback()
+		return 0, nil
+	}
 	// 删除前捕获渠道名，名称快照移到删除后异步处理。
 	names := captureChannelNamesForSnapshot(tx, ids)
-	result := tx.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
-	if result.Error != nil {
-		tx.Rollback()
-		return 0, result.Error
+	var deletedCount int64
+	for _, chunk := range lo.Chunk(ids, 200) {
+		result := tx.Where("id IN ?", chunk).Delete(&Channel{})
+		if result.Error != nil {
+			tx.Rollback()
+			return 0, result.Error
+		}
+		deletedCount += result.RowsAffected
+		if err := deleteChannelCostConfigsTx(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
 	}
 	finalizeChannelDeletionAsync(names, ids)
-	return result.RowsAffected, nil
+	return deletedCount, nil
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {

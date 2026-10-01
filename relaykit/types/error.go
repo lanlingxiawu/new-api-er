@@ -100,6 +100,11 @@ type NewAPIError struct {
 	// upstreamMessage holds only an explicit protocol/API message, never a local
 	// transport error, body preview or metadata. It is used only for log selection.
 	upstreamMessage string
+	// safeMessage marks a message the gateway composed itself from the
+	// client's own request (e.g. a JSON field path such as
+	// generationConfig.maxOutputTokens); it skips sensitive-info masking,
+	// whose domain pattern would otherwise turn field paths into "***".
+	safeMessage bool
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -239,7 +244,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Code:    e.errorCode,
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
+	if e.errorCode != ErrorCodeCountTokenFailed && !e.safeMessage {
 		result.Message = kitutil.MaskSensitiveInfo(result.Message)
 	}
 	if result.Message == "" {
@@ -255,7 +260,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		if openAIError, ok := e.RelayError.(OpenAIError); ok {
 			result = ClaudeError{
 				Message: e.relayMessage(),
-				Type:    fmt.Sprintf("%v", openAIError.Code),
+				Type:    claudeErrorTypeOf(openAIError, e.StatusCode),
 			}
 		}
 	case ErrorTypeClaudeError:
@@ -263,18 +268,85 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			result = claudeError
 		}
 	default:
+		// Local errors, including the fresh one relay error masking builds,
+		// have no upstream type; the status decides the Anthropic type.
 		result = ClaudeError{
 			Message: e.relayMessage(),
-			Type:    string(e.errorType),
+			Type:    claudeErrorTypeForStatus(e.StatusCode),
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
+	if e.errorCode != ErrorCodeCountTokenFailed && !e.safeMessage {
 		result.Message = kitutil.MaskSensitiveInfo(result.Message)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
 	}
 	return result
+}
+
+// anthropicErrorTypes are the error.type values of the Anthropic Messages API;
+// Claude clients and SDKs classify errors by them.
+var anthropicErrorTypes = map[string]struct{}{
+	"invalid_request_error": {},
+	"authentication_error":  {},
+	"billing_error":         {},
+	"permission_error":      {},
+	"not_found_error":       {},
+	"request_too_large":     {},
+	"rate_limit_error":      {},
+	"api_error":             {},
+	"overloaded_error":      {},
+	"timeout_error":         {},
+}
+
+// claudeErrorTypeOf picks the Claude error.type for an OpenAI-shaped error:
+// an Anthropic type carried from upstream, else a non-empty string code (local
+// error codes such as insufficient_user_quota), else the type Anthropic uses
+// for the HTTP status. A nil code must never be formatted: it renders "<nil>".
+func claudeErrorTypeOf(openAIError OpenAIError, statusCode int) string {
+	if _, ok := anthropicErrorTypes[openAIError.Type]; ok {
+		return openAIError.Type
+	}
+	switch code := openAIError.Code.(type) {
+	case string:
+		if code != "" {
+			return code
+		}
+	case ErrorCode:
+		if code != "" {
+			return string(code)
+		}
+	}
+	return claudeErrorTypeForStatus(statusCode)
+}
+
+func claudeErrorTypeForStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusPaymentRequired:
+		return "billing_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusGatewayTimeout:
+		// Our own relay deadline (relay_timeout); matches the timeout_error the
+		// Claude stream terminal frame uses for the same event.
+		return "timeout_error"
+	case 529:
+		return "overloaded_error"
+	}
+	if statusCode >= 400 && statusCode < 500 {
+		return "invalid_request_error"
+	}
+	return "api_error"
 }
 
 type NewAPIErrorOptions func(*NewAPIError)
@@ -437,6 +509,15 @@ func IsSkipRetryError(err *NewAPIError) bool {
 func ErrOptionWithSkipRetry() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.skipRetry = true
+	}
+}
+
+// ErrOptionWithSafeMessage marks the message as composed by the gateway from
+// the client's own request, so it is sent without sensitive-info masking.
+// Never use it for messages that carry upstream or server-side text.
+func ErrOptionWithSafeMessage() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.safeMessage = true
 	}
 }
 

@@ -183,8 +183,8 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	var hasInputReference bool
 
 	var req TaskSubmitReq
-	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
-		return createTaskError(err, "invalid_json", http.StatusBadRequest, true)
+	if err := UnmarshalRequestBody(c, &req); err != nil {
+		return newRequestBodyTaskError(c, err, "invalid_json")
 	}
 
 	prompt = req.Prompt
@@ -266,12 +266,12 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		req, err = validateMultipartTaskRequest(c, info, action)
 		if err != nil {
-			return createTaskError(err, "invalid_multipart_form", http.StatusBadRequest, true)
+			return newRequestBodyTaskError(c, NewRequestFormError(err), "invalid_multipart_form")
 		}
 	}
 	// 为了metadata字段的兼容性，统一UnmarshalBodyReusable
-	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
-		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
+	if err := UnmarshalRequestBody(c, &req); err != nil {
+		return newRequestBodyTaskError(c, err, "invalid_request")
 	}
 
 	if taskErr := validatePrompt(req.Prompt); taskErr != nil {

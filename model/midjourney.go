@@ -23,6 +23,38 @@ type Midjourney struct {
 	Quota       int    `json:"quota"`
 	Buttons     string `json:"buttons"`
 	Properties  string `json:"properties"`
+
+	// TokenId is the token the submission was charged to (0: none, e.g. the
+	// playground or an unbilled submission), so a failure refund can return
+	// the token quota too. Internal; not exposed in the task API.
+	TokenId int `json:"-" gorm:"default:0"`
+}
+
+// SetChargedBilling records what the submission actually charged: quota taken
+// from the wallet (0 when the charge failed) and the token charged (0 when
+// none was). A later failure refunds exactly this.
+func (midjourney *Midjourney) SetChargedBilling(quota int, tokenId int) error {
+	midjourney.Quota = quota
+	midjourney.TokenId = tokenId
+	return DB.Model(&Midjourney{}).Where("id = ?", midjourney.Id).
+		UpdateColumns(map[string]any{"quota": quota, "token_id": tokenId}).Error
+}
+
+// ClaimRefundQuota atomically takes the task's pending refund amount: it sets
+// quota to 0 only while it still equals quota, so of any concurrent or
+// repeated refunds of the same task exactly one gets true.
+func (midjourney *Midjourney) ClaimRefundQuota(quota int) (bool, error) {
+	result := DB.Model(&Midjourney{}).Where("id = ? AND quota = ?", midjourney.Id, quota).Update("quota", 0)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// RestoreRefundQuota puts back a claimed refund amount whose refund failed, so
+// it stays visible for manual reconciliation.
+func (midjourney *Midjourney) RestoreRefundQuota(quota int) error {
+	return DB.Model(&Midjourney{}).Where("id = ? AND quota = 0", midjourney.Id).Update("quota", quota).Error
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -164,19 +196,24 @@ func (midjourney *Midjourney) Insert() error {
 	return err
 }
 
+// midjourneyBillingColumns are written only by the charge (SetChargedBilling)
+// and refund (ClaimRefundQuota / RestoreRefundQuota) paths. The whole-row
+// status writes below leave them alone: they write back structs loaded
+// earlier, and restoring a refunded task's quota from such a copy would let the
+// next failure refund it again.
+var midjourneyBillingColumns = []string{"quota", "token_id"}
+
 func (midjourney *Midjourney) Update() error {
-	var err error
-	err = DB.Save(midjourney).Error
-	return err
+	return DB.Omit(midjourneyBillingColumns...).Save(midjourney).Error
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus.
-// UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Uses Model().Select("*").Updates() to avoid GORM Save()'s INSERT fallback.
+// The billing columns are not written (see midjourneyBillingColumns).
 func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) {
-	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
+	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Omit(midjourneyBillingColumns...).Updates(midjourney)
 	if result.Error != nil {
 		return false, result.Error
 	}

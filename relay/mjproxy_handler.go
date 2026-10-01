@@ -232,11 +232,13 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if err != nil {
 		return &mjResp.Response
 	}
+	// Declared before the deferred charge so the charge can record on the task
+	// what it actually took (the task is inserted before the defer runs).
+	var midjourneyTask *model.Midjourney
 	defer func() {
 		if mjResp.StatusCode == 200 && mjResp.Response.Code == 1 {
-			err := service.PostConsumeQuota(info, priceData.Quota, 0, true)
-			if err != nil {
-				common.SysLog("error consuming token remain quota: " + err.Error())
+			if !service.ChargeMidjourneySubmission(info, midjourneyTask, priceData.Quota) {
+				return
 			}
 
 			tokenName := c.GetString("token_name")
@@ -257,7 +259,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}()
 	midjResponse := &mjResp.Response
-	midjourneyTask := &model.Midjourney{
+	midjourneyTask = &model.Midjourney{
 		UserId:      info.UserId,
 		Code:        midjResponse.Code,
 		Action:      constant.MjActionSwapFace,
@@ -274,7 +276,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		Progress:    "0%",
 		FailReason:  "",
 		ChannelId:   c.GetInt("channel_id"),
-		Quota:       priceData.Quota,
+		// Quota and TokenId stay 0 until the deferred charge records what it took.
 	}
 	err = midjourneyTask.Insert()
 	if err != nil {
@@ -539,11 +541,13 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	}
 	midjResponse := &midjResponseWithStatus.Response
 
+	// Declared before the deferred charge so the charge can record on the task
+	// what it actually took (the task is inserted before the defer runs).
+	var midjourneyTask *model.Midjourney
 	defer func() {
 		if consumeQuota && midjResponseWithStatus.StatusCode == 200 {
-			err := service.PostConsumeQuota(relayInfo, priceData.Quota, 0, true)
-			if err != nil {
-				common.SysLog("error consuming token remain quota: " + err.Error())
+			if !service.ChargeMidjourneySubmission(relayInfo, midjourneyTask, priceData.Quota) {
+				return
 			}
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s，ID %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, midjRequest.Action, midjResponse.Result)
@@ -570,7 +574,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	// 23-队列已满，请稍后再试 {"code":23,"description":"队列已满，请稍后尝试","result":"14001929738841620","properties":{"discordInstanceId":"1118138338562560102"}}
 	// 24-prompt包含敏感词 {"code":24,"description":"可能包含敏感词","properties":{"promptEn":"nude body","bannedWord":"nude"}}
 	// other: 提交错误，description为错误描述
-	midjourneyTask := &model.Midjourney{
+	midjourneyTask = &model.Midjourney{
 		UserId:      relayInfo.UserId,
 		Code:        midjResponse.Code,
 		Action:      midjRequest.Action,
@@ -587,7 +591,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		Progress:    "0%",
 		FailReason:  "",
 		ChannelId:   c.GetInt("channel_id"),
-		Quota:       priceData.Quota,
+		// Quota and TokenId stay 0 until the deferred charge records what it took.
 	}
 	if midjResponse.Code == 3 {
 		//无实例账号自动禁用渠道（No available account instance）

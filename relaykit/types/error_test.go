@@ -428,7 +428,7 @@ func TestToClaudeError_DefaultType(t *testing.T) {
 	e := NewErrorWithStatusCode(errors.New("plain fail"), ErrorCodeBadResponse, http.StatusBadGateway)
 	got := e.ToClaudeError()
 	require.Equal(t, "plain fail", got.Message)
-	require.Equal(t, string(ErrorTypeNewAPIError), got.Type)
+	require.Equal(t, "api_error", got.Type, "local errors get the Anthropic type for their status (502)")
 }
 
 func TestToClaudeError_MasksSensitiveInfo(t *testing.T) {
@@ -567,4 +567,17 @@ func TestRelayMessage_ClaudeNonEmpty(t *testing.T) {
 func TestRelayMessage_FallbackWhenNoRelay(t *testing.T) {
 	e := &NewAPIError{Err: errors.New("just underlying")}
 	require.Equal(t, "just underlying", e.relayMessage())
+}
+
+// Only errors explicitly marked safe skip sensitive-info masking; everything
+// else (upstream text, server-side details) is still masked.
+func TestErrOptionWithSafeMessageSkipsMaskingOnlyWhenSet(t *testing.T) {
+	text := "Invalid value for field 'generationConfig.maxOutputTokens'"
+
+	masked := NewError(errors.New(text), ErrorCodeInvalidRequest)
+	require.NotContains(t, masked.ToOpenAIError().Message, "generationConfig.maxOutputTokens")
+
+	safe := NewError(errors.New(text), ErrorCodeInvalidRequest, ErrOptionWithSafeMessage())
+	require.Equal(t, text, safe.ToOpenAIError().Message)
+	require.Equal(t, text, safe.ToClaudeError().Message)
 }

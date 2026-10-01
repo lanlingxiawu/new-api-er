@@ -760,3 +760,29 @@ const (
 	MsgSettingRelayErrorRulesUnreadable       = "setting.relay_error_rules_unreadable"
 	MsgSettingRelayErrorRulesOverLimit        = "setting.relay_error_rules_over_limit"
 )
+
+// Relay request body that fails to decode: shown instead of the Go decoder's
+// error text, which names internal struct types.
+const (
+	MsgRelayRequestBodyInvalid  = "relay.request_body_invalid"
+	MsgRelayRequestFieldInvalid = "relay.request_field_invalid"
+)
+
+// Relay token / quota checks that reject a request before it reaches upstream.
+const (
+	MsgTokenIpNotAllowed           = "token.ip_not_allowed"
+	MsgTokenClientIpUnparsable     = "token.client_ip_unparsable"
+	MsgQuotaUserInsufficient       = "quota.user_insufficient"
+	MsgQuotaUserPreConsumeExceeded = "quota.user_pre_consume_exceeded"
+)
+
+// Relay request body and upstream-request preparation failures, shown instead
+// of Go's error text (decoder, multipart, file system).
+const (
+	MsgRelayRequestBodyTooLarge     = "relay.request_body_too_large"
+	MsgRelayRequestBodyReadFailed   = "relay.request_body_read_failed"
+	MsgRelayRequestFormInvalid      = "relay.request_form_invalid"
+	MsgRelayImageRequestUnsupported = "relay.image_request_unsupported"
+	MsgRelayImageRequestInvalid     = "relay.image_request_invalid"
+	MsgRelayRequestPrepareFailed    = "relay.request_prepare_failed"
+)

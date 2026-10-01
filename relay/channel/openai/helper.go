@@ -198,7 +198,9 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if info.ShouldIncludeUsage && !containStreamUsage {
+		// 受管流未完成（上游失败、我方超时、客户端断开）时不补发用量尾帧：其用量与随后另行结算的
+		// 确认/估算值不一致，终止错误帧应是最后一帧。未受管的旧路径保持原样。
+		if info.ShouldIncludeUsage && !containStreamUsage && !streamEndedIncomplete(info) {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
 			helper.ObjectData(c, response)
@@ -289,4 +291,9 @@ func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamR
 		return
 	}
 	_ = helper.ResponseChunkData(c, streamResponse, data)
+}
+
+// streamEndedIncomplete 报告受管流式会话在收尾时尚未确认协议完成；未受管（旧路径）恒为 false。
+func streamEndedIncomplete(info *relaycommon.RelayInfo) bool {
+	return info.StreamSession.Active() && !info.StreamSession.ProtocolComplete()
 }

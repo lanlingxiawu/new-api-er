@@ -1175,6 +1175,7 @@ const (
 	streamSuccessCandidate                             // 单个候选完成，其他候选可继续生成。
 	streamSuccessClaudeDelta                           // Claude 真正的 stop_reason 帧，随后仍需 message_stop。
 	streamSuccessResponse                              // 整条响应的结束标记，须由上游全流完成状态确认。
+	streamSuccessUsageTail                             // OpenAI Chat 的纯用量尾帧（choices 为空数组、带 usage 对象），只属于成功的流。
 )
 
 // classifyStreamSuccessEvent 按事件名 event 和 JSON data 返回成功结束的粒度，不修改协议状态或原始字节。
@@ -1204,10 +1205,17 @@ func classifyStreamSuccessEvent(event string, data []byte) streamSuccessScope {
 		}
 		return streamSuccessNone
 	}
-	for _, c := range v.Get("choices").Array() {
+	choices := v.Get("choices")
+	choiceList := choices.Array() // 每个受管帧都经过这里，只展开一次
+	for _, c := range choiceList {
 		if c.Get("finish_reason").String() != "" {
 			return streamSuccessCandidate
 		}
+	}
+	if choices.IsArray() && len(choiceList) == 0 && v.Get("usage").IsObject() {
+		// 流失败后再发的用量尾帧（含本地合成的 include_usage 帧）与实际结算不一致：失败时按确认或估算
+		// 另行结算，终止错误帧才是最后一帧。与候选结束一样只在已记录终止原因时拦下，健康流中途的用量帧照常放行。
+		return streamSuccessUsageTail
 	}
 	for _, c := range v.Get("candidates").Array() {
 		if c.Get("finishReason").String() != "" {

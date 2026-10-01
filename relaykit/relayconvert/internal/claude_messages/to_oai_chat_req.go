@@ -92,6 +92,10 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 		openAITools = append(openAITools, openAITool)
 	}
 	openAIRequest.Tools = openAITools
+	// OpenAI rejects tool_choice and parallel_tool_calls without tools.
+	if len(openAITools) > 0 {
+		openAIRequest.ToolChoice, openAIRequest.ParallelTooCalls = claudeToolChoiceToOpenAI(claudeRequest.ToolChoice)
+	}
 
 	openAIMessages := make([]dto.Message, 0)
 	if claudeRequest.System != nil {
@@ -208,6 +212,43 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 
 	openAIRequest.Messages = openAIMessages
 	return &openAIRequest, nil
+}
+
+// claudeToolChoiceToOpenAI maps a Claude tool_choice onto OpenAI Chat
+// tool_choice and parallel_tool_calls. An absent, malformed or unknown choice
+// yields (nil, nil) so the upstream default applies, as it would on Claude.
+func claudeToolChoiceToOpenAI(toolChoice any) (any, *bool) {
+	if toolChoice == nil {
+		return nil, nil
+	}
+	choice, err := kitutil.Any2Type[dto.ClaudeToolChoice](toolChoice)
+	if err != nil {
+		return nil, nil
+	}
+	var openAIChoice any
+	switch choice.Type {
+	case "auto":
+		openAIChoice = "auto"
+	case "any":
+		openAIChoice = "required"
+	case "none":
+		// No tool may be called, so a parallel limit has nothing to apply to.
+		return "none", nil
+	case "tool":
+		if choice.Name == "" {
+			return nil, nil
+		}
+		openAIChoice = map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": choice.Name},
+		}
+	default:
+		return nil, nil
+	}
+	if choice.DisableParallelToolUse {
+		return openAIChoice, kitutil.GetPointer(false)
+	}
+	return openAIChoice, nil
 }
 
 func requestToJSONString(v interface{}) string {
