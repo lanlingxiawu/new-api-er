@@ -16,6 +16,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -295,23 +296,30 @@ func WriteStreamTerminalError(c *gin.Context, info *relaycommon.RelayInfo, snaps
 	if c.Writer.Written() && relaycommon.IsStreamBinaryContentType(c.Writer.Header().Get("Content-Type")) {
 		return
 	}
-	message := i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
-	payload := map[string]any{"error": map[string]any{"type": "api_error", "message": message, "code": "upstream_stream_error"}}
+	upstreamPayload := snapshot.ErrorPayload
+	if len(snapshot.ErrorFrame) > 0 {
+		_, upstreamPayload = relaycommon.StreamFramePayload(snapshot.ErrorFrame)
+	}
+	// forwardUpstream=false: the admin's error display replaced this error, so
+	// the upstream frame must not reach the client verbatim.
+	message, forwardUpstream := PresentStreamTerminalMessage(c, upstreamPayload, i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed))
+	code := operation_setting.RelayStreamErrorCode
+	payload := map[string]any{"error": map[string]any{"type": "api_error", "message": message, "code": code}}
 	event := "error"
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAIRealtime:
-		payload = map[string]any{"type": "error", "error": map[string]any{"type": "server_error", "code": "upstream_stream_error", "message": message}}
+		payload = map[string]any{"type": "error", "error": map[string]any{"type": "server_error", "code": code, "message": message}}
 	case types.RelayFormatClaude:
 		payload = map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": message}}
 	case types.RelayFormatOpenAIResponses:
-		payload = map[string]any{"type": "error", "code": "upstream_stream_error", "message": message, "param": nil}
+		payload = map[string]any{"type": "error", "code": code, "message": message, "param": nil}
 	case types.RelayFormatGemini:
 		payload = map[string]any{"error": map[string]any{"code": 502, "status": "UNAVAILABLE", "message": message}}
 	}
 	data, _ := common.Marshal(payload)
 	frame := []byte("event: " + event + "\ndata: " + string(data) + "\n\n")
 	sdkPayload := false // 原 SDK 载荷在终止写入时用固定缓冲添加外壳，不分配换行放大后的完整 SSE 帧。
-	if (len(snapshot.ErrorFrame) > 0 || len(snapshot.ErrorPayload) > 0) && info.GetFinalRequestRelayFormat() == info.RelayFormat {
+	if forwardUpstream && (len(snapshot.ErrorFrame) > 0 || len(snapshot.ErrorPayload) > 0) && info.GetFinalRequestRelayFormat() == info.RelayFormat {
 		// 旧原生适配器未必登记转换链，进一步检查错误形状，避免把讯飞 header.code 等当作 OpenAI error。
 		originalEvent, originalData := "error", snapshot.ErrorPayload
 		if len(snapshot.ErrorFrame) > 0 {

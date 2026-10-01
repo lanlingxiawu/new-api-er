@@ -1439,6 +1439,7 @@ func ResolveChannelDisplayNamesWithoutLogs(ids []int) map[int]string {
 
 // ResolveChannelDisplayNames 批量解析渠道显示名称（兼容已删除渠道），仅用于按页展示等小批量场景。
 // 解析链：channels 表 → platform_channel_daily_stats 名称快照 → logs 快照。
+// logs 快照只来自旧错误日志的 other.channel_name（错误日志已不再写渠道名），仅对历史数据有效。
 // 渠道删除后 finalizeChannelDeletion（异步）会把名称快照回写日聚合表（在世期间刷盘通常已写入），
 // 故该链路对已删渠道基本闭合（最终一致；极短窗口内可能短暂取不到名）。
 func ResolveChannelDisplayNames(ids []int) map[int]string {

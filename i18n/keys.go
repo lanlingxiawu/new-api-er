@@ -283,6 +283,21 @@ const (
 	MsgSettingSaved            = "setting.saved"
 
 	MsgSettingGroupRetryTimesInvalid   = "setting.group_retry_times_invalid"
+	MsgSettingRelayErrorDisplayInvalid = "setting.relay_error_display_invalid"
+	MsgSettingRelayErrorEditInvalid    = "setting.relay_error_edit_invalid"
+
+	// Relay error display: built-in fallback text and preset rules.
+	MsgRelayErrorDefaultMessage         = "relay_error.default_message"
+	MsgRelayErrorPresetKeepParamsName   = "relay_error.preset.keep_params.name"
+	MsgRelayErrorPresetQuotaName        = "relay_error.preset.quota.name"
+	MsgRelayErrorPresetQuotaMessage     = "relay_error.preset.quota.message"
+	MsgRelayErrorPresetRateLimitName    = "relay_error.preset.rate_limit.name"
+	MsgRelayErrorPresetRateLimitMessage = "relay_error.preset.rate_limit.message"
+	MsgRelayErrorPresetModelCodeName    = "relay_error.preset.model_code.name"
+	MsgRelayErrorPresetModelChannelName = "relay_error.preset.model_channel.name"
+	MsgRelayErrorPresetModelMessage     = "relay_error.preset.model.message"
+	MsgRelayErrorPresetTimeoutName      = "relay_error.preset.timeout.name"
+	MsgRelayErrorPresetTimeoutMessage   = "relay_error.preset.timeout.message"
 )
 
 // Deployment related messages (io.net)
@@ -624,6 +639,10 @@ const (
 	MsgLogExportSummaryTooManyGroups = "log_export.summary_too_many_groups"
 )
 
+// MsgSettingRelayErrorEditTooComplex: the regular expressions of an edit rule
+// exceed operation_setting.MaxRelayErrorRuleRegexSize.
+const MsgSettingRelayErrorEditTooComplex = "setting.relay_error_edit_too_complex"
+
 // 价格巡检分享页（/price_monitor/view）的界面文字，按请求语言整页渲染。
 const (
 	MsgPriceMonitorPageTitle                        = "price_monitor.page_title"
@@ -724,4 +743,16 @@ const (
 	MsgPriceMonitorPageComparedModels               = "price_monitor.page_compared_models"
 	MsgPriceMonitorPageRange                        = "price_monitor.page_range"
 	MsgPriceMonitorPageNoModelsForFilter            = "price_monitor.page_no_models_for_filter"
+)
+
+// MsgSettingRelayErrorRuleSkipped: a stored relay error display rule that no
+// longer validates and is skipped while the rest of the setting stays in effect.
+const MsgSettingRelayErrorRuleSkipped = "setting.relay_error_rule_skipped"
+
+// Parts of a stored relay error display setting that are skipped while the
+// rest stays in effect (other than single rules: MsgSettingRelayErrorRuleSkipped).
+const (
+	MsgSettingRelayErrorDefaultMessageSkipped = "setting.relay_error_default_message_skipped"
+	MsgSettingRelayErrorRulesUnreadable       = "setting.relay_error_rules_unreadable"
+	MsgSettingRelayErrorRulesOverLimit        = "setting.relay_error_rules_over_limit"
 )

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -257,7 +259,121 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if field, ok := strings.CutPrefix(key, relayErrorDisplayOptionPrefix); ok {
+		return validateRelayErrorDisplayOption(field, value)
+	}
 	return nil
+}
+
+const relayErrorDisplayOptionPrefix = "relay_error_display_setting."
+
+// validateRelayErrorDisplayOption validates one relay_error_display_setting
+// field saved on its own (the single-option endpoint) the way SaveConfigGroup
+// validates the group: the live setting with this field changed must pass
+// validateRelayErrorDisplaySave, so a single-key save cannot store rules the
+// group save would refuse. Every refusal is an ErrRelayErrorDisplayInvalid, so
+// the caller answers with the translated message, never a Go error string.
+func validateRelayErrorDisplayOption(field, value string) error {
+	values := map[string]string{field: value}
+	if err := validateRelayErrorDisplayFields(values); err != nil {
+		return fmt.Errorf("%w: %v", operation_setting.ErrRelayErrorDisplayInvalid, err)
+	}
+	stored := operation_setting.GetRelayErrorDisplaySetting()
+	draft := stored
+	if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+		return fmt.Errorf("%w: %v", operation_setting.ErrRelayErrorDisplayInvalid, err)
+	}
+	return validateRelayErrorDisplaySave(stored, draft)
+}
+
+// validateRelayErrorDisplaySave checks a relay error display save (single key
+// or group) strictly, but only in what the save changes relative to the stored
+// setting. Parts already stored are not re-validated: the runtime loader skips
+// stored parts that no longer validate (a rule saved before a limit existed, a
+// hand-edited row) and keeps the rest in effect, so re-validating them would
+// only make it impossible to switch the feature off, change
+// hide_upstream_errors or the default message until the stale rule is removed.
+//
+//   - default_message: checked only when it differs from the stored one.
+//   - rules: a list equal to the stored one is not checked. Otherwise every
+//     rule that also appears in the stored list is left out of the check and
+//     every new or edited rule is checked strictly, together with the rule
+//     count, and errors keep the rule numbers the admin sees.
+//
+// Rules are compared by content (parsed and re-encoded), so a settings page
+// that re-serializes the unchanged list still counts as unchanged.
+func validateRelayErrorDisplaySave(stored, draft operation_setting.RelayErrorDisplaySetting) error {
+	check := draft
+	if strings.TrimSpace(draft.DefaultMessage) == strings.TrimSpace(stored.DefaultMessage) {
+		check.DefaultMessage = ""
+	}
+	check.Rules = relayErrorDisplayRulesToCheck(stored.Rules, draft.Rules)
+	return operation_setting.ValidateRelayErrorDisplaySetting(check)
+}
+
+// relayErrorDisplayRulesToCheck returns the rules value to validate for a save
+// of draftRules over storedRules: "" when nothing changed, otherwise the draft
+// list with every rule already in the stored list replaced by a placeholder
+// that always validates (so rule numbers in errors stay those of the draft).
+// A draft that is not a JSON rule list is returned as is and fails validation.
+func relayErrorDisplayRulesToCheck(storedRules, draftRules string) string {
+	draftRaw := strings.TrimSpace(draftRules)
+	if draftRaw == strings.TrimSpace(storedRules) {
+		return ""
+	}
+	var draft []operation_setting.RelayErrorRule
+	if err := common.UnmarshalJsonStr(draftRaw, &draft); err != nil || draftRaw == "" {
+		return draftRules
+	}
+	var stored []operation_setting.RelayErrorRule
+	if strings.TrimSpace(storedRules) != "" {
+		// An unreadable stored list has no rules to keep; every draft rule is new.
+		_ = common.UnmarshalJsonStr(storedRules, &stored)
+	}
+	storedKeys := make(map[string]bool, len(stored))
+	storedList := make([]string, 0, len(stored))
+	for _, rule := range stored {
+		key, ok := relayErrorDisplayRuleKey(rule)
+		if !ok {
+			continue
+		}
+		storedKeys[key] = true
+		storedList = append(storedList, key)
+	}
+	draftList := make([]string, 0, len(draft))
+	for _, rule := range draft {
+		key, ok := relayErrorDisplayRuleKey(rule)
+		if !ok {
+			return draftRules
+		}
+		draftList = append(draftList, key)
+	}
+	if slices.Equal(storedList, draftList) {
+		return ""
+	}
+	placeholder := operation_setting.RelayErrorRule{
+		Source: operation_setting.RelayErrorSourceAny,
+		Action: operation_setting.RelayErrorActionKeep,
+	}
+	for i, key := range draftList {
+		if storedKeys[key] {
+			draft[i] = placeholder
+		}
+	}
+	encoded, err := common.Marshal(draft)
+	if err != nil {
+		return draftRules
+	}
+	return string(encoded)
+}
+
+// relayErrorDisplayRuleKey is a rule's content in a canonical encoding.
+func relayErrorDisplayRuleKey(rule operation_setting.RelayErrorRule) (string, bool) {
+	encoded, err := common.Marshal(rule)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 func UpdateOption(key string, value string) error {

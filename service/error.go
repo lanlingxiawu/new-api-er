@@ -135,13 +135,6 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other["error_type"] = err.GetErrorType()
 		other["error_code"] = err.GetErrorCode()
 		other["status_code"] = err.StatusCode
-		other["channel_id"] = channelId
-		channelName := c.GetString("channel_name")
-		if channelError.ChannelName != "" {
-			channelName = channelError.ChannelName
-		}
-		other["channel_name"] = channelName
-		other["channel_type"] = c.GetInt("channel_type")
 		adminInfo := make(map[string]interface{})
 		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
 		if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {

@@ -95,6 +95,27 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 			return false, err
 		}
 		operation_setting.ReplaceRelayTimeoutSetting(draft)
+	case "relay_error_display_setting":
+		stored := operation_setting.GetRelayErrorDisplaySetting()
+		draft := stored
+		if err := validateRelayErrorDisplayFields(values); err != nil {
+			return false, err
+		}
+		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+			return false, err
+		}
+		// Only what this save changes is validated; stored parts the runtime
+		// already skips as invalid must not block switching the feature off.
+		if err := validateRelayErrorDisplaySave(stored, draft); err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceRelayErrorDisplaySetting(draft)
 	case "veridrop_monitor_setting":
 		draft := operation_setting.GetVeridropMonitorSetting()
 		if err := validateGroupFieldNames(values, veridropMonitorFields); err != nil {
@@ -218,6 +239,24 @@ func validateRelayTimeoutFields(values map[string]string) error {
 		}
 		if _, err := strconv.Atoi(value); err != nil {
 			return fmt.Errorf("invalid integer configuration value")
+		}
+	}
+	return nil
+}
+
+var relayErrorDisplayFields = fieldSet("enabled", "hide_upstream_errors", "default_message", "rules")
+
+// validateRelayErrorDisplayFields checks names and the two booleans; the rules
+// JSON and text limits are checked by ValidateRelayErrorDisplaySetting.
+func validateRelayErrorDisplayFields(values map[string]string) error {
+	if err := validateGroupFieldNames(values, relayErrorDisplayFields); err != nil {
+		return err
+	}
+	for _, key := range []string{"enabled", "hide_upstream_errors"} {
+		if value, ok := values[key]; ok {
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean configuration value")
+			}
 		}
 	}
 	return nil

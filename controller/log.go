@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -93,6 +94,7 @@ func exportLogsExcel(c *gin.Context, userId int) {
 	// 渠道、重试列在前端仅管理员可见，且普通日志接口会剥离 admin_info；
 	// 自助导出必须同样隐藏，避免普通用户拿到内部渠道路由信息。
 	isAdmin := userId == 0
+	viewerLang := i18n.GetLangFromContext(c)
 
 	f := excelize.NewFile()
 	defer func() {
@@ -162,12 +164,17 @@ func exportLogsExcel(c *gin.Context, userId int) {
 				}
 				// 花费换算成美元，四舍五入到 6 位小数，对齐前端 renderQuota(quota, 6)。
 				costUSD := math.Round(common.QuotaToUSD(int64(l.Quota))*1e6) / 1e6
-				// 渠道、重试仅管理员可见，自助导出置空。
+				// 渠道、重试仅管理员可见，自助导出置空；详情：管理员附带仅管理员可见的
+				// 上游流式错误原文，自助导出按错误提示配置改写，与用户日志列表一致。
 				var channelCell interface{} = ""
 				retryCell := ""
+				var detailCell string
 				if isAdmin {
 					channelCell = l.ChannelId
 					retryCell = retryChainText(l.Other)
+					detailCell = model.AdminLogExportContent(l)
+				} else {
+					detailCell = model.MaskErrorLogContentForUser(l, viewerLang)
 				}
 				row := []interface{}{
 					time.Unix(l.CreatedAt, 0).Format("2006-01-02 15:04:05"),
@@ -183,7 +190,7 @@ func exportLogsExcel(c *gin.Context, userId int) {
 					costUSD,
 					l.Ip,
 					retryCell,
-					l.Content,
+					detailCell,
 				}
 				if err := sw.SetRow(cell, row); err != nil {
 					return err

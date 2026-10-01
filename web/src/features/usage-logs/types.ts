@@ -252,6 +252,9 @@ export interface LogOtherData {
     local_count_tokens?: boolean
     usage_billing_path?: UsageBillingPath | string
     channel_affinity?: ChannelAffinityInfo
+    // Upstream error text of a charged stream that failed midway; the consume
+    // log content only carries our own message (admin only).
+    stream_error?: string
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

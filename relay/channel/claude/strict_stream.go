@@ -627,8 +627,16 @@ loop:
 	info.StreamStatus.SetEndReason(reason, nil)
 	// 先关闭上游再写终止错误，避免下游慢写继续拖延上游生成。
 	cleanup()
+	genericFailure := i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
 	if upstreamError {
-		service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, upstreamErrorFrame, true) })
+		// 管理员配置的错误提示替换命中时，不再原样转发上游错误帧。
+		_, upstreamPayload := relaycommon.StreamFramePayload(upstreamErrorFrame)
+		if message, forward := service.PresentStreamTerminalMessage(c, upstreamPayload, genericFailure); forward {
+			service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, upstreamErrorFrame, true) })
+		} else {
+			payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": message}})
+			service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
+		}
 	}
 	if result.Failed && !result.ClientGone && !upstreamError && (c.Request.Context().Err() == nil || service.IsRelayRequestTimeout(c)) {
 		// 即使内容块尚未关闭，也只发送官方格式 error，不伪造 stop_reason 或成功结束事件。

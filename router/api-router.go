@@ -325,6 +325,10 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetOptions)
 			optionRoute.PUT("/", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOption)
 			optionRoute.PUT("/group", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOptionGroup)
+			// 错误提示替换：预览不改任何状态，只需查看权限；scope 取自请求体（POST）或查询参数（GET）。
+			optionRoute.POST("/relay-error-display/preview", middleware.RequireSystemSettingsScope(authz.ActionView), controller.PreviewRelayErrorDisplay)
+			optionRoute.GET("/relay-error-display/presets", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetRelayErrorDisplayPresets)
+			optionRoute.GET("/relay-error-display/status", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetRelayErrorDisplayStatus)
 		}
 		optionRootRoute := apiRouter.Group("/option")
 		optionRootRoute.Use(middleware.AdminAuth())

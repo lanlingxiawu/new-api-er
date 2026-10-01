@@ -27,6 +27,9 @@ import type {
   LedgerPipelineStatusResponse,
   RelayLogPipelineStatusResponse,
   RelayLogReplayStartResponse,
+  RelayErrorPresetsResponse,
+  RelayErrorPreviewRequest,
+  RelayErrorPreviewResponse,
   LogCleanupTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
@@ -258,6 +261,24 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   const res = await api.post<UpstreamRatiosResponse>(
     '/api/ratio_sync/fetch',
     request
+  )
+  return res.data
+}
+
+export async function previewRelayErrorDisplay(
+  request: RelayErrorPreviewRequest
+) {
+  const res = await api.post<RelayErrorPreviewResponse>(
+    '/api/option/relay-error-display/preview',
+    request
+  )
+  return res.data
+}
+
+export async function getRelayErrorDisplayPresets(scope: string, lang: string) {
+  const res = await api.get<RelayErrorPresetsResponse>(
+    '/api/option/relay-error-display/presets',
+    { params: { scope, lang } }
   )
   return res.data
 }

@@ -512,7 +512,7 @@ func writeAdaptedStreamTimeout(c *gin.Context) {
 	message := i18n.T(c, i18n.MsgRelayTimeout, map[string]any{
 		"Seconds": service.RelayRequestTimeoutSeconds(c),
 	})
-	status, code := http.StatusGatewayTimeout, string(types.ErrorCodeRelayTimeout)
+	status, message, code := service.PresentLocalRelayAbort(c, true, http.StatusGatewayTimeout, message, string(types.ErrorCodeRelayTimeout))
 	// Like every relay error the controller writes, so a user can report it.
 	message = common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))
 	service.WriteRelayTerminalError(c, func() {

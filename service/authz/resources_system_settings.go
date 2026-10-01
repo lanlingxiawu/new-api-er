@@ -72,6 +72,7 @@ var systemSettingsScopeDefinitions = []systemSettingsScopeDefinition{
 	{Scope: "system-tuning.fallback-backfill", LabelKey: "Fallback Backfill", Group: "system-tuning", GroupLabelKey: "Runtime Parameters", Sort: 811},
 	{Scope: "system-tuning.relay-timeout", LabelKey: "AI Request Timeout", Group: "system-tuning", GroupLabelKey: "Runtime Parameters", Sort: 812},
 	{Scope: "system-tuning.group-retry-times", LabelKey: "Per-group retry attempts", Group: "system-tuning", GroupLabelKey: "Runtime Parameters", Sort: 813},
+	{Scope: "system-tuning.relay-error-display", LabelKey: "Error messages shown to users", Group: "system-tuning", GroupLabelKey: "Runtime Parameters", Sort: 814},
 }
 
 func init() {

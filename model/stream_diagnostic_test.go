@@ -50,10 +50,13 @@ func TestClaudeDiagnosticReadBoundary(t *testing.T) {
 			require.Equal(t, tc.reason, fields["reject_reason"])
 		}
 	}
-	log.Other = `{"reject_reason":"policy","admin_info":{"private":1},"audit_info":{"private":2}}`
+	// The owner's view follows upstream: reject_reason is admin-only, like the
+	// admin and audit scopes.
+	log.Other = `{"reject_reason":"policy","admin_info":{"private":1},"audit_info":{"private":2},"keep":1}`
 	formatUserLogs([]*Log{&log}, 0)
-	require.Contains(t, log.Other, `"reject_reason":"policy"`)
+	require.NotContains(t, log.Other, "reject_reason")
 	require.NotContains(t, log.Other, "private")
+	require.Contains(t, log.Other, `"keep":1`)
 }
 
 // TestClaudeDiagnosticDatabaseProjection 验证标准 GORM 读取被过滤，而独立诊断投影按请求、时间、尝试编号正确读取私有数据。

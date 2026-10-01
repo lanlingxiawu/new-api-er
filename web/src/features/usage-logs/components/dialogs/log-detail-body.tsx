@@ -1384,6 +1384,12 @@ export function LogDetailBody(props: LogDetailBodyProps) {
               label={t('Effective content delivered')}
               value={other.stream_result.effective_content ? t('Yes') : t('No')}
             />
+            {props.isAdmin && other.admin_info?.stream_error && (
+              <DetailRow
+                label={t('Upstream error')}
+                value={other.admin_info.stream_error}
+              />
+            )}
           </DetailSection>
         )}
       </CompareCell>

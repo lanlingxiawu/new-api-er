@@ -324,6 +324,7 @@ export type UpdateOptionGroupRequest = {
     | 'db_pool_setting'
     | 'user_session_setting'
     | 'relay_timeout_setting'
+    | 'relay_error_display_setting'
     | 'veridrop_monitor_setting'
     | 'veridrop_monitor_setting'
   values: Record<string, string>
@@ -864,6 +865,10 @@ export type SystemTuningSettings = {
   'relay_timeout_setting.total_timeout_seconds': number
   'relay_timeout_setting.retry_min_budget_seconds': number
   'relay_timeout_setting.max_total_attempts': number
+  'relay_error_display_setting.enabled': boolean
+  'relay_error_display_setting.hide_upstream_errors': boolean
+  'relay_error_display_setting.default_message': string
+  'relay_error_display_setting.rules': string
   'business_stats_circuit_breaker_setting.enabled': boolean
   'business_stats_circuit_breaker_setting.manual_disabled': boolean
   'business_stats_circuit_breaker_setting.failure_threshold': number
@@ -1089,4 +1094,66 @@ export type UpstreamRatiosResponse = {
     differences: DifferencesMap
     test_results: TestResult[]
   }
+}
+
+// ---- 错误提示替换（relay_error_display_setting）
+
+export type RelayErrorRuleSource = 'upstream' | 'local' | 'any'
+export type RelayErrorRuleAction = 'replace' | 'keep' | 'edit'
+
+/** Mirrors operation_setting.RelayErrorEdit: one find-and-replace step. */
+export type RelayErrorEdit = {
+  find: string
+  /** Empty or absent deletes the match. */
+  replace?: string
+  regex?: boolean
+}
+
+/** Mirrors operation_setting.RelayErrorRule. */
+export type RelayErrorRule = {
+  name?: string
+  source: RelayErrorRuleSource
+  status_codes?: number[]
+  error_codes?: string[]
+  keywords?: string[]
+  action: RelayErrorRuleAction
+  message?: string
+  edits?: RelayErrorEdit[]
+  status_code?: number
+}
+
+export type RelayErrorDisplayDraft = {
+  enabled: boolean
+  hide_upstream_errors: boolean
+  default_message: string
+  rules: string
+}
+
+export type RelayErrorPreviewRequest = {
+  scope?: string
+  setting: RelayErrorDisplayDraft
+  sample: {
+    source: 'upstream' | 'local'
+    status_code: number
+    error_code: string
+    message: string
+  }
+}
+
+export type RelayErrorPreviewResponse = {
+  success: boolean
+  message: string
+  data?: {
+    replace: boolean
+    message: string
+    status_code: number
+    rule_index: number
+    rule_name: string
+  }
+}
+
+export type RelayErrorPresetsResponse = {
+  success: boolean
+  message: string
+  data?: RelayErrorRule[]
 }

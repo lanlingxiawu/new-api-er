@@ -36,6 +36,7 @@ import {
   RelayTimeoutHotConfigSection,
   UserSessionHotConfigSection,
 } from './hot-config-sections'
+import { RelayErrorDisplaySection } from './relay-error-display-section'
 
 const SYSTEM_TUNING_SECTIONS = [
   {
@@ -553,6 +554,13 @@ const SYSTEM_TUNING_SECTIONS = [
     titleKey: 'AI Request Timeout',
     build: (settings: SystemTuningSettings) => (
       <RelayTimeoutHotConfigSection settings={settings} />
+    ),
+  },
+  {
+    id: 'relay-error-display',
+    titleKey: 'Error messages shown to users',
+    build: (settings: SystemTuningSettings) => (
+      <RelayErrorDisplaySection settings={settings} />
     ),
   },
 ] as const

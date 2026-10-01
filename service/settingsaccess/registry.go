@@ -4,6 +4,7 @@ const (
 	ScopeBillingGroupPricing  = "billing.group-pricing"
 	ScopeChannelProfitPreview = "channel.profit-preview"
 	ScopeVeridropDetection    = "veridrop-detection"
+	ScopeRelayErrorDisplay    = "system-tuning.relay-error-display"
 )
 
 type Definition struct {

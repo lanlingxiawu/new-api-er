@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -115,24 +117,55 @@ func assignDisplayLogIds(logs []*Log, startIdx int) {
 	}
 }
 
-// formatUserLogs 移除管理员操作信息；reject_reason 按 bb6317462 保留在接口，仅由前端限制管理员展示。
+// formatUserLogs 生成日志所有者可见的视图：other 按上游的用户可见性裁剪（admin/root/audit 信息与
+// channel_id/channel_name/channel_type/reject_reason 等历史敏感键一律去掉），再按错误提示配置改写。
 // 参数 logs：待原地更新的日志切片；startIdx：当前页起始序号，用于生成展示用日志编号。
 func formatUserLogs(logs []*Log, startIdx int) {
+	masking := operation_setting.RelayErrorDisplayEnabled()
+	// The built-in fallback text follows the user's language. All logs here
+	// belong to one user; resolved once, on the first log that is checked.
+	lang, langLoaded := "", false
+	langOf := func(userId int) string {
+		if !langLoaded {
+			lang, langLoaded = userLogLanguage(userId), true
+		}
+		return lang
+	}
 	for i := range logs {
 		logs[i].ChannelName = ""
-		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
-		if otherMap != nil {
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			// Remove operation-audit details (operator/route info), admin-only.
-			delete(otherMap, "audit_info")
-			// delete(otherMap, "reject_reason")
-			// delete(otherMap, "stream_status")
+		// Read before the projection removes admin_info, where it is kept.
+		var streamInput *operation_setting.RelayErrorInput
+		if masking {
+			streamInput = storedStreamTerminalInput(logs[i])
 		}
-		logs[i].Other = common.MapToJsonStr(otherMap)
+		logs[i].Other = formatLogOtherJSON(logs[i].Other, logOtherVisibilityUser)
+		if masking {
+			maskProjectedLogForUser(logs[i], streamInput, langOf)
+		}
 	}
 	assignDisplayLogIds(logs, startIdx)
+}
+
+// maskProjectedLogForUser applies the relay error display configuration to one
+// log that has already been projected for its owner. streamInput is the
+// terminal-frame input a stream-failure error log recorded
+// (storedStreamTerminalInput, read from the log before projection; nil when it
+// has none). other is re-encoded only when a value in it was rewritten, and
+// then only that value changes: the others keep their raw JSON.
+func maskProjectedLogForUser(log *Log, streamInput *operation_setting.RelayErrorInput, langOf func(userId int) string) {
+	if log.Type != LogTypeError && !strings.Contains(log.Other, `"stream_status"`) {
+		return
+	}
+	fields := parseLogOtherFields(log.Other)
+	changed := false
+	if log.Type == LogTypeError {
+		changed = maskErrorLogForUser(log, fields, streamInput, langOf)
+	} else {
+		changed = maskStreamStatusForUser(fields, log.UserId, langOf)
+	}
+	if changed {
+		log.Other = fields.encode()
+	}
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
@@ -849,10 +882,69 @@ func applyEmployeeCustomerLogFilters(tx *gorm.DB, filter EmployeeCustomerLogFilt
 	return tx, nil
 }
 
-// stripLogChannelNames 抹掉渠道名称。员工只看渠道编号定位问题，供应渠道的名称属于内部信息。
-func stripLogChannelNames(logs []*Log) {
+// employeeHiddenLogOtherKeys are the top-level other keys the employee view of
+// customer logs removes: the channel name (error logs written before it left
+// other still carry it) and the root-only and audit scopes. admin_info stays:
+// the employee log page shows the admin fields (retry chain, channel affinity,
+// multi-key index), and employees read errors unmasked by design, which
+// admin_info.stream_error* only repeats.
+var employeeHiddenLogOtherKeys = []string{"channel_name", logOtherRootInfoKey, logOtherAuditInfoKey}
+
+// employeeHiddenAdminInfoKeys are admin_info keys the employee view removes
+// although it keeps admin_info: timeout_absorbed is the platform's cost of a
+// timed-out request, an internal figure (relay-timeout-cost-bearing.md §4).
+var employeeHiddenAdminInfoKeys = []string{"timeout_absorbed"}
+
+// employeeHiddenLogOtherMarkers is the cheap substring pre-check for both lists.
+var employeeHiddenLogOtherMarkers = append(append([]string{}, employeeHiddenLogOtherKeys...), employeeHiddenAdminInfoKeys...)
+
+// formatEmployeeLogs 生成员工查看客户日志的视图：抹掉渠道名称（员工只看渠道编号定位问题，
+// 供应渠道的名称属于内部信息）、仅 root / 审计可见的 root_info、audit_info，以及 admin_info 里的
+// 平台成本字段（timeout_absorbed）。
+// 其余 other 值保持原始 JSON；无须去掉任何键时 other 原样返回，无法解析且含这些键时返回 {}。
+func formatEmployeeLogs(logs []*Log) {
 	for i := range logs {
 		logs[i].ChannelName = ""
+		hidden := false
+		for _, key := range employeeHiddenLogOtherMarkers {
+			if strings.Contains(logs[i].Other, `"`+key+`"`) {
+				hidden = true
+				break
+			}
+		}
+		if !hidden {
+			continue
+		}
+		fields := parseLogOtherFields(logs[i].Other)
+		if fields == nil {
+			logs[i].Other = "{}"
+			continue
+		}
+		changed := false
+		for _, key := range employeeHiddenLogOtherKeys {
+			if _, ok := fields[key]; ok {
+				delete(fields, key)
+				changed = true
+			}
+		}
+		if adminInfo := fields.object(logOtherAdminInfoKey); adminInfo != nil {
+			adminChanged := false
+			for _, key := range employeeHiddenAdminInfoKeys {
+				if _, ok := adminInfo[key]; ok {
+					delete(adminInfo, key)
+					adminChanged = true
+				}
+			}
+			if adminChanged {
+				if !fields.set(logOtherAdminInfoKey, adminInfo) {
+					delete(fields, logOtherAdminInfoKey)
+				}
+				changed = true
+			}
+		}
+		if changed {
+			logs[i].Other = fields.encode()
+		}
 	}
 }
 
@@ -873,7 +965,7 @@ func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, tot
 	if err = tx.Order("logs.created_at desc, logs.id desc").Limit(filter.PageSize).Offset(filter.StartIdx).Find(&logs).Error; err != nil {
 		return nil, 0, err
 	}
-	stripLogChannelNames(logs)
+	formatEmployeeLogs(logs)
 	return logs, total, nil
 }
 
@@ -1141,4 +1233,170 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return 0, result.Error
 	}
 	return result.RowsAffected, nil
+}
+
+// userLogLanguage is the user's language for the fallback text; a seam for tests.
+var userLogLanguage = GetUserLanguage
+
+// MaskErrorLogContentForUser returns an error log's content as its owner may
+// see it, for views outside formatUserLogs (the self-service export). lang is
+// the viewer's language, for the built-in fallback text.
+func MaskErrorLogContentForUser(log *Log, lang string) string {
+	if log == nil || log.Type != LogTypeError || !operation_setting.RelayErrorDisplayEnabled() {
+		if log == nil {
+			return ""
+		}
+		return log.Content
+	}
+	masked := *log
+	maskErrorLogForUser(&masked, parseLogOtherFields(log.Other), storedStreamTerminalInput(log), func(int) string { return lang })
+	return masked.Content
+}
+
+// storedStreamTerminalInput returns the error code and text the terminal frame
+// of a failed stream was decided with, which its settlement error log keeps in
+// admin_info (service.FinalizeConsumptionSettlement); nil for any other log and
+// for rows written before it was recorded. log.Other must not be projected yet:
+// the user projection removes admin_info.
+func storedStreamTerminalInput(log *Log) *operation_setting.RelayErrorInput {
+	if log == nil || log.Type != LogTypeError || !strings.Contains(log.Other, `"`+operation_setting.RelayStreamMatchCodeKey+`"`) {
+		return nil
+	}
+	adminInfo := parseLogOtherFields(log.Other).object(logOtherAdminInfoKey)
+	if adminInfo == nil {
+		return nil
+	}
+	code, codeOK := rawJSONString(adminInfo[operation_setting.RelayStreamMatchCodeKey])
+	message, messageOK := rawJSONString(adminInfo[operation_setting.RelayStreamMatchMessageKey])
+	if !codeOK || !messageOK {
+		return nil
+	}
+	truncated := string(adminInfo[operation_setting.RelayStreamMatchTruncatedKey]) == "true"
+	return &operation_setting.RelayErrorInput{ErrorCode: code, Message: message, Truncated: truncated}
+}
+
+// isStreamFailureErrorLog reports whether an error log is the settlement of a
+// stream that failed after its headers went out with nothing to charge
+// (service.FinalizeConsumptionSettlement). Such a row has no error type; the
+// settlement records error_code upstream_stream_error, or relay_timeout when our
+// own time limit cut the stream. Rows written before it recorded a code are
+// recognised by a stream_result that failed for a reason other than the client
+// leaving.
+func isStreamFailureErrorLog(fields logOtherFields, errorType, errorCode string) bool {
+	if errorType != "" {
+		return false
+	}
+	switch errorCode {
+	case operation_setting.RelayStreamErrorCode, operation_setting.RelayTimeoutErrorCode:
+		return true
+	case "":
+	default:
+		return false
+	}
+	var result struct {
+		Failed     bool `json:"failed"`
+		ClientGone bool `json:"client_gone"`
+	}
+	raw, ok := fields["stream_result"]
+	if !ok || common.GetJsonType(raw) != "object" || common.Unmarshal(raw, &result) != nil {
+		return false
+	}
+	return result.Failed && !result.ClientGone
+}
+
+// maskErrorLogForUser applies the relay error display configuration to an error
+// log a user is about to see. The stored row keeps the original for admins; it
+// is rewritten at read time so rule changes also cover past logs. streamInput
+// is the stream-failure row's recorded terminal-frame input
+// (storedStreamTerminalInput), or nil. Reports whether fields was changed.
+func maskErrorLogForUser(log *Log, fields logOtherFields, streamInput *operation_setting.RelayErrorInput, langOf func(userId int) string) bool {
+	errorType, errorCode := fields.str("error_type"), fields.str("error_code")
+	in := operation_setting.RelayErrorInput{
+		Upstream:   operation_setting.IsUpstreamRelayErrorKind(errorType, errorCode),
+		StatusCode: fields.integer("status_code"),
+		ErrorCode:  errorCode,
+		Message:    log.Content,
+	}
+	streamFailure := isStreamFailureErrorLog(fields, errorType, errorCode)
+	if streamFailure {
+		// Decided as the stream's terminal frame was: the upstream's error, or our
+		// own time limit (error_code relay_timeout). The status was already sent,
+		// so a rule's status override did not reach the client and is not shown.
+		in = operation_setting.StreamFailureRelayErrorInput(errorCode == operation_setting.RelayTimeoutErrorCode, log.Content)
+		if streamInput != nil {
+			// The frame's own error code and text, so rules keyed on them decide
+			// the log exactly as they decided the frame. Older rows match with
+			// the stream-failure code and the whole content.
+			in.ErrorCode, in.Message, in.Truncated = streamInput.ErrorCode, streamInput.Message, streamInput.Truncated
+		}
+	}
+	in.Lang = langOf(log.UserId)
+	content, statusCode, replaced := operation_setting.MaskRelayErrorLogInputForUser(in, log.RequestId)
+	if !replaced {
+		return false
+	}
+	log.Content = content
+	if fields == nil {
+		return false
+	}
+	changed := false
+	// The client got the rule's status; the upstream's own one is part of what
+	// the override hides.
+	if _, ok := fields["status_code"]; ok && statusCode > 0 && !streamFailure {
+		changed = fields.set("status_code", statusCode) || changed
+	}
+	if in.Upstream && !streamFailure {
+		// The upstream's own code would still tell the user what the upstream is.
+		// A stream failure's code is ours.
+		changed = fields.set("error_type", "new_api_error") || changed
+		changed = fields.set("error_code", "upstream_error") || changed
+	}
+	return changed
+}
+
+// maskStreamStatusForUser applies the same configuration to the error texts a
+// consume log keeps in stream_status: a stream that failed after output is
+// settled, not logged as an error, and the legacy stream path records the
+// upstream's text there. The status and end_reason classification is ours and
+// stays. Only string texts are rewritten; other values keep their raw JSON.
+// Reports whether any text was rewritten.
+func maskStreamStatusForUser(fields logOtherFields, userId int, langOf func(userId int) string) bool {
+	status := fields.object("stream_status")
+	if status == nil {
+		return false
+	}
+	mask := func(raw json.RawMessage) (json.RawMessage, bool) {
+		text, ok := rawJSONString(raw)
+		if !ok {
+			return raw, false
+		}
+		masked, replaced := operation_setting.MaskRelayStreamErrorForUser(text, langOf(userId))
+		if !replaced {
+			return raw, false
+		}
+		encoded, err := common.Marshal(masked)
+		if err != nil {
+			return raw, false
+		}
+		return encoded, true
+	}
+	changed := false
+	if raw, ok := status["end_error"]; ok {
+		if masked, replaced := mask(raw); replaced {
+			status["end_error"], changed = masked, true
+		}
+	}
+	var messages []json.RawMessage
+	if raw, ok := status["errors"]; ok && common.GetJsonType(raw) == "array" && common.Unmarshal(raw, &messages) == nil {
+		messagesChanged := false
+		for i, raw := range messages {
+			if masked, replaced := mask(raw); replaced {
+				messages[i], messagesChanged = masked, true
+			}
+		}
+		if messagesChanged && status.set("errors", messages) {
+			changed = true
+		}
+	}
+	return changed && fields.set("stream_status", status)
 }

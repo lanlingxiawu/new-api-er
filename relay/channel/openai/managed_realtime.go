@@ -295,8 +295,21 @@ loop:
 					info.StreamSession.RecordReceivedMedia(receivedAudio)
 				}
 			}
+			// 观察本帧后的会话状态：记为 upstream_error 即本帧就是终止错误（error 事件、失败的
+			// response.done、带 error 对象的事件等），写出后标记已送达、不再补发终止帧。
+			var state relaycommon.StreamSnapshot
+			if !recoverable && !duplicate {
+				state = info.StreamSession.Snapshot()
+			}
+			terminalError := state.Reason == "upstream_error"
+			downstream := frame.data
+			if recoverable || terminalError {
+				// 上游错误同终止错误帧一样经错误提示配置决定客户端所见内容；
+				// 终止错误另记匹配输入供错误日志使用，可恢复的请求错误不记录。
+				downstream = service.PresentRealtimeErrorEvent(c, frame.data, terminalError)
+			}
 			_ = info.ClientWs.SetWriteDeadline(time.Now().Add(15 * time.Second))
-			if err := info.ClientWs.WriteMessage(websocket.TextMessage, frame.data); err != nil {
+			if err := info.ClientWs.WriteMessage(websocket.TextMessage, downstream); err != nil {
 				info.StreamSession.ClientFailed(err)
 				endErr = err
 				clientGone = true
@@ -304,7 +317,7 @@ loop:
 				break loop
 			}
 			// 去重仅影响用量处理；已实际转发的重复帧也属于下游原始正文。
-			info.StreamDiagnostic.WriteDownstreamPayload(frame.data)
+			info.StreamDiagnostic.WriteDownstreamPayload(downstream)
 			if recoverable {
 				// 未开始回答时的请求错误不虚构失败轮次；活动回答的状态与计量保持。
 				if !roundStarted {
@@ -337,7 +350,7 @@ loop:
 				local.OutputTokenDetails.AudioTokens += receivedAudio
 				local.TotalTokens = local.InputTokens + local.OutputTokens
 			}
-			if state := info.StreamSession.Snapshot(); state.Reason == "upstream_error" {
+			if terminalError {
 				info.StreamSession.MarkErrorDelivered()
 				active = true
 				endErr = state.Err
