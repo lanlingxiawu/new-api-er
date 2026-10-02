@@ -38,6 +38,7 @@ import { toast } from 'sonner'
 
 import { Dialog } from '@/components/dialog'
 import { SectionPageLayout } from '@/components/layout'
+import { NumericPresetInput } from '@/components/numeric-preset-input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -2150,16 +2151,16 @@ export function PriceMonitorPanel({
               <FieldLabel htmlFor='price-monitor-log-queries'>
                 {t('Upstream log lookups per host')}
               </FieldLabel>
-              <Input
+              <NumericPresetInput
                 id='price-monitor-log-queries'
-                type='number'
-                min={0}
+                presets={[{ value: 0, label: 'Disabled' }]}
+                min={1}
                 max={20}
                 value={form.upstreamLogQueriesPerHost}
-                onChange={(event) =>
+                onChange={(next) =>
                   setForm((current) => ({
                     ...current,
-                    upstreamLogQueriesPerHost: Number(event.target.value),
+                    upstreamLogQueriesPerHost: Number(next),
                   }))
                 }
               />

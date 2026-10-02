@@ -35,6 +35,7 @@ import '@/lib/dayjs'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
 import { handleServerError } from '@/lib/handle-server-error'
 import { installToastDedupe } from '@/lib/toast-dedupe'
+import { installZodErrorMessages } from '@/lib/zod-error-messages'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { DirectionProvider } from './context/direction-provider'
@@ -52,6 +53,7 @@ import './styles/index.css'
 initializeFrontendCache()
 installBuildMetadata()
 installToastDedupe()
+installZodErrorMessages()
 
 const queryClient = new QueryClient({
   defaultOptions: {

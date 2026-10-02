@@ -32,6 +32,11 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -151,6 +156,8 @@ type NumberField = {
   description: string
   min: number
   max?: number
+  // Special values offered in a dropdown; `min`/`max` then bound ordinary numbers only.
+  presets?: NumericPreset[]
 }
 
 const quotaFields: NumberField[] = [
@@ -166,16 +173,19 @@ const quotaFields: NumberField[] = [
     label: 'Export Cooldown (s)',
     description:
       'Minimum seconds between two export jobs from the same admin. A rejected request does not consume the cooldown.',
-    min: 0,
+    min: 1,
     max: 86400,
+    // GetUserCooldownSec treats 0 as unset and applies DefaultLogExportUserCooldownSec.
+    presets: [{ value: 0, label: 'Default 300 seconds' }],
   },
   {
     name: 'max_concurrent_jobs',
     label: 'Max Concurrent Jobs',
     description:
       'Export jobs allowed to run at once. Set to 0 to stop accepting new jobs; running jobs are not interrupted.',
-    min: 0,
+    min: 1,
     max: 16,
+    presets: [{ value: 0, label: 'Stop accepting new jobs' }],
   },
   {
     name: 'max_active_jobs_per_user',
@@ -229,8 +239,9 @@ const throttleFields: NumberField[] = [
     label: 'Batch Sleep (ms)',
     description:
       'Base pause after each batch. The main lever for reducing database pressure — raising it slows exports down linearly.',
-    min: 0,
+    min: 1,
     max: 60000,
+    presets: [{ value: 0, label: 'No pause' }],
   },
   {
     name: 'batch_query_timeout_sec',
@@ -266,8 +277,9 @@ const throttleFields: NumberField[] = [
     label: 'CPU Hard Limit (%)',
     description:
       'Above this CPU usage the export pauses. Set to 0 as an emergency brake: running jobs pause within a second and keep their progress.',
-    min: 0,
+    min: 1,
     max: 100,
+    presets: [{ value: 0, label: 'Pause all exports' }],
   },
   {
     name: 'cpu_check_interval_ms',
@@ -398,15 +410,24 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
           <FormItem>
             <FormLabel>{t(item.label)}</FormLabel>
             <FormControl>
-              <Input
-                className={numberInputNoSpinnerClassName}
-                type='number'
-                inputMode='numeric'
-                min={item.min}
-                max={item.max}
-                step={1}
-                {...safeNumberFieldProps(field)}
-              />
+              {item.presets ? (
+                <NumericPresetInput
+                  presets={item.presets}
+                  min={item.min}
+                  max={item.max}
+                  {...numericPresetFieldProps(field)}
+                />
+              ) : (
+                <Input
+                  className={numberInputNoSpinnerClassName}
+                  type='number'
+                  inputMode='numeric'
+                  min={item.min}
+                  max={item.max}
+                  step={1}
+                  {...safeNumberFieldProps(field)}
+                />
+              )}
             </FormControl>
             <FormDescription>{t(item.description)}</FormDescription>
             <FormMessage />

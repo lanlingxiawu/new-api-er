@@ -22,6 +22,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -46,6 +50,10 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const MAX_GROUP_RETRY_TIMES = 20
 const DISABLED = -1
 const WHOLE_NUMBER = /^-?\d+$/
+const RETRY_TIMES_PRESETS: NumericPreset[] = [
+  { value: DISABLED, label: 'No retry' },
+  { value: 0, label: 'Follow system default' },
+]
 
 type Row = {
   // Stable key so editing a group name does not remount the row.
@@ -326,24 +334,23 @@ export function GroupRetrySection(props: {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className='flex w-40 flex-col gap-2'>
+                  <div className='flex w-60 flex-col gap-2'>
                     <Label htmlFor={`group-retry-times-${row.id}`}>
                       {t('Retry attempts')}
                     </Label>
-                    <Input
+                    <NumericPresetInput
                       id={`group-retry-times-${row.id}`}
-                      type='number'
-                      min={DISABLED}
+                      presets={RETRY_TIMES_PRESETS}
+                      min={1}
                       max={MAX_GROUP_RETRY_TIMES}
-                      step={1}
                       value={row.times}
                       disabled={busy}
-                      onChange={(event) => {
+                      onChange={(next) => {
                         dirty.current.counts = true
                         setRows((current) =>
                           current.map((item) =>
                             item.id === row.id
-                              ? { ...item, times: event.target.value }
+                              ? { ...item, times: String(next) }
                               : item
                           )
                         )

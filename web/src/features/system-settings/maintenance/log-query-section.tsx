@@ -31,6 +31,8 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import { NumericPresetInput } from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -194,13 +196,10 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
               <FormItem>
                 <FormLabel>{t('Current Hour Refresh Interval')}</FormLabel>
                 <FormControl>
-                  <Input
-                    className={numberInputNoSpinnerClassName}
-                    type='number'
-                    inputMode='numeric'
-                    min={0}
-                    step={5}
-                    {...safeNumberFieldProps(field)}
+                  <NumericPresetInput
+                    presets={[{ value: 0, label: 'Always count in real time' }]}
+                    min={1}
+                    {...numericPresetFieldProps(field)}
                   />
                 </FormControl>
                 <FormDescription>
@@ -269,13 +268,12 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
               <FormItem>
                 <FormLabel>{t('Hours To Precompute On Startup')}</FormLabel>
                 <FormControl>
-                  <Input
-                    className={numberInputNoSpinnerClassName}
-                    type='number'
-                    inputMode='numeric'
-                    min={0}
-                    step={12}
-                    {...safeNumberFieldProps(field)}
+                  <NumericPresetInput
+                    presets={[
+                      { value: 0, label: 'Only hours finished from now on' },
+                    ]}
+                    min={1}
+                    {...numericPresetFieldProps(field)}
                   />
                 </FormControl>
                 <FormDescription>
