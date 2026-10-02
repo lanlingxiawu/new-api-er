@@ -206,6 +206,14 @@ func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A single customer is named in the download file; the lookup only labels the file, so a failure is not fatal.
+	customerName := ""
+	if !req.AllCustomers && len(ids) == 1 {
+		var customer model.User
+		if err := model.DB.WithContext(ctx).Select("username").First(&customer, ids[0]).Error; err == nil {
+			customerName = customer.Username
+		}
+	}
 	for key, value := range req.Filters {
 		if !slices.Contains(tpl.AllowedFilters, key) || len(value) > 256 {
 			return nil, model.ErrEmployeeExportInvalid
@@ -216,7 +224,8 @@ func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
 		Format: tpl.Format, Columns: tpl.Columns, Options: options, Mode: tpl.Mode, SummaryDims: tpl.SummaryDims,
 		Filters: model.LogExportFilter{LogType: model.LogTypeConsume, StartTimestamp: req.StartTimestamp, EndTimestamp: req.EndTimestamp,
 			ModelName: req.Filters["model_name"], TokenName: req.Filters["token_name"], Group: req.Filters["group"]},
-		EmployeeScope: &model.EmployeeExportScope{TemplateKey: tpl.Key, TemplateName: tpl.Name, TemplateVersion: tpl.Version, CustomerIDs: ids},
+		EmployeeScope: &model.EmployeeExportScope{TemplateKey: tpl.Key, TemplateName: tpl.Name, TemplateVersion: tpl.Version, CustomerIDs: ids,
+			AllCustomers: req.AllCustomers, CustomerName: customerName},
 	}
 	return job, nil
 }

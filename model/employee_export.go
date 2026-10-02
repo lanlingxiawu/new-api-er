@@ -47,6 +47,9 @@ type EmployeeExportScope struct {
 	TemplateName    string `json:"template_name"`
 	TemplateVersion int    `json:"template_version"`
 	CustomerIDs     []int  `json:"customer_ids"`
+	// AllCustomers and CustomerName only label the download file; access is always checked against CustomerIDs.
+	AllCustomers bool   `json:"all_customers,omitempty"`
+	CustomerName string `json:"customer_name,omitempty"`
 }
 
 // employeeBuiltinTemplateIDs are the administrator templates shared read-only with every employee.

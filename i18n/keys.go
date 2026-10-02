@@ -805,3 +805,21 @@ const (
 	MsgEmployeeExportNameTaken       = "employee_export.name_taken"
 	MsgEmployeeExportConflict        = "employee_export.conflict"
 )
+
+// Log export download file name parts.
+const (
+	MsgLogExportFileUsageLogs               = "log_export.file.usage_logs"
+	MsgLogExportFileTemplateCustomerInvoice = "log_export.file.template.customer_invoice"
+	MsgLogExportFileAllCustomers            = "log_export.file.all_customers"
+	MsgLogExportFileCustomerCount           = "log_export.file.customer_count"
+	MsgLogExportFileMoreFilters             = "log_export.file.more_filters"
+	MsgLogExportFileSummary                 = "log_export.file.summary"
+	MsgLogExportFilePart                    = "log_export.file.part"
+	MsgLogExportFileDateRange               = "log_export.file.date_range"
+	MsgLogExportFileFilterUser              = "log_export.file.filter.user"
+	MsgLogExportFileFilterUserId            = "log_export.file.filter.user_id"
+	MsgLogExportFileFilterModel             = "log_export.file.filter.model"
+	MsgLogExportFileFilterToken             = "log_export.file.filter.token"
+	MsgLogExportFileFilterGroup             = "log_export.file.filter.group"
+	MsgLogExportFileFilterChannel           = "log_export.file.filter.channel"
+)

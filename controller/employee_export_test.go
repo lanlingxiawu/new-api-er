@@ -55,6 +55,10 @@ func TestEmployeeExportRequestCannotOverrideTemplateOrCustomerScope(t *testing.T
 	require.Equal(t, tpl.Options, job.Options, "a template-pinned timezone wins over the requester's")
 	require.Equal(t, model.LogTypeConsume, job.Filters.LogType)
 	require.Equal(t, []int{customer}, job.EmployeeScope.CustomerIDs)
+	var customerUser model.User
+	require.NoError(t, model.DB.First(&customerUser, customer).Error)
+	require.Equal(t, customerUser.Username, job.EmployeeScope.CustomerName, "a single customer is named in the download file")
+	require.False(t, job.EmployeeScope.AllCustomers)
 
 	for _, key := range []string{"columns", "options", "format", "mode", "summary_dims", "username", "user_id", "employee_scope"} {
 		body[key] = nil
@@ -105,6 +109,8 @@ func TestEmployeeExportBuiltinTemplateForAnyEmployee(t *testing.T) {
 	require.Equal(t, "Asia/Tokyo", job.Options.Timezone, "builtin templates export in the requester's timezone")
 	require.Equal(t, model.LogExportTemplateCustomerInvoice, job.EmployeeScope.TemplateKey)
 	require.Equal(t, []int{customer.Id}, job.EmployeeScope.CustomerIDs)
+	require.True(t, job.EmployeeScope.AllCustomers)
+	require.Empty(t, job.EmployeeScope.CustomerName, "all-customer exports are labelled as such, not by the only customer")
 
 	// A zone missing from the server's tzdata must not block the export; it falls back to server time.
 	body["timezone"] = "Not/AZone"
