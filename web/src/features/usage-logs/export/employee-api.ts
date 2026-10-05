@@ -33,6 +33,9 @@ export interface EmployeeExportCapabilities {
   columns: { key: string; label: string }[]
   max_range_sec: number
   max_customers: number
+  anomaly_kinds: string[]
+  quota_per_unit: number
+  max_filter_values: number
 }
 
 export interface EmployeeExportCatalog {

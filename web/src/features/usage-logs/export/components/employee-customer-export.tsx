@@ -30,6 +30,10 @@ import {
   type EmployeeExportCapabilities,
 } from '../employee-api'
 import { EmployeeExportJobs } from './employee-export-jobs'
+import {
+  EmployeeTroubleshootingFilters,
+  type EmployeeTroubleshootingFilters as TroubleshootingFilters,
+} from './employee-troubleshooting-filters'
 import { ExportFilterSelect } from './export-filter-select'
 
 const FIELD_LABELS: Record<string, string> = {
@@ -162,6 +166,8 @@ function EmployeeExportForm(props: {
     end: props.prefill?.end ?? new Date(),
   }))
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [troubleshooting, setTroubleshooting] =
+    useState<TroubleshootingFilters>({})
   const template = props.capabilities.templates.find(
     (item) => item.key === templateId
   )
@@ -177,11 +183,44 @@ function EmployeeExportForm(props: {
     all_customers: all,
     start_timestamp: start,
     end_timestamp: end,
-    filters,
+    filters: {
+      ...filters,
+      ...Object.fromEntries(
+        Object.entries(troubleshooting).filter(
+          ([key, value]) =>
+            template?.allowed_filters.includes(key) && value != null
+        )
+      ),
+    },
   }
   const serialized = JSON.stringify(payload)
   const estimatePayload = useDebounce(serialized, 400)
-  const ready = Boolean(template && validRange && (all || customers.length))
+  const validNumbers = [
+    troubleshooting.quota_min,
+    troubleshooting.completion_tokens_min,
+    troubleshooting.completion_tokens_max,
+    troubleshooting.use_time_min,
+    troubleshooting.min_retry_count,
+  ].every(
+    (value) => value == null || (Number.isSafeInteger(value) && value >= 0)
+  )
+  const validBounds =
+    troubleshooting.completion_tokens_min == null ||
+    troubleshooting.completion_tokens_max == null ||
+    troubleshooting.completion_tokens_min <=
+      troubleshooting.completion_tokens_max
+  const hasRowFilter = Boolean(
+    troubleshooting.anomaly_only ||
+    troubleshooting.anomaly_kinds?.length ||
+    troubleshooting.min_retry_count != null
+  )
+  const ready = Boolean(
+    template &&
+    validRange &&
+    validNumbers &&
+    validBounds &&
+    (all || customers.length)
+  )
   const estimate = useQuery({
     queryKey: ['employee-export-estimate', userId, estimatePayload],
     queryFn: () =>
@@ -235,6 +274,7 @@ function EmployeeExportForm(props: {
                 onValueChange={(value) => {
                   setTemplateId(value ?? '')
                   setFilters({})
+                  setTroubleshooting({})
                 }}
                 placeholder={t('Select template')}
               />
@@ -338,26 +378,46 @@ function EmployeeExportForm(props: {
             </Field>
             {template && (all || customers.length > 0) && (
               <div className='grid gap-3 sm:grid-cols-2'>
-                {template.allowed_filters.map((field) => (
-                  <Field key={field}>
-                    <FieldLabel>{t(FIELD_LABELS[field] ?? field)}</FieldLabel>
-                    <ExportFilterSelect
-                      base={BASE}
-                      field={field}
-                      label={t(FIELD_LABELS[field] ?? field)}
-                      value={filters[field] ?? ''}
-                      start={start}
-                      end={end}
-                      customerIds={all ? undefined : customers}
-                      templateId={template.key}
-                      disabled={create.isPending || !validRange}
-                      onChange={(value) =>
-                        setFilters({ ...filters, [field]: value })
-                      }
-                    />
-                  </Field>
-                ))}
+                {template.allowed_filters
+                  .filter((field) =>
+                    ['model_name', 'token_name', 'group'].includes(field)
+                  )
+                  .map((field) => (
+                    <Field key={field}>
+                      <FieldLabel>{t(FIELD_LABELS[field] ?? field)}</FieldLabel>
+                      <ExportFilterSelect
+                        base={BASE}
+                        field={field}
+                        label={t(FIELD_LABELS[field] ?? field)}
+                        value={filters[field] ?? ''}
+                        start={start}
+                        end={end}
+                        customerIds={all ? undefined : customers}
+                        templateId={template.key}
+                        disabled={create.isPending || !validRange}
+                        onChange={(value) =>
+                          setFilters({ ...filters, [field]: value })
+                        }
+                      />
+                    </Field>
+                  ))}
               </div>
+            )}
+            {template && (
+              <EmployeeTroubleshootingFilters
+                allowed={template.allowed_filters}
+                value={troubleshooting}
+                onChange={setTroubleshooting}
+                anomalyKinds={props.capabilities.anomaly_kinds ?? []}
+                quotaPerUnit={props.capabilities.quota_per_unit}
+                maxFilterValues={props.capabilities.max_filter_values ?? 20}
+                disabled={create.isPending}
+              />
+            )}
+            {!validBounds && (
+              <p className='text-destructive text-sm' role='alert'>
+                {t('Minimum must not exceed maximum')}
+              </p>
             )}
           </FieldGroup>
           {template && (
@@ -422,9 +482,14 @@ function EmployeeExportForm(props: {
             {ready &&
               estimatePayload === serialized &&
               estimate.data?.available &&
-              t('Scans about {{rows}} rows', {
-                rows: `${estimate.data.rows.toLocaleString()}${estimate.data.capped ? '+' : ''}`,
-              })}
+              t(
+                hasRowFilter
+                  ? 'At most {{rows}} rows before anomaly filtering'
+                  : 'Scans about {{rows}} rows',
+                {
+                  rows: `${estimate.data.rows.toLocaleString()}${estimate.data.capped ? '+' : ''}`,
+                }
+              )}
           </div>
           <div className='flex gap-2'>
             <Button

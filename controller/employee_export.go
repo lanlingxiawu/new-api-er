@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -19,6 +20,11 @@ import (
 
 func employeeExportError(c *gin.Context, err error) {
 	logger.LogError(c, "employee export: "+err.Error())
+	var filterError *logExportFilterError
+	if errors.As(err, &filterError) {
+		common.ApiErrorI18n(c, filterError.key, filterError.args)
+		return
+	}
 	switch {
 	case errors.Is(err, model.ErrEmployeeExportAccess):
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
@@ -132,7 +138,7 @@ func EmployeeExportCapabilities(c *gin.Context) {
 	// Labels for every column a template can reference, used by the read-only preview.
 	columns := employeeExportColumnDTOs()
 	setting := operation_setting.GetLogExportSetting()
-	common.ApiSuccess(c, gin.H{"enabled": setting.Enabled, "templates": templates, "columns": columns, "max_range_sec": setting.GetAdminMaxRangeSec(), "max_customers": setting.GetEmployeeMaxCustomersPerJob()})
+	common.ApiSuccess(c, gin.H{"enabled": setting.Enabled, "templates": templates, "columns": columns, "max_range_sec": setting.GetAdminMaxRangeSec(), "max_customers": setting.GetEmployeeMaxCustomersPerJob(), "anomaly_kinds": model.LogExportAnomalyKinds(), "quota_per_unit": common.QuotaPerUnit, "max_filter_values": setting.GetMaxFilterValues()})
 }
 
 func employeeExportColumnDTOs() []logExportColumnDTO {
@@ -153,13 +159,41 @@ func GetEmployeeExportColumns(c *gin.Context) {
 }
 
 type employeeExportRequest struct {
-	TemplateID     string            `json:"template_id"`
-	Timezone       string            `json:"timezone"`
-	CustomerIDs    []int             `json:"customer_ids"`
-	AllCustomers   bool              `json:"all_customers"`
-	StartTimestamp int64             `json:"start_timestamp"`
-	EndTimestamp   int64             `json:"end_timestamp"`
-	Filters        map[string]string `json:"filters"`
+	TemplateID     string                     `json:"template_id"`
+	Timezone       string                     `json:"timezone"`
+	CustomerIDs    []int                      `json:"customer_ids"`
+	AllCustomers   bool                       `json:"all_customers"`
+	StartTimestamp int64                      `json:"start_timestamp"`
+	EndTimestamp   int64                      `json:"end_timestamp"`
+	Filters        map[string]json.RawMessage `json:"filters"`
+}
+
+// buildEmployeeExportFilter shares the administrator filter semantics while enforcing template access.
+func buildEmployeeExportFilter(values map[string]json.RawMessage, allowed []string) (model.LogExportFilter, error) {
+	for key := range values {
+		if !slices.Contains(allowed, key) {
+			return model.LogExportFilter{}, model.ErrEmployeeExportInvalid
+		}
+	}
+	data, err := common.Marshal(values)
+	if err != nil {
+		return model.LogExportFilter{}, model.ErrEmployeeExportInvalid
+	}
+	var req createLogExportJobRequest
+	if err := common.Unmarshal(data, &req); err != nil {
+		return model.LogExportFilter{}, model.ErrEmployeeExportInvalid
+	}
+	for _, value := range []string{req.ModelName, req.TokenName, req.Group} {
+		if len(value) > 256 {
+			return model.LogExportFilter{}, model.ErrEmployeeExportInvalid
+		}
+	}
+	for _, value := range []*int{req.QuotaMin, req.CompletionTokensMin, req.CompletionTokensMax, req.UseTimeMin, req.MinRetryCount} {
+		if value != nil && (*value < 0 || int64(*value) > 9007199254740991) {
+			return model.LogExportFilter{}, model.ErrEmployeeExportInvalid
+		}
+	}
+	return buildLogExportFilter(req)
 }
 
 func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
@@ -214,16 +248,16 @@ func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
 			customerName = customer.Username
 		}
 	}
-	for key, value := range req.Filters {
-		if !slices.Contains(tpl.AllowedFilters, key) || len(value) > 256 {
-			return nil, model.ErrEmployeeExportInvalid
-		}
+	filter, err := buildEmployeeExportFilter(req.Filters, tpl.AllowedFilters)
+	if err != nil {
+		return nil, err
 	}
+	filter.LogType = model.LogTypeConsume
+	filter.StartTimestamp, filter.EndTimestamp = req.StartTimestamp, req.EndTimestamp
 	job := &model.LogExportJob{
 		UserID: c.GetInt("id"), Username: c.GetString("username"), Lang: i18n.GetLangFromContext(c),
 		Format: tpl.Format, Columns: tpl.Columns, Options: options, Mode: tpl.Mode, SummaryDims: tpl.SummaryDims,
-		Filters: model.LogExportFilter{LogType: model.LogTypeConsume, StartTimestamp: req.StartTimestamp, EndTimestamp: req.EndTimestamp,
-			ModelName: req.Filters["model_name"], TokenName: req.Filters["token_name"], Group: req.Filters["group"]},
+		Filters: filter,
 		EmployeeScope: &model.EmployeeExportScope{TemplateKey: tpl.Key, TemplateName: tpl.Name, TemplateVersion: tpl.Version, CustomerIDs: ids,
 			AllCustomers: req.AllCustomers, CustomerName: customerName},
 	}

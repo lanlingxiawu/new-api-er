@@ -43,6 +43,7 @@ import {
   type EmployeeExportCatalog,
   type EmployeeExportTemplate,
 } from '../employee-api'
+import { TROUBLESHOOTING_FILTERS } from '../employee-filters'
 import type { ExportFormat, ExportMode, SummaryDimension } from '../types'
 import { ColumnPicker } from './column-picker'
 
@@ -53,9 +54,12 @@ const DIMENSIONS: { value: SummaryDimension; label: string }[] = [
   { value: 'token_name', label: 'Token' },
   { value: 'group', label: 'Group' },
 ]
-const FILTERS = DIMENSIONS.filter((item) =>
-  ['model_name', 'token_name', 'group'].includes(item.value)
-)
+const FILTERS = [
+  ...DIMENSIONS.filter((item) =>
+    ['model_name', 'token_name', 'group'].includes(item.value)
+  ),
+  ...TROUBLESHOOTING_FILTERS,
+]
 const MODE_LABELS = {
   detail: 'Detail',
   summary: 'Summary',

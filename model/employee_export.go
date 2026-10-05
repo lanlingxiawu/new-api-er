@@ -57,7 +57,7 @@ var employeeBuiltinTemplateIDs = []string{
 	LogExportTemplateCustomerInvoice,
 }
 
-var employeeExportFilters = []string{"model_name", "token_name", "group"}
+var employeeExportFilters = []string{"model_name", "token_name", "group", "anomaly_only", "anomaly_kinds", "charged", "quota_min", "completion_tokens_min", "completion_tokens_max", "use_time_min", "min_retry_count"}
 
 // EmployeeBuiltinExportTemplates reuses the administrator column sets. Admin-only columns are
 // removed here so the preview matches the file, and the customer name is prepended where missing
