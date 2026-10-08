@@ -81,8 +81,10 @@ type LogExportJob struct {
 	// CreatorRole 创建任务时的操作者角色，决定 root 专属列是否参与导出。
 	// 升级前创建的任务该字段为 0，按「非 root」处理——宁可少一列，
 	// 也不能让普通管理员从导出文件里拿到 root 专属诊断。
-	CreatorRole int    `json:"creator_role,omitempty"`
-	Status      string `json:"status"`
+	CreatorRole int `json:"creator_role,omitempty"`
+	// EmployeeScope 员工导出任务的范围（模板快照与客户清单）；管理员与自助导出为 nil。
+	EmployeeScope *EmployeeExportScope `json:"employee_scope,omitempty"`
+	Status        string               `json:"status"`
 	// Progress 0-100，按时间轴推进，不做 COUNT。
 	Progress int `json:"progress"`
 	// RowCount 实际写进文件的行数。带行级筛选时它远小于扫描量。
@@ -637,7 +639,12 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		return writeLogExportSummary(ctx, job)
 	}
 
-	columnSet, err := ResolveLogExportColumnsForRole(job.Columns, max(job.CreatorRole, common.RoleAdminUser))
+	// Employee jobs never render admin-only columns, even if a template snapshot contains one.
+	viewerRole := max(job.CreatorRole, common.RoleAdminUser)
+	if job.EmployeeScope != nil {
+		viewerRole = common.RoleCommonUser
+	}
+	columnSet, err := ResolveLogExportColumnsForRole(job.Columns, viewerRole)
 	if err != nil {
 		return err
 	}
@@ -667,6 +674,14 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	}
 
 	fields := columnSet.SelectFields()
+	// 明细+汇总共用一次扫描：汇总维度即使没有对应的明细列也必须 SELECT，否则该维度全为空值、所有行被并成一组。
+	if job.NeedsSummary() {
+		for _, field := range summaryScanFields(job.SummaryDims) {
+			if !slices.Contains(fields, field) {
+				fields = append(fields, field)
+			}
+		}
+	}
 	// 行级条件要读 other，即使勾选的列一个都不依赖它。other 是行宽的大头，
 	// 这会明显抬高单批的传输与解析开销——代价在新建导出时已向管理员说明。
 	rowFilter := job.Filters.HasRowFilter()

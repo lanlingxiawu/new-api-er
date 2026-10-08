@@ -62,6 +62,25 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 }
 
+// ClearEventStreamHeaders undoes SetEventStreamHeaders when nothing has been
+// written yet, so an error that happens before the first byte (e.g. the
+// upstream rejects the request) goes out as a plain JSON response instead of
+// a JSON body labelled text/event-stream. c.JSON only sets Content-Type when
+// it is empty, so the stale SSE value must be removed first.
+func ClearEventStreamHeaders(c *gin.Context) {
+	if c.Writer.Written() {
+		return
+	}
+	if _, exists := c.Get("event_stream_headers_set"); !exists {
+		return
+	}
+	header := c.Writer.Header()
+	header.Del("Content-Type")
+	header.Del("Transfer-Encoding")
+	header.Del("X-Accel-Buffering")
+	header.Del("Connection")
+}
+
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	if requestContextDone(c) {
 		return nil

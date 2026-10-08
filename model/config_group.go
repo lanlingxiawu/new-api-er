@@ -23,6 +23,42 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "group_retry_status_setting":
+		draft, err := operation_setting.ParseGroupRetryStatusUpdate(values)
+		if err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if _, ok := values["enabled"]; ok {
+			prefixed[module+".enabled"] = strconv.FormatBool(draft.Enabled)
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceGroupRetryStatusSetting(draft)
+	case "probe_routing_setting":
+		if len(values) != 1 {
+			return false, fmt.Errorf("invalid probe routing configuration")
+		}
+		raw, ok := values["max_input_chars"]
+		if !ok {
+			return false, fmt.Errorf("configuration field is not editable")
+		}
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return false, fmt.Errorf("invalid integer configuration value")
+		}
+		draft := operation_setting.ProbeRoutingSetting{MaxInputChars: limit}
+		if err := operation_setting.ValidateProbeRoutingSetting(draft); err != nil {
+			return false, err
+		}
+		prefixed[module+".max_input_chars"] = raw
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceProbeRoutingSetting(draft)
 	case "rate_limit_setting":
 		draft := operation_setting.GetRateLimitSetting()
 		if err := validateGroupFields(values, rateLimitFields); err != nil {
@@ -95,6 +131,27 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 			return false, err
 		}
 		operation_setting.ReplaceRelayTimeoutSetting(draft)
+	case "relay_error_display_setting":
+		stored := operation_setting.GetRelayErrorDisplaySetting()
+		draft := stored
+		if err := validateRelayErrorDisplayFields(values); err != nil {
+			return false, err
+		}
+		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+			return false, err
+		}
+		// Only what this save changes is validated; stored parts the runtime
+		// already skips as invalid must not block switching the feature off.
+		if err := validateRelayErrorDisplaySave(stored, draft); err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		operation_setting.ReplaceRelayErrorDisplaySetting(draft)
 	case "veridrop_monitor_setting":
 		draft := operation_setting.GetVeridropMonitorSetting()
 		if err := validateGroupFieldNames(values, veridropMonitorFields); err != nil {
@@ -121,7 +178,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 		if err := config.UpdateConfigFromMap(&draft, values); err != nil {
 			return false, err
 		}
-		if draft != draft.Normalized() {
+		if !draft.IsNormalized() {
 			return false, fmt.Errorf("invalid price monitor configuration")
 		}
 		for k, v := range values {
@@ -223,6 +280,24 @@ func validateRelayTimeoutFields(values map[string]string) error {
 	return nil
 }
 
+var relayErrorDisplayFields = fieldSet("enabled", "hide_upstream_errors", "default_message", "rules")
+
+// validateRelayErrorDisplayFields checks names and the two booleans; the rules
+// JSON and text limits are checked by ValidateRelayErrorDisplaySetting.
+func validateRelayErrorDisplayFields(values map[string]string) error {
+	if err := validateGroupFieldNames(values, relayErrorDisplayFields); err != nil {
+		return err
+	}
+	for _, key := range []string{"enabled", "hide_upstream_errors"} {
+		if value, ok := values[key]; ok {
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean configuration value")
+			}
+		}
+	}
+	return nil
+}
+
 func validatePriceMonitorFields(values map[string]string) error {
 	if err := validateGroupFieldNames(values, priceMonitorFields); err != nil {
 		return err
@@ -238,9 +313,20 @@ func validatePriceMonitorFields(values map[string]string) error {
 			if err != nil || !includeOfficial {
 				return fmt.Errorf("official price comparison is required")
 			}
-		case "interval_minutes", "timeout_seconds":
+		case "interval_minutes", "timeout_seconds",
+			"upstream_log_queries_per_host", "upstream_ratio_refresh_hours", "upstream_ratio_max_age_days":
 			if _, err := strconv.Atoi(value); err != nil {
 				return fmt.Errorf("invalid integer configuration value")
+			}
+		case "custom_endpoints":
+			// updateConfigFromMap 对 map 字段解析失败时是 continue，非法 JSON 会被静默丢弃、
+			// option 行却照样落库，所以必须在这里显式拦下来。
+			endpoints := make(map[string]string)
+			if err := common.UnmarshalJsonStr(value, &endpoints); err != nil {
+				return fmt.Errorf("invalid price endpoint configuration")
+			}
+			if _, err := price_monitor_setting.ValidateCustomEndpoints(endpoints); err != nil {
+				return fmt.Errorf("invalid price endpoint configuration")
 			}
 		}
 	}
@@ -276,7 +362,7 @@ func validateChannelDailyLimitFields(values map[string]string) error {
 var rateLimitFields = fieldSet("global_api_enabled", "global_api_num", "global_api_duration_sec", "global_api_user_enabled", "global_api_user_num", "global_api_user_duration_sec", "global_web_enabled", "global_web_num", "global_web_duration_sec", "critical_enabled", "critical_num", "critical_duration_sec", "register_cooldown_enabled", "register_cooldown_num", "register_cooldown_sec", "auth_refresh_enabled", "auth_refresh_num", "auth_refresh_ip_num", "auth_refresh_duration_sec", "search_enabled", "search_num", "search_duration_sec", "log_export_enabled", "log_export_num", "log_export_duration_sec", "redis_timeout_ms")
 var dbPoolFields = fieldSet("max_idle_conns", "max_open_conns", "max_lifetime_sec", "log_max_idle_conns", "log_max_open_conns")
 var userSessionFields = fieldSet("active_limit", "issuance_limit", "issuance_window_sec", "revoked_retention_days", "hourly_alert_threshold")
-var relayTimeoutFields = fieldSet("enabled", "response_timeout_seconds", "total_timeout_seconds")
+var relayTimeoutFields = fieldSet("enabled", "response_timeout_seconds", "total_timeout_seconds", "retry_min_budget_seconds", "max_total_attempts")
 var veridropMonitorFields = fieldSet(
 	"enabled", "base_url", "admin_api_key", "default_mode", "default_openai_wire_api",
 	"include_long_context", "include_long_context_extreme", "max_concurrent", "batch_size",
@@ -285,7 +371,8 @@ var veridropMonitorFields = fieldSet(
 )
 var priceMonitorFields = fieldSet(
 	"enabled", "interval_minutes", "timeout_seconds", "include_official",
-	"include_models_dev", "model_whitelist",
+	"include_models_dev", "model_whitelist", "custom_endpoints",
+	"upstream_log_queries_per_host", "upstream_ratio_refresh_hours", "upstream_ratio_max_age_days",
 )
 var channelDailyLimitFields = fieldSet("enabled", "timezone", "retention_days")
 

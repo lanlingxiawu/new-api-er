@@ -45,6 +45,9 @@ func ShouldRetryRelayError(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
 	}
+	if allowed, overridden := GroupRetryStatusAllowed(c, code); overridden {
+		return allowed
+	}
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 

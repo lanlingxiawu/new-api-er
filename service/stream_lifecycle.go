@@ -16,6 +16,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -148,6 +149,23 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		outcome.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(cause)
 	}
 	outcome.UsageSource = outcome.SelectUsageSource()
+	if outcome.UsageSource == "estimated" && clientGone && !snapshot.ReceivedResponse && info.RelayFormat == types.RelayFormatOpenAIRealtime {
+		// Realtime 按轮次计费：握手后没有开始任何轮次就断开，上游没有可计的轮次。
+		outcome.UsageSource = "none"
+	}
+	// 我方时限切断且没有有效交付：按用户的超时计费方式（StreamTimeoutSettlement）。
+	timedOutWithoutDelivery := outcome.UsageSource == "none" && reason == relaycommon.StreamEndReasonTimeout && info.RelayFormat != types.RelayFormatOpenAIRealtime
+	chargedTimeout, inputOnlyTimeout := false, false
+	if timedOutWithoutDelivery {
+		if source, inputOnly := StreamTimeoutSettlement(c, info, confirmed); source != "" {
+			outcome.UsageSource, chargedTimeout, inputOnlyTimeout = source, true, inputOnly
+		}
+	}
+	// 用户断开或按 charge 结算我方超时时取接收侧估算（主分支口径），其余取交付侧；只收输入时输出为 0。
+	outputEstimate := estimatedStreamOutput(snapshot, clientGone || chargedTimeout)
+	if inputOnlyTimeout {
+		outputEstimate = 0
+	}
 	info.StreamResult = outcome
 	info.StreamStatus = relaycommon.NewStreamStatus()
 	if reason == "" {
@@ -177,15 +195,36 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 			}
 		}
 	}
-	if outcome.Failed {
+	if outcome.Failed && inputOnlyTimeout {
+		// 只收输入：确认输入（含确认的缓存）否则估算输入，输出 0。
+		var inputEstimated bool
+		selected, inputEstimated = streamTimeoutInputUsage(info, snapshot.Evidence, confirmed)
+		if inputEstimated {
+			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+			if !confirmed {
+				outcome.Diagnostic.EstimatedUsage = map[string]int{"input_tokens": selected.PromptTokens, "output_tokens": 0}
+			}
+		}
+	} else if outcome.Failed {
 		switch outcome.UsageSource {
 		case "none":
 			selected = &dto.Usage{}
 		case "upstream":
 			selected = BuildConfirmedStreamUsage(info, snapshot.Evidence)
+			if _, ok := snapshot.Evidence["input_tokens"]; !ok && !info.PriceData.UsePrice && info.RelayFormat != types.RelayFormatOpenAIRealtime {
+				// 中途结束时上游可能只报过部分字段；缺输入字段不等于输入为 0，按估算输入补齐（显式 0 仍保留）。
+				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
+				selected.PromptTokens = info.GetEstimatePromptTokens()
+				selected.PromptTokensDetails.TextTokens = max(0, selected.PromptTokens-selected.PromptTokensDetails.AudioTokens)
+				selected.TotalTokens = selected.PromptTokens + selected.CompletionTokens
+				if billing := selected.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
+					billing.ClaudeUsage.InputTokens = selected.PromptTokens
+					billing.Estimated = true
+				}
+			}
 		case "estimated":
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: estimatedStreamOutput(snapshot, clientGone)}
+			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: outputEstimate}
 			if (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) && info.PriceData.UsePrice {
 				// 只有预览而无完成用量时按一张估算，不把原请求的多张数量全部收费。
 				info.PriceData.AddOtherRatio("n", 1)
@@ -199,14 +238,46 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		selected = &dto.Usage{}
 	}
 	if info.RelayFormat != types.RelayFormatOpenAIRealtime {
-		selected = SupplementStreamZeroOutput(c, info, selected, estimatedStreamOutput(snapshot, clientGone), 0)
+		if outcome.Failed && !snapshot.OutputReportCurrent {
+			// 异常结束且最近的上游输出计数不覆盖此后收到的内容（如只有 Claude message_start 的 1）：
+			// 取确认值与已交付（断开时为已接收）估算的较大者。晚于全部内容的计数照收。
+			selected = SupplementStreamPartialOutput(c, info, selected, outputEstimate, 0)
+		} else {
+			selected = SupplementStreamZeroOutput(c, info, selected, outputEstimate, 0)
+		}
+	}
+	if timedOutWithoutDelivery && RelayTimeoutBillingMode(c) != NonStreamTimeoutBillingCharge {
+		// 平台承担记录：refund 为输入＋已接收输出，input 为已接收输出（charge 由用户承担，不记）。
+		input, inputEstimated := streamTimeoutInputUsage(info, snapshot.Evidence, confirmed)
+		NoteStreamTimeoutAbsorbed(c, info, input, inputEstimated, estimatedStreamOutput(snapshot, true), inputOnlyTimeout)
 	}
 	info.StreamFinalUsage = selected
 	c.Set(relaycommon.StreamHandledKey, true)
 	return selected
 }
 
-// estimatedStreamOutput 选择本地估算的输出量：正常取交付侧，用户断开取接收侧。
+// streamTimeoutInputUsage 是我方超时流的「只含输入」用量：有确认证据时取确认输入与确认缓存（去掉输出侧字段），
+// 确认证据缺输入字段时（及按次计价以外）按估算输入补齐；没有确认证据时为不含缓存的估算输入。
+// 返回的 estimated 表示输入是否来自估算。
+func streamTimeoutInputUsage(info *relaycommon.RelayInfo, evidence map[string]int, confirmed bool) (*dto.Usage, bool) {
+	if !confirmed {
+		return estimatedInputUsage(info.GetEstimatePromptTokens()), true
+	}
+	u := BuildConfirmedStreamUsage(info, StreamInputOnlyEvidence(evidence))
+	if _, ok := evidence["input_tokens"]; ok || info.PriceData.UsePrice {
+		return u, false
+	}
+	u.PromptTokens = info.GetEstimatePromptTokens()
+	u.PromptTokensDetails.TextTokens = max(0, u.PromptTokens-u.PromptTokensDetails.AudioTokens)
+	u.TotalTokens = u.PromptTokens
+	if billing := u.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
+		billing.ClaudeUsage.InputTokens = u.PromptTokens
+		billing.Estimated = true
+	}
+	return u, true
+}
+
+// estimatedStreamOutput 选择本地估算的输出量：正常取交付侧，用户断开（及按 charge 结算的我方超时）取接收侧。
 // 接收侧读不出该上游方言（fallback 表未覆盖）而确实交付过有效内容时回落到交付侧，
 // 避免"有产出却按 0 结算"的漏收；两侧都读不出时仍为 0，因为没有任何可计量的产出证据。
 func estimatedStreamOutput(snapshot relaycommon.StreamSnapshot, clientGone bool) int {
@@ -269,9 +340,20 @@ func BuildConfirmedStreamUsage(info *relaycommon.RelayInfo, e map[string]int) *d
 	return u
 }
 
+// StreamTerminalFailureText 返回流式终止错误帧的本地文案：我方时限切断时为带秒数的超时提示
+// （与非流式 504、消费日志一致），否则为通用的上游流式失败提示；timedOut 供调用方选择错误码与类型。
+// 文案为英文，与其余流式终止文案及存储内容一致；错误提示替换规则仍按 PresentStreamTerminalMessage 生效。
+func StreamTerminalFailureText(c *gin.Context) (text string, timedOut bool) {
+	if IsRelayRequestTimeout(c) {
+		return relayTimeoutNote(c), true
+	}
+	return i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed), false
+}
+
 // WriteStreamTerminalError 按下游协议写终止错误；调用方负责一次性判断，本方法自身不设置去重标记。
 // 参数 c 提供写入/超时上下文，info 决定下游协议和成功响应资格，snapshot 保存上游原错误帧/载荷与协议结果。
-// 同协议且形状兼容时可原样发送上游错误；本地补发使用公开提示。裸媒体已经写出时直接返回，由调用方关闭流，不插入 SSE。
+// 同协议且形状兼容时可原样发送上游错误；本地补发使用公开提示（我方超时为 relay_timeout 与超时文案）。
+// 裸媒体已经写出时直接返回，由调用方关闭流，不插入 SSE。
 // SDK 原 JSON 只添加 SSE 外壳（换行规范化并逐行加 data 字段），Realtime 原载荷逐字节写入 WS。
 func WriteStreamTerminalError(c *gin.Context, info *relaycommon.RelayInfo, snapshot relaycommon.StreamSnapshot) {
 	if !info.StreamResponseGate.AllowsStream() {
@@ -280,23 +362,36 @@ func WriteStreamTerminalError(c *gin.Context, info *relaycommon.RelayInfo, snaps
 	if c.Writer.Written() && relaycommon.IsStreamBinaryContentType(c.Writer.Header().Get("Content-Type")) {
 		return
 	}
-	message := i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
-	payload := map[string]any{"error": map[string]any{"type": "api_error", "message": message, "code": "upstream_stream_error"}}
+	upstreamPayload := snapshot.ErrorPayload
+	if len(snapshot.ErrorFrame) > 0 {
+		_, upstreamPayload = relaycommon.StreamFramePayload(snapshot.ErrorFrame)
+	}
+	// forwardUpstream=false: the admin's error display replaced this error, so
+	// the upstream frame must not reach the client verbatim.
+	fallback, timedOut := StreamTerminalFailureText(c)
+	message, forwardUpstream := PresentStreamTerminalMessage(c, upstreamPayload, fallback)
+	// 我方时限切断的流用 relay_timeout，与非流式 504 及消费日志的 error_code 一致；其余为上游流式失败。
+	code, claudeType, geminiCode, geminiStatus := operation_setting.RelayStreamErrorCode, "api_error", 502, "UNAVAILABLE"
+	if timedOut {
+		code, claudeType, geminiCode, geminiStatus = operation_setting.RelayTimeoutErrorCode, "timeout_error", 504, "DEADLINE_EXCEEDED"
+	}
+	payload := map[string]any{"error": map[string]any{"type": "api_error", "message": message, "code": code}}
 	event := "error"
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAIRealtime:
-		payload = map[string]any{"type": "error", "error": map[string]any{"type": "server_error", "code": "upstream_stream_error", "message": message}}
+		payload = map[string]any{"type": "error", "error": map[string]any{"type": "server_error", "code": code, "message": message}}
 	case types.RelayFormatClaude:
-		payload = map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": message}}
+		payload = map[string]any{"type": "error", "error": map[string]string{"type": claudeType, "message": message}}
 	case types.RelayFormatOpenAIResponses:
-		payload = map[string]any{"type": "error", "code": "upstream_stream_error", "message": message, "param": nil}
+		payload = map[string]any{"type": "error", "code": code, "message": message, "param": nil}
 	case types.RelayFormatGemini:
-		payload = map[string]any{"error": map[string]any{"code": 502, "status": "UNAVAILABLE", "message": message}}
+		payload = map[string]any{"error": map[string]any{"code": geminiCode, "status": geminiStatus, "message": message}}
 	}
 	data, _ := common.Marshal(payload)
 	frame := []byte("event: " + event + "\ndata: " + string(data) + "\n\n")
 	sdkPayload := false // 原 SDK 载荷在终止写入时用固定缓冲添加外壳，不分配换行放大后的完整 SSE 帧。
-	if (len(snapshot.ErrorFrame) > 0 || len(snapshot.ErrorPayload) > 0) && info.GetFinalRequestRelayFormat() == info.RelayFormat {
+	// 我方时限切断时，截止前读到的上游错误帧不是本流的结束原因，不原样转发。
+	if forwardUpstream && !timedOut && (len(snapshot.ErrorFrame) > 0 || len(snapshot.ErrorPayload) > 0) && info.GetFinalRequestRelayFormat() == info.RelayFormat {
 		// 旧原生适配器未必登记转换链，进一步检查错误形状，避免把讯飞 header.code 等当作 OpenAI error。
 		originalEvent, originalData := "error", snapshot.ErrorPayload
 		if len(snapshot.ErrorFrame) > 0 {

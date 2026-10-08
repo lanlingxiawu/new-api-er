@@ -25,6 +25,7 @@ var channel2advancedCustomConfig map[int]*kitdto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
+	defer RefreshChannelProbePolicy()
 	if !common.MemoryCacheEnabled {
 		InvalidatePricingCache()
 		rebuildTaskAliasView()
@@ -122,10 +123,15 @@ func GetRandomSatisfiedChannel(
 	model string,
 	retry int,
 	filters []dto.ChannelFilter,
+	policies ...*ChannelProbePolicy,
 ) (*Channel, error) {
+	var policy *ChannelProbePolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, filters)
+		return GetChannel(group, model, retry, filters, policy)
 	}
 
 	channelSyncLock.RLock()
@@ -142,6 +148,19 @@ func GetRandomSatisfiedChannel(
 
 	if len(channels) == 0 {
 		return nil, nil
+	}
+
+	if policy != nil {
+		allowed := make([]int, 0, len(channels))
+		for _, id := range channels {
+			if !policy.Blocks(id) {
+				allowed = append(allowed, id)
+			}
+		}
+		if len(allowed) == 0 {
+			return nil, ErrProbeChannelUnavailable
+		}
+		channels = allowed
 	}
 
 	if len(channels) == 1 {

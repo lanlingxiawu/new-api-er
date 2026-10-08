@@ -102,6 +102,11 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, other)
+	if GetRequestProbeRouting(ctx) != nil {
+		probeInfo := make(map[string]interface{}, 1)
+		AppendProbeRoutingAdminInfo(ctx, probeInfo)
+		other.MergeAdmin(probeInfo)
+	}
 }
 
 // relayLogChannelName 取本次请求实际使用的渠道名；relayInfo 里的快照优先，
@@ -230,12 +235,14 @@ func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, ref
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
-// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算。
+// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算；
+// 我方超时且平台承担成本（退款）的非流式请求另记 admin_info.timeout_absorbed。
 // 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志字段，将原地更新；err：底层错误，nil 时不覆盖已有原因。
 func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err error) {
 	if other == nil {
 		return
 	}
+	appendRelayTimeoutAbsorbedToErrorLog(c, other, err)
 	value, _ := c.Get(relaycommon.StreamResponseCaptureKey)
 	capture, _ := value.(*relaycommon.StreamResponseCapture)
 	reject := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
@@ -412,13 +419,19 @@ func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other *model.LogO
 }
 
 // appendStreamStatus 生成公开流状态；有通用会话、流式结果或响应采集器时省略底层错误文本，旧路径按原逻辑保留。
-// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志字段。任一为 nil、非流式或无状态时跳过。
+// 参数 relayInfo：流式状态及协议信息；other：原地写入的日志字段。任一为 nil、无状态、
+// 或既非流式又非「非流式转流式」时跳过。转流请求对客户是非流式（is_stream 为假），
+// 但上游是流式，同样要记下流是怎样结束的：中途断开时管理员才能看出这是半截交付及其原因。
 func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
-	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+	if relayInfo == nil || other == nil || (!relayInfo.IsStream && !relayInfo.UpstreamStreamAdapted) || relayInfo.StreamStatus == nil {
 		return
 	}
 	ss := relayInfo.StreamStatus
-	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil
+	// A non-stream request sent upstream as a stream keeps its raw read error out
+	// of the log too: text such as "read tcp …: connection reset by peer" names
+	// the upstream address and would reach the user's log view. The end reason
+	// says enough there; the server log keeps the text.
+	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil || relayInfo.UpstreamStreamAdapted
 	status := "ok"
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"

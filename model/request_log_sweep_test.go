@@ -39,7 +39,7 @@ func TestSweep_KeepsIndexedDeletesOrphansRegardlessOfModTime(t *testing.T) {
 
 	log := &RequestLog{Username: "u", CreatedAt: time.Now().Unix(), RequestId: "keep"}
 	RecordRequestLog(log)
-	indexedRel := requestLogRelPath(log.CreatedAt, "keep", int64(log.Id))
+	indexedRel := requestLogIndexSnapshot()[0].rel
 
 	today := time.Now().Format("2006-01-02")
 	oldOrphan := writeOrphanFile(t, today+"/0/1_old.json")
@@ -96,8 +96,8 @@ func TestSweep_OldDateDirWithIndexedEntryIsScanned(t *testing.T) {
 
 	createdAt, date := dayRel(30, 3)
 	log := &RequestLog{Username: "u", CreatedAt: createdAt, RequestId: "keep"}
-	RecordRequestLog(log)
-	indexedRel := requestLogRelPath(createdAt, "keep", int64(log.Id))
+	indexedRel := date + "/3/" + strconv.FormatInt(createdAt, 10) + "_keep.json"
+	writeLegacyIndexed(t, indexedRel, log)
 
 	orphan := writeOrphanFile(t, date+"/5/1_orphan.json")
 
@@ -133,7 +133,7 @@ func TestSweep_HandlesMoreFilesThanOneBatch(t *testing.T) {
 
 	// 让该日期"在用"，从而走逐文件分支而非整目录删除
 	createdAt, date := dayRel(30, 1)
-	RecordRequestLog(&RequestLog{Username: "u", CreatedAt: createdAt, RequestId: "keep"})
+	writeLegacyIndexed(t, date+"/1/"+strconv.FormatInt(createdAt, 10)+"_keep.json", &RequestLog{Id: 1, Username: "u", CreatedAt: createdAt, RequestId: "keep"})
 
 	const orphans = requestLogSweepBatch + 200
 	for i := 0; i < orphans; i++ {

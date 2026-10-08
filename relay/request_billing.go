@@ -72,7 +72,7 @@ func RefundFailedRequestBilling(c *gin.Context, info *relaycommon.RelayInfo, api
 		return nil
 	}
 	apiErr = service.NormalizeViolationFeeError(apiErr)
-	if info.Billing != nil {
+	if !service.SettleRelayTimeoutInputIfNeeded(c, info, apiErr) && info.Billing != nil {
 		info.Billing.Refund(c)
 	}
 	service.ChargeViolationFeeIfNeeded(c, info, apiErr)

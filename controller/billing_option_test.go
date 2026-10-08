@@ -63,6 +63,7 @@ export function parseTaskResult() { return {}; }
 			context, _ := gin.CreateTestContext(recorder)
 			context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
 
+			context.Set("role", common.RoleRootUser) // settings writes require root (settingsWriteScope)
 			UpdateOption(context)
 
 			assert.Equal(t, http.StatusOK, recorder.Code)
@@ -92,6 +93,7 @@ func TestUpdateOptionRejectsUsageExpressionWithoutTaskPlugin(t *testing.T) {
 		strings.NewReader(string(body)),
 	)
 
+	context.Set("role", common.RoleRootUser) // settings writes require root (settingsWriteScope)
 	UpdateOption(context)
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
@@ -155,6 +157,7 @@ export function parseTaskResult() { return {}; }
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
+		context.Set("role", common.RoleRootUser) // settings writes require root (settingsWriteScope)
 		UpdateOption(context)
 		return recorder
 	}

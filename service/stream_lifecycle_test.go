@@ -48,7 +48,8 @@ func TestUnifiedStreamBillingMatrix(t *testing.T) {
 				expected := "none"
 				if confirmed && (client || delivered) {
 					expected = "upstream"
-				} else if delivered {
+				} else if delivered || client {
+					// A client that leaves after the upstream accepted the request is billed the estimate.
 					expected = "estimated"
 				}
 				require.Equal(t, expected, info.StreamResult.UsageSource)
@@ -60,7 +61,11 @@ func TestUnifiedStreamBillingMatrix(t *testing.T) {
 					require.Equal(t, 3, usage.CompletionTokens)
 				case "estimated":
 					require.Equal(t, 10, usage.PromptTokens)
-					require.Greater(t, usage.CompletionTokens, 0)
+					if delivered {
+						require.Greater(t, usage.CompletionTokens, 0)
+					} else {
+						require.Zero(t, usage.CompletionTokens)
+					}
 				}
 			}
 		}

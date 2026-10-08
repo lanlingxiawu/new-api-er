@@ -77,9 +77,15 @@ func TestStreamAwsExceptionLogMessage(t *testing.T) {
 				require.Equal(t, wire, append(info.StreamResult.Diagnostic.BodyHead, info.StreamResult.Diagnostic.BodyTail...))
 				require.Equal(t, delivered, info.StreamResult.EffectiveContent)
 				if delivered {
-					require.Equal(t, "upstream", info.StreamResult.UsageSource)
+					// 只有 message_start 的输出 1 是中途值：异常结束时取它与已交付估算的较大者。
+					deliveredEstimate := service.EstimateTokenByModel(info.UpstreamModelName, "partial")
 					require.Equal(t, 10, finalUsage.PromptTokens)
-					require.Equal(t, 1, finalUsage.CompletionTokens)
+					require.Equal(t, max(1, deliveredEstimate), finalUsage.CompletionTokens)
+					if deliveredEstimate > 1 {
+						require.Equal(t, "mixed", info.StreamResult.UsageSource)
+					} else {
+						require.Equal(t, "upstream", info.StreamResult.UsageSource)
+					}
 				} else {
 					require.Equal(t, "none", info.StreamResult.UsageSource)
 					require.Zero(t, finalUsage.TotalTokens)

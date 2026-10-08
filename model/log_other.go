@@ -209,6 +209,88 @@ func normalizeLegacyRejectReason(values map[string]json.RawMessage) bool {
 	return true
 }
 
+// logOtherFields is a log's other decoded one level deep. Values that are not
+// rewritten keep their raw JSON, so a view that changes one field does not
+// round-trip the rest through float64 (integers beyond 2^53 stay exact).
+type logOtherFields map[string]json.RawMessage
+
+// parseLogOtherFields returns nil when other is empty or not a JSON object.
+func parseLogOtherFields(other string) logOtherFields {
+	if other == "" {
+		return nil
+	}
+	var fields logOtherFields
+	if err := common.UnmarshalJsonStr(other, &fields); err != nil {
+		return nil
+	}
+	return fields
+}
+
+// rawJSONString decodes raw when it is a JSON string.
+func rawJSONString(raw json.RawMessage) (string, bool) {
+	if common.GetJsonType(raw) != "string" {
+		return "", false
+	}
+	var value string
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// str is the string value of key, or "" when it is missing or not a string.
+func (f logOtherFields) str(key string) string {
+	value, _ := rawJSONString(f[key])
+	return value
+}
+
+// integer is the numeric value of key, or 0 when it is missing or not a number.
+func (f logOtherFields) integer(key string) int {
+	raw := f[key]
+	if common.GetJsonType(raw) != "number" {
+		return 0
+	}
+	var value float64
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return 0
+	}
+	return int(value)
+}
+
+// object decodes key as a JSON object; nil when it is missing or not an object.
+func (f logOtherFields) object(key string) logOtherFields {
+	raw, ok := f[key]
+	if !ok || common.GetJsonType(raw) != "object" {
+		return nil
+	}
+	var fields logOtherFields
+	if err := common.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+	return fields
+}
+
+// set stores value encoded as JSON; reports whether it was stored.
+func (f logOtherFields) set(key string, value any) bool {
+	data, err := common.Marshal(value)
+	if err != nil {
+		return false
+	}
+	f[key] = data
+	return true
+}
+
+// encode is the JSON text of f. Values that were just parsed always encode; if
+// one did not, the view shows an empty object rather than the stored original,
+// which may hold what the caller removed (as formatLogOtherJSON does).
+func (f logOtherFields) encode() string {
+	data, err := common.Marshal(f)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
 // formatLogOtherJSON applies the role projection while keeping untouched JSON
 // values as RawMessage. This preserves integers larger than JavaScript's safe
 // range instead of round-tripping them through float64.

@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	taskdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -99,8 +100,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			responseMessage := common.MessageWithRequestId(newAPIError.Error(), requestId)
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(service.StreamPublicErrorSummary(c, newAPIError))))
+			newAPIError, responseMessage = service.PresentRelayError(c, newAPIError, responseMessage, requestId)
 			newAPIError.SetMessage(responseMessage)
 			writeError := func() {
+				if relayFormat != types.RelayFormatOpenAIRealtime {
+					helper.ClearEventStreamHeaders(c)
+				}
 				switch relayFormat {
 				case types.RelayFormatOpenAIRealtime:
 					helper.WssError(c, ws, newAPIError.ToOpenAIError())
@@ -128,7 +133,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 		} else {
-			newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithStatusCode(http.StatusBadRequest), types.ErrOptionWithSkipRetry())
+			newAPIError = helper.NewInvalidRequestError(c, err)
 		}
 		return
 	}
@@ -139,7 +144,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	if relayFormat != types.RelayFormatOpenAIRealtime {
-		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
+		startRelayRequestTimeout(c, relayInfo)
 	}
 
 	// Realtime 长连接逐轮补充同一预留，禁用一次性请求的信任旁路，防止无限轮次透支。
@@ -154,6 +159,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			return
 		}
 		newAPIError = normalizeRelayTimeoutError(c, newAPIError)
+		// Only return quota if downstream failed and quota was actually pre-consumed
 		newAPIError = relay.RefundFailedRequestBilling(c, relayInfo, newAPIError)
 	}()
 
@@ -173,11 +179,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for ; service.ContinueRelayAttempts(c, retryParam); retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		if retryParam.GetRetry() > 0 {
-			service.RestartRelayResponseTimeout(c)
-		}
+		service.BeginRelayAttempt(c, retryParam)
 		// relayInfo 在整个重试循环里复用，ReceivedResponseCount 会跨尝试累积。
 		// 必须每次尝试前归零：否则「上一尝试收到过 SSE 数据后报可重试错、本次尝试
 		// 上游返回 200 却零响应」时，计费守卫（service.ResponseText2UsageFromStream /
@@ -221,6 +225,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = relayHandler(c, relayInfo)
 		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
+			reportAdaptedRelayTimeout(c, relayInfo, channel)
 			return
 		}
 		if relayInfo.StreamSession.Active() {
@@ -250,7 +255,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetry(c, newAPIError, service.RemainingRetryBudget(c, retryParam)) {
 			break
 		}
 	}
@@ -332,6 +337,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
+		if errors.Is(err, model.ErrProbeChannelUnavailable) {
+			return nil, types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgProbeChannelUnavailable)), types.ErrorCode("probe_channel_unavailable"), http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
@@ -367,9 +375,6 @@ func RelayMidjourney(c *gin.Context) {
 		})
 		return
 	}
-	if shouldStartMidjourneyTimeout(relayInfo.RelayMode) {
-		middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
-	}
 
 	var mjErr *taskdto.MidjourneyResponse
 	switch relayInfo.RelayMode {
@@ -383,13 +388,6 @@ func RelayMidjourney(c *gin.Context) {
 		mjErr = relay.RelaySwapFace(c, relayInfo)
 	default:
 		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
-	}
-	if middleware.IsRelayRequestTimeout(c) {
-		if !c.Writer.Written() {
-			respondMidjourneyTimeout(c)
-		}
-		logger.LogError(c, "midjourney relay timed out")
-		return
 	}
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
@@ -496,17 +494,16 @@ func RelayTask(c *gin.Context) {
 		})
 		return
 	}
-	middleware.StartRelayRequestTimeout(c, relayInfo.IsStream)
 	if action := c.GetString("task_action"); action != "" {
 		relayInfo.Action = action
 	}
 
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
-		respondTaskSubmissionError(c, normalizeRelayTaskTimeout(c, taskErr))
+		respondTaskSubmissionError(c, taskErr)
 		return
 	}
 	if taskErr := relay.ApplyOriginTaskAffinity(c, relayInfo); taskErr != nil {
-		respondTaskSubmissionError(c, normalizeRelayTaskTimeout(c, taskErr))
+		respondTaskSubmissionError(c, taskErr)
 		return
 	}
 
@@ -560,10 +557,8 @@ func executeTaskSubmissionWith(
 		Retry:       common.GetPointer(0),
 	}
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		if retryParam.GetRetry() > 0 {
-			service.RestartRelayResponseTimeout(c)
-		}
+	for ; service.ContinueRelayAttempts(c, retryParam); retryParam.IncreaseRetry() {
+		service.BeginRelayAttempt(c, retryParam)
 		stage = "select_channel"
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("before_attempt", retryParam.GetRetry()+1)
@@ -606,8 +601,7 @@ func executeTaskSubmissionWith(
 
 		stage = "submit"
 		result, taskErr = submit(c, relayInfo)
-		taskErr = normalizeRelayTaskTimeout(c, taskErr)
-		if requestErr := c.Request.Context().Err(); requestErr != nil && (taskErr == nil || taskErr.Code != string(types.ErrorCodeRelayTimeout)) {
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("after_submit", retryParam.GetRetry()+1)
 			taskErr = taskRequestContextError(c, requestErr)
 			break
@@ -617,11 +611,8 @@ func executeTaskSubmissionWith(
 			break
 		}
 
-		if shouldProcessTaskChannelError(taskErr) {
+		if !taskErr.LocalError {
 			channelErr := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
-			if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
-				channelErr = relayTimeoutAPIError(c)
-			}
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
@@ -629,7 +620,7 @@ func executeTaskSubmissionWith(
 				relayInfo)
 		}
 
-		willRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry())
+		willRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, service.RemainingRetryBudget(c, retryParam))
 		diagnostics.attemptFailed(retryParam.GetRetry()+1, channel, taskErr, willRetry)
 		if !willRetry {
 			break
@@ -793,17 +784,17 @@ func presentTaskSubmission(c *gin.Context, outcome *taskSubmissionOutcome) {
 
 func respondTaskSubmissionError(c *gin.Context, taskErr *taskdto.TaskError) {
 	newTaskPluginSubmitDiagnostics(c).presentError(taskErr)
-	// 超时终止错误统一走超时写入器；插件渲染依赖已过期的请求上下文。
-	if taskErr.Code != string(types.ErrorCodeRelayTimeout) && middleware.RespondTaskPluginError(c, taskErr) {
+	if middleware.RespondTaskPluginError(c, taskErr) {
 		return
 	}
 	respondTaskError(c, taskErr)
 }
 
-// taskRequestContextError 将任务提交期间的请求上下文结束转换为任务错误；本请求超时控制器触发时返回超时错误，其余视为请求取消。
+// taskRequestContextError 将任务提交期间的请求上下文结束转换为请求取消错误。
+// 任务提交由上游受理即计费，不启用单用户中转超时（startRelayRequestTimeout），
+// 因此这里的上下文结束只来自客户端断开或 Responses 桥接自身的时限。
 func taskRequestContextError(c *gin.Context, requestErr error) *taskdto.TaskError {
-	cancelled := service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
-	return normalizeRelayTaskTimeout(c, cancelled)
+	return service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
@@ -823,9 +814,6 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if taskErr == nil || taskErr.NoRetry {
 		return false
 	}
-	if taskErr.Code == string(types.ErrorCodeRelayTimeout) {
-		return false
-	}
 	if taskErr.SkipRetry {
 		return false
 	}
@@ -837,6 +825,11 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	}
 	if service.GetChannelConstraints(c).SuppressesRetry() {
 		return false
+	}
+	if taskErr.StatusCode >= 100 && taskErr.StatusCode <= 599 {
+		if allowed, overridden := service.GroupRetryStatusAllowed(c, taskErr.StatusCode); overridden {
+			return allowed && !taskErr.LocalError
+		}
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		return true

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -28,18 +29,32 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 18
+	priceMonitorMatrixVersion           = 22
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
-	priceMonitorLaneCacheRead           = "cache_read"
-	priceMonitorLaneCacheWrite          = "cache_write"
-	priceMonitorLaneCacheWrite1h        = "cache_write_1h"
-	priceMonitorLaneImageInput          = "image_input"
-	priceMonitorLaneImageCacheRead      = "image_cache_read"
-	priceMonitorLaneImageOutput         = "image_output"
-	priceMonitorLaneAudioInput          = "audio_input"
-	priceMonitorLaneAudioOutput         = "audio_output"
+
+	// 来源状态：只有 ok 的来源参与价格对比，其余三种都在表头说明原因，
+	// 不再伪装成"该来源未提供此模型"的价格差异。
+	priceMonitorSourceStatusOK        = "ok"
+	priceMonitorSourceStatusFailed    = "failed"
+	priceMonitorSourceStatusNoOverlap = "no_overlap"
+	priceMonitorSourceStatusNoModels  = "no_models"
+
+	// 失败细分，只回传固定枚举，不把上游错误串透给页面。
+	priceMonitorFailureFetch = "fetch"
+	priceMonitorFailureEmpty = "empty"
+	// sub2api 模型广场没开；或广场里找不到渠道密钥所在的分组（多半是专属分组，匿名看不到）。
+	priceMonitorFailureSub2APIPlazaDisabled = "sub2api_plaza_disabled"
+	priceMonitorFailureSub2APIGroupUnknown  = "sub2api_group_unknown"
+	priceMonitorLaneCacheRead               = "cache_read"
+	priceMonitorLaneCacheWrite              = "cache_write"
+	priceMonitorLaneCacheWrite1h            = "cache_write_1h"
+	priceMonitorLaneImageInput              = "image_input"
+	priceMonitorLaneImageCacheRead          = "image_cache_read"
+	priceMonitorLaneImageOutput             = "image_output"
+	priceMonitorLaneAudioInput              = "audio_input"
+	priceMonitorLaneAudioOutput             = "audio_output"
 )
 
 type PriceMonitorSource struct {
@@ -60,6 +75,31 @@ type PriceMonitorSourceHeader struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	APIURL string `json:"api_url,omitempty"`
+	// Status 说明这个来源本轮是否真的参与了价格对比，取值见 priceMonitorSourceStatus*。
+	// 历史快照没有这个字段，读取方把空值当作 ok。
+	Status string `json:"status,omitempty"`
+	// FailureReason 只在 Status 为 failed 时有意义，取 fetch / empty。
+	FailureReason string `json:"failure_reason,omitempty"`
+	// FetchedModels 是来源返回的模型价格条数，MatchedModels 是其中与本平台同名、
+	// 真正进入对比的条数。两者一起回答"这个来源到底比了多少模型"。
+	FetchedModels int `json:"fetched_models,omitempty"`
+	MatchedModels int `json:"matched_models,omitempty"`
+	// Endpoint 是本轮实际使用的价格接口路径，便于管理员确认人工配置是否生效。
+	Endpoint string `json:"endpoint,omitempty"`
+	// ChannelId 只对渠道来源有值，页面据此关联成本系数核对结果与渠道操作。
+	ChannelId int `json:"channel_id,omitempty"`
+}
+
+// PriceMonitorLossLine 是一项实测亏损：上游实际成本与我们的最低售价，单位与单元格价格相同。
+type PriceMonitorLossLine struct {
+	// Tier 是阶梯价的阶梯下标，非阶梯价为空。
+	Tier *int `json:"tier,omitempty"`
+	// Key 是 input / output / price，或分项键（cache_read 等）。
+	Key string `json:"key"`
+	// Cost = 上游列表价 × 上游分组倍率（倍率未知时按 1）。
+	Cost float64 `json:"cost"`
+	// Sell = 平台价 × 最低售价倍率。
+	Sell float64 `json:"sell"`
 }
 
 type PriceMonitorPriceCell struct {
@@ -84,6 +124,10 @@ type PriceMonitorPriceCell struct {
 	SellFactor       *float64 `json:"sell_factor,omitempty"`
 	MeasuredFactor   *float64 `json:"measured_factor,omitempty"`
 	ConfiguredFactor *float64 `json:"configured_factor,omitempty"`
+	// UpstreamFactor 是计入实测成本的上游分组倍率；判定命中但它为空，表示按列表价判定（上游倍率未知）。
+	UpstreamFactor *float64 `json:"upstream_factor,omitempty"`
+	// LossLines 是实测亏损的逐项价格对比，页面直接显示它而不是系数。
+	LossLines []PriceMonitorLossLine `json:"loss_lines,omitempty"`
 
 	// optionFields 是平台单元格的原始 option 值，只在构建矩阵时用来填充 RepairFloor.Current，不序列化。
 	optionFields map[string]float64
@@ -127,12 +171,15 @@ type PriceMonitorRepairFloor struct {
 	Display map[string]float64 `json:"display,omitempty"`
 	// Binding 记录每个字段的下限由哪个渠道决定，便于管理员追因。
 	Binding map[string]string `json:"binding,omitempty"`
-	// Current 是这些字段当前的原始 option 值，作为改价请求的 expected（乐观并发校验）；
+	// Current 是平台已配置的所有改价字段的原始 option 值，作为改价请求的 expected（乐观并发校验）；
 	// 缺少的字段表示当前未配置（expected 传 null）。
 	Current map[string]float64 `json:"current,omitempty"`
 	// Highest 是改价弹窗的「最高价」：每一项在所有可比渠道原始报价中的最高展示价（每百万 token，
 	// 按次为每次），不除售价系数。键与 Fields 相同；输出价即使补全倍率被锁定也给出，供比较。
 	Highest map[string]float64 `json:"highest,omitempty"`
+	// Lowest 是每一项在所有可比渠道原始报价中的最低展示价，Official 是官方价；均为改价参考价。
+	Lowest   map[string]float64 `json:"lowest,omitempty"`
+	Official map[string]float64 `json:"official,omitempty"`
 	// LockedCompletionRatio 非 0 表示补全倍率被系统锁定：输出价 = 输入价 × 该值，不能单独改。
 	LockedCompletionRatio float64 `json:"locked_completion_ratio,omitempty"`
 }
@@ -145,6 +192,8 @@ type PriceMonitorComparisonModelCounts struct {
 	ChannelModelsDev  int `json:"channel_models_dev"`
 	AbovePlatform     int `json:"above_platform"`
 	LossRisk          int `json:"loss_risk"`
+	// CostRatioMismatch 是成本系数与上游分组倍率不一致的渠道数（按渠道计，不是模型数）。
+	CostRatioMismatch int `json:"cost_ratio_mismatch"`
 }
 
 type PriceMonitorSnapshot struct {
@@ -163,6 +212,11 @@ type PriceMonitorSnapshot struct {
 	SourceHeaders         []PriceMonitorSourceHeader        `json:"source_headers"`
 	MatrixItems           []PriceMonitorMatrixItem          `json:"matrix_items"`
 	MatrixVersion         int                               `json:"matrix_version"`
+	// SourceEndpoints 记住上轮每个渠道真正取到价格的端点（key 为渠道 ID），
+	// 下轮直接从它开始，省掉重复探测。纯派生缓存，丢了只是多试一次。
+	SourceEndpoints map[string]string `json:"source_endpoints,omitempty"`
+	// ChannelCosts 是各渠道的成本系数核对结果（key 为渠道 ID），也是下一轮沿用上游倍率的依据。
+	ChannelCosts map[string]PriceMonitorChannelCost `json:"channel_costs,omitempty"`
 }
 
 type priceMonitorSnapshotStore struct {
@@ -218,6 +272,25 @@ func (store *priceMonitorSnapshotStore) Save(snapshot PriceMonitorSnapshot) erro
 	}
 	store.write.Lock()
 	defer store.write.Unlock()
+	if err := writePriceMonitorFile(store.path, data); err != nil {
+		return err
+	}
+	store.value.Store(&snapshot)
+	return nil
+}
+
+// SaveIfCheckedAt 只在当前快照仍是 checkedAt 那一轮时写入：就地重算基于读到的快照，
+// 期间若新一轮巡检已经替换了快照（新一轮已包含最新配置），放弃这次写回，不能用旧数据覆盖新结果。
+func (store *priceMonitorSnapshotStore) SaveIfCheckedAt(checkedAt int64, snapshot PriceMonitorSnapshot) error {
+	data, err := common.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	store.write.Lock()
+	defer store.write.Unlock()
+	if current := store.value.Load(); current == nil || current.CheckedAt != checkedAt {
+		return errPriceMonitorSnapshotSuperseded
+	}
 	if err := writePriceMonitorFile(store.path, data); err != nil {
 		return err
 	}
@@ -354,12 +427,18 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 		if comparison == "above_platform" {
 			highestKey = priceMonitorHighestAbovePlatformKey(item, eligibleHeaders)
 		}
-		prices := make(map[string]PriceMonitorPriceCell, len(displayKeys))
+		prices := make(map[string]PriceMonitorPriceCell, len(displayKeys)+1)
 		for key := range displayKeys {
 			if price, ok := item.Prices[key]; ok {
 				price.Highest = key == highestKey
 				prices[key] = price
 				visibleKeys[key] = struct{}{}
+			}
+		}
+		// 平台单元格总是带上（但不因此显示平台列）：任何视图里的行都要能改价，改价要读平台现价。
+		if _, ok := prices[priceMonitorPlatformKey]; !ok {
+			if platform, has := item.Prices[priceMonitorPlatformKey]; has {
+				prices[priceMonitorPlatformKey] = platform
 			}
 		}
 		// RepairFloor 必须显式带上：这里是重建一个新 item（只保留可见来源的单元格），
@@ -719,7 +798,7 @@ func priceMonitorPriceCellsEqual(left, right PriceMonitorPriceCell) bool {
 	}
 	for i := range left.Tiers {
 		leftTier, rightTier := left.Tiers[i], right.Tiers[i]
-		if leftTier.Range != rightTier.Range || leftTier.ConditionVariable != rightTier.ConditionVariable || leftTier.ConditionOperator != rightTier.ConditionOperator || !priceMonitorOptionalPriceEqual(leftTier.ConditionValue, rightTier.ConditionValue) || !nearlyEqual(leftTier.Input, rightTier.Input) || !nearlyEqual(leftTier.Output, rightTier.Output) || len(leftTier.Lanes) != len(rightTier.Lanes) {
+		if leftTier.ConditionVariable != rightTier.ConditionVariable || leftTier.ConditionOperator != rightTier.ConditionOperator || !priceMonitorOptionalPriceEqual(leftTier.ConditionValue, rightTier.ConditionValue) || !nearlyEqual(leftTier.Input, rightTier.Input) || !nearlyEqual(leftTier.Output, rightTier.Output) || len(leftTier.Lanes) != len(rightTier.Lanes) {
 			return false
 		}
 		if !priceMonitorLanePricesEqual(leftTier.Lanes, rightTier.Lanes) {
@@ -885,6 +964,11 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 		prices := map[string]PriceMonitorPriceCell{priceMonitorPlatformKey: platform}
 		hasDifference := false
 		for _, source := range sources {
+			// 取不到同名价格的来源不生成单元格：它们的问题是接口或渠道配置，
+			// 写成 missing 会被当成价格差异，污染对比统计。
+			if source.status == priceMonitorSourceStatusNoOverlap || source.status == priceMonitorSourceStatusNoModels {
+				continue
+			}
 			if source.applicableModels != nil {
 				if _, applicable := source.applicableModels[modelName]; !applicable {
 					continue
@@ -917,17 +1001,35 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 	return headers, items
 }
 
+// buildPriceMonitorSourceHeaders 生成矩阵表头。平台、官方、models.dev 三个固定来源的名称
+// 不写进快照，由 localizePriceMonitorMatrixResult 按请求语言填写（见 price_monitor_http.go）。
 func buildPriceMonitorSourceHeaders(sources []pricingSource, sourceTypes map[string]string) []PriceMonitorSourceHeader {
-	headers := []PriceMonitorSourceHeader{{Key: priceMonitorPlatformKey, Name: "平台配置", Type: priceMonitorPlatformKey}}
+	headers := []PriceMonitorSourceHeader{{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey, Status: priceMonitorSourceStatusOK}}
 	labelCounts := make(map[string]int)
 	for _, source := range sources {
 		sourceType := sourceTypes[source.name]
 		label := priceMonitorSourceLabel(source.name, sourceType)
-		labelCounts[label]++
-		if labelCounts[label] > 1 {
-			label += "（" + strconv.Itoa(labelCounts[label]) + "）"
+		if label != "" {
+			labelCounts[label]++
+			if labelCounts[label] > 1 {
+				label += "（" + strconv.Itoa(labelCounts[label]) + "）"
+			}
 		}
-		headers = append(headers, PriceMonitorSourceHeader{Key: source.name, Name: label, Type: sourceType, APIURL: source.apiURL})
+		status := source.status
+		if status == "" {
+			status = priceMonitorSourceStatusOK
+		}
+		headers = append(headers, PriceMonitorSourceHeader{
+			Key:           source.name,
+			Name:          label,
+			Type:          sourceType,
+			APIURL:        source.apiURL,
+			Status:        status,
+			FailureReason: source.failureReason,
+			FetchedModels: source.fetchedModels,
+			MatchedModels: source.matchedModels,
+			Endpoint:      source.endpoint,
+		})
 	}
 	return headers
 }
@@ -946,12 +1048,11 @@ func priceMonitorDisplayURL(raw string) string {
 	return parsed.String()
 }
 
+// priceMonitorSourceLabel 是渠道来源的显示名（去掉「(渠道 ID)」后缀）；固定来源返回空串，
+// 它们的名称按请求语言生成。
 func priceMonitorSourceLabel(name, sourceType string) string {
-	if sourceType == priceSourceOfficial {
-		return "官方价格"
-	}
-	if sourceType == priceSourceModelsDev {
-		return "models.dev 价格"
+	if sourceType == priceSourceOfficial || sourceType == priceSourceModelsDev {
+		return ""
 	}
 	trimmed := strings.TrimSpace(name)
 	open := strings.LastIndex(trimmed, "(")
@@ -1121,7 +1222,6 @@ func parsePriceMonitorExpression(expression string) ([]PriceMonitorPriceTier, bo
 				lanes = append(lanes, PriceMonitorPriceLane{Key: key, Price: floatPointer(value)})
 			}
 		}
-		rangeLabel := "全部输入长度"
 		tierConditionVariable, tierConditionOperator := "", ""
 		var tierConditionValue *float64
 		prefix := expression[previousEnd:match[0]]
@@ -1133,31 +1233,38 @@ func parsePriceMonitorExpression(expression string) ([]PriceMonitorPriceTier, bo
 			}
 			conditionVariable, conditionOperator, conditionValue = condition[1], condition[2], value
 			tierConditionVariable, tierConditionOperator, tierConditionValue = conditionVariable, conditionOperator, floatPointer(conditionValue)
-			rangeLabel = priceMonitorConditionLabel(conditionVariable, conditionOperator, conditionValue)
 		} else if index == 1 && conditionVariable != "" {
 			tierConditionVariable, tierConditionOperator, tierConditionValue = conditionVariable, inversePriceMonitorOperator(conditionOperator), floatPointer(conditionValue)
-			rangeLabel = priceMonitorConditionLabel(tierConditionVariable, tierConditionOperator, conditionValue)
 		} else if len(matches) > 1 {
 			return nil, true
 		}
-		tiers = append(tiers, PriceMonitorPriceTier{Range: rangeLabel, ConditionVariable: tierConditionVariable, ConditionOperator: tierConditionOperator, ConditionValue: tierConditionValue, Input: input, Output: output, Lanes: lanes})
+		tiers = append(tiers, PriceMonitorPriceTier{ConditionVariable: tierConditionVariable, ConditionOperator: tierConditionOperator, ConditionValue: tierConditionValue, Input: input, Output: output, Lanes: lanes})
 		previousEnd = match[1]
 	}
 	return tiers, false
 }
 
-func priceMonitorConditionLabel(variable, operator string, value float64) string {
-	name := "输入长度"
-	if variable == "c" {
-		name = "输出长度"
+// priceMonitorTierLabel 按档位条件生成档位说明（如「输入长度 ≤ 200,000 tokens」）。
+// 说明只由条件决定，不写进快照，响应时按请求语言生成。
+func priceMonitorTierLabel(tier PriceMonitorPriceTier, translate func(key string, args map[string]any) string) string {
+	if tier.ConditionVariable == "" || tier.ConditionOperator == "" || tier.ConditionValue == nil {
+		return translate(i18n.MsgPriceMonitorTierAllInput, nil)
 	}
-	symbol := map[string]string{"<=": "≤", "<": "<", ">=": "≥", ">": ">"}[operator]
-	formatted := strconv.FormatFloat(value, 'f', -1, 64)
+	key := i18n.MsgPriceMonitorTierInputLength
+	if tier.ConditionVariable == "c" {
+		key = i18n.MsgPriceMonitorTierOutputLength
+	}
+	symbol := map[string]string{"<=": "≤", "<": "<", ">=": "≥", ">": ">"}[tier.ConditionOperator]
+	formatted := strconv.FormatFloat(*tier.ConditionValue, 'f', -1, 64)
+	sign := ""
+	if strings.HasPrefix(formatted, "-") {
+		sign, formatted = "-", formatted[1:]
+	}
 	parts := strings.SplitN(formatted, ".", 2)
 	for index := len(parts[0]) - 3; index > 0; index -= 3 {
 		parts[0] = parts[0][:index] + "," + parts[0][index:]
 	}
-	return name + " " + symbol + " " + strings.Join(parts, ".") + " tokens"
+	return translate(key, map[string]any{"Operator": symbol, "Value": sign + strings.Join(parts, ".")})
 }
 
 func inversePriceMonitorOperator(operator string) string {

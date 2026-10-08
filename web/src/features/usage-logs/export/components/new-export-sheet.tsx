@@ -42,15 +42,14 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { useDebounce } from '@/hooks'
 
+import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
 import {
   LOG_TYPE_ALL_VALUE,
   LOG_TYPE_FILTERS,
   TIME_RANGE_PRESETS,
 } from '../../constants'
-import { useDebounce } from '@/hooks'
-
-import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
 import {
   createExportJob,
   createExportTemplate,
@@ -67,8 +66,8 @@ import type {
   NumericFilters,
   SummaryDimension,
 } from '../types'
-
 import { ColumnPicker } from './column-picker'
+import { ExportFilterSelect } from './export-filter-select'
 
 const CUSTOM_TEMPLATE = '__custom__'
 
@@ -235,7 +234,9 @@ export function NewExportSheet({
     if (!catalog || templateId) return
     const preset =
       (prefill?.templateId &&
-        catalog.builtin_templates.find((tpl) => tpl.id === prefill.templateId)) ||
+        catalog.builtin_templates.find(
+          (tpl) => tpl.id === prefill.templateId
+        )) ||
       catalog.builtin_templates.find((tpl) => tpl.is_default) ||
       catalog.builtin_templates[0]
     if (preset) {
@@ -359,19 +360,20 @@ export function NewExportSheet({
     () =>
       Boolean(
         anomaly.anomaly_only ||
-          anomaly.anomaly_kinds?.length ||
-          anomaly.usage_source?.length ||
-          anomaly.stream_end_reason?.length ||
-          anomaly.settlement_state?.length ||
-          anomaly.min_retry_count != null
+        anomaly.anomaly_kinds?.length ||
+        anomaly.usage_source?.length ||
+        anomaly.stream_end_reason?.length ||
+        anomaly.settlement_state?.length ||
+        anomaly.min_retry_count != null
       ),
     [anomaly]
   )
 
   // 额度→美元换算率由后端下发，前端不硬编码——它是可配置的系统参数。
-  const quotaPerUnit = catalog?.quota_per_unit && catalog.quota_per_unit > 0
-    ? catalog.quota_per_unit
-    : 500000
+  const quotaPerUnit =
+    catalog?.quota_per_unit && catalog.quota_per_unit > 0
+      ? catalog.quota_per_unit
+      : 500000
   const quotaUnitUSD = formatUSD(1 / quotaPerUnit)
 
   const hasNumericFilter = useMemo(
@@ -422,9 +424,9 @@ export function NewExportSheet({
   const estCapped = estimate?.capped ?? false
   // 聚合模式下估算的是扫描量，不是产出行数——扫 100 万行可能只出 50 行汇总，
   // 拿扫描量否决 xlsx 会把最该用 Excel 的场景挡在门外。
-  const xlsxTooLarge =
-    mode !== 'summary' && (estCapped || estRows > xlsxLimit)
-  const estParts = estRows > 0 ? Math.max(1, Math.ceil(estRows / rowsPerPart)) : 0
+  const xlsxTooLarge = mode !== 'summary' && (estCapped || estRows > xlsxLimit)
+  const estParts =
+    estRows > 0 ? Math.max(1, Math.ceil(estRows / rowsPerPart)) : 0
   useEffect(() => {
     if (xlsxTooLarge && format === 'xlsx') setFormat('csv_gz')
   }, [xlsxTooLarge, format])
@@ -446,7 +448,10 @@ export function NewExportSheet({
         parts: estParts,
       })
     }
-    return t('About {{rows}} rows · {{parts}} part(s)', { rows, parts: estParts })
+    return t('About {{rows}} rows · {{parts}} part(s)', {
+      rows,
+      parts: estParts,
+    })
   }, [mode, estimate?.upper_bound, estCapped, estRows, estParts, t])
 
   const createJob = useMutation({
@@ -605,30 +610,88 @@ export function NewExportSheet({
               </div>
               <div className='space-y-1'>
                 <Label>{t('Model')}</Label>
-                <Input value={model} onChange={(e) => setModel(e.target.value)} />
+                <ExportFilterSelect
+                  field='model_name'
+                  label={t('Model')}
+                  value={model}
+                  onChange={setModel}
+                  start={
+                    range.start
+                      ? Math.floor(range.start.getTime() / 1000)
+                      : undefined
+                  }
+                  end={
+                    range.end
+                      ? Math.floor(range.end.getTime() / 1000)
+                      : undefined
+                  }
+                />
               </div>
               <div className='space-y-1'>
                 <Label>{t('User')}</Label>
-                <Input
+                <ExportFilterSelect
+                  field='username'
+                  label={t('User')}
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={setUsername}
                 />
               </div>
               <div className='space-y-1'>
                 <Label>{t('Token')}</Label>
-                <Input value={token} onChange={(e) => setToken(e.target.value)} />
+                <ExportFilterSelect
+                  field='token_name'
+                  label={t('Token')}
+                  value={token}
+                  onChange={setToken}
+                  start={
+                    range.start
+                      ? Math.floor(range.start.getTime() / 1000)
+                      : undefined
+                  }
+                  end={
+                    range.end
+                      ? Math.floor(range.end.getTime() / 1000)
+                      : undefined
+                  }
+                />
               </div>
               <div className='space-y-1'>
                 <Label>{t('Channel')}</Label>
-                <Input
+                <ExportFilterSelect
+                  field='channel'
+                  label={t('Channel')}
                   value={channel}
-                  inputMode='numeric'
-                  onChange={(e) => setChannel(e.target.value)}
+                  onChange={setChannel}
+                  start={
+                    range.start
+                      ? Math.floor(range.start.getTime() / 1000)
+                      : undefined
+                  }
+                  end={
+                    range.end
+                      ? Math.floor(range.end.getTime() / 1000)
+                      : undefined
+                  }
                 />
               </div>
               <div className='space-y-1'>
                 <Label>{t('Group')}</Label>
-                <Input value={group} onChange={(e) => setGroup(e.target.value)} />
+                <ExportFilterSelect
+                  field='group'
+                  label={t('Group')}
+                  value={group}
+                  onChange={setGroup}
+                  start={
+                    range.start
+                      ? Math.floor(range.start.getTime() / 1000)
+                      : undefined
+                  }
+                  end={
+                    range.end
+                      ? Math.floor(range.end.getTime() / 1000)
+                      : undefined
+                  }
+                />
               </div>
             </div>
 
@@ -740,7 +803,11 @@ export function NewExportSheet({
                     onClick={() =>
                       setNumeric((prev) =>
                         prev.charged && prev.completion_tokens_max === 0
-                          ? { ...prev, charged: null, completion_tokens_max: null }
+                          ? {
+                              ...prev,
+                              charged: null,
+                              completion_tokens_max: null,
+                            }
                           : { ...prev, charged: true, completion_tokens_max: 0 }
                       )
                     }
@@ -895,85 +962,85 @@ export function NewExportSheet({
           )}
 
           {mode !== 'summary' && (
-          <section className='space-y-3'>
-            <div className='flex flex-wrap items-end justify-between gap-2'>
-              <h3 className='flex items-center gap-2 text-sm font-semibold'>
-                {t('Columns')}
-                {/* 「可发给客户」是这份文件能不能直接转发出去的唯一判据，
+            <section className='space-y-3'>
+              <div className='flex flex-wrap items-end justify-between gap-2'>
+                <h3 className='flex items-center gap-2 text-sm font-semibold'>
+                  {t('Columns')}
+                  {/* 「可发给客户」是这份文件能不能直接转发出去的唯一判据，
                     放在列区标题旁边，而不是藏在下拉项里。 */}
-                {selectedBuiltin?.audience === 'customer' && (
-                  <Badge variant='secondary'>
-                    {t('Safe to send to customers')}
-                  </Badge>
+                  {selectedBuiltin?.audience === 'customer' && (
+                    <Badge variant='secondary'>
+                      {t('Safe to send to customers')}
+                    </Badge>
+                  )}
+                </h3>
+                <div className='w-64 space-y-1'>
+                  <Label className='text-xs'>{t('Template')}</Label>
+                  <Select
+                    items={templateSelectItems}
+                    value={templateId}
+                    onValueChange={(v) => applyTemplate(v ?? '')}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('Template')} />
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      {templateOptions.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                      {templateId === CUSTOM_TEMPLATE && (
+                        <SelectItem value={CUSTOM_TEMPLATE}>
+                          {t('Custom')}
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Exported files always contain the real values — the sensitive-data toggle on the list page does not apply here.'
                 )}
-              </h3>
-              <div className='w-64 space-y-1'>
-                <Label className='text-xs'>{t('Template')}</Label>
-                <Select
-                  items={templateSelectItems}
-                  value={templateId}
-                  onValueChange={(v) => applyTemplate(v ?? "")}
+              </p>
+              <ColumnPicker
+                columns={catalog?.columns ?? []}
+                selected={columns}
+                maxColumns={catalog?.max_columns ?? 100}
+                onChange={(next) => {
+                  setColumns(next)
+                  setTemplateId(CUSTOM_TEMPLATE)
+                }}
+              />
+              <div className='flex items-end gap-2'>
+                <div className='flex-1 space-y-1'>
+                  <Label className='text-xs'>{t('Save as template')}</Label>
+                  <Input
+                    value={templateName}
+                    placeholder={t('Template name')}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                  />
+                </div>
+                <Button
+                  type='button'
+                  variant='outline'
+                  disabled={
+                    !templateName.trim() ||
+                    columns.length === 0 ||
+                    saveTemplate.isPending
+                  }
+                  onClick={() => saveTemplate.mutate()}
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('Template')} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    {templateOptions.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                    {templateId === CUSTOM_TEMPLATE && (
-                      <SelectItem value={CUSTOM_TEMPLATE}>
-                        {t('Custom')}
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
+                  {saveTemplate.isPending ? (
+                    <Loader2 className='animate-spin' />
+                  ) : (
+                    <Save />
+                  )}
+                  {t('Save')}
+                </Button>
               </div>
-            </div>
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Exported files always contain the real values — the sensitive-data toggle on the list page does not apply here.'
-              )}
-            </p>
-            <ColumnPicker
-              columns={catalog?.columns ?? []}
-              selected={columns}
-              maxColumns={catalog?.max_columns ?? 100}
-              onChange={(next) => {
-                setColumns(next)
-                setTemplateId(CUSTOM_TEMPLATE)
-              }}
-            />
-            <div className='flex items-end gap-2'>
-              <div className='flex-1 space-y-1'>
-                <Label className='text-xs'>{t('Save as template')}</Label>
-                <Input
-                  value={templateName}
-                  placeholder={t('Template name')}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                />
-              </div>
-              <Button
-                type='button'
-                variant='outline'
-                disabled={
-                  !templateName.trim() ||
-                  columns.length === 0 ||
-                  saveTemplate.isPending
-                }
-                onClick={() => saveTemplate.mutate()}
-              >
-                {saveTemplate.isPending ? (
-                  <Loader2 className='animate-spin' />
-                ) : (
-                  <Save />
-                )}
-                {t('Save')}
-              </Button>
-            </div>
-          </section>
+            </section>
           )}
 
           {/* 3. Format */}
@@ -985,7 +1052,9 @@ export function NewExportSheet({
                 <Select
                   items={formatItems}
                   value={format}
-                  onValueChange={(v) => setFormat((v ?? "csv_gz") as ExportFormat)}
+                  onValueChange={(v) =>
+                    setFormat((v ?? 'csv_gz') as ExportFormat)
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1029,7 +1098,9 @@ export function NewExportSheet({
               <label className='flex items-center gap-2 text-sm'>
                 <Switch
                   checked={options.csv_bom}
-                  onCheckedChange={(v) => setOptions({ ...options, csv_bom: v })}
+                  onCheckedChange={(v) =>
+                    setOptions({ ...options, csv_bom: v })
+                  }
                 />
                 {t('Add BOM (Excel reads UTF-8 correctly)')}
               </label>

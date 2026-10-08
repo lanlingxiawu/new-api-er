@@ -298,6 +298,7 @@ const SENSITIVE_FORM_FIELDS = [
   'system_prompt_override',
   'allow_service_tier',
   'disable_store',
+  'disable_probe_requests',
   'allow_safety_identifier',
   'allow_include_obfuscation',
   'allow_inference_geo',
@@ -2104,6 +2105,35 @@ export function ChannelMutateDrawer({
               <Switch
                 checked={field.value === 1}
                 onCheckedChange={(checked) => field.onChange(checked ? 1 : 0)}
+              />
+            </FormControl>
+          </FormItem>
+        )}
+      />
+
+      <FormField
+        control={form.control}
+        name='disable_probe_requests'
+        render={({ field }) => (
+          <FormItem className='flex items-center justify-between'>
+            <div className='space-y-0.5'>
+              <FormLabel>{t('Block probe requests')}</FormLabel>
+              <FormDescription>
+                {t(
+                  'Route short, single-turn text requests to other eligible channels in the same group. Simple questions may also be routed. Platform channel tests are unaffected.'
+                )}
+                {sensitiveLocked && (
+                  <span className='block'>
+                    {t('No permission to perform this action')}
+                  </span>
+                )}
+              </FormDescription>
+            </div>
+            <FormControl>
+              <Switch
+                disabled={sensitiveLocked}
+                checked={field.value ?? false}
+                onCheckedChange={field.onChange}
               />
             </FormControl>
           </FormItem>

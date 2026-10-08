@@ -1,9 +1,12 @@
 package model
 
 import (
+	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -172,7 +175,7 @@ func InitOptionMap() {
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["UserExclusiveGroupRatioEnabled"] = strconv.FormatBool(ratio_setting.IsUserExclusiveGroupRatioEnabled())
-	common.OptionMap["UserExclusiveGroupRatioCacheMax"] = strconv.Itoa(ratio_setting.GetUserGroupRatioCacheMax())
+	common.OptionMap[userGroupRatioCacheMaxOptionKey] = strconv.Itoa(ratio_setting.GetUserGroupRatioCacheMax())
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
@@ -198,6 +201,7 @@ func InitOptionMap() {
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
+	common.OptionMap["GroupRetryTimes"] = operation_setting.GroupRetryTimes2JSONString()
 	common.OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString()
 	common.OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString()
 	common.OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString()
@@ -267,6 +271,10 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
+		_, err := operation_setting.ParseGroupRetryStatusUpdate(map[string]string{field: value})
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -276,7 +284,151 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if key == userGroupRatioCacheMaxOptionKey {
+		_, err := ratio_setting.ParseUserGroupRatioCacheMax(value)
+		return err
+	}
+	if field, ok := strings.CutPrefix(key, relayErrorDisplayOptionPrefix); ok {
+		return validateRelayErrorDisplayOption(field, value)
+	}
 	return nil
+}
+
+const relayErrorDisplayOptionPrefix = "relay_error_display_setting."
+
+// validateRelayErrorDisplayOption validates one relay_error_display_setting
+// field saved on its own (the single-option endpoint) the way SaveConfigGroup
+// validates the group: the live setting with this field changed must pass
+// validateRelayErrorDisplaySave, so a single-key save cannot store rules the
+// group save would refuse. Every refusal is an ErrRelayErrorDisplayInvalid, so
+// the caller answers with the translated message, never a Go error string.
+func validateRelayErrorDisplayOption(field, value string) error {
+	values := map[string]string{field: value}
+	if err := validateRelayErrorDisplayFields(values); err != nil {
+		return fmt.Errorf("%w: %v", operation_setting.ErrRelayErrorDisplayInvalid, err)
+	}
+	stored := operation_setting.GetRelayErrorDisplaySetting()
+	draft := stored
+	if err := config.UpdateConfigFromMap(&draft, values); err != nil {
+		return fmt.Errorf("%w: %v", operation_setting.ErrRelayErrorDisplayInvalid, err)
+	}
+	return validateRelayErrorDisplaySave(stored, draft)
+}
+
+// validateRelayErrorDisplaySave checks a relay error display save (single key
+// or group) strictly, but only in what the save changes relative to the stored
+// setting. Parts already stored are not re-validated: the runtime loader skips
+// stored parts that no longer validate (a rule saved before a limit existed, a
+// hand-edited row) and keeps the rest in effect, so re-validating them would
+// only make it impossible to switch the feature off, change
+// hide_upstream_errors or the default message until the stale rule is removed.
+//
+//   - default_message: checked only when it differs from the stored one.
+//   - rules: a list equal to the stored one is not checked. Otherwise every
+//     rule that also appears in the stored list is left out of the check and
+//     every new or edited rule is checked strictly, together with the rule
+//     count, and errors keep the rule numbers the admin sees.
+//
+// Rules are compared by content (parsed and re-encoded), so a settings page
+// that re-serializes the unchanged list still counts as unchanged.
+func validateRelayErrorDisplaySave(stored, draft operation_setting.RelayErrorDisplaySetting) error {
+	check := draft
+	if strings.TrimSpace(draft.DefaultMessage) == strings.TrimSpace(stored.DefaultMessage) {
+		check.DefaultMessage = ""
+	}
+	check.Rules = relayErrorDisplayRulesToCheck(stored.Rules, draft.Rules)
+	return operation_setting.ValidateRelayErrorDisplaySetting(check)
+}
+
+// relayErrorDisplayRulesToCheck returns the rules value to validate for a save
+// of draftRules over storedRules: "" when nothing changed, otherwise the draft
+// list with every rule already in the stored list replaced by a placeholder
+// that always validates (so rule numbers in errors stay those of the draft).
+// A draft that is not a JSON rule list is returned as is and fails validation.
+func relayErrorDisplayRulesToCheck(storedRules, draftRules string) string {
+	draftRaw := strings.TrimSpace(draftRules)
+	if draftRaw == strings.TrimSpace(storedRules) {
+		return ""
+	}
+	var draft []operation_setting.RelayErrorRule
+	if err := common.UnmarshalJsonStr(draftRaw, &draft); err != nil || draftRaw == "" {
+		return draftRules
+	}
+	var stored []operation_setting.RelayErrorRule
+	if strings.TrimSpace(storedRules) != "" {
+		// An unreadable stored list has no rules to keep; every draft rule is new.
+		_ = common.UnmarshalJsonStr(storedRules, &stored)
+	}
+	storedKeys := make(map[string]bool, len(stored))
+	storedList := make([]string, 0, len(stored))
+	for _, rule := range stored {
+		key, ok := relayErrorDisplayRuleKey(rule)
+		if !ok {
+			continue
+		}
+		storedKeys[key] = true
+		storedList = append(storedList, key)
+	}
+	draftList := make([]string, 0, len(draft))
+	for _, rule := range draft {
+		key, ok := relayErrorDisplayRuleKey(rule)
+		if !ok {
+			return draftRules
+		}
+		draftList = append(draftList, key)
+	}
+	if slices.Equal(storedList, draftList) {
+		return ""
+	}
+	placeholder := operation_setting.RelayErrorRule{
+		Source: operation_setting.RelayErrorSourceAny,
+		Action: operation_setting.RelayErrorActionKeep,
+	}
+	for i, key := range draftList {
+		if storedKeys[key] {
+			draft[i] = placeholder
+		}
+	}
+	encoded, err := common.Marshal(draft)
+	if err != nil {
+		return draftRules
+	}
+	return string(encoded)
+}
+
+// relayErrorDisplayRuleKey is a rule's content in a canonical encoding.
+func relayErrorDisplayRuleKey(rule operation_setting.RelayErrorRule) (string, bool) {
+	encoded, err := common.Marshal(rule)
+	if err != nil {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+const userGroupRatioCacheMaxOptionKey = "UserExclusiveGroupRatioCacheMax"
+
+var (
+	invalidUserGroupRatioCacheMaxMu     sync.Mutex
+	invalidUserGroupRatioCacheMaxLogged string
+)
+
+// normalizeStoredUserGroupRatioCacheMax returns value when it is a valid cache
+// cap, otherwise the default. SyncOptions reloads every option periodically,
+// so the fallback is logged once per distinct bad value, not on every sync.
+func normalizeStoredUserGroupRatioCacheMax(value string) string {
+	_, err := ratio_setting.ParseUserGroupRatioCacheMax(value)
+	invalidUserGroupRatioCacheMaxMu.Lock()
+	defer invalidUserGroupRatioCacheMaxMu.Unlock()
+	if err == nil {
+		invalidUserGroupRatioCacheMaxLogged = ""
+		return value
+	}
+	if invalidUserGroupRatioCacheMaxLogged != value {
+		invalidUserGroupRatioCacheMaxLogged = value
+		common.SysError(fmt.Sprintf("stored %s is invalid (%v); using the default %d until it is saved again",
+			userGroupRatioCacheMaxOptionKey, err, ratio_setting.DefaultUserGroupRatioCacheMax))
+	}
+	return strconv.Itoa(ratio_setting.DefaultUserGroupRatioCacheMax)
 }
 
 func UpdateOption(key string, value string) error {
@@ -286,6 +438,10 @@ func UpdateOption(key string, value string) error {
 	}
 	if IsModelPricingOption(key) {
 		return UpdateModelPricingOptions(map[string]string{key: value})
+	}
+	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
+		_, err := SaveConfigGroup("group_retry_status_setting", map[string]string{field: value})
+		return err
 	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
@@ -398,6 +554,13 @@ func updateOptionMap(key string, value string) (err error) {
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
 		return nil
+	}
+	// Checked before OptionMap is written: the settings page reads OptionMap, and
+	// a value the runtime ignores must not show up there as saved. Save paths
+	// validate first, so an invalid value here was stored before validation
+	// existed; it falls back to the default instead of failing every sync.
+	if key == userGroupRatioCacheMaxOptionKey {
+		value = normalizeStoredUserGroupRatioCacheMax(value)
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
@@ -532,10 +695,10 @@ func updateOptionMap(key string, value string) (err error) {
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue > 0 {
 			common.RequestLogMaxBodyKB = intValue
 		}
-	case "UserExclusiveGroupRatioCacheMax":
-		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {
-			ratio_setting.SetUserGroupRatioCacheMax(intValue)
-		}
+	case userGroupRatioCacheMaxOptionKey:
+		// Normalized to a valid value before OptionMap was written above.
+		intValue, _ := ratio_setting.ParseUserGroupRatioCacheMax(value)
+		ratio_setting.SetUserGroupRatioCacheMax(intValue)
 	case "RequestLogMinCount":
 		if intValue, parseErr := strconv.Atoi(value); parseErr == nil && intValue >= 0 {
 			common.RequestLogMinCount = intValue
@@ -779,6 +942,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
+	case "GroupRetryTimes":
+		err = operation_setting.UpdateGroupRetryTimesByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
 	case "UserUsableGroups":

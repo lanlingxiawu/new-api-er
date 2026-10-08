@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import {
   CheckCircle2,
   Circle,
@@ -25,6 +26,7 @@ import {
   Link2,
   Pencil,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Timer,
   Trash2,
@@ -128,12 +130,37 @@ type TimeoutOverrideFieldName =
   | 'stream_total_timeout'
   | 'non_stream_response_timeout'
   | 'non_stream_total_timeout'
+  | 'retry_times'
 
 type TimeoutOverrideFieldProps = {
   control: Control<UserFormValues>
   name: TimeoutOverrideFieldName
   label: ReactNode
   description: ReactNode
+  // Bounds default to the timeout range; retry counts pass their own.
+  min?: number
+  max?: number
+}
+
+// timeoutBillingDescription explains, from the user's side, what each timeout
+// billing mode costs when our time limit ends a request.
+function timeoutBillingDescription(
+  value: string | undefined,
+  t: TFunction
+): string {
+  if (value === 'charge') {
+    return t(
+      'On timeout the user pays for what the model already produced: OpenAI chat completion requests also receive that partial output; other non-stream requests are charged for the input only. The upstream cost is borne by the user.'
+    )
+  }
+  if (value === 'input') {
+    return t(
+      'On timeout the user is charged only for the input (as confirmed by upstream, otherwise the estimate); output is not charged, so the platform bears that part. Models priced per call are refunded.'
+    )
+  }
+  return t(
+    'On timeout the user is not charged. Upstream has usually billed by then, so the platform bears that cost.'
+  )
 }
 
 type TimeoutNumberInputProps = Omit<
@@ -182,6 +209,8 @@ function TimeoutOverrideField({
   name,
   label,
   description,
+  min = -1,
+  max = 604800,
 }: TimeoutOverrideFieldProps) {
   return (
     <FormField
@@ -192,8 +221,8 @@ function TimeoutOverrideField({
           <FormLabel>{label}</FormLabel>
           <FormControl>
             <TimeoutNumberInput
-              min={-1}
-              max={604800}
+              min={min}
+              max={max}
               step={1}
               name={field.name}
               ref={field.ref}
@@ -214,6 +243,7 @@ const USER_SECTION_IDS = {
   BASIC: 'user-basic-information',
   GROUP_QUOTA: 'user-group-quota',
   TIMEOUT: 'user-request-timeout',
+  RETRY: 'user-retry',
   EMPLOYEE: 'user-assigned-employee',
   BINDINGS: 'user-binding-information',
 } as const
@@ -325,6 +355,11 @@ export function UsersMutateDrawer({
               id: USER_SECTION_IDS.TIMEOUT,
               label: t('AI Request Timeout'),
               icon: <Timer className='size-4' aria-hidden='true' />,
+            },
+            {
+              id: USER_SECTION_IDS.RETRY,
+              label: t('Retry'),
+              icon: <RotateCcw className='size-4' aria-hidden='true' />,
             },
           ]
         : []),
@@ -888,13 +923,12 @@ export function UsersMutateDrawer({
                         </h3>
                         <p className='text-muted-foreground text-sm'>
                           {t(
-                            'Each request applies both response and total timeout limits.'
-                          )}{' '}
+                            '0 inherits the system default, -1 disables the limit.'
+                          )}
+                        </p>
+                        <p className='text-muted-foreground text-sm'>
                           {t(
-                            'All four 0 keeps legacy behavior; otherwise, 0 inherits the system default and -1 disables that limit.'
-                          )}{' '}
-                          {t(
-                            '10-minute example: stream response 600, stream total -1; non-stream response -1, non-stream total 600.'
+                            'Task submissions, Midjourney, Coze non-stream requests and Ali image generation and editing are not subject to these timeouts.'
                           )}
                         </p>
 
@@ -908,7 +942,7 @@ export function UsersMutateDrawer({
                             render={({ field }) => (
                               <FormItem>
                                 <FormLabel>
-                                  {t('Stream response timeout mode')}
+                                  {t('Response timeout mode')}
                                 </FormLabel>
                                 <Select
                                   items={[
@@ -927,7 +961,7 @@ export function UsersMutateDrawer({
                                   }}
                                 >
                                   <FormControl>
-                                    <SelectTrigger>
+                                    <SelectTrigger className='w-full'>
                                       <SelectValue />
                                     </SelectTrigger>
                                   </FormControl>
@@ -955,20 +989,19 @@ export function UsersMutateDrawer({
                               </FormItem>
                             )}
                           />
-                          <div className='grid gap-4 sm:grid-cols-2'>
+                          <div className='grid items-start gap-4 sm:grid-cols-2'>
                             <TimeoutOverrideField
                               control={form.control}
                               name='stream_response_timeout'
-                              label={t('Stream response timeout (seconds)')}
+                              label={t('Response timeout (seconds)')}
                               description={t(
                                 'Used as first-output wait time or continuous silence time, depending on the selected stream response timeout mode.'
                               )}
                             />
-
                             <TimeoutOverrideField
                               control={form.control}
                               name='stream_total_timeout'
-                              label={t('Stream total timeout (seconds)')}
+                              label={t('Total timeout (seconds)')}
                               description={t(
                                 'Maximum total duration of a streaming request. This timer never restarts.'
                               )}
@@ -980,7 +1013,7 @@ export function UsersMutateDrawer({
                           <h4 className='text-sm font-medium'>
                             {t('Non-streaming requests')}
                           </h4>
-                          <div className='grid gap-4 sm:grid-cols-2'>
+                          <div className='grid items-start gap-4 sm:grid-cols-2'>
                             <TimeoutOverrideField
                               control={form.control}
                               name='non_stream_response_timeout'
@@ -989,7 +1022,6 @@ export function UsersMutateDrawer({
                                 'Maximum time to wait for the upstream first response.'
                               )}
                             />
-
                             <TimeoutOverrideField
                               control={form.control}
                               name='non_stream_total_timeout'
@@ -999,6 +1031,82 @@ export function UsersMutateDrawer({
                               )}
                             />
                           </div>
+                          <div className='grid items-start gap-4 sm:grid-cols-2'>
+                            <FormField
+                              control={form.control}
+                              name='non_stream_timeout_billing'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('Timeout billing')}</FormLabel>
+                                  <Select
+                                    items={[
+                                      {
+                                        value: 'refund',
+                                        label: t('Refund on timeout'),
+                                      },
+                                      {
+                                        value: 'charge',
+                                        label: t(
+                                          'Charge usage already produced'
+                                        ),
+                                      },
+                                      {
+                                        value: 'input',
+                                        label: t('Charge input only'),
+                                      },
+                                    ]}
+                                    value={field.value ?? 'refund'}
+                                    onValueChange={(value) => {
+                                      if (value !== null) field.onChange(value)
+                                    }}
+                                  >
+                                    <FormControl>
+                                      <SelectTrigger className='w-full'>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent alignItemWithTrigger={false}>
+                                      <SelectGroup>
+                                        <SelectItem value='refund'>
+                                          {t('Refund on timeout')}
+                                        </SelectItem>
+                                        <SelectItem value='charge'>
+                                          {t('Charge usage already produced')}
+                                        </SelectItem>
+                                        <SelectItem value='input'>
+                                          {t('Charge input only')}
+                                        </SelectItem>
+                                      </SelectGroup>
+                                    </SelectContent>
+                                  </Select>
+                                  <FormDescription>
+                                    {timeoutBillingDescription(field.value, t)}
+                                  </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        </div>
+                      </SideDrawerSection>
+                    </div>
+                  )}
+
+                  {isUpdate && (
+                    <div id={USER_SECTION_IDS.RETRY} className='scroll-mt-4'>
+                      <SideDrawerSection>
+                        <h3 className='text-sm font-medium'>{t('Retry')}</h3>
+                        <div className='grid items-start gap-4 sm:grid-cols-2'>
+                          <TimeoutOverrideField
+                            control={form.control}
+                            name='retry_times'
+                            min={-1}
+                            max={20}
+                            label={t('Retry attempts')}
+                            description={t(
+                              'How many times a failed request may be retried on another channel. 0 follows the group or system default, -1 never retries.'
+                            )}
+                          />
                         </div>
                       </SideDrawerSection>
                     </div>

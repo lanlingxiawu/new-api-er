@@ -2,9 +2,18 @@ import type { SystemTuningSettings } from '../types'
 
 // Safe UI fallbacks for the runtime-parameter page. Server-side `setting/` remains the source of truth.
 export const systemTuningFallbackSettings: SystemTuningSettings = {
+  GroupRetryTimes: '',
+  'group_retry_status_setting.enabled': false,
+  'group_retry_status_setting.rules': '{}',
   'relay_timeout_setting.enabled': true,
   'relay_timeout_setting.response_timeout_seconds': 300,
   'relay_timeout_setting.total_timeout_seconds': 0,
+  'relay_timeout_setting.retry_min_budget_seconds': 0,
+  'relay_timeout_setting.max_total_attempts': 0,
+  'relay_error_display_setting.enabled': false,
+  'relay_error_display_setting.hide_upstream_errors': true,
+  'relay_error_display_setting.default_message': '',
+  'relay_error_display_setting.rules': '',
   'business_stats_circuit_breaker_setting.enabled': true,
   'business_stats_circuit_breaker_setting.manual_disabled': false,
   'business_stats_circuit_breaker_setting.failure_threshold': 3,
@@ -112,6 +121,8 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'log_query_setting.query_timeout_ms': 10000,
 
   'log_export_setting.enabled': true,
+  'log_export_setting.employee_export_enabled': false,
+  'log_export_setting.employee_max_customers_per_job': 100,
   'log_export_setting.offpeak_only': false,
   'log_export_setting.user_cooldown_sec': 300,
   'log_export_setting.max_concurrent_jobs': 1,

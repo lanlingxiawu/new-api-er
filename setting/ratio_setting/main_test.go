@@ -45,5 +45,5 @@ func resetUserGroupRatioCache() {
 	})
 	parsedUserGroupRatiosCount.Store(0)
 	parsedUserGroupRatiosSweep.Store(false)
-	parsedUserGroupRatiosMax.Store(defaultUserGroupRatioCacheMax)
+	parsedUserGroupRatiosMax.Store(DefaultUserGroupRatioCacheMax)
 }

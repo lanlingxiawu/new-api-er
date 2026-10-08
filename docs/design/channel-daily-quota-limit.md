@@ -362,6 +362,20 @@ upsert 回 `channel_daily_usages`，留下一条指向已不存在渠道的孤�
 （含「drain 之后不得再为已删渠道产出增量」这条关键断言）、
 `TestDailyLimit_DropChannelStateIsSafeOnEmpty`。
 
+**渠道自身的配置行随渠道同事务删除**（`model/channel_cost_config.go`）。上面四条删除路径在删
+`channels` 的同一个事务里按同一份 id 列表删掉该渠道的 `channel_cost_configs`。两条按状态删的路径
+（`deleteChannelsByStatus`）只选一次 id，并对选中行加锁（FOR UPDATE；SQLite 单写者串行），之后删渠道、
+删成本配置都按这份 id 列表执行——若用两条各自按状态筛选的语句，PostgreSQL READ COMMITTED 下两条语句之间
+提交的状态变更会删掉一个最终存活渠道的成本配置。删除失败则两者都保留，不再留下孤儿成本配置（SQLite / MySQL 5.7 重启后会复用最大 id，
+孤儿配置会被新渠道继承）。成本系数缓存（L1 与 Redis `channel_cost_ratio:<id>`）不主动失效、
+按 TTL 过期：删除时仍在进行的请求随后结算，缓存命中时仍按原系数记成本；未命中则读不到行、按默认
+1.0 计。历史数据保留：`consumption_costs`、`employee_commission_logs`（每行自带成本系数）、
+`platform_channel_daily_stats`（接收渠道名快照）、`channel_veridrop_detections`（有自己的保留期）。
+回归测试：`model` `TestChannelDeleteRemovesCostConfig`、`TestBatchDeleteChannelsRemovesCostConfigs`、
+`TestDeleteChannelByStatusRemovesCostConfigs`；`controller` `TestDeleteChannelHandlerRemovesCostConfig`、
+`TestDeleteChannelBatchHandlerRemovesCostConfigs`；`service` `TestDeleteDisabledChannelRemovesCostConfigs`、`TestDeleteChannelByStatusConcurrentStatusChangeKeepsSurvivorConfig`（PostgreSQL 下复现过旧实现的问题）
+（service 包每次运行用隔离库，删全部禁用渠道不会波及共享开发库）。
+
 #### 5.5.4 排队中的禁用请求必须重新确认（审计 #2）
 
 禁用请求是在**提交时刻**判定的，worker 执行时世界可能已经变了。队列容量 256、

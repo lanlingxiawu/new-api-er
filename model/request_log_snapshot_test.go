@@ -76,6 +76,46 @@ func TestRequestLogSnapshot_RoundTripAndKeyRemoval(t *testing.T) {
 	assert.EqualValues(t, 0, exists, "the snapshot key must be removed after restore")
 }
 
+// 脱敏上线前写下的条目（快照里的索引、磁盘正文）Url 仍带 ?key=<token>：恢复进索引时
+// 与读详情时都要脱敏，列表（对非 root 管理员开放）与详情都不能再出现令牌。
+func TestRequestLogSnapshot_RedactsLegacyUrlCredentials(t *testing.T) {
+	enableRedis(t)
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
+	requestLogClearSnapshot(t)
+
+	const secret = "sk-legacy-secret"
+	const redacted = "/v1beta/models/m:generateContent?alt=sse&key=***"
+	// RecordRequestLog stores Url verbatim, like the pre-fix middleware did.
+	RecordRequestLog(&RequestLog{
+		Username:  "alice",
+		CreatedAt: 1000,
+		RequestId: "rid-legacy",
+		Url:       "/v1beta/models/m:generateContent?alt=sse&key=" + secret,
+	})
+
+	list, _, err := GetAllRequestLogs("", "", 0, "rid-legacy", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	detail, err := GetRequestLogById(list[0].Id)
+	require.NoError(t, err)
+	assert.Equal(t, redacted, detail.Url, "detail read from the legacy body file is redacted")
+
+	SnapshotRequestLogs()
+	reqLogMu.Lock()
+	reqLogItems = nil
+	reqLogMu.Unlock()
+	RestoreRequestLogs()
+
+	list, _, err = GetAllRequestLogs("", "", 0, "rid-legacy", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, redacted, list[0].Url, "restored list entry is redacted")
+	detail, err = GetRequestLogById(list[0].Id)
+	require.NoError(t, err)
+	assert.NotContains(t, detail.Url, secret)
+}
+
 // 正文已消失的条目不能进索引，否则详情点开是 404。
 func TestRequestLogSnapshot_SkipsEntriesWithMissingBody(t *testing.T) {
 	enableRedis(t)
@@ -85,6 +125,7 @@ func TestRequestLogSnapshot_SkipsEntriesWithMissingBody(t *testing.T) {
 
 	RecordRequestLog(&RequestLog{Username: "u", CreatedAt: 1000, RequestId: "gone"})
 	SnapshotRequestLogs()
+	closeDefaultRequestLogWriter()
 
 	// 删掉磁盘正文后再恢复
 	require.NoError(t, os.RemoveAll(root))
@@ -123,6 +164,38 @@ func TestRequestLogSnapshot_CapsRestoredCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 3)
 	assert.EqualValues(t, 1005, list[0].CreatedAt, "the newest entries are the ones kept")
+}
+
+// 快照里的顺序不可信（旧版本按提交顺序写出）：恢复后仍须按 created_at 排好，
+// 且上限裁剪保留的是 created_at 最新的条目。
+func TestRequestLogSnapshot_RestoreSortsByCreatedAt(t *testing.T) {
+	enableRedis(t)
+	requestLogTestStore(t)
+	requestLogWithLimits(t, 100, 1000)
+	requestLogClearSnapshot(t)
+
+	for i, ts := range []int64{1003, 1001, 1004, 1002} {
+		RecordRequestLog(&RequestLog{Username: "u", CreatedAt: ts, RequestId: "rid-" + strconv.Itoa(i)})
+	}
+	// 人为打乱索引，模拟旧版本写出的乱序快照。
+	reqLogMu.Lock()
+	reqLogItems[0], reqLogItems[3] = reqLogItems[3], reqLogItems[0]
+	reqLogMu.Unlock()
+	SnapshotRequestLogs()
+
+	reqLogMu.Lock()
+	reqLogItems = nil
+	reqLogMu.Unlock()
+	requestLogWithLimits(t, 1, 3)
+	RestoreRequestLogs()
+
+	list, _, err := GetAllRequestLogs("", "", 0, "", 0, 0, 0, 0, 10)
+	require.NoError(t, err)
+	got := make([]int64, 0, len(list))
+	for _, l := range list {
+		got = append(got, l.CreatedAt)
+	}
+	assert.Equal(t, []int64{1004, 1003, 1002}, got)
 }
 
 func TestRequestLogSnapshot_CorruptedSnapshotDiscarded(t *testing.T) {

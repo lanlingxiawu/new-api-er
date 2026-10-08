@@ -1,5 +1,7 @@
 package i18n
 
+const MsgGroupRetryStatusInvalid = "setting.group_retry_status_invalid"
+
 // MsgClaudeStreamFailed 是 Claude 本地流内 error 的通用展示消息键，文案不包含底层错误或原始上游数据。
 const MsgClaudeStreamFailed = "relay.claude_stream_failed"
 
@@ -33,7 +35,12 @@ const (
 	MsgBatchTooMany      = "common.batch_too_many"
 )
 
-const MsgRelayTimeout = "relay.timeout"
+const (
+	MsgRelayTimeout = "relay.timeout"
+	// MsgRelayTimeoutInputOnly is the consume-log note of a request our deadline
+	// ended that was charged for its input only.
+	MsgRelayTimeoutInputOnly = "relay.timeout_input_only"
+)
 
 const (
 	MsgVeridropDisabled       = "veridrop.disabled"
@@ -291,6 +298,27 @@ const (
 	MsgSettingGotifyUrlInvalid = "setting.gotify_url_invalid"
 	MsgSettingUrlMustHttp      = "setting.url_must_http"
 	MsgSettingSaved            = "setting.saved"
+
+	MsgSettingGroupRetryTimesInvalid   = "setting.group_retry_times_invalid"
+	MsgSettingRelayErrorDisplayInvalid = "setting.relay_error_display_invalid"
+	MsgSettingRelayErrorEditInvalid    = "setting.relay_error_edit_invalid"
+
+	MsgSettingUserGroupRatioCacheMaxInvalid = "setting.user_group_ratio_cache_max_invalid"
+
+	// Relay error display: built-in fallback text and preset rules.
+	MsgRelayErrorDefaultMessage         = "relay_error.default_message"
+	MsgRelayErrorPresetKeepParamsName   = "relay_error.preset.keep_params.name"
+	MsgRelayErrorPresetQuotaName        = "relay_error.preset.quota.name"
+	MsgRelayErrorPresetQuotaMessage     = "relay_error.preset.quota.message"
+	MsgRelayErrorPresetRateLimitName    = "relay_error.preset.rate_limit.name"
+	MsgRelayErrorPresetRateLimitMessage = "relay_error.preset.rate_limit.message"
+	MsgRelayErrorPresetModelCodeName    = "relay_error.preset.model_code.name"
+	MsgRelayErrorPresetModelChannelName = "relay_error.preset.model_channel.name"
+	MsgRelayErrorPresetModelMessage     = "relay_error.preset.model.message"
+	MsgRelayErrorPresetTimeoutName      = "relay_error.preset.timeout.name"
+	MsgRelayErrorPresetTimeoutMessage   = "relay_error.preset.timeout.message"
+	MsgProbeChannelUnavailable          = "probe.channel_unavailable"
+	MsgProbeChannelForbidden            = "probe.channel_forbidden"
 )
 
 // Deployment related messages (io.net)
@@ -570,6 +598,7 @@ const (
 	MsgLogExportColAuditPath             = "log_export.col.audit_path"
 	MsgLogExportColAuditStatus           = "log_export.col.audit_status"
 	MsgLogExportColAuditSuccess          = "log_export.col.audit_success"
+	MsgLogExportColTimeoutAbsorbedMin    = "log_export.col.timeout_absorbed_quota_min"
 )
 
 // Request log (relay 请求日志)
@@ -590,6 +619,16 @@ const (
 
 	MsgPriceMonitorCompletionRatioLocked = "price_monitor.completion_ratio_locked"
 	MsgPriceMonitorPricingInvalid        = "price_monitor.pricing_invalid"
+	MsgPriceMonitorCostRatioInvalid      = "price_monitor.cost_ratio_invalid"
+	MsgPriceMonitorChannelUnavailable    = "price_monitor.channel_unavailable"
+
+	// 价格矩阵的固定来源表头与阶梯档位说明，按请求语言在响应时生成。
+	MsgPriceMonitorSourcePlatform   = "price_monitor.source_platform"
+	MsgPriceMonitorSourceOfficial   = "price_monitor.source_official"
+	MsgPriceMonitorSourceModelsDev  = "price_monitor.source_models_dev"
+	MsgPriceMonitorTierAllInput     = "price_monitor.tier_all_input"
+	MsgPriceMonitorTierInputLength  = "price_monitor.tier_input_length"
+	MsgPriceMonitorTierOutputLength = "price_monitor.tier_output_length"
 )
 
 // Third-party SD2 price matrix (第三方 SD2 价格矩阵)
@@ -616,6 +655,7 @@ const (
 	MsgUpstreamLogRateLimited          = "upstream_log.rate_limited"
 	MsgUpstreamLogVersionUnsupported   = "upstream_log.version_unsupported"
 	MsgUpstreamLogEndpointMissing      = "upstream_log.endpoint_missing"
+	MsgUpstreamLogSub2APIUnsupported   = "upstream_log.sub2api_unsupported"
 	MsgUpstreamLogUpstreamDetail       = "upstream_log.upstream_detail"
 	MsgUpstreamLogUpstreamStatus       = "upstream_log.upstream_status"
 )
@@ -639,4 +679,178 @@ const (
 
 	MsgLogExportSummaryNoDimensions  = "log_export.summary_no_dimensions"
 	MsgLogExportSummaryTooManyGroups = "log_export.summary_too_many_groups"
+)
+
+// MsgSettingRelayErrorEditTooComplex: the regular expressions of an edit rule
+// exceed operation_setting.MaxRelayErrorRuleRegexSize.
+const MsgSettingRelayErrorEditTooComplex = "setting.relay_error_edit_too_complex"
+
+// 价格巡检分享页（/price_monitor/view）的界面文字，按请求语言整页渲染。
+const (
+	MsgPriceMonitorPageTitle                        = "price_monitor.page_title"
+	MsgPriceMonitorPagePasswordLabel                = "price_monitor.page_password_label"
+	MsgPriceMonitorPageConfirm                      = "price_monitor.page_confirm"
+	MsgPriceMonitorPageSubtitle                     = "price_monitor.page_subtitle"
+	MsgPriceMonitorPageCheckedAt                    = "price_monitor.page_checked_at"
+	MsgPriceMonitorPagePasswordExpires              = "price_monitor.page_password_expires"
+	MsgPriceMonitorPageMismatchModels               = "price_monitor.page_mismatch_models"
+	MsgPriceMonitorPageModelName                    = "price_monitor.page_model_name"
+	MsgPriceMonitorPageModelPlaceholder             = "price_monitor.page_model_placeholder"
+	MsgPriceMonitorPageClear                        = "price_monitor.page_clear"
+	MsgPriceMonitorPageNoMatchingModels             = "price_monitor.page_no_matching_models"
+	MsgPriceMonitorPageSources                      = "price_monitor.page_sources"
+	MsgPriceMonitorPageAllChannels                  = "price_monitor.page_all_channels"
+	MsgPriceMonitorPageSearchChannels               = "price_monitor.page_search_channels"
+	MsgPriceMonitorPageClearChannels                = "price_monitor.page_clear_channels"
+	MsgPriceMonitorPageNoMatchingChannels           = "price_monitor.page_no_matching_channels"
+	MsgPriceMonitorPageSelectedCount                = "price_monitor.page_selected_count"
+	MsgPriceMonitorPageApply                        = "price_monitor.page_apply"
+	MsgPriceMonitorPagePageSize                     = "price_monitor.page_page_size"
+	MsgPriceMonitorPageSearch                       = "price_monitor.page_search"
+	MsgPriceMonitorPageReset                        = "price_monitor.page_reset"
+	MsgPriceMonitorPageScrollLeft                   = "price_monitor.page_scroll_left"
+	MsgPriceMonitorPageScrollRight                  = "price_monitor.page_scroll_right"
+	MsgPriceMonitorPageFilterAll                    = "price_monitor.page_filter_all"
+	MsgPriceMonitorPageFilterChannelOfficial        = "price_monitor.page_filter_channel_official"
+	MsgPriceMonitorPageFilterChannelModelsDev       = "price_monitor.page_filter_channel_models_dev"
+	MsgPriceMonitorPageFilterChannelPlatform        = "price_monitor.page_filter_channel_platform"
+	MsgPriceMonitorPageFilterPlatformOfficial       = "price_monitor.page_filter_platform_official"
+	MsgPriceMonitorPageFilterPlatformModelsDev      = "price_monitor.page_filter_platform_models_dev"
+	MsgPriceMonitorPageFilterAbovePlatform          = "price_monitor.page_filter_above_platform"
+	MsgPriceMonitorPageFilterLossRisk               = "price_monitor.page_filter_loss_risk"
+	MsgPriceMonitorPageMoreFilters                  = "price_monitor.page_more_filters"
+	MsgPriceMonitorPagePrevious                     = "price_monitor.page_previous"
+	MsgPriceMonitorPageNext                         = "price_monitor.page_next"
+	MsgPriceMonitorPageLoading                      = "price_monitor.page_loading"
+	MsgPriceMonitorPageReload                       = "price_monitor.page_reload"
+	MsgPriceMonitorPageNotProvided                  = "price_monitor.page_not_provided"
+	MsgPriceMonitorPageRawValue                     = "price_monitor.page_raw_value"
+	MsgPriceMonitorPageLaneCacheRead                = "price_monitor.page_lane_cache_read"
+	MsgPriceMonitorPageLaneCacheWrite               = "price_monitor.page_lane_cache_write"
+	MsgPriceMonitorPageLaneCacheWrite1h             = "price_monitor.page_lane_cache_write_1h"
+	MsgPriceMonitorPageLaneImageInput               = "price_monitor.page_lane_image_input"
+	MsgPriceMonitorPageLaneImageCacheRead           = "price_monitor.page_lane_image_cache_read"
+	MsgPriceMonitorPageLaneImageOutput              = "price_monitor.page_lane_image_output"
+	MsgPriceMonitorPageLaneAudioInput               = "price_monitor.page_lane_audio_input"
+	MsgPriceMonitorPageLaneAudioOutput              = "price_monitor.page_lane_audio_output"
+	MsgPriceMonitorPageSourceNoModels               = "price_monitor.page_source_no_models"
+	MsgPriceMonitorPageSourceNoOverlap              = "price_monitor.page_source_no_overlap"
+	MsgPriceMonitorPageSourceEmpty                  = "price_monitor.page_source_empty"
+	MsgPriceMonitorPageSourcePlazaDisabled          = "price_monitor.page_source_plaza_disabled"
+	MsgPriceMonitorPageSourceGroupUnknown           = "price_monitor.page_source_group_unknown"
+	MsgPriceMonitorPageSourceFailed                 = "price_monitor.page_source_failed"
+	MsgPriceMonitorPageStatusDisabled               = "price_monitor.page_status_disabled"
+	MsgPriceMonitorPageStatusDisabledDetail         = "price_monitor.page_status_disabled_detail"
+	MsgPriceMonitorPageStatusUnavailable            = "price_monitor.page_status_unavailable"
+	MsgPriceMonitorPageStatusUnavailableDetail      = "price_monitor.page_status_unavailable_detail"
+	MsgPriceMonitorPageStatusPlaceholder            = "price_monitor.page_status_placeholder"
+	MsgPriceMonitorPageStatusPlaceholderDetail      = "price_monitor.page_status_placeholder_detail"
+	MsgPriceMonitorPageStatusFailed                 = "price_monitor.page_status_failed"
+	MsgPriceMonitorPageStatusNotListed              = "price_monitor.page_status_not_listed"
+	MsgPriceMonitorPageStatusOfficialMissingDetail  = "price_monitor.page_status_official_missing_detail"
+	MsgPriceMonitorPageStatusModelsDevMissingDetail = "price_monitor.page_status_models_dev_missing_detail"
+	MsgPriceMonitorPageStatusChannelMissingDetail   = "price_monitor.page_status_channel_missing_detail"
+	MsgPriceMonitorPageInput                        = "price_monitor.page_input"
+	MsgPriceMonitorPageOutput                       = "price_monitor.page_output"
+	MsgPriceMonitorPageInputOnly                    = "price_monitor.page_input_only"
+	MsgPriceMonitorPageFixedPrice                   = "price_monitor.page_fixed_price"
+	MsgPriceMonitorPagePerRequestSuffix             = "price_monitor.page_per_request_suffix"
+	MsgPriceMonitorPageDynamicPricing               = "price_monitor.page_dynamic_pricing"
+	MsgPriceMonitorPageDynamicPricingDetail         = "price_monitor.page_dynamic_pricing_detail"
+	MsgPriceMonitorPageMeasuredLoss                 = "price_monitor.page_measured_loss"
+	MsgPriceMonitorPageConfiguredLoss               = "price_monitor.page_configured_loss"
+	MsgPriceMonitorPageHighest                      = "price_monitor.page_highest"
+	MsgPriceMonitorPageSameAsPlatform               = "price_monitor.page_same_as_platform"
+	MsgPriceMonitorPageFilterInput                  = "price_monitor.page_filter_input"
+	MsgPriceMonitorPageFilterOutput                 = "price_monitor.page_filter_output"
+	MsgPriceMonitorPageFilterCache                  = "price_monitor.page_filter_cache"
+	MsgPriceMonitorPageFilterBilling                = "price_monitor.page_filter_billing"
+	MsgPriceMonitorPageFilterOfficialMissing        = "price_monitor.page_filter_official_missing"
+	MsgPriceMonitorPageFilterModelsDevMissing       = "price_monitor.page_filter_models_dev_missing"
+	MsgPriceMonitorPageFilterChannelMissing         = "price_monitor.page_filter_channel_missing"
+	MsgPriceMonitorPageFilterSourceFailed           = "price_monitor.page_filter_source_failed"
+	MsgPriceMonitorPageSelectedChannels             = "price_monitor.page_selected_channels"
+	MsgPriceMonitorPageLoadedOfTotal                = "price_monitor.page_loaded_of_total"
+	MsgPriceMonitorPageLoadFailedRetry              = "price_monitor.page_load_failed_retry"
+	MsgPriceMonitorPageLoadingMore                  = "price_monitor.page_loading_more"
+	MsgPriceMonitorPageAllLoaded                    = "price_monitor.page_all_loaded"
+	MsgPriceMonitorPageScrollToLoad                 = "price_monitor.page_scroll_to_load"
+	MsgPriceMonitorPageTapToLoad                    = "price_monitor.page_tap_to_load"
+	MsgPriceMonitorPageLoadMore                     = "price_monitor.page_load_more"
+	MsgPriceMonitorPageLoadFailed                   = "price_monitor.page_load_failed"
+	MsgPriceMonitorPageModelCount                   = "price_monitor.page_model_count"
+	MsgPriceMonitorPageModelColumn                  = "price_monitor.page_model_column"
+	MsgPriceMonitorPagePlatformBaseline             = "price_monitor.page_platform_baseline"
+	MsgPriceMonitorPageRequiredComparison           = "price_monitor.page_required_comparison"
+	MsgPriceMonitorPageOptionalComparison           = "price_monitor.page_optional_comparison"
+	MsgPriceMonitorPageComparedModels               = "price_monitor.page_compared_models"
+	MsgPriceMonitorPageRange                        = "price_monitor.page_range"
+	MsgPriceMonitorPageNoModelsForFilter            = "price_monitor.page_no_models_for_filter"
+)
+
+// MsgSettingRelayErrorRuleSkipped: a stored relay error display rule that no
+// longer validates and is skipped while the rest of the setting stays in effect.
+const MsgSettingRelayErrorRuleSkipped = "setting.relay_error_rule_skipped"
+
+// Parts of a stored relay error display setting that are skipped while the
+// rest stays in effect (other than single rules: MsgSettingRelayErrorRuleSkipped).
+const (
+	MsgSettingRelayErrorDefaultMessageSkipped = "setting.relay_error_default_message_skipped"
+	MsgSettingRelayErrorRulesUnreadable       = "setting.relay_error_rules_unreadable"
+	MsgSettingRelayErrorRulesOverLimit        = "setting.relay_error_rules_over_limit"
+)
+
+// Relay request body that fails to decode: shown instead of the Go decoder's
+// error text, which names internal struct types.
+const (
+	MsgRelayRequestBodyInvalid  = "relay.request_body_invalid"
+	MsgRelayRequestFieldInvalid = "relay.request_field_invalid"
+)
+
+// Relay token / quota checks that reject a request before it reaches upstream.
+const (
+	MsgTokenIpNotAllowed           = "token.ip_not_allowed"
+	MsgTokenClientIpUnparsable     = "token.client_ip_unparsable"
+	MsgQuotaUserInsufficient       = "quota.user_insufficient"
+	MsgQuotaUserPreConsumeExceeded = "quota.user_pre_consume_exceeded"
+)
+
+// Relay request body and upstream-request preparation failures, shown instead
+// of Go's error text (decoder, multipart, file system).
+const (
+	MsgRelayRequestBodyTooLarge     = "relay.request_body_too_large"
+	MsgRelayRequestBodyReadFailed   = "relay.request_body_read_failed"
+	MsgRelayRequestFormInvalid      = "relay.request_form_invalid"
+	MsgRelayImageRequestUnsupported = "relay.image_request_unsupported"
+	MsgRelayImageRequestInvalid     = "relay.image_request_invalid"
+	MsgRelayRequestPrepareFailed    = "relay.request_prepare_failed"
+)
+
+// Employee export messages already used by the connected export controllers.
+const (
+	MsgEmployeeExportInvalid         = "employee_export.invalid"
+	MsgEmployeeExportTemplateSaved   = "employee_export.template_saved"
+	MsgEmployeeExportTemplateDeleted = "employee_export.template_deleted"
+	MsgEmployeeExportNoCustomers     = "employee_export.no_customers"
+	MsgEmployeeExportTooMany         = "employee_export.too_many_customers"
+	MsgEmployeeExportNameTaken       = "employee_export.name_taken"
+	MsgEmployeeExportConflict        = "employee_export.conflict"
+)
+
+// Log export download file name parts.
+const (
+	MsgLogExportFileUsageLogs               = "log_export.file.usage_logs"
+	MsgLogExportFileTemplateCustomerInvoice = "log_export.file.template.customer_invoice"
+	MsgLogExportFileAllCustomers            = "log_export.file.all_customers"
+	MsgLogExportFileCustomerCount           = "log_export.file.customer_count"
+	MsgLogExportFileMoreFilters             = "log_export.file.more_filters"
+	MsgLogExportFileSummary                 = "log_export.file.summary"
+	MsgLogExportFilePart                    = "log_export.file.part"
+	MsgLogExportFileDateRange               = "log_export.file.date_range"
+	MsgLogExportFileFilterUser              = "log_export.file.filter.user"
+	MsgLogExportFileFilterUserId            = "log_export.file.filter.user_id"
+	MsgLogExportFileFilterModel             = "log_export.file.filter.model"
+	MsgLogExportFileFilterToken             = "log_export.file.filter.token"
+	MsgLogExportFileFilterGroup             = "log_export.file.filter.group"
+	MsgLogExportFileFilterChannel           = "log_export.file.filter.channel"
 )

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -716,4 +717,44 @@ func TestGenerateTextOtherInfo_UserGroupRatioSentinelIsNotRecorded(t *testing.T)
 			assert.Equal(t, 1.5, other["group_ratio"])
 		})
 	}
+}
+
+// A non-stream client request sent upstream as a stream (UpstreamStreamAdapted)
+// records how that stream ended, like a native stream: the admin sees an answer
+// delivered half-way and why. is_stream stays false (what the client asked for).
+func TestLoginfoAppendStreamStatus_AdaptedNonStream(t *testing.T) {
+	other := model.NewLogOther()
+	ss := relaycommon.NewStreamStatus()
+	ss.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("unexpected EOF"))
+	appendStreamStatus(&relaycommon.RelayInfo{IsStream: false, UpstreamStreamAdapted: true, StreamStatus: ss}, other)
+
+	info, ok := other.Snapshot()["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "error", info["status"])
+	assert.Equal(t, "scanner_error", info["end_reason"])
+	// The raw error ("read tcp …: connection reset by peer" names the upstream
+	// address) is not written where the user's log view can show it; the end
+	// reason is enough there, and the server log keeps the text.
+	assert.NotContains(t, info, "end_error")
+}
+
+// 探针分流的命中记录随中继日志（成功与渠道错误日志共用 AppendRelayLogAdminInfo）
+// 写入 admin_info；未经探针分流的请求不写该键。
+func TestLoginfoAppendRelayLogAdminInfo_ProbeRouting(t *testing.T) {
+	c := loginfoNewCtx()
+	other := model.NewLogOther()
+	AppendRelayLogAdminInfo(c, nil, other)
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, adminInfo, "probe_routing")
+
+	c.Set(ProbeRoutingContextKey, &RequestProbeRouting{InputChars: 14, Group: "probe-test"})
+	c.Set("channel_id", 42)
+	other = model.NewLogOther()
+	AppendRelayLogAdminInfo(c, nil, other)
+	adminInfo, ok = other.Snapshot()["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, map[string]interface{}{
+		"rule": "short-text-v1", "input_chars": 14, "group": "probe-test", "channel_id": 42,
+	}, adminInfo["probe_routing"])
 }

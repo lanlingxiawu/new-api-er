@@ -90,7 +90,8 @@ func TestSanitizeURLForLog(t *testing.T) {
 
 func TestIsSensitiveURLQueryKey(t *testing.T) {
 	sensitive := []string{"key", "api_key", "API-KEY", " token ", "authorization", "password",
-		"x-amz-signature", "my_secret", "session_token", "some_signature_thing"}
+		"x-amz-signature", "my_secret", "session_token", "some_signature_thing",
+		"x-goog-api-key", "X-Amz-Security-Token", "x-amz-credential", "sig", "passwd", "AWSAccessKeyId"}
 	for _, k := range sensitive {
 		assert.True(t, isSensitiveURLQueryKey(k), "expected sensitive: %q", k)
 	}

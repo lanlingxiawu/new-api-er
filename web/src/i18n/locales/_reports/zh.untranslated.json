@@ -1,5 +1,6 @@
 {
   "{{count}} request log entries cleared.": "已清除 {{count}} 条请求日志。",
+  "≈ ${{usd}}": "≈ ${{usd}}",
   "Backfill running for {{date}}…": "Backfill running for {{date}}…",
   "Downloading ({{progress}}%)": "下载中 ({{progress}}%)",
   "Enable Stripe payment": "启用 Stripe 支付",

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 2
+const userCacheSchemaVersion = 4
 
 type UserBase struct {
 	Id          int    `json:"id"`
@@ -26,12 +27,18 @@ type UserBase struct {
 	Setting     string `json:"setting"`
 	AuthVersion int64  `json:"-"`
 	CacheSchema int    `json:"-"`
+	// ProfileVersion is the row's profile_version at snapshot time. It is only
+	// used to fence cache writes (see writeUserCache) and is not stored in the
+	// hash, so it reads back as 0 from Redis.
+	ProfileVersion int64 `json:"-"`
 
 	StreamResponseTimeout     int    `json:"stream_response_timeout"`
 	StreamResponseTimeoutMode string `json:"stream_response_timeout_mode"`
 	StreamTotalTimeout        int    `json:"stream_total_timeout"`
 	NonStreamResponseTimeout  int    `json:"non_stream_response_timeout"`
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout"`
+	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing"`
+	RetryTimes                int    `json:"retry_times"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -44,12 +51,18 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeout, user.StreamResponseTimeout)
 	streamResponseTimeoutMode := user.StreamResponseTimeoutMode
 	if streamResponseTimeoutMode == "" {
-		streamResponseTimeoutMode = "first_output"
+		streamResponseTimeoutMode = constant.RelayStreamResponseTimeoutModeFirstOutput
 	}
 	common.SetContextKey(c, constant.ContextKeyUserStreamResponseTimeoutMode, streamResponseTimeoutMode)
 	common.SetContextKey(c, constant.ContextKeyUserStreamTotalTimeout, user.StreamTotalTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamResponseTimeout, user.NonStreamResponseTimeout)
 	common.SetContextKey(c, constant.ContextKeyUserNonStreamTotalTimeout, user.NonStreamTotalTimeout)
+	nonStreamTimeoutBilling := user.NonStreamTimeoutBilling
+	if nonStreamTimeoutBilling == "" {
+		nonStreamTimeoutBilling = constant.NonStreamTimeoutBillingRefund
+	}
+	common.SetContextKey(c, constant.ContextKeyUserNonStreamTimeoutBilling, nonStreamTimeoutBilling)
+	common.SetContextKey(c, constant.ContextKeyUserRetryTimes, user.RetryTimes)
 	// Per-user exclusive group ratios. Only parse when the feature is enabled:
 	// when the flag is off the map is ignored by ResolveGroupRatio anyway, so
 	// this avoids a per-request JSON unmarshal + map allocation on the auth hot
@@ -153,16 +166,25 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
+	// 哈希与版本下限放进同一个 pipeline：每个 relay 请求都会走到这里，两次往返合为一次。
+	// 命令顺序必须保持"先哈希、后下限"——下限读在快照之后，才能拦住读快照之后
+	// 才发布的 fence。
+	ctx := context.Background()
+	key := getUserCacheKey(userId)
+	pipe := common.RDB.Pipeline()
+	hashCmd := pipe.HGetAll(ctx, key)
+	floorCmd := pipe.MGet(ctx, getUserAuthFenceKey(userId), getUserAuthVersionKey(userId))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("failed to load user cache from Redis: %w", err)
+	}
 	var userCache UserBase
-	// Try getting from Redis first
-	err := common.RedisHGetObj(getUserCacheKey(userId), &userCache)
-	if err != nil {
+	if err := common.DecodeRedisHash(key, hashCmd.Val(), &userCache); err != nil {
 		return nil, err
 	}
 	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
-	floor, err := getUserAuthVersionFloor(userId)
+	floor, err := parseUserAuthVersionFloor(floorCmd.Val())
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +283,7 @@ func RefreshUserGroupCache(userId int) error {
 	// refresh and still pass the auth-version fence. Re-read after every write
 	// and repair the cache when the authoritative group changed in between.
 	for range 3 {
-		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion, profileUnfenced); err != nil {
 			return err
 		}
 
@@ -278,39 +300,10 @@ func RefreshUserGroupCache(userId int) error {
 	// Preserve the freshest snapshot observed even when the row was too busy to
 	// stabilize within the bounded retries. Returning an error lets best-effort
 	// callers emit an operation-specific warning.
-	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion, profileUnfenced); err != nil {
 		return err
 	}
 	return fmt.Errorf("user group changed repeatedly during cache refresh")
-}
-
-func updateUserEmailCache(userId int, email string) error {
-	return updateUserCacheField(userId, "Email", email)
-}
-
-func updateUserNameCache(userId int, username string) error {
-	return updateUserCacheField(userId, "Username", username)
-}
-
-func updateUserSettingCache(userId int, setting string) error {
-	return updateUserCacheField(userId, "Setting", setting)
-}
-
-// updateUserCacheField prevents individual cache refreshes from bypassing the
-// auth-version fence. It intentionally does nothing when the complete hash is
-// absent; the next GetUserCache call will repopulate it from the database.
-func updateUserCacheField(userId int, field string, value any) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	var user User
-	if err := DB.Select("id", "auth_version").Where("id = ?", userId).First(&user).Error; err != nil {
-		return err
-	}
-	if user.AuthVersion <= 0 {
-		return fmt.Errorf("invalid user auth version")
-	}
-	return updateUserCacheFieldAtVersion(userId, field, value, user.AuthVersion)
 }
 
 // GetUserLanguage returns the user's language preference from cache

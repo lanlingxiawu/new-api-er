@@ -30,3 +30,11 @@ func assertPriceMonitorRoutePermission(t *testing.T, method string, path string,
 	}
 	require.FailNow(t, "price monitor route not found", "%s %s", method, path)
 }
+
+// Editing a cost ratio on the monitor page needs the same authorization as the
+// channel drawer that edits it, on top of the monitor's edit permission.
+func TestPriceMonitorChannelCostRoutes(t *testing.T) {
+	assertPriceMonitorRoutePermission(t, http.MethodGet, "/channels", authz.AdminMenuPriceMonitorView, controller.GetPriceMonitorChannelCosts)
+	assertPriceMonitorRoutePermission(t, http.MethodPut, "/channels/:id/cost_ratio", authz.AdminMenuPriceMonitorEdit, controller.UpdatePriceMonitorChannelCostRatio)
+	assert.Equal(t, []authz.Permission{authz.ChannelWrite}, priceMonitorExtraPermissions["/channels/:id/cost_ratio"])
+}

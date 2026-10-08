@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -27,28 +28,37 @@ type cancelImageTaskBody struct {
 // Close 触发取消，使真实 asyncTaskWait 在首次等待中立即退出，不访问外部网络。
 func (b *cancelImageTaskBody) Close() error { b.cancel(); return nil }
 
-// TestManagedAliInitialTaskCancellation 验证真实图片入口声明中间态，随后用户取消仍按确认用量结算；t 为测试上下文。
-func TestManagedAliInitialTaskCancellation(t *testing.T) {
+// TestManagedAliTaskPollingSurvivesClientDisconnect 回归（审查 M2）：受管图片会话在首次等待中用户离开，
+// 轮询曾随之停止并按估算（1 张/输入）结算，而已提交的任务照样生成并按全部张数向我们计费。
+// 现在轮询继续到任务完成，按上游返回的实际张数结算；t 为测试上下文。
+func TestManagedAliTaskPollingSurvivesClientDisconnect(t *testing.T) {
+	prevWait, prevInterval := aliTaskPollInitialWait, aliTaskPollInterval
+	aliTaskPollInitialWait, aliTaskPollInterval = 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { aliTaskPollInitialWait, aliTaskPollInterval = prevWait, prevInterval })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":{"task_id":"fixture","task_status":"SUCCEEDED","results":[{"url":"https://fixture.invalid/1"},{"url":"https://fixture.invalid/2"}]},"usage":{"image_count":2}}`)
+	}))
+	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/images/generations", nil).WithContext(ctx)
 	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeAli)
-	info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, RelayFormat: types.RelayFormatOpenAI, Request: &dto.ImageRequest{}, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fixture"}}
+	n := uint(2)
+	info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, RelayFormat: types.RelayFormatOpenAI, Request: &dto.ImageRequest{N: &n}, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fixture", ChannelBaseUrl: server.URL}}
+	info.PriceData.UsePrice = true
 	service.BeginStreamAttempt(c, info)
 	resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &cancelImageTaskBody{strings.NewReader(`{"output":{"task_id":"fixture","task_status":"PENDING"},"usage":{"input_tokens":3}}`), cancel}}
 	info.StreamSession.ObserveTransport(resp, nil)
 	info.StreamDiagnostic.Observe(resp)
 	info.StreamSession.ObserveHTTP(resp)
 	apiErr, usage := aliImageHandler(&Adaptor{IsSyncImageModel: false}, c, resp, info)
-	require.NotNil(t, apiErr)
-	require.ErrorIs(t, apiErr, context.Canceled)
-	selected := service.FinalizeStreamUsage(c, info, usage)
+	require.Nil(t, apiErr, "polling must not stop because the client left")
+	service.FinalizeStreamUsage(c, info, usage)
 	require.True(t, info.StreamResult.ClientGone)
-	require.False(t, info.StreamResult.EffectiveContent)
-	require.False(t, info.StreamResult.DiagnosticAvailable)
-	require.Equal(t, 3, selected.PromptTokens)
 	require.Equal(t, "upstream", info.StreamResult.UsageSource)
+	require.EqualValues(t, 2, info.PriceData.OtherRatios()["n"], "billed for every image the task produced")
 }
 
 // TestManagedAliImageTaskStages 从初始创建响应推进到真实本地轮询响应；t 为测试上下文，不等待生产轮询定时器。
@@ -95,7 +105,7 @@ func TestManagedAliImageTaskStages(t *testing.T) {
 			require.False(t, info.StreamSession.ProtocolComplete())
 			require.Empty(t, info.StreamSession.Snapshot().Reason)
 			require.NotContains(t, info.StreamSession.Snapshot().Evidence, "image_count")
-			_, err, body := updateTask(c, info, "fixture")
+			_, err, body := updateTask(c, info, "fixture", c.Request.Context())
 			require.Equal(t, tc.body, string(body))
 			if tc.failed {
 				require.Error(t, err)

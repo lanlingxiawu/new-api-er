@@ -15,11 +15,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// newTestUser wraps the shared mkUser factory and additionally assigns a unique
-// aff_code. The users table has a UNIQUE index on aff_code, and the bare factory
-// leaves it empty (""), so creating more than one factory user inside a single
-// test would collide on the empty value. Assigning a unique code here keeps
-// multi-user tests independent without touching the shared harness.
+// newTestUser wraps the shared mkUser factory and additionally assigns a unique,
+// longer-than-generated aff_code, so tests that look a user up by code cannot hit
+// another row's random 4-character code.
 func newTestUser(t *testing.T, mut func(u *User)) *User {
 	t.Helper()
 	return mkUser(t, func(u *User) {
@@ -327,6 +325,32 @@ func TestGetUserIdByAffCode(t *testing.T) {
 	id, err := GetUserIdByAffCode(code)
 	require.NoError(t, err)
 	assert.Equal(t, u.Id, id)
+}
+
+// Users created outside Insert (the initial root, Setup) carry no aff code. The
+// unique index lets only one row hold "", so a second such user used to fail
+// with a duplicate-key error. Each gets a generated code; a given one is kept.
+func TestUserBeforeCreateFillsMissingAffCode(t *testing.T) {
+	var created []*User
+	for i := 0; i < 2; i++ {
+		u := &User{Username: uniq("nocode"), Password: "x", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+		require.NoError(t, DB.Create(u).Error)
+		deleteByID(t, &User{}, u.Id)
+		created = append(created, u)
+	}
+	for _, u := range created {
+		assert.Len(t, u.AffCode, 4)
+		reloaded, err := GetUserById(u.Id, true)
+		require.NoError(t, err)
+		assert.Equal(t, u.AffCode, reloaded.AffCode, "the generated code is what gets stored")
+	}
+	assert.NotEqual(t, created[0].AffCode, created[1].AffCode)
+
+	code := strings.ReplaceAll(uniq("keep"), "_", "")[:8]
+	kept := &User{Username: uniq("withcode"), Password: "x", AffCode: code}
+	require.NoError(t, DB.Create(kept).Error)
+	deleteByID(t, &User{}, kept.Id)
+	assert.Equal(t, code, kept.AffCode)
 }
 
 func TestGetMaxUserId(t *testing.T) {
@@ -1029,7 +1053,7 @@ func TestInviteUser(t *testing.T) {
 	assert.Equal(t, common.QuotaForInviter, reloaded.AffQuota)
 	assert.Equal(t, common.QuotaForInviter, reloaded.AffHistoryQuota)
 
-	// missing inviter -> error surfaces from GetUserById
+	// missing inviter -> gorm.ErrRecordNotFound (no row updated)
 	assert.Error(t, inviteUser(0))
 }
 

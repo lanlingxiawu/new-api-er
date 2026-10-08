@@ -73,7 +73,7 @@ type StreamDiagnostic struct {
 type StreamOutcome struct {
 	Failed              bool             `json:"failed"`            // 本次流式响应是否异常结束；包含上游、本地或客户端原因，不能单凭此字段判定上游诊断资格。
 	ClientGone          bool             `json:"client_gone"`       // 下游取消或写出失败；受管超时另按上游异常处理。
-	ReceivedResponse    bool             `json:"-"`                 // 已解析上游业务响应；握手与保活不构成估算收费资格。
+	ReceivedResponse    bool             `json:"-"`                 // 已解析上游业务响应（握手与保活不算）；Realtime 据此判断断开前是否开始过轮次。
 	EffectiveContent    bool             `json:"effective_content"` // 已成功完整写出并刷新非空文本/思考或完整工具调用；不等同于客户端已消费。
 	ConfirmedUsage      bool             `json:"confirmed_usage"`   // 是否存在当前计价方式可采用的确认字段；显式 0 仍算证据，token 计价排除只有完成张数的情况。
 	UsageSource         string           `json:"usage_source"`      // upstream/estimated/mixed/none：上游、估算、混合或不计费。
@@ -88,7 +88,11 @@ type StreamOutcome struct {
 
 // SelectUsageSource 按终止原因、已确认用量与有效交付决定计费来源。
 // 接收者 s：当前流式结果；无参数；返回 upstream、estimated 或 none，正常部分估算的 mixed 由后续逻辑标记。
-// 上游异常且无有效交付优先不收费；用户断开优先确认用量，无确认但已有业务响应时采用接收估算。
+// 上游异常且无有效交付不收费；其余情况优先确认用量，没有确认用量时按本地估算。
+// 用户断开时会话必然已取得上游成功响应（门控未开放的尝试不进入这里），上游已按输入计费，
+// 所以即使断开前一个业务帧都没收到，也按估算输入（加已接收输出）收费，与主分支
+// ResponseText2Usage 的口径一致；按 0 收费会让"发长请求、首字节前断开"反复白用上游。
+// Realtime 按轮次计费，断开前没有任何轮次时由结算方另行改判为不收费。
 func (s *StreamOutcome) SelectUsageSource() string {
 	if s.Failed && !s.ClientGone && !s.EffectiveContent {
 		return "none"
@@ -96,11 +100,5 @@ func (s *StreamOutcome) SelectUsageSource() string {
 	if s.ConfirmedUsage {
 		return "upstream"
 	}
-	if s.ClientGone && !s.ReceivedResponse {
-		return "none"
-	}
-	if s.ClientGone || !s.Failed || s.EffectiveContent {
-		return "estimated"
-	}
-	return "none"
+	return "estimated"
 }

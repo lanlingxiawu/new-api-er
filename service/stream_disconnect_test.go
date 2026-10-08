@@ -15,13 +15,15 @@ import (
 )
 
 // Cancellation must retain upstream content even when no downstream flush succeeded.
+// A disconnect before any business frame still bills the estimated prompt: the
+// upstream accepted (and billed) the request, as main's ResponseText2Usage does.
 func TestStreamDisconnectUsage(t *testing.T) {
 	for _, tc := range []struct {
 		name, evidence, source string
 		response, writeFailure bool
 		input, output          int
 	}{
-		{"empty", "", "none", false, false, 0, 0},
+		{"empty", "", "estimated", false, false, 23, 0},
 		{"received", "", "estimated", true, false, 23, -1},
 		{"write failure", "", "estimated", true, true, 23, -1},
 		{"confirmed", `{"usage":{"prompt_tokens":12,"completion_tokens":7}}`, "upstream", true, false, 12, 7},
@@ -80,6 +82,13 @@ func TestStreamDisconnectPingAndUpstreamFailure(t *testing.T) {
 			info.StreamSession.Fail("upstream_error", io.ErrUnexpectedEOF)
 		}
 		u := FinalizeStreamUsage(c, info, nil)
+		if client {
+			// Only a keep-alive arrived before the client left; the prompt was still billed upstream.
+			require.Equal(t, "estimated", info.StreamResult.UsageSource)
+			require.Equal(t, 23, u.PromptTokens)
+			require.Zero(t, u.CompletionTokens)
+			continue
+		}
 		require.Zero(t, u.TotalTokens)
 		require.Equal(t, "none", info.StreamResult.UsageSource)
 	}

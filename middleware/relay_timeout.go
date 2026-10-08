@@ -20,9 +20,11 @@ import (
 
 type relayTimeoutKind string
 
+// relayTimeoutKindResponse is shared with service, which classifies the expiry
+// for the timeout message; a separate literal could drift and misreport it.
 const (
 	relayTimeoutKindNone     relayTimeoutKind = ""
-	relayTimeoutKindResponse relayTimeoutKind = "response_timeout"
+	relayTimeoutKindResponse relayTimeoutKind = service.RelayTimeoutKindResponse
 	relayTimeoutKindTotal    relayTimeoutKind = "total_timeout"
 )
 
@@ -52,6 +54,20 @@ type relayTimeoutControl struct {
 
 	allowExpiredWrite atomic.Bool
 	lateWriteRejected atomic.Bool
+	// responseHeld keeps the response timer running past the upstream's first
+	// byte. Set when a non-stream request is adapted to talk to upstream in
+	// streaming mode: there the first byte is the first SSE chunk, which arrives
+	// almost immediately, whereas the user's non_stream_response_timeout means
+	// "no complete result within N seconds". Letting the first chunk stop the
+	// timer would silently drop that bound to nothing.
+	responseHeld atomic.Bool
+
+	// closeHooks run once when the request finishes (Close): upstream work linked to
+	// this request (service.BindRelayRequestContext / RelayUpstreamContext) is
+	// detached from the client, and this is what keeps it from outliving the
+	// handler. Guarded by mu.
+	closeHooks    map[uint64]func()
+	nextCloseHook uint64
 }
 
 func newRelayTimeoutControl(parent context.Context, responseTimeout, totalTimeout time.Duration, streamResponseMode string) (context.Context, *relayTimeoutControl) {
@@ -105,8 +121,30 @@ func (control *relayTimeoutControl) expireTotal() {
 	control.mu.Unlock()
 }
 
+// HoldRelayResponse suppresses every path that would stop the response timer on
+// the upstream's first byte. Idempotent. It lasts until ReleaseRelayResponse or
+// the next attempt's RestartResponse.
+func (control *relayTimeoutControl) HoldRelayResponse() {
+	if control == nil {
+		return
+	}
+	control.responseHeld.Store(true)
+}
+
+// ReleaseRelayResponse ends the hold and stops the response timer, as a plain
+// non-stream response's arrival would. It reports whether the timer was
+// stopped; false means it had already expired (or was never running), which
+// the caller detects through the ordinary timeout check.
+func (control *relayTimeoutControl) ReleaseRelayResponse() bool {
+	if control == nil {
+		return false
+	}
+	control.responseHeld.Store(false)
+	return control.MarkResponse(false)
+}
+
 func (control *relayTimeoutControl) MarkResponse(isStream bool) bool {
-	if control == nil || !control.responseActive.Load() {
+	if control == nil || control.responseHeld.Load() || !control.responseActive.Load() {
 		return false
 	}
 	control.mu.Lock()
@@ -141,10 +179,26 @@ func (control *relayTimeoutControl) RestartResponse(isStream bool) bool {
 		return false
 	}
 	control.responseStopped = false
+	// The full window applies even when less total budget is left: trimming it
+	// would end the request no sooner (both timers then fire at the total
+	// deadline) but would let the response timer win, reporting a spent total
+	// budget as a response timeout. The total timer owns that case.
+	if !control.totalDeadline.IsZero() && time.Until(control.totalDeadline) <= 0 {
+		// Budget already gone. Leave the timer stopped rather than arming it;
+		// the total timer owns the cancellation.
+		control.responseTimer.Stop()
+		control.responseActive.Store(false)
+		control.responseHeld.Store(false)
+		return true
+	}
 	control.responseDeadline = time.Now().Add(control.responseTimeout)
 	control.responseTimer.Stop()
 	control.responseTimer.Reset(control.responseTimeout)
 	control.responseActive.Store(true)
+	// The hold belongs to one attempt, not to the request: a retry may land on a
+	// channel that does not stream, and that attempt's first byte should stop the
+	// timer as usual. The new attempt re-applies the hold if it adapts again.
+	control.responseHeld.Store(false)
 	return true
 }
 
@@ -174,8 +228,43 @@ func (control *relayTimeoutControl) Close() {
 	if control.totalTimer != nil {
 		control.totalTimer.Stop()
 	}
+	hooks := control.closeHooks
+	control.closeHooks = nil
 	control.mu.Unlock()
 	control.cancel(context.Canceled)
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
+// AfterRelayClose registers f to run once when the request finishes. It
+// returns a stop function (true if f was removed before running) and false
+// without registering when the request has already finished; f is never run
+// synchronously by this call, so callers may hold their own locks.
+func (control *relayTimeoutControl) AfterRelayClose(f func()) (stop func() bool, registered bool) {
+	if control == nil || f == nil {
+		return func() bool { return false }, false
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.closed {
+		return func() bool { return false }, false
+	}
+	if control.closeHooks == nil {
+		control.closeHooks = make(map[uint64]func())
+	}
+	id := control.nextCloseHook
+	control.nextCloseHook++
+	control.closeHooks[id] = f
+	return func() bool {
+		control.mu.Lock()
+		defer control.mu.Unlock()
+		if _, ok := control.closeHooks[id]; !ok {
+			return false
+		}
+		delete(control.closeHooks, id)
+		return true
+	}, true
 }
 
 func (control *relayTimeoutControl) ExpiredKind() relayTimeoutKind {
@@ -209,6 +298,24 @@ func (control *relayTimeoutControl) NextDeadline() (time.Time, bool) {
 
 func (control *relayTimeoutControl) RelayTimeoutDeadline() (time.Time, bool) {
 	return control.NextDeadline()
+}
+
+// RelayTotalDeadline reports only the request-wide deadline, never the
+// per-attempt response window. Budget decisions that span attempts must use
+// this: NextDeadline() returns whichever limit fires first, so with no total
+// timeout configured it yields the response window and would make every retry
+// look unaffordable. The deadline is still reported after a timer has fired, so
+// a spent budget reads as spent rather than as "no budget configured".
+func (control *relayTimeoutControl) RelayTotalDeadline() (time.Time, bool) {
+	if control == nil {
+		return time.Time{}, false
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.closed || control.totalDeadline.IsZero() {
+		return time.Time{}, false
+	}
+	return control.totalDeadline, true
 }
 
 type relayTimeoutWriterState struct {
@@ -291,9 +398,11 @@ func WriteRelayTimeoutResponse(c *gin.Context, write func()) {
 	control.WriteTerminalError(write)
 }
 
-// WriteTerminalError permits only the terminal error, not late business output.
-// WriteTerminalError 临时允许终止错误写入，回调结束后恢复原有过期写入限制。
-// 接收者 control：本请求超时控制器；参数 write：非 nil 的同步终止写入回调，业务正文不应通过此入口发送。
+// WriteTerminalError permits only the request's one terminal payload, not late
+// business output.
+// WriteTerminalError 临时允许终止内容写入，回调结束后恢复原有过期写入限制。终止内容是超时错误，
+// 或转流式非流请求在超时前已收到的部分结果（由请求所在 goroutine 一次性写出）；流式正文等过期业务输出不得经此入口。
+// 接收者 control：本请求超时控制器；参数 write：非 nil 的同步终止写入回调。
 func (control *relayTimeoutControl) WriteTerminalError(write func()) {
 	previous := control.allowExpiredWrite.Swap(true)
 	defer control.allowExpiredWrite.Store(previous)
@@ -460,8 +569,5 @@ func RelayRequestTimeoutKind(c *gin.Context) string {
 }
 
 func RelayRequestTimeoutSeconds(c *gin.Context) int {
-	if RelayRequestTimeoutKind(c) == string(relayTimeoutKindResponse) {
-		return common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds)
-	}
-	return common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds)
+	return service.RelayRequestTimeoutSeconds(c)
 }

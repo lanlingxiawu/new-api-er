@@ -126,3 +126,52 @@ func TestAdminMenuRequestLogsAndSystemInfo_DefaultOffWithPerUserGrant(t *testing
 	}))
 	assert.False(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsView))
 }
+
+func TestAdminMenuRequestLogsDetailAction(t *testing.T) {
+	var found bool
+	for _, resource := range Catalog() {
+		if resource.Resource != ResourceAdminMenuRequestLogs {
+			continue
+		}
+		found = true
+		actions := make([]string, 0, len(resource.Actions))
+		for _, action := range resource.Actions {
+			actions = append(actions, action.Action)
+			assert.Empty(t, action.DefaultRoles, "request log grants stay off by default: %s", action.Action)
+		}
+		assert.Equal(t, []string{ActionView, ActionViewDetail}, actions)
+	}
+	assert.True(t, found)
+
+	// view_detail depends on view, exactly like edit does elsewhere.
+	assert.Equal(t, map[string]bool{ActionView: true, ActionViewDetail: true},
+		normalizePermissionActions(ResourceAdminMenuRequestLogs, map[string]bool{ActionViewDetail: true}))
+	assert.Equal(t, map[string]bool{ActionView: false, ActionViewDetail: false},
+		normalizePermissionActions(ResourceAdminMenuRequestLogs, map[string]bool{ActionView: false, ActionViewDetail: true}))
+	assert.Equal(t, map[string]bool{ActionView: true},
+		normalizePermissionActions(ResourceAdminMenuRequestLogs, map[string]bool{ActionView: true}))
+	// Resources without dependent actions are returned untouched.
+	untouched := map[string]bool{ActionView: false}
+	assert.Equal(t, untouched, normalizePermissionActions(ResourceAdminMenuSystemInfo, untouched))
+}
+
+func TestAdminMenuRequestLogsDetail_DefaultOffWithPerUserGrant(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+	const userID = 92003
+
+	assert.False(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsViewDetail))
+	assert.True(t, Can(userID, common.RoleRootUser, AdminMenuRequestLogsViewDetail))
+
+	require.NoError(t, SetUserPermissions(userID, PermissionsMap{
+		ResourceAdminMenuRequestLogs: {ActionView: true},
+	}))
+	assert.True(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsView))
+	assert.False(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsViewDetail), "the list grant alone does not open details")
+
+	require.NoError(t, SetUserPermissions(userID, PermissionsMap{
+		ResourceAdminMenuRequestLogs: {ActionViewDetail: true},
+	}))
+	assert.True(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsViewDetail))
+	assert.True(t, Can(userID, common.RoleAdminUser, AdminMenuRequestLogsView), "a detail grant implies the list")
+}

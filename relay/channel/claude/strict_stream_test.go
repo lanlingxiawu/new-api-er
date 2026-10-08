@@ -612,19 +612,22 @@ func TestStrictReadError(t *testing.T) {
 	require.Equal(t, 1, strings.Count(w.Body.String(), "event: error"))
 }
 
-// TestStrictClientCancellation 验证预先取消的请求不继续发送内容或采用尚未读取的用量。
+// TestStrictClientCancellation 验证预先取消的请求不继续发送内容或采用尚未读取的用量；
+// 上游已接受请求，按估算输入收费（与主分支一致），不释放预扣。
 // 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
 func TestStrictClientCancellation(t *testing.T) {
 	c, w, resp, info := strictTestContext(io.NopCloser(strings.NewReader(strictStart)))
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	cancel()
 	c.Request = c.Request.WithContext(ctx)
-	_, err := strictClaudeStream(c, resp, info)
+	u, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
 	require.Equal(t, "client_gone", string(info.StreamStatus.EndReason))
 	require.False(t, info.StreamResult.DiagnosticAvailable)
 	require.Empty(t, w.Body.String())
-	require.Equal(t, "none", info.StreamResult.UsageSource)
+	require.Equal(t, "estimated", info.StreamResult.UsageSource)
+	require.Equal(t, 50, u.PromptTokens, "unread usage is not adopted; the prompt is estimated")
+	require.Zero(t, u.CompletionTokens)
 }
 
 // TestStrictUsagePresenceAndEstimation 区分 usage 缺失和显式零值，验证只有缺少证据且已交付内容时走异常估算。

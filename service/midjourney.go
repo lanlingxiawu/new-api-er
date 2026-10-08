@@ -125,14 +125,36 @@ func recordMidjourneyCostAndCommission(task *model.Midjourney, quota int, logId 
 }
 
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.
+//
+// The refund amount is claimed first with a compare-and-set on the task's quota
+// (quota -> 0), so a task is refunded at most once even if two callers (the
+// polling loop on several nodes, or a stale task copy) reach here. Returns
+// whether the balance was refunded; when the wallet refund fails the amount is
+// put back on the task for manual reconciliation.
 func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
 		return true
 	}
+	claimed, err := task.ClaimRefundQuota(quota)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款认领失败 task %s: %s", task.MjId, err.Error()))
+		return false
+	}
+	if !claimed {
+		logger.LogInfo(ctx, fmt.Sprintf("Midjourney 任务 %s 已退款，跳过", task.MjId))
+		task.Quota = 0
+		return true
+	}
+	task.Quota = 0
 
 	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
+		logger.LogError(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
+		if restoreErr := task.RestoreRefundQuota(quota); restoreErr != nil {
+			logger.LogError(ctx, fmt.Sprintf("Midjourney 退款失败且恢复 quota 失败 task %s: %s", task.MjId, restoreErr.Error()))
+		} else {
+			task.Quota = quota
+		}
 		return false
 	}
 
@@ -166,11 +188,6 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	// 失败的任务照样计提佣金。退款日志是新的 logId，与消费日志的
 	// employee_commission_logs.log_id 唯一索引不冲突。
 	recordMidjourneyCostAndCommission(task, -quota, logId)
-
-	task.Quota = 0
-	if err := task.UpdateBillingState(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款成功但清除 quota 失败 task %s: %s", task.MjId, err.Error()))
-	}
 	return true
 }
 
@@ -347,17 +364,20 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 	if err != nil {
 		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "create_request_failed", http.StatusInternalServerError), nullBytes, err
 	}
-	var ctx context.Context
 	cancel := func() {}
 	if _, owned := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl); owned {
 		// The unified request-local controller is authoritative for managed
-		// requests. Keep the legacy provider cap only when the feature is off.
-		ctx = c.Request.Context()
+		// requests: only our own deadline cancels the submit, a client that
+		// leaves does not (the upstream bills the task either way, and main
+		// does not bind it to the client). Keep the legacy provider cap only
+		// when the feature is off.
+		req = BindRelayRequestContext(c, req)
 	} else {
+		var ctx context.Context
 		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		req = req.WithContext(ctx)
 	}
-	// Bind either the unified managed context or the legacy local timeout.
-	req = req.WithContext(RelayResponseTraceContext(c, ctx))
+	req = req.WithContext(RelayResponseTraceContext(c, req.Context()))
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	req.Header.Set("Accept", c.Request.Header.Get("Accept"))
 	auth := common.GetContextKeyString(c, constant.ContextKeyChannelKey)

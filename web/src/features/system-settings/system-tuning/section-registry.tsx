@@ -30,12 +30,14 @@ import {
 import type { SystemTuningSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { systemTuningFallbackSettings } from './defaults'
+import { GroupRetrySection } from './group-retry-section'
 import {
   DBPoolHotConfigSection,
   RateLimitHotConfigSection,
   RelayTimeoutHotConfigSection,
   UserSessionHotConfigSection,
 } from './hot-config-sections'
+import { RelayErrorDisplaySection } from './relay-error-display-section'
 
 const SYSTEM_TUNING_SECTIONS = [
   {
@@ -319,6 +321,11 @@ const SYSTEM_TUNING_SECTIONS = [
     build: (settings: SystemTuningSettings) => (
       <LogExportSection
         defaultValues={{
+          'log_export_setting.employee_export_enabled':
+            settings['log_export_setting.employee_export_enabled'] ?? false,
+          'log_export_setting.employee_max_customers_per_job':
+            settings['log_export_setting.employee_max_customers_per_job'] ||
+            100,
           'log_export_setting.enabled':
             settings['log_export_setting.enabled'] ??
             systemTuningFallbackSettings['log_export_setting.enabled'],
@@ -553,6 +560,24 @@ const SYSTEM_TUNING_SECTIONS = [
     titleKey: 'AI Request Timeout',
     build: (settings: SystemTuningSettings) => (
       <RelayTimeoutHotConfigSection settings={settings} />
+    ),
+  },
+  {
+    id: 'group-retry-times',
+    titleKey: 'Per-group retry attempts',
+    build: (settings: SystemTuningSettings) => (
+      <GroupRetrySection
+        value={settings.GroupRetryTimes ?? ''}
+        statusRules={settings['group_retry_status_setting.rules'] ?? '{}'}
+        statusEnabled={settings['group_retry_status_setting.enabled'] ?? false}
+      />
+    ),
+  },
+  {
+    id: 'relay-error-display',
+    titleKey: 'Error messages shown to users',
+    build: (settings: SystemTuningSettings) => (
+      <RelayErrorDisplaySection settings={settings} />
     ),
   },
 ] as const

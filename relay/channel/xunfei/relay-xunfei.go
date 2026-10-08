@@ -212,24 +212,28 @@ func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, dom
 	d := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
-	conn, resp, err := d.DialContext(service.RelayRequestContext(c), authUrl, nil)
+	// 只有我方时限断开上游连接：客户端离开后上游仍在生成并计费，读完再按用量结算（与主分支一致）。
+	requestContext, release := service.RelayUpstreamContext(c)
+	conn, resp, err := d.DialContext(requestContext, authUrl, nil)
 	if err != nil {
+		release()
 		return nil, nil, err
 	}
 	if resp == nil || resp.StatusCode != http.StatusSwitchingProtocols {
 		_ = conn.Close()
+		release()
 		if resp == nil {
 			return nil, nil, fmt.Errorf("xunfei websocket returned no handshake response")
 		}
 		return nil, nil, fmt.Errorf("xunfei websocket handshake failed with status %d", resp.StatusCode)
 	}
-	requestContext := service.RelayRequestContext(c)
 	responseMarker, timeoutManaged := service.RelayResponseMarkerFromContext(c)
 	isStream := common.GetContextKeyBool(c, constant.ContextKeyIsStream)
 
 	data := requestOpenAI2Xunfei(textRequest, appId, domain)
 	if err = conn.WriteJSON(data); err != nil {
 		_ = conn.Close()
+		release()
 		return nil, nil, err
 	}
 
@@ -240,6 +244,7 @@ func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, dom
 		defer func() {
 			stopCloseOnCancel()
 			_ = conn.Close()
+			release()
 			select {
 			case stopChan <- true:
 			default:

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,6 +17,7 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 	if len(code) > 0 {
 		codeStr = string(code[0])
 	}
+	statusCode, message, codeStr = service.PresentLocalRelayAbort(c, c.GetString(RouteTagKey) == "relay", statusCode, message, codeStr)
 	userId := c.GetInt("id")
 	_, preparedPluginRoute := c.Get(pluginruntime.ContextKeyRouteRequest)
 	if !preparedPluginRoute || !RespondTaskPluginError(c, &dto.TaskError{

@@ -17,9 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useTranslation } from 'react-i18next'
 import { Copy, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+
 import { getRequestLogDetail } from './api'
 
 interface Props {
@@ -64,7 +66,15 @@ function prettify(raw?: string): string {
   return raw
 }
 
-function Block({ title, content }: { title: string; content?: string }) {
+function Block({
+  title,
+  content,
+  note,
+}: {
+  title: string
+  content?: string
+  note?: string
+}) {
   const { t } = useTranslation()
 
   const handleCopy = async () => {
@@ -92,6 +102,7 @@ function Block({ title, content }: { title: string; content?: string }) {
           {t('Copy')}
         </Button>
       </div>
+      {note && <p className='text-muted-foreground text-xs'>{note}</p>}
       <pre className='bg-muted/60 border-border max-h-72 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap'>
         {content ? prettify(content) : '-'}
       </pre>
@@ -106,6 +117,14 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
     queryFn: () => getRequestLogDetail(id as number),
     enabled: open && id !== null,
   })
+
+  // 被截断的头部无法可靠遮蔽凭据，后端对非超级管理员不返回；说明原因，免得误以为数据丢失。
+  const headersNote = (content?: string) =>
+    data?.headers_withheld && !content
+      ? t(
+          'These headers were cut at the size limit and are hidden because credentials in them could not be masked'
+        )
+      : undefined
 
   const renderBody = () => {
     if (isLoading) {
@@ -128,12 +147,20 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
     }
     return (
       <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4'>
-        <Block title={t('Request Headers')} content={data?.request_headers} />
+        <Block
+          title={t('Request Headers')}
+          content={data?.request_headers}
+          note={headersNote(data?.request_headers)}
+        />
         <Block
           title={`${t('Request Body')} (${formatBytes(data?.request_body_size)})`}
           content={data?.request_body}
         />
-        <Block title={t('Response Headers')} content={data?.response_headers} />
+        <Block
+          title={t('Response Headers')}
+          content={data?.response_headers}
+          note={headersNote(data?.response_headers)}
+        />
         <Block
           title={`${t('Response Body')} (${formatBytes(data?.response_body_size)})`}
           content={data?.response_body}

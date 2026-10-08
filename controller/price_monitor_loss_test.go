@@ -445,15 +445,15 @@ func TestPriceMonitorSellFactorIgnoresUnreachableGroupPairs(t *testing.T) {
 	require.InDelta(t, 1, factor, 1e-9, "a discount on a group the channel does not serve must not lower the sell factor")
 }
 
-// 保本下限带上各字段当前的原始 option 值，作为改价请求的 expected：只覆盖下限里的字段，
-// 平台没配置的字段不出现（expected 传 null）。
+// 改价数据带上平台已配置的所有改价字段的原始 option 值，作为改价请求的 expected：包括没有下限的
+// 字段（按官方价改它同样要并发校验）；平台没配置的字段不出现（expected 传 null）。
 func TestRepairFloorCarriesCurrentOptionValues(t *testing.T) {
 	platform := PriceMonitorPriceCell{
 		Mode:   priceMonitorModeToken,
 		Input:  floatPointer(4),
 		Output: floatPointer(12),
 		Lanes:  []PriceMonitorPriceLane{{Key: priceMonitorLaneCacheRead, Price: floatPointer(1)}},
-		// image_ratio 不是这一行的下限字段，不该带出去；completion_ratio 由内置规则决定时映射表里没有。
+		// image_ratio 没有下限，但同样要带出去；completion_ratio 由内置规则决定时映射表里没有。
 		optionFields: map[string]float64{"model_ratio": 2, "cache_ratio": 0.25, "image_ratio": 9},
 	}
 	source := PriceMonitorPriceCell{
@@ -466,5 +466,71 @@ func TestRepairFloorCarriesCurrentOptionValues(t *testing.T) {
 	floor := repairFloorFor("current-model", platform, source, 1.0)
 	require.NotNil(t, floor)
 	require.Contains(t, floor.Fields, "completion_ratio")
-	require.Equal(t, map[string]float64{"model_ratio": 2, "cache_ratio": 0.25}, floor.Current)
+	require.Equal(t, map[string]float64{"model_ratio": 2, "cache_ratio": 0.25, "image_ratio": 9}, floor.Current)
+}
+
+// The real upstream cost is the upstream list price times the upstream group
+// ratio our key is billed at. Measured loss and the break-even floor both use
+// it; without a known ratio they behave exactly as before.
+func TestPriceMonitorLossUsesUpstreamGroupRatio(t *testing.T) {
+	headers := []PriceMonitorSourceHeader{
+		{Key: priceMonitorPlatformKey, Type: priceMonitorPlatformKey},
+		{Key: "channel-a", Type: priceSourceChannel},
+	}
+	newItems := func() []PriceMonitorMatrixItem {
+		return []PriceMonitorMatrixItem{{
+			Model: "m",
+			Prices: map[string]PriceMonitorPriceCell{
+				priceMonitorPlatformKey: {Mode: priceMonitorModeToken, Input: floatPointer(10), optionFields: map[string]float64{"model_ratio": 5}},
+				// upstream list price 12 vs our 10: 1.2 at list price
+				"channel-a": {Mode: priceMonitorModeToken, Input: floatPointer(12), Different: true, InputDifferent: true},
+			},
+		}}
+	}
+	ratio := func(v float64) *float64 { return &v }
+
+	t.Run("a discounted upstream group removes a false measured loss", func(t *testing.T) {
+		items := newItems()
+		contexts := map[string]priceMonitorLossContext{"channel-a": {ChannelId: 1, SellFactor: 1, Configured: 0.5, Valid: true, UpstreamRatio: ratio(0.5)}}
+		applyPriceMonitorLossVerdicts(headers, items, contexts)
+		applyPriceMonitorRepairFloors(headers, items, contexts)
+		require.Empty(t, items[0].Prices["channel-a"].LossKinds, "12 × 0.5 = 6 per 10 sold: no loss")
+		require.NotNil(t, items[0].RepairFloor)
+		require.InDelta(t, 6, items[0].RepairFloor.Display["model_ratio"], 1e-9, "floor = 12 × 0.5 / 1")
+		require.InDelta(t, 12, items[0].RepairFloor.Highest["model_ratio"], 1e-9, "the highest price stays the raw list price")
+	})
+
+	t.Run("a marked-up upstream group reveals a loss the list price hides", func(t *testing.T) {
+		items := newItems()
+		items[0].Prices["channel-a"] = PriceMonitorPriceCell{Mode: priceMonitorModeToken, Input: floatPointer(9), Different: true, InputDifferent: true}
+		contexts := map[string]priceMonitorLossContext{"channel-a": {ChannelId: 1, SellFactor: 1, Configured: 1, Valid: true, UpstreamRatio: ratio(1.5)}}
+		applyPriceMonitorLossVerdicts(headers, items, contexts)
+		cell := items[0].Prices["channel-a"]
+		require.Equal(t, []string{priceMonitorLossKindMeasured}, cell.LossKinds)
+		require.InDelta(t, 1.35, *cell.MeasuredFactor, 1e-9, "9/10 × 1.5")
+		require.NotNil(t, cell.UpstreamFactor)
+		require.InDelta(t, 1.5, *cell.UpstreamFactor, 1e-9)
+	})
+
+	t.Run("unknown upstream ratio keeps the list-price verdict and says so", func(t *testing.T) {
+		items := newItems()
+		contexts := map[string]priceMonitorLossContext{"channel-a": {ChannelId: 1, SellFactor: 1, Configured: 1, Valid: true}}
+		applyPriceMonitorLossVerdicts(headers, items, contexts)
+		applyPriceMonitorRepairFloors(headers, items, contexts)
+		cell := items[0].Prices["channel-a"]
+		require.Equal(t, []string{priceMonitorLossKindMeasured}, cell.LossKinds)
+		require.InDelta(t, 1.2, *cell.MeasuredFactor, 1e-9)
+		require.Nil(t, cell.UpstreamFactor)
+		require.InDelta(t, 12, items[0].RepairFloor.Display["model_ratio"], 1e-9)
+	})
+
+	t.Run("a free upstream group costs nothing", func(t *testing.T) {
+		items := newItems()
+		contexts := map[string]priceMonitorLossContext{"channel-a": {ChannelId: 1, SellFactor: 1, Configured: 0, Valid: true, UpstreamRatio: ratio(0)}}
+		applyPriceMonitorLossVerdicts(headers, items, contexts)
+		applyPriceMonitorRepairFloors(headers, items, contexts)
+		require.Empty(t, items[0].Prices["channel-a"].LossKinds)
+		require.NotNil(t, items[0].RepairFloor)
+		require.Empty(t, items[0].RepairFloor.Fields, "no cost, so no floor from this channel")
+	})
 }

@@ -187,7 +187,7 @@ func (ctx *rowCtx) streamResult(l *Log) map[string]any {
 	return sub
 }
 
-// streamStatus 取 other.stream_status（公有）。同样仅流式请求才有。
+// streamStatus 取 other.stream_status（公有）。只有流式请求与非流式转流式请求才有。
 func (ctx *rowCtx) streamStatus(l *Log) map[string]any {
 	m := ctx.otherMap(l)
 	if m == nil {
@@ -291,6 +291,42 @@ func otherValue(m map[string]any, key string) string {
 		return ""
 	}
 	return formatAny(v)
+}
+
+// logExportStreamErrorMarker 是 other 含 admin_info.stream_error 的廉价预判，
+// 绝大多数行不含它，不必解析 other。
+const logExportStreamErrorMarker = `"stream_error"`
+
+// logContentWithStreamError 给管理员导出的「详情」补上 admin_info.stream_error：
+// 已扣费的流式中途失败，content 只写我方提示，上游原文只存在 admin_info 里
+// （service.FinalizeConsumptionSettlement），导出若只取 content 就丢了排障依据。
+func logContentWithStreamError(content string, adminInfo map[string]any) string {
+	text, _ := adminInfo["stream_error"].(string)
+	if text == "" {
+		return content
+	}
+	if content == "" {
+		return "stream_error: " + text
+	}
+	return content + "; stream_error: " + text
+}
+
+// AdminLogExportContent 是管理员导出里一条日志的「详情」：content 加上
+// admin_info.stream_error（若有）。只用于管理员导出——自助导出的详情走
+// MaskErrorLogContentForUser，admin_info 永不出现在用户的文件里。
+func AdminLogExportContent(l *Log) string {
+	if l == nil {
+		return ""
+	}
+	if !strings.Contains(l.Other, logExportStreamErrorMarker) {
+		return l.Content
+	}
+	other, err := common.StrToMap(l.Other)
+	if err != nil {
+		return l.Content
+	}
+	adminInfo, _ := other["admin_info"].(map[string]any)
+	return logContentWithStreamError(l.Content, adminInfo)
 }
 
 // otherCol 生成一个从 other 顶层取值的列。
@@ -457,8 +493,14 @@ func buildLogExportColumns() []LogExportColumn {
 			Extract: func(l *Log, _ *rowCtx) string { return l.RequestId }},
 		{Key: "upstream_request_id", Label: "Upstream Request ID", Group: LogExportGroupBasic,
 			Extract: func(l *Log, _ *rowCtx) string { return l.UpstreamRequestId }},
-		{Key: "content", Label: "Details", Group: LogExportGroupBasic,
-			Extract: func(l *Log, _ *rowCtx) string { return l.Content }},
+		// 导出中心只对管理员开放：详情附带 admin_info.stream_error（见 AdminLogExportContent）。
+		{Key: "content", Label: "Details", Group: LogExportGroupBasic, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				if !strings.Contains(l.Other, logExportStreamErrorMarker) {
+					return l.Content
+				}
+				return logContentWithStreamError(l.Content, ctx.adminInfo(l))
+			}},
 
 		// ── tokens ───────────────────────────────────────────
 		{Key: "prompt_tokens", Label: "Input Tokens", Group: LogExportGroupTokens,
@@ -635,6 +677,14 @@ func buildLogExportColumns() []LogExportColumn {
 		rootInfoCol("task_node_name", "node_name", "Task Node", LogExportGroupAdmin),
 		rootInfoCol("task_plugin_runtime", "task_plugin", "Task Plugin Runtime", LogExportGroupAdmin),
 		// other_raw 原样导出整条 other，其中含 root_info，只有超级管理员能取。
+		// 我方超时结束请求时平台至少承担的额度（admin_info.timeout_absorbed，见
+		// docs/design/relay-timeout-cost-bearing.md §4），可按用户/渠道汇总；其余日志为空。
+		{Key: "timeout_absorbed_quota_min", Label: "Timeout Absorbed Quota (min)", Group: LogExportGroupAdmin,
+			AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				absorbed, _ := ctx.adminInfo(l)["timeout_absorbed"].(map[string]any)
+				return otherValue(absorbed, "absorbed_quota_min")
+			}},
 		{Key: "other_raw", Label: "Raw Other JSON", Group: LogExportGroupAdmin,
 			AdminOnly: true, RootOnly: true, NeedOther: true,
 			Extract: func(l *Log, _ *rowCtx) string { return l.Other }},

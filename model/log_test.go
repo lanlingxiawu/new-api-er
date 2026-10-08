@@ -870,9 +870,9 @@ func TestSumUsedToken(t *testing.T) {
 	assert.Equal(t, 20, token) // (7+3)+(5+5)
 }
 
-// 员工只有 RoleCommonUser，员工视角的客户日志必须做 other 可见性投影：
-// 渠道 key 指纹、重试链、拒绝原因、root 与审计层都不能下发给员工。
-// 渠道名与真实日志 id 要保留——页面按它们展示和定位。
+// 员工视角的客户日志 other 投影：root_info、audit_info 不下发；顶层渠道名称与 channel_name
+// 列隐藏，只留渠道编号定位问题；admin_info 保留（重试链、拒绝原因等），但剔除平台成本
+// timeout_absorbed。真实日志 id 保留。
 func TestGetEmployeeCustomerLogs_StripsPrivilegedOther(t *testing.T) {
 	requireLogDB(t)
 
@@ -884,16 +884,23 @@ func TestGetEmployeeCustomerLogs_StripsPrivilegedOther(t *testing.T) {
 
 	other := NewLogOther()
 	other.SetPublic("model_ratio", 2.5)
-	other.SetAdmin("channel_name", ch.Name)
 	other.SetAdmin("use_channel", []string{"7", "9"})
 	other.SetAdmin("reject_reason", "blocked by policy")
+	other.SetAdmin("timeout_absorbed", map[string]any{"absorbed_quota_min": 12})
 	other.SetRoot("upstream_task_id", "task-secret")
 	other.SetAudit("route", "/api/x")
 
 	row := mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.CreatedAt = customer.Id, customer.Username, common.GetTimestamp()
 		l.ChannelId = ch.Id
-		l.Other = other.JSONString()
+		// Older error logs also carried the channel name at the top level, a key
+		// LogOther no longer accepts from writers.
+		stored, err := common.StrToMap(other.JSONString())
+		require.NoError(t, err)
+		stored["channel_name"] = "legacy top-level name"
+		raw, err := common.Marshal(stored)
+		require.NoError(t, err)
+		l.Other = string(raw)
 	})
 
 	logs, _, err := GetEmployeeCustomerLogs(EmployeeCustomerLogFilter{
@@ -904,15 +911,23 @@ func TestGetEmployeeCustomerLogs_StripsPrivilegedOther(t *testing.T) {
 
 	got, err := common.StrToMap(logs[0].Other)
 	require.NoError(t, err)
-	assert.NotContains(t, got, "admin_info")
+	// Root-only and audit scopes never reach employees.
 	assert.NotContains(t, got, "root_info")
 	assert.NotContains(t, got, "audit_info")
+	// The legacy top-level channel name is hidden.
 	assert.NotContains(t, got, "channel_name")
-	assert.NotContains(t, got, "reject_reason")
+	// admin_info stays (retry chain, reject reason ...) minus the platform's
+	// timeout cost.
+	adminInfo, ok := got["admin_info"].(map[string]any)
+	require.True(t, ok, "employees keep admin_info")
+	assert.Equal(t, []any{"7", "9"}, adminInfo["use_channel"])
+	assert.Equal(t, "blocked by policy", adminInfo["reject_reason"])
+	assert.NotContains(t, adminInfo, "timeout_absorbed")
 	assert.EqualValues(t, 2.5, got["model_ratio"])
 
-	// 投影不得动展示字段：渠道名与真实日志 id 仍要在。
-	assert.Equal(t, ch.Name, logs[0].ChannelName)
+	// The channel id stays for locating problems; the name column is cleared.
+	assert.Equal(t, ch.Id, logs[0].ChannelId)
+	assert.Empty(t, logs[0].ChannelName)
 	assert.Equal(t, row.Id, logs[0].Id)
 }
 
@@ -942,7 +957,7 @@ func TestGetEmployeeCustomerLogs(t *testing.T) {
 
 	mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.Quota, l.CreatedAt, l.PromptTokens = cust1.Id, cust1.Username, 10, now, 3
-		l.ChannelId = ch.Id // exercises fillLogChannelNames DB path
+		l.ChannelId = ch.Id // employee view keeps the channel id but must not expose its name
 	})
 	mkLogRow(t, func(l *Log) {
 		l.UserId, l.Username, l.Quota, l.CreatedAt, l.CompletionTokens = cust2.Id, cust2.Username, 20, now, 4
@@ -965,7 +980,9 @@ func TestGetEmployeeCustomerLogs(t *testing.T) {
 		}
 	}
 	require.NotNil(t, cust1Log)
-	assert.Equal(t, ch.Name, cust1Log.ChannelName) // fillLogChannelNames resolved it
+	require.NotEmpty(t, ch.Name)               // guard: the channel really has a name that could leak
+	assert.Equal(t, ch.Id, cust1Log.ChannelId) // channel id stays visible so employees can report issues
+	assert.Empty(t, cust1Log.ChannelName)      // channel name is withheld from employees
 	assert.True(t, got[cust1.Id])
 	assert.True(t, got[cust2.Id])
 	assert.True(t, got[employee.Id])

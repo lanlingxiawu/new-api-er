@@ -31,6 +31,11 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { SettingsForm } from '../components/settings-form-layout'
@@ -125,6 +130,8 @@ const exportFields: Array<{
   label: string
   description: string
   min: number
+  // Special values offered in a dropdown; `min` then bounds ordinary numbers only.
+  presets?: NumericPreset[]
 }> = [
   {
     name: 'export_user_cooldown_sec',
@@ -142,7 +149,9 @@ const exportFields: Array<{
     name: 'export_batch_sleep_ms',
     label: 'Batch Sleep (ms)',
     description: 'Milliseconds to sleep after each batch to throttle DB load.',
-    min: 0,
+    min: 1,
+    // GetExportBatchSleepMs treats 0 as unset and applies DefaultLedgerDetailExportBatchSleepMs.
+    presets: [{ value: 0, label: 'Default 100 ms' }],
   },
   {
     name: 'export_rows_per_file',
@@ -169,6 +178,8 @@ const listFields: Array<{
   label: string
   description: string
   min: number
+  // Special values offered in a dropdown; `min` then bounds ordinary numbers only.
+  presets?: NumericPreset[]
 }> = [
   {
     name: 'list_max_range_sec',
@@ -260,14 +271,22 @@ export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps)
           <FormItem>
             <FormLabel>{t(item.label)}</FormLabel>
             <FormControl>
-              <Input
-                className={numberInputNoSpinnerClassName}
-                type='number'
-                inputMode='numeric'
-                min={item.min}
-                step={1}
-                {...safeNumberFieldProps(field)}
-              />
+              {item.presets ? (
+                <NumericPresetInput
+                  presets={item.presets}
+                  min={item.min}
+                  {...numericPresetFieldProps(field)}
+                />
+              ) : (
+                <Input
+                  className={numberInputNoSpinnerClassName}
+                  type='number'
+                  inputMode='numeric'
+                  min={item.min}
+                  step={1}
+                  {...safeNumberFieldProps(field)}
+                />
+              )}
             </FormControl>
             <FormDescription>{t(item.description)}</FormDescription>
             <FormMessage />

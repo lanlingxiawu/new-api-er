@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequestLogReadRoutesRelyOnlyOnMenuPermission(t *testing.T) {
+func TestRequestLogReadRoutePermissions(t *testing.T) {
 	assertRequestLogRoutePermission(t, http.MethodGet, "/", authz.Permission{}, controller.GetAllRequestLogs)
-	assertRequestLogRoutePermission(t, http.MethodGet, "/:id", authz.Permission{}, controller.GetRequestLogDetail)
+	assertRequestLogRoutePermission(t, http.MethodGet, "/:id", authz.AdminMenuRequestLogsViewDetail, controller.GetRequestLogDetail)
 }
 
 func TestRequestLogCleanupRouteRequiresRequestLogEditPermission(t *testing.T) {

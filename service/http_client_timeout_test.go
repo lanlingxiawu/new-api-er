@@ -45,15 +45,25 @@ func TestRelayHTTPClientOnlyRemovesGlobalTimeoutForManagedRequests(t *testing.T)
 	resolved := RelayHTTPClient(managed, source)
 	require.NotSame(t, source, resolved)
 	assert.Zero(t, resolved.Timeout)
-	assert.Same(t, source.Transport, resolved.Transport)
+	wrapped, ok := resolved.Transport.(relayUpstreamTransport)
+	require.True(t, ok, "managed calls go through the timeout-link transport")
+	assert.Equal(t, transport, wrapped.base, "the wrapper shares the cached transport and its pool")
 	assert.Equal(t, 30*time.Second, source.Timeout, "the cached shared client must remain unchanged")
+	assert.Equal(t, transport, source.Transport, "the cached shared client must remain unchanged")
 }
 
-func TestRelayHTTPClientDoesNotCopyClientWithoutTimeout(t *testing.T) {
+// A managed client is cloned even without a global timeout: the clone carries
+// the transport wrapper that releases a bound call's timeout link with its body.
+func TestRelayHTTPClientWrapsDefaultTransportWithoutMutatingSource(t *testing.T) {
 	managed, _ := gin.CreateTestContext(httptest.NewRecorder())
 	common.SetContextKey(managed, constant.ContextKeyRelayTimeoutControl, struct{}{})
 	source := &http.Client{}
-	assert.Same(t, source, RelayHTTPClient(managed, source))
+	resolved := RelayHTTPClient(managed, source)
+	require.NotSame(t, source, resolved)
+	assert.Nil(t, source.Transport)
+	wrapped, ok := resolved.Transport.(relayUpstreamTransport)
+	require.True(t, ok)
+	assert.Equal(t, http.DefaultTransport, wrapped.base)
 }
 
 func TestNewRelayHTTPClientKeepsLegacyTimeoutForUnmanagedCalls(t *testing.T) {
@@ -69,14 +79,17 @@ func TestNewRelayHTTPClientKeepsLegacyTimeoutForUnmanagedCalls(t *testing.T) {
 	assert.Equal(t, 17*time.Second, client.Timeout)
 }
 
+// Only a non-stream request still waiting for its first byte marks the
+// response; every managed request tracks whether its upstream request was
+// written in full (relay-timeout-cost-bearing.md §3.2).
 func TestRelayResponseTraceContextOnlyMarksNonStreamActualRequest(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		isStream  bool
 		pending   bool
-		wantTrace bool
+		wantFirst bool
 	}{
-		{name: "non_stream_pending", pending: true, wantTrace: true},
+		{name: "non_stream_pending", pending: true, wantFirst: true},
 		{name: "non_stream_response_already_received"},
 		{name: "stream", isStream: true, pending: true},
 	} {
@@ -88,12 +101,13 @@ func TestRelayResponseTraceContextOnlyMarksNonStreamActualRequest(t *testing.T) 
 
 			ctx := RelayResponseTraceContext(c, context.Background())
 			trace := httptrace.ContextClientTrace(ctx)
-			if !test.wantTrace {
-				assert.Nil(t, trace)
+			require.NotNil(t, trace)
+			require.NotNil(t, trace.WroteRequest, "managed requests track the upstream write")
+			if !test.wantFirst {
+				assert.Nil(t, trace.GotFirstResponseByte)
 				assert.False(t, marker.called)
 				return
 			}
-			require.NotNil(t, trace)
 			require.NotNil(t, trace.GotFirstResponseByte)
 			trace.GotFirstResponseByte()
 			assert.True(t, marker.called)

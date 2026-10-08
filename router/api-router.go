@@ -336,6 +336,10 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetOptions)
 			optionRoute.PUT("/", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOption)
 			optionRoute.PUT("/group", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateOptionGroup)
+			// 错误提示替换：预览不改任何状态，只需查看权限；scope 取自请求体（POST）或查询参数（GET）。
+			optionRoute.POST("/relay-error-display/preview", middleware.RequireSystemSettingsScope(authz.ActionView), controller.PreviewRelayErrorDisplay)
+			optionRoute.GET("/relay-error-display/presets", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetRelayErrorDisplayPresets)
+			optionRoute.GET("/relay-error-display/status", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetRelayErrorDisplayStatus)
 		}
 		optionRootRoute := apiRouter.Group("/option")
 		optionRootRoute.Use(middleware.AdminAuth())
@@ -424,8 +428,10 @@ func SetApiRouter(router *gin.Engine) {
 
 		// 分组路由
 		groupRoute := apiRouter.Group("/group")
+		groupRoute.Use(middleware.UserAuth())
 		{
-			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup) // 获取分组的可用模型列表
+			// 分组近期有消费流量的模型；非管理员只能查自己可用的分组（控制器内校验）。
+			groupRoute.GET("/:group/models", controller.GetAvailableModelsByGroup)
 		}
 
 		usageRoute := apiRouter.Group("/usage")
@@ -481,6 +487,7 @@ func SetApiRouter(router *gin.Engine) {
 		logExportRoute.Use(middleware.AdminAuth())
 		{
 			logExportRoute.GET("/columns", controller.GetLogExportColumns)
+			logExportRoute.GET("/options", controller.GetLogExportFilterOptions)
 			logExportRoute.GET("/estimate", controller.GetLogExportEstimate)
 			logExportRoute.GET("/templates", controller.GetLogExportTemplates)
 			logExportRoute.POST("/templates", controller.CreateLogExportTemplate)
@@ -492,6 +499,27 @@ func SetApiRouter(router *gin.Engine) {
 			logExportRoute.DELETE("/jobs/:job_id", controller.DeleteLogExportJob)
 			logExportRoute.GET("/jobs/:job_id/download-url", controller.GetLogExportDownloadURL)
 		}
+
+		employeeExportAdmin := apiRouter.Group("/admin/employee-export")
+		employeeExportAdmin.Use(middleware.AdminAuth(), middleware.RequirePermission(authz.AdminMenuEmployeesView))
+		employeeExportAdmin.GET("/columns", controller.GetEmployeeExportColumns)
+		employeeExportAdmin.GET("/templates", controller.AdminEmployeeExportTemplates)
+		employeeExportAdmin.GET("/templates/:id", controller.AdminEmployeeExportTemplates)
+		employeeExportAdmin.POST("/templates", controller.AdminEmployeeExportTemplates)
+		employeeExportAdmin.PUT("/templates/:id", controller.AdminEmployeeExportTemplates)
+		employeeExportAdmin.DELETE("/templates/:id", controller.AdminEmployeeExportTemplates)
+
+		employeeExport := apiRouter.Group("/user/employee/export")
+		employeeExport.Use(middleware.UserAuth())
+		employeeExport.GET("/capabilities", controller.EmployeeExportCapabilities)
+		employeeExport.Use(controller.EmployeeExportGuard)
+		employeeExport.GET("/options", controller.GetLogExportFilterOptions)
+		employeeExport.POST("/estimate", controller.EmployeeExportEstimate)
+		employeeExport.POST("/jobs", controller.EmployeeCreateExport)
+		employeeExport.GET("/jobs", controller.GetLogExportJobs)
+		employeeExport.GET("/jobs/:job_id", controller.GetLogExportJob)
+		employeeExport.DELETE("/jobs/:job_id", controller.DeleteLogExportJob)
+		employeeExport.GET("/jobs/:job_id/download-url", controller.GetLogExportDownloadURL)
 
 		// 请求日志（下游请求体/请求头 与 返回头/返回体）：菜单可见性由
 		// admin_menu.request_logs 控制，默认对普通管理员关闭，由 root 按人授予。

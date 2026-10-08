@@ -3,14 +3,17 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"golang.org/x/sync/singleflight"
 )
 
 type tokenAutoGroupsInput struct {
@@ -552,49 +556,156 @@ func GetTokenKeysBatch(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"keys": keysMap})
 }
 
+// availableModelsWindowSeconds is how far back a consume log proves a model of
+// the group is currently serving traffic.
+const availableModelsWindowSeconds = 30 * 60
+
+// The DISTINCT over the last 30 minutes of logs has no fitting index (only
+// idx_created_at_type and single-column group / model_name), scans every
+// consume row of the window (~900k at 30k RPM) and runs on LOG_DB, which the
+// async relay log writer shares. Any logged-in user can call the endpoint, so
+// results are cached per group: at most one query per group per TTL on this
+// node, and concurrent misses for the same group share that one query.
+// A covering index is deliberately not added: building one needs a migration
+// on the large logs table, and the query is already bounded to at most once
+// per group per node per minute.
+const (
+	availableModelsCacheTTL = 60 * time.Second
+	// availableModelsCacheMaxGroups bounds the map: administrators may ask about
+	// arbitrary group names. Real deployments have far fewer groups.
+	availableModelsCacheMaxGroups = 1024
+)
+
+type availableModelsCacheEntry struct {
+	models    []string // sorted, read-only once cached
+	expiresAt time.Time
+}
+
+var (
+	availableModelsCacheMu sync.Mutex
+	availableModelsCache   = make(map[string]availableModelsCacheEntry)
+	availableModelsFlight  singleflight.Group
+	// Swapped by tests.
+	availableModelsNow    = time.Now
+	loadAvailableModelsFn = loadAvailableModels
+)
+
+// GetAvailableModelsByGroup lists the models of a group's channels that had
+// consume traffic in that group during the last 30 minutes (cached for up to
+// availableModelsCacheTTL). It runs behind UserAuth: administrators may ask
+// about any group, other users only about groups they are allowed to use, so
+// hidden groups cannot be enumerated. The permission check runs before the
+// cache is consulted.
 func GetAvailableModelsByGroup(c *gin.Context) {
-	userGroup := c.Param("group")
-	if userGroup == "" {
-		common.ApiError(c, fmt.Errorf("group parameter is required"))
+	group := strings.TrimSpace(c.Param("group"))
+	if group == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	channels, err := model.GetChannelsByGroup(userGroup)
+	if c.GetInt("role") < common.RoleAdminUser && !service.GroupInUserUsableGroups(c.GetString("group"), group) {
+		common.ApiErrorI18n(c, i18n.MsgDistributorGroupAccessDenied)
+		return
+	}
+	models, err := availableModelsForGroup(group)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "failed to load recent models for group: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
-
-	modelSet := make(map[string]bool)
-	windowStart := time.Now().Unix() - 30*60
-	for _, ch := range channels {
-		for _, modelName := range ch.GetModels() {
-			if modelName == "" {
-				continue
-			}
-
-			var count int64
-			model.LOG_DB.Model(&model.Log{}).
-				Where(&model.Log{
-					ModelName: modelName,
-					Group:     userGroup,
-					Type:      model.LogTypeConsume,
-				}).
-				Where("created_at >= ?", windowStart).
-				Count(&count)
-
-			if count > 0 {
-				modelSet[modelName] = true
-			}
-		}
-	}
-
-	models := make([]string, 0, len(modelSet))
-	for m := range modelSet {
-		models = append(models, m)
-	}
-
 	common.ApiSuccess(c, dto.AvailableModelsResponse{
 		Models: models,
 		Count:  len(models),
 	})
+}
+
+// availableModelsForGroup serves the group's list from the cache, loading it
+// at most once per concurrent miss. Errors are not cached.
+func availableModelsForGroup(group string) ([]string, error) {
+	if models, ok := cachedAvailableModels(group); ok {
+		return models, nil
+	}
+	v, err, _ := availableModelsFlight.Do(group, func() (any, error) {
+		// A flight that finished just before this one started has already filled it.
+		if models, ok := cachedAvailableModels(group); ok {
+			return models, nil
+		}
+		models, err := loadAvailableModelsFn(group)
+		if err != nil {
+			return nil, err
+		}
+		storeAvailableModels(group, models)
+		return models, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]string), nil
+}
+
+func cachedAvailableModels(group string) ([]string, bool) {
+	availableModelsCacheMu.Lock()
+	defer availableModelsCacheMu.Unlock()
+	entry, ok := availableModelsCache[group]
+	if !ok || !availableModelsNow().Before(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.models, true
+}
+
+func storeAvailableModels(group string, models []string) {
+	now := availableModelsNow()
+	availableModelsCacheMu.Lock()
+	defer availableModelsCacheMu.Unlock()
+	if _, exists := availableModelsCache[group]; !exists && len(availableModelsCache) >= availableModelsCacheMaxGroups {
+		for name, entry := range availableModelsCache {
+			if !now.Before(entry.expiresAt) {
+				delete(availableModelsCache, name)
+			}
+		}
+		// Still full of live entries: drop an arbitrary one rather than grow.
+		for name := range availableModelsCache {
+			if len(availableModelsCache) < availableModelsCacheMaxGroups {
+				break
+			}
+			delete(availableModelsCache, name)
+		}
+	}
+	availableModelsCache[group] = availableModelsCacheEntry{models: models, expiresAt: now.Add(availableModelsCacheTTL)}
+}
+
+// loadAvailableModels runs the uncached lookup: the group's channel models,
+// narrowed by one time-bounded DISTINCT over consume logs. Returns a sorted,
+// non-nil slice.
+func loadAvailableModels(group string) ([]string, error) {
+	channels, err := model.GetChannelsByGroup(group)
+	if err != nil {
+		return nil, fmt.Errorf("load channels: %w", err)
+	}
+	candidateSet := make(map[string]struct{})
+	for _, ch := range channels {
+		for _, modelName := range ch.GetModels() {
+			if modelName != "" {
+				candidateSet[modelName] = struct{}{}
+			}
+		}
+	}
+	models := make([]string, 0)
+	if len(candidateSet) > 0 {
+		candidates := make([]string, 0, len(candidateSet))
+		for modelName := range candidateSet {
+			candidates = append(candidates, modelName)
+		}
+		// One time-bounded DISTINCT query instead of a COUNT per channel x model.
+		err = model.LOG_DB.Model(&model.Log{}).
+			Where(&model.Log{Group: group, Type: model.LogTypeConsume}).
+			Where("created_at >= ?", availableModelsNow().Unix()-availableModelsWindowSeconds).
+			Where("model_name IN ?", candidates).
+			Distinct("model_name").
+			Pluck("model_name", &models).Error
+		if err != nil {
+			return nil, fmt.Errorf("query recent models: %w", err)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -388,6 +389,15 @@ func (s *BillingSession) syncRelayInfo() {
 // NewBillingSession 工厂 — 根据计费偏好创建会话并处理回退
 // ---------------------------------------------------------------------------
 
+// quotaRejectMessage 按请求语言翻译钱包额度不足的提示。脱离 HTTP 请求构造的上下文
+// （c.Request 为 nil）无法读取 Accept-Language，i18n.T 会空指针，此时用默认语言。
+func quotaRejectMessage(c *gin.Context, key string, args map[string]any) string {
+	if c == nil || c.Request == nil {
+		return i18n.Translate(i18n.DefaultLang, key, args)
+	}
+	return i18n.T(c, key, args)
+}
+
 // NewBillingSession 根据用户计费偏好创建 BillingSession，处理 subscription_first / wallet_first 的回退。
 func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.NewAPIError) {
 	if relayInfo == nil {
@@ -398,19 +408,29 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
-		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		// relayInfo.UserQuota 是本请求 TokenAuth 刚从同一份用户缓存读到的额度。够用时
+		// 直接采信，省掉每请求一次 Redis 往返；可能不够时再实时读，判定与报错都以
+		// 实时值为准。两次读之间的并发扣减窗口与"读额度→扣额度"之间原本就有的窗口同阶。
+		userQuota := relayInfo.UserQuota
+		if userQuota <= 0 || userQuota < preConsumedQuota {
+			var err error
+			userQuota, err = model.GetUserQuota(relayInfo.UserId, false)
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+			}
 		}
 		if userQuota <= 0 {
 			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+				errors.New(quotaRejectMessage(c, i18n.MsgQuotaUserInsufficient, map[string]any{"Remaining": logger.FormatQuota(userQuota)})),
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		if userQuota-preConsumedQuota < 0 {
 			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+				errors.New(quotaRejectMessage(c, i18n.MsgQuotaUserPreConsumeExceeded, map[string]any{
+					"Remaining": logger.FormatQuota(userQuota),
+					"Required":  logger.FormatQuota(preConsumedQuota),
+				})),
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}

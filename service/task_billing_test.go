@@ -155,6 +155,7 @@ func TestMain(m *testing.M) {
 		&model.QuotaData{},
 		&model.TopUp{},
 		&model.Task{},
+		&model.Midjourney{},
 		&model.SubscriptionPlan{},
 		&model.SubscriptionOrder{},
 		&model.UserSubscription{},

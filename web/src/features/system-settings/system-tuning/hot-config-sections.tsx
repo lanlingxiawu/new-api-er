@@ -21,6 +21,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,6 +52,21 @@ type ConfigGroupField = {
   type?: 'switch'
   min?: number
   max?: number
+  // Special values offered in a dropdown; `min`/`max` then bound the ordinary
+  // numbers only, and a preset value is accepted even outside that range.
+  presets?: NumericPreset[]
+  // Shown under the input when a field only takes effect together with another.
+  description?: string
+}
+
+function isValidFieldNumber(field: ConfigGroupField, raw: unknown): boolean {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return false
+  if (field.presets?.some((preset) => preset.value === value)) return true
+  return (
+    (field.min === undefined || value >= field.min) &&
+    (field.max === undefined || value <= field.max)
+  )
 }
 
 type ConfigGroupSectionProps = {
@@ -84,9 +103,16 @@ function ConfigGroupSection({
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [values, setValues] = useState(defaults)
   const baselineRef = useRef(defaults)
+  const baselineSerializedRef = useRef(JSON.stringify(defaults))
 
+  // `defaults` is rebuilt on every parent render (e.g. when the pool-stats query
+  // resolves after the form is shown); only reset the form when the server
+  // values really changed, otherwise unsaved edits would be wiped.
   useEffect(() => {
+    const serialized = JSON.stringify(defaults)
+    if (serialized === baselineSerializedRef.current) return
     baselineRef.current = defaults
+    baselineSerializedRef.current = serialized
     setValues(defaults)
   }, [defaults])
 
@@ -114,15 +140,10 @@ function ConfigGroupSection({
   })
 
   const save = async () => {
-    const invalidNumber = fields.some(({ key, type, min, max }) => {
-      if (type === 'switch') return false
-      const value = Number(values[key])
-      return (
-        !Number.isFinite(value) ||
-        (min !== undefined && value < min) ||
-        (max !== undefined && value > max)
-      )
-    })
+    const invalidNumber = fields.some(
+      (field) =>
+        field.type !== 'switch' && !isValidFieldNumber(field, values[field.key])
+    )
     if (invalidNumber) {
       toast.error(t('Please enter a valid number'))
       return
@@ -154,6 +175,7 @@ function ConfigGroupSection({
       const response = await mutation.mutateAsync(request)
       if (!response.success) return
       baselineRef.current = nextValues
+      baselineSerializedRef.current = JSON.stringify(nextValues)
       setValues(nextValues)
     }, confirmationOptions)
   }
@@ -171,7 +193,7 @@ function ConfigGroupSection({
             return (
               <div className='space-y-2' key={field.key}>
                 <Label htmlFor={id}>{t(field.label)}</Label>
-                {field.type === 'switch' ? (
+                {field.type === 'switch' && (
                   <Switch
                     id={id}
                     checked={Boolean(values[field.key])}
@@ -182,7 +204,23 @@ function ConfigGroupSection({
                       }))
                     }
                   />
-                ) : (
+                )}
+                {field.type !== 'switch' && field.presets && (
+                  <NumericPresetInput
+                    id={id}
+                    presets={field.presets}
+                    min={field.min ?? 0}
+                    max={field.max}
+                    value={Number(values[field.key])}
+                    onChange={(next) =>
+                      setValues((current) => ({
+                        ...current,
+                        [field.key]: Number(next),
+                      }))
+                    }
+                  />
+                )}
+                {field.type !== 'switch' && !field.presets && (
                   <Input
                     id={id}
                     type='number'
@@ -196,6 +234,11 @@ function ConfigGroupSection({
                       }))
                     }
                   />
+                )}
+                {field.description && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t(field.description)}
+                  </p>
                 )}
               </div>
             )
@@ -336,20 +379,44 @@ const rateLimitFields: ConfigGroupField[] = [
   },
 ]
 
+const unlimitedPreset: NumericPreset[] = [{ value: 0, label: 'Unlimited' }]
+
 const relayTimeoutFields: ConfigGroupField[] = [
   { key: 'enabled', label: 'AI request timeout enabled', type: 'switch' },
   {
     key: 'response_timeout_seconds',
     label: 'Default response timeout (seconds)',
-    min: 0,
+    presets: unlimitedPreset,
+    min: 1,
     max: 604800,
   },
   {
     key: 'total_timeout_seconds',
     label: 'Default total timeout (seconds)',
-    min: 0,
+    presets: unlimitedPreset,
+    min: 1,
     max: 604800,
   },
+  {
+    key: 'retry_min_budget_seconds',
+    label: 'Stop retrying below remaining budget (seconds)',
+    presets: [{ value: 0, label: 'Disabled' }],
+    min: 1,
+    max: 604800,
+    description:
+      '0 = off (default). Only applies when a total timeout is set (system or per-user). Without one, retries are limited only by the retry count and max attempts.',
+  },
+  {
+    key: 'max_total_attempts',
+    label: 'Max attempts per request (0 = unlimited)',
+    presets: unlimitedPreset,
+    min: 1,
+    max: 100,
+  },
+]
+
+const inheritMainDatabasePreset: NumericPreset[] = [
+  { value: 0, label: 'Same as main database' },
 ]
 
 const dbPoolFields: ConfigGroupField[] = [
@@ -374,13 +441,15 @@ const dbPoolFields: ConfigGroupField[] = [
   {
     key: 'log_max_idle_conns',
     label: 'Log database idle connections (0 inherits)',
-    min: 0,
+    presets: inheritMainDatabasePreset,
+    min: 1,
     max: 10000,
   },
   {
     key: 'log_max_open_conns',
     label: 'Log database open connections (0 inherits)',
-    min: 0,
+    presets: inheritMainDatabasePreset,
+    min: 1,
     max: 100000,
   },
 ]

@@ -16,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"gorm.io/gorm"
 )
 
 type relayLogKind uint8
@@ -109,6 +110,10 @@ type relayLogFallbackRecord struct {
 type relayLogFallbackJob struct {
 	event               *relayLogEvent
 	executeContinuation bool
+	// continuationOnly 表示日志行已经入库（或本来就没有日志行），这个任务只借用
+	// fallback worker 执行记账：不写 JSONL、不计 fallback_total，记账用 logID。
+	continuationOnly bool
+	logID            int
 }
 
 var (
@@ -154,7 +159,12 @@ var (
 	relayLogCircuitFailures  atomic.Int64
 	relayLogCircuitOpenUntil atomic.Int64
 	relayLogHalfOpenProbe    atomic.Bool
-	relayLogContinuationDrop atomic.Uint64
+	// relayLogContinuationDrop 只统计真正没执行的记账（两条车道都满、或辅助车道
+	// 已关闭）。relayLogContinuationOverflow 统计 continuation 车道满、改交 fallback
+	// worker 的次数；其中极少数随后连兜底也失败的，另计入 relayLogContinuationDrop。
+	relayLogContinuationDrop     atomic.Uint64
+	relayLogContinuationOverflow atomic.Uint64
+	// relayLogFallbackErrors 只统计丢失的日志行，不含只借道执行记账的任务。
 	relayLogFallbackErrors   atomic.Uint64
 	relayLogErrorYielded     atomic.Uint64
 	relayLogFallbackAlertAt  atomic.Int64
@@ -166,6 +176,45 @@ var (
 	relayLogReplayActivePath string
 	relayLogAlertCh          = make(chan string, 1)
 	relayLogAlertSink        = common.SysError
+)
+
+// intake 与关停的状态。
+//
+// relayLogAccepting 只表达生命周期：StartRelayLogFlushLoop 之后为 true，
+// ShutdownRelayLogFlush 开始时置 false，之后不再恢复。压力（队列满、兜底目录
+// 达到保留上限、worker panic）从不关闭 intake：每条通道本身都有硬上限，溢出只会
+// 被计数丢弃；关闭 intake 对有界性毫无帮助，却会在日志库恢复后继续拒收全部日志
+// （见设计文档 §19.1）。
+var (
+	// relayLogBuffersSealed 在关停做最后一次取缓冲前、持有两把缓冲锁时置位。
+	// 已经越过 relayLogAccepting 检查的 relay goroutine 在锁内看到它就拒收，
+	// 而不是把事件留在再也没人排空的缓冲里，或在溢出时向已关闭的通道发送。
+	relayLogBuffersSealed atomic.Bool
+	// relayLogIntakeRefused 统计 intake 关闭（启动前/关停中）时被拒收的日志条数，
+	// 同时计入对应种类的 dropped。
+	relayLogIntakeRefused atomic.Uint64
+	// pending 切片只由持有 relayLogFlushMu 的 worker 读写；长度另存原子量，
+	// 状态接口与关停循环不持锁读取。
+	relayLogPendingConsumeLen atomic.Int64
+	relayLogPendingErrorLen   atomic.Int64
+	// pending 车道队首事件的入队时间（UnixNano，空车道为 0），与长度同处更新，
+	// 供状态接口计算 oldest_event_age_ms 而不触碰 worker 独占的切片。
+	relayLogPendingConsumeOldest atomic.Int64
+	relayLogPendingErrorOldest   atomic.Int64
+	// 正在落库的批次（已离开车道、落库尚未返回）的最早入队时间，空闲为 0。
+	relayLogInflightFlushOldest atomic.Int64
+	relayLogInflightRetryOldest atomic.Int64
+	// 最近一次写出过该类日志的刷盘：本类条数与整轮落库耗时（毫秒）。只由刷盘
+	// worker 写入，状态接口读取；relay goroutine 的入队路径不涉及。
+	relayLogLastFlushConsumeItems atomic.Int64
+	relayLogLastFlushConsumeMs    atomic.Int64
+	relayLogLastFlushErrorItems   atomic.Int64
+	relayLogLastFlushErrorMs      atomic.Int64
+	relayLogLastFlushRetryItems   atomic.Int64
+	relayLogLastFlushRetryMs      atomic.Int64
+	// relayLogRetentionFullLogged 让"兜底目录已满"的系统日志只在进入该状态时
+	// 输出一次，持续满时不按批刷屏；任一批写入成功后复位。
+	relayLogRetentionFullLogged atomic.Bool
 )
 
 func bufferFor(kind relayLogKind) (*sync.Mutex, *[]*relayLogEvent, int, *atomic.Uint64) {
@@ -184,6 +233,11 @@ func enqueueRelayLog(kind relayLogKind, event *relayLogEvent) bool {
 	event.Kind = kind
 	mu, buf, max, dropped := bufferFor(kind)
 	mu.Lock()
+	if relayLogBuffersSealed.Load() {
+		mu.Unlock()
+		countRelayLogIntakeRefused(kind)
+		return false
+	}
 	if len(*buf) >= max {
 		mu.Unlock()
 		dropped.Add(1)
@@ -202,6 +256,25 @@ func enqueueRelayLog(kind relayLogKind, event *relayLogEvent) bool {
 		}
 	}
 	return true
+}
+
+func countRelayLogIntakeRefused(kind relayLogKind) {
+	relayLogIntakeRefused.Add(1)
+	if kind == relayLogKindConsume {
+		relayLogDroppedConsume.Add(1)
+	} else {
+		relayLogDroppedError.Add(1)
+	}
+}
+
+// sealRelayLogBuffers 在持有两把缓冲锁时置位，保证此后抢到锁的入队都能看到它；
+// 在此之前已经入列的事件会被随后的最后一次取缓冲带走。
+func sealRelayLogBuffers() {
+	relayLogConsumeMu.Lock()
+	relayLogErrorMu.Lock()
+	relayLogBuffersSealed.Store(true)
+	relayLogErrorMu.Unlock()
+	relayLogConsumeMu.Unlock()
 }
 
 // takeRelayLogBatch 整体交换缓冲，一次取走全部事件。
@@ -265,18 +338,23 @@ func dispatchRelayLogContinuation(event *relayLogEvent, id int) {
 			// 每次投递重新读软上限，调大调小都即时生效。它由配置钳制保证不超过
 			// 物理容量，所以这里不需要再 clamp。
 			softCap := operation_setting.GetRelayLogPipelineSetting().GetContinuationBufMaxEntries()
+			// 溢出车道只执行记账：到这里日志行要么已经入库（id 已知），要么根本没有，
+			// 不能再写进兜底文件，也不能丢掉已知的 logs.id。
+			// 改道不是丢失，只计 continuation_overflowed；fallback 车道也放不下、
+			// 最后一条路也满时，由 sendRelayLogContinuationLastResort 计一次丢弃。
+			overflow := relayLogFallbackJob{event: event, executeContinuation: true, continuationOnly: true, logID: id}
 			if len(relayLogContinuationCh) >= softCap {
-				relayLogContinuationDrop.Add(1)
-				dispatchRelayLogFallbackJob(event, true)
+				relayLogContinuationOverflow.Add(1)
+				dispatchRelayLogFallbackLocked(overflow)
 				return
 			}
 			select {
 			case relayLogContinuationCh <- job:
 			default:
 				// Keep relay non-blocking. The isolated fallback worker is the
-				// overflow lane and executes accounting after writing JSONL.
-				relayLogContinuationDrop.Add(1)
-				dispatchRelayLogFallbackJob(event, true)
+				// overflow lane and executes the accounting.
+				relayLogContinuationOverflow.Add(1)
+				dispatchRelayLogFallbackLocked(overflow)
 			}
 		})
 	}
@@ -295,35 +373,61 @@ func startRelayLogAuxWorkers() {
 	})
 }
 
+// 两个辅助 worker 都以"单条/单批 recover"的方式运行：一次 panic 只报废当前任务，
+// worker 本身继续消费，不会因为车道少了一个消费者而让通道逐渐堆满。
 func relayLogContinuationWorker() {
 	defer relayLogAuxWG.Done()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			common.SysError(fmt.Sprintf("relay-log: continuation worker panic: %v", recovered))
-			relayLogAccepting.Store(false)
-		}
-	}()
 	for job := range relayLogContinuationCh {
 		relayLogContinuationBusy.Add(1)
-		func() {
-			defer relayLogContinuationBusy.Add(-1)
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					common.SysError(fmt.Sprintf("relay-log: continuation panic: %v", recovered))
-				}
-			}()
-			if job.event.QuotaData != nil {
-				LogQuotaData(*job.event.QuotaData)
-			}
-			if job.event.Accounting != nil && relayLogAccountingHandler != nil {
-				relayLogAccountingHandler(*job.event.Accounting, job.id)
-			}
-		}()
+		runRelayLogContinuationJob(job)
+	}
+}
+
+func runRelayLogContinuationJob(job relayLogContinuationJob) {
+	defer relayLogContinuationBusy.Add(-1)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			common.SysError(fmt.Sprintf("relay-log: continuation panic: %v", recovered))
+		}
+	}()
+	if job.event.QuotaData != nil {
+		LogQuotaData(*job.event.QuotaData)
+	}
+	if job.event.Accounting != nil && relayLogAccountingHandler != nil {
+		relayLogAccountingHandler(*job.event.Accounting, job.id)
 	}
 }
 
 func dispatchRelayLogFallbackJob(event *relayLogEvent, executeContinuation bool) {
 	if event == nil {
+		return
+	}
+	relayLogAuxSendMu.RLock()
+	defer relayLogAuxSendMu.RUnlock()
+	dispatchRelayLogFallbackLocked(relayLogFallbackJob{event: event, executeContinuation: executeContinuation})
+}
+
+// dispatchRelayLogFallbackLocked 要求调用方已持有 relayLogAuxSendMu 读锁：
+// 关停在写锁下关闭两条辅助通道，持读锁再检查 relayLogAuxClosed 才能保证
+// 永远不向已关闭的通道发送（那会在 relay goroutine 上 panic）。
+// 读锁不可重入（有写者排队时再次 RLock 会死锁），所以已持锁的
+// dispatchRelayLogContinuation 直接调用本函数。
+func dispatchRelayLogFallbackLocked(job relayLogFallbackJob) {
+	event := job.event
+	hasContinuation := job.executeContinuation && (event.Accounting != nil || event.QuotaData != nil)
+	// 只有真要落盘的日志行放不进车道才算 fallback 错误；continuationOnly 任务的
+	// 日志行已在库里（或没有），放不进来丢的只是记账，由 continuation_dropped 计数。
+	carriesLog := !job.continuationOnly && event.Log != nil
+	countLogLost := func() {
+		if carriesLog {
+			relayLogFallbackErrors.Add(1)
+		}
+	}
+	if relayLogAuxClosed.Load() {
+		countLogLost()
+		if hasContinuation {
+			relayLogContinuationDrop.Add(1)
+		}
 		return
 	}
 	startRelayLogAuxWorkers()
@@ -333,41 +437,46 @@ func dispatchRelayLogFallbackJob(event *relayLogEvent, executeContinuation bool)
 	// 错误日志在通道用掉 1/N 之后就不再入队，把余量留给消费日志。
 	// 这里直接丢弃而不是走下面的软/硬上限分支：错误日志没有记账负载，
 	// 无需再往 continuation 通道兜一次，那样只会挤占记账自己的容量。
-	if event.Kind == relayLogKindError && len(relayLogFallbackCh) >= softCap/relayLogErrorFallbackDivisor {
+	// 万一带了记账负载就不走让位：让位不计 continuation_dropped，会让记账静默丢失。
+	if event.Kind == relayLogKindError && !hasContinuation && len(relayLogFallbackCh) >= softCap/relayLogErrorFallbackDivisor {
 		relayLogErrorYielded.Add(1)
 		queueRelayLogAlert("error logs yielding fallback capacity to consume logs")
 		return
 	}
 
 	if len(relayLogFallbackCh) >= softCap {
-		relayLogFallbackErrors.Add(1)
+		countLogLost()
 		queueRelayLogAlert("soft capacity reached")
-		if executeContinuation {
-			select {
-			case relayLogContinuationCh <- relayLogContinuationJob{event: event, id: 0}:
-			default:
-				relayLogContinuationDrop.Add(1)
-				relayLogAccepting.Store(false)
-			}
+		if hasContinuation {
+			sendRelayLogContinuationLastResort(job)
 		}
 		return
 	}
 	select {
-	case relayLogFallbackCh <- relayLogFallbackJob{event: event, executeContinuation: executeContinuation}:
+	case relayLogFallbackCh <- job:
 	default:
 		// A log-only fallback may be dropped under extreme pressure. Accounting
-		// gets a second fixed worker lane and is never silently discarded here.
-		relayLogFallbackErrors.Add(1)
+		// gets a second fixed worker lane before it is counted as dropped.
+		countLogLost()
 		queueRelayLogAlert("hard capacity reached")
-		if executeContinuation {
-			select {
-			case relayLogContinuationCh <- relayLogContinuationJob{event: event, id: 0}:
-			default:
-				relayLogContinuationDrop.Add(1)
-				relayLogAccepting.Store(false)
-				queueRelayLogAlert("accounting queues exhausted; relay log intake stopped")
-			}
+		if hasContinuation {
+			sendRelayLogContinuationLastResort(job)
 		}
+	}
+}
+
+// sendRelayLogContinuationLastResort 是 fallback 车道放不下时记账的最后一条路。
+// 它不看 continuation 软上限，只受物理容量约束，并带着 job.logID——日志已入库的
+// 记账仍拿到真实的 logs.id。两条车道都满时只能计数丢弃并告警，这是
+// continuation_dropped 在压力下唯一的计数点（另一处是辅助车道已关闭），一次事件
+// 只计一次。此时 intake 不关闭——所有通道都有硬上限，关闭 intake 既救不回这笔
+// 记账，还会在压力消退后继续拒收日志。
+func sendRelayLogContinuationLastResort(job relayLogFallbackJob) {
+	select {
+	case relayLogContinuationCh <- relayLogContinuationJob{event: job.event, id: job.logID}:
+	default:
+		relayLogContinuationDrop.Add(1)
+		queueRelayLogAlert("accounting queues exhausted; accounting continuation dropped")
 	}
 }
 
@@ -396,12 +505,6 @@ func relayLogAlertWorker() {
 
 func relayLogFallbackWorker() {
 	defer relayLogAuxWG.Done()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			common.SysError(fmt.Sprintf("relay-log: fallback worker panic: %v", recovered))
-			relayLogAccepting.Store(false)
-		}
-	}()
 	// 批量取走已经排队的任务：fallback 是主通路的兜底，如果它比主通路还慢，
 	// 主通路一旦顶不住，兜底会立刻跟着崩，日志行就只能丢。一条一条写时每条要付
 	// MkdirAll + Stat + OpenFile + Write + Close 五次系统调用，把这些开销摊到一批
@@ -420,14 +523,51 @@ func relayLogFallbackWorker() {
 				break drain
 			}
 		}
-		writeRelayLogFallbackBatch(batch)
+		runRelayLogFallbackBatch(batch)
 	}
 }
 
+// runRelayLogFallbackBatch 把一批的 panic 限制在这一批：worker 继续消费后续任务。
+//
+// panic 时只把本批中尚未计入 fallback_total / fallback_errors 的日志行记为错误：
+// 只借道执行记账的任务没有日志行可丢（记账由 defer 照常执行），已按单条计过
+// 错误或已写入成功的行也不能再计一次。
+func runRelayLogFallbackBatch(batch []relayLogFallbackJob) {
+	unsettled := relayLogFallbackLogRows(batch)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if unsettled > 0 {
+				relayLogFallbackErrors.Add(uint64(unsettled))
+			}
+			common.SysError(fmt.Sprintf("relay-log: fallback batch panic: %v", recovered))
+		}
+	}()
+	writeRelayLogFallbackBatch(batch, &unsettled)
+}
+
+// relayLogFallbackCarriesLog 判定任务是否带着待落盘的日志行。
+// continuationOnly 的日志已在库里（或本来就没有），不属于待落盘的行。
+func relayLogFallbackCarriesLog(job relayLogFallbackJob) bool {
+	return !job.continuationOnly && job.event != nil && job.event.Log != nil
+}
+
+func relayLogFallbackLogRows(batch []relayLogFallbackJob) int {
+	rows := 0
+	for _, job := range batch {
+		if relayLogFallbackCarriesLog(job) {
+			rows++
+		}
+	}
+	return rows
+}
+
 // writeRelayLogFallbackBatch 是独立函数，好让 busy 计数由 defer 释放：
-// 放在循环体末尾自减的话，worker 一旦 panic 计数就永远停在 >0，
+// 放在循环体末尾自减的话，一次 panic 就让计数永远停在 >0，
 // 而 drain/关停流程都在等它归零。
-func writeRelayLogFallbackBatch(batch []relayLogFallbackJob) {
+//
+// unsettled 是本批尚未计数的日志行数，每计入一次 fallback_total 或
+// fallback_errors 就相应扣减，供 runRelayLogFallbackBatch 在 panic 时只补计余数。
+func writeRelayLogFallbackBatch(batch []relayLogFallbackJob, unsettled *int) {
 	// defer 是 LIFO：先注册的计数归还最后执行，保证记账跑完之前 busy 不会归零，
 	// 否则关停流程会在记账还没做完时就认为管道已经空闲。
 	defer relayLogFallbackBusy.Add(-int64(len(batch)))
@@ -437,25 +577,41 @@ func writeRelayLogFallbackBatch(batch []relayLogFallbackJob) {
 	recordedAt := time.Now().Unix()
 	payloads := make([][]byte, 0, len(batch))
 	for _, job := range batch {
+		// 只落盘待补写的日志行。continuationOnly 的日志已在库里（或本来就没有），
+		// 写进来只会占用保留空间、虚增 fallback_total，回放时也只会被跳过。
+		if job.continuationOnly || job.event.Log == nil {
+			continue
+		}
 		data, err := common.Marshal(relayLogFallbackRecord{
 			Version: 1, Kind: "relay_log_only", RecordedAt: recordedAt, Log: job.event.Log,
 		})
 		if err != nil {
 			relayLogFallbackErrors.Add(1)
+			*unsettled--
 			common.SysError("relay-log: fallback marshal failed: " + err.Error())
 			continue
 		}
 		payloads = append(payloads, data)
 	}
 
-	if err := appendRelayLogFallbackLines(payloads); err != nil {
+	err := appendRelayLogFallbackLines(payloads)
+	*unsettled -= len(payloads)
+	if err != nil {
 		relayLogFallbackErrors.Add(uint64(len(payloads)))
-		common.SysError("relay-log: fallback write failed: " + err.Error())
 		if errors.Is(err, errRelayLogFallbackRetentionFull) {
-			relayLogAccepting.Store(false)
-			queueRelayLogAlert("retention cap reached; intake stopped")
+			// 目录满是持续状态，按批输出会刷屏；只在进入该状态时记一次。
+			// 告警 worker 另有 60 秒限频。
+			if relayLogRetentionFullLogged.CompareAndSwap(false, true) {
+				common.SysError("relay-log: fallback retention cap reached; overflow logs are dropped until fallback files are backfilled or removed")
+			}
+			queueRelayLogAlert("fallback retention cap reached; overflow logs are being dropped")
+			return
 		}
+		common.SysError("relay-log: fallback write failed: " + err.Error())
 		return
+	}
+	if len(payloads) > 0 {
+		relayLogRetentionFullLogged.Store(false)
 	}
 	relayLogFallbackTotal.Add(uint64(len(payloads)))
 }
@@ -516,7 +672,7 @@ func runRelayLogFallbackContinuations(batch []relayLogFallbackJob) {
 				LogQuotaData(*event.QuotaData)
 			}
 			if event.Accounting != nil && relayLogAccountingHandler != nil {
-				relayLogAccountingHandler(*event.Accounting, 0)
+				relayLogAccountingHandler(*event.Accounting, job.logID)
 			}
 		}()
 	}
@@ -539,24 +695,52 @@ func rotateRelayLogFallbackLocked(path string) error {
 		return err
 	}
 	rotated := fmt.Sprintf("%s.%d", path, time.Now().UnixNano())
-	maxFiles := cfg.FallbackMaxFiles
-	if maxFiles <= 0 {
-		maxFiles = 8
-	}
-	if maxFiles > 64 {
-		maxFiles = 64
-	}
 	logicalFiles, err := relayLogLogicalFallbackCountLocked(path)
 	if err != nil {
 		return err
 	}
-	if logicalFiles >= maxFiles {
+	if logicalFiles >= boundedFallbackMaxFiles(cfg.FallbackMaxFiles) {
 		return errRelayLogFallbackRetentionFull
 	}
 	if err := os.Rename(path, rotated); err != nil {
 		return err
 	}
 	return nil
+}
+
+// relayLogFallbackRetentionFull 报告兜底目录此刻是否已满，判定与
+// rotateRelayLogFallbackLocked 相同：active 文件已达轮转阈值且逻辑文件数已达
+// 保留上限，即下一批兜底写入会被拒绝。只读目录元数据，不读文件内容。
+func relayLogFallbackRetentionFull() (bool, error) {
+	relayLogFallbackFileMu.Lock()
+	defer relayLogFallbackFileMu.Unlock()
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	path := filepath.Join(relayLogFallbackDir, "relay-log.jsonl")
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Size() < int64(boundedFallbackFileSizeMB(cfg.FallbackMaxFileSizeMB))*1024*1024 {
+		return false, nil
+	}
+	logicalFiles, err := relayLogLogicalFallbackCountLocked(path)
+	if err != nil {
+		return false, err
+	}
+	return logicalFiles >= boundedFallbackMaxFiles(cfg.FallbackMaxFiles), nil
+}
+
+func boundedFallbackMaxFiles(value int) int {
+	if value <= 0 {
+		return 8
+	}
+	if value > 64 {
+		return 64
+	}
+	return value
 }
 
 func relayLogLogicalFallbackCountLocked(path string) (int, error) {
@@ -620,7 +804,7 @@ func persistRelayLogEvents(events []*relayLogEvent) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), operation_setting.GetRelayLogPipelineSetting().GetWriteTimeout())
 	defer cancel()
-	err := LOG_DB.WithContext(ctx).CreateInBatches(&logs, operation_setting.GetRelayLogPipelineSetting().GetInnerBatchSize()).Error
+	err := insertRelayLogs(LOG_DB.WithContext(ctx), logs, operation_setting.GetRelayLogPipelineSetting().GetInnerBatchSize())
 	if err != nil {
 		if ctx.Err() != nil {
 			relayLogDBTimeoutTotal.Add(1)
@@ -685,6 +869,18 @@ func flushRelayLogs() {
 		return events[i].EnqueuedAt.Before(events[j].EnqueuedAt)
 	})
 
+	consumeItems, errorItems := 0, 0
+	for _, event := range events {
+		if event.Kind == relayLogKindConsume {
+			consumeItems++
+		} else {
+			errorItems++
+		}
+	}
+	started := time.Now()
+	// 本轮选中的事件已离开待写车道，落库返回前仍算"在等待"；按入队时间排过序，队首最早。
+	relayLogInflightFlushOldest.Store(relayLogEventsOldest(events))
+	defer relayLogInflightFlushOldest.Store(0) // 落库 panic 时也不留下过期的队首时间
 	for outer := cfg.GetOuterBatchSize(); len(events) > 0; {
 		n := outer
 		if n > len(events) {
@@ -693,6 +889,18 @@ func flushRelayLogs() {
 		persistRelayLogEvents(events[:n])
 		events = events[n:]
 	}
+	recordRelayLogFlush(consumeItems, &relayLogLastFlushConsumeItems, &relayLogLastFlushConsumeMs, started)
+	recordRelayLogFlush(errorItems, &relayLogLastFlushErrorItems, &relayLogLastFlushErrorMs, started)
+}
+
+// recordRelayLogFlush 记下一轮刷盘写出的某类条数与耗时；空轮不覆盖，状态始终反映最近一次真实刷盘。
+// 条数是本轮选中并交给落库的条数，写失败转入重试的也计入（耗时同样包含失败的往返）。
+func recordRelayLogFlush(items int, lastItems, lastMs *atomic.Int64, started time.Time) {
+	if items == 0 {
+		return
+	}
+	lastItems.Store(int64(items))
+	lastMs.Store(time.Since(started).Milliseconds())
 }
 
 func appendRelayLogPending(kind relayLogKind, incoming []*relayLogEvent) {
@@ -718,6 +926,7 @@ func appendRelayLogPending(kind relayLogKind, incoming []*relayLogEvent) {
 		keep = available
 	}
 	*pending = append(*pending, incoming[:keep]...)
+	storeRelayLogPendingLen(kind)
 	for _, event := range incoming[keep:] {
 		dispatchRelayLogFallbackJob(event, true)
 	}
@@ -736,7 +945,50 @@ func takeRelayLogPending(kind relayLogKind, max int) []*relayLogEvent {
 	if len(*pending) == 0 {
 		*pending = nil
 	}
+	storeRelayLogPendingLen(kind)
 	return out
+}
+
+// storeRelayLogPendingLen 在每次改动 pending 切片后同步其长度，调用方持有
+// relayLogFlushMu（关停路径同样先拿到这把锁，拿不到就不碰 pending）。
+func storeRelayLogPendingLen(kind relayLogKind) {
+	if kind == relayLogKindConsume {
+		relayLogPendingConsumeLen.Store(int64(len(relayLogPendingConsume)))
+		relayLogPendingConsumeOldest.Store(relayLogEventsOldest(relayLogPendingConsume))
+		return
+	}
+	relayLogPendingErrorLen.Store(int64(len(relayLogPendingError)))
+	relayLogPendingErrorOldest.Store(relayLogEventsOldest(relayLogPendingError))
+}
+
+// relayLogEventsMinEnqueued 逐条取最早的入队时间（UnixNano，空或都未打戳为 0），用于不按入队顺序排列的重试队列与批次。
+func relayLogEventsMinEnqueued(events []*relayLogEvent) int64 {
+	oldest := int64(0)
+	for _, event := range events {
+		if event == nil || event.EnqueuedAt.IsZero() {
+			continue
+		}
+		if at := event.EnqueuedAt.UnixNano(); oldest == 0 || at < oldest {
+			oldest = at
+		}
+	}
+	return oldest
+}
+
+// relayLogEventsOldest 返回按入队顺序排列的事件队首的入队时间（UnixNano），空为 0。
+// 入队在抢缓冲锁前打戳，锁争用时相邻事件可能倒挂几微秒，状态展示不需要更精确。
+func relayLogEventsOldest(events []*relayLogEvent) int64 {
+	if len(events) == 0 || events[0] == nil || events[0].EnqueuedAt.IsZero() {
+		return 0
+	}
+	return events[0].EnqueuedAt.UnixNano()
+}
+
+func clearRelayLogPending() {
+	relayLogPendingConsume = nil
+	relayLogPendingError = nil
+	storeRelayLogPendingLen(relayLogKindConsume)
+	storeRelayLogPendingLen(relayLogKindError)
 }
 
 func flushRelayLogRetries() {
@@ -753,7 +1005,12 @@ func flushRelayLogRetries() {
 			retryable = append(retryable, event)
 		}
 	}
+	started := time.Now()
+	// 重试批次按失败先后排列而非入队先后，逐条取最早的入队时间。
+	relayLogInflightRetryOldest.Store(relayLogEventsMinEnqueued(retryable))
+	defer relayLogInflightRetryOldest.Store(0)
 	persistRelayLogEvents(retryable)
+	recordRelayLogFlush(len(retryable), &relayLogLastFlushRetryItems, &relayLogLastFlushRetryMs, started)
 }
 
 func StartRelayLogFlushLoop() {
@@ -902,7 +1159,7 @@ type relayLogReplayFileResult struct {
 }
 
 var relayLogReplayBatchWriter = func(ctx context.Context, logs []*Log, batchSize int) error {
-	return LOG_DB.WithContext(ctx).CreateInBatches(&logs, batchSize).Error
+	return insertRelayLogs(LOG_DB.WithContext(ctx), logs, batchSize)
 }
 
 func writeRelayLogReplayBatch(ctx context.Context, logs []*Log, batchSize int) error {
@@ -974,8 +1231,11 @@ func runRelayLogFallbackReplay(ctx context.Context, paths []string) {
 		processed += result.processed
 		failed += result.failed
 		if result.err != nil {
-			lastError = relayLogReplayErrorFailed
 			common.SysError("relay-log: manual fallback replay failed: " + result.err.Error())
+			lastError = relayLogReplayErrorFailed
+			if ctx.Err() != nil {
+				lastError = relayLogReplayErrorShutdown
+			}
 		}
 		updateRelayLogReplayProgress(processed, failed)
 	}
@@ -1076,13 +1336,16 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 
 	writer := bufio.NewWriterSize(out, 64*1024)
 	type replayItem struct {
-		line []byte
-		log  *Log
+		line   []byte
+		record relayLogFallbackRecord
 	}
 	batchSize := operation_setting.GetRelayLogPipelineSetting().GetInnerBatchSize()
 	batch := make([]replayItem, 0, batchSize)
 	failedCount := uint64(0)
+	// retained 表示临时文件里有内容，源文件因此要被它替换而不是直接删除。
+	retained := false
 	writeRetained := func(line []byte) error {
+		retained = true
 		_, err := writer.Write(append(line, '\n'))
 		return err
 	}
@@ -1092,14 +1355,22 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 		}
 		logs := make([]*Log, 0, len(batch))
 		for _, item := range batch {
-			logs = append(logs, item.log)
+			logs = append(logs, item.record.Log)
 		}
 		writeCtx, cancel := context.WithTimeout(ctx, operation_setting.GetRelayLogPipelineSetting().GetWriteTimeout())
 		writeErr := writeRelayLogReplayBatch(writeCtx, logs, batchSize)
 		cancel()
 		if writeErr != nil {
 			for _, item := range batch {
-				if err := writeRetained(item.line); err != nil {
+				// 失败的写入可能其实已提交：带着这次分到的 id 保留，下次回放才能
+				// 按 id 认出已入库的行，而不是再插一遍。
+				line := item.line
+				if item.record.Log.Id > 0 {
+					if data, err := common.Marshal(item.record); err == nil {
+						line = data
+					}
+				}
+				if err := writeRetained(line); err != nil {
 					return err
 				}
 				failedCount++
@@ -1123,17 +1394,24 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 	}
 
 	reader := bufio.NewReaderSize(file, 64*1024)
+	cancelled := false
+	// partial 是取消时已从 reader 读出、但还没读完整的那条记录的前缀。
+	var partial []byte
 	for {
 		if ctx.Err() != nil {
-			result.err = errors.Join(ctx.Err(), discardTemp())
-			result.failed = failedCount + uint64(len(batch))
-			return result
+			cancelled = true
+			break
 		}
 		line, readErr := readRelayLogJSONLRecord(ctx, reader)
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(readErr, ctxErr) {
+				cancelled = true
+				partial = line
+				break
+			}
 			result.err = errors.Join(result.err, readErr, discardTemp())
 			result.failed = failedCount
 			return result
@@ -1141,8 +1419,10 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 		var record relayLogFallbackRecord
 		if err := common.Unmarshal(line, &record); err != nil || record.Version != 1 {
 			if err := writeRetained(line); err != nil {
-				result.err = errors.Join(result.err, err)
-				break
+				// 临时文件写不进去就无法保留任何东西：放弃临时文件、保留源文件。
+				result.err = errors.Join(result.err, err, discardTemp())
+				result.failed = failedCount
+				return result
 			}
 			failedCount++
 			result.err = errors.New("unsupported fallback record")
@@ -1151,41 +1431,78 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 		if record.Log == nil {
 			continue
 		}
-		batch = append(batch, replayItem{line: line, log: record.Log})
+		batch = append(batch, replayItem{line: line, record: record})
 		if len(batch) >= batchSize {
 			if err := flushBatch(); err != nil {
-				result.err = errors.Join(result.err, err)
-				break
+				result.err = errors.Join(result.err, err, discardTemp())
+				result.failed = failedCount
+				return result
 			}
 		}
 	}
-	if err := flushBatch(); err != nil {
-		result.err = errors.Join(result.err, err, discardTemp())
+	if cancelled {
+		// 取消（关停）发生在文件中途：之前的批次已经提交，却没有可回写的 id。
+		// 若整体保留源文件，下次回放会把它们再插一遍。因此（有批次已提交或已有
+		// 保留行时）把尚未写库的部分——
+		// 当前未提交的批次、读了一半的记录和未读的剩余字节——原样接在临时文件
+		// （失败保留行）之后，再走与失败保留相同的两阶段替换。拷贝量不超过单个
+		// 兜底文件的大小；关停只在自己的截止时间内等待回放，超时后进程退出留下的
+		// .replay.tmp 在下次启动时被丢弃、源文件保留（至少一次语义，见 §20.4）。
+		result.err = errors.Join(result.err, ctx.Err())
+		result.failed = failedCount + uint64(len(batch))
+		if result.processed == 0 && !retained {
+			// 这个文件还没有任何批次提交、也没有要改写的保留行：源文件原样就是
+			// 尚未写库的全部内容，不拷贝、不替换，只丢弃空的临时文件。
+			result.err = errors.Join(result.err, discardTemp())
+			return result
+		}
+		for _, item := range batch {
+			if err := writeRetained(item.line); err != nil {
+				result.err = errors.Join(result.err, err, discardTemp())
+				return result
+			}
+		}
+		batch = batch[:0]
+		if len(partial) > 0 {
+			retained = true
+			if _, err := writer.Write(partial); err != nil {
+				result.err = errors.Join(result.err, err, discardTemp())
+				return result
+			}
+		}
+		copied, err := io.Copy(writer, reader)
+		if err != nil {
+			result.err = errors.Join(result.err, err, discardTemp())
+			return result
+		}
+		if copied > 0 {
+			retained = true
+		}
+	} else {
+		if err := flushBatch(); err != nil {
+			result.err = errors.Join(result.err, err, discardTemp())
+			result.failed = failedCount
+			return result
+		}
 		result.failed = failedCount
-		return result
 	}
 	if err := writer.Flush(); err != nil {
 		result.err = errors.Join(result.err, err, discardTemp())
-		result.failed = failedCount
 		return result
 	}
 	if err := out.Sync(); err != nil {
 		result.err = errors.Join(result.err, err, discardTemp())
-		result.failed = failedCount
 		return result
 	}
 	if err := closeOutput(); err != nil {
 		result.err = errors.Join(result.err, err)
-		result.failed = failedCount
 		return result
 	}
 	if err := closeSource(); err != nil {
 		result.err = errors.Join(result.err, err)
-		result.failed = failedCount
 		return result
 	}
-	result.failed = failedCount
-	if failedCount == 0 {
+	if !retained {
 		relayLogFallbackFileMu.Lock()
 		removeTmpErr := os.Remove(tmp)
 		removeSourceErr := os.Remove(path)
@@ -1220,11 +1537,13 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 	return result
 }
 
+// readRelayLogJSONLRecord 读出一条记录（去掉行尾）。ctx 取消时连同已经读出的
+// 半条记录一起返回：这些字节已离开 reader，调用方要保留剩余内容就必须写回它们。
 func readRelayLogJSONLRecord(ctx context.Context, reader *bufio.Reader) ([]byte, error) {
 	var record []byte
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return record, err
 		}
 		fragment, err := reader.ReadSlice('\n')
 		record = append(record, fragment...)
@@ -1301,20 +1620,33 @@ func ShutdownRelayLogFlush(timeout time.Duration) {
 			time.Sleep(time.Millisecond)
 		}
 	}
+	// 下面是最后一次取缓冲。封口之后才入队的事件（越过 intake 检查的在途 relay
+	// goroutine）被拒收并计数，不会留在再也没人排空的缓冲里。
+	sealRelayLogBuffers()
 	// Anything left at the deadline is isolated from both databases.
 	if !time.Now().Before(deadline) {
 		dropRelayLogShutdownRemainder()
-		common.SysLog("relay-log: shutdown complete")
+		logRelayLogShutdownComplete()
 		return
 	}
 	for _, kind := range []relayLogKind{relayLogKindConsume, relayLogKindError} {
 		events := takeRelayLogBatch(kind)
 		handoffRelayLogEventsUntil(events, deadline)
 	}
-	handoffRelayLogEventsUntil(takeRelayLogRetryBatch(int(^uint(0)>>1)), deadline)
-	for _, pending := range []*[]*relayLogEvent{&relayLogPendingConsume, &relayLogPendingError} {
-		handoffRelayLogEventsUntil(*pending, deadline)
-		*pending = nil
+	// pending 只能在持有 relayLogFlushMu 时读写；超时仍未返回的刷盘周期还持有它。
+	// retry 缓冲也在这把锁内取：持锁的周期写库失败时会继续往 retry 缓冲里放，
+	// 锁外先取会把它随后放入的事件留在无人排空的缓冲里。
+	if lockRelayLogFlushUntil(deadline) {
+		retries := takeRelayLogRetryBatch(int(^uint(0) >> 1))
+		consume := takeRelayLogPending(relayLogKindConsume, -1)
+		errs := takeRelayLogPending(relayLogKindError, -1)
+		relayLogFlushMu.Unlock()
+		handoffRelayLogEventsUntil(retries, deadline)
+		handoffRelayLogEventsUntil(consume, deadline)
+		handoffRelayLogEventsUntil(errs, deadline)
+	} else {
+		handoffRelayLogEventsUntil(takeRelayLogRetryBatch(int(^uint(0)>>1)), deadline)
+		reportRelayLogPendingHeldByOverrunFlush()
 	}
 	for time.Now().Before(deadline) &&
 		(len(relayLogContinuationCh) > 0 || len(relayLogFallbackCh) > 0 ||
@@ -1357,40 +1689,103 @@ func ShutdownRelayLogFlush(timeout time.Duration) {
 		case <-timer.C:
 		}
 	}
+	logRelayLogShutdownComplete()
+}
+
+func logRelayLogShutdownComplete() {
+	if refused := relayLogIntakeRefused.Load(); refused > 0 {
+		common.SysLog(fmt.Sprintf("relay-log: shutdown complete; %d relay logs refused while intake was closed", refused))
+		return
+	}
 	common.SysLog("relay-log: shutdown complete")
 }
 
 func dropRelayLogShutdownRemainder() {
+	var dropped []*relayLogEvent
 	relayLogConsumeMu.Lock()
-	count := len(relayLogConsumeBuf)
+	dropped = append(dropped, relayLogConsumeBuf...)
 	relayLogConsumeBuf = nil
 	relayLogConsumeMu.Unlock()
 	relayLogErrorMu.Lock()
-	count += len(relayLogErrorBuf)
+	dropped = append(dropped, relayLogErrorBuf...)
 	relayLogErrorBuf = nil
 	relayLogErrorMu.Unlock()
 	relayLogRetryMu.Lock()
-	count += len(relayLogRetryBuf)
+	dropped = append(dropped, relayLogRetryBuf...)
 	relayLogRetryBuf = nil
 	relayLogRetryMu.Unlock()
-	count += len(relayLogPendingConsume) + len(relayLogPendingError)
-	relayLogPendingConsume = nil
-	relayLogPendingError = nil
-	if count > 0 {
-		relayLogFallbackErrors.Add(uint64(count))
-		common.SysError(fmt.Sprintf("relay-log: shutdown deadline dropped %d remaining events", count))
+	// The deadline has passed: take pending only if no overrunning flush cycle
+	// still owns it, never wait for one.
+	if relayLogFlushMu.TryLock() {
+		dropped = append(dropped, relayLogPendingConsume...)
+		dropped = append(dropped, relayLogPendingError...)
+		clearRelayLogPending()
+		relayLogFlushMu.Unlock()
+	} else {
+		reportRelayLogPendingHeldByOverrunFlush()
 	}
+	countRelayLogShutdownDropped(dropped, "remaining")
 }
 
 func handoffRelayLogEventsUntil(events []*relayLogEvent, deadline time.Time) {
 	for index, event := range events {
 		if !time.Now().Before(deadline) {
-			remaining := len(events) - index
-			relayLogFallbackErrors.Add(uint64(remaining))
-			common.SysError(fmt.Sprintf("relay-log: shutdown deadline dropped %d serialized events", remaining))
+			countRelayLogShutdownDropped(events[index:], "serialized")
 			return
 		}
 		dispatchRelayLogFallbackJob(event, true)
+	}
+}
+
+// countRelayLogShutdownDropped records events abandoned at the shutdown
+// deadline with the same meaning the counters have everywhere else: a lost log
+// row counts under fallback_errors, lost accounting under continuation_dropped.
+func countRelayLogShutdownDropped(events []*relayLogEvent, what string) {
+	logs, accounting := 0, 0
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		if event.Log != nil {
+			logs++
+		}
+		if event.Accounting != nil || event.QuotaData != nil {
+			accounting++
+		}
+	}
+	if logs > 0 {
+		relayLogFallbackErrors.Add(uint64(logs))
+	}
+	if accounting > 0 {
+		relayLogContinuationDrop.Add(uint64(accounting))
+	}
+	if logs > 0 || accounting > 0 {
+		common.SysError(fmt.Sprintf("relay-log: shutdown deadline dropped %d %s events (%d log rows, %d accounting continuations)", len(events), what, logs, accounting))
+	}
+}
+
+// lockRelayLogFlushUntil acquires relayLogFlushMu, giving up at deadline so a
+// flush cycle that overran the shutdown timeout cannot hang the process exit.
+func lockRelayLogFlushUntil(deadline time.Time) bool {
+	for {
+		if relayLogFlushMu.TryLock() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// reportRelayLogPendingHeldByOverrunFlush is the known limit of design §19.1:
+// a flush cycle still running past the shutdown deadline owns the pending
+// lanes, so shutdown leaves them to it and reports their size (read from the
+// atomic mirrors, never from the slices) instead of racing it.
+func reportRelayLogPendingHeldByOverrunFlush() {
+	held := relayLogPendingConsumeLen.Load() + relayLogPendingErrorLen.Load()
+	if held > 0 {
+		common.SysError(fmt.Sprintf("relay-log: shutdown deadline reached while a flush cycle still owns %d pending events; they are not handed off", held))
 	}
 }
 
@@ -1404,13 +1799,17 @@ func relayLogBacklog() int {
 	relayLogRetryMu.Lock()
 	n += len(relayLogRetryBuf)
 	relayLogRetryMu.Unlock()
-	return n + len(relayLogPendingConsume) + len(relayLogPendingError)
+	return n + int(relayLogPendingConsumeLen.Load()+relayLogPendingErrorLen.Load())
 }
 
 type RelayLogQueueStatus struct {
 	Backlog  int    `json:"backlog"`
 	Capacity int    `json:"capacity"`
 	Dropped  uint64 `json:"dropped"`
+	// LastFlushItems / LastFlushTookMs 描述最近一次写出过该类日志的刷盘：本类条数与该轮
+	// 落库总耗时（消费与错误日志同轮落库，耗时相同）。进程启动后尚未刷过时为 0。
+	LastFlushItems  int64 `json:"last_flush_items"`
+	LastFlushTookMs int64 `json:"last_flush_took_ms"`
 }
 type RelayLogReplayStatus struct {
 	State          string `json:"state"`
@@ -1423,36 +1822,74 @@ type RelayLogReplayStatus struct {
 	LastError      string `json:"last_error"`
 }
 type RelayLogPipelineStatus struct {
-	Enabled             bool                `json:"enabled"`
-	CircuitState        string              `json:"circuit_state"`
-	Consume             RelayLogQueueStatus `json:"consume"`
-	Error               RelayLogQueueStatus `json:"error"`
-	Retry               RelayLogQueueStatus `json:"retry"`
-	PersistedTotal      uint64              `json:"persisted_total"`
-	FallbackTotal       uint64              `json:"fallback_total"`
-	DBTimeoutTotal      uint64              `json:"db_timeout_total"`
-	LastSuccessAt       int64               `json:"last_success_at"`
-	LastErrorAt         int64               `json:"last_error_at"`
-	ContinuationBacklog int                 `json:"continuation_backlog"`
-	ContinuationDropped uint64              `json:"continuation_dropped"`
-	FallbackBacklog     int                 `json:"fallback_backlog"`
-	FallbackErrors      uint64              `json:"fallback_errors"`
+	Enabled        bool                `json:"enabled"`
+	CircuitState   string              `json:"circuit_state"`
+	Consume        RelayLogQueueStatus `json:"consume"`
+	Error          RelayLogQueueStatus `json:"error"`
+	Retry          RelayLogQueueStatus `json:"retry"`
+	PersistedTotal uint64              `json:"persisted_total"`
+	FallbackTotal  uint64              `json:"fallback_total"`
+	DBTimeoutTotal uint64              `json:"db_timeout_total"`
+	// OldestEventAgeMs 是仍在内存中等待落库的日志（入队缓冲、worker 待写车道、重试队列）里
+	// 最早入队那条已等待的毫秒数，全部为空时为 0。
+	OldestEventAgeMs    int64 `json:"oldest_event_age_ms"`
+	LastSuccessAt       int64 `json:"last_success_at"`
+	LastErrorAt         int64 `json:"last_error_at"`
+	ContinuationBacklog int   `json:"continuation_backlog"`
+	// ContinuationDropped 是确实没有执行的记账条数（两条车道都满，或关停后到达）。
+	ContinuationDropped uint64 `json:"continuation_dropped"`
+	// ContinuationOverflowed 是 continuation 车道放不下、改由 fallback worker（或
+	// 最后一条路）执行的记账条数。改道不是丢失，它只说明 continuation 车道在承压。
+	ContinuationOverflowed uint64 `json:"continuation_overflowed"`
+	FallbackBacklog        int    `json:"fallback_backlog"`
+	// FallbackErrors 是既没进日志库、也没写进兜底文件的日志行数。
+	FallbackErrors uint64 `json:"fallback_errors"`
 	// ErrorLogsYielded 是为了给消费日志腾容量而主动丢弃的错误日志条数。
 	// 它不为零就说明管道已经在异常状态，但账务仍然完整。
-	ErrorLogsYielded uint64               `json:"error_logs_yielded"`
-	Replay           RelayLogReplayStatus `json:"replay"`
+	ErrorLogsYielded uint64 `json:"error_logs_yielded"`
+	// IntakeState 只反映生命周期：accepting（运行中）或 stopped（启动前/关停中）。
+	// 压力从不关闭 intake。
+	IntakeState string `json:"intake_state"`
+	// IntakeRefused 是 intake 关闭时被拒收的日志条数（同时计入各自的 dropped）。
+	IntakeRefused uint64 `json:"intake_refused"`
+	// FallbackRetentionFull 按目录元数据实时计算：为 true 时下一批兜底写入会被拒绝，
+	// 进不了日志库的日志将被丢弃，直到回填或清理出空间；空间恢复后自动变回 false。
+	FallbackRetentionFull bool                 `json:"fallback_retention_full"`
+	Replay                RelayLogReplayStatus `json:"replay"`
+}
+
+// relayLogOldestAgeMs 返回各队首入队时间（UnixNano，0 表示该队列为空）中最早者距 now 的毫秒数；全空为 0。
+func relayLogOldestAgeMs(now time.Time, heads ...int64) int64 {
+	oldest := int64(0)
+	for _, head := range heads {
+		if head > 0 && (oldest == 0 || head < oldest) {
+			oldest = head
+		}
+	}
+	if oldest == 0 {
+		return 0
+	}
+	return max(0, now.Sub(time.Unix(0, oldest)).Milliseconds())
 }
 
 func GetRelayLogPipelineStatus() RelayLogPipelineStatus {
+	// 各队列的队首就是该队列最早入队的事件，取长度时顺带读取，不另加锁或遍历。
 	relayLogConsumeMu.Lock()
 	cn := len(relayLogConsumeBuf)
+	consumeOldest := relayLogEventsOldest(relayLogConsumeBuf)
 	relayLogConsumeMu.Unlock()
 	relayLogErrorMu.Lock()
 	en := len(relayLogErrorBuf)
+	errorOldest := relayLogEventsOldest(relayLogErrorBuf)
 	relayLogErrorMu.Unlock()
 	relayLogRetryMu.Lock()
 	rn := len(relayLogRetryBuf)
+	// 重试队列按失败先后追加，不按入队先后，逐条扫描（有 RetryBufMaxEntries 上界，只在状态接口执行）。
+	retryOldest := relayLogEventsMinEnqueued(relayLogRetryBuf)
 	relayLogRetryMu.Unlock()
+	oldestAgeMs := relayLogOldestAgeMs(time.Now(), consumeOldest, errorOldest, retryOldest,
+		relayLogPendingConsumeOldest.Load(), relayLogPendingErrorOldest.Load(),
+		relayLogInflightFlushOldest.Load(), relayLogInflightRetryOldest.Load())
 	state := "closed"
 	if relayLogCircuitOpen() {
 		state = "open"
@@ -1468,14 +1905,32 @@ func GetRelayLogPipelineStatus() RelayLogPipelineStatus {
 	if replayListErr != nil && replay.LastError == "" {
 		replay.LastError = relayLogReplayErrorRecovery
 	}
+	retentionFull, retentionErr := relayLogFallbackRetentionFull()
+	if retentionErr != nil {
+		common.SysError("relay-log: inspect fallback retention failed: " + retentionErr.Error())
+	}
+	intakeState := "stopped"
+	if relayLogAccepting.Load() && !relayLogBuffersSealed.Load() {
+		intakeState = "accepting"
+	}
+	// backlog 含 worker 侧 pending 车道（与关停统计 relayLogBacklog 口径一致），
+	// 因此积压时可能超过 capacity，最多为其两倍。
+	cn += int(relayLogPendingConsumeLen.Load())
+	en += int(relayLogPendingErrorLen.Load())
 	return RelayLogPipelineStatus{Enabled: cfg.Enabled, CircuitState: state,
-		Consume:        RelayLogQueueStatus{cn, cfg.GetConsumeBufMaxEntries(), relayLogDroppedConsume.Load()},
-		Error:          RelayLogQueueStatus{en, cfg.GetErrorBufMaxEntries(), relayLogDroppedError.Load()},
-		Retry:          RelayLogQueueStatus{rn, operation_setting.GetRelayLogRetrySetting().GetRetryBufMaxEntries(), relayLogDroppedRetry.Load()},
+		IntakeState: intakeState, IntakeRefused: relayLogIntakeRefused.Load(), FallbackRetentionFull: retentionFull,
+		Consume: RelayLogQueueStatus{Backlog: cn, Capacity: cfg.GetConsumeBufMaxEntries(), Dropped: relayLogDroppedConsume.Load(),
+			LastFlushItems: relayLogLastFlushConsumeItems.Load(), LastFlushTookMs: relayLogLastFlushConsumeMs.Load()},
+		Error: RelayLogQueueStatus{Backlog: en, Capacity: cfg.GetErrorBufMaxEntries(), Dropped: relayLogDroppedError.Load(),
+			LastFlushItems: relayLogLastFlushErrorItems.Load(), LastFlushTookMs: relayLogLastFlushErrorMs.Load()},
+		Retry: RelayLogQueueStatus{Backlog: rn, Capacity: operation_setting.GetRelayLogRetrySetting().GetRetryBufMaxEntries(), Dropped: relayLogDroppedRetry.Load(),
+			LastFlushItems: relayLogLastFlushRetryItems.Load(), LastFlushTookMs: relayLogLastFlushRetryMs.Load()},
 		PersistedTotal: relayLogPersistedTotal.Load(), FallbackTotal: relayLogFallbackTotal.Load(), DBTimeoutTotal: relayLogDBTimeoutTotal.Load(),
-		LastSuccessAt: relayLogLastSuccessAt.Load(), LastErrorAt: relayLogLastErrorAt.Load(),
+		OldestEventAgeMs: oldestAgeMs,
+		LastSuccessAt:    relayLogLastSuccessAt.Load(), LastErrorAt: relayLogLastErrorAt.Load(),
 		ContinuationBacklog: len(relayLogContinuationCh), ContinuationDropped: relayLogContinuationDrop.Load(),
-		FallbackBacklog: len(relayLogFallbackCh), FallbackErrors: relayLogFallbackErrors.Load(),
+		ContinuationOverflowed: relayLogContinuationOverflow.Load(), FallbackBacklog: len(relayLogFallbackCh),
+		FallbackErrors:   relayLogFallbackErrors.Load(),
 		ErrorLogsYielded: relayLogErrorYielded.Load(),
 		Replay:           replay}
 }
@@ -1490,8 +1945,10 @@ func resetRelayLogPipelineForTest() {
 	relayLogRetryMu.Lock()
 	relayLogRetryBuf = nil
 	relayLogRetryMu.Unlock()
-	relayLogPendingConsume = nil
-	relayLogPendingError = nil
+	clearRelayLogPending()
+	relayLogBuffersSealed.Store(false)
+	relayLogIntakeRefused.Store(0)
+	relayLogRetentionFullLogged.Store(false)
 	relayLogDroppedConsume.Store(0)
 	relayLogDroppedError.Store(0)
 	relayLogDroppedRetry.Store(0)
@@ -1504,8 +1961,14 @@ func resetRelayLogPipelineForTest() {
 	relayLogCircuitOpenUntil.Store(0)
 	relayLogHalfOpenProbe.Store(false)
 	relayLogContinuationDrop.Store(0)
+	relayLogContinuationOverflow.Store(0)
 	relayLogFallbackErrors.Store(0)
 	relayLogErrorYielded.Store(0)
+	for _, value := range []*atomic.Int64{&relayLogLastFlushConsumeItems, &relayLogLastFlushConsumeMs,
+		&relayLogLastFlushErrorItems, &relayLogLastFlushErrorMs, &relayLogLastFlushRetryItems, &relayLogLastFlushRetryMs,
+		&relayLogInflightFlushOldest, &relayLogInflightRetryOldest} {
+		value.Store(0)
+	}
 }
 
 func resetRelayLogReplayForTest() {
@@ -1516,10 +1979,13 @@ func resetRelayLogReplayForTest() {
 	relayLogReplayMu.Unlock()
 }
 
+// enqueueAsyncRelayLog 返回 false 只表示 intake 已关闭（启动前/关停中）：
+// 调用方自己兜底 accounting；quota 导出属于日志构造的一部分，在这里恰好派发一次。
 func enqueueAsyncRelayLog(kind relayLogKind, log *Log, accounting *RelayLogAccountingPayload, quotaData *QuotaDataLogParams) bool {
 	if !relayLogAccepting.Load() {
-		// Callers own accounting fallback on false; quota export is internal to
-		// log construction and must be accounted here exactly once.
+		if log != nil {
+			countRelayLogIntakeRefused(kind)
+		}
 		dispatchRelayLogContinuation(&relayLogEvent{QuotaData: quotaData}, 0)
 		return false
 	}
@@ -1529,5 +1995,96 @@ func enqueueAsyncRelayLog(kind relayLogKind, log *Log, accounting *RelayLogAccou
 		dispatchRelayLogContinuation(&relayLogEvent{Accounting: accounting, QuotaData: quotaData}, 0)
 		return true
 	}
-	return enqueueRelayLog(kind, &relayLogEvent{Log: log, Accounting: accounting, QuotaData: quotaData})
+	if enqueueRelayLog(kind, &relayLogEvent{Log: log, Accounting: accounting, QuotaData: quotaData}) {
+		return true
+	}
+	// 越过上面的检查后关停封口了缓冲（enqueueRelayLog 已计数），或 log 为 nil。
+	dispatchRelayLogContinuation(&relayLogEvent{QuotaData: quotaData}, 0)
+	return false
+}
+
+// insertRelayLogs 写入一批日志，对"已经带 id 的行"幂等。
+//
+// 批量插入超时时，服务端可能已经提交、客户端只看到 context deadline exceeded。
+// 这批事件带着 RETURNING/LastInsertId 回填的 id 进重试或兜底文件；直接 INSERT
+// 会撞主键，而且次次都撞，同批里从未提交的行也被拖着失败，最终整批进兜底文件、
+// logs 表缺行（压测复现：1740 条兜底记录里 248 条其实已在库）。
+//
+// 带 id 的行只可能来自之前某次尝试。先按主键回查：库里那一行与本条的身份字段
+// 一致，说明那次尝试其实已提交，跳过并保留 id；否则清掉 id 当新行插入。
+//
+// 不用 ON CONFLICT DO NOTHING：回滚事务分到的 id 在 SQLite（无独立序列）和
+// MySQL 5.7 重启后会被别的行复用，按主键冲突跳过会把本条当成"已存在"悄悄丢掉；
+// 另外 GORM 在 DoNothing 模式下回填 RETURNING 会跳过已带 id 的元素，与新行混在
+// 同一条语句里时新行的 id 整体错位。回查只发生在重试与回放，首次写入的行都不带 id。
+func insertRelayLogs(db *gorm.DB, logs []*Log, batchSize int) error {
+	pending := logs
+	if hasKnownRelayLogID(logs) {
+		stored, err := storedRelayLogIdentities(db, logs, batchSize)
+		if err != nil {
+			return err
+		}
+		pending = make([]*Log, 0, len(logs))
+		for _, log := range logs {
+			if log.Id > 0 {
+				if row, ok := stored[log.Id]; ok && row.sameAs(log) {
+					continue
+				}
+				log.Id = 0
+			}
+			pending = append(pending, log)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return db.CreateInBatches(&pending, batchSize).Error
+}
+
+func hasKnownRelayLogID(logs []*Log) bool {
+	for _, log := range logs {
+		if log.Id > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// relayLogIdentity 是判定"库里这一行就是本条"的字段集合。
+type relayLogIdentity struct {
+	Id        int
+	RequestId string
+	CreatedAt int64
+	UserId    int
+	Type      int
+}
+
+func (r relayLogIdentity) sameAs(log *Log) bool {
+	return r.RequestId == log.RequestId && r.CreatedAt == log.CreatedAt &&
+		r.UserId == log.UserId && r.Type == log.Type
+}
+
+func storedRelayLogIdentities(db *gorm.DB, logs []*Log, batchSize int) (map[int]relayLogIdentity, error) {
+	ids := make([]int, 0, len(logs))
+	for _, log := range logs {
+		if log.Id > 0 {
+			ids = append(ids, log.Id)
+		}
+	}
+	if batchSize <= 0 {
+		batchSize = len(ids)
+	}
+	stored := make(map[int]relayLogIdentity, len(ids))
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		var rows []relayLogIdentity
+		if err := db.Model(&Log{}).Select("id", "request_id", "created_at", "user_id", "type").
+			Where("id IN ?", ids[start:end]).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			stored[row.Id] = row
+		}
+	}
+	return stored, nil
 }

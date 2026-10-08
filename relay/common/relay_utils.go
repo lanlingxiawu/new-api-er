@@ -67,35 +67,10 @@ func SanitizeURLForLog(rawURL string) string {
 	return parsedURL.String()
 }
 
+// isSensitiveURLQueryKey uses the same credential predicate as the access log
+// and the request log, so every logged URL masks the same parameters.
 func isSensitiveURLQueryKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	switch normalized {
-	case "key",
-		"api_key",
-		"api-key",
-		"apikey",
-		"x-api-key",
-		"access_token",
-		"refresh_token",
-		"id_token",
-		"token",
-		"authorization",
-		"auth",
-		"client_secret",
-		"secret",
-		"password",
-		"passwd",
-		"signature",
-		"sig",
-		"awsaccesskeyid",
-		"x-amz-credential",
-		"x-amz-security-token",
-		"x-amz-signature":
-		return true
-	}
-	return strings.Contains(normalized, "token") ||
-		strings.Contains(normalized, "secret") ||
-		strings.Contains(normalized, "signature")
+	return common.IsCredentialQueryName(key)
 }
 
 func GetAPIVersion(c *gin.Context) string {
@@ -208,8 +183,8 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	var hasInputReference bool
 
 	var req TaskSubmitReq
-	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
-		return createTaskError(err, "invalid_json", http.StatusBadRequest, true)
+	if err := UnmarshalRequestBody(c, &req); err != nil {
+		return newRequestBodyTaskError(c, err, "invalid_json")
 	}
 
 	prompt = req.Prompt
@@ -291,12 +266,12 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		req, err = validateMultipartTaskRequest(c, info, action)
 		if err != nil {
-			return createTaskError(err, "invalid_multipart_form", http.StatusBadRequest, true)
+			return newRequestBodyTaskError(c, NewRequestFormError(err), "invalid_multipart_form")
 		}
 	}
 	// 为了metadata字段的兼容性，统一UnmarshalBodyReusable
-	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
-		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
+	if err := UnmarshalRequestBody(c, &req); err != nil {
+		return newRequestBodyTaskError(c, err, "invalid_request")
 	}
 
 	if taskErr := validatePrompt(req.Prompt); taskErr != nil {

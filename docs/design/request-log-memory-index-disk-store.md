@@ -1,5 +1,7 @@
 # 请求日志改造：内存索引 + 本地磁盘正文 + Redis 快照
 
+> 正文的磁盘格式（按 writer 追加的分段文件、索引记 `分段#偏移#长度`、分段级回收与批量写入）以 `request-log-and-redis-hotpath-optimization.md` §3.1 为准；本文中"每条一个 JSON 文件、`<date>/<ts%8>/` 桶目录"的描述只适用于升级前留下、仍被兼容读取与回收的旧条目。内存索引、快照、队列与丢弃语义仍以本文为准。
+>
 > 最近修订：2026-08-10。本文为权威设计，全文一致。历史草案中的“孤儿文件宽限期”“pending/ready 两阶段索引”“清空立即触发扫描”均已废弃，不再出现在本文。
 
 ## 0. 设计前提与核心取舍
@@ -28,7 +30,7 @@
 
 **范围内**：`model/request_log.go` 存储层重写、`middleware/request_logger.go` 写入路径改为有界 writer 池、启动/退出钩子、后台扫描协程、`use_time` 补齐与前端展示、文案与 i18n、原 Redis 键的一次性清理。
 
-**范围外**：抓取逻辑（截断规则、用户名过滤、Content-Type 判断）、API 路由与权限、消费日志（`logs` 表）与业绩统计——完全不变。
+**范围外**：抓取逻辑（截断规则、用户名过滤、Content-Type 判断；当前抓取行为见 §3.2）、API 路由与权限、消费日志（`logs` 表）与业绩统计——完全不变。
 
 **明确的非目标**：不保证进程崩溃（SIGKILL / 断电）时的数据完整性；不保证每一条都物理落盘（§0 允许丢单条）。
 
@@ -71,6 +73,17 @@ relay 请求结束
 | 清空与写入交叉：清空把索引置空后，仍在途的 writer 落盘并 append，把自己那条放回空索引 | 该条对应真实文件，不是孤儿，保留即可，无需特殊处理 |
 | 阈值淘汰与写入交叉 | 淘汰只删索引不删文件（§6.2）；被淘汰文件作为孤儿等下一轮扫描回收 |
 | writer 单条 panic | writer 循环内 `recover()` 兜底，丢弃当前条、不影响后续；因为不存在 pending 半登记态，panic 不会留下幽灵索引条目 |
+
+### 3.2 请求体抓取与 URL 脱敏
+
+中间件挂在 relay 路由组上、**排在 `TokenAuth` / `UserAuth` 之前**，所以被鉴权拒绝的请求同样记日志（生产常开请求日志排障，拒绝请求正是要看的）。由此对抓取的约束：
+
+- **只读有界前缀**：`captureRequestBody` 从原始请求体读 `maxBytes+1` 字节（`maxBytes = RequestLogMaxBodyKB × 1024`，多 1 字节判断截断），不调用 `common.GetBodyStorage`、不整读请求体。被拒请求的读取成本因此封顶在约 64 KB，而不是 `MAX_REQUEST_BODY_MB`。
+- **下游看到完整请求体**：`c.Request.Body` 换成 `requestLogBodyTap`——先回放已读前缀，再接着读原始流；`Close` 关闭原始请求体。请求体的整读、超限判定（413）、磁盘缓存全部留给下游自己的 `GetBodyStorage`，与关闭请求日志时完全一致。
+- **错误不被吞、不被改写**：读前缀时原始请求体返回的读错误（客户端断开、外层 `MaxBytesReader` 超限）在前缀回放完后原样交给下游。日志功能从不让请求体进入"已读空并关闭"的状态，relay 不会拿到 `invalid Read on closed Body`。只有原始请求体自己返回的 `io.EOF` 才算读完：`readBodyPrefix` 手工循环读，不用 `io.ReadFull`——后者把"读了一部分后遇到 EOF"改写成 `io.ErrUnexpectedEOF`，与 net/http 在客户端没发完 `Content-Length` / chunked 请求体就断开时返回的 `io.ErrUnexpectedEOF` 分不开；当成正常结束的话，relay 会拿着截断的请求体报 400，日志也会按"已读完"记大小。
+- **非文本请求体**（multipart、二进制）不读正文，只经 tap 计数，日志正文记为 `[non-textual request body omitted]`。
+- **`request_body_size`**：请求结束时由 tap 给出。下游读到 EOF → 实际读到的字节数（压缩请求为解压后大小）；下游没读完（鉴权拒绝、超限）→ `max(声明的 Content-Length, 已读字节数)`，未声明长度（chunked）时即已读字节数，是下界。
+- **URL 查询串凭据脱敏**：列表对持有 `admin_menu.request_logs:view` 的非 root 管理员开放并返回 `url`，而 Gemini 风格客户端用 `?key=<token>` 鉴权。记录时即把凭据类查询参数的值替换为 `***`，其余参数与顺序原样保留。凭据参数由唯一的判定 `common.IsCredentialQueryName` 决定（参数名大小写不敏感、按 URL 解码后比较）：精确匹配 `key`、`api_key`、`apikey`、`api-key`、`x-api-key`、`x-goog-api-key`、`auth`、`authorization`、`passwd`、`sig`、`awsaccesskeyid`，或参数名含 `token`、`secret`、`signature`、`password`、`credential`（覆盖 `access_token`、`session_token`、`x-amz-security-token`、`client_secret`、`x-amz-signature`、`x-amz-credential` 等）。子串匹配会顺带遮掉 `token_name`、`max_tokens` 这类无害参数，宁可多遮不漏令牌。转发链路记录上游地址（`relay/common.SanitizeURLForLog`）用同一个判定，三处遮的参数一致。磁盘正文与详情里的 `url` 同样是脱敏后的值。脱敏上线前写下的条目仍带原始 `url`：启动时从 Redis 快照恢复索引时逐条脱敏，读详情时对磁盘正文里的 `url` 再脱敏一次（`common.RedactURIString`，幂等、无命中不分配），列表与详情因此都不会再出现旧令牌；磁盘上的旧正文随淘汰自然清掉。同一套脱敏（`common/url_redact.go`）也用于 gin 访问日志（`middleware/logger.go`），stdout / 日志文件里的请求路径同样不带查询串令牌。访问日志从解析好的 `Request.URL` 取路径（转义形式）与原始查询串，不用 gin 的 `param.Path`：后者是解码后的路径拼上查询串，路径里的 `%3F` 解码成 `?` 后按第一个 `?` 切分，会把真正的 `?key=<token>` 当成路径原样写进日志。处理器改写过路径时（kling / 即梦适配器改成 `/v1/video/generations`），只在 `param.Path` 恰好等于"不含 `?` 的路径 + `?` + 当前 `RawQuery`"时取回客户端请求的路径，否则按解析好的 URL 记录，查询串始终经过脱敏。客户端把 `?key=<token>` 连同模型名一起百分号编码进路径时（`/v1beta/models/m%3Fkey=<token>:generateContent`），令牌是路径的一部分而不是查询参数，因此路径也要脱敏（`common.RedactPathCredentials`，由 `RedactURIString` / `RedactRequestURI` 调用）：在转义形式的路径上逐个解出字符（`%3F`、`%3f`、双重编码 `%253F` 都还原成 `?`，`=`、`&` 同理），`=` 前紧邻的 `[A-Za-z0-9_-]` 串（`.` 也是分隔，`gemini.key=` 的名字是 `key`）若被 `IsCredentialQueryName` 判为凭据名，就把 `=` 之后到下一个 `&`、`;`、`?`、`#` 或路径末尾的内容换成 `***`。值不在 `/`、`:` 处截断（AWS secret、base64 里会出现），代价是这类畸形路径在日志里丢掉后半段；路径不含 `=` 与 `%` 时直接返回，无命中不分配。查询串里非凭据参数的值也按同样规则扫描：`?alt=sse%26key=<token>` 按原始 `&` 切分只有一个参数 `alt`，令牌藏在它的值里；查询参数名同样按最后一个 `.` 之后的部分判定（`gemini.key`）。`RedactURIString` 只用于 `RequestURI()` 产出的字符串（路径里的 `?` 保持 `%3F`）。请求头的取舍见 §17。
 
 ## 4. 磁盘布局
 
@@ -136,17 +149,17 @@ type requestLogIndexEntry struct {
 
 ### 6.2 容器与淘汰
 
-用**尾部追加**的切片替换现有的头部插入：
+索引是按 `created_at` 升序的切片：
 
 ```go
 var (
     reqLogMu    sync.Mutex
-    reqLogItems []requestLogIndexEntry // 尾部为最新
+    reqLogItems []requestLogIndexEntry // 按 created_at 升序，尾部为最新
     reqLogSeq   int64                  // 进程内自增 id
 )
 ```
 
-现实现每条日志都执行 `append([]*RequestLog{log}, memRequestLogs...)`，即每次插入复制整个 5000 元素切片。改为尾部 `append` 后插入是 O(1) 摊还；淘汰在 `len > max` 时执行一次 `copy(items, items[len-min:])` + 截断，即每 `max-min` 次插入才付一次 O(min) 拷贝。读取端倒序遍历得到“最新在前”。
+登记（`insertRequestLogIndexLocked`）：`created_at` 不小于尾部的条目直接尾部 `append`，O(1) 摊还；否则二分找到第一个 `created_at` 更大的位置插入（相同 `created_at` 保持提交顺序），只搬移该位置之后的尾段。提交顺序不等于 `created_at` 顺序——多个 writer 并发时，先出队的旧批次可能后提交——但 `created_at` 在请求结束时取值、紧接着入队，乱序幅度受写队列深度约束，搬移的尾段通常只有几条到几千条（微秒级），不随索引规模增长。淘汰在 `len > max` 时执行一次 `copy(items, items[len-min:])` + 截断，即每 `max-min` 次插入才付一次 O(min) 拷贝，丢弃的是 `created_at` 最旧的条目。读取端倒序遍历得到“最新在前”。id 在写盘时分配，不保证与 `created_at` 同序；详情按 id 线性查找，不依赖 id 有序。
 
 淘汰阈值沿用现有 `effectiveRequestLogLimits()`（保证 `0 <= min < max`，配置错配时退化为 `max/2`，杜绝“永不清理”）。**淘汰只删索引，不碰磁盘文件**——磁盘回收统一交给 §8 的扫描协程，写入路径因此不含任何删除 IO；被淘汰文件作为孤儿等下一轮周期扫描删除。
 
@@ -171,7 +184,7 @@ var (
 | `request_log:snapshot` | string（JSON 数组） | 进程退出 | 进程启动，读后立即 `DEL` |
 
 - **退出**：`main.go` 关停序列在 `ShutdownRelayLogFlush` 之后追加两步——先 `middleware.DrainRequestLogQueue(3 * time.Second)` 排空写队列（让在途条目落盘并进索引），再 `model.SnapshotRequestLogs()` 把整个索引（含 `rel`）序列化为一个 JSON 数组 `SET ... EX 86400`。TTL 防止“进程再没起来”时快照永久驻留。两步各自设超时、失败只记日志，不阻塞退出。
-- **启动**：`main.go` 在 `InitRedisClient` 之后、HTTP 端口绑定之前调用 `model.RestoreRequestLogs()`：`GET` → `Unmarshal` → 装入索引（超过 `max` 时只保留最新 `max` 条）→ `DEL`。恢复条目里 `rel` 对应文件已不存在的直接跳过，避免详情 404。读取设 5 秒超时，失败视为无快照。**必须在扫描协程启动之前完成**，否则第一次扫描会把有效文件当孤儿删掉。
+- **启动**：`main.go` 在 `InitRedisClient` 之后、HTTP 端口绑定之前调用 `model.RestoreRequestLogs()`：`GET` → `Unmarshal` → 按 `created_at` 稳定排序（不信任快照里的顺序）→ 装入索引（超过 `max` 时只保留 `created_at` 最新的 `max` 条）→ `DEL`。恢复条目里 `rel` 对应文件已不存在的直接跳过，避免详情 404。读取设 5 秒超时，失败视为无快照。**必须在扫描协程启动之前完成**，否则第一次扫描会把有效文件当孤儿删掉。
 - **Redis 未启用**：快照与恢复都是 no-op。重启后索引为空，磁盘上的旧文件将在下一轮扫描时因“无索引”被删除——这正是需求语义，需在设置页文案说明“未启用 Redis 时重启会丢失请求日志”。
 - **单键大小**：5000 条 × ~400 B ≈ 2 MB，一次 SET/GET。实现中对快照条数额外加 `min(len, max)` 上限，避免 `MaxCount` 被配置成极大值时单键无限膨胀。
 
@@ -213,10 +226,10 @@ var (
 |---|---|---|
 | 开关关闭时直接放行 | relay goroutine | 不变（零开销，早于任何计时） |
 | 记录起始时间 `time.Now()` | relay goroutine | **新增**，仅在开关开启时，纳秒级 |
-| 抓请求头/体、包装 ResponseWriter、抓返回体 | relay goroutine | 不变 |
+| 抓请求头、读请求体前缀（≤ `maxBytes+1` 字节，§3.2）、包装 ResponseWriter、抓返回体 | relay goroutine | 请求体只读有界前缀，不整读 |
 | 组装 `RequestLog` + 计算 `use_time_ms` + 投递队列 | relay goroutine | 由 gopool 派发改为非阻塞 channel 发送，更轻 |
 | 序列化 + 写磁盘文件 | writer 池（4 个常驻 goroutine） | **新增**，替代原 Redis Incr + 3 条 pipeline 命令 |
-| 单次持锁 append 索引 + 按需淘汰 | writer 池 | 新增，一次加锁，O(1) 摊还 |
+| 单次持锁按 `created_at` 登记索引 + 按需淘汰 | writer 池 | 新增，一次加锁；顺序到达 O(1) 摊还，乱序只搬移尾段（§6.2） |
 | Redis 写 | — | **移除** |
 
 relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次 gopool 调度）；实际变化全部发生在异步 writer 内部。
@@ -238,10 +251,10 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 
 100k RPM = 1667 请求/秒。请求日志默认关闭；即使全量开启且不设用户名过滤：
 
-- **relay goroutine**：新增 0 次 DB、0 次 Redis、0 次磁盘 IO、0 次加锁；仅一次 `time.Now()` 与一次非阻塞 channel 发送。
+- **relay goroutine**：新增 0 次 DB、0 次 Redis、0 次磁盘 IO、0 次加锁；仅一次 `time.Now()`、一次 ≤ `maxBytes+1` 字节的请求体前缀读取（下游本来就要读这些字节，前缀随后回放，不是额外整读）与一次非阻塞 channel 发送。被鉴权拒绝的请求最多读 `maxBytes+1` 字节。
 - **writer 池**：1667 次/秒 `WriteFile`，平均 8 KB/条（典型 relay 请求体+响应体），约 13 MB/s 顺序写，由 4 个 writer 承担。SSD 可承受；机械盘或网络盘（NFS/EFS）不可承受——文档明确要求 `relay_log` 落本地 SSD，或用用户名过滤把量级压到个位数 QPS。
 - **背压**：写盘变慢时队列（1000）迅速打满，超出部分丢弃并按 1/1000 频率告警。这是既有的优雅降级机制，不新增阻塞点。
-- **锁竞争**：`reqLogMu` 每条日志**一次** O(1) 操作，1667 次/秒下最多 4 个 writer 争用；管理端列表持锁只做一次页大小切片复制，清空只做一次置空。
+- **锁竞争**：`reqLogMu` 每批日志**一次**持锁，顺序到达的条目 O(1)、乱序条目二分 + 尾段搬移，1667 次/秒下最多 4 个 writer 争用；管理端列表持锁只做一次页大小切片复制，清空只做一次置空。
 - **磁盘容量**：稳态文件数受 `MaxCount` 约束（扫描协程回收），不随 RPM 增长。峰值上限 ≈ `MaxCount × 单文件上限` 加上一个扫描周期（默认 5 min）内的新增量与淘汰/清空尚未回收的孤儿量。
 
 ## 10. `use_time` 补齐
@@ -329,7 +342,7 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 **查询与清理**
 - 六个过滤条件各自命中/不命中及组合过滤
 - 分页：`startIdx` 越界、`num <= 0`、跨页边界、中间页窗口取值正确、`total` 与过滤后条数一致（而非当前页条数）
-- 排序：结果严格按 `created_at` 倒序（尾部追加 + 倒序遍历的回归锁）
+- 排序：结果严格按 `created_at` 倒序，多 writer 乱序提交、批内乱序、同秒多条（保持提交顺序）、快照乱序恢复均覆盖（`model/request_log_branch_audit_regression_test.go`、`TestRequestLogSnapshot_RestoreSortsByCreatedAt`）
 - 详情：命中返回大字段；文件被删后返回 `errRequestLogNotFound`
 - `ClearAllRequestLogs`：只清索引、返回正确条数、**不删磁盘文件**（断言清空后文件仍在，随后一轮扫描才删除）
 
@@ -361,10 +374,10 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 | 文件 | 内容 |
 |---|---|
 | `model/request_log_store.go` | 环境变量解析（`InitRequestLogStore`）、日期+桶路径推导、request id 净化、磁盘读写、目录记忆与自愈重试 |
-| `model/request_log.go` | 内存索引容器（尾部追加 + 淘汰）、`RecordRequestLog`（写盘 → 单次 append 索引）、查询/详情/按时间删除/清空 |
-| `model/request_log_snapshot.go` | 快照保存/恢复、遗留 Redis 键一次性清理 |
+| `model/request_log.go` | 内存索引容器（尾部追加 + 淘汰）、`RecordRequestLog`（写盘 → 单次 append 索引）、查询/详情（读出时对旧条目 `url` 脱敏）/按时间删除/清空 |
+| `model/request_log_snapshot.go` | 快照保存/恢复（恢复时对旧条目 `url` 脱敏）、遗留 Redis 键一次性清理 |
 | `model/request_log_sweep.go` | 清理协程、`SweepRequestLogFiles`（无宽限期）、整目录删除与空目录回收 |
-| `middleware/request_logger.go` | 队列 + writer 池、`DrainRequestLogQueue`、单条 `defer`/`recover`、`use_time_ms` 计时、用户名异步解析、头部截断 |
+| `middleware/request_logger.go` | 队列 + writer 池、`DrainRequestLogQueue`、单条 `defer`/`recover`、`use_time_ms` 计时、用户名异步解析、头部截断、请求体有界前缀抓取与回放、URL 查询串凭据脱敏（调用 `common/url_redact.go`，§3.2） |
 | `main.go` | 启动 `InitRequestLogStore → RestoreRequestLogs → StartRequestLogWriters → StartRequestLogSweeper → StartLegacyRequestLogCleanup`；关停 `DrainRequestLogQueue(3s) → SnapshotRequestLogs` |
 | `controller/request_log.go`、`i18n/` | `ApiErrorI18n` + `request_log.not_found` / `request_log.timestamp_required` 双语 |
 | `web/src/features/request-logs/`、`.../maintenance/request-log-settings-section.tsx` | 耗时列、`success:false` 判定、错误态展示、文案与 7 语言 i18n |
@@ -382,15 +395,17 @@ relay goroutine 上的工作量没有增加（多一次 `time.Now()`，少一次
 7. **请求/返回头不做脱敏**（见 §17）。
 8. **新增环境变量一律不在包级变量里读**（见 §11）。
 
-## 17. 安全边界：头部不脱敏
+## 17. 安全边界：头部落盘不脱敏，按查看者遮蔽
 
-请求头按原样记录，**不对 `Authorization` / `X-Api-Key` / `Cookie` 等做脱敏或掩码**——这是明确的取舍，不是疏漏。
+请求头按原样记录，**落盘时不对 `Authorization` / `X-Api-Key` / `Cookie` 等做脱敏或掩码**——这是明确的取舍，不是疏漏；遮蔽只发生在详情接口返回给非超级管理员时。
 
 由此产生的事实，部署方必须知晓：
 
-- 上游 API key、客户端令牌、playground 的后台 JWT 会以**明文**出现在 `relay_log/` 下的 JSON 文件里，以及请求日志详情弹窗里（可一键复制）。
+- 上游 API key、客户端令牌、playground 的后台 JWT 会以**明文**出现在 `relay_log/` 下的 JSON 文件里，以及超级管理员打开的请求日志详情弹窗里（可一键复制）。
 - 正文文件权限为 `0644`，会随备份、镜像、宿主机日志采集一并扩散；相比原先存 Redis（内存、可整体 flush），持久化后暴露面更大。
-- 读取入口受 `admin_menu.request_logs:view` 管控，但任何拿到该权限的管理员即可读取全量令牌。
+- 列表（`GET /api/request-log/`）只需 `admin_menu.request_logs:view`，因此列表投影不含任何请求/返回头，`url` 中的查询串凭据在记录时已脱敏（§3.2）。
+- 详情（`GET /api/request-log/:id`，含请求/响应正文与头部）另需同一资源上的 `view_detail` 动作，默认不授予任何内置角色，由超级管理员在权限分配里单独勾选；勾选 `view_detail` 隐含 `view`，取消 `view` 同时取消 `view_detail`（与 view/edit 的归一化相同，前后端各一份 `viewDependentActions`）。前端对没有该权限的账号禁用「查看」按钮并提示找超级管理员开通。
+- 超级管理员看到原始头部；其他管理员看到的凭据类请求/响应头（名字匹配 `common.IsCredentialHeaderName`：URL 凭据参数的同一判定，外加含 `auth`、`cookie`、`key` 的名字与 `Sec-WebSocket-Protocol`）值被替换为 `***`，个数保留。头部因超过采集上限被截断、不再是完整 JSON 时无法可靠遮蔽，整段不返回并置 `headers_withheld: true`，弹窗据此说明原因。正文不做遮蔽（请求体里的用户输入正是排障所需）。
 
 因此运维约束是：**请求日志是临时排障开关，不应长期开启**；开启时优先配 `RequestLogUsername` 缩小范围；`relay_log/` 目录应与备份/采集路径隔离。这些写进设置页文案。
 

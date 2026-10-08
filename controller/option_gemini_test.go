@@ -21,6 +21,7 @@ func TestUpdateOptionRejectsInvalidGeminiSafetyThreshold(t *testing.T) {
 		strings.NewReader(`{"key":"gemini.safety_settings","value":"{\"default\":\"BLOCK_SOME\"}"}`),
 	)
 
+	context.Set("role", common.RoleRootUser) // the unscoped write path is root-only
 	UpdateOption(context)
 
 	assert.Equal(t, http.StatusOK, response.Code)

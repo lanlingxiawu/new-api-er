@@ -376,7 +376,11 @@ func TestPasskeyDomainPreviewConfirmationAndAudit(t *testing.T) {
 	assert.Empty(t, options, "preview must not materialize default rows")
 	assert.Equal(t, "www.example.com,WWW.example.com", system_setting.GetPasskeySettings().LegacyRPIDs)
 	assert.ErrorIs(t, model.UpdateOptionsBulk(map[string]string{"passkey.legacy_rp_ids": upper, "Notice": "must roll back"}), model.ErrPasskeyDomainRemovalConfirmation)
-	blocked := passkeyDomainRequest(t, "/api/option/", map[string]string{"key": "passkey.legacy_rp_ids", "value": upper}, identity, "https://example.com", UpdateOption)
+	// /api/option/ is a root route and UpdateOption refuses non-root writers itself.
+	blocked := passkeyDomainRequest(t, "/api/option/", map[string]string{"key": "passkey.legacy_rp_ids", "value": upper}, identity, "https://example.com", func(c *gin.Context) {
+		c.Set("role", common.RoleRootUser)
+		UpdateOption(c)
+	})
 	assert.Equal(t, http.StatusConflict, blocked.Code)
 	assert.Contains(t, blocked.Body.String(), "PASSKEY_RP_ID_REMOVAL_CONFIRMATION_REQUIRED")
 	request["preview"] = false

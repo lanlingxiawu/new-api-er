@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -101,6 +102,11 @@ func RestoreRequestLogs() {
 		common.SysError("RestoreRequestLogs: corrupted snapshot discarded: " + err.Error())
 		return
 	}
+	// 索引要求按 created_at 升序（列表"最新在前"与淘汰"最旧先出"都依赖它）；
+	// 快照按索引顺序写出，这里再稳定排序一次，不信任外部数据的顺序。
+	sort.SliceStable(entries, func(i, j int) bool {
+		return requestLogSnapshotCreatedAt(entries[i]) < requestLogSnapshotCreatedAt(entries[j])
+	})
 	maxCount, _ := effectiveRequestLogLimits()
 	if len(entries) > maxCount {
 		entries = entries[len(entries)-maxCount:]
@@ -108,14 +114,17 @@ func RestoreRequestLogs() {
 
 	items := make([]requestLogIndexEntry, 0, len(entries))
 	var maxId int64
+	segSizes := make(map[string]int64)
 	for _, entry := range entries {
 		if entry.Meta == nil || entry.Rel == "" {
 			continue
 		}
 		// 正文已被清理的条目直接丢弃，避免详情点开是 404。
-		if !requestLogFileExists(entry.Rel) {
+		if !requestLogBodyExists(entry.Rel, segSizes) {
 			continue
 		}
+		// 早于脱敏上线写下的条目 Url 里可能带着 ?key=<token>，而列表对非 root 管理员开放。
+		entry.Meta.Url = common.RedactURIString(entry.Meta.Url)
 		items = append(items, requestLogIndexEntry{meta: entry.Meta, rel: entry.Rel})
 		if int64(entry.Meta.Id) > maxId {
 			maxId = int64(entry.Meta.Id)
@@ -191,4 +200,12 @@ func CleanupLegacyRequestLogRedisKeys() {
 	// 索引/序号键最后删：中途失败时下次启动还能重试。
 	common.RequestLogRDB.Del(ctx, legacyRequestLogIndexKey, legacyRequestLogSeqKey)
 	common.SysLog(fmt.Sprintf("legacy request log cleanup done, %d keys removed", removed))
+}
+
+// requestLogSnapshotCreatedAt 取排序键；缺 meta 的坏条目排在最前，随后在恢复循环里被跳过。
+func requestLogSnapshotCreatedAt(entry requestLogSnapshotEntry) int64 {
+	if entry.Meta == nil {
+		return 0
+	}
+	return entry.Meta.CreatedAt
 }

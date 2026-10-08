@@ -111,7 +111,7 @@ func TestGetAndValidOpenAIImageRequestMultipartStream(t *testing.T) {
 
 		_, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid stream value")
+		require.Equal(t, "stream must be true or false", err.Error())
 	})
 }
 

@@ -39,6 +39,7 @@ type StreamSnapshot struct {
 	EstimatedOutput     int               // 成功交付文本的累计增量估算，不对每个分片独立取整。
 	ReceivedResponse    bool              // 已解析上游业务响应，不要求下游写入成功。
 	ReceivedOutput      int               // 接收侧文本估算，仅用户断开且无确认用量时采用。
+	OutputReportCurrent bool              // 最近的上游输出计数晚于最后一段已接收内容（message_start 的初值不算）；异常结束时据此决定是否用估算补足。
 	ReceivedAudioOutput int               // Realtime 已接收音频的专用估算，不按压缩字节计量。
 	MediaBytes          int64             // 成功交付的裸媒体字节，仅作为证据，不直接换算成 token。
 	UpstreamFailure     bool              // 首个终止原因确认为上游异常；与兼容计费原因字符串分开记录。
@@ -500,7 +501,14 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		s.state.Complete = false
 		return s.state.Err
 	}
+	receivedBefore := s.state.ReceivedOutput
 	s.observeReceivedLocked(event, data, v)
+	if _, reported := updates["output_tokens"]; reported {
+		// 同帧内容已计入该帧的累计报告（OpenAI 末帧、Gemini 逐块 usageMetadata、Claude message_delta）。
+		s.state.OutputReportCurrent = kind != "message_start"
+	} else if s.state.ReceivedOutput > receivedBefore {
+		s.state.OutputReportCurrent = false
+	}
 	return nil
 }
 
@@ -1167,6 +1175,7 @@ const (
 	streamSuccessCandidate                             // 单个候选完成，其他候选可继续生成。
 	streamSuccessClaudeDelta                           // Claude 真正的 stop_reason 帧，随后仍需 message_stop。
 	streamSuccessResponse                              // 整条响应的结束标记，须由上游全流完成状态确认。
+	streamSuccessUsageTail                             // OpenAI Chat 的纯用量尾帧（choices 为空数组、带 usage 对象），只属于成功的流。
 )
 
 // classifyStreamSuccessEvent 按事件名 event 和 JSON data 返回成功结束的粒度，不修改协议状态或原始字节。
@@ -1196,10 +1205,17 @@ func classifyStreamSuccessEvent(event string, data []byte) streamSuccessScope {
 		}
 		return streamSuccessNone
 	}
-	for _, c := range v.Get("choices").Array() {
+	choices := v.Get("choices")
+	choiceList := choices.Array() // 每个受管帧都经过这里，只展开一次
+	for _, c := range choiceList {
 		if c.Get("finish_reason").String() != "" {
 			return streamSuccessCandidate
 		}
+	}
+	if choices.IsArray() && len(choiceList) == 0 && v.Get("usage").IsObject() {
+		// 流失败后再发的用量尾帧（含本地合成的 include_usage 帧）与实际结算不一致：失败时按确认或估算
+		// 另行结算，终止错误帧才是最后一帧。与候选结束一样只在已记录终止原因时拦下，健康流中途的用量帧照常放行。
+		return streamSuccessUsageTail
 	}
 	for _, c := range v.Get("candidates").Array() {
 		if c.Get("finishReason").String() != "" {

@@ -224,6 +224,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if info != nil && billingPrepared {
 			apiErr = RefundFailedRequestBilling(c, info, apiErr)
 		}
+		apiErr = presentResponsesWSError(c, apiErr)
 	}()
 	if modelName == "" {
 		return newResponsesWSInvalidRequestError(errors.New("model is required"))
@@ -260,7 +261,8 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		}
 	} else {
 		retry := &service.RetryParam{Ctx: c, TokenGroup: common.GetContextKeyString(c, appconstant.ContextKeyUsingGroup), ModelName: modelName, RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0)}
-		for ; retry.GetRetry() <= common.RetryTimes; retry.IncreaseRetry() {
+		for ; service.ContinueRelayAttempts(c, retry); retry.IncreaseRetry() {
+			service.BeginRelayAttempt(c, retry)
 			var channel *appmodel.Channel
 			channel, apiErr = selectResponsesWSChannel(c, modelName, retry)
 			if apiErr != nil {
@@ -296,7 +298,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				service.ResetStatusCode(apiErr, c.GetString("status_code_mapping"))
 				info.LastError = apiErr
 				service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, info.ApiKey, channel.GetAutoBan()), apiErr, info)
-				if service.ShouldRetryRelayError(c, apiErr, common.RetryTimes-retry.GetRetry()) {
+				if service.ShouldRetryRelayError(c, apiErr, service.RemainingRetryBudget(c, retry)) {
 					continue
 				}
 				return apiErr
@@ -583,6 +585,20 @@ func (s *responsesWSSession) writeClient(kind int, message []byte) error {
 		return err
 	}
 	return s.client.WriteMessage(kind, message)
+}
+
+// presentResponsesWSError applies the configured relay error display rules,
+// the same ones the HTTP relay applies before answering the client.
+func presentResponsesWSError(c *gin.Context, apiErr *types.NewAPIError) *types.NewAPIError {
+	if apiErr == nil {
+		return nil
+	}
+	original := apiErr.Error()
+	presented, message := service.PresentRelayError(c, apiErr, original, c.GetString(common.RequestIdKey))
+	if presented != apiErr || message != original {
+		presented.SetMessage(message)
+	}
+	return presented
 }
 
 func (s *responsesWSSession) sendError(eventID string, apiErr *types.NewAPIError) {

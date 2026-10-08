@@ -1,3 +1,4 @@
+import { EmployeeCustomerExport } from '@/features/usage-logs/export/components/employee-customer-export'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -646,12 +647,14 @@ function MyRechargeLogsTab() {
 }
 */
 
+
 export function CustomerConsole() {
   const { t } = useTranslation()
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('My Customers')}</SectionPageLayout.Title>
+      <SectionPageLayout.Actions><EmployeeCustomerExport /></SectionPageLayout.Actions>
       <SectionPageLayout.Content className='overflow-hidden'>
         <div className='h-full min-h-0 overflow-hidden'>
           <MyCustomersTab />

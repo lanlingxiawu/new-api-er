@@ -14,6 +14,8 @@ import (
 // 快照进结构体，否则运行中的任务无法响应配置变更。哪些参数对运行中的任务立即
 // 生效、哪些仅对新分片/新任务生效，见 docs/design/usage-log-export.md §8.1。
 type LogExportSetting struct {
+	EmployeeExportEnabled      bool `json:"employee_export_enabled"`
+	EmployeeMaxCustomersPerJob int  `json:"employee_max_customers_per_job"`
 	// ── 开关与配额 ──────────────────────────────────────────
 	// Enabled 功能总开关，关闭后拒绝新建导出任务（不中断运行中的任务）。
 	Enabled bool `json:"enabled"`
@@ -77,6 +79,13 @@ type LogExportSetting struct {
 	DownloadSessionTTLSec int `json:"download_session_ttl_sec"`
 	// MaxConcurrentDownloadsPerUser 单用户并发下载数上限。
 	MaxConcurrentDownloadsPerUser int `json:"max_concurrent_downloads_per_user"`
+}
+
+func (s *LogExportSetting) GetEmployeeMaxCustomersPerJob() int {
+	if s.EmployeeMaxCustomersPerJob <= 0 {
+		return 100
+	}
+	return clampInt(s.EmployeeMaxCustomersPerJob, 1, 1000)
 }
 
 const (
@@ -172,16 +181,17 @@ func clampInt(value, min, max int) int {
 }
 
 var logExportSetting = LogExportSetting{
-	Enabled:              true,
-	UserCooldownSec:      DefaultLogExportUserCooldownSec,
-	MaxConcurrentJobs:    DefaultLogExportMaxConcurrentJobs,
-	MaxActiveJobsPerUser: DefaultLogExportMaxActiveJobsPerUser,
-	AdminMaxRangeSec:     DefaultLogExportAdminMaxRangeSec,
-	TimeoutSec:           DefaultLogExportTimeoutSec,
-	JobTTLHours:          DefaultLogExportJobTTLHours,
-	MaxTemplatesPerUser:  DefaultLogExportMaxTemplatesPerUser,
-	MaxFilterValues:      DefaultLogExportMaxFilterValues,
-	SummaryMaxGroups:     DefaultLogExportSummaryMaxGroups,
+	EmployeeMaxCustomersPerJob: 100,
+	Enabled:                    true,
+	UserCooldownSec:            DefaultLogExportUserCooldownSec,
+	MaxConcurrentJobs:          DefaultLogExportMaxConcurrentJobs,
+	MaxActiveJobsPerUser:       DefaultLogExportMaxActiveJobsPerUser,
+	AdminMaxRangeSec:           DefaultLogExportAdminMaxRangeSec,
+	TimeoutSec:                 DefaultLogExportTimeoutSec,
+	JobTTLHours:                DefaultLogExportJobTTLHours,
+	MaxTemplatesPerUser:        DefaultLogExportMaxTemplatesPerUser,
+	MaxFilterValues:            DefaultLogExportMaxFilterValues,
+	SummaryMaxGroups:           DefaultLogExportSummaryMaxGroups,
 
 	BatchSize:            DefaultLogExportBatchSize,
 	BatchSleepMs:         DefaultLogExportBatchSleepMs,

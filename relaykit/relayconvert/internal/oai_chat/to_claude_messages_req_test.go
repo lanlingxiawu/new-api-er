@@ -164,7 +164,9 @@ func TestClaudeReq_ToolChoiceAndParallel(t *testing.T) {
 		Model:            "gpt-4",
 		ToolChoice:       "auto",
 		ParallelTooCalls: ptr(false),
-		Messages:         []dto.Message{{Role: "user", Content: "hi"}},
+		// Anthropic accepts tool_choice only alongside tools.
+		Tools:    []dto.ToolCallRequest{toolWithParams("lookup", "d", map[string]any{"type": "object"})},
+		Messages: []dto.Message{{Role: "user", Content: "hi"}},
 	}
 	got, err := OpenAIChatRequestToClaudeMessages(newGinCtx(), claudeMeta(), req)
 	require.NoError(t, err)

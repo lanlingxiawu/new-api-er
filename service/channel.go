@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -65,6 +66,11 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 		return true
 	}
 	if types.IsSkipRetryError(err) {
+		return false
+	}
+	// Built locally before the channel's upstream was called: says nothing
+	// about the channel, whatever its status code.
+	if relaycommon.IsLocalRequestBuildError(err) {
 		return false
 	}
 	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {

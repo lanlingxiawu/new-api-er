@@ -38,15 +38,24 @@ func upstreamBaseQuota(priceData *hosttypes.PriceData, quota int, explicit *int6
 		if quota == 0 {
 			return 0
 		}
-		return decimal.NewFromInt(int64(quota)).Div(decimal.NewFromFloat(groupRatio)).Round(0).IntPart()
+		return eventCostQuota(decimal.NewFromInt(int64(quota)).Div(decimal.NewFromFloat(groupRatio)))
 	}
 	if priceData.UsePrice && priceData.ModelPrice > 0 {
-		return decimal.NewFromFloat(priceData.ModelPrice).
+		return eventCostQuota(decimal.NewFromFloat(priceData.ModelPrice).
 			Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-			Mul(decimal.NewFromFloat(priceData.OtherRatioMultiplier())).
-			Round(0).IntPart()
+			Mul(decimal.NewFromFloat(priceData.OtherRatioMultiplier())))
 	}
 	return 0
+}
+
+// maxEventCostQuota 是单笔成本/佣金换算结果的上限（约 1.1e15 quota，远超任何真实单笔消费）。
+// 极端倍率（如分组倍率 1e-18）下换算会超出 int64：直接 IntPart 会回绕成负数，被累计器丢弃或记成贷记；
+// 饱和到 MaxInt64 又会在下一次 `cost += x` 或数据库 `cost_quota + ?` 时溢出，卡住每日上限刷盘。
+// 封顶在这里，累计 8192 笔封顶值才会触及 int64 上界。
+const maxEventCostQuota int64 = 1 << 50
+
+func eventCostQuota(d decimal.Decimal) int64 {
+	return common.Int64FromDecimal(d, maxEventCostQuota)
 }
 
 // upstreamQuota = 基础消耗 × 成本系数，四舍五入到 quota。
@@ -54,7 +63,7 @@ func upstreamQuota(baseQuota int64, costRatio float64) int64 {
 	if baseQuota <= 0 || costRatio <= 0 {
 		return 0
 	}
-	return decimal.NewFromInt(baseQuota).Mul(decimal.NewFromFloat(costRatio)).Round(0).IntPart()
+	return eventCostQuota(decimal.NewFromInt(baseQuota).Mul(decimal.NewFromFloat(costRatio)))
 }
 
 // recordChannelDailyUpstream 累计一笔上游消耗。

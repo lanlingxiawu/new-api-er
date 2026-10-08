@@ -1,6 +1,7 @@
 package ali
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -201,9 +202,9 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 	return &imageRequest, nil
 }
 
-// updateTask 查询 taskID 的原始任务响应；c/info 提供请求上下文与会话，返回解析结果、错误及本次原始正文。
+// updateTask 查询 taskID 的原始任务响应；c/info 提供请求上下文与会话，ctx 为轮询的上游 context，返回解析结果、错误及本次原始正文。
 // 受管图片轮询延续初始 HTTP 200 的会话，采集后再解析，不重置门控/证据；非受管请求保持既有行为。
-func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, error, []byte) {
+func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string, ctx context.Context) (*AliResponse, error, []byte) {
 	url := fmt.Sprintf("%s/api/v1/tasks/%s", info.ChannelBaseUrl, taskID)
 
 	var aliResponse AliResponse
@@ -214,15 +215,12 @@ func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*Al
 	}
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
-	req = service.BindRelayRequestContext(c, req)
 
-	client := &http.Client{}
 	managed := info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0
-	if managed {
-		// 新会话已负责用户取消；不沿用旧轮询脱离下游的后台上下文。
-		req = req.WithContext(c.Request.Context())
-	}
-	resp, err := client.Do(req)
+	// 轮询的是已提交（上游已计费）的任务：只受 asyncTaskWait 的上游 context（我方时限与请求结束）约束，
+	// 客户端离开不中断——受管图片会话也一样。
+	req = req.WithContext(ctx)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		if managed {
 			info.StreamSession.Fail("upstream_read_error", err)
@@ -266,30 +264,37 @@ func updateTask(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*Al
 	return &response, nil, responseBody
 }
 
+// aliTaskPollInitialWait / aliTaskPollInterval 是异步任务的首次等待与轮询间隔（测试可缩短）。
+var (
+	aliTaskPollInitialWait = 5 * time.Second
+	aliTaskPollInterval    = 10 * time.Second
+)
+
 // asyncTaskWait 按原间隔轮询 taskID，c/info 提供取消与诊断会话；返回最终任务、原始正文及错误。
 // 已进入受管图片任务的异常立即交给统一终止流程，旧请求维持既有重试和等待策略。
 func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (*AliResponse, []byte, error) {
-	waitSeconds := 10
+	waitInterval := aliTaskPollInterval
 	step := 0
 	maxStep := 20
 
 	var taskResponse AliResponse
 	var responseBody []byte
 
-	requestContext := service.RelayRequestContext(c)
-	if info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0 {
-		requestContext = c.Request.Context() // 未启用旧超时控制器时，受管任务也立即响应用户断开。
-	}
+	// 任务已提交，上游按任务生成全部图片并计费：只有我方时限（及请求结束）结束轮询，客户端离开
+	// 不中断，取回真实结果按实际张数结算（与主分支一致）。受管图片会话同样如此——轮询已提交的
+	// 任务不是流式读取，停下来只会按估算少收。
+	requestContext, release := service.RelayUpstreamContext(c)
+	defer release()
 	select {
-	case <-time.After(5 * time.Second):
+	case <-time.After(aliTaskPollInitialWait):
 	case <-requestContext.Done():
 		return nil, nil, requestContext.Err()
 	}
 
 	for {
-		logger.LogDebug(c, "asyncTaskWait step %d/%d, wait %d seconds", step, maxStep, waitSeconds)
+		logger.LogDebug(c, "asyncTaskWait step %d/%d, wait %s", step, maxStep, waitInterval)
 		step++
-		rsp, err, body := updateTask(c, info, taskID)
+		rsp, err, body := updateTask(c, info, taskID, requestContext)
 		responseBody = body
 		if err != nil {
 			if info.StreamSession.Active() && info.StreamSession.ExpectedImages > 0 {
@@ -297,7 +302,7 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 			}
 			logger.LogWarn(c, "asyncTaskWait UpdateTask err: "+err.Error())
 			select {
-			case <-time.After(time.Duration(waitSeconds) * time.Second):
+			case <-time.After(waitInterval):
 			case <-requestContext.Done():
 				return nil, responseBody, requestContext.Err()
 			}
@@ -322,7 +327,7 @@ func asyncTaskWait(c *gin.Context, info *relaycommon.RelayInfo, taskID string) (
 			break
 		}
 		select {
-		case <-time.After(time.Duration(waitSeconds) * time.Second):
+		case <-time.After(waitInterval):
 		case <-requestContext.Done():
 			return nil, responseBody, requestContext.Err()
 		}

@@ -137,8 +137,12 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 	}
 
-	// 如果没有实际内容且没有结束标志，跳过。主要针对 openai 流响应开头的空数据
-	if !hasContent && !hasFinishReason {
+	// 没有内容、没有结束标志的帧跳过（主要是 openai 流开头的空数据）。
+	// 例外是 include_usage 的末帧：choices 为空、只带真实 usage。它往往是流里
+	// 唯一的真实用量，丢掉它客户端就只能看到前面各帧的估算值（prompt=估算、
+	// candidates=0），与计费不符。
+	isUsageOnlyChunk := len(openAIResponse.Choices) == 0 && hasReportedUsage(openAIResponse.Usage)
+	if !hasContent && !hasFinishReason && !isUsageOnlyChunk {
 		return nil
 	}
 
@@ -524,6 +528,10 @@ func geminiFinishReason(finishReason string) string {
 	default:
 		return "STOP"
 	}
+}
+
+func hasReportedUsage(usage *dto.Usage) bool {
+	return usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0)
 }
 
 func geminiBillingMetadataFromOpenAIUsage(usage *dto.Usage) (dto.GeminiUsageMetadata, bool) {

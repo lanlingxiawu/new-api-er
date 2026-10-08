@@ -154,6 +154,12 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 	if geminiRequest.GenerationConfig.CandidateCount != nil {
 		openaiRequest.N = kitutil.GetPointer(*geminiRequest.GenerationConfig.CandidateCount)
 	}
+	if geminiRequest.GenerationConfig.Seed != nil {
+		openaiRequest.Seed = kitutil.GetPointer(float64(*geminiRequest.GenerationConfig.Seed))
+	}
+	// presencePenalty / frequencyPenalty are not mapped (as upstream): OpenAI
+	// reasoning models and the Claude target reject them.
+	openaiRequest.ResponseFormat = responseFormatFromGemini(&geminiRequest.GenerationConfig)
 
 	if len(geminiRequest.GetTools()) > 0 {
 		var tools []dto.ToolCallRequest
@@ -172,14 +178,15 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 					Function: dto.FunctionRequest{
 						Name:        function.Name,
 						Description: function.Description,
-						Parameters:  function.Parameters,
+						Parameters:  lowercaseSchemaTypes(function.Parameters, 0),
 					},
 				}
 				tools = append(tools, openAITool)
 			}
 		}
 		if len(tools) > 0 {
-			openaiRequest.Tools = tools
+			// OpenAI rejects tool_choice without tools.
+			openaiRequest.Tools, openaiRequest.ToolChoice = toolChoiceFromGemini(geminiRequest.ToolConfig, tools)
 		}
 	}
 
@@ -274,6 +281,131 @@ func (h *geminiFunctionCallHistory) newFallbackID() string {
 		h.reservedIDs[id] = struct{}{}
 		return id
 	}
+}
+
+// responseFormatFromGemini maps responseMimeType application/json to an OpenAI
+// response_format. A responseJsonSchema is standard JSON Schema and becomes
+// json_schema. A responseSchema uses Gemini's Schema dialect (nullable,
+// propertyOrdering, ...) that OpenAI's schema validator may reject, so it
+// becomes json_object: the output stays JSON, the shape is left to the prompt.
+// Other MIME types (text/plain, text/x.enum) have no OpenAI counterpart.
+func responseFormatFromGemini(config *dto.GeminiChatGenerationConfig) *dto.ResponseFormat {
+	if !strings.EqualFold(strings.TrimSpace(config.ResponseMimeType), "application/json") {
+		return nil
+	}
+	raw := strings.TrimSpace(string(config.ResponseJsonSchema))
+	if raw == "" || raw == "null" {
+		return &dto.ResponseFormat{Type: "json_object"}
+	}
+	jsonSchema, err := kitutil.Marshal(dto.FormatJsonSchema{Name: "response", Schema: config.ResponseJsonSchema})
+	if err != nil {
+		kitutil.LogSystemError(fmt.Sprintf("failed to marshal gemini response schema: %v", err))
+		return &dto.ResponseFormat{Type: "json_object"}
+	}
+	return &dto.ResponseFormat{Type: "json_schema", JsonSchema: jsonSchema}
+}
+
+// toolChoiceFromGemini maps functionCallingConfig.mode to an OpenAI
+// tool_choice and returns the tools to send with it. VALIDATED lets the model
+// choose, like "auto". ANY with exactly one allowed function names that
+// function. ANY with several allowed functions has no tool_choice form, so the
+// tools are narrowed to the allowed ones and the choice is "required". If no
+// allowed name is declared, all tools are kept with "required".
+func toolChoiceFromGemini(toolConfig *dto.ToolConfig, tools []dto.ToolCallRequest) ([]dto.ToolCallRequest, any) {
+	if toolConfig == nil || toolConfig.FunctionCallingConfig == nil {
+		return tools, nil
+	}
+	config := toolConfig.FunctionCallingConfig
+	switch strings.ToUpper(strings.TrimSpace(string(config.Mode))) {
+	case "AUTO", "VALIDATED":
+		return tools, "auto"
+	case "NONE":
+		return tools, "none"
+	case "ANY":
+		if len(config.AllowedFunctionNames) == 0 {
+			return tools, "required"
+		}
+		allowed := make(map[string]bool, len(config.AllowedFunctionNames))
+		for _, name := range config.AllowedFunctionNames {
+			allowed[name] = true
+		}
+		narrowed := make([]dto.ToolCallRequest, 0, len(tools))
+		for _, tool := range tools {
+			if allowed[tool.Function.Name] {
+				narrowed = append(narrowed, tool)
+			}
+		}
+		switch {
+		case len(narrowed) == 0:
+			// No allowed name is declared: naming one would be rejected.
+			return tools, "required"
+		case len(allowed) == 1:
+			return tools, map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": narrowed[0].Function.Name},
+			}
+		default:
+			return narrowed, "required"
+		}
+	default:
+		return tools, nil
+	}
+}
+
+const maxSchemaDepth = 64
+
+// lowercaseSchemaTypes rewrites Gemini Schema type names (OBJECT, STRING, ...)
+// to the lowercase JSON Schema names OpenAI requires. It only follows
+// sub-schema keywords, so a property that happens to be called "type" is not
+// touched. Input maps are copied, never mutated.
+func lowercaseSchemaTypes(schema any, depth int) any {
+	if depth > maxSchemaDepth {
+		return schema
+	}
+	node, ok := schema.(map[string]any)
+	if !ok {
+		return schema
+	}
+	out := make(map[string]any, len(node))
+	for key, value := range node {
+		switch key {
+		case "type":
+			switch typed := value.(type) {
+			case string:
+				value = strings.ToLower(typed)
+			case []any:
+				types := make([]any, len(typed))
+				for i, item := range typed {
+					if name, ok := item.(string); ok {
+						types[i] = strings.ToLower(name)
+					} else {
+						types[i] = item
+					}
+				}
+				value = types
+			}
+		case "properties", "$defs", "definitions", "patternProperties":
+			if children, ok := value.(map[string]any); ok {
+				mapped := make(map[string]any, len(children))
+				for name, child := range children {
+					mapped[name] = lowercaseSchemaTypes(child, depth+1)
+				}
+				value = mapped
+			}
+		case "items", "additionalProperties", "not":
+			value = lowercaseSchemaTypes(value, depth+1)
+		case "anyOf", "oneOf", "allOf", "prefixItems":
+			if children, ok := value.([]any); ok {
+				mapped := make([]any, len(children))
+				for i, child := range children {
+					mapped[i] = lowercaseSchemaTypes(child, depth+1)
+				}
+				value = mapped
+			}
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func convertGeminiRoleToOpenAI(geminiRole string) string {

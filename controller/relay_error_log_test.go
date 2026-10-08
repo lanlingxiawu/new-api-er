@@ -79,12 +79,15 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	storedOther, err := common.StrToMap(stored.Other)
 	require.NoError(t, err)
 	assert.Equal(t, float64(http.StatusBadGateway), storedOther["status_code"])
+	assert.Equal(t, "/v1/chat/completions", storedOther["request_path"])
+	assert.Equal(t, string(types.ErrorCodeBadResponseStatusCode), storedOther["error_code"])
 	for _, key := range []string{"channel_id", "channel_name", "channel_type"} {
 		assert.NotContains(t, storedOther, key)
 	}
 	adminInfo, ok := storedOther["admin_info"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []any{"101"}, adminInfo["use_channel"])
+	assert.NotContains(t, adminInfo, "is_multi_key")
 
 	logs, total, err := model.GetUserLogs(7, model.LogTypeError, 0, 0, "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)

@@ -106,6 +106,8 @@ func main() {
 	}
 	wsmanager.StartSubscriber(context.Background())
 
+	go model.SyncChannelProbePolicy()
+
 	// Warm pricing after channel cache initialization so Advanced Custom
 	// endpoint inference can read cached route settings on first request.
 	model.GetPricing()

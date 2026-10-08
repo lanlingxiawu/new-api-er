@@ -87,6 +87,21 @@ export type PriceMonitorPriceCell = {
   sell_factor?: number
   measured_factor?: number
   configured_factor?: number
+  /** 计入实测成本的上游分组倍率；判定命中但它为空，表示按列表价判定（上游倍率未知）。 */
+  upstream_factor?: number
+  /** 实测亏损的逐项价格对比：只列上游实际成本高于我们最低售价的项。 */
+  loss_lines?: PriceMonitorLossLine[]
+}
+
+export type PriceMonitorLossLine = {
+  /** 阶梯价的阶梯下标，非阶梯价为空。 */
+  tier?: number
+  /** input / output / price，或分项键（cache_read 等）。 */
+  key: string
+  /** 上游列表价 × 上游分组倍率。 */
+  cost: number
+  /** 平台价 × 最低售价倍率。 */
+  sell: number
 }
 
 export type PriceMonitorLossKind = 'measured' | 'configured'
@@ -107,6 +122,10 @@ export type PriceMonitorRepairFloor = {
   current?: Record<string, number>
   /** 每一项在所有渠道原始报价中的最高展示价（每百万 token，按次为每次），不除售价系数。 */
   highest?: Record<string, number>
+  /** 每一项在所有渠道原始报价中的最低展示价。 */
+  lowest?: Record<string, number>
+  /** 官方价（展示价）。 */
+  official?: Record<string, number>
   /** 补全倍率被系统锁定时的倍率：输出价 = 输入价 × 该值，不能单独改。 */
   locked_completion_ratio?: number
 }
@@ -116,6 +135,18 @@ export type PriceMonitorSourceHeader = {
   name: string
   type: 'platform' | 'official' | 'models_dev' | 'channel'
   api_url?: string
+  /** 这个来源本轮是否真的参与了价格对比；旧快照没有该字段，按 ok 处理。 */
+  status?: 'ok' | 'failed' | 'no_overlap' | 'no_models'
+  failure_reason?:
+    | 'fetch'
+    | 'empty'
+    | 'sub2api_plaza_disabled'
+    | 'sub2api_group_unknown'
+  fetched_models?: number
+  matched_models?: number
+  endpoint?: string
+  /** 只对渠道来源有值，用于关联成本系数核对结果。 */
+  channel_id?: number
 }
 
 export type PriceMonitorMatrixItem = {
@@ -135,6 +166,10 @@ export type PriceMonitorStatusResponse = {
       include_official: boolean
       include_models_dev: boolean
       model_whitelist: string
+      custom_endpoints?: Record<string, string>
+      upstream_log_queries_per_host?: number
+      upstream_ratio_refresh_hours?: number
+      upstream_ratio_max_age_days?: number
     }
     snapshot: {
       checked_at: number
@@ -152,6 +187,8 @@ export type PriceMonitorStatusResponse = {
         channel_models_dev: number
         above_platform: number
         loss_risk: number
+        /** 成本系数与上游分组倍率不一致的渠道数。 */
+        cost_ratio_mismatch?: number
       }
       access_password: string
       password_expire_at: number
@@ -191,6 +228,73 @@ export type PriceMonitorApplyPriceResponse = {
     pricing_version?: number
     results?: { model: string; applied: string[]; unchanged: string[] }[]
     violations?: PriceMonitorFloorViolation[]
+    /** 巡检结果已按新价格重算；为 false 时要等下一轮巡检刷新。 */
+    refreshed?: boolean
+  }
+}
+
+export type PriceMonitorCostStatus =
+  | 'unknown'
+  | 'free'
+  | 'match'
+  | 'cost_low'
+  | 'cost_high'
+
+export type PriceMonitorRatioReason =
+  | 'no_source'
+  | 'key_not_in_account'
+  | 'auto_group'
+  | 'group_missing'
+  | 'credential_rejected'
+  | 'rate_limited'
+  | 'unavailable'
+  | 'not_supported'
+  | 'no_consume_log'
+  | 'waiting'
+  | 'unsupported_channel'
+  | 'sub2api_unsupported'
+  | 'sub2api_no_group'
+
+/** 一个渠道的成本系数核对结果。 */
+export type PriceMonitorChannelCost = {
+  channel_id: number
+  source_key: string
+  channel_name: string
+  upstream_group?: string
+  /** 多把密钥分属不同分组时列出全部，upstream_group 是倍率最高的那个。 */
+  upstream_groups?: string[]
+  upstream_ratio?: number
+  ratio_source?: 'official' | 'log' | 'sub2api'
+  observed_at?: number
+  attempted_at?: number
+  reason?: PriceMonitorRatioReason
+  /** 识别出的上游网关。 */
+  upstream_kind?: 'new-api' | 'sub2api'
+  /** sub2api 分组的高峰倍率与时段。高峰倍率大于 1 时 upstream_ratio 已按高峰倍率计（最坏情况）。 */
+  peak_multiplier?: number
+  peak_window?: string
+  cost_ratio: number
+  cost_ratio_configured: boolean
+  status: PriceMonitorCostStatus
+  /** 成本系数 / 上游倍率 − 1。 */
+  deviation?: number
+}
+
+export type PriceMonitorChannelCostsResponse = {
+  success: boolean
+  message: string
+  data: {
+    checked_at: number
+    items: PriceMonitorChannelCost[]
+  }
+}
+
+export type PriceMonitorCostRatioResponse = {
+  success: boolean
+  message: string
+  data?: {
+    refreshed: boolean
+    item?: PriceMonitorChannelCost
   }
 }
 
@@ -216,10 +320,12 @@ export type PriceMonitorResultsResponse = {
 export type UpdateOptionGroupRequest = {
   scope?: string
   module:
+    | 'group_retry_status_setting'
     | 'rate_limit_setting'
     | 'db_pool_setting'
     | 'user_session_setting'
     | 'relay_timeout_setting'
+    | 'relay_error_display_setting'
     | 'veridrop_monitor_setting'
     | 'veridrop_monitor_setting'
   values: Record<string, string>
@@ -309,6 +415,10 @@ export type RelayLogQueueStatus = {
   backlog: number
   capacity: number
   dropped: number
+  /** Logs of this kind written by the most recent flush that wrote any; 0 before the first. */
+  last_flush_items?: number
+  /** Duration of that flush in milliseconds. */
+  last_flush_took_ms?: number
 }
 
 export type RelayLogReplayState =
@@ -338,12 +448,20 @@ export type RelayLogPipelineStatus = {
   persisted_total: number
   fallback_total: number
   db_timeout_total: number
+  /** How long the oldest log still waiting in memory has waited, in ms; 0 when none waits. */
+  oldest_event_age_ms?: number
   last_success_at: number
   last_error_at: number
   continuation_backlog: number
+  /** Accounting that was lost: both lanes full, or arrived after shutdown. */
   continuation_dropped: number
+  /** Accounting rerouted to the fallback worker; it still runs, nothing lost. */
+  continuation_overflowed: number
   fallback_backlog: number
   fallback_errors: number
+  intake_state: 'accepting' | 'stopped'
+  intake_refused: number
+  fallback_retention_full: boolean
   replay: RelayLogReplayStatus
 }
 
@@ -604,6 +722,7 @@ export type ModelSettings = {
   'channel_daily_limit_setting.enabled': boolean
   'channel_daily_limit_setting.timezone': string
   'channel_daily_limit_setting.retention_days': number
+  'probe_routing_setting.max_input_chars': number
   'channel_affinity_setting.enabled': boolean
   'channel_affinity_setting.switch_on_success': boolean
   'channel_affinity_setting.keep_on_channel_disabled': boolean
@@ -783,9 +902,20 @@ export type OperationsSettings = {
 }
 
 export type SystemTuningSettings = {
+  // Bare option key holding a JSON map of group -> retry count, same shape
+  // as GroupRatio; edited by GroupRetrySection.
+  GroupRetryTimes: string
+  'group_retry_status_setting.enabled': boolean
+  'group_retry_status_setting.rules': string
   'relay_timeout_setting.enabled': boolean
   'relay_timeout_setting.response_timeout_seconds': number
   'relay_timeout_setting.total_timeout_seconds': number
+  'relay_timeout_setting.retry_min_budget_seconds': number
+  'relay_timeout_setting.max_total_attempts': number
+  'relay_error_display_setting.enabled': boolean
+  'relay_error_display_setting.hide_upstream_errors': boolean
+  'relay_error_display_setting.default_message': string
+  'relay_error_display_setting.rules': string
   'business_stats_circuit_breaker_setting.enabled': boolean
   'business_stats_circuit_breaker_setting.manual_disabled': boolean
   'business_stats_circuit_breaker_setting.failure_threshold': number
@@ -895,6 +1025,8 @@ export type SystemTuningSettings = {
 
   // 使用日志导出（管理员后台任务）
   'log_export_setting.enabled': boolean
+  'log_export_setting.employee_export_enabled': boolean
+  'log_export_setting.employee_max_customers_per_job': number
   'log_export_setting.offpeak_only': boolean
   'log_export_setting.user_cooldown_sec': number
   'log_export_setting.max_concurrent_jobs': number
@@ -1018,4 +1150,66 @@ export type UpstreamRatiosResponse = {
     prices: PricingSyncModels
     test_results: TestResult[]
   }
+}
+
+// ---- 错误提示替换（relay_error_display_setting）
+
+export type RelayErrorRuleSource = 'upstream' | 'local' | 'any'
+export type RelayErrorRuleAction = 'replace' | 'keep' | 'edit'
+
+/** Mirrors operation_setting.RelayErrorEdit: one find-and-replace step. */
+export type RelayErrorEdit = {
+  find: string
+  /** Empty or absent deletes the match. */
+  replace?: string
+  regex?: boolean
+}
+
+/** Mirrors operation_setting.RelayErrorRule. */
+export type RelayErrorRule = {
+  name?: string
+  source: RelayErrorRuleSource
+  status_codes?: number[]
+  error_codes?: string[]
+  keywords?: string[]
+  action: RelayErrorRuleAction
+  message?: string
+  edits?: RelayErrorEdit[]
+  status_code?: number
+}
+
+export type RelayErrorDisplayDraft = {
+  enabled: boolean
+  hide_upstream_errors: boolean
+  default_message: string
+  rules: string
+}
+
+export type RelayErrorPreviewRequest = {
+  scope?: string
+  setting: RelayErrorDisplayDraft
+  sample: {
+    source: 'upstream' | 'local'
+    status_code: number
+    error_code: string
+    message: string
+  }
+}
+
+export type RelayErrorPreviewResponse = {
+  success: boolean
+  message: string
+  data?: {
+    replace: boolean
+    message: string
+    status_code: number
+    rule_index: number
+    rule_name: string
+  }
+}
+
+export type RelayErrorPresetsResponse = {
+  success: boolean
+  message: string
+  data?: RelayErrorRule[]
 }

@@ -485,7 +485,7 @@ func TestGetAndValidOpenAIImageRequest_MultipartEdit(t *testing.T) {
 		c, _ := newMultipart(t, map[string]string{"model": "gpt-image-1", "prompt": "e", "stream": "notabool"}, false)
 		_, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid stream value")
+		require.Equal(t, "stream must be true or false", err.Error())
 	})
 
 	t.Run("negative n rejected", func(t *testing.T) {

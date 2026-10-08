@@ -47,6 +47,7 @@ import {
   DataTablePage,
 } from '@/components/data-table'
 import { SectionPageLayout } from '@/components/layout'
+import { NumericPresetInput } from '@/components/numeric-preset-input'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2821,10 +2822,13 @@ function TierDialog({
   const parsedRate = Number(rate)
   const normalizedGroup = group.trim() || DEFAULT_TIER_GROUP
   const rateText = Number.isFinite(parsedRate) ? formatPercent(parsedRate) : '-'
-  const thresholdText =
-    Number.isFinite(parsedThresholdUsd) && parsedThresholdUsd > 0
-      ? formatTargetAmount(parsedThresholdUsd)
-      : t('No limit')
+  let thresholdText = '-'
+  if (Number.isFinite(parsedThresholdUsd)) {
+    thresholdText =
+      parsedThresholdUsd > 0
+        ? formatTargetAmount(parsedThresholdUsd)
+        : t('Unlimited')
+  }
   const duplicateTier = tiers.find(
     (tier) =>
       tier.id !== currentRow?.id &&
@@ -3017,15 +3021,19 @@ function TierDialog({
             ) : null}
           </div>
           <div className='space-y-2'>
-            <label className='text-sm font-medium'>
+            <label
+              htmlFor='employee-tier-threshold'
+              className='text-sm font-medium'
+            >
               {t('Performance Threshold (USD)')}
             </label>
-            <Input
-              type='number'
+            <NumericPresetInput
+              id='employee-tier-threshold'
+              presets={[{ value: 0, label: 'Unlimited' }]}
               min={0}
-              step={100}
+              decimals
               value={thresholdUsd}
-              onChange={(event) => setThresholdUsd(event.target.value)}
+              onChange={(next) => setThresholdUsd(String(next))}
             />
             <p className='text-muted-foreground text-xs'>
               {t(

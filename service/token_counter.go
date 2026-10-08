@@ -3,8 +3,11 @@ package service
 import (
 	"errors"
 	"fmt"
+	"image"
 	"math"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -24,21 +27,73 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 		return 0, fmt.Errorf("image_url_is_nil")
 	}
 
-	// Defaults for 4o/4.1/4.5 family unless overridden below
-	baseTokens := 85
-	tileTokens := 170
-
 	// Model classification
 	lowerModel := strings.ToLower(model)
 
 	// Special cases from existing behavior
 	if strings.HasPrefix(lowerModel, "glm-4") {
-		return 1047, nil
+		return glm4ImageTokens, nil
 	}
 
+	baseTokens, tileTokens, isPatchBased, multiplier := imageTokenModelParams(lowerModel)
+
+	// Respect existing feature flags/short-circuits
+	if fileMeta.Detail == "low" && !isPatchBased {
+		return baseTokens, nil
+	}
+
+	// Whether to count image tokens at all
+	if !constant.GetMediaToken {
+		return 3 * baseTokens, nil
+	}
+
+	if !constant.GetMediaTokenNotStream && !stream {
+		return 3 * baseTokens, nil
+	}
+	// Normalize detail
+	if fileMeta.Detail == "auto" || fileMeta.Detail == "" {
+		fileMeta.Detail = "high"
+	}
+
+	// 使用统一的文件服务获取图片配置
+	config, format, err := GetImageConfig(c, fileMeta.Source)
+	if err != nil {
+		return 0, err
+	}
+	return imageTokensFromConfig(c, fileMeta, config, format, baseTokens, tileTokens, isPatchBased, multiplier)
+}
+
+// glm4ImageTokens is the flat per-image estimate for glm-4 models.
+const glm4ImageTokens = 1047
+
+// imageTokenFallback is the fixed per-image estimate used when the image cannot
+// be inspected (download refused / failed, or undecodable data). It equals what
+// getImageToken returns when local media counting is disabled. The request is
+// still forwarded: the upstream fetches the image itself, and settlement uses
+// the upstream usage, so only the pre-consume estimate is affected (and, when
+// the upstream reports no usage, the settled prompt tokens).
+func imageTokenFallback(model string, detail string) int {
+	lowerModel := strings.ToLower(model)
+	if strings.HasPrefix(lowerModel, "glm-4") {
+		return glm4ImageTokens
+	}
+	baseTokens, _, isPatchBased, _ := imageTokenModelParams(lowerModel)
+	if detail == "low" && !isPatchBased {
+		return baseTokens
+	}
+	return 3 * baseTokens
+}
+
+// imageTokenModelParams classifies a (lower-cased) OpenAI model for image
+// token estimation: tile-based models get base/tile tokens, patch-based models
+// (32x32 patches, capped at 1536) get a multiplier.
+func imageTokenModelParams(lowerModel string) (baseTokens, tileTokens int, isPatchBased bool, multiplier float64) {
+	// Defaults for 4o/4.1/4.5 family unless overridden below
+	baseTokens = 85
+	tileTokens = 170
+
 	// Patch-based models (32x32 patches, capped at 1536, with multiplier)
-	isPatchBased := false
-	multiplier := 1.0
+	multiplier = 1.0
 	switch {
 	case strings.Contains(lowerModel, "gpt-4.1-mini"):
 		isPatchBased = true
@@ -76,30 +131,10 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 			tileTokens = 170
 		}
 	}
+	return baseTokens, tileTokens, isPatchBased, multiplier
+}
 
-	// Respect existing feature flags/short-circuits
-	if fileMeta.Detail == "low" && !isPatchBased {
-		return baseTokens, nil
-	}
-
-	// Whether to count image tokens at all
-	if !constant.GetMediaToken {
-		return 3 * baseTokens, nil
-	}
-
-	if !constant.GetMediaTokenNotStream && !stream {
-		return 3 * baseTokens, nil
-	}
-	// Normalize detail
-	if fileMeta.Detail == "auto" || fileMeta.Detail == "" {
-		fileMeta.Detail = "high"
-	}
-
-	// 使用统一的文件服务获取图片配置
-	config, format, err := GetImageConfig(c, fileMeta.Source)
-	if err != nil {
-		return 0, err
-	}
+func imageTokensFromConfig(c *gin.Context, fileMeta *types.FileMeta, config image.Config, format string, baseTokens, tileTokens int, isPatchBased bool, multiplier float64) (int, error) {
 	if config.Width == 0 || config.Height == 0 {
 		// not an image, but might be a valid file
 		if format != "" {
@@ -254,8 +289,12 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 		shouldFetchFiles = false
 	}
 
-	// 使用统一的文件服务获取文件类型
-	for _, file := range meta.Files {
+	// 使用统一的文件服务获取文件类型。
+	// 媒体取不到（下载被拒 / 失败 / 超限）或解不出图片尺寸时只用默认估算，不拒绝请求：
+	// 上游能自己取到的图片不该因为网关取不到而 500，结算又以上游 usage 为准。
+	// 取失败的文件记下来，后面不再为它二次下载。
+	unreadable := make([]bool, len(meta.Files))
+	for i, file := range meta.Files {
 		if file.Source == nil {
 			continue
 		}
@@ -267,8 +306,10 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 			// 而我们这里既然要计算 token，通常需要完整数据
 			cachedData, err := LoadFileSource(c, file.Source, "token_counter")
 			if err != nil {
+				unreadable[i] = true
 				if shouldFetchFiles {
-					return 0, fmt.Errorf("error getting file type: %v", err)
+					logger.LogWarn(c, fmt.Sprintf("count token: media index[%d] (%s) unreadable, using default estimate: %s",
+						i, describeFileSourceForLog(file.Source), redactFileSourceError(file.Source, err)))
 				}
 				continue
 			}
@@ -280,9 +321,15 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 		switch file.FileType {
 		case types.FileTypeImage:
 			if common.IsOpenAITextModel(model) {
+				if unreadable[i] {
+					tkm += imageTokenFallback(model, file.Detail)
+					continue
+				}
 				token, err := getImageToken(c, file, model, info.IsStream)
 				if err != nil {
-					return 0, fmt.Errorf("error counting image token, media index[%d], identifier[%s], err: %v", i, file.GetIdentifier(), err)
+					logger.LogWarn(c, fmt.Sprintf("count token: image index[%d] (%s) not measurable, using default estimate: %s",
+						i, describeFileSourceForLog(file.Source), redactFileSourceError(file.Source, err)))
+					token = imageTokenFallback(model, file.Detail)
 				}
 				tkm += token
 			} else {
@@ -301,6 +348,41 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 
 	common.SetContextKey(c, constant.ContextKeyPromptTokens, tkm)
 	return tkm, nil
+}
+
+// describeFileSourceForLog names a media source without its full URL or data:
+// URLs can carry signed credentials in the query string.
+func describeFileSourceForLog(source types.FileSource) string {
+	if u, ok := source.(*types.URLSource); ok {
+		if parsed, err := url.Parse(u.URL); err == nil && parsed.Host != "" {
+			return "url host=" + parsed.Host
+		}
+		return "url"
+	}
+	if source == nil {
+		return "unknown"
+	}
+	return "base64"
+}
+
+// urlInTextPattern matches anything URL-shaped inside an error message, up to
+// the next whitespace. Download errors quote the URL in re-serialized forms
+// (userinfo masked, path percent-encoded, redirect targets), so matching the
+// original string is not enough; and quotes / angle brackets may stay
+// unescaped in the query, so they must not end the match.
+var urlInTextPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://\S+`)
+
+// redactFileSourceError removes every URL (download errors embed them) from
+// err before it is logged.
+func redactFileSourceError(source types.FileSource, err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if u, ok := source.(*types.URLSource); ok && u.URL != "" {
+		msg = strings.ReplaceAll(msg, u.URL, "<url>")
+	}
+	return urlInTextPattern.ReplaceAllString(msg, "<url>")
 }
 
 func CountTokenRealtime(info *relaycommon.RelayInfo, request dto.RealtimeEvent, model string) (int, int, error) {

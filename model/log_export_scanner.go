@@ -24,7 +24,14 @@ type logExportScanner struct {
 	startedAt time.Time
 	timeout   time.Duration
 	lastSaved time.Time
+	// lastValidated 员工任务上次复核权限的时间，见 employeeExportRevalidateInterval。
+	lastValidated time.Time
 }
+
+// employeeExportRevalidateInterval 是撤权后运行中员工任务最多继续扫描的时长。
+// 不逐个时间窗复核：每次复核要 3-4 条主库查询，多客户长时间段的任务里其数量
+// 会达到日志查询本身的数倍（空窗口也算）。
+var employeeExportRevalidateInterval = time.Second
 
 func newLogExportScanner(job *LogExportJob, fields []string, needChannelName bool, rctx *rowCtx) *logExportScanner {
 	return &logExportScanner{
@@ -48,6 +55,25 @@ func (s *logExportScanner) exceededBudget() bool {
 // run 扫描整个时间范围，每读到一批就调用 onBatch。
 // onBatch 返回错误即中止整次扫描（xlsx 行数上限、分片数上限等都走这条路）。
 func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) error) error {
+	if s.job.EmployeeScope == nil {
+		return s.runCustomer(ctx, onBatch)
+	}
+	original := s.job.Filters.UserId
+	defer func() { s.job.Filters.UserId = original }()
+	if err := ValidateEmployeeExportJob(ctx, s.job); err != nil {
+		return err
+	}
+	s.lastValidated = time.Now()
+	for _, id := range s.job.EmployeeScope.CustomerIDs {
+		s.job.Filters.UserId = id
+		if err := s.runCustomer(ctx, onBatch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []*Log) error) error {
 	job := s.job
 	exportStart := job.Filters.StartTimestamp
 	exportEnd := job.Filters.EndTimestamp
@@ -96,6 +122,12 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 				return context.DeadlineExceeded
 			}
 
+			if job.EmployeeScope != nil && time.Since(s.lastValidated) >= employeeExportRevalidateInterval {
+				if err := ValidateEmployeeExportJob(ctx, job); err != nil {
+					return err
+				}
+				s.lastValidated = time.Now()
+			}
 			queryCtx, queryCancel := context.WithTimeout(ctx,
 				logExportQueryTimeout(operation_setting.GetLogExportSetting().GetBatchQueryTimeoutSec()))
 			started := time.Now()
@@ -132,6 +164,14 @@ func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) er
 				position = cursor.CreatedAt
 			}
 			job.Progress = logExportProgress(exportStart, exportEnd, position)
+			if job.EmployeeScope != nil {
+				for index, id := range job.EmployeeScope.CustomerIDs {
+					if id == job.Filters.UserId {
+						job.Progress = (index*100 + job.Progress) / len(job.EmployeeScope.CustomerIDs)
+						break
+					}
+				}
+			}
 			if time.Since(s.lastSaved) >= 500*time.Millisecond {
 				UpdateLogExportJob(job)
 				s.lastSaved = time.Now()

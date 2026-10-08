@@ -350,7 +350,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	ratio := dModelRatio.Mul(dGroupRatio)
-	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+	if !relayTimeoutInputOnlySettling(ctx) {
+		// 我方超时只收输入时不收工具附加费（relay-timeout-cost-bearing.md §3.2）。
+		summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+	}
 
 	var audioInputQuota decimal.Decimal
 	// audioInputBase / upstreamBase：同一份用量按分组倍率 1 计算，供每日上限的上游消耗口径使用。
@@ -636,7 +639,14 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+	if relayInfo.UpstreamStreamAdapted {
+		// The client sent a non-stream request; we asked upstream to stream so a
+		// timeout would still have usage to settle. is_stream stays false because
+		// it records what the client asked for, so record the adaptation here.
+		other.SetPublic("upstream_stream_adapted", true)
+	}
 
+	relayTimeoutInputSettling := isRelayTimeoutInputSettlement(ctx)
 	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
 		ChannelId:         relayInfo.ChannelId,
 		PromptTokens:      summary.PromptTokens,
@@ -654,6 +664,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		LedgerQuota:       summary.LedgerQuota,
 		UpstreamBaseQuota: &summary.UpstreamBaseQuota,
 	})
+	if relayTimeoutInputSettling {
+		// 我方超时的非流式请求：控制器会按失败记一次样本，这里不再按成功重复记。
+		return
+	}
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens))
 	})

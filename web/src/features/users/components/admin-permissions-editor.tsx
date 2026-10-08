@@ -34,6 +34,7 @@ import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
   normalizeAdminPermissions,
+  viewDependentActions,
   type AdminPermissionMatrix,
   type PermissionCatalog,
   type PermissionResourceDef,
@@ -172,16 +173,12 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
       ...selected,
       [resource]: { ...selected[resource], [action]: checked },
     }
-    if (
-      resource.startsWith(ADMIN_PERMISSION_RESOURCES.SYSTEM_SETTINGS_PREFIX) ||
-      resource === ADMIN_PERMISSION_RESOURCES.PRICE_MONITOR
-    ) {
-      if (action === ADMIN_PERMISSION_ACTIONS.EDIT && checked) {
-        next[resource][ADMIN_PERMISSION_ACTIONS.VIEW] = true
-      }
-      if (action === ADMIN_PERMISSION_ACTIONS.VIEW && !checked) {
-        next[resource][ADMIN_PERMISSION_ACTIONS.EDIT] = false
-      }
+    const dependents = viewDependentActions(resource)
+    if (dependents.includes(action) && checked) {
+      next[resource][ADMIN_PERMISSION_ACTIONS.VIEW] = true
+    }
+    if (action === ADMIN_PERMISSION_ACTIONS.VIEW && !checked) {
+      for (const dependent of dependents) next[resource][dependent] = false
     }
     props.onChange(next)
   }

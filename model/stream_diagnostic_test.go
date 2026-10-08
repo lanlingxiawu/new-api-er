@@ -52,10 +52,11 @@ func TestClaudeDiagnosticReadBoundary(t *testing.T) {
 	}
 	// reject_reason is admin-scoped (legacy sensitive key): the user projection
 	// strips it together with admin_info / audit_info.
-	log.Other = `{"reject_reason":"policy","admin_info":{"private":1},"audit_info":{"private":2}}`
+	log.Other = `{"reject_reason":"policy","admin_info":{"private":1},"audit_info":{"private":2},"keep":1}`
 	formatUserLogs([]*Log{&log}, 0)
 	require.NotContains(t, log.Other, "reject_reason")
 	require.NotContains(t, log.Other, "private")
+	require.Contains(t, log.Other, `"keep":1`)
 }
 
 // TestClaudeDiagnosticDatabaseProjection 验证标准 GORM 读取被过滤，而独立诊断投影按请求、时间、尝试编号正确读取私有数据。

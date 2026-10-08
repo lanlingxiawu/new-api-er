@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -43,7 +44,41 @@ const (
 	modelsDevHost               = "models.dev"
 	modelsDevPath               = "/api.json"
 	modelsDevInputCostRatioBase = 1000.0
+	// emptyPricingPayloadError 表示来源返回了可解析的响应，但里面一个模型价格都没有。
+	// 这种来源必须判为失败：当成功来源处理会让它的每个模型都被标成"未提供"，
+	// 把接口故障伪装成价格差异。
+	emptyPricingPayloadError = "empty pricing payload"
 )
+
+// pricingPayloadPriceFields 是能单独构成一个模型价格基准的字段。completion_ratio、cache_ratio
+// 之类都是相对倍率，没有基准价时无法单独构成一个价格。
+var pricingPayloadPriceFields = []string{"model_ratio", "model_price", billing_setting.BillingExprField}
+
+// pricingPayloadUsablePrice 判断某个价格字段里的一个值能否作为价格基准：按量倍率或按次价格
+// 是有限且非负的数值，阶梯表达式是非空字符串。数字字符串在来源入口已换成数值
+// （normalizePricingPayloadNumbers），这里与对比一样只认数值。只看键是否存在不够：
+// `{"model_ratio":{"m":null}}` 里 m 没有价格，当成有价格会让 m 显示成「缺失」并计为价差。
+func pricingPayloadUsablePrice(field string, value any) bool {
+	if field == billing_setting.BillingExprField {
+		expr, ok := value.(string)
+		return ok && strings.TrimSpace(expr) != ""
+	}
+	parsed, ok := asFloat64(value)
+	return ok && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) && parsed >= 0
+}
+
+// pricingPayloadHasPrices 判断转换后的数据里是否至少有一个模型有可用的价格基准
+// （见 pricingPayloadUsablePrice）。一个都没有的来源必须判为失败。
+func pricingPayloadHasPrices(data map[string]any) bool {
+	for _, field := range pricingPayloadPriceFields {
+		for _, value := range valueMap(data[field]) {
+			if pricingPayloadUsablePrice(field, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func nearlyEqual(a, b float64) bool {
 	if a > b {
@@ -97,6 +132,12 @@ type pricingSource struct {
 	data             map[string]any
 	applicableModels map[string]struct{}
 	failed           bool
+	// 以下字段只由价格巡检填充，用于在表头说明这个来源本轮是否真的参与了对比。
+	status        string
+	failureReason string
+	endpoint      string
+	fetchedModels int
+	matchedModels int
 }
 
 func valueMap(value any) map[string]any {
@@ -109,6 +150,30 @@ func valueMap(value any) map[string]any {
 		return lo.MapValues(typed, func(value string, _ string) any { return value })
 	default:
 		return nil
+	}
+}
+
+// normalizePricingPayloadNumbers 把 ratio_config 格式来源里数值字段的数字字符串（如
+// "model_ratio":{"m":"1.5"}）就地换成数值。有效价格判断、价格对比与同步差异都只认数值
+// （asFloat64），在入口统一换算，三者口径一致：换算后的模型参与对比，换不了的（非数字、
+// NaN、Inf）三处都不算价格。其他格式的来源按结构体解析或由转换函数产出，值已是数值。
+func normalizePricingPayloadNumbers(data map[string]any) {
+	for field := range numericPricingSyncFields {
+		values, ok := data[field].(map[string]any)
+		if !ok {
+			continue
+		}
+		for modelName, value := range values {
+			text, isString := value.(string)
+			if !isString {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				continue
+			}
+			values[modelName] = parsed
+		}
 	}
 }
 
@@ -302,6 +367,67 @@ func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams 
 }
 
 func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int) pricingSyncComparison {
+	testResults, successfulChannels := fetchUpstreamPricingSources(requestContext, upstreams, timeoutSeconds)
+	localData := effectivePricingSyncData(getLocalPricingSyncData())
+	differences := buildDifferences(localData, successfulChannels)
+	prices := make(map[string]modelSyncPrices, len(differences))
+	for name, fields := range differences {
+		row := modelSyncPrices{Current: modelPricingSyncValues(localData, name), Upstreams: make(map[string]map[string]any)}
+		_, expressionPriority := fields[billing_setting.BillingExprField]
+		for _, channel := range successfulChannels {
+			candidate := modelPricingSyncValues(channel.data, name)
+			if expressionPriority && candidate[billing_setting.BillingModeField] != billing_setting.BillingModeTieredExpr {
+				continue
+			}
+			_, hasRatio := candidate["model_ratio"]
+			_, hasPrice := candidate["model_price"]
+			_, hasExpression := candidate[billing_setting.BillingExprField]
+			if hasRatio || hasPrice || hasExpression {
+				row.Upstreams[channel.name] = candidate
+			}
+		}
+		prices[name] = row
+	}
+
+	return pricingSyncComparison{
+		differences: differences,
+		prices:      prices,
+		testResults: testResults,
+		sources:     successfulChannels,
+	}
+}
+
+// pricingSourceChannel 是按渠道 ID 读渠道的接缝（带密钥取价时用），测试替换为固定渠道。
+var pricingSourceChannel = func(id int) (*model.Channel, error) { return model.GetChannelById(id, true) }
+
+// errPricingSourceAddressMismatch 表示请求的上游地址不是该渠道自己的地址。
+var errPricingSourceAddressMismatch = errors.New("the requested upstream address does not match the channel")
+
+// loadPricingSourceChannel 读出需要带渠道密钥取价的渠道，并确认请求的上游地址就是渠道自己的地址。
+//
+// 上游地址可能来自前端：同步上游倍率弹窗可以提交任意 base_url 与渠道 ID。不校验的话，
+// 只有模型定价权限的管理员就能让本站把任意渠道的密钥发往自己的服务器（而查看密钥本需要
+// Root 与安全验证）。地址不一致一律拒绝，不发出任何请求。
+func loadPricingSourceChannel(upstream dto.UpstreamDTO) (*model.Channel, error) {
+	channel, err := pricingSourceChannel(upstream.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load channel: %w", err)
+	}
+	channelURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+	if channelURL == "" || channelURL != strings.TrimRight(strings.TrimSpace(upstream.BaseURL), "/") {
+		return nil, errPricingSourceAddressMismatch
+	}
+	return channel, nil
+}
+
+// fetchUpstreamPricingSources 只负责抓取和解析。价格巡检需要按端点分多轮抓取、
+// 合并之后再统一算一次差异，所以差异计算留给调用方。
+func fetchUpstreamPricingSources(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int) ([]dto.TestResult, []pricingSource) {
+	// sub2api 渠道的密钥查询走进程级每主机被拒限额（跨调用的 60 秒窗口，连点手动同步也不会越过）；
+	// 价格巡检会预先挂上整轮共用的那次取数，让倍率步骤复用这里问过的密钥。
+	if priceMonitorSub2APIRunFrom(requestContext) == nil {
+		requestContext = withPriceMonitorSub2APIRun(requestContext, newPriceMonitorSub2APIRun())
+	}
 	var wg sync.WaitGroup
 	ch := make(chan upstreamResult, len(upstreams))
 
@@ -369,6 +495,18 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 			ctx, cancel := context.WithTimeout(requestContext, time.Duration(timeoutSeconds)*time.Second)
 			defer cancel()
 
+			// type5: sub2api 模型广场 -> 该渠道密钥所在分组的价格
+			if chItem.Endpoint == sub2apiPricingEndpoint {
+				converted, err := fetchSub2APIPlazaPricing(ctx, client, chItem)
+				if err != nil {
+					logger.LogWarn(requestContext, "sub2api model plaza failed from "+chItem.Name+": "+err.Error())
+					ch <- upstreamResult{Name: uniqueName, Err: err.Error()}
+					return
+				}
+				ch <- upstreamResult{Name: uniqueName, Data: converted}
+				return
+			}
+
 			httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 			if err != nil {
 				logger.LogWarn(requestContext, "build request failed: "+err.Error())
@@ -378,21 +516,18 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 
 			// OpenRouter requires Bearer token auth
 			if isOpenRouter && chItem.ID != 0 {
-				dbCh, err := model.GetChannelById(chItem.ID, true)
+				dbCh, err := loadPricingSourceChannel(chItem)
 				if err != nil {
-					ch <- upstreamResult{Name: uniqueName, Err: "failed to get channel key: " + err.Error()}
+					ch <- upstreamResult{Name: uniqueName, Err: err.Error()}
 					return
 				}
-				key, _, apiErr := dbCh.GetNextEnabledKey()
-				if apiErr != nil {
-					ch <- upstreamResult{Name: uniqueName, Err: "failed to get enabled channel key: " + apiErr.Error()}
-					return
-				}
-				if strings.TrimSpace(key) == "" {
+				// 取第一把未禁用的密钥，不用 GetNextEnabledKey：取价不该推进转发的多密钥轮询。
+				keys := priceMonitorEnabledKeys(dbCh)
+				if len(keys) == 0 {
 					ch <- upstreamResult{Name: uniqueName, Err: "no API key configured for this channel"}
 					return
 				}
-				httpReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(key))
+				httpReq.Header.Set("Authorization", "Bearer "+keys[0])
 			} else if isOpenRouter {
 				ch <- upstreamResult{Name: uniqueName, Err: "OpenRouter requires a valid channel with API key"}
 				return
@@ -490,6 +625,12 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 					}
 				}
 				if isType1 {
+					normalizePricingPayloadNumbers(type1Data)
+					if !pricingPayloadHasPrices(type1Data) {
+						logger.LogWarn(requestContext, "empty pricing payload from "+chItem.Name)
+						ch <- upstreamResult{Name: uniqueName, Err: emptyPricingPayloadError}
+						return
+					}
 					ch <- upstreamResult{Name: uniqueName, Data: type1Data}
 					return
 				}
@@ -612,14 +753,18 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 				converted[billing_setting.BillingExprField] = valueMap(billingExprMap)
 			}
 
+			if !pricingPayloadHasPrices(converted) {
+				logger.LogWarn(requestContext, "empty pricing payload from "+chItem.Name)
+				ch <- upstreamResult{Name: uniqueName, Err: emptyPricingPayloadError}
+				return
+			}
+
 			ch <- upstreamResult{Name: uniqueName, Data: converted}
 		}(chn)
 	}
 
 	wg.Wait()
 	close(ch)
-
-	localData := effectivePricingSyncData(getLocalPricingSyncData())
 
 	var testResults []dto.TestResult
 	var successfulChannels []pricingSource
@@ -640,32 +785,7 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 		}
 	}
 
-	differences := buildDifferences(localData, successfulChannels)
-	prices := make(map[string]modelSyncPrices, len(differences))
-	for name, fields := range differences {
-		row := modelSyncPrices{Current: modelPricingSyncValues(localData, name), Upstreams: make(map[string]map[string]any)}
-		_, expressionPriority := fields[billing_setting.BillingExprField]
-		for _, channel := range successfulChannels {
-			candidate := modelPricingSyncValues(channel.data, name)
-			if expressionPriority && candidate[billing_setting.BillingModeField] != billing_setting.BillingModeTieredExpr {
-				continue
-			}
-			_, hasRatio := candidate["model_ratio"]
-			_, hasPrice := candidate["model_price"]
-			_, hasExpression := candidate[billing_setting.BillingExprField]
-			if hasRatio || hasPrice || hasExpression {
-				row.Upstreams[channel.name] = candidate
-			}
-		}
-		prices[name] = row
-	}
-
-	return pricingSyncComparison{
-		differences: differences,
-		prices:      prices,
-		testResults: testResults,
-		sources:     successfulChannels,
-	}
+	return testResults, successfulChannels
 }
 
 func buildDifferences(localData map[string]any, successfulChannels []pricingSource) map[string]map[string]dto.DifferenceItem {
@@ -952,6 +1072,9 @@ func convertOpenRouterToRatioData(reader io.Reader) (map[string]any, error) {
 	}
 	if len(cacheRatioMap) > 0 {
 		converted["cache_ratio"] = cacheRatioMap
+	}
+	if !pricingPayloadHasPrices(converted) {
+		return nil, errors.New(emptyPricingPayloadError)
 	}
 
 	return converted, nil

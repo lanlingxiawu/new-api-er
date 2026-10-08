@@ -3,6 +3,7 @@ import { PriceMonitorPanel } from '@/features/system-settings/models/price-monit
 import { ADMIN_MENU_IDS } from '@/lib/admin-menu-access'
 import {
   ADMIN_PERMISSION_ACTIONS,
+  ADMIN_PERMISSION_RESOURCES,
   adminMenuResource,
   canEditSystemSettingsScope,
   hasPermission,
@@ -25,11 +26,22 @@ export function PriceMonitor() {
     'billing.model-pricing'
   )
 
+  // 改成本系数：PUT /api/price_monitor/channels/:id/cost_ratio 要求巡检编辑权 + 渠道编辑权，
+  // 与渠道编辑抽屉改成本系数同一授权。
+  const canEditCostRatio =
+    canEdit &&
+    hasPermission(
+      user,
+      ADMIN_PERMISSION_RESOURCES.CHANNEL,
+      ADMIN_PERMISSION_ACTIONS.WRITE
+    )
+
   return (
     <SettingsSaveConfirmationProvider>
       <PriceMonitorPanel
         canEdit={canEdit}
         canRepairPricing={canRepairPricing}
+        canEditCostRatio={canEditCostRatio}
       />
     </SettingsSaveConfirmationProvider>
   )

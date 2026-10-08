@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,8 @@ func requestLogTestStore(t *testing.T) string {
 	InitRequestLogStore()
 	require.True(t, RequestLogStoreReady())
 	requestLogResetIndex(t)
+	// 共享 writer 的活动分段要在临时目录删除前关闭（Windows 删不掉打开着的文件）。
+	t.Cleanup(closeDefaultRequestLogWriter)
 	return dir
 }
 
@@ -62,15 +65,23 @@ func requestLogIndexLen() int {
 	return len(reqLogItems)
 }
 
-// countRequestLogFiles 统计根目录下所有 .json 正文文件。
+// countRequestLogFiles 统计根目录下磁盘上的正文条数：分段按行计，旧格式按文件计。
 func countRequestLogFiles(t *testing.T, root string) int {
 	t.Helper()
 	count := 0
-	err := filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && filepath.Ext(info.Name()) == ".json" {
+		switch {
+		case info.IsDir():
+		case isRequestLogSegmentName(info.Name()):
+			data, rerr := os.ReadFile(p)
+			if rerr != nil {
+				return rerr
+			}
+			count += bytes.Count(data, []byte{'\n'})
+		case filepath.Ext(info.Name()) == ".json":
 			count++
 		}
 		return nil
@@ -389,6 +400,7 @@ func TestGetRequestLogById_FileMissing(t *testing.T) {
 	root := requestLogTestStore(t)
 	log := &RequestLog{Username: "u", CreatedAt: 1000, RequestId: "rid", RequestBody: "b"}
 	RecordRequestLog(log)
+	closeDefaultRequestLogWriter()
 
 	require.NoError(t, os.RemoveAll(root))
 	_, err := GetRequestLogById(log.Id)
@@ -434,7 +446,12 @@ func TestClearAllRequestLogs_ReturnsEntryCount(t *testing.T) {
 	assert.Zero(t, requestLogIndexLen())
 	assert.Equal(t, 3, countRequestLogFiles(t, root), "files are reclaimed by the sweeper, not by clear")
 
+	// 写入方仍开着的分段受保护；关闭后下一轮清理回收。
 	stats := SweepRequestLogFiles()
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 3, countRequestLogFiles(t, root), "the writer's active segment survives a sweep")
+	closeDefaultRequestLogWriter()
+	stats = SweepRequestLogFiles()
 	assert.Zero(t, stats.Errors)
 	assert.Zero(t, countRequestLogFiles(t, root), "the next periodic sweep reclaims cleared bodies")
 

@@ -511,6 +511,12 @@ export function RelayLogPipelineSection({
               <div>
                 {t("Dropped")}: {formatNumber(queue.value.dropped)}
               </div>
+              <div>
+                {t("Last flush")}:{" "}
+                {queue.value.last_flush_items
+                  ? `${t("{{total}} items", { total: formatNumber(queue.value.last_flush_items) })} · ${t("{{value}}ms", { value: formatNumber(queue.value.last_flush_took_ms ?? 0) })}`
+                  : "-"}
+              </div>
             </div>
           </div>
         ))}
@@ -531,8 +537,18 @@ export function RelayLogPipelineSection({
             {t("Database timeouts")}: {formatNumber(status.db_timeout_total)}
           </div>
           <div>
+            {t("Oldest waiting log")}:{" "}
+            {t("{{value}}ms", {
+              value: formatNumber(status.oldest_event_age_ms ?? 0),
+            })}
+          </div>
+          <div>
             {t("Accounting continuation backlog")}:{" "}
             {formatNumber(status.continuation_backlog)}
+          </div>
+          <div>
+            {t("Accounting continuations rerouted to fallback worker")}:{" "}
+            {formatNumber(status.continuation_overflowed)}
           </div>
           <div>
             {t("Last successful write")}: {formatTime(status.last_success_at)}
@@ -542,12 +558,24 @@ export function RelayLogPipelineSection({
           </div>
         </div>
       ) : null}
+      {/* Only real-loss signals raise this alert: continuation_overflowed
+          counts accounting handed to the fallback worker (a rare later loss is
+          counted in continuation_dropped), so it stays informational. */}
       {status &&
-      (status.continuation_dropped > 0 || status.fallback_errors > 0) ? (
+      (status.continuation_dropped > 0 ||
+        status.fallback_errors > 0 ||
+        status.fallback_retention_full) ? (
         <div className="border-destructive/30 bg-destructive/5 text-destructive rounded-xl border p-4 text-sm">
           <div className="font-medium">
             {t("Relay log pipeline needs attention")}
           </div>
+          {status.fallback_retention_full ? (
+            <div className="mt-2">
+              {t(
+                "Fallback storage is full. Logs that cannot be written to the log database are dropped until space is freed. Once the log database is available, start backfill to free fallback storage.",
+              )}
+            </div>
+          ) : null}
           <div className="mt-2">
             {t("Dropped accounting continuations")}:{" "}
             {formatNumber(status.continuation_dropped)}

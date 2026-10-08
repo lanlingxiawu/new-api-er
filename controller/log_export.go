@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -544,7 +543,7 @@ func CreateLogExportJob(c *gin.Context) {
 // auditLogExportJobCreated 手动埋点：中间件兜底只会记下「POST 了哪个路由」，
 // 而导出的关键信息是「谁、取了哪段时间、哪些筛选条件、多少列」。
 // 设置 ContextKeyAuditLogged 以避免与兜底记录重复。
-func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob) {
+func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob, extra ...map[string]interface{}) {
 	common.SetContextKey(c, constant.ContextKeyAuditLogged, true)
 	params := map[string]interface{}{
 		"job_id":  job.JobID,
@@ -555,6 +554,11 @@ func auditLogExportJobCreated(c *gin.Context, job *model.LogExportJob) {
 	}
 	if scope := logExportFilterScope(job.Filters); scope != "" {
 		params["filters"] = scope
+	}
+	for _, fields := range extra {
+		for key, value := range fields {
+			params[key] = value
+		}
 	}
 	recordLogExportAudit(c, "log_export.job_create",
 		"created log export job "+job.JobID, params)
@@ -700,6 +704,9 @@ func GetLogExportJobs(c *gin.Context) {
 	}
 	views := make([]*model.LogExportJob, 0, len(jobs))
 	for _, job := range jobs {
+		if (isEmployeeExportRoute(c) || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil {
+			continue
+		}
 		views = append(views, job.PublicView())
 	}
 	common.ApiSuccess(c, gin.H{
@@ -722,6 +729,12 @@ func loadOwnedLogExportJob(c *gin.Context) (*model.LogExportJob, bool) {
 	}
 	if job.UserID != c.GetInt("id") && !isRootRequest(c) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
+		return nil, false
+	}
+	employeeRoute := isEmployeeExportRoute(c)
+	if ((employeeRoute || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil) ||
+		(employeeRoute && job.UserID != c.GetInt("id")) {
+		employeeExportError(c, model.ErrEmployeeExportAccess)
 		return nil, false
 	}
 	return job, true
@@ -768,6 +781,10 @@ func GetLogExportDownloadURL(c *gin.Context) {
 	}
 	job, ok := loadOwnedLogExportJob(c)
 	if !ok {
+		return
+	}
+	if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+		employeeExportError(c, err)
 		return
 	}
 	if job.Status != model.LogExportStatusReady {
@@ -863,14 +880,18 @@ func DownloadLogExport(c *gin.Context) {
 
 	// 令牌不经过鉴权中间件，这里必须自己复核当前身份：管理员被降权或被封禁后，
 	// 已签发的链接要立刻失效（否则续传窗口内仍能取数）。
-	if !logExportDownloaderAllowed(userID) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "access denied"})
-		return
-	}
-
 	job, err := model.GetLogExportJob(jobID)
 	if err != nil || job == nil || job.UserID != userID || job.Status != model.LogExportStatusReady {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "export not available"})
+		return
+	}
+	if job.EmployeeScope != nil {
+		if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+			employeeExportError(c, err)
+			return
+		}
+	} else if !logExportDownloaderAllowed(userID) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return
 	}
 	if len(job.Parts) == 0 {
@@ -892,6 +913,12 @@ func DownloadLogExport(c *gin.Context) {
 		serveLogExportPart(c, job, part)
 		return
 	}
+	// 只有一个分片时直接给这个文件：一个文件再套一层 zip 只会多一步解压。
+	// 不管调用方是否指定分片（管理员导出中心指定，员工导出不指定），拿到的都是同一个文件。
+	if len(job.Parts) == 1 {
+		serveLogExportPart(c, job, job.Parts[0].Index)
+		return
+	}
 	serveLogExportZip(c, job)
 }
 
@@ -906,23 +933,6 @@ func logExportDownloaderAllowed(userID int) bool {
 		return false
 	}
 	return user.Role >= common.RoleAdminUser && user.Status == common.UserStatusEnabled
-}
-
-// logExportPartFileName 生成下载时呈现给用户的文件名。
-//
-// 汇总分片必须用不同的名字：「明细 + 汇总」模式下两种分片同在一个压缩包里，
-// 全叫 part-000N 的话，拿到文件的人得逐个解开才知道哪个是哪个。
-func logExportPartFileName(job *model.LogExportJob, part *model.LogExportPart) string {
-	ext := ".csv.gz"
-	if job.Format == model.LogExportFormatXlsx {
-		ext = ".xlsx"
-	}
-	kind := "part"
-	if part.Kind == model.LogExportPartKindSummary {
-		kind = "summary"
-	}
-	stamp := time.Unix(job.CreatedAt, 0).Format("20060102-150405")
-	return fmt.Sprintf("log-export-%s-%s-%04d%s", stamp, kind, part.Index, ext)
 }
 
 func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {
@@ -945,7 +955,7 @@ func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {
 	}
 
 	filename := logExportPartFileName(job, part)
-	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("Content-Disposition", logExportContentDisposition(filename))
 	if job.Format == model.LogExportFormatXlsx {
 		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	} else {
@@ -956,8 +966,7 @@ func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {
 }
 
 func serveLogExportZip(c *gin.Context, job *model.LogExportJob) {
-	stamp := time.Unix(job.CreatedAt, 0).Format("20060102-150405")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="log-export-%s.zip"`, stamp))
+	c.Header("Content-Disposition", logExportContentDisposition(logExportFileBase(job)+".zip"))
 	c.Header("Content-Type", "application/zip")
 
 	zw := zip.NewWriter(c.Writer)

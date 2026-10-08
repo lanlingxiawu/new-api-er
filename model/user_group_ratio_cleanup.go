@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 // Cleanup of per-user exclusive group ratios after a pricing group is deleted
@@ -46,8 +47,9 @@ var (
 )
 
 type userGroupRatioRow struct {
-	Id          int
-	GroupRatios string
+	Id             int
+	GroupRatios    string
+	ProfileVersion int64
 }
 
 // ScheduleUserGroupRatioCleanup queues group names for removal from every
@@ -294,7 +296,7 @@ func CleanupUserGroupRatios(targets []string) {
 			break
 		}
 		query := DB.Model(&User{}).Unscoped().
-			Select([]string{"id", "group_ratios"}).
+			Select([]string{"id", "group_ratios", "profile_version"}).
 			Where("id > ?", lastID).
 			Where("group_ratios IS NOT NULL AND group_ratios <> ? AND group_ratios <> ?", "", "{}")
 		if len(bounds) > 0 {
@@ -329,10 +331,13 @@ func CleanupUserGroupRatios(targets []string) {
 			}
 			// Relay reads group_ratios from the Redis user cache, so a DB-only write
 			// would keep billing the removed ratio until the cache expires. Publish
-			// is a field-level refresh that never touches the cached Quota (a DEL
-			// would let a stale DB quota overwrite pending batched deductions).
-			// Users with no cached copy are skipped: a later fill reads the cleaned row.
-			if common.RedisEnabled && userCacheExists(row.Id) {
+			// never touches the cached Quota (a DEL would let a stale DB quota
+			// overwrite pending batched deductions). Uncached users skip the
+			// publish's DB read (it made a 50k-user cleanup 322s -> 400s+) and only
+			// get the profile floor advanced, so a fill that read the row before
+			// the CAS cannot cache the removed ratio. row.ProfileVersion+1 is at
+			// most the committed version (the CAS added 1 to a value >= it).
+			if common.RedisEnabled && advanceProfileFloorUnlessCached(row.Id, row.ProfileVersion+1) {
 				if err := PublishUserAuthCache(row.Id); err != nil {
 					common.SysError(fmt.Sprintf("user group ratio cleanup: failed to refresh cache for user %d: %v", row.Id, err))
 				}
@@ -359,11 +364,15 @@ func CleanupUserGroupRatios(targets []string) {
 //
 // An admin may save the same user between the cleanup's read and its write; a
 // blind update would silently discard the rules they just set. Reports whether
-// the write landed.
+// the write landed. group_ratios is a cached field, so the write bumps
+// profile_version like EditWithTx (the caller publishes).
 func casUpdateUserGroupRatios(id int, expected string, updated string) (bool, error) {
 	result := DB.Model(&User{}).Unscoped().
 		Where("id = ? AND group_ratios = ?", id, expected).
-		Update("group_ratios", updated)
+		Updates(map[string]interface{}{
+			"group_ratios":    updated,
+			"profile_version": gorm.Expr("profile_version + ?", 1),
+		})
 	if result.Error != nil {
 		return false, result.Error
 	}

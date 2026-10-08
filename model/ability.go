@@ -110,13 +110,32 @@ func GetChannel(
 	model string,
 	retry int,
 	filters []dto.ChannelFilter,
+	policies ...*ChannelProbePolicy,
 ) (*Channel, error) {
+	var policy *ChannelProbePolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	var abilities []Ability
 	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).Order("priority DESC, weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
 	abilities = filterAbilitiesByConstraints(abilities, model, filters)
+	if policy != nil && len(abilities) > 0 {
+		// Candidates span all priorities, so dropping forbidden channels here
+		// cannot leave a forbidden high-priority tier hiding usable lower tiers.
+		allowed := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			if !policy.Blocks(ability.ChannelId) {
+				allowed = append(allowed, ability)
+			}
+		}
+		if len(allowed) == 0 {
+			return nil, ErrProbeChannelUnavailable
+		}
+		abilities = allowed
+	}
 	if len(abilities) > 0 {
 		priorities := make([]int64, 0)
 		seen := make(map[int64]bool)

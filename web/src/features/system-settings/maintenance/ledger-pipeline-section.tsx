@@ -33,6 +33,11 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -199,6 +204,8 @@ const numericFields: Array<{
   label: string
   description: string
   min: number
+  // Special values offered in a dropdown; `min` then bounds ordinary numbers only.
+  presets?: NumericPreset[]
 }> = [
   // ── Throughput controls ────────────────────────────────
   {
@@ -217,7 +224,8 @@ const numericFields: Array<{
     name: 'cost_flush_max_per_cycle',
     label: 'Cost Queue: Max Per Cycle',
     description: 'Cost queue (cost-only records): max records flushed per cycle. 0 = drain all each cycle (default). Caps the DB burst when recovering from an outage. Ignored when Full Drain is on.',
-    min: 0,
+    min: 1,
+    presets: [{ value: 0, label: 'Drain all each cycle' }],
   },
   // ── Batch sizing ───────────────────────────────────────
   {
@@ -230,7 +238,8 @@ const numericFields: Array<{
     name: 'cost_outer_batch_size',
     label: 'Batch Size (Cost Queue)',
     description: 'Cost queue (cost-only records) batch size per write iteration. 0 = inherit the settlement queue batch size.',
-    min: 0,
+    min: 1,
+    presets: [{ value: 0, label: 'Same as settlement queue' }],
   },
   {
     name: 'inner_batch_size',
@@ -694,14 +703,22 @@ export function LedgerPipelineSection({
                   <FormItem>
                     <FormLabel>{t(item.label)}</FormLabel>
                     <FormControl>
-                      <Input
-                        className={numberInputNoSpinnerClassName}
-                        type='number'
-                        inputMode='numeric'
-                        min={item.min}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
+                      {item.presets ? (
+                        <NumericPresetInput
+                          presets={item.presets}
+                          min={item.min}
+                          {...numericPresetFieldProps(field)}
+                        />
+                      ) : (
+                        <Input
+                          className={numberInputNoSpinnerClassName}
+                          type='number'
+                          inputMode='numeric'
+                          min={item.min}
+                          step={1}
+                          {...safeNumberFieldProps(field)}
+                        />
+                      )}
                     </FormControl>
                     <FormDescription>{t(item.description)}</FormDescription>
                     {hint && (
@@ -763,14 +780,11 @@ export function LedgerPipelineSection({
               <FormItem>
                 <FormLabel>{t('Cache TTL Jitter (%)')}</FormLabel>
                 <FormControl>
-                  <Input
-                    className={numberInputNoSpinnerClassName}
-                    type='number'
-                    inputMode='numeric'
-                    min={0}
+                  <NumericPresetInput
+                    presets={[{ value: 0, label: 'Disabled' }]}
+                    min={1}
                     max={100}
-                    step={1}
-                    {...safeNumberFieldProps(field)}
+                    {...numericPresetFieldProps(field)}
                   />
                 </FormControl>
                 <FormDescription>

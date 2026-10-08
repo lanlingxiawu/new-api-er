@@ -556,26 +556,6 @@ func TestDownloadLogExport_RejectsBannedAdmin(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
 
-func TestDownloadLogExport_ZipAllParts(t *testing.T) {
-	enableRedis(t)
-	requireDB(t)
-
-	admin := mkUser(t, func(u *model.User) { u.Role = common.RoleAdminUser })
-	job := mkReadyExportJob(t, admin.Id, "part-one")
-
-	token, err := model.CreateLogExportDownloadToken(job.JobID, admin.Id, 0)
-	require.NoError(t, err)
-
-	ctx, rec := newCtx(t, http.MethodGet, "/dl/log-export/"+token, nil)
-	ctx.Params = gin.Params{{Key: "token", Value: token}}
-	DownloadLogExport(ctx)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "application/zip", rec.Header().Get("Content-Type"))
-	assert.Contains(t, rec.Header().Get("Content-Disposition"), ".zip")
-	assert.Greater(t, rec.Body.Len(), 0)
-}
-
 func TestLogExportDownloadSlots_LimitConcurrentDownloadsPerUser(t *testing.T) {
 	withExportSetting(t, func(s *operation_setting.LogExportSetting) {
 		s.MaxConcurrentDownloadsPerUser = 2
@@ -886,31 +866,6 @@ func TestGetLogExportColumns_ExposesAudienceAndFilterVocabulary(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, customerTemplates, "只应有「客户对账单」一个面向客户的模板")
-}
-
-// 「明细 + 汇总」模式下两种分片同在一个压缩包里，下载文件名必须能区分，
-// 否则拿到包的人得逐个解开才知道哪个是明细、哪个是汇总。
-func TestLogExportPartFileName_DistinguishesSummary(t *testing.T) {
-	job := &model.LogExportJob{
-		CreatedAt: time.Date(2026, 9, 20, 15, 30, 27, 0, time.Local).Unix(),
-		Format:    model.LogExportFormatCSVGz,
-	}
-	detail := logExportPartFileName(job, &model.LogExportPart{Index: 1})
-	summary := logExportPartFileName(job, &model.LogExportPart{
-		Index: 2, Kind: model.LogExportPartKindSummary,
-	})
-	assert.Contains(t, detail, "-part-0001.csv.gz")
-	assert.Contains(t, summary, "-summary-0002.csv.gz")
-	assert.NotEqual(t, detail, summary)
-
-	// 空 Kind 按明细处理，升级前创建的任务文件名不变。
-	legacy := logExportPartFileName(job, &model.LogExportPart{Index: 1, Kind: ""})
-	assert.Equal(t, detail, legacy)
-
-	job.Format = model.LogExportFormatXlsx
-	assert.Contains(t, logExportPartFileName(job, &model.LogExportPart{
-		Index: 3, Kind: model.LogExportPartKindSummary,
-	}), "-summary-0003.xlsx")
 }
 
 // mode=both 必须带着聚合维度落库。

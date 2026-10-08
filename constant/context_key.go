@@ -60,6 +60,15 @@ const (
 	ContextKeyUserStreamTotalTimeout        ContextKey = "user_stream_total_timeout"
 	ContextKeyUserNonStreamResponseTimeout  ContextKey = "user_non_stream_response_timeout"
 	ContextKeyUserNonStreamTotalTimeout     ContextKey = "user_non_stream_total_timeout"
+	// ContextKeyUserNonStreamTimeoutBilling selects what happens to a non-stream
+	// request that hits its deadline: "refund" returns the pre-consumed quota and
+	// the platform absorbs the upstream cost, "charge" settles the usage actually
+	// received. "charge" also makes the request talk to upstream in streaming mode
+	// so that partial usage exists to settle.
+	ContextKeyUserNonStreamTimeoutBilling ContextKey = "user_non_stream_timeout_billing"
+	// ContextKeyUserRetryTimes is the per-user retry quota: 0 inherits the
+	// group/global value, -1 disables retry.
+	ContextKeyUserRetryTimes ContextKey = "user_retry_times"
 	// Relay-timeout keys hold the hot config snapshot taken at request start, the
 	// two effective limits, and the request-local control.
 	ContextKeyRelayTimeoutSetting         ContextKey = "relay_timeout_setting"

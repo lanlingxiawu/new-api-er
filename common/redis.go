@@ -191,7 +191,12 @@ func RedisHGetObj(key string, obj any) error {
 	if err != nil {
 		return fmt.Errorf("failed to load hash from Redis: %w", err)
 	}
+	return DecodeRedisHash(key, result, obj)
+}
 
+// DecodeRedisHash 把 HGETALL 的结果按字段名填进 obj，供需要把 HGETALL 与其他命令
+// 合并进同一个 pipeline 的调用方使用。空结果视为键不存在。
+func DecodeRedisHash(key string, result map[string]string, obj any) error {
 	if len(result) == 0 {
 		return fmt.Errorf("key %s not found in Redis", key)
 	}
@@ -299,28 +304,23 @@ func RedisHIncrBy(key, field string, delta int64) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HINCRBY: key=%s, field=%s, delta=%d", key, field, delta))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
+	err := redisHIncrByIfCachedScript.Run(context.Background(), RDB, []string{key}, field, delta).Err()
 	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		incrCmd := txn.HIncrBy(ctx, key, field, delta)
-		if err := incrCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
 		return err
 	}
 	return nil
 }
+
+// redisHIncrByIfCachedScript 只在缓存键存在且带 TTL 时增减字段，TTL 保持不变。
+//
+// 必须在 Redis 端一步完成：拆成"先查 TTL、再 HINCRBY"时，键若恰好在两步之间过期，
+// HINCRBY 会新建一个只有该字段的残缺哈希——令牌缓存没有 schema 校验，会被读成
+// Status=0 的令牌。单脚本同时把每次额度增减从 2 次往返降到 1 次。
+var redisHIncrByIfCachedScript = redis.NewScript(`
+if redis.call('PTTL', KEYS[1]) > 0 then
+  return redis.call('HINCRBY', KEYS[1], ARGV[1], ARGV[2])
+end
+return false`)
 
 func RedisHSetField(key, field string, value any) error {
 	if DebugEnabled {

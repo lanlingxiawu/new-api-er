@@ -31,6 +31,11 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -126,6 +131,8 @@ const numericFields: Array<{
   description: string
   min: number
   step: number
+  // Special values offered in a dropdown; `min` then bounds ordinary numbers only.
+  presets?: NumericPreset[]
 }> = [
   {
     name: 'status_cache_seconds',
@@ -156,7 +163,8 @@ const numericFields: Array<{
     label: 'Flush Interval',
     description:
       'Min seconds between flushes. Set 0 for size-only mode (flush only when full).',
-    min: 0,
+    min: 1,
+    presets: [{ value: 0, label: 'Flush only when full' }],
     step: 1,
   },
   {
@@ -164,7 +172,8 @@ const numericFields: Array<{
     label: 'Batch Sleep',
     description:
       'Milliseconds the task sleeps after each flush to ease DB write pressure.',
-    min: 0,
+    min: 1,
+    presets: [{ value: 0, label: 'No pause' }],
     step: 50,
   },
 ]
@@ -286,14 +295,22 @@ export function FallbackBackfillSection({
                 <FormItem>
                   <FormLabel>{t(item.label)}</FormLabel>
                   <FormControl>
-                    <Input
-                      className={numberInputNoSpinnerClassName}
-                      type='number'
-                      inputMode='numeric'
-                      min={item.min}
-                      step={item.step}
-                      {...safeNumberFieldProps(field)}
-                    />
+                    {item.presets ? (
+                      <NumericPresetInput
+                        presets={item.presets}
+                        min={item.min}
+                        {...numericPresetFieldProps(field)}
+                      />
+                    ) : (
+                      <Input
+                        className={numberInputNoSpinnerClassName}
+                        type='number'
+                        inputMode='numeric'
+                        min={item.min}
+                        step={item.step}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    )}
                   </FormControl>
                   <FormDescription>{t(item.description)}</FormDescription>
                   <FormMessage />

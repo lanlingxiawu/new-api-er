@@ -281,7 +281,8 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	relayconvert.FinalizeClaudeStreamBillingUsage(claudeInfo)
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
-		if info.ShouldIncludeUsage {
+		// 受管流未完成时不补发用量尾帧（与 OpenAI 路径一致，见 openai.HandleFinalResponse）。
+		if info.ShouldIncludeUsage && !(info.StreamSession.Active() && !info.StreamSession.ProtocolComplete()) {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
 			err := helper.ObjectData(c, response)

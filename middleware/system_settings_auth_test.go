@@ -125,6 +125,41 @@ func TestRequireSystemSettingsScope_VeridropUsesIndependentMenuPermission(t *tes
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 }
 
+// Writes are decoded as JSON by the handlers, so the scope must come from the
+// same JSON reading: every other media type is rejected, for root as well.
+func TestRequireSystemSettingsScope_WriteRejectsNonJSONBody(t *testing.T) {
+	for _, contentType := range []string{
+		"",
+		"text/plain",
+		"application/x-www-form-urlencoded",
+		"multipart/form-data; boundary=X",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			ctx, recorder := systemSettingsContext(t, http.MethodPut, "/api/option/", `{"scope":"site.notice","key":"Notice","value":"x"}`)
+			ctx.Request.Header.Set("Content-Type", contentType)
+			ctx.Set("role", common.RoleRootUser)
+			RequireSystemSettingsScope(authz.ActionEdit)(ctx)
+			assert.True(t, ctx.IsAborted())
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			_, recorded := ctx.Get(SystemSettingsScopeContextKey)
+			assert.False(t, recorded)
+		})
+	}
+}
+
+// Root without a scope passes and the context records the empty scope, which is
+// what the handlers use to decide that no allowlist applies.
+func TestRequireSystemSettingsScope_RootUnscopedWriteRecordsEmptyScope(t *testing.T) {
+	ctx, _ := systemSettingsContext(t, http.MethodPut, "/api/option/", `{"key":"Notice","value":"x"}`)
+	ctx.Request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	ctx.Set("role", common.RoleRootUser)
+	RequireSystemSettingsScope(authz.ActionEdit)(ctx)
+	assert.False(t, ctx.IsAborted())
+	scope, recorded := ctx.Get(SystemSettingsScopeContextKey)
+	assert.True(t, recorded)
+	assert.Equal(t, "", scope)
+}
+
 func systemSettingsContext(t *testing.T, method string, url string, body string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
