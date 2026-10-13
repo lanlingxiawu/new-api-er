@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { Copy, Loader2 } from 'lucide-react'
+import { Copy, Download, Loader2 } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -26,6 +27,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -112,11 +114,47 @@ function Block({
 
 export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
   const { t } = useTranslation()
-  const { data, isLoading, isError, error } = useQuery({
+  const [isDownloading, setIsDownloading] = useState(false)
+  const { data, isLoading, isFetching, isError, error } = useQuery({
     queryKey: ['request-log-detail', id],
     queryFn: () => getRequestLogDetail(id as number),
     enabled: open && id !== null,
   })
+  const canDownload =
+    open &&
+    id !== null &&
+    data?.id === id &&
+    !isLoading &&
+    !isFetching &&
+    !isError &&
+    !isDownloading
+
+  const handleDownload = async () => {
+    if (!canDownload || !data) return
+    setIsDownloading(true)
+    let objectUrl: string | undefined
+    let link: HTMLAnchorElement | undefined
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      })
+      objectUrl = URL.createObjectURL(blob)
+      link = document.createElement('a')
+      link.href = objectUrl
+      link.download = `request-log-${data.id}.json`
+      document.body.appendChild(link)
+      link.click()
+      toast.success(t('Request log download started'))
+      // Give the browser time to consume the URL; finally also runs if the dialog unmounts.
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    } catch {
+      toast.error(t('Unable to download the request log. Please try again.'))
+    } finally {
+      link?.remove()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      setIsDownloading(false)
+    }
+  }
 
   // 被截断的头部无法可靠遮蔽凭据，后端对非超级管理员不返回；说明原因，免得误以为数据丢失。
   const headersNote = (content?: string) =>
@@ -179,6 +217,20 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
         {renderBody()}
+        <DialogFooter className='mx-0 mb-0 shrink-0 px-5 py-3'>
+          <Button
+            variant='outline'
+            disabled={!canDownload}
+            onClick={handleDownload}
+          >
+            {isDownloading ? (
+              <Loader2 className='h-4 w-4 animate-spin' />
+            ) : (
+              <Download className='h-4 w-4' />
+            )}
+            {isDownloading ? t('Downloading...') : t('Download JSON')}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
