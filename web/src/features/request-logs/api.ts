@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
-import type { RequestLogFilters, RequestLogItem, RequestLogsPage } from './types'
+
+import type {
+  RequestLogFilters,
+  RequestLogItem,
+  RequestLogsPage,
+} from './types'
 
 interface ApiResponse<T> {
   success: boolean
@@ -56,10 +61,12 @@ export async function getRequestLogs(
 }
 
 export async function getRequestLogDetail(
-  id: number
+  id: number,
+  signal?: AbortSignal
 ): Promise<RequestLogItem | undefined> {
   const res = await api.get<ApiResponse<RequestLogItem>>(
-    `/api/request-log/${id}`
+    `/api/request-log/${id}`,
+    { signal }
   )
   if (res.data.success === false) {
     throw new Error(res.data.message)

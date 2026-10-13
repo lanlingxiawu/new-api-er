@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Copy, Download, Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -33,6 +33,12 @@ import {
 } from '@/components/ui/dialog'
 
 import { getRequestLogDetail } from './api'
+import {
+  formatRequestLogContent,
+  SMALL_LOG_CONTENT_LIMIT,
+} from './request-log-content'
+import { RequestLogLargeContent } from './request-log-large-content'
+import { runRequestLogJob } from './request-log-worker-client'
 
 interface Props {
   id: number | null
@@ -52,23 +58,7 @@ function formatBytes(bytes?: number): string {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
-function prettify(raw?: string): string {
-  if (!raw) return ''
-  const trimmed = raw.trim()
-  if (
-    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-    (trimmed.startsWith('[') && trimmed.endsWith(']'))
-  ) {
-    try {
-      return JSON.stringify(JSON.parse(trimmed), null, 2)
-    } catch {
-      return raw
-    }
-  }
-  return raw
-}
-
-function Block({
+const Block = memo(function Block({
   title,
   content,
   note,
@@ -79,10 +69,12 @@ function Block({
 }) {
   const { t } = useTranslation()
 
+  const formatted = useMemo(() => formatRequestLogContent(content), [content])
+
   const handleCopy = async () => {
     if (!content) return
     try {
-      await navigator.clipboard.writeText(prettify(content))
+      await navigator.clipboard.writeText(formatted)
       toast.success(t('Copied'))
     } catch {
       toast.error(t('Copy failed'))
@@ -105,19 +97,32 @@ function Block({
         </Button>
       </div>
       {note && <p className='text-muted-foreground text-xs'>{note}</p>}
-      <pre className='bg-muted/60 border-border max-h-72 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap'>
-        {content ? prettify(content) : '-'}
-      </pre>
+      {formatted.length > SMALL_LOG_CONTENT_LIMIT ? (
+        <RequestLogLargeContent content={formatted} />
+      ) : (
+        <pre className='bg-muted/60 border-border max-h-72 overflow-auto rounded-lg border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap'>
+          {formatted || '-'}
+        </pre>
+      )}
     </div>
   )
-}
+})
 
 export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
   const { t } = useTranslation()
   const [isDownloading, setIsDownloading] = useState(false)
+  const downloadController = useRef<AbortController | null>(null)
+  useEffect(() => {
+    setIsDownloading(false)
+    return () => {
+      downloadController.current?.abort()
+      downloadController.current = null
+    }
+  }, [id, open])
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ['request-log-detail', id],
-    queryFn: () => getRequestLogDetail(id as number),
+    queryKey: ['request-log-detail', open ? id : null],
+    queryFn: ({ signal }) => getRequestLogDetail(id as number, signal),
+    gcTime: 0,
     enabled: open && id !== null,
   })
   const canDownload =
@@ -131,13 +136,18 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
 
   const handleDownload = async () => {
     if (!canDownload || !data) return
+    if (downloadController.current) return
+    const controller = new AbortController()
+    downloadController.current = controller
     setIsDownloading(true)
     let objectUrl: string | undefined
     let link: HTMLAnchorElement | undefined
     try {
-      const blob = new Blob([JSON.stringify(data, null, 2)], {
-        type: 'application/json;charset=utf-8',
-      })
+      const blob = (await runRequestLogJob(
+        { type: 'download', data },
+        controller.signal
+      )) as Blob
+      if (controller.signal.aborted) return
       objectUrl = URL.createObjectURL(blob)
       link = document.createElement('a')
       link.href = objectUrl
@@ -148,11 +158,16 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
       // Give the browser time to consume the URL; finally also runs if the dialog unmounts.
       await new Promise((resolve) => window.setTimeout(resolve, 1000))
     } catch {
-      toast.error(t('Unable to download the request log. Please try again.'))
+      if (!controller.signal.aborted) {
+        toast.error(t('Unable to download the request log. Please try again.'))
+      }
     } finally {
       link?.remove()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
-      setIsDownloading(false)
+      if (downloadController.current === controller) {
+        downloadController.current = null
+        setIsDownloading(false)
+      }
     }
   }
 
@@ -216,7 +231,7 @@ export function RequestLogDetailDialog({ id, open, onOpenChange }: Props) {
             {data?.request_id ? `Request ID: ${data.request_id}` : ' '}
           </DialogDescription>
         </DialogHeader>
-        {renderBody()}
+        {open && renderBody()}
         <DialogFooter className='mx-0 mb-0 shrink-0 px-5 py-3'>
           <Button
             variant='outline'
