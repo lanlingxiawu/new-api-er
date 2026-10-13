@@ -1,3 +1,4 @@
+import { zodResolver } from '@hookform/resolvers/zod'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,11 +18,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
-import * as z from 'zod'
 import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,6 +45,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+
 import { clearAllRequestLogs } from '../api'
 import {
   SettingsControlGroup,
@@ -200,7 +202,7 @@ export function RequestLogSettingsSection({
                 <FormLabel>{t('Request Log Username')}</FormLabel>
                 <FormControl>
                   <Input
-                    placeholder={t('Leave empty to record all users')}
+                    placeholder={t('For example: alice,bob')}
                     autoComplete='off'
                     {...field}
                     onChange={(event) => field.onChange(event.target.value)}
@@ -208,7 +210,7 @@ export function RequestLogSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'If empty, requests and responses of all users are recorded. If filled, only the specified username is recorded.'
+                    'Leave empty to record all users. Separate login usernames with commas (,) or Chinese commas (，) to record only those users. Commas alone record no users.'
                   )}
                 </FormDescription>
                 <FormMessage />
