@@ -791,6 +791,14 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	if addChannelRequest.Channel != nil {
+		if err := addChannelRequest.Channel.PreserveProbeSetting(nil); err != nil {
+			logger.LogError(c, "invalid channel probe setting: "+err.Error())
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+	}
+
 	// 每日上限先单独校验，好让报错是翻译过的而不是裸 i18n key（见函数注释）。
 	if !validateChannelDailyLimitI18n(c, addChannelRequest.Channel) {
 		return
@@ -1197,6 +1205,11 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	clearChannelReadOnlyFields(&channel, requestData)
+	if err := channel.Channel.PreserveProbeSetting(nil); err != nil {
+		logger.LogError(c, "invalid channel probe setting: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 
 	// 每日上限先单独校验，好让报错是翻译过的而不是裸 i18n key（见函数注释）。
 	if !validateChannelDailyLimitI18n(c, &channel.Channel) {

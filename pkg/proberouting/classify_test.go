@@ -8,6 +8,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestClassifyStreamMode(t *testing.T) {
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"} {
+		for _, tc := range []struct {
+			field           string
+			stream, matched bool
+		}{
+			{"", false, true},
+			{`,"stream":false`, false, true},
+			{`,"stream":true`, true, true},
+			{`,"stream":null`, false, false},
+			{`,"stream":"true"`, false, false},
+			{`,"stream":1`, false, false},
+			{`,"stream":true,"stream":false`, false, false},
+		} {
+			t.Run(path+tc.field, func(t *testing.T) {
+				input := `"messages":[{"role":"user","content":"hi"}]`
+				if path == "/v1/responses" {
+					input = `"input":"hi"`
+				}
+				chars, matched, stream := ClassifyWithStream(path, []byte(`{`+input+tc.field+`}`), 128)
+				require.Equal(t, tc.matched, matched)
+				if matched {
+					require.Equal(t, tc.stream, stream)
+					require.Equal(t, 2, chars)
+				}
+			})
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	tests := []struct {
 		name, path, body string

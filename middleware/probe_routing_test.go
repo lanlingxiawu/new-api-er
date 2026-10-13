@@ -22,7 +22,7 @@ import (
 // Exercise the distribution boundary against real configured DB rows and local
 // upstreams, without invoking real AI APIs or reproducing the billing hot path.
 func TestProbeRoutingDistribution(t *testing.T) {
-	requireDB(t)
+	probeRoutingDB(t)
 	group, modelName := uniq("probe-group"), uniq("probe-model")
 	oldMemory := common.MemoryCacheEnabled
 	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory; model.InitChannelCache() })
@@ -122,7 +122,7 @@ func TestProbeRoutingDistribution(t *testing.T) {
 }
 
 func TestProbeAutoGroupDoesNotEscape(t *testing.T) {
-	requireDB(t)
+	probeRoutingDB(t)
 	oldGroups := setting.UserUsableGroups2JSONString()
 	oldRatios := ratio_setting.GroupRatio2JSONString()
 	oldMemory := common.MemoryCacheEnabled

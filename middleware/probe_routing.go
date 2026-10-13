@@ -38,8 +38,9 @@ func classifyChannelProbe(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	chars, matched := proberouting.Classify(c.Request.URL.Path, body, operation_setting.GetProbeRoutingSnapshot().MaxInputChars)
-	if matched {
+	chars, matched, stream := proberouting.ClassifyWithStream(c.Request.URL.Path, body, operation_setting.GetProbeRoutingSnapshot().MaxInputChars)
+	policy = policy.ForStream(stream)
+	if matched && policy != nil {
 		c.Set(service.ProbeRoutingContextKey, &service.RequestProbeRouting{Policy: policy, InputChars: chars})
 	}
 }
