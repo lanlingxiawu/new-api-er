@@ -49,7 +49,7 @@ func TestExportUserLogs_MasksUpstreamErrorsForUser(t *testing.T) {
 
 	previous := operation_setting.GetRelayErrorDisplaySetting()
 	t.Cleanup(func() { operation_setting.ReplaceRelayErrorDisplaySetting(previous) })
-	target := fmt.Sprintf("/api/log/self/export?start_timestamp=%d&end_timestamp=%d", now-60, now+60)
+	target := fmt.Sprintf("/api/log/self/export?format=xlsx&start_timestamp=%d&end_timestamp=%d", now-60, now+60)
 
 	operation_setting.ReplaceRelayErrorDisplaySetting(operation_setting.RelayErrorDisplaySetting{Enabled: true, HideUpstreamErrors: true, DefaultMessage: "服务暂时不可用"})
 	ctx, rec := newCtx(t, "GET", target, nil)

@@ -358,15 +358,15 @@ func ExportAllLogs(c *gin.Context) {
 
 // ExportUserLogs streams the caller's own logs matching the search.
 func ExportUserLogs(c *gin.Context) {
+	if c.GetInt("id") <= 0 {
+		common.ApiErrorT(c, "Invalid user")
+		return
+	}
 	if c.GetInt("role") < common.RoleAdminUser && !operation_setting.GetLogSetting().UserExportEnabled {
 		common.ApiErrorT(c, "Log export is disabled")
 		return
 	}
 	if c.Query("format") == "xlsx" {
-		if c.GetInt("id") <= 0 {
-			common.ApiErrorT(c, "Invalid user")
-			return
-		}
 		exportLogsExcel(c, c.GetInt("id"))
 		return
 	}

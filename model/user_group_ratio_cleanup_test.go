@@ -355,13 +355,13 @@ func TestGroupRatioCleanupsActive_CoversUserCacheTTLAfterScan(t *testing.T) {
 	CleanupUserGroupRatios([]string{gone})
 	require.Equal(t, "{}", readGroupRatios(t, u.Id))
 
-	// 竞态注入：扫描判定「无缓存、无需刷新」之后，旧行被写回缓存。
+	// A delayed pre-cleanup snapshot must be rejected by the profile fence.
 	stale := *u
 	stale.GroupRatios = `{"` + gone + `":3}`
 	require.NoError(t, populateUserCache(stale))
-	cached, err := common.RDB.HGet(context.Background(), getUserCacheKey(u.Id), "GroupRatios").Result()
+	cached, err := GetUserCache(u.Id)
 	require.NoError(t, err)
-	require.Contains(t, cached, gone, "precondition: 缓存里仍是已删分组的旧倍率")
+	require.Equal(t, "{}", cached.GroupRatios, "stale ratios must not reappear after cleanup")
 
 	assert.Equal(t, []string{gone}, GroupRatioCleanupsActive([]string{gone}),
 		"扫描结束后的一个缓存 TTL 内，重建与新规则门禁必须继续拦截")

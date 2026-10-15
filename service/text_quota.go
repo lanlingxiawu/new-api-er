@@ -175,6 +175,10 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	var items []ToolSurchargeItem
+	if ctx != nil {
+		count := min(ctx.GetInt("claude_web_search_requests"), relaycommon.MaxBillableToolCallCount)
+		items = collectToolSurchargeItem(items, dto.BuildInToolWebSearch, count, summary.ModelName)
+	}
 
 	if relayInfo.ResponsesUsageInfo != nil {
 		for name, tool := range relayInfo.ResponsesUsageInfo.BuiltInTools {

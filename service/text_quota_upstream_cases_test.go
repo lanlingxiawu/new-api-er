@@ -1340,18 +1340,18 @@ func TestCalculateTextQuotaSummaryDoesNotApplyRequestMultipliersToToolSurcharge(
 func TestCalculateTextToolCallSurchargeGeminiGoogleSearch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Set("gemini_google_search_call", true)
 
 	relayInfo := &relaycommon.RelayInfo{OriginModelName: "gemini-2.5-flash"}
+	relayInfo.SetBillableToolCount(relaycommon.GoogleSearchGroundedPromptTool, 1)
 	summary := &textQuotaSummary{ModelName: "gemini-2.5-flash", GroupRatio: 1}
 
 	surcharge := calculateTextToolCallSurcharge(ctx, relayInfo, summary)
-	expected := decimal.NewFromFloat(14.0 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	expected := decimal.NewFromFloat(35.0 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	assert.True(t, expected.Equal(surcharge), "got %s want %s", surcharge, expected)
 	require.Len(t, summary.ToolSurchargeItems, 1)
-	assert.Equal(t, dto.BuildInToolGoogleSearch, summary.ToolSurchargeItems[0].Name)
+	assert.Equal(t, relaycommon.GoogleSearchGroundedPromptTool, summary.ToolSurchargeItems[0].Name)
 	assert.Equal(t, 1, summary.ToolSurchargeItems[0].Count)
-	assert.Equal(t, 14.0, summary.ToolSurchargeItems[0].Price)
+	assert.Equal(t, 35.0, summary.ToolSurchargeItems[0].Price)
 }
 
 func TestCalculateTextToolCallSurchargeGeminiFunctionCall(t *testing.T) {

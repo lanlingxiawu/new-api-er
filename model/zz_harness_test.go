@@ -150,6 +150,7 @@ func TestMain(m *testing.M) {
 		&Token{},
 		&User{},
 		&UserSession{},
+		&UserAccessToken{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
 		&PasskeyCredential{},

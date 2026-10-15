@@ -67,7 +67,10 @@ func TestWebhook_SendSuccess(t *testing.T) {
 	err := SendWebhookNotify(srv.URL, "sec", data)
 	require.NoError(t, err)
 	assert.NotEmpty(t, gotSig)
-	assert.Contains(t, string(gotBody), "hello world")
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(gotBody, &payload))
+	assert.Equal(t, "hello %s", payload["content"])
+	assert.Equal(t, []any{"world"}, payload["values"])
 }
 
 func TestWebhook_SendNon2xx(t *testing.T) {

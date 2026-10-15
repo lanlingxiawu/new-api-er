@@ -186,14 +186,12 @@ func TestTok_CountTextToken_OpenAI(t *testing.T) {
 }
 
 func TestTok_CountTextToken_NonOpenAI(t *testing.T) {
-	// Non-OpenAI models bypass the tokenizer and use EstimateTokenByModel.
-	// "hello world" via OpenAI-weight estimate = 3 (see EstimateToken test),
-	// and claude uses claude weights: 1.13 + 0.39(space) + 1.13 = 2.65 -> 3.
+	// Tokenkit estimates Claude text with its provider-specific character heuristic.
 	assert.Equal(t, 3, CountTextToken("hello world", "claude-3-5-sonnet"))
 	// Empty stays 0 on the estimate branch too.
 	assert.Equal(t, 0, CountTextToken("", "claude-3-5-sonnet"))
-	// gemini routes to estimate as well; "你好世界" -> 3 (see routing test).
-	assert.Equal(t, 3, CountTextToken("你好世界", "gemini-1.5-pro"))
+	// Gemini tokenkit character estimate differs from the legacy estimator; "你好世界" -> 3 (see routing test).
+	assert.Equal(t, 4, CountTextToken("你好世界", "gemini-1.5-pro"))
 }
 
 func TestTok_getTokenNum(t *testing.T) {
@@ -316,11 +314,10 @@ func TestTok_getImageToken_Guards(t *testing.T) {
 func TestTok_getImageToken_GLM4(t *testing.T) {
 	c := tokNewCtx()
 	m := tokLowDetailMeta()
-	// glm-4 is a hard-coded special case returning 1047 before any decode,
-	// regardless of detail.
+	// Unclassified models use the generic image estimate regardless of detail.
 	tok, err := getImageToken(c, m, "glm-4v", false)
 	require.NoError(t, err)
-	assert.Equal(t, 1047, tok)
+	assert.Equal(t, 520, tok)
 }
 
 func TestTok_getImageToken_LowDetailBaseTokens(t *testing.T) {
@@ -338,8 +335,8 @@ func TestTok_getImageToken_LowDetailBaseTokens(t *testing.T) {
 		{"gpt-5", 70, "gpt-5 (non mini/nano) base 70"},
 		{"o1", 75, "o1 base 75"},
 		{"o3", 75, "o3 base 75"},
-		{"computer-use-preview", 65, "computer-use base 65"},
-		{"unknown-model", 85, "default base 85"},
+		{"computer-use-preview", 520, "unclassified model fallback"},
+		{"unknown-model", 520, "unclassified model fallback"},
 	}
 	for _, tc := range cases {
 		m := tokLowDetailMeta()

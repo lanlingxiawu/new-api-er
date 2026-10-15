@@ -411,6 +411,13 @@ func TestStatedLangLoadsTheUserOnlyWithoutLoadedSettings(t *testing.T) {
 	assert.Equal(t, 1, loads)
 }
 
+func TestStatedLangWithoutRequest(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	assert.Empty(t, StatedLang(c))
+	c.Set(string(constant.ContextKeyLanguage), LangZhCN)
+	assert.Equal(t, LangZhCN, StatedLang(c))
+}
+
 func TestBackendMessageLanguage(t *testing.T) {
 	require.NoError(t, Init())
 	t.Cleanup(func() { common.DefaultLanguage = "" })

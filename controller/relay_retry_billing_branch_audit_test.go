@@ -614,6 +614,9 @@ func TestBranchAuditRelayClientCancelBillsCompletedNonStreamUpstream(t *testing.
 // upstream accepted the request, so it is settled like main (estimated prompt;
 // here the per-call price) — with and without the per-user timeout feature.
 func TestBranchAuditRelayStreamClientGoneBeforeFirstByteIsCharged(t *testing.T) {
+	previousMultiplier := operation_setting.GetQuotaSetting().PreConsumeMultiplier
+	operation_setting.GetQuotaSetting().PreConsumeMultiplier = 3
+	t.Cleanup(func() { operation_setting.GetQuotaSetting().PreConsumeMultiplier = previousMultiplier })
 	// The charge is the estimated prompt, so local token counting must be on
 	// (it is by default in production; the test environment leaves it off).
 	prevCountToken := constant.CountToken
@@ -627,7 +630,7 @@ func TestBranchAuditRelayStreamClientGoneBeforeFirstByteIsCharged(t *testing.T) 
 				f.setUserColumns(t, map[string]any{"stream_response_timeout": 30})
 			}
 			useRetryAuditRatioPricing(t, f)
-			// max_tokens makes the pre-consume larger than the settled estimate, so a
+			// The input reservation multiplier makes pre-consume larger than the settled estimate, so a
 			// settlement is distinguishable from both a release and a kept pre-consume.
 			f.sendBodyAndLeave(t, `{"model":"`+f.modelName+`","stream":true,"max_tokens":2000,"messages":[{"role":"user","content":"hi"}]}`, 100*time.Millisecond)
 			hits, quotaAtHit := f.snapshot()

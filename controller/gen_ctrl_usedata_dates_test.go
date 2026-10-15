@@ -11,8 +11,8 @@ import (
 // parseFlowQuotaTimeRange are covered in usedata_flow_test.go.
 
 func TestGetUserQuotaDates_SpanTooLarge(t *testing.T) {
-	// Span > 30 days (2592000s) is rejected before any DB access.
-	ctx, rec := newCtx(t, "GET", "/x?start_timestamp=0&end_timestamp=2592001", nil)
+	// Span > the default 365 days is rejected before any DB access.
+	ctx, rec := newCtx(t, "GET", "/x?start_timestamp=1&end_timestamp=31622402", nil)
 	asUser(ctx, nextTestID())
 	GetUserQuotaDates(ctx)
 	resp := decodeResp(t, rec)

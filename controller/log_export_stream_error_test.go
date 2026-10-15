@@ -27,7 +27,7 @@ func TestExportLogs_StreamErrorOnlyInAdminExport(t *testing.T) {
 		Other: `{"admin_info":{"use_channel":["7"],"stream_error":"` + upstreamText + `"}}`,
 	}).Error)
 	t.Cleanup(func() { model.LOG_DB.Where("user_id = ?", u.Id).Delete(&model.Log{}) })
-	span := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-60, now+60)
+	span := fmt.Sprintf("format=xlsx&start_timestamp=%d&end_timestamp=%d", now-60, now+60)
 
 	userCtx, userRec := newCtx(t, "GET", "/api/log/self/export?"+span, nil)
 	asUser(userCtx, u.Id)

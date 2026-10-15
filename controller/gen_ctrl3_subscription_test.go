@@ -164,7 +164,7 @@ func TestAdminCreateSubscriptionPlan_EmptyTitle(t *testing.T) {
 	AdminCreateSubscriptionPlan(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "标题")
+	require.Contains(t, resp.Message, "Subscription plan title cannot be empty")
 }
 
 func TestAdminCreateSubscriptionPlan_PriceTooHigh(t *testing.T) {
@@ -190,7 +190,7 @@ func TestAdminCreateSubscriptionPlan_BadUpgradeGroup(t *testing.T) {
 	AdminCreateSubscriptionPlan(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "升级分组")
+	require.Contains(t, resp.Message, "Upgrade group does not exist")
 }
 
 func TestAdminUpdateSubscriptionPlan_Success(t *testing.T) {
@@ -217,7 +217,7 @@ func TestAdminUpdateSubscriptionPlan_InvalidId(t *testing.T) {
 	AdminUpdateSubscriptionPlan(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "无效")
+	require.Contains(t, resp.Message, "Invalid ID")
 }
 
 func TestAdminUpdateSubscriptionPlanStatus_Success(t *testing.T) {
@@ -282,7 +282,7 @@ func TestAdminListUserSubscriptions_InvalidId(t *testing.T) {
 	AdminListUserSubscriptions(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "无效")
+	require.Contains(t, resp.Message, "Invalid user ID")
 }
 
 func TestAdminCreateUserSubscription_BadParam(t *testing.T) {
@@ -312,7 +312,7 @@ func TestAdminResetPlanSubscriptions_InvalidId(t *testing.T) {
 	AdminResetPlanSubscriptions(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "无效")
+	require.Contains(t, resp.Message, "Invalid ID")
 }
 
 func TestAdminInvalidateUserSubscription_InvalidId(t *testing.T) {

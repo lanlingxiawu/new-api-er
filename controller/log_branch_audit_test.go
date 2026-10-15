@@ -107,7 +107,7 @@ func TestBranchAuditExportUserLogs_ScopeColumnsAndSpan(t *testing.T) {
 		t.Cleanup(func() { model.LOG_DB.Where("user_id = ?", ownerID).Delete(&model.Log{}) })
 	}
 
-	target := fmt.Sprintf("/api/log/self/export?start_timestamp=%d&end_timestamp=%d&username=%s", start, end, victim.Username)
+	target := fmt.Sprintf("/api/log/self/export?format=xlsx&start_timestamp=%d&end_timestamp=%d&username=%s", start, end, victim.Username)
 	ctx, rec := newCtx(t, "GET", target, nil)
 	asUser(ctx, u.Id)
 	ExportUserLogs(ctx)
@@ -122,7 +122,7 @@ func TestBranchAuditExportUserLogs_ScopeColumnsAndSpan(t *testing.T) {
 	assert.Equal(t, "row of "+u.Username, row[13])
 
 	// Admin export of the same range shows the routing columns.
-	adminCtx, adminRec := newCtx(t, "GET", fmt.Sprintf("/api/log/export?start_timestamp=%d&end_timestamp=%d&username=%s", start, end, u.Username), nil)
+	adminCtx, adminRec := newCtx(t, "GET", fmt.Sprintf("/api/log/export?format=xlsx&start_timestamp=%d&end_timestamp=%d&username=%s", start, end, u.Username), nil)
 	asAdmin(adminCtx, nextTestID())
 	ExportAllLogs(adminCtx)
 	adminRows := branchAuditExportRows(t, adminRec.Body.Bytes())
@@ -131,7 +131,7 @@ func TestBranchAuditExportUserLogs_ScopeColumnsAndSpan(t *testing.T) {
 	assert.Equal(t, "7->9", adminRows[0][12])
 
 	// One second past 30 days is refused with the standard envelope.
-	tooLong, tooLongRec := newCtx(t, "GET", fmt.Sprintf("/api/log/self/export?start_timestamp=%d&end_timestamp=%d", start-1, end), nil)
+	tooLong, tooLongRec := newCtx(t, "GET", fmt.Sprintf("/api/log/self/export?format=xlsx&start_timestamp=%d&end_timestamp=%d", start-1, end), nil)
 	asUser(tooLong, u.Id)
 	ExportUserLogs(tooLong)
 	assert.False(t, decodeResp(t, tooLongRec).Success)

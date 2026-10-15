@@ -1482,6 +1482,8 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 					after, err = model.GetModelPricingSnapshot([]string{name, keep})
 					require.NoError(t, err)
 					assert.Empty(t, after.Entries[0].Configured)
+					assert.Greater(t, after.Entries[1].PricingVersion, before.Entries[1].PricingVersion)
+					before.Entries[1].PricingVersion = after.Entries[1].PricingVersion
 					assert.Equal(t, before.Entries[1], after.Entries[1], "name rules do not expand pricing deletion")
 					assert.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(name))
 					_, hasExpr := billing_setting.GetBillingExpr(name)

@@ -235,13 +235,13 @@ func TestStrutil_GetUserUsableGroups(t *testing.T) {
 	})
 	t.Run("unknown user group added with default description", func(t *testing.T) {
 		got := GetUserUsableGroups("brandnew")
-		assert.Equal(t, "用户分组", got["brandnew"])
+		assert.Equal(t, "User group", got["brandnew"])
 		// base groups preserved
 		assert.Contains(t, got, "default")
 	})
 	t.Run("known base group not overwritten with default desc", func(t *testing.T) {
 		got := GetUserUsableGroups("default")
-		assert.Equal(t, "默认分组", got["default"])
+		assert.Equal(t, "Default group", got["default"])
 	})
 	t.Run("special settings add/remove/direct branches", func(t *testing.T) {
 		const ug = "strutil_special_ug"

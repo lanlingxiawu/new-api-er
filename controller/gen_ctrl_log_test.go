@@ -61,9 +61,9 @@ func TestGetLogByKey_NoTokenId(t *testing.T) {
 
 func TestExportUserLogs_InvalidUser(t *testing.T) {
 	ctx, rec := newCtx(t, "GET", "/api/log/self/export", nil)
-	// no id -> 401 defensive guard
+	// Missing identity is rejected even when middleware was not invoked.
 	ExportUserLogs(ctx)
-	assert.Equal(t, 401, rec.Code)
+	assert.Equal(t, 200, rec.Code)
 	var out map[string]any
 	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
 	assert.Equal(t, false, out["success"])

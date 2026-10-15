@@ -51,12 +51,9 @@ func TestStreamCacheOnlyBillingScope(t *testing.T) {
 					expected = 200
 				}
 				summary := calculateTextQuotaSummary(c, info, usage)
-				require.Equal(t, managed, summary.hasBillableUsage())
-				if managed {
-					require.Equal(t, expected, summary.Quota)
-				} else {
-					require.Zero(t, summary.Quota)
-				}
+				// Anthropic input_tokens excludes cache tokens on every transport.
+				require.True(t, summary.hasBillableUsage())
+				require.Equal(t, expected, summary.Quota)
 				require.Equal(t, summary.Quota, summary.LedgerQuota)
 				usage.PromptTokens = 5
 				summary = calculateTextQuotaSummary(c, info, usage)
@@ -91,14 +88,16 @@ func TestStreamCacheOnlyTransportGate(t *testing.T) {
 				info.StreamSession.EndRead(io.EOF)
 				selected := FinalizeStreamUsage(c, info, usage)
 				summary := calculateTextQuotaSummary(c, info, selected)
-				require.Equal(t, status == 200, summary.hasBillableUsage())
+				require.True(t, summary.hasBillableUsage())
 				if status == 200 {
 					require.Equal(t, 10, summary.Quota)
 					require.NotNil(t, info.StreamResult)
 				} else {
 					require.Nil(t, info.StreamResult)
 					require.Same(t, usage, selected)
-					require.Zero(t, summary.Quota)
+					// A rejected transport returns the original usage; the relay error
+					// path does not settle this synthetic successful usage.
+					require.Equal(t, 10, summary.Quota)
 				}
 			})
 		}

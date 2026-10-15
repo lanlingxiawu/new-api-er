@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,17 +114,18 @@ func TestBranchAuditUpdateUser_RoleCannotBeChangedThroughEdit(t *testing.T) {
 // A non-root admin smuggling admin_permissions must fail the whole transaction:
 // the profile fields written earlier in the same transaction roll back.
 func TestBranchAuditUpdateUser_NonRootAdminPermissionsRollBack(t *testing.T) {
-	requireDB(t)
+	_, identity, target := setupAdminUserTest(t)
 	withGroupRatio(t, map[string]float64{"default": 1, "vip": 2})
-	target := mkUser(t, func(u *model.User) { u.DisplayName = "before"; u.GroupRatios = `{"vip":2}` })
-
-	res := auditUpdateUser(t, nextTestID(), common.RoleAdminUser, auditUserBody(target, map[string]any{
+	require.NoError(t, model.DB.Model(target).Updates(map[string]any{"display_name": "before", "group_ratios": `{"vip":2}`}).Error)
+	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAdminUserUpdate, Context: []byte(fmt.Sprintf(`{"user_id":%d}`, target.Id))}, service.VerificationMethodPassword)
+	body, err := common.Marshal(auditUserBody(target, map[string]any{
 		"display_name":      "after",
 		"group_ratios":      `{"vip":0.1}`,
 		"admin_permissions": map[string]map[string]bool{"system_settings.site.notice": {"view": true}},
-	}), "")
-
-	assert.False(t, res.resp.Success)
+	}))
+	require.NoError(t, err)
+	recorder := adminUserRequest(http.MethodPut, "/api/user/", string(body), proof, identity, common.RoleAdminUser, nil, UpdateUser)
+	assert.False(t, decodeResp(t, recorder).Success)
 	stored := auditStoredUser(t, target.Id)
 	assert.Equal(t, "before", stored.DisplayName)
 	assert.JSONEq(t, `{"vip":2}`, stored.GroupRatios)

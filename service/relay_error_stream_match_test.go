@@ -70,6 +70,7 @@ func runStreamMatch(t *testing.T, tokenID int, requestID string, run streamMatch
 	c.Set("original_model", "stream-match-model")
 	c.Set("group", "default")
 	common.SetContextKey(c, constant.ContextKeyIsStream, true)
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://up.example.com")
 	common.SetContextKey(c, constant.ContextKeyRelayTotalTimeoutSeconds, 30)
 	if run.timeoutBeforeFrame {
 		common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, settlementTimeoutControl{})

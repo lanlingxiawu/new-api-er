@@ -74,6 +74,7 @@ func setupResponsesWSRequestTest(t *testing.T) (*model.User, *model.Token) {
 	setting.ModelRequestRateLimitEnabled = false
 	enableRelayLogPipelineForTest(t)
 	t.Cleanup(func() {
+		drainRelayLogsForTest(t)
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.SetDatabaseTypes(previousType, previousLogType)
@@ -245,7 +246,7 @@ func TestResponsesWSRequestRunnerUsesExistingMemoryRateLimit(t *testing.T) {
 	require.NotNil(t, apiError)
 	assert.Equal(t, http.StatusTooManyRequests, apiError.StatusCode)
 	message := i18n.Translate("", i18n.MsgRateLimitTotalReached, map[string]any{"Minutes": 1, "Max": 1})
-	assert.Equal(t, common.MessageWithRequestId(message, "limited"), apiError.Error())
+	assert.Equal(t, message, apiError.Error())
 	assert.Equal(t, 1, called)
 }
 
@@ -303,6 +304,7 @@ func (fixture *responsesWSBillingTest) closeAndWait(t *testing.T) {
 			t.Error("upstream connection was not closed")
 		}
 	}
+	drainRelayLogsForTest(t)
 	// Health classification is synchronous at the request boundary; only the
 	// Redis write is asynchronous, see waitPerfCounters.
 }
@@ -954,6 +956,12 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 					}
 				}
 				quotas := []int{1000}
+				zeroChargeFailure := transport == "http-sse" && tc.failed && !tc.delta
+				if zeroChargeFailure {
+					quotas = nil // Strict SSE: no delivered content means no charge, including fixed pricing.
+				} else if transport == "http-sse" && tc.failed && tc.delta {
+					quotas[0] = 2000 // Delivered hello is estimated as two output tokens.
+				}
 				if tc.failed {
 					// The first terminal must complete settlement and middleware before
 					// admitting this immediately following request.
@@ -963,7 +971,11 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 				}
 				require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","event_id":"limited","stream_id":"planner","model":"ws-billing","input":"limited"}`)))
 				limited := readResponsesWSTestEvent(t, fixture.client)
-				assert.Equal(t, float64(http.StatusTooManyRequests), limited["status"])
+				expectedStatus := http.StatusTooManyRequests
+				if transport == "http-sse" && tc.delta {
+					expectedStatus = http.StatusUnauthorized
+				} // The preceding turns exhaust all 3000 token quota.
+				assert.Equal(t, float64(expectedStatus), limited["status"])
 				assert.Equal(t, "planner", limited["stream_id"])
 				assert.Equal(t, "limited", limited["event_id"])
 				fixture.closeAndWait(t)
@@ -971,8 +983,14 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 				var logs []model.Log
 				require.NoError(t, model.LOG_DB.Where("token_id = ? AND type = ?", fixture.token.Id, model.LogTypeConsume).Order("id").Find(&logs).Error)
 				require.Len(t, logs, len(quotas))
+				firstLog := logs[0]
+				if zeroChargeFailure {
+					firstLog = model.Log{}
+					require.NoError(t, model.LOG_DB.Where("token_id = ? AND type = ?", fixture.token.Id, model.LogTypeError).First(&firstLog).Error)
+					require.Zero(t, firstLog.Quota)
+				}
 				var other map[string]any
-				require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+				require.NoError(t, common.UnmarshalJsonStr(firstLog.Other, &other))
 				stream := other["stream_status"].(map[string]any)
 				if tc.failed {
 					assert.Equal(t, "error", stream["status"])
@@ -986,7 +1004,10 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 					}
 				}
 				assert.NotContains(t, logs[0].Other, "sensitive upstream detail")
-				expectedRequests := int64(len(quotas))
+				expectedRequests := int64(1)
+				if tc.failed {
+					expectedRequests++
+				}
 				if tc.ignored {
 					expectedRequests--
 				}

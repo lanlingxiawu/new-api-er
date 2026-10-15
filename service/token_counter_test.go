@@ -140,7 +140,7 @@ func TestEstimateRequestToken_ImageURLRefusedBySSRFGuard_UsesFallback(t *testing
 	got, err := EstimateRequestToken(estimateCtx("gpt-4o"), estimateMeta(img), streamOpenAI())
 
 	require.NoError(t, err)
-	assert.Equal(t, estimateTextTokens+3*85, got)
+	assert.Equal(t, estimateTextTokens+765, got)
 	assert.Equal(t, int32(0), atomic.LoadInt32(hits))
 }
 
@@ -161,8 +161,8 @@ func TestEstimateRequestToken_ImageURLReadable_MeasuresImage(t *testing.T) {
 	got, err := EstimateRequestToken(estimateCtx("gpt-4o"), estimateMeta(img), streamOpenAI())
 
 	require.NoError(t, err)
-	// 512x512 high: scaled to 768x768 -> 2x2 tiles -> 4*170 + 85.
-	assert.Equal(t, estimateTextTokens+4*170+85, got)
+	// 512x512 high is not upscaled: one tile plus the base cost.
+	assert.Equal(t, estimateTextTokens+170+85, got)
 	assert.Equal(t, int32(1), atomic.LoadInt32(hits), "the cached download is reused for the image size")
 }
 
@@ -189,7 +189,7 @@ func TestEstimateRequestToken_NonOpenAIModelURLDownloadFails_UsesFlatImageEstima
 	got, err := EstimateRequestToken(estimateCtx("claude-sonnet-4"), estimateMeta(img), info)
 
 	require.NoError(t, err)
-	assert.Equal(t, 2+520, got)
+	assert.Equal(t, 2+1373, got)
 	assert.Equal(t, int32(1), atomic.LoadInt32(hits))
 }
 
@@ -215,22 +215,22 @@ func TestEstimateRequestToken_NonStreamDoesNotFetch(t *testing.T) {
 	got, err := EstimateRequestToken(estimateCtx("gpt-4o"), estimateMeta(img), info)
 
 	require.NoError(t, err)
-	assert.Equal(t, estimateTextTokens+3*85, got)
+	assert.Equal(t, estimateTextTokens+765, got)
 	assert.Equal(t, int32(0), atomic.LoadInt32(hits))
 }
 
 func TestImageTokenFallback_MatchesMediaCountingDisabled(t *testing.T) {
 	cases := map[string]int{
-		"gpt-4o":               3 * 85,
-		"GPT-4o-mini":          3 * 2833,
-		"gpt-5":                3 * 70,
-		"o1-pro":               3 * 75,
-		"o3":                   3 * 75,
-		"computer-use-preview": 3 * 65,
-		"gpt-4.1-mini":         3 * 85, // patch-based: default base
-		"gpt-5-nano":           3 * 85,
-		"glm-4v":               1047,
-		"some-unknown":         3 * 85,
+		"gpt-4o":               765,
+		"GPT-4o-mini":          25501,
+		"gpt-5":                630,
+		"o1-pro":               675,
+		"o3":                   675,
+		"computer-use-preview": 520,
+		"gpt-4.1-mini":         1659, // ceil(1024 patches * 1.62)
+		"gpt-5-nano":           1536,
+		"glm-4v":               520,
+		"some-unknown":         520,
 	}
 	for model, want := range cases {
 		assert.Equal(t, want, imageTokenFallback(model, "high"), model)

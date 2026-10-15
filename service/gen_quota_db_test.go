@@ -101,7 +101,7 @@ func TestQuotadb_PreConsumeTokenQuota_NegativeRejected(t *testing.T) {
 	info := quotadbRelayInfo(0, 0, "")
 	err := PreConsumeTokenQuota(info, -1)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "负数")
+	assert.Contains(t, err.Error(), "negative")
 }
 
 func TestQuotadb_PreConsumeTokenQuota_PlaygroundNoop(t *testing.T) {

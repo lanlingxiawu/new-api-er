@@ -74,6 +74,7 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	c.Set(relaycommon.StreamSessionKey, info.StreamSession)
 	c.Set(common.StreamPrivateContextKey, true)
 	info.StreamStatus = relaycommon.NewStreamStatus()
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	c.Set(relaycommon.StreamHandledKey, false)
 	c.Set(relaycommon.StreamResponseOnlyKey, true)
 	c.Set(relaycommon.StreamResponseCaptureKey, (*relaycommon.StreamResponseCapture)(nil))
@@ -167,11 +168,27 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		outputEstimate = 0
 	}
 	info.StreamResult = outcome
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	if reason == "" {
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	} else {
 		info.StreamStatus.SetEndReason(reason, nil)
+		// The strict scanner can intercept terminal errors before the Responses
+		// accumulator sees them. Preserve their business code for health scoring.
+		if info.RelayFormat == types.RelayFormatOpenAIResponses {
+			payload := snapshot.ErrorPayload
+			if len(snapshot.ErrorFrame) > 0 {
+				_, payload = relaycommon.StreamFramePayload(snapshot.ErrorFrame)
+			}
+			var event dto.ResponsesStreamResponse
+			if common.Unmarshal(payload, &event) == nil {
+				ObserveResponsesOutcome(info, &event)
+			}
+		}
+		info.StreamStatus.MarkFailed("", "", 0)
 	}
 	// Realtime 正常 response.done 仅结束一轮，连接保留给下一轮；异常才关闭。
 	if info.RelayFormat != types.RelayFormatOpenAIRealtime || outcome.Failed {
@@ -181,7 +198,7 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		WriteStreamTerminalError(c, info, snapshot)
 	}
 	if outcome.Failed && !outcome.ClientGone {
-		outcome.ErrorMessage = StreamFailureLogMessage(snapshot)
+		outcome.ErrorMessage = StreamFailureLogMessage(snapshot, common.UpstreamAddresses(c)...)
 	}
 	selected := usage
 	if !outcome.Failed && confirmed && snapshot.EstimatedOutput > 0 {

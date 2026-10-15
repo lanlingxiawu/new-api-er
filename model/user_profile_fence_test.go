@@ -418,7 +418,7 @@ func TestRechargeCreemEmailFillBumpsProfileVersionAndPublishes(t *testing.T) {
 	cached, err := cacheGetUserBase(u.Id)
 	require.NoError(t, err)
 	assert.Equal(t, email, cached.Email, "the hash is refreshed immediately")
-	assert.Equal(t, 5, cached.Quota, "the publish must not touch the cached quota")
+	assert.Equal(t, 105, cached.Quota, "the top-up must add 100 while preserving the Redis-only delta of 5")
 
 	// Email already set: no bump.
 	tp2 := mkTopUp(t, u.Id, func(tp *TopUp) {

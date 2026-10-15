@@ -127,7 +127,7 @@ func TestUpdateVendorMeta_MissingID(t *testing.T) {
 	UpdateVendorMeta(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "供应商 ID")
+	require.Contains(t, resp.Message, "Missing vendor ID")
 }
 
 func TestUpdateVendorMeta_BadJSON(t *testing.T) {

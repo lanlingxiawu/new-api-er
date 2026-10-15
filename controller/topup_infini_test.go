@@ -278,7 +278,7 @@ func TestRawQuotaFromPayMoneySaturatesAboveWalletCeiling(t *testing.T) {
 	quota := rawQuotaFromPayMoney(huge, 7.2, 7.2)
 	assert.Equal(t, int64(common.MaxWalletQuota)+1, quota)
 	_, err := validateCreditedQuota(decimal.NewFromInt(quota))
-	require.EqualError(t, err, "充值额度超出系统可表示范围")
+	require.EqualError(t, err, "Top-up quota exceeds the range the system can represent")
 
 	// Exactly at the ceiling stays representable and is accepted.
 	atCeiling := decimal.NewFromInt(int64(common.MaxWalletQuota)).Div(decimal.NewFromInt(500000))

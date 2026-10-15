@@ -52,10 +52,10 @@ func TestImgTok_NilSource(t *testing.T) {
 }
 
 func TestImgTok_GLM4(t *testing.T) {
-	// GLM-4 is a fixed 1047 short-circuit.
+	// Unclassified model families use the generic 520-token image estimate.
 	got, err := getImageToken(imgTokCtx(t), imageMeta(t, 8, 8, "high"), "glm-4v", true)
 	require.NoError(t, err)
-	assert.Equal(t, 1047, got)
+	assert.Equal(t, 520, got)
 }
 
 func TestImgTok_LowDetailShortCircuit(t *testing.T) {
@@ -69,10 +69,10 @@ func TestImgTok_MediaTokenDisabled(t *testing.T) {
 	o := constant.GetMediaToken
 	constant.GetMediaToken = false
 	t.Cleanup(func() { constant.GetMediaToken = o })
-	// GetMediaToken false => 3*baseTokens (3*85).
+	// Without size inspection, tokenkit assumes a typical 1024x1024 image.
 	got, err := getImageToken(imgTokCtx(t), imageMeta(t, 100, 100, "high"), "gpt-4o", true)
 	require.NoError(t, err)
-	assert.Equal(t, 255, got)
+	assert.Equal(t, 765, got)
 }
 
 func TestImgTok_TileBased_4o(t *testing.T) {
@@ -86,8 +86,8 @@ func TestImgTok_TileBased_4o(t *testing.T) {
 
 func TestImgTok_PatchBased_41Mini(t *testing.T) {
 	withMediaToken(t)
-	// 64x64 => 2x2 = 4 patches (< 1536 cap). round(4 * 1.62) = 6.
+	// 64x64 => 2x2 = 4 patches (< 1536 cap). ceil(4 * 1.62) = 7.
 	got, err := getImageToken(imgTokCtx(t), imageMeta(t, 64, 64, "high"), "gpt-4.1-mini", true)
 	require.NoError(t, err)
-	assert.Equal(t, 6, got)
+	assert.Equal(t, 7, got)
 }

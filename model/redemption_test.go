@@ -103,11 +103,11 @@ func TestRedeem_Guards(t *testing.T) {
 
 	_, err := Redeem("", u.Id)
 	require.Error(t, err)
-	assert.Equal(t, "未提供兑换码", err.Error())
+	assert.Equal(t, "redemption code not provided", err.Error())
 
 	_, err = Redeem("somekey", 0)
 	require.Error(t, err)
-	assert.Equal(t, "无效的 user id", err.Error())
+	assert.Equal(t, "invalid user id", err.Error())
 
 	// unknown key -> wrapped ErrRedeemFailed
 	_, err = Redeem(redKey(), u.Id)

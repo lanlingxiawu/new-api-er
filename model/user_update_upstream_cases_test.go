@@ -341,8 +341,8 @@ func TestRevokeUserAccessTokenOnlyClearsLegacyToken(t *testing.T) {
 
 	createdAt := int64(100)
 	user := User{
-		Id:                   2,
-		Username:             "token-revoke-user",
+		Id:                   nextTestID(),
+		Username:             uniq("token-revoke-user"),
 		Password:             "password",
 		DisplayName:          "before",
 		Status:               common.UserStatusEnabled,
@@ -353,6 +353,7 @@ func TestRevokeUserAccessTokenOnlyClearsLegacyToken(t *testing.T) {
 	}
 	user.SetAccessToken("legacy-token")
 	require.NoError(t, DB.Create(&user).Error)
+	deleteByID(t, &User{}, user.Id)
 
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
 		"quota":        gorm.Expr("quota + ?", 500),
@@ -378,13 +379,15 @@ func TestRevokeUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	user := User{
-		Id:       3,
-		Username: "deleted-token-revoke-user",
+		Id:       nextTestID(),
+		Username: uniq("deleted-token-revoke-user"),
 		Password: "password",
 		Status:   common.UserStatusEnabled,
 	}
-	user.SetAccessToken("old-token")
+	oldToken := uniq("old-token")
+	user.SetAccessToken(oldToken)
 	require.NoError(t, DB.Create(&user).Error)
+	deleteByID(t, &User{}, user.Id)
 	require.NoError(t, DB.Delete(&user).Error)
 
 	_, err := RevokeUserAccessToken(user.Id)
@@ -392,21 +395,23 @@ func TestRevokeUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.Unscoped().First(&got, user.Id).Error)
-	assert.Equal(t, "old-token", got.GetAccessToken())
+	assert.Equal(t, oldToken, got.GetAccessToken())
 }
 
 func createAccessTokenTestUser(t *testing.T, username string) User {
 	t.Helper()
 	user := User{
-		Username:    username,
+		Id:          nextTestID(),
+		Username:    uniq(username),
 		Password:    "unused-password-hash",
 		Role:        common.RoleCommonUser,
 		Status:      common.UserStatusEnabled,
 		Group:       "default",
 		AuthVersion: 1,
-		AffCode:     username + "-aff",
+		AffCode:     uniqCode(),
 	}
 	require.NoError(t, DB.Create(&user).Error)
+	deleteByID(t, &User{}, user.Id)
 	return user
 }
 
@@ -415,6 +420,7 @@ func createTestUserAccessToken(t *testing.T, userID int, raw string, expiresAt i
 	token := UserAccessToken{Name: raw, TokenHash: AccessTokenFingerprint(raw), TokenHint: AccessTokenHint(raw), ExpiresAt: expiresAt}
 	require.NoError(t, token.SetScopes([]string{"profile:read"}))
 	require.NoError(t, CreateUserAccessToken(userID, &token, 20))
+	deleteByID(t, &UserAccessToken{}, token.Id)
 	return token
 }
 
@@ -456,10 +462,11 @@ func TestValidateAccessTokenStopsAtLegacyDeadline(t *testing.T) {
 	t.Cleanup(func() { legacyAccessTokenRetireAt.Store(previous) })
 
 	user := createAccessTokenTestUser(t, "legacy-deadline-user")
-	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("access_token", "legacy-deadline-token").Error)
+	legacyToken := uniqCode()
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("access_token", legacyToken).Error)
 
 	legacyAccessTokenRetireAt.Store(time.Now().Add(time.Hour).Unix())
-	found, err := ValidateAccessToken("legacy-deadline-token")
+	found, err := ValidateAccessToken(legacyToken)
 	require.NoError(t, err)
 	require.NotNil(t, found)
 	assert.Equal(t, user.Id, found.Id)
@@ -475,7 +482,7 @@ func TestValidateAccessTokenStopsAtLegacyDeadline(t *testing.T) {
 
 	for _, retireAt := range []int64{time.Now().Add(-time.Second).Unix(), 0} {
 		legacyAccessTokenRetireAt.Store(retireAt)
-		found, err = ValidateAccessToken("legacy-deadline-token")
+		found, err = ValidateAccessToken(legacyToken)
 		require.ErrorIs(t, err, ErrLegacyAccessTokenRetired)
 		assert.Nil(t, found)
 	}
@@ -589,8 +596,6 @@ func TestValidateAuthSessionWithTxChecksAccessTokenIdentity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, DB.Exec("DELETE FROM user_access_tokens").Error)
-			require.NoError(t, DB.Exec("DELETE FROM users").Error)
 			user := createAccessTokenTestUser(t, "token-identity-user")
 			token := createTestUserAccessToken(t, user.Id, "nap_identity_token", now.Add(time.Hour).Unix())
 			identity := AuthSessionIdentity{

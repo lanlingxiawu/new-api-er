@@ -547,7 +547,8 @@ func TestSubscription_AdminBind(t *testing.T) {
 
 	msg, err := AdminBindSubscription(u.Id, p.Id, "note")
 	require.NoError(t, err)
-	assert.Contains(t, msg, "admvip")
+	require.NotNil(t, msg)
+	assert.Equal(t, "admvip", msg.Params["group"])
 	assert.EqualValues(t, 1, subCountSubs(t, u.Id, p.Id))
 
 	// plan without upgrade group -> empty message
@@ -556,7 +557,7 @@ func TestSubscription_AdminBind(t *testing.T) {
 	p2 := subMakePlan(t, nil)
 	msg, err = AdminBindSubscription(u2.Id, p2.Id, "note")
 	require.NoError(t, err)
-	assert.Equal(t, "", msg)
+	assert.Nil(t, msg)
 }
 
 // ---------------------------------------------------------------------------
@@ -696,7 +697,7 @@ func TestSubscription_AdminInvalidate(t *testing.T) {
 	sub := subMakeSub(t, u.Id, 12345, nil)
 	msg, err := AdminInvalidateUserSubscription(sub.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "", msg)
+	assert.Nil(t, msg)
 	reloaded := subReloadSub(t, sub.Id)
 	assert.Equal(t, "cancelled", reloaded.Status)
 	assert.NotZero(t, reloaded.EndTime)
@@ -710,7 +711,8 @@ func TestSubscription_AdminInvalidate(t *testing.T) {
 	})
 	msg, err = AdminInvalidateUserSubscription(subv.Id)
 	require.NoError(t, err)
-	assert.Contains(t, msg, "default")
+	require.NotNil(t, msg)
+	assert.Equal(t, "default", msg.Params["group"])
 	var reloadedUser User
 	require.NoError(t, DB.Select("id", "group").First(&reloadedUser, uv.Id).Error)
 	assert.Equal(t, "default", reloadedUser.Group)

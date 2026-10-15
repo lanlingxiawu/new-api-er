@@ -59,7 +59,7 @@ func TestCreatePrefillGroup_MissingNameOrType(t *testing.T) {
 	CreatePrefillGroup(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "不能为空")
+	require.Contains(t, resp.Message, "Group name and type cannot be empty")
 
 	// missing name
 	ctx2, rec2 := newCtx(t, http.MethodPost, "/api/prefill_group", map[string]any{"type": "channel"})
@@ -96,7 +96,7 @@ func TestCreatePrefillGroup_DuplicateName(t *testing.T) {
 	CreatePrefillGroup(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "已存在")
+	require.Contains(t, resp.Message, "Group name already exists")
 }
 
 func TestUpdatePrefillGroup_MissingID(t *testing.T) {
@@ -106,7 +106,7 @@ func TestUpdatePrefillGroup_MissingID(t *testing.T) {
 	UpdatePrefillGroup(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "组 ID")
+	require.Contains(t, resp.Message, "Missing group ID")
 }
 
 func TestUpdatePrefillGroup_BadJSON(t *testing.T) {

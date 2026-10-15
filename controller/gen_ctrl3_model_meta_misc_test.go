@@ -84,7 +84,7 @@ func TestCreateModelMeta_EmptyName(t *testing.T) {
 	CreateModelMeta(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "模型名称")
+	require.Contains(t, resp.Message, "Model name cannot be empty")
 }
 
 func TestCreateModelMeta_BadJSON(t *testing.T) {
@@ -119,7 +119,7 @@ func TestCreateModelMeta_Duplicate(t *testing.T) {
 	CreateModelMeta(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "已存在")
+	require.Contains(t, resp.Message, "Model name already exists")
 }
 
 func TestUpdateModelMeta_MissingId(t *testing.T) {
@@ -128,7 +128,7 @@ func TestUpdateModelMeta_MissingId(t *testing.T) {
 	UpdateModelMeta(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "缺少模型 ID")
+	require.Contains(t, resp.Message, "Missing model ID")
 }
 
 func TestUpdateModelMeta_StatusOnly(t *testing.T) {

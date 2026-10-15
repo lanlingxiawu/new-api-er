@@ -351,7 +351,7 @@ func filterStreamDiagnosticResponse(diagnostic relaycommon.StreamDiagnostic, kee
 func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
 	if c.GetBool(relaycommon.StreamResponseOnlyKey) {
 		if message := err.UpstreamErrorMessage(); message != "" {
-			message = common.MaskSensitiveInfo(message)
+			message = common.MaskSensitiveInfo(message, common.UpstreamAddresses(c)...)
 			if err.StatusCode == 0 {
 				return message
 			}
@@ -359,7 +359,7 @@ func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
 		}
 		return fmt.Sprintf("upstream response failed (status=%d, code=%s)", err.StatusCode, err.GetErrorCode())
 	}
-	return err.MaskSensitiveErrorWithStatusCode()
+	return err.MaskSensitiveErrorWithStatusCode(common.UpstreamAddresses(c)...)
 }
 
 // StreamFailureLogMessage selects a public message once at stream termination.
@@ -367,7 +367,7 @@ func StreamPublicErrorSummary(c *gin.Context, err *types.NewAPIError) string {
 // transport errors and private diagnostic previews use the existing local hint.
 // The caller excludes normal completion and client disconnects. Request IDs are
 // added at the common log sink, not here, and no response/settlement state changes.
-func StreamFailureLogMessage(snapshot relaycommon.StreamSnapshot) string {
+func StreamFailureLogMessage(snapshot relaycommon.StreamSnapshot, upstreamURLs ...string) string {
 	data := snapshot.ErrorPayload
 	if len(snapshot.ErrorFrame) > 0 {
 		_, data = relaycommon.StreamFramePayload(snapshot.ErrorFrame)
@@ -413,7 +413,7 @@ func StreamFailureLogMessage(snapshot relaycommon.StreamSnapshot) string {
 	if message == "" {
 		return i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
 	}
-	return common.MaskSensitiveInfo(message)
+	return common.MaskSensitiveInfo(message, upstreamURLs...)
 }
 
 func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {

@@ -51,9 +51,9 @@ func TestGetUserFlowQuotaDates_InvalidTimeRange(t *testing.T) {
 	assert.Equal(t, "invalid start_timestamp", resp.Message)
 }
 
-// GetUserFlowQuotaDates: span > 31 days is rejected.
+// GetUserFlowQuotaDates: span > the default 365 days is rejected.
 func TestGetUserFlowQuotaDates_SpanTooLong(t *testing.T) {
-	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow/self?start_timestamp=1&end_timestamp=2592002", nil)
+	ctx, rec := newCtx(t, http.MethodGet, "/api/data/flow/self?start_timestamp=1&end_timestamp=31622402", nil)
 	asUser(ctx, 1)
 	GetUserFlowQuotaDates(ctx)
 	resp := decodeResp(t, rec)

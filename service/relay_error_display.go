@@ -275,7 +275,7 @@ func streamTerminalRelayErrorInput(c *gin.Context, upstreamPayload []byte, fallb
 		// text enough that the cap below no longer cuts (and trims) it.
 		prefix = operation_setting.CutRelayErrorText(in.Message, len(prefix))
 	}
-	masked := common.MaskSensitiveInfo(prefix)
+	masked := common.MaskSensitiveInfo(prefix, common.UpstreamAddresses(c)...)
 	in.Message = operation_setting.CapRelayErrorText(masked)
 	in.Truncated = cut || len(in.Message) < len(masked)
 	if strings.TrimSpace(in.Message) == "" {

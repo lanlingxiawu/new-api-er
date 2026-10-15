@@ -26,6 +26,7 @@ func bsCtx(t *testing.T, tokenQuota int) *gin.Context {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	c.Set("token_quota", tokenQuota)
 	return c
 }

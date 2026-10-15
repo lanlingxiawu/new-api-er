@@ -63,7 +63,7 @@ func TestUserCheckin_DisabledGuard(t *testing.T) {
 	got, err := UserCheckin(u.Id)
 	assert.Nil(t, got)
 	require.Error(t, err)
-	assert.Equal(t, "签到功能未启用", err.Error())
+	assert.Equal(t, "Check-in feature is not enabled", err.Error())
 }
 
 func TestUserCheckin_HappyPathAndOncePerDay(t *testing.T) {
@@ -101,7 +101,7 @@ func TestUserCheckin_HappyPathAndOncePerDay(t *testing.T) {
 	ci2, err := UserCheckin(u.Id)
 	assert.Nil(t, ci2)
 	require.Error(t, err)
-	assert.Equal(t, "今日已签到", err.Error())
+	assert.Equal(t, "Already checked in today", err.Error())
 
 	reloaded2, err := GetUserById(u.Id, false)
 	require.NoError(t, err)

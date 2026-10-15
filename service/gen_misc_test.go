@@ -258,7 +258,7 @@ func TestMiscClaudeErrorWrapper(t *testing.T) {
 
 	t.Run("upstream network wording is masked", func(t *testing.T) {
 		e := ClaudeErrorWrapper(errors.New("dial tcp 1.2.3.4: connection refused"), "code", http.StatusBadGateway)
-		require.Equal(t, "请求上游地址失败", e.Error.Message)
+		require.Equal(t, "request to the upstream address failed", e.Error.Message)
 	})
 
 	t.Run("get file base64 prefix keeps original", func(t *testing.T) {

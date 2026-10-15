@@ -246,6 +246,7 @@ func TestUpdateUserPermissionChangeAdvancesAuthVersionAndRevokesSessions(t *test
 		LastActiveAt: now, ExpiresAt: now + 3600,
 	}).Error)
 
+	identity, proof := manageUserProof(t, db, service.VerificationOperation{Scope: service.VerificationScopeAdminUserUpdate, Context: []byte(fmt.Sprintf(`{"user_id":%d}`, user.Id))})
 	ctx, recorder := newCtx(t, http.MethodPut, "/api/user/", map[string]any{
 		"id": user.Id, "username": user.Username, "display_name": user.Username,
 		"role": user.Role, "group": user.Group,
@@ -255,6 +256,10 @@ func TestUpdateUserPermissionChangeAdvancesAuthVersionAndRevokesSessions(t *test
 	})
 	asRoot(ctx, 9999)
 	ctx.Set("username", "root-operator")
+	ctx.Set("session_id", identity.SessionID)
+	ctx.Set("auth_version", identity.UserAuthVersion)
+	ctx.Set("session_version", identity.SessionVersion)
+	ctx.Request.Header.Set("X-Security-Proof", proof)
 	UpdateUser(ctx)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"success":true`)

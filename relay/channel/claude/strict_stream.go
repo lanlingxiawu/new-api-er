@@ -333,6 +333,7 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 	result.Diagnostic.UsagePhases = make(map[string]string)
 	info.StreamResult = result
 	info.StreamStatus = relaycommon.NewStreamStatus()
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	c.Set(relaycommon.StreamHandledKey, true)
 	helper.SetEventStreamHeaders(c)
 	if info.CaptureClaudeResponse() {
@@ -626,6 +627,9 @@ loop:
 		result.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(endErr)
 	}
 	info.StreamStatus.SetEndReason(reason, nil)
+	if result.Failed {
+		info.StreamStatus.MarkFailed("", "", 0)
+	}
 	// 先关闭上游再写终止错误，避免下游慢写继续拖延上游生成。
 	cleanup()
 	genericFailure := i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed)
@@ -655,7 +659,7 @@ loop:
 		if len(upstreamErrorFrame) > 0 {
 			errorLogFrame = upstreamErrorFrame
 		}
-		result.ErrorMessage = service.StreamFailureLogMessage(relaycommon.StreamSnapshot{ErrorFrame: errorLogFrame, Err: endErr})
+		result.ErrorMessage = service.StreamFailureLogMessage(relaycommon.StreamSnapshot{ErrorFrame: errorLogFrame, Err: endErr}, common.UpstreamAddresses(c)...)
 	}
 	if info.StreamDiagnostic != nil {
 		snapshot := info.StreamDiagnostic.Snapshot()

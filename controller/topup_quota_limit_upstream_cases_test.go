@@ -202,10 +202,10 @@ func TestStripeRawQuotaFromPayMoneyRespectsQuotaLimit(t *testing.T) {
 
 	// invalid exchange rate -> 0 quota -> rejected as non-positive
 	_, err = validateCreditedQuota(decimal.NewFromInt(rawQuotaFromPayMoney(decimal.NewFromInt(1), 0, 7.2)))
-	require.EqualError(t, err, "充值额度必须大于 0")
+	require.EqualError(t, err, "Top-up quota must be greater than 0")
 
 	// payment beyond the wallet ceiling -> rejected
 	overLimit := decimal.NewFromInt(int64(common.MaxWalletQuota)).Div(decimal.NewFromInt(500000)).Add(decimal.NewFromInt(1))
 	_, err = validateCreditedQuota(decimal.NewFromInt(rawQuotaFromPayMoney(overLimit, 7.2, 7.2)))
-	require.EqualError(t, err, "充值额度超出系统可表示范围")
+	require.EqualError(t, err, "Top-up quota exceeds the range the system can represent")
 }

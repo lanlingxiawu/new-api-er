@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -697,6 +698,9 @@ func TestIsAdmin(t *testing.T) {
 }
 
 func TestValidateAccessToken(t *testing.T) {
+	previousDeadline := legacyAccessTokenRetireAt.Load()
+	legacyAccessTokenRetireAt.Store(time.Now().Add(time.Hour).Unix())
+	t.Cleanup(func() { legacyAccessTokenRetireAt.Store(previousDeadline) })
 	// empty -> nil, nil
 	u1, err := ValidateAccessToken("")
 	require.NoError(t, err)
