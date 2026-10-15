@@ -1,7 +1,10 @@
 package helper
 
 import (
+	"errors"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 // StreamResult 供逐帧转换回调记录错误或结束状态；扫描器在回调返回后检查停止标记。
@@ -25,6 +28,10 @@ func (r *StreamResult) Error(err error) {
 	if r.session.Active() {
 		r.session.Fail("upstream_json_error", err)
 		r.stopped = true
+	}
+	var apiErr *types.NewAPIError
+	if errors.As(err, &apiErr) {
+		r.status.MarkFailed(string(apiErr.GetErrorCode()), apiErr.ToOpenAIError().Type, apiErr.StatusCode)
 	}
 }
 

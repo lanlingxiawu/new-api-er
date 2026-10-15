@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/service/settingsaccess"
 	"github.com/gin-gonic/gin"
@@ -28,9 +29,12 @@ import (
 // access token and permissions are casbin rows.
 func TestRelayErrorDisplayRoutesServeOnlyTheirOwnScope(t *testing.T) {
 	require.NoError(t, i18n.Init())
+	previousSecret := common.SessionSecret
+	common.SessionSecret = "router-test-session-secret-with-sufficient-entropy"
+	t.Cleanup(func() { common.SessionSecret = previousSecret })
 	db, err := gorm.Open(sqlite.Open("file:relay-error-display-routes?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.UserSession{}, &model.User{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.Log{}))
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousMaster, previousRedis := common.IsMasterNode, common.RedisEnabled
 	model.DB, model.LOG_DB = db, db
@@ -46,6 +50,9 @@ func TestRelayErrorDisplayRoutesServeOnlyTheirOwnScope(t *testing.T) {
 		token := strings.Repeat(name[4:5], 32-len(name)) + name
 		user := &model.User{Username: name, Password: "unused-password", Role: role, Status: common.UserStatusEnabled, AccessToken: &token, AuthVersion: 1}
 		require.NoError(t, db.Create(user).Error)
+		bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "test")
+		require.NoError(t, err)
+		user.AccessToken = &bundle.AccessToken
 		users[name] = user
 	}
 	require.NoError(t, authz.SetUserPermissions(users["red-other"].Id, authz.PermissionsMap{

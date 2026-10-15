@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -11,6 +12,8 @@ import (
 
 // ConsumptionSettlementParams 汇总终止结算及日志入队所需数据，额度单位为系统内部 quota，不是货币元。
 type ConsumptionSettlementParams struct {
+	ContentMessages []*common.Message
+
 	ChannelId        int             // 日志所属渠道；0 时从 relayInfo 补入。
 	PromptTokens     int             // 最终计费输入 token 数。
 	CompletionTokens int             // 最终计费输出 token 数。
@@ -166,6 +169,10 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		}
 	}
 
+	messages := append([]*common.Message(nil), params.ContentMessages...)
+	if params.Content != "" {
+		messages = append(messages, common.NewMessage(params.Content))
+	}
 	logParams := model.RecordConsumeLogParams{
 		ChannelId:        params.ChannelId,
 		PromptTokens:     params.PromptTokens,
@@ -173,7 +180,7 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		ModelName:        params.ModelName,
 		TokenName:        params.TokenName,
 		Quota:            params.Quota,
-		Content:          params.Content,
+		Content:          messages,
 		TokenId:          params.TokenId,
 		UseTimeSeconds:   params.UseTimeSeconds,
 		IsStream:         params.IsStream,

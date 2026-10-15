@@ -202,16 +202,6 @@ func TestClaudeRequest_GetEfforts(t *testing.T) {
 	assert.Equal(t, "", (&ClaudeRequest{OutputConfig: json.RawMessage(`{"x":1}`)}).GetEfforts())
 }
 
-func TestClaudeRequest_SearchToolNameByToolCallId(t *testing.T) {
-	r := &ClaudeRequest{Messages: []ClaudeMessage{
-		{Role: "assistant", Content: []map[string]any{
-			{"type": "tool_use", "id": "call_1", "name": "search"},
-		}},
-	}}
-	assert.Equal(t, "search", r.SearchToolNameByToolCallId("call_1"))
-	assert.Equal(t, "", r.SearchToolNameByToolCallId("missing"))
-}
-
 func TestClaudeRequest_GetTokenCountMeta(t *testing.T) {
 	maxTok := uint(200)
 	r := &ClaudeRequest{

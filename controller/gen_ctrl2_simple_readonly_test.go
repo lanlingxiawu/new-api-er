@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/stretchr/testify/require"
 )
@@ -134,30 +133,6 @@ func TestGetPerfMetrics_MissingModel(t *testing.T) {
 	require.False(t, out.Success)
 	require.Contains(t, out.Message, "model")
 }
-
-func TestFilterActiveGroups(t *testing.T) {
-	groups := []perfmetrics.GroupResult{
-		{Group: "auto"},           // always kept
-		{Group: "____not_active"}, // dropped (not in ratio map)
-	}
-	got := filterActiveGroups(groups)
-	// "auto" is always retained; the bogus group is filtered out.
-	found := false
-	for _, g := range got {
-		require.NotEqual(t, "____not_active", g.Group)
-		if g.Group == "auto" {
-			found = true
-		}
-	}
-	require.True(t, found, "auto group must always survive filtering")
-}
-
-// ---------------------------------------------------------------------------
-// ledger_pipeline_status.go :: AdminGetLedgerPipelineStatus — assembles a
-// status snapshot from in-memory buffers + settings (no DB read). Asserts the
-// envelope and the presence of both the flat (Classic UI) and nested (Default
-// UI) shapes, plus that the derived throughput is consistent.
-// ---------------------------------------------------------------------------
 
 func TestAdminGetLedgerPipelineStatus(t *testing.T) {
 	ctx, rec := newCtx(t, http.MethodGet, "/api/ledger/pipeline-status", nil)

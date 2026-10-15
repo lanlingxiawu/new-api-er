@@ -39,7 +39,7 @@ func TestGetAllLogs_TotalViaHourCacheMatchesDirectCount(t *testing.T) {
 	mkLogAt(t, base+20, LogTypeConsume, 6, 0, 0)
 	mkLogAt(t, base+3600+10, LogTypeTopup, 7, 0, 0)
 
-	logs, total, err := GetAllLogs(LogTypeUnknown, start, end, "", "", "", 0, 100, 0, 0, "", "", "")
+	logs, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: "", TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 100)
 	require.NoError(t, err)
 	assert.Equal(t, before.CountAll+3, total, "全类型总数应精确，不被截断")
 	assert.Len(t, logs, int(before.CountAll)+3, "列表数据本身不受缓存影响")
@@ -63,15 +63,15 @@ func TestGetAllLogs_TotalRespectsTypeFilterThroughCache(t *testing.T) {
 	mkLogAt(t, base+30, LogTypeError, 0, 0, 0)
 
 	// 类型不进缓存指纹，而是作为字段存在值里——所以切换类型 tab 仍命中同一份缓存。
-	_, consume, err := GetAllLogs(LogTypeConsume, start, end, "", "", "", 0, 10, 0, 0, "", "", "")
+	_, consume, err := GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: "", TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, before.countFor(LogTypeConsume)+2, consume)
 
-	_, errType, err := GetAllLogs(LogTypeError, start, end, "", "", "", 0, 10, 0, 0, "", "", "")
+	_, errType, err := GetAllLogs(LogFilter{Type: LogTypeError, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: "", TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, before.countFor(LogTypeError)+1, errType)
 
-	_, topup, err := GetAllLogs(LogTypeTopup, start, end, "", "", "", 0, 10, 0, 0, "", "", "")
+	_, topup, err := GetAllLogs(LogFilter{Type: LogTypeTopup, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: "", TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, before.countFor(LogTypeTopup), topup, "没有该类型的行时应为基线值")
 }
@@ -94,7 +94,7 @@ func TestGetAllLogs_FallsBackWhenFiltered(t *testing.T) {
 	mkLogAt(t, base+20, LogTypeConsume, 99, 0, 0) // 别的用户，不该被算进来
 
 	// 带 username 筛选 → 回落原查询，结果只能是该用户的行。
-	logs, total, err := GetAllLogs(LogTypeUnknown, start, end, "", user, "", 0, 10, 0, 0, "", "", "")
+	logs, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: user, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total, "带筛选时不得错用无筛选的缓存值")
 	require.Len(t, logs, 1)
@@ -113,7 +113,7 @@ func TestGetAllLogs_FallsBackWhenCacheDisabled(t *testing.T) {
 	before := logStatBaseline(t, start, end)
 	mkLogAt(t, base+10, LogTypeConsume, 5, 0, 0)
 
-	_, total, err := GetAllLogs(LogTypeUnknown, start, end, "", "", "", 0, 10, 0, 0, "", "", "")
+	_, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: start, EndTimestamp: end, ModelName: "", Username: "", TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, before.CountAll+1, total, "关掉缓存后结果必须与今天一致")
 }
@@ -133,7 +133,7 @@ func TestGetAllLogs_FallsBackWithoutTimeRange(t *testing.T) {
 	})
 
 	// 用 username 收窄，避免真的去数全表。
-	_, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", user, "", 0, 10, 0, 0, "", "", "")
+	_, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: user, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
 }

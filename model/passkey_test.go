@@ -131,6 +131,7 @@ func TestPasskey_GetByUserID(t *testing.T) {
 }
 
 func TestPasskey_GetByCredentialID(t *testing.T) {
+	requireDB(t)
 	// empty -> friendly error
 	_, err := GetPasskeyByCredentialID(nil)
 	assert.ErrorIs(t, err, ErrFriendlyPasskeyNotFound)

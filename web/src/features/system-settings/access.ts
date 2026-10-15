@@ -14,11 +14,13 @@ export const SYSTEM_SETTINGS_GROUPS = [
   'content',
   'operations',
   'system-tuning',
+  'request-policies',
 ] as const
 
 export type SystemSettingsGroup = (typeof SYSTEM_SETTINGS_GROUPS)[number]
 
 export const SYSTEM_SETTINGS_SECTIONS: Record<SystemSettingsGroup, string[]> = {
+  'request-policies': ['routing', 'health', 'filtering'],
   site: ['system-info', 'notice', 'header-navigation', 'sidebar-modules'],
   auth: ['basic-auth', 'oauth', 'passkey', 'bot-protection', 'custom-oauth'],
   billing: [

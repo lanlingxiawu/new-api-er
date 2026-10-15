@@ -193,7 +193,7 @@ func TestRecordLog_ConsumeDisabledSkips(t *testing.T) {
 	common.LogConsumeEnabled = false
 	t.Cleanup(func() { common.LogConsumeEnabled = prev })
 
-	RecordLog(u.Id, LogTypeConsume, "should be skipped")
+	RecordLog(u.Id, LogTypeConsume, common.NewMessage("should be skipped"))
 	assert.EqualValues(t, 0, countUserLogs(t, u.Id))
 }
 
@@ -202,7 +202,7 @@ func TestRecordLog_Basic(t *testing.T) {
 	u := mkUser(t, nil)
 	logCleanupUser(t, u.Id)
 
-	RecordLog(u.Id, LogTypeManage, "hello")
+	RecordLog(u.Id, LogTypeManage, common.NewMessage("hello"))
 	require.EqualValues(t, 1, countUserLogs(t, u.Id))
 	l := firstUserLog(t, u.Id)
 	assert.Equal(t, LogTypeManage, l.Type)
@@ -243,8 +243,7 @@ func TestRecordLogWithAdminInfo(t *testing.T) {
 	auditCleanupUser(t, u.Id)
 
 	// non-manage type -> logs row whose Other carries admin_info + op
-	RecordLogWithAdminInfo(u.Id, LogTypeSystem, "system op",
-		&AuditAdminInfo{AdminID: 1, AdminUsername: "root"},
+	RecordLogWithAdminInfo(u.Id, LogTypeSystem, "system op", &AuditAdminInfo{AdminID: 1, AdminUsername: "root"},
 		&AuditOperation{Action: "sync"})
 	l := firstUserLog(t, u.Id)
 	assert.Equal(t, LogTypeSystem, l.Type)
@@ -352,7 +351,7 @@ func TestRecordTopupLog(t *testing.T) {
 	u := mkUser(t, nil)
 	logCleanupUser(t, u.Id)
 
-	RecordTopupLog(u.Id, "topup 100", "1.2.3.4", "stripe", "card")
+	RecordTopupLog(u.Id, common.NewMessage("topup 100"), "1.2.3.4", "stripe", "card")
 	l := firstUserLog(t, u.Id)
 	assert.Equal(t, LogTypeTopup, l.Type)
 	assert.Equal(t, "1.2.3.4", l.Ip)
@@ -501,7 +500,7 @@ func TestRecordTaskBillingLog(t *testing.T) {
 
 	// normal consume with token id -> token name resolved
 	id := RecordTaskBillingLog(RecordTaskBillingLogParams{
-		UserId: u.Id, LogType: LogTypeConsume, Content: "task", ChannelId: 2,
+		UserId: u.Id, LogType: LogTypeConsume, Content: []*common.Message{common.NewMessage("task")}, ChannelId: 2,
 		ModelName: "mj", Quota: 50, TokenId: tk.Id, Group: "g",
 	})
 	assert.Positive(t, id)
@@ -607,7 +606,7 @@ func TestGetAllLogs(t *testing.T) {
 	})
 
 	t.Run("all types via username filter", func(t *testing.T) {
-		logs, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "", 0, 50, 0, 0, "", "", "")
+		logs, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 3, total)
 		assert.Len(t, logs, 3)
@@ -616,33 +615,33 @@ func TestGetAllLogs(t *testing.T) {
 	})
 
 	t.Run("type filter", func(t *testing.T) {
-		_, total, err := GetAllLogs(LogTypeConsume, 0, 0, "", uname, "", 0, 50, 0, 0, "", "", "")
+		_, total, err := GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, total)
 	})
 
 	t.Run("model exact and fuzzy", func(t *testing.T) {
-		_, total, err := GetAllLogs(LogTypeConsume, 0, 0, "gpt-4o", uname, "", 0, 50, 0, 0, "", "", "")
+		_, total, err := GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "gpt-4o", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, total)
-		_, total, err = GetAllLogs(LogTypeConsume, 0, 0, "claude%", uname, "", 0, 50, 0, 0, "", "", "")
+		_, total, err = GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "claude%", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, total)
 	})
 
 	t.Run("invalid model pattern errors", func(t *testing.T) {
-		_, _, err := GetAllLogs(LogTypeConsume, 0, 0, "a%%b", uname, "", 0, 50, 0, 0, "", "", "")
+		_, _, err := GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "a%%b", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		assert.Error(t, err)
 	})
 
 	t.Run("token name filter", func(t *testing.T) {
-		_, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "tkA", 0, 50, 0, 0, "", "", "")
+		_, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "tkA", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, total)
 	})
 
 	t.Run("channel + group filters and channel-name fill", func(t *testing.T) {
-		logs, total, err := GetAllLogs(LogTypeConsume, 0, 0, "", uname, "", 0, 50, ch.Id, 0, grp, "", "")
+		logs, total, err := GetAllLogs(LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: ch.Id, LogId: 0, Group: grp, RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, total)
 		require.NotEmpty(t, logs)
@@ -650,26 +649,26 @@ func TestGetAllLogs(t *testing.T) {
 	})
 
 	t.Run("time range", func(t *testing.T) {
-		_, total, err := GetAllLogs(LogTypeUnknown, now+1, now+2, "", uname, "", 0, 50, 0, 0, "", "", "")
+		_, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: now + 1, EndTimestamp: now + 2, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 2, total)
 	})
 
 	t.Run("request id filters", func(t *testing.T) {
-		_, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "", 0, 50, 0, 0, "", "rid-1", "")
+		_, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "rid-1", UpstreamRequestId: ""}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, total)
-		_, total, err = GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "", 0, 50, 0, 0, "", "", "urid-9")
+		_, total, err = GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: "urid-9"}, 0, 50)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, total)
 	})
 
 	t.Run("pagination offset/limit", func(t *testing.T) {
-		page1, total, err := GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "", 0, 2, 0, 0, "", "", "")
+		page1, total, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 2)
 		require.NoError(t, err)
 		assert.EqualValues(t, 3, total)
 		assert.Len(t, page1, 2)
-		page2, _, err := GetAllLogs(LogTypeUnknown, 0, 0, "", uname, "", 2, 2, 0, 0, "", "", "")
+		page2, _, err := GetAllLogs(LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: uname, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 2, 2)
 		require.NoError(t, err)
 		assert.Len(t, page2, 1)
 	})
@@ -742,7 +741,7 @@ func TestGetUserLogs(t *testing.T) {
 	})
 
 	// all types
-	logs, total, err := GetUserLogs(uid, LogTypeUnknown, 0, 0, "", "", 0, 50, 0, "", "", "")
+	logs, total, err := GetUserLogs(uid, LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, total)
 	require.NotEmpty(t, logs)
@@ -753,22 +752,22 @@ func TestGetUserLogs(t *testing.T) {
 	}
 
 	// type filter
-	_, total, err = GetUserLogs(uid, LogTypeConsume, 0, 0, "", "", 0, 50, 0, "", "", "")
+	_, total, err = GetUserLogs(uid, LogFilter{Type: LogTypeConsume, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 
 	// group filter (logGroupCol reserved word on PG)
-	_, total, err = GetUserLogs(uid, LogTypeUnknown, 0, 0, "", "", 0, 50, 0, grp, "", "")
+	_, total, err = GetUserLogs(uid, LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", TokenName: "", LogId: 0, Group: grp, RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 
 	// request id filter
-	_, total, err = GetUserLogs(uid, LogTypeUnknown, 0, 0, "", "", 0, 50, 0, "", "urq", "")
+	_, total, err = GetUserLogs(uid, LogFilter{Type: LogTypeUnknown, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "urq", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 
 	// time-range filter
-	_, total, err = GetUserLogs(uid, LogTypeUnknown, now+1, 0, "", "", 0, 50, 0, "", "", "")
+	_, total, err = GetUserLogs(uid, LogFilter{Type: LogTypeUnknown, StartTimestamp: now + 1, EndTimestamp: 0, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 }

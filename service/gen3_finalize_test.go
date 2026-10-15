@@ -1,5 +1,7 @@
 package service
 
+import "github.com/QuantumNous/new-api/common"
+
 import (
 	"net/http/httptest"
 	"testing"
@@ -86,7 +88,7 @@ func TestFinalize_PostTextConsumeQuota_ZeroTokensNoDeduction(t *testing.T) {
 	// TotalTokens 0 => countUsage false, no deduction, log still written.
 	usage := &dto.Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0}
 
-	PostTextConsumeQuota(finalizeCtx(t), info, usage, []string{"pre"})
+	PostTextConsumeQuota(finalizeCtx(t), info, usage, []*common.Message{common.NewMessage("pre")})
 
 	assert.Equal(t, 500_000, getUserQuota(t, uid))
 	log := getLastLog(t)
@@ -143,7 +145,7 @@ func TestFinalize_PostAudioConsumeQuota_Deducts(t *testing.T) {
 		PromptTokensDetails: dto.InputTokenDetails{TextTokens: 800, AudioTokens: 200},
 	}
 
-	PostAudioConsumeQuota(finalizeCtx(t), info, usage, "audio-extra")
+	PostAudioConsumeQuota(finalizeCtx(t), info, usage, []*common.Message{common.NewMessage("audio-extra")})
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
@@ -159,7 +161,7 @@ func TestFinalize_PostAudioConsumeQuota_ZeroTokens(t *testing.T) {
 	seedChannel(t, chid)
 
 	info := finalizeRelayInfo(uid, tid, chid, "sk-fin-audio0")
-	PostAudioConsumeQuota(finalizeCtx(t), info, &dto.Usage{TotalTokens: 0}, "")
+	PostAudioConsumeQuota(finalizeCtx(t), info, &dto.Usage{TotalTokens: 0}, []*common.Message{common.NewMessage("")})
 
 	assert.Equal(t, 300_000, getUserQuota(t, uid))
 	log := getLastLog(t)
@@ -185,7 +187,7 @@ func TestFinalize_PostWssConsumeQuota_Deducts(t *testing.T) {
 		OutputTokenDetails: dto.OutputTokenDetails{TextTokens: 500},
 	}
 
-	PostWssConsumeQuota(finalizeCtx(t), info, "gpt-4o-realtime", usage, "wss-extra")
+	PostWssConsumeQuota(finalizeCtx(t), info, "gpt-4o-realtime", usage, []*common.Message{common.NewMessage("wss-extra")})
 
 	log := getLastLog(t)
 	require.NotNil(t, log)

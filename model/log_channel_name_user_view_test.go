@@ -42,7 +42,7 @@ func TestGetUserLogs_StripsLegacyChannelFields(t *testing.T) {
 		l.UserId, l.Type, l.CreatedAt, l.Content, l.Other = uid, LogTypeError, now, "boom", legacyErrorLogOther
 	})
 
-	logs, _, err := GetUserLogs(uid, LogTypeError, now-10, now+10, "", "", 0, 10, 0, "", "", "")
+	logs, _, err := GetUserLogs(uid, LogFilter{Type: LogTypeError, StartTimestamp: now - 10, EndTimestamp: now + 10, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, logs, 1)
 	assertNoLegacyChannelFields(t, logs[0])

@@ -245,6 +245,13 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
+	requestPolicyOptionMutex.Lock()
+	defer requestPolicyOptionMutex.Unlock()
+	defer func() {
+		if err := refreshRequestPolicySnapshot(); err != nil {
+			common.SysError(common.LogText("invalid request policy: %s", err.Error()))
+		}
+	}()
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
 	modelPricingMutationMu.Lock()
@@ -272,12 +279,18 @@ func loadOptionsFromDatabase() {
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing options from database")
+		common.SysLog(common.LogText("syncing options from database"))
 		loadOptionsFromDatabase()
 	}
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == legacyAccessTokenRetireAtKey {
+		return errLegacyRetireAtReadOnly
+	}
+	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
+		return err
+	}
 	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
 		_, err := operation_setting.ParseGroupRetryStatusUpdate(map[string]string{field: value})
 		return err
@@ -287,6 +300,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.ChannelTestConcurrencyOptionKey {
 		return operation_setting.ValidateChannelTestConcurrency(value)
+	}
+	if key == operation_setting.LogMaxRangeDaysOptionKey {
+		return operation_setting.ValidateLogMaxRangeDays(value)
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
@@ -439,6 +455,9 @@ func normalizeStoredUserGroupRatioCacheMax(value string) string {
 }
 
 func UpdateOption(key string, value string) error {
+	if IsRequestPolicyOption(key) {
+		return UpdateRequestPolicyOptions(map[string]string{key: value})
+	}
 	if IsPasskeyDomainOption(key) {
 		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
 		return err
@@ -501,6 +520,26 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if pricing {
 		return updateModelPricingOptionsBulk(values)
 	}
+	var policySnapshot *RequestPolicySnapshot
+	for key := range values {
+		if IsRequestPolicyOption(key) {
+			requestPolicyOptionMutex.Lock()
+			defer requestPolicyOptionMutex.Unlock()
+			options := maps.Clone(CurrentRequestPolicy().Options)
+			for key, value := range values {
+				if IsRequestPolicyOption(key) {
+					options[key] = value
+				}
+			}
+			var err error
+			policySnapshot, err = BuildRequestPolicy(options)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
 			option := Option{Key: k}
@@ -517,11 +556,17 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return publishModelPricingOptions(values)
+	if err := publishModelPricingOptions(values); err != nil {
+		return err
+	}
+	if policySnapshot != nil {
+		requestPolicySnapshot.Store(policySnapshot)
+	}
+	return nil
 }
 
 func updateOptionMap(key string, value string) (err error) {
-	if key == retiredThemeOptionKey {
+	if key == retiredThemeOptionKey || key == legacyAccessTokenRetireAtKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()

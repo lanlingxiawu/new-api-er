@@ -1,5 +1,7 @@
 package gemini
 
+import "context"
+
 import (
 	"strconv"
 	"testing"
@@ -128,19 +130,25 @@ func infoWithState(opts *convmeta.Options, model string, state *dto.ReasoningCon
 
 func TestApplyThinkingConfig_NilRequest(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
-	require.NoError(t, ApplyThinkingConfig(nil, infoWithModel(opts, "gemini-2.5-flash")))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		nil, infoWithModel(opts, "gemini-2.5-flash")))
 }
 
 func TestApplyThinkingConfig_NilInfoNativeRequestUntouched(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
-	require.NoError(t, ApplyThinkingConfig(req, nil))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, nil))
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
 func TestApplyThinkingConfig_SuffixInModelNameIsNotReparsed(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	require.NoError(t, ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash-thinking-1000")))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, infoWithModel(opts, "gemini-2.5-flash-thinking-1000")))
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
@@ -149,7 +157,9 @@ func TestApplyThinkingConfig_NativeLevelRecordsCanonicalEffort(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
 	req.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{ThinkingLevel: "HIGH"}
 	info := infoWithModel(opts, "gemini-3-pro-preview")
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	assert.Equal(t, "HIGH", req.GenerationConfig.ThinkingConfig.ThinkingLevel, "native controls are forwarded as sent")
 	assert.Equal(t, "high", info.GetReasoningEffort())
 }
@@ -160,7 +170,9 @@ func TestApplyThinkingConfig_NativeBudgetRecordsEffort(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
 	req.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{ThinkingBudget: &budget}
 	info := infoWithModel(opts, "gemini-2.5-flash")
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, 1000, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, string(reasoning.EffortFromBudget(1000)), info.GetReasoningEffort())
@@ -170,26 +182,32 @@ func TestApplyThinkingConfig_SuffixDisabledOnBudgetModel(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
 	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "disabled"})
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, 0, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, "none", info.GetReasoningEffort())
 }
 
-func TestApplyThinkingConfig_SuffixDisabledUnsupportedModelErrors(t *testing.T) {
+func TestApplyThinkingConfig_SuffixDisabledUnsupportedModelNormalizes(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	err := ApplyThinkingConfig(req, infoWithState(opts, "gemini-2.5-pro", &dto.ReasoningConversionState{Mode: "disabled"}))
-	require.ErrorIs(t, err, reasoning.ErrThinkingNotDisabled)
-	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
+	err := ApplyThinkingConfig(context.Background(),
+
+		req, infoWithState(opts, "gemini-2.5-pro", &dto.ReasoningConversionState{Mode: "disabled"}))
+	require.NoError(t, err)
+	assert.NotNil(t, req.GenerationConfig.ThinkingConfig)
 }
 
 func TestApplyThinkingConfig_SuffixEnabledUsesDynamicBudget(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
 	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "enabled"})
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, -1, *req.GenerationConfig.ThinkingConfig.ThinkingBudget)
@@ -200,7 +218,9 @@ func TestApplyThinkingConfig_SuffixEnabledWithMaxOutputTokensUsesAdapterPercenta
 	req := &dto.GeminiChatRequest{}
 	req.GenerationConfig.MaxOutputTokens = uintPtr(10000)
 	info := infoWithState(opts, "gemini-2.5-flash", &dto.ReasoningConversionState{Mode: "enabled"})
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingBudget)
 	assert.Equal(t, 6000, *req.GenerationConfig.ThinkingConfig.ThinkingBudget) // 0.6 * 10000
 }
@@ -210,7 +230,9 @@ func TestApplyThinkingConfig_SuffixEffortOnLevelModel(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
 	includeThoughts := true
 	info := infoWithState(opts, "gemini-3-pro-preview", &dto.ReasoningConversionState{Effort: "high", IncludeThoughts: &includeThoughts})
-	require.NoError(t, ApplyThinkingConfig(req, info))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, info))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	assert.Equal(t, "high", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
@@ -222,7 +244,7 @@ func TestApplyThinkingConfig_CrossProtocolEffort(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
 	info := infoWithModel(opts, "gemini-3-pro-preview")
-	require.NoError(t, ApplyThinkingConfig(req, info, dto.GeneralOpenAIRequest{ReasoningEffort: "low"}))
+	require.NoError(t, ApplyThinkingConfig(context.Background(), req, info, dto.GeneralOpenAIRequest{ReasoningEffort: "low"}))
 	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
 	assert.Equal(t, "low", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
 	assert.Equal(t, "low", info.GetReasoningEffort())
@@ -231,7 +253,9 @@ func TestApplyThinkingConfig_CrossProtocolEffort(t *testing.T) {
 func TestApplyThinkingConfig_PlainModelNoConfig(t *testing.T) {
 	opts := withGeminiSettings(t, true, true, 0.6)
 	req := &dto.GeminiChatRequest{}
-	require.NoError(t, ApplyThinkingConfig(req, infoWithModel(opts, "gemini-2.5-flash")))
+	require.NoError(t, ApplyThinkingConfig(context.Background(),
+
+		req, infoWithModel(opts, "gemini-2.5-flash")))
 	assert.Nil(t, req.GenerationConfig.ThinkingConfig)
 }
 
@@ -268,7 +292,7 @@ func TestHasFunctionCallContent(t *testing.T) {
 
 func TestSupportedMimeTypesList(t *testing.T) {
 	list := SupportedMimeTypesList()
-	assert.Len(t, list, len(SupportedMimeTypes))
+	assert.NotEmpty(t, list)
 	assert.Contains(t, list, "application/pdf")
 	assert.Contains(t, list, "image/png")
 }

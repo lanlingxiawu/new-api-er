@@ -251,7 +251,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutCountsPricedToolCalls(t *testing.T) 
 	markTimedOut(c)
 
 	countAtSettlement := -1
-	restore := stubSettlement(func(_ *gin.Context, settledInfo *relaycommon.RelayInfo, _ *dto.Usage, _ []string) {
+	restore := stubSettlement(func(_ *gin.Context, settledInfo *relaycommon.RelayInfo, _ *dto.Usage, _ []*common.Message) {
 		countAtSettlement = toolCallCount(settledInfo, "priced_fn")
 	})
 	defer restore()

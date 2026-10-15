@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Code2, Eye, HelpCircle } from 'lucide-react'
-import { memo, useCallback, useMemo, useState, type ReactNode } from 'react'
-import type { UseFormReturn } from 'react-hook-form'
+import { memo, useCallback, useState, type ReactNode } from 'react'
+import { useWatch, type UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -59,10 +59,11 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
-import { safeJsonParse } from '../utils/json-parser'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-import { GroupRatioVisualEditor } from './group-ratio-visual-editor'
-import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
+import {
+  GroupRatioVisualEditor,
+  type GroupSettingsSection,
+} from './group-ratio-visual-editor'
 
 type GroupFormValues = {
   GroupRatio: string
@@ -89,8 +90,10 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   isSaving,
 }: GroupRatioFormProps) {
   const { t } = useTranslation()
+  const values = useWatch({ control: form.control })
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [guideOpen, setGuideOpen] = useState(false)
+  const [section, setSection] = useState<GroupSettingsSection>('pricing')
 
   const handleFieldChange = useCallback(
     (field: keyof GroupFormValues, value: string) => {
@@ -106,51 +109,41 @@ export const GroupRatioForm = memo(function GroupRatioForm({
     setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
   }, [])
 
-  const watchedGroupRatio = form.watch('GroupRatio')
-  const watchedUserUsableGroups = form.watch('UserUsableGroups')
-  const watchedTopupGroupRatio = form.watch('TopupGroupRatio')
-  const groupNames = useMemo(() => {
-    const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
-      fallback: {},
-      silent: true,
-    })
-    const usableMap = safeJsonParse<Record<string, string>>(
-      watchedUserUsableGroups,
-      { fallback: {}, silent: true }
-    )
-    const topupMap = safeJsonParse<Record<string, number>>(
-      watchedTopupGroupRatio,
-      { fallback: {}, silent: true }
-    )
-    return [
-      ...new Set([
-        ...Object.keys(ratioMap),
-        ...Object.keys(usableMap),
-        ...Object.keys(topupMap),
-      ]),
-    ]
-  }, [watchedGroupRatio, watchedUserUsableGroups, watchedTopupGroupRatio])
-
   return (
     <div className='space-y-6'>
-      <div className='flex flex-wrap justify-end gap-2'>
-        <Button variant='outline' size='sm' onClick={() => setGuideOpen(true)}>
-          <HelpCircle className='mr-2 h-4 w-4' />
-          {t('Usage guide')}
-        </Button>
-        <Button variant='outline' size='sm' onClick={toggleEditMode}>
-          {editMode === 'visual' ? (
-            <>
-              <Code2 className='mr-2 h-4 w-4' />
-              {t('Switch to JSON')}
-            </>
-          ) : (
-            <>
-              <Eye className='mr-2 h-4 w-4' />
-              {t('Switch to Visual')}
-            </>
-          )}
-        </Button>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
+        <p className='text-muted-foreground text-sm'>
+          {editMode === 'visual'
+            ? t(
+                'Manage pricing, visibility and automatic routing for your groups.'
+              )
+            : t(
+                'Edit group settings as JSON. Changes are shared with the visual editor.'
+              )}
+        </p>
+        <div className='flex shrink-0 gap-2'>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => setGuideOpen(true)}
+          >
+            <HelpCircle className='mr-2 h-4 w-4' />
+            {t('Usage guide')}
+          </Button>
+          <Button variant='outline' size='sm' onClick={toggleEditMode}>
+            {editMode === 'visual' ? (
+              <>
+                <Code2 className='mr-2 h-4 w-4' />
+                {t('Switch to JSON')}
+              </>
+            ) : (
+              <>
+                <Eye className='mr-2 h-4 w-4' />
+                {t('Switch to Visual')}
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       <GroupPricingGuide open={guideOpen} onOpenChange={setGuideOpen} />
@@ -160,20 +153,28 @@ export const GroupRatioForm = memo(function GroupRatioForm({
           <Button
             type='button'
             size='sm'
-            onClick={form.handleSubmit(onSave)}
+            onClick={form.handleSubmit(onSave, (errors) => {
+              if (errors.MaxTokenAutoGroups) {
+                setEditMode('visual')
+                setSection('auto')
+                requestAnimationFrame(() => form.setFocus('MaxTokenAutoGroups'))
+              }
+            })}
             disabled={isSaving}
           >
-            {isSaving ? t('Saving...') : t('Save group ratios')}
+            {isSaving ? t('Saving...') : t('Save group settings')}
           </Button>
         </SettingsPageActionsPortal>
         {editMode === 'visual' ? (
-          <div className='space-y-6'>
+          <>
             <GroupRatioVisualEditor
-              groupRatio={form.watch('GroupRatio')}
-              topupGroupRatio={form.watch('TopupGroupRatio')}
-              userUsableGroups={form.watch('UserUsableGroups')}
-              groupGroupRatio={form.watch('GroupGroupRatio')}
-              autoGroups={form.watch('AutoGroups')}
+              section={section}
+              onSectionChange={setSection}
+              groupRatio={values.GroupRatio ?? ''}
+              topupGroupRatio={values.TopupGroupRatio ?? ''}
+              userUsableGroups={values.UserUsableGroups ?? ''}
+              groupGroupRatio={values.GroupGroupRatio ?? ''}
+              autoGroups={values.AutoGroups ?? ''}
               maxTokenAutoGroupsField={
                 <FormField
                   control={form.control}
@@ -202,98 +203,93 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   )}
                 />
               }
-              groupSpecialUsableGroup={form.watch('GroupSpecialUsableGroup')}
+              defaultUseAutoGroupField={
+                <FormField
+                  control={form.control}
+                  name='DefaultUseAutoGroup'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>{t('Default to auto groups')}</FormLabel>
+                        <FormDescription>
+                          {t(
+                            'If default auto group is enabled, newly created tokens start with auto instead of an empty group.'
+                          )}
+                        </FormDescription>
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+              }
+              groupSpecialUsableGroup={values.GroupSpecialUsableGroup ?? ''}
               onChange={(field, value) =>
                 handleFieldChange(field as keyof GroupFormValues, value)
               }
             />
 
-            <GroupSpecialUsableRulesEditor
-              value={form.watch('GroupSpecialUsableGroup')}
-              groupOptions={groupNames}
-              onChange={(value) =>
-                handleFieldChange('GroupSpecialUsableGroup', value)
-              }
-            />
+            <div className='space-y-4'>
+              <FormField
+                control={form.control}
+                name='UserExclusiveGroupRatioEnabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>
+                        {t('Per-user exclusive group ratios')}
+                      </FormLabel>
+                      <FormDescription>
+                        {t(
+                          'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name='DefaultUseAutoGroup'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Default to auto groups')}</FormLabel>
-                    <FormDescription>
-                      {t(
-                        'When enabled, newly created tokens start in the first auto group.'
-                      )}
-                    </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='UserExclusiveGroupRatioEnabled'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
+              <FormField
+                control={form.control}
+                name='UserExclusiveGroupRatioCacheMax'
+                render={({ field }) => (
+                  <FormItem>
                     <FormLabel>
-                      {t('Per-user exclusive group ratios')}
+                      {t('Exclusive ratio parse cache limit')}
                     </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        value={field.value ?? 0}
+                        onChange={(e) =>
+                          field.onChange(
+                            e.target.value === '' ? 0 : Number(e.target.value)
+                          )
+                        }
+                      />
+                    </FormControl>
                     <FormDescription>
                       {t(
-                        'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                        'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
                       )}
                     </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='UserExclusiveGroupRatioCacheMax'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    {t('Exclusive ratio parse cache limit')}
-                  </FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      value={field.value ?? 0}
-                      onChange={(e) =>
-                        field.onChange(
-                          e.target.value === '' ? 0 : Number(e.target.value)
-                        )
-                      }
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </>
         ) : (
           <SettingsForm onSubmit={form.handleSubmit(onSave)}>
             <FormField
@@ -406,7 +402,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               name='AutoGroups'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Auto assignment order')}</FormLabel>
+                  <FormLabel>{t('Auto group order')}</FormLabel>
                   <FormControl>
                     <JsonCodeEditor
                       value={field.value}
@@ -419,7 +415,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'JSON array of group identifiers. When enabled below, new tokens rotate through this list.'
+                      'Priority order for tokens in the auto group. The system tries groups from top to bottom.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -486,7 +482,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     <FormLabel>{t('Default to auto groups')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'When enabled, newly created tokens start in the first auto group.'
+                        'If default auto group is enabled, newly created tokens start with auto instead of an empty group.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
@@ -651,7 +647,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Find the billing group.')}
                 </span>{' '}
                 {t(
-                  'Use the group set on the token. If the token has no group, use the user group. The auto group tries the auto assignment order from top to bottom.'
+                  'Use the group set on the token. If the token has no group, use the user group. The auto group tries the configured groups from top to bottom.'
                 )}
               </li>
               <li>

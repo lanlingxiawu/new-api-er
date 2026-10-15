@@ -53,14 +53,15 @@ import { useIsEmployee } from '@/hooks/use-admin'
 import { getUserGroups } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { exportLogs, LogExportError } from '../api'
-import { EmployeeCustomerExport } from '../export/components/employee-customer-export'
+import { exportLogsXlsx, LogExportError } from '../api'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
+import { EmployeeCustomerExport } from '../export/components/employee-customer-export'
 import { buildSearchParams } from '../lib/filter'
 import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
+import { ExportLogsDialog } from './dialogs/export-logs-dialog'
 import {
   LogsFilterField,
   LogsFilterInput,
@@ -333,7 +334,7 @@ export function CommonLogsFilterBar<TData>(
         searchParams,
         scope: exportScope,
       })
-      await exportLogs(params, exportScope)
+      await exportLogsXlsx(params, exportScope)
     } catch (e) {
       if (axios.isAxiosError(e) && e.response?.status === 429) {
         toast.error(
@@ -362,7 +363,15 @@ export function CommonLogsFilterBar<TData>(
   // 普通用户只有「快速导出」（同步小范围）；管理员多一条通往后台导出中心的路。
   let exportButton: React.ReactNode = null
   if (logsScope === 'employee') {
-    exportButton = <EmployeeCustomerExport prefill={{ start: filters.startTime, end: filters.endTime, customerId: Number(filters.customerUserId) || undefined }} />
+    exportButton = (
+      <EmployeeCustomerExport
+        prefill={{
+          start: filters.startTime,
+          end: filters.endTime,
+          customerId: Number(filters.customerUserId) || undefined,
+        }}
+      />
+    )
   } else if (canExport && exportScope === 'admin') {
     exportButton = (
       <DropdownMenu>
@@ -501,6 +510,7 @@ export function CommonLogsFilterBar<TData>(
         emptyText={t('No group found.')}
         placeholder={t('Group')}
         className='h-8 min-w-0 text-sm leading-5'
+        popupClassName={sensitiveInputClass}
         value={filters.group || ''}
         onValueChange={(value) => handleChange('group', value ?? '')}
         onKeyDown={handleKeyDown}
@@ -648,6 +658,7 @@ export function CommonLogsFilterBar<TData>(
       stats={statsBar}
       actions={exportButton}
       actionStart={sensitiveToggle}
+      actionEnd={<ExportLogsDialog />}
       primaryFilters={
         <>
           {dateRangeFilter}

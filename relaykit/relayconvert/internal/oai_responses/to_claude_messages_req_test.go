@@ -317,8 +317,8 @@ func TestResponsesClaudeRole(t *testing.T) {
 }
 
 func TestResponsesToolOutputValue(t *testing.T) {
-	assert.Equal(t, "", responsesToolOutputValue(nil))
-	assert.Equal(t, "x", responsesToolOutputValue("x"))
+	assert.Equal(t, "", responsesToolOutputToClaude(newTestGinContext(), nil))
+	assert.Equal(t, "x", responsesToolOutputToClaude(newTestGinContext(), "x"))
 }
 
 func TestAppendClaudeToolUseNewAssistant(t *testing.T) {

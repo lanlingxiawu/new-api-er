@@ -20,6 +20,7 @@ import { useParams } from '@tanstack/react-router'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { canEditSystemSettingsScope } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
@@ -92,7 +93,7 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
         <SectionPageLayout.Content>
           <fieldset
             disabled={!props.canEdit}
-            className='flex h-full min-h-0 min-w-0 w-full max-w-full flex-col gap-4 disabled:opacity-80'
+            className='flex h-full min-h-0 w-full max-w-full min-w-0 flex-col gap-4 disabled:opacity-80'
           >
             {props.children}
           </fieldset>
@@ -128,7 +129,7 @@ export function SettingsPage<
   const scope = `${group}.${activeSection}`
   const user = useAuthStore((state) => state.auth.user)
   const canEdit = canEditSystemSettingsScope(user, scope)
-  const { data, isLoading } = useSystemOptions(scope)
+  const { data, isLoading, isError, refetch } = useSystemOptions(scope)
   const sectionMeta = getSectionMeta(activeSection)
 
   const settings = useMemo(() => {
@@ -151,6 +152,21 @@ export function SettingsPage<
         <div className='text-muted-foreground flex min-h-40 items-center justify-center text-sm'>
           {t(loadingMessage)}
         </div>
+      </SettingsPageFrame>
+    )
+  }
+
+  if (isError && !data) {
+    return (
+      <SettingsPageFrame
+        title={t(sectionMeta.titleKey)}
+        scope={scope}
+        canEdit={canEdit}
+      >
+        <ErrorState
+          title={t('Failed to load settings')}
+          onRetry={() => void refetch()}
+        />
       </SettingsPageFrame>
     )
   }

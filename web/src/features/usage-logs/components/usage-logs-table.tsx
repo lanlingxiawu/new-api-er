@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -27,17 +27,23 @@ import {
   DataTableRow,
   useDataTable,
 } from '@/components/data-table'
+import {
+  getAdminPlans,
+  getSelfSubscriptionFull,
+} from '@/features/subscriptions/api'
 import { useMediaQuery } from '@/hooks'
 import { useIsEmployee } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { createServerError } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   DEFAULT_LOGS_DATA,
   LOG_TYPE_ALL_VALUE,
   LOG_TYPE_ENUM,
 } from '../constants'
+import { shouldShowBillingSource } from '../lib/billing-source'
 import { useColumnsByCategory } from '../lib/columns'
 import { parseLogOther } from '../lib/format'
 import { fetchLogsByCategory } from '../lib/utils'
@@ -85,6 +91,10 @@ export function UsageLogsTable({
   isWorkspaceActive = true,
 }: UsageLogsTableProps) {
   const { t } = useTranslation()
+  const getColumnClassName = useCallback(
+    () => (logCategory === 'common' ? 'py-2' : 'py-3.5'),
+    [logCategory]
+  )
   const {
     isAdminView: isAdmin,
     isRootView: isRoot,
@@ -132,6 +142,30 @@ export function UsageLogsTable({
       searchParams.endTime,
     ]
   )
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const { data: showBillingSource = false } = useQuery({
+    queryKey: ['usage-log-billing-source', isAdmin, userId],
+    enabled: logCategory === 'common' && userId != null,
+    queryFn: async () => {
+      if (isAdmin) {
+        const plansResult = await getAdminPlans()
+        return shouldShowBillingSource({
+          isAdmin,
+          plans: plansResult.success ? plansResult.data : undefined,
+          subscriptions: undefined,
+        })
+      }
+
+      const selfResult = await getSelfSubscriptionFull()
+      return shouldShowBillingSource({
+        isAdmin,
+        plans: undefined,
+        subscriptions: selfResult.success
+          ? selfResult.data?.subscriptions
+          : undefined,
+      })
+    },
+  })
 
   const {
     columnFilters,
@@ -224,7 +258,8 @@ export function UsageLogsTable({
     logCategory,
     showAdminFields,
     isRoot,
-    isAdmin
+    isAdmin,
+    showBillingSource
   )
   const isLoadingData = isLoading || (isFetching && !data)
 
@@ -299,7 +334,8 @@ export function UsageLogsTable({
             key={row.id}
             row={row}
             className={cn('transition-colors', tintClass)}
-            getColumnClassName={() => (isCommon ? 'py-2' : 'py-3.5')}
+            getColumnClassName={getColumnClassName}
+            cellRenderColumns={table.options.columns}
           />
         )
       }}

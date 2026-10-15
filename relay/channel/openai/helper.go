@@ -92,7 +92,7 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo) error {
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
-		logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
+		logger.LogError(c, common.LogText("failed to unmarshal stream response: %s", err.Error()))
 		return err
 	}
 
@@ -141,7 +141,7 @@ func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResu
 		}
 		data, err := common.Marshal(geminiResponse)
 		if err != nil {
-			logger.LogError(c, "failed to marshal gemini response: "+err.Error())
+			logger.LogError(c, common.LogText("failed to marshal gemini response: %s", err.Error()))
 			return err
 		}
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(data)})
@@ -167,13 +167,14 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
-	switch relayMode {
+func processTokenData(info *relaycommon.RelayInfo, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+	switch info.RelayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
+		info.ObserveResponseModel(streamResponse.Model)
 		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse

@@ -17,6 +17,9 @@ type systemSettingsScopeDefinition struct {
 }
 
 var systemSettingsScopeDefinitions = []systemSettingsScopeDefinition{
+	{Scope: "request-policies.routing", LabelKey: "Sessions and retries", Group: "request-policies", GroupLabelKey: "Request policies", Sort: 451},
+	{Scope: "request-policies.health", LabelKey: "Channel health", Group: "request-policies", GroupLabelKey: "Request policies", Sort: 452},
+	{Scope: "request-policies.filtering", LabelKey: "Request checks", Group: "request-policies", GroupLabelKey: "Request policies", Sort: 453},
 	{Scope: "site.system-info", LabelKey: "System Information", Group: "site", GroupLabelKey: "Site & Branding", Sort: 101},
 	{Scope: "site.notice", LabelKey: "System Notice", Group: "site", GroupLabelKey: "Site & Branding", Sort: 102},
 	{Scope: "site.header-navigation", LabelKey: "Header navigation", Group: "site", GroupLabelKey: "Site & Branding", Sort: 103},

@@ -287,7 +287,7 @@ func TestAudit_TimeoutAcrossFramings(t *testing.T) {
 			c, rec, info := bufferedCase(t)
 			markTimedOut(c)
 			settled := 0
-			restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) { settled++ })
+			restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) { settled++ })
 			defer restore()
 
 			_, apiErr := handleAdaptedUpstreamStream(c, info, upstreamSSE(tc.body))

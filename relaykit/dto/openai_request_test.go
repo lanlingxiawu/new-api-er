@@ -535,7 +535,7 @@ func TestMessage_ParseContent_ArrayAllTypes(t *testing.T) {
 	img1 := got[1].GetImageMedia()
 	require.NotNil(t, img1)
 	assert.Equal(t, "https://img/1.png", img1.Url)
-	assert.Equal(t, "high", img1.Detail, "string image_url defaults detail=high")
+	assert.Equal(t, "", img1.Detail, "string image_url leaves detail unspecified")
 
 	img2 := got[2].GetImageMedia()
 	require.NotNil(t, img2)

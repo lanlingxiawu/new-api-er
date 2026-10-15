@@ -161,6 +161,7 @@ func TestAdminUpdateEmployee_InvalidId(t *testing.T) {
 }
 
 func TestAdminUpdateEmployee_NotFound(t *testing.T) {
+	requireDB(t)
 	ctx, rec := newCtx(t, http.MethodPut, "/api/admin/employee/999999991", UpdateEmployeeRequest{Status: 1})
 	idParam(ctx, "id", "999999991")
 	asAdmin(ctx, 1)
@@ -311,6 +312,7 @@ func TestAdminAddEmployeePerformance_AllowsAmountBeyondBillingQuotaLimit(t *test
 }
 
 func TestAdminAddEmployeePerformance_EmployeeNotFound(t *testing.T) {
+	requireDB(t)
 	ctx, rec := newCtx(t, http.MethodPost, "/api/admin/employee/999999991/performance",
 		AddEmployeePerformanceRequest{ProfitUsd: 1})
 	idParam(ctx, "id", "999999991")
@@ -556,6 +558,7 @@ func TestAdminUpdateTier_InvalidId(t *testing.T) {
 }
 
 func TestAdminUpdateTier_NotFound(t *testing.T) {
+	requireDB(t)
 	ctx, rec := newCtx(t, http.MethodPut, "/api/admin/employee/tiers/999999991",
 		UpdateTierRequest{Level: 1, Rate: 0.1})
 	idParam(ctx, "id", "999999991")
@@ -605,6 +608,7 @@ func TestAdminSetEmployeeTier_InvalidId(t *testing.T) {
 }
 
 func TestAdminSetEmployeeTier_EmployeeNotFound(t *testing.T) {
+	requireDB(t)
 	ctx, rec := newCtx(t, http.MethodPost, "/api/admin/employee/999999991/tier",
 		SetEmployeeTierRequest{TierId: 0})
 	idParam(ctx, "id", "999999991")

@@ -10,7 +10,7 @@ import (
 
 func TestSystemSettingsResources_AllScopesRegistered(t *testing.T) {
 	scopes := SystemSettingsScopes()
-	require.Len(t, scopes, 56)
+	require.Len(t, scopes, 59)
 
 	seen := make(map[string]struct{}, len(scopes))
 	for _, scope := range scopes {

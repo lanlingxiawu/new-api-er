@@ -86,6 +86,7 @@ func TestCleanupChannelVeridropDetectionsBatchPreservesActiveRows(t *testing.T) 
 }
 
 func TestListChannelVeridropDetectionsFiltersAndPages(t *testing.T) {
+	requireDB(t)
 	require.NoError(t, DB.AutoMigrate(&ChannelVeridropDetection{}))
 
 	baseChannelID := 880000000 + int(time.Now().UnixNano()%1000000)
@@ -424,6 +425,7 @@ func TestListChannelVeridropDetectionsFiltersAndPages(t *testing.T) {
 }
 
 func TestSummarizeChannelVeridropDetectionsUsesCompleteFilteredSet(t *testing.T) {
+	requireDB(t)
 	require.NoError(t, DB.AutoMigrate(&ChannelVeridropDetection{}))
 	channelID := nextTestID()
 	t.Cleanup(func() {
@@ -496,6 +498,7 @@ func TestClassifyChannelVeridropDetectionOutcome(t *testing.T) {
 }
 
 func TestGetChannelVeridropDetectionBatchTaskIDByID(t *testing.T) {
+	requireDB(t)
 	require.NoError(t, DB.AutoMigrate(&ChannelVeridropDetection{}))
 	row := &ChannelVeridropDetection{ChannelID: nextTestID(), Status: ChannelVeridropDetectionDone, BatchTaskID: "systask_pinned_batch"}
 	require.NoError(t, CreateChannelVeridropDetection(row))
@@ -520,6 +523,7 @@ func TestMigrateChannelVeridropUpdatedIndexReplacesLegacyIndex(t *testing.T) {
 }
 
 func TestFindEnabledChannelsForVeridropAfterID(t *testing.T) {
+	requireDB(t)
 	baseID := 881000000 + int(time.Now().UnixNano()%1000000)
 	ids := []int{baseID, baseID + 1, baseID + 2}
 	t.Cleanup(func() {
@@ -552,6 +556,7 @@ func TestFindEnabledChannelsForVeridropAfterID(t *testing.T) {
 }
 
 func TestFindChannelsForVeridropAfterIDCanIncludeDisabledChannels(t *testing.T) {
+	requireDB(t)
 	baseID := 883000000 + int(time.Now().UnixNano()%1000000)
 	ids := []int{baseID, baseID + 1, baseID + 2}
 	t.Cleanup(func() {

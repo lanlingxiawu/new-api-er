@@ -26,6 +26,7 @@ import {
 } from '../constants'
 import { CHANNEL_TYPE_ADVANCED_CUSTOM } from './advanced-custom'
 import { channelFormSchema, type ChannelFormValues } from './channel-form'
+import { supportsResponsesWebSocket } from './responses-websocket'
 
 export type ChannelProviderTarget =
   | { kind: 'builtin'; type: number }
@@ -89,6 +90,7 @@ const CONFIGURATION_BLOCKS = {
       'proxy',
       'http_protocol',
       'http2_connection_shards',
+      'tls_insecure_skip_verify',
       'disable_task_polling_sleep',
     ],
   },
@@ -160,7 +162,7 @@ export function getChannelConfigurationState(
       values.thinking_to_content ||
       (values.type !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
         values.pass_through_body_enabled) ||
-      ((values.type === 1 || values.type === 57) &&
+      (supportsResponsesWebSocket(values.type) &&
         values.responses_websocket_enabled) ||
       (values.type === CHANNEL_TYPE_OLLAMA && values.ollama_openai_chat) ||
       values.system_prompt?.trim() ||
@@ -181,6 +183,7 @@ export function getChannelConfigurationState(
       values.proxy?.trim() ||
       (values.http_protocol && values.http_protocol !== 'auto') ||
       (values.http2_connection_shards ?? 1) > 1 ||
+      values.tls_insecure_skip_verify ||
       values.disable_task_polling_sleep
     ),
     upstreamModelDetection:

@@ -163,7 +163,9 @@ func (e *NewAPIError) ErrorWithStatusCode() string {
 	return fmt.Sprintf("status_code=%d, %s", e.StatusCode, msg)
 }
 
-func (e *NewAPIError) MaskSensitiveError() string {
+// MaskSensitiveError masks the upstream addresses of the channel that produced
+// the error in the error text; see kitutil.MaskSensitiveInfo.
+func (e *NewAPIError) MaskSensitiveError(upstreamURLs ...string) string {
 	if e == nil {
 		return ""
 	}
@@ -171,14 +173,14 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	if e.errorCode == ErrorCodeCountTokenFailed {
 		return errStr
 	}
-	return kitutil.StripRequestIds(kitutil.MaskSensitiveInfo(errStr))
+	return kitutil.StripRequestIds(kitutil.MaskSensitiveInfo(errStr, upstreamURLs...))
 }
 
-func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
+func (e *NewAPIError) MaskSensitiveErrorWithStatusCode(upstreamURLs ...string) string {
 	if e == nil {
 		return ""
 	}
-	msg := e.MaskSensitiveError()
+	msg := e.MaskSensitiveError(upstreamURLs...)
 	if e.StatusCode == 0 {
 		return msg
 	}
@@ -220,7 +222,9 @@ func (e *NewAPIError) relayMessage() string {
 	return e.Error()
 }
 
-func (e *NewAPIError) ToOpenAIError() OpenAIError {
+// ToOpenAIError masks the upstream addresses in the message; pass those of the
+// channel that produced the error, or none when no channel did.
+func (e *NewAPIError) ToOpenAIError(upstreamURLs ...string) OpenAIError {
 	var result OpenAIError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
@@ -245,7 +249,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed && !e.safeMessage {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
@@ -253,7 +257,8 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	return result
 }
 
-func (e *NewAPIError) ToClaudeError() ClaudeError {
+// ToClaudeError masks the upstream addresses like ToOpenAIError.
+func (e *NewAPIError) ToClaudeError(upstreamURLs ...string) ClaudeError {
 	var result ClaudeError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
@@ -276,7 +281,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed && !e.safeMessage {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)

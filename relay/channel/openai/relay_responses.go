@@ -36,6 +36,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	info.ObserveResponseModel(responsesResponse.Model)
 	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
 
 	// 写入新的 response body
@@ -55,13 +56,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
 		}
 	}
+	info.ApplyVendorToolUsage(responseBody)
 
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
-	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
-		for i := range responsesResponse.Output {
-			idx := i
-			imageCounter.Observe(&responsesResponse.Output[i], &idx)
-		}
+	for i := range responsesResponse.Output {
+		imageCounter.Observe(&responsesResponse.Output[i], &i)
 	}
 	imageCounter.Commit(info)
 
@@ -73,7 +72,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 // 返回渠道用量和中继错误，异常结算由统一终止流程负责。
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		logger.LogError(c, "invalid response or response body")
+		logger.LogError(c, common.LogText("invalid response or response body"))
 		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
 	}
 
@@ -87,7 +86,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
+			logger.LogError(c, common.LogText("failed to unmarshal stream response: %s", err.Error()))
 			sr.Error(err)
 			return
 		}
@@ -105,9 +104,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				limitUsage = service.BuildConfirmedStreamUsage(info, evidence)
 			}
 		}
-		accumulator.Observe(usageEvent)
+		accumulator.Observe(usageEvent, common.StringToByteSlice(data))
 	})
 
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
+	info.StreamStatus.RequireTerminal()
 	usage := accumulator.Finish()
 	if limitUsage != nil {
 		// 限制终态改走正常分支后，仍保留已确认的显式零，不触发旧的零 token 估算。

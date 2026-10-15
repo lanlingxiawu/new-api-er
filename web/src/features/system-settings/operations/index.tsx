@@ -53,6 +53,8 @@ const defaultOperationsSettings: OperationsSettings = {
   RequestLogMaxBodyKB: 64,
   RequestLogMinCount: 1000,
   RequestLogMaxCount: 5000,
+  'log_setting.user_export_enabled': true,
+  'log_setting.max_range_days': 365,
   'performance_setting.disk_cache_enabled': false,
   'performance_setting.disk_cache_threshold_mb': 10,
   'performance_setting.disk_cache_max_size_mb': 1024,

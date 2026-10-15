@@ -181,20 +181,20 @@ func TestAbortWithMidjourneyMessage(t *testing.T) {
 func TestI18nMiddleware_DefaultLanguage(t *testing.T) {
 	ctx, _ := newCtx(http.MethodGet, "/", "")
 	I18n()(ctx)
-	require.Equal(t, i18n.DefaultLang, GetLanguage(ctx))
+	require.Equal(t, i18n.DefaultLang, i18n.GetLangFromContext(ctx))
 }
 
 func TestI18nMiddleware_AcceptLanguageHeader(t *testing.T) {
 	ctx, _ := newCtx(http.MethodGet, "/", "")
 	ctx.Request.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
 	I18n()(ctx)
-	lang := GetLanguage(ctx)
+	lang := i18n.GetLangFromContext(ctx)
 	require.True(t, i18n.IsSupported(lang))
 }
 
 func TestGetLanguage_FallbackWhenUnset(t *testing.T) {
 	ctx, _ := newCtx(http.MethodGet, "/", "")
-	require.Equal(t, i18n.DefaultLang, GetLanguage(ctx))
+	require.Equal(t, i18n.DefaultLang, i18n.GetLangFromContext(ctx))
 }
 
 // ---------------------------------------------------------------------------

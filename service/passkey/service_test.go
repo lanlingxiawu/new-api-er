@@ -128,7 +128,7 @@ func TestResolveOrigins_ConfiguredList(t *testing.T) {
 		s := &system_setting.PasskeySettings{Origins: "http://insecure.com", AllowInsecureOrigin: false}
 		_, err := resolveOrigins(plainRequest(t, "ignored"), s)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "不安全")
+		assert.Contains(t, err.Error(), "insecure")
 	})
 
 	t.Run("http origin allowed when insecure allowed", func(t *testing.T) {
@@ -162,7 +162,7 @@ func TestResolveOrigins_AutoDetect(t *testing.T) {
 		s := &system_setting.PasskeySettings{}
 		_, err := resolveOrigins(plainRequest(t, "ex.com"), s)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "仅支持 HTTPS")
+		assert.Contains(t, err.Error(), "requires HTTPS")
 	})
 
 	t.Run("http allowed when insecure allowed", func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestResolveOrigins_AutoDetect(t *testing.T) {
 		r.Header.Set("X-Forwarded-Proto", "https")
 		_, err := resolveOrigins(r, s)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "无法确定")
+		assert.Contains(t, err.Error(), "cannot determine")
 	})
 
 	t.Run("ServerAddress without parseable host errors", func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestResolveOrigins_AutoDetect(t *testing.T) {
 		r.Header.Set("X-Forwarded-Proto", "https")
 		_, err := resolveOrigins(r, s)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "无法确定")
+		assert.Contains(t, err.Error(), "cannot determine")
 	})
 }
 
@@ -260,14 +260,14 @@ func TestResolveRPID(t *testing.T) {
 		s := &system_setting.PasskeySettings{RPID: ""}
 		_, err := resolveRPID(r, s, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "无法推导 RPID")
+		assert.Contains(t, err.Error(), "cannot derive the RP ID")
 	})
 
 	t.Run("unparseable origin errors", func(t *testing.T) {
 		s := &system_setting.PasskeySettings{RPID: ""}
 		_, err := resolveRPID(r, s, []string{"http://[::1"}) // malformed => url.Parse error
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "无法解析")
+		assert.Contains(t, err.Error(), "failed to parse")
 	})
 }
 
@@ -352,7 +352,7 @@ func TestBuildWebAuthn_PropagatesInsecureOriginError(t *testing.T) {
 	wa, err := BuildWebAuthn(plainRequest(t, "example.com"))
 	require.Error(t, err)
 	assert.Nil(t, wa)
-	assert.Contains(t, err.Error(), "不安全")
+	assert.Contains(t, err.Error(), "insecure")
 }
 
 func TestBuildWebAuthn_PropagatesRPIDDerivationError(t *testing.T) {
@@ -366,7 +366,7 @@ func TestBuildWebAuthn_PropagatesRPIDDerivationError(t *testing.T) {
 	wa, err := BuildWebAuthn(plainRequest(t, "example.com"))
 	require.Error(t, err)
 	assert.Nil(t, wa)
-	assert.Contains(t, err.Error(), "无法解析")
+	assert.Contains(t, err.Error(), "failed to parse")
 }
 
 // ---------------------------------------------------------------------------

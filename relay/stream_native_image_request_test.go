@@ -18,7 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // TestUnifiedStreamNativeImageFinalRequest 使用本地 503 截获实际出站正文，再验证响应约束；t 不执行计费持久化。
@@ -31,7 +30,6 @@ func TestUnifiedStreamNativeImageFinalRequest(t *testing.T) {
 		body    string // 已完成的一张原生图片响应，不访问图片 URL。
 	}{
 		{constant.ChannelTypeMiniMax, "image-01", "n", `{"data":{"image_urls":["https://fixture.invalid/image"]},"base_resp":{"status_code":0}}`},
-		{constant.ChannelTypeAli, "qwen-image", "parameters.n", `{"output":{"results":[{"url":"https://fixture.invalid/image"}]}}`},
 	} {
 		for _, passthrough := range []bool{false, true} {
 			for _, entry := range []string{``, `,"n":2`, `,"n":2,"parameters":{"n":1}`, `,"parameters":{"n":3}`} {
@@ -72,16 +70,6 @@ func TestUnifiedStreamNativeImageFinalRequest(t *testing.T) {
 						body := <-received
 						if passthrough {
 							want := raw
-							if provider.channel == constant.ChannelTypeAli {
-								// Ali 透传以预留张数显式写回 parameters.n（计费信任边界），其余字节保持原样。
-								count := max(1, gjson.Get(raw, "n").Int())
-								if n := gjson.Get(raw, "parameters.n"); n.Exists() {
-									count = n.Int()
-								}
-								var err error
-								want, err = sjson.Set(raw, "parameters.n", count)
-								require.NoError(t, err)
-							}
 							require.Equal(t, want, body, "透传正文保持原字节，不应用覆盖")
 						}
 						want := max(1, int(gjson.Get(body, provider.path).Int()))

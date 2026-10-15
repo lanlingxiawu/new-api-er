@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 )
 
@@ -267,8 +268,17 @@ func staticBucket(num int, duration int64) bucketProvider {
 	}
 }
 
-func GlobalWebRateLimit() func(c *gin.Context) {
-	return rateLimitFactory(snapshotBucket(func(s *operation_setting.RateLimitSnapshot) operation_setting.RateLimitBucket { return s.GlobalWeb }), globalWebRateLimitMark)
+func GlobalWebRateLimit(frontendFS ...static.ServeFileSystem) func(c *gin.Context) {
+	webLimit := rateLimitFactory(snapshotBucket(func(s *operation_setting.RateLimitSnapshot) operation_setting.RateLimitBucket { return s.GlobalWeb }), globalWebRateLimitMark)
+	return func(c *gin.Context) {
+		if len(frontendFS) > 0 && frontendFS[0] != nil && frontendFS[0].Exists("/", c.Request.URL.Path) {
+			if common.GlobalStaticRateLimitEnable {
+				takeRateLimit(c, common.GlobalStaticRateLimitNum, common.GlobalStaticRateLimitDuration, redisIPRateLimitKey("GS", c.ClientIP()))
+			}
+			return
+		}
+		webLimit(c)
+	}
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {

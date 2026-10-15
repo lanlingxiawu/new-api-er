@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,11 +25,12 @@ func stopReasonClaude2OpenAI(reason string) string {
 	return relayconvert.StopReasonClaudeToOpenAI(reason)
 }
 
-func maybeMarkClaudeRefusal(c *gin.Context, stopReason string) {
+func maybeMarkClaudeRefusal(c *gin.Context, info *relaycommon.RelayInfo, stopReason string) {
 	if c == nil {
 		return
 	}
 	if strings.EqualFold(stopReason, "refusal") {
+		info.PerformanceBusinessRejection = true
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "claude_stop_reason=refusal")
 	}
 }
@@ -97,11 +99,17 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+		info.ObserveResponseModel(claudeResponse.Message.Model)
+	}
 	if claudeResponse.StopReason != "" {
-		maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+		maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)
 	}
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
-		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
+		maybeMarkClaudeRefusal(c, info, *claudeResponse.Delta.StopReason)
+	}
+	if claudeResponse.Type == "message_stop" {
+		info.StreamStatus.MarkCompleted()
 	}
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
@@ -130,7 +138,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		case "message_stop":
 			claudeInfo.MessageStopSent = true
 		}
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		state, err := claudeToChatStreamState(info)
@@ -146,14 +154,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			return nil
 		}
 
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 
 		if response == nil {
 			return nil
 		}
 		err = helper.ObjectData(c, response)
 		if err != nil {
-			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			logger.LogError(c, common.LogText("send_stream_response_failed: %s", err.Error()))
 		}
 	} else if info.RelayFormat == types.RelayFormatGemini {
 		state, err := claudeToGeminiStreamState(info)
@@ -167,7 +175,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if !FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo) {
 			return nil
 		}
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		countClaudeStreamBillableTools(info, &claudeResponse)
 		if sendErr := sendGeminiStreamResults(c, results); sendErr != nil {
 			return sendErr
 		}
@@ -229,7 +237,7 @@ func sendGeminiStreamResults(c *gin.Context, results []relayconvert.ResponseResu
 	return nil
 }
 
-func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
+func countClaudeStreamBillableTools(info *relaycommon.RelayInfo, claudeResponse *dto.ClaudeResponse) {
 	if claudeResponse == nil {
 		return
 	}
@@ -238,11 +246,28 @@ func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo,
 		claudeResponse.ContentBlock.Type == "tool_use" {
 		info.CountBillableToolCall(dto.BuildInCallToolUse, claudeResponse.ContentBlock.Name)
 	}
-	if claudeResponse.Type == "message_delta" &&
-		claudeResponse.Usage != nil &&
-		claudeResponse.Usage.ServerToolUse != nil &&
-		claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	if claudeResponse.Type == "message_delta" && claudeResponse.Usage != nil {
+		// message_delta usage is cumulative, so the last report wins.
+		recordClaudeServerToolUse(info, claudeResponse.Usage.ServerToolUse)
+	}
+}
+
+// recordClaudeServerToolUse bills the server tool requests Anthropic reports
+// in usage.server_tool_use. web_fetch, code_execution, and tool_search have no
+// built-in price and bill only once an operator prices them.
+func recordClaudeServerToolUse(info *relaycommon.RelayInfo, serverToolUse *dto.ClaudeServerToolUse) {
+	if info == nil || serverToolUse == nil {
+		return
+	}
+	for name, count := range map[string]int{
+		cmp.Or(info.WebSearchBillingKey, dto.BuildInToolWebSearch): serverToolUse.WebSearchRequests,
+		"web_fetch":      serverToolUse.WebFetchRequests,
+		"code_execution": serverToolUse.CodeExecutionRequests,
+		"tool_search":    serverToolUse.ToolSearchRequests,
+	} {
+		if count > 0 {
+			info.SetBillableToolCount(name, count)
+		}
 	}
 }
 
@@ -251,6 +276,12 @@ func countClaudeStreamBillableTools(c *gin.Context, info *relaycommon.RelayInfo,
 // OpenAI 转换分支仍尝试写用量和 DONE，由受管写入器按会话状态过滤成功尾帧；原生 Claude 分支仅收尾用量。
 // 用量尾帧的本地输出错误显式登记，已存在的客户端或上游首因保持不变。
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	// Claude input_tokens excludes cache reads and writes, so a fully cached
+	// prompt reports zero input; the prompt is uncounted only when the total
+	// with cache is zero as well. Zero output is uncounted only when content
+	// was streamed, so a refusal before any output keeps its zeros.
+	missingInputUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
+	missingOutputUsage := claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
 	if info.ReceivedResponseCount == 0 {
 		// 上游零响应：HTTP 200 进入了流式分支，但整段流一条 SSE 数据都没发过来
 		// （连接挂起后断开 / 首字超时）。此时既没有 message_start 也没有任何输出，
@@ -260,17 +291,20 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.PromptTokens = 0
 		claudeInfo.Usage.CompletionTokens = 0
 		claudeInfo.Usage.TotalTokens = 0
-	} else if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	} else if missingInputUsage || missingOutputUsage || !claudeInfo.Done {
 		if common.DebugEnabled {
-			common.SysLog("claude response usage is not complete, maybe upstream error")
+			common.SysLog(common.LogText("claude response usage is not complete, maybe upstream error"))
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
 		fallback := service.ResponseText2UsageFromStream(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens(), info.ReceivedResponseCount)
-		if claudeInfo.Usage.CompletionTokens == 0 ||
+		// Each tool_use block costs about 40 output tokens beyond its name and JSON
+		// input (measured on Claude Haiku 4.5 and Sonnet 5 agent turns).
+		fallback.CompletionTokens += claudeInfo.ToolUseCount * 40
+		if missingOutputUsage ||
 			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
 			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
 		}
-		if claudeInfo.Usage.PromptTokens == 0 {
+		if missingInputUsage {
 			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
@@ -295,16 +329,16 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatGemini {
 		state, err := claudeToGeminiStreamState(info)
 		if err != nil {
-			common.SysLog("error creating Gemini stream state: " + err.Error())
+			common.SysLog(common.LogText("error creating Gemini stream state: %s", err.Error()))
 			return
 		}
 		results, err := service.FinalizeStreamResponse(c, info, state)
 		if err != nil {
-			common.SysLog("error finalizing Gemini stream response: " + err.Error())
+			common.SysLog(common.LogText("error finalizing Gemini stream response: %s", err.Error()))
 			return
 		}
 		if sendErr := sendGeminiStreamResults(c, results); sendErr != nil {
-			common.SysLog("send final Gemini stream response failed: " + sendErr.Error())
+			common.SysLog(common.LogText("send final Gemini stream response failed: %s", sendErr.Error()))
 		}
 	}
 }
@@ -357,6 +391,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			sr.Stop(err)
 		}
 	})
+	info.StreamStatus.RequireTerminal()
 	if err != nil {
 		if info.RelayFormat == types.RelayFormatClaude {
 			HandleStreamFinalResponse(c, info, claudeInfo)
@@ -377,7 +412,8 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
-	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+	info.ObserveResponseModel(claudeResponse.Model)
+	maybeMarkClaudeRefusal(c, info, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
@@ -439,8 +475,8 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 
-	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	if claudeResponse.Usage != nil {
+		recordClaudeServerToolUse(info, claudeResponse.Usage.ServerToolUse)
 	}
 
 	for _, block := range claudeResponse.Content {

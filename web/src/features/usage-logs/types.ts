@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
  * Type definitions for usage logs
  */
 import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
+import type { PolicyEvent } from '@/features/system-settings/request-policies/api'
 
 export interface UsageLog {
   [key: string]: unknown
@@ -248,6 +249,7 @@ export interface LogOtherData {
     settlement_state: 'pending' | 'settled' | 'released' | 'failed' | 'partial' // 待结算、完成、释放预扣、失败或部分提交。
   }
   admin_info?: {
+    request_policy?: PolicyEvent[]
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
@@ -299,6 +301,12 @@ export interface LogOtherData {
     upstream_task_id?: string
     node_name?: string
   }
+  // Structured log content: English source keys plus params, rendered in the
+  // viewer's language. `content` keeps the English text for older clients.
+  content_parts?: {
+    key: string
+    params?: Record<string, string | number | boolean>
+  }[]
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
   op?: {
@@ -354,6 +362,13 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  // Diagnostic only. Whether the names disagree is derived in the UI via
+  // isResponseModelMismatch so old rows follow the current comparison rule.
+  response_model?: {
+    requested_model: string
+    upstream_model: string
+    returned_model: string
+  }
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
@@ -407,6 +422,11 @@ export interface LogOtherData {
   reject_reason?: string
   // Task-related fields (for refund logs, type=6)
   is_task?: boolean
+  // The submitting request returned the task result itself (an immediate
+  // result, or an OpenAI Images request the gateway waited on).
+  task_sync?: boolean
+  // The inline result was not persisted, so no artifact can be retrieved.
+  result_discarded?: boolean
   task_id?: string
   reason?: string
   // Subscription billing fields
@@ -483,6 +503,9 @@ export interface TaskLog {
     origin_model_name?: string
   }
   legacy_video_available?: boolean
+  // A synchronous result returned inline and never persisted; artifact
+  // retrieval is not offered for it.
+  result_discarded?: boolean
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string | LogOtherData
@@ -528,9 +551,25 @@ export interface TaskArtifact {
   content_url: string
 }
 
+export interface AudioClip {
+  clip_id?: string
+  id?: string
+  title?: string
+  tags?: string
+  duration?: number
+  audio_url?: string
+  image_url?: string
+  image_large_url?: string
+  metadata?: {
+    tags?: string
+    duration?: number
+  }
+}
+
 export interface TaskArtifactProjection {
   artifacts: TaskArtifact[]
   legacyContentUrl?: string
+  legacyAudioClips?: AudioClip[]
 }
 
 export interface TaskArtifactsResponse {
@@ -540,6 +579,7 @@ export interface TaskArtifactsResponse {
   data?: {
     artifacts?: unknown
     legacy_content_url?: unknown
+    legacy_audio_clips?: unknown
   }
 }
 

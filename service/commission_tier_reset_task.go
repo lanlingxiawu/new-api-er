@@ -173,7 +173,7 @@ func runCommissionTierResetCheck() {
 	}
 	persistTierResetLastResetAt(due)
 	if common.DebugEnabled {
-		logger.LogDebug(ctx, fmt.Sprintf("commission tier reset: due=%d, processed=%d", due, total))
+		logger.LogDebug(ctx, "commission tier reset: due=%d, processed=%d", due, total)
 	}
 }
 

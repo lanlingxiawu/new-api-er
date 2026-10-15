@@ -572,10 +572,10 @@ func TestRelayMessage_FallbackWhenNoRelay(t *testing.T) {
 // Only errors explicitly marked safe skip sensitive-info masking; everything
 // else (upstream text, server-side details) is still masked.
 func TestErrOptionWithSafeMessageSkipsMaskingOnlyWhenSet(t *testing.T) {
-	text := "Invalid value for field 'generationConfig.maxOutputTokens'"
+	text := "Invalid upstream at 192.0.2.1"
 
 	masked := NewError(errors.New(text), ErrorCodeInvalidRequest)
-	require.NotContains(t, masked.ToOpenAIError().Message, "generationConfig.maxOutputTokens")
+	require.NotContains(t, masked.ToOpenAIError().Message, "192.0.2.1")
 
 	safe := NewError(errors.New(text), ErrorCodeInvalidRequest, ErrOptionWithSafeMessage())
 	require.Equal(t, text, safe.ToOpenAIError().Message)

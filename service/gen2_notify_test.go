@@ -237,7 +237,7 @@ func TestNotifyUpstreamModelUpdateWatchers(t *testing.T) {
 	}
 	require.NoError(t, model.DB.Create(adminDisabled).Error)
 
-	NotifyUpstreamModelUpdateWatchers("subject", "content")
+	NotifyUpstreamModelUpdateWatchers(func(string) (string, string) { return "subject", "content" })
 	assert.True(t, hit)
 }
 

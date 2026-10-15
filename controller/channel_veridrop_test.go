@@ -97,6 +97,7 @@ func TestVeridropDetectRequestPreservesExplicitFalse(t *testing.T) {
 }
 
 func TestListChannelVeridropDetectionTargets(t *testing.T) {
+	requireDB(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}))
 	channelID := nextTestID()
 	disabledChannelID := nextTestID()
@@ -265,6 +266,7 @@ func TestListChannelVeridropDetectionResultsRejectsInvalidFilters(t *testing.T) 
 }
 
 func TestListChannelVeridropDetectionResultsReturnsStatistics(t *testing.T) {
+	requireDB(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.ChannelVeridropDetection{}))
 	channelID := 990000000 + int(time.Now().UnixNano()%1000000)
 	t.Cleanup(func() {

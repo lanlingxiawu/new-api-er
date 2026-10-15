@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -116,10 +118,17 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/models", controller.GetUserModels)
 				selfRoute.PUT("/self", middleware.UserCriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", middleware.DisableCache(), controller.DeleteSelf)
-				selfRoute.GET("/token", middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
-				selfRoute.GET("/token/status", middleware.DisableCache(), controller.GetAccessTokenStatus)
-				selfRoute.POST("/token", middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
-				selfRoute.DELETE("/token", middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.RevokeAccessToken)
+				accessTokenRoute := selfRoute.Group("/access_tokens")
+				accessTokenRoute.Use(middleware.DisableCache())
+				{
+					accessTokenRoute.GET("", controller.ListAccessTokens)
+					accessTokenRoute.GET("/catalog", controller.GetAccessTokenCatalog)
+					accessTokenRoute.GET("/scopes", controller.GetAccessTokenScopes)
+					accessTokenRoute.POST("", middleware.UserCriticalRateLimit("access-token"), controller.CreateAccessToken)
+					accessTokenRoute.PATCH("/:id", middleware.UserCriticalRateLimit("access-token"), controller.UpdateAccessToken)
+					accessTokenRoute.DELETE("/:id", middleware.UserCriticalRateLimit("access-token"), controller.DeleteAccessToken)
+					accessTokenRoute.DELETE("/legacy", middleware.UserCriticalRateLimit("access-token"), controller.RevokeLegacyAccessToken)
+				}
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
 				selfRoute.POST("/passkey/register/begin", middleware.UserCriticalRateLimit("security-verification"), middleware.DisableCache(), controller.PasskeyRegisterBegin)
 				selfRoute.POST("/passkey/register/finish", middleware.UserCriticalRateLimit("security-verification"), middleware.DisableCache(), controller.PasskeyRegisterFinish)
@@ -348,14 +357,16 @@ func SetApiRouter(router *gin.Engine) {
 			optionRootRoute.GET("/business-stats-circuit-breaker/status", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.settlement-guard")), controller.GetBusinessStatsCircuitBreakerStatus)
 			optionRootRoute.PUT("/passkey/domains", middleware.RequirePermission(authz.SystemSettingsEdit("auth.passkey")), controller.UpdatePasskeyDomains)
 			optionRootRoute.POST("/payment_compliance", middleware.RequirePermission(authz.SystemSettingsEdit("billing.quota")), controller.ConfirmPaymentCompliance)
-			optionRootRoute.GET("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsView("models.channel-affinity")), controller.GetChannelAffinityCacheStats)
-			optionRootRoute.DELETE("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsEdit("models.channel-affinity")), controller.ClearChannelAffinityCache)
+			optionRootRoute.GET("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsView("request-policies.routing")), controller.GetChannelAffinityCacheStats)
+			optionRootRoute.DELETE("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsEdit("request-policies.routing")), controller.ClearChannelAffinityCache)
 			optionRootRoute.POST("/rest_model_ratio", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.ResetModelRatio)
 			optionRootRoute.GET("/waffo-pancake/catalog", middleware.RequirePermission(authz.SystemSettingsView("billing.payment")), controller.ListWaffoPancakeCatalog)
 			optionRootRoute.POST("/waffo-pancake/pair", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.CreateWaffoPancakePair)
 			optionRootRoute.POST("/waffo-pancake/save", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.SaveWaffoPancake)
 			optionRootRoute.POST("/waffo-pancake/subscription-product", middleware.RequirePermission(authz.SystemSettingsEdit("billing.payment")), controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRootRoute.GET("/waffo-pancake/subscription-product-options", middleware.RequirePermission(authz.SystemSettingsView("billing.payment")), controller.ListWaffoPancakeSubscriptionProductOptions)
+			optionRootRoute.GET("/request_policy", middleware.RequireSystemSettingsScope(authz.ActionView), controller.GetRequestPolicy)
+			optionRootRoute.PATCH("/request_policy", middleware.RequireSystemSettingsScope(authz.ActionEdit), controller.UpdateRequestPolicy)
 		}
 
 		// Custom OAuth provider management.
@@ -404,7 +415,7 @@ func SetApiRouter(router *gin.Engine) {
 			taskPluginRoute.POST("/:key/dryrun", controller.DryRunTaskPlugin)
 			taskPluginRoute.DELETE("/:key/versions/:version", controller.DeleteTaskPluginVersion)
 		}
-		apiRouter.GET("/task_plugin_options", middleware.AdminAuth(), middleware.RequirePermission(authz.TaskPluginBind), controller.GetTaskPluginOptions)
+		handlePermissionRoute(apiRouter.Group("", middleware.AdminAuth()), http.MethodGet, "/task_plugin_options", authz.TaskPluginBind, controller.GetTaskPluginOptions)
 		registerChannelRoutes(apiRouter)
 		registerAuthzRoutes(apiRouter)
 		tokenRoute := apiRouter.Group("/token")
@@ -453,7 +464,7 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
-		apiRouter.GET("/audit", middleware.DisableCache(), middleware.AdminAuth(), middleware.RequirePermission(authz.AuditRead), controller.GetAuditLogs)
+		handlePermissionRoute(apiRouter.Group("", middleware.DisableCache(), middleware.AdminAuth()), http.MethodGet, "/audit", authz.AuditRead, controller.GetAuditLogs)
 		apiRouter.GET("/audit/self", middleware.DisableCache(), middleware.UserAuth(), controller.GetAuditLogs)
 		logRoute := apiRouter.Group("/log")
 		// 前端请求的是 /api/log（无尾斜杠）。只注册 "/" 会让 Gin 回 301 再重定向到
@@ -463,7 +474,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/employee/stat", middleware.UserAuth(), controller.GetEmployeeCustomerLogsStat)
-		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), middleware.RequirePermission(authz.SystemSettingsView("models.channel-affinity")), controller.GetChannelAffinityUsageCacheStats)
+		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), middleware.RequirePermission(authz.SystemSettingsView("request-policies.routing")), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/export", middleware.AdminAuth(), middleware.LogExportRateLimit(), controller.ExportAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
@@ -528,7 +539,9 @@ func SetApiRouter(router *gin.Engine) {
 			systemTaskRoute.GET("/list", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.ListSystemTasks)
 			systemTaskRoute.GET("/current", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.GetCurrentSystemTask)
 			systemTaskRoute.GET("/:task_id", middleware.RequirePermission(authz.SystemSettingsView("operations.logs")), controller.GetSystemTask)
+			systemTaskRoute.DELETE("/history", middleware.RequirePermission(authz.SystemSettingsEdit("operations.logs")), controller.DeleteSystemTaskHistory)
 		}
+
 		// 系统信息：菜单可见性由 admin_menu.system_info 控制，默认对普通管理员关闭；
 		// pprof 剖析数据仍始终只对 root 开放（见 registerSystemInfoRoutes）。
 		registerSystemInfoRoutes(apiRouter)

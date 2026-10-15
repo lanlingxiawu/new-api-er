@@ -1,11 +1,7 @@
 # Chinese (Simplified) translations
 # 中文（简体）翻译文件
 
-# Task plugin messages
-task_plugin.unknown_meta_field: '插件元数据包含未知字段“{{.Field}}”。如果插件来自官方市场，可能需要更高版本的 new-api。请尝试更新 new-api 后重新安装插件。'
-
-# Common messages
-common.invalid_params: "无效的参数"
+# Errors returned to AI clients
 common.database_error: "数据库出错，请联系管理员"
 common.retry_later: "请稍后重试"
 common.generate_failed: "生成失败"
@@ -39,20 +35,9 @@ auth.user_id_not_provided: "无权进行此操作，未提供 New-Api-User"
 auth.user_id_format_error: "无权进行此操作，New-Api-User 格式错误"
 auth.user_id_mismatch: "无权进行此操作，New-Api-User 与登录用户不匹配"
 auth.user_banned: "用户已被封禁"
-auth.insufficient_privilege: "无权进行此操作，权限不足"
-
-# Token messages
-token.name_too_long: "令牌名称过长"
-token.quota_negative: "额度值不能为负数"
-token.quota_exceed_max: "额度值超出有效范围，最大值为 {{.Max}}"
-token.generate_failed: "生成令牌失败"
 token.get_info_failed: "获取令牌信息失败，请稍后重试"
-token.expired_cannot_enable: "令牌已过期，无法启用，请先修改令牌过期时间，或者设置为永不过期"
-token.exhausted_cannot_enable: "令牌可用额度已用尽，无法启用，请先修改令牌剩余额度，或者设置为无限额度"
 token.invalid: "无效的令牌"
 token.not_provided: "未提供令牌"
-token.expired: "该令牌已过期"
-token.exhausted: "该令牌额度已用尽 TokenStatusExhausted[sk-{{.Prefix}}***{{.Suffix}}]"
 token.status_unavailable: "该令牌状态不可用"
 token.db_error: "无效的令牌，数据库查询出错，请联系管理员"
 token.auto_groups_too_many: "每个令牌最多可选择 {{.Max}} 个 Auto 分组"
@@ -230,8 +215,6 @@ twofa.code_invalid: "验证码或备用码不正确"
 twofa.login_expired: "验证会话已过期，请重新登录。"
 
 # Rate limit messages
-rate_limit.reached: "您已达到请求数限制：{{.Minutes}}分钟内最多请求{{.Max}}次"
-rate_limit.total_reached: "您已达到总请求数限制：{{.Minutes}}分钟内最多请求{{.Max}}次，包括失败次数"
 rate_limit.too_many_requests: "请求过于频繁，请在 {{.Seconds}} 秒后重试。"
 
 # Setting messages
@@ -306,10 +289,16 @@ common.uuid_duplicate: "请重试，系统生成的 UUID 竟然重复了！"
 common.invalid_input: "输入不合法"
 
 # Distributor messages
+auth.client_ip_unresolved: "无法解析客户端 IP 地址"
+auth.token_ip_not_allowed: "您的 IP 不在令牌允许访问的列表中"
+auth.token_group_forbidden: "无权访问 {{.Group}} 分组"
+auth.token_group_deprecated: "分组 {{.Group}} 已被弃用"
+auth.channel_select_forbidden: "普通用户不支持指定渠道"
+rate_limit.reached: "您已达到请求数限制：{{.Minutes}}分钟内最多请求{{.Max}}次"
+rate_limit.total_reached: "您已达到总请求数限制：{{.Minutes}}分钟内最多请求{{.Max}}次，包括失败次数，请检查您的请求是否正确"
 distributor.invalid_request: "无效的请求，{{.Error}}"
 distributor.invalid_channel_id: "无效的渠道 Id"
 distributor.channel_disabled: "该渠道已被禁用"
-distributor.affinity_channel_disabled: "渠道亲和性命中的渠道已被禁用，已按规则停止重试，请联系管理员处理"
 distributor.token_no_model_access: "该令牌无权访问任何模型"
 distributor.token_model_forbidden: "该令牌无权访问模型 {{.Model}}"
 distributor.model_name_required: "未指定模型名称，模型名称不能为空"
@@ -317,9 +306,18 @@ distributor.invalid_playground_request: "无效的playground请求，{{.Error}}"
 distributor.group_access_denied: "无权访问该分组"
 distributor.get_channel_failed: "获取分组 {{.Group}} 下模型 {{.Model}} 的可用渠道失败（distributor）：{{.Error}}"
 distributor.no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 无可用渠道（distributor）"
-distributor.no_available_channel_task_plugin: "分组 {{.Group}} 下模型 {{.Model}} 无可用渠道：该模型由任务插件「{{.Plugin}}」认领，但该插件当前没有启用的渠道可服务此模型。若要让其他插件或渠道服务该模型，请在任务插件管理中禁用或覆盖插件「{{.Plugin}}」（distributor）"
-distributor.invalid_midjourney_request: "无效的midjourney请求，{{.Error}}"
-distributor.invalid_request_parse_model: "无效的请求，无法解析模型"
+distributor.no_available_channel_task_plugin: "分组 {{.Group}} 下模型 {{.Model}} 无可用渠道：该模型由任务插件认领，但当前没有启用的渠道可服务此模型（distributor）"
+distributor.invalid_request_parse_model: "无法解析模型"
+quota.pre_consume_insufficient: "预扣费额度失败, 用户剩余额度: {{.Remaining}}, 需要预扣费额度: {{.Required}}"
+quota.subscription_insufficient: "订阅额度不足或未配置订阅: {{.Error}}"
+relay.model_price_not_configured: "模型 {{.Model}} 的价格尚未由管理员配置，暂时无法使用，请联系站点管理员开启该模型；Model {{.Model}} has not been priced by the administrator yet. Please contact the site administrator to enable this model."
+relay.model_price_not_configured_admin: "模型 {{.Model}} 的价格未配置。请前往「系统设置 → 运营设置」开启自用模式，或在「系统设置 → 分组与模型定价设置」中为该模型配置价格；Model {{.Model}} price not configured. Go to System Settings → Operation Settings to enable self-use mode, or configure the model price in System Settings → Group & Model Pricing."
+relay.task_channel_disabled: "该任务所属渠道已被禁用"
+relay.group_saturated: "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
+relay.group_upstream_saturated: "当前分组上游负载已饱和，请稍后再试"
+relay.retry_get_channel_failed: "获取分组 {{.Group}} 下模型 {{.Model}} 的可用渠道失败（retry）: {{.Error}}"
+relay.retry_no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 的可用渠道不存在（retry）"
+relay.access_token_unsupported: "暂不支持使用 access token"
 
 # 充值账单导出 CSV 列头
 topup_export.col_trade_no: "订单号"
@@ -708,3 +706,57 @@ price_monitor.preview_unsupported: "当前计费能力或用量数据无法试�
 price_monitor.preview_source_unavailable: "该来源暂无可用价格，请刷新巡检或选择其他来源。"
 price_monitor.preview_semantics_unknown: "无法确定来源的计费规则语义，因此不能可靠比较此场景。"
 price_monitor.conversion_unsupported: "此价格无法在保持原计费行为的前提下自动转换。请保留当前定价，或核对用量规则后编辑表达式。"
+# Emails and the name of the token created at registration
+user.default_token_name: "{{.Username}}的初始令牌"
+email.verification.subject: "{{.SystemName}}邮箱验证邮件"
+email.verification.greeting: "您好，你正在进行{{.SystemName}}邮箱验证。"
+email.verification.code: "您的验证码为: <strong>{{.Code}}</strong>"
+email.verification.validity: "验证码 {{.Minutes}} 分钟内有效，如果不是本人操作，请忽略。"
+email.password_reset.subject: "{{.SystemName}}密码重置"
+email.password_reset.greeting: "您好，你正在进行{{.SystemName}}密码重置。"
+email.password_reset.link: "点击 <a href='{{.Link}}'>此处</a> 进行密码重置。"
+email.password_reset.link_fallback: "如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> {{.Link}}"
+email.password_reset.validity: "重置链接 {{.Minutes}} 分钟内有效，如果不是本人操作，请忽略。"
+
+# Low-quota notices
+notify.quota_low_title: "您的额度即将用尽"
+notify.subscription_quota_low_title: "您的订阅额度即将用尽"
+notify.quota_low_bark: "{{.Prompt}}，剩余额度：{{.Quota}}，请及时充值"
+notify.quota_low_gotify: "{{.Prompt}}，当前剩余额度为 {{.Quota}}，请及时充值。"
+notify.quota_low_email: "{{.Prompt}}，当前剩余额度为 {{.Quota}}，为了不影响您的使用，请及时充值。<br/>充值链接：<a href='{{.Link}}'>{{.Link}}</a>"
+
+# Channel notices sent to the root user and model update watchers
+channel.notify_disabled_subject: "通道「{{.Name}}」（#{{.Id}}）已被禁用"
+channel.notify_disabled_content: "通道「{{.Name}}」（#{{.Id}}）已被禁用，原因：{{.Reason}}"
+channel.notify_enabled_subject: "通道「{{.Name}}」（#{{.Id}}）已被启用"
+channel.notify_enabled_content: "通道「{{.Name}}」（#{{.Id}}）已被启用"
+channel.test_completed_subject: "通道测试完成"
+channel.test_completed_content: "所有通道测试已完成"
+channel.response_time_exceeded: "响应时间 {{.Seconds}}s 超过阈值 {{.Threshold}}s"
+channel.upstream_update_notify_subject: "上游模型巡检通知"
+channel.upstream_update_summary: "上游模型巡检摘要：检测渠道 {{.Checked}} 个，发现变更 {{.Changed}} 个，新增 {{.Added}} 个，删除 {{.Removed}} 个，自动同步新增 {{.AutoAdded}} 个，失败 {{.Failed}} 个。"
+channel.upstream_update_changed_channels: "变更渠道明细（展示 {{.Shown}}/{{.Total}}）："
+channel.upstream_update_more_channels: "其余 {{.Count}} 个渠道已省略"
+channel.upstream_update_added_models: "新增模型示例（展示 {{.Shown}}/{{.Total}}）：{{.Models}}"
+channel.upstream_update_removed_models: "删除模型示例（展示 {{.Shown}}/{{.Total}}）：{{.Models}}"
+channel.upstream_update_failed_channels: "失败渠道 ID（展示 {{.Shown}}/{{.Total}}）：{{.Ids}}"
+channel.upstream_update_more_omitted: "（其余 {{.Count}} 个已省略）"
+
+# Retained fork message keys.
+task_plugin.unknown_meta_field: '插件元数据包含未知字段“{{.Field}}”。如果插件来自官方市场，可能需要更高版本的 new-api。请尝试更新 new-api 后重新安装插件。'
+
+# Common messages
+common.invalid_params: "无效的参数"
+auth.insufficient_privilege: "无权进行此操作，权限不足"
+
+# Token messages
+token.name_too_long: "令牌名称过长"
+token.quota_negative: "额度值不能为负数"
+token.quota_exceed_max: "额度值超出有效范围，最大值为 {{.Max}}"
+token.generate_failed: "生成令牌失败"
+token.expired_cannot_enable: "令牌已过期，无法启用，请先修改令牌过期时间，或者设置为永不过期"
+token.exhausted_cannot_enable: "令牌可用额度已用尽，无法启用，请先修改令牌剩余额度，或者设置为无限额度"
+token.expired: "该令牌已过期"
+token.exhausted: "该令牌额度已用尽 TokenStatusExhausted[sk-{{.Prefix}}***{{.Suffix}}]"
+distributor.affinity_channel_disabled: "渠道亲和性命中的渠道已被禁用，已按规则停止重试，请联系管理员处理"
+distributor.invalid_midjourney_request: "无效的midjourney请求，{{.Error}}"

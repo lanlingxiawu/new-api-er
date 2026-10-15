@@ -258,6 +258,7 @@ func TestSubscription_NormalizeDefaultsAndHooks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSubscription_PlanGetByIdAndCache(t *testing.T) {
+	requireDB(t)
 	_, err := GetSubscriptionPlanById(0)
 	assert.Error(t, err)
 
@@ -913,6 +914,7 @@ func TestSubscription_PreConsumePicksSubscriptionWithRoom(t *testing.T) {
 }
 
 func TestSubscription_RefundPreConsume(t *testing.T) {
+	requireDB(t)
 	// guards
 	assert.Error(t, RefundSubscriptionPreConsume(""))
 	assert.Error(t, RefundSubscriptionPreConsume("no-such-request"))

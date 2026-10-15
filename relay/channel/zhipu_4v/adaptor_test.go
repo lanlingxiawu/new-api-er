@@ -251,7 +251,7 @@ func TestGettersAndUnimplemented(t *testing.T) {
 	c := newTestContext()
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 	_, err := a.ConvertGeminiRequest(c, info, &dto.GeminiChatRequest{})
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	_, err = a.ConvertAudioRequest(c, info, dto.AudioRequest{})
 	assert.Error(t, err)
 	_, err = a.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{})

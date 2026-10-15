@@ -414,15 +414,6 @@ func TestUser_ClearBinding(t *testing.T) {
 	assert.Equal(t, "", reloaded.GitHubId)
 }
 
-func TestUser_UpdateGitHubId(t *testing.T) {
-	assert.Error(t, (&User{Id: 0}).UpdateGitHubId("x"))
-	u := newTestUser(t, func(u *User) { u.GitHubId = uniq("gh") })
-	newId := uniq("gh2")
-	require.NoError(t, u.UpdateGitHubId(newId))
-	reloaded, _ := GetUserById(u.Id, true)
-	assert.Equal(t, newId, reloaded.GitHubId)
-}
-
 func TestUpdateUserRemark(t *testing.T) {
 	u := newTestUser(t, nil)
 	require.NoError(t, UpdateUserRemark(u.Id, "vip customer"))
@@ -447,11 +438,20 @@ func TestUpdateUserSetting(t *testing.T) {
 
 func TestUser_DeleteSoft(t *testing.T) {
 	// id 0 -> error
-	assert.Error(t, (&User{Id: 0}).Delete())
-	assert.Error(t, DeleteUserById(0))
+	{
+		_, deleteErr := (&User{Id: 0}).Delete()
+		assert.Error(t, deleteErr)
+	}
+	{
+		_, deleteErr := DeleteUserById(0)
+		assert.Error(t, deleteErr)
+	}
 
 	u := newTestUser(t, nil)
-	require.NoError(t, DeleteUserById(u.Id))
+	{
+		_, deleteErr := DeleteUserById(u.Id)
+		require.NoError(t, deleteErr)
+	}
 
 	// default scope hides soft-deleted rows
 	_, err := GetUserById(u.Id, false)
@@ -463,12 +463,21 @@ func TestUser_DeleteSoft(t *testing.T) {
 }
 
 func TestUser_HardDelete(t *testing.T) {
-	assert.Error(t, (&User{Id: 0}).HardDelete())
-	assert.Error(t, HardDeleteUserById(0))
+	{
+		_, deleteErr := (&User{Id: 0}).HardDelete()
+		assert.Error(t, deleteErr)
+	}
+	{
+		_, deleteErr := HardDeleteUserById(0)
+		assert.Error(t, deleteErr)
+	}
 
 	u := newTestUser(t, nil)
 	mkToken(t, u.Id, nil) // ensure auth data is cleaned too
-	require.NoError(t, HardDeleteUserById(u.Id))
+	{
+		_, deleteErr := HardDeleteUserById(u.Id)
+		require.NoError(t, deleteErr)
+	}
 
 	var cnt int64
 	DB.Unscoped().Model(&User{}).Where("id = ?", u.Id).Count(&cnt)

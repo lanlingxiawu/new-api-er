@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -12,14 +11,12 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
@@ -87,7 +84,7 @@ type textQuotaSummary struct {
 // 接收者 s：当前费用计算摘要；无参数；返回 true 表示存在可计费项目，最终是否收费仍受流式结算策略控制。
 func (s *textQuotaSummary) hasBillableUsage() bool {
 	return s.FixedPriceBilling || s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() ||
-		s.StreamCacheBillable && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)
+		(s.StreamCacheBillable || s.IsClaudeUsageSemantic) && (s.CacheTokens > 0 || s.CacheCreationTokens > 0 || s.CacheCreationTokens5m > 0 || s.CacheCreationTokens1h > 0)
 }
 
 // textInputTokensForLog returns the text-only portion of the input for logging.
@@ -161,7 +158,7 @@ func mergeToolSurchargeItems(items []ToolSurchargeItem) []ToolSurchargeItem {
 			merged[lastIndex].Name == item.Name &&
 			merged[lastIndex].Price == item.Price {
 			if item.Count > math.MaxInt-merged[lastIndex].Count {
-				common.SysError("tool surcharge call count overflow for " + item.Name)
+				common.SysError(common.LogText("tool surcharge call count overflow for %s", item.Name))
 				merged[lastIndex].Count = math.MaxInt
 			} else {
 				merged[lastIndex].Count += item.Count
@@ -184,23 +181,17 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 			if tool == nil {
 				continue
 			}
-			items = collectToolSurchargeItem(items, name, tool.CallCount, summary.ModelName)
+			count := tool.CallCount
+			if count > relaycommon.MaxBillableToolCallCount {
+				logger.LogWarn(ctx, common.LogText("tool surcharge call count clamped: tool=%s count=%d", name, count))
+				count = relaycommon.MaxBillableToolCallCount
+			}
+			items = collectToolSurchargeItem(items, name, count, summary.ModelName)
 		}
 	}
 	if relayInfo.RelayMode != relayconstant.RelayModeResponses &&
 		strings.HasSuffix(summary.ModelName, "search-preview") {
 		items = collectToolSurchargeItem(items, dto.BuildInToolWebSearchPreview, 1, summary.ModelName)
-	}
-
-	items = collectToolSurchargeItem(
-		items,
-		dto.BuildInToolWebSearch,
-		ctx.GetInt("claude_web_search_requests"),
-		summary.ModelName,
-	)
-
-	if ctx.GetBool("gemini_google_search_call") {
-		items = collectToolSurchargeItem(items, dto.BuildInToolGoogleSearch, 1, summary.ModelName)
 	}
 
 	summary.ToolSurchargeItems = mergeToolSurchargeItems(items)
@@ -487,7 +478,7 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 // PostTextConsumeQuota 根据用量和既有价格规则计算费用并发起最终结算，严格流式无收费来源时清零全部费用项。
 // 参数 ctx：请求及日志上下文；relayInfo：计费配置、预扣和流式结果；usage：解析或估算的用量，nil 时使用既有请求估算。
 // 参数 extraContent：消费日志的附加说明，可为 nil。已尝试严格结算的请求直接退出以避免重复收费。
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []*common.Message) {
 	usage = FinalizeStreamUsage(ctx, relayInfo, usage)
 	if relayInfo.StreamResult != nil && relayInfo.StreamResult.SettlementAttempted {
 		return
@@ -495,7 +486,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
-		extraContent = append(extraContent, "上游无计费信息")
+		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage"))
 	}
 	if originUsage != nil {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
@@ -542,16 +533,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			Div(decimal.NewFromInt(1000)).
 			Mul(decimal.NewFromFloat(summary.GroupRatio)).
 			Mul(decimal.NewFromFloat(common.QuotaPerUnit))
-		extraContent = append(extraContent, fmt.Sprintf(
-			"%s 调用 %d 次，调用花费 %s",
-			item.Name,
-			item.Count,
-			logger.LogQuota(common.QuotaFromDecimal(q)),
-		))
+		extraContent = append(extraContent, common.NewMessage("{{name}} called {{count}} times, cost {{quota}}", map[string]any{
+			"name":  item.Name,
+			"count": item.Count,
+			"quota": logger.FormatQuota(common.QuotaFromDecimal(q)),
+		}))
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		q := decimal.NewFromFloat(summary.AudioInputPrice).Div(decimal.NewFromInt(1000000)).Mul(decimal.NewFromInt(int64(summary.AudioTokens))).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
-		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", logger.LogQuota(common.QuotaFromDecimal(q))))
+		extraContent = append(extraContent, common.NewMessage("Audio input cost {{quota}}", map[string]any{"quota": logger.FormatQuota(common.QuotaFromDecimal(q))}))
 	}
 
 	// 与 buildTextQuotaSummary 的计费口径保持一致：零 token 但有工具附加费时
@@ -562,21 +552,20 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 	// 严格流式零收费由 stream_result 解释；即使上游有用量，也可能因没有有效交付而释放预扣。
 	if !countUsage && relayInfo.StreamResult == nil {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		extraContent = append(extraContent, common.NewMessage("Upstream returned no usage, so nothing was charged (possibly an upstream timeout)"))
+		logger.LogError(ctx, common.LogText("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
 
 	logModel := summary.ModelName
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
-		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
+		extraContent = append(extraContent, common.NewMessage("Model {{model}}", map[string]any{"model": summary.ModelName}))
 	}
 	if strings.HasPrefix(logModel, "gpt-4o-gizmo") {
 		logModel = "gpt-4o-gizmo-*"
-		extraContent = append(extraContent, fmt.Sprintf("模型 %s", summary.ModelName))
+		extraContent = append(extraContent, common.NewMessage("Model {{model}}", map[string]any{"model": summary.ModelName}))
 	}
 
-	logContent := strings.Join(extraContent, ", ")
 	var other *model.LogOther
 	if summary.IsClaudeUsageSemantic {
 		other = GenerateClaudeOtherInfo(ctx, relayInfo,
@@ -646,7 +635,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other.SetPublic("upstream_stream_adapted", true)
 	}
 
-	relayTimeoutInputSettling := isRelayTimeoutInputSettlement(ctx)
 	FinalizeConsumptionSettlement(ctx, relayInfo, ConsumptionSettlementParams{
 		ChannelId:         relayInfo.ChannelId,
 		PromptTokens:      summary.PromptTokens,
@@ -654,7 +642,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		ModelName:         logModel,
 		TokenName:         summary.TokenName,
 		Quota:             summary.Quota,
-		Content:           logContent,
+		ContentMessages:   extraContent,
 		TokenId:           relayInfo.TokenId,
 		UseTimeSeconds:    int(summary.UseTimeSeconds),
 		IsStream:          relayInfo.IsStream,
@@ -664,11 +652,5 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		LedgerQuota:       summary.LedgerQuota,
 		UpstreamBaseQuota: &summary.UpstreamBaseQuota,
 	})
-	if relayTimeoutInputSettling {
-		// 我方超时的非流式请求：控制器会按失败记一次样本，这里不再按成功重复记。
-		return
-	}
-	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens))
-	})
+	relayInfo.PerformanceOutputTokens = int64(summary.CompletionTokens)
 }

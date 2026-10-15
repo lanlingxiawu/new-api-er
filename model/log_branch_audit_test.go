@@ -210,7 +210,7 @@ func TestBranchAuditGetUserLogs_ScopeRangeAndMasking(t *testing.T) {
 	}
 	mkLogRow(t, func(l *Log) { l.UserId, l.Type, l.CreatedAt = stranger, LogTypeError, start+1 })
 
-	logs, total, err := GetUserLogs(owner, LogTypeError, start, end, "", "", 0, 10, 0, "", "", "")
+	logs, total, err := GetUserLogs(owner, LogFilter{Type: LogTypeError, StartTimestamp: start, EndTimestamp: end, ModelName: "", TokenName: "", LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 10)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, total, "created_at == start and == end are both inside")
 	require.Len(t, logs, 2)

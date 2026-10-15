@@ -1,5 +1,7 @@
 package claudemessages
 
+import "context"
+
 import (
 	"testing"
 
@@ -23,7 +25,9 @@ func convertClaudeJSON(t *testing.T, body string) map[string]any {
 	t.Helper()
 	var req dto.ClaudeRequest
 	require.NoError(t, kitutil.Unmarshal([]byte(body), &req))
-	out, err := ClaudeMessagesRequestToOpenAIChat(req, nil)
+	out, err := ClaudeMessagesRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	raw, err := kitutil.Marshal(out)
 	require.NoError(t, err)
@@ -103,7 +107,9 @@ func TestReq_ToolChoiceTypedStruct(t *testing.T) {
 		&dto.ClaudeToolChoice{Type: "tool", Name: "get_weather", DisableParallelToolUse: true},
 		dto.ClaudeToolChoice{Type: "tool", Name: "get_weather", DisableParallelToolUse: true},
 	} {
-		out, err := ClaudeMessagesRequestToOpenAIChat(dto.ClaudeRequest{Model: "m", Tools: weatherTool(), ToolChoice: choice}, nil)
+		out, err := ClaudeMessagesRequestToOpenAIChat(context.Background(),
+
+			dto.ClaudeRequest{Model: "m", Tools: weatherTool(), ToolChoice: choice}, nil)
 		require.NoError(t, err)
 		assert.Equal(t, map[string]any{"type": "function", "function": map[string]any{"name": "get_weather"}}, out.ToolChoice)
 		require.NotNil(t, out.ParallelTooCalls)

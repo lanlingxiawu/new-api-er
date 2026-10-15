@@ -498,7 +498,7 @@ func FinalizeStreamFailure(c *gin.Context, info *relaycommon.RelayInfo, err erro
 	}
 	usage := FinalizeStreamUsage(c, info, nil)
 	if usage.PromptTokensDetails.AudioTokens > 0 || usage.CompletionTokenDetails.AudioTokens > 0 {
-		PostAudioConsumeQuota(c, info, usage, "")
+		PostAudioConsumeQuota(c, info, usage, nil)
 	} else {
 		PostTextConsumeQuota(c, info, usage, nil)
 	}

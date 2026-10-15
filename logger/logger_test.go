@@ -111,7 +111,7 @@ func TestFormatQuota_Tokens(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// LogQuota — same branch structure, with the " 额度" suffix and symbols.
+// LogQuota — same branch structure, with the " quota" suffix and symbols.
 // ---------------------------------------------------------------------------
 
 func TestLogQuota_AllBranches(t *testing.T) {
@@ -122,12 +122,12 @@ func TestLogQuota_AllBranches(t *testing.T) {
 		custom, usd   float64
 		want          string
 	}{
-		{"usd", operation_setting.QuotaDisplayTypeUSD, "¤", 1, 7.3, fmt.Sprintf("＄%.6f 额度", usd)},
-		{"cny", operation_setting.QuotaDisplayTypeCNY, "¤", 1, 7.3, fmt.Sprintf("¥%.6f 额度", usd*7.3)},
-		{"custom", operation_setting.QuotaDisplayTypeCustom, "€", 2, 7.3, fmt.Sprintf("€%.6f 额度", usd*2)},
-		{"custom-empty-symbol", operation_setting.QuotaDisplayTypeCustom, "", 2, 7.3, fmt.Sprintf("¤%.6f 额度", usd*2)},
-		{"custom-bad-rate", operation_setting.QuotaDisplayTypeCustom, "€", -1, 7.3, fmt.Sprintf("€%.6f 额度", usd*1)},
-		{"tokens", operation_setting.QuotaDisplayTypeTokens, "¤", 1, 7.3, "500000 点额度"},
+		{"usd", operation_setting.QuotaDisplayTypeUSD, "¤", 1, 7.3, fmt.Sprintf("＄%.6f quota", usd)},
+		{"cny", operation_setting.QuotaDisplayTypeCNY, "¤", 1, 7.3, fmt.Sprintf("¥%.6f quota", usd*7.3)},
+		{"custom", operation_setting.QuotaDisplayTypeCustom, "€", 2, 7.3, fmt.Sprintf("€%.6f quota", usd*2)},
+		{"custom-empty-symbol", operation_setting.QuotaDisplayTypeCustom, "", 2, 7.3, fmt.Sprintf("¤%.6f quota", usd*2)},
+		{"custom-bad-rate", operation_setting.QuotaDisplayTypeCustom, "€", -1, 7.3, fmt.Sprintf("€%.6f quota", usd*1)},
+		{"tokens", operation_setting.QuotaDisplayTypeTokens, "¤", 1, 7.3, "500000 quota points"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

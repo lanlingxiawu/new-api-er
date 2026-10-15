@@ -49,19 +49,6 @@ func TestBytes2Size(t *testing.T) {
 	assert.Equal(t, "2.00 GB", Bytes2Size(2*1024*1024*1024))
 }
 
-func TestSeconds2Time(t *testing.T) {
-	assert.Equal(t, "0 秒", Seconds2Time(0))
-	assert.Equal(t, "59 秒", Seconds2Time(59))
-	assert.Equal(t, "1 分钟 0 秒", Seconds2Time(60))
-	assert.Equal(t, "1 小时 0 秒", Seconds2Time(3600))
-	assert.Equal(t, "1 天 0 秒", Seconds2Time(86400))
-	assert.Equal(t, "1 个月 0 秒", Seconds2Time(2592000))
-	assert.Equal(t, "1 年 0 秒", Seconds2Time(31104000))
-	// mixed value exercises every component together
-	assert.Equal(t, "1 年 1 个月 1 天 1 小时 1 分钟 1 秒",
-		Seconds2Time(31104000+2592000+86400+3600+60+1))
-}
-
 func TestInterface2String(t *testing.T) {
 	assert.Equal(t, "hello", Interface2String("hello"))
 	assert.Equal(t, "42", Interface2String(42))

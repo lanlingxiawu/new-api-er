@@ -363,7 +363,7 @@ func SettleRelayTimeoutInputIfNeeded(c *gin.Context, info *relaycommon.RelayInfo
 	}
 	c.Set(relayTimeoutCostKey, &relayTimeoutCost{absorbed: record, inputOnly: true, refundOnSettleFailure: true})
 	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-	PostTextConsumeQuota(c, info, estimatedInputUsage(info.GetEstimatePromptTokens()), []string{MessageWithCurrentRequestId(c, relayTimeoutInputOnlyNote(c))})
+	PostTextConsumeQuota(c, info, estimatedInputUsage(info.GetEstimatePromptTokens()), []*common.Message{common.NewMessage(MessageWithCurrentRequestId(c, relayTimeoutInputOnlyNote(c)))})
 	return true
 }
 
@@ -481,7 +481,7 @@ func isRelayTimeoutInputSettlement(c *gin.Context) bool {
 // It returns the usage to settle and the consume-log note, and records
 // admin_info.timeout_absorbed (the output is not observable: 0; a per-call
 // price is absorbed in full).
-func AdaptedTimeoutWithoutOutput(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) (*dto.Usage, []string) {
+func AdaptedTimeoutWithoutOutput(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) (*dto.Usage, []*common.Message) {
 	if c == nil || info == nil {
 		return usage, nil
 	}
@@ -517,5 +517,5 @@ func AdaptedTimeoutWithoutOutput(c *gin.Context, info *relaycommon.RelayInfo, us
 	if !inputOnly {
 		return usage, nil
 	}
-	return usage, []string{MessageWithCurrentRequestId(c, relayTimeoutInputOnlyNote(c))}
+	return usage, []*common.Message{common.NewMessage(MessageWithCurrentRequestId(c, relayTimeoutInputOnlyNote(c)))}
 }

@@ -50,6 +50,8 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import { readTaskExtendPluginKeys } from './channel-plugin-extensions'
+import { supportsResponsesWebSocket } from './responses-websocket'
 
 // ============================================================================
 // Form Validation Schema
@@ -216,6 +218,7 @@ export const channelFormSchema = z
     type: z.number().min(0, ERROR_MESSAGES.REQUIRED_TYPE),
     base_url: z.string().optional(),
     task_plugin_key: z.string().optional(),
+    task_extend_plugin_keys: z.array(z.string()).optional(),
     key: z.string(),
     openai_organization: z.string().optional(),
     models: z.string().min(1, ERROR_MESSAGES.REQUIRED_MODELS),
@@ -291,6 +294,7 @@ export const channelFormSchema = z
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
+    tls_insecure_skip_verify: z.boolean().optional(),
     pass_through_body_enabled: z.boolean().optional(),
     responses_websocket_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
@@ -302,6 +306,7 @@ export const channelFormSchema = z
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
+    vertex_project_id: z.string().optional(), // Vertex AI specific (api_key mode only)
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
     azure_responses_version: z.string().optional(), // Azure specific
     // Field passthrough controls (stored in settings JSON)
@@ -496,6 +501,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   type: 1,
   base_url: '',
   task_plugin_key: '',
+  task_extend_plugin_keys: [],
   key: '',
   openai_organization: '',
   models: '',
@@ -529,6 +535,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
+  tls_insecure_skip_verify: false,
   pass_through_body_enabled: false,
   responses_websocket_enabled: false,
   system_prompt: '',
@@ -536,6 +543,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
+  vertex_project_id: '',
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
   // Field passthrough controls
@@ -569,11 +577,13 @@ export function transformChannelToFormDefaults(
   // Parse channel extra settings from setting field
   let extraSettings = {
     task_plugin_key: '',
+    task_extend_plugin_keys: [] as string[],
     force_format: false,
     thinking_to_content: false,
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
+    tls_insecure_skip_verify: false,
     pass_through_body_enabled: false,
     responses_websocket_enabled: false,
     system_prompt: '',
@@ -592,11 +602,13 @@ export function transformChannelToFormDefaults(
       )
       extraSettings = {
         task_plugin_key: parsed.task_plugin_key || '',
+        task_extend_plugin_keys: readTaskExtendPluginKeys(channel.type, parsed),
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        tls_insecure_skip_verify: parsed.tls_insecure_skip_verify === true,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         responses_websocket_enabled:
           parsed.responses_websocket_enabled === true,
@@ -614,6 +626,7 @@ export function transformChannelToFormDefaults(
 
   // Parse type-specific settings from settings field
   let vertexKeyType: 'json' | 'api_key' = 'json'
+  let vertexProjectId = ''
   let azureResponsesVersion = ''
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
@@ -637,6 +650,7 @@ export function transformChannelToFormDefaults(
     try {
       const parsed = JSON.parse(channel.settings)
       vertexKeyType = parsed.vertex_key_type || 'json'
+      vertexProjectId = parsed.vertex_project_id || ''
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
@@ -706,6 +720,7 @@ export function transformChannelToFormDefaults(
     // Type-specific settings
     is_enterprise_account: isEnterpriseAccount,
     vertex_key_type: vertexKeyType,
+    vertex_project_id: vertexProjectId,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
     allow_service_tier: allowServiceTier,
@@ -849,6 +864,11 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       formData.type === CHANNEL_TYPE_TASK_PLUGIN
         ? formData.task_plugin_key?.trim() || ''
         : undefined,
+    task_extend_plugin_keys:
+      formData.type === CHANNEL_TYPE_NEW_API &&
+      formData.task_extend_plugin_keys?.length
+        ? formData.task_extend_plugin_keys
+        : undefined,
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
     proxy: formData.proxy?.trim() || '',
@@ -856,7 +876,7 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
       formData.type !== CHANNEL_TYPE_ADVANCED_CUSTOM &&
       formData.pass_through_body_enabled === true,
     responses_websocket_enabled:
-      (formData.type === 1 || formData.type === 57) &&
+      supportsResponsesWebSocket(formData.type) &&
       formData.responses_websocket_enabled === true,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
@@ -873,6 +893,9 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
+  }
+  if (formData.tls_insecure_skip_verify === true) {
+    settingObj.tls_insecure_skip_verify = true
   }
 
   // 账号余额查询配置同样存在 setting 里，而 setting 是整体覆盖的：漏写就等于清空。
@@ -909,8 +932,15 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   // Add vertex_key_type for Vertex AI channels (type 41)
   if (formData.type === 41) {
     settingsObj.vertex_key_type = formData.vertex_key_type || 'json'
-  } else if ('vertex_key_type' in settingsObj) {
+    const vertexProjectId = formData.vertex_project_id?.trim()
+    if (settingsObj.vertex_key_type === 'api_key' && vertexProjectId) {
+      settingsObj.vertex_project_id = vertexProjectId
+    } else {
+      delete settingsObj.vertex_project_id
+    }
+  } else {
     delete settingsObj.vertex_key_type
+    delete settingsObj.vertex_project_id
   }
 
   // Add azure_responses_version for Azure channels (type 3)

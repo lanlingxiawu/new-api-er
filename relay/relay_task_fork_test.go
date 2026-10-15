@@ -99,7 +99,7 @@ func TestRecordXaiTaskPricingMetadata(t *testing.T) {
 		return c, info, adaptor
 	}
 
-	c, info, adaptor := newSubmit(map[string]any{"prompt": "p", "duration": 8, "images": []any{"file_a", "file_b"}, "metadata": map[string]any{"resolution": "1080p"}})
+	c, info, adaptor := newSubmit(map[string]any{"prompt": "p", "duration": 8, "images": []any{"file_a", "file_b"}, "metadata": map[string]any{"resolution": "720p"}})
 	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
 	recordXaiTaskPricingMetadata(c, info, "xai", adaptor)
 	assert.Equal(t, map[string]string{

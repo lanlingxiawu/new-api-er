@@ -2,6 +2,8 @@ package perfmetrics
 
 import (
 	"context"
+	"errors"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"testing"
 	"time"
 
@@ -364,4 +366,15 @@ func TestCleanupExpiredMetrics(t *testing.T) {
 
 func TestInit_StartsWithoutPanic(t *testing.T) {
 	assert.NotPanics(t, func() { Init() })
+}
+
+func RecordRelaySample(info *relaycommon.RelayInfo, success bool, output int64) {
+	if info != nil {
+		info.PerformanceOutputTokens = output
+	}
+	var apiErr *types.NewAPIError
+	if !success {
+		apiErr = types.NewErrorWithStatusCode(errors.New("upstream failure"), types.ErrorCodeBadResponse, 500)
+	}
+	RecordRelayResult(context.Background(), info, apiErr)
 }

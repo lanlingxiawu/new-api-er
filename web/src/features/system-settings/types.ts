@@ -597,6 +597,14 @@ export type SystemTaskListResponse = {
   success: boolean
   message: string
   data?: SystemTask[]
+  total: number
+}
+
+export type SystemTaskFilters = {
+  type?: string
+  status?: SystemTaskStatus | ''
+  scope?: 'active' | 'history'
+  offset?: number
 }
 
 export type SiteSettings = {
@@ -608,6 +616,7 @@ export type SiteSettings = {
   HomePageContent: string
   ServerAddress: string
   TaskPublicAddress: string
+  'general_setting.docs_link': string
   'legal.user_agreement': string
   'legal.privacy_policy': string
   HeaderNavModules: string
@@ -756,12 +765,12 @@ export type ModelSettings = {
 
 export type BillingSettings = {
   QuotaForNewUser: number
-  PreConsumedQuota: number
   QuotaForInviter: number
   QuotaForInvitee: number
   TopUpLink: string
-  'general_setting.docs_link': string
   'quota_setting.enable_free_model_pre_consume': boolean
+  'quota_setting.trust_quota_usd': number
+  'quota_setting.pre_consume_multiplier': number
   QuotaPerUnit: number
   USDExchangeRate: number
   'general_setting.quota_display_type': string
@@ -908,6 +917,8 @@ export type OperationsSettings = {
   RequestLogMaxBodyKB: number
   RequestLogMinCount: number
   RequestLogMaxCount: number
+  'log_setting.user_export_enabled': boolean
+  'log_setting.max_range_days': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number

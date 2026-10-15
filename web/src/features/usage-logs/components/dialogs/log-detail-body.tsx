@@ -43,6 +43,7 @@ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-p
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
+import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -63,18 +64,20 @@ import {
   getResponseTimeColor,
   getReasoningEffortVariant,
   renderAuditContent,
+  renderLogContent,
   getAuditTargetUser,
   formatAuditTargetUser,
   isTieredBillingLog,
 } from '../../lib/format'
-import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import {
   TIERED_PRICE_METRIC,
   type LogMetricKey,
   type LogMetrics,
 } from '../../lib/log-metrics'
+import { buildQuotaAuditOperation } from '../../lib/quota-audit-operation'
 import { isPerCallBilling, isTimingLogType } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
 import {
   compareCellClassName,
@@ -763,7 +766,11 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       )
     : null
   const operationText = renderAuditContent(other, t)
-  const details = (isTopup ? operationText : null) ?? props.log.content ?? ''
+  const details =
+    (isTopup ? operationText : null) ??
+    renderLogContent(other, t) ??
+    props.log.content ??
+    ''
   const auditRoute = isManage && props.isAdmin ? other?.audit_info : undefined
   // Channel update records which fields changed (stable field tokens); render
   // them with their localized labels for admins.
@@ -1105,6 +1112,19 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       <CompareCell row='taskPlugin' column={col}>
+        {props.isAdmin && adminInfo?.request_policy?.length ? (
+          <DetailSection
+            label={t('Request policy decisions')}
+            icon={<Route className='size-4' />}
+          >
+            <PolicyDecisionRecord events={adminInfo.request_policy} />
+          </DetailSection>
+        ) : null}
+        {other?.response_model && (
+          <DetailSection label={t('Response Model')}>
+            <ResponseModelDetails observation={other.response_model} />
+          </DetailSection>
+        )}
         {props.isAdmin && adminInfo?.task_plugin ? (
           <DetailSection label={t('Task Plugin')}>
             <DetailRow

@@ -188,7 +188,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutReturnsPartialOutput(t *testing.T) {
 
 	var settled *dto.Usage
 	settleCalls := 0
-	restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, _ []string) {
+	restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, _ []*common.Message) {
 		settleCalls++
 		settled = usage
 	})
@@ -236,7 +236,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutReturnsReasoningAndToolCalls(t *test
 		t.Run(name, func(t *testing.T) {
 			c, rec, info := bufferedCase(t)
 			markTimedOut(c)
-			restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})
+			restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})
 			defer restore()
 
 			_, apiErr := handleAdaptedUpstreamStream(c, info, upstreamSSE(tc.frame+"\n"))
@@ -253,7 +253,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutReturnsReasoningAndToolCalls(t *test
 func TestHandleAdaptedUpstreamStream_TimeoutAfterCompletionKeepsFinishReason(t *testing.T) {
 	c, rec, info := bufferedCase(t)
 	markTimedOut(c)
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})
 	defer restore()
 
 	body := strings.Join([]string{
@@ -279,7 +279,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutRecordsContentFilterBeforeSettlement
 			c, _, info := bufferedCase(t)
 			markTimedOut(c)
 			atSettlement := ""
-			restore := stubSettlement(func(sc *gin.Context, _ *relaycommon.RelayInfo, _ *dto.Usage, _ []string) {
+			restore := stubSettlement(func(sc *gin.Context, _ *relaycommon.RelayInfo, _ *dto.Usage, _ []*common.Message) {
 				atSettlement = common.GetContextKeyString(sc, constant.ContextKeyAdminRejectReason)
 			})
 			defer restore()
@@ -295,7 +295,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutRecordsContentFilterBeforeSettlement
 func TestHandleAdaptedUpstreamStream_TimeoutIdOnlyToolCallIsNoOutput(t *testing.T) {
 	c, rec, info := bufferedCase(t)
 	markTimedOut(c)
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})
 	defer restore()
 
 	body := `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function"}]}}]}` + "\n"
@@ -311,7 +311,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutWithoutOutputAnswers504(t *testing.T
 	c, rec, info := bufferedCase(t)
 	markTimedOut(c)
 	settleCalls := 0
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) { settleCalls++ })
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) { settleCalls++ })
 	defer restore()
 
 	body := strings.Join([]string{
@@ -336,7 +336,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutPartialPassesWriteGate(t *testing.T)
 	c.Writer = &gatedWriter{ResponseWriter: c.Writer, gate: gate}
 	common.SetContextKey(c, constant.ContextKeyRelayTimeoutControl, gatedTimedOutControl{gate: gate})
 	common.SetContextKey(c, constant.ContextKeyRelayResponseTimeoutSeconds, 60)
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})
 	defer restore()
 
 	body := `data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}` + "\n"
@@ -414,7 +414,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutWithNoChunks(t *testing.T) {
 	markTimedOut(c)
 
 	var settled *dto.Usage
-	restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, _ []string) {
+	restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, _ []*common.Message) {
 		settled = usage
 	})
 	defer restore()
@@ -474,7 +474,7 @@ func TestAdaptedStreamUsage_ToolCallSurcharge(t *testing.T) {
 		"tool calls carry the same surcharge the streaming path applies")
 }
 
-func stubSettlement(fn func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string)) func() {
+func stubSettlement(fn func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message)) func() {
 	previous := settleAdaptedTimeout
 	settleAdaptedTimeout = fn
 	return func() { settleAdaptedTimeout = previous }
@@ -522,7 +522,7 @@ func TestHandleAdaptedUpstreamStream_ErrorFrameBeatsTimeout(t *testing.T) {
 	c, _, info := bufferedCase(t)
 	markTimedOut(c)
 	settled := 0
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) { settled++ })
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) { settled++ })
 	defer restore()
 
 	_, apiErr := handleAdaptedUpstreamStream(c, info,

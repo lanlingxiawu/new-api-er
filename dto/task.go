@@ -57,6 +57,7 @@ type TaskDto struct {
 	Other                map[string]any  `json:"other,omitempty"`
 	AdminInfo            *TaskAdminInfo  `json:"admin_info,omitempty"`
 	RootInfo             *TaskRootInfo   `json:"root_info,omitempty"`
+	ResultDiscarded      bool            `json:"result_discarded,omitempty"`
 }
 
 type TaskPluginInfo struct {

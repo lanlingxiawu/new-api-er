@@ -237,6 +237,7 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
                 <Field key={option.action} orientation='horizontal'>
                   <Checkbox
                     id={id}
+                    aria-describedby={`${id}-description`}
                     checked={
                       selected[resource.resource]?.[option.action] === true
                     }
@@ -252,7 +253,7 @@ export function AdminPermissionsEditor(props: AdminPermissionsEditorProps) {
                     <FieldLabel htmlFor={id} className='font-medium'>
                       {t(option.label_key)}
                     </FieldLabel>
-                    <FieldDescription>
+                    <FieldDescription id={`${id}-description`}>
                       {t(option.description_key)}
                     </FieldDescription>
                   </FieldContent>

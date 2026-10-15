@@ -144,7 +144,7 @@ func TestRecalculateTaskQuota_AdjustsUsedQuotaBothWays(t *testing.T) {
 			taskUsedQuotaSeed(t, userID, channelID, tc.preConsumed, 1, int64(tc.preConsumed))
 			task := makeTask(userID, channelID, tc.preConsumed, tokenID, BillingSourceWallet, 0)
 
-			RecalculateTaskQuota(ctx, task, tc.actualQuota, "adaptor adjustment", nil)
+			RecalculateTaskQuota(ctx, task, tc.actualQuota, common.NewMessage("adaptor adjustment"), nil)
 
 			used, requests := taskUsedQuotaUser(t, userID)
 			assert.Equal(t, tc.wantUsed, used)

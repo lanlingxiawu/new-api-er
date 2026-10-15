@@ -1,5 +1,7 @@
 package geminichat
 
+import "context"
+
 import (
 	"encoding/json"
 	"testing"
@@ -48,7 +50,9 @@ func TestExtractText(t *testing.T) {
 // --- model / stream propagation ---
 
 func TestReq_ModelAndStreamFromInfo(t *testing.T) {
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, infoWith(chanTypeGemini, "gemini-1.5-pro", true))
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{}, infoWith(chanTypeGemini, "gemini-1.5-pro", true))
 	require.NoError(t, err)
 	assert.Equal(t, "gemini-1.5-pro", out.Model)
 	require.NotNil(t, out.Stream)
@@ -56,7 +60,9 @@ func TestReq_ModelAndStreamFromInfo(t *testing.T) {
 }
 
 func TestReq_NilInfoDefaults(t *testing.T) {
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "", out.Model)
 	require.NotNil(t, out.Stream)
@@ -71,7 +77,9 @@ func TestReq_SingleTextBecomesPlainStringContent(t *testing.T) {
 			{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	assert.Equal(t, "user", out.Messages[0].Role)
@@ -85,7 +93,9 @@ func TestReq_MultipleTextPartsBecomeMediaContent(t *testing.T) {
 			{Role: "user", Parts: []dto.GeminiPart{{Text: "a"}, {Text: "b"}}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	content := out.Messages[0].ParseContent()
@@ -104,7 +114,9 @@ func TestReq_InlineDataImage(t *testing.T) {
 			}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	content := out.Messages[0].ParseContent()
@@ -125,7 +137,9 @@ func TestReq_FileData(t *testing.T) {
 			}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	content := out.Messages[0].ParseContent()
 	require.Len(t, content, 1)
@@ -145,7 +159,9 @@ func TestReq_FunctionCallBecomesToolCall(t *testing.T) {
 			}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	assert.Equal(t, "assistant", out.Messages[0].Role)
@@ -166,7 +182,9 @@ func TestReq_MultipleFunctionCallsIncrementIds(t *testing.T) {
 			}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	tcs := out.Messages[0].ParseToolCalls()
 	require.Len(t, tcs, 2)
@@ -182,7 +200,9 @@ func TestReq_FunctionResponseBecomesToolMessage(t *testing.T) {
 			}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 1)
 	msg := out.Messages[0]
@@ -199,13 +219,17 @@ func TestReq_EmptyPartsMessageDropped(t *testing.T) {
 			{Role: "user", Parts: []dto.GeminiPart{}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	assert.Len(t, out.Messages, 0)
 }
 
 func TestReq_EmptyContents(t *testing.T) {
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{}, nil)
 	require.NoError(t, err)
 	assert.Len(t, out.Messages, 0)
 }
@@ -223,7 +247,9 @@ func TestReq_GenerationConfigFull(t *testing.T) {
 			StopSequences:   []string{"a", "b", "c", "d", "e"},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.Temperature)
 	assert.Equal(t, 0.7, *out.Temperature)
@@ -244,7 +270,9 @@ func TestReq_GenerationConfigTemperatureZeroPreserved(t *testing.T) {
 	req := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{Temperature: kitutil.GetPointer(0.0)},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.Temperature)
 	assert.Equal(t, 0.0, *out.Temperature)
@@ -261,7 +289,9 @@ func TestReq_GenerationConfigExplicitZerosForwarded(t *testing.T) {
 			Seed:            kitutil.GetPointer(int64(0)),
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.TopP)
 	assert.Equal(t, 0.0, *out.TopP)
@@ -281,7 +311,9 @@ func TestReq_GenerationConfigExplicitZerosForwarded(t *testing.T) {
 }
 
 func TestReq_GenerationConfigAbsentFieldsOmitted(t *testing.T) {
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.TopP)
 	assert.Nil(t, out.TopK)
@@ -305,7 +337,9 @@ func TestReq_SeedMappedPenaltiesNot(t *testing.T) {
 			FrequencyPenalty: kitutil.GetPointer(float32(-0.25)),
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.Seed)
 	assert.Equal(t, 42.0, *out.Seed)
@@ -319,7 +353,9 @@ func TestReq_ResponseMimeTypeJSONWithoutSchemaIsJSONObject(t *testing.T) {
 	req := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{ResponseMimeType: "application/json"},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.ResponseFormat)
 	assert.Equal(t, "json_object", out.ResponseFormat.Type)
@@ -334,7 +370,9 @@ func TestReq_GeminiResponseSchemaBecomesJSONObject(t *testing.T) {
 		"responseMimeType": "application/json",
 		"responseSchema": {"type": "OBJECT", "nullable": true, "propertyOrdering": ["a"], "properties": {"a": {"type": "INTEGER"}}}
 	}`), &generationConfig))
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.ResponseFormat)
 	assert.Equal(t, "json_object", out.ResponseFormat.Type)
@@ -349,7 +387,9 @@ func TestReq_ResponseJSONSchemaPassedThrough(t *testing.T) {
 			ResponseSchema:     map[string]any{"type": "STRING"},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.ResponseFormat)
 	assert.Equal(t, "json_schema", out.ResponseFormat.Type)
@@ -359,7 +399,9 @@ func TestReq_ResponseJSONSchemaPassedThrough(t *testing.T) {
 func TestReq_NullResponseJSONSchemaTreatedAsAbsent(t *testing.T) {
 	var generationConfig dto.GeminiChatGenerationConfig
 	require.NoError(t, json.Unmarshal([]byte(`{"responseMimeType":"application/json","responseJsonSchema":null}`), &generationConfig))
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{GenerationConfig: generationConfig}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out.ResponseFormat)
 	assert.Equal(t, "json_object", out.ResponseFormat.Type)
@@ -370,7 +412,9 @@ func TestReq_NonJSONResponseMimeTypeNotMapped(t *testing.T) {
 		req := &dto.GeminiChatRequest{
 			GenerationConfig: dto.GeminiChatGenerationConfig{ResponseMimeType: mimeType},
 		}
-		out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+		out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+			req, nil)
 		require.NoError(t, err)
 		assert.Nil(t, out.ResponseFormat, mimeType)
 	}
@@ -386,7 +430,9 @@ func TestReq_ThinkingBudgetZeroSerializesReasoningEffortNone(t *testing.T) {
 		"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
 		"generationConfig": {"maxOutputTokens": 16, "thinkingConfig": {"thinkingBudget": 0}}
 	}`), &req))
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&req, infoWith(chanTypeGemini, "gemini-2.5-flash", false))
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&req, infoWith(chanTypeGemini, "gemini-2.5-flash", false))
 	require.NoError(t, err)
 	body, err := json.Marshal(out)
 	require.NoError(t, err)
@@ -421,7 +467,9 @@ func TestReq_ToolConfigBecomesToolChoice(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := &dto.GeminiChatRequest{Tools: tools, ToolConfig: &dto.ToolConfig{FunctionCallingConfig: tc.config}}
-			out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+			out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+				req, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out.ToolChoice)
 			names := make([]string, 0, len(out.Tools))
@@ -439,7 +487,9 @@ func TestReq_ToolConfigWithoutFunctionToolsDropped(t *testing.T) {
 		Tools:      json.RawMessage(`[{"googleSearch":{}}]`),
 		ToolConfig: &dto.ToolConfig{FunctionCallingConfig: &dto.FunctionCallingConfig{Mode: "ANY"}},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.Tools)
 	assert.Nil(t, out.ToolChoice)
@@ -458,7 +508,9 @@ func TestReq_FunctionSchemaTypesLowercased(t *testing.T) {
 		},
 		"required": ["city"]
 	}}]}]`)}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Tools, 1)
 	params, err := json.Marshal(out.Tools[0].Function.Parameters)
@@ -489,7 +541,9 @@ func TestReq_StopSequencesUnderFourNotTruncated(t *testing.T) {
 	req := &dto.GeminiChatRequest{
 		GenerationConfig: dto.GeminiChatGenerationConfig{StopSequences: []string{"x", "y"}},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"x", "y"}, out.Stop)
 }
@@ -499,7 +553,9 @@ func TestReq_StopSequencesUnderFourNotTruncated(t *testing.T) {
 func TestReq_ToolsFunctionDeclarations(t *testing.T) {
 	toolsJSON := `[{"functionDeclarations":[{"name":"get_weather","description":"d","parameters":{"type":"object"}}]}]`
 	req := &dto.GeminiChatRequest{Tools: json.RawMessage(toolsJSON)}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Tools, 1)
 	assert.Equal(t, "function", out.Tools[0].Type)
@@ -511,21 +567,27 @@ func TestReq_ToolsFunctionDeclarations(t *testing.T) {
 func TestReq_ToolsWithoutFunctionDeclarationsSkipped(t *testing.T) {
 	// googleSearch tool has no functionDeclarations => skipped, no tools set.
 	req := &dto.GeminiChatRequest{Tools: json.RawMessage(`[{"googleSearch":{}}]`)}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.Tools)
 }
 
 func TestReq_ToolsSingleObjectForm(t *testing.T) {
 	req := &dto.GeminiChatRequest{Tools: json.RawMessage(`{"functionDeclarations":[{"name":"f"}]}`)}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Tools, 1)
 	assert.Equal(t, "f", out.Tools[0].Function.Name)
 }
 
 func TestReq_NoTools(t *testing.T) {
-	out, err := GeminiGenerateContentRequestToOpenAIChat(&dto.GeminiChatRequest{}, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		&dto.GeminiChatRequest{}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.Tools)
 }
@@ -534,7 +596,9 @@ func TestReq_ToolsMalformedFunctionDeclarationsSkipped(t *testing.T) {
 	// functionDeclarations is a string, not an array => Any2Type parse error =>
 	// SysError + continue, no tools produced.
 	req := &dto.GeminiChatRequest{Tools: json.RawMessage(`[{"functionDeclarations":"not_an_array"}]`)}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out.Tools)
 }
@@ -550,7 +614,9 @@ func TestReq_SystemInstructionPrepended(t *testing.T) {
 			Parts: []dto.GeminiPart{{Text: "be terse"}, {Text: "and kind"}},
 		},
 	}
-	out, err := GeminiGenerateContentRequestToOpenAIChat(req, nil)
+	out, err := GeminiGenerateContentRequestToOpenAIChat(context.Background(),
+
+		req, nil)
 	require.NoError(t, err)
 	require.Len(t, out.Messages, 2)
 	assert.Equal(t, "system", out.Messages[0].Role)

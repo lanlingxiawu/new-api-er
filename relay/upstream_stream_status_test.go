@@ -81,7 +81,7 @@ func TestAdaptedStreamStatus_ClientGoneIsNotAnUpstreamBreak(t *testing.T) {
 func TestAdaptedStreamStatus_TimeoutIsTimeout(t *testing.T) {
 	c, _, info := bufferedCase(t)
 	markTimedOut(c)
-	defer stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})()
+	defer stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})()
 	_, apiErr := handleAdaptedUpstreamStream(c, info, brokenUpstream(contentFrame))
 	require.Nil(t, apiErr)
 	assert.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
@@ -148,7 +148,7 @@ func TestAdaptedStreamStatus_UpstreamErrorFrameIsHandlerStop(t *testing.T) {
 func TestAdaptedStreamStatus_TimeoutAfterDoneStaysDone(t *testing.T) {
 	c, _, info := bufferedCase(t)
 	markTimedOut(c)
-	defer stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})()
+	defer stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})()
 	body := `data: {"id":"c","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
 	_, _ = handleAdaptedUpstreamStream(c, info, upstreamSSE(body))
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)

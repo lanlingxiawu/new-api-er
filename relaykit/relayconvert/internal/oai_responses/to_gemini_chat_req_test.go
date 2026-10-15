@@ -5,7 +5,6 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -227,27 +226,6 @@ func TestOpenAIResponsesRequestToGeminiChatMediaResolverError(t *testing.T) {
 
 // ---- convert wrapper + preprocess ----
 
-func TestConvertOpenAIResponsesRequestToGeminiChatWrapper(t *testing.T) {
-	c := newTestGinContext()
-	out, err := convertOpenAIResponsesRequestToGeminiChat(c, nil, &dto.OpenAIResponsesRequest{
-		Model: "gemini-test",
-		Input: mustRawMessage(t, "hi"),
-	})
-	require.NoError(t, err)
-	_, ok := out.(*dto.GeminiChatRequest)
-	assert.True(t, ok)
-
-	_, err = convertOpenAIResponsesRequestToGeminiChat(c, nil, 12345)
-	require.Error(t, err)
-
-	// PrepareOpenAIResponsesRequest fails (tools array of non-objects) -> wrapper propagates
-	_, err = convertOpenAIResponsesRequestToGeminiChat(c, nil, &dto.OpenAIResponsesRequest{
-		Model: "gemini-test",
-		Tools: []byte(`[1,2,3]`),
-	})
-	require.Error(t, err)
-}
-
 func TestOpenAIResponsesRequestToGeminiChatMediaNilSourceSkipped(t *testing.T) {
 	c := newTestGinContext()
 	// input_image without data yields nil FileSource -> part skipped, text kept
@@ -264,72 +242,6 @@ func TestOpenAIResponsesRequestToGeminiChatMediaNilSourceSkipped(t *testing.T) {
 	require.Len(t, got.Contents, 1)
 	require.Len(t, got.Contents[0].Parts, 1)
 	assert.Equal(t, "keep", got.Contents[0].Parts[0].Text)
-}
-
-func TestPrepareOpenAIResponsesRequestFiltersToolsAndInput(t *testing.T) {
-	req := dto.OpenAIResponsesRequest{
-		Model: "gemini-test",
-		Tools: mustRawMessage(t, []map[string]any{
-			{"type": "function", "name": "keep"},
-			{"type": "web_search_preview"},
-		}),
-		Input: mustRawMessage(t, []map[string]any{
-			{"type": "custom_tool_call", "call_id": "cc_1", "name": "x", "input": "b"},
-			{"type": "custom_tool_call_output", "call_id": "cc_1", "output": "r"},
-			{"type": "function_call_output", "call_id": "cc_1", "output": "r"},  // linked to skipped custom -> removed
-			{"type": "function_call_output", "call_id": "other", "output": "r"}, // kept
-			{"role": "user", "content": "keep me"},
-		}),
-	}
-	out, err := PrepareOpenAIResponsesRequest(req)
-	require.NoError(t, err)
-
-	var tools []map[string]any
-	require.NoError(t, kitutil.Unmarshal(out.Tools, &tools))
-	require.Len(t, tools, 1)
-	assert.Equal(t, "keep", tools[0]["name"])
-
-	var items []map[string]any
-	require.NoError(t, kitutil.Unmarshal(out.Input, &items))
-	// remaining: function_call_output(other) + user message
-	require.Len(t, items, 2)
-	assert.Equal(t, "other", items[0]["call_id"])
-	assert.Equal(t, "user", items[1]["role"])
-}
-
-func TestPrepareOpenAIResponsesRequestNonArrayPassthrough(t *testing.T) {
-	req := dto.OpenAIResponsesRequest{
-		Model: "gemini-test",
-		Tools: mustRawMessage(t, "notarray"),
-		Input: mustRawMessage(t, "just a string"),
-	}
-	out, err := PrepareOpenAIResponsesRequest(req)
-	require.NoError(t, err)
-	assert.Equal(t, req.Tools, out.Tools)
-	assert.Equal(t, req.Input, out.Input)
-}
-
-func TestPrepareOpenAIResponsesRequestToolsUnmarshalError(t *testing.T) {
-	// array whose elements are not objects -> unmarshal into []map[string]any fails
-	req := dto.OpenAIResponsesRequest{Model: "gemini-test", Tools: []byte(`[1,2,3]`)}
-	_, err := PrepareOpenAIResponsesRequest(req)
-	require.Error(t, err)
-}
-
-func TestPrepareOpenAIResponsesRequestInputUnmarshalError(t *testing.T) {
-	req := dto.OpenAIResponsesRequest{Model: "gemini-test", Input: []byte(`[1,2,3]`)}
-	_, err := PrepareOpenAIResponsesRequest(req)
-	require.Error(t, err)
-}
-
-func TestPrepareOpenAIResponsesRequestAllToolsFilteredToNil(t *testing.T) {
-	req := dto.OpenAIResponsesRequest{
-		Model: "gemini-test",
-		Tools: mustRawMessage(t, []map[string]any{{"type": "web_search_preview"}}),
-	}
-	out, err := PrepareOpenAIResponsesRequest(req)
-	require.NoError(t, err)
-	assert.Nil(t, out.Tools)
 }
 
 // ---- helper branch tests ----
@@ -396,13 +308,13 @@ func TestAppendGeminiContentPartFunctionCallInsertOrdering(t *testing.T) {
 
 func TestResponsesFunctionOutputItemToGeminiPartNameFromCallNames(t *testing.T) {
 	callNames := map[string]string{"call_1": "resolved"}
-	part, err := responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "output": "r"}, callNames)
+	part, _, err := responsesFunctionOutputItemToGeminiPart(newTestGinContext(), map[string]any{"call_id": "call_1", "output": "r"}, callNames, false)
 	require.NoError(t, err)
 	require.NotNil(t, part.FunctionResponse)
 	assert.Equal(t, "resolved", part.FunctionResponse.Name)
 
 	// explicit name wins
-	part, err = responsesFunctionOutputItemToGeminiPart(map[string]any{"call_id": "call_1", "name": "explicit", "output": "r"}, callNames)
+	part, _, err = responsesFunctionOutputItemToGeminiPart(newTestGinContext(), map[string]any{"call_id": "call_1", "name": "explicit", "output": "r"}, callNames, false)
 	require.NoError(t, err)
 	assert.Equal(t, "explicit", part.FunctionResponse.Name)
 }
@@ -410,10 +322,10 @@ func TestResponsesFunctionOutputItemToGeminiPartNameFromCallNames(t *testing.T) 
 func TestApplyResponsesTextToGeminiNoFormat(t *testing.T) {
 	req := &dto.GeminiChatRequest{}
 	// absent -> no-op
-	require.NoError(t, applyResponsesTextToGemini(nil, req))
+	require.NoError(t, applyResponsesTextToGemini(newTestGinContext(), nil, req, false))
 	assert.Empty(t, req.GenerationConfig.ResponseMimeType)
 
 	// text format type is neither json_schema nor json_object -> no-op
-	require.NoError(t, applyResponsesTextToGemini(mustRawMessage(t, map[string]any{"format": map[string]any{"type": "text"}}), req))
+	require.NoError(t, applyResponsesTextToGemini(newTestGinContext(), mustRawMessage(t, map[string]any{"format": map[string]any{"type": "text"}}), req, false))
 	assert.Empty(t, req.GenerationConfig.ResponseMimeType)
 }

@@ -190,7 +190,7 @@ func handleAdaptedUpstreamStream(c *gin.Context, info *relaycommon.RelayInfo, re
 		// same; the streaming handler counts them on a cut-off stream too.
 		aggregator.CountBillableToolCalls(info)
 		recordAdaptedContentFilter(c, aggregator)
-		var note []string
+		var note []*common.Message
 		if !aggregator.HasOutput() {
 			// No output to deliver: bill at least the input, as the input mode
 			// would for the same request (relay-timeout-cost-bearing.md §3.2).

@@ -20,10 +20,10 @@ func TestParseJSONArray_Valid(t *testing.T) {
 }
 
 func TestParseJSONArray_InvalidJSON(t *testing.T) {
-	list, err := parseJSONArray(`not-json`, "测试类型")
+	list, err := parseJSONArray(`not-json`, "Invalid test format: {{error}}")
 	require.Error(t, err)
 	assert.Nil(t, list)
-	assert.Contains(t, err.Error(), "测试类型格式错误")
+	assert.Contains(t, err.Error(), "Invalid test format:")
 }
 
 // ---------------------------------------------------------------------------
@@ -31,24 +31,24 @@ func TestParseJSONArray_InvalidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestValidateURL_Valid(t *testing.T) {
-	assert.NoError(t, validateURL("https://example.com/path", 1, "项"))
-	assert.NoError(t, validateURL("http://192.168.0.1:8080", 1, "项"))
-	assert.NoError(t, validateURL("http://a.b.c.example.co/x?y=z", 1, "项"))
+	assert.NoError(t, validateURL("https://example.com/path", 1, apiInfoMessages))
+	assert.NoError(t, validateURL("http://192.168.0.1:8080", 1, apiInfoMessages))
+	assert.NoError(t, validateURL("http://a.b.c.example.co/x?y=z", 1, apiInfoMessages))
 }
 
 func TestValidateURL_RegexReject(t *testing.T) {
 	// ftp scheme not allowed by the regex.
-	err := validateURL("ftp://example.com", 3, "项")
+	err := validateURL("ftp://example.com", 3, apiInfoMessages)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "第3个项的URL格式不正确")
+	assert.Contains(t, err.Error(), "API info #3 has an invalid URL format")
 }
 
 func TestValidateURL_ParseErrorAfterRegex(t *testing.T) {
 	// Passes the regex (http:// + /path) but fails url.Parse due to an invalid
 	// percent-escape in the path — exercises the second guard.
-	err := validateURL("http://example.com/%zz", 2, "项")
+	err := validateURL("http://example.com/%zz", 2, apiInfoMessages)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "第2个项的URL无法解析")
+	assert.Contains(t, err.Error(), "API info #2 has a URL that cannot be parsed")
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ func TestValidateURL_ParseErrorAfterRegex(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckDangerousContent_Clean(t *testing.T) {
-	assert.NoError(t, checkDangerousContent("perfectly safe text", 1, "项"))
+	assert.NoError(t, checkDangerousContent("perfectly safe text", 1, apiInfoMessages))
 }
 
 func TestCheckDangerousContent_EachPattern(t *testing.T) {
@@ -64,9 +64,9 @@ func TestCheckDangerousContent_EachPattern(t *testing.T) {
 	for _, p := range patterns {
 		// Case-insensitive: uppercase must still trip the check.
 		content := "prefix " + strings.ToUpper(p) + " suffix"
-		err := checkDangerousContent(content, 7, "项")
+		err := checkDangerousContent(content, 7, apiInfoMessages)
 		require.Error(t, err, "pattern %q should be rejected", p)
-		assert.Contains(t, err.Error(), "第7个项包含不允许的内容")
+		assert.Contains(t, err.Error(), "API info #7 contains disallowed content")
 	}
 }
 
@@ -112,7 +112,7 @@ func TestValidateConsoleSettings_DispatchesEachType(t *testing.T) {
 func TestValidateConsoleSettings_UnknownType(t *testing.T) {
 	err := ValidateConsoleSettings(`[]`, "Nope")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "未知的设置类型：Nope")
+	assert.Contains(t, err.Error(), "Unknown setting type: Nope")
 }
 
 func TestValidateConsoleSettings_RoutedValidatorErrorPropagates(t *testing.T) {
@@ -153,7 +153,7 @@ func TestValidateApiInfo_TooMany(t *testing.T) {
 	sb.WriteString("]")
 	err := validateApiInfo(sb.String())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "不能超过50个")
+	assert.Contains(t, err.Error(), "API info cannot exceed 50 entries")
 }
 
 func TestValidateApiInfo_MissingFields(t *testing.T) {
@@ -161,10 +161,10 @@ func TestValidateApiInfo_MissingFields(t *testing.T) {
 		drop string
 		want string
 	}{
-		{"url", "缺少URL字段"},
-		{"route", "缺少线路描述字段"},
-		{"description", "缺少说明字段"},
-		{"color", "缺少颜色字段"},
+		{"url", "API info #1 is missing the URL field"},
+		{"route", "API info #1 is missing the route description field"},
+		{"description", "API info #1 is missing the description field"},
+		{"color", "API info #1 is missing the color field"},
 	}
 	for _, c := range cases {
 		item := validApiInfoItem()
@@ -180,7 +180,7 @@ func TestValidateApiInfo_EmptyStringFieldTreatedAsMissing(t *testing.T) {
 	item["url"] = ""
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少URL字段")
+	assert.Contains(t, err.Error(), "API info #1 is missing the URL field")
 }
 
 func TestValidateApiInfo_WrongTypeFieldTreatedAsMissing(t *testing.T) {
@@ -188,7 +188,7 @@ func TestValidateApiInfo_WrongTypeFieldTreatedAsMissing(t *testing.T) {
 	item["route"] = 123 // not a string
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少线路描述字段")
+	assert.Contains(t, err.Error(), "API info #1 is missing the route description field")
 }
 
 func TestValidateApiInfo_InvalidURL(t *testing.T) {
@@ -196,7 +196,7 @@ func TestValidateApiInfo_InvalidURL(t *testing.T) {
 	item["url"] = "ftp://bad"
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL格式不正确")
+	assert.Contains(t, err.Error(), "API info #1 has an invalid URL format")
 }
 
 func TestValidateApiInfo_URLTooLong(t *testing.T) {
@@ -204,7 +204,7 @@ func TestValidateApiInfo_URLTooLong(t *testing.T) {
 	item["url"] = "https://example.com/" + strings.Repeat("a", 500)
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL长度不能超过500字符")
+	assert.Contains(t, err.Error(), "API info #1 URL cannot exceed 500 characters")
 }
 
 func TestValidateApiInfo_RouteTooLong(t *testing.T) {
@@ -212,7 +212,7 @@ func TestValidateApiInfo_RouteTooLong(t *testing.T) {
 	item["route"] = strings.Repeat("r", 101)
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "线路描述长度不能超过100字符")
+	assert.Contains(t, err.Error(), "API info #1 route description cannot exceed 100 characters")
 }
 
 func TestValidateApiInfo_DescriptionTooLong(t *testing.T) {
@@ -220,7 +220,7 @@ func TestValidateApiInfo_DescriptionTooLong(t *testing.T) {
 	item["description"] = strings.Repeat("d", 201)
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "说明长度不能超过200字符")
+	assert.Contains(t, err.Error(), "API info #1 description cannot exceed 200 characters")
 }
 
 func TestValidateApiInfo_InvalidColor(t *testing.T) {
@@ -228,7 +228,7 @@ func TestValidateApiInfo_InvalidColor(t *testing.T) {
 	item["color"] = "chartreuse"
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "颜色值不合法")
+	assert.Contains(t, err.Error(), "API info #1 has an invalid color value")
 }
 
 func TestValidateApiInfo_AllValidColorsAccepted(t *testing.T) {
@@ -244,7 +244,7 @@ func TestValidateApiInfo_DangerousDescription(t *testing.T) {
 	item["description"] = "<script>alert(1)</script>"
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "包含不允许的内容")
+	assert.Contains(t, err.Error(), "API info #1 contains disallowed content")
 }
 
 func TestValidateApiInfo_DangerousRoute(t *testing.T) {
@@ -252,7 +252,7 @@ func TestValidateApiInfo_DangerousRoute(t *testing.T) {
 	item["route"] = "javascript:evil"
 	err := validateApiInfoOne(t, item)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "包含不允许的内容")
+	assert.Contains(t, err.Error(), "API info #1 contains disallowed content")
 }
 
 func TestValidateApiInfo_BoundaryLengthsAccepted(t *testing.T) {
@@ -318,7 +318,7 @@ func TestValidateAnnouncements_TooMany(t *testing.T) {
 	}
 	err := validateAnnouncements(marshalArray(t, items))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "不能超过100个")
+	assert.Contains(t, err.Error(), "Announcements cannot exceed 100 entries")
 }
 
 func TestValidateAnnouncements_MissingContent(t *testing.T) {
@@ -326,7 +326,7 @@ func TestValidateAnnouncements_MissingContent(t *testing.T) {
 	delete(item, "content")
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少内容字段")
+	assert.Contains(t, err.Error(), "Announcement #1 is missing the content field")
 }
 
 func TestValidateAnnouncements_MissingPublishDate(t *testing.T) {
@@ -334,7 +334,7 @@ func TestValidateAnnouncements_MissingPublishDate(t *testing.T) {
 	delete(item, "publishDate")
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少发布日期字段")
+	assert.Contains(t, err.Error(), "Announcement #1 is missing the publish date field")
 }
 
 func TestValidateAnnouncements_PublishDateNotStringOrEmpty(t *testing.T) {
@@ -343,14 +343,14 @@ func TestValidateAnnouncements_PublishDateNotStringOrEmpty(t *testing.T) {
 	item["publishDate"] = 123
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "发布日期不能为空")
+	assert.Contains(t, err.Error(), "Announcement #1 publish date cannot be empty")
 
 	// present, string, but empty
 	item2 := validAnnouncement()
 	item2["publishDate"] = ""
 	err2 := validateAnnouncements(marshalArray(t, item2))
 	require.Error(t, err2)
-	assert.Contains(t, err2.Error(), "发布日期不能为空")
+	assert.Contains(t, err2.Error(), "Announcement #1 publish date cannot be empty")
 }
 
 func TestValidateAnnouncements_PublishDateBadFormat(t *testing.T) {
@@ -358,7 +358,7 @@ func TestValidateAnnouncements_PublishDateBadFormat(t *testing.T) {
 	item["publishDate"] = "2026/07/20"
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "发布日期格式错误")
+	assert.Contains(t, err.Error(), "Announcement #1 has an invalid publish date format")
 }
 
 func TestValidateAnnouncements_InvalidType(t *testing.T) {
@@ -366,7 +366,7 @@ func TestValidateAnnouncements_InvalidType(t *testing.T) {
 	item["type"] = "bogus"
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "类型值不合法")
+	assert.Contains(t, err.Error(), "Announcement #1 has an invalid type value")
 }
 
 func TestValidateAnnouncements_NonStringTypeIgnored(t *testing.T) {
@@ -381,7 +381,7 @@ func TestValidateAnnouncements_ContentTooLong(t *testing.T) {
 	item["content"] = strings.Repeat("c", 501)
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "内容长度不能超过500字符")
+	assert.Contains(t, err.Error(), "Announcement #1 content cannot exceed 500 characters")
 }
 
 func TestValidateAnnouncements_ExtraTooLong(t *testing.T) {
@@ -389,7 +389,7 @@ func TestValidateAnnouncements_ExtraTooLong(t *testing.T) {
 	item["extra"] = strings.Repeat("e", 101)
 	err := validateAnnouncements(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "公告的说明长度不能超过100字符")
+	assert.Contains(t, err.Error(), "Announcement #1 note cannot exceed 100 characters")
 }
 
 func TestValidateAnnouncements_ExtraNonStringIgnored(t *testing.T) {
@@ -429,7 +429,7 @@ func TestValidateFAQ_TooMany(t *testing.T) {
 	}
 	err := validateFAQ(marshalArray(t, items))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "FAQ数量不能超过100个")
+	assert.Contains(t, err.Error(), "FAQ cannot exceed 100 entries")
 }
 
 func TestValidateFAQ_MissingQuestion(t *testing.T) {
@@ -437,7 +437,7 @@ func TestValidateFAQ_MissingQuestion(t *testing.T) {
 	delete(item, "question")
 	err := validateFAQ(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少问题字段")
+	assert.Contains(t, err.Error(), "FAQ #1 is missing the question field")
 }
 
 func TestValidateFAQ_MissingAnswer(t *testing.T) {
@@ -445,7 +445,7 @@ func TestValidateFAQ_MissingAnswer(t *testing.T) {
 	delete(item, "answer")
 	err := validateFAQ(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少答案字段")
+	assert.Contains(t, err.Error(), "FAQ #1 is missing the answer field")
 }
 
 func TestValidateFAQ_QuestionTooLong(t *testing.T) {
@@ -453,7 +453,7 @@ func TestValidateFAQ_QuestionTooLong(t *testing.T) {
 	item["question"] = strings.Repeat("q", 201)
 	err := validateFAQ(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "问题长度不能超过200字符")
+	assert.Contains(t, err.Error(), "FAQ #1 question cannot exceed 200 characters")
 }
 
 func TestValidateFAQ_AnswerTooLong(t *testing.T) {
@@ -461,7 +461,7 @@ func TestValidateFAQ_AnswerTooLong(t *testing.T) {
 	item["answer"] = strings.Repeat("a", 1001)
 	err := validateFAQ(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "答案长度不能超过1000字符")
+	assert.Contains(t, err.Error(), "FAQ #1 answer cannot exceed 1000 characters")
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +565,7 @@ func TestValidateUptimeKumaGroups_TooMany(t *testing.T) {
 	}
 	err := validateUptimeKumaGroups(marshalArray(t, items))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "不能超过20个")
+	assert.Contains(t, err.Error(), "Uptime Kuma groups cannot exceed 20 entries")
 }
 
 func TestValidateUptimeKumaGroups_MissingCategoryName(t *testing.T) {
@@ -573,7 +573,7 @@ func TestValidateUptimeKumaGroups_MissingCategoryName(t *testing.T) {
 	delete(item, "categoryName")
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少分类名称字段")
+	assert.Contains(t, err.Error(), "Group #1 is missing the category name field")
 }
 
 func TestValidateUptimeKumaGroups_DuplicateName(t *testing.T) {
@@ -582,7 +582,7 @@ func TestValidateUptimeKumaGroups_DuplicateName(t *testing.T) {
 	g2["categoryName"] = g1["categoryName"] // force duplicate
 	err := validateUptimeKumaGroups(marshalArray(t, []map[string]interface{}{g1, g2}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "分类名称与其他分组重复")
+	assert.Contains(t, err.Error(), "Group #2 category name duplicates another group")
 }
 
 func TestValidateUptimeKumaGroups_MissingURL(t *testing.T) {
@@ -590,7 +590,7 @@ func TestValidateUptimeKumaGroups_MissingURL(t *testing.T) {
 	delete(item, "url")
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少URL字段")
+	assert.Contains(t, err.Error(), "Group #1 is missing the URL field")
 }
 
 func TestValidateUptimeKumaGroups_MissingSlug(t *testing.T) {
@@ -598,7 +598,7 @@ func TestValidateUptimeKumaGroups_MissingSlug(t *testing.T) {
 	delete(item, "slug")
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "缺少Slug字段")
+	assert.Contains(t, err.Error(), "Group #1 is missing the slug field")
 }
 
 func TestValidateUptimeKumaGroups_InvalidURL(t *testing.T) {
@@ -606,7 +606,7 @@ func TestValidateUptimeKumaGroups_InvalidURL(t *testing.T) {
 	item["url"] = "ftp://bad"
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL格式不正确")
+	assert.Contains(t, err.Error(), "Group #1 has an invalid URL format")
 }
 
 func TestValidateUptimeKumaGroups_CategoryNameTooLong(t *testing.T) {
@@ -614,7 +614,7 @@ func TestValidateUptimeKumaGroups_CategoryNameTooLong(t *testing.T) {
 	item["categoryName"] = strings.Repeat("c", 51)
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "分类名称长度不能超过50字符")
+	assert.Contains(t, err.Error(), "Group #1 category name cannot exceed 50 characters")
 }
 
 func TestValidateUptimeKumaGroups_URLTooLong(t *testing.T) {
@@ -622,7 +622,7 @@ func TestValidateUptimeKumaGroups_URLTooLong(t *testing.T) {
 	item["url"] = "https://example.com/" + strings.Repeat("a", 500)
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "URL长度不能超过500字符")
+	assert.Contains(t, err.Error(), "Group #1 URL cannot exceed 500 characters")
 }
 
 func TestValidateUptimeKumaGroups_SlugTooLong(t *testing.T) {
@@ -631,7 +631,7 @@ func TestValidateUptimeKumaGroups_SlugTooLong(t *testing.T) {
 	item["slug"] = strings.Repeat("s", 101)
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Slug长度不能超过100字符")
+	assert.Contains(t, err.Error(), "Group #1 slug cannot exceed 100 characters")
 }
 
 func TestValidateUptimeKumaGroups_DescriptionTooLong(t *testing.T) {
@@ -639,14 +639,14 @@ func TestValidateUptimeKumaGroups_DescriptionTooLong(t *testing.T) {
 	item["description"] = strings.Repeat("d", 201)
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "描述长度不能超过200字符")
+	assert.Contains(t, err.Error(), "Group #1 description cannot exceed 200 characters")
 }
 
 func TestValidateUptimeKumaGroups_InvalidSlug(t *testing.T) {
 	item := validGroup("bad slug!")
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Slug只能包含字母、数字、下划线和连字符")
+	assert.Contains(t, err.Error(), "Group #1 slug can only contain letters, numbers, underscores and hyphens")
 }
 
 func TestValidateUptimeKumaGroups_DangerousDescription(t *testing.T) {
@@ -654,7 +654,7 @@ func TestValidateUptimeKumaGroups_DangerousDescription(t *testing.T) {
 	item["description"] = "<iframe src=x>"
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "包含不允许的内容")
+	assert.Contains(t, err.Error(), "Group #1 contains disallowed content")
 }
 
 func TestValidateUptimeKumaGroups_DangerousCategoryName(t *testing.T) {
@@ -662,7 +662,7 @@ func TestValidateUptimeKumaGroups_DangerousCategoryName(t *testing.T) {
 	item["categoryName"] = "onerror=alert(1)"
 	err := validateUptimeKumaGroups(marshalArray(t, item))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "包含不允许的内容")
+	assert.Contains(t, err.Error(), "Group #1 contains disallowed content")
 }
 
 func TestValidateUptimeKumaGroups_SlugBoundaryAccepted(t *testing.T) {

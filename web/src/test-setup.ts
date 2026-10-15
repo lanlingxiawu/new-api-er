@@ -131,3 +131,9 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
     value: storage,
   })
 }
+
+// Base UI scroll areas use the Web Animations API, absent from jsdom.
+Object.defineProperty(HTMLElement.prototype, 'getAnimations', {
+  configurable: true,
+  value: () => [],
+})

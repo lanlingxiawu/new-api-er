@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -374,10 +376,18 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 
 // DoWssRequest 建立上游 WS；受管流式只采集握手响应并登记取消时需关闭的连接。
 // 参数 a 构造渠道 URL/头，c 为请求上下文，info 保存连接策略，requestBody 保留旧接口但不参与诊断。
+// DoWssRequest dials the adaptor's upstream over WebSocket for the realtime
+// and Responses WebSocket relays. It honors the channel proxy, is bound to the
+// request context, and reports a rejected handshake as a *types.NewAPIError
+// carrying the upstream status code (types.NewError preserves it).
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
+	}
+	fullRequestURL = toWebSocketURL(fullRequestURL)
+	if targetURL, parseErr := url.Parse(fullRequestURL); parseErr == nil {
+		common2.SetContextKey(c, appconstant.ContextKeyUpstreamRequestOrigin, targetURL.Scheme+"://"+targetURL.Host)
 	}
 	targetHeader := http.Header{}
 	err = a.SetupRequestHeader(c, &targetHeader, info)
@@ -394,26 +404,49 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	var targetConn *websocket.Conn
-	// 待激活会话也需观察真实握手；此处不把“尚未握手”误判为关闭功能。
+	dialer := *websocket.DefaultDialer
+	if info.ChannelSetting.Proxy != "" {
+		proxyURL, _, proxyErr := common2.ParseProxyURLRuntime(info.ChannelSetting.Proxy)
+		if proxyErr != nil {
+			return nil, proxyErr
+		}
+		dialer.Proxy = http.ProxyURL(proxyURL)
+	}
+	if info.ChannelSetting.TLSInsecureSkipVerify {
+		dialer.TLSClientConfig = common2.InsecureTLSConfig
+	}
+	targetConn, resp, err := dialer.DialContext(service.RelayRequestContext(c), fullRequestURL, targetHeader)
 	if info.StreamSession != nil {
-		var resp *http.Response
-		targetConn, resp, err = websocket.DefaultDialer.DialContext(service.RelayRequestContext(c), fullRequestURL, targetHeader)
 		info.StreamSession.ObserveWebSocketHandshake(resp, err)
 		info.StreamDiagnostic.ObserveStreamHandshake(resp, err)
 		if err == nil {
 			info.StreamSession.BindUpstream(targetConn)
 		}
-	} else {
-		targetConn, _, err = websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
+		statusCode := http.StatusInternalServerError
+		if resp != nil {
+			statusCode = resp.StatusCode
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+		}
+		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, statusCode)
 	}
-	// send request body
-	//all, err := io.ReadAll(requestBody)
-	//err = service.WssString(c, targetConn, string(all))
 	return targetConn, nil
+}
+
+// toWebSocketURL maps an http(s) endpoint to ws(s). Realtime adaptors already
+// return ws(s) URLs, which pass through unchanged.
+func toWebSocketURL(raw string) string {
+	switch {
+	case strings.HasPrefix(raw, "https://"):
+		return "wss://" + strings.TrimPrefix(raw, "https://")
+	case strings.HasPrefix(raw, "http://"):
+		return "ws://" + strings.TrimPrefix(raw, "http://")
+	default:
+		return raw
+	}
 }
 
 func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {
@@ -483,7 +516,7 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 	helper.ExtendWriteDeadline(c)
 	err := helper.PingData(c)
 	if err != nil {
-		logger.LogError(c, "SSE ping error: "+err.Error())
+		logger.LogError(c, common2.LogText("SSE ping error: %s", err.Error()))
 		return err
 	}
 
@@ -521,13 +554,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	relayClient.CheckRedirect = keepUpstreamRedirectResponse
 	if common2.DebugEnabled && req != nil && req.URL != nil {
 		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
-		logger.LogDebug(c, fmt.Sprintf(
-			"http transport select: host=%s protocol=%s shards=%d policy=%s",
+		logger.LogDebug(c, "http transport select: host=%s protocol=%s shards=%d policy=%s",
 			req.URL.Host,
 			policy.Protocol,
 			policy.Shards,
-			policy.String(),
-		))
+			policy.String())
 	}
 
 	var stopPinger context.CancelFunc
@@ -550,6 +581,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	common2.SetContextKey(c, appconstant.ContextKeyUpstreamRequestOrigin, req.URL.Scheme+"://"+req.URL.Host)
 	// 请求级包装在任何状态处理/JSON 解码前接入响应采集，nil 采集器时沿用原客户端行为。
 	diagnosticClient := common.StreamDiagnosticHTTPClient{Client: service.RelayHTTPClient(c, &relayClient), Capture: info.StreamDiagnostic, Stream: info.StreamSession}
 	resp, err := diagnosticClient.Do(req)
@@ -567,14 +599,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 	if common2.DebugEnabled {
 		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
-		logger.LogDebug(c, fmt.Sprintf(
-			"http transport negotiated: host=%s protocol=%s shards=%d policy=%s negotiated=%s",
+		logger.LogDebug(c, "http transport negotiated: host=%s protocol=%s shards=%d policy=%s negotiated=%s",
 			req.URL.Host,
 			policy.Protocol,
 			policy.Shards,
 			policy.String(),
-			resp.Proto,
-		))
+			resp.Proto)
 	}
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {

@@ -46,7 +46,7 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		return
 	}
 	attachQuotaSaturationToOther(other, clamp)
-	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
+	logger.LogWarn(ctx, common.LogText("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
@@ -107,6 +107,9 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		AppendProbeRoutingAdminInfo(ctx, probeInfo)
 		other.MergeAdmin(probeInfo)
 	}
+	if events := RequestPolicy(ctx).Events(); len(events) > 0 {
+		other.SetAdmin("request_policy", events)
+	}
 }
 
 // relayLogChannelName 取本次请求实际使用的渠道名；relayInfo 里的快照优先，
@@ -128,6 +131,7 @@ func relayLogChannelName(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) str
 // 返回新建的日志字段；此时订阅可能尚未结算，严格流式结算后会刷新其中的订阅字段。
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) *model.LogOther {
+	MarkRequestPolicySuccess(ctx, relayInfo.StreamStatus)
 	other := model.NewLogOther()
 	other.SetPublic("model_ratio", modelRatio)
 	other.SetPublic("group_ratio", groupRatio)
@@ -164,6 +168,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if reason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason); reason != "" {
 		other.SetAdmin("reject_reason", reason)
 	}
+	AppendResponseModelLogInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
@@ -411,6 +416,19 @@ func StreamFailureLogMessage(snapshot relaycommon.StreamSnapshot) string {
 	return common.MaskSensitiveInfo(message)
 }
 
+func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || relayInfo.ResponseModel == nil || other == nil {
+		return
+	}
+	observation := relayInfo.ResponseModel
+	if observation.ReturnedModel == observation.RequestedModel &&
+		(observation.UpstreamModel == "" || observation.UpstreamModel == observation.RequestedModel) &&
+		(relayInfo.ChannelMeta == nil || !relayInfo.IsModelMapped) {
+		return
+	}
+	other.SetPublic("response_model", *observation)
+}
+
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 {
 		return
@@ -433,12 +451,15 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther)
 	// says enough there; the server log keeps the text.
 	privateErrors := relayInfo.RelayFormat == types.RelayFormatClaude || relayInfo.StreamDiagnostic != nil || relayInfo.StreamResult != nil || relayInfo.UpstreamStreamAdapted
 	status := "ok"
-	if !ss.IsNormalEnd() || ss.HasErrors() {
+	if !ss.IsNormalEnd() || ss.HasErrors() || ss.ResponseFailed() {
 		status = "error"
 	}
 	streamInfo := map[string]any{
 		"status":     status,
 		"end_reason": string(ss.EndReason),
+	}
+	if outcome := ss.ResponseOutcome(); outcome != "" {
+		streamInfo["response_status"] = outcome
 	}
 	if ss.EndError != nil && !privateErrors {
 		streamInfo["end_error"] = ss.EndError.Error()

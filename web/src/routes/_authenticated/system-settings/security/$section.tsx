@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { requireSystemSettingsSection } from '@/features/system-settings/route-access'
 import { SecuritySettings } from '@/features/system-settings/security'
@@ -26,6 +26,13 @@ export const Route = createFileRoute(
   '/_authenticated/system-settings/security/$section'
 )({
   beforeLoad: ({ params }) => {
+    if (params.section === 'sensitive-words') {
+      throw redirect({
+        to: '/system-settings/request-policies/$section',
+        params: { section: 'filtering' },
+        replace: true,
+      })
+    }
     requireSystemSettingsSection(
       'security',
       params.section,

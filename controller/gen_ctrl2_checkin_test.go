@@ -31,7 +31,7 @@ func TestGetCheckinStatus_Disabled(t *testing.T) {
 	GetCheckinStatus(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "签到功能未启用")
+	require.Contains(t, resp.Message, "Check-in feature is not enabled")
 }
 
 func TestDoCheckin_Disabled(t *testing.T) {
@@ -41,5 +41,5 @@ func TestDoCheckin_Disabled(t *testing.T) {
 	DoCheckin(ctx)
 	resp := decodeResp(t, rec)
 	require.False(t, resp.Success)
-	require.Contains(t, resp.Message, "签到功能未启用")
+	require.Contains(t, resp.Message, "Check-in feature is not enabled")
 }

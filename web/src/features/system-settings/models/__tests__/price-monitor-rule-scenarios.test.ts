@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+
+import { test } from 'vitest'
 
 import type { MonitorPricingScenario } from '../price-monitor-pricing-api'
 import { ruleConditionExamples } from '../price-monitor-rule-scenarios'

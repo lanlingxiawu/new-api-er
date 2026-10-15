@@ -48,8 +48,8 @@ func TestAdaptedTimeoutWithoutOutputBillsInput(t *testing.T) {
 				info.PriceData.ModelPrice = 0.01
 			}
 			var settled *dto.Usage
-			var notes []string
-			restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, extra []string) {
+			var notes []*common.Message
+			restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, extra []*common.Message) {
 				settled, notes = usage, extra
 			})
 			defer restore()
@@ -60,7 +60,7 @@ func TestAdaptedTimeoutWithoutOutputBillsInput(t *testing.T) {
 			require.NotNil(t, settled)
 			assert.Equal(t, tc.prompt, settled.PromptTokens)
 			assert.Zero(t, settled.CompletionTokens)
-			assert.Equal(t, tc.note, len(notes) == 1 && strings.Contains(notes[0], "charged for input only"), notes)
+			assert.Equal(t, tc.note, len(notes) == 1 && strings.Contains(notes[0].Error(), "charged for input only"), notes)
 		})
 	}
 }

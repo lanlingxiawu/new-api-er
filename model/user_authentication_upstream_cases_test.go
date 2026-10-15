@@ -4,11 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"net"
-	"sync"
-	"testing"
-	"time"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/go-redis/redis/v8"
@@ -17,17 +12,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"net"
+	"sync"
+	"testing"
+	"time"
 )
 
-// Cases from upstream/main:model/user_authentication_test.go, run on the
-// fork's shared DB harness. Upstream truncates every auth table and uses fixed
-// ids / literal unique values; here users come from mkUser, every value behind
-// a unique index (token key, credential id, session id, flow hash, OAuth and
-// external identity subjects) is generated per test, and cleanup removes only
-// the rows owned by the test user.
-
-// userAuthCasesUser inserts a user and registers cleanup for every
-// authentication table row keyed by that user.
 func userAuthCasesUser(t *testing.T, mut func(u *User)) User {
 	t.Helper()
 	user := mkUser(t, mut)
@@ -49,8 +39,6 @@ func userAuthCasesUser(t *testing.T, mut func(u *User)) User {
 	return *user
 }
 
-// seedUserAuthenticationData attaches one row of every authentication table to
-// the user so hard-delete purge / fail-closed behaviour can be observed.
 func seedUserAuthenticationData(t *testing.T, user User) {
 	t.Helper()
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -89,7 +77,10 @@ func TestHardDeleteUserFailsClosedWhenAuthFenceCannotPublish(t *testing.T) {
 		common.RedisEnabled, common.RDB = oldRedisEnabled, oldRDB
 	})
 
-	require.Error(t, HardDeleteUserById(user.Id))
+	{
+		_, deleteErr := HardDeleteUserById(user.Id)
+		require.Error(t, deleteErr)
+	}
 
 	var count int64
 	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
@@ -121,7 +112,10 @@ func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.
 	// user; the shared version increment must therefore query unscoped.
 	require.NoError(t, DB.Delete(&user).Error)
 
-	require.NoError(t, HardDeleteUserById(user.Id))
+	{
+		_, deleteErr := HardDeleteUserById(user.Id)
+		require.NoError(t, deleteErr)
+	}
 
 	var count int64
 	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)

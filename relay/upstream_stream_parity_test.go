@@ -145,7 +145,7 @@ func TestHandleAdaptedUpstreamStream_TimeoutCarriesRequestID(t *testing.T) {
 	c, rec, info := bufferedCase(t)
 	c.Set(common.RequestIdKey, "rid-timeout-1")
 	markTimedOut(c)
-	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []string) {})
+	restore := stubSettlement(func(*gin.Context, *relaycommon.RelayInfo, *dto.Usage, []*common.Message) {})
 	defer restore()
 	// A role-only frame is no output, so the timeout is answered with the 504.
 	body := `data: {"id":"c1","choices":[{"index":0,"delta":{"role":"assistant"}}]}` + "\n"

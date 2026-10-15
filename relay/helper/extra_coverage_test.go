@@ -92,7 +92,7 @@ func TestModelPriceHelperPerCall_Overflow(t *testing.T) {
 
 func TestModelPriceNotConfiguredError_NonAdmin(t *testing.T) {
 	// userId 0 short-circuits IsAdmin without a DB call.
-	err := modelPriceNotConfiguredError("some-model", 0)
+	err := modelPriceNotConfiguredError(nil, "some-model", 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "some-model")
 	require.Contains(t, err.Error(), "contact the site administrator")
@@ -164,7 +164,7 @@ func TestModelPriceNotConfiguredError_Admin(t *testing.T) {
 	t.Cleanup(func() { db.Unscoped().Where("id = ?", adminID).Delete(&model.User{}) })
 
 	require.True(t, model.IsAdmin(adminID))
-	err := modelPriceNotConfiguredError("admin-model", adminID)
+	err := modelPriceNotConfiguredError(nil, "admin-model", adminID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "admin-model")
 	require.Contains(t, err.Error(), "self-use mode")

@@ -555,10 +555,10 @@ loop:
 				}
 			}
 			if response.StopReason != "" {
-				maybeMarkClaudeRefusal(c, response.StopReason)
+				maybeMarkClaudeRefusal(c, info, response.StopReason)
 			}
 			if response.Delta != nil && response.Delta.StopReason != nil {
-				maybeMarkClaudeRefusal(c, *response.Delta.StopReason)
+				maybeMarkClaudeRefusal(c, info, *response.Delta.StopReason)
 			}
 			if response.Type == "message_stop" {
 				result.Diagnostic.UsageFinal = outputUsageCurrent
@@ -568,6 +568,7 @@ loop:
 				info.SetFirstResponseTime()
 			}
 			if response.Type == "message_start" && response.Message != nil && response.Message.Model != "" {
+				info.ObserveResponseModel(response.Message.Model)
 				info.UpstreamModelName = response.Message.Model
 			}
 			if response.Type != "ping" {
@@ -601,7 +602,7 @@ loop:
 				endErr = err
 				break loop
 			}
-			countClaudeStreamBillableTools(c, info, &response)
+			countClaudeStreamBillableTools(info, &response)
 			if strings.TrimSpace(content) != "" {
 				result.EffectiveContent = true
 			}

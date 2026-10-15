@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { ModelSettings } from '@/features/system-settings/models'
 import { MODELS_SECTION_IDS } from '@/features/system-settings/models/section-registry.tsx'
@@ -26,6 +26,13 @@ export const Route = createFileRoute(
   '/_authenticated/system-settings/models/$section'
 )({
   beforeLoad: ({ params }) => {
+    if (params.section === 'channel-affinity') {
+      throw redirect({
+        to: '/system-settings/request-policies/$section',
+        params: { section: 'routing' },
+        replace: true,
+      })
+    }
     requireSystemSettingsSection('models', params.section, MODELS_SECTION_IDS)
   },
   component: ModelSettings,

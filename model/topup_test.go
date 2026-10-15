@@ -292,7 +292,7 @@ func TestManualCompleteTopUp_ReplayWritesNoTopupLog(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, u.Id, userId)
 
-	_, before, err := GetAllLogs(LogTypeTopup, 0, 0, "", u.Username, "", 0, 50, 0, 0, "", "", "")
+	_, before, err := GetAllLogs(LogFilter{Type: LogTypeTopup, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: u.Username, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 
 	// 重复补单：额度不再变化，也不该再写日志。
@@ -302,7 +302,7 @@ func TestManualCompleteTopUp_ReplayWritesNoTopupLog(t *testing.T) {
 	reloaded, _ := GetUserById(u.Id, false)
 	assert.Equal(t, 4321, reloaded.Quota, "重复补单不得重复入账")
 
-	_, after, err := GetAllLogs(LogTypeTopup, 0, 0, "", u.Username, "", 0, 50, 0, 0, "", "", "")
+	_, after, err := GetAllLogs(LogFilter{Type: LogTypeTopup, StartTimestamp: 0, EndTimestamp: 0, ModelName: "", Username: u.Username, TokenName: "", Channel: 0, LogId: 0, Group: "", RequestId: "", UpstreamRequestId: ""}, 0, 50)
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "重复补单不得写出金额为 0 的假充值记录")
 }

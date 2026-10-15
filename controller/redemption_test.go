@@ -193,12 +193,7 @@ func TestDeleteRedemption_Success(t *testing.T) {
 
 // validateExpiredTime: boundary between 0 (never), past, and future.
 func TestValidateExpiredTime(t *testing.T) {
-	ctx, _ := newCtx(t, http.MethodPost, "/api/redemption/", nil)
-	ok, _ := validateExpiredTime(ctx, 0)
-	assert.True(t, ok, "0 means never-expire and is valid")
-	ok, msg := validateExpiredTime(ctx, time.Now().Unix()-100)
-	assert.False(t, ok)
-	assert.NotEmpty(t, msg)
-	ok, _ = validateExpiredTime(ctx, time.Now().Unix()+3600)
-	assert.True(t, ok)
+	assert.NoError(t, validateExpiredTime(0))
+	assert.Error(t, validateExpiredTime(time.Now().Unix()-100))
+	assert.NoError(t, validateExpiredTime(time.Now().Unix()+3600))
 }

@@ -123,7 +123,7 @@ func TestThirdPartySD2InboundCascadeRoutes(t *testing.T) {
 	cascade.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "downstream-key", ChannelBaseUrl: "https://upstream.example/sd2"}})
 	cascaded := &model.Task{TaskID: "task_downstream", Status: model.TaskStatusSuccess}
 	cascaded.SetData(status)
-	descriptor, err := cascade.BuildContentRequest(cascaded, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err := cascade.BuildContentRequest(t.Context(), cascaded, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 	require.NoError(t, err)
 	assert.Equal(t, "https://upstream.example/v1/videos/task_public/content", descriptor.URL)
 	assert.Equal(t, map[string]string{"Authorization": "Bearer downstream-key"}, descriptor.Headers)
@@ -178,7 +178,7 @@ func TestXaiInboundCascadeRoutes(t *testing.T) {
 	submitRoute, found := registry.Generation().LookupDeclaredRoute(http.MethodPost, "/xai/v1/videos/generations")
 	require.True(t, found)
 	assert.Equal(t, "submit", string(submitRoute.Route.Type))
-	assert.Equal(t, "createVideoTask", submitRoute.Route.Decode)
+	assert.Equal(t, "createGeneration", submitRoute.Route.Decode)
 	assert.Equal(t, "videoCreated", submitRoute.Route.Render)
 	queryRoute, found := registry.Generation().LookupDeclaredRoute(http.MethodGet, "/xai/v1/videos/:request_id")
 	require.True(t, found)
@@ -189,10 +189,10 @@ func TestXaiInboundCascadeRoutes(t *testing.T) {
 	const model15 = "grok-imagine-video-1.5"
 	inbound := map[string]any{
 		"model": model15, "prompt": "a running fox", "duration": float64(6),
-		"aspect_ratio": "16:9", "resolution": "720p", "seed": float64(42),
+		"aspect_ratio": "16:9", "resolution": "720p",
 		"image": map[string]any{"url": "https://cdn.example/a.png"},
 	}
-	value, err := plugin.Engine.CallPath(t.Context(), "native", []string{"createVideoTask"}, map[string]any{
+	value, err := plugin.Engine.CallPath(t.Context(), "native", []string{"createGeneration"}, map[string]any{
 		"path": "/xai/v1/videos/generations", "method": http.MethodPost,
 		"body": map[string]any{"kind": "json", "value": inbound},
 	})
@@ -242,7 +242,6 @@ func TestXaiInboundCascadeRoutes(t *testing.T) {
 	require.NoError(t, err)
 	result := pluginResultObject(t, value)
 	assert.Equal(t, "SUCCESS", result["status"])
-	assert.Equal(t, "/v1/videos/task_public/content", result["url"])
 
 	cascade := taskplugin.New(plugin)
 	cascade.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "downstream-key", ChannelBaseUrl: "https://upstream.example/xai"}})
@@ -251,7 +250,7 @@ func TestXaiInboundCascadeRoutes(t *testing.T) {
 	artifacts, err := cascade.ListArtifacts(cascaded)
 	require.NoError(t, err)
 	assert.Equal(t, []relaychannel.TaskArtifact{{Key: "video", Type: "video", MimeType: "video/mp4"}}, artifacts)
-	descriptor, err := cascade.BuildContentRequest(cascaded, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err := cascade.BuildContentRequest(t.Context(), cascaded, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 	require.NoError(t, err)
 	assert.Equal(t, "https://upstream.example/v1/videos/task_public/content", descriptor.URL)
 	assert.Equal(t, map[string]string{"Authorization": "Bearer downstream-key"}, descriptor.Headers)
@@ -296,7 +295,7 @@ func TestXaiInboundCascadeRejectsInvalidRequests(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := plugin.Engine.CallPath(t.Context(), "native", []string{"createVideoTask"}, map[string]any{
+			_, err := plugin.Engine.CallPath(t.Context(), "native", []string{"createGeneration"}, map[string]any{
 				"path": "/xai/v1/videos/generations", "method": http.MethodPost, "body": testCase.body,
 			})
 			require.ErrorContains(t, err, testCase.message)

@@ -102,7 +102,7 @@ func TestStreamState_FullTextToolFlowAggregates(t *testing.T) {
 	assert.Equal(t, "hello", events[9].Payload.Response.Output[0].Content[0].Text)
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(events[9].Payload.Response.Output[1].Arguments))
 
-	assert.Equal(t, "hello", state.UsageText())
+	assert.Equal(t, `hello{"q":"x"}`, state.UsageText())
 }
 
 func TestStreamState_ReasoningFlow(t *testing.T) {
@@ -132,11 +132,11 @@ func TestStreamState_ReasoningAddedEvent(t *testing.T) {
 			{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ReasoningContent: lo.ToPtr("r")}},
 		},
 	})
-	// created, output_item.added(reasoning), reasoning_summary_text.delta
-	require.Len(t, ev, 3)
+	// created, output_item.added, reasoning_summary_part.added, text.delta
+	require.Len(t, ev, 4)
 	assert.Equal(t, responsesEventOutputItemAdded, ev[1].Type)
 	assert.Equal(t, responsesOutputTypeReasoning, ev[1].Payload.Item.Type)
-	assert.Equal(t, responsesEventReasoningSummaryDelta, ev[2].Type)
+	assert.Equal(t, responsesEventReasoningSummaryDelta, ev[3].Type)
 }
 
 func TestStreamState_ToolCallWithoutIndexDefaultsToZero(t *testing.T) {

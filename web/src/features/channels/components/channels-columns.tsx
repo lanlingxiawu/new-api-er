@@ -67,7 +67,10 @@ import {
   formatTimestampToDate,
 } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
-import { createServerError } from '@/lib/server-error-message'
+import {
+  createServerError,
+  translateServerText,
+} from '@/lib/server-error-message'
 import { truncateText } from '@/lib/utils'
 
 import { getCodexUsage, updateChannelBalance } from '../api'
@@ -96,8 +99,8 @@ import {
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
-import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import { createChannelFieldUpdateScheduler } from '../lib/channel-field-update'
+import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import {
   DAILY_LIMIT_NEAR_THRESHOLD,
   type Channel,
@@ -1390,8 +1393,9 @@ export function useChannelsColumns(
                     <TooltipContent side='top' className='max-w-xs'>
                       <div className='space-y-1 text-xs'>
                         {statusReason && (
-                          <div>
-                            {t('Reason:')} {statusReason}
+                          <div className='wrap-anywhere'>
+                            {t('Reason:')}{' '}
+                            {translateServerText(t, statusReason)}
                           </div>
                         )}
                         {statusTime && (

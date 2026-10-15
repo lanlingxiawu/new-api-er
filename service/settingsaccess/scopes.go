@@ -134,5 +134,26 @@ func buildDefinitions() map[string]Definition {
 	routing := result["models.routing-reliability"]
 	routing.OptionKeys["probe_routing_setting.max_input_chars"] = struct{}{}
 	routing.GroupKeys["probe_routing_setting"] = keys("max_input_chars")
+
+	// Policy sections retain the same per-option boundary as their original pages.
+	for target, sources := range map[string][]string{
+		"request-policies.routing":   {"models.channel-affinity"},
+		"request-policies.health":    {"models.routing-reliability"},
+		"request-policies.filtering": {"security.sensitive-words"},
+	} {
+		definition := scope(target)
+		for _, source := range sources {
+			for key := range result[source].OptionKeys {
+				definition.OptionKeys[key] = struct{}{}
+			}
+		}
+		result[target] = definition
+	}
+	for _, key := range []string{"RetryTimes", "AutomaticRetryStatusCodes", "probe_routing_setting.max_input_chars"} {
+		delete(result["request-policies.health"].OptionKeys, key)
+	}
+	for _, key := range []string{"RetryTimes", "AutomaticRetryStatusCodes", "channel_affinity_setting.session_mode", "channel_affinity_setting.switch_on_success"} {
+		result["request-policies.routing"].OptionKeys[key] = struct{}{}
+	}
 	return result
 }

@@ -452,7 +452,7 @@ func TestThirdPartySD2ArtifactContentRequest(t *testing.T) {
 	artifacts, err := adaptor.ListArtifacts(sameHost)
 	require.NoError(t, err)
 	assert.Equal(t, []relaychannel.TaskArtifact{{Key: "video", Type: "video", MimeType: "video/mp4"}}, artifacts)
-	descriptor, err := adaptor.BuildContentRequest(sameHost, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err := adaptor.BuildContentRequest(t.Context(), sameHost, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 	require.NoError(t, err)
 	assert.Equal(t, "https://SD2.example/files/out.mp4", descriptor.URL)
 	assert.Equal(t, map[string]string{"Authorization": "Bearer sd2-key"}, descriptor.Headers)
@@ -460,7 +460,7 @@ func TestThirdPartySD2ArtifactContentRequest(t *testing.T) {
 
 	otherHost := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
 	otherHost.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{"https://cdn.example/out.mp4?sig=1"}}})
-	descriptor, err = adaptor.BuildContentRequest(otherHost, "video", sd2HeadRequest())
+	descriptor, err = adaptor.BuildContentRequest(t.Context(), otherHost, "video", sd2HeadRequest())
 	require.NoError(t, err)
 	assert.True(t, descriptor.Credentialless)
 	assert.Empty(t, descriptor.Headers)
@@ -468,13 +468,13 @@ func TestThirdPartySD2ArtifactContentRequest(t *testing.T) {
 
 	sameHostDefaultPort := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
 	sameHostDefaultPort.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{"https://sd2.example:443/files/out.mp4"}}})
-	descriptor, err = adaptor.BuildContentRequest(sameHostDefaultPort, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err = adaptor.BuildContentRequest(t.Context(), sameHostDefaultPort, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"Authorization": "Bearer sd2-key"}, descriptor.Headers)
 
 	userinfoHost := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
 	userinfoHost.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{"https://sd2.example@cdn.example/out.mp4"}}})
-	descriptor, err = adaptor.BuildContentRequest(userinfoHost, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err = adaptor.BuildContentRequest(t.Context(), userinfoHost, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 	require.NoError(t, err)
 	assert.True(t, descriptor.Credentialless)
 	assert.Empty(t, descriptor.Headers)
@@ -514,7 +514,7 @@ func TestThirdPartySD2ArtifactContentRequestDeclaredCredentialHosts(t *testing.T
 		t.Run(testCase.output, func(t *testing.T) {
 			task := &model.Task{TaskID: "task_public", Status: model.TaskStatusSuccess}
 			task.SetData(map[string]any{"task": map[string]any{"status": "succeeded", "outputs": []any{testCase.output}}})
-			descriptor, err := adaptor.BuildContentRequest(task, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
+			descriptor, err := adaptor.BuildContentRequest(t.Context(), task, "video", relaychannel.TaskArtifactClientRequest{Method: http.MethodGet})
 			require.NoError(t, err)
 			assert.Equal(t, testCase.output, descriptor.URL)
 			if testCase.wantCredential {

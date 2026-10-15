@@ -199,7 +199,7 @@ func TestMaskSensitiveInfo(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.check(t, MaskSensitiveInfo(tc.in))
+			tc.check(t, MaskSensitiveInfo(tc.in, "http://example.com", "https://api.test.org", "https://sub.domain.co.uk", "https://openai.com", "https://api.openai.com"))
 		})
 	}
 }

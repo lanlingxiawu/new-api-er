@@ -24,7 +24,7 @@ import type {
   SortingState,
   Row,
 } from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, RefreshCw } from 'lucide-react'
 import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -45,6 +45,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { cn } from '@/lib/utils'
 
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
@@ -176,8 +177,7 @@ export function ChannelsTable() {
   const dailyLimitFilterValues =
     (columnFilters.find((f) => f.id === 'daily_limit')?.value as string[]) || []
   const limitFilter =
-    dailyLimitFilterValues.length > 0 &&
-    !dailyLimitFilterValues.includes('all')
+    dailyLimitFilterValues.length > 0 && !dailyLimitFilterValues.includes('all')
       ? (dailyLimitFilterValues[0] as ChannelLimitFilter)
       : undefined
   const {
@@ -269,7 +269,7 @@ export function ChannelsTable() {
 
   // Fetch channels data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
@@ -530,24 +530,43 @@ export function ChannelsTable() {
           },
         ],
         preActions: (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  onClick={() => setSensitiveVisible(!sensitiveVisible)}
-                  aria-label={sensitiveVisible ? t('Hide') : t('Show')}
-                  className='text-muted-foreground hover:text-foreground size-8'
-                />
-              }
-            >
-              {sensitiveVisible ? <Eye /> : <EyeOff />}
-            </TooltipTrigger>
-            <TooltipContent>
-              {sensitiveVisible ? t('Hide') : t('Show')}
-            </TooltipContent>
-          </Tooltip>
+          <>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    onClick={() => setSensitiveVisible(!sensitiveVisible)}
+                    aria-label={sensitiveVisible ? t('Hide') : t('Show')}
+                    className='text-muted-foreground hover:text-foreground size-8'
+                  />
+                }
+              >
+                {sensitiveVisible ? <Eye /> : <EyeOff />}
+              </TooltipTrigger>
+              <TooltipContent>
+                {sensitiveVisible ? t('Hide') : t('Show')}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    onClick={() => void refetch()}
+                    aria-label={t('Refresh')}
+                    aria-busy={isFetching}
+                    className='text-muted-foreground hover:text-foreground size-8'
+                  />
+                }
+              >
+                <RefreshCw className={cn(isFetching && 'animate-spin')} />
+              </TooltipTrigger>
+              <TooltipContent>{t('Refresh')}</TooltipContent>
+            </Tooltip>
+          </>
         ),
       }}
       getRowClassName={(row, { isMobile }) => {

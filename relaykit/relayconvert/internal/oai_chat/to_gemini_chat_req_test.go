@@ -9,7 +9,6 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 // geminiInfo 打开 thoughtSignature 附加开关——转换器不再读进程级全局配置，
@@ -177,7 +176,7 @@ func TestGeminiReq_ReasoningEffortBecomesThinkingConfig(t *testing.T) {
 
 // Models that always think cannot honour reasoning_effort "none"; the
 // conversion fails as a client error instead of picking another setting.
-func TestGeminiReq_ReasoningEffortNoneRejectedOnAlwaysThinkingModels(t *testing.T) {
+func TestGeminiReq_ReasoningEffortNoneNormalizedOnAlwaysThinkingModels(t *testing.T) {
 	for _, model := range []string{"gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"} {
 		t.Run(model, func(t *testing.T) {
 			req := dto.GeneralOpenAIRequest{
@@ -185,9 +184,9 @@ func TestGeminiReq_ReasoningEffortNoneRejectedOnAlwaysThinkingModels(t *testing.
 				ReasoningEffort: "none",
 				Messages:        []dto.Message{{Role: "user", Content: "hi"}},
 			}
-			_, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
-			require.Error(t, err)
-			assert.True(t, reasoning.IsClientError(err))
+			got, err := OpenAIChatRequestToGeminiGenerateContent(newGinCtx(), req, geminiInfo())
+			require.NoError(t, err)
+			require.NotNil(t, got.GenerationConfig.ThinkingConfig)
 		})
 	}
 }
@@ -266,8 +265,7 @@ func TestGeminiReq_ExtraBodyErrors(t *testing.T) {
 		{"camelCase aspectRatio", `{"google":{"image_config":{"aspectRatio":"1:1"}}}`},
 		{"camelCase imageSize", `{"google":{"image_config":{"imageSize":"1K"}}}`},
 		{"invalid json", `{not-json`},
-		// Gemini accepts either a budget or a level, never both.
-		{"budget and level both set", `{"google":{"thinking_config":{"thinking_budget":512,"thinking_level":"high"}}}`},
+		// Conflicting native strengths are normalized by upstream.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
