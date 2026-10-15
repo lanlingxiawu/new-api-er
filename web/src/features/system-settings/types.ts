@@ -59,6 +59,8 @@ export type PriceMonitorPriceLane = {
 }
 
 export type PriceMonitorPriceTier = {
+  min_context?: number
+  max_context?: number
   range: string
   condition_variable?: 'p' | 'c' | 'len'
   condition_operator?: '<' | '<=' | '>' | '>='
@@ -69,6 +71,25 @@ export type PriceMonitorPriceTier = {
 }
 
 export type PriceMonitorPriceCell = {
+  billing_mode?: string
+  comparison_status?:
+    | 'equal'
+    | 'different'
+    | 'scenario_only'
+    | 'unavailable'
+    | 'partial'
+    | 'unsupported'
+  comparison_reason?:
+    | 'request_or_custom_expression'
+    | 'missing_price'
+    | 'normalization_semantics_unknown'
+  differences?: {
+    min: number
+    max?: number
+    variable: string
+    left: number
+    right: number
+  }[]
   mode: 'per_token' | 'per_request' | 'tiered_expr' | ''
   input?: number
   output?: number

@@ -347,10 +347,6 @@ func SetApiRouter(router *gin.Engine) {
 			optionRootRoute.GET("/db-pool/stats", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.database-pool")), controller.GetDBPoolRuntimeStatus)
 			optionRootRoute.GET("/business-stats-circuit-breaker/status", middleware.RequirePermission(authz.SystemSettingsView("system-tuning.settlement-guard")), controller.GetBusinessStatsCircuitBreakerStatus)
 			optionRootRoute.PUT("/passkey/domains", middleware.RequirePermission(authz.SystemSettingsEdit("auth.passkey")), controller.UpdatePasskeyDomains)
-			optionRootRoute.GET("/model_pricing", middleware.RequirePermission(authz.SystemSettingsView("billing.model-pricing")), controller.GetModelPricingConfig)
-			optionRootRoute.PATCH("/model_pricing", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.UpdateModelPricingConfig)
-			optionRootRoute.POST("/model_pricing/convert", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.PreviewModelPricingConversion)
-			optionRootRoute.POST("/model_pricing/preview", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.PreviewModelPricing)
 			optionRootRoute.POST("/payment_compliance", middleware.RequirePermission(authz.SystemSettingsEdit("billing.quota")), controller.ConfirmPaymentCompliance)
 			optionRootRoute.GET("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsView("models.channel-affinity")), controller.GetChannelAffinityCacheStats)
 			optionRootRoute.DELETE("/channel_affinity_cache", middleware.RequirePermission(authz.SystemSettingsEdit("models.channel-affinity")), controller.ClearChannelAffinityCache)
@@ -390,6 +386,7 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.POST("/fetch", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.FetchUpstreamRatios)
 		}
 		registerPriceMonitorRoutes(apiRouter, anonymousRequestBodyLimit)
+		registerModelPricingRoutes(apiRouter)
 		taskPluginRoute := apiRouter.Group("/plugin/task")
 		taskPluginRoute.Use(middleware.RootAuth())
 		{

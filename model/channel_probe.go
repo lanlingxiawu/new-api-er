@@ -16,7 +16,20 @@ var ErrProbeChannelUnavailable = errors.New("no channel accepts probe requests i
 // version across initial selection and retries.
 type ChannelProbePolicy struct {
 	blocked     map[int]bool
+	streaming   *ChannelProbePolicy
 	refreshedAt time.Time
+}
+
+// ForStream selects an immutable request policy without allocating or copying
+// maps. The published root contains non-stream IDs and a streaming policy.
+func (p *ChannelProbePolicy) ForStream(stream bool) *ChannelProbePolicy {
+	if p != nil && stream {
+		p = p.streaming
+	}
+	if p == nil || len(p.blocked) == 0 {
+		return nil
+	}
+	return p
 }
 
 func (p *ChannelProbePolicy) Blocks(id int) bool {
@@ -28,7 +41,7 @@ var channelProbeRefresh sync.Mutex
 
 func CurrentChannelProbePolicy() *ChannelProbePolicy {
 	policy := channelProbePolicy.Load()
-	if policy == nil || len(policy.blocked) == 0 || time.Since(policy.refreshedAt) > 3*time.Minute {
+	if policy == nil || (policy.ForStream(false) == nil && policy.ForStream(true) == nil) || time.Since(policy.refreshedAt) > 3*time.Minute {
 		return nil
 	}
 	return policy
@@ -55,20 +68,35 @@ func RefreshChannelProbePolicy() {
 		common.SysError("channel probe policy refresh failed: " + err.Error())
 		return
 	}
-	next := &ChannelProbePolicy{blocked: make(map[int]bool), refreshedAt: time.Now()}
+	next := &ChannelProbePolicy{
+		blocked: make(map[int]bool), refreshedAt: time.Now(),
+		streaming: &ChannelProbePolicy{blocked: make(map[int]bool)},
+	}
 	for _, channel := range channels {
 		if channel.Settings == "" {
 			continue
 		}
 		var settings struct {
-			DisableProbeRequests bool `json:"disable_probe_requests"`
+			DisableProbeRequests bool   `json:"disable_probe_requests"`
+			ProbeRequestMode     string `json:"probe_request_mode"`
 		}
 		if err := common.UnmarshalJsonStr(channel.Settings, &settings); err != nil {
 			common.SysError("invalid channel probe policy; retaining previous snapshot")
 			return
 		}
 		if settings.DisableProbeRequests {
-			next.blocked[channel.Id] = true
+			switch settings.ProbeRequestMode {
+			case "", "all":
+				next.blocked[channel.Id] = true
+				next.streaming.blocked[channel.Id] = true
+			case "non_stream":
+				next.blocked[channel.Id] = true
+			case "stream":
+				next.streaming.blocked[channel.Id] = true
+			default:
+				common.SysError("invalid channel probe mode; retaining previous snapshot")
+				return
+			}
 		}
 	}
 	channelProbePolicy.Store(next)
@@ -100,15 +128,31 @@ func (channel *Channel) PreserveProbeSetting(origin *Channel) error {
 		if _, valid := value.(bool); !valid {
 			return errors.New("invalid probe setting")
 		}
-		return nil
 	}
-	if origin == nil || !origin.GetOtherSettings().DisableProbeRequests {
-		return nil
+	if value, exists := values["probe_request_mode"]; exists {
+		mode, valid := value.(string)
+		if !valid || (mode != "" && mode != "all" && mode != "non_stream" && mode != "stream") {
+			return errors.New("invalid probe request mode")
+		}
 	}
 	if values == nil {
 		values = make(map[string]any)
 	}
-	values["disable_probe_requests"] = true
+	changed := false
+	if origin != nil {
+		settings := origin.GetOtherSettings()
+		if _, exists := values["disable_probe_requests"]; !exists && settings.DisableProbeRequests {
+			values["disable_probe_requests"] = true
+			changed = true
+		}
+		if _, exists := values["probe_request_mode"]; !exists && settings.ProbeRequestMode != "" {
+			values["probe_request_mode"] = settings.ProbeRequestMode
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
 	raw, err := common.Marshal(values)
 	if err == nil {
 		channel.OtherSettings = string(raw)

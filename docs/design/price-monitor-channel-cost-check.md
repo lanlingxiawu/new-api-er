@@ -1,5 +1,7 @@
 # 价格巡检：上游分组倍率与成本系数核对 + 模型改价便捷化
 
+> 2026-10-13：本文 §5.2 的旧改价弹窗已由完整定价草稿编辑器接替，动态模型和缺价模型均可编辑。成本系数核对保持原入口；新编辑和原子保存契约见 [动态计费适配设计](price-monitor-dynamic-billing-adaptation.md)。
+
 > 状态：**已实现**（2026-09-28）。本文描述实现后的实际逻辑。
 
 关联文档：`price-monitor-loss-detection-and-price-repair.md`（亏损判定与改价）、`price-monitor-inline-repair-floor.md`（保本下限）、`channel-upstream-log-query.md`（上游日志查询）、`channel-limit-upstream-basis-and-timed-recovery.md`（"上游倍率即成本系数"）。

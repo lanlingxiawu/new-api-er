@@ -73,7 +73,13 @@ func GetPricingConfigVersion() int64 {
 	return version
 }
 
-// PatchPricingOptions 在单个事务内完成 行锁 → 校验版本 → 校验目标字段 → 局部改写 → 校验改写后的模型价格 → 递增版本。
+// ReadPricingConfigVersion reads the database generation for administrative
+// reviews. Cross-instance validation must never use this process's OptionMap.
+func ReadPricingConfigVersion() (int64, error) {
+	return readPricingVersionForUpdate(DB)
+}
+
+// PatchPricingOptions 在单个事务内完成 行锁 → 校验版本 → 校验目标字段 → 局部改写 → 递增版本。
 //
 // 这是「按模型局部更新价格」的写入路径。之所以不能沿用 UpdateOptionsBulk，是因为它内部只有
 // FirstOrCreate + Save，没有版本列、没有条件更新、也没有行锁：在事务之外比对 expected 再调用它，
@@ -87,6 +93,8 @@ func GetPricingConfigVersion() int64 {
 // 返回值 applied 是「实际写入的 option key -> 模型字段列表」；与当前值相同的字段不写，
 // 由调用方归入 unchanged。没有任何实际写入时版本号不变。
 func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, map[string][]PricingPatch, error) {
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
 	if len(patches) == 0 {
 		return GetPricingConfigVersion(), map[string][]PricingPatch{}, nil
 	}
@@ -104,16 +112,12 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 	}
 	sort.Strings(optionKeys)
 
-	modelPricingMutationMu.Lock()
-	defer modelPricingMutationMu.Unlock()
-
 	newVersion := expectedVersion + 1
 	applied := make(map[string][]PricingPatch)
 	written := make(map[string]string)
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		// 先版本行、后价格行，与 mutateModelPricingOptions / updatePricingOption 的加锁顺序一致。
-		currentVersion, err := readPricingVersionForUpdate(lockedPricingTx(tx))
+		currentVersion, err := lockModelPricingVersion(tx)
 		if err != nil {
 			return err
 		}
@@ -214,13 +218,8 @@ func PatchPricingOptions(expectedVersion int64, patches []PricingPatch) (int64, 
 	if err != nil {
 		return 0, nil, err
 	}
-	if len(written) == 0 {
-		return newVersion, applied, nil
-	}
-	for key, value := range written {
-		if updateErr := updateOptionMap(key, value); updateErr != nil {
-			common.SysError("failed to refresh pricing option in memory: " + updateErr.Error())
-		}
+	if updateErr := publishModelPricingOptions(written); updateErr != nil {
+		common.SysError("failed to refresh pricing option in memory: " + updateErr.Error())
 	}
 	RefreshPricing()
 	ratio_setting.InvalidateExposedDataCache()
@@ -279,7 +278,7 @@ func lockedPricingTx(tx *gorm.DB) *gorm.DB {
 func readPricingVersionForUpdate(tx *gorm.DB) (int64, error) {
 	var option Option
 	// key 是三种数据库里的保留字，列名引用方式不同，走 model/main.go 的 commonKeyCol。
-	err := tx.Where(commonKeyCol+" = ?", PricingConfigVersionKey).Take(&option).Error
+	err := tx.Where(&Option{Key: PricingConfigVersionKey}).Take(&option).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, nil
 	}

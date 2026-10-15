@@ -1,5 +1,7 @@
 # 价格巡检：亏损风险判定与页面内改价
 
+> 2026-10-13：页面内改价已扩展为完整定价草稿，支持动态表达式、缺价字段、批量编辑和场景试算；新草稿接口与旧数值接口并存。编辑入口不再依赖 `repair_floor`，最新契约和风险覆盖口径见 [动态计费适配设计](price-monitor-dynamic-billing-adaptation.md)。本文保留旧数值接口说明。
+
 > 2026-09-15 审查修订：逐渠道的 `suggestion`（建议价）已删除，改价的保本价统一取行上的 `repair_floor`（含 `current` 作为 expected）；亏损判定开关 `loss_detection_enabled` 与 `apply_max_models` 配置项已删除；改价接口不再接受 null 删除；快照版本为 17。详见 [price-monitor-inline-repair-floor.md §14](price-monitor-inline-repair-floor.md)，本文相关段落以其为准。
 >
 > 2026-09-10 实现核对补充：当前代码在所有分组倍率为零时也回退 sellFactor=1，与下文“全部为零则不判定”存在差异；改价的 null 删除语义与下限校验尚需统一；数据库事务后的各份倍率内存映射是逐项发布。具体事实与待确认修正见 [整体设计第 8 节](uncommitted-changes-overview.md)。这些边界未在本轮修改实现，文中既有测试记录亦未重新验证。

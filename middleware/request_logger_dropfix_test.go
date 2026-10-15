@@ -197,7 +197,7 @@ func TestRequestLogWriters_BatchWritesEachEntryOnce(t *testing.T) {
 	model.InitRequestLogStore()
 	_, _ = model.ClearAllRequestLogs()
 	prevUser := common.RequestLogUsername
-	common.RequestLogUsername = "keep"
+	common.RequestLogUsername = "keep,保留，keep"
 	StartRequestLogWriters()
 	t.Cleanup(func() {
 		StopRequestLogWriters()
@@ -208,6 +208,9 @@ func TestRequestLogWriters_BatchWritesEachEntryOnce(t *testing.T) {
 	const kept, filtered = 300, 50
 	for i := 0; i < kept+filtered; i++ {
 		name := "keep"
+		if i%2 == 0 {
+			name = "保留"
+		}
 		if i%7 == 0 && i/7 < filtered {
 			name = "other"
 		}
@@ -220,7 +223,7 @@ func TestRequestLogWriters_BatchWritesEachEntryOnce(t *testing.T) {
 	require.EqualValues(t, kept, total, "filtered users are skipped, every other entry is written exactly once")
 	seen := make(map[string]bool, len(list))
 	for _, l := range list {
-		require.Equal(t, "keep", l.Username)
+		require.Contains(t, []string{"keep", "保留"}, l.Username)
 		require.False(t, seen[l.RequestId], "duplicate %s", l.RequestId)
 		seen[l.RequestId] = true
 	}

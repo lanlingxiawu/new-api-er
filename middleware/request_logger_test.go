@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -290,6 +291,62 @@ func TestRequestLogUsernameMatches(t *testing.T) {
 func TestResolveRequestLogUsername_InvalidId(t *testing.T) {
 	require.Equal(t, "", resolveRequestLogUsername(0))
 	require.Equal(t, "", resolveRequestLogUsername(-1))
+}
+
+func TestRequestLogUsernameMatchesMultiple(t *testing.T) {
+	prev := common.RequestLogUsername
+	t.Cleanup(func() { common.RequestLogUsername = prev })
+	for _, tc := range []struct {
+		filter, username string
+		want             bool
+	}{
+		{"", "", true}, {" \t ", "any", true},
+		{"alice,bob,charlie", "alice", true},
+		{"alice,bob,charlie", "bob", true},
+		{"alice,bob,charlie", "charlie", true},
+		{"alice,bob", "other", false}, {"alice,bob", "ali", false},
+		{"十三，张三", "张三", true},
+		{" 十三 , , 张三， ", " 十三 ", true},
+		{" Alice，bob,", " ALICE ", true},
+		{"alice,alice", "alice", true},
+		{", ， ,", "", false}, {", ， ,", "any", false},
+		{"alice,,", "", false}, {"alice", "", false},
+		{"a b,bob", "a b", true}, {"a b,bob", "a", false},
+		{"alice;bob", "alice", false}, {"alice;bob", "alice;bob", true},
+	} {
+		t.Run(tc.filter+"/"+tc.username, func(t *testing.T) {
+			common.RequestLogUsername = tc.filter
+			require.Equal(t, tc.want, requestLogUsernameMatches(tc.username))
+		})
+	}
+}
+
+func BenchmarkRequestLogUsernameMatches(b *testing.B) {
+	prev := common.RequestLogUsername
+	b.Cleanup(func() { common.RequestLogUsername = prev })
+	for _, count := range []int{1, 10, 100, 1000} {
+		for _, position := range []string{"first", "last", "miss"} {
+			b.Run(fmt.Sprintf("%d/%s", count, position), func(b *testing.B) {
+				names := make([]string, count)
+				for i := range names {
+					names[i] = fmt.Sprintf("user%04d", i)
+				}
+				username := "missing"
+				if position == "first" {
+					username = names[0]
+				}
+				if position == "last" {
+					username = names[count-1]
+				}
+				common.RequestLogUsername = strings.Join(names, ",")
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					requestLogUsernameMatches(username)
+				}
+			})
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -16,27 +16,39 @@ const RuleVersion = "short-text-v1"
 // the request matches the short, single-turn text policy. Unknown structures
 // conservatively remain ordinary traffic.
 func Classify(path string, body []byte, limit int) (chars int, matched bool) {
+	chars, matched, _ = ClassifyWithStream(path, body, limit)
+	return chars, matched
+}
+
+// ClassifyWithStream also returns the client streaming mode from the same
+// bounded scan. Invalid or duplicate stream fields remain ordinary traffic.
+func ClassifyWithStream(path string, body []byte, limit int) (chars int, matched bool, stream bool) {
 	if limit < 1 || limit > 1024 || len(body) > MaxBodyBytes || !utf8.Valid(body) {
-		return 0, false
+		return 0, false, false
 	}
 	switch path {
 	case "/v1/chat/completions", "/v1/responses", "/v1/messages":
 	default:
-		return 0, false
+		return 0, false, false
 	}
 	if !gjson.ValidBytes(body) {
-		return 0, false
+		return 0, false, false
 	}
 	root := gjson.ParseBytes(body)
 	if !root.IsObject() {
-		return 0, false
+		return 0, false, false
 	}
 	var messages, content, instructions, system gjson.Result
 	valid := true
+	streamSeen := false
 	// Inspect the root once. Repeated Get calls rescan unrelated metadata and
 	// turn a bounded 16 KiB request into hundreds of KiB of scanning.
 	root.ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
+		case "stream":
+			valid = !streamSeen && (value.Type == gjson.True || value.Type == gjson.False)
+			streamSeen = true
+			stream = value.Type == gjson.True
 		case "messages":
 			if messages.Exists() {
 				valid = false
@@ -85,49 +97,49 @@ func Classify(path string, body []byte, limit int) (chars int, matched bool) {
 		return valid
 	})
 	if !valid {
-		return 0, false
+		return 0, false, false
 	}
 	input := textInput{limit: limit}
 	switch path {
 	case "/v1/responses":
 		if messages.Exists() || system.Exists() {
-			return 0, false
+			return 0, false, false
 		}
 		if instructions.Exists() && instructions.Type != gjson.Null {
 			if instructions.Type != gjson.String || !input.add(instructions.Str, false) {
-				return 0, false
+				return 0, false, false
 			}
 		}
 		if content.Type == gjson.String {
 			if !input.add(content.Str, true) {
-				return 0, false
+				return 0, false, false
 			}
-			return input.chars, input.hasUserText
+			return input.chars, input.hasUserText, stream
 		}
 		if !input.messages(content, true) {
-			return 0, false
+			return 0, false, false
 		}
 	case "/v1/messages":
 		if content.Exists() || instructions.Exists() {
-			return 0, false
+			return 0, false, false
 		}
 		if system.Exists() && system.Type != gjson.Null {
 			if !input.content(system, false, false) {
-				return 0, false
+				return 0, false, false
 			}
 		}
 		if !input.messages(messages, false) {
-			return 0, false
+			return 0, false, false
 		}
 	default:
 		if content.Exists() || instructions.Exists() || system.Exists() {
-			return 0, false
+			return 0, false, false
 		}
 		if !input.messages(messages, false) {
-			return 0, false
+			return 0, false, false
 		}
 	}
-	return input.chars, input.hasUserText
+	return input.chars, input.hasUserText, stream
 }
 
 func plainTextFormat(value gjson.Result) bool {

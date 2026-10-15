@@ -308,6 +308,7 @@ export const channelFormSchema = z
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
     disable_probe_requests: z.boolean().optional(),
+    probe_request_mode: z.enum(['all', 'non_stream', 'stream']).optional(),
     allow_safety_identifier: z.boolean().optional(), // OpenAI only
     allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
@@ -541,6 +542,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   allow_service_tier: false,
   disable_store: false,
   disable_probe_requests: false,
+  probe_request_mode: 'all',
   allow_safety_identifier: false,
   allow_include_obfuscation: false,
   allow_inference_geo: false,
@@ -618,6 +620,7 @@ export function transformChannelToFormDefaults(
   let allowServiceTier = false
   let disableStore = false
   let disableProbeRequests = false
+  let probeRequestMode: 'all' | 'non_stream' | 'stream' = 'all'
   let allowSafetyIdentifier = false
   let allowIncludeObfuscation = false
   let allowInferenceGeo = false
@@ -640,6 +643,12 @@ export function transformChannelToFormDefaults(
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       disableProbeRequests = parsed.disable_probe_requests === true
+      if (
+        parsed.probe_request_mode === 'non_stream' ||
+        parsed.probe_request_mode === 'stream'
+      ) {
+        probeRequestMode = parsed.probe_request_mode
+      }
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
       allowIncludeObfuscation = parsed.allow_include_obfuscation === true
       allowInferenceGeo = parsed.allow_inference_geo === true
@@ -702,6 +711,7 @@ export function transformChannelToFormDefaults(
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     disable_probe_requests: disableProbeRequests,
+    probe_request_mode: probeRequestMode,
     allow_include_obfuscation: allowIncludeObfuscation,
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
@@ -894,6 +904,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   }
 
   settingsObj.disable_probe_requests = formData.disable_probe_requests === true
+  settingsObj.probe_request_mode = formData.probe_request_mode || 'all'
 
   // Add vertex_key_type for Vertex AI channels (type 41)
   if (formData.type === 41) {

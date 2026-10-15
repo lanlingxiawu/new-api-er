@@ -165,6 +165,7 @@ export interface ChannelOtherSettings {
   allow_service_tier?: boolean
   disable_store?: boolean
   disable_probe_requests?: boolean
+  probe_request_mode?: 'all' | 'non_stream' | 'stream'
   allow_safety_identifier?: boolean
   allow_include_obfuscation?: boolean
   allow_inference_geo?: boolean

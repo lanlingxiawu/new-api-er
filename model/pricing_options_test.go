@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/glebarez/sqlite"
@@ -27,6 +28,21 @@ func usePricingOptionsDB(t *testing.T) *gorm.DB {
 	previousDB := DB
 	previousType := common.MainDatabaseType()
 	previousMap := common.OptionMap
+	previousPricing := map[string]string{}
+	for _, key := range modelPricingOptionKeys {
+		var value any = pricingMemoryValues(key)
+		if key == "billing_setting.billing_mode" {
+			value = billing_setting.GetBillingModeCopy()
+		}
+		if key == "billing_setting.billing_expr" {
+			value = billing_setting.GetBillingExprCopy()
+		}
+		encoded, encodeErr := common.Marshal(value)
+		require.NoError(t, encodeErr)
+		previousPricing[key] = string(encoded)
+	}
+	previousKeyCol := commonKeyCol
+	commonKeyCol = "`key`"
 
 	// 每个用例一个独立命名的内存库：cache=shared 让 GORM 连接池里的多条连接看到同一个库
 	// （并发用例需要），命名则保证用例之间互不串状态。
@@ -41,6 +57,10 @@ func usePricingOptionsDB(t *testing.T) *gorm.DB {
 	common.OptionMapRWMutex.Unlock()
 
 	t.Cleanup(func() {
+		for key, value := range previousPricing {
+			require.NoError(t, updateOptionMap(key, value))
+		}
+		commonKeyCol = previousKeyCol
 		sqlDB, sqlErr := db.DB()
 		if sqlErr == nil {
 			_ = sqlDB.Close()

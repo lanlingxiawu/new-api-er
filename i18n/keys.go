@@ -1,5 +1,13 @@
 package i18n
 
+const (
+	MsgPriceMonitorUnknownRisk              = "price_monitor.unknown_risk"
+	MsgPriceMonitorPreviewUnsupported       = "price_monitor.preview_unsupported"
+	MsgPriceMonitorPreviewSourceUnavailable = "price_monitor.preview_source_unavailable"
+	MsgPriceMonitorPreviewSemanticsUnknown  = "price_monitor.preview_semantics_unknown"
+	MsgPriceMonitorConversionUnsupported    = "price_monitor.conversion_unsupported"
+)
+
 const MsgGroupRetryStatusInvalid = "setting.group_retry_status_invalid"
 
 // MsgClaudeStreamFailed 是 Claude 本地流内 error 的通用展示消息键，文案不包含底层错误或原始上游数据。

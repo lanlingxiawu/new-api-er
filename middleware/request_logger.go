@@ -235,7 +235,7 @@ func (w *responseBodyWriter) WriteString(s string) (int, error) {
 }
 
 // RequestResponseLogger 记录中转请求的下游请求体/请求头 以及 返回给下游的返回头/返回体。
-// 仅在 common.RequestLogEnabled 开启时生效；当 common.RequestLogUsername 非空时仅记录该用户名。
+// 仅在 common.RequestLogEnabled 开启时生效；非空用户名列表以中英文逗号分隔。
 func RequestResponseLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 关闭时零开销直接放行
@@ -299,7 +299,7 @@ func recordRequestLogEntry(c *gin.Context, snap requestLogCapture) {
 		}
 	}()
 
-	// 用户名过滤：RequestLogUsername 为空记录全部，否则仅记录匹配的登录用户名
+	// 用户名过滤：RequestLogUsername 为空记录全部，否则匹配中英文逗号分隔的登录用户名
 	// （比较的是账号的登录用户名 username，不是显示名/邮箱）。大小写不敏感、去除首尾空白。
 	username := strings.TrimSpace(c.GetString("username"))
 	userId := c.GetInt("id")
@@ -349,7 +349,24 @@ func requestLogUsernameMatches(username string) bool {
 	if filterUser == "" {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(username), filterUser)
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return false
+	}
+	start := 0
+	for offset, char := range filterUser {
+		if char != ',' && char != '，' {
+			continue
+		}
+		if strings.EqualFold(username, strings.TrimSpace(filterUser[start:offset])) {
+			return true
+		}
+		start = offset + 1
+		if char == '，' {
+			start = offset + len("，")
+		}
+	}
+	return strings.EqualFold(username, strings.TrimSpace(filterUser[start:]))
 }
 
 // resolveRequestLogUsername 在 worker goroutine 上按用户 id 补齐用户名。

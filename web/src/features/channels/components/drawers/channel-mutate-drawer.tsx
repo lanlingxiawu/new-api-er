@@ -299,6 +299,7 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_service_tier',
   'disable_store',
   'disable_probe_requests',
+  'probe_request_mode',
   'allow_safety_identifier',
   'allow_include_obfuscation',
   'allow_inference_geo',
@@ -2139,6 +2140,56 @@ export function ChannelMutateDrawer({
           </FormItem>
         )}
       />
+      {form.watch('disable_probe_requests') && (
+        <FormField
+          control={form.control}
+          name='probe_request_mode'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Probe blocking scope')}</FormLabel>
+              <Select
+                disabled={sensitiveLocked}
+                value={field.value ?? 'all'}
+                onValueChange={field.onChange}
+                items={[
+                  { value: 'all', label: t('All') },
+                  {
+                    value: 'non_stream',
+                    label: t('Non-streaming probes'),
+                  },
+                  {
+                    value: 'stream',
+                    label: t('Streaming probes'),
+                  },
+                ]}
+              >
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value='all'>{t('All')}</SelectItem>
+                    <SelectItem value='non_stream'>
+                      {t('Non-streaming probes')}
+                    </SelectItem>
+                    <SelectItem value='stream'>
+                      {t('Streaming probes')}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                {t(
+                  'Apply probe blocking to all requests, non-streaming requests, or streaming requests, based on the client request mode.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
     </div>
   )
 
@@ -2429,9 +2480,7 @@ export function ChannelMutateDrawer({
                   value={field.value ?? ''}
                   onChange={(e) =>
                     field.onChange(
-                      e.target.value === ''
-                        ? undefined
-                        : Number(e.target.value)
+                      e.target.value === '' ? undefined : Number(e.target.value)
                     )
                   }
                 />
@@ -4472,7 +4521,9 @@ export function ChannelMutateDrawer({
                     disabled={!dailyLimitEnabled}
                   />
                 </FormControl>
-                <FormDescription>{dailyLimitRecoverDescription}</FormDescription>
+                <FormDescription>
+                  {dailyLimitRecoverDescription}
+                </FormDescription>
                 <FormMessage />
               </FormItem>
             )}

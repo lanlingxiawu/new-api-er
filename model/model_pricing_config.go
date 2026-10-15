@@ -34,6 +34,9 @@ type ModelPricingChange struct {
 }
 
 type ModelPricingEntry struct {
+	PricingVersion   int64   `json:"-"`
+	CompletionLocked bool    `json:"completion_locked"`
+	TokenPriceFactor float64 `json:"token_price_factor"`
 	ModelPricingDescription
 	PluginVariants []ModelPricingPluginVariant          `json:"plugin_variants,omitempty"`
 	ModelName      string                               `json:"model_name"`
@@ -55,9 +58,11 @@ type ModelPricingPluginVariant struct {
 }
 
 type ModelPricingSnapshot struct {
-	Entries      []ModelPricingEntry `json:"entries"`
-	Options      map[string]string   `json:"options"`
-	EmptyVersion string              `json:"empty_version"`
+	TokenPriceFactor float64             `json:"token_price_factor"`
+	PricingVersion   int64               `json:"pricing_version"`
+	Entries          []ModelPricingEntry `json:"entries"`
+	Options          map[string]string   `json:"options"`
+	EmptyVersion     string              `json:"empty_version"`
 }
 
 var ErrModelPricingConflict = errors.New("model pricing changed; reload before saving")
@@ -269,11 +274,20 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 	}
 	sort.Strings(names)
 	result := &ModelPricingSnapshot{Entries: make([]ModelPricingEntry, 0, len(names)), Options: make(map[string]string), EmptyVersion: ModelPricingVersion(PricingValues{})}
+	version, err := ReadPricingConfigVersion()
+	if err != nil {
+		return nil, err
+	}
+	result.PricingVersion = version
+	result.TokenPriceFactor = 1_000_000 / common.QuotaPerUnit
 	generation := jsplugin.DefaultRegistry.Generation()
 	for _, name := range names {
 		configured := modelPricingValues(values, name)
 		entry := ModelPricingEntry{ModelName: name, Version: ModelPricingVersion(configured), Configured: configured,
 			ModelPricingDescription: ModelPricingDescription{Effective: effectiveModelPricing(values, name)}}
+		entry.PricingVersion = version
+		entry.TokenPriceFactor = 1_000_000 / common.QuotaPerUnit
+		entry.CompletionLocked = ratio_setting.ResolvePricingCompletionRatio(name, nil).Locked
 		entry.CacheWriteMode = ResolveCacheWriteMode(name, configured)
 		entry.BillingDetails = ResolveLegacyBillingDetails(name, entry.Effective, configured)
 		if plugin, ok := generation.GetByModel(name); ok {
@@ -464,11 +478,16 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 }
 
 func UpdateModelPricing(changes []ModelPricingChange) error {
-	if len(changes) == 0 {
-		return errors.New("select model pricing changes before saving")
+	return UpdateModelPricingWithGuard(changes, nil)
+}
+
+func UpdateModelPricingWithGuard(changes []ModelPricingChange, guard func([]ModelPricingEntry, []ModelPricingChange) error) error {
+	if len(changes) == 0 || len(changes) > 100 {
+		return errors.New("invalid pricing change count")
 	}
+	changes = append([]ModelPricingChange(nil), changes...)
 	seen := make(map[string]bool)
-	for _, change := range changes {
+	for i, change := range changes {
 		if seen[change.ModelName] {
 			return errors.New("duplicate model pricing change")
 		}
@@ -476,22 +495,36 @@ func UpdateModelPricing(changes []ModelPricingChange) error {
 		if change.ExpectedVersion == "" {
 			return ErrModelPricingConflict
 		}
+		if change.Reset {
+			changes[i].Pricing = ResetModelPricingDraft(change.ModelName)
+		}
 	}
-	return mutateModelPricingOptions(func(_ *gorm.DB, values map[string]map[string]any) error {
-		defaults := defaultPricingMaps()
+	return mutateModelPricingOptions(func(tx *gorm.DB, values map[string]map[string]any) error {
+		version, err := readPricingVersionForUpdate(tx)
+		if err != nil {
+			return err
+		}
+		current := make([]ModelPricingEntry, 0, len(changes))
 		for _, change := range changes {
 			previous := modelPricingValues(values, change.ModelName)
 			if ModelPricingVersion(previous) != change.ExpectedVersion {
 				return fmt.Errorf("%w: %s", ErrModelPricingConflict, change.ModelName)
 			}
-			pricing := change.Pricing
-			if change.Reset {
-				pricing = modelPricingValues(defaults, change.ModelName)
-			}
-			if err := validateModelPricing(change.ModelName, pricing, previous); err != nil {
+			if err := validateModelPricing(change.ModelName, change.Pricing, previous); err != nil {
 				return err
 			}
-			replaceModelPricing(values, change.ModelName, pricing)
+			if err := validateCompletionPricingChange(change.ModelName, previous, change.Pricing); err != nil {
+				return err
+			}
+			current = append(current, ModelPricingEntry{PricingVersion: version, ModelName: change.ModelName, Version: change.ExpectedVersion, Configured: previous, ModelPricingDescription: ModelPricingDescription{Effective: effectiveModelPricing(values, change.ModelName)}})
+		}
+		if guard != nil {
+			if err := guard(current, changes); err != nil {
+				return err
+			}
+		}
+		for _, change := range changes {
+			replaceModelPricing(values, change.ModelName, change.Pricing)
 		}
 		return nil
 	})
@@ -547,7 +580,7 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 		// price-monitor inline edit (PatchPricingOptions) detects the overwrite. Lock the
 		// version row before the pricing rows, the same order PatchPricingOptions uses,
 		// otherwise concurrent writers deadlock.
-		currentVersion, err := readPricingVersionForUpdate(lockedPricingTx(tx))
+		currentVersion, err := lockModelPricingVersion(tx)
 		if err != nil {
 			return err
 		}
@@ -599,16 +632,183 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 	if err != nil {
 		return err
 	}
+	written := map[string]string{PricingConfigVersionKey: version}
 	for _, key := range modelPricingOptionKeys {
-		encoded, _ := common.Marshal(committed[key])
-		if err := updateOptionMap(key, string(encoded)); err != nil {
+		encoded, err := common.Marshal(committed[key])
+		if err != nil {
+			return err
+		}
+		written[key] = string(encoded)
+	}
+	if err := publishModelPricingOptions(written); err != nil {
+		return err
+	}
+
+	RefreshPricing()
+	ratio_setting.InvalidateExposedDataCache()
+	return nil
+}
+
+func ResetModelPricingDraft(name string) PricingValues {
+	draft := PricingValues{}
+	for _, key := range modelPricingOptionKeys {
+		if value, ok := ratio_setting.GetDefaultPricingValue(key, name); ok {
+			draft[key] = value
+		}
+	}
+	return draft
+}
+
+func lockModelPricingVersion(tx *gorm.DB) (int64, error) {
+	row := Option{Key: PricingConfigVersionKey, Value: "0"}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		return 0, err
+	}
+	return readPricingVersionForUpdate(lockedPricingTx(tx))
+}
+
+func persistModelPricingValues(tx *gorm.DB, values map[string]string) error {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		row := Option{Key: key, Value: values[key]}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&row).Error; err != nil {
 			return err
 		}
 	}
-	if err := updateOptionMap(PricingConfigVersionKey, version); err != nil {
+	return nil
+}
+
+func updateModelPricingOptionsBulk(updates map[string]string) error {
+	return updateModelPricingOptionMaps(updates, nil)
+}
+
+func validateCompletionPricingChange(name string, previous, draft PricingValues) error {
+	if draft["billing_setting.billing_mode"] == billing_setting.BillingModeTieredExpr {
+		return nil
+	}
+	value, exists := draft["CompletionRatio"].(float64)
+	if !exists || previous["CompletionRatio"] == value {
+		return nil
+	}
+	if _, configured := previous["CompletionRatio"]; !configured {
+		if fallback, ok := ratio_setting.GetDefaultPricingValue("CompletionRatio", name); ok && fallback == value {
+			return nil
+		}
+	}
+	info := ratio_setting.ResolvePricingCompletionRatio(name, &value)
+	if info.Locked && value != info.Ratio {
+		return errors.New("completion pricing is fixed for this model")
+	}
+	return nil
+}
+
+func UpdateModelPricingOptionMaps(updates, expected map[string]string) error {
+	if len(updates) == 0 || len(updates) != len(expected) {
+		return errors.New("expected pricing maps are required")
+	}
+	for key := range updates {
+		if !IsModelPricingOption(key) {
+			return errors.New("unsupported pricing map")
+		}
+		if _, ok := expected[key]; !ok {
+			return errors.New("missing expected pricing map")
+		}
+	}
+	return updateModelPricingOptionMaps(updates, expected)
+}
+
+func updateModelPricingOptionMaps(updates, expected map[string]string) error {
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
+	written := make(map[string]string, len(updates)+1)
+	for key, value := range updates {
+		written[key] = value
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		version, err := lockModelPricingVersion(tx)
+		if err != nil {
+			return err
+		}
+		values, _, _, err := readModelPricingMaps(lockedPricingTx(tx))
+		if err != nil {
+			return err
+		}
+		for key, raw := range expected {
+			var prior map[string]any
+			if err := common.UnmarshalJsonStr(raw, &prior); err != nil {
+				return err
+			}
+			if prior == nil {
+				return errors.New("expected pricing values must be an object")
+			}
+			current := values[key]
+			if current == nil {
+				current = map[string]any{}
+				for name, value := range ratio_setting.GetDefaultPricingMaps()[key] {
+					current[name] = value
+				}
+			}
+			priorJSON, err := common.Marshal(prior)
+			if err != nil {
+				return err
+			}
+			currentJSON, err := common.Marshal(current)
+			if err != nil {
+				return err
+			}
+			if string(priorJSON) != string(currentJSON) {
+				return ErrModelPricingConflict
+			}
+		}
+		affected := map[string]bool{}
+		previous := map[string]PricingValues{}
+		for key, raw := range updates {
+			if !IsModelPricingOption(key) {
+				continue
+			}
+			var entries map[string]any
+			if err := common.UnmarshalJsonStr(raw, &entries); err != nil {
+				return err
+			}
+			if entries == nil {
+				return errors.New("pricing values must be an object")
+			}
+			for name := range values[key] {
+				affected[name] = true
+				if _, ok := previous[name]; !ok {
+					previous[name] = modelPricingValues(values, name)
+				}
+			}
+			for name := range entries {
+				affected[name] = true
+				if _, ok := previous[name]; !ok {
+					previous[name] = modelPricingValues(values, name)
+				}
+			}
+			values[key] = entries
+		}
+		for name := range affected {
+			if err := validateCompletionPricingChange(name, previous[name], modelPricingValues(values, name)); err != nil {
+				return err
+			}
+			if err := validateModelPricing(name, modelPricingValues(values, name), previous[name]); err != nil {
+				return err
+			}
+		}
+		written[PricingConfigVersionKey] = strconv.FormatInt(version+1, 10)
+		return persistModelPricingValues(tx, written)
+	})
+	if err != nil {
 		return err
 	}
-	RefreshPricing()
+	if err := publishModelPricingOptions(written); err != nil {
+		return err
+	}
+	InvalidatePricingCache()
 	ratio_setting.InvalidateExposedDataCache()
 	return nil
 }

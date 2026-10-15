@@ -41,9 +41,13 @@ type priceMonitorApplyPriceItem struct {
 }
 
 type priceMonitorApplyPriceRequest struct {
-	CheckedAt      int64                        `json:"checked_at"`
-	PricingVersion int64                        `json:"pricing_version"`
-	Items          []priceMonitorApplyPriceItem `json:"items"`
+	Changes            []model.ModelPricingChange   `json:"changes"`
+	ContextVersion     string                       `json:"context_version"`
+	ForceBelowFloor    bool                         `json:"force_below_floor"`
+	AcknowledgeUnknown bool                         `json:"acknowledge_unknown"`
+	CheckedAt          int64                        `json:"checked_at"`
+	PricingVersion     int64                        `json:"pricing_version"`
+	Items              []priceMonitorApplyPriceItem `json:"items"`
 	// Force 允许管理员在明知低于保本下限时仍然提交（亏损引流等刻意定价）。
 	// 默认 false：服务端必须自证安全，不能只靠前端提示——直接调接口即可绕过。
 	Force bool `json:"force"`
@@ -73,6 +77,10 @@ func ApplyPriceMonitorPrice(c *gin.Context) {
 	var request priceMonitorApplyPriceRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if request.Changes != nil {
+		applyPriceMonitorDrafts(c, request)
 		return
 	}
 	if len(request.Items) == 0 {

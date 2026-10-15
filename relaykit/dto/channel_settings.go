@@ -73,6 +73,7 @@ const (
 
 type ChannelOtherSettings struct {
 	DisableProbeRequests                  bool                  `json:"disable_probe_requests,omitempty"`
+	ProbeRequestMode                      string                `json:"probe_request_mode,omitempty"`
 	AzureResponsesVersion                 string                `json:"azure_responses_version,omitempty"`
 	VertexKeyType                         VertexKeyType         `json:"vertex_key_type,omitempty"` // "json" or "api_key"
 	OpenRouterEnterprise                  *bool                 `json:"openrouter_enterprise,omitempty"`

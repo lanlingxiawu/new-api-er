@@ -30,19 +30,21 @@ const (
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
 // billing_setting.plugin_billing_expr
 type BillingSetting struct {
-	BillingMode       map[string]string `json:"billing_mode"`
-	BillingExpr       map[string]string `json:"billing_expr"`
-	PluginBillingExpr map[string]string `json:"plugin_billing_expr"`
+	AtomicPricingEnabled bool              `json:"atomic_pricing_enabled"`
+	BillingMode          map[string]string `json:"billing_mode"`
+	BillingExpr          map[string]string `json:"billing_expr"`
+	PluginBillingExpr    map[string]string `json:"plugin_billing_expr"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode:       make(map[string]string),
-	BillingExpr:       make(map[string]string),
-	PluginBillingExpr: make(map[string]string),
+	AtomicPricingEnabled: true,
+	BillingMode:          make(map[string]string),
+	BillingExpr:          make(map[string]string),
+	PluginBillingExpr:    make(map[string]string),
 }
 
 func init() {
-	config.GlobalConfig.Register("billing_setting", &billingSetting)
+	config.GlobalConfig.RegisterSnapshot("billing_setting", &billingSetting, publishBillingSnapshot)
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,12 @@ func GetBuiltinBillingExprCopy() map[string]string {
 }
 
 func GetBillingModeCopy() map[string]string {
+	var result map[string]string
+	config.WithConfigDraft(func() { result = getBillingModeCopy() })
+	return result
+}
+
+func getBillingModeCopy() map[string]string {
 	modes := lo.Assign(billingSetting.BillingMode)
 	for model := range builtinBillingExpr {
 		if _, configured := modes[model]; !configured && GetBillingMode(model) == BillingModeTieredExpr {
@@ -162,6 +170,12 @@ func GetBillingModeCopy() map[string]string {
 }
 
 func GetBillingExprCopy() map[string]string {
+	var result map[string]string
+	config.WithConfigDraft(func() { result = getBillingExprCopy() })
+	return result
+}
+
+func getBillingExprCopy() map[string]string {
 	expressions := lo.Assign(billingSetting.BillingExpr)
 	for model := range builtinBillingExpr {
 		if _, configured := expressions[model]; configured {
@@ -175,14 +189,18 @@ func GetBillingExprCopy() map[string]string {
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {
-	extra := make(map[string]any, 2)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
-		extra[BillingModeField] = modes
-	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
-		extra[BillingExprField] = exprs
-	}
-	return lo.Assign(base, extra)
+	var result map[string]any
+	config.WithConfigDraft(func() {
+		extra := make(map[string]any, 2)
+		if modes := getBillingModeCopy(); len(modes) > 0 {
+			extra[BillingModeField] = modes
+		}
+		if exprs := getBillingExprCopy(); len(exprs) > 0 {
+			extra[BillingExprField] = exprs
+		}
+		result = lo.Assign(base, extra)
+	})
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -367,4 +385,31 @@ func billingExprSmokeRequests() []billingexpr.RequestInput {
 			Body: []byte(`{"service_tier":"fast","stream_options":{"include_usage":true},"messages":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21]}`),
 		},
 	}
+}
+
+var billingSnapshot config.Snapshot[BillingSetting]
+
+func publishBillingSnapshot() {
+	billingSnapshot.Publish(BillingSetting{AtomicPricingEnabled: billingSetting.AtomicPricingEnabled, BillingMode: maps.Clone(billingSetting.BillingMode), BillingExpr: maps.Clone(billingSetting.BillingExpr), PluginBillingExpr: maps.Clone(billingSetting.PluginBillingExpr)})
+}
+func GetModelBilling(model string) (string, string, bool) {
+	snapshot := billingSnapshot.Load()
+	if !snapshot.AtomicPricingEnabled {
+		expression, ok := GetBillingExpr(model)
+		return GetBillingMode(model), expression, ok
+	}
+	mode, exists := snapshot.BillingMode[model]
+	if !exists {
+		mode = BillingModeRatio
+		if _, builtin := builtinBillingExpr[model]; builtin && !ratio_setting.HasConfiguredModelRatio(model) {
+			if _, configured := ratio_setting.GetModelPrice(model, false); !configured {
+				mode = BillingModeTieredExpr
+			}
+		}
+	}
+	expression, ok := snapshot.BillingExpr[model]
+	if !ok && mode == BillingModeTieredExpr {
+		expression, ok = builtinBillingExpr[model]
+	}
+	return mode, expression, ok
 }
