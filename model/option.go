@@ -236,12 +236,19 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
-	options, _ := AllOption()
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
+	options, err := AllOption()
+	if err != nil {
+		common.SysError("failed to read options: " + err.Error())
+		return
+	}
+	values := make(map[string]string, len(options))
 	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
-		if err != nil {
-			common.SysLog("failed to update option map: " + err.Error())
-		}
+		values[option.Key] = option.Value
+	}
+	if err := publishModelPricingOptions(values); err != nil {
+		common.SysError("failed to publish options: " + err.Error())
 	}
 }
 
@@ -422,8 +429,8 @@ func UpdateOption(key string, value string) error {
 	// 价格类 option 走带版本递增的事务写入：倍率设置页仍是整块覆写，但只要它也推进
 	// PricingConfigVersion，巡检页的行内改价就能检测到「我读到的价格已经被整块保存覆盖」，
 	// 而不是被静默清掉。见 docs/design/price-monitor-loss-detection-and-price-repair.md §5.4。
-	if IsPricingOptionKey(key) {
-		return updatePricingOption(key, value)
+	if IsModelPricingOption(key) {
+		return UpdateOptionsBulk(map[string]string{key: value})
 	}
 	// Save to database first
 	option := Option{
@@ -440,43 +447,6 @@ func UpdateOption(key string, value string) error {
 	return updateOptionMap(key, value)
 }
 
-// updatePricingOption 在同一事务里保存价格 option 并递增 PricingConfigVersion。
-func updatePricingOption(key string, value string) error {
-	version := ""
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		// 加锁顺序必须是「先版本行、后价格行」，与 PatchPricingOptions 保持一致。
-		// 反过来写会构成锁顺序反转：倍率设置页整块保存（本函数）先拿到 ModelRatio 的
-		// 行锁再等版本行，巡检页行内改价（PatchPricingOptions）先拿到版本行再等
-		// ModelRatio，两者并发时 MySQL / PostgreSQL 会检测到死锁并回滚其中一个。
-		current, err := readPricingVersionForUpdate(lockedPricingTx(tx))
-		if err != nil {
-			return err
-		}
-		versionOption := Option{Key: PricingConfigVersionKey}
-		if err := tx.Where(Option{Key: PricingConfigVersionKey}).FirstOrCreate(&versionOption).Error; err != nil {
-			return err
-		}
-		option := Option{Key: key}
-		if err := tx.Where(Option{Key: key}).FirstOrCreate(&option).Error; err != nil {
-			return err
-		}
-		option.Value = value
-		if err := tx.Save(&option).Error; err != nil {
-			return err
-		}
-		version = strconv.FormatInt(current+1, 10)
-		versionOption.Value = version
-		return tx.Save(&versionOption).Error
-	})
-	if err != nil {
-		return err
-	}
-	if err := updateOptionMap(key, value); err != nil {
-		return err
-	}
-	return updateOptionMap(PricingConfigVersionKey, version)
-}
-
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
 // transaction, then dispatches them through updateOptionMap in one pass. If
 // any DB write fails the whole transaction rolls back and no in-memory state
@@ -490,6 +460,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
+	}
+	pricing := false
+	for key := range values {
+		pricing = pricing || IsModelPricingOption(key)
+	}
+	if pricing {
+		return updateModelPricingOptionsBulk(values)
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
@@ -507,12 +484,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return publishModelPricingOptions(values)
 }
 
 func updateOptionMap(key string, value string) (err error) {

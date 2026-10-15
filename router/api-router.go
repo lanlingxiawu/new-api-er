@@ -374,6 +374,7 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.POST("/fetch", middleware.RequirePermission(authz.SystemSettingsEdit("billing.model-pricing")), controller.FetchUpstreamRatios)
 		}
 		registerPriceMonitorRoutes(apiRouter, anonymousRequestBodyLimit)
+		registerModelPricingRoutes(apiRouter)
 		registerChannelRoutes(apiRouter)
 		registerAuthzRoutes(apiRouter)
 		tokenRoute := apiRouter.Group("/token")

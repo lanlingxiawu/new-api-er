@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -29,7 +29,7 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 21
+	priceMonitorMatrixVersion           = 22
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -102,21 +102,26 @@ type PriceMonitorLossLine struct {
 }
 
 type PriceMonitorPriceCell struct {
-	Mode              string                  `json:"mode"`
-	Input             *float64                `json:"input,omitempty"`
-	Output            *float64                `json:"output,omitempty"`
-	Price             *float64                `json:"price,omitempty"`
-	Lanes             []PriceMonitorPriceLane `json:"lanes,omitempty"`
-	Tiers             []PriceMonitorPriceTier `json:"tiers,omitempty"`
-	Dynamic           bool                    `json:"dynamic,omitempty"`
-	Different         bool                    `json:"different,omitempty"`
-	InputDifferent    bool                    `json:"input_different,omitempty"`
-	OutputDifferent   bool                    `json:"output_different,omitempty"`
-	PriceDifferent    bool                    `json:"price_different,omitempty"`
-	ModeDifferent     bool                    `json:"mode_different,omitempty"`
-	UnavailableReason string                  `json:"unavailable_reason,omitempty"`
-	Highest           bool                    `json:"highest,omitempty"`
-	Expr              string                  `json:"-"`
+	Standard          *billingexpr.StandardAnalysis    `json:"standard,omitempty"`
+	BillingMode       string                           `json:"billing_mode,omitempty"`
+	Differences       []billingexpr.StandardDifference `json:"differences,omitempty"`
+	ComparisonStatus  string                           `json:"comparison_status,omitempty"`
+	ComparisonReason  string                           `json:"comparison_reason,omitempty"`
+	Mode              string                           `json:"mode"`
+	Input             *float64                         `json:"input,omitempty"`
+	Output            *float64                         `json:"output,omitempty"`
+	Price             *float64                         `json:"price,omitempty"`
+	Lanes             []PriceMonitorPriceLane          `json:"lanes,omitempty"`
+	Tiers             []PriceMonitorPriceTier          `json:"tiers,omitempty"`
+	Dynamic           bool                             `json:"dynamic,omitempty"`
+	Different         bool                             `json:"different,omitempty"`
+	InputDifferent    bool                             `json:"input_different,omitempty"`
+	OutputDifferent   bool                             `json:"output_different,omitempty"`
+	PriceDifferent    bool                             `json:"price_different,omitempty"`
+	ModeDifferent     bool                             `json:"mode_different,omitempty"`
+	UnavailableReason string                           `json:"unavailable_reason,omitempty"`
+	Highest           bool                             `json:"highest,omitempty"`
+	Expr              string                           `json:"-"`
 
 	// 亏损判定结果，仅命中 loss_risk 的渠道单元格写入。
 	LossKinds        []string `json:"loss_kinds,omitempty"`
@@ -133,6 +138,8 @@ type PriceMonitorPriceCell struct {
 }
 
 type PriceMonitorPriceTier struct {
+	MinContext        int64                   `json:"min_context,omitempty"`
+	MaxContext        *int64                  `json:"max_context,omitempty"`
 	Range             string                  `json:"range"`
 	ConditionVariable string                  `json:"condition_variable,omitempty"`
 	ConditionOperator string                  `json:"condition_operator,omitempty"`
@@ -383,7 +390,7 @@ func queryPriceMonitorMatrix(snapshot PriceMonitorSnapshot, query priceMonitorQu
 	sourceFilter := strings.ToLower(strings.TrimSpace(query.Source))
 	comparison := strings.ToLower(strings.TrimSpace(query.Comparison))
 	switch comparison {
-	case "channel_official", "channel_models_dev", "channel_platform", "platform_official", "platform_models_dev", "above_platform", "loss_risk", "input", "output", "cache", "billing", "official_missing", "models_dev_missing", "channel_missing", "source_failed":
+	case "channel_official", "channel_models_dev", "channel_platform", "platform_official", "platform_models_dev", "above_platform", "loss_risk", "input", "output", "cache", "billing", "official_missing", "models_dev_missing", "channel_missing", "source_failed", "needs_review":
 	default:
 		comparison = "all"
 	}
@@ -483,7 +490,7 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 			if (header.Type == priceSourceOfficial || header.Type == priceSourceModelsDev) && cell.UnavailableReason == "" && !cell.Different {
 				matchingReferenceKeys = append(matchingReferenceKeys, header.Key)
 			}
-			if priceMonitorCellHasComparableDifference(cell) {
+			if priceMonitorCellHasComparableDifference(cell) || priceMonitorCellNeedsReview(cell) {
 				displayKeys[header.Key] = struct{}{}
 				hasComparableDifference = true
 			}
@@ -517,6 +524,14 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 		}
 	}
 	switch comparison {
+	case "needs_review":
+		for _, header := range headers {
+			cell, ok := item.Prices[header.Key]
+			if ok && priceMonitorCellNeedsReview(cell) {
+				displayKeys[header.Key] = struct{}{}
+				displayKeys[priceMonitorPlatformKey] = struct{}{}
+			}
+		}
 	case "channel_official", "channel_models_dev":
 		reference, referenceKey := official, officialKey
 		if comparison == "channel_models_dev" {
@@ -714,6 +729,19 @@ func priceMonitorLanePriceHigher(platformLanes, sourceLanes []PriceMonitorPriceL
 }
 
 func priceMonitorTierPriceHigher(platform, source PriceMonitorPriceCell) bool {
+	if !platform.Dynamic && !source.Dynamic && (platform.Expr != "" || platform.Standard != nil) && (source.Expr != "" || source.Standard != nil) {
+		left, leftErr := priceMonitorStandardCellAnalysis(platform)
+		right, rightErr := priceMonitorStandardCellAnalysis(source)
+		if leftErr == nil && rightErr == nil {
+			for _, difference := range billingexpr.CompareStandard(left, right) {
+				if difference.Right > difference.Left {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
 	if platform.Dynamic || source.Dynamic || len(platform.Tiers) == 0 || len(platform.Tiers) != len(source.Tiers) {
 		return false
 	}
@@ -775,10 +803,14 @@ func priceMonitorPriceValue(price *float64) float64 {
 }
 
 func priceMonitorComparisonIgnores(cell PriceMonitorPriceCell) bool {
-	return cell.UnavailableReason != ""
+	return cell.UnavailableReason != "" || cell.ComparisonStatus == "scenario_only" || cell.ComparisonStatus == "unavailable" || cell.ComparisonStatus == "unsupported"
 }
 
 func priceMonitorCellHasComparableDifference(cell PriceMonitorPriceCell) bool {
+	if cell.ComparisonStatus == "scenario_only" || cell.ComparisonStatus == "unavailable" || cell.ComparisonStatus == "unsupported" {
+		return false
+	}
+
 	if priceMonitorComparisonIgnores(cell) {
 		return false
 	}
@@ -786,6 +818,23 @@ func priceMonitorCellHasComparableDifference(cell PriceMonitorPriceCell) bool {
 }
 
 func priceMonitorPriceCellsEqual(left, right PriceMonitorPriceCell) bool {
+	if left.Dynamic || right.Dynamic {
+		return false
+	}
+	if left.Mode == priceMonitorModeExpression && right.Mode == priceMonitorModeExpression && (left.Expr != "" || left.Standard != nil) && (right.Expr != "" || right.Standard != nil) {
+		a, aErr := priceMonitorStandardCellAnalysis(left)
+		b, bErr := priceMonitorStandardCellAnalysis(right)
+		if aErr != nil || bErr != nil {
+			return false
+		}
+		for _, variable := range []string{"cr", "cc", "cc1h", "img", "img_o", "ai", "ao"} {
+			if a.UsedVars[variable] != b.UsedVars[variable] {
+				return false
+			}
+		}
+		return len(billingexpr.CompareStandard(a, b)) == 0
+	}
+
 	if left.UnavailableReason != "" || right.UnavailableReason != "" {
 		return left.UnavailableReason == right.UnavailableReason
 	}
@@ -988,7 +1037,7 @@ func buildPriceMonitorMatrix(localData map[string]any, sources []pricingSource, 
 				continue
 			}
 			markPriceMonitorDifferences(platform, &cell)
-			if cell.Different {
+			if cell.Different || priceMonitorCellNeedsReview(cell) {
 				hasDifference = true
 			}
 			prices[source.name] = cell
@@ -1066,9 +1115,13 @@ func priceMonitorSourceLabel(name, sourceType string) string {
 func priceMonitorCell(data map[string]any, modelName string) (PriceMonitorPriceCell, bool) {
 	mode, _ := valueMap(data[billing_setting.BillingModeField])[modelName].(string)
 	expr, _ := valueMap(data[billing_setting.BillingExprField])[modelName].(string)
+	if mode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(expr) == "" {
+		return PriceMonitorPriceCell{Mode: priceMonitorModeExpression, BillingMode: priceMonitorModeExpression, Dynamic: true, UnavailableReason: priceMonitorUnavailableMissing}, true
+	}
 	if mode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(expr) != "" {
 		tiers, dynamic := parsePriceMonitorExpression(expr)
-		return PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: strings.TrimSpace(expr), Tiers: tiers, Dynamic: dynamic}, true
+		analysis, _ := billingexpr.AnalyzeStandard(expr)
+		return PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: strings.TrimSpace(expr), Tiers: tiers, Dynamic: dynamic, Standard: analysis}, true
 	}
 	if raw, ok := valueMap(data["model_price"])[modelName]; ok {
 		if price, valid := asFloat64(raw); valid {
@@ -1133,13 +1186,6 @@ func priceMonitorOptionFields(data map[string]any, modelName string) map[string]
 
 func floatPointer(value float64) *float64 { return &value }
 
-var (
-	priceMonitorTierPattern   = regexp.MustCompile(`tier\("[^"]*",\s*([^)]+)\)`)
-	priceMonitorCoefficient   = regexp.MustCompile(`\b(p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)`)
-	priceMonitorTierCondition = regexp.MustCompile(`(len|p|c)\s*(<=|<|>=|>)\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*\?\s*$`)
-	priceMonitorSafeTierBody  = regexp.MustCompile(`^\s*(?:(?:p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\s*\+\s*(?:p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)*\s*$`)
-)
-
 var priceMonitorRatioLanes = []struct {
 	field string
 	key   string
@@ -1162,55 +1208,32 @@ var priceMonitorExpressionLaneKeys = map[string]string{
 }
 
 func parsePriceMonitorExpression(expression string) ([]PriceMonitorPriceTier, bool) {
-	expression = strings.TrimSpace(expression)
-	if expression == "" || strings.Contains(expression, "|||") || strings.Contains(expression, "header(") || strings.Contains(expression, "param(") || strings.Contains(expression, "hour(") || strings.Contains(expression, "minute(") || strings.Contains(expression, "weekday(") {
+	analysis, err := billingexpr.AnalyzeStandard(expression)
+	if err != nil {
 		return nil, true
 	}
-	matches := priceMonitorTierPattern.FindAllStringSubmatchIndex(expression, -1)
-	if len(matches) == 0 || len(matches) > 2 {
-		return nil, true
-	}
-	tiers := make([]PriceMonitorPriceTier, 0, len(matches))
-	previousEnd := 0
-	conditionVariable, conditionOperator, conditionValue := "", "", 0.0
-	for index, match := range matches {
-		body := expression[match[2]:match[3]]
-		if !priceMonitorSafeTierBody.MatchString(body) {
-			return nil, true
+	tiers := make([]PriceMonitorPriceTier, 0, len(analysis.Segments))
+	for _, segment := range analysis.Segments {
+		tier := PriceMonitorPriceTier{Input: segment.Prices["p"], Output: segment.Prices["c"]}
+		if len(analysis.Segments) > 2 {
+			tier.MinContext = segment.Min
+			tier.MaxContext = segment.Max
 		}
-		input, output := 0.0, 0.0
-		lanes := make([]PriceMonitorPriceLane, 0)
-		for _, coefficient := range priceMonitorCoefficient.FindAllStringSubmatch(body, -1) {
-			value, err := strconv.ParseFloat(coefficient[2], 64)
-			if err != nil {
-				return nil, true
-			}
-			if coefficient[1] == "p" {
-				input = value
-			} else if coefficient[1] == "c" {
-				output = value
-			} else if key := priceMonitorExpressionLaneKeys[coefficient[1]]; key != "" {
-				lanes = append(lanes, PriceMonitorPriceLane{Key: key, Price: floatPointer(value)})
+		if segment.Max != nil {
+			tier.ConditionVariable = "len"
+			tier.ConditionOperator = "<="
+			tier.ConditionValue = floatPointer(float64(*segment.Max))
+		} else if segment.Min > 0 {
+			tier.ConditionVariable = "len"
+			tier.ConditionOperator = ">"
+			tier.ConditionValue = floatPointer(float64(segment.Min - 1))
+		}
+		for _, key := range []string{"cr", "cc", "cc1h", "img", "img_o", "ai", "ao"} {
+			if analysis.UsedVars[key] {
+				tier.Lanes = append(tier.Lanes, PriceMonitorPriceLane{Key: priceMonitorExpressionLaneKeys[key], Price: floatPointer(segment.Prices[key])})
 			}
 		}
-		tierConditionVariable, tierConditionOperator := "", ""
-		var tierConditionValue *float64
-		prefix := expression[previousEnd:match[0]]
-		condition := priceMonitorTierCondition.FindStringSubmatch(prefix)
-		if len(condition) > 0 {
-			value, err := strconv.ParseFloat(condition[3], 64)
-			if err != nil {
-				return nil, true
-			}
-			conditionVariable, conditionOperator, conditionValue = condition[1], condition[2], value
-			tierConditionVariable, tierConditionOperator, tierConditionValue = conditionVariable, conditionOperator, floatPointer(conditionValue)
-		} else if index == 1 && conditionVariable != "" {
-			tierConditionVariable, tierConditionOperator, tierConditionValue = conditionVariable, inversePriceMonitorOperator(conditionOperator), floatPointer(conditionValue)
-		} else if len(matches) > 1 {
-			return nil, true
-		}
-		tiers = append(tiers, PriceMonitorPriceTier{ConditionVariable: tierConditionVariable, ConditionOperator: tierConditionOperator, ConditionValue: tierConditionValue, Input: input, Output: output, Lanes: lanes})
-		previousEnd = match[1]
+		tiers = append(tiers, tier)
 	}
 	return tiers, false
 }
@@ -1249,6 +1272,42 @@ func isUntrustedPriceMonitorSource(data map[string]any, modelName string) bool {
 }
 
 func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMonitorPriceCell) {
+	if source.BillingMode == "" {
+		source.BillingMode = source.Mode
+	}
+	normalizationUnknown := false
+	if (platform.Expr != "" || platform.Standard != nil) && (source.Expr != "" || source.Standard != nil) {
+		left, leftErr := priceMonitorStandardCellAnalysis(platform)
+		right, rightErr := priceMonitorStandardCellAnalysis(*source)
+		if leftErr == nil && rightErr == nil {
+			for _, variable := range []string{"cr", "cc", "cc1h", "img", "img_o", "ai", "ao"} {
+				if left.UsedVars[variable] != right.UsedVars[variable] {
+					normalizationUnknown = true
+					break
+				}
+			}
+		}
+	}
+	defer func() {
+		source.ComparisonStatus = "equal"
+		source.ComparisonReason = ""
+		if source.Different {
+			source.ComparisonStatus = "different"
+		}
+		if normalizationUnknown {
+			source.ComparisonStatus = "partial"
+			source.ComparisonReason = "normalization_semantics_unknown"
+		}
+		if platform.Dynamic || source.Dynamic {
+			source.ComparisonStatus = "scenario_only"
+			source.ComparisonReason = "request_or_custom_expression"
+		}
+		if platform.UnavailableReason != "" || source.UnavailableReason != "" {
+			source.ComparisonStatus = "unavailable"
+			source.ComparisonReason = "missing_price"
+		}
+	}()
+
 	// 只有一档、不带条件的阶梯表达式，与同价的按量计费完全等价，不能仅凭计费模式不同就判为不一致。
 	// 来源侧直接换算成按量单元格：之后的逐字段标记、「高于平台」、亏损判定与保本下限都读这个
 	// 单元格，口径因此一致。平台侧只在这里借用换算结果、不改写自身——改价接口要靠平台的计费
@@ -1278,7 +1337,14 @@ func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMo
 		source.Different = source.PriceDifferent
 	case priceMonitorModeExpression:
 		if !platform.Dynamic && !source.Dynamic {
-			source.Different = !priceMonitorPriceCellsEqual(platform, *source)
+			left, leftErr := priceMonitorStandardCellAnalysis(platform)
+			right, rightErr := priceMonitorStandardCellAnalysis(*source)
+			if leftErr == nil && rightErr == nil {
+				source.Differences = billingexpr.CompareStandard(left, right)
+				source.Different = len(source.Differences) > 0
+			} else {
+				source.Different = !priceMonitorPriceCellsEqual(platform, *source)
+			}
 		} else {
 			source.Different = platform.Expr != source.Expr
 		}
@@ -1433,4 +1499,57 @@ func priceMonitorStorageScope() string {
 		path = priceMonitorStore.path
 	}
 	return fmt.Sprintf("local:%s", path)
+}
+
+// priceMonitorStandardCellAnalysis keeps snapshot prices authoritative while
+// validating the complete stored expression and its global variable semantics.
+func priceMonitorStandardCellAnalysis(cell PriceMonitorPriceCell) (*billingexpr.StandardAnalysis, error) {
+	analysis, err := billingexpr.AnalyzeStandard(cell.Expr)
+	if err != nil && cell.Expr == "" && cell.Standard != nil && cell.Standard.SchemaVersion == 1 && len(cell.Standard.Segments) > 0 && len(cell.Standard.Segments) <= 128 {
+		analysis = &billingexpr.StandardAnalysis{SchemaVersion: 1, UsedVars: make(map[string]bool), Segments: make([]billingexpr.StandardSegment, len(cell.Standard.Segments))}
+		for key, value := range cell.Standard.UsedVars {
+			analysis.UsedVars[key] = value
+		}
+		for i, segment := range cell.Standard.Segments {
+			analysis.Segments[i] = segment
+			analysis.Segments[i].Prices = make(map[string]float64)
+			for key, value := range segment.Prices {
+				analysis.Segments[i].Prices[key] = value
+			}
+		}
+		err = nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(cell.Tiers) == len(analysis.Segments) {
+		for i, tier := range cell.Tiers {
+			analysis.Segments[i].Prices["p"] = tier.Input
+			analysis.Segments[i].Prices["c"] = tier.Output
+			for variable, key := range priceMonitorExpressionLaneKeys {
+				for _, lane := range tier.Lanes {
+					if lane.Key == key && lane.Price != nil {
+						analysis.Segments[i].Prices[variable] = *lane.Price
+					}
+				}
+			}
+		}
+	}
+	return analysis, nil
+}
+
+// actualBillingMode is retained when the display normalizes a single expression tier.
+func (cell PriceMonitorPriceCell) actualBillingMode() string {
+	if cell.BillingMode != "" {
+		return cell.BillingMode
+	}
+	return cell.Mode
+}
+
+func priceMonitorCellNeedsReview(cell PriceMonitorPriceCell) bool {
+	switch cell.ComparisonStatus {
+	case "scenario_only", "partial", "unsupported", "unknown":
+		return true
+	}
+	return false
 }

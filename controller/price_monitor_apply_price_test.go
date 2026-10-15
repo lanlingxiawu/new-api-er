@@ -27,6 +27,7 @@ func useApplyPriceEnv(t *testing.T, snapshot PriceMonitorSnapshot) {
 	getPriceMonitorStore()
 	previousStore := priceMonitorStore
 	previousDB := model.DB
+	previousLogDB := model.LOG_DB
 	previousType := common.MainDatabaseType()
 	previousMap := common.OptionMap
 
@@ -36,8 +37,9 @@ func useApplyPriceEnv(t *testing.T, snapshot PriceMonitorSnapshot) {
 
 	db, err := gorm.Open(sqlite.Open("file:apply_price_"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.User{}, &model.Log{}))
 	model.DB = db
+	model.LOG_DB = db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
@@ -49,6 +51,7 @@ func useApplyPriceEnv(t *testing.T, snapshot PriceMonitorSnapshot) {
 		}
 		priceMonitorStore = previousStore
 		model.DB = previousDB
+		model.LOG_DB = previousLogDB
 		common.SetMainDatabaseType(previousType)
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = previousMap

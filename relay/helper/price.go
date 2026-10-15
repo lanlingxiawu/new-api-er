@@ -75,8 +75,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// Check if this model uses tiered_expr billing
-	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
-		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
+	billingMode, billingExpression, hasBillingExpression := billing_setting.GetModelBilling(info.OriginModelName)
+	if billingMode == billing_setting.BillingModeTieredExpr {
+		if !hasBillingExpression {
+			return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
+		}
+		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo, billingExpression)
 	}
 
 	var preConsumedQuota int
@@ -258,18 +262,14 @@ func HasModelBillingConfig(modelName string) bool {
 	if _, ok, _ := ratio_setting.GetModelRatio(modelName); ok {
 		return true
 	}
-	if billing_setting.GetBillingMode(modelName) != billing_setting.BillingModeTieredExpr {
+	mode, expr, ok := billing_setting.GetModelBilling(modelName)
+	if mode != billing_setting.BillingModeTieredExpr {
 		return false
 	}
-	expr, ok := billing_setting.GetBillingExpr(modelName)
 	return ok && strings.TrimSpace(expr) != ""
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
-	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
-	if !ok {
-		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
-	}
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo, exprStr string) (hosttypes.PriceData, error) {
 
 	estimatedCompletionTokens := meta.MaxTokens
 	if estimatedCompletionTokens == 0 && groupRatioInfo.GroupRatio != 0 {

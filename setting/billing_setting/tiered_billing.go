@@ -18,17 +18,41 @@ const (
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr
 type BillingSetting struct {
-	BillingMode map[string]string `json:"billing_mode"`
-	BillingExpr map[string]string `json:"billing_expr"`
+	AtomicPricingEnabled bool              `json:"atomic_pricing_enabled"`
+	BillingMode          map[string]string `json:"billing_mode"`
+	BillingExpr          map[string]string `json:"billing_expr"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	AtomicPricingEnabled: true,
+	BillingMode:          make(map[string]string),
+	BillingExpr:          make(map[string]string),
+}
+
+var billingSnapshot config.Snapshot[BillingSetting]
+
+func publishBillingSnapshot() {
+	billingSnapshot.Publish(BillingSetting{AtomicPricingEnabled: billingSetting.AtomicPricingEnabled, BillingMode: lo.Assign(billingSetting.BillingMode), BillingExpr: lo.Assign(billingSetting.BillingExpr)})
 }
 
 func init() {
-	config.GlobalConfig.Register("billing_setting", &billingSetting)
+	config.GlobalConfig.RegisterSnapshot("billing_setting", &billingSetting, publishBillingSnapshot)
+}
+
+// GetModelBilling returns a coherent mode/expression pair without locking the
+// relay. Configuration maps are copied only when administrators publish updates.
+func GetModelBilling(model string) (string, string, bool) {
+	snapshot := billingSnapshot.Load()
+	if !snapshot.AtomicPricingEnabled {
+		expression, ok := GetBillingExpr(model)
+		return GetBillingMode(model), expression, ok
+	}
+	mode, exists := snapshot.BillingMode[model]
+	if !exists {
+		mode = BillingModeRatio
+	}
+	expression, ok := snapshot.BillingExpr[model]
+	return mode, expression, ok
 }
 
 // ---------------------------------------------------------------------------
@@ -48,21 +72,27 @@ func GetBillingExpr(model string) (string, bool) {
 }
 
 func GetBillingModeCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingMode)
+	var result map[string]string
+	config.WithConfigDraft(func() { result = lo.Assign(billingSetting.BillingMode) })
+	return result
 }
 
 func GetBillingExprCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingExpr)
+	var result map[string]string
+	config.WithConfigDraft(func() { result = lo.Assign(billingSetting.BillingExpr) })
+	return result
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {
 	extra := make(map[string]any, 2)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
-		extra[BillingModeField] = modes
-	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
-		extra[BillingExprField] = exprs
-	}
+	config.WithConfigDraft(func() {
+		if len(billingSetting.BillingMode) > 0 {
+			extra[BillingModeField] = lo.Assign(billingSetting.BillingMode)
+		}
+		if len(billingSetting.BillingExpr) > 0 {
+			extra[BillingExprField] = lo.Assign(billingSetting.BillingExpr)
+		}
+	})
 	return lo.Assign(base, extra)
 }
 

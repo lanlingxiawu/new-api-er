@@ -26,7 +26,8 @@ import {
   Share2,
 } from 'lucide-react'
 import {
-  type ReactNode,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -100,7 +101,6 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 
 import {
-  applyPriceMonitorPrice,
   getPriceMonitorChannelCosts,
   getPriceMonitorResults,
   getPriceMonitorStatus,
@@ -111,10 +111,7 @@ import {
 } from '../api'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import type {
-  PriceMonitorApplyPriceItem,
-  PriceMonitorApplyPriceResponse,
   PriceMonitorChannelCost,
-  PriceMonitorFloorViolation,
   PriceMonitorLossKind,
   PriceMonitorLossLine,
   PriceMonitorMatrixItem,
@@ -128,19 +125,18 @@ import type {
 import { ChannelSelectorDialog } from './channel-selector-dialog'
 import { OPENROUTER_CHANNEL_TYPE } from './constants'
 import {
-  PriceMonitorApplyDialog,
-  type PriceMonitorRepairTarget,
-} from './price-monitor-apply-dialog'
-import {
   formatCostFactor,
   isCostRatioMismatch,
 } from './price-monitor-channel-cost-utils'
 import { PriceMonitorChannelCosts } from './price-monitor-channel-costs'
 
 const PAGE_SIZE = 20
-const PLATFORM_KEY = 'platform'
+const PriceMonitorPricingDialog = lazy(() =>
+  import('./price-monitor-pricing-dialog').then((module) => ({
+    default: module.PriceMonitorPricingDialog,
+  }))
+)
 const CONFIGURED_LOSS: PriceMonitorLossKind = 'configured'
-const NO_MODELS: ReadonlySet<string> = new Set()
 /** 成本系数核对是页面内的另一个视图，不是矩阵的比对筛选。 */
 const COST_RATIO_VIEW = 'cost_ratio'
 
@@ -160,31 +156,6 @@ function configuredLossChannelId(
   return header?.channel_id
 }
 
-/** 阶梯表达式（或动态价格）无法在这里改价，服务端也会拒绝。 */
-function isTieredPlatformPrice(platform: PriceMonitorPriceCell | undefined) {
-  return platform?.mode === 'tiered_expr' || Boolean(platform?.dynamic)
-}
-
-/**
- * 任何按量/按次计价的行都能改价（设计 docs/design/price-monitor-channel-cost-check.md §5.1）：
- * repair_floor 带着现值与参考价，保本下限 fields 可能为空（没有可比渠道）。
- */
-function buildRepairTarget(
-  item: PriceMonitorMatrixItem
-): PriceMonitorRepairTarget | null {
-  const platform = item.prices[PLATFORM_KEY]
-  if (!item.repair_floor) return null
-  if (platform?.mode !== 'per_token' && platform?.mode !== 'per_request') {
-    return null
-  }
-  if (platform.dynamic) return null
-  return { model: item.model, platform, floor: item.repair_floor }
-}
-
-function modelPricingLink(model: string) {
-  return `/system-settings/billing/model-pricing?model=${encodeURIComponent(model)}`
-}
-
 const primaryComparisonFilters = [
   ['all', 'All differences'],
   ['channel_official', 'Channel vs official'],
@@ -194,6 +165,7 @@ const primaryComparisonFilters = [
   ['platform_models_dev', 'Platform vs models.dev'],
   ['above_platform', 'Priced above platform'],
   ['loss_risk', 'Loss risk'],
+  ['needs_review', 'Scenario comparison required'],
   [COST_RATIO_VIEW, 'Cost ratio check'],
 ] as const
 
@@ -582,6 +554,9 @@ function laneLabel(key: PriceMonitorPriceLane['key'], t: TFunction) {
 }
 
 function tierLabel(tier: PriceMonitorPriceTier, t: TFunction) {
+  if (tier.min_context !== undefined || tier.max_context !== undefined) {
+    return `${tier.min_context ?? 0} ≤ ${t('Input length')}${tier.max_context === undefined ? '' : ` ≤ ${tier.max_context}`} tokens`
+  }
   if (
     !tier.condition_variable ||
     !tier.condition_operator ||
@@ -619,9 +594,6 @@ function PriceCell({
 }) {
   const { t } = useTranslation()
   const lossKinds = price?.loss_kinds ?? []
-  if (!price?.highest && lossKinds.length === 0) {
-    return <PriceCellContent price={price} sourceType={sourceType} />
-  }
   const formatRatio = (value?: number) =>
     value === undefined ? '—' : Number(value.toFixed(4)).toString()
   const lossLines = lossKinds.includes('measured')
@@ -638,6 +610,28 @@ function PriceCell({
         放到下面之后，各单元格的价格行都从顶部开始，天然平行。
       */}
       <PriceCellContent price={price} sourceType={sourceType} />
+      {price?.comparison_status === 'scenario_only' && (
+        <Badge variant='outline'>{t('Scenario comparison required')}</Badge>
+      )}
+      {price?.comparison_status === 'partial' && (
+        <Badge variant='outline'>{t('Partially compared')}</Badge>
+      )}
+      {price?.comparison_reason === 'normalization_semantics_unknown' && (
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'Token normalization differs or is unknown; compare cache and media scenarios'
+          )}
+        </p>
+      )}
+      {(price?.differences ?? []).map((difference) => (
+        <p
+          key={`${difference.min}:${difference.max ?? ''}:${difference.variable}`}
+          className='text-destructive text-xs'
+        >
+          {difference.min}–{difference.max ?? '∞'} · {difference.variable}:{' '}
+          {formatPrice(difference.left)} / {formatPrice(difference.right)}
+        </p>
+      ))}
       <div className='flex flex-wrap gap-1'>
         {price?.highest && (
           <Badge variant='warning'>{t('Highest price')}</Badge>
@@ -795,7 +789,7 @@ function PriceCellContent({
   return (
     <div
       className={
-        price.mode_different
+        price.mode_different && price.comparison_status !== 'scenario_only'
           ? 'bg-destructive/10 text-destructive rounded p-2'
           : 'text-muted-foreground p-2'
       }
@@ -1121,16 +1115,6 @@ export function PriceMonitorPanel({
 
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
   const [repairOpen, setRepairOpen] = useState(false)
-  // 当前快照内已改过价的模型。快照在下次巡检前仍显示旧价格，再提交一次会与
-  // 刚写入的新价冲突，所以这些行的改价入口先禁用；快照一换（checked_at 变化）自动失效。
-  const [appliedModels, setAppliedModels] = useState<{
-    checkedAt: number
-    models: ReadonlySet<string>
-  }>({ checkedAt: 0, models: NO_MODELS })
-
-  // 结果统一在 handleApplyPrice 里处理，这里不挂 onSuccess / onError，避免重复提示。
-  const applyPriceMutation = useMutation({ mutationFn: applyPriceMonitorPrice })
-
   const refreshMonitorQueries = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['price-monitor-status'] }),
@@ -1199,91 +1183,14 @@ export function PriceMonitorPanel({
   const snapshot = status?.snapshot
   const results = resultsQuery.data?.data
   const checkedAt = snapshot?.checked_at ?? 0
-  const repairTargets = useMemo(() => {
-    const targets = new Map<string, PriceMonitorRepairTarget>()
-    for (const item of results?.items ?? []) {
-      const target = buildRepairTarget(item)
-      if (target) targets.set(item.model, target)
-    }
-    return targets
-  }, [results?.items])
-  const appliedInSnapshot =
-    appliedModels.checkedAt === checkedAt ? appliedModels.models : NO_MODELS
   const selectableModels = useMemo(
-    () =>
-      [...repairTargets.keys()].filter(
-        (model) => !appliedInSnapshot.has(model)
-      ),
-    [appliedInSnapshot, repairTargets]
+    () => (results?.items ?? []).map((item) => item.model),
+    [results?.items]
   )
-  // 必须 memo：结果每 30 秒轮询一次，内联数组会让弹窗每次都拿到新的 targets。
-  const selectedTargets = useMemo(
-    () =>
-      [...selectedModels].flatMap((model) => {
-        const target = repairTargets.get(model)
-        return target ? [target] : []
-      }),
-    [repairTargets, selectedModels]
+  const selectedPricingModels = useMemo(
+    () => [...selectedModels],
+    [selectedModels]
   )
-
-  const handleApplyPrice = async (
-    items: PriceMonitorApplyPriceItem[],
-    force: boolean
-  ): Promise<PriceMonitorFloorViolation[]> => {
-    let response: PriceMonitorApplyPriceResponse
-    try {
-      response = await applyPriceMutation.mutateAsync({
-        checked_at: checkedAt,
-        pricing_version: status?.pricing_version ?? 0,
-        items,
-        force,
-      })
-    } catch {
-      toast.error(t('Failed to update pricing'))
-      return []
-    }
-    if (!response.success) {
-      // 低于保本下限：交给弹窗列出违规字段并进入确认步骤，不弹 toast。
-      const violations =
-        response.error_code === 'PRICE_BELOW_FLOOR'
-          ? (response.data?.violations ?? [])
-          : []
-      if (violations.length === 0) {
-        toast.error(response.message || t('Failed to update pricing'))
-      }
-      return violations
-    }
-    const appliedCount = (response.data?.results ?? []).reduce(
-      (total, result) => total + result.applied.length,
-      0
-    )
-    const refreshed = response.data?.refreshed === true
-    if (!refreshed) {
-      // 结果没能就地重算（非主节点等）：快照仍是旧价格，再提交会与刚写入的新价冲突，
-      // 这些行的改价入口先锁住，快照一换（checked_at 变化）自动解锁。
-      setAppliedModels((current) => ({
-        checkedAt,
-        models: new Set([
-          ...(current.checkedAt === checkedAt ? current.models : []),
-          ...items.map((item) => item.model),
-        ]),
-      }))
-    }
-    setRepairOpen(false)
-    setSelectedModels(new Set())
-    toast.success(
-      refreshed
-        ? t('Updated {{count}} pricing fields; results recalculated', {
-            count: appliedCount,
-          })
-        : t('Updated {{count}} pricing fields', { count: appliedCount })
-    )
-    void Promise.all([
-      refreshMonitorQueries(),
-      queryClient.invalidateQueries({ queryKey: ['system-options'] }),
-    ])
-    return []
-  }
 
   const hasModelsDev = status?.config.include_models_dev === true
   const visiblePrimaryComparisonFilters = hasModelsDev
@@ -1432,71 +1339,40 @@ export function PriceMonitorPanel({
         {t('Adjust cost ratio')}
       </Button>
     )
-    let priceAction: ReactNode = (
-      <span className='text-muted-foreground text-xs'>—</span>
-    )
-    if (repairTargets.has(item.model)) {
-      priceAction = appliedInSnapshot.has(item.model) ? (
-        <div className='space-y-1'>
-          <Button size='sm' variant='outline' disabled>
-            {t('Change price')}
-          </Button>
-          <p className='text-muted-foreground text-xs'>
-            {t('Updated — refreshes after the next check')}
-          </p>
-        </div>
-      ) : (
-        <div className='flex items-start gap-2'>
-          <Checkbox
-            className='mt-0.5'
-            aria-label={t('Select {{model}}', { model: item.model })}
-            checked={selectedModels.has(item.model)}
-            onCheckedChange={(checked) =>
-              setSelectedModels((current) => {
-                const next = new Set(current)
-                if (checked) next.add(item.model)
-                else next.delete(item.model)
-                return next
-              })
-            }
-          />
-          <Button
-            size='sm'
-            variant='outline'
-            disabled={!canRepairPricing}
-            title={
-              canRepairPricing
-                ? undefined
-                : t('Requires permission to edit model pricing')
-            }
-            onClick={() => {
-              setSelectedModels(new Set([item.model]))
-              setRepairOpen(true)
-            }}
-          >
-            {t('Change price')}
-          </Button>
-        </div>
-      )
-    } else if (isTieredPlatformPrice(item.prices[PLATFORM_KEY])) {
-      priceAction = (
+    const priceAction = (
+      <div className='flex items-start gap-2'>
+        <Checkbox
+          className='mt-0.5'
+          disabled={!canRepairPricing}
+          aria-label={t('Select {{model}}', { model: item.model })}
+          checked={selectedModels.has(item.model)}
+          onCheckedChange={(checked) =>
+            setSelectedModels((current) => {
+              const next = new Set(current)
+              if (checked) next.add(item.model)
+              else next.delete(item.model)
+              return next
+            })
+          }
+        />
         <Button
           size='sm'
-          variant='link'
-          className='h-auto p-0 text-xs'
-          render={
-            <a
-              href={modelPricingLink(item.model)}
-              target='_blank'
-              rel='noreferrer'
-            />
+          variant='outline'
+          disabled={!canRepairPricing}
+          title={
+            canRepairPricing
+              ? undefined
+              : t('Requires permission to edit model pricing')
           }
+          onClick={() => {
+            setSelectedModels(new Set([item.model]))
+            setRepairOpen(true)
+          }}
         >
-          {t('Edit in model pricing')}
-          <ExternalLink data-icon='inline-end' className='size-3' />
+          {t('Change price')}
         </Button>
-      )
-    }
+      </div>
+    )
     return (
       <div className='space-y-1.5'>
         {priceAction}
@@ -1727,6 +1603,16 @@ export function PriceMonitorPanel({
                     {t('Apply filters')}
                   </Button>
                   <Button
+                    variant='outline'
+                    disabled={!canRepairPricing || !draftModel.trim()}
+                    onClick={() => {
+                      setSelectedModels(new Set([draftModel.trim()]))
+                      setRepairOpen(true)
+                    }}
+                  >
+                    {t('Configure model pricing')}
+                  </Button>
+                  <Button
                     variant='ghost'
                     onClick={() => {
                       setDraftModel('')
@@ -1844,7 +1730,7 @@ export function PriceMonitorPanel({
               >
                 <div className='bg-background flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-3'>
                   {/* 批量修复放进表格工具栏，而不是单独占一行：切换筛选时页面结构保持一致，不会上下跳动。 */}
-                  {repairTargets.size > 0 && (
+                  {selectableModels.length > 0 && (
                     <div className='flex items-center gap-2'>
                       <Checkbox
                         aria-label={t('Select all')}
@@ -1992,13 +1878,38 @@ export function PriceMonitorPanel({
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
-      <PriceMonitorApplyDialog
-        open={repairOpen}
-        submitting={applyPriceMutation.isPending}
-        targets={selectedTargets}
-        onOpenChange={setRepairOpen}
-        onSubmit={handleApplyPrice}
-      />
+      {repairOpen && (
+        <Suspense
+          fallback={
+            <Dialog
+              open
+              onOpenChange={setRepairOpen}
+              title={t('Change selected prices')}
+            >
+              <p role='status'>{t('Loading...')}</p>
+            </Dialog>
+          }
+        >
+          <PriceMonitorPricingDialog
+            open={repairOpen}
+            models={selectedPricingModels}
+            checkedAt={checkedAt}
+            items={results?.items ?? []}
+            sources={results?.source_headers ?? []}
+            onOpenChange={setRepairOpen}
+            onSaved={() => {
+              setSelectedModels(new Set())
+              void Promise.all([
+                refreshMonitorQueries(),
+                queryClient.invalidateQueries({ queryKey: ['system-options'] }),
+                queryClient.invalidateQueries({
+                  queryKey: ['price-monitor-model-pricing'],
+                }),
+              ])
+            }}
+          />
+        </Suspense>
+      )}
 
       <Dialog
         open={settingsOpen}

@@ -24,11 +24,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 
-import {
-  fetchUpstreamRatios,
-  getUpstreamChannels,
-  updateSystemOption,
-} from '../api'
+import { fetchUpstreamRatios, getUpstreamChannels } from '../api'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import type {
   DifferencesMap,
@@ -50,6 +46,7 @@ import {
   OPENROUTER_CHANNEL_TYPE,
   OPENROUTER_ENDPOINT,
 } from './constants'
+import { savePricingOptionMaps } from './price-monitor-pricing-api'
 import {
   NUMERIC_SYNC_FIELDS,
   RATIO_SYNC_FIELDS,
@@ -198,9 +195,17 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
   const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
     mutationFn: async (updates: Array<{ key: string; value: string }>) => {
-      for (const update of updates) {
-        await updateSystemOption({ ...update, scope: MODEL_PRICING_SCOPE })
-      }
+      await savePricingOptionMaps({
+        options: Object.fromEntries(
+          updates.map((update) => [update.key, update.value])
+        ),
+        expected_options: Object.fromEntries(
+          updates.map((update) => [
+            update.key,
+            modelRatios[update.key as keyof typeof modelRatios],
+          ])
+        ),
+      })
     },
     onSuccess: () => {
       toast.success(t('Prices synced successfully'))

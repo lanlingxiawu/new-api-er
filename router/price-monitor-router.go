@@ -17,6 +17,8 @@ var priceMonitorAdminRoutes = []permissionRoute{
 	{method: http.MethodPost, path: "/run", permission: authz.AdminMenuPriceMonitorEdit, handler: controller.RunPriceMonitor},
 	// 改价与 rest_model_ratio 用同一个权限位：两者都是「修改模型价格」，不该有两套授权语义。
 	{method: http.MethodPost, path: "/apply_price", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.ApplyPriceMonitorPrice},
+	{method: http.MethodPost, path: "/preview_price", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.PreviewPriceMonitorPrice},
+	{method: http.MethodPost, path: "/evaluate", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.EvaluatePriceMonitorPrice},
 	{method: http.MethodGet, path: "/channels", permission: authz.AdminMenuPriceMonitorView, handler: controller.GetPriceMonitorChannelCosts},
 	// 改成本系数还要渠道编辑权限（见 registerPriceMonitorRoutes）：与渠道编辑抽屉改成本系数同一授权。
 	{method: http.MethodPut, path: "/channels/:id/cost_ratio", permission: authz.AdminMenuPriceMonitorEdit, handler: controller.UpdatePriceMonitorChannelCostRatio},

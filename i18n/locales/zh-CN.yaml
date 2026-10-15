@@ -677,3 +677,8 @@ relay.request_form_invalid: "无法解析表单数据，请发送合法的 multi
 relay.image_request_unsupported: "模型 {{.Model}} 在可用渠道上不支持该图片请求。"
 relay.image_request_invalid: "图片请求不完整或无效，请检查提示词、上传的图片文件及额外字段后重试。"
 relay.request_prepare_failed: "无法为上游服务准备该请求，请稍后重试。"
+price_monitor.unknown_risk: "部分价格无法核对渠道成本。请查看未覆盖的项目，并确认了解不确定性后再保存。"
+price_monitor.preview_unsupported: "当前计费能力或用量数据无法试算此价格规则。"
+price_monitor.preview_source_unavailable: "该来源暂无可用价格，请刷新巡检或选择其他来源。"
+price_monitor.preview_semantics_unknown: "无法确定来源的计费规则语义，因此不能可靠比较此场景。"
+price_monitor.conversion_unsupported: "此价格无法在保持原计费行为的前提下自动转换。请保留当前定价，或核对用量规则后编辑表达式。"

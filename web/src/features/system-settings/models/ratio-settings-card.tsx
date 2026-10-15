@@ -35,6 +35,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
+import { savePricingOptionMaps } from './price-monitor-pricing-api'
 import { ThirdPartySD2PriceSettings } from './thirdpartysd2-price-settings'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -190,6 +191,11 @@ export function RatioSettingsCard({
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const pricingOptionsMutation = useMutation({
+    mutationFn: savePricingOptionMaps,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['system-options'] }),
+  })
 
   const resetMutation = useMutation({
     mutationFn: resetModelRatios,
@@ -380,19 +386,39 @@ export function RatioSettingsCard({
       }
 
       await requestSaveConfirmation(async () => {
-        for (const key of updates) {
-          const apiKey = apiKeyMap[key as string] || (key as string)
-          await updateOption.mutateAsync({
-            key: apiKey,
-            value: normalized[key],
+        const pricingKeys = updates.filter(
+          (key) => key !== 'ExposeRatioEnabled'
+        )
+        if (pricingKeys.length > 0) {
+          await pricingOptionsMutation.mutateAsync({
+            options: Object.fromEntries(
+              pricingKeys.map((key) => [apiKeyMap[key] || key, normalized[key]])
+            ),
+            expected_options: Object.fromEntries(
+              pricingKeys.map((key) => [
+                apiKeyMap[key] || key,
+                modelNormalizedDefaults.current[key],
+              ])
+            ),
           })
+        }
+        if (updates.includes('ExposeRatioEnabled')) {
+          const response = await updateOption.mutateAsync({
+            key: 'ExposeRatioEnabled',
+            value: normalized.ExposeRatioEnabled,
+          })
+          if (!response.success) {
+            throw new Error(
+              response.message || t('Failed to save model pricing')
+            )
+          }
         }
 
         modelNormalizedDefaults.current = normalized
         setSavedModelValues(normalized)
       })
     },
-    [requestSaveConfirmation, t, updateOption]
+    [requestSaveConfirmation, t, updateOption, pricingOptionsMutation]
   )
 
   const saveGroupRatios = useCallback(
@@ -508,7 +534,7 @@ export function RatioSettingsCard({
           savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
-          isSaving={updateOption.isPending}
+          isSaving={updateOption.isPending || pricingOptionsMutation.isPending}
           isResetting={resetMutation.isPending}
           variant={tab === 'unset-models' ? 'unset' : 'default'}
         />

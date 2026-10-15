@@ -143,8 +143,15 @@ The editor outputs a billing expression string and an optional request rule expr
 **File**: `setting/billing_setting/tiered_billing.go`
 
 Two option maps stored in the `options` DB table:
-- `ModelBillingMode`: `{ "model-name": "tiered_expr" }` — activates tiered billing for a model
-- `ModelBillingExpr`: `{ "model-name": "tier(\"base\", p * 2.5 + c * 15)" }` — the expression
+- `billing_setting.billing_mode`: `{ "model-name": "tiered_expr" }` — activates tiered billing for a model
+- `billing_setting.billing_expr`: `{ "model-name": "tier(\"base\", p * 2.5 + c * 15)" }` — the expression
+
+Model-level administrator edits use `model/model_pricing_config.go`: a complete
+configured draft and a per-model expected version are validated and saved in one
+transaction. Effective/default prices are returned separately. Price-monitor
+edits additionally bind risk acknowledgements to the reviewed draft and quote
+context. Management previews use request-scoped `CompilePreview` / `RunAt` with
+a fixed clock; they do not populate the relay compilation cache.
 
 On save, the expression is validated:
 1. Compiled via `billingexpr.CompileFromCache()` — syntax check
