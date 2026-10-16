@@ -388,7 +388,8 @@ func Recharge(referenceId string, customerId string, callerIp string, notifiedAm
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quota, common.LogText("stripe topup"))
 
-	RecordTopupLog(topUp.UserId, common.NewMessage("Online top-up succeeded, amount added: {{quota}}, payment amount: {{amount}}", map[string]any{"quota": logger.FormatQuota(quota), "amount": topUp.Amount}), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
+	paidAmount := decimal.NewFromInt(notifiedAmountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
+	RecordTopupLog(topUp.UserId, common.NewMessage("Online top-up succeeded, amount added: {{quota}}, payment amount: {{amount}}", map[string]any{"quota": logger.FormatQuota(quota), "amount": paidAmount}), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
 
 	return nil
 }

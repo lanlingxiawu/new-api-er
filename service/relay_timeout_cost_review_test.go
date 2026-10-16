@@ -161,8 +161,9 @@ func TestInputOnlyExcludesToolSurcharges(t *testing.T) {
 	t.Run("stream with reported web searches", func(t *testing.T) {
 		c, info := streamTimeoutCase(t, NonStreamTimeoutBillingInput)
 		c.Set("claude_web_search_requests", 2)
+		info.SetBillableToolCount(dto.BuildInToolWebSearch, 2)
 		surcharge := relayConfirmedToolSurchargeQuota(c, info)
-		require.Positive(t, surcharge)
+		require.Equal(t, common.QuotaFromFloat(2*10.0/1000*common.QuotaPerUnit), surcharge)
 		fixture := &timeoutBillingFixture{pre: 1000}
 		info.Billing = fixture
 		usage := FinalizeStreamUsage(c, info, nil)

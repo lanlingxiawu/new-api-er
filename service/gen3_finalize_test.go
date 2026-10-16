@@ -128,6 +128,33 @@ func TestFinalize_PostTextConsumeQuota_RichUsage(t *testing.T) {
 	assert.Equal(t, 5_000_000-log.Quota, getUserQuota(t, uid))
 }
 
+func TestFinalize_PostTextConsumeQuota_SearchUsageChargedOnce(t *testing.T) {
+	truncate(t)
+	const uid, tid, chid = 3212, 3212, 78
+	seedUser(t, uid, 1_000_000)
+	seedToken(t, tid, uid, "sk-fin-search", 900_000)
+	seedChannel(t, chid)
+	info := finalizeRelayInfo(uid, tid, chid, "sk-fin-search")
+	info.SetBillableToolCount(dto.BuildInToolWebSearch, 2)
+	c := finalizeCtx(t)
+	c.Set("claude_web_search_requests", 2)
+	PostTextConsumeQuota(c, info, &dto.Usage{PromptTokens: 1, TotalTokens: 1}, nil)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	wantQuota := 1 + common.QuotaFromFloat(2*10.0/1000*common.QuotaPerUnit)
+	assert.Equal(t, wantQuota, log.Quota)
+	assert.Equal(t, 1_000_000-wantQuota, getUserQuota(t, uid))
+	assert.Equal(t, 900_000-wantQuota, getTokenRemainQuota(t, tid))
+	var other struct {
+		Items []ToolSurchargeItem `json:"tool_surcharges"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	require.Len(t, other.Items, 1)
+	assert.Equal(t, dto.BuildInToolWebSearch, other.Items[0].Name)
+	assert.Equal(t, 2, other.Items[0].Count)
+}
+
 // --- PostAudioConsumeQuota -------------------------------------------------
 
 func TestFinalize_PostAudioConsumeQuota_Deducts(t *testing.T) {

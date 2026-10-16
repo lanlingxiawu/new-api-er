@@ -1250,7 +1250,7 @@ func TestCalculateTextToolCallSurchargeDoesNotInferSearchForResponses(t *testing
 	assert.Empty(t, summary.ToolSurchargeItems)
 }
 
-func TestCalculateTextToolCallSurchargeMergesSameNameAndPrice(t *testing.T) {
+func TestCalculateTextToolCallSurchargePrefersReportedSearchCount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("claude_web_search_requests", 3)
@@ -1269,10 +1269,44 @@ func TestCalculateTextToolCallSurchargeMergesSameNameAndPrice(t *testing.T) {
 
 	require.Len(t, summary.ToolSurchargeItems, 1)
 	assert.Equal(t, dto.BuildInToolWebSearch, summary.ToolSurchargeItems[0].Name)
-	assert.Equal(t, 5, summary.ToolSurchargeItems[0].Count)
+	assert.Equal(t, 2, summary.ToolSurchargeItems[0].Count)
 	assert.Equal(t, 10.0, summary.ToolSurchargeItems[0].Price)
-	expected := decimal.NewFromFloat(10.0 * 5 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	expected := decimal.NewFromFloat(10.0 * 2 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	assert.True(t, expected.Equal(surcharge), "got %s want %s", surcharge, expected)
+}
+
+func TestCalculateTextToolCallSurchargeSearchSources(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		legacy   int
+		reported *relaycommon.BuildInToolInfo
+		want     int
+	}{
+		{name: "same usage is charged once", legacy: 2, reported: &relaycommon.BuildInToolInfo{CallCount: 2}, want: 2},
+		{name: "explicit zero suppresses legacy count", legacy: 3, reported: &relaycommon.BuildInToolInfo{}, want: 0},
+		{name: "missing reported usage uses legacy count", legacy: 2, want: 2},
+		{name: "negative legacy usage is ignored", legacy: -1, want: 0},
+		{name: "legacy count is capped", legacy: relaycommon.MaxBillableToolCallCount + 1, want: relaycommon.MaxBillableToolCallCount},
+		{name: "reported count is capped", legacy: 2, reported: &relaycommon.BuildInToolInfo{CallCount: relaycommon.MaxBillableToolCallCount + 1}, want: relaycommon.MaxBillableToolCallCount},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set("claude_web_search_requests", tc.legacy)
+			info := &relaycommon.RelayInfo{ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+				BuiltInTools: map[string]*relaycommon.BuildInToolInfo{dto.BuildInToolWebSearch: tc.reported},
+			}}
+			summary := &textQuotaSummary{ModelName: "claude-3-7-sonnet", GroupRatio: 1}
+			got := calculateTextToolCallSurcharge(ctx, info, summary)
+			want := decimal.NewFromInt(int64(tc.want)).Mul(decimal.NewFromFloat(10.0 / 1000 * common.QuotaPerUnit))
+			assert.True(t, want.Equal(got), "got %s want %s", got, want)
+			if tc.want == 0 {
+				assert.Empty(t, summary.ToolSurchargeItems)
+				return
+			}
+			require.Len(t, summary.ToolSurchargeItems, 1)
+			assert.Equal(t, tc.want, summary.ToolSurchargeItems[0].Count)
+		})
+	}
 }
 
 func TestMergeToolSurchargeItemsSaturatesCountOverflow(t *testing.T) {

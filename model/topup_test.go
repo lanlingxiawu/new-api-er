@@ -196,12 +196,26 @@ func TestRecharge_Stripe_PromoLowerAmountScalesCredit(t *testing.T) {
 				tp.Amount = tc.amount
 				tp.PaymentCurrency = "usd"
 			})
+			t.Cleanup(func() {
+				LOG_DB.Where("user_id = ? AND type = ?", u.Id, LogTypeTopup).Delete(&Log{})
+			})
 
 			require.NoError(t, Recharge(tp.TradeNo, "cus", "ip", tc.notifiedCents, "usd"))
 
 			reloaded, _ := GetUserById(u.Id, false)
 			assert.Equal(t, tc.wantQuota, reloaded.Quota)
 			assert.Equal(t, common.TopUpStatusSuccess, GetTopUpById(tp.Id).Status)
+			var logs []Log
+			require.NoError(t, LOG_DB.Where("user_id = ? AND type = ?", u.Id, LogTypeTopup).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			paid := decimal.NewFromInt(tc.notifiedCents).Div(decimal.NewFromInt(100)).StringFixed(2)
+			assert.Contains(t, logs[0].Content, "payment amount: "+paid)
+			var other struct {
+				Parts []common.Message `json:"content_parts"`
+			}
+			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+			require.Len(t, other.Parts, 1)
+			assert.Equal(t, paid, other.Parts[0].Params["amount"])
 		})
 	}
 }

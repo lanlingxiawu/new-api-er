@@ -211,3 +211,51 @@ ClickHouse 未验证。relaykit 独立构建和测试通过。
 浏览器回归；两端各检查 16 个管理页面，无运行异常或失败接口。
 覆盖部署保持原目录和端口，临时测试账号已禁用、活动登录会话为零。
 本轮不重复宣称首轮短时压测为长期容量验证，也不宣称已实际调用全部上游服务。
+
+## 合并审计问题复核（2026-10-16）
+
+当前代码仍存在两个缺陷，本轮为现有行为的定向修复：
+
+- Claude 严格流同时把搜索次数写入请求上下文和 `BuiltInTools`，结算原先相加。
+  现在优先使用 `BuiltInTools.web_search` 的非空计数对象，显式零同样生效；
+  只有缺少该对象时才读取旧上下文。原有次数上限和工具价格保持不变。
+  普通结算、日志、钱包与令牌扣费及超时平台承担成本共用这一口径。
+- Stripe 充值日志原先把额度快照 `Amount` 当成支付金额。
+  现在从已校验的 webhook 实付美分精确转换成两位小数，写入日志文本和
+  `content_parts` 参数。促销折扣、到账额度计算、订单状态和事务均保持原逻辑。
+
+API Key 抽屉测试的弹层选择问题已由后续提交修复；普通日志列表的
+`format=xlsx` 已由本轮开始前的工作区修改移除，不覆盖这些既有改动。
+没有新增 API、认证级别、配置、数据模型、迁移或索引；错误处理沿用现有路径。
+
+### Main Chain Impact
+
+结算同步增加一次请求内 map 查询，避免重复添加同一工具收费项；不增加
+数据库、Redis、外部调用、锁或协程。异步日志和成本持久化路径不变。
+每分钟 30,000 至 100,000 请求下，每次结算新增工作量为 O(1)，无新增 I/O。
+这是计费去重修复，不新增转发执行分支；严格流配置继续沿用原有开关。
+Stripe 日志金额格式化只发生在充值回调成功后，不在 AI 转发路径上。
+
+### Shared Resource Audit
+
+`RelayInfo.ResponsesUsageInfo.BuiltInTools` 和 Gin 上下文均为已有请求内状态，
+不引入全局 map 或缓存。工具价格设置的读取次数不增加。
+充值沿用已有 `top_ups`、`users` 和日志表的访问、事务与连接池；
+仅改变已有日志字段的内容，不增加 SQL 或改变锁范围。
+
+### 回归验证
+
+先运行新增断言复现：2 次搜索被收取 4 次费用；Stripe 全额和促销订单日志
+错误显示额度快照。修复后在独立临时数据库运行：
+
+```text
+go test ./service ./model -run 'Test(CalculateTextToolCallSurcharge|ComposeTieredTextQuota|Finalize_PostTextConsumeQuota|InputOnlyExcludesToolSurcharges|Recharge_Stripe)' -count=1
+```
+
+MySQL 8.0.46、PostgreSQL 15.19 均通过，临时库已删除。
+覆盖重复来源、明确零、旧来源兜底、负数和次数上限，以及实际钱包/令牌扣费、
+日志工具次数、超时平台成本和 Stripe 全额/折扣/一美分支付的日志参数。
+本轮不修改数据库行为或结构，不重复做迁移升级预演；未运行 SQLite 或压测。
+前端 API Key 抽屉及日志模块合计 28 文件、460 项测试通过，
+`bun run typecheck`、`bun run lint` 通过（6 个既有 warning）。
+根模块 `go build ./...` 和差异空白检查通过；本轮未运行全量测试。
