@@ -185,9 +185,10 @@ type OptionUpdateRequest struct {
 }
 
 type OptionGroupUpdateRequest struct {
-	Scope  string            `json:"scope"`
-	Module string            `json:"module"`
-	Values map[string]string `json:"values"`
+	Scope           string            `json:"scope"`
+	Module          string            `json:"module"`
+	Values          map[string]string `json:"values"`
+	GroupRetryTimes *string           `json:"group_retry_times"`
 }
 
 // settingsWriteScope returns the scope a settings write must be restricted to.
@@ -227,9 +228,27 @@ func UpdateOptionGroup(c *gin.Context) {
 			return
 		}
 	}
-	applied, err := model.SaveConfigGroup(request.Module, request.Values)
+	if request.GroupRetryTimes != nil && (request.Module != "group_retry_status_setting" || len(request.Values) != 2) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if request.GroupRetryTimes != nil && !middleware.AllowsSystemSettingsOption(c, "GroupRetryTimes") {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	var applied bool
+	var err error
+	if request.GroupRetryTimes != nil {
+		applied, err = model.SaveGroupRetryPolicy(*request.GroupRetryTimes, request.Values)
+	} else {
+		applied, err = model.SaveConfigGroup(request.Module, request.Values)
+	}
 	if err != nil {
 		logger.LogError(c, "failed to update configuration group: "+err.Error())
+		if errors.Is(err, model.ErrGroupRetryTimesInvalid) {
+			common.ApiErrorI18n(c, i18n.MsgSettingGroupRetryTimesInvalid)
+			return
+		}
 		if errors.Is(err, operation_setting.ErrGroupRetryStatusInvalid) {
 			common.ApiErrorI18n(c, i18n.MsgGroupRetryStatusInvalid)
 			return

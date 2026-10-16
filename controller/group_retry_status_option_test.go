@@ -15,10 +15,11 @@ import (
 func TestGroupRetryStatusOptionEndpoints(t *testing.T) {
 	requireDB(t)
 	require.NoError(t, i18n.Init())
-	keys := []string{"group_retry_status_setting.enabled", "group_retry_status_setting.rules"}
+	keys := []string{"group_retry_status_setting.enabled", "group_retry_status_setting.rules", "GroupRetryTimes"}
 	var saved []model.Option
 	require.NoError(t, model.DB.Where(map[string]any{"key": keys}).Find(&saved).Error)
 	old := operation_setting.GetGroupRetryStatusSetting()
+	oldCounts := operation_setting.GroupRetryTimes2JSONString()
 	previousOptions := map[string]string{}
 	common.OptionMapRWMutex.RLock()
 	for _, key := range keys {
@@ -33,6 +34,7 @@ func TestGroupRetryStatusOptionEndpoints(t *testing.T) {
 			model.DB.Create(&option)
 		}
 		operation_setting.ReplaceGroupRetryStatusSetting(old)
+		require.NoError(t, operation_setting.UpdateGroupRetryTimesByJSONString(oldCounts))
 		common.OptionMapRWMutex.Lock()
 		for _, key := range keys {
 			delete(common.OptionMap, key)
@@ -44,10 +46,14 @@ func TestGroupRetryStatusOptionEndpoints(t *testing.T) {
 	})
 	c, rec := newCtx(t, http.MethodPut, "/api/option/group", map[string]any{
 		"module": "group_retry_status_setting", "values": map[string]string{"enabled": "true", "rules": `{"default":"429"}`},
+		"group_retry_times": `{"default":2}`,
 	})
 	asRoot(c, nextTestID())
 	UpdateOptionGroup(c)
 	require.True(t, decodeResp(t, rec).Success, rec.Body.String())
+	count, exists := operation_setting.GetGroupRetryTimes("default")
+	require.True(t, exists)
+	require.Equal(t, 2, count)
 	allowed, found := operation_setting.GroupRetryStatusAllowed("default", 429)
 	assert.True(t, allowed)
 	assert.True(t, found)

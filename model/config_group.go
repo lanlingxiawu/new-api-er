@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,6 +16,52 @@ import (
 
 var configGroupMu sync.Mutex
 
+var ErrGroupRetryTimesInvalid = errors.New("invalid group retry counts")
+
+// SaveGroupRetryPolicy commits the complete editor before publishing either setting.
+func SaveGroupRetryPolicy(times string, values map[string]string) (bool, error) {
+	configGroupMu.Lock()
+	defer configGroupMu.Unlock()
+	return saveGroupRetryPolicy(&times, values)
+}
+
+func saveGroupRetryPolicy(times *string, values map[string]string) (bool, error) {
+	if times != nil {
+		if err := operation_setting.CheckGroupRetryTimes(*times); err != nil {
+			return false, fmt.Errorf("%w: %v", ErrGroupRetryTimesInvalid, err)
+		}
+	}
+	draft, err := operation_setting.ParseGroupRetryStatusUpdate(values)
+	if err != nil {
+		return false, err
+	}
+	prefixed := make(map[string]string, len(values)+1)
+	for key, value := range values {
+		prefixed["group_retry_status_setting."+key] = value
+	}
+	if _, ok := values["enabled"]; ok {
+		prefixed["group_retry_status_setting.enabled"] = strconv.FormatBool(draft.Enabled)
+	}
+	if times != nil {
+		prefixed["GroupRetryTimes"] = *times
+	}
+	if err := persistOptionsTx(prefixed); err != nil {
+		return false, err
+	}
+	if times != nil {
+		if err := operation_setting.UpdateGroupRetryTimesByJSONString(*times); err != nil {
+			return true, err
+		}
+	}
+	operation_setting.ReplaceGroupRetryStatusSetting(draft)
+	common.OptionMapRWMutex.Lock()
+	for key, value := range prefixed {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	return true, nil
+}
+
 func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
@@ -24,20 +71,7 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	prefixed := make(map[string]string, len(values))
 	switch module {
 	case "group_retry_status_setting":
-		draft, err := operation_setting.ParseGroupRetryStatusUpdate(values)
-		if err != nil {
-			return false, err
-		}
-		for k, v := range values {
-			prefixed[module+"."+k] = v
-		}
-		if _, ok := values["enabled"]; ok {
-			prefixed[module+".enabled"] = strconv.FormatBool(draft.Enabled)
-		}
-		if err := persistOptionsTx(prefixed); err != nil {
-			return false, err
-		}
-		operation_setting.ReplaceGroupRetryStatusSetting(draft)
+		return saveGroupRetryPolicy(nil, values)
 	case "probe_routing_setting":
 		if len(values) != 1 {
 			return false, fmt.Errorf("invalid probe routing configuration")

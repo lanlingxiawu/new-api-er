@@ -9325,6 +9325,7 @@
     "When matched, calculate this amount": "符合時計算此金額",
     "When no conditions are set, the operation always executes.": "沒有條件時，預設總是執行該操作。",
     "When off, new export jobs are refused. Running jobs keep going; cancel them from the export center.": "關閉後不再接受新的匯出任務；執行中的任務不會中斷，需要到匯出中心取消。",
+    "When off, saved per-group status code rules are ignored and default retry rules apply. Per-group retry counts still apply. Changes take effect after saving.": "關閉時保留分組狀態碼規則，但依預設規則判斷是否重試；分組重試次數仍然生效。變更儲存後生效。",
     "When off, usage is no longer accumulated and channels are neither disabled nor recovered. Channels already disabled stay disabled and must be enabled manually; re-enabling this switch does not recover them retroactively.": "關閉後不再累計用量，也不會停用或恢復管道。已被停用的管道保持停用，需手動啟用；重新開啟本開關不會補做期間遺留的自動恢復。",
     "When off, users see error messages exactly as before.": "關閉時，使用者看到的錯誤提示與現在完全一致。",
     "When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.": "啟用效能監控後，當系統資源使用率超過設定閾值時，將拒絕新的 Relay 請求。",

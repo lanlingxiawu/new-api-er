@@ -9325,6 +9325,7 @@
     "When matched, calculate this amount": "一致した場合の金額",
     "When no conditions are set, the operation always executes.": "条件が設定されていない場合、操作は常に実行されます。",
     "When off, new export jobs are refused. Running jobs keep going; cancel them from the export center.": "When off, new export jobs are refused. Running jobs keep going; cancel them from the export center.",
+    "When off, saved per-group status code rules are ignored and default retry rules apply. Per-group retry counts still apply. Changes take effect after saving.": "オフの場合、保存済みのグループ別ステータスコードルールは無視され、既定の再試行ルールが適用されます。グループ別の再試行回数は引き続き有効です。変更は保存後に反映されます。",
     "When off, usage is no longer accumulated and channels are neither disabled nor recovered. Channels already disabled stay disabled and must be enabled manually; re-enabling this switch does not recover them retroactively.": "オフにすると使用量は集計されず、チャネルの無効化も復旧も行われません。すでに無効なチャネルは無効のままで手動有効化が必要です。再びオンにしても、その間の自動復旧は遡って実行されません。",
     "When off, users see error messages exactly as before.": "オフの場合、ユーザーに表示されるエラーメッセージはこれまでとまったく同じです。",
     "When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.": "パフォーマンス監視を有効にすると、システムリソース使用率が閾値を超えた場合、新しいRelayリクエストが拒否されます。",

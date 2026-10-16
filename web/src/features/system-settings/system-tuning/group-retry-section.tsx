@@ -39,12 +39,13 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getGroups } from '../../users/api'
 import { updateSystemOptionGroup } from '../api'
 import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import type { UpdateOptionGroupRequest } from '../types'
 
 // Mirrors MaxGroupRetryTimes in setting/operation_setting/group_retry_setting.go.
 const MAX_GROUP_RETRY_TIMES = 20
@@ -109,7 +110,6 @@ export function GroupRetrySection(props: {
   const { t } = useTranslation()
   const { scope } = useSettingsPageAccess()
   const queryClient = useQueryClient()
-  const updateOption = useUpdateOption()
   const [rows, setRows] = useState<Row[]>(() =>
     parseRows(props.value, props.statusRules)
   )
@@ -120,7 +120,7 @@ export function GroupRetrySection(props: {
   const dirty = useRef({ counts: false, statuses: false })
 
   useEffect(() => {
-    // Saving one module must not erase the other module's unsaved edits.
+    // A background refresh must not erase unsaved edits.
     if (dirty.current.counts || dirty.current.statuses) return
     const parsed = parseRows(props.value, props.statusRules)
     setRows(parsed)
@@ -128,22 +128,20 @@ export function GroupRetrySection(props: {
     setEnabled(props.statusEnabled)
   }, [props.value, props.statusRules, props.statusEnabled])
 
-  const statusMutation = useMutation({
-    mutationFn: (rules: string) =>
-      updateSystemOptionGroup({
-        scope,
-        module: 'group_retry_status_setting',
-        values: { enabled: String(enabled), rules },
-      }),
+  const saveMutation = useMutation({
+    mutationFn: async (request: UpdateOptionGroupRequest) =>
+      requireServerSuccess(
+        await updateSystemOptionGroup({ ...request, scope })
+      ),
     onSuccess: (response) => {
       if (!response.success) return
-      dirty.current.statuses = false
+      dirty.current = { counts: false, statuses: false }
       queryClient.invalidateQueries({ queryKey: ['system-options', scope] })
-      toast.success(t('Retry status codes saved'))
+      toast.success(t('Saved successfully'))
     },
-    onError: handleServerError,
+    onError: (error) => handleServerError(error),
   })
-  const busy = updateOption.isPending || statusMutation.isPending
+  const busy = saveMutation.isPending
 
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
@@ -184,27 +182,6 @@ export function GroupRetrySection(props: {
     return ''
   }
 
-  const save = () => {
-    const firstError = rows.map(rowError).find((message) => message !== '')
-    if (firstError) {
-      toast.error(firstError)
-      return
-    }
-    // An empty editor saves "{}" rather than deleting the key: that keeps
-    // "explicitly cleared" distinguishable from "never configured".
-    const payload = JSON.stringify(
-      Object.fromEntries(rows.map((row) => [row.group, Number(row.times)]))
-    )
-    updateOption.mutate(
-      { key: 'GroupRetryTimes', value: payload },
-      {
-        onSuccess: (response) => {
-          if (response.success) dirty.current.counts = false
-        },
-      }
-    )
-  }
-
   const statusError = (row: Row): string => {
     if (!row.group) return t('Select a group.')
     if (duplicates.has(row.group)) return t('This group is already configured.')
@@ -229,8 +206,10 @@ export function GroupRetrySection(props: {
       : t('Enter HTTP codes from 100 to 599, for example 429,500-503.')
   }
 
-  const saveStatuses = () => {
-    const error = rows.map(statusError).find(Boolean)
+  const save = () => {
+    const error = rows
+      .map((row) => rowError(row) || statusError(row))
+      .find(Boolean)
     if (error) {
       toast.error(error)
       return
@@ -252,7 +231,13 @@ export function GroupRetrySection(props: {
       toast.error(t('Retry rules must fit within 64 KiB and 256 groups.'))
       return
     }
-    statusMutation.mutate(rules)
+    saveMutation.mutate({
+      module: 'group_retry_status_setting',
+      group_retry_times: JSON.stringify(
+        Object.fromEntries(rows.map((row) => [row.group, Number(row.times)]))
+      ),
+      values: { enabled: String(enabled), rules },
+    })
   }
 
   return (
@@ -277,6 +262,11 @@ export function GroupRetrySection(props: {
             {t('Enable per-group retry status codes')}
           </Label>
         </div>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'When off, saved per-group status code rules are ignored and default retry rules apply. Per-group retry counts still apply. Changes take effect after saving.'
+          )}
+        </p>
         <p className='text-muted-foreground text-sm'>
           {t(
             'Custom codes replace the default status rules. Successful responses, 504 and 524 are never retried; retry counts and time limits still apply.'
@@ -484,16 +474,9 @@ export function GroupRetrySection(props: {
             <Plus className='mr-2 size-4' />
             {t('Add group')}
           </Button>
-          <div className='flex flex-wrap gap-2'>
-            <Button disabled={busy} onClick={save}>
-              {updateOption.isPending ? t('Saving...') : t('Save retry counts')}
-            </Button>
-            <Button disabled={busy} onClick={saveStatuses}>
-              {statusMutation.isPending
-                ? t('Saving...')
-                : t('Save retry status codes')}
-            </Button>
-          </div>
+          <Button disabled={busy} onClick={save}>
+            {busy ? t('Saving...') : t('Save changes')}
+          </Button>
         </div>
       </div>
     </SettingsSection>

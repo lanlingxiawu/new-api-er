@@ -340,6 +340,7 @@ export type PriceMonitorResultsResponse = {
 
 export type UpdateOptionGroupRequest = {
   scope?: string
+  group_retry_times?: string
   module:
     | 'group_retry_status_setting'
     | 'rate_limit_setting'
