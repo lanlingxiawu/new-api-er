@@ -25,6 +25,9 @@ import { requireSystemSettingsSection } from '@/features/system-settings/route-a
 export const Route = createFileRoute(
   '/_authenticated/system-settings/billing/$section'
 )({
+  validateSearch: (search: Record<string, unknown>) => ({
+    model: typeof search.model === 'string' ? search.model : undefined,
+  }),
   beforeLoad: ({ params }) => {
     requireSystemSettingsSection('billing', params.section, BILLING_SECTION_IDS)
   },

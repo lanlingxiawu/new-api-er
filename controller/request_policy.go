@@ -5,7 +5,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/service/settingsaccess"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/model"
@@ -14,9 +13,8 @@ import (
 
 func GetRequestPolicy(c *gin.Context) {
 	options := make(map[string]string)
-	scope := c.GetString(middleware.SystemSettingsScopeContextKey)
 	for key, value := range model.CurrentRequestPolicy().Options {
-		if scope == "" || settingsaccess.AllowsOption(scope, key) {
+		if middleware.AllowsSystemSettingsOption(c, key) {
 			options[key] = value
 		}
 	}
@@ -31,9 +29,8 @@ func UpdateRequestPolicy(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	scope := c.GetString(middleware.SystemSettingsScopeContextKey)
 	for key := range request.Options {
-		if scope != "" && !settingsaccess.AllowsOption(scope, key) {
+		if !middleware.AllowsSystemSettingsOption(c, key) {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}

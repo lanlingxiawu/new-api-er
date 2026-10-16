@@ -1,3 +1,4 @@
+import { ModelPricingWorkspace } from '@/features/model-pricing/workspace'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -108,20 +109,22 @@ const BILLING_SECTIONS = [
     id: 'model-pricing',
     titleKey: 'Model Pricing',
     build: (settings: BillingSettings) => (
-      <RatioSettingsCard
-        titleKey='Model Pricing'
-        modelDefaults={getModelDefaults(settings)}
-        groupDefaults={getGroupDefaults(settings)}
-        toolPricesDefault={settings['tool_price_setting.prices']}
-        thirdPartySD2PricingDefault={settings['thirdpartysd2_pricing.matrix']}
-        visibleTabs={[
-          'models',
-          'unset-models',
-          'thirdpartysd2',
-          'tool-prices',
-          'upstream-sync',
-        ]}
-      />
+      <ModelPricingWorkspace>
+        <RatioSettingsCard
+          titleKey='Model Pricing'
+          modelDefaults={getModelDefaults(settings)}
+          groupDefaults={getGroupDefaults(settings)}
+          toolPricesDefault={settings['tool_price_setting.prices']}
+          thirdPartySD2PricingDefault={settings['thirdpartysd2_pricing.matrix']}
+          visibleTabs={[
+            'models',
+            'unset-models',
+            'thirdpartysd2',
+            'tool-prices',
+            'upstream-sync',
+          ]}
+        />
+      </ModelPricingWorkspace>
     ),
   },
   {

@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -178,15 +179,19 @@ export function useModelsColumns(
           const entry = priceMap.get(row.original.model_name)
           return (
             <Button
+              role='link'
               variant='ghost'
               className='h-auto w-full max-w-full min-w-0 justify-start px-0 py-1 text-left font-normal hover:bg-transparent'
               aria-label={t('View pricing for {{model}}', {
                 model: row.original.model_name,
               })}
-              onClick={() => {
-                setCurrentRow(row.original)
-                setOpen('price-model')
-              }}
+              render={
+                <Link
+                  to='/system-settings/billing/$section'
+                  params={{ section: 'model-pricing' }}
+                  search={{ model: row.original.model_name }}
+                />
+              }
             >
               <ModelPriceCell
                 model={modelPricingDisplay(

@@ -17,6 +17,21 @@ import (
 // authorize against this value instead of re-reading the scope themselves.
 const SystemSettingsScopeContextKey = "system_settings_scope"
 
+const systemSettingsAllowedKeysContextKey = "system_settings_allowed_keys"
+
+// AllowsSystemSettingsOption enforces the field intersection for legacy grants.
+func AllowsSystemSettingsOption(c *gin.Context, key string) bool {
+	scope := c.GetString(SystemSettingsScopeContextKey)
+	if scope != "" && !settingsaccess.AllowsOption(scope, key) {
+		return false
+	}
+	if value, exists := c.Get(systemSettingsAllowedKeysContextKey); exists {
+		_, allowed := value.(map[string]struct{})[key]
+		return allowed
+	}
+	return true
+}
+
 type systemSettingsScopeRequest struct {
 	Scope string `json:"scope"`
 }
@@ -69,6 +84,22 @@ func RequireSystemSettingsScope(action string) func(c *gin.Context) {
 			permission = authz.AdminMenuEmployeesView
 		}
 		allowed := authz.Can(c.GetInt("id"), role, permission)
+		if sources := settingsaccess.CompatibilitySources(scope); len(sources) > 0 && !allowed {
+			permitted := make(map[string]struct{})
+			for _, source := range sources {
+				if !authz.Can(c.GetInt("id"), role, authz.Permission{Resource: authz.SystemSettingsResource(source), Action: action}) {
+					continue
+				}
+				keys, _ := settingsaccess.OptionKeys(source)
+				for key := range keys {
+					if settingsaccess.AllowsOption(scope, key) {
+						permitted[key] = struct{}{}
+					}
+				}
+			}
+			allowed = len(permitted) > 0
+			c.Set(systemSettingsAllowedKeysContextKey, permitted)
+		}
 		if !allowed && scope == settingsaccess.ScopeChannelProfitPreview && action == authz.ActionView {
 			allowed = authz.Can(c.GetInt("id"), role, authz.ChannelSensitiveWrite)
 		}

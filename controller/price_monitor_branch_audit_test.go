@@ -554,63 +554,6 @@ func TestPriceMonitorAuditPublicQueryPassword(t *testing.T) {
 	assert.False(t, query(`{"password":"share123"}`).Success, "an expired password is refused")
 }
 
-// Below the break-even floor the whole request is refused with the violations; force applies it.
-func TestPriceMonitorAuditApplyPriceBelowFloorAndForce(t *testing.T) {
-	keepPricingRatios(t)
-	floor := &PriceMonitorRepairFloor{
-		Mode:    priceMonitorModeToken,
-		Fields:  map[string]float64{"model_ratio": 2},
-		Display: map[string]float64{"model_ratio": 4},
-		Binding: map[string]string{"model_ratio": "channel-a"},
-	}
-	useApplyPriceEnv(t, applyPriceSnapshotWithFloor("gpt-4o", floor))
-	seedPricingRatios(t, "gpt-4o", "3", "1")
-
-	body := func(force bool) string {
-		return `{"checked_at":100,"pricing_version":0,"force":` + strconv.FormatBool(force) +
-			`,"items":[{"model":"gpt-4o","fields":{"model_ratio":1},"expected":{"model_ratio":3}}]}`
-	}
-	_, response := performApplyPrice(t, body(false))
-	require.Equal(t, false, response["success"])
-	assert.Equal(t, "PRICE_BELOW_FLOOR", response["error_code"])
-	violations := response["data"].(map[string]any)["violations"].([]any)
-	require.Len(t, violations, 1)
-	violation := violations[0].(map[string]any)
-	assert.Equal(t, "model_ratio", violation["field"])
-	assert.InDelta(t, 1, violation["value"], 1e-9)
-	assert.InDelta(t, 2, violation["floor"], 1e-9)
-	assert.Equal(t, "channel-a", violation["binding"])
-	assert.Equal(t, true, violation["submitted"])
-	stored, _ := applyPriceOptionValue(t, "ModelRatio", "gpt-4o")
-	assert.InDelta(t, 3, stored, 1e-9, "nothing is written")
-
-	_, response = performApplyPrice(t, body(true))
-	require.Equal(t, true, response["success"], response["message"])
-	stored, _ = applyPriceOptionValue(t, "ModelRatio", "gpt-4o")
-	assert.InDelta(t, 1, stored, 1e-9, "an explicit override is applied")
-}
-
-func TestPriceMonitorAuditApplyPerRequestPriceBelowFloor(t *testing.T) {
-	snapshot := applyPriceSnapshot(100, priceMonitorModeRequest)
-	snapshot.MatrixItems[0].RepairFloor = &PriceMonitorRepairFloor{
-		Mode:    priceMonitorModeRequest,
-		Fields:  map[string]float64{"model_price": 0.05},
-		Display: map[string]float64{"model_price": 0.05},
-	}
-	useApplyPriceEnv(t, snapshot)
-	seedApplyPriceOption(t, "ModelPrice", `{"gpt-4o":0.08}`)
-
-	_, response := performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"gpt-4o","fields":{"model_price":0.01},"expected":{"model_price":0.08}}]}`)
-	require.Equal(t, false, response["success"])
-	assert.Equal(t, "PRICE_BELOW_FLOOR", response["error_code"])
-	stored, _ := applyPriceOptionValue(t, "ModelPrice", "gpt-4o")
-	assert.InDelta(t, 0.08, stored, 1e-12)
-
-	_, response = performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"gpt-4o","fields":{"model_price":-1},"expected":{"model_price":0.08}}]}`)
-	require.Equal(t, false, response["success"], "negative prices are refused")
-	assert.Nil(t, response["error_code"])
-}
-
 // ── settings ────────────────────────────────────────────────────────────────
 
 func TestPriceMonitorAuditSettingsRequestCostCheckBoundaries(t *testing.T) {

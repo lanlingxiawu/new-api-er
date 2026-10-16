@@ -26,6 +26,41 @@ func TestRequireSystemSettingsScope_RootCompatibilityWithoutScope(t *testing.T) 
 	assert.Equal(t, http.StatusOK, recorder.Code)
 }
 
+func TestPolicyCompatibilityKeepsLegacyPermissionBoundaries(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:policy-compat?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = previousMaster })
+	require.NoError(t, authz.Init(db))
+	require.NoError(t, authz.SetUserPermissions(71009, authz.PermissionsMap{
+		authz.SystemSettingsResource("models.routing-reliability"): {authz.ActionView: true, authz.ActionEdit: true},
+	}))
+	for _, action := range []string{authz.ActionView, authz.ActionEdit} {
+		c, _ := systemSettingsContext(t, http.MethodGet, "/api/option/?scope=request-policies.routing", "")
+		c.Set("id", 71009)
+		c.Set("role", common.RoleAdminUser)
+		RequireSystemSettingsScope(action)(c)
+		require.False(t, c.IsAborted())
+		assert.True(t, AllowsSystemSettingsOption(c, "RetryTimes"))
+		assert.True(t, AllowsSystemSettingsOption(c, "probe_routing_setting.max_input_chars"))
+		assert.False(t, AllowsSystemSettingsOption(c, "channel_affinity_setting.enabled"))
+		assert.False(t, AllowsSystemSettingsOption(c, "AutomaticDisableKeywords"))
+	}
+	require.NoError(t, authz.SetUserPermissions(71010, authz.PermissionsMap{
+		authz.SystemSettingsResource("models.channel-affinity"): {authz.ActionView: true, authz.ActionEdit: true},
+	}))
+	c, _ := systemSettingsContext(t, http.MethodGet, "/api/option/?scope=request-policies.routing", "")
+	c.Set("id", 71010)
+	c.Set("role", common.RoleAdminUser)
+	RequireSystemSettingsScope(authz.ActionEdit)(c)
+	require.False(t, c.IsAborted())
+	assert.True(t, AllowsSystemSettingsOption(c, "channel_affinity_setting.session_mode"))
+	assert.False(t, AllowsSystemSettingsOption(c, "RetryTimes"))
+	assert.False(t, AllowsSystemSettingsOption(c, "probe_routing_setting.max_input_chars"))
+}
+
 func TestRequireSystemSettingsScope_AdminRequiresKnownScope(t *testing.T) {
 	for _, url := range []string{"/api/option/", "/api/option/?scope=unknown.scope"} {
 		ctx, _ := systemSettingsContext(t, http.MethodGet, url, "")

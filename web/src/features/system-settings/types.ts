@@ -346,6 +346,8 @@ export type UpdateOptionGroupRequest = {
     | 'db_pool_setting'
     | 'user_session_setting'
     | 'relay_timeout_setting'
+    | 'probe_routing_setting'
+    | 'channel_daily_limit_setting'
     | 'relay_error_display_setting'
     | 'veridrop_monitor_setting'
     | 'veridrop_monitor_setting'
@@ -712,53 +714,6 @@ export type ModelSettings = {
   'claude.thinking_adapter_budget_tokens_percentage': number
   'grok.violation_deduction_enabled': boolean
   'grok.violation_deduction_amount': number
-  ModelPrice: string
-  ModelRatio: string
-  CacheRatio: string
-  CreateCacheRatio: string
-  CompletionRatio: string
-  ImageRatio: string
-  AudioRatio: string
-  AudioCompletionRatio: string
-  ExposeRatioEnabled: boolean
-  'billing_setting.billing_mode': string
-  'billing_setting.billing_expr': string
-  'billing_setting.plugin_billing_expr': string
-  'tool_price_setting.prices': string
-  'thirdpartysd2_pricing.matrix': string
-  TopupGroupRatio: string
-  GroupRatio: string
-  UserUsableGroups: string
-  GroupGroupRatio: string
-  AutoGroups: string
-  MaxTokenAutoGroups: number
-  DefaultUseAutoGroup: boolean
-  'group_ratio_setting.group_special_usable_group': string
-  RetryTimes: number
-  ChannelDisableThreshold: string
-  AutomaticDisableChannelEnabled: boolean
-  AutomaticEnableChannelEnabled: boolean
-  AutomaticDisableKeywords: string
-  AutomaticDisableStatusCodes: string
-  AutomaticRetryStatusCodes: string
-  'monitor_setting.auto_test_channel_enabled': boolean
-  'monitor_setting.auto_test_channel_minutes': number
-  'monitor_setting.channel_test_concurrency': number
-  'monitor_setting.channel_test_mode':
-    | 'scheduled_all'
-    | 'auto_ban_only'
-    | 'passive_recovery'
-  // 渠道每日金额上限（docs/design/channel-daily-quota-limit.md §3.2）
-  'channel_daily_limit_setting.enabled': boolean
-  'channel_daily_limit_setting.timezone': string
-  'channel_daily_limit_setting.retention_days': number
-  'probe_routing_setting.max_input_chars': number
-  'channel_affinity_setting.enabled': boolean
-  'channel_affinity_setting.switch_on_success': boolean
-  'channel_affinity_setting.keep_on_channel_disabled': boolean
-  'channel_affinity_setting.max_entries': number
-  'channel_affinity_setting.default_ttl_seconds': number
-  'channel_affinity_setting.rules': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
 }

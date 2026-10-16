@@ -155,5 +155,9 @@ func buildDefinitions() map[string]Definition {
 	for _, key := range []string{"RetryTimes", "AutomaticRetryStatusCodes", "channel_affinity_setting.session_mode", "channel_affinity_setting.switch_on_success"} {
 		result["request-policies.routing"].OptionKeys[key] = struct{}{}
 	}
+	result["request-policies.routing"].OptionKeys["probe_routing_setting.max_input_chars"] = struct{}{}
+	result["request-policies.routing"].GroupKeys["probe_routing_setting"] = keys("max_input_chars")
+	result["request-policies.health"].GroupKeys["channel_daily_limit_setting"] = keys("enabled", "timezone", "retention_days")
+	result["models.channel-affinity"].OptionKeys["channel_affinity_setting.session_mode"] = struct{}{}
 	return result
 }

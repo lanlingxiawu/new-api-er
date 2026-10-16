@@ -27,6 +27,13 @@ func performPriceMonitorDraftHTTP(t *testing.T, method, path string, body any, h
 	return response
 }
 
+func TestPriceMonitorRejectsRetiredItemWrites(t *testing.T) {
+	response := performPriceMonitorDraftHTTP(t, "POST", "/api/price_monitor/apply_price", map[string]any{
+		"items": []any{map[string]any{"model": "example", "fields": map[string]any{"model_ratio": 1}}},
+	}, ApplyPriceMonitorPrice)
+	require.Equal(t, false, response["success"])
+}
+
 func TestPriceMonitorDraftHTTPGuardLifecycle(t *testing.T) {
 	useApplyPriceEnv(t, PriceMonitorSnapshot{CheckedAt: 100, MatrixVersion: priceMonitorMatrixVersion})
 	previous := priceMonitorRefreshChannels

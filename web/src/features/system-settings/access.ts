@@ -31,16 +31,8 @@ export const SYSTEM_SETTINGS_SECTIONS: Record<SystemSettingsGroup, string[]> = {
     'payment',
     'checkin',
   ],
-  models: [
-    'global',
-    'routing-reliability',
-    'gemini',
-    'claude',
-    'grok',
-    'channel-affinity',
-    'model-deployment',
-  ],
-  security: ['rate-limit', 'sensitive-words', 'ssrf', 'token-limits'],
+  models: ['global', 'gemini', 'claude', 'grok', 'model-deployment'],
+  security: ['rate-limit', 'ssrf', 'token-limits'],
   content: [
     'dashboard',
     'announcements',

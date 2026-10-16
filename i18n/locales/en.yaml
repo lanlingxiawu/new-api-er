@@ -530,6 +530,7 @@ price_monitor.already_running: "A price check is already running. Please wait fo
 price_monitor.master_required: "Price checks can only be started on the master node."
 price_monitor.pricing_config_changed: "Model pricing was changed by another administrator. Refresh the page and try again."
 price_monitor.snapshot_stale: "The price check results have been updated. Refresh the page and try again."
+price_monitor.client_refresh_required: "This pricing form is out of date. Refresh the page and submit your changes again."
 price_monitor.expr_not_editable: "This model uses tiered expression pricing, which cannot be edited here. Open Settings, Billing, Model pricing to change it."
 price_monitor.too_many_models: "Too many models selected for a single update. Select fewer models and try again."
 price_monitor.below_floor: "Some prices are below the break-even floor required by upstream channel quotes. Raise them, or confirm again to apply anyway."

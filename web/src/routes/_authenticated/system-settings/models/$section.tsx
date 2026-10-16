@@ -26,7 +26,10 @@ export const Route = createFileRoute(
   '/_authenticated/system-settings/models/$section'
 )({
   beforeLoad: ({ params }) => {
-    if (params.section === 'channel-affinity') {
+    if (
+      params.section === 'channel-affinity' ||
+      params.section === 'routing-reliability'
+    ) {
       throw redirect({
         to: '/system-settings/request-policies/$section',
         params: { section: 'routing' },

@@ -215,19 +215,6 @@ export function bindWeChat(
   )
 }
 
-export interface TelegramBindFlow {
-  flow_token: string
-  callback_url: string
-  expires_at: number
-}
-
-export async function startTelegramBind(): Promise<
-  ApiResponse<TelegramBindFlow>
-> {
-  const res = await api.post('/api/oauth/telegram/bind/start')
-  return res.data
-}
-
 // ============================================================================
 // Login Session APIs
 // ============================================================================

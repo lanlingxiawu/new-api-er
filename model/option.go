@@ -472,12 +472,6 @@ func UpdateOption(key string, value string) error {
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
-	// 价格类 option 走带版本递增的事务写入：倍率设置页仍是整块覆写，但只要它也推进
-	// PricingConfigVersion，巡检页的行内改价就能检测到「我读到的价格已经被整块保存覆盖」，
-	// 而不是被静默清掉。见 docs/design/price-monitor-loss-detection-and-price-repair.md §5.4。
-	if IsModelPricingOption(key) {
-		return UpdateOptionsBulk(map[string]string{key: value})
-	}
 	// Save to database first
 	option := Option{
 		Key: key,

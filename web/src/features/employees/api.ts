@@ -1,6 +1,7 @@
+import type { UsageLog } from '@/features/usage-logs/types'
 import { api } from '@/lib/api'
 import { appendUnixTimeRangeParams } from '@/lib/query-params'
-import type { UsageLog } from '@/features/usage-logs/types'
+
 import type {
   EmployeeProfile,
   EmployeeCustomer,
@@ -108,9 +109,7 @@ export async function addEmployeePerformance(
 export async function revertEmployeePerformance(
   logId: number
 ): Promise<ApiResponse> {
-  const res = await api.post(
-    `/api/admin/employee/performance/${logId}/revert`
-  )
+  const res = await api.post(`/api/admin/employee/performance/${logId}/revert`)
   return res.data
 }
 
@@ -148,10 +147,12 @@ export async function getCommissionLogs(params: {
   const q = new URLSearchParams()
   if (params.page) q.set('page', String(params.page))
   if (params.page_size) q.set('page_size', String(params.page_size))
-  if (params.employee_user_id)
-    {q.set('employee_user_id', String(params.employee_user_id))}
-  if (params.customer_user_id)
-    {q.set('customer_user_id', String(params.customer_user_id))}
+  if (params.employee_user_id) {
+    q.set('employee_user_id', String(params.employee_user_id))
+  }
+  if (params.customer_user_id) {
+    q.set('customer_user_id', String(params.customer_user_id))
+  }
   if (params.model_name) q.set('model_name', params.model_name)
   if (params.channel_id) q.set('channel_id', String(params.channel_id))
   if (params.loss_status) q.set('loss_status', params.loss_status)
@@ -204,8 +205,9 @@ export async function getCommissionCalendarStats(params: {
   const q = new URLSearchParams()
   q.set('start_time', String(params.start_time))
   q.set('end_time', String(params.end_time))
-  if (params.employee_user_id)
-    {q.set('employee_user_id', String(params.employee_user_id))}
+  if (params.employee_user_id) {
+    q.set('employee_user_id', String(params.employee_user_id))
+  }
   const res = await api.get(
     `/api/admin/employee/commission/calendar?${q.toString()}`
   )
@@ -235,8 +237,9 @@ export async function getCommissionResetPeriodStats(params: {
   const q = new URLSearchParams()
   q.set('page', String(params.page ?? 1))
   q.set('page_size', String(params.page_size ?? 100))
-  if (params.employee_user_id)
-    {q.set('employee_user_id', String(params.employee_user_id))}
+  if (params.employee_user_id) {
+    q.set('employee_user_id', String(params.employee_user_id))
+  }
   appendUnixTimeRangeParams(q, params)
   const res = await api.get(`/api/admin/employee/commission/monthly?${q}`)
   return res.data
@@ -308,10 +311,7 @@ export async function switchCommissionPeriod(payload: {
   reset_tiers: boolean
   include_period_data: boolean
 }): Promise<ApiResponse<{ processed: number; period_start_at: number }>> {
-  const res = await api.post(
-    '/api/admin/employee/tiers/switch-period',
-    payload
-  )
+  const res = await api.post('/api/admin/employee/tiers/switch-period', payload)
   return res.data
 }
 
@@ -333,22 +333,6 @@ export async function getChannelCosts(): Promise<
   ApiResponse<ChannelCostConfig[]>
 > {
   const res = await api.get('/api/admin/channel/cost')
-  return res.data
-}
-
-export async function upsertChannelCost(data: {
-  channel_id: number
-  cost_ratio: number
-  remark?: string
-}): Promise<ApiResponse> {
-  const res = await api.post('/api/admin/channel/cost', data)
-  return res.data
-}
-
-export async function deleteChannelCost(
-  channelId: number
-): Promise<ApiResponse> {
-  const res = await api.delete(`/api/admin/channel/cost/${channelId}`)
   return res.data
 }
 

@@ -87,14 +87,6 @@ export {
 
 export { getAffiliateCode, saveAffiliateCode } from './lib/storage'
 
-export {
-  isValidOTP,
-  isValidBackupCode,
-  formatBackupCode,
-  cleanBackupCode,
-  isValidEmail,
-} from './lib/validation'
-
 // ============================================================================
 // Hooks
 // ============================================================================

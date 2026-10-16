@@ -590,8 +590,8 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 	version := ""
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		// Fork: every whole-block pricing write must advance PricingConfigVersion so the
-		// price-monitor inline edit (PatchPricingOptions) detects the overwrite. Lock the
-		// version row before the pricing rows, the same order PatchPricingOptions uses,
+		// price-monitor draft detects the overwrite. Lock the
+		// version row before the pricing rows in every pricing write,
 		// otherwise concurrent writers deadlock.
 		currentVersion, err := lockModelPricingVersion(tx)
 		if err != nil {

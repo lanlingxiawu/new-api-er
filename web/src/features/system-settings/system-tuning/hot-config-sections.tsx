@@ -44,12 +44,14 @@ type ConfigGroupModule =
   | 'db_pool_setting'
   | 'user_session_setting'
   | 'relay_timeout_setting'
+  | 'probe_routing_setting'
+  | 'channel_daily_limit_setting'
 type ConfigGroupValues = Record<string, string | number | boolean>
 
 type ConfigGroupField = {
   key: string
   label: string
-  type?: 'switch'
+  type?: 'switch' | 'text'
   min?: number
   max?: number
   // Special values offered in a dropdown; `min`/`max` then bound the ordinary
@@ -88,7 +90,7 @@ type ConfigGroupSectionProps = {
  * without its request count, or idle connections above open connections, can
  * only be rejected when both fields arrive together.
  */
-function ConfigGroupSection({
+export function ConfigGroupSection({
   title,
   description,
   module,
@@ -142,7 +144,9 @@ function ConfigGroupSection({
   const save = async () => {
     const invalidNumber = fields.some(
       (field) =>
-        field.type !== 'switch' && !isValidFieldNumber(field, values[field.key])
+        field.type !== 'switch' &&
+        field.type !== 'text' &&
+        !isValidFieldNumber(field, values[field.key])
     )
     if (invalidNumber) {
       toast.error(t('Please enter a valid number'))
@@ -223,14 +227,17 @@ function ConfigGroupSection({
                 {field.type !== 'switch' && !field.presets && (
                   <Input
                     id={id}
-                    type='number'
+                    type={field.type === 'text' ? 'text' : 'number'}
                     min={field.min}
                     max={field.max}
-                    value={Number(values[field.key])}
+                    value={String(values[field.key])}
                     onChange={(event) =>
                       setValues((current) => ({
                         ...current,
-                        [field.key]: Number(event.target.value),
+                        [field.key]:
+                          field.type === 'text'
+                            ? event.target.value
+                            : Number(event.target.value),
                       }))
                     }
                   />

@@ -20,6 +20,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { SettingsPageProvider } from '../../components/settings-page-context'
 import { RoutingPolicySection } from '../routing-section'
@@ -53,6 +54,7 @@ const options = {
 let currentOptions: Record<string, string>
 let client: QueryClient
 beforeEach(() => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'root', role: 100 })
   client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })

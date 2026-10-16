@@ -469,6 +469,7 @@ const (
 	MsgPriceMonitorPreviewUnsupported               = "price_monitor.preview_unsupported"
 	MsgPriceMonitorPricingInvalid                   = "price_monitor.pricing_invalid"
 	MsgPriceMonitorSnapshotStale                    = "price_monitor.snapshot_stale"
+	MsgPriceMonitorClientRefreshRequired            = "price_monitor.client_refresh_required"
 	MsgPriceMonitorSourceModelsDev                  = "price_monitor.source_models_dev"
 	MsgPriceMonitorSourceOfficial                   = "price_monitor.source_official"
 	MsgPriceMonitorSourcePlatform                   = "price_monitor.source_platform"

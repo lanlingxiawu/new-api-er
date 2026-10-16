@@ -46,6 +46,7 @@ import type {
   ModelPricingEntry,
 } from '@/features/model-pricing/api'
 import { pricingOptions } from '@/features/model-pricing/pricing'
+import { ModelPricingWorkspace } from '@/features/model-pricing/workspace'
 import { usePricingColumns } from '@/features/pricing/components/pricing-columns'
 import type { PricingModel } from '@/features/pricing/types'
 import fr from '@/i18n/locales/fr.json'
@@ -170,7 +171,23 @@ async function renderList(
     component: Page,
   })
   const router = createRouter({
-    routeTree: root.addChildren([authenticated.addChildren([models])]),
+    routeTree: root.addChildren([
+      authenticated.addChildren([
+        models,
+        createRoute({
+          getParentRoute: () => authenticated,
+          path: 'system-settings/billing/$section',
+          validateSearch: (search: Record<string, unknown>) => ({
+            model: typeof search.model === 'string' ? search.model : undefined,
+          }),
+          component: () => (
+            <ModelPricingWorkspace>
+              <div />
+            </ModelPricingWorkspace>
+          ),
+        }),
+      ]),
+    ]),
     history: createMemoryHistory({
       initialEntries: [options.initialUrl ?? '/models/metadata'],
     }),
@@ -363,7 +380,7 @@ it('keeps prices and channel explanations readable in the mobile card and detail
       },
     ],
   })
-  const price = screen.getByRole('button', {
+  const price = screen.getByRole('link', {
     name: 'View pricing for catalog-only',
   })
   expect(within(price).getByText('1.25')).toHaveClass('whitespace-normal')
@@ -605,7 +622,7 @@ it.each([
     await renderList([model], {
       pricing: [{ model_name: name, version: 'v1', configured: {}, effective }],
     })
-    const button = screen.getByRole('button', {
+    const button = screen.getByRole('link', {
       name: `View pricing for ${name}`,
     })
     expect(button.textContent?.replaceAll(/\s/g, '')).toContain(text)
@@ -658,7 +675,7 @@ it('shows task tier ranges in the schema unit and converts site currency only on
       },
     ],
   })
-  const button = screen.getByRole('button', {
+  const button = screen.getByRole('link', {
     name: 'View pricing for channel-only',
   })
   expect(button).toHaveTextContent(/2.8.*5.6/)
@@ -686,7 +703,7 @@ it('opens the effective expression breakdown from the price without creating met
   })
   const write = vi.spyOn(api, 'post')
   await userEvent.click(
-    screen.getByRole('button', { name: 'View pricing for channel-only' })
+    screen.getByRole('link', { name: 'View pricing for channel-only' })
   )
   const preview = await screen.findByRole('region', { name: 'Current Billing' })
   expect(preview).toHaveTextContent('standard')
@@ -712,7 +729,7 @@ it('shows an unrecognized expression as special and retains its full source in p
       },
     ],
   })
-  const button = screen.getByRole('button', {
+  const button = screen.getByRole('link', {
     name: 'View pricing for channel-only',
   })
   expect(button).toHaveTextContent('Special billing expression')
@@ -843,7 +860,7 @@ it.each([
         },
       ],
     })
-    const button = screen.getByRole('button', {
+    const button = screen.getByRole('link', {
       name: 'View pricing for channel-only',
     })
     expect(button.textContent?.replaceAll(/\s/g, '')).toContain(

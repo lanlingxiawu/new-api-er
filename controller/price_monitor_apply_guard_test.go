@@ -62,70 +62,6 @@ func completionFloor(fieldFloor, displayFloor float64) *PriceMonitorRepairFloor 
 	}
 }
 
-// 锁定模型的 completion_ratio 计费时不生效：写进去只会让接口谎报「已应用」。必须整单拒绝、一个字节不写。
-func TestApplyPriceMonitorPriceRejectsLockedCompletionRatio(t *testing.T) {
-	require.True(t, ratio_setting.GetCompletionRatioInfo(lockedCompletionModel).Locked, "precondition")
-	keepPricingRatios(t)
-	useApplyPriceEnv(t, applyPriceSnapshotWithFloor(lockedCompletionModel, completionFloor(8, 24)))
-	seedPricingRatios(t, lockedCompletionModel, "1.5", "5")
-
-	_, response := performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"`+lockedCompletionModel+`",`+
-		`"fields":{"model_ratio":4,"completion_ratio":10},"expected":{"model_ratio":1.5,"completion_ratio":5}}]}`)
-
-	require.Equal(t, false, response["success"])
-	assert.Contains(t, response["message"], lockedCompletionModel, "the message must name the model so the admin knows which row to fix")
-	completion, _ := applyPriceOptionValue(t, "CompletionRatio", lockedCompletionModel)
-	assert.InDelta(t, 5, completion, 1e-9)
-	ratio, _ := applyPriceOptionValue(t, "ModelRatio", lockedCompletionModel)
-	assert.InDelta(t, 1.5, ratio, 1e-9, "the whole request is rejected, including the editable field")
-}
-
-// 锁定模型改 model_ratio 是唯一有效的修法，必须照常放行。
-func TestApplyPriceMonitorPriceAcceptsModelRatioForLockedModel(t *testing.T) {
-	keepPricingRatios(t)
-	useApplyPriceEnv(t, applyPriceSnapshotWithFloor(lockedCompletionModel, completionFloor(8, 24)))
-	seedPricingRatios(t, lockedCompletionModel, "1.5", "5")
-
-	// model_ratio 2.4 → input 4.8；锁定倍率 5 → 输出 24，恰好达到保本下限。
-	_, response := performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"`+lockedCompletionModel+`",`+
-		`"fields":{"model_ratio":2.4},"expected":{"model_ratio":1.5}}]}`)
-
-	require.Equal(t, true, response["success"], response["message"])
-	assert.InDelta(t, 24, ratio_setting.GetCompletionRatio(lockedCompletionModel)*2.4*2, 1e-9)
-}
-
-// 不接受删除（null）；字段必须与平台计费模式一致。被拒的请求一个字节都不写。
-func TestApplyPriceMonitorPriceRejectsNullAndModeMismatchedFields(t *testing.T) {
-	keepPricingRatios(t)
-	useApplyPriceEnv(t, applyPriceSnapshotWithFloor("gpt-4o", nil))
-	seedPricingRatios(t, "gpt-4o", "1", "8")
-
-	for name, fields := range map[string]string{
-		"deleting an override":                   `{"completion_ratio":null}`,
-		"per-request price on a per-token model": `{"model_price":0.01}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, response := performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"gpt-4o","fields":`+fields+`}]}`)
-			require.Equal(t, false, response["success"])
-		})
-	}
-	completion, _ := applyPriceOptionValue(t, "CompletionRatio", "gpt-4o")
-	assert.InDelta(t, 8, completion, 1e-9)
-	_, hasPrice := applyPriceOptionValue(t, "ModelPrice", "gpt-4o")
-	assert.False(t, hasPrice, "a per-token model must not be switched to per-request billing")
-}
-
-// 按次计费的模型只能改 model_price：比值字段写进去根本不生效。
-func TestApplyPriceMonitorPriceRejectsRatioFieldsOnPerRequestModel(t *testing.T) {
-	useApplyPriceEnv(t, applyPriceSnapshot(100, priceMonitorModeRequest))
-	seedApplyPriceOption(t, "ModelRatio", `{"gpt-4o":1}`)
-
-	_, response := performApplyPrice(t, `{"checked_at":100,"pricing_version":0,"items":[{"model":"gpt-4o","fields":{"model_ratio":2}}]}`)
-	require.Equal(t, false, response["success"])
-	value, _ := applyPriceOptionValue(t, "ModelRatio", "gpt-4o")
-	assert.InDelta(t, 1, value, 1e-9)
-}
-
 // 锁定模型的保本价：输出侧的要求折算进 input，不产出改了也不生效的 completion_ratio；按它改完就不再亏。
 func TestRepairFloor_LockedCompletionRaisesInputAndClearsVerdict(t *testing.T) {
 	platform := tokenCell(1, 5) // 锁定倍率 5：输出 = 输入 × 5
@@ -215,24 +151,4 @@ func TestRepairFloor_LockedCompletionFoldsIntoModelRatio(t *testing.T) {
 	require.NotNil(t, inputBound)
 	assert.InDelta(t, 4.5, inputBound.Fields["model_ratio"], 1e-9)
 	assert.Equal(t, "channel-b", inputBound.Binding["model_ratio"])
-}
-
-// 保本复算在合并后的完整价格上判：只把 input 降下来、不动 completion_ratio，输出价同样被拖到
-// 线下，这一项必须报出来（并标明不是管理员直接改的）。
-func TestFloorViolations_UnsubmittedRatioDraggedDownByInput(t *testing.T) {
-	keepPricingRatios(t)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-4o":1}`))
-	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"gpt-4o":8}`))
-
-	// 当前 input 2、completion 8 → 输出 16 ≥ 保本 12，不提交任何字段时不违规。
-	assert.Empty(t, priceMonitorFloorViolations(completionFloor(6, 12), "gpt-4o", map[string]*float64{}))
-
-	// model_ratio 0.5 → input 1：completion 8 → 输出 8 < 12，completion 的下限变成 12 / 1 = 12。
-	violations := priceMonitorFloorViolations(completionFloor(6, 12), "gpt-4o",
-		map[string]*float64{"model_ratio": floatPointer(0.5)})
-	require.Len(t, violations, 1)
-	assert.Equal(t, "completion_ratio", violations[0].Field)
-	assert.InDelta(t, 8, violations[0].Value, 1e-9)
-	assert.InDelta(t, 12, violations[0].Floor, 1e-9)
-	assert.False(t, violations[0].Submitted, "the admin did not touch it; the lowered input dragged it down")
 }

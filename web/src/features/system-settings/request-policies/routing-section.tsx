@@ -20,8 +20,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { policySectionAccess } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { SettingsAccordion } from '../components/settings-accordion'
 import { SettingsCard } from '../components/settings-card'
@@ -33,6 +35,10 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { ChannelAffinitySection } from '../general/channel-affinity'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 import { getPolicyConfig, type PolicyConfig } from './api'
+import {
+  defaultRequestPolicySettings,
+  type RequestPolicySettings,
+} from './defaults'
 import { policyLabel } from './policy-label'
 import { RetrySection } from './retry-section'
 import {
@@ -41,9 +47,14 @@ import {
   routingPolicyOptions,
   type RoutingPolicyFormValues,
 } from './routing-form'
+import { PolicyRuntimeSettings } from './runtime-settings'
 import { useSavePolicy } from './use-save-policy'
 
-export function RoutingPolicySection() {
+export function RoutingPolicySection({
+  settings = defaultRequestPolicySettings,
+}: {
+  settings?: RequestPolicySettings
+}) {
   const { t } = useTranslation()
   const query = useQuery({
     queryKey: ['request-policy'],
@@ -59,11 +70,53 @@ export function RoutingPolicySection() {
       />
     )
   }
-  return <RoutingPolicyEditor config={query.data} />
+  return (
+    <>
+      <RoutingPolicyEditor config={query.data} />
+      <ProbeSettings settings={settings} />
+    </>
+  )
+}
+
+function ProbeSettings({ settings }: { settings: RequestPolicySettings }) {
+  const user = useAuthStore((state) => state.auth.user)
+  if (!policySectionAccess(user, 'models.routing-reliability', 'view')) {
+    return null
+  }
+  return (
+    <fieldset
+      disabled={
+        !policySectionAccess(user, 'models.routing-reliability', 'edit')
+      }
+    >
+      <PolicyRuntimeSettings kind='probe' settings={settings} />
+    </fieldset>
+  )
 }
 
 function RoutingPolicyEditor(props: { config: PolicyConfig }) {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const affinityView = policySectionAccess(
+    user,
+    'models.channel-affinity',
+    'view'
+  )
+  const affinityEdit = policySectionAccess(
+    user,
+    'models.channel-affinity',
+    'edit'
+  )
+  const retryView = policySectionAccess(
+    user,
+    'models.routing-reliability',
+    'view'
+  )
+  const retryEdit = policySectionAccess(
+    user,
+    'models.routing-reliability',
+    'edit'
+  )
   const mutation = useSavePolicy()
   const schema = useMemo(() => createRoutingPolicySchema(t), [t])
   const defaults = useMemo(
@@ -91,6 +144,13 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
     ).normalized
     const delta = Object.fromEntries(
       Object.entries(next).filter(([key, value]) => {
+        if (
+          key.startsWith('channel_affinity_setting.')
+            ? !affinityEdit
+            : !retryEdit
+        ) {
+          return false
+        }
         const previous = props.config.options[key]
         if (key === 'channel_affinity_setting.rules') {
           return (
@@ -127,25 +187,33 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
           isSaving={mutation.isPending}
         />
         <div className='min-w-0 space-y-4'>
-          <AffinitySettings />
-          <FormField
-            control={form.control}
-            name='channel_affinity_setting.rules'
-            render={({ field }) => (
-              <FormItem>
-                <ChannelAffinitySection
-                  rulesJson={field.value}
-                  onRulesChange={field.onChange}
-                  enabled={values.channel_affinity_setting.enabled}
-                  globalSessionMode={
-                    values.channel_affinity_setting.session_mode
-                  }
-                />
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <RetrySection />
+          {affinityView && (
+            <fieldset disabled={!affinityEdit}>
+              <AffinitySettings />
+              <FormField
+                control={form.control}
+                name='channel_affinity_setting.rules'
+                render={({ field }) => (
+                  <FormItem>
+                    <ChannelAffinitySection
+                      rulesJson={field.value}
+                      onRulesChange={field.onChange}
+                      enabled={values.channel_affinity_setting.enabled}
+                      globalSessionMode={
+                        values.channel_affinity_setting.session_mode
+                      }
+                    />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </fieldset>
+          )}
+          {retryView && (
+            <fieldset disabled={!retryEdit}>
+              <RetrySection />
+            </fieldset>
+          )}
           {mutation.isError ? (
             <p role='alert' className='text-destructive text-sm'>
               {mutation.error.message}

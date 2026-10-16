@@ -44,9 +44,18 @@ export type FilteringSettings = Pick<
 export type RequestPolicySettings = RetrySettings &
   HealthSettings &
   FilteringSettings &
-  Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings>
+  Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings> & {
+    'probe_routing_setting.max_input_chars': number
+    'channel_daily_limit_setting.enabled': boolean
+    'channel_daily_limit_setting.timezone': string
+    'channel_daily_limit_setting.retention_days': number
+  }
 
 export const defaultRequestPolicySettings: RequestPolicySettings = {
+  'probe_routing_setting.max_input_chars': 128,
+  'channel_daily_limit_setting.enabled': true,
+  'channel_daily_limit_setting.timezone': 'Asia/Shanghai',
+  'channel_daily_limit_setting.retention_days': 90,
   RetryTimes: 0,
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',

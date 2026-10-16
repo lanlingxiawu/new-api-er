@@ -119,10 +119,13 @@ export function canViewSystemSettingsScope(
   user: AuthUser | null | undefined,
   scope: string
 ): boolean {
-  return hasPermission(
-    user,
-    systemSettingsResource(scope),
-    ADMIN_PERMISSION_ACTIONS.VIEW
+  return [scope, ...(SETTINGS_COMPATIBILITY_SCOPES[scope] ?? [])].some(
+    (candidate) =>
+      hasPermission(
+        user,
+        systemSettingsResource(candidate),
+        ADMIN_PERMISSION_ACTIONS.VIEW
+      )
   )
 }
 
@@ -130,10 +133,36 @@ export function canEditSystemSettingsScope(
   user: AuthUser | null | undefined,
   scope: string
 ): boolean {
-  return hasPermission(
-    user,
-    systemSettingsResource(scope),
-    ADMIN_PERMISSION_ACTIONS.EDIT
+  return [scope, ...(SETTINGS_COMPATIBILITY_SCOPES[scope] ?? [])].some(
+    (candidate) =>
+      hasPermission(
+        user,
+        systemSettingsResource(candidate),
+        ADMIN_PERMISSION_ACTIONS.EDIT
+      )
+  )
+}
+
+const SETTINGS_COMPATIBILITY_SCOPES: Record<string, string[]> = {
+  'request-policies.routing': [
+    'models.routing-reliability',
+    'models.channel-affinity',
+  ],
+  'request-policies.health': ['models.routing-reliability'],
+  'request-policies.filtering': ['security.sensitive-words'],
+}
+
+export function policySectionAccess(
+  user: AuthUser | null | undefined,
+  legacy: string,
+  action: 'view' | 'edit'
+) {
+  return (
+    hasPermission(
+      user,
+      systemSettingsResource('request-policies.routing'),
+      action
+    ) || hasPermission(user, systemSettingsResource(legacy), action)
   )
 }
 

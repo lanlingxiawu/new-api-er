@@ -102,6 +102,11 @@ func GetOptions(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
+		for key := range allowedKeys {
+			if !middleware.AllowsSystemSettingsOption(c, key) {
+				delete(allowedKeys, key)
+			}
+		}
 	}
 
 	var options []*model.Option
@@ -216,6 +221,12 @@ func UpdateOptionGroup(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	for key := range request.Values {
+		if !middleware.AllowsSystemSettingsOption(c, request.Module+"."+key) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+	}
 	applied, err := model.SaveConfigGroup(request.Module, request.Values)
 	if err != nil {
 		logger.LogError(c, "failed to update configuration group: "+err.Error())
@@ -295,7 +306,7 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	option.Scope = scope
-	if option.Scope != "" && !settingsaccess.AllowsOption(option.Scope, option.Key) {
+	if option.Scope != "" && !middleware.AllowsSystemSettingsOption(c, option.Key) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}

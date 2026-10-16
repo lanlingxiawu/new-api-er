@@ -1,5 +1,6 @@
 # Chinese (Simplified) translations
 # 中文（简体）翻译文件
+price_monitor.client_refresh_required: "当前改价表单版本已停用，请刷新页面后重新提交。"
 user.username_too_long: "用户名最多 20 个字符，请缩短后重试。"
 user.display_name_too_long: "显示名最多 20 个字符，请缩短后重试。"
 user.email_too_long: "邮箱地址最多 50 个字符，请检查后重试。"

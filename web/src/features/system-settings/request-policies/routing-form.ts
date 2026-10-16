@@ -47,8 +47,8 @@ export function routingPolicyFormValues(
   options: Record<string, string>
 ): RoutingPolicyFormValues {
   return {
-    RetryTimes: Number(options.RetryTimes),
-    AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes,
+    RetryTimes: Number(options.RetryTimes ?? 0),
+    AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes ?? '',
     channel_affinity_setting: {
       enabled: options['channel_affinity_setting.enabled'] === 'true',
       session_mode: (options['channel_affinity_setting.session_mode'] ||
@@ -57,9 +57,9 @@ export function routingPolicyFormValues(
         options['channel_affinity_setting.switch_on_success'] === 'true',
       keep_on_channel_disabled:
         options['channel_affinity_setting.keep_on_channel_disabled'] === 'true',
-      max_entries: Number(options['channel_affinity_setting.max_entries']),
+      max_entries: Number(options['channel_affinity_setting.max_entries'] ?? 0),
       default_ttl_seconds: Number(
-        options['channel_affinity_setting.default_ttl_seconds']
+        options['channel_affinity_setting.default_ttl_seconds'] ?? 0
       ),
       rules: options['channel_affinity_setting.rules'] || '[]',
     },

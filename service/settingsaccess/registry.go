@@ -19,6 +19,20 @@ type Definition struct {
 
 var definitions = buildDefinitions()
 
+// CompatibilitySources keeps retired page permissions scoped to their original fields.
+func CompatibilitySources(scope string) []string {
+	switch scope {
+	case "request-policies.routing":
+		return []string{"models.routing-reliability", "models.channel-affinity"}
+	case "request-policies.health":
+		return []string{"models.routing-reliability"}
+	case "request-policies.filtering":
+		return []string{"security.sensitive-words"}
+	default:
+		return nil
+	}
+}
+
 func Resolve(scope string) (Definition, bool) {
 	definition, ok := definitions[scope]
 	return definition, ok

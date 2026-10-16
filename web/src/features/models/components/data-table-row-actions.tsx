@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import type { Row } from '@tanstack/react-table'
 import { Eye, EyeOff, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -75,14 +76,18 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </span>
       </Button>
 
-      {canPrice && (
+      {canPrice && model.name_rule === 0 && (
         <Button
+          role='link'
           variant='ghost'
           size='sm'
-          onClick={() => {
-            setCurrentRow(model)
-            setOpen('price-model')
-          }}
+          render={
+            <Link
+              to='/system-settings/billing/$section'
+              params={{ section: 'model-pricing' }}
+              search={{ model: model.model_name }}
+            />
+          }
         >
           <span className='truncate'>{t('Pricing')}</span>
         </Button>

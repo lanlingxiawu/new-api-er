@@ -51,6 +51,46 @@ import {
 
 type PolicyBeforeLoad = (context: { params: { section: string } }) => void
 
+it('keeps the daily limit controls on the single channel health page', async () => {
+  await renderPolicies('/system-settings/request-policies/health')
+  expect(await screen.findByText('Daily reset timezone')).toBeVisible()
+  expect(screen.getByText('Usage history retention (days)')).toBeVisible()
+})
+
+it('redirects the retired reliability page to request policies', async () => {
+  const router = await renderPolicies(
+    '/system-settings/models/routing-reliability'
+  )
+  await waitFor(() =>
+    expect(router.state.location.pathname).toBe(
+      '/system-settings/request-policies/routing'
+    )
+  )
+})
+
+it('preserves legacy retry access without exposing session affinity', async () => {
+  useAuthStore.getState().auth.setUser({
+    id: 2,
+    username: 'legacy-admin',
+    role: 10,
+    permissions: {
+      admin_permissions: {
+        'system_settings.models.routing-reliability': {
+          view: true,
+          edit: true,
+        },
+      },
+    },
+  })
+  await renderPolicies('/system-settings/request-policies/routing')
+  expect(
+    await screen.findByRole('spinbutton', { name: 'Maximum retries' })
+  ).toBeEnabled()
+  expect(
+    screen.queryByRole('switch', { name: 'Enable session affinity' })
+  ).not.toBeInTheDocument()
+})
+
 let queryClient: QueryClient
 let settings: RequestPolicySettings
 
