@@ -19,6 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  accountUsernameSchema,
+  accountDisplayNameSchema,
+  accountRemarkSchema,
+} from '@/lib/account-profile-schema'
+import {
   type PermissionCatalog,
   type AdminPermissionMatrix,
   normalizeAdminPermissions,
@@ -34,8 +39,8 @@ import type { UserFormData, User } from '../types'
 // ============================================================================
 
 export const userFormSchema = z.object({
-  username: z.string().min(1, 'Username is required'),
-  display_name: z.string().optional(),
+  username: accountUsernameSchema,
+  display_name: accountDisplayNameSchema.optional(),
   password: z.string().optional(),
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
@@ -56,7 +61,7 @@ export const userFormSchema = z.object({
       })
     )
     .optional(),
-  remark: z.string().optional(),
+  remark: accountRemarkSchema.optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),

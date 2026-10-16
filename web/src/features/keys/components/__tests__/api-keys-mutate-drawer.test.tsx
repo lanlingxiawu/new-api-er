@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test } from 'vitest'
 
 const { createInstance } = await import('i18next')
@@ -179,18 +180,15 @@ function changeInput(input: HTMLInputElement, value: string): void {
   fireEvent.input(input, { target: { value } })
 }
 
-function selectComboboxOption(
+async function selectComboboxOption(
   trigger: HTMLButtonElement,
   optionDescription: string
-): void {
-  fireEvent.click(trigger)
-  const option = [
-    ...document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'),
-  ].find((candidate) => candidate.textContent?.includes(optionDescription))
-  if (!option) {
-    throw new Error(`Expected option containing "${optionDescription}"`)
-  }
-  fireEvent.click(option)
+): Promise<void> {
+  await userEvent.click(trigger)
+  // 只选择当前可访问的选项，避免命中上一个弹层退出动画中的隐藏节点。
+  await userEvent.click(
+    await screen.findByRole('option', { name: new RegExp(optionDescription) })
+  )
 }
 
 afterEach(() => {
@@ -249,7 +247,7 @@ describe('API keys mutate drawer Auto group integration', () => {
     if (!addGroupTrigger) {
       throw new Error('Expected Auto group order combobox')
     }
-    selectComboboxOption(addGroupTrigger, 'Priority access')
+    await selectComboboxOption(addGroupTrigger, 'Priority access')
 
     expect(
       document.querySelector('button[aria-label="Remove vip"]')
@@ -260,9 +258,13 @@ describe('API keys mutate drawer Auto group integration', () => {
     expect(findButton('Restore global Auto', true).disabled).toBe(false)
 
     const groupTrigger = getControlByLabel('Group')
-    selectComboboxOption(groupTrigger, 'Standard access')
-    expect(document.querySelector('button[aria-label="Remove vip"]')).toBe(null)
-    selectComboboxOption(groupTrigger, 'Automatic routing')
+    await selectComboboxOption(groupTrigger, 'Standard access')
+    await waitFor(() =>
+      expect(document.querySelector('button[aria-label="Remove vip"]')).toBe(
+        null
+      )
+    )
+    await selectComboboxOption(groupTrigger, 'Automatic routing')
 
     expect(
       document.querySelector('button[aria-label="Remove vip"]')

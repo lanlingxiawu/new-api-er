@@ -4,16 +4,68 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/gin-gonic/gin"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUserValidationMessagesAreLocalizedAndActionable(t *testing.T) {
+	registerEnabled, passwordRegisterEnabled := common.RegisterEnabled, common.PasswordRegisterEnabled
+	common.RegisterEnabled, common.PasswordRegisterEnabled = true, true
+	t.Cleanup(func() {
+		common.RegisterEnabled, common.PasswordRegisterEnabled = registerEnabled, passwordRegisterEnabled
+	})
+	for _, endpoint := range []struct {
+		name    string
+		handler gin.HandlerFunc
+	}{{"register", Register}, {"create", CreateUser}, {"update", UpdateUser}, {"self", UpdateSelf}} {
+		for _, tc := range []struct {
+			field, value, zh, en string
+		}{
+			{"username", strings.Repeat("名", 21), "用户名最多 20 个字符，请缩短后重试。", "Username must be at most 20 characters. Shorten it and try again."},
+			{"display_name", strings.Repeat("😀", 21), "显示名最多 20 个字符，请缩短后重试。", "Display name must be at most 20 characters. Shorten it and try again."},
+			{"email", strings.Repeat("a", 51), "邮箱地址最多 50 个字符，请检查后重试。", "Email address must be at most 50 characters. Check it and try again."},
+			{"remark", strings.Repeat("注", 256), "备注最多 255 个字符，请缩短后重试。", "Remark must be at most 255 characters. Shorten it and try again."},
+			{"password", "short", "密码长度须为 8 至 128 个字符。", "Password must contain 8 to 128 characters."},
+		} {
+			if tc.field == "password" && (endpoint.name == "update" || endpoint.name == "self") {
+				continue // 修改密码走独立的安全验证流程。
+			}
+			for _, language := range []string{"zh-CN", "en"} {
+				t.Run(endpoint.name+"/"+tc.field+"/"+language, func(t *testing.T) {
+					body := map[string]any{"id": 1, "username": "valid-user", "password": "valid-password", "role": 1}
+					if endpoint.name == "update" || endpoint.name == "self" {
+						delete(body, "password")
+					}
+					body[tc.field] = tc.value
+					ctx, rec := newCtx(t, http.MethodPut, "/api/user/", body)
+					ctx.Request.Header.Set("Accept-Language", language)
+					ctx.Set("id", 1)
+					ctx.Set("role", common.RoleRootUser)
+					endpoint.handler(ctx)
+					response := decodeResp(t, rec)
+					require.False(t, response.Success)
+					expected := tc.en
+					if language == "zh-CN" {
+						expected = tc.zh
+					}
+					assert.Equal(t, expected, response.Message)
+					assert.NotContains(t, response.Message, "User.")
+					assert.NotContains(t, response.Message, "validation for")
+				})
+			}
+		}
+	}
+}
 
 // Branch audit of UpdateUser (fork rewrite): role/level guards, the admin-only
 // exclusive-ratio field on master vs slave nodes, cleanup coordination, and the
@@ -89,6 +141,27 @@ func TestBranchAuditUpdateUser_LevelGuards(t *testing.T) {
 		auditUserBody(otherAdmin, map[string]any{"display_name": "peer-after"}), "")
 	require.True(t, res.resp.Success, res.resp.Message)
 	assert.Equal(t, "peer-after", auditStoredUser(t, otherAdmin.Id).DisplayName)
+}
+
+func TestRootProfileUpdatePreservesUnchangedUserAuthentication(t *testing.T) {
+	requireDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
+	require.NoError(t, authz.Init(model.DB))
+	user := mkUser(t, func(u *model.User) { u.Role = common.RoleCommonUser })
+	before := auditStoredUser(t, user.Id)
+	ctx, rec := newCtx(t, http.MethodPut, "/api/user/", map[string]any{
+		"id": user.Id, "username": user.Username, "display_name": "新显示名",
+		"group": user.Group, "stream_response_timeout": 1, "retry_times": 2,
+	})
+	ctx.Set("id", nextTestID())
+	ctx.Set("role", common.RoleRootUser)
+	UpdateUser(ctx)
+	require.True(t, decodeResp(t, rec).Success)
+	after := auditStoredUser(t, user.Id)
+	assert.Equal(t, before.AuthVersion, after.AuthVersion, "普通资料更新不应撤销登录会话")
+	assert.Greater(t, after.ProfileVersion, before.ProfileVersion)
+	assert.Equal(t, 1, after.StreamResponseTimeout)
+	assert.Equal(t, 2, after.RetryTimes)
 }
 
 func TestBranchAuditUpdateUser_RoleCannotBeChangedThroughEdit(t *testing.T) {

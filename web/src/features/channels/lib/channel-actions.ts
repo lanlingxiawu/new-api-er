@@ -415,15 +415,15 @@ export async function handleUpdateChannelAccountBalance(
   try {
     const response = await updateChannelAccountBalance(id)
     if (response.success) {
-      toast.success(i18next.t('Account balance updated'))
+      toast.success(i18next.t('Balance updated successfully'))
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     } else {
       toast.error(
-        response.message || i18next.t('Failed to update account balance')
+        getServerMessage(response) || i18next.t('Failed to update balance')
       )
     }
   } catch {
-    toast.error(i18next.t('Failed to update account balance'))
+    toast.error(i18next.t('Failed to update balance'))
   }
 }
 

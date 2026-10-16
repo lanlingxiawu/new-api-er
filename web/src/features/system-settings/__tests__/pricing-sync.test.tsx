@@ -172,7 +172,7 @@ describe('pricing synchronization', () => {
       custom: { current: {}, upstreams: { upstream: { billing_mode: 'tiered_expr', billing_expr: custom } } },
     }} />)
     expect(screen.queryByText(tiered)).not.toBeInTheDocument()
-    expect(screen.getByText(/128,000/)).toBeVisible()
+    expect(screen.getByText(/Full input length.*128,000/)).toBeVisible()
     expect(screen.getByText('$0.2')).toBeVisible()
     expect(screen.getByText('$0.4')).toBeVisible()
     expect(screen.getByText(custom)).toBeVisible()

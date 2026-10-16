@@ -18,6 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import {
+  accountUsernameSchema,
+  accountEmailSchema,
+} from '@/lib/account-profile-schema'
 import { accountPasswordSchema } from '@/lib/password-policy'
 
 // ============================================================================
@@ -31,8 +35,8 @@ export const loginFormSchema = z.object({
 
 export const registerFormSchema = z
   .object({
-    username: z.string().min(1, 'Please enter your username'),
-    email: z.string().optional(),
+    username: accountUsernameSchema,
+    email: accountEmailSchema.optional(),
     password: accountPasswordSchema,
     confirmPassword: z.string().min(1, 'Please confirm your password'),
   })

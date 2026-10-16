@@ -1,4 +1,9 @@
 # English translations
+user.username_too_long: "Username must be at most 20 characters. Shorten it and try again."
+user.display_name_too_long: "Display name must be at most 20 characters. Shorten it and try again."
+user.email_too_long: "Email address must be at most 50 characters. Check it and try again."
+user.remark_too_long: "Remark must be at most 255 characters. Shorten it and try again."
+user.password_length_invalid: "Password must contain 8 to 128 characters."
 relay.claude_stream_failed: "Upstream stream failed. Please retry."
 
 # Errors returned to AI clients

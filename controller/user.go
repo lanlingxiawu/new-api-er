@@ -28,6 +28,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"gorm.io/gorm"
 )
 
@@ -219,6 +220,32 @@ func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBu
 	})
 }
 
+func writeUserValidationError(c *gin.Context, err error) {
+	var fields validator.ValidationErrors
+	if !errors.As(err, &fields) || len(fields) == 0 {
+		logger.LogWarn(c, "User input validation failed")
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	field := fields[0]
+	// 只记录字段和规则，不记录输入值，避免泄露密码等敏感信息。
+	logger.LogWarn(c, "User input rejected: "+field.Field()+" "+field.Tag())
+	key := i18n.MsgInvalidParams
+	switch field.Field() {
+	case "Username":
+		key = i18n.MsgUserUsernameTooLong
+	case "DisplayName":
+		key = i18n.MsgUserDisplayNameTooLong
+	case "Email":
+		key = i18n.MsgUserEmailTooLong
+	case "Remark":
+		key = i18n.MsgUserRemarkTooLong
+	case "Password":
+		key = i18n.MsgUserPasswordLengthInvalid
+	}
+	common.ApiErrorI18n(c, key)
+}
+
 func Register(c *gin.Context) {
 	if !common.RegisterEnabled {
 		common.ApiErrorT(c, "New user registration has been disabled by administrator")
@@ -241,7 +268,7 @@ func Register(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.Struct(&user); err != nil {
-		common.ApiErrorT(c, "Invalid input {{error}}", map[string]any{"error": err.Error()})
+		writeUserValidationError(c, err)
 		return
 	}
 	if common.EmailVerificationEnabled {
@@ -765,7 +792,7 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.StructExcept(&updatedUser, "Password"); err != nil {
-		common.ApiErrorT(c, "Invalid input {{error}}", map[string]any{"error": err.Error()})
+		writeUserValidationError(c, err)
 		return
 	}
 	originUser, err := model.GetUserById(updatedUser.Id, false)
@@ -1100,7 +1127,7 @@ func UpdateSelf(c *gin.Context) {
 	}
 
 	if err := common.Validate.StructExcept(&user, "Password"); err != nil {
-		common.ApiErrorT(c, "Invalid input")
+		writeUserValidationError(c, err)
 		return
 	}
 
@@ -1244,7 +1271,7 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 	if err := common.Validate.Struct(&user); err != nil {
-		common.ApiErrorT(c, "Invalid input {{error}}", map[string]any{"error": err.Error()})
+		writeUserValidationError(c, err)
 		return
 	}
 	if !common.IsValidateRole(user.Role) {
@@ -1307,7 +1334,7 @@ func CreateUser(c *gin.Context) {
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
 	if permissions == nil {
 		if userRole < common.RoleAdminUser && c.GetInt("role") == common.RoleRootUser {
-			return true, authz.ClearUserAuthorizationInTx(tx, userID)
+			return authz.ClearUserAuthorizationInTx(tx, userID)
 		}
 		return false, nil
 	}
@@ -1315,7 +1342,7 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 		return false, fmt.Errorf("only root can update admin permissions")
 	}
 	if userRole < common.RoleAdminUser {
-		return true, authz.ClearUserAuthorizationInTx(tx, userID)
+		return authz.ClearUserAuthorizationInTx(tx, userID)
 	}
 	return authz.UpdateUserPermissionsInTx(tx, userID, permissions)
 }
@@ -1428,7 +1455,8 @@ func ManageUser(c *gin.Context) {
 			if err := user.UpdateWithTx(tx, false); err != nil {
 				return err
 			}
-			return authz.ClearUserAuthorizationInTx(tx, user.Id)
+			_, err := authz.ClearUserAuthorizationInTx(tx, user.Id)
+			return err
 		}); err != nil {
 			common.ApiError(c, err)
 			return

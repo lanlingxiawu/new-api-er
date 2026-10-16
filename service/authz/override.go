@@ -119,20 +119,25 @@ func ClearUserPermissions(userID int) error {
 }
 
 func ClearUserPermissionsInTx(tx *gorm.DB, userID int) error {
+	_, err := ClearUserAuthorizationInTx(tx, userID)
+	return err
+}
+
+// ClearUserAuthorizationInTx 清理用户覆盖权限，并报告是否确实删除了规则。
+func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) (bool, error) {
+	changed := false
 	for _, resource := range registry {
-		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource.Resource).Delete(&model.CasbinRule{}).Error; err != nil {
-			return err
+		result := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource.Resource).Delete(&model.CasbinRule{})
+		if result.Error != nil {
+			return false, result.Error
 		}
+		changed = changed || result.RowsAffected > 0
 	}
-	return nil
+	return changed, nil
 }
 
 func ClearUserAuthorization(userID int) error {
 	return ClearUserPermissions(userID)
-}
-
-func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) error {
-	return ClearUserPermissionsInTx(tx, userID)
 }
 
 // ExplicitUserPermissions returns the effective permission matrix for the

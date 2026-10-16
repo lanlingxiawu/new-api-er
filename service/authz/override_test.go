@@ -251,7 +251,13 @@ func TestClearUserAuthorizationInTx_RemovesRows(t *testing.T) {
 	require.Equal(t, int64(2), before)
 
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
-		return ClearUserAuthorizationInTx(tx, 91)
+		changed, err := ClearUserAuthorizationInTx(tx, 91)
+		require.NoError(t, err)
+		assert.True(t, changed, "删除已有权限必须报告变更")
+		changed, err = ClearUserAuthorizationInTx(tx, 91)
+		require.NoError(t, err)
+		assert.False(t, changed, "没有权限可清理时不应撤销会话")
+		return nil
 	}))
 
 	var after int64

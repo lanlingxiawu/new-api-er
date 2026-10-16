@@ -21,9 +21,11 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 
+import { registerFormSchema } from '@/features/auth/constants'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { userFormSchema } from '../../lib/user-form'
 import type { User } from '../../types'
 import { UsersMutateDrawer } from '../users-mutate-drawer'
 import { UsersProvider } from '../users-provider'
@@ -119,6 +121,75 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   useAuthStore.getState().auth.reset()
+})
+
+it.each(['username', 'display_name'] as const)(
+  '用户名称长度按 Unicode 字符校验：%s',
+  (field) => {
+    for (const character of ['a', '名', '😀']) {
+      for (const length of [19, 20, 21]) {
+        const result = userFormSchema.safeParse({
+          username: 'managed-user',
+          [field]: character.repeat(length),
+        })
+        expect(result.success).toBe(length <= 20)
+      }
+    }
+  }
+)
+
+it('注册与管理员编辑采用相同的用户名长度和去空格规则', () => {
+  for (const character of ['a', '名', '😀']) {
+    for (const length of [20, 21]) {
+      const username = ` ${character.repeat(length)} `
+      const result = registerFormSchema.safeParse({
+        username,
+        password: 'valid-password',
+        confirmPassword: 'valid-password',
+      })
+      expect(result.success).toBe(length === 20)
+      if (result.success) expect(result.data.username).toBe(username.trim())
+    }
+  }
+  expect(userFormSchema.safeParse({ username: '   ' }).success).toBe(false)
+  expect(
+    userFormSchema.safeParse({ username: 'valid', remark: '注'.repeat(256) })
+      .success
+  ).toBe(false)
+})
+
+it('超长显示名阻止保存，修正后可保存且保留超时和重试配置', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  renderPermissions(100, true)
+  const displayName = await screen.findByDisplayValue('Managed admin')
+  await userEvent.clear(displayName)
+  await userEvent.type(displayName, 'x'.repeat(21))
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(displayName).toHaveAttribute('aria-invalid', 'true')
+  )
+  expect(put).not.toHaveBeenCalled()
+  await userEvent.clear(displayName)
+  await userEvent.type(displayName, 'Corrected admin')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/user/',
+      expect.objectContaining({
+        display_name: 'Corrected admin',
+        stream_response_timeout: 0,
+        stream_total_timeout: 0,
+        non_stream_response_timeout: 0,
+        non_stream_total_timeout: 0,
+        stream_response_timeout_mode: 'first_output',
+        non_stream_timeout_billing: 'refund',
+        retry_times: 0,
+      }),
+      {}
+    )
+  )
 })
 
 it.each([undefined, true])(

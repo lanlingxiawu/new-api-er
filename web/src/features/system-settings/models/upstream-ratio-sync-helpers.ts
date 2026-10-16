@@ -141,7 +141,7 @@ export function getSyncExpressionPricing(expression: string, t: (key: string) =>
       ? [{ ...field, tierField: field.tierField }]
       : []
   )
-  const conditionLabels = { p: t('Input tokens'), c: t('Output tokens'), len: t('Length') }
+  const conditionLabels = { p: t('Input tokens'), c: t('Output tokens'), len: t('Full input length') }
   return {
     requestRuleExpr,
     tiers: config.tiers.map((tier) => ({

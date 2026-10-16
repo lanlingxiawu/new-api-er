@@ -34,7 +34,11 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 		common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	}
 	model.DB = db
-	model.LOG_DB = db
+	logDB := model.LOG_DB
+	if logDB == nil {
+		logDB = db
+	}
+	model.LOG_DB = logDB
 	common.RedisEnabled = false
 	model.InitColumnNames()
 	t.Cleanup(func() {
@@ -45,9 +49,9 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 		model.InitColumnNames()
 	})
 	row := model.Log{RequestId: common.NewRequestId(), CreatedAt: common.GetTimestamp(), Other: `{"stream_diagnostic":{"error":"root-private","downstream_body_base64":"Ym9keQ=="}}`}
-	require.NoError(t, db.Create(&row).Error)
-	require.NoError(t, db.Create(&model.Log{RequestId: row.RequestId, CreatedAt: row.CreatedAt, Other: `{"claude_diagnostic":{"attempt":2,"error":"second-private"},"claude_diagnostic_attempt":2}`}).Error)
-	t.Cleanup(func() { db.Where("request_id = ?", row.RequestId).Delete(&model.Log{}) })
+	require.NoError(t, logDB.Create(&row).Error)
+	require.NoError(t, logDB.Create(&model.Log{RequestId: row.RequestId, CreatedAt: row.CreatedAt, Other: `{"claude_diagnostic":{"attempt":2,"error":"second-private"},"claude_diagnostic_attempt":2}`}).Error)
+	t.Cleanup(func() { logDB.Where("request_id = ?", row.RequestId).Delete(&model.Log{}) })
 	router := gin.New()
 	router.GET("/diagnostic", middleware.RootAuth(), GetStreamDiagnostic)
 	unauthenticated := httptest.NewRecorder()
@@ -58,7 +62,7 @@ func TestClaudeDiagnosticRootBoundary(t *testing.T) {
 		// users.access_token is CHAR(32): a longer token is truncated by non-strict MySQL
 		// and then never matches, so use a 32-char token.
 		token := common.GetUUID()
-		user := model.User{Username: "diag-" + token, Password: "fixture", Role: role, Status: common.UserStatusEnabled, Group: "default", AccessToken: &token, AffCode: token}
+		user := model.User{Username: "diag-" + token[:15], Password: "fixture", Role: role, Status: common.UserStatusEnabled, Group: "default", AccessToken: &token, AffCode: token}
 		require.NoError(t, db.Create(&user).Error)
 		t.Cleanup(func() { db.Unscoped().Where("id = ?", user.Id).Delete(&model.User{}) })
 		request := httptest.NewRequest("GET", fmt.Sprintf("/diagnostic?request_id=%s&created_at=%d", row.RequestId, row.CreatedAt), nil)
