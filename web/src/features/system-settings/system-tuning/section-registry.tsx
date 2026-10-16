@@ -347,6 +347,8 @@ const SYSTEM_TUNING_SECTIONS = [
             systemTuningFallbackSettings[
               'log_export_setting.max_active_jobs_per_user'
             ],
+          'log_export_setting.user_max_range_sec':
+            settings['log_export_setting.user_max_range_sec'] || 2592000,
           'log_export_setting.admin_max_range_sec':
             settings['log_export_setting.admin_max_range_sec'] ??
             systemTuningFallbackSettings[

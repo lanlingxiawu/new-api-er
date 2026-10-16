@@ -3,41 +3,10 @@ package controller
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // log.go: export-text helpers, deprecated endpoints, and handler input guards.
-
-func TestLogTypeText(t *testing.T) {
-	cases := map[int]string{
-		model.LogTypeTopup:   "充值",
-		model.LogTypeConsume: "消费",
-		model.LogTypeManage:  "管理",
-		model.LogTypeSystem:  "系统",
-		model.LogTypeError:   "错误",
-		model.LogTypeRefund:  "退款",
-		9999:                 "未知",
-	}
-	for in, want := range cases {
-		assert.Equalf(t, want, logTypeText(in), "type=%d", in)
-	}
-}
-
-func TestRetryChainText(t *testing.T) {
-	// Empty / non-JSON / missing keys -> empty string.
-	assert.Equal(t, "", retryChainText(""))
-	assert.Equal(t, "", retryChainText("not-json"))
-	assert.Equal(t, "", retryChainText(`{"foo":"bar"}`))
-	assert.Equal(t, "", retryChainText(`{"admin_info":{}}`))
-	assert.Equal(t, "", retryChainText(`{"admin_info":{"use_channel":[]}}`))
-
-	// Valid retry chain joins with "->".
-	got := retryChainText(`{"admin_info":{"use_channel":[1,2,3]}}`)
-	assert.Equal(t, "1->2->3", got)
-}
 
 func TestSearchLogs_Deprecated(t *testing.T) {
 	ctx, rec := newCtx(t, "GET", "/api/log/search", nil)
@@ -57,36 +26,6 @@ func TestGetLogByKey_NoTokenId(t *testing.T) {
 	GetLogByKey(ctx)
 	resp := decodeResp(t, rec)
 	assert.False(t, resp.Success)
-}
-
-func TestExportUserLogs_InvalidUser(t *testing.T) {
-	ctx, rec := newCtx(t, "GET", "/api/log/self/export", nil)
-	// Missing identity is rejected even when middleware was not invoked.
-	ExportUserLogs(ctx)
-	assert.Equal(t, 200, rec.Code)
-	var out map[string]any
-	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &out))
-	assert.Equal(t, false, out["success"])
-}
-
-func TestExportLogsExcel_TimeRangeGuards(t *testing.T) {
-	// Missing time range.
-	ctx, rec := newCtx(t, "GET", "/api/log/export", nil)
-	exportLogsExcel(ctx, 0)
-	resp := decodeResp(t, rec)
-	assert.False(t, resp.Success)
-
-	// end < start.
-	ctx2, rec2 := newCtx(t, "GET", "/api/log/export?start_timestamp=200&end_timestamp=100", nil)
-	exportLogsExcel(ctx2, 0)
-	resp2 := decodeResp(t, rec2)
-	assert.False(t, resp2.Success)
-
-	// span > 1 month.
-	ctx3, rec3 := newCtx(t, "GET", "/api/log/export?start_timestamp=1&end_timestamp=99999999", nil)
-	exportLogsExcel(ctx3, 0)
-	resp3 := decodeResp(t, rec3)
-	assert.False(t, resp3.Success)
 }
 
 func TestGetEmployeeCustomerLogs_NotEmployee(t *testing.T) {

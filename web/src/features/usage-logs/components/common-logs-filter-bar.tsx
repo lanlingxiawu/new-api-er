@@ -19,21 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQueryClient, useIsFetching, useQuery } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import type { Table } from '@tanstack/react-table'
-import axios from 'axios'
-import { Download, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Download, Eye, EyeOff } from 'lucide-react'
 import { useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import {
   Select,
   SelectContent,
@@ -53,15 +45,13 @@ import { useIsEmployee } from '@/hooks/use-admin'
 import { getUserGroups } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import { exportLogsXlsx, LogExportError } from '../api'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { EmployeeCustomerExport } from '../export/components/employee-customer-export'
 import { buildSearchParams } from '../lib/filter'
-import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
+import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
-import { ExportLogsDialog } from './dialogs/export-logs-dialog'
 import {
   LogsFilterField,
   LogsFilterInput,
@@ -319,37 +309,6 @@ export function CommonLogsFilterBar<TData>(
     [handleApply]
   )
 
-  const [exporting, setExporting] = useState(false)
-  // Export endpoint only supports admin (all logs) and self (own logs).
-  const exportScope = logsScope === 'admin' ? 'admin' : 'self'
-  const canExport = logsScope !== 'employee'
-
-  const handleExport = useCallback(async () => {
-    if (exporting) return
-    setExporting(true)
-    try {
-      const params = buildApiParams({
-        page: 1,
-        pageSize: 1,
-        searchParams,
-        scope: exportScope,
-      })
-      await exportLogsXlsx(params, exportScope)
-    } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 429) {
-        toast.error(
-          t('Downloading too frequently, please try again in 10 minutes.')
-        )
-      } else if (e instanceof LogExportError && e.message) {
-        toast.error(e.message)
-      } else {
-        toast.error(t('Export failed'))
-      }
-    } finally {
-      setExporting(false)
-    }
-  }, [exporting, searchParams, exportScope, t])
-
   const handleAdvancedExport = useCallback(() => {
     void navigate({
       to: '/usage-logs/$section',
@@ -360,7 +319,7 @@ export function CommonLogsFilterBar<TData>(
     })
   }, [navigate, searchParams])
 
-  // 普通用户只有「快速导出」（同步小范围）；管理员多一条通往后台导出中心的路。
+  // 各视图统一进入后台导出中心，由服务端限定数据范围。
   let exportButton: React.ReactNode = null
   if (logsScope === 'employee') {
     exportButton = (
@@ -372,46 +331,10 @@ export function CommonLogsFilterBar<TData>(
         }}
       />
     )
-  } else if (canExport && exportScope === 'admin') {
+  } else {
     exportButton = (
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button type='button' variant='outline' disabled={exporting} />
-          }
-        >
-          {exporting ? <Loader2 className='animate-spin' /> : <Download />}
-          {t('Export')}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align='end' className='w-64'>
-          <DropdownMenuItem onClick={handleExport}>
-            <div className='flex flex-col'>
-              <span>{t('Quick Export')}</span>
-              <span className='text-muted-foreground text-[11px]'>
-                {t('Current filters, downloads right away')}
-              </span>
-            </div>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleAdvancedExport}>
-            <div className='flex flex-col'>
-              <span>{t('Advanced Export…')}</span>
-              <span className='text-muted-foreground text-[11px]'>
-                {t('Pick columns, split into parts, run in background')}
-              </span>
-            </div>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    )
-  } else if (canExport) {
-    exportButton = (
-      <Button
-        type='button'
-        variant='outline'
-        onClick={handleExport}
-        disabled={exporting}
-      >
-        {exporting ? <Loader2 className='animate-spin' /> : <Download />}
+      <Button type='button' variant='outline' onClick={handleAdvancedExport}>
+        <Download />
         {t('Export')}
       </Button>
     )
@@ -656,9 +579,9 @@ export function CommonLogsFilterBar<TData>(
       table={props.table}
       compactMobile
       stats={statsBar}
-      actions={exportButton}
+      actionEnd={exportButton}
       actionStart={sensitiveToggle}
-      actionEnd={<ExportLogsDialog />}
+
       primaryFilters={
         <>
           {dateRangeFilter}

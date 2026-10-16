@@ -1063,6 +1063,7 @@ export type SystemTuningSettings = {
   'log_export_setting.user_cooldown_sec': number
   'log_export_setting.max_concurrent_jobs': number
   'log_export_setting.max_active_jobs_per_user': number
+  'log_export_setting.user_max_range_sec': number
   'log_export_setting.admin_max_range_sec': number
   'log_export_setting.timeout_sec': number
   'log_export_setting.job_ttl_hours': number

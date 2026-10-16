@@ -43,12 +43,23 @@ export async function getExportColumns(): Promise<ExportColumnCatalog> {
 }
 
 export async function getExportJobs(
-  all = false
-): Promise<{ jobs: ExportJob[]; enabled: boolean }> {
-  const res = await api.get(`${BASE}/jobs${all ? '?all=true' : ''}`)
-  const body = res.data as Envelope<{ jobs: ExportJob[] | null; enabled: boolean }>
+  all = false,
+  self = false
+): Promise<{ jobs: ExportJob[]; enabled: boolean; max_range_sec?: number }> {
+  const res = await api.get(
+    `${self ? '/api/log/self/export' : BASE}/jobs${all ? '?all=true' : ''}`
+  )
+  const body = res.data as Envelope<{
+    jobs: ExportJob[] | null
+    enabled: boolean
+    max_range_sec?: number
+  }>
   if (!body.success) throw new Error(body.message)
-  return { jobs: body.data?.jobs ?? [], enabled: body.data?.enabled ?? true }
+  return {
+    jobs: body.data?.jobs ?? [],
+    enabled: body.data?.enabled ?? true,
+    max_range_sec: body.data?.max_range_sec,
+  }
 }
 
 export async function createExportJob(
@@ -61,8 +72,13 @@ export async function createExportJob(
 }
 
 /** Cancels a running job, or deletes a finished one along with its part files. */
-export async function deleteExportJob(jobId: string): Promise<void> {
-  const res = await api.delete(`${BASE}/jobs/${jobId}`)
+export async function deleteExportJob(
+  jobId: string,
+  self = false
+): Promise<void> {
+  const res = await api.delete(
+    `${self ? '/api/log/self/export' : BASE}/jobs/${jobId}`
+  )
   const body = res.data as Envelope<unknown>
   if (!body.success) throw new Error(body.message)
 }
@@ -77,10 +93,13 @@ export async function deleteExportJob(jobId: string): Promise<void> {
  */
 export async function downloadExportPart(
   jobId: string,
-  part?: number
+  part?: number,
+  self = false
 ): Promise<void> {
   const query = part ? `?part=${part}` : '?part=all'
-  const res = await api.get(`${BASE}/jobs/${jobId}/download-url${query}`)
+  const res = await api.get(
+    `${self ? '/api/log/self/export' : BASE}/jobs/${jobId}/download-url${query}`
+  )
   const body = res.data as Envelope<{ url: string }>
   if (!body.success) throw new Error(body.message)
 
@@ -100,23 +119,25 @@ export async function downloadExportPart(
  * a filter. The dedicated endpoint stops counting at a cap, so its cost does not
  * grow with the log table.
  */
-export async function getExportEstimate(params: {
-  start_timestamp: number
-  end_timestamp: number
-  type?: number
-  model_name?: string
-  username?: string
-  token_name?: string
-  channel?: number
-  group?: string
-  /**
-   * Row-level (anomaly) filters cannot be counted here, so the server flags the
-   * result as an upper bound rather than a prediction.
-   */
-  has_row_filter?: boolean
-  // 数值条件能下推 SQL，必须一并参与估算，否则设了「最多输出 tokens=0」
-  // 只会导出几行，弹窗却笃定地报出全时段的行数。
-} & NumericFilters): Promise<{
+export async function getExportEstimate(
+  params: {
+    start_timestamp: number
+    end_timestamp: number
+    type?: number
+    model_name?: string
+    username?: string
+    token_name?: string
+    channel?: number
+    group?: string
+    /**
+     * Row-level (anomaly) filters cannot be counted here, so the server flags the
+     * result as an upper bound rather than a prediction.
+     */
+    has_row_filter?: boolean
+    // 数值条件能下推 SQL，必须一并参与估算，否则设了「最多输出 tokens=0」
+    // 只会导出几行，弹窗却笃定地报出全时段的行数。
+  } & NumericFilters
+): Promise<{
   rows: number
   capped: boolean
   available: boolean
@@ -170,4 +191,21 @@ export async function deleteExportTemplate(id: number): Promise<void> {
   const res = await api.delete(`${BASE}/templates/${id}`)
   const body = res.data as Envelope<unknown>
   if (!body.success) throw new Error(body.message)
+}
+
+export async function createSelfExportJob(payload: {
+  filters: {
+    start_timestamp: number
+    end_timestamp: number
+    type?: number
+    model_name?: string
+    token_name?: string
+    group?: string
+  }
+  options: { timezone: string; header: boolean; csv_bom: boolean }
+}): Promise<string> {
+  const res = await api.post('/api/log/self/export/jobs', payload)
+  const body = res.data as Envelope<{ job_id: string }>
+  if (!body.success) throw new Error(body.message)
+  return body.data.job_id
 }

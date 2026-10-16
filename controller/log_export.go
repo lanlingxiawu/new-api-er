@@ -214,8 +214,7 @@ func isRootRequest(c *gin.Context) bool {
 // （过滤条件无匹配 → 扫完整段时间范围）在日志大表上跑得更久。
 const logExportEstimateTimeout = 3 * time.Second
 
-// GetLogExportEstimate 估算某组筛选条件命中的行数，供新建导出弹窗判断
-// xlsx 是否可行、预计几个分片。
+// GetLogExportEstimate 有界估算匹配行数，供新建导出弹窗提示数据规模和分片数。
 //
 // 走有界计数（数到上限即止），不复用日志列表接口——那个接口每次都会对
 // 命中集做完整 COUNT，而这个估算会随用户敲筛选条件被反复触发。
@@ -255,7 +254,7 @@ func GetLogExportEstimate(c *gin.Context) {
 	// 估算只覆盖能下推 SQL 的条件。行级条件（异常、用量来源等）没有索引可走，
 	// 无法在一次有界计数里算出来，因此带这些条件时估算结果是**上限**而非预测值。
 	// 前端据此把「约 N 行」改成「最多 N 行」——这个方向是保守的：
-	// 可能把实际能用 xlsx 的判成要降级，但绝不会反过来。
+	// 实际通过行级筛选的数量可能更少。
 	upperBound := c.Query("has_row_filter") == "true"
 
 	// 数值条件同样下推 SQL，必须计入估算——否则设了「最多输出 tokens=0」
@@ -270,8 +269,8 @@ func GetLogExportEstimate(c *gin.Context) {
 	filter.UseTimeMin = queryInt(c, "use_time_min")
 	filter.UseTimeMax = queryInt(c, "use_time_max")
 
-	// 数到「xlsx 上限 + 1」就够：再多也只是用来判断超没超限。
-	limit := setting.GetXlsxMaxRows() + 1
+	// 数到「单分片上限 + 1」就够，避免为预估扫描整个结果集。
+	limit := setting.GetRowsPerFile() + 1
 	// 超时刻意取得很短：LIMIT 限住的是结果不是工作量，过滤条件无匹配时
 	// 数据库要扫完整段范围才知道凑不满。估算只是提示，宁可放弃也不该让它
 	// 在日志大表上跑几十秒。
@@ -422,9 +421,13 @@ type logExportFilterError struct {
 func (e *logExportFilterError) Error() string { return e.key }
 
 // CreateLogExportJob 创建后台导出任务（管理员）。
-func CreateLogExportJob(c *gin.Context) {
+func CreateLogExportJob(c *gin.Context) { createLogExportJob(c, false) }
+
+func CreateSelfLogExportJob(c *gin.Context) { createLogExportJob(c, true) }
+
+func createLogExportJob(c *gin.Context, self bool) {
 	setting := operation_setting.GetLogExportSetting()
-	if !setting.Enabled {
+	if !setting.Enabled || (self && !operation_setting.GetLogSetting().UserExportEnabled) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportDisabled)
 		return
 	}
@@ -434,7 +437,13 @@ func CreateLogExportJob(c *gin.Context) {
 	}
 
 	var req createLogExportJobRequest
-	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
+	var parseErr error
+	if self {
+		req, parseErr = parseSelfLogExportRequest(c)
+	} else {
+		parseErr = common.UnmarshalBodyReusable(c, &req)
+	}
+	if parseErr != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -449,6 +458,9 @@ func CreateLogExportJob(c *gin.Context) {
 		return
 	}
 	maxRange := setting.GetAdminMaxRangeSec()
+	if self {
+		maxRange = setting.GetUserMaxRangeSec()
+	}
 	if req.EndTimestamp-req.StartTimestamp > maxRange {
 		common.ApiErrorI18n(c, i18n.MsgLogExportRangeTooLong,
 			map[string]any{"Days": maxRange / 86400})
@@ -484,6 +496,19 @@ func CreateLogExportJob(c *gin.Context) {
 		return
 	}
 
+	if self {
+		filters.UserId = c.GetInt("id")
+		if filters.UserId <= 0 {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		set, resolveErr := model.ResolveLogExportColumnsForRole(nil, common.RoleCommonUser)
+		if resolveErr != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		columns = set.Keys
+	}
 	userId := c.GetInt("id")
 	if model.CountActiveLogExportJobs(userId) >= setting.GetMaxActiveJobsPerUser() {
 		common.ApiErrorI18n(c, i18n.MsgLogExportTooManyJobs,
@@ -513,6 +538,7 @@ func CreateLogExportJob(c *gin.Context) {
 	go model.CleanupOrphanLogExportFiles()
 
 	job := &model.LogExportJob{
+		SelfExport:  self,
 		JobID:       jobID,
 		UserID:      userId,
 		Username:    c.GetString("username"),
@@ -673,19 +699,8 @@ func resolveLogExportRequestShape(c *gin.Context, req createLogExportJobRequest)
 	}
 	columns = set.Keys
 
-	if !model.ValidLogExportFormat(format) {
-		format = model.LogExportFormatCSVGz
-	}
-	// xlsx 只服务小结果集：预估行数超阈值时直接落到 csv.gz，避免白跑一趟再降级。
-	//
-	// 聚合模式不参与这个判断：est_rows 估的是**要扫描的日志行数**，而聚合的产出是
-	// 维度组合数——扫 100 万行可能只出 50 行汇总。拿扫描量去否决 xlsx，
-	// 会让所有大范围的汇总导出都拿不到 Excel 文件，而那恰恰是最该给 Excel 的场景。
-	if format == model.LogExportFormatXlsx && req.Mode != model.LogExportModeSummary {
-		if req.EstRows > int64(operation_setting.GetLogExportSetting().GetXlsxMaxRows()) {
-			format = model.LogExportFormatCSVGz
-		}
-	}
+	format = model.LogExportFormatCSVGz
+
 	return columns, format, options, nil
 }
 
@@ -695,7 +710,7 @@ func GetLogExportJobs(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
 		return
 	}
-	all := c.Query("all") == "true" && isRootRequest(c)
+	all := c.Query("all") == "true" && isRootRequest(c) && !isSelfLogExportRoute(c)
 	jobs, err := model.ListLogExportJobs(c.GetInt("id"), all, 20)
 	if err != nil {
 		common.SysError("log export: list jobs failed: " + err.Error())
@@ -704,14 +719,19 @@ func GetLogExportJobs(c *gin.Context) {
 	}
 	views := make([]*model.LogExportJob, 0, len(jobs))
 	for _, job := range jobs {
-		if (isEmployeeExportRoute(c) || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil {
+		if isSelfLogExportRoute(c) {
+			if !job.IsSelfExportFor(c.GetInt("id")) {
+				continue
+			}
+		} else if (isEmployeeExportRoute(c) || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil {
 			continue
 		}
 		views = append(views, job.PublicView())
 	}
 	common.ApiSuccess(c, gin.H{
-		"jobs":    views,
-		"enabled": operation_setting.GetLogExportSetting().Enabled,
+		"jobs":          views,
+		"enabled":       operation_setting.GetLogExportSetting().Enabled && (!isSelfLogExportRoute(c) || operation_setting.GetLogSetting().UserExportEnabled),
+		"max_range_sec": operation_setting.GetLogExportSetting().GetUserMaxRangeSec(),
 	})
 }
 
@@ -730,6 +750,13 @@ func loadOwnedLogExportJob(c *gin.Context) (*model.LogExportJob, bool) {
 	if job.UserID != c.GetInt("id") && !isRootRequest(c) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return nil, false
+	}
+	if isSelfLogExportRoute(c) {
+		if !job.IsSelfExportFor(c.GetInt("id")) {
+			employeeExportError(c, model.ErrEmployeeExportAccess)
+			return nil, false
+		}
+		return job, true
 	}
 	employeeRoute := isEmployeeExportRoute(c)
 	if ((employeeRoute || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil) ||
@@ -890,7 +917,7 @@ func DownloadLogExport(c *gin.Context) {
 			employeeExportError(c, err)
 			return
 		}
-	} else if !logExportDownloaderAllowed(userID) {
+	} else if !logExportDownloaderAllowedForJob(job) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
 		return
 	}
@@ -933,6 +960,17 @@ func logExportDownloaderAllowed(userID int) bool {
 		return false
 	}
 	return user.Role >= common.RoleAdminUser && user.Status == common.UserStatusEnabled
+}
+
+func logExportDownloaderAllowedForJob(job *model.LogExportJob) bool {
+	if !job.SelfExport {
+		return logExportDownloaderAllowed(job.UserID)
+	}
+	if !job.IsSelfExportFor(job.UserID) {
+		return false
+	}
+	user, err := model.GetUserCache(job.UserID)
+	return err == nil && user != nil && user.Status == common.UserStatusEnabled
 }
 
 func serveLogExportPart(c *gin.Context, job *model.LogExportJob, index int) {

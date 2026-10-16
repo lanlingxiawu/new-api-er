@@ -59,7 +59,6 @@ import {
 } from '../api'
 import type {
   AnomalyFilters,
-  ExportFormat,
   ExportMode,
   ExportOptions,
   ExportTemplatePurpose,
@@ -205,7 +204,7 @@ export function NewExportSheet({
   const [summaryDims, setSummaryDims] = useState<SummaryDimension[]>(['date'])
   const [templateId, setTemplateId] = useState<string>('')
   const [columns, setColumns] = useState<string[]>([])
-  const [format, setFormat] = useState<ExportFormat>('csv_gz')
+  const format = 'csv_gz' as const
   const [options, setOptions] = useState<ExportOptions>({
     csv_bom: true,
     header: true,
@@ -293,14 +292,6 @@ export function NewExportSheet({
     [t]
   )
 
-  const formatItems = useMemo(
-    () => [
-      { value: 'csv_gz', label: t('CSV (gzip, recommended)') },
-      { value: 'xlsx', label: t('Excel (.xlsx)') },
-    ],
-    [t]
-  )
-
   // 跨度上限由后端下发，前端不硬编码；用来禁用超限预设并给出提示。
   const maxRangeDays = Math.max(
     1,
@@ -335,14 +326,11 @@ export function NewExportSheet({
     const custom = templates?.find((tpl) => String(tpl.id) === value)
     if (custom) {
       setColumns(custom.columns)
-      setFormat(custom.format)
       if (custom.options) setOptions(custom.options)
     }
   }
 
-  // 行数估算：判断 xlsx 是否可行，并给出「预计多少行 / 多少个分片」。
-  //
-  // 三重防护，避免把日志大表当成打字回调来扫：
+  // 行数估算采用三重防护，避免把日志大表当成打字回调来扫：
   //   1. 走专用的有界计数接口（数到上限即止），不是列表接口的完整 COUNT；
   //   2. 文本筛选先 debounce，敲字过程中不发请求；
   //   3. 超出跨度上限时根本不查——那种范围后端本来就会拒绝导出。
@@ -416,20 +404,12 @@ export function NewExportSheet({
     staleTime: 60 * 1000,
   })
 
-  const xlsxLimit = catalog?.xlsx_max_rows ?? 200000
   const rowsPerPart = catalog?.rows_per_file ?? 1000000
   const estRows = estimate?.rows ?? 0
-  // capped 表示真实行数 ≥ estRows（计数被上限截断），这对判断「超没超 xlsx 上限」
-  // 已经足够——上限本身就是按 xlsx_max_rows + 1 取的。
   const estCapped = estimate?.capped ?? false
-  // 聚合模式下估算的是扫描量，不是产出行数——扫 100 万行可能只出 50 行汇总，
-  // 拿扫描量否决 xlsx 会把最该用 Excel 的场景挡在门外。
-  const xlsxTooLarge = mode !== 'summary' && (estCapped || estRows > xlsxLimit)
+  // 聚合模式下估算的是扫描量，扫 100 万行可能只出 50 行汇总。
   const estParts =
     estRows > 0 ? Math.max(1, Math.ceil(estRows / rowsPerPart)) : 0
-  useEffect(() => {
-    if (xlsxTooLarge && format === 'xlsx') setFormat('csv_gz')
-  }, [xlsxTooLarge, format])
 
   // 带异常条件时估算只覆盖能下推 SQL 的部分，得到的是筛选前的上限。
   // 照旧说「约 N 行」会让人以为那就是最终行数，实际可能只导出几百行。
@@ -479,7 +459,6 @@ export function NewExportSheet({
         summary_dims: mode !== 'detail' ? summaryDims : undefined,
         columns,
         format,
-        // 让后端在创建时就能判断 xlsx 是否可行，避免跑一半才降级。
         est_rows: estRows || undefined,
         options,
       })
@@ -1049,33 +1028,7 @@ export function NewExportSheet({
             <div className='grid gap-3 sm:grid-cols-2'>
               <div className='space-y-1'>
                 <Label>{t('File format')}</Label>
-                <Select
-                  items={formatItems}
-                  value={format}
-                  onValueChange={(v) =>
-                    setFormat((v ?? 'csv_gz') as ExportFormat)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    <SelectItem value='csv_gz'>
-                      {t('CSV (gzip, recommended)')}
-                    </SelectItem>
-                    <SelectItem value='xlsx' disabled={xlsxTooLarge}>
-                      {t('Excel (.xlsx)')}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {xlsxTooLarge && (
-                  <p className='text-muted-foreground text-xs'>
-                    {t(
-                      'Excel is unavailable above {{count}} rows; this export will use CSV.',
-                      { count: xlsxLimit }
-                    )}
-                  </p>
-                )}
+                <p className='text-sm'>{t('CSV (gzip, recommended)')}</p>
               </div>
               <div className='space-y-1'>
                 <Label>{t('Timezone')}</Label>

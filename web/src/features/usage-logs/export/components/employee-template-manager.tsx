@@ -44,7 +44,7 @@ import {
   type EmployeeExportTemplate,
 } from '../employee-api'
 import { TROUBLESHOOTING_FILTERS } from '../employee-filters'
-import type { ExportFormat, ExportMode, SummaryDimension } from '../types'
+import type { ExportMode, SummaryDimension } from '../types'
 import { ColumnPicker } from './column-picker'
 
 const DIMENSIONS: { value: SummaryDimension; label: string }[] = [
@@ -132,7 +132,7 @@ export function EmployeeTemplateManager() {
                   name: '',
                   enabled: true,
                   version: 0,
-                  format: 'xlsx',
+                  format: 'csv_gz',
                   mode: 'detail',
                   columns: catalog.data?.default_columns ?? [],
                   summary_dims: ['date'],
@@ -179,7 +179,7 @@ export function EmployeeTemplateManager() {
                     <div className='mt-1 flex flex-wrap items-center gap-1.5'>
                       <Badge variant='secondary'>{t('Built-in')}</Badge>
                       <span className='text-muted-foreground text-xs'>
-                        {tpl.format === 'xlsx' ? 'Excel' : 'CSV'} ·{' '}
+                        CSV.GZ ·{' '}
                         {t(MODE_LABELS[tpl.mode])}
                       </span>
                     </div>
@@ -205,7 +205,7 @@ export function EmployeeTemplateManager() {
                         {tpl.enabled ? t('Enabled') : t('Disabled')}
                       </Badge>
                       <span className='text-muted-foreground text-xs'>
-                        {tpl.format === 'xlsx' ? 'Excel' : 'CSV'} ·{' '}
+                        CSV.GZ ·{' '}
                         {t(MODE_LABELS[tpl.mode])}
                       </span>
                     </div>
@@ -369,19 +369,7 @@ function EmployeeTemplateEditor(props: {
             <div className='grid gap-3 sm:grid-cols-2'>
               <div>
                 <Label htmlFor={`${id}-format`}>{t('Format')}</Label>
-                <Combobox
-                  id={`${id}-format`}
-                  options={[
-                    { value: 'xlsx', label: 'Excel (.xlsx)' },
-                    { value: 'csv_gz', label: 'CSV (.csv.gz)' },
-                  ]}
-                  value={draft.format}
-                  onValueChange={(format) => {
-                    if (format) {
-                      setDraft({ ...draft, format: format as ExportFormat })
-                    }
-                  }}
-                />
+                <p className='text-sm'>CSV (.csv.gz)</p>
               </div>
               <div>
                 <Label htmlFor={`${id}-mode`}>{t('Output')}</Label>

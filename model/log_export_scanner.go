@@ -53,8 +53,13 @@ func (s *logExportScanner) exceededBudget() bool {
 }
 
 // run 扫描整个时间范围，每读到一批就调用 onBatch。
-// onBatch 返回错误即中止整次扫描（xlsx 行数上限、分片数上限等都走这条路）。
+// onBatch 返回错误即中止整次扫描（写入失败、分片数上限等都走这条路）。
 func (s *logExportScanner) run(ctx context.Context, onBatch func(logs []*Log) error) error {
+	if s.job.SelfExport {
+		if !s.job.IsSelfExportFor(s.job.UserID) {
+			return ErrEmployeeExportAccess
+		}
+	}
 	if s.job.EmployeeScope == nil {
 		return s.runCustomer(ctx, onBatch)
 	}
@@ -117,6 +122,9 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 			// 开工前只过「系统忙不忙」这道闸；计费放到这一批读完之后，
 			// 因为只有查完才知道实际读到了多少行。
 			s.gate.Before(ctx)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			job.ThrottledMs = s.gate.ThrottledMs()
 			if s.exceededBudget() {
 				return context.DeadlineExceeded
@@ -152,6 +160,9 @@ func (s *logExportScanner) runCustomer(ctx context.Context, onBatch func(logs []
 			windowRows += len(logs)
 			windowBatches++
 			s.gate.Charge(ctx, len(logs), batchSize)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			job.ThrottledMs = s.gate.ThrottledMs()
 
 			if len(logs) > 0 {

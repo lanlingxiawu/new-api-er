@@ -75,9 +75,10 @@ type LogExportOptions struct {
 
 // LogExportJob 一次导出任务的完整状态，序列化后存 Redis。
 type LogExportJob struct {
-	JobID    string `json:"job_id"`
-	UserID   int    `json:"user_id"`
-	Username string `json:"username"`
+	SelfExport bool   `json:"self_export,omitempty"`
+	JobID      string `json:"job_id"`
+	UserID     int    `json:"user_id"`
+	Username   string `json:"username"`
 	// CreatorRole 创建任务时的操作者角色，决定 root 专属列是否参与导出。
 	// 升级前创建的任务该字段为 0，按「非 root」处理——宁可少一列，
 	// 也不能让普通管理员从导出文件里拿到 root 专属诊断。
@@ -91,10 +92,9 @@ type LogExportJob struct {
 	RowCount int64 `json:"row_count"`
 	// ScannedRows 扫描过的行数。没有它，管理员看到「跑了 8 分钟只出 340 行」
 	// 会以为出了故障——而那正是异常筛选该有的样子。
-	ScannedRows int64  `json:"scanned_rows,omitempty"`
-	BytesOut    int64  `json:"bytes_out"`
-	Format      string `json:"format"`
-	// FormatDowngraded 结果超出 xlsx 行数上限而自动降级为 csv.gz。
+	ScannedRows      int64           `json:"scanned_rows,omitempty"`
+	BytesOut         int64           `json:"bytes_out"`
+	Format           string          `json:"format"`
 	FormatDowngraded bool            `json:"format_downgraded"`
 	Columns          []string        `json:"columns"`
 	Filters          LogExportFilter `json:"filters"`
@@ -136,6 +136,9 @@ func (j *LogExportJob) PublicView() *LogExportJob {
 		return nil
 	}
 	view := *j
+	if j.SelfExport {
+		view.NodeName = ""
+	}
 	view.Parts = make([]LogExportPart, len(j.Parts))
 	copy(view.Parts, j.Parts)
 	for i := range view.Parts {
@@ -195,6 +198,7 @@ func saveLogExportJob(job *LogExportJob) error {
 
 // CreateLogExportJob 落盘一个 pending 任务。
 func CreateLogExportJob(job *LogExportJob) error {
+	job.Format = LogExportFormatCSVGz
 	job.Status = LogExportStatusPending
 	job.NodeName = common.NodeName
 	now := time.Now()
@@ -508,9 +512,6 @@ func RecoverStaleLogExportJobs() {
 
 // ── 导出执行 ─────────────────────────────────────────────────────
 
-// errXlsxRowLimit 触发 xlsx → csv.gz 自动降级。
-var errXlsxRowLimit = errors.New("xlsx row limit exceeded")
-
 // ErrLogExportDiskFull 磁盘可用空间不足。
 var ErrLogExportDiskFull = errors.New("insufficient disk space")
 
@@ -553,44 +554,58 @@ func runLogExport(job *LogExportJob) {
 	job.Status = LogExportStatusRunning
 	UpdateLogExportJob(job)
 
-	// 用可取消的 ctx 而不是带 deadline 的：超时按「实际工作时间」判定，见
-	// writeLogExport 里的预算检查。闸门让出的时间（CPU 高位暂停、低峰等待、限速休眠）
-	// 不该计入任务超时——否则开启低峰模式后，白天创建的任务会先干等几小时再超时失败。
-	ctx, cancel := context.WithCancel(context.Background())
+	// Bound total wall time as well as individual queries, including throttle waits.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(operation_setting.GetLogExportSetting().GetTimeoutSec())*time.Second)
 	defer cancel()
+	// One monitor per bounded export task lets cancellation interrupt throttle waits and queries.
+	stopped := make(chan struct{})
+	defer close(stopped)
+	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				common.SysError(fmt.Sprintf("log export: cancellation monitor panic: %v", err))
+				cancel()
+			}
+		}()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopped:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if isLogExportJobCanceled(job.JobID) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
-	// xlsx 超出行数上限时降级重跑一次。xlsx 本身被限制在 20 万行以内，
-	// 重跑浪费的工作量有界且很小。
-	for attempt := 0; attempt < 2; attempt++ {
-		err := writeLogExport(ctx, job)
-		if err == nil {
-			job.Status = LogExportStatusReady
-			job.Progress = 100
-			job.FinishedAt = time.Now().Unix()
-			UpdateLogExportJob(job)
-			return
-		}
-		RemoveLogExportJobFiles(job)
-		job.Parts = nil
-		job.RowCount = 0
-		job.BytesOut = 0
-
-		if errors.Is(err, errXlsxRowLimit) && job.Format == LogExportFormatXlsx {
-			job.Format = LogExportFormatCSVGz
-			job.FormatDowngraded = true
-			UpdateLogExportJob(job)
-			continue
-		}
-		if errors.Is(err, context.Canceled) || isLogExportJobCanceled(job.JobID) {
-			job.Status = LogExportStatusCanceled
-		} else {
-			job.Status = LogExportStatusFailed
-			job.Error = logExportErrorCode(err)
-		}
+	err := writeLogExport(ctx, job)
+	if err == nil {
+		job.Status = LogExportStatusReady
+		job.Progress = 100
 		job.FinishedAt = time.Now().Unix()
 		UpdateLogExportJob(job)
 		return
 	}
+	RemoveLogExportJobFiles(job)
+	job.Parts = nil
+	job.RowCount = 0
+	job.BytesOut = 0
+
+	if errors.Is(err, context.Canceled) || isLogExportJobCanceled(job.JobID) {
+		job.Status = LogExportStatusCanceled
+	} else {
+		job.Status = LogExportStatusFailed
+		job.Error = logExportErrorCode(err)
+	}
+	job.FinishedAt = time.Now().Unix()
+	UpdateLogExportJob(job)
+	return
 }
 
 // logExportErrorCode 把内部错误映射成稳定的错误码，前端据此渲染用户可读文案。
@@ -624,6 +639,11 @@ const (
 // 保证升级前创建的任务行为不变。
 func (j *LogExportJob) IsSummary() bool { return j.Mode == LogExportModeSummary }
 
+// IsSelfExportFor 校验自助任务的所有者与实际查询范围一致。
+func (j *LogExportJob) IsSelfExportFor(userID int) bool {
+	return userID > 0 && j.SelfExport && j.UserID == userID && j.Filters.UserId == userID && j.EmployeeScope == nil
+}
+
 // NeedsSummary 是否需要聚合累加（纯汇总或明细+汇总）。
 func (j *LogExportJob) NeedsSummary() bool {
 	return j.Mode == LogExportModeSummary || j.Mode == LogExportModeBoth
@@ -631,6 +651,10 @@ func (j *LogExportJob) NeedsSummary() bool {
 
 // writeLogExport 执行一次完整导出：按时间窗口由早到晚扫描，逐批写入分片文件。
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
+	job.Format = LogExportFormatCSVGz
+	if job.SelfExport && (!job.IsSelfExportFor(job.UserID) || job.NeedsSummary() || job.IsSummary()) {
+		return ErrEmployeeExportAccess
+	}
 	setting := operation_setting.GetLogExportSetting()
 
 	// 聚合导出复用同一套扫描循环（限速、CPU 闸门、超时、取消全部原样生效），
@@ -641,7 +665,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 
 	// Employee jobs never render admin-only columns, even if a template snapshot contains one.
 	viewerRole := max(job.CreatorRole, common.RoleAdminUser)
-	if job.EmployeeScope != nil {
+	if job.EmployeeScope != nil || job.SelfExport {
 		viewerRole = common.RoleCommonUser
 	}
 	columnSet, err := ResolveLogExportColumnsForRole(job.Columns, viewerRole)
@@ -674,6 +698,14 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	}
 
 	fields := columnSet.SelectFields()
+	if job.SelfExport {
+		// 脱敏规则依赖日志类型和原始错误信息，不能由展示列决定是否读取。
+		for _, field := range []string{"type", "other", "request_id"} {
+			if !slices.Contains(fields, field) {
+				fields = append(fields, field)
+			}
+		}
+	}
 	// 明细+汇总共用一次扫描：汇总维度即使没有对应的明细列也必须 SELECT，否则该维度全为空值、所有行被并成一组。
 	if job.NeedsSummary() {
 		for _, field := range summaryScanFields(job.SummaryDims) {
@@ -739,18 +771,18 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		}
 	}
 	rowBuf := make([]string, len(columnSet.Columns))
-	xlsxMaxRows := int64(setting.GetXlsxMaxRows())
 
 	scanner := newLogExportScanner(job, fields, columnSet.NeedChannelName, rctx)
 	err = scanner.run(ctx, func(logs []*Log) error {
 		for _, l := range logs {
+			if job.SelfExport {
+				l.Content = MaskErrorLogContentForUser(l, job.Lang)
+				l.Other = formatLogOtherJSON(l.Other, logOtherVisibilityUser)
+			}
 			// 行级条件在这里判定。other 的解析缓存按行归属失效（见 rowCtx.otherMap），
 			// 所以先判定、后渲染只会解析一次。
 			if rowFilter && !job.Filters.matchesRow(l, rctx) {
 				continue
-			}
-			if job.Format == LogExportFormatXlsx && job.RowCount >= xlsxMaxRows {
-				return errXlsxRowLimit
 			}
 			rowsPerFile := int64(operation_setting.GetLogExportSetting().GetRowsPerFile())
 			if partRows >= rowsPerFile {

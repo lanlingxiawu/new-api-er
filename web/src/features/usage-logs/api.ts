@@ -16,10 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api, getFreshAuthHeaders, type ApiRequestConfig } from '@/lib/api'
-import { createServerError } from '@/lib/server-error-message'
+import { api, type ApiRequestConfig } from '@/lib/api'
 
-import type { UsageLog } from './data/schema'
 import { buildQueryParams } from './lib/query-params'
 import { parseTaskArtifactsResponse } from './lib/task-artifacts'
 import type {
@@ -59,7 +57,7 @@ async function fetchLogs<T>(
     ...params,
   })
   const path = buildApiPath(endpoint, scope)
-  const res = await api.get(`${path}?${queryParams}&format=xlsx`)
+  const res = await api.get(`${path}?${queryParams}`)
   return res.data
 }
 
@@ -105,55 +103,6 @@ export const getUserLogStats = (
  * log per line and ends with an API response object; a stream that ends
  * without a successful one is a failed export. Resolves with the log count.
  */
-export async function exportLogs(
-  params: GetLogsParams,
-  isAdmin: boolean,
-  options: { signal: AbortSignal; onLog: (log: UsageLog) => void }
-): Promise<number> {
-  const queryParams = buildQueryParams(
-    params as unknown as Record<string, unknown>
-  )
-  const response = await fetch(
-    `${buildApiPath('/api/log', isAdmin ? 'admin' : 'self')}/export?${queryParams}`,
-    {
-      credentials: 'include',
-      headers: await getFreshAuthHeaders(),
-      signal: options.signal,
-    }
-  )
-  if (!response.ok || !response.body) {
-    const body: unknown = await response.json().catch(() => null)
-    throw createServerError(body ?? { status: response.status })
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let result: { success?: unknown; data?: { count?: number } } | null = null
-  for (;;) {
-    const { done, value } = await reader.read()
-    buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = done ? '' : (lines.pop() ?? '')
-    for (const line of lines) {
-      if (!line.trim()) continue
-      let parsed
-      try {
-        parsed = JSON.parse(line)
-      } catch {
-        throw createServerError(null)
-      }
-      if (typeof parsed.success === 'boolean') result = parsed
-      else options.onLog(parsed as UsageLog)
-    }
-    if (done) break
-  }
-  if (result?.success !== true) {
-    throw createServerError(result)
-  }
-  return result.data?.count ?? 0
-}
-
 export async function getUserInfo(
   userId: number
 ): Promise<{ success: boolean; message?: string; data?: UserInfo }> {
@@ -210,65 +159,6 @@ export async function getUpstreamLogChannels(
 // ============================================================================
 
 /** Thrown when the export endpoint returns a business error (HTTP 200 + JSON). */
-export class LogExportError extends Error {}
-
-function parseFilename(disposition?: string): string | undefined {
-  if (!disposition) return undefined
-  const match = /filename="?([^"]+)"?/.exec(disposition)
-  return match?.[1]
-}
-
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  window.URL.revokeObjectURL(url)
-}
-
-/**
- * Export logs as CSV for the given filters and scope.
- * Uses a blob request so the caller can catch HTTP 429 (rate limit) and
- * surface a friendly message. Validation failures come back as HTTP 200 with
- * a JSON body, which is detected here and rethrown as a LogExportError.
- */
-export async function exportLogsXlsx(
-  params: GetLogsParams,
-  scope: Exclude<LogsScope, 'employee'>
-): Promise<void> {
-  const queryParams = buildQueryParams(
-    params as unknown as Record<string, unknown>
-  )
-  const path = scope === 'admin' ? '/api/log/export' : '/api/log/self/export'
-  const res = await api.get(`${path}?${queryParams}&format=xlsx`, {
-    responseType: 'blob',
-    skipErrorHandler: true, // handle 429 ourselves
-    skipBusinessError: true,
-    disableDuplicate: true,
-  })
-
-  const blob = res.data as Blob
-  // Backend validation errors are returned as HTTP 200 + JSON, not CSV.
-  if (blob.type.includes('application/json')) {
-    const text = await blob.text()
-    let message = ''
-    try {
-      message = (JSON.parse(text) as { message?: string }).message ?? ''
-    } catch {
-      /* empty */
-    }
-    throw new LogExportError(message)
-  }
-
-  const filename =
-    parseFilename(res.headers['content-disposition'] as string | undefined) ??
-    `logs_${Date.now()}.xlsx`
-  triggerBlobDownload(blob, filename)
-}
-
 // ============================================================================
 // MjProxy (Drawing) Logs API
 // ============================================================================

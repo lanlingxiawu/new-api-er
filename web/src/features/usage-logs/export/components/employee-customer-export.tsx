@@ -426,7 +426,7 @@ function EmployeeExportForm(props: {
                 <h3 className='text-sm font-medium'>{t('Output')}</h3>
                 <div className='flex gap-2'>
                   <Badge variant='outline'>
-                    {template.format === 'xlsx' ? 'Excel' : 'CSV'}
+                    CSV.GZ
                   </Badge>
                   <Badge variant='secondary'>
                     {t(MODE_LABELS[template.mode])}

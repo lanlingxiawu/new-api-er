@@ -11,8 +11,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/xuri/excelize/v2"
 )
+
+func TestCSVGzPartWriterNeutralizesFormulas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "safe.csv.gz")
+	writer, err := newCSVGzPartWriter(path, LogExportWriterOptions{})
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteRow([]string{"=1+1", " +SUM(A1)", "@SUM(A1)", "-2+3", "-1.25", "plain,quoted"}))
+	_, err = writer.Close()
+	require.NoError(t, err)
+	rows, _ := readCSVGz(t, path)
+	require.Equal(t, []string{"'=1+1", "' +SUM(A1)", "'@SUM(A1)", "'-2+3", "-1.25", "plain,quoted"}, rows[0])
+}
 
 // readCSVGz 解压并解析一个 csv.gz 分片，返回全部行（含表头）与是否带 BOM。
 func readCSVGz(t *testing.T, path string) (rows [][]string, hasBOM bool) {
@@ -122,29 +132,6 @@ func TestCSVGzPartWriter_GzipLevelsAllReadable(t *testing.T) {
 			assert.Equal(t, []string{"x"}, rows[0])
 		})
 	}
-}
-
-func TestXlsxPartWriter_RoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "part.xlsx")
-	w, err := newLogExportPartWriter(path, LogExportFormatXlsx, LogExportWriterOptions{
-		Header: []string{"Time", "User"},
-	})
-	require.NoError(t, err)
-	require.NoError(t, w.WriteRow([]string{"2026-07-27 10:00:00", "alice"}))
-	assert.Equal(t, int64(1), w.Rows(), "header must not count as a data row")
-
-	size, err := w.Close()
-	require.NoError(t, err)
-	assert.Greater(t, size, int64(0))
-
-	f, err := excelize.OpenFile(path)
-	require.NoError(t, err)
-	defer f.Close()
-	rows, err := f.GetRows("Sheet1")
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Equal(t, []string{"Time", "User"}, rows[0])
-	assert.Equal(t, []string{"2026-07-27 10:00:00", "alice"}, rows[1])
 }
 
 func TestLogExportPartFilePath_ExtensionByFormat(t *testing.T) {

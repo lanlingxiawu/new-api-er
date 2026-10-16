@@ -14,6 +14,7 @@ import (
 // 快照进结构体，否则运行中的任务无法响应配置变更。哪些参数对运行中的任务立即
 // 生效、哪些仅对新分片/新任务生效，见 docs/design/usage-log-export.md §8.1。
 type LogExportSetting struct {
+	UserMaxRangeSec            int  `json:"user_max_range_sec"`
 	EmployeeExportEnabled      bool `json:"employee_export_enabled"`
 	EmployeeMaxCustomersPerJob int  `json:"employee_max_customers_per_job"`
 	// ── 开关与配额 ──────────────────────────────────────────
@@ -181,6 +182,7 @@ func clampInt(value, min, max int) int {
 }
 
 var logExportSetting = LogExportSetting{
+	UserMaxRangeSec:            30 * 86400,
 	EmployeeMaxCustomersPerJob: 100,
 	Enabled:                    true,
 	UserCooldownSec:            DefaultLogExportUserCooldownSec,
@@ -469,4 +471,11 @@ func (s *LogExportSetting) GetSummaryMaxGroups() int {
 		return DefaultLogExportSummaryMaxGroups
 	}
 	return clampInt(s.SummaryMaxGroups, 1000, 2000000)
+}
+
+func (s *LogExportSetting) GetUserMaxRangeSec() int64 {
+	if s.UserMaxRangeSec <= 0 {
+		return 30 * 86400
+	}
+	return int64(clampInt(s.UserMaxRangeSec, 1, 366*86400))
 }

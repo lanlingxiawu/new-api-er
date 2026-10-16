@@ -2,7 +2,6 @@ package controller
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 	"time"
 
@@ -92,47 +91,3 @@ func branchAuditExportRows(t *testing.T, body []byte) [][]string {
 
 // The self export is locked to the caller (a username parameter cannot widen it),
 // blanks the channel and retry columns, and accepts a span of exactly 30 days.
-func TestBranchAuditExportUserLogs_ScopeColumnsAndSpan(t *testing.T) {
-	requireLogDB(t)
-	u := mkUser(t, nil)
-	victim := mkUser(t, nil)
-	end := time.Now().Unix()
-	start := end - 2592000
-	for _, owner := range []*model.User{u, victim} {
-		require.NoError(t, model.LOG_DB.Create(&model.Log{
-			UserId: owner.Id, Username: owner.Username, CreatedAt: start, Type: model.LogTypeConsume,
-			Content: "row of " + owner.Username, ChannelId: 7, Other: `{"admin_info":{"use_channel":["7","9"]}}`,
-		}).Error)
-		ownerID := owner.Id
-		t.Cleanup(func() { model.LOG_DB.Where("user_id = ?", ownerID).Delete(&model.Log{}) })
-	}
-
-	target := fmt.Sprintf("/api/log/self/export?format=xlsx&start_timestamp=%d&end_timestamp=%d&username=%s", start, end, victim.Username)
-	ctx, rec := newCtx(t, "GET", target, nil)
-	asUser(ctx, u.Id)
-	ExportUserLogs(ctx)
-	require.Equal(t, 200, rec.Code)
-	rows := branchAuditExportRows(t, rec.Body.Bytes())
-	require.Len(t, rows, 1, "only the caller's own row, whatever username says")
-	row := rows[0]
-	require.Len(t, row, 14)
-	assert.Equal(t, u.Username, row[2])
-	assert.Equal(t, "", row[1], "channel column blank for self export")
-	assert.Equal(t, "", row[12], "retry chain blank for self export")
-	assert.Equal(t, "row of "+u.Username, row[13])
-
-	// Admin export of the same range shows the routing columns.
-	adminCtx, adminRec := newCtx(t, "GET", fmt.Sprintf("/api/log/export?format=xlsx&start_timestamp=%d&end_timestamp=%d&username=%s", start, end, u.Username), nil)
-	asAdmin(adminCtx, nextTestID())
-	ExportAllLogs(adminCtx)
-	adminRows := branchAuditExportRows(t, adminRec.Body.Bytes())
-	require.Len(t, adminRows, 1)
-	assert.Equal(t, "7", adminRows[0][1])
-	assert.Equal(t, "7->9", adminRows[0][12])
-
-	// One second past 30 days is refused with the standard envelope.
-	tooLong, tooLongRec := newCtx(t, "GET", fmt.Sprintf("/api/log/self/export?format=xlsx&start_timestamp=%d&end_timestamp=%d", start-1, end), nil)
-	asUser(tooLong, u.Id)
-	ExportUserLogs(tooLong)
-	assert.False(t, decodeResp(t, tooLongRec).Success)
-}

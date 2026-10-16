@@ -256,8 +256,8 @@ func TestWriteLogExport_StopsWhenCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-// xlsx 超过行数上限时返回降级信号，由 runLogExport 改用 csv.gz 重跑。
-func TestWriteLogExport_XlsxRowLimitTriggersDowngrade(t *testing.T) {
+// 旧 XLSX 请求直接生成 CSV.GZ，不受历史工作表行数上限约束。
+func TestWriteLogExport_LegacyXlsxUsesCSVWithoutRowLimit(t *testing.T) {
 	requireLogDB(t)
 	enableRedis(t)
 	fastExportSettings(t, func(s *operation_setting.LogExportSetting) {
@@ -278,7 +278,8 @@ func TestWriteLogExport_XlsxRowLimitTriggersDowngrade(t *testing.T) {
 	job := newExportJobFor(username, base-10, base+100, []string{"created_at", "username"})
 	job.Format = LogExportFormatXlsx
 	err := runExportJob(t, job)
-	assert.ErrorIs(t, err, errXlsxRowLimit)
+	assert.NoError(t, err)
+	assert.Equal(t, LogExportFormatCSVGz, job.Format)
 }
 
 func TestWriteLogExport_TooManyPartsFails(t *testing.T) {
@@ -369,7 +370,6 @@ func TestWriteLogExport_RemovesUnfinishedPartOnFailure(t *testing.T) {
 	requireLogDB(t)
 	enableRedis(t)
 	fastExportSettings(t, func(s *operation_setting.LogExportSetting) {
-		s.XlsxMaxRows = 2
 		s.BatchSize = 10
 	})
 
@@ -384,18 +384,20 @@ func TestWriteLogExport_RemovesUnfinishedPartOnFailure(t *testing.T) {
 	}
 
 	job := newExportJobFor(username, base-10, base+100, []string{"created_at"})
-	job.Format = LogExportFormatXlsx
-	partPath := LogExportPartFilePath(job.JobID, 1, LogExportFormatXlsx)
+	partPath := LogExportPartFilePath(job.JobID, 1, LogExportFormatCSVGz)
 
-	err := runExportJob(t, job)
-	require.ErrorIs(t, err, errXlsxRowLimit)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	t.Cleanup(func() { RemoveLogExportJobFiles(job) })
+	err := writeLogExport(ctx, job)
+	require.ErrorIs(t, err, context.Canceled)
 
 	_, statErr := os.Stat(partPath)
 	assert.True(t, os.IsNotExist(statErr), "half-written part must be deleted when the export fails")
 }
 
-// 闸门让出的时间不能计入任务超时：否则一开低峰模式，白天创建的任务会先干等
-// 几小时再以超时失败。这里让每批休眠远超 timeout_sec，实际工作时间却很短。
+// 扫描器内部仍按工作时间计算预算，后台任务另有包含等待时间的总时限。
+// 此用例只验证扫描器预算；总时限由 TestExportTotalTimeoutIncludesResourceWait 覆盖。
 func TestWriteLogExport_ThrottledTimeDoesNotConsumeTimeout(t *testing.T) {
 	requireLogDB(t)
 	enableRedis(t)

@@ -680,6 +680,8 @@ func TestGetAllLogs(t *testing.T) {
 
 func TestExportLogs(t *testing.T) {
 	requireLogDB(t)
+	enableRedis(t)
+	fastExportSettings(t, nil)
 	uname := uniq("exp")
 	uid := nextTestID()
 	logCleanupUser(t, uid)
@@ -691,7 +693,7 @@ func TestExportLogs(t *testing.T) {
 	}
 
 	var collected int
-	err := ExportLogs(LogTypeConsume, 0, 0, "", uname, "", 0, "", uid, func(batch []*Log) error {
+	err := newLogExportScanner(&LogExportJob{JobID: NewLogExportJobID(), Filters: LogExportFilter{LogType: LogTypeConsume, StartTimestamp: now - 1, EndTimestamp: now + 10, ModelName: "", Username: uname, UserId: uid}}, []string{"id", "created_at"}, false, &rowCtx{}).run(context.Background(), func(batch []*Log) error {
 		collected += len(batch)
 		return nil
 	})
@@ -700,7 +702,7 @@ func TestExportLogs(t *testing.T) {
 
 	// model fuzzy filter narrows the export
 	collected = 0
-	err = ExportLogs(LogTypeConsume, 0, 0, "gpt%", uname, "", 0, "", uid, func(batch []*Log) error {
+	err = newLogExportScanner(&LogExportJob{JobID: NewLogExportJobID(), Filters: LogExportFilter{LogType: LogTypeConsume, StartTimestamp: now - 1, EndTimestamp: now + 10, ModelName: "gpt%", Username: uname, UserId: uid}}, []string{"id", "created_at"}, false, &rowCtx{}).run(context.Background(), func(batch []*Log) error {
 		collected += len(batch)
 		return nil
 	})
@@ -709,13 +711,13 @@ func TestExportLogs(t *testing.T) {
 
 	// fn error is propagated
 	sentinel := context.Canceled
-	err = ExportLogs(LogTypeConsume, 0, 0, "", uname, "", 0, "", uid, func(batch []*Log) error {
+	err = newLogExportScanner(&LogExportJob{JobID: NewLogExportJobID(), Filters: LogExportFilter{LogType: LogTypeConsume, StartTimestamp: now - 1, EndTimestamp: now + 10, ModelName: "", Username: uname, UserId: uid}}, []string{"id", "created_at"}, false, &rowCtx{}).run(context.Background(), func(batch []*Log) error {
 		return sentinel
 	})
 	assert.ErrorIs(t, err, sentinel)
 
 	// invalid pattern surfaces before iterating
-	err = ExportLogs(LogTypeConsume, 0, 0, "a%%b", uname, "", 0, "", uid, func(batch []*Log) error { return nil })
+	err = newLogExportScanner(&LogExportJob{JobID: NewLogExportJobID(), Filters: LogExportFilter{LogType: LogTypeConsume, StartTimestamp: now - 1, EndTimestamp: now + 10, ModelName: "a%%b", Username: uname, UserId: uid}}, []string{"id", "created_at"}, false, &rowCtx{}).run(context.Background(), func(batch []*Log) error { return nil })
 	assert.Error(t, err)
 }
 

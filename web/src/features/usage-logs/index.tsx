@@ -81,7 +81,8 @@ function UsageLogsContent() {
     affinityDialogOpen,
     setAffinityDialogOpen,
   } = useUsageLogsContext()
-  const { canManageScope, viewScope, setViewScope } = useLogsViewScope()
+  const { canManageScope, viewScope, setViewScope, isAdminView } =
+    useLogsViewScope()
   const tabNavGroups = useMemo<NavGroup[]>(
     () => [
       {
@@ -148,9 +149,7 @@ function UsageLogsContent() {
       }
       if (tab !== 'all' && tab !== 'self') return
       setViewScope(tab as LogsViewScope)
-      const targetSection = isUpstreamSection
-        ? savedLocalSection
-        : localSection
+      const targetSection = isUpstreamSection ? savedLocalSection : localSection
       void navigate({
         to: '/usage-logs/$section',
         params: { section: targetSection },
@@ -198,11 +197,7 @@ function UsageLogsContent() {
     })
   }, [canManageScope, isUpstreamSection, navigate, searchParams])
 
-  // 导出中心是管理员专属的后台任务页：非管理员直接看回普通日志，
-  // 而不是渲染一个注定 403 的空页面。
-  const isExportSection = localSection === 'export' && canManageScope
-  // 非管理员访问 /usage-logs/export 时回落到普通日志：标题也必须跟着回落，
-  // 否则会出现「标题写着任务日志、下面渲染的是普通日志」。
+  const isExportSection = localSection === 'export'
   const isCommonView = localSection === 'common' || localSection === 'export'
   let pageMeta = SECTION_META.task
   if (isUpstreamSection && canManageScope) {
@@ -226,7 +221,7 @@ function UsageLogsContent() {
     />
   )
   if (isExportSection) {
-    localPageContent = <LogExportCenter />
+    localPageContent = <LogExportCenter self={!isAdminView} />
   }
 
   return (

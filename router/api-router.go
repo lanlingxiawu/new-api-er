@@ -476,9 +476,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/employee/stat", middleware.UserAuth(), controller.GetEmployeeCustomerLogsStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), middleware.RequirePermission(authz.SystemSettingsView("request-policies.routing")), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
-		logRoute.GET("/export", middleware.AdminAuth(), middleware.LogExportRateLimit(), controller.ExportAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
-		logRoute.GET("/self/export", middleware.UserAuth(), middleware.LogExportRateLimit(), controller.ExportUserLogs)
 		logRoute.GET("/employee", middleware.UserAuth(), controller.GetEmployeeCustomerLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
@@ -490,7 +488,7 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/claude-diagnostic", middleware.RootAuth(), controller.GetStreamDiagnostic)
 
 		// 后台导出（管理员专属）：任务化、分片、断点续传。
-		// 普通用户的自助导出仍走上面的 /log/self/export 同步路径。
+		// 普通用户通过 /log/self/export/jobs 创建受限的后台任务。
 		logExportRoute := apiRouter.Group("/log/export")
 		logExportRoute.Use(middleware.AdminAuth())
 		{
@@ -506,6 +504,16 @@ func SetApiRouter(router *gin.Engine) {
 			logExportRoute.GET("/jobs/:job_id", controller.GetLogExportJob)
 			logExportRoute.DELETE("/jobs/:job_id", controller.DeleteLogExportJob)
 			logExportRoute.GET("/jobs/:job_id/download-url", controller.GetLogExportDownloadURL)
+		}
+
+		selfExportRoute := apiRouter.Group("/log/self/export/jobs")
+		selfExportRoute.Use(middleware.UserAuth())
+		{
+			selfExportRoute.POST("", middleware.LogExportRateLimit(), controller.CreateSelfLogExportJob)
+			selfExportRoute.GET("", controller.GetLogExportJobs)
+			selfExportRoute.GET("/:job_id", controller.GetLogExportJob)
+			selfExportRoute.DELETE("/:job_id", controller.DeleteLogExportJob)
+			selfExportRoute.GET("/:job_id/download-url", controller.GetLogExportDownloadURL)
 		}
 
 		employeeExportAdmin := apiRouter.Group("/admin/employee-export")

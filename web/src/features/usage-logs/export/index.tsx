@@ -52,6 +52,7 @@ import {
   NewExportSheet,
   type NewExportPrefill,
 } from './components/new-export-sheet'
+import { SelfExportSheet } from './components/self-export-sheet'
 import type { AnomalyFilters, ExportJob, ExportJobStatus } from './types'
 
 /** Stable backend error codes → user-facing copy. Raw Go errors never reach the UI. */
@@ -125,7 +126,7 @@ function toDate(value?: number | string): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date
 }
 
-export function LogExportCenter() {
+export function LogExportCenter(props: { self?: boolean }) {
   const canManageEmployees = useAuthStore((state) =>
     canViewAdminMenu(state.auth.user, 'employees')
   )
@@ -174,8 +175,8 @@ export function LogExportCenter() {
   )
 
   const { data, isLoading, isFetching, refetch, error } = useQuery({
-    queryKey: ['log-export-jobs'],
-    queryFn: () => getExportJobs(),
+    queryKey: ['log-export-jobs', props.self ? 'self' : 'admin'],
+    queryFn: () => getExportJobs(false, props.self),
     // Poll only while something is actually running, and never in a background
     // tab — an idle export page must not keep hitting the server.
     refetchInterval: (query) =>
@@ -188,16 +189,18 @@ export function LogExportCenter() {
   })
 
   const removeJob = useMutation({
-    mutationFn: deleteExportJob,
+    mutationFn: (jobId: string) => deleteExportJob(jobId, props.self),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['log-export-jobs'] })
+      queryClient.invalidateQueries({
+        queryKey: ['log-export-jobs', props.self ? 'self' : 'admin'],
+      })
     },
     onError: (err: Error) => toast.error(err.message || t('Operation failed')),
   })
 
   const download = useMutation({
     mutationFn: ({ jobId, part }: { jobId: string; part?: number }) =>
-      downloadExportPart(jobId, part),
+      downloadExportPart(jobId, part, props.self),
     onError: (err: Error) =>
       toast.error(
         err.message || t('Download link expired. Click download again.')
@@ -210,11 +213,15 @@ export function LogExportCenter() {
     <div className='space-y-4'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex items-center gap-2'>
-          <Button type='button' onClick={() => setSheetOpen(true)}>
+          <Button
+            type='button'
+            onClick={() => setSheetOpen(true)}
+            disabled={isLoading || !!error || data?.enabled === false}
+          >
             <Plus />
             {t('New Export')}
           </Button>
-          {canManageEmployees && <EmployeeTemplateManager />}
+          {!props.self && canManageEmployees && <EmployeeTemplateManager />}
           {data && !data.enabled && (
             <Badge variant='destructive'>
               {t('Log export is currently turned off')}
@@ -236,7 +243,7 @@ export function LogExportCenter() {
         <p className='text-destructive text-sm'>
           {(error as Error).message ||
             t(
-              'Background export is unavailable. You can still use Quick Export for smaller ranges.'
+              'Background export is unavailable. Please contact an administrator.'
             )}
         </p>
       )}
@@ -446,11 +453,19 @@ export function LogExportCenter() {
         </Table>
       </div>
 
-      <NewExportSheet
-        open={sheetOpen}
-        onOpenChange={setSheetOpen}
-        prefill={prefill}
-      />
+      {props.self ? (
+        <SelfExportSheet
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          maxRangeSec={data?.max_range_sec}
+        />
+      ) : (
+        <NewExportSheet
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          prefill={prefill}
+        />
+      )}
     </div>
   )
 }

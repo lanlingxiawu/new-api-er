@@ -88,6 +88,7 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
       : search?.type != null && search.type !== ''
     if (
       params.section !== 'common' &&
+      params.section !== 'export' &&
       params.section !== 'upstream' &&
       hasTypeSearch
     ) {

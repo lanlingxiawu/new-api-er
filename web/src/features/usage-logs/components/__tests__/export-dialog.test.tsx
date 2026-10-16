@@ -17,263 +17,96 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-} from '@tanstack/react-router'
-import {
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { toast } from 'sonner'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { ROLE } from '@/lib/roles'
-import { STATUS_QUERY_KEY } from '@/lib/status-query'
-import { useAuthStore } from '@/stores/auth-store'
+import { SelfExportSheet } from '../../export/components/self-export-sheet'
+import { LogExportCenter } from '../../export'
 
-import { ExportLogsDialog } from '../dialogs/export-logs-dialog'
-import { UsageLogsProvider } from '../usage-logs-provider'
-
-const DAY_MS = 24 * 60 * 60 * 1000
-const createObjectURL = vi.fn((_blob: Blob) => 'blob:logs')
-
+const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  jobs: vi.fn(),
+  search: {
+    startTime: 1700000000000,
+    endTime: 1700003600000,
+    model: 'gpt-test',
+    username: 'other-user',
+    channel: '9',
+    type: ['2'],
+    token: 'my-token',
+  },
+}))
+vi.mock('@tanstack/react-router', () => ({
+  getRouteApi: () => ({ useSearch: () => mocks.search }),
+}))
+vi.mock('../../export/api', () => ({
+  createSelfExportJob: mocks.create,
+  getExportJobs: mocks.jobs,
+  deleteExportJob: vi.fn(),
+  downloadExportPart: vi.fn(),
+}))
+vi.mock('../../export/components/new-export-sheet', () => ({
+  NewExportSheet: () => <div data-testid='admin-export-form' />,
+}))
+vi.mock('../../export/components/employee-template-manager', () => ({
+  EmployeeTemplateManager: () => null,
+}))
 beforeEach(() => {
-  Object.defineProperty(URL, 'createObjectURL', {
-    configurable: true,
-    value: createObjectURL,
-  })
-  Object.defineProperty(URL, 'revokeObjectURL', {
-    configurable: true,
-    value: vi.fn(),
-  })
-  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  mocks.create.mockReset()
+  mocks.create.mockResolvedValue('job-1')
+  mocks.jobs.mockReset()
+  mocks.jobs.mockResolvedValue({ jobs: [], enabled: true, max_range_sec: 60 })
 })
-
-afterEach(() => {
-  cleanup()
-  Reflect.deleteProperty(URL, 'createObjectURL')
-  Reflect.deleteProperty(URL, 'revokeObjectURL')
-  useAuthStore.getState().auth.reset()
-})
-
-function renderExport(options: {
-  role: number
-  status?: Record<string, unknown>
-  search: Record<string, string | number>
-}) {
-  useAuthStore.setState((state) => ({
-    auth: {
-      ...state.auth,
-      user: { id: 7, username: 'alice', role: options.role },
-      accessToken: 'test-token',
-      accessExpiresAt: Math.floor(Date.now() / 1000) + 3600,
-    },
-  }))
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-  })
-  queryClient.setQueryData(STATUS_QUERY_KEY, options.status ?? {})
-  const root = createRootRoute()
-  const auth = createRoute({ getParentRoute: () => root, id: '_authenticated' })
-  const logs = createRoute({
-    getParentRoute: () => auth,
-    path: '/usage-logs/$section',
-    component: () => (
-      <UsageLogsProvider>
-        <h1>Common Logs</h1>
-        <ExportLogsDialog />
-      </UsageLogsProvider>
-    ),
-    validateSearch: (search: Record<string, unknown>) => search,
-  })
-  const query = new URLSearchParams(
-    Object.entries(options.search).map(([key, value]) => [key, String(value)])
-  )
-  const router = createRouter({
-    routeTree: root.addChildren([auth.addChildren([logs])]),
-    history: createMemoryHistory({
-      initialEntries: [`/usage-logs/common?${query}`],
-    }),
+afterEach(cleanup)
+it('creates a task with only self filters and closes after submission', async () => {
+  const closed = vi.fn()
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
   })
   render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+    <QueryClientProvider client={client}>
+      <SelfExportSheet open onOpenChange={closed} />
     </QueryClientProvider>
   )
-  return router
-}
-
-function mockExportResponse(lines: unknown[]) {
-  return vi
-    .spyOn(globalThis, 'fetch')
-    .mockResolvedValue(
-      new Response(lines.map((line) => JSON.stringify(line)).join('\n'))
-    )
-}
-
-const recentRange = () => ({
-  startTime: Date.now() - DAY_MS,
-  endTime: Date.now(),
-})
-
-it('hides Export from users when the administrator turned user export off', async () => {
-  renderExport({
-    role: ROLE.USER,
-    status: { log_export_enabled: false },
-    search: recentRange(),
+  await userEvent.click(screen.getByRole('button', { name: 'Export' }))
+  await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1))
+  const body = mocks.create.mock.calls[0][0]
+  expect(body.filters).toEqual({
+    start_timestamp: 1700000000,
+    end_timestamp: 1700003600,
+    model_name: 'gpt-test',
+    token_name: 'my-token',
+    type: 2,
+    group: undefined,
   })
-
-  await screen.findByRole('heading', { name: 'Common Logs' })
-  expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull()
+  expect(body.options).toMatchObject({ header: true, csv_bom: true })
+  expect(body.filters).not.toHaveProperty('username')
+  expect(body.filters).not.toHaveProperty('channel')
+  await waitFor(() => expect(closed).toHaveBeenCalledWith(false))
+})
+it('blocks ranges above the server limit', () => {
+  const client = new QueryClient()
+  render(
+    <QueryClientProvider client={client}>
+      <SelfExportSheet open onOpenChange={vi.fn()} maxRangeSec={60} />
+    </QueryClientProvider>
+  )
+  expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled()
+  expect(mocks.create).not.toHaveBeenCalled()
 })
 
-it('keeps Export for administrators when user export is off', async () => {
-  renderExport({
-    role: ROLE.ADMIN,
-    status: { log_export_enabled: false },
-    search: recentRange(),
-  })
-
-  expect(
-    await screen.findByRole('button', { name: 'Export CSV' })
-  ).toBeVisible()
-})
-
-it('blocks a range longer than the configured limit before any request', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  const user = userEvent.setup()
-  renderExport({
-    role: ROLE.USER,
-    status: { log_max_range_days: 7 },
-    search: { startTime: Date.now() - 10 * DAY_MS, endTime: Date.now() },
-  })
-
-  await user.click(await screen.findByRole('button', { name: 'Export CSV' }))
-
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    'The time range cannot exceed 7 days'
+it('loads self tasks and applies the server time limit in the export center', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <LogExportCenter self />
+    </QueryClientProvider>
   )
-  expect(
-    within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' })
-  ).toBeDisabled()
-  expect(fetchSpy).not.toHaveBeenCalled()
-})
-
-it('downloads the streamed logs of the current filters as CSV', async () => {
-  const fetchSpy = mockExportResponse([
-    {
-      id: 1,
-      created_at: 1760000000,
-      type: 2,
-      content: '',
-      token_name: 'prod',
-      model_name: 'gpt-4o',
-      quota: 0,
-      other: '',
-      request_id: 'req-2',
-    },
-    {
-      id: 2,
-      created_at: 1759990000,
-      type: 2,
-      content: '',
-      token_name: 'prod',
-      model_name: 'gpt-4o',
-      quota: 0,
-      other: '',
-      request_id: 'req-1',
-    },
-    { success: true, message: '', data: { count: 2 } },
-  ])
-  const success = vi.spyOn(toast, 'success')
-  const user = userEvent.setup()
-  const range = recentRange()
-  renderExport({ role: ROLE.USER, search: { ...range, model: 'gpt-4o' } })
-
-  await user.click(await screen.findByRole('button', { name: 'Export CSV' }))
-  await user.click(
-    within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' })
-  )
-
-  await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
-  const [url] = fetchSpy.mock.calls[0]
-  const params = new URL(String(url), 'http://localhost').searchParams
-  expect(String(url)).toMatch(/^\/api\/log\/self\/export\?/)
-  expect(params.get('model_name')).toBe('gpt-4o')
-  expect(params.get('start_timestamp')).toBe(
-    String(Math.floor(range.startTime / 1000))
-  )
-  expect(params.has('p')).toBe(false)
-  const file = createObjectURL.mock.calls[0][0]
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  expect(bytes.subarray(0, 3)).toEqual(new Uint8Array([0xef, 0xbb, 0xbf]))
-  const rows = (await file.text()).trimEnd().split('\r\n')
-  expect(rows).toHaveLength(3)
-  expect(rows[1]).toContain('"req-2"')
-  expect(rows[2]).toContain('"req-1"')
-  expect(success).toHaveBeenCalledWith('Exported 2 logs')
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-})
-
-it('reports a server refusal and keeps the dialog open without a download', async () => {
-  mockExportResponse([
-    {
-      success: false,
-      message: 'Another log export is running. Try again after it finishes.',
-      message_key:
-        'Another log export is running. Try again after it finishes.',
-    },
-  ])
-  const error = vi.spyOn(toast, 'error')
-  const user = userEvent.setup()
-  renderExport({ role: ROLE.ADMIN, search: recentRange() })
-
-  await user.click(await screen.findByRole('button', { name: 'Export CSV' }))
-  await user.click(
-    within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' })
-  )
-
-  await waitFor(() =>
-    expect(error).toHaveBeenCalledWith(
-      'Another log export is running. Try again after it finishes.'
-    )
-  )
-  expect(createObjectURL).not.toHaveBeenCalled()
-  expect(screen.getByRole('dialog')).toBeVisible()
-})
-
-it('treats a stream that ends without the success line as a failed export', async () => {
-  mockExportResponse([
-    {
-      id: 1,
-      created_at: 1760000000,
-      type: 2,
-      content: '',
-      token_name: 'prod',
-      model_name: 'gpt-4o',
-      quota: 0,
-      other: '',
-    },
-  ])
-  const error = vi.spyOn(toast, 'error')
-  const user = userEvent.setup()
-  renderExport({ role: ROLE.ADMIN, search: recentRange() })
-
-  await user.click(await screen.findByRole('button', { name: 'Export CSV' }))
-  await user.click(
-    within(screen.getByRole('dialog')).getByRole('button', { name: 'Export' })
-  )
-
-  await waitFor(() =>
-    expect(error).toHaveBeenCalledWith('Failed to export logs')
-  )
-  expect(createObjectURL).not.toHaveBeenCalled()
+  await waitFor(() => expect(mocks.jobs).toHaveBeenCalledWith(false, true))
+  const button = screen.getByRole('button', { name: 'New Export' })
+  await waitFor(() => expect(button).toBeEnabled())
+  await userEvent.click(button)
+  expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled()
+  expect(screen.queryByTestId('admin-export-form')).not.toBeInTheDocument()
 })

@@ -127,6 +127,7 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
   'log_export_setting.user_cooldown_sec': 300,
   'log_export_setting.max_concurrent_jobs': 1,
   'log_export_setting.max_active_jobs_per_user': 3,
+  'log_export_setting.user_max_range_sec': 2592000,
   'log_export_setting.admin_max_range_sec': 2678400,
   'log_export_setting.timeout_sec': 7200,
   'log_export_setting.job_ttl_hours': 24,

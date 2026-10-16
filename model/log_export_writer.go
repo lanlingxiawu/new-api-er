@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/xuri/excelize/v2"
+	"strconv"
+	"strings"
 )
 
 // 导出格式。
@@ -21,8 +21,6 @@ const (
 	logExportFilePrefix = "log-export-"
 	// logExportWriteBufSize 写缓冲，减少 syscall 次数。
 	logExportWriteBufSize = 4 * 1024 * 1024
-	// xlsxSheetRowLimit Excel 单表最大行数（含表头）。
-	xlsxSheetRowLimit = 1048576
 )
 
 // ValidLogExportFormat 校验格式取值。
@@ -49,7 +47,7 @@ type logExportPartWriter interface {
 
 // LogExportWriterOptions 写入选项。
 type LogExportWriterOptions struct {
-	// CSVBOM 是否写 UTF-8 BOM。不写的话 Excel 打开中文 CSV 会乱码。
+	// CSVBOM adds a UTF-8 BOM inside the compressed CSV for spreadsheet compatibility.
 	CSVBOM bool
 	// GzipLevel gzip 压缩等级，1 最省 CPU。
 	GzipLevel int
@@ -59,8 +57,8 @@ type LogExportWriterOptions struct {
 
 // newLogExportPartWriter 按格式创建分片写入器，并写入表头。
 func newLogExportPartWriter(path, format string, opts LogExportWriterOptions) (logExportPartWriter, error) {
-	if format == LogExportFormatXlsx {
-		return newXlsxPartWriter(path, opts)
+	if format != LogExportFormatCSVGz {
+		return nil, fmt.Errorf("unsupported export generation format: %s", format)
 	}
 	return newCSVGzPartWriter(path, opts)
 }
@@ -114,6 +112,17 @@ func (w *csvGzPartWriter) abort(path string) error {
 }
 
 func (w *csvGzPartWriter) WriteRow(record []string) error {
+	for i, value := range record {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || !strings.ContainsRune("=+-@", rune(trimmed[0])) {
+			continue
+		}
+		if _, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			continue
+		}
+		record[i] = "'" + value
+	}
+
 	if err := w.cw.Write(record); err != nil {
 		return err
 	}
@@ -144,78 +153,6 @@ func (w *csvGzPartWriter) Close() (int64, error) {
 	return size, w.f.Close()
 }
 
-// ── xlsx ─────────────────────────────────────────────────────────
-
-// xlsxPartWriter 用 StreamWriter 把行写进临时文件，避免整表驻留内存。
-// 仅用于行数受限（xlsx_max_rows）的小结果集——xlsx 是 zip+XML，CPU 代价远高于
-// csv.gz，大结果集一律走 csv.gz。
-type xlsxPartWriter struct {
-	path   string
-	file   *excelize.File
-	sw     *excelize.StreamWriter
-	rowIdx int
-	rows   int64
-}
-
-func newXlsxPartWriter(path string, opts LogExportWriterOptions) (logExportPartWriter, error) {
-	f := excelize.NewFile()
-	sw, err := f.NewStreamWriter("Sheet1")
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	w := &xlsxPartWriter{path: path, file: f, sw: sw, rowIdx: 1}
-	if len(opts.Header) > 0 {
-		if err := w.WriteRow(opts.Header); err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		w.rows = 0 // 表头不计入数据行数
-	}
-	return w, nil
-}
-
-func (w *xlsxPartWriter) WriteRow(record []string) error {
-	if w.rowIdx >= xlsxSheetRowLimit {
-		return fmt.Errorf("xlsx sheet row limit reached")
-	}
-	cell, err := excelize.CoordinatesToCellName(1, w.rowIdx)
-	if err != nil {
-		return err
-	}
-	values := make([]interface{}, len(record))
-	for i, v := range record {
-		values[i] = v
-	}
-	if err := w.sw.SetRow(cell, values); err != nil {
-		return err
-	}
-	w.rowIdx++
-	w.rows++
-	return nil
-}
-
-func (w *xlsxPartWriter) Rows() int64 { return w.rows }
-
-func (w *xlsxPartWriter) Close() (int64, error) {
-	defer w.file.Close()
-	if err := w.sw.Flush(); err != nil {
-		return 0, err
-	}
-	if err := w.file.SaveAs(w.path); err != nil {
-		return 0, err
-	}
-	size := int64(0)
-	if info, err := os.Stat(w.path); err == nil {
-		size = info.Size()
-	}
-	return size, nil
-}
-
-// LogExportSummaryPartFilePath 返回聚合汇总分片的路径。
-//
-// 与明细分片用不同的文件名：「明细 + 汇总」模式下两种分片同在一个 zip 里，
-// 拿到文件的人必须一眼能分出哪个是哪个。
 func LogExportSummaryPartFilePath(jobID string, part int, format string) string {
 	ext := ".csv.gz"
 	if format == LogExportFormatXlsx {

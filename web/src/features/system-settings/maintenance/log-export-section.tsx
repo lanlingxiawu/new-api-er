@@ -23,6 +23,11 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import * as z from 'zod'
 
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import {
   Form,
   FormControl,
@@ -32,11 +37,6 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { numericPresetFieldProps } from '@/components/numeric-preset-field'
-import {
-  NumericPresetInput,
-  type NumericPreset,
-} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -64,6 +64,7 @@ const schema = z.object({
     // 0 是有意义的取值：停止接受新任务，但不打断运行中的任务。
     max_concurrent_jobs: z.number().int().min(0).max(16),
     max_active_jobs_per_user: z.number().int().min(1).max(20),
+    user_max_range_sec: z.number().int().min(1).max(31622400),
     admin_max_range_sec: z.number().int().min(1).max(31622400),
     timeout_sec: z.number().int().min(1).max(86400),
     job_ttl_hours: z.number().int().min(1).max(720),
@@ -109,6 +110,7 @@ const FIELD_KEYS = [
   'max_concurrent_jobs',
   'max_active_jobs_per_user',
   'admin_max_range_sec',
+  'user_max_range_sec',
   'timeout_sec',
   'job_ttl_hours',
   'max_templates_per_user',
@@ -151,7 +153,10 @@ function normalizeFormValues(v: FormValues): LogExportFlatDefaults {
 }
 
 type NumberField = {
-  name: Exclude<keyof Settings, 'enabled' | 'employee_export_enabled' | 'offpeak_only' | 'offpeak_window'>
+  name: Exclude<
+    keyof Settings,
+    'enabled' | 'employee_export_enabled' | 'offpeak_only' | 'offpeak_window'
+  >
   label: string
   description: string
   min: number
@@ -164,7 +169,8 @@ const quotaFields: NumberField[] = [
   {
     name: 'employee_max_customers_per_job',
     label: 'Customers per export',
-    description: 'Maximum customers in one employee export, including all-customer exports.',
+    description:
+      'Maximum customers in one employee export, including all-customer exports.',
     min: 1,
     max: 1000,
   },
@@ -203,17 +209,25 @@ const quotaFields: NumberField[] = [
     max: 31622400,
   },
   {
+    name: 'user_max_range_sec',
+    label: 'User Export Time Range (s)',
+    description: 'Maximum time range for users exporting their own logs.',
+    min: 1,
+    max: 31622400,
+  },
+  {
     name: 'timeout_sec',
     label: 'Job Timeout (s)',
     description:
-      'Working-time budget for one job. Time yielded to the resource gate does not count, so a throttled job is not killed.',
+      'Maximum elapsed time for one job, including time waiting for resources.',
     min: 1,
     max: 86400,
   },
   {
     name: 'job_ttl_hours',
     label: 'Job Retention (hours)',
-    description: 'How long finished jobs and their part files are kept before cleanup.',
+    description:
+      'How long finished jobs and their part files are kept before cleanup.',
     min: 1,
     max: 720,
   },
@@ -246,7 +260,8 @@ const throttleFields: NumberField[] = [
   {
     name: 'batch_query_timeout_sec',
     label: 'Batch Query Timeout (s)',
-    description: 'Timeout for a single batch query, so a slow query cannot hold a connection.',
+    description:
+      'Timeout for a single batch query, so a slow query cannot hold a connection.',
     min: 1,
     max: 300,
   },
@@ -302,23 +317,18 @@ const outputFields: NumberField[] = [
   {
     name: 'rows_per_file',
     label: 'Rows Per Part',
-    description: 'Rows written before a new part file is started. Applies to newly started parts only.',
+    description:
+      'Rows written before a new part file is started. Applies to newly started parts only.',
     min: 1,
     max: 5000000,
   },
   {
     name: 'max_parts',
     label: 'Max Parts',
-    description: 'Part limit for one job. Exceeding it fails the job instead of filling the disk.',
+    description:
+      'Part limit for one job. Exceeding it fails the job instead of filling the disk.',
     min: 1,
     max: 1000,
-  },
-  {
-    name: 'xlsx_max_rows',
-    label: 'Excel Row Limit',
-    description: 'Above this row count the export falls back to CSV, which is far cheaper to produce.',
-    min: 1,
-    max: 1000000,
   },
   {
     name: 'min_free_disk_mb',
@@ -334,7 +344,8 @@ const downloadFields: NumberField[] = [
   {
     name: 'download_token_ttl_sec',
     label: 'Download Link Lifetime (s)',
-    description: 'How long a freshly issued download link stays valid before first use.',
+    description:
+      'How long a freshly issued download link stays valid before first use.',
     min: 1,
     max: 3600,
   },
