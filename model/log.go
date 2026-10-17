@@ -185,11 +185,20 @@ func FormatRootLogs(logs []*Log) {
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+	return GetLogByTokenIdWithContext(context.Background(), tokenId)
+}
+
+func GetLogByTokenIdWithContext(ctx context.Context, tokenId int) (logs []*Log, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	err = LOG_DB.WithContext(ctx).Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -716,13 +725,25 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 }
 
 func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB)
+	return GetAllLogsWithContext(context.Background(), filter, startIdx, num)
+}
+
+func GetAllLogsWithContext(ctx context.Context, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	tx, err := filter.apply(LOG_DB.WithContext(ctx))
 	if err != nil {
 		return nil, 0, err
 	}
 	hasNonTypeFilter := filter.ModelName != "" || filter.Username != "" || filter.TokenName != "" || filter.Channel != 0 || filter.LogId > 0 || filter.Group != "" || filter.RequestId != "" || filter.UpstreamRequestId != ""
-	total, err = countLogsWithHourCache(filter.Type, filter.StartTimestamp, filter.EndTimestamp, hasNonTypeFilter, func() *gorm.DB { return tx.Model(&Log{}) })
+	total, err = countLogsWithHourCache(ctx, filter.Type, filter.StartTimestamp, filter.EndTimestamp, hasNonTypeFilter, func() *gorm.DB { return tx.Model(&Log{}) })
 	if err != nil {
+		return nil, 0, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
 	order := "logs.created_at desc, logs.id desc"
@@ -764,7 +785,7 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 			}
 		} else {
 			// Bulk query channels from DB
-			if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+			if err = DB.WithContext(ctx).Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
 				return logs, total, err
 			}
 		}
@@ -975,7 +996,16 @@ func GetEmployeeCustomerLogs(filter EmployeeCustomerLogFilter) (logs []*Log, tot
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB.Where("logs.user_id = ?", userId))
+	return GetUserLogsWithContext(context.Background(), userId, filter, startIdx, num)
+}
+
+func GetUserLogsWithContext(ctx context.Context, userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	tx, err := filter.apply(LOG_DB.WithContext(ctx).Where("logs.user_id = ?", userId))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -983,6 +1013,9 @@ func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*L
 	if err != nil {
 		common.SysError(common.LogText("failed to count user logs: %s", err.Error()))
 		return nil, 0, common.NewMessage("Failed to query logs")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
 	}
 	order := "logs.id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
@@ -1030,10 +1063,19 @@ func GetConsumptionByChannelGroup(startTimestamp, endTimestamp int64) ([]Channel
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+	return SumUsedQuotaWithContext(context.Background(), logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+}
+
+func SumUsedQuotaWithContext(ctx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	ctx, cancel := logQueryContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return stat, err
+	}
+	tx := LOG_DB.WithContext(ctx).Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	rpmTpmQuery := LOG_DB.WithContext(ctx).Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -1078,19 +1120,23 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 而缓存里的 Quota 也只累加消费类日志，两者口径一致。
 	hasNonTypeFilter := username != "" || tokenName != "" || modelName != "" ||
 		channel != 0 || group != ""
-	cachedQuota, quotaFromCache := sumConsumeQuotaWithHourCache(startTimestamp, endTimestamp, hasNonTypeFilter)
+	cachedQuota, quotaFromCache := sumConsumeQuotaWithHourCache(ctx, startTimestamp, endTimestamp, hasNonTypeFilter)
 
 	// 执行查询。GORM v1.25.12 起 Scan 会清零目标结构体中未匹配的字段，
 	// 因此 rpm/tpm 必须扫进独立结构体再合并，否则会把已取到的 quota 覆盖为 0。
 	// 回落到整段 SUM 时同样挂超时：那条查询要扫全区间，是最可能长时间占住
 	// LOG_DB 连接的一条，而连接占用正是本次改造要解决的问题。
-	statCtx, cancelStat := logStatQueryContext()
-	defer cancelStat()
+	if err := ctx.Err(); err != nil {
+		return stat, err
+	}
 	if quotaFromCache {
 		stat.Quota = int(cachedQuota)
-	} else if err := tx.WithContext(statCtx).Scan(&stat).Error; err != nil {
+	} else if err := tx.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
+	}
+	if err := ctx.Err(); err != nil {
+		return stat, err
 	}
 	var rateStat Stat
 	if err := rpmTpmQuery.Scan(&rateStat).Error; err != nil {

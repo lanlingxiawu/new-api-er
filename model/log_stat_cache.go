@@ -209,6 +209,9 @@ COALESCE(SUM(CASE WHEN type = 2 THEN prompt_tokens + completion_tokens ELSE 0 EN
 // 闭区间是为了与既有查询的 created_at >= ? AND created_at <= ? 语义完全一致。
 func queryLogHourStatRange(ctx context.Context, from, to int64) (logHourStat, error) {
 	var out logHourStat
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
 	if from > to {
 		return out, nil
 	}
@@ -244,6 +247,9 @@ func queryLogHourStatRange(ctx context.Context, from, to int64) (logHourStat, er
 // logStatHourCached 取单个整点 [hour, hour+3599] 的聚合量，优先走缓存。
 // 缓存读写的任何失败都只降级回源，绝不把错误抛给调用方（Rule 0）。
 func logStatHourCached(ctx context.Context, hour int64, kind string, ttl time.Duration) (logHourStat, error) {
+	if err := ctx.Err(); err != nil {
+		return logHourStat{}, err
+	}
 	cache := getLogStatCache()
 	key := logStatCacheKey(kind, hour)
 
@@ -257,7 +263,7 @@ func logStatHourCached(ctx context.Context, hour int64, kind string, ttl time.Du
 	if err != nil {
 		return logHourStat{}, err
 	}
-	if ttl > 0 {
+	if ttl > 0 && ctx.Err() == nil {
 		if err := cache.SetWithTTL(key, value, ttl); err != nil {
 			common.SysLog("log stat cache write failed: " + err.Error())
 		}
@@ -280,6 +286,9 @@ func SumLogStatRange(ctx context.Context, startTimestamp, endTimestamp int64) (l
 //	[cursor, end]                 尾段      实时查，≤1 小时
 func sumLogStatRangeAt(ctx context.Context, startTimestamp, endTimestamp, now int64) (logHourStat, error) {
 	var total logHourStat
+	if err := ctx.Err(); err != nil {
+		return total, err
+	}
 	if startTimestamp > endTimestamp {
 		return total, nil
 	}
@@ -347,17 +356,23 @@ func min64(a, b int64) int64 {
 // 宁可给用户一个「请缩小范围」的提示，也不要让一条查询占住 LOG_DB 连接十几秒——
 // 连接被长时间占住才是这次改造真正要解决的问题。
 func logStatQueryContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(),
+	return logQueryContext(context.Background())
+}
+
+// logQueryContext shares one bounded budget across all queries for a request.
+func logQueryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(safeDBContext(ctx),
 		operation_setting.GetLogQuerySetting().GetQueryTimeout())
 }
 
 // countLogsWithHourCache 返回列表总数：条件允许时走小时缓存分解，否则回落原 COUNT。
 // fallback 是惰性的——走缓存时不去构造那条查询，免得在 tx 上留下多余的语句状态。
-func countLogsWithHourCache(logType int, startTimestamp, endTimestamp int64,
+func countLogsWithHourCache(ctx context.Context, logType int, startTimestamp, endTimestamp int64,
 	hasNonTypeFilter bool, fallback func() *gorm.DB) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if logStatCacheUsable(startTimestamp, endTimestamp, hasNonTypeFilter) {
-		ctx, cancel := logStatQueryContext()
-		defer cancel()
 		if stat, err := SumLogStatRange(ctx, startTimestamp, endTimestamp); err == nil {
 			return stat.countFor(logType), nil
 		} else {
@@ -368,8 +383,9 @@ func countLogsWithHourCache(logType int, startTimestamp, endTimestamp int64,
 	// 回落路径恰恰是最慢的那条（带筛选、无法走缓存），所以它更需要超时兜底。
 	// 默认 30s 相对实测最坏值（无筛选 COUNT 约 6s）留了足够余量，只用来掐住
 	// 真正失控的查询，不会误杀正常请求。
-	ctx, cancel := logStatQueryContext()
-	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	var total int64
 	err := fallback().WithContext(ctx).Count(&total).Error
 	return total, err
@@ -377,13 +393,11 @@ func countLogsWithHourCache(logType int, startTimestamp, endTimestamp int64,
 
 // sumConsumeQuotaWithHourCache 返回区间内的消费额度。
 // 与 countLogsWithHourCache 同构：条件允许走缓存，否则回落调用方给的原查询。
-func sumConsumeQuotaWithHourCache(startTimestamp, endTimestamp int64,
+func sumConsumeQuotaWithHourCache(ctx context.Context, startTimestamp, endTimestamp int64,
 	hasNonTypeFilter bool) (quota int64, ok bool) {
 	if !logStatCacheUsable(startTimestamp, endTimestamp, hasNonTypeFilter) {
 		return 0, false
 	}
-	ctx, cancel := logStatQueryContext()
-	defer cancel()
 	stat, err := SumLogStatRange(ctx, startTimestamp, endTimestamp)
 	if err != nil {
 		common.SysLog("log stat quota via hour cache failed, falling back to logs: " + err.Error())
