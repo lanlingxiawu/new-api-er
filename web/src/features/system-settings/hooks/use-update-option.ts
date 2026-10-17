@@ -46,7 +46,8 @@ const STATUS_RELATED_KEYS = new Set([
 export function useUpdateOption(explicitScope?: string) {
   const queryClient = useQueryClient()
   const { scope: contextScope } = useSettingsPageAccess()
-  const scope = explicitScope || contextScope
+  // An explicit empty scope uses the backend's root-only unscoped write path.
+  const scope = explicitScope ?? contextScope
 
   return useMutation({
     mutationFn: (request: UpdateOptionRequest) =>

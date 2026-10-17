@@ -263,3 +263,11 @@ go test ./...
 - 持久化入口复扫未发现遗漏。审计同时确认了上述 `useUpdateOption` 对 `{success:false}` 的存量 baseline 语义；为避免把保存确认需求扩大成全局 mutation 错误契约重构，本次保留原行为并在本文记录。
 
 本次没有新增或修改后端 API、数据库结构、配置参数或 Relay 主链代码；Main Chain Impact 与 Shared Resource Audit 的结论保持不变。
+
+### pprof 保存参数修复（2026-10-17）
+
+- 根因：pprof 开关继承页面的 `operations.performance` scope，但该 scope 的白名单不包含 `pprof_setting.enabled`，root 提交也会被拒绝。
+- 修复：`useUpdateOption` 仅在参数未提供时继承页面 scope；显式空字符串走既有 root 专用无 scope 保存路径。pprof 开关明确使用空 scope，保留保存确认、成功提示和状态刷新。
+- 权限：不扩大性能设置白名单；普通管理员仍不能无 scope 保存，也不能访问 pprof 状态与下载接口。
+- 回归：请求级测试覆盖开启/关闭、显式空 scope、默认继承和显式其他 scope，修复前空 scope 用例失败。页面验收为 root 确认开关后保存成功并刷新状态、取消不保存、普通管理员不显示 pprof 区域。
+- 共享资源审计：仅修正前端请求 scope，没有增加数据库、Redis、内存缓存或连接池使用；沿用既有配置写入，不改变 Relay 主链执行。

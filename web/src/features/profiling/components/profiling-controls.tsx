@@ -86,7 +86,8 @@ function ProfileButton(props: {
 export function ProfilingControls() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const updateOption = useUpdateOption()
+  // Profiling is root-only, outside the delegated performance settings scope.
+  const updateOption = useUpdateOption('')
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [seconds, setSeconds] = useState('30')
 
