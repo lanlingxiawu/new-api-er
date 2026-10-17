@@ -19,8 +19,18 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+const adaptedStreamOriginalFieldsKey = "relay_adapted_stream_original_fields"
+
+// Only these two fields are injected by adaptation. Retain small independent
+// strings, not slices of the possibly media-heavy outbound request body.
+type adaptedStreamOriginalFields struct {
+	stream  string
+	options string
+}
 
 // shouldAdaptUpstreamStream decides whether a non-stream client request should
 // talk to upstream in streaming mode and be re-assembled before it is returned.
@@ -140,6 +150,66 @@ func jsonFieldSet(raw json.RawMessage) bool {
 	return trimmed != "" && trimmed != "null"
 }
 
+// adaptFinalUpstreamStreamRequest runs after conversion and parameter overrides.
+// No adaptation fields or timer hold are installed until the bytes actually
+// being sent can be safely reassembled. Channel-supplied stream options survive.
+func adaptFinalUpstreamStreamRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest, body []byte) ([]byte, error) {
+	if !shouldAdaptUpstreamStream(c, info, request) {
+		return body, nil
+	}
+	root := gjson.ParseBytes(body)
+	if !root.IsObject() {
+		return body, nil
+	}
+	compatible := true
+	original := adaptedStreamOriginalFields{}
+	root.ForEach(func(key, value gjson.Result) bool {
+		switch key.Str {
+		case "n":
+			compatible = value.Type == gjson.Null || value.Type == gjson.Number && value.Raw == "1"
+		case "stream", "logprobs":
+			if key.Str == "stream" {
+				original.stream = strings.Clone(value.Raw)
+			}
+			// A channel that explicitly requests SSE keeps the existing stream
+			// path; it must not become owned by the internal buffered handler.
+			compatible = value.Type == gjson.Null || value.Type == gjson.False
+		case "top_logprobs", "audio", "functions", "function_call":
+			compatible = value.Type == gjson.Null
+		case "modalities":
+			compatible = value.Type == gjson.Null || value.IsArray()
+			if value.IsArray() {
+				value.ForEach(func(_, modality gjson.Result) bool {
+					compatible = modality.Type == gjson.String && modality.Str != "audio"
+					return compatible
+				})
+			}
+		case "stream_options":
+			original.options = strings.Clone(value.Raw)
+			compatible = value.Type == gjson.Null || value.IsObject()
+			if value.IsObject() {
+				usage := value.Get("include_usage")
+				compatible = !usage.Exists() || usage.Type == gjson.True
+			}
+		}
+		return compatible
+	})
+	if !compatible {
+		return body, nil
+	}
+	adapted, err := sjson.SetBytes(body, "stream", true)
+	if err != nil {
+		return nil, err
+	}
+	adapted, err = sjson.SetBytes(adapted, "stream_options.include_usage", true)
+	if err != nil {
+		return nil, err
+	}
+	applyUpstreamStreamAdaptation(c, info, request)
+	c.Set(adaptedStreamOriginalFieldsKey, original)
+	return adapted, nil
+}
+
 // applyUpstreamStreamAdaptation rewrites the outbound request to stream and asks
 // for usage in the final chunk. The client-facing mode is untouched: info.IsStream
 // stays false so the response is still assembled and returned as one JSON body.
@@ -200,6 +270,19 @@ func fallBackFromRejectedAdaptation(c *gin.Context, info *relaycommon.RelayInfo,
 	if err != nil {
 		// Cannot rebuild the plain request safely; surface the original error.
 		return resp, nil, nil
+	}
+	value, _ := c.Get(adaptedStreamOriginalFieldsKey)
+	original, _ := value.(adaptedStreamOriginalFields)
+	for _, field := range []struct{ path, raw string }{
+		{"stream", original.stream}, {"stream_options", original.options},
+	} {
+		if field.raw == "" {
+			continue
+		}
+		plainBody, err = sjson.SetRawBytes(plainBody, field.path, []byte(field.raw))
+		if err != nil {
+			return resp, nil, nil
+		}
 	}
 	rejection, _ := io.ReadAll(io.LimitReader(resp.Body, adaptedRejectionPreviewBytes))
 	service.CloseResponseBodyGracefully(resp)

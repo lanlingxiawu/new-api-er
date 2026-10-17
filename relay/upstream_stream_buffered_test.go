@@ -76,6 +76,99 @@ func TestHandleAdaptedUpstreamStream_AssemblesJSONBody(t *testing.T) {
 	assert.Equal(t, 6, out.Usage.TotalTokens)
 }
 
+func TestHandleAdaptedUpstreamStream_UsageFreshness(t *testing.T) {
+	usageFrame := `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101,"prompt_tokens_details":{"cached_tokens":30}}}`
+	zeroFrame := strings.ReplaceAll(usageFrame, `"completion_tokens":1`, `"completion_tokens":0`)
+	textFrame := `{"choices":[{"index":0,"delta":{"content":"a sufficiently long generated answer with many words"}}]}`
+	cases := []struct {
+		name      string
+		frames    []string
+		estimated bool
+		output    int
+	}{
+		{"early zero", []string{zeroFrame, textFrame}, true, 0},
+		{"early nonzero", []string{usageFrame, textFrame}, true, 0},
+		{"late report", []string{textFrame, usageFrame}, false, 1},
+		{"late explicit zero", []string{textFrame, zeroFrame}, false, 0},
+		{"same frame", []string{strings.Replace(usageFrame, `"choices":[]`, `"choices":[{"index":0,"delta":{"content":"many words were produced"}}]`, 1)}, false, 1},
+		{"role is not output", []string{textFrame, usageFrame, `{"choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`}, false, 1},
+		{"confirmed greater than estimate", []string{strings.Replace(usageFrame, `"completion_tokens":1`, `"completion_tokens":10000`, 1), textFrame}, false, 10000},
+		{"missing output count", []string{textFrame, `{"choices":[],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30}}}`}, true, 0},
+		{"refusal after report", []string{usageFrame, `{"choices":[{"index":0,"delta":{"refusal":"I cannot help with this particular request"}}]}`}, true, 0},
+		{"reasoning after report", []string{usageFrame, `{"choices":[{"index":0,"delta":{"reasoning_content":"considering the detailed steps for this response"}}]}`}, true, 0},
+		{"tool after report", []string{usageFrame, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"lookup","arguments":"{\"query\":\"some sufficiently detailed query\"}"}}]}}]}`}, true, 0},
+		{"same frame refusal", []string{strings.Replace(usageFrame, `"choices":[]`, `"choices":[{"index":0,"delta":{"refusal":"I cannot help with this particular request"}}]`, 1)}, false, 1},
+		{"same frame refusal without output count", []string{`{"choices":[{"index":0,"delta":{"refusal":"I cannot help with this particular request"}}],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30}}}`}, true, 0},
+		{"metadata after report", []string{textFrame, usageFrame, `{"choices":[{"index":0,"delta":{"annotations":[],"tool_calls":[{"index":0,"id":"id-only","type":"function","function":{}}]}}]}`}, false, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, rec, info := bufferedCase(t)
+			markTimedOut(c)
+			calls := 0
+			restore := stubSettlement(func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.Usage, _ []*common.Message) { calls++ })
+			defer restore()
+			var body strings.Builder
+			for _, frame := range tc.frames {
+				body.WriteString("data: " + frame + "\n")
+			}
+			usage, apiErr := handleAdaptedUpstreamStream(c, info, upstreamSSE(body.String()))
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 1, calls)
+			assert.Equal(t, 100, usage.PromptTokens)
+			assert.Equal(t, 30, usage.PromptTokensDetails.CachedTokens)
+			assert.Nil(t, info.StreamResult, "buffering must not acquire client-stream settlement ownership")
+			assert.Equal(t, tc.estimated, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+			if tc.estimated {
+				assert.Greater(t, usage.CompletionTokens, 1)
+				assert.Equal(t, usage.PromptTokens+usage.CompletionTokens, usage.TotalTokens)
+				assert.Equal(t, int64(usage.CompletionTokens), gjson.Get(rec.Body.String(), "usage.completion_tokens").Int())
+			} else {
+				assert.Equal(t, tc.output, usage.CompletionTokens)
+			}
+		})
+	}
+}
+
+func TestHandleAdaptedUpstreamStream_CompletedUsageIsNotSupplemented(t *testing.T) {
+	for _, ending := range []string{"data: [DONE]\n", `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n", ""} {
+		t.Run(ending, func(t *testing.T) {
+			c, rec, info := bufferedCase(t)
+			body := "data: " + `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101}}` + "\n" +
+				"data: " + `{"choices":[{"index":0,"delta":{"content":"a sufficiently long generated answer with many words"}}]}` + "\n" + ending
+			usage, apiErr := handleAdaptedUpstreamStream(c, info, upstreamSSE(body))
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			if ending == "" {
+				assert.Greater(t, usage.CompletionTokens, 1)
+				assert.Equal(t, "length", gjson.Get(rec.Body.String(), "choices.0.finish_reason").String())
+			} else {
+				assert.Equal(t, 1, usage.CompletionTokens)
+				assert.False(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
+			}
+		})
+	}
+}
+
+func TestHandleAdaptedUpstreamStream_StaleUsageOnReadFailure(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		c, rec, info := bufferedCase(t)
+		body := "data: " + `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101}}` + "\n" +
+			"data: " + `{"choices":[{"index":0,"delta":{"content":"a sufficiently long generated answer with many words"}}]}` + "\n"
+		resp := brokenUpstream(body)
+		if malformed {
+			resp = upstreamSSE(body + "data: " + `{"choices":[{"index":0,"delta":{"content":123}}]}` + "\n")
+		}
+		usage, apiErr := handleAdaptedUpstreamStream(c, info, resp)
+		require.Nil(t, apiErr)
+		require.NotNil(t, usage)
+		assert.Greater(t, usage.CompletionTokens, 1)
+		assert.Equal(t, "length", gjson.Get(rec.Body.String(), "choices.0.finish_reason").String())
+		assert.Equal(t, int64(usage.CompletionTokens), gjson.Get(rec.Body.String(), "usage.completion_tokens").Int())
+	}
+}
+
 // Upstream ended without [DONE]: the body is still delivered, flagged incomplete.
 func TestHandleAdaptedUpstreamStream_TruncatedUpstream(t *testing.T) {
 	c, rec, info := bufferedCase(t)

@@ -72,14 +72,6 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	info.ShouldIncludeUsage = includeUsage
 
-	// A non-stream request whose user opted into timeout billing talks to
-	// upstream in streaming mode, so a deadline hit still has real usage to
-	// settle. The client-facing shape is unchanged: the stream is re-assembled
-	// into one JSON body below.
-	if shouldAdaptUpstreamStream(c, info, request) {
-		applyUpstreamStreamAdaptation(c, info, request)
-	}
-
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -152,6 +144,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+
+		// Judge the final outbound fields, not the client's DTO before channel
+		// overrides. Incompatible bodies retain all administrator overrides.
+		jsonData, err = adaptFinalUpstreamStreamRequest(c, info, request, jsonData)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		logger.LogDebug(c, "text request body: %s", jsonData)

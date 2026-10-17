@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tokenkit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -495,6 +496,15 @@ func adaptedStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, aggregator 
 			}
 		}
 		openai.ApplyUsagePostProcessing(info, usage, common.StringToByteSlice(lastFrame))
+		// Only an abnormal ending needs to supplement a report that predates
+		// received output. A final (including explicit zero) report stays intact.
+		if status := info.StreamStatus; status != nil &&
+			status.EndReason != relaycommon.StreamEndReasonNone && status.EndReason != relaycommon.StreamEndReasonDone &&
+			!(status.EndReason == relaycommon.StreamEndReasonEOF && aggregator.UpstreamFinished()) &&
+			(!aggregator.outputReported || aggregator.usageOutputRevision != aggregator.outputRevision) {
+			estimate := tokenkit.Estimate(info.UpstreamModelName, aggregator.AssembledText()) + aggregator.ToolCallCount()*7
+			usage = service.SupplementStreamPartialOutput(c, info, usage, estimate, 0)
+		}
 		return usage
 	}
 	if !aggregator.ReceivedAnything() {

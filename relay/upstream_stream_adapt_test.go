@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -16,7 +18,160 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+func TestTextHelper_FinalOverridesReachUpstreamWithoutUnsafeAdaptation(t *testing.T) {
+	cases := []struct {
+		name     string
+		override map[string]any
+		adapt    bool
+	}{
+		{"ordinary", map[string]any{"temperature": 0}, true},
+		{"audio", map[string]any{"audio": map[string]any{"format": "wav"}}, false},
+		{"legacy functions", map[string]any{"functions": []any{}}, false},
+		{"multiple choices", map[string]any{"n": 2}, false},
+		{"logprobs operation", map[string]any{"operations": []any{map[string]any{"mode": "set", "path": "logprobs", "value": true}}}, false},
+		{"usage override", map[string]any{"stream_options": map[string]any{"include_usage": false}}, false},
+		{"explicit SSE", map[string]any{"stream": true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			received := make(chan []byte, 4)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				received <- body
+				w.Header().Set("Content-Type", "application/json")
+				// A non-retryable response exercises the actual send without
+				// touching funding or a database in this request-transform test.
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":{"message":"fixture","type":"rate_limit_error"}}`))
+			}))
+			defer upstream.Close()
+			c, info, request := adaptCase(t)
+			request.Model = "gpt-4o"
+			info.Request = request
+			info.OriginModelName = "gpt-4o"
+			info.RequestURLPath = "/v1/chat/completions"
+			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-4o")
+			common.SetContextKey(c, constant.ContextKeyChannelParamOverride, tc.override)
+			apiErr := TextHelper(c, info)
+			require.NotNil(t, apiErr)
+			require.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+			require.Len(t, received, 1)
+			body := <-received
+			assert.Equal(t, tc.adapt, info.UpstreamStreamAdapted)
+			assert.Nil(t, request.Stream, "the client's request must not be rewritten")
+			for key, value := range tc.override {
+				if key == "operations" {
+					continue
+				}
+				expected, err := common.Marshal(value)
+				require.NoError(t, err)
+				assert.JSONEq(t, string(expected), gjson.GetBytes(body, key).Raw, key)
+			}
+			if tc.adapt {
+				assert.True(t, gjson.GetBytes(body, "stream").Bool())
+				assert.True(t, gjson.GetBytes(body, "stream_options.include_usage").Bool())
+				assert.Equal(t, "0", gjson.GetBytes(body, "temperature").Raw)
+			} else if tc.name != "explicit SSE" {
+				assert.False(t, gjson.GetBytes(body, "stream").Bool())
+			}
+			if tc.name == "logprobs operation" {
+				assert.True(t, gjson.GetBytes(body, "logprobs").Bool())
+			}
+		})
+	}
+}
+
+// The actual outbound body, including channel overrides, determines whether
+// aggregation can preserve the response. Rejected bodies must stay untouched.
+func TestAdaptFinalUpstreamStreamRequest(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		adapt bool
+	}{
+		{"plain", `{"model":"m","stream":false,"temperature":0}`, true},
+		{"single choice and text", `{"n":1,"modalities":["text"],"logprobs":false}`, true},
+		{"null optional fields", `{"n":null,"audio":null,"functions":null,"top_logprobs":null}`, true},
+		{"tool calls", `{"tools":[{"type":"function","function":{"name":"f"}}]}`, true},
+		{"preserve stream options", `{"stream_options":{"include_usage":true,"include_obfuscation":false}}`, true},
+		{"multiple choices", `{"n":2}`, false},
+		{"zero choices", `{"n":0}`, false},
+		{"invalid choices", `{"n":"1"}`, false},
+		{"logprobs", `{"logprobs":true}`, false},
+		{"top logprobs zero", `{"top_logprobs":0}`, false},
+		{"audio", `{"audio":{"format":"wav"}}`, false},
+		{"audio modality", `{"modalities":["text","audio"]}`, false},
+		{"invalid modalities", `{"modalities":"text"}`, false},
+		{"legacy functions", `{"functions":[]}`, false},
+		{"legacy function call", `{"function_call":"none"}`, false},
+		{"explicit upstream stream", `{"stream":true}`, false},
+		{"invalid stream", `{"stream":"false"}`, false},
+		{"usage disabled", `{"stream_options":{"include_usage":false}}`, false},
+		{"invalid stream options", `{"stream_options":[]}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info, request := adaptCase(t)
+			body, err := adaptFinalUpstreamStreamRequest(c, info, request, []byte(tc.body))
+			require.NoError(t, err)
+			assert.Equal(t, tc.adapt, info.UpstreamStreamAdapted)
+			assert.False(t, info.IsStream)
+			if !tc.adapt {
+				assert.Equal(t, tc.body, string(body), "do not rewrite channel overrides")
+				return
+			}
+			assert.True(t, gjson.GetBytes(body, "stream").Bool())
+			assert.True(t, gjson.GetBytes(body, "stream_options.include_usage").Bool())
+			for _, key := range []string{"model", "temperature", "n", "modalities", "logprobs", "tools", "stream_options.include_obfuscation"} {
+				assert.Equal(t, gjson.Get(tc.body, key).Raw, gjson.GetBytes(body, key).Raw, key)
+			}
+		})
+	}
+	for _, mode := range []string{"refund", "input"} {
+		t.Run(mode, func(t *testing.T) {
+			c, info, request := adaptCase(t)
+			common.SetContextKey(c, constant.ContextKeyUserNonStreamTimeoutBilling, mode)
+			body, err := adaptFinalUpstreamStreamRequest(c, info, request, []byte(`{"stream":false}`))
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"stream":false}`, string(body))
+			assert.False(t, info.UpstreamStreamAdapted)
+		})
+	}
+}
+
+func TestAdaptFinalUpstreamStreamRequest_PlainFallbackRestoresOriginalFields(t *testing.T) {
+	for _, original := range []string{
+		`{"model":"m","temperature":0}`,
+		`{"model":"m","stream":false,"stream_options":{"include_usage":true,"include_obfuscation":false}}`,
+		`{"model":"m","stream":null,"stream_options":null}`,
+	} {
+		t.Run(original, func(t *testing.T) {
+			c, info, request := adaptCase(t)
+			body, err := adaptFinalUpstreamStreamRequest(c, info, request, []byte(original))
+			require.NoError(t, err)
+			require.True(t, info.UpstreamStreamAdapted)
+			storage, err := common.CreateBodyStorage(body)
+			require.NoError(t, err)
+			defer storage.Close()
+			adaptor := &recordingAdaptor{status: http.StatusTooManyRequests}
+			resp, closer, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(http.StatusBadRequest), storage)
+			if closer != nil {
+				defer closer.Close()
+			}
+			require.Nil(t, apiErr)
+			require.NotNil(t, resp)
+			defer resp.Body.Close()
+			require.Len(t, adaptor.sent, 1)
+			assert.JSONEq(t, original, string(adaptor.sent[0]))
+			assert.False(t, info.UpstreamStreamAdapted)
+		})
+	}
+}
 
 // adaptCase builds the fully-eligible baseline; each test mutates exactly one
 // input so a failure names the single condition that regressed.

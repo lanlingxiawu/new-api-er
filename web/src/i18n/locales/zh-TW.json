@@ -5506,6 +5506,8 @@
     "On timeout the user is charged only for the input (as confirmed by upstream, otherwise the estimate); output is not charged, so the platform bears that part. Models priced per call are refunded.": "逾時只按輸入計費（上游已確認的輸入，否則按估算），不收輸出，輸出部分由平台承擔。按次計費的模型逾時退款。",
     "On timeout the user is not charged. Upstream has usually billed by then, so the platform bears that cost.": "逾時不向使用者計費。此時上游通常已完成計費，這部分成本由平台承擔。",
     "On timeout the user pays for what the model already produced: OpenAI chat completion requests also receive that partial output; other non-stream requests are charged for the input only. The upstream cost is borne by the user.": "逾時按模型已產生的用量計費：OpenAI 對話補全請求會同時回傳已產生的部分內容；其他非串流請求只收輸入。上游成本由使用者承擔。",
+    "On timeout, only input is charged. Non-stream input is estimated unless upstream usage is available; output is not charged. Per-call models are refunded.": "逾時後僅收取輸入費用。非串流請求優先採用上游輸入用量，否則估算；不收取輸出費用。按次計費模型退款。",
+    "On timeout, supported requests return partial output and charge for received usage (upstream counts first, otherwise an estimate). Other non-stream requests charge estimated input only. Per-call models are refunded if no output is received.": "逾時後，支援的請求會傳回已收到的部分內容，並依其用量計費（優先採用上游用量，否則估算）。其他非串流請求僅收取估算的輸入費用。按次計費模型在未收到輸出時退款。",
     "One API": "One API",
     "One API for all LLMs": "One API for all LLMs",
     "One IP or CIDR range per line": "每行一個 IP 或 CIDR 範圍",

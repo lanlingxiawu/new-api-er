@@ -154,12 +154,12 @@ function timeoutBillingDescription(
 ): string {
   if (value === 'charge') {
     return t(
-      'On timeout the user pays for what the model already produced: OpenAI chat completion requests also receive that partial output; other non-stream requests are charged for the input only. The upstream cost is borne by the user.'
+      'On timeout, supported requests return partial output and charge for received usage (upstream counts first, otherwise an estimate). Other non-stream requests charge estimated input only. Per-call models are refunded if no output is received.'
     )
   }
   if (value === 'input') {
     return t(
-      'On timeout the user is charged only for the input (as confirmed by upstream, otherwise the estimate); output is not charged, so the platform bears that part. Models priced per call are refunded.'
+      'On timeout, only input is charged. Non-stream input is estimated unless upstream usage is available; output is not charged. Per-call models are refunded.'
     )
   }
   return t(

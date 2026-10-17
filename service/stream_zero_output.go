@@ -28,7 +28,8 @@ func SupplementStreamPartialOutput(c *gin.Context, info *relaycommon.RelayInfo, 
 // raise=true 在输出低于估算时补。输入、缓存与推理细分保持不变，嵌套计费对象同步改写并标记为估算。
 func supplementStreamOutput(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, text, audio int, raise bool) *dto.Usage {
 	result := info.StreamResult
-	if result == nil || result.UsageSource == "none" || usage == nil || text+audio <= 0 {
+	if usage == nil || text+audio <= 0 ||
+		(result == nil && !info.UpstreamStreamAdapted) || (result != nil && result.UsageSource == "none") {
 		return usage
 	}
 	effective := effectiveBillingUsage(usage)
@@ -64,15 +65,19 @@ func supplementStreamOutput(c *gin.Context, info *relaycommon.RelayInfo, usage *
 			u.CandidatesTokensDetails = []dto.GeminiPromptTokensDetails{{Modality: "TEXT", TokenCount: max(0, u.CandidatesTokenCount-audio)}, {Modality: "AUDIO", TokenCount: audio}}
 		}
 	}
-	if result.ConfirmedUsage {
-		result.UsageSource = "mixed"
+	// Buffered non-stream requests share token selection, not client-stream
+	// lifecycle ownership. They have no StreamResult to mutate.
+	if result != nil {
+		if result.ConfirmedUsage {
+			result.UsageSource = "mixed"
+		}
+		if result.Diagnostic.EstimatedUsage == nil {
+			result.Diagnostic.EstimatedUsage = make(map[string]int)
+		}
+		result.Diagnostic.EstimatedUsage["output_tokens"] = updated.CompletionTokens
+		result.Diagnostic.EstimatedUsage["output_text_tokens"] = text
+		result.Diagnostic.EstimatedUsage["output_audio_tokens"] = audio
 	}
-	if result.Diagnostic.EstimatedUsage == nil {
-		result.Diagnostic.EstimatedUsage = make(map[string]int)
-	}
-	result.Diagnostic.EstimatedUsage["output_tokens"] = updated.CompletionTokens
-	result.Diagnostic.EstimatedUsage["output_text_tokens"] = text
-	result.Diagnostic.EstimatedUsage["output_audio_tokens"] = audio
 	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	return &updated
 }

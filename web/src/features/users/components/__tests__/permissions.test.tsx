@@ -45,7 +45,11 @@ const label = "View other accounts' audit logs"
 const description =
   'View audit records from user and admin roles. Root records are always excluded.'
 
-function renderPermissions(viewerRole: number, allowed?: boolean) {
+function renderPermissions(
+  viewerRole: number,
+  allowed?: boolean,
+  timeoutBilling: 'refund' | 'charge' | 'input' = 'refund'
+) {
   useAuthStore
     .getState()
     .auth.setUser({ id: 1, username: 'operator', role: viewerRole })
@@ -94,6 +98,7 @@ function renderPermissions(viewerRole: number, allowed?: boolean) {
         success: true,
         data: {
           ...target,
+          non_stream_timeout_billing: timeoutBilling,
           admin_permissions:
             allowed === undefined ? {} : { audit: { read: allowed } },
         },
@@ -109,7 +114,7 @@ function renderPermissions(viewerRole: number, allowed?: boolean) {
         <UsersMutateDrawer
           open
           onOpenChange={() => undefined}
-          currentRow={target}
+          currentRow={{ ...target, non_stream_timeout_billing: timeoutBilling }}
         />
       </UsersProvider>
     </QueryClientProvider>
@@ -122,6 +127,36 @@ afterEach(() => {
   vi.restoreAllMocks()
   useAuthStore.getState().auth.reset()
 })
+
+it.each([
+  {
+    mode: 'charge' as const,
+    description:
+      'On timeout, supported requests return partial output and charge for received usage (upstream counts first, otherwise an estimate). Other non-stream requests charge estimated input only. Per-call models are refunded if no output is received.',
+  },
+  {
+    mode: 'input' as const,
+    description:
+      'On timeout, only input is charged. Non-stream input is estimated unless upstream usage is available; output is not charged. Per-call models are refunded.',
+  },
+])(
+  'explains $mode billing and preserves the saved selection',
+  async (testCase) => {
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true } })
+    renderPermissions(100, true, testCase.mode)
+    expect(await screen.findByText(testCase.description)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        '/api/user/',
+        expect.objectContaining({ non_stream_timeout_billing: testCase.mode }),
+        {}
+      )
+    )
+  }
+)
 
 it.each(['username', 'display_name'] as const)(
   '用户名称长度按 Unicode 字符校验：%s',

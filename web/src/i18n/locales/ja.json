@@ -5506,6 +5506,8 @@
     "On timeout the user is charged only for the input (as confirmed by upstream, otherwise the estimate); output is not charged, so the platform bears that part. Models priced per call are refunded.": "タイムアウト時は入力分のみ課金します（上流が確定した入力、なければ推定値）。出力は課金せず、その分はプラットフォームが負担します。呼び出し単位課金のモデルは返金します。",
     "On timeout the user is not charged. Upstream has usually billed by then, so the platform bears that cost.": "タイムアウト時はユーザーに課金しません。その時点で上流は通常すでに課金しているため、そのコストはプラットフォームが負担します。",
     "On timeout the user pays for what the model already produced: OpenAI chat completion requests also receive that partial output; other non-stream requests are charged for the input only. The upstream cost is borne by the user.": "タイムアウト時は、モデルがすでに生成した分を課金します。OpenAI のチャット補完リクエストはその途中までの出力も受け取ります。それ以外の非ストリーミングリクエストは入力分のみ課金します。上流のコストはユーザーが負担します。",
+    "On timeout, only input is charged. Non-stream input is estimated unless upstream usage is available; output is not charged. Per-call models are refunded.": "タイムアウト時は入力分のみ課金します。非ストリーミングの入力は上流の使用量があれば採用し、なければ推定します。出力分は課金しません。リクエスト単位の課金モデルは返金します。",
+    "On timeout, supported requests return partial output and charge for received usage (upstream counts first, otherwise an estimate). Other non-stream requests charge estimated input only. Per-call models are refunded if no output is received.": "タイムアウト時、対応するリクエストは受信済みの部分出力を返し、その使用量を課金します（上流の使用量を優先し、なければ推定）。その他の非ストリーミングリクエストは推定入力分のみ課金します。リクエスト単位の課金モデルは、出力を受信していなければ返金します。",
     "One API": "1つのAPI",
     "One API for all LLMs": "すべての LLM に対応する 1 つの API",
     "One IP or CIDR range per line": "1行に1つのIPまたはCIDR範囲",

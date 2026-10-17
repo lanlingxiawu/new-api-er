@@ -149,3 +149,20 @@ func TestZeroOutputUsesEffectiveBillingInsteadOfStaleTopLevelEstimate(t *testing
 	require.Equal(t, "mixed", info.StreamResult.UsageSource)
 	require.Zero(t, effectiveBillingUsage(u).CompletionTokens)
 }
+
+func TestBufferedPartialOutputPreservesBillingEvidenceWithoutStreamOwnership(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{UpstreamStreamAdapted: true}
+	confirmed := &dto.Usage{PromptTokens: 15, CompletionTokens: 1, TotalTokens: 16}
+	confirmed.PromptTokensDetails.CachedTokens = 4
+	u := &dto.Usage{BillingUsage: dto.NewOpenAIChatBillingUsage(confirmed)}
+	require.Same(t, u, SupplementStreamPartialOutput(c, &relaycommon.RelayInfo{}, u, 8, 0), "ordinary non-stream calls stay unchanged")
+	v := SupplementStreamPartialOutput(c, info, u, 8, 0)
+	require.Equal(t, 15, effectiveBillingUsage(v).PromptTokens)
+	require.Equal(t, 8, effectiveBillingUsage(v).CompletionTokens)
+	require.Equal(t, 4, effectiveBillingUsage(v).PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1, effectiveBillingUsage(u).CompletionTokens, "confirmed evidence stays unchanged")
+	require.True(t, v.BillingUsage.Estimated)
+	require.Nil(t, info.StreamResult)
+	require.Same(t, v, SupplementStreamPartialOutput(c, info, v, 2, 0), "never reduce confirmed or supplemented usage")
+}

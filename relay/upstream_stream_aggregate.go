@@ -26,6 +26,12 @@ type chatStreamAggregator struct {
 	created           int64
 	systemFingerprint *string
 	usage             *dto.Usage
+	// Revisions track whether the last output report covers subsequent text,
+	// reasoning, refusal and tool data. Role/metadata frames do not advance it.
+	outputRevision      uint64
+	usageOutputRevision uint64
+	usageInChunk        bool
+	outputReported      bool
 	// usageRaw is upstream's usage object verbatim. A plain non-stream call
 	// forwards upstream's bytes, so its usage keeps exactly upstream's fields;
 	// re-marshaling dto.Usage would add internal ones (claude_cache_creation_*,
@@ -237,11 +243,14 @@ func (a *chatStreamAggregator) AddChunk(chunk *dto.ChatCompletionsStreamResponse
 	}
 	// Usage normally arrives only in the final chunk (include_usage). Later
 	// chunks win so a mid-stream partial count never overrides the final one.
-	if chunk.Usage != nil {
-		a.usage = chunk.Usage
-	}
+	a.usageInChunk = chunk.Usage != nil
 	for i := range chunk.Choices {
 		a.addChoice(&chunk.Choices[i])
+	}
+	if chunk.Usage != nil {
+		a.usage = chunk.Usage
+		a.usageOutputRevision = a.outputRevision
+		a.outputReported = true // AddFrameExtras refines field presence from JSON.
 	}
 }
 
@@ -271,6 +280,9 @@ func (a *chatStreamAggregator) addChoice(choice *dto.ChatCompletionsStreamRespon
 		target.sawStringContent = true
 		if a.take(len(*choice.Delta.Content)) {
 			target.content.WriteString(*choice.Delta.Content)
+			if *choice.Delta.Content != "" {
+				a.outputRevision++
+			}
 		}
 	}
 	// Providers disagree on which of the two reasoning fields they emit, and
@@ -287,6 +299,9 @@ func (a *chatStreamAggregator) addChoice(choice *dto.ChatCompletionsStreamRespon
 		}
 		if a.take(len(*reasoning)) {
 			target.reasoning.WriteString(*reasoning)
+			if *reasoning != "" {
+				a.outputRevision++
+			}
 		}
 	}
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
@@ -326,10 +341,12 @@ func (c *aggregatedChoice) addToolCall(call *dto.ToolCallResponse, budget *chatS
 	}
 	if call.Function.Name != "" && call.Function.Name != target.name && budget.take(len(call.Function.Name)) {
 		target.name = call.Function.Name
+		budget.outputRevision++
 	}
 	if call.Function.Arguments != "" && budget.take(len(call.Function.Arguments)) {
 		target.arguments.WriteString(call.Function.Arguments)
 		target.argsShape.feed(call.Function.Arguments)
+		budget.outputRevision++
 	}
 }
 
@@ -425,6 +442,7 @@ func (a *chatStreamAggregator) AddFrameExtras(data string) {
 	if strings.Contains(data, `"usage"`) {
 		if v := gjson.Get(data, "usage"); v.IsObject() {
 			a.usageRaw = v.Raw
+			a.outputReported = v.Get("completion_tokens").Type == gjson.Number
 		}
 	}
 	// Azure sends it once; charged to the budget since it is upstream-sized.
@@ -461,6 +479,10 @@ func (a *chatStreamAggregator) AddFrameExtras(data string) {
 		if hasRefusal && a.take(len(refusal.Str)) {
 			target.refusal.WriteString(refusal.Str)
 			target.hasRefusal = true
+			a.outputRevision++
+			if a.usageInChunk {
+				a.usageOutputRevision = a.outputRevision
+			}
 		}
 		if annotations.IsArray() {
 			annotations.ForEach(func(_, item gjson.Result) bool {

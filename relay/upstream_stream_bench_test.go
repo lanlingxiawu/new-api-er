@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 // sseStream builds a realistic upstream body: n content chunks plus a final
@@ -130,6 +131,27 @@ func BenchmarkAdaptationDecision(b *testing.B) {
 			_ = shouldAdaptUpstreamStream(c2, info2, request2)
 		}
 	})
+}
+
+func BenchmarkFinalUpstreamStreamRequest(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	for _, size := range []int{64, 1 << 20} {
+		body := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"` + strings.Repeat("x", size) + `"}],"stream":false}`)
+		for _, mode := range []string{"refund", "charge"} {
+			b.Run(fmt.Sprintf("%s/bytes=%d", mode, size), func(b *testing.B) {
+				c, info, request := adaptCase(nil)
+				c.Set("user_non_stream_timeout_billing", mode)
+				b.ReportAllocs()
+				b.SetBytes(int64(len(body)))
+				b.ResetTimer()
+				for b.Loop() {
+					if _, err := adaptFinalUpstreamStreamRequest(c, info, request, body); err != nil {
+						require.NoError(b, err)
+					}
+				}
+			})
+		}
+	}
 }
 
 // realisticSSE mirrors what OpenAI actually sends with include_usage: every
