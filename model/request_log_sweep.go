@@ -32,7 +32,7 @@ type requestLogSweepStats struct {
 	Errors      int
 }
 
-// StartRequestLogSweeper 启动清理协程。必须在 RestoreRequestLogs 之后调用。
+// StartRequestLogSweeper 启动清理协程。必须在 InitializeRequestLogHistory 之后调用。
 func StartRequestLogSweeper() {
 	if !RequestLogStoreReady() || requestLogSweepInterval <= 0 {
 		return
@@ -68,7 +68,7 @@ func runRequestLogSweep() {
 // SweepRequestLogFiles 执行一轮清理并返回统计。导出供测试使用。
 func SweepRequestLogFiles() requestLogSweepStats {
 	var stats requestLogSweepStats
-	if !RequestLogStoreReady() {
+	if !RequestLogStoreReady() || requestLogRecoveryIncomplete {
 		return stats
 	}
 
@@ -119,7 +119,7 @@ func SweepRequestLogFiles() requestLogSweepStats {
 		name := entry.Name()
 		full := filepath.Join(requestLogRoot, name)
 
-		if name == requestLogOwnerMarker {
+		if name == requestLogOwnerMarker || name == requestLogRecoveryFile || name == requestLogRecoveryTemp {
 			// 归属标记：删掉它下次启动就无法证明这个目录是本功能独占的。
 			continue
 		}

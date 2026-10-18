@@ -682,3 +682,5 @@ price_monitor.preview_unsupported: "目前計費能力或用量資料無法試�
 price_monitor.preview_source_unavailable: "該來源暫無可用價格，請重新整理巡檢或選擇其他來源。"
 price_monitor.preview_semantics_unknown: "無法確定來源的計費規則語義，因此無法可靠比較此情境。"
 price_monitor.conversion_unsupported: "此價格無法在維持原計費行為的前提下自動轉換。請保留目前定價，或核對用量規則後編輯表達式。"
+
+relay.body_cache_capacity: "伺服器忙碌，請降低並行請求數後重試。"

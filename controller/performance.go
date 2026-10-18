@@ -13,11 +13,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
 // PerformanceStats 性能统计信息
 type PerformanceStats struct {
+	Guidance service.CacheGuidance `json:"guidance"`
 	// 缓存统计
 	CacheStats common.DiskCacheStats `json:"cache_stats"`
 	// 系统内存统计
@@ -67,6 +69,8 @@ type DiskCacheInfo struct {
 
 // PerformanceConfig 性能配置
 type PerformanceConfig struct {
+	BodyGovernanceEnabled bool `json:"body_governance_enabled"`
+	BodyMemoryBudgetMB    int  `json:"body_memory_budget_mb"`
 	// 是否启用磁盘缓存
 	DiskCacheEnabled bool `json:"disk_cache_enabled"`
 	// 磁盘缓存阈值（MB）
@@ -105,6 +109,8 @@ func GetPerformanceStats(c *gin.Context) {
 	diskConfig := common.GetDiskCacheConfig()
 	monitorConfig := common.GetPerformanceMonitorConfig()
 	config := PerformanceConfig{
+		BodyGovernanceEnabled:  diskConfig.GovernanceEnabled,
+		BodyMemoryBudgetMB:     diskConfig.MemoryBudgetMB,
 		DiskCacheEnabled:       diskConfig.Enabled,
 		DiskCacheThresholdMB:   diskConfig.ThresholdMB,
 		DiskCacheMaxSizeMB:     diskConfig.MaxSizeMB,
@@ -128,7 +134,12 @@ func GetPerformanceStats(c *gin.Context) {
 	// 但为了一致性，我们也可以考虑从 SystemStatus 中获取部分信息
 	diskSpaceInfo = common.GetDiskSpaceInfo()
 
+	resources, sampleErrors := service.CollectCacheResources(diskConfig)
+	for _, err := range sampleErrors {
+		logger.LogWarn(c, "performance guidance unavailable: "+err.Error())
+	}
 	stats := PerformanceStats{
+		Guidance:   service.BuildCacheGuidance(resources, cacheStats, diskConfig, time.Now()),
 		CacheStats: cacheStats,
 		MemoryStats: MemoryStats{
 			Alloc:        memStats.Alloc,

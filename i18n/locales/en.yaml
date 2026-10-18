@@ -680,3 +680,5 @@ price_monitor.preview_unsupported: "This pricing rule cannot be evaluated with t
 price_monitor.preview_source_unavailable: "This source has no usable price. Refresh the inspection or choose another source."
 price_monitor.preview_semantics_unknown: "The source billing semantics are unknown, so this scenario cannot be compared reliably."
 price_monitor.conversion_unsupported: "This price cannot be converted automatically without changing its billing behavior. Keep the current pricing or edit an expression after reviewing the usage rules."
+
+relay.body_cache_capacity: "The server is busy. Please reduce concurrent requests and try again later."

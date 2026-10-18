@@ -831,3 +831,5 @@ const (
 	MsgLogExportFileFilterGroup             = "log_export.file.filter.group"
 	MsgLogExportFileFilterChannel           = "log_export.file.filter.channel"
 )
+
+const MsgBodyCacheCapacity = "relay.body_cache_capacity"

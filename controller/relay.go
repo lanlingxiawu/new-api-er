@@ -94,6 +94,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		if errors.Is(newAPIError, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
+		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
 			return
 		}
@@ -131,7 +134,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
-		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+		if errors.Is(err, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
+		} else if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 		} else {
 			newAPIError = helper.NewInvalidRequestError(c, err)
@@ -251,7 +256,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			if errors.Is(bodyErr, common.ErrBodyCacheCapacity) {
+				newAPIError = service.NewBodyCacheCapacityError(c)
+			} else if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -271,6 +278,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = geminiRelayHandler(c, relayInfo)
 		default:
 			newAPIError = relayHandler(c, relayInfo)
+		}
+		if errors.Is(newAPIError, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
 		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
 			reportAdaptedRelayTimeout(c, relayInfo, channel)
@@ -467,6 +477,9 @@ func channelErrorLogOther(c *gin.Context, err *types.NewAPIError) map[string]int
 // processChannelError 处理渠道失败统计、错误日志及渠道状态；流式底层原因单独保存为超级管理员诊断。
 // 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，供分类及记录。
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+	if err != nil && err.GetErrorCode() == service.BodyCacheCapacityErrorCode {
+		return
+	}
 	publicSummary := service.StreamPublicErrorSummary(c, err)
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(messageWithCurrentRequestId(c, publicSummary))))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
@@ -636,7 +649,9 @@ func RelayTask(c *gin.Context) {
 		addUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			if errors.Is(bodyErr, common.ErrBodyCacheCapacity) {
+				taskErr = service.TaskErrorWrapperLocal(service.NewBodyCacheCapacityError(c), string(service.BodyCacheCapacityErrorCode), http.StatusServiceUnavailable)
+			} else if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
 				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusRequestEntityTooLarge)
 			} else {
 				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusBadRequest)

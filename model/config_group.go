@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/price_monitor_setting"
 	"gorm.io/gorm"
 )
@@ -23,6 +24,19 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "performance_setting":
+		draft, err := performance_setting.ParsePerformanceUpdate(values)
+		if err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		performance_setting.ReplacePerformanceSetting(draft)
+
 	case "group_retry_status_setting":
 		draft, err := operation_setting.ParseGroupRetryStatusUpdate(values)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
@@ -81,7 +82,8 @@ func DeleteHistoryRequestLogs(c *gin.Context) {
 	}
 	count, err := model.DeleteOldRequestLog(targetTimestamp)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "failed to delete request logs: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDeleteFailed)
 		return
 	}
 	common.ApiSuccess(c, count)
@@ -92,7 +94,8 @@ func DeleteHistoryRequestLogs(c *gin.Context) {
 func ClearAllRequestLogs(c *gin.Context) {
 	count, err := model.ClearAllRequestLogs()
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "failed to clear request logs: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDeleteFailed)
 		return
 	}
 	common.ApiSuccess(c, count)

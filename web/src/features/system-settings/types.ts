@@ -341,6 +341,7 @@ export type PriceMonitorResultsResponse = {
 export type UpdateOptionGroupRequest = {
   scope?: string
   module:
+    | 'performance_setting'
     | 'group_retry_status_setting'
     | 'rate_limit_setting'
     | 'db_pool_setting'
@@ -868,6 +869,9 @@ export type OperationsSettings = {
   RequestLogMaxBodyKB: number
   RequestLogMinCount: number
   RequestLogMaxCount: number
+  'request_log_setting.clear_on_restart': boolean
+  'performance_setting.body_governance_enabled': boolean
+  'performance_setting.body_memory_budget_mb': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number

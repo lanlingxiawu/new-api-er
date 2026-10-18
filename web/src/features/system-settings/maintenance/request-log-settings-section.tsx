@@ -61,6 +61,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const requestLogSchema = z
   .object({
     RequestLogEnabled: z.boolean(),
+    RequestLogClearOnRestart: z.boolean(),
     RequestLogUsername: z.string(),
     RequestLogMaxBodyKB: z.number().int().min(1).max(10240),
     RequestLogMinCount: z.number().int().min(0),
@@ -120,6 +121,15 @@ export function RequestLogSettingsSection({
 
   const onSubmit = async (values: RequestLogFormValues) => {
     const updates: Array<{ key: string; value: string | boolean | number }> = []
+
+    if (
+      values.RequestLogClearOnRestart !== defaultValues.RequestLogClearOnRestart
+    ) {
+      updates.push({
+        key: 'request_log_setting.clear_on_restart',
+        value: values.RequestLogClearOnRestart,
+      })
+    }
 
     if (values.RequestLogEnabled !== defaultValues.RequestLogEnabled) {
       updates.push({
@@ -188,6 +198,32 @@ export function RequestLogSettingsSection({
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RequestLogClearOnRestart'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>
+                    {t('Clear historical request log files on restart')}
+                  </FormLabel>
+                  <FormDescription>
+                    {t(
+                      'After saving, each restart deletes historical request log files and their list index on this machine. Saving does not delete logs immediately. When off, regular cleanup still applies.'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={updateOption.isPending}
                   />
                 </FormControl>
               </SettingsSwitchItem>
@@ -270,7 +306,7 @@ export function RequestLogSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'When request logs exceed the max count, older entries are dropped and only the newest min count is kept. The list index lives in memory and body files live in the relay_log directory; without Redis the index is lost on restart.'
+                    'When request logs exceed the max count, only the newest min count is kept. Unless restart cleanup is enabled, historical logs are restored from local files after restart, without requiring Redis.'
                   )}
                 </FormDescription>
                 <FormMessage />
