@@ -201,12 +201,20 @@ func UpdateOptionGroup(c *gin.Context) {
 	applied, err := model.SaveConfigGroup(request.Module, request.Values)
 	if err != nil {
 		logger.LogError(c, "failed to update configuration group: "+err.Error())
+		if errors.Is(err, operation_setting.ErrGroupRetryGuardInvalid) {
+			common.ApiErrorI18n(c, i18n.MsgGroupRetryGuardInvalid)
+			return
+		}
 		if errors.Is(err, operation_setting.ErrGroupRetryStatusInvalid) {
 			common.ApiErrorI18n(c, i18n.MsgGroupRetryStatusInvalid)
 			return
 		}
 		if errors.Is(err, operation_setting.ErrRelayErrorDisplayInvalid) {
 			respondRelayErrorDisplayInvalid(c, err)
+			return
+		}
+		if request.Module == "group_retry_policy" || request.Module == "group_retry_guard_setting" {
+			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 			return
 		}
 		if !applied {
@@ -604,6 +612,15 @@ func UpdateOption(c *gin.Context) {
 		if errors.Is(err, operation_setting.ErrRelayErrorDisplayInvalid) {
 			logger.LogError(c, "failed to update option: "+err.Error())
 			respondRelayErrorDisplayInvalid(c, err)
+			return
+		}
+		if option.Key == "GroupRetryTimes" || strings.HasPrefix(option.Key, "group_retry_guard_setting.") {
+			logger.LogError(c, "failed to update group retry protection: "+err.Error())
+			if errors.Is(err, operation_setting.ErrGroupRetryGuardInvalid) {
+				common.ApiErrorI18n(c, i18n.MsgGroupRetryGuardInvalid)
+			} else {
+				common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			}
 			return
 		}
 		if strings.HasPrefix(option.Key, "group_retry_status_setting.") {

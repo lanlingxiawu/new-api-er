@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
@@ -18,7 +19,12 @@ func publishModelPricingOptions(values map[string]string) error {
 	keys := make([]string, 0, len(values))
 	billing := map[string]string{}
 	performance := map[string]string{}
+	guard := map[string]string{}
 	for key, value := range values {
+		if field, ok := strings.CutPrefix(key, "group_retry_guard_setting."); ok {
+			guard[field] = value
+			continue
+		}
 		if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
 			performance[field] = value
 			continue
@@ -30,10 +36,31 @@ func publishModelPricingOptions(values map[string]string) error {
 		keys = append(keys, key)
 	}
 	var performanceErr error
+	if len(guard) > 0 {
+		revision, hasRevision := guard["revision"]
+		delete(guard, "revision")
+		draft, err := operation_setting.ParseGroupRetryGuardUpdate(guard)
+		if err != nil {
+			performanceErr = err
+		} else {
+			if hasRevision {
+				draft.Revision = revision
+			}
+			operation_setting.ReplaceGroupRetryGuardSetting(draft)
+			common.OptionMapRWMutex.Lock()
+			for field, value := range guard {
+				common.OptionMap["group_retry_guard_setting."+field] = value
+			}
+			if hasRevision {
+				common.OptionMap["group_retry_guard_setting.revision"] = revision
+			}
+			common.OptionMapRWMutex.Unlock()
+		}
+	}
 	if len(performance) > 0 {
 		draft, err := performance_setting.ParsePerformanceUpdate(performance)
 		if err != nil {
-			performanceErr = err
+			performanceErr = errors.Join(performanceErr, err)
 		} else {
 			performance_setting.ReplacePerformanceSetting(draft)
 			common.OptionMapRWMutex.Lock()

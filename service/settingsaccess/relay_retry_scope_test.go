@@ -56,7 +56,12 @@ func TestGroupRetryTimesScope(t *testing.T) {
 		"GroupRetryTimes":                    {},
 		"group_retry_status_setting.enabled": {},
 		"group_retry_status_setting.rules":   {},
+		"group_retry_guard_setting.enabled":  {},
+		"group_retry_guard_setting.rules":    {},
 	}, keys)
+	assert.True(t, AllowsGroup("system-tuning.group-retry-times", "group_retry_policy", map[string]string{"times": "{}", "status_enabled": "true", "status_rules": "{}", "guard_enabled": "true", "guard_rules": "{}"}))
+	assert.False(t, AllowsGroup("system-tuning.relay-timeout", "group_retry_policy", map[string]string{"times": "{}"}))
+	assert.False(t, AllowsOption("system-tuning.group-retry-times", "group_retry_guard_setting.revision"))
 	assert.True(t, AllowsGroup("system-tuning.group-retry-times", "group_retry_status_setting", map[string]string{"enabled": "true", "rules": "{}"}))
 	assert.False(t, AllowsGroup("system-tuning.relay-timeout", "group_retry_status_setting", map[string]string{"enabled": "true"}))
 

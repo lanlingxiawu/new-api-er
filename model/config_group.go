@@ -24,6 +24,12 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "group_retry_policy", "group_retry_times", "group_retry_guard_setting":
+		var err error
+		prefixed, err = saveGroupRetryPolicy(module, values)
+		if err != nil {
+			return false, err
+		}
 	case "performance_setting":
 		draft, err := performance_setting.ParsePerformanceUpdate(values)
 		if err != nil {

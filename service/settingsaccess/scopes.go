@@ -127,5 +127,10 @@ func buildDefinitions() map[string]Definition {
 	routing := result["models.routing-reliability"]
 	routing.OptionKeys["probe_routing_setting.max_input_chars"] = struct{}{}
 	routing.GroupKeys["probe_routing_setting"] = keys("max_input_chars")
+	retry := result["system-tuning.group-retry-times"]
+	retry.OptionKeys["group_retry_guard_setting.enabled"] = struct{}{}
+	retry.OptionKeys["group_retry_guard_setting.rules"] = struct{}{}
+	retry.GroupKeys["group_retry_guard_setting"] = keys("enabled", "rules")
+	retry.GroupKeys["group_retry_policy"] = keys("times", "status_enabled", "status_rules", "guard_enabled", "guard_rules")
 	return result
 }

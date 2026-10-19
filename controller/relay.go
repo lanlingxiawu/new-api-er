@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/retryguard"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -323,8 +324,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
+		guardEligible := relayInfo.LastError == newAPIError && service.ClaimGroupRetryGuardSample(c, relayInfo, false)
 		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
+			perfmetrics.RecordRelaySample(relayInfo, false, 0, guardEligible)
 		})
 	}
 }
@@ -417,6 +419,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	if service.GroupRetryGuardDisabled(c) {
+		return false
+	}
 	if openaiErr == nil {
 		return false
 	}
@@ -690,6 +695,10 @@ func RelayTask(c *gin.Context) {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
 		service.LogTaskConsumption(c, relayInfo)
+		if operation_setting.GroupRetryGuardSnapshot().Enabled && c.Request.Context().Err() == nil {
+			now := time.Now()
+			retryguard.Observe(relayInfo.UsingGroup, now.Sub(relayInfo.StartTime).Milliseconds(), now.Unix())
+		}
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
@@ -716,6 +725,10 @@ func RelayTask(c *gin.Context) {
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+		if operation_setting.GroupRetryGuardSnapshot().Enabled && !taskErr.LocalError && c.Request.Context().Err() == nil {
+			now := time.Now()
+			retryguard.Observe(relayInfo.UsingGroup, now.Sub(relayInfo.StartTime).Milliseconds(), now.Unix())
+		}
 	}
 }
 
@@ -733,6 +746,9 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
+	if service.GroupRetryGuardDisabled(c) {
+		return false
+	}
 	if taskErr == nil {
 		return false
 	}

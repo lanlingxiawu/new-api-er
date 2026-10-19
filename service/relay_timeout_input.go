@@ -13,6 +13,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
@@ -258,10 +259,12 @@ func relayUpstreamSentState(c *gin.Context, create bool) *relayUpstreamSent {
 	return state
 }
 
-// relayUpstreamWroteRequestTrace starts tracking a managed request's main
-// upstream exchange; nil when the request is not managed.
+// relayUpstreamWroteRequestTrace tracks the main upstream exchange for timeout
+// billing or retry protection. Provider error codes alone cannot prove that an
+// unmanaged request reached upstream. Both features share this request-local
+// marker and callback; no additional I/O or timer is needed.
 func relayUpstreamWroteRequestTrace(c *gin.Context) func(httptrace.WroteRequestInfo) {
-	if !IsRelayTimeoutManaged(c) {
+	if c == nil || (!IsRelayTimeoutManaged(c) && !operation_setting.GroupRetryGuardSnapshot().Enabled) {
 		return nil
 	}
 	exchange := &relayUpstreamExchange{}

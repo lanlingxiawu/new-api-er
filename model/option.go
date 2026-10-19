@@ -419,6 +419,14 @@ func normalizeStoredUserGroupRatioCacheMax(value string) string {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == "GroupRetryTimes" {
+		_, err := SaveConfigGroup("group_retry_times", map[string]string{"times": value})
+		return err
+	}
+	if field, ok := strings.CutPrefix(key, "group_retry_guard_setting."); ok {
+		_, err := SaveConfigGroup("group_retry_guard_setting", map[string]string{field: value})
+		return err
+	}
 	if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
 		_, err := SaveConfigGroup("performance_setting", map[string]string{field: value})
 		return err

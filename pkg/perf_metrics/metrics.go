@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/retryguard"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 )
@@ -24,7 +25,7 @@ func Init() {
 	go flushLoop()
 }
 
-func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64, guardEligible ...bool) {
 	if info == nil {
 		return
 	}
@@ -43,18 +44,24 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 		generationMs = latencyMs
 	}
 	Record(Sample{
-		Model:        info.OriginModelName,
-		Group:        info.UsingGroup,
-		LatencyMs:    latencyMs,
-		TtftMs:       ttftMs,
-		HasTtft:      hasTtft,
-		Success:      success,
-		OutputTokens: outputTokens,
-		GenerationMs: generationMs,
+		GuardEligible:  len(guardEligible) > 0 && guardEligible[0],
+		GuardLatencyMs: retryGuardLatency(info.IsStream, hasTtft, success, ttftMs, latencyMs),
+		CompletedAt:    now.Unix(),
+		Model:          info.OriginModelName,
+		Group:          info.UsingGroup,
+		LatencyMs:      latencyMs,
+		TtftMs:         ttftMs,
+		HasTtft:        hasTtft,
+		Success:        success,
+		OutputTokens:   outputTokens,
+		GenerationMs:   generationMs,
 	})
 }
 
 func Record(sample Sample) {
+	if sample.GuardEligible {
+		retryguard.Observe(sample.Group, sample.GuardLatencyMs, sample.CompletedAt)
+	}
 	setting := perf_metrics_setting.GetSetting()
 	if !setting.Enabled || sample.Model == "" {
 		return

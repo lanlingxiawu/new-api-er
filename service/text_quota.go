@@ -641,7 +641,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// 我方超时的非流式请求：控制器会按失败记一次样本，这里不再按成功重复记。
 		return
 	}
+	guardEligible := ClaimGroupRetryGuardSample(ctx, relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed)
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, relayInfo.StreamResult == nil || !relayInfo.StreamResult.Failed, int64(summary.CompletionTokens), guardEligible)
 	})
 }
