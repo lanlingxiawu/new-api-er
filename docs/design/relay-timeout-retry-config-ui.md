@@ -135,14 +135,14 @@ AI 请求超时
 ```
 
 - 分组下拉的候选来自已有分组列表（与用户抽屉的 `GroupCombobox` 同源），避免手输错分组名产生永不生效的配置；
-- 次数输入沿用用户抽屉里 `TimeoutOverrideField` 的数字输入语义（`-1` / `0` / 正整数），`min=-1`、`max=20`（与后端 `MaxGroupRetryTimes` 一致）。输入框内容按原始文本保存、保存时再解析：数字输入框在只键入 `-` 时上报空串，若立即转成数字会被改写成 `0`，`-1` 就无法手动输入；
+- 次数输入沿用用户抽屉里 `TimeoutOverrideField` 的数字输入语义（`-1` / `0` / 正整数），`min=-1`、`max=10`（与后端 `MaxGroupRetryTimes` 一致）。输入框内容按原始文本保存、保存时再解析：数字输入框在只键入 `-` 时上报空串，若立即转成数字会被改写成 `0`，`-1` 就无法手动输入；
 - 每行下方一句取值说明：`-1` 不重试（该分组只尝试一次）、`0` 跟随系统默认。切组沿用 main 语义，配额为 0 时不会切到下一组（见 [relay-retry-time-budget.md](relay-retry-time-budget.md) 第 22 节），所以文案不提切组。
 
 ### 4.3 保存
 
 复用既有单键保存：`useUpdateOption()` → `PUT /api/option`，key `GroupRetryTimes`，value 为 JSON 字符串。后端 `controller/option.go` 已有 `CheckGroupRetryTimes` 校验分支，`model/option.go` 已有 `UpdateGroupRetryTimesByJSONString` 落库分支——两者在上一轮已实现，本节不需要后端改动。
 
-前端提交前本地做一次同样的校验（值必须是 `-1` 或 `0..20`），把错误在保存前就显示在对应行，而不是等后端返回一句整体错误。
+前端提交前本地做一次同样的校验（值必须是 `-1` 或 `0..10`），把错误在保存前就显示在对应行，而不是等后端返回一句整体错误。
 
 ### 4.4 空值处理
 

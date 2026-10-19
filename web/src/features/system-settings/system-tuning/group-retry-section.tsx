@@ -47,7 +47,7 @@ import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 // Mirrors MaxGroupRetryTimes in setting/operation_setting/group_retry_setting.go.
-const MAX_GROUP_RETRY_TIMES = 20
+const MAX_GROUP_RETRY_TIMES = 10
 const DISABLED = -1
 const WHOLE_NUMBER = /^-?\d+$/
 const RETRY_TIMES_PRESETS: NumericPreset[] = [

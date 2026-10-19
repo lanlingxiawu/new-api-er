@@ -147,7 +147,8 @@ func TestCheckGroupRetryTimes(t *testing.T) {
 		`{"a":0}`,
 		`{"a":-1}`,
 		`{"a":1}`,
-		`{"a":20}`,
+		`{"a":9}`,
+		`{"a":10}`,
 		`{"a":5,"b":-1,"c":0}`,
 	}
 	for _, s := range valid {
@@ -156,6 +157,8 @@ func TestCheckGroupRetryTimes(t *testing.T) {
 
 	invalid := []string{
 		`{"a":-2}`,
+		`{"a":11}`,
+		`{"a":20}`,
 		`{"a":21}`,
 		`{"a":"x"}`,
 		`not json`,
@@ -522,9 +525,9 @@ func TestGroupRetryTimesAcceptsUIPayloads(t *testing.T) {
 			assert.Equal(t, -1, v)
 			assert.Equal(t, 0, ResolveRetryTimes(RetryTimesInherit, "official", 3))
 		}},
-		{"mixed rows", `{"a":0,"b":20,"c":-1}`, func(t *testing.T) {
+		{"mixed rows", `{"a":0,"b":10,"c":-1}`, func(t *testing.T) {
 			assert.Equal(t, 3, ResolveRetryTimes(RetryTimesInherit, "a", 3), "0 inherits")
-			assert.Equal(t, 20, ResolveRetryTimes(RetryTimesInherit, "b", 3))
+			assert.Equal(t, 10, ResolveRetryTimes(RetryTimesInherit, "b", 3))
 			assert.Equal(t, 0, ResolveRetryTimes(RetryTimesInherit, "c", 3))
 		}},
 	}
@@ -538,10 +541,10 @@ func TestGroupRetryTimesAcceptsUIPayloads(t *testing.T) {
 	}
 }
 
-// The UI clamps to [-1, 20]; the backend must reject anything outside that so a
+// The UI accepts [-1, 10]; the backend must reject anything outside that so a
 // hand-crafted request cannot install an unbounded per-group quota.
 func TestGroupRetryTimesRejectsOutOfUIRange(t *testing.T) {
-	for _, payload := range []string{`{"a":21}`, `{"a":-2}`, `{"a":100}`} {
+	for _, payload := range []string{`{"a":11}`, `{"a":20}`, `{"a":21}`, `{"a":-2}`, `{"a":100}`} {
 		assert.Error(t, operation_setting.CheckGroupRetryTimes(payload), payload)
 	}
 }
