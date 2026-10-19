@@ -343,6 +343,7 @@ export type UpdateOptionGroupRequest = {
   module:
     | 'performance_setting'
     | 'group_retry_status_setting'
+    | 'group_retry_policy'
     | 'rate_limit_setting'
     | 'db_pool_setting'
     | 'user_session_setting'
@@ -892,6 +893,8 @@ export type SystemTuningSettings = {
   GroupRetryTimes: string
   'group_retry_status_setting.enabled': boolean
   'group_retry_status_setting.rules': string
+  'group_retry_guard_setting.enabled': boolean
+  'group_retry_guard_setting.rules': string
   'relay_timeout_setting.enabled': boolean
   'relay_timeout_setting.response_timeout_seconds': number
   'relay_timeout_setting.total_timeout_seconds': number

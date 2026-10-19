@@ -255,6 +255,4 @@ Main Chain Impact：额外操作仅为未启用超时管理且保护开启的请
 - 通过：新功能 PostgreSQL 专项（配置事务、热加载、权限、原次数/状态码兼容、采集资格），retryguard/perf_metrics/operation_setting/settingsaccess/relay-common/router 包测试，root `go build ./...`，相关包 vet；前端 typecheck、修改文件 lint、生产 build。
 - 基准：本机 Ryzen 7 8700G，保护快照判断约 20.16 ns/op，队列已满时投递约 13.36 ns/op，均 0 B/op、0 allocs/op。这是局部基准，不代表已做 100k RPM 真实部署压测。
 - 扩大数据库回归遇到已有问题：PostgreSQL channels JSON 字段空字符串夹具失败；MySQL user_extensions.extra TEXT 默认值迁移失败。两者均已在未修改基线 `2536ecb29` 独立 worktree 复现，本次不修改既有测试/模型来掩盖失败。新增相关测试在临时 PostgreSQL 与配置专用 SQLite fixture 中通过。
-- Windows 当前没有可用的 GCC，未运行 race detector；未访问真实 AI 提供商。后续按用户要求部署至香港测试服务器，健康与静态资源校验通过，自动保护仍关闭；详见验证说明。
-
-详细验证说明：[分组重试保护验证](group-retry-auto-protection-validation.md)。
+- Windows 当前没有可用的 GCC，未运行 race detector；未访问真实 AI 提供商。

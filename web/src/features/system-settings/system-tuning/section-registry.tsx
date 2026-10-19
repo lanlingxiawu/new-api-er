@@ -570,6 +570,8 @@ const SYSTEM_TUNING_SECTIONS = [
         value={settings.GroupRetryTimes ?? ''}
         statusRules={settings['group_retry_status_setting.rules'] ?? '{}'}
         statusEnabled={settings['group_retry_status_setting.enabled'] ?? false}
+        guardRules={settings['group_retry_guard_setting.rules'] ?? '{}'}
+        guardEnabled={settings['group_retry_guard_setting.enabled'] ?? false}
       />
     ),
   },

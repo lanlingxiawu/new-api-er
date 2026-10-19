@@ -140,6 +140,8 @@ AI 请求超时
 
 ### 4.3 保存
 
+2026-10-19 更新：分组次数、状态码和自动保护现在共用一个保存按钮，通过 `group_retry_policy` 配置组事务一起提交，失败保留草稿。下文单键保存为原始设计记录，旧接口仍兼容；当前实现见 [分组重试自动保护](group-retry-auto-protection.md)。
+
 复用既有单键保存：`useUpdateOption()` → `PUT /api/option`，key `GroupRetryTimes`，value 为 JSON 字符串。后端 `controller/option.go` 已有 `CheckGroupRetryTimes` 校验分支，`model/option.go` 已有 `UpdateGroupRetryTimesByJSONString` 落库分支——两者在上一轮已实现，本节不需要后端改动。
 
 前端提交前本地做一次同样的校验（值必须是 `-1` 或 `0..10`），把错误在保存前就显示在对应行，而不是等后端返回一句整体错误。
