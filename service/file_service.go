@@ -203,10 +203,7 @@ func loadFromURL(c *gin.Context, url string, reason ...string) (*types.CachedFil
 		} else {
 			cachedData = types.NewDiskCachedData(diskPath, mimeType, int64(len(fileBytes)))
 			cachedData.DiskSize = base64Size
-			cachedData.OnClose = func(size int64) {
-				common.DecrementDiskFiles(size)
-			}
-			common.IncrementDiskFiles(base64Size)
+			cachedData.RemoveFile = common.RemoveDiskCacheFile
 			if common.DebugEnabled {
 				logger.LogDebug(c, "File cached to disk: %s, size: %d bytes", diskPath, base64Size)
 			}
@@ -360,10 +357,7 @@ func loadFromBase64(base64String string, providedMimeType string) (*types.Cached
 		} else {
 			cachedData = types.NewDiskCachedData(diskPath, mimeType, int64(len(decodedData)))
 			cachedData.DiskSize = base64Size
-			cachedData.OnClose = func(size int64) {
-				common.DecrementDiskFiles(size)
-			}
-			common.IncrementDiskFiles(base64Size)
+			cachedData.RemoveFile = common.RemoveDiskCacheFile
 		}
 	} else {
 		cachedData = types.NewMemoryCachedData(cleanBase64, mimeType, int64(len(decodedData)))

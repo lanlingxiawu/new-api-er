@@ -157,6 +157,8 @@ type CachedFileData struct {
 	statDecremented bool       // 是否已扣减统计
 
 	OnClose func(size int64)
+	// RemoveFile lets the owning application release its file lease.
+	RemoveFile func(path string) error
 }
 
 func NewMemoryCachedData(base64Data string, mimeType string, size int64) *CachedFileData {
@@ -215,15 +217,24 @@ func (c *CachedFileData) Close() error {
 	c.diskMu.Lock()
 	defer c.diskMu.Unlock()
 
-	if c.diskClosed {
+	if c.diskClosed && c.statDecremented {
 		return nil
 	}
 
 	c.diskClosed = true
 	if c.diskPath != "" {
-		err := os.Remove(c.diskPath)
-		if err == nil && !c.statDecremented && c.OnClose != nil {
-			c.OnClose(c.DiskSize)
+		remove := c.RemoveFile
+		if remove == nil {
+			remove = os.Remove
+		}
+		err := remove(c.diskPath)
+		if os.IsNotExist(err) {
+			err = nil
+		}
+		if err == nil && !c.statDecremented {
+			if c.OnClose != nil {
+				c.OnClose(c.DiskSize)
+			}
 			c.statDecremented = true
 		}
 		return err

@@ -8,14 +8,17 @@ type Store interface {
 }
 
 type Sample struct {
-	Model        string
-	Group        string
-	LatencyMs    int64
-	TtftMs       int64
-	HasTtft      bool
-	Success      bool
-	OutputTokens int64
-	GenerationMs int64
+	GuardEligible  bool
+	GuardLatencyMs int64
+	CompletedAt    int64
+	Model          string
+	Group          string
+	LatencyMs      int64
+	TtftMs         int64
+	HasTtft        bool
+	Success        bool
+	OutputTokens   int64
+	GenerationMs   int64
 }
 
 type QueryParams struct {

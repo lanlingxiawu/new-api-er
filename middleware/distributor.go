@@ -47,6 +47,10 @@ func Distribute() func(c *gin.Context) {
 		service.AppendTaskPluginIdentityFilter(c, c.GetString("expected_task_plugin_key"))
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
+			if errors.Is(err, common.ErrBodyCacheCapacity) {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgBodyCacheCapacity), service.BodyCacheCapacityErrorCode)
+				return
+			}
 			abortWithOpenAiMessage(c, invalidRequestStatus(err), i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}

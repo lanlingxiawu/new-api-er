@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/retryguard"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
@@ -35,7 +36,7 @@ func Init() {
 
 // RecordRelayResult samples one finished relay exactly once, at the request
 // boundary, regardless of how many channel attempts it took.
-func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError) {
+func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError, guardEligible ...bool) {
 	if info == nil {
 		return
 	}
@@ -58,14 +59,17 @@ func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr 
 		generationMs = latencyMs
 	}
 	Record(Sample{
-		Model:        info.OriginModelName,
-		Group:        info.UsingGroup,
-		LatencyMs:    latencyMs,
-		TtftMs:       ttftMs,
-		HasTtft:      hasTtft,
-		Success:      outcome == OutcomeSuccess,
-		OutputTokens: info.PerformanceOutputTokens,
-		GenerationMs: generationMs,
+		GuardEligible:  len(guardEligible) > 0 && guardEligible[0],
+		GuardLatencyMs: retryGuardLatency(info.IsStream, hasTtft, outcome == OutcomeSuccess, ttftMs, latencyMs),
+		CompletedAt:    now.Unix(),
+		Model:          info.OriginModelName,
+		Group:          info.UsingGroup,
+		LatencyMs:      latencyMs,
+		TtftMs:         ttftMs,
+		HasTtft:        hasTtft,
+		Success:        outcome == OutcomeSuccess,
+		OutputTokens:   info.PerformanceOutputTokens,
+		GenerationMs:   generationMs,
 	})
 }
 
@@ -105,6 +109,9 @@ func RecordTaskResult(task *model.Task, result *relaycommon.TaskInfo) {
 }
 
 func Record(sample Sample) {
+	if sample.GuardEligible {
+		retryguard.Observe(sample.Group, sample.GuardLatencyMs, sample.CompletedAt)
+	}
 	setting := perf_metrics_setting.GetSetting()
 	if !setting.Enabled || sample.Model == "" {
 		return

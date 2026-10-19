@@ -55,6 +55,10 @@ func InitRequestLogStore() {
 	requestLogQueueSize = clampInt(common.GetEnvOrDefault("REQUEST_LOG_MAX_INFLIGHT", defaultRequestLogQueueSize), 1, 1<<20)
 	requestLogSweepInterval = time.Duration(maxInt(common.GetEnvOrDefault("REQUEST_LOG_SWEEP_INTERVAL_SEC", int(defaultRequestLogSweepInterval/time.Second)), 0)) * time.Second
 	closeDefaultRequestLogWriter()
+	reqLogMu.Lock()
+	requestLogCommitted = make(map[string]int64)
+	requestLogRecoveryIncomplete = false
+	reqLogMu.Unlock()
 
 	requestLogRoot = resolveRequestLogRoot()
 	if err := os.MkdirAll(requestLogRoot, requestLogDirPerm); err != nil {

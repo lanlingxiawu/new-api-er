@@ -133,6 +133,9 @@ const OPERATIONS_SECTIONS = [
       <RequestLogSettingsSection
         defaultValues={{
           RequestLogEnabled: Boolean(settings.RequestLogEnabled),
+          RequestLogClearOnRestart: Boolean(
+            settings['request_log_setting.clear_on_restart']
+          ),
           RequestLogUsername: settings.RequestLogUsername ?? '',
           RequestLogMaxBodyKB: Number(settings.RequestLogMaxBodyKB) || 64,
           RequestLogMinCount: Number(settings.RequestLogMinCount) || 1000,
@@ -147,6 +150,10 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <PerformanceSection
         defaultValues={{
+          'performance_setting.body_governance_enabled':
+            settings['performance_setting.body_governance_enabled'] ?? false,
+          'performance_setting.body_memory_budget_mb':
+            settings['performance_setting.body_memory_budget_mb'] ?? 0,
           'performance_setting.disk_cache_enabled':
             settings['performance_setting.disk_cache_enabled'] ?? false,
           'performance_setting.disk_cache_threshold_mb':

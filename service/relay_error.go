@@ -22,6 +22,9 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 	if err == nil {
 		return PolicyDecision{Action: "stop", Reason: "request_completed", Source: "system"}
 	}
+	if GroupRetryGuardDisabled(c) {
+		return PolicyDecision{Action: "stop", Reason: "group_retry_protection", Source: "group"}
+	}
 	if ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		source := RequestPolicy(c).SessionModeSource
 		if source == "" {
@@ -85,7 +88,7 @@ func MessageWithCurrentRequestId(c *gin.Context, message string) string {
 // 参数 c：当前请求上下文；channelError：本次失败渠道的身份及配置快照；err：本次中转错误，nil 时直接返回；relayInfo：本请求中转信息，可为 nil。
 // 仅在失败路径执行：渠道禁用在 gopool 中异步执行，错误日志经 model.RecordErrorLog 进入日志写入管线。
 func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) {
-	if err == nil {
+	if err == nil || err.GetErrorCode() == BodyCacheCapacityErrorCode {
 		return
 	}
 	publicSummary := StreamPublicErrorSummary(c, err)

@@ -39,16 +39,22 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
-import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getGroups } from '../../users/api'
 import { updateSystemOptionGroup } from '../api'
 import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsSection } from '../components/settings-section'
-import type { UpdateOptionGroupRequest } from '../types'
+import {
+  guardDraft,
+  getGroupRetryGuardStatus,
+  parseGuardDraft,
+  type GuardDraft,
+  type GuardRule,
+} from './group-retry-guard'
+import { GroupRetryGuardFields } from './group-retry-guard-fields'
 
 // Mirrors MaxGroupRetryTimes in setting/operation_setting/group_retry_setting.go.
-const MAX_GROUP_RETRY_TIMES = 20
+const MAX_GROUP_RETRY_TIMES = 10
 const DISABLED = -1
 const WHOLE_NUMBER = /^-?\d+$/
 const RETRY_TIMES_PRESETS: NumericPreset[] = [
@@ -65,14 +71,20 @@ type Row = {
   times: string
   statusMode: 'inherit' | 'custom' | 'none'
   statusCodes: string
+  guard?: GuardDraft
 }
 
-function parseRows(raw: string, statusRaw: string): Row[] {
+function parseRows(raw: string, statusRaw: string, guardRaw: string): Row[] {
   try {
     const parsed = JSON.parse(raw || '{}') as Record<string, number>
     const statuses = JSON.parse(statusRaw || '{}') as Record<string, string>
+    const guards = JSON.parse(guardRaw || '{}') as Record<string, GuardRule>
     const groups = [
-      ...new Set([...Object.keys(parsed), ...Object.keys(statuses)]),
+      ...new Set([
+        ...Object.keys(parsed),
+        ...Object.keys(statuses),
+        ...Object.keys(guards),
+      ]),
     ]
     return groups.map((group, index) => {
       let statusMode: Row['statusMode'] = 'inherit'
@@ -85,6 +97,7 @@ function parseRows(raw: string, statusRaw: string): Row[] {
         times: String(parsed[group] ?? 0),
         statusMode,
         statusCodes: statuses[group] ?? '',
+        guard: guards[group] ? guardDraft(guards[group]) : undefined,
       }
     })
   } catch {
@@ -106,42 +119,78 @@ export function GroupRetrySection(props: {
   value: string
   statusRules: string
   statusEnabled: boolean
+  guardRules: string
+  guardEnabled: boolean
 }) {
   const { t } = useTranslation()
   const { scope } = useSettingsPageAccess()
   const queryClient = useQueryClient()
   const [rows, setRows] = useState<Row[]>(() =>
-    parseRows(props.value, props.statusRules)
+    parseRows(props.value, props.statusRules, props.guardRules)
   )
   const [enabled, setEnabled] = useState(props.statusEnabled)
-  const [nextId, setNextId] = useState(
-    () => parseRows(props.value, props.statusRules).length
+  const [guardEnabled, setGuardEnabled] = useState(props.guardEnabled)
+  const [openGroupId, setOpenGroupId] = useState<number | null>(null)
+  const [submitted, setSubmitted] = useState(false)
+  const [removed, setRemoved] = useState<{ row: Row; index: number } | null>(
+    null
   )
-  const dirty = useRef({ counts: false, statuses: false })
+  const [nextId, setNextId] = useState(
+    () => parseRows(props.value, props.statusRules, props.guardRules).length
+  )
+  const dirty = useRef(false)
 
   useEffect(() => {
-    // A background refresh must not erase unsaved edits.
-    if (dirty.current.counts || dirty.current.statuses) return
-    const parsed = parseRows(props.value, props.statusRules)
+    if (dirty.current) return
+    const parsed = parseRows(props.value, props.statusRules, props.guardRules)
     setRows(parsed)
     setNextId(parsed.length)
     setEnabled(props.statusEnabled)
-  }, [props.value, props.statusRules, props.statusEnabled])
+    setGuardEnabled(props.guardEnabled)
+  }, [
+    props.value,
+    props.statusRules,
+    props.statusEnabled,
+    props.guardRules,
+    props.guardEnabled,
+  ])
 
   const saveMutation = useMutation({
-    mutationFn: async (request: UpdateOptionGroupRequest) =>
-      requireServerSuccess(
-        await updateSystemOptionGroup({ ...request, scope })
-      ),
+    mutationFn: (values: Record<string, string>) =>
+      updateSystemOptionGroup({
+        scope,
+        module: 'group_retry_policy',
+        values,
+      }),
     onSuccess: (response) => {
-      if (!response.success) return
-      dirty.current = { counts: false, statuses: false }
+      if (!response.success || !response.data?.applied) {
+        toast.error(
+          response.message ||
+            t(
+              'Could not save retry settings. Your changes are kept; please try again.'
+            )
+        )
+        return
+      }
+      dirty.current = false
+      setSubmitted(false)
+      setRemoved(null)
       queryClient.invalidateQueries({ queryKey: ['system-options', scope] })
-      toast.success(t('Saved successfully'))
+      queryClient.invalidateQueries({
+        queryKey: ['group-retry-guard-status', scope],
+      })
+      toast.success(t('Retry settings saved'))
     },
     onError: (error) => handleServerError(error),
   })
   const busy = saveMutation.isPending
+  const statusQuery = useQuery({
+    queryKey: ['group-retry-guard-status', scope],
+    queryFn: () =>
+      getGroupRetryGuardStatus(scope ?? 'system-tuning.group-retry-times'),
+    enabled: props.guardEnabled,
+    refetchInterval: 5000,
+  })
 
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
@@ -170,6 +219,10 @@ export function GroupRetrySection(props: {
     }
     return dupes
   }, [rows])
+  const selectedGroups = useMemo(
+    () => new Set(rows.map((row) => row.group).filter(Boolean)),
+    [rows]
+  )
 
   const rowError = (row: Row): string => {
     if (!row.group) return t('Select a group.')
@@ -177,14 +230,12 @@ export function GroupRetrySection(props: {
     if (!WHOLE_NUMBER.test(row.times)) return t('Enter a whole number.')
     const times = Number(row.times)
     if (times < DISABLED || times > MAX_GROUP_RETRY_TIMES) {
-      return t('Must be -1, or between 0 and 20.')
+      return t('Must be -1, or between 0 and 10.')
     }
     return ''
   }
 
   const statusError = (row: Row): string => {
-    if (!row.group) return t('Select a group.')
-    if (duplicates.has(row.group)) return t('This group is already configured.')
     if (row.statusMode !== 'custom') return ''
     const segments = row.statusCodes
       .replaceAll('，', ',')
@@ -207,10 +258,13 @@ export function GroupRetrySection(props: {
   }
 
   const save = () => {
+    setSubmitted(true)
     const error = rows
       .map((row) => rowError(row) || statusError(row))
       .find(Boolean)
     if (error) {
+      const invalidRow = rows.find((row) => rowError(row) || statusError(row))
+      if (invalidRow && !invalidRow.group) setOpenGroupId(invalidRow.id)
       toast.error(error)
       return
     }
@@ -224,20 +278,39 @@ export function GroupRetrySection(props: {
           ])
       )
     )
+    const guardRules: Record<string, GuardRule> = Object.create(null)
+    for (const row of rows) {
+      if (!row.guard) continue
+      const rule = parseGuardDraft(row.guard)
+      if (!rule) {
+        toast.error(
+          t(
+            'Check the protection limits. Maximum cooldown must be at least the initial cooldown.'
+          )
+        )
+        return
+      }
+      guardRules[row.group] = rule
+    }
+    const values = {
+      times: JSON.stringify(
+        Object.fromEntries(rows.map((row) => [row.group, Number(row.times)]))
+      ),
+      status_enabled: String(enabled),
+      status_rules: rules,
+      guard_enabled: String(guardEnabled),
+      guard_rules: JSON.stringify(guardRules),
+    }
     if (
-      rows.filter((row) => row.statusMode !== 'inherit').length > 256 ||
-      new TextEncoder().encode(rules).length > 65536
+      rows.length > 256 ||
+      Object.values(values).some(
+        (value) => new TextEncoder().encode(value).length > 65536
+      )
     ) {
       toast.error(t('Retry rules must fit within 64 KiB and 256 groups.'))
       return
     }
-    saveMutation.mutate({
-      module: 'group_retry_status_setting',
-      group_retry_times: JSON.stringify(
-        Object.fromEntries(rows.map((row) => [row.group, Number(row.times)]))
-      ),
-      values: { enabled: String(enabled), rules },
-    })
+    saveMutation.mutate(values)
   }
 
   return (
@@ -254,7 +327,7 @@ export function GroupRetrySection(props: {
             checked={enabled}
             disabled={busy}
             onCheckedChange={(checked) => {
-              dirty.current.statuses = true
+              dirty.current = true
               setEnabled(checked)
             }}
           />
@@ -273,33 +346,71 @@ export function GroupRetrySection(props: {
           )}
         </p>
 
+        <div className='flex items-center gap-3'>
+          <Switch
+            id='group-retry-guard-enabled'
+            checked={guardEnabled}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              dirty.current = true
+              setGuardEnabled(checked)
+            }}
+          />
+          <Label htmlFor='group-retry-guard-enabled'>
+            {t('Enable automatic retry protection')}
+          </Label>
+        </div>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'When both the RPM and slow-response count reach their thresholds, retries pause and recover after cooldown. First attempts remain available.'
+          )}
+        </p>
+        {guardEnabled && (
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Uses completed monitoring samples. Streams use first-response delay; other requests use total response time. Long streams are counted when they finish. Redis is required.'
+            )}
+          </p>
+        )}
+
         {rows.length === 0 && (
           <p className='text-muted-foreground text-sm'>
             {t('No group overrides. Every group follows the system default.')}
           </p>
         )}
 
-        <div className='space-y-3'>
+        <div className='flex flex-col gap-4'>
           {rows.map((row) => {
-            const error = rowError(row)
+            const error = row.group || submitted ? rowError(row) : ''
             const hint = describeTimes(row.times, t)
+            const availableGroups = groups.filter(
+              (group) => group === row.group || !selectedGroups.has(group)
+            )
             return (
-              <div className='space-y-1' key={row.id}>
+              <section
+                className='bg-card flex flex-col gap-3 rounded-lg border p-4'
+                key={row.id}
+                aria-label={row.group || t('Select a group')}
+              >
                 <div className='flex flex-wrap items-end gap-3'>
-                  <div className='flex min-w-0 flex-1 flex-col gap-2'>
+                  <div className='flex min-w-48 flex-1 flex-col gap-2'>
                     <Label htmlFor={`group-retry-name-${row.id}`}>
                       {t('Group')}
                     </Label>
                     <Select
-                      items={groups.map((group) => ({
+                      items={availableGroups.map((group) => ({
                         value: group,
                         label: group,
                       }))}
                       value={row.group || null}
+                      open={openGroupId === row.id}
+                      onOpenChange={(open) =>
+                        setOpenGroupId(open ? row.id : null)
+                      }
                       disabled={busy}
                       onValueChange={(next) => {
                         if (next === null) return
-                        dirty.current = { counts: true, statuses: true }
+                        dirty.current = true
                         setRows((current) =>
                           current.map((item) =>
                             item.id === row.id ? { ...item, group: next } : item
@@ -315,7 +426,7 @@ export function GroupRetrySection(props: {
                       </SelectTrigger>
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
-                          {groups.map((group) => (
+                          {availableGroups.map((group) => (
                             <SelectItem key={group} value={group}>
                               {group}
                             </SelectItem>
@@ -324,7 +435,7 @@ export function GroupRetrySection(props: {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className='flex w-60 flex-col gap-2'>
+                  <div className='flex w-full flex-col gap-2 sm:w-60'>
                     <Label htmlFor={`group-retry-times-${row.id}`}>
                       {t('Retry attempts')}
                     </Label>
@@ -336,7 +447,7 @@ export function GroupRetrySection(props: {
                       value={row.times}
                       disabled={busy}
                       onChange={(next) => {
-                        dirty.current.counts = true
+                        dirty.current = true
                         setRows((current) =>
                           current.map((item) =>
                             item.id === row.id
@@ -373,7 +484,7 @@ export function GroupRetrySection(props: {
                         ) {
                           return
                         }
-                        dirty.current.statuses = true
+                        dirty.current = true
                         setRows((current) =>
                           current.map((item) =>
                             item.id === row.id
@@ -410,7 +521,7 @@ export function GroupRetrySection(props: {
                         value={row.statusCodes}
                         disabled={busy}
                         onChange={(event) => {
-                          dirty.current.statuses = true
+                          dirty.current = true
                           setRows((current) =>
                             current.map((item) =>
                               item.id === row.id
@@ -428,7 +539,11 @@ export function GroupRetrySection(props: {
                     aria-label={t('Remove')}
                     disabled={busy}
                     onClick={() => {
-                      dirty.current = { counts: true, statuses: true }
+                      dirty.current = true
+                      setRemoved({
+                        row,
+                        index: rows.findIndex((item) => item.id === row.id),
+                      })
                       setRows((current) =>
                         current.filter((item) => item.id !== row.id)
                       )
@@ -447,36 +562,99 @@ export function GroupRetrySection(props: {
                 {statusError(row) && (
                   <p className='text-destructive text-xs'>{statusError(row)}</p>
                 )}
-              </div>
+                {guardEnabled && (
+                  <GroupRetryGuardFields
+                    id={row.id}
+                    value={row.guard ?? guardDraft()}
+                    disabled={busy}
+                    active={props.guardEnabled && !dirty.current}
+                    available={
+                      !statusQuery.isError &&
+                      statusQuery.data?.success === true &&
+                      statusQuery.data.data?.available === true
+                    }
+                    status={statusQuery.data?.data?.groups.find(
+                      (item) => item.group === row.group
+                    )}
+                    onChange={(guard) => {
+                      dirty.current = true
+                      setRows((current) =>
+                        current.map((item) =>
+                          item.id === row.id ? { ...item, guard } : item
+                        )
+                      )
+                    }}
+                  />
+                )}
+              </section>
             )
           })}
         </div>
 
-        <div className='flex items-center justify-between'>
-          <Button
-            variant='outline'
-            disabled={busy}
-            onClick={() => {
-              dirty.current = { counts: true, statuses: true }
-              setRows((current) => [
-                ...current,
-                {
-                  id: nextId,
-                  group: '',
-                  times: '0',
-                  statusMode: 'inherit',
-                  statusCodes: '',
-                },
-              ])
-              setNextId((current) => current + 1)
-            }}
-          >
-            <Plus className='mr-2 size-4' />
-            {t('Add group')}
-          </Button>
-          <Button disabled={busy} onClick={save}>
-            {busy ? t('Saving...') : t('Save changes')}
-          </Button>
+        <div className='flex flex-wrap items-center justify-between gap-3'>
+          <div className='flex flex-wrap gap-2'>
+            <Button
+              variant='outline'
+              disabled={busy}
+              onClick={() => {
+                dirty.current = true
+                setRows((current) => [
+                  ...current,
+                  {
+                    id: nextId,
+                    group: '',
+                    times: '0',
+                    statusMode: 'inherit',
+                    statusCodes: '',
+                  },
+                ])
+                setOpenGroupId(nextId)
+                setNextId((current) => current + 1)
+              }}
+            >
+              <Plus className='mr-2 size-4' />
+              {t('Add group')}
+            </Button>
+            {removed && (
+              <Button
+                variant='outline'
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    removed.row.group &&
+                    selectedGroups.has(removed.row.group)
+                  ) {
+                    toast.error(t('This group is already configured.'))
+                    return
+                  }
+                  dirty.current = true
+                  setRows((current) => {
+                    const restored = [...current]
+                    restored.splice(
+                      Math.min(removed.index, restored.length),
+                      0,
+                      { ...removed.row, id: nextId }
+                    )
+                    return restored
+                  })
+                  setNextId((current) => current + 1)
+                  setRemoved(null)
+                }}
+              >
+                {t('Undo removal')}
+              </Button>
+            )}
+          </div>
+          <div className='flex flex-wrap items-center gap-3'>
+            {dirty.current && (
+              <span className='text-muted-foreground text-xs'>
+                {t('Unsaved changes')}
+              </span>
+            )}
+            <Button disabled={busy || !dirty.current} onClick={save}>
+              {busy ? t('Saving...') : t('Save')}
+            </Button>
+          </div>
         </div>
       </div>
     </SettingsSection>

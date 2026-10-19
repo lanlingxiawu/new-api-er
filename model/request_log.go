@@ -15,8 +15,8 @@ import (
 // 仅供超级管理员排查使用，写入受 common.RequestLogEnabled / RequestLogUsername 控制。
 //
 // 存储分两层：列表所需的元字段常驻进程内存（本文件的索引），完整正文写本机磁盘
-// （request_log_store.go）。不写数据库，也不再写 Redis —— Redis 只在进程首尾各用
-// 一次做索引快照（request_log_snapshot.go）。
+// （request_log_store.go）。不写数据库；本地恢复检查点与正文尾部扫描负责跨重启恢复，
+// 不再依赖 Redis 关停快照（request_log_recovery.go）。
 type RequestLog struct {
 	Id         int    `json:"id"`
 	CreatedAt  int64  `json:"created_at"`
@@ -140,9 +140,21 @@ func appendRequestLogIndexBatch(entries []requestLogIndexEntry) {
 	reqLogMu.Lock()
 	defer reqLogMu.Unlock()
 	for _, entry := range entries {
+		name, offset, length, segment := parseRequestLogRecordRel(entry.rel)
+		if segment {
+			end := offset + int64(length) + 1
+			if end > requestLogCommitted[name] {
+				requestLogCommitted[name] = end
+			}
+		} else {
+			requestLogCommitted[entry.rel] = -1
+		}
 		insertRequestLogIndexLocked(entry)
 	}
 	if len(reqLogItems) > maxCount {
+		if err := saveRequestLogCheckpointLocked(reqLogItems[len(reqLogItems)-minCount:]); err != nil {
+			common.SysError("request log eviction checkpoint failed: " + err.Error())
+		}
 		trimRequestLogIndexLocked(minCount)
 	}
 }
@@ -285,6 +297,7 @@ func GetRequestLogById(id int) (*RequestLog, error) {
 	}
 	// 早于脱敏上线写下的正文文件里 Url 仍是原样；读出时再脱敏一次（幂等）。
 	log.Url = common.RedactURIString(log.Url)
+	log.Id = id // recovered legacy files may have collided with another process's IDs
 	return log, nil
 }
 
@@ -301,6 +314,11 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 		}
 		kept = append(kept, entry)
 	}
+	if err := saveRequestLogCheckpointLocked(kept); err != nil {
+		reqLogMu.Unlock()
+		common.SysError("request log deletion checkpoint failed: " + err.Error())
+		return 0, errors.New("request log deletion could not be saved")
+	}
 	reqLogItems = kept
 	reqLogMu.Unlock()
 
@@ -312,6 +330,11 @@ func DeleteOldRequestLog(targetTimestamp int64) (int64, error) {
 func ClearAllRequestLogs() (int64, error) {
 	reqLogMu.Lock()
 	cleared := int64(len(reqLogItems))
+	if err := saveRequestLogCheckpointLocked(nil); err != nil {
+		reqLogMu.Unlock()
+		common.SysError("request log clear checkpoint failed: " + err.Error())
+		return 0, errors.New("request log deletion could not be saved")
+	}
 	reqLogItems = nil
 	reqLogMu.Unlock()
 

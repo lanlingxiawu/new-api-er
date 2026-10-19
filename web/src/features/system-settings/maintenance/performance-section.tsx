@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -50,23 +51,24 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { ProfilingControls } from '@/features/profiling/components/profiling-controls'
 import { api } from '@/lib/api'
 import { handleServerError } from '@/lib/handle-server-error'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { ProfilingControls } from '@/features/profiling/components/profiling-controls'
-
+import { updateSystemOptionGroup } from '../api'
 import {
   SettingsForm,
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import { CacheGuidance, type CacheGuidanceData } from './cache-guidance'
 
 /**
  * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
@@ -78,6 +80,8 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
  */
 const perfSchema = z.object({
   performance_setting: z.object({
+    body_governance_enabled: z.boolean(),
+    body_memory_budget_mb: z.coerce.number().int().min(0),
     disk_cache_enabled: z.boolean(),
     disk_cache_threshold_mb: z.coerce.number().min(1),
     disk_cache_max_size_mb: z.coerce.number().min(100),
@@ -93,6 +97,8 @@ type PerfFormInput = z.input<typeof perfSchema>
 type PerfFormValues = z.output<typeof perfSchema>
 
 type FlatPerfDefaults = {
+  'performance_setting.body_governance_enabled': boolean
+  'performance_setting.body_memory_budget_mb': number
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number
@@ -105,6 +111,10 @@ type FlatPerfDefaults = {
 
 const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
   performance_setting: {
+    body_governance_enabled:
+      defaults['performance_setting.body_governance_enabled'],
+    body_memory_budget_mb:
+      defaults['performance_setting.body_memory_budget_mb'],
     disk_cache_enabled: defaults['performance_setting.disk_cache_enabled'],
     disk_cache_threshold_mb:
       defaults['performance_setting.disk_cache_threshold_mb'],
@@ -122,6 +132,10 @@ const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
 })
 
 const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
+  'performance_setting.body_governance_enabled':
+    values.performance_setting.body_governance_enabled,
+  'performance_setting.body_memory_budget_mb':
+    values.performance_setting.body_memory_budget_mb,
   'performance_setting.disk_cache_enabled':
     values.performance_setting.disk_cache_enabled,
   'performance_setting.disk_cache_threshold_mb':
@@ -145,7 +159,7 @@ function formatBytes(bytes: number, decimals = 2): string {
   if (bytes === 0) return '0 Bytes'
   if (bytes < 0) return `-${formatBytes(-bytes, decimals)}`
   const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+  const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB']
   const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k))
   if (i < 0 || i >= sizes.length) return `${bytes} Bytes`
   return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${
@@ -158,7 +172,11 @@ interface Props {
 }
 
 type PerformanceStats = {
+  guidance?: CacheGuidanceData
   cache_stats?: {
+    body_memory_reserved_bytes: number
+    body_capacity_rejects: number
+    disk_reserved_bytes: number
     current_disk_usage_bytes: number
     disk_cache_max_bytes: number
     active_disk_files: number
@@ -187,16 +205,26 @@ type PerformanceStats = {
   }
   config?: {
     is_running_in_container: boolean
+    disk_cache_path: string
   }
 }
 
 export function PerformanceSection(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const { scope, canEdit } = useSettingsPageAccess()
+  const queryClient = useQueryClient()
+  const updateOption = useMutation({
+    mutationFn: (values: Record<string, string>) =>
+      updateSystemOptionGroup({ module: 'performance_setting', values, scope }),
+  })
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const isRoot = useAuthStore(
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
+  const [statsLoading, setStatsLoading] = useState(false)
+  const [statsFailed, setStatsFailed] = useState(false)
+  const [receivedAt, setReceivedAt] = useState(0)
+  const statsRequest = useRef(0)
   const [stats, setStats] = useState<PerformanceStats | null>(null)
 
   const formDefaults = useMemo(
@@ -223,15 +251,20 @@ export function PerformanceSection(props: Props) {
   }, [props.defaultValues, form])
 
   const fetchStats = useCallback(async () => {
+    const startedAt = Date.now()
+    const request = ++statsRequest.current
+    setStatsLoading(true)
     try {
-      const res = await api.get('/api/performance/stats')
-      if (res.data.success) {
-        setStats(res.data.data)
-      } else {
-        handleServerError(res.data)
-      }
-    } catch (error) {
-      handleServerError(error)
+      const res = await api.get('/api/performance/stats', { timeout: 10000 })
+      if (request !== statsRequest.current) return
+      if (!res.data.success) throw new Error('stats unavailable')
+      setStats(res.data.data)
+      setReceivedAt(startedAt)
+      setStatsFailed(false)
+    } catch {
+      if (request === statsRequest.current) setStatsFailed(true)
+    } finally {
+      if (request === statsRequest.current) setStatsLoading(false)
     }
   }, [])
 
@@ -240,6 +273,14 @@ export function PerformanceSection(props: Props) {
   }, [fetchStats])
 
   const onSubmit = async (values: PerfFormValues) => {
+    if (!canEdit) return
+    if (
+      values.performance_setting.body_governance_enabled &&
+      values.performance_setting.body_memory_budget_mb <= 0
+    ) {
+      toast.error(t('Set a positive memory budget before enabling protection.'))
+      return
+    }
     const normalized = normalizeFormValues(values)
     const changedKeys = (
       Object.keys(normalized) as Array<keyof FlatPerfDefaults>
@@ -251,12 +292,33 @@ export function PerformanceSection(props: Props) {
     }
 
     await requestSaveConfirmation(async () => {
-      for (const key of changedKeys) {
-        await updateOption.mutateAsync({
-          key,
-          value: normalized[key],
-        })
+      try {
+        const response = await updateOption.mutateAsync(
+          Object.fromEntries(
+            changedKeys.map((key) => [
+              key.replace('performance_setting.', ''),
+              String(normalized[key]),
+            ])
+          )
+        )
+        if (!response.success) {
+          toast.error(t('Save failed'))
+          return
+        }
+        if (response.data?.applied === false) {
+          toast.warning(
+            t('Saved, but this node could not fully apply the settings')
+          )
+          return
+        }
+      } catch {
+        toast.error(t('Save failed'))
+        return
       }
+      toast.success(t('Setting updated successfully'))
+      void queryClient.invalidateQueries({
+        queryKey: ['system-options', scope],
+      })
 
       baselineRef.current = normalized
       baselineSerializedRef.current = JSON.stringify(normalized)
@@ -335,7 +397,10 @@ export function PerformanceSection(props: Props) {
       : 0
 
   return (
-    <SettingsSection title={t('Performance Settings')}>
+    <SettingsSection
+      title={t('Performance Settings')}
+      className='w-full min-w-0'
+    >
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
@@ -347,17 +412,61 @@ export function PerformanceSection(props: Props) {
             <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>
             <p className='text-muted-foreground mt-1 text-xs'>
               {t(
-                'When enabled, large request bodies are temporarily stored on disk instead of memory, significantly reducing memory usage. SSD recommended.'
+                'Request bodies are kept for forwarding and retries, then released when requests finish. This is not model prompt caching and does not change upstream cache-token billing.'
               )}
             </p>
           </div>
 
-          <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
+          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='performance_setting.body_governance_enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem className='max-w-sm self-start'>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable body cache protection')}</FormLabel>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={!canEdit}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.body_memory_budget_mb'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Body memory budget (MiB)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!canEdit}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Limits reserved body-cache buffers, not total process memory. When capacity is exhausted, new allocations may be rejected; active requests are not cleared.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-2'>
             <FormField
               control={form.control}
               name='performance_setting.disk_cache_enabled'
               render={({ field }) => (
-                <SettingsSwitchItem>
+                <SettingsSwitchItem className='max-w-sm md:col-span-2'>
                   <SettingsSwitchContent>
                     <FormLabel>{t('Enable Disk Cache')}</FormLabel>
                   </SettingsSwitchContent>
@@ -375,7 +484,7 @@ export function PerformanceSection(props: Props) {
               name='performance_setting.disk_cache_threshold_mb'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Disk Cache Threshold (MB)')}</FormLabel>
+                  <FormLabel>{t('Disk cache threshold (MiB)')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -386,7 +495,9 @@ export function PerformanceSection(props: Props) {
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Use disk cache when request body exceeds this size')}
+                    {t(
+                      'Bodies reaching this size use disk. Lower values reduce retained memory but increase disk I/O. Units are MiB (1024 KiB).'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -397,7 +508,7 @@ export function PerformanceSection(props: Props) {
               name='performance_setting.disk_cache_max_size_mb'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Max Disk Cache Size (MB)')}</FormLabel>
+                  <FormLabel>{t('Disk cache budget (MiB)')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -407,6 +518,11 @@ export function PerformanceSection(props: Props) {
                       disabled={!diskEnabled}
                     />
                   </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Leave space for databases, logs and files left by previous processes.'
+                    )}
+                  </FormDescription>
                   {stats?.disk_space_info &&
                     stats.disk_space_info.total > 0 && (
                       <FormDescription>
@@ -456,6 +572,36 @@ export function PerformanceSection(props: Props) {
             />
           )}
 
+          <p className='text-muted-foreground max-w-3xl text-xs leading-relaxed'>
+            {t(
+              'With disk cache enabled, memory allocation failures can spill to disk. If the read buffer or disk capacity is unavailable, the request is rejected.'
+            )}
+          </p>
+          <CacheGuidance
+            guidance={stats?.guidance}
+            receivedAt={receivedAt}
+            loading={statsLoading}
+            failed={statsFailed}
+            canEdit={canEdit}
+            pathChanged={
+              form.watch('performance_setting.disk_cache_path') !==
+              (stats?.config?.disk_cache_path ??
+                baselineRef.current['performance_setting.disk_cache_path'])
+            }
+            onRefresh={fetchStats}
+            onApply={(kind, value) => {
+              const fields = {
+                memory: 'body_memory_budget_mb',
+                disk: 'disk_cache_max_size_mb',
+                threshold: 'disk_cache_threshold_mb',
+              } as const
+              form.setValue(`performance_setting.${fields[kind]}`, value, {
+                shouldDirty: true,
+                shouldValidate: true,
+              })
+            }}
+          />
+
           <Separator />
 
           {/* System Performance Monitor */}
@@ -470,12 +616,12 @@ export function PerformanceSection(props: Props) {
             </p>
           </div>
 
-          <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
+          <div className='grid grid-cols-1 items-start gap-x-6 gap-y-4 md:grid-cols-3'>
             <FormField
               control={form.control}
               name='performance_setting.monitor_enabled'
               render={({ field }) => (
-                <SettingsSwitchItem>
+                <SettingsSwitchItem className='max-w-sm md:col-span-3'>
                   <SettingsSwitchContent>
                     <FormLabel>{t('Enable Performance Monitoring')}</FormLabel>
                   </SettingsSwitchContent>
@@ -523,6 +669,11 @@ export function PerformanceSection(props: Props) {
                       disabled={!monitorEnabled}
                     />
                   </FormControl>
+                  <FormDescription>
+                    {t(
+                      'System memory usage threshold, not the body-cache budget. This does not guarantee prevention of OOM.'
+                    )}
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -581,7 +732,7 @@ export function PerformanceSection(props: Props) {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {t(
-                    'This will delete temporary cache files that have not been used for more than 10 minutes'
+                    'Only closed cache files owned by this process are cleaned. Active files and files left by earlier processes are not deleted.'
                   )}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -649,6 +800,16 @@ export function PerformanceSection(props: Props) {
                   {t('Memory Hits')}:{' '}
                   {stats.cache_stats?.memory_cache_hits ?? 0}
                 </StatusBadge>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Reserved body memory')}:{' '}
+                  {formatBytes(
+                    stats.cache_stats?.body_memory_reserved_bytes ?? 0
+                  )}
+                </p>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Reservation failures (including successful fallback)')}:{' '}
+                  {stats.cache_stats?.body_capacity_rejects ?? 0}
+                </p>
               </div>
             </div>
 
@@ -677,7 +838,7 @@ export function PerformanceSection(props: Props) {
             {stats.memory_stats && (
               <div className='rounded-lg border p-4'>
                 <p className='mb-2 text-sm font-medium'>
-                  {t('System Memory Stats')}
+                  {t('Go Runtime Memory')}
                 </p>
                 <div className='grid grid-cols-2 gap-2 text-xs md:grid-cols-5'>
                   <div>
@@ -694,7 +855,7 @@ export function PerformanceSection(props: Props) {
                   </div>
                   <div>
                     <span className='text-muted-foreground'>
-                      {t('System Memory')}:
+                      {t('Go Reserved Memory')}:
                     </span>{' '}
                     {formatBytes(stats.memory_stats.sys)}
                   </div>

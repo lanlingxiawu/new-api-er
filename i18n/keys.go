@@ -1,5 +1,8 @@
 package i18n
 
+const MsgBodyCacheCapacity = "relay.body_cache_capacity"
+const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
+
 const (
 	MsgAbilityDbCorrupted                           = "ability.db_corrupted"
 	MsgAbilityRepairRunning                         = "ability.repair_running"

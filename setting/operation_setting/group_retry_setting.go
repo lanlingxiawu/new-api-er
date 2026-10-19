@@ -14,7 +14,7 @@ const GroupRetryDisabled = -1
 // MaxGroupRetryTimes bounds a single group's quota. It is deliberately much
 // smaller than the total-attempt cap: a group that needs more than this many
 // retries has a health problem that retrying will not fix.
-const MaxGroupRetryTimes = 20
+const MaxGroupRetryTimes = 10
 
 // groupRetryTimesMap holds group name -> retry quota. Absent means "inherit the
 // global RetryTimes"; -1 means "no retry"; a positive value is the quota.

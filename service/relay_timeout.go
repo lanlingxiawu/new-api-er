@@ -509,6 +509,8 @@ func RelayHTTPClient(c *gin.Context, client *http.Client) *http.Client {
 // For every managed request (stream or not) it also records whether the
 // request was written to the upstream in full, which decides whether a
 // timed-out request is billed (relay-timeout-cost-bearing.md §3.2).
+// Retry protection also uses that callback for unmanaged requests, so a
+// provider-defined error code cannot hide a completed upstream failure.
 func RelayResponseTraceContext(c *gin.Context, parent context.Context) context.Context {
 	if c == nil || parent == nil {
 		return parent
@@ -710,6 +712,9 @@ func relayMaxTotalCalls(c *gin.Context) int {
 // resolves is still the previous attempt's — exactly the group whose quota that
 // attempt spent. The first attempt is always allowed (see ShouldAttemptRelay).
 func ContinueRelayAttempts(c *gin.Context, p *RetryParam) bool {
+	if p.TotalAttempts() > 0 && GroupRetryGuardDisabled(c) {
+		return false
+	}
 	maxTotal := relayMaxTotalCalls(c)
 	if !ShouldAttemptRelay(p.GetRetry(), relayRetryQuota(c), p.TotalAttempts(), maxTotal) {
 		return false
@@ -759,6 +764,9 @@ func BeginRelayAttempt(c *gin.Context, p *RetryParam) {
 func ReserveRelayFallbackCall(c *gin.Context) (bool, string) {
 	if c == nil {
 		return false, "relay context is unavailable"
+	}
+	if GroupRetryGuardDisabled(c) {
+		return false, "group retry protection is active"
 	}
 	value, exists := c.Get(relayRetryParamContextKey)
 	if !exists {

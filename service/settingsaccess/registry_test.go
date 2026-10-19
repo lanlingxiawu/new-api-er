@@ -29,6 +29,8 @@ func TestRegistryCoversEverySystemSettingsScope(t *testing.T) {
 }
 
 func TestOptionKeyAllowlist(t *testing.T) {
+	assert.True(t, AllowsOption("operations.performance", "performance_setting.body_governance_enabled"))
+	assert.True(t, AllowsOption("operations.performance", "performance_setting.body_memory_budget_mb"))
 	assert.True(t, AllowsOption("site.notice", "Notice"))
 	assert.False(t, AllowsOption("site.notice", "SystemName"))
 	assert.True(t, AllowsOption("operations.performance", "performance_setting.monitor_enabled"))

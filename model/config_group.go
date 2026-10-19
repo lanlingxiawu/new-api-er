@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/price_monitor_setting"
 	"gorm.io/gorm"
 )
@@ -22,10 +23,10 @@ var ErrGroupRetryTimesInvalid = errors.New("invalid group retry counts")
 func SaveGroupRetryPolicy(times string, values map[string]string) (bool, error) {
 	configGroupMu.Lock()
 	defer configGroupMu.Unlock()
-	return saveGroupRetryPolicy(&times, values)
+	return saveGroupRetryStatusPolicy(&times, values)
 }
 
-func saveGroupRetryPolicy(times *string, values map[string]string) (bool, error) {
+func saveGroupRetryStatusPolicy(times *string, values map[string]string) (bool, error) {
 	if times != nil {
 		if err := operation_setting.CheckGroupRetryTimes(*times); err != nil {
 			return false, fmt.Errorf("%w: %v", ErrGroupRetryTimesInvalid, err)
@@ -70,8 +71,27 @@ func SaveConfigGroup(module string, values map[string]string) (bool, error) {
 	}
 	prefixed := make(map[string]string, len(values))
 	switch module {
+	case "group_retry_policy", "group_retry_times", "group_retry_guard_setting":
+		var err error
+		prefixed, err = saveGroupRetryPolicy(module, values)
+		if err != nil {
+			return false, err
+		}
+	case "performance_setting":
+		draft, err := performance_setting.ParsePerformanceUpdate(values)
+		if err != nil {
+			return false, err
+		}
+		for k, v := range values {
+			prefixed[module+"."+k] = v
+		}
+		if err := persistOptionsTx(prefixed); err != nil {
+			return false, err
+		}
+		performance_setting.ReplacePerformanceSetting(draft)
+
 	case "group_retry_status_setting":
-		return saveGroupRetryPolicy(nil, values)
+		return saveGroupRetryStatusPolicy(nil, values)
 	case "probe_routing_setting":
 		if len(values) != 1 {
 			return false, fmt.Errorf("invalid probe routing configuration")

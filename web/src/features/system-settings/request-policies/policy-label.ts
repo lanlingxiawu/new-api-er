@@ -15,6 +15,8 @@ export function policyLabel(t: TFunction, value: string): string {
       return t('Session behavior prevents switching channels')
     case 'attempt_budget_exhausted':
       return t('Total attempt budget exhausted')
+    case 'group_retry_protection':
+      return t('Automatic retry protection')
     case 'channel_error':
       return t('Channel error')
     case 'unrecognized_status':

@@ -1,12 +1,17 @@
 package performance_setting
 
 import (
+	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
+	"strconv"
+	"strings"
 )
 
 // PerformanceSetting 性能设置配置
 type PerformanceSetting struct {
+	BodyGovernanceEnabled bool `json:"body_governance_enabled"`
+	BodyMemoryBudgetMB    int  `json:"body_memory_budget_mb"`
 	// DiskCacheEnabled 是否启用磁盘缓存（磁盘换内存）
 	DiskCacheEnabled bool `json:"disk_cache_enabled"`
 	// DiskCacheThresholdMB 触发磁盘缓存的请求体大小阈值（MB）
@@ -41,18 +46,25 @@ var performanceSetting = PerformanceSetting{
 
 func init() {
 	// 注册到全局配置管理器
-	config.GlobalConfig.Register("performance_setting", &performanceSetting)
+	config.GlobalConfig.RegisterSnapshot("performance_setting", &performanceSetting, publishPerformanceSetting)
 	// 同步初始配置到 common 包
-	syncToCommon()
 }
 
 // syncToCommon 将配置同步到 common 包
-func syncToCommon() {
+var performanceSnapshot config.Snapshot[PerformanceSetting]
+
+func publishPerformanceSetting() {
+	if ValidatePerformanceSetting(performanceSetting) != nil {
+		return
+	}
+	performanceSnapshot.Publish(performanceSetting)
 	common.SetDiskCacheConfig(common.DiskCacheConfig{
-		Enabled:     performanceSetting.DiskCacheEnabled,
-		ThresholdMB: performanceSetting.DiskCacheThresholdMB,
-		MaxSizeMB:   performanceSetting.DiskCacheMaxSizeMB,
-		Path:        performanceSetting.DiskCachePath,
+		GovernanceEnabled: performanceSetting.BodyGovernanceEnabled,
+		MemoryBudgetMB:    performanceSetting.BodyMemoryBudgetMB,
+		Enabled:           performanceSetting.DiskCacheEnabled,
+		ThresholdMB:       performanceSetting.DiskCacheThresholdMB,
+		MaxSizeMB:         performanceSetting.DiskCacheMaxSizeMB,
+		Path:              performanceSetting.DiskCachePath,
 	})
 
 	common.SetPerformanceMonitorConfig(common.PerformanceMonitorConfig{
@@ -65,13 +77,14 @@ func syncToCommon() {
 
 // GetPerformanceSetting 获取性能设置
 func GetPerformanceSetting() *PerformanceSetting {
-	return &performanceSetting
+	value := *performanceSnapshot.Load()
+	return &value
 }
 
 // UpdateAndSync 更新配置并同步到 common 包
 // 当配置从数据库加载后，需要调用此函数同步
 func UpdateAndSync() {
-	syncToCommon()
+	config.WithConfigDraft(publishPerformanceSetting)
 }
 
 // GetCacheStats 获取缓存统计信息（代理到 common 包）
@@ -82,4 +95,56 @@ func GetCacheStats() common.DiskCacheStats {
 // ResetStats 重置统计信息
 func ResetStats() {
 	common.ResetDiskCacheStats()
+}
+
+func ValidatePerformanceSetting(value PerformanceSetting) error {
+	if value.BodyMemoryBudgetMB < 0 || int64(value.BodyMemoryBudgetMB) > (1<<43)-1 {
+		return fmt.Errorf("invalid body memory budget")
+	}
+	if value.BodyGovernanceEnabled && value.BodyMemoryBudgetMB == 0 {
+		return fmt.Errorf("body memory budget is required")
+	}
+	if value.BodyGovernanceEnabled && (value.DiskCacheMaxSizeMB < 0 || value.DiskCacheThresholdMB < 0) {
+		return fmt.Errorf("invalid disk cache budget")
+	}
+	return nil
+}
+
+func ParsePerformanceUpdate(values map[string]string) (PerformanceSetting, error) {
+	draft := *GetPerformanceSetting()
+	for key, value := range values {
+		switch key {
+		case "disk_cache_path":
+			continue
+		case "body_governance_enabled", "disk_cache_enabled", "monitor_enabled":
+			if _, err := strconv.ParseBool(value); err != nil {
+				return draft, err
+			}
+		case "body_memory_budget_mb", "disk_cache_threshold_mb", "disk_cache_max_size_mb", "monitor_cpu_threshold", "monitor_memory_threshold", "monitor_disk_threshold":
+			if _, err := strconv.Atoi(value); err != nil {
+				return draft, err
+			}
+		default:
+			return draft, fmt.Errorf("configuration field is not editable")
+		}
+	}
+	normalized := make(map[string]string, len(values))
+	for key, value := range values {
+		if strings.HasSuffix(key, "_enabled") {
+			b, _ := strconv.ParseBool(value)
+			value = strconv.FormatBool(b)
+		}
+		normalized[key] = value
+	}
+	if err := config.UpdateConfigFromMap(&draft, normalized); err != nil {
+		return draft, err
+	}
+	return draft, ValidatePerformanceSetting(draft)
+}
+
+func ReplacePerformanceSetting(value PerformanceSetting) {
+	if ValidatePerformanceSetting(value) != nil {
+		return
+	}
+	config.WithConfigDraft(func() { performanceSetting = value; publishPerformanceSetting() })
 }

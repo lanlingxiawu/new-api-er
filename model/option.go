@@ -465,6 +465,18 @@ func UpdateOption(key string, value string) error {
 	if IsModelPricingOption(key) {
 		return UpdateModelPricingOptions(map[string]string{key: value})
 	}
+	if key == "GroupRetryTimes" {
+		_, err := SaveConfigGroup("group_retry_times", map[string]string{"times": value})
+		return err
+	}
+	if field, ok := strings.CutPrefix(key, "group_retry_guard_setting."); ok {
+		_, err := SaveConfigGroup("group_retry_guard_setting", map[string]string{field: value})
+		return err
+	}
+	if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
+		_, err := SaveConfigGroup("performance_setting", map[string]string{field: value})
+		return err
+	}
 	if field, ok := strings.CutPrefix(key, "group_retry_status_setting."); ok {
 		_, err := SaveConfigGroup("group_retry_status_setting", map[string]string{field: value})
 		return err
@@ -493,6 +505,19 @@ func UpdateOption(key string, value string) error {
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
 func UpdateOptionsBulk(values map[string]string) error {
+	performance := map[string]string{}
+	for key, value := range values {
+		if field, ok := strings.CutPrefix(key, "performance_setting."); ok {
+			performance[field] = value
+		}
+	}
+	if len(performance) > 0 {
+		configGroupMu.Lock()
+		defer configGroupMu.Unlock()
+		if _, err := performance_setting.ParsePerformanceUpdate(performance); err != nil {
+			return err
+		}
+	}
 	if len(values) == 0 {
 		return nil
 	}

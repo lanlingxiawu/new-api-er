@@ -73,6 +73,9 @@ func countRequestLogFiles(t *testing.T, root string) int {
 		if err != nil {
 			return err
 		}
+		if info.Name() == requestLogRecoveryFile || info.Name() == requestLogRecoveryTemp {
+			return nil
+		}
 		switch {
 		case info.IsDir():
 		case isRequestLogSegmentName(info.Name()):

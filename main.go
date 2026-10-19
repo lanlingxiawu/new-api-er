@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/retryguard"
 	"github.com/QuantumNous/new-api/pkg/wsmanager"
 	"github.com/QuantumNous/new-api/relay"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -63,6 +64,8 @@ func main() {
 	}
 
 	common.SysLog("NEXAXIS API " + common.Version + " started")
+	stopRetryGuard := retryguard.Start()
+	defer stopRetryGuard()
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -270,10 +273,10 @@ func main() {
 			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
 			model.ShutdownRelayLogFlush(operation_setting.GetRelayLogPipelineSetting().GetShutdownTimeout())
 
-			// 请求日志：先排空写队列让在途条目落盘并进索引，快照才是完整的。
+			// 请求日志：先排空写队列再保存本地恢复检查点，未及时入索引的正文由下次启动补读。
 			// 预算 3 s——这些数据允许丢失，不值得再拖长关停。
 			middleware.DrainRequestLogQueue(3 * time.Second)
-			model.SnapshotRequestLogs()
+			model.CheckpointRequestLogs()
 		},
 	)
 
@@ -430,10 +433,10 @@ func InitResources() error {
 
 	// 请求日志：环境变量必须在 godotenv.Load 之后读，因此这里显式初始化而不是靠包级变量
 	// （包级变量在 main() 之前求值，那时 .env 还没进环境，配置会被静默忽略）。
-	// 三步顺序不可颠倒：先恢复索引快照，再拉起写盘 worker 与磁盘清理——清理以内存索引
+	// 三步顺序不可颠倒：先按设置清理历史或恢复索引，再拉起写盘 worker 与磁盘清理——清理以内存索引
 	// 为唯一真值，若排在恢复之前，首轮就会把有效正文文件当孤儿删掉。
 	model.InitRequestLogStore()
-	model.RestoreRequestLogs()
+	model.InitializeRequestLogHistory()
 	middleware.StartRequestLogWriters()
 	model.StartRequestLogSweeper()
 	model.StartLegacyRequestLogCleanup()

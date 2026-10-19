@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/retryguard"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -91,6 +92,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		if errors.Is(newAPIError, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
+		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
 			return
 		}
@@ -130,7 +134,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
-		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+		if errors.Is(err, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
+		} else if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 		} else {
 			newAPIError = helper.NewInvalidRequestError(c, err)
@@ -158,7 +164,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			resultErr = types.NewError(fmt.Errorf("relay panic: %v", recovered), types.ErrorCodeBadResponse)
 		}
 		if relayFormat != types.RelayFormatOpenAIRealtime {
-			perfmetrics.RecordRelayResult(c.Request.Context(), relayInfo, resultErr)
+			guardEligible := recovered == nil && service.ClaimGroupRetryGuardSample(c, relayInfo, resultErr == nil)
+			perfmetrics.RecordRelayResult(c.Request.Context(), relayInfo, resultErr, guardEligible)
 		}
 		if recovered != nil {
 			panic(recovered)
@@ -220,7 +227,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			if errors.Is(bodyErr, common.ErrBodyCacheCapacity) {
+				newAPIError = service.NewBodyCacheCapacityError(c)
+			} else if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
 			} else {
 				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -240,6 +249,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = geminiRelayHandler(c, relayInfo)
 		default:
 			newAPIError = relayHandler(c, relayInfo)
+		}
+		if errors.Is(newAPIError, common.ErrBodyCacheCapacity) {
+			newAPIError = service.NewBodyCacheCapacityError(c)
 		}
 		if c.GetBool(relaycommon.StreamHandledKey) {
 			reportAdaptedRelayTimeout(c, relayInfo, channel)
@@ -620,7 +632,9 @@ func executeTaskSubmissionWith(
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			stage = "read_body"
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			if errors.Is(bodyErr, common.ErrBodyCacheCapacity) {
+				taskErr = service.TaskErrorWrapperLocal(service.NewBodyCacheCapacityError(c), string(service.BodyCacheCapacityErrorCode), http.StatusServiceUnavailable)
+			} else if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
 				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusRequestEntityTooLarge)
 			} else {
 				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusBadRequest)
@@ -666,6 +680,10 @@ func executeTaskSubmissionWith(
 		logger.LogInfo(c, retryLogStr)
 	}
 
+	if operation_setting.GroupRetryGuardSnapshot().Enabled && c.Request.Context().Err() == nil && (result != nil || (taskErr != nil && !taskErr.LocalError)) {
+		now := time.Now()
+		retryguard.Observe(relayInfo.UsingGroup, now.Sub(relayInfo.StartTime).Milliseconds(), now.Unix())
+	}
 	if taskErr != nil {
 		diagnostics.failed(stage, "task_error", taskErr, false)
 		return nil, taskErr
@@ -894,6 +912,8 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 	switch {
 	case taskErr == nil:
 		stop.Reason = "request_completed"
+	case service.GroupRetryGuardDisabled(c):
+		stop.Reason, stop.Source = "group_retry_protection", "group"
 	case taskErr.NoRetry || taskErr.SkipRetry:
 		stop.Reason = "task_accepted"
 	case service.ShouldSkipRetryAfterChannelAffinityFailure(c):

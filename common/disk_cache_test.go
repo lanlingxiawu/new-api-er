@@ -3,6 +3,7 @@ package common
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,12 @@ func useTempDiskCache(t *testing.T, cfg DiskCacheConfig) string {
 	origStats := GetDiskCacheStats()
 	SetDiskCacheConfig(cfg)
 	t.Cleanup(func() {
+		cacheFiles.Range(func(key, value any) bool {
+			if strings.HasPrefix(key.(string), dir+string(os.PathSeparator)) {
+				_ = RemoveDiskCacheFile(key.(string))
+			}
+			return true
+		})
 		SetDiskCacheConfig(origCfg)
 		atomic.StoreInt64(&diskCacheStats.ActiveDiskFiles, origStats.ActiveDiskFiles)
 		atomic.StoreInt64(&diskCacheStats.CurrentDiskUsageBytes, origStats.CurrentDiskUsageBytes)
@@ -104,15 +111,14 @@ func TestGetDiskCacheInfoAndCleanup(t *testing.T) {
 	assert.Equal(t, 2, count)
 	assert.Equal(t, int64(10), size)
 
-	// age p1 by an hour; cleanup with a 1-minute cutoff removes only p1 and
-	// leaves the freshly-written p2 (deterministic, no timing race).
+	// Age does not end ownership: both files must remain available to callers.
 	old := time.Now().Add(-time.Hour)
 	require.NoError(t, os.Chtimes(p1, old, old))
 	require.NoError(t, CleanupOldDiskCacheFiles(time.Minute))
 	count, _, err = GetDiskCacheInfo()
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
-	assert.NoFileExists(t, p1)
+	assert.Equal(t, 2, count)
+	assert.FileExists(t, p1)
 }
 
 func TestCleanupOldDiskCacheFiles_MissingDir(t *testing.T) {

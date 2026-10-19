@@ -18,7 +18,7 @@ func savePerformanceState(t *testing.T) {
 	origMonitor := common.GetPerformanceMonitorConfig()
 	origStats := common.GetDiskCacheStats()
 	t.Cleanup(func() {
-		performanceSetting = origSetting
+		ReplacePerformanceSetting(origSetting)
 		common.SetDiskCacheConfig(origDisk)
 		common.SetPerformanceMonitorConfig(origMonitor)
 		// Restore hit counters (ResetStats zeroes them). The only mutation the
@@ -34,13 +34,13 @@ func savePerformanceState(t *testing.T) {
 	})
 }
 
-func TestGetPerformanceSetting_ReturnsGlobalPointer(t *testing.T) {
+func TestGetPerformanceSetting_ReturnsIndependentSnapshot(t *testing.T) {
 	savePerformanceState(t)
 	got := GetPerformanceSetting()
-	assert.Same(t, &performanceSetting, got)
+	assert.NotSame(t, &performanceSetting, got)
 
 	got.DiskCacheThresholdMB = 42
-	assert.Equal(t, 42, performanceSetting.DiskCacheThresholdMB)
+	assert.NotEqual(t, 42, performanceSetting.DiskCacheThresholdMB)
 }
 
 func TestDefaults(t *testing.T) {

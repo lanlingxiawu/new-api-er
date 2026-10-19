@@ -120,7 +120,7 @@ RHF 用法：`<FormControl><NumericPresetInput presets={…} min={1} {...numeric
 
 | # | 文件 | 字段 | 特殊值（说明键） | 普通取值 | 后端依据 |
 |---|---|---|---|---|---|
-| 6 | `system-tuning/group-retry-section.tsx` | 分组重试次数 | -1 `No retry`、0 `Follow system default` | 1–20 | `MaxGroupRetryTimes` |
+| 6 | `system-tuning/group-retry-section.tsx` | 分组重试次数 | -1 `No retry`、0 `Follow system default` | 1–10 | `MaxGroupRetryTimes` |
 | 7 | `system-tuning/hot-config-sections.tsx` | `relay_timeout_setting.response_timeout_seconds` | 0 `Unlimited` | 1–604800 | `ValidateRelayTimeoutSetting` |
 | 8 | 同上 | `relay_timeout_setting.total_timeout_seconds` | 0 `Unlimited` | 1–604800 | 同上 |
 | 9 | 同上 | `relay_timeout_setting.retry_min_budget_seconds` | 0 `Disabled` | 1–604800 | 同上 |
@@ -149,4 +149,3 @@ RHF 用法：`<FormControl><NumericPresetInput presets={…} min={1} {...numeric
 - #37 的「不限」复用已有键 `Unlimited`（`No limit` 在 zh-TW/fr/vi 未翻译），弹窗里的门槛预览同样改用 `Unlimited`，门槛不是数字时预览显示 `-`（与费率预览一致）。
 
 保存格式：`ConfigGroupSection`、价格监控、RHF 表单提交的仍是 number；分组重试与员工门槛的状态仍是字符串、保存时 `Number()`。同一输入保存出的值与改动前一致。
-

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -164,6 +165,7 @@ type RelayInfo struct {
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int
 	LastError                             *types.NewAPIError
+	RetryGuardSampled                     *atomic.Bool
 	RuntimeHeadersOverride                map[string]any
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
@@ -830,6 +832,9 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 	}
 
 	info.InitRequestConversionChain()
+	if operation_setting.GroupRetryGuardSnapshot().Enabled {
+		info.RetryGuardSampled = &atomic.Bool{}
+	}
 	return info, nil
 }
 

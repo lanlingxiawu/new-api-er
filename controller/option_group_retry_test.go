@@ -15,10 +15,10 @@ import (
 
 // An invalid per-group retry map is rejected with a translated message that
 // says what is allowed — not a raw Go error such as an unmarshal failure or
-// an English "must not exceed 20: vip" shown to Chinese admins.
+// an English "must not exceed 10: vip" shown to Chinese admins.
 func TestUpdateOptionRejectsInvalidGroupRetryTimes(t *testing.T) {
 	for name, value := range map[string]string{
-		"out of range": `{\"vip\":21}`,
+		"out of range": `{\"vip\":11}`,
 		"not json":     `not json`,
 		"wrong type":   `{\"vip\":\"x\"}`,
 	} {
@@ -49,5 +49,5 @@ func TestGroupRetryTimesInvalidMessageIsTranslated(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/option/", nil)
 	message := i18n.T(ctx, i18n.MsgSettingGroupRetryTimesInvalid)
 	assert.NotEqual(t, i18n.MsgSettingGroupRetryTimesInvalid, message, "the key must have a translation")
-	assert.Contains(t, message, "20")
+	assert.Contains(t, message, "10")
 }

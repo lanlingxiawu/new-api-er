@@ -38,6 +38,8 @@ function show() {
         value='{"default":2}'
         statusRules='{"default":"429"}'
         statusEnabled
+        guardEnabled={false}
+        guardRules="{}"
       />
     </QueryClientProvider>
   )
@@ -46,18 +48,17 @@ function show() {
 it('saves retry counts, status codes and the switch in one request', async () => {
   const put = vi
     .spyOn(api, 'put')
-    .mockResolvedValue({ data: { success: true } })
+    .mockResolvedValue({ data: { success: true, data: { applied: true } } })
   show()
   fireEvent.change(screen.getByLabelText('Retry attempts'), {
     target: { value: '3' },
   })
-  fireEvent.click(screen.getByRole('switch'))
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.click(screen.getByRole('switch', { name: 'Enable per-group retry status codes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
   expect(put.mock.calls[0][1]).toMatchObject({
-    module: 'group_retry_status_setting',
-    group_retry_times: '{"default":3}',
-    values: { enabled: 'false', rules: '{"default":"429"}' },
+    module: 'group_retry_policy',
+    values: { times: '{"default":3}', status_enabled: 'false', status_rules: '{"default":"429"}', guard_enabled: 'false', guard_rules: '{}' },
   })
   expect(
     screen.queryByRole('button', { name: 'Save retry counts' })
@@ -73,21 +74,21 @@ it('keeps the draft after a rejected save and retries the complete form', async 
     .mockResolvedValueOnce({
       data: { success: false, message: 'Save rejected' },
     })
-    .mockResolvedValue({ data: { success: true } })
+    .mockResolvedValue({ data: { success: true, data: { applied: true } } })
   show()
   fireEvent.change(screen.getByLabelText('Retry attempts'), {
     target: { value: '4' },
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   )
   expect(screen.getByLabelText('Retry attempts')).toHaveValue('4')
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
   expect(put.mock.calls[1][1]).toMatchObject({
-    group_retry_times: '{"default":4}',
+    values: { times: '{"default":4}' },
   })
 })
 
@@ -95,9 +96,9 @@ it('rejects an invalid count before saving any status changes', () => {
   const put = vi.spyOn(api, 'put')
   show()
   fireEvent.change(screen.getByLabelText('Retry attempts'), {
-    target: { value: '21' },
+    target: { value: '11' },
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   expect(put).not.toHaveBeenCalled()
 })
 
@@ -113,7 +114,7 @@ it('rejects invalid status codes before saving changed counts', () => {
       target: { value: '600' },
     }
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   expect(put).not.toHaveBeenCalled()
 })
 
@@ -126,15 +127,16 @@ it('disables editing and repeat submission while the complete form is saving', a
       })
   )
   show()
-  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  fireEvent.change(screen.getByLabelText('Retry attempts'), { target: { value: '3' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled()
   )
-  expect(screen.getByRole('switch')).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.getByRole('switch', { name: 'Enable per-group retry status codes' })).toHaveAttribute('aria-disabled', 'true')
   expect(screen.getByLabelText('Retry attempts')).toBeDisabled()
   expect(put).toHaveBeenCalledTimes(1)
-  finish({ data: { success: true } })
+  finish({ data: { success: true, data: { applied: true } } })
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
   )
 })
