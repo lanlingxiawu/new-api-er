@@ -6,15 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -83,41 +80,32 @@ func TestStreamRejectReasonBaseline(t *testing.T) {
 	require.NotContains(t, other, "stream_diagnostic")
 }
 
-// TestStreamDiagnosticSwitches 验证实际开关、透传入口和无采集重试编号；t 为测试上下文，结束后恢复全局配置。
-func TestStreamDiagnosticSwitches(t *testing.T) {
-	old := *operation_setting.GetStreamErrorSetting()
-	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.UpdateFromMap("stream_error_setting", map[string]string{"enabled": strconv.FormatBool(old.Enabled), "capture_response": strconv.FormatBool(old.CaptureResponse)}))
-	})
-	for _, enabled := range []bool{false, true} {
-		for _, capture := range []bool{false, true} {
-			require.NoError(t, config.GlobalConfig.UpdateFromMap("stream_error_setting", map[string]string{"enabled": strconv.FormatBool(enabled), "capture_response": strconv.FormatBool(capture)}))
-			for _, streaming := range []bool{false, true} {
-				c, _ := gin.CreateTestContext(httptest.NewRecorder())
-				c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
-				info := &relaycommon.RelayInfo{IsStream: streaming, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{}}
-				info.ChannelSetting.PassThroughBodyEnabled = true
-				for attempt := 1; attempt <= 2; attempt++ {
-					BeginStreamAttempt(c, info)
-					other := map[string]any{}
-					if enabled && streaming {
-						require.Equal(t, capture, info.StreamDiagnostic != nil)
-						_, observesDownstream := info.StreamWriter.ResponseWriter.(*relaycommon.DownstreamCaptureWriter)
-						require.Equal(t, capture, observesDownstream, "关闭采集时不安装下游观察器")
-						info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
-						info.StreamSession.EndRead(io.ErrUnexpectedEOF)
-						AppendStreamErrorDiagnostic(c, other, io.ErrUnexpectedEOF)
-						require.Equal(t, attempt, other["stream_diagnostic_attempt"])
-						FinalizeStreamUsage(c, info, nil)
-						AppendStreamLogInfo(info, other)
-						require.Equal(t, attempt, other["stream_diagnostic_attempt"])
-					} else {
-						require.Nil(t, info.StreamSession)
-						AppendStreamLogInfo(info, other)
-					}
-					require.Equal(t, enabled && streaming, other["stream_diagnostic_available"] == true)
-				}
+// TestStreamDiagnosticAlwaysEnabled covers passthrough, mode isolation and retry identity.
+func TestStreamDiagnosticAlwaysEnabled(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{IsStream: streaming, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{}}
+		info.ChannelSetting.PassThroughBodyEnabled = true
+		for attempt := 1; attempt <= 2; attempt++ {
+			BeginStreamAttempt(c, info)
+			other := map[string]any{}
+			if streaming {
+				require.NotNil(t, info.StreamDiagnostic)
+				_, observesDownstream := info.StreamWriter.ResponseWriter.(*relaycommon.DownstreamCaptureWriter)
+				require.True(t, observesDownstream)
+				info.StreamSession.ObserveTransport(&http.Response{StatusCode: 200}, nil)
+				info.StreamSession.EndRead(io.ErrUnexpectedEOF)
+				AppendStreamErrorDiagnostic(c, other, io.ErrUnexpectedEOF)
+				require.Equal(t, attempt, other["stream_diagnostic_attempt"])
+				FinalizeStreamUsage(c, info, nil)
+				AppendStreamLogInfo(info, other)
+				require.Equal(t, attempt, other["stream_diagnostic_attempt"])
+			} else {
+				require.Nil(t, info.StreamSession)
+				AppendStreamLogInfo(info, other)
 			}
+			require.Equal(t, streaming, other["stream_diagnostic_available"] == true)
 		}
 	}
 }

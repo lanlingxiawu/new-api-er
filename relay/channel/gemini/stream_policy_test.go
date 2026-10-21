@@ -32,6 +32,7 @@ func TestUnifiedStreamGeminiPolicyStop(t *testing.T) {
 			}
 			resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + body + "\n\n"))}
 			info.StreamSession.ObserveTransport(resp, nil)
+			info.StreamDiagnostic.Observe(resp)
 			info.StreamSession.ObserveHTTP(resp)
 			handler := GeminiChatStreamHandler
 			if format == types.RelayFormatGemini {
@@ -44,15 +45,15 @@ func TestUnifiedStreamGeminiPolicyStop(t *testing.T) {
 			final := service.FinalizeStreamUsage(c, info, u)
 			require.Same(t, u, final, "正常策略终态应保留渠道原有用量对象")
 			require.False(t, info.StreamResult.Failed, rec.Body.String())
-			require.False(t, info.StreamResult.DiagnosticAvailable)
+			require.True(t, info.StreamResult.DiagnosticAvailable, "policy stops retain diagnostics without changing settlement")
 			require.Equal(t, "gemini_block_reason=SAFETY", common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
 			require.NotContains(t, rec.Body.String(), "event: error")
 			other := service.GenerateTextOtherInfo(c, info, 1, 1, 1, 0, 1, 1, 1)
 			require.Equal(t, "gemini_block_reason=SAFETY", other["reject_reason"])
-			require.NotContains(t, other, "stream_diagnostic_available")
+			require.Equal(t, true, other["stream_diagnostic_available"])
 			diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
-			require.Empty(t, diagnostic.BodyHead)
-			require.Empty(t, diagnostic.ResponseHeaders)
+			require.Contains(t, string(diagnostic.BodyHead)+string(diagnostic.BodyTail), "SAFETY")
+			require.Equal(t, []string{"text/event-stream"}, diagnostic.ResponseHeaders["Content-Type"])
 			if format == types.RelayFormatGemini {
 				require.Contains(t, rec.Body.String(), body)
 			}

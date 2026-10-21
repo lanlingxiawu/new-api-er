@@ -22,7 +22,7 @@ import (
 )
 
 // BeginStreamAttempt 为每次渠道尝试安装独立会话；非流式直接返回，不更改原请求响应或计费。
-// 参数 c 为请求上下文，info 为重试复用的中转信息；模式/配置首次冻结，证据每次重建。
+// 参数 c 为请求上下文，info 为重试复用的中转信息；入口模式首次冻结，证据每次重建。
 func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	if !info.UseStreamErrors() {
 		return
@@ -78,7 +78,7 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	c.Set(relaycommon.StreamResponseOnlyKey, true)
 	c.Set(relaycommon.StreamResponseCaptureKey, (*relaycommon.StreamResponseCapture)(nil))
 	common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "")
-	// 尝试编号与响应采集开关解耦，避免无 body 的多次失败诊断互相命中。
+	// 每次尝试独立编号，避免无 body 的多次失败诊断互相命中。
 	attempt := c.GetInt(relaycommon.StreamDiagnosticAttemptKey) + 1
 	c.Set(relaycommon.StreamDiagnosticAttemptKey, attempt)
 	if info.CaptureStreamResponse() {
@@ -130,9 +130,11 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		confirmed = false
 	}
 	outcome := &relaycommon.StreamOutcome{Failed: reason != "", ClientGone: clientGone, ReceivedResponse: snapshot.ReceivedResponse, EffectiveContent: snapshot.Effective, ConfirmedUsage: confirmed, SettlementState: "pending"}
-	// 诊断依据实际错误来源，不借用 Failed/计费标签，也不依赖是否启用了 body 采集。
-	outcome.DiagnosticAvailable = snapshot.DiagnosticAvailable(IsRelayRequestTimeout(c))
+	// 上游拒绝也保留诊断；诊断资格不改变 Failed、终止原因或计费用量。
+	rejectReason := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
+	outcome.DiagnosticAvailable = snapshot.DiagnosticAvailable(IsRelayRequestTimeout(c)) || rejectReason != ""
 	outcome.Diagnostic = info.StreamDiagnostic.Snapshot()
+	outcome.Diagnostic.RejectReason = rejectReason
 	outcome.Diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 	outcome.Diagnostic.UsageEvidence = snapshot.Evidence
 	outcome.Diagnostic.UsageFinal = snapshot.Complete

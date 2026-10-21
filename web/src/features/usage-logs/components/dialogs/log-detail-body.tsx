@@ -504,7 +504,8 @@ function TokenBreakdown(props: {
   const cacheWrite = other.cache_creation_tokens || 0
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
-  const hasTokens = promptTokens > 0 || completionTokens > 0
+  const hasTokens =
+    promptTokens > 0 || completionTokens > 0 || hasAnyCacheTokens(other)
 
   if (!hasTokens) return null
 

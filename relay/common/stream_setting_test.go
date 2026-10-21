@@ -1,30 +1,34 @@
 package common
 
 import (
-	"testing"
-
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
-// TestStreamSettingsFreeze 验证入口模式冻结、协议兼容开关和全局采集关闭均可回退。
-// 参数 t：测试上下文，承载断言与测试资源清理。
-func TestStreamSettingsFreeze(t *testing.T) {
-	on, off := true, false
-	info := &RelayInfo{RelayFormat: types.RelayFormatOpenAI}
-	require.False(t, info.UseStreamErrors())
-	require.Nil(t, info.streamErrorsEnabled) // 非流式不初始化配置或异常处理状态。
-	info.IsStream = true
-	require.False(t, info.UseStreamErrors())
-	info = &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatClaude, streamErrorsEnabled: &off, clientStreamMode: &on}
-	require.False(t, info.UseStrictClaudeStream())
-	require.False(t, info.UseStreamErrors())
-	info = &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatClaude, streamErrorsEnabled: &on, streamCaptureEnabled: &off, clientStreamMode: &on}
-	require.True(t, info.UseStrictClaudeStream())
-	require.False(t, info.CaptureClaudeResponse())
-	require.False(t, info.CaptureStreamResponse())
-	info = &RelayInfo{IsStream: true, RelayFormat: types.RelayFormatClaude, claudeStreamStrict: &off}
-	require.False(t, info.UseStreamErrors())
-	info = &RelayInfo{RelayFormat: types.RelayFormatOpenAIRealtime}
+func TestStreamSettingsAlwaysEnabled(t *testing.T) {
+	for _, name := range []string{"stream_error_setting", "claude_stream_setting"} {
+		require.Nil(t, config.GlobalConfig.Get(name), "retired settings must not be registered")
+	}
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"stream_error_setting.enabled": "false", "stream_error_setting.capture_response": "false",
+		"claude_stream_setting.enabled": "false", "claude_stream_setting.capture_response": "false",
+	}))
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatOpenAIRealtime} {
+		info := &RelayInfo{IsStream: true, RelayFormat: format}
+		require.True(t, info.UseStreamErrors())
+		require.True(t, info.CaptureStreamResponse())
+		info.IsStream = false
+		require.True(t, info.UseStreamErrors(), "retries retain the original streaming mode")
+	}
+	info := &RelayInfo{RelayFormat: types.RelayFormatOpenAIRealtime}
 	require.True(t, info.UseStreamErrors())
+	info = &RelayInfo{RelayFormat: types.RelayFormatClaude}
+	require.False(t, info.UseStreamErrors())
+	info.IsStream = true
+	require.False(t, info.UseStreamErrors(), "upstream SSE cannot promote a non-stream request")
+	require.False(t, info.UseStrictClaudeStream())
+	require.False(t, info.CaptureStreamResponse())
+	require.True(t, info.CaptureClaudeResponse(), "legacy Claude response capture stays enabled")
 }

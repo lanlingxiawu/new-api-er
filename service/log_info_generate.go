@@ -148,7 +148,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 // API reads the stored envelope. Never pass this payload to application logging.
 // AppendStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
 // 参数 info：请求中转状态，nil 时跳过；other：待原地扩充的日志映射，nil 时跳过。
-// 无返回值；新流程只在明确上游异常时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
+// 无返回值；新流程在明确上游异常或拒绝时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
 func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface{}) {
 	if info == nil || other == nil {
 		return
@@ -198,7 +198,7 @@ func AppendStreamLogInfo(info *relaycommon.RelayInfo, other map[string]interface
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
-// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，仅新流式上游异常生成按钮标记，不执行结算；
+// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，新流式上游异常或拒绝生成按钮标记，不执行结算；
 // 我方超时且平台承担成本（退款）的非流式请求另记 admin_info.timeout_absorbed。
 // 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志映射，将原地更新；err：底层错误，nil 时不覆盖已有原因。
 func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, err error) {
@@ -220,7 +220,8 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, e
 		delete(other, "stream_result")
 		return
 	}
-	available := session.DiagnosticAvailable(IsRelayRequestTimeout(c))
+	available := session.DiagnosticAvailable(IsRelayRequestTimeout(c)) ||
+		(reject != "" && session != nil && session.ResponseGate != nil && session.ResponseGate.AllowsStream())
 	if capture == nil && reject == "" && !available {
 		return
 	}
@@ -229,7 +230,7 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, e
 	if available {
 		other["stream_diagnostic_available"] = true
 		diagnostic.DownstreamBodyBase64 = capture.DownstreamBody()
-		// 关闭响应采集仍保留错误与尝试编号，使无 body 的诊断也能查询。
+		// 即使采集器缺失也保留错误与尝试编号，使无 body 的诊断可以定位。
 		diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 		if err != nil {
 			diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(err)
@@ -245,7 +246,7 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other map[string]interface{}, e
 }
 
 // filterStreamDiagnosticResponse 为新流程日志过滤原始响应内容，保留独立错误、读取元数据、用量与结算证据。
-// 参数 diagnostic 为按值传入的诊断快照，keepResponse 表示已确认上游异常且开启采集；返回可入队的副本。
+// 参数 diagnostic 为按值传入的诊断快照，keepResponse 表示已有上游异常或拒绝资格且采集器存在；返回可入队的副本。
 // 历史响应只复制元数据切片后清空内容引用，不修改采集器或固定结果，以供后续异常/Realtime 轮次使用。
 func filterStreamDiagnosticResponse(diagnostic relaycommon.StreamDiagnostic, keepResponse bool) relaycommon.StreamDiagnostic {
 	if keepResponse {
