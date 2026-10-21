@@ -728,7 +728,11 @@ export function useCommonLogsColumns(
 
           const promptTokens = log.prompt_tokens || 0
           const completionTokens = log.completion_tokens || 0
-          if (promptTokens === 0 && completionTokens === 0) {
+          if (
+            promptTokens === 0 &&
+            completionTokens === 0 &&
+            !hasAnyCacheTokens(other)
+          ) {
             return <span className='text-muted-foreground text-xs'>-</span>
           }
 

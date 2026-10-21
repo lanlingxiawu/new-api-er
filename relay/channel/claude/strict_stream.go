@@ -621,8 +621,9 @@ loop:
 	}
 	result.Failed = reason != relaycommon.StreamEndReasonDone
 	result.ClientGone = reason == relaycommon.StreamEndReasonClientGone
-	// 专用解析器已停用通用会话，直接采用本循环确定的上游首因；正常策略停止不生成诊断资格。
-	result.DiagnosticAvailable = info.UseStreamErrors() && relaycommon.IsUpstreamStreamFailure(reason)
+	// 专用解析器已停用通用会话；上游异常和策略拒绝均保留诊断，不改变计费分类。
+	rejectReason := common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
+	result.DiagnosticAvailable = info.UseStreamErrors() && (relaycommon.IsUpstreamStreamFailure(reason) || rejectReason != "")
 	if endErr != nil {
 		result.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(endErr)
 	}
@@ -668,7 +669,7 @@ loop:
 		result.Diagnostic.PreviousResponses = snapshot.PreviousResponses
 		result.Diagnostic.OmittedResponses = snapshot.OmittedResponses
 	}
-	result.Diagnostic.RejectReason = common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason)
+	result.Diagnostic.RejectReason = rejectReason
 	if attempt := c.GetInt(relaycommon.StreamDiagnosticAttemptKey); attempt > 0 {
 		result.Diagnostic.Attempt = attempt
 	}

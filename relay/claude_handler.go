@@ -25,7 +25,6 @@ import (
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 
 	info.InitChannelMeta(c)
-	info.UseStrictClaudeStream()
 	// 每次中转尝试重建诊断状态，避免渠道重试混用错误/用量；SDK 内部重试由同一采集器分别记录。
 	info.StreamResult = nil
 	if info.StreamSession == nil {

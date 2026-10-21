@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -16,8 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -160,34 +157,27 @@ func TestManagedNativeTTSRequest(t *testing.T) {
 	}
 }
 
-// TestManagedNativeTTSIsolation 验证渠道/模式双重约束和非流式/开关关闭隔离；t 使用既有配置快照 API 并恢复原值。
+// TestManagedNativeTTSIsolation verifies channel, mode and non-stream isolation.
 func TestManagedNativeTTSIsolation(t *testing.T) {
-	old := operation_setting.GetStreamErrorSetting().Enabled
-	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.UpdateFromMap("stream_error_setting", map[string]string{"enabled": strconv.FormatBool(old)}))
-	})
-	for _, enabled := range []bool{true, false} {
-		require.NoError(t, config.GlobalConfig.UpdateFromMap("stream_error_setting", map[string]string{"enabled": strconv.FormatBool(enabled)}))
-		for _, streaming := range []bool{false, true} {
-			for _, channel := range []int{constant.ChannelTypeMiniMax, constant.ChannelTypeOpenAI} {
-				for _, mode := range []int{relayconstant.RelayModeAudioSpeech, relayconstant.RelayModeChatCompletions} {
-					c, _ := gin.CreateTestContext(httptest.NewRecorder())
-					c.Request = httptest.NewRequest("POST", "/v1/audio/speech", nil)
-					common.SetContextKey(c, constant.ContextKeyChannelType, channel)
-					info := &relaycommon.RelayInfo{IsStream: streaming, RelayMode: mode, RelayFormat: types.RelayFormatOpenAI}
-					service.BeginStreamAttempt(c, info)
-					resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"data":{"audio":"534e44"},"base_resp":{"status_code":0}}`))}
-					if enabled && streaming {
-						info.StreamSession.ObserveTransport(resp, nil)
-						info.StreamSession.ObserveHTTP(resp)
-					} else {
-						require.Nil(t, info.StreamSession)
-					}
-					_, err := io.ReadAll(resp.Body)
-					wantSuccess := !enabled || !streaming || channel == constant.ChannelTypeMiniMax && mode == relayconstant.RelayModeAudioSpeech
-					require.Equal(t, wantSuccess, err == nil)
-					require.NoError(t, resp.Body.Close())
+	for _, streaming := range []bool{false, true} {
+		for _, channel := range []int{constant.ChannelTypeMiniMax, constant.ChannelTypeOpenAI} {
+			for _, mode := range []int{relayconstant.RelayModeAudioSpeech, relayconstant.RelayModeChatCompletions} {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest("POST", "/v1/audio/speech", nil)
+				common.SetContextKey(c, constant.ContextKeyChannelType, channel)
+				info := &relaycommon.RelayInfo{IsStream: streaming, RelayMode: mode, RelayFormat: types.RelayFormatOpenAI}
+				service.BeginStreamAttempt(c, info)
+				resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"data":{"audio":"534e44"},"base_resp":{"status_code":0}}`))}
+				if streaming {
+					info.StreamSession.ObserveTransport(resp, nil)
+					info.StreamSession.ObserveHTTP(resp)
+				} else {
+					require.Nil(t, info.StreamSession)
 				}
+				_, err := io.ReadAll(resp.Body)
+				wantSuccess := !streaming || channel == constant.ChannelTypeMiniMax && mode == relayconstant.RelayModeAudioSpeech
+				require.Equal(t, wantSuccess, err == nil)
+				require.NoError(t, resp.Body.Close())
 			}
 		}
 	}

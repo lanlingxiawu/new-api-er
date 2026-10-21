@@ -73,7 +73,7 @@ func TestClaudeDiagnosticLegacyAndErrorLogPaths(t *testing.T) {
 
 // TestStreamDiagnosticResponsePersistence 验证新流程双日志入口仅在明确上游异常时保存原始响应；t 为测试上下文。
 func TestStreamDiagnosticResponsePersistence(t *testing.T) {
-	for _, kind := range []string{"pending", "normal", "client", "local", "eof", "read", "json", "protocol", "error", "upstream_then_client", "capture_off"} {
+	for _, kind := range []string{"pending", "normal", "refusal", "client", "local", "eof", "read", "json", "protocol", "error", "upstream_then_client", "capture_off"} {
 		t.Run(kind, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx, cancel := context.WithCancel(context.Background())
@@ -95,12 +95,18 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, resp.Body.Close())
 			}
-			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "policy-reason")
-			info.StreamRejectReason = "policy-reason"
+			var reject any
+			if kind == "refusal" {
+				reject = "claude_stop_reason=refusal"
+				common.SetContextKey(c, constant.ContextKeyAdminRejectReason, reject.(string))
+				info.StreamRejectReason = reject.(string)
+			}
 			wantAvailable := true
 			switch kind {
 			case "pending":
 				wantAvailable = false
+			case "refusal":
+				info.StreamSession.Complete()
 			case "normal":
 				info.StreamSession.Complete()
 				wantAvailable = false
@@ -134,7 +140,7 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 			assertStreamResponseLogContent(t, errorOther, errorSource, wantContent)
 			errorFields := errorOther.Snapshot()
 			require.Equal(t, wantAvailable, errorFields["stream_diagnostic_available"] == true)
-			require.Equal(t, "policy-reason", logOtherAdmin(errorOther)["reject_reason"])
+			require.Equal(t, reject, logOtherAdmin(errorOther)["reject_reason"])
 			require.Equal(t, "private log cause", errorFields["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
 			if kind != "pending" {
 				FinalizeStreamUsage(c, info, nil)
@@ -158,7 +164,7 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 			}
 			assertStreamResponseLogContent(t, other, source, wantContent)
 			require.Equal(t, wantAvailable, fields["stream_diagnostic_available"] == true)
-			require.Equal(t, "policy-reason", logOtherAdmin(other)["reject_reason"])
+			require.Equal(t, reject, logOtherAdmin(other)["reject_reason"])
 			require.Equal(t, before, info.StreamDiagnostic.Snapshot(), "生成日志不修改后续终止/轮次可能使用的内存缓存")
 			if kind != "capture_off" {
 				require.Len(t, source.PreviousResponses, 3)

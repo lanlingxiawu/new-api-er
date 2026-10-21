@@ -64,7 +64,7 @@ type StreamDiagnostic struct {
 	UsageEvidence          map[string]int           `json:"usage_evidence"`               // 上游已确认的累计用量；键缺失与显式 0 不同，token 与工具次数按字段区分。
 	UsagePhases            map[string]string        `json:"usage_phases,omitempty"`       // 各用量字段最近出现的事件阶段，如 message_start 或 message_delta。
 	EstimatedUsage         map[string]int           `json:"estimated_usage,omitempty"`    // 本地估算的输入/输出 token，独立于原始上游用量证据。
-	RejectReason           string                   `json:"reject_reason,omitempty"`      // 历史诊断内策略原因；普通日志单独保留同名字段，与诊断资格无关。
+	RejectReason           string                   `json:"reject_reason,omitempty"`      // 诊断内策略原因；普通日志单独保留同名字段。
 	UsageFinal             bool                     `json:"usage_final"`                  // 处理器确认的用量/协议结束状态；Claude 专用路径检查 message_stop，通用路径沿用对应协议的 Complete。
 	SettlementError        string                   `json:"settlement_error,omitempty"`   // 资金或令牌结算错误，与上游流式错误分别记录。
 }
@@ -83,7 +83,7 @@ type StreamOutcome struct {
 	SettlementAttempted bool             `json:"-"`                 // 单次结算保护标记，失败后也保持 true，避免重复资金运算。
 	ErrorMessage        string           `json:"-"`                 // 终止时选定并脱敏的日志消息；仅明确上游消息或既有本地提示，不含私有诊断。
 	Diagnostic          StreamDiagnostic `json:"-"`                 // 私有诊断，仅由日志封装逻辑单独保存。
-	DiagnosticAvailable bool             `json:"-"`                 // 新流程明确的上游异常资格，单独写入 stream_diagnostic_available；不参与计费。
+	DiagnosticAvailable bool             `json:"-"`                 // 上游异常或拒绝的诊断资格，单独写入 stream_diagnostic_available；不参与计费。
 }
 
 // SelectUsageSource 按终止原因、已确认用量与有效交付决定计费来源。

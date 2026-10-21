@@ -19,9 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -548,40 +546,20 @@ func TestStrictPolicyStopMarkerRegression(t *testing.T) {
 	_, err := strictClaudeStream(c, resp, info)
 	require.Nil(t, err)
 	require.False(t, info.StreamResult.Failed)
-	require.False(t, info.StreamResult.DiagnosticAvailable, "policy reason is independent of upstream failure")
+	require.True(t, info.StreamResult.DiagnosticAvailable, "refusal must retain diagnostics without marking the stream failed")
 	require.NotEmpty(t, common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
 }
 
-// TestClaudeCaptureAndStrictSwitchesAreIndependent 遍历严格解析与响应采集开关的四种组合，验证采集与计费状态互不绑定。
-// 参数 t：当前测试上下文，用于断言、子测试与清理；无返回值，失败通过测试断言报告。
-func TestClaudeCaptureAndStrictSwitchesAreIndependent(t *testing.T) {
-	old := *operation_setting.GetClaudeStreamSetting()
-	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_setting", map[string]string{"enabled": fmt.Sprint(old.Enabled), "capture_response": fmt.Sprint(old.CaptureResponse)}))
-	})
-	for _, strict := range []bool{false, true} {
-		for _, capture := range []bool{false, true} {
-			require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_setting", map[string]string{"enabled": fmt.Sprint(strict), "capture_response": fmt.Sprint(capture)}))
-			body := strictStart + strictText + strictStop
-			c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
-			if info.CaptureClaudeResponse() {
-				info.StreamDiagnostic = relaycommon.NewStreamResponseCapture(1)
-				info.StreamDiagnostic.Observe(resp)
-			}
-			_, err := ClaudeStreamHandler(c, resp, info)
-			require.Nil(t, err)
-			require.Equal(t, strict, info.StreamResult != nil)
-			if capture {
-				d := info.StreamDiagnostic.Snapshot()
-				require.Equal(t, body, string(d.BodyHead)+string(d.BodyTail))
-			} else {
-				require.Nil(t, info.StreamDiagnostic)
-				if strict {
-					require.Empty(t, info.StreamResult.Diagnostic.BodyHead)
-				}
-			}
-		}
-	}
+// TestClaudeCaptureAlwaysEnabled verifies the former all-enabled path remains active.
+func TestClaudeCaptureAlwaysEnabled(t *testing.T) {
+	body := strictStart + strictText + strictStop
+	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
+	require.True(t, info.CaptureClaudeResponse())
+	_, err := ClaudeStreamHandler(c, resp, info)
+	require.Nil(t, err)
+	require.NotNil(t, info.StreamResult)
+	d := info.StreamDiagnostic.Snapshot()
+	require.Equal(t, body, string(d.BodyHead)+string(d.BodyTail))
 }
 
 // strictReadError 的 Reader 为本地字节源；其 Read 在源结束时注入异常，覆盖部分返回后读取失败。
