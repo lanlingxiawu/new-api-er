@@ -8,7 +8,7 @@ package controller
 // 按 CLAUDE.md Rule 6 的约定，把 helper 放到本文件，而不是去改上游测试
 // ——改了它们，下次同步必然冲突。
 //
-// 两个 helper 与上游逐字节一致，只是换了个文件。
+// 本地补丁负责保存和恢复共享数据库句柄、方言及对应的列名。
 
 import (
 	"bytes"
@@ -42,6 +42,7 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 		model.DB, model.LOG_DB = prevDB, prevLogDB
 		// Later tests on the shared MySQL/PostgreSQL harness build dialect-specific SQL from these.
 		common.SetDatabaseTypes(prevMainType, prevLogType)
+		model.InitColumnNames()
 		common.RedisEnabled = prevRedis
 	})
 
@@ -49,6 +50,7 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 
 	gin.SetMode(gin.TestMode)
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	model.InitColumnNames()
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
@@ -110,9 +112,8 @@ func initModelListColumnNames(t *testing.T) {
 // 与本仓 harness 的共享连接冲突，因此没有携带；token_auto_groups_test.go 仍要
 // 用这几个助手，按 Rule 6 放在这里而不是去改上游测试。
 //
-// 与上游的唯一差异：openTokenControllerTestDB 前后成对保存/还原 model.DB 和
-// model.LOG_DB。上游版本换掉全局句柄后不还原，后续用 harness 连接的测试会拿到
-// 已关闭的句柄（表现为 "sql: database is closed"）。
+// 本地差异：openTokenControllerTestDB 前后成对保存/还原 model.DB、model.LOG_DB、
+// 数据库方言及对应的列名。否则后续测试可能拿到已关闭的句柄，或使用错误方言的 SQL。
 // ---------------------------------------------------------------------------
 
 type tokenAPIResponse struct {
@@ -130,11 +131,13 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 		model.DB, model.LOG_DB = prevDB, prevLogDB
 		// Later tests on the shared MySQL/PostgreSQL harness build dialect-specific SQL from these.
 		common.SetDatabaseTypes(prevMainType, prevLogType)
+		model.InitColumnNames()
 		common.RedisEnabled = prevRedis
 	})
 
 	gin.SetMode(gin.TestMode)
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	model.InitColumnNames()
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
