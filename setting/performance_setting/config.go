@@ -10,8 +10,9 @@ import (
 
 // PerformanceSetting 性能设置配置
 type PerformanceSetting struct {
-	BodyGovernanceEnabled bool `json:"body_governance_enabled"`
-	BodyMemoryBudgetMB    int  `json:"body_memory_budget_mb"`
+	StrictRequestJSONEnabled bool `json:"strict_request_json_enabled"`
+	BodyGovernanceEnabled    bool `json:"body_governance_enabled"`
+	BodyMemoryBudgetMB       int  `json:"body_memory_budget_mb"`
 	// DiskCacheEnabled 是否启用磁盘缓存（磁盘换内存）
 	DiskCacheEnabled bool `json:"disk_cache_enabled"`
 	// DiskCacheThresholdMB 触发磁盘缓存的请求体大小阈值（MB）
@@ -58,6 +59,9 @@ func publishPerformanceSetting() {
 		return
 	}
 	performanceSnapshot.Publish(performanceSetting)
+	common.SetRequestValidationConfig(common.RequestValidationConfig{
+		StrictJSONEnabled: performanceSetting.StrictRequestJSONEnabled,
+	})
 	common.SetDiskCacheConfig(common.DiskCacheConfig{
 		GovernanceEnabled: performanceSetting.BodyGovernanceEnabled,
 		MemoryBudgetMB:    performanceSetting.BodyMemoryBudgetMB,
@@ -116,7 +120,7 @@ func ParsePerformanceUpdate(values map[string]string) (PerformanceSetting, error
 		switch key {
 		case "disk_cache_path":
 			continue
-		case "body_governance_enabled", "disk_cache_enabled", "monitor_enabled":
+		case "strict_request_json_enabled", "body_governance_enabled", "disk_cache_enabled", "monitor_enabled":
 			if _, err := strconv.ParseBool(value); err != nil {
 				return draft, err
 			}

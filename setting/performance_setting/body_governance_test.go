@@ -59,3 +59,19 @@ func TestBodyGovernanceConfiguration(t *testing.T) {
 	ReplacePerformanceSetting(invalid)
 	require.Equal(t, draft, *GetPerformanceSetting())
 }
+
+func TestStrictRequestJSONConfiguration(t *testing.T) {
+	old := *GetPerformanceSetting()
+	t.Cleanup(func() { ReplacePerformanceSetting(old) })
+	before := common.GetRequestValidationConfig()
+	_, err := ParsePerformanceUpdate(map[string]string{"strict_request_json_enabled": "invalid"})
+	require.Error(t, err)
+	require.Equal(t, before, common.GetRequestValidationConfig())
+	for _, value := range []string{"true", "false", "TRUE"} {
+		draft, err := ParsePerformanceUpdate(map[string]string{"strict_request_json_enabled": value})
+		require.NoError(t, err)
+		ReplacePerformanceSetting(draft)
+		require.Equal(t, value != "false", GetPerformanceSetting().StrictRequestJSONEnabled)
+		require.Equal(t, value != "false", common.GetRequestValidationConfig().StrictJSONEnabled)
+	}
+}

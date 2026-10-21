@@ -72,6 +72,7 @@ func TestImageRequestReservesFinalQuantityBeforeUpstream(t *testing.T) {
 			t.Cleanup(upstream.Close)
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
 			c.Request.Header.Set("Content-Type", "application/json")
 			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
 			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
@@ -295,6 +296,7 @@ func TestGeminiThinkingControlsConvertBestEffort(t *testing.T) {
 // conversion failure that other channels would then be asked to serve.
 func TestImageHelperKeepsAdaptorClassifiedConvertError(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	t.Cleanup(func() { common.CleanupBodyStorage(c) })
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"wanx-style-repaint-v1","prompt":"a cat"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeAli)

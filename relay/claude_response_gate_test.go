@@ -39,6 +39,7 @@ func TestStreamResponseGateClaudeLegacy(t *testing.T) {
 			t.Cleanup(srv.Close)
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
 			c.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude","stream":true,"max_tokens":1,"messages":[]}`))
 			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeAnthropic)
 			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, srv.URL)

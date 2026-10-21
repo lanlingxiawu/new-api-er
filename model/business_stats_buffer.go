@@ -511,13 +511,13 @@ func upsertPlatformDailyStatTx(tx *gorm.DB, statDate int64, channelId int, chann
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "stat_date"}, {Name: "channel_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"revenue_quota":   gorm.Expr("revenue_quota + ?", revenueQuota),
-			"cost_quota":      gorm.Expr("cost_quota + ?", costQuota),
-			"record_count":    gorm.Expr("record_count + ?", recordCount),
-			"cost_ratio_sum":  gorm.Expr("cost_ratio_sum + ?", costRatioSum),
-			"channel_name":    gorm.Expr("COALESCE(NULLIF(channel_name, ''), ?)", channelName),
-			"last_created_at": gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		DoUpdates: clause.Assignments(map[string]any{
+			"revenue_quota":   gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "revenue_quota"}, revenueQuota),
+			"cost_quota":      gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "cost_quota"}, costQuota),
+			"record_count":    gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "record_count"}, recordCount),
+			"cost_ratio_sum":  gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "cost_ratio_sum"}, costRatioSum),
+			"channel_name":    gorm.Expr("COALESCE(NULLIF(?, ''), ?)", clause.Column{Table: clause.CurrentTable, Name: "channel_name"}, channelName),
+			"last_created_at": gorm.Expr("CASE WHEN ? > ? THEN ? ELSE ? END", clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt, clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt),
 		}),
 	}).Create(&row).Error
 }
@@ -618,13 +618,13 @@ func upsertCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUserId int
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "stat_date"}, {Name: "employee_user_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
-			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
-			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
-			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
-			"record_count":     gorm.Expr("record_count + ?", recordCount),
-			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		DoUpdates: clause.Assignments(map[string]any{
+			"revenue_quota":    gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "revenue_quota"}, revenueQuota),
+			"cost_quota":       gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "cost_quota"}, costQuota),
+			"profit_quota":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "profit_quota"}, profitQuota),
+			"commission_quota": gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "commission_quota"}, commissionQuota),
+			"record_count":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "record_count"}, recordCount),
+			"last_created_at":  gorm.Expr("CASE WHEN ? > ? THEN ? ELSE ? END", clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt, clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt),
 		}),
 	}).Create(&row).Error
 }
@@ -653,13 +653,13 @@ func upsertCustomerCommissionDailyStatTx(tx *gorm.DB, statDate int64, employeeUs
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "stat_date"}, {Name: "employee_user_id"}, {Name: "customer_user_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
-			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
-			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
-			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
-			"record_count":     gorm.Expr("record_count + ?", recordCount),
-			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		DoUpdates: clause.Assignments(map[string]any{
+			"revenue_quota":    gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "revenue_quota"}, revenueQuota),
+			"cost_quota":       gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "cost_quota"}, costQuota),
+			"profit_quota":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "profit_quota"}, profitQuota),
+			"commission_quota": gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "commission_quota"}, commissionQuota),
+			"record_count":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "record_count"}, recordCount),
+			"last_created_at":  gorm.Expr("CASE WHEN ? > ? THEN ? ELSE ? END", clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt, clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt),
 		}),
 	}).Create(&row).Error
 }
@@ -688,13 +688,13 @@ func upsertCommissionResetPeriodDailyStatTx(tx *gorm.DB, resetStartedAt, statDat
 	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "reset_started_at"}, {Name: "stat_date"}, {Name: "employee_user_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"revenue_quota":    gorm.Expr("revenue_quota + ?", revenueQuota),
-			"cost_quota":       gorm.Expr("cost_quota + ?", costQuota),
-			"profit_quota":     gorm.Expr("profit_quota + ?", profitQuota),
-			"commission_quota": gorm.Expr("commission_quota + ?", commissionQuota),
-			"record_count":     gorm.Expr("record_count + ?", recordCount),
-			"last_created_at":  gorm.Expr("CASE WHEN last_created_at > ? THEN last_created_at ELSE ? END", lastCreatedAt, lastCreatedAt),
+		DoUpdates: clause.Assignments(map[string]any{
+			"revenue_quota":    gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "revenue_quota"}, revenueQuota),
+			"cost_quota":       gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "cost_quota"}, costQuota),
+			"profit_quota":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "profit_quota"}, profitQuota),
+			"commission_quota": gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "commission_quota"}, commissionQuota),
+			"record_count":     gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: "record_count"}, recordCount),
+			"last_created_at":  gorm.Expr("CASE WHEN ? > ? THEN ? ELSE ? END", clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt, clause.Column{Table: clause.CurrentTable, Name: "last_created_at"}, lastCreatedAt),
 		}),
 	}).Create(&row).Error
 }

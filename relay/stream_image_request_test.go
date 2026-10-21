@@ -47,6 +47,7 @@ func TestUnifiedStreamImageFinalRequest(t *testing.T) {
 						path, mode = "/v1/images/edits", relayconstant.RelayModeImagesEdits
 					}
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					t.Cleanup(func() { common.CleanupBodyStorage(c) })
 					c.Request = httptest.NewRequest("POST", path, strings.NewReader(raw))
 					c.Request.Header.Set("Content-Type", "application/json")
 					common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
@@ -106,6 +107,7 @@ func TestUnifiedStreamXAIImageFinalRequest(t *testing.T) {
 			req := &dto.ImageRequest{}
 			require.NoError(t, common.UnmarshalJsonStr(raw, req))
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			t.Cleanup(func() { common.CleanupBodyStorage(c) })
 			c.Request = httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(raw))
 			c.Request.Header.Set("Content-Type", "application/json")
 			common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeXai)

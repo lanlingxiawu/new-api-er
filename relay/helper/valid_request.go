@@ -82,8 +82,8 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 }
 
 func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
-	var rerankRequest *dto.RerankRequest
-	err := relaycommon.UnmarshalRequestBody(c, &rerankRequest)
+	rerankRequest := &dto.RerankRequest{}
+	err := relaycommon.UnmarshalRequestBody(c, rerankRequest)
 	if err != nil {
 		logger.LogError(c, common.LogText("getAndValidateTextRequest failed: %s", err.Error()))
 		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -99,8 +99,8 @@ func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
 }
 
 func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.EmbeddingRequest, error) {
-	var embeddingRequest *dto.EmbeddingRequest
-	err := relaycommon.UnmarshalRequestBody(c, &embeddingRequest)
+	embeddingRequest := &dto.EmbeddingRequest{}
+	err := relaycommon.UnmarshalRequestBody(c, embeddingRequest)
 	if err != nil {
 		logger.LogError(c, common.LogText("getAndValidateTextRequest failed: %s", err.Error()))
 		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())

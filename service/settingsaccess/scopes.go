@@ -99,6 +99,7 @@ func buildDefinitions() map[string]Definition {
 		scope("operations.request-log", "RequestLogEnabled", "RequestLogUsername", "RequestLogMaxBodyKB", "RequestLogMinCount", "RequestLogMaxCount", "request_log_setting.clear_on_restart"),
 		configScope("operations.performance", "performance_setting",
 			[]string{
+				"performance_setting.strict_request_json_enabled",
 				"performance_setting.body_governance_enabled", "performance_setting.body_memory_budget_mb",
 				"performance_setting.disk_cache_enabled", "performance_setting.disk_cache_threshold_mb",
 				"performance_setting.disk_cache_max_size_mb", "performance_setting.disk_cache_path",
@@ -106,6 +107,7 @@ func buildDefinitions() map[string]Definition {
 				"performance_setting.monitor_memory_threshold", "performance_setting.monitor_disk_threshold",
 			},
 			[]string{
+				"strict_request_json_enabled",
 				"body_governance_enabled", "body_memory_budget_mb", "disk_cache_enabled",
 				"disk_cache_threshold_mb", "disk_cache_max_size_mb", "disk_cache_path",
 				"monitor_enabled", "monitor_cpu_threshold", "monitor_memory_threshold", "monitor_disk_threshold",

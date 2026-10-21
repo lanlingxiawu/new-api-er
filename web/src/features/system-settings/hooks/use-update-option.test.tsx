@@ -1,8 +1,6 @@
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
-
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToString } from 'react-dom/server'
+import { assert, test } from 'vitest'
 
 import { api } from '@/lib/api'
 

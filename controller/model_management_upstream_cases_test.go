@@ -85,6 +85,7 @@ func modelManagementDB(t *testing.T, kind, dsn string) *gorm.DB {
 		common.IsMasterNode, common.SQLitePath = previousMaster, previousSQLite
 		common.RedisEnabled, common.MemoryCacheEnabled = previousRedis, previousMemory
 		common.SetDatabaseTypes(previousMain, previousLog)
+		model.InitColumnNames()
 		connection, err := database.DB()
 		if err == nil {
 			require.NoError(t, connection.Close())

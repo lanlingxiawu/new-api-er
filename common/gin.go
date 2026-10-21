@@ -131,7 +131,11 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 			return seekErr
 		}
-		if err := DecodeJson(storage, v); err != nil {
+		decode := DecodeJson
+		if GetRequestValidationConfig().StrictJSONEnabled {
+			decode = DecodeSingleJson
+		}
+		if err := decode(storage, v); err != nil {
 			return err
 		}
 		if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {

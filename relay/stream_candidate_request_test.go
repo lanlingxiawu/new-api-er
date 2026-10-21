@@ -47,6 +47,7 @@ func TestUnifiedStreamFinalCandidateRequest(t *testing.T) {
 					}
 					require.NoError(t, common.UnmarshalJsonStr(raw, request))
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					t.Cleanup(func() { common.CleanupBodyStorage(c) })
 					c.Request = httptest.NewRequest("POST", path, strings.NewReader(raw))
 					c.Request.Header.Set("Content-Type", "application/json")
 					common.SetContextKey(c, constant.ContextKeyChannelType, channelType)

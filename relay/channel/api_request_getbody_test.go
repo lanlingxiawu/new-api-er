@@ -350,7 +350,8 @@ func awaitH2ServerResult(t *testing.T, resultCh <-chan h2ServerResult) h2ServerR
 // retry-safe reset some proxy/CDN-fronted upstreams send under load or during
 // graceful shutdown, see RFC 9113 section 8.7). When expectRetry is true it
 // serves the retried stream a 200 response; otherwise it stops after the reset.
-func runResetOnFirstStreamServer(ln net.Listener, expectRetry bool) <-chan h2ServerResult {
+func runResetOnFirstStreamServer(t *testing.T, ln net.Listener, expectRetry bool) <-chan h2ServerResult {
+	t.Helper()
 	resCh := make(chan h2ServerResult, 1)
 	go func() {
 		res := h2ServerResult{}
@@ -361,7 +362,9 @@ func runResetOnFirstStreamServer(ln net.Listener, expectRetry bool) <-chan h2Ser
 			res.err = err
 			return
 		}
-		defer conn.Close()
+		// Keep TCP alive until the client has observed the reset. Closing with
+		// unread SETTINGS/ACK data can replace RST_STREAM with a TCP reset.
+		t.Cleanup(func() { _ = conn.Close() })
 
 	attempts:
 		for attempt := 0; ; attempt++ {
@@ -393,7 +396,8 @@ func runResetOnFirstStreamServer(ln net.Listener, expectRetry bool) <-chan h2Ser
 	return resCh
 }
 
-func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
+func runGoAwayAfterFirstRequestServer(t *testing.T, ln net.Listener) <-chan h2ServerResult {
+	t.Helper()
 	resCh := make(chan h2ServerResult, 1)
 	go func() {
 		res := h2ServerResult{}
@@ -405,6 +409,9 @@ func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
 				res.err = err
 				return
 			}
+			// Graceful GOAWAY drains the connection; it must not race a TCP
+			// close while the client is still sending control frames.
+			t.Cleanup(func() { _ = conn.Close() })
 			streamID, body, err := readH2TestRequest(framer)
 			if err != nil {
 				conn.Close()
@@ -416,7 +423,6 @@ func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
 
 			if attempt == 0 {
 				err = framer.WriteGoAway(0, http2.ErrCodeNo, nil)
-				conn.Close()
 				if err != nil {
 					res.err = err
 					return
@@ -425,7 +431,6 @@ func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
 			}
 
 			err = writeH2TestResponse(framer, streamID)
-			conn.Close()
 			if err != nil {
 				res.err = err
 			}
@@ -464,7 +469,7 @@ func TestUpstreamGetBody_HTTP2RetryAfterUpstreamStreamReset(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
-	resCh := runResetOnFirstStreamServer(ln, true)
+	resCh := runResetOnFirstStreamServer(t, ln, true)
 
 	client, transport := newH2PriorKnowledgeClient(ln)
 	defer transport.CloseIdleConnections()
@@ -499,7 +504,7 @@ func TestUpstreamGetBody_HTTP2RetryAfterUpstreamStreamReset_PassThrough(t *testi
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
-	resCh := runResetOnFirstStreamServer(ln, true)
+	resCh := runResetOnFirstStreamServer(t, ln, true)
 
 	client, transport := newH2PriorKnowledgeClient(ln)
 	defer transport.CloseIdleConnections()
@@ -531,7 +536,7 @@ func TestUpstreamGetBody_HTTP2RetryAfterGracefulGoAway_PassThrough(t *testing.T)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
-	resCh := runGoAwayAfterFirstRequestServer(ln)
+	resCh := runGoAwayAfterFirstRequestServer(t, ln)
 
 	client, transport := newH2PriorKnowledgeClient(ln)
 	defer transport.CloseIdleConnections()
@@ -565,7 +570,7 @@ func TestUpstreamGetBody_HTTP2CannotRetryWithoutGetBody(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
-	resCh := runResetOnFirstStreamServer(ln, false)
+	resCh := runResetOnFirstStreamServer(t, ln, false)
 
 	client, transport := newH2PriorKnowledgeClient(ln)
 	defer transport.CloseIdleConnections()

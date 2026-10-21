@@ -103,6 +103,7 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/node-pool/nodes/:node_name/accounts":                                accessTokenSessionRule,
 	"GET /api/option/business-stats-circuit-breaker/status":                       accessTokenSessionRule,
 	"GET /api/option/db-pool/stats":                                               accessTokenSessionRule,
+	"GET /api/option/group-retry/status":                                          accessTokenSessionRule,
 	"GET /api/option/relay-error-display/presets":                                 accessTokenSessionRule,
 	"GET /api/option/relay-error-display/status":                                  accessTokenSessionRule,
 	"GET /api/price_monitor/channels":                                             accessTokenSessionRule,

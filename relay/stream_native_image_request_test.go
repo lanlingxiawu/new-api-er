@@ -46,6 +46,7 @@ func TestUnifiedStreamNativeImageFinalRequest(t *testing.T) {
 					req := &dto.ImageRequest{}
 					require.NoError(t, common.UnmarshalJsonStr(raw, req))
 					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					t.Cleanup(func() { common.CleanupBodyStorage(c) })
 					c.Request = httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(raw))
 					c.Request.Header.Set("Content-Type", "application/json")
 					common.SetContextKey(c, constant.ContextKeyChannelType, provider.channel)

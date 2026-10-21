@@ -370,9 +370,12 @@ func TestFallBackFromRejectedAdaptation_ResendsPlainOn400(t *testing.T) {
 	c, _, info := bufferedCase(t)
 	adaptor := &recordingAdaptor{status: http.StatusOK}
 
-	resp, _, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(http.StatusBadRequest), adaptedStorage(t))
+	resp, closer, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(http.StatusBadRequest), adaptedStorage(t))
 	require.Nil(t, apiErr)
 	require.NotNil(t, resp)
+	require.NotNil(t, closer)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the plain re-send's response is what gets handled")
 	require.Len(t, adaptor.sent, 1, "exactly one re-send")
 	assert.False(t, gjson.GetBytes(adaptor.sent[0], "stream").Exists())
@@ -394,8 +397,11 @@ func TestFallBackFromRejectedAdaptation_ResendsPlainOnAnyStreamPathFailure(t *te
 	} {
 		c, _, info := bufferedCase(t)
 		adaptor := &recordingAdaptor{status: http.StatusOK}
-		resp, _, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(status), adaptedStorage(t))
+		resp, closer, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(status), adaptedStorage(t))
 		require.Nil(t, apiErr, "status %d", status)
+		require.NotNil(t, closer)
+		t.Cleanup(func() { require.NoError(t, closer.Close()) })
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "status %d: the plain re-send's response is handled", status)
 		assert.Len(t, adaptor.sent, 1, "status %d: exactly one re-send", status)
 		assert.False(t, info.UpstreamStreamAdapted, "status %d", status)
@@ -442,8 +448,11 @@ func TestFallBackFromRejectedAdaptation_NotAdapted(t *testing.T) {
 func TestFallBackFromRejectedAdaptation_PlainAlso400(t *testing.T) {
 	c, _, info := bufferedCase(t)
 	adaptor := &recordingAdaptor{status: http.StatusBadRequest}
-	resp, _, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(http.StatusBadRequest), adaptedStorage(t))
+	resp, closer, apiErr := fallBackFromRejectedAdaptation(c, info, adaptor, rejected(http.StatusBadRequest), adaptedStorage(t))
 	require.Nil(t, apiErr)
+	require.NotNil(t, closer)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.Len(t, adaptor.sent, 1)
 }
