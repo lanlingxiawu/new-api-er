@@ -624,15 +624,6 @@ function PriceCell({
           )}
         </p>
       )}
-      {(price?.differences ?? []).map((difference) => (
-        <p
-          key={`${difference.min}:${difference.max ?? ''}:${difference.variable}`}
-          className='text-destructive text-xs'
-        >
-          {difference.min}–{difference.max ?? '∞'} · {difference.variable}:{' '}
-          {formatPrice(difference.left)} / {formatPrice(difference.right)}
-        </p>
-      ))}
       <div className='flex flex-wrap gap-1'>
         {price?.highest && (
           <Badge variant='warning'>{t('Highest price')}</Badge>
