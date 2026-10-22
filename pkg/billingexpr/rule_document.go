@@ -169,7 +169,7 @@ func (w *ruleDocumentWriter) write(node *RuleNode, depth int) (string, error) {
 		switch node.Name {
 		case "max", "min", "tier", "has":
 			argc = 2
-		case "abs", "ceil", "floor", "header", "param", "hour", "minute", "weekday", "month", "day":
+		case "abs", "ceil", "floor", "fixed", "header", "param", "hour", "minute", "weekday", "month", "day":
 			argc = 1
 		default:
 			return "", fmt.Errorf("unsupported rule function")
@@ -211,7 +211,7 @@ func (w *ruleDocumentWriter) write(node *RuleNode, depth int) (string, error) {
 		result = "nil"
 	case "usage":
 		switch node.Name {
-		case "p", "c", "len", "cr", "cc", "cc1h", "img", "img_o", "ai", "ao":
+		case "p", "c", "len", "cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao", "image_count":
 		default:
 			return "", fmt.Errorf("unsupported usage value")
 		}

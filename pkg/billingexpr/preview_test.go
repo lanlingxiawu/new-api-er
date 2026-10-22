@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 func TestPreviewRejectsUnboundedWork(t *testing.T) {
@@ -92,4 +94,73 @@ func TestPreviewPreservesExplicitZeroAndBranchVars(t *testing.T) {
 	p, err := CompilePreview(`len<=10?tier("a",p*2):tier("b",p*3+cr*0)`)
 	require.NoError(t, err)
 	require.True(t, p.UsedVars["cr"])
+}
+
+func TestPreviewFixedPricingRoundTrip(t *testing.T) {
+	InvalidateCache()
+	program, err := CompilePreview(`tier("request", fixed(2))`)
+	require.NoError(t, err)
+	cost, trace, err := program.RunAt(TokenParams{}, RequestInput{}, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, 2e6, cost)
+	require.Equal(t, BillingUnitRequest, trace.BillingUnit)
+	require.NotNil(t, trace.FixedPrice)
+	require.Equal(t, 2.0, *trace.FixedPrice)
+	require.Equal(t, "request", trace.MatchedTier)
+	require.Empty(t, cache, "preview must not populate the relay cache")
+}
+
+func TestPreviewFixedPricingLenTierBoundaries(t *testing.T) {
+	program, err := CompilePreview(`v1:len <= 272000 ? tier("short", fixed(1)) : tier("long", fixed(2))`)
+	require.NoError(t, err)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cost, trace, err := program.RunAt(TokenParams{Len: 272000}, RequestInput{}, at)
+	require.NoError(t, err)
+	require.Equal(t, 1e6, cost)
+	require.Equal(t, "short", trace.MatchedTier)
+	require.Equal(t, BillingUnitRequest, trace.BillingUnit)
+	cost, trace, err = program.RunAt(TokenParams{Len: 272001}, RequestInput{}, at)
+	require.NoError(t, err)
+	require.Equal(t, 2e6, cost)
+	require.Equal(t, "long", trace.MatchedTier)
+}
+
+func TestPreviewFixedPricingImageCount(t *testing.T) {
+	program, err := CompilePreview(`tier("image", fixed(0.05)) * image_count`)
+	require.NoError(t, err)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	three := 3
+	cost, trace, err := program.RunAt(TokenParams{}, RequestInput{ImageCount: &three}, at)
+	require.NoError(t, err)
+	require.Equal(t, 0.05*1e6*3, cost)
+	require.NotNil(t, trace.ImageCount)
+	require.Equal(t, 3, *trace.ImageCount)
+	require.Equal(t, BillingUnitRequest, trace.BillingUnit)
+	cost, trace, err = program.RunAt(TokenParams{}, RequestInput{}, at)
+	require.NoError(t, err)
+	require.Equal(t, 0.05*1e6, cost)
+	require.NotNil(t, trace.ImageCount)
+	require.Equal(t, 1, *trace.ImageCount)
+	zero := 0
+	_, _, err = program.RunAt(TokenParams{}, RequestInput{ImageCount: &zero}, at)
+	require.Error(t, err)
+	tooMany := dto.MaxImageN + 1
+	_, _, err = program.RunAt(TokenParams{}, RequestInput{ImageCount: &tooMany}, at)
+	require.Error(t, err)
+}
+
+func TestPreviewRejectsInvalidFixedPricing(t *testing.T) {
+	for _, source := range []string{`fixed(1)`, `p*2 + fixed(1)`, `tier("a", fixed(-1))`, `tier("a", fixed(param("x")))`, `u("x")*2`} {
+		_, err := CompilePreview(source)
+		require.Error(t, err, source)
+	}
+}
+
+func TestPreviewImageCacheReadTokens(t *testing.T) {
+	program, err := CompilePreview(`p*5 + img_cr*2 + img*8`)
+	require.NoError(t, err)
+	require.True(t, program.UsedVars["img_cr"])
+	cost, _, err := program.RunAt(TokenParams{P: 10, ImgCR: 3, Img: 8}, RequestInput{}, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, 120.0, cost)
 }

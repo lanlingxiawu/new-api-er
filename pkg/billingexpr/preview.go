@@ -2,14 +2,17 @@ package billingexpr
 
 import (
 	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/QuantumNous/new-api/relaykit/dto"
+
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 	"github.com/tidwall/gjson"
-	"math"
-	"strings"
-	"time"
 )
 
 // PreviewProgram is request-scoped and never enters the relay compilation cache.
@@ -31,6 +34,17 @@ func CompilePreview(source string) (*PreviewProgram, error) {
 	if err := validatePreviewAST(tree.Node, 0, &count); err != nil {
 		return nil, err
 	}
+	// Mirror the relay compiler: fixed pricing must keep one pricing leaf per
+	// execution, otherwise the billing-unit trace is ambiguous.
+	fixedPricing := ast.Find(tree.Node, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.IdentifierNode)
+		return ok && identifier.Value == "fixed"
+	}) != nil
+	if fixedPricing {
+		if err := validateFixedPricingTree(tree.Node); err != nil {
+			return nil, err
+		}
+	}
 	program, err := expr.Compile(body, expr.Env(getCompileEnv(version)), expr.AsFloat64())
 	if err != nil {
 		return nil, err
@@ -38,7 +52,7 @@ func CompilePreview(source string) (*PreviewProgram, error) {
 	return &PreviewProgram{program: program, UsedVars: extractUsedVars(program)}, nil
 }
 func (p *PreviewProgram) RunAt(params TokenParams, request RequestInput, at time.Time) (float64, TraceResult, error) {
-	trace := TraceResult{}
+	trace := TraceResult{BillingUnit: BillingUnitToken}
 	if at.IsZero() {
 		return 0, trace, fmt.Errorf("scenario time is required")
 	}
@@ -50,22 +64,39 @@ func (p *PreviewProgram) RunAt(params TokenParams, request RequestInput, at time
 		return at.In(loc)
 	}
 	headers := normalizeHeaders(request.Headers)
+	imageCount := 1
+	if p.UsedVars["image_count"] {
+		if request.ImageCount != nil {
+			imageCount = *request.ImageCount
+		}
+		if imageCount < 1 || imageCount > dto.MaxImageN {
+			return 0, trace, fmt.Errorf("image_count must be between 1 and %d", dto.MaxImageN)
+		}
+		trace.ImageCount = &imageCount
+	}
 
-	env := map[string]interface{}{
-		"p":     params.P,
-		"c":     params.C,
-		"len":   params.Len,
-		"cr":    params.CR,
-		"cc":    params.CC,
-		"cc1h":  params.CC1h,
-		"img":   params.Img,
-		"img_o": params.ImgO,
-		"ai":    params.AI,
-		"ao":    params.AO,
+	env := map[string]any{
+		"image_count": float64(imageCount),
+		"p":           params.P,
+		"c":           params.C,
+		"len":         params.Len,
+		"cr":          params.CR,
+		"cc":          params.CC,
+		"cc1h":        params.CC1h,
+		"img":         params.Img,
+		"img_cr":      params.ImgCR,
+		"img_o":       params.ImgO,
+		"ai":          params.AI,
+		"ao":          params.AO,
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name
 			trace.Cost = value
 			return value
+		},
+		"fixed": func(amount float64) float64 {
+			trace.BillingUnit = BillingUnitRequest
+			trace.FixedPrice = &amount
+			return amount * 1_000_000
 		},
 		"header": func(key string) string {
 			return headers[strings.ToLower(strings.TrimSpace(key))]
@@ -150,7 +181,7 @@ func validatePreviewAST(node ast.Node, depth int, count *int) error {
 			return fmt.Errorf("unsupported preview call")
 		}
 		switch id.Value {
-		case "max", "min", "abs", "ceil", "floor", "tier", "header", "param", "has", "hour", "minute", "weekday", "month", "day":
+		case "max", "min", "abs", "ceil", "floor", "tier", "fixed", "header", "param", "has", "hour", "minute", "weekday", "month", "day":
 		default:
 			return fmt.Errorf("unsupported preview function")
 		}

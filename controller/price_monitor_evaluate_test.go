@@ -61,3 +61,32 @@ func TestPriceMonitorScenarioUnsupportedAndZero(t *testing.T) {
 	scenario.Usage.PromptTokens = -1
 	require.Error(t, validatePriceMonitorScenario(scenario))
 }
+
+func TestPriceMonitorScenarioImageCountFromRequestBody(t *testing.T) {
+	scenario := priceMonitorScenario{
+		ID:             "image",
+		UsageSemantics: "openai",
+		At:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		RequestBody:    map[string]any{"n": float64(2)},
+	}
+	cell := PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: `tier("image", fixed(0.05)) * image_count`}
+	result := priceMonitorEvaluateCell("draft", cell, scenario)
+	require.Equal(t, "evaluated", result.Status)
+	require.NotNil(t, result.AmountUSD)
+	require.InDelta(t, 0.10, *result.AmountUSD, 1e-12)
+
+	missing := priceMonitorScenario{ID: "image", UsageSemantics: "openai", At: scenario.At}
+	result = priceMonitorEvaluateCell("draft", cell, missing)
+	require.Equal(t, "evaluated", result.Status)
+	require.InDelta(t, 0.05, *result.AmountUSD, 1e-12)
+
+	invalid := priceMonitorScenario{ID: "image", UsageSemantics: "openai", At: scenario.At, RequestBody: map[string]any{"n": "two"}}
+	result = priceMonitorEvaluateCell("draft", cell, invalid)
+	require.Equal(t, "evaluated", result.Status)
+	require.InDelta(t, 0.05, *result.AmountUSD, 1e-12)
+
+	outOfRange := priceMonitorScenario{ID: "image", UsageSemantics: "openai", At: scenario.At, RequestBody: map[string]any{"n": float64(dto.MaxImageN + 1)}}
+	result = priceMonitorEvaluateCell("draft", cell, outOfRange)
+	require.Equal(t, "unknown", result.Status)
+	require.Nil(t, result.AmountUSD)
+}

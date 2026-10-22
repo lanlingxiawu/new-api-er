@@ -133,7 +133,14 @@ func priceMonitorEvaluateCompiledCell(key string, cell PriceMonitorPriceCell, sc
 	if err != nil {
 		return side
 	}
-	result, trace, err := program.RunAt(params, billingexpr.RequestInput{Headers: scenario.Headers, Body: body}, scenario.At)
+	input := billingexpr.RequestInput{Headers: scenario.Headers, Body: body}
+	// A positive integer request n becomes the scenario's image count; missing or
+	// invalid values are omitted and left to RunAt's own range validation.
+	if n, ok := scenario.RequestBody["n"].(float64); ok && n > 0 && n <= 1e15 && n == math.Trunc(n) {
+		imageCount := int(n)
+		input.ImageCount = &imageCount
+	}
+	result, trace, err := program.RunAt(params, input, scenario.At)
 	if err != nil || result < 0 || math.IsNaN(result) || math.IsInf(result, 0) {
 		return side
 	}

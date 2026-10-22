@@ -62,3 +62,110 @@ func TestEditorPreservesUnsupportedImageCachePricing(t *testing.T) {
 	require.False(t, editor.CanScale)
 	require.Empty(t, editor.Branches)
 }
+
+func TestDescribeEditorFixedPricingForms(t *testing.T) {
+	InvalidateCache()
+	at := []struct {
+		source   string
+		branches []EditorBranch
+	}{
+		{
+			source: `tier("request", fixed(2))`,
+			branches: []EditorBranch{
+				{Name: "request", Min: 0, Unit: "request", Price: float64Pointer(2)},
+			},
+		},
+		{
+			source: `v1:len <= 272000 ? tier("short", fixed(1)) : tier("long", fixed(2))`,
+			branches: []EditorBranch{
+				{Name: "short", Min: 0, Max: int64Pointer(272000), Unit: "request", Price: float64Pointer(1)},
+				{Name: "long", Min: 272001, Unit: "request", Price: float64Pointer(2)},
+			},
+		},
+		{
+			source:   `tier("image", fixed(0.05)) * image_count`,
+			branches: []EditorBranch{{Name: "image", Min: 0, Unit: "image", Price: float64Pointer(0.05), Quantity: "image_count"}},
+		},
+		{
+			source:   `image_count * tier("image", fixed(0.05))`,
+			branches: []EditorBranch{{Name: "image", Min: 0, Unit: "image", Price: float64Pointer(0.05), Quantity: "image_count"}},
+		},
+		{
+			source: `len <= 272000 ? tier("short", fixed(0.05)) * image_count : tier("long", fixed(0.1)) * image_count`,
+			branches: []EditorBranch{
+				{Name: "short", Min: 0, Max: int64Pointer(272000), Unit: "image", Price: float64Pointer(0.05), Quantity: "image_count"},
+				{Name: "long", Min: 272001, Unit: "image", Price: float64Pointer(0.1), Quantity: "image_count"},
+			},
+		},
+	}
+	for _, tc := range at {
+		t.Run(tc.source, func(t *testing.T) {
+			editor, err := DescribeEditor(tc.source)
+			require.NoError(t, err)
+			require.Equal(t, "fixed", editor.Kind)
+			require.Equal(t, tc.source, editor.Source)
+			require.Equal(t, ExprHashString(tc.source), editor.SourceHash)
+			require.True(t, editor.CanScale)
+			require.Empty(t, editor.Reason)
+			require.Len(t, editor.Branches, len(tc.branches))
+			for index, want := range tc.branches {
+				got := editor.Branches[index]
+				require.Equal(t, want.Name, got.Name)
+				require.Equal(t, want.Name, got.Label)
+				require.True(t, got.Wrapped)
+				require.True(t, got.Reachable)
+				require.Equal(t, want.Min, got.Min)
+				if want.Max == nil {
+					require.Nil(t, got.Max)
+				} else {
+					require.NotNil(t, got.Max)
+					require.Equal(t, *want.Max, *got.Max)
+				}
+				require.Equal(t, want.Unit, got.Unit)
+				require.Equal(t, want.Quantity, got.Quantity)
+				require.NotNil(t, got.Price)
+				require.Equal(t, *want.Price, *got.Price)
+			}
+		})
+	}
+	require.Contains(t, mustDescribeEditor(t, `tier("image", fixed(0.05)) * image_count`).UsedVars, "image_count")
+	require.Empty(t, cache, "editor analysis must not populate the relay cache")
+}
+
+func mustDescribeEditor(t *testing.T, source string) *EditorDescription {
+	t.Helper()
+	editor, err := DescribeEditor(source)
+	require.NoError(t, err)
+	return editor
+}
+
+func TestDescribeEditorFixedPricingUnreachableBranch(t *testing.T) {
+	editor := mustDescribeEditor(t, `len < 0 ? tier("neg", fixed(1)) : tier("base", fixed(2))`)
+	require.Equal(t, "fixed", editor.Kind)
+	require.Len(t, editor.Branches, 2)
+	require.Equal(t, "neg", editor.Branches[0].Name)
+	require.False(t, editor.Branches[0].Reachable)
+	require.Equal(t, "base", editor.Branches[1].Name)
+	require.True(t, editor.Branches[1].Reachable)
+}
+
+func TestDescribeEditorFixedPricingCustomAndRejected(t *testing.T) {
+	for _, source := range []string{
+		`has(param("mode"),"hd") ? tier("image", fixed(0.1)) * image_count : tier("image", fixed(0.05)) * image_count`,
+		`len>100 ? tier("a", fixed(2)) : tier("b", p*2)`,
+	} {
+		editor, err := DescribeEditor(source)
+		require.NoError(t, err, source)
+		require.Equal(t, "custom", editor.Kind)
+		require.Equal(t, "custom_rule", editor.Reason)
+		require.Empty(t, editor.Branches)
+	}
+	for _, source := range []string{`fixed(1)`, `p*2 + fixed(1)`, `tier("a", fixed(-1))`} {
+		_, err := DescribeEditor(source)
+		require.Error(t, err, source)
+	}
+}
+
+func float64Pointer(value float64) *float64 { return &value }
+
+func int64Pointer(value int64) *int64 { return &value }

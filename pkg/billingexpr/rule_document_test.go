@@ -159,3 +159,64 @@ func TestRuleDocumentRejectsUnsafeChanges(t *testing.T) {
 	_, err = CompileRuleDocument(base, doc.SourceHash, doc)
 	require.Error(t, err)
 }
+
+func TestRuleDocumentFixedAndImageRoundTrip(t *testing.T) {
+	for _, source := range []string{
+		`v1:tier("request", fixed(2))`,
+		`tier("image", fixed(0.05)) * image_count`,
+		`p*2 + img_cr*0.5`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			doc, err := DescribeRuleDocument(source)
+			require.NoError(t, err)
+			got, err := CompileRuleDocument(source, ExprHashString(source), doc)
+			require.NoError(t, err)
+			require.Equal(t, source, got)
+			// Changing an ID forces serialization through the writer whitelist.
+			doc.Root.ID = "regenerated"
+			generated, err := CompileRuleDocument(source, doc.SourceHash, doc)
+			require.NoError(t, err)
+			before, err := CompilePreview(source)
+			require.NoError(t, err)
+			after, err := CompilePreview(generated)
+			require.NoError(t, err)
+			require.Equal(t, before.UsedVars, after.UsedVars)
+			params := TokenParams{P: 10, ImgCR: 4}
+			at := time.Date(2026, 10, 13, 9, 15, 0, 0, time.UTC)
+			x, xt, xe := before.RunAt(params, RequestInput{}, at)
+			y, yt, ye := after.RunAt(params, RequestInput{}, at)
+			require.Equal(t, xe == nil, ye == nil)
+			require.Equal(t, x, y)
+			require.Equal(t, xt, yt)
+		})
+	}
+}
+
+func TestRuleDocumentFixedPriceEdit(t *testing.T) {
+	source := `v1:tier("request", fixed(2))`
+	doc, err := DescribeRuleDocument(source)
+	require.NoError(t, err)
+	doc.Root.Args[1].Args[0].Value = "3.5"
+	generated, err := CompileRuleDocument(source, doc.SourceHash, doc)
+	require.NoError(t, err)
+	program, err := CompilePreview(generated)
+	require.NoError(t, err)
+	cost, trace, err := program.RunAt(TokenParams{}, RequestInput{}, time.Date(2026, 10, 13, 9, 15, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, 3.5e6, cost)
+	require.Equal(t, BillingUnitRequest, trace.BillingUnit)
+}
+
+func TestRuleDocumentRejectsFixedAndUsageWhitelistViolations(t *testing.T) {
+	source := `v1:tier("request", fixed(2))`
+	doc, err := DescribeRuleDocument(source)
+	require.NoError(t, err)
+	doc.Root.Args[1].Args = append(doc.Root.Args[1].Args, &RuleNode{ID: "extra", Kind: "number", Value: "1"})
+	_, err = CompileRuleDocument(source, doc.SourceHash, doc)
+	require.Error(t, err)
+	doc, err = DescribeRuleDocument(`p*2`)
+	require.NoError(t, err)
+	doc.Root = &RuleNode{ID: "x", Kind: "usage", Name: "bogus_var"}
+	_, err = CompileRuleDocument(`p*2`, doc.SourceHash, doc)
+	require.Error(t, err)
+}
