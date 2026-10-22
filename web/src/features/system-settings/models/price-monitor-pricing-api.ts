@@ -13,48 +13,12 @@ import type {
   MonitorPricingEntry,
   PricingValues,
 } from './price-monitor-pricing-draft'
-import type { RuleDocument } from './price-monitor-rule-types'
 
 export type MonitorPricingConfig = {
   entries: MonitorPricingEntry[]
   empty_version: string
   capabilities?: Record<string, boolean>
   token_price_factor: number
-}
-
-export type MonitorPricingEditorDescription = {
-  schema_version: number
-  kind: 'flat' | 'tiered' | 'custom'
-  source: string
-  source_hash: string
-  expression_version?: number
-  used_vars: string[]
-  branches: {
-    id: string
-    label: string
-    min: number
-    max?: number
-    prices: Record<string, number>
-    reachable?: boolean
-  }[]
-  reason?: string
-  can_scale?: boolean
-}
-
-export async function describeMonitorPricing(
-  modelName: string,
-  pricing: PricingValues
-): Promise<{
-  effective: PricingValues
-  editor?: MonitorPricingEditorDescription
-  rule_document?: RuleDocument
-}> {
-  const response = await api.post('/api/option/model_pricing/preview', {
-    model_name: modelName,
-    pricing,
-  })
-  if (!response.data.success) throw new Error(response.data.message)
-  return response.data.data
 }
 
 export type MonitorPricingReview = {
@@ -83,7 +47,6 @@ export type MonitorPricingScenario = {
 }
 
 export type MonitorScenarioResults = {
-  context_version: string
   results: {
     scenario_id: string
     sides: {
@@ -96,6 +59,7 @@ export type MonitorScenarioResults = {
     differences?: unknown[]
   }[]
   coverage: string
+  checked_at: number
 }
 
 export async function getMonitorModelPricing(

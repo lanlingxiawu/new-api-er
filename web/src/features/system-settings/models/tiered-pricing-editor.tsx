@@ -1046,6 +1046,11 @@ export type TieredPricingEditorProps = {
   requestRuleExpr: string
   onBillingExprChange: (next: string) => void
   onRequestRuleExprChange: (next: string) => void
+  hidePresets?: boolean
+  hideEstimator?: boolean
+  pricingOnly?: boolean
+  onInvalidChange?: (invalid: boolean) => void
+  onUnfinishedChange?: (unfinished: boolean) => void
 }
 
 type EditorMode = 'visual' | 'raw'
@@ -1063,6 +1068,11 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   requestRuleExpr: currentRequestRuleExpr,
   onBillingExprChange,
   onRequestRuleExprChange,
+  hidePresets = false,
+  hideEstimator = false,
+  pricingOnly = false,
+  onInvalidChange,
+  onUnfinishedChange,
 }: TieredPricingEditorProps) {
   const { t } = useTranslation()
   const [visualDocument, setVisualDocument] =
@@ -1098,10 +1108,20 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
       visualDocument ? serializeVisualBillingDocument(visualDocument) : null,
     [visualDocument]
   )
-  const invalidDraft = editorMode === 'visual' && serialized?.ok === false
+  const invalidDraft =
+    (pricingOnly && !visualDocument) ||
+    (editorMode === 'visual' && serialized?.ok === false)
   const canUseVisualRules =
     !ruleExpr || tryParseRequestRuleExpr(ruleExpr) !== null
   const effectiveExpr = baseExpr
+
+  useEffect(() => {
+    onInvalidChange?.(invalidDraft)
+  }, [invalidDraft, onInvalidChange])
+  const unfinished = editorMode === 'visual' && serialized?.ok === false
+  useEffect(() => {
+    onUnfinishedChange?.(unfinished)
+  }, [unfinished, onUnfinishedChange])
 
   const handleDocumentChange = useCallback(
     (next: VisualBillingDocument) => {
@@ -1180,61 +1200,80 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
 
   return (
     <div className='space-y-5' data-billing-invalid={invalidDraft || undefined}>
-      <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end'>
-        <Field className='gap-2'>
-          <FieldLabel>{t('Editor mode')}</FieldLabel>
-          <Select
-            items={[
-              { value: 'visual', label: t('Visual editor') },
-              { value: 'raw', label: t('Expression editor') },
-            ]}
-            value={editorMode}
-            onValueChange={(value) => handleModeChange(value as EditorMode)}
-          >
-            <SelectTrigger
-              aria-label={t('Editor mode')}
-              className='w-full sm:w-56'
-              size='sm'
+      {!pricingOnly && (
+        <div className='grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end'>
+          <Field className='gap-2'>
+            <FieldLabel>{t('Editor mode')}</FieldLabel>
+            <Select
+              items={[
+                { value: 'visual', label: t('Visual editor') },
+                { value: 'raw', label: t('Expression editor') },
+              ]}
+              value={editorMode}
+              onValueChange={(value) => handleModeChange(value as EditorMode)}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false}>
-              <SelectGroup>
-                <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
-                <SelectItem value='raw' disabled={invalidDraft}>
-                  {t('Expression editor')}
-                </SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-        {editorMode === 'raw' && (
-          <div className='sm:pb-0.5'>
-            <LlmPromptHelper modelName={modelName} />
-          </div>
-        )}
-      </div>
+              <SelectTrigger
+                aria-label={t('Editor mode')}
+                className='w-full sm:w-56'
+                size='sm'
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
+                  <SelectItem value='raw' disabled={invalidDraft}>
+                    {t('Expression editor')}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          {editorMode === 'raw' && (
+            <div className='sm:pb-0.5'>
+              <LlmPromptHelper modelName={modelName} />
+            </div>
+          )}
+        </div>
+      )}
 
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
-        )}
-      </p>
-      <PresetSection applyPreset={applyPreset} />
+      {!pricingOnly && (
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
+          )}
+        </p>
+      )}
+      {!pricingOnly && !hidePresets && (
+        <PresetSection applyPreset={applyPreset} />
+      )}
 
-      <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
+      <div
+        className={cn(
+          'space-y-3',
+          !pricingOnly && 'bg-muted/30 rounded-md border p-3'
+        )}
+      >
         {editorMode === 'visual' && visualDocument && (
           <VisualBillingDocumentEditor
             document={visualDocument}
             currency={currency}
             issues={serialized && !serialized.ok ? serialized.issues : []}
             onChange={handleDocumentChange}
+            flat={pricingOnly}
           />
         )}
-        {editorMode === 'raw' && (
+        {editorMode === 'raw' && !pricingOnly && (
           <RawExprEditor exprString={rawExpr} onChange={handleRawChange} />
         )}
-        {invalidDraft && (
+        {pricingOnly && !visualDocument && (
+          <p role='alert' className='text-destructive text-sm'>
+            {t(
+              'Edit this expression in Model pricing. Its current pricing is preserved.'
+            )}
+          </p>
+        )}
+        {invalidDraft && visualDocument && !pricingOnly && (
           <p role='alert' className='text-destructive text-sm'>
             {t(
               'Complete the invalid fields before saving or switching modes. The last valid expression is preserved.'
@@ -1242,7 +1281,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
           </p>
         )}
 
-        {editorMode === 'visual' && (
+        {editorMode === 'visual' && !pricingOnly && (
           <div className='space-y-3 border-t pt-3'>
             <div className='space-y-1'>
               <h4 className='text-sm font-medium'>
@@ -1303,15 +1342,17 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         )}
       </div>
 
-      <CostEstimator
-        effectiveExpr={effectiveExpr}
-        fullExpr={
-          editorMode === 'raw'
-            ? rawExpr
-            : combineBillingExpr(effectiveExpr, ruleExpr)
-        }
-        currency={currency}
-      />
+      {!pricingOnly && !hideEstimator && (
+        <CostEstimator
+          effectiveExpr={effectiveExpr}
+          fullExpr={
+            editorMode === 'raw'
+              ? rawExpr
+              : combineBillingExpr(effectiveExpr, ruleExpr)
+          }
+          currency={currency}
+        />
+      )}
     </div>
   )
 })

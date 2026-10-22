@@ -116,6 +116,24 @@ For commercial licensing, please contact support@quantumnous.com
   padding: 0 0.75rem 0.75rem;
 }
 
+.billing-pricing-flat .billing-condition-group,
+.billing-pricing-flat .billing-condition-row {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.billing-pricing-flat .billing-condition-row,
+.billing-pricing-flat .billing-condition-header,
+.billing-pricing-flat .billing-condition-range {
+  padding-inline: 0;
+}
+
+.billing-pricing-flat .billing-condition-children > li::before,
+.billing-pricing-flat .billing-condition-children > li::after {
+  content: none;
+}
+
 @media (max-width: 480px) {
   .billing-condition-children {
     margin-inline: 0.5rem;

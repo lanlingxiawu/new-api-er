@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { FolderPlus, Plus, Ungroup, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTableRowActionMenu } from '@/components/data-table'
@@ -137,6 +138,8 @@ type ConditionProps = {
   onChange: (node: VisualCondition) => void
   onRemove?: () => void
   implicitRange?: boolean
+  deferValidation?: boolean
+  autoFocus?: boolean
 }
 
 function ConditionActions(props: ConditionProps & { group: boolean }) {
@@ -275,6 +278,7 @@ function ConditionFields(props: ConditionProps) {
               onChange={(operator) => props.onChange({ ...node, operator })}
             />
             <BillingConditionValueInput
+              autoFocus={props.autoFocus}
               probe={node.probe}
               value={node.value}
               invalid={errors.some(
@@ -350,6 +354,7 @@ function ConditionFields(props: ConditionProps) {
 
 export function VisualConditionTree(props: ConditionProps) {
   const { t } = useTranslation()
+  const [touched, setTouched] = useState(false)
   const node = props.node
   const range = conditionRange(node)
   const group = node.kind !== 'comparison' && !props.implicitRange
@@ -358,9 +363,15 @@ export function VisualConditionTree(props: ConditionProps) {
       <div
         role='group'
         aria-label={t('Condition {{path}}', { path: props.path })}
-        className='billing-condition-row flex flex-wrap items-center gap-2'
+        className='billing-condition-row flex items-start gap-2'
+        onBlurCapture={() => setTouched(true)}
       >
-        <ConditionFields {...props} />
+        <div className='min-w-0 flex-1'>
+          <ConditionFields
+            {...props}
+            issues={props.deferValidation && !touched ? [] : props.issues}
+          />
+        </div>
         <ConditionActions {...props} group={false} />
       </div>
     )
@@ -416,6 +427,7 @@ export function VisualConditionTree(props: ConditionProps) {
             <li>
               <VisualConditionTree
                 {...props}
+                autoFocus={false}
                 node={node.child}
                 path={`${props.path}.1`}
                 implicitRange={false}
@@ -428,6 +440,7 @@ export function VisualConditionTree(props: ConditionProps) {
               <li key={row.node.id}>
                 <VisualConditionTree
                   {...props}
+                  autoFocus={false}
                   node={row.node}
                   path={`${props.path}.${rowIndex + 1}`}
                   implicitRange={row.count === 2}

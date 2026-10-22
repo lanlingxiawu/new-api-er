@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Combobox } from '@/components/ui/combobox'
@@ -120,8 +120,13 @@ export function BillingConditionValueInput(props: {
   invalid?: boolean
   normalizeNumberDrafts?: boolean
   probe?: VisualComparison['probe']
+  autoFocus?: boolean
 }) {
   const { t, i18n } = useTranslation()
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (props.autoFocus) inputRef.current?.focus()
+  }, [props.autoFocus])
   if (
     props.probe === 'weekday' &&
     !props.normalizeNumberDrafts &&
@@ -171,13 +176,15 @@ export function BillingConditionValueInput(props: {
   }
   return (
     <Input
+      ref={inputRef}
       type='text'
       inputMode='numeric'
+      placeholder={t('Value')}
       aria-label={props.label ?? t('Condition value')}
       aria-invalid={props.invalid || undefined}
       value={props.value}
       onChange={(event) => props.onChange(event.target.value)}
-      className='w-24'
+      className='w-32'
     />
   )
 }

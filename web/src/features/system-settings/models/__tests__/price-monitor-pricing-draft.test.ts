@@ -17,6 +17,7 @@ import {
   expressionPriceFields,
   patchExpressionPrice,
   patchExpressionPrices,
+  patchFixedPrice,
   parsePriceDraft,
   pricingDraftFingerprint,
   scaleExpressionPrices,
@@ -27,7 +28,6 @@ import {
   addPricingTier,
   removePricingTier,
   patchPricingThreshold,
-  generateFlatPricing,
 } from '../price-monitor-pricing-draft'
 
 test('ordinary expressions expose prices without requiring a tier wrapper', () => {
@@ -119,11 +119,208 @@ test('tier creation and edits make contiguous ranges without changing prices', (
   assert.throws(() => removePricingTier(flat, 0))
 })
 
-test('new model forms require explicit basic prices and retain zero', () => {
-  assert.equal(generateFlatPricing({ p: '0', c: '2' }), 'p * 0 + c * 2')
-  assert.throws(() => generateFlatPricing({ p: '2' }))
-  assert.throws(() => generateFlatPricing({ p: '', c: '2' }))
-  assert.throws(() => generateFlatPricing({ p: '-1', c: '2' }))
+test('fixed request and image prices parse with units, quantities and amounts', () => {
+  const request = expressionPriceFields('tier("request", fixed(2))')
+  assert.equal(request?.length, 1)
+  const field = request?.[0]
+  assert.equal(field?.unit, 'request')
+  assert.equal(field?.price, '2')
+  assert.equal(field?.label, 'request')
+  assert.equal(field?.wrapped, true)
+  assert.equal(field?.quantity, undefined)
+  assert.equal(field?.min, 0)
+  assert.equal(field?.max, undefined)
+  const tiered = expressionPriceFields(
+    'v1:len <= 272000 ? tier("short", fixed(1)) : tier("long", fixed(2))'
+  )
+  assert.deepEqual(
+    tiered?.map((branch) => [
+      branch.min,
+      branch.max,
+      branch.reachable,
+      branch.price,
+    ]),
+    [
+      [0, 272000, true, '1'],
+      [272001, undefined, true, '2'],
+    ]
+  )
+  for (const expression of [
+    'tier("image", fixed(0.05)) * image_count',
+    'image_count * tier("image", fixed(0.05))',
+  ]) {
+    const fields = expressionPriceFields(expression)
+    assert.equal(fields?.length, 1)
+    assert.equal(fields?.[0]?.unit, 'image')
+    assert.equal(fields?.[0]?.quantity, 'image_count')
+    assert.equal(fields?.[0]?.price, '0.05')
+    assert.equal(fields?.[0]?.label, 'image')
+    assert.equal(fields?.[0]?.wrapped, true)
+  }
+  assert.deepEqual(expressionPriceFields('p * 2 + img_cr * 0.5')?.[0]?.prices, {
+    p: '2',
+    img_cr: '0.5',
+  })
+})
+
+test('fixed pricing rejects bare calls, linear mixes and image_count lanes', () => {
+  for (const expression of [
+    'fixed(2)',
+    'fixed(-1)',
+    'tier("a", fixed(1 + 1))',
+    'p*2 + fixed(1)',
+    'tier("a", fixed(2)) + p*2',
+    'tier("a", fixed(2)) + tier("b", fixed(3))',
+    'image_count * 3',
+    'len <= 100 ? tier("a", fixed(1)) : p*2',
+  ]) {
+    assert.equal(expressionPriceFields(expression), null)
+  }
+})
+
+test('fixed price edits replace only the amount span and keep the prefix', () => {
+  const expression =
+    'v1:len <= 272000 ? tier("short", fixed(1)) : tier("long", fixed(2))'
+  assert.equal(
+    patchFixedPrice(expression, 0, '3.5'),
+    'v1:len <= 272000 ? tier("short", fixed(3.5)) : tier("long", fixed(2))'
+  )
+  assert.equal(patchFixedPrice(expression, 1, '2'), expression)
+  assert.equal(
+    patchFixedPrice('tier("image", fixed(0.05)) * image_count', 0, '0.1'),
+    'tier("image", fixed(0.1)) * image_count'
+  )
+  assert.throws(() => patchFixedPrice(expression, 0, ''))
+  assert.throws(() => patchFixedPrice(expression, 5, '3'))
+  assert.throws(() => patchFixedPrice('p * 2 + c * 4', 0, '3'))
+})
+
+test('batch fixed prices cover every tier and reject token-only expressions', () => {
+  const expression = 'len <= 100 ? tier("a", fixed(1)) : tier("b", fixed(2))'
+  const changed = patchExpressionPrices(expression, 'fixed', ['3', '4'])
+  assert.deepEqual(
+    expressionPriceFields(changed)?.map((field) => field.price),
+    ['3', '4']
+  )
+  assert.throws(() => patchExpressionPrices(expression, 'fixed', ['3', '']))
+  assert.throws(() => patchExpressionPrices('p * 2', 'fixed', ['3']))
+  const bulk = bulkExpressionPrice(
+    [
+      {
+        model_name: 'm',
+        expected_version: 'v',
+        pricing: { 'billing_setting.billing_expr': expression },
+      },
+    ],
+    'fixed',
+    '0.5'
+  )
+  assert.deepEqual(
+    expressionPriceFields(
+      String(bulk[0]?.pricing['billing_setting.billing_expr'])
+    )?.map((field) => field.price),
+    ['0.5', '0.5']
+  )
+})
+
+test('percentage changes scale fixed tier amounts and reject unparseable fixed rules', () => {
+  const fixed = [
+    {
+      model_name: 'm',
+      expected_version: 'v',
+      pricing: {
+        'billing_setting.billing_expr':
+          'v1:len <= 100 ? tier("a", fixed(1)) : tier("b", fixed(0.05)) * image_count',
+      },
+    },
+  ]
+  const scaled = scaleExpressionPrices(fixed, '10')
+  assert.equal(
+    scaled[0]?.pricing['billing_setting.billing_expr'],
+    'v1:len <= 100 ? tier("a", fixed(1.1)) : tier("b", fixed(0.055)) * image_count'
+  )
+  const complex = [
+    {
+      model_name: 'm',
+      expected_version: 'v',
+      pricing: {
+        'billing_setting.billing_expr':
+          'has(param("x"),"a") ? tier("a", fixed(1)) : tier("b", fixed(2))',
+      },
+    },
+  ]
+  assert.throws(() => scaleExpressionPrices(complex, '10'))
+})
+
+test('structural tier edits keep fixed amounts and image multipliers intact', () => {
+  const split = addPricingTier('v1:tier("request", fixed(2))', '272000')
+  assert.ok(split.startsWith('v1:'))
+  assert.deepEqual(
+    expressionPriceFields(split)?.map((field) => [
+      field.min,
+      field.max,
+      field.unit,
+      field.price,
+    ]),
+    [
+      [0, 272000, 'request', '2'],
+      [272001, undefined, 'request', '2'],
+    ]
+  )
+  assert.deepEqual(
+    expressionPriceFields(patchPricingThreshold(split, 0, '271999'))?.map(
+      (field) => [field.min, field.max, field.price]
+    ),
+    [
+      [0, 271999, '2'],
+      [272000, undefined, '2'],
+    ]
+  )
+  assert.deepEqual(
+    expressionPriceFields(patchPricingThreshold(split, 0, '272001'))?.map(
+      (field) => [field.min, field.max, field.price]
+    ),
+    [
+      [0, 272001, '2'],
+      [272002, undefined, '2'],
+    ]
+  )
+  assert.deepEqual(
+    expressionPriceFields(removePricingTier(split, 1))?.map((field) => [
+      field.min,
+      field.max,
+      field.unit,
+      field.price,
+    ]),
+    [[0, undefined, 'request', '2']]
+  )
+  const imageSplit = addPricingTier(
+    'tier("image", fixed(0.05)) * image_count',
+    '50'
+  )
+  assert.deepEqual(
+    expressionPriceFields(imageSplit)?.map((field) => [
+      field.min,
+      field.max,
+      field.unit,
+      field.quantity,
+      field.price,
+    ]),
+    [
+      [0, 50, 'image', 'image_count', '0.05'],
+      [51, undefined, 'image', 'image_count', '0.05'],
+    ]
+  )
+  assert.deepEqual(
+    expressionPriceFields(removePricingTier(imageSplit, 0))?.map((field) => [
+      field.min,
+      field.max,
+      field.unit,
+      field.quantity,
+      field.price,
+    ]),
+    [[0, undefined, 'image', 'image_count', '0.05']]
+  )
 })
 
 test('numeric edits retain a parseable rule and zero-percent changes are lossless', () => {
@@ -142,7 +339,6 @@ test('numeric edits retain a parseable rule and zero-percent changes are lossles
     },
   ]
   assert.deepEqual(scaleExpressionPrices(changes, '0'), changes)
-  assert.match(generateFlatPricing({ p: '1e20', c: '2' }), /p \* 1e\+20/)
   assert.match(patchExpressionPrice('p*1+c*3', 0, 'p', '1e20'), /p\*1e\+20/)
 })
 

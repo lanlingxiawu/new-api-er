@@ -34,6 +34,148 @@ const expression =
 const chainedExpression =
   'len <= 32000 && c <= 200 ? tier("discount", p * 0.8 + c * 2 + cr * 0.16 + cc * 0.17) : len <= 32000 ? tier("short", p * 0.8 + c * 8 + cr * 0.16 + cc * 0.17) : len <= 128000 ? tier("mid", p * 1.2 + c * 16 + cr * 0.16 + cc * 0.17) : tier("long", p * 2.4 + c * 24 + cr * 0.16 + cc * 0.17)'
 
+test('adds independent sibling tiers in the price-only editor and preserves the fallback and request rules', async () => {
+  const onBillingExprChange = vi.fn()
+  const onRequestRuleExprChange = vi.fn()
+  const onInvalidChange = vi.fn()
+  const props = {
+    pricingOnly: true,
+    billingExpr: 'tier("base", p * 5 + c * 25 + cr * 0)',
+    requestRuleExpr: '(header("x-plan") == "fast" ? 2.00 : 1)',
+    onBillingExprChange,
+    onRequestRuleExprChange,
+    onInvalidChange,
+  }
+  const view = render(<TieredPricingEditor {...props} />)
+  const user = userEvent.setup()
+  expect(
+    screen.queryByRole('combobox', { name: 'Editor mode' })
+  ).not.toBeInTheDocument()
+  expect(screen.queryByText('Request rule pricing')).not.toBeInTheDocument()
+  expect(screen.queryByText('Preset templates')).not.toBeInTheDocument()
+  expect(screen.queryByText('Token estimator')).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Add pricing branch' })
+  ).not.toBeInTheDocument()
+
+  for (const [index, threshold, price] of [
+    [1, '32000', '1'],
+    [2, '128000', '3'],
+  ] as const) {
+    const lastValid = onBillingExprChange.mock.calls.length
+    await user.click(screen.getByRole('button', { name: 'Add tier' }))
+    expect(onInvalidChange).toHaveBeenLastCalledWith(true)
+    expect(onBillingExprChange).toHaveBeenCalledTimes(lastValid)
+    const tier = within(
+      screen.getByRole('group', { name: `Pricing tier tier_${index}` })
+    )
+    const thresholdField = tier.getByRole('textbox', {
+      name: 'Condition value',
+    })
+    expect(thresholdField).toHaveFocus()
+    expect(thresholdField).not.toHaveAttribute('aria-invalid', 'true')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getAllByRole('button', {
+        name: /^Edit pricing rule /,
+        expanded: true,
+      })
+    ).toHaveLength(1)
+    fireEvent.blur(thresholdField)
+    expect(thresholdField).toHaveAttribute('aria-invalid', 'true')
+    expect(tier.getByRole('alert')).toHaveTextContent(
+      'Enter a valid condition value.'
+    )
+    expect(
+      tier.queryByRole('combobox', { name: 'Timezone' })
+    ).not.toBeInTheDocument()
+    fireEvent.change(tier.getByRole('textbox', { name: 'Condition value' }), {
+      target: { value: threshold },
+    })
+    fireEvent.change(tier.getByRole('textbox', { name: 'Input price' }), {
+      target: { value: price },
+    })
+    expect(onInvalidChange).toHaveBeenLastCalledWith(false)
+    expect(tier.queryByRole('alert')).not.toBeInTheDocument()
+  }
+  const generated = onBillingExprChange.mock.lastCall?.[0]
+  assert(generated)
+  for (const [len, matchedTier, cost] of [
+    [31999, 'tier_1', 1],
+    [32000, 'tier_1', 1],
+    [32001, 'tier_2', 3],
+    [128000, 'tier_2', 3],
+    [128001, 'base', 5],
+  ] as const) {
+    expect(
+      evaluateBillingExpression(generated, {
+        tokens: { len, p: 1, c: 0, cr: 0 },
+      })
+    ).toMatchObject({ status: 'success', matchedTier, cost })
+  }
+  expect(generated).toContain('tier("base", p * 5 + c * 25 + cr * 0)')
+  expect(onRequestRuleExprChange).not.toHaveBeenCalled()
+  view.unmount()
+  render(<TieredPricingEditor {...props} billingExpr={generated} />)
+  expect(screen.getAllByRole('group', { name: /^Pricing tier / })).toHaveLength(
+    3
+  )
+  await user.click(screen.getByRole('button', { name: 'Branch actions 2' }))
+  await user.click(screen.getByRole('menuitem', { name: 'Remove branch' }))
+  expect(
+    evaluateBillingExpression(onBillingExprChange.mock.lastCall?.[0], {
+      tokens: { len: 32001, p: 1, c: 0, cr: 0 },
+    })
+  ).toMatchObject({ status: 'success', matchedTier: 'base', cost: 5 })
+  expect(onRequestRuleExprChange).not.toHaveBeenCalled()
+})
+
+test('keeps fixed prices when adding a tier and blocks unsupported expressions in price-only mode', async () => {
+  const onBillingExprChange = vi.fn()
+  const onInvalidChange = vi.fn()
+  const view = render(
+    <TieredPricingEditor
+      pricingOnly
+      billingExpr='tier("request", fixed(0.05))'
+      requestRuleExpr=''
+      onBillingExprChange={onBillingExprChange}
+      onRequestRuleExprChange={vi.fn()}
+      onInvalidChange={onInvalidChange}
+    />
+  )
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Add tier' }))
+  const tier = within(
+    screen.getByRole('group', { name: 'Pricing tier tier_1' })
+  )
+  fireEvent.change(tier.getByRole('textbox', { name: 'Condition value' }), {
+    target: { value: '100' },
+  })
+  expect(tier.getByRole('textbox', { name: 'Price per request' })).toHaveValue(
+    '0.05'
+  )
+  expect(onBillingExprChange.mock.lastCall?.[0]).toContain('fixed(0.05)')
+  view.unmount()
+  onBillingExprChange.mockClear()
+  render(
+    <TieredPricingEditor
+      pricingOnly
+      billingExpr='max(p * 2, 100)'
+      requestRuleExpr=''
+      onBillingExprChange={onBillingExprChange}
+      onRequestRuleExprChange={vi.fn()}
+      onInvalidChange={onInvalidChange}
+    />
+  )
+  expect(screen.getByRole('alert')).toBeVisible()
+  expect(
+    screen.queryByRole('textbox', { name: 'Billing expression' })
+  ).not.toBeInTheDocument()
+  expect(onInvalidChange).toHaveBeenLastCalledWith(true)
+  expect(onBillingExprChange).not.toHaveBeenCalled()
+})
+
 test.each([
   ['zhCN', '星期一'],
   ['zhTW', '星期一'],

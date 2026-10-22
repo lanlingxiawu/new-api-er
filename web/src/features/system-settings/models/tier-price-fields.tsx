@@ -219,8 +219,8 @@ export function TierPriceFields(props: TierPriceFieldsProps) {
           </div>
 
           <div className='space-y-2'>
-            <div className='flex h-7 items-center'>
-              {props.onCacheModeChange && (
+            {props.onCacheModeChange && (
+              <div className='flex h-7 items-center'>
                 <Tabs
                   value={props.cacheMode}
                   onValueChange={(value) =>
@@ -243,8 +243,8 @@ export function TierPriceFields(props: TierPriceFieldsProps) {
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
-              )}
-            </div>
+              </div>
+            )}
             <div className='flex flex-wrap gap-x-4 gap-y-2'>
               {CACHE_PRICE_VARS.map((variable) => {
                 if (

@@ -89,22 +89,12 @@ export const TOKEN_PRICE_VARIABLES = [
   'cc',
   'cc1h',
   'img',
+  'img_cr',
   'img_o',
   'ai',
   'ao',
 ] as const
 export type TokenPriceVariable = (typeof TOKEN_PRICE_VARIABLES)[number]
-
-export const LEGACY_PRICING_FIELDS = [
-  ['ModelRatio', 'Input ratio'],
-  ['CompletionRatio', 'Completion ratio'],
-  ['CacheRatio', 'Cache ratio'],
-  ['CreateCacheRatio', 'Cache creation ratio'],
-  ['ImageRatio', 'Image ratio'],
-  ['AudioRatio', 'Audio ratio'],
-  ['AudioCompletionRatio', 'Audio completion ratio'],
-  ['ModelPrice', 'Fixed price'],
-] as const
 
 export function parsePriceDraft(value: string): number | undefined {
   if (!value.trim()) return undefined
@@ -154,24 +144,6 @@ function pricingCoefficientText(value: number): string {
     : String(value)
 }
 
-export function generateFlatPricing(
-  prices: Partial<Record<TokenPriceVariable, string>>
-): string {
-  if (
-    parsePriceDraft(prices.p ?? '') === undefined ||
-    parsePriceDraft(prices.c ?? '') === undefined
-  ) {
-    throw new Error('Enter input and output prices')
-  }
-  return TOKEN_PRICE_VARIABLES.filter((key) => prices[key] !== undefined)
-    .map((key) => {
-      const value = parsePriceDraft(prices[key] ?? '')
-      if (value === undefined) throw new Error('Enter a valid price')
-      return `${key} * ${pricingCoefficientText(value)}`
-    })
-    .join(' + ')
-}
-
 // Structural changes are explicit actions. Price-only edits use source offsets
 // instead, retaining every condition and tier marker byte-for-byte.
 function rebuildPricingTiers(
@@ -207,6 +179,8 @@ function rebuildPricingTiers(
   const prefix = expression.match(/^\s*v1\s*:/)?.[0] ?? ''
   const bodies = sorted.map((field) => {
     const body = expression.slice(field.start, field.end)
+    // Quantity leaves span the whole tier(...) * image_count leaf already.
+    if (field.quantity) return body
     return field.wrapped
       ? `tier(${JSON.stringify(field.label)}, ${body})`
       : `(${body})`
@@ -332,6 +306,10 @@ function replaceTierPrice(
   variable: TokenPriceVariable,
   value: string
 ): string {
+  // Fixed leaves cannot gain token lanes; the relay rejects the combination.
+  if (field.unit !== undefined) {
+    throw new Error('Open pricing rule cards to change this price')
+  }
   value = pricingCoefficientText(Number(value))
   if (
     field.prices[variable] !== undefined &&
@@ -361,16 +339,45 @@ function replaceTierPrice(
   return expression.slice(0, field.start) + next + expression.slice(field.end)
 }
 
+export function patchFixedPrice(
+  expression: string,
+  tier: number,
+  value: string
+): string {
+  if (parsePriceDraft(value) === undefined) {
+    throw new Error('Enter a valid price')
+  }
+  const fields = expressionPriceFields(expression)
+  const field = fields?.[tier]
+  if (!field || field.unit === undefined) {
+    throw new Error('Open pricing rule cards to change this price')
+  }
+  if (field.price !== undefined && Number(field.price) === Number(value)) {
+    return expression
+  }
+  const coefficients = field.coefficients['fixed'] ?? []
+  const coefficient = coefficients[0]
+  if (coefficients.length !== 1 || !coefficient) {
+    throw new Error('Open pricing rule cards to change this price')
+  }
+  return (
+    expression.slice(0, coefficient.start) +
+    pricingCoefficientText(Number(value)) +
+    expression.slice(coefficient.end)
+  )
+}
+
 export function patchExpressionPrices(
   expression: string,
-  variable: TokenPriceVariable,
+  variable: TokenPriceVariable | 'fixed',
   values: string[]
 ): string {
   const fields = expressionPriceFields(expression)
   if (
     !fields ||
     fields.length !== values.length ||
-    values.some((value) => parsePriceDraft(value) === undefined)
+    values.some((value) => parsePriceDraft(value) === undefined) ||
+    (variable === 'fixed' && fields.some((field) => field.price === undefined))
   ) {
     throw new Error('Enter the new price item for every tier')
   }
@@ -380,7 +387,10 @@ export function patchExpressionPrices(
     const field = fields[index]
     const value = values[index]
     if (field && value !== undefined) {
-      next = replaceTierPrice(next, field, variable, value)
+      next =
+        variable === 'fixed'
+          ? patchFixedPrice(next, index, value)
+          : replaceTierPrice(next, field, variable, value)
     }
   }
   return next
@@ -388,7 +398,7 @@ export function patchExpressionPrices(
 
 export function bulkExpressionPrice(
   changes: MonitorPricingChange[],
-  variable: TokenPriceVariable,
+  variable: TokenPriceVariable | 'fixed',
   value: string
 ): MonitorPricingChange[] {
   if (parsePriceDraft(value) === undefined) {
@@ -434,6 +444,11 @@ export function scaleExpressionPrices(
       if (!expression.trim()) {
         throw new Error('Open pricing rule cards to change this price')
       }
+      // Wrapping fixed pricing in (body) * factor produces an expression the
+      // relay rejects, so unparseable fixed rules stay card-only.
+      if (/\bfixed\s*\(/.test(expression)) {
+        throw new Error('Open pricing rule cards to change this price')
+      }
       const ruleAt = expression.indexOf('|||')
       let body = ruleAt === -1 ? expression : expression.slice(0, ruleAt)
       const rules = ruleAt === -1 ? '' : expression.slice(ruleAt)
@@ -464,6 +479,17 @@ export function scaleExpressionPrices(
             )
           )
         }
+      }
+      if (tier.price !== undefined) {
+        next = patchFixedPrice(
+          next,
+          index,
+          String(
+            Number(
+              (Number(tier.price) * (1 + percentage / 100)).toPrecision(15)
+            )
+          )
+        )
       }
     }
     return {
@@ -516,7 +542,7 @@ export function boundaryPricingScenarios(
 export function applyBatchTokenPrice(
   changes: MonitorPricingChange[],
   entries: MonitorPricingEntry[],
-  variable: TokenPriceVariable,
+  variable: TokenPriceVariable | 'fixed',
   value: string,
   tokenPriceFactor: number
 ): MonitorPricingChange[] {

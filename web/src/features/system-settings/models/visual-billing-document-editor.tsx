@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ChevronDown } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ChevronDown, Plus } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { DataTableRowActionMenu } from '@/components/data-table'
@@ -45,6 +45,7 @@ import {
   type VisualPricingNode,
   type VisualCondition,
 } from '@/features/pricing/lib/billing-expression/visual'
+import { cn } from '@/lib/utils'
 
 import { TierPriceFields } from './tier-price-fields'
 import { VisualConditionTree } from './visual-condition-tree'
@@ -55,6 +56,7 @@ type PricingNodeProps = {
   currency: PricingCurrency
   issues: VisualBillingIssue[]
   onChange: (node: VisualPricingNode) => void
+  flat?: boolean
 }
 
 function PricingTierFields(
@@ -81,30 +83,32 @@ function PricingTierFields(
             className='w-40 max-w-full'
           />
         </div>
-        <Button
-          type='button'
-          variant='outline'
-          size='sm'
-          onClick={() =>
-            props.onChange({
-              id: visualNodeId(),
-              kind: 'branch',
-              condition: createEmptyVisualCondition(),
-              yes: {
-                ...node,
+        {!props.flat && (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() =>
+              props.onChange({
                 id: visualNodeId(),
-                origin: undefined,
-                prices: node.prices.map(({ variable, value }) => ({
-                  variable,
-                  value,
-                })),
-              },
-              no: node,
-            })
-          }
-        >
-          {t('Add pricing branch')}
-        </Button>
+                kind: 'branch',
+                condition: createEmptyVisualCondition(),
+                yes: {
+                  ...node,
+                  id: visualNodeId(),
+                  origin: undefined,
+                  prices: node.prices.map(({ variable, value }) => ({
+                    variable,
+                    value,
+                  })),
+                },
+                no: node,
+              })
+            }
+          >
+            {t('Add pricing branch')}
+          </Button>
+        )}
       </div>
       <TierPriceFields
         currency={props.currency}
@@ -167,6 +171,8 @@ function PricingRuleCard(
     number: string
     first: boolean
     fallback: boolean
+    expanded?: boolean
+    onExpandedChange?: (expanded: boolean) => void
   }
 ) {
   const { t, i18n } = useTranslation()
@@ -213,22 +219,29 @@ function PricingRuleCard(
     ids.has(issue.id.split(':')[0])
   )
   useEffect(() => {
-    if (hasIssues) setOpen(true)
-  }, [hasIssues])
+    if (hasIssues && !props.flat) setOpen(true)
+  }, [hasIssues, props.flat])
+  const isOpen = props.flat ? props.expanded === true : open || hasIssues
 
   return (
     <Collapsible
-      open={open || hasIssues}
-      onOpenChange={setOpen}
+      open={isOpen}
+      onOpenChange={props.flat ? props.onExpandedChange : setOpen}
       render={
         <section
           role='group'
           aria-label={t('Pricing tier {{name}}', { name })}
         />
       }
-      className='bg-background min-w-0 overflow-hidden rounded-xl border data-open:border-blue-300 dark:data-open:border-blue-800'
+      className={cn(
+        'min-w-0 overflow-hidden',
+        !props.flat &&
+          'bg-background rounded-xl border data-open:border-blue-300 dark:data-open:border-blue-800'
+      )}
     >
-      <div className='flex items-start gap-1 p-3'>
+      <div
+        className={cn('flex items-start gap-1', props.flat ? 'py-3' : 'p-3')}
+      >
         <CollapsibleTrigger
           aria-label={t('Edit pricing rule {{name}}', { name })}
           className='flex min-w-0 flex-1 items-start gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2'
@@ -243,10 +256,12 @@ function PricingRuleCard(
                 <Badge variant='outline'>{t('Fallback tier')}</Badge>
               )}
             </span>
-            <span className='text-muted-foreground block text-sm break-words'>
-              {matchDescription}
-            </span>
-            {tier.kind === 'tier' && (
+            {(!props.flat || !isOpen || node.kind === 'tier') && (
+              <span className='text-muted-foreground block text-sm break-words'>
+                {matchDescription}
+              </span>
+            )}
+            {tier.kind === 'tier' && (!props.flat || !isOpen) && (
               <span className='flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums'>
                 {tier.billingUnit === 'request' ? (
                   <span>
@@ -279,7 +294,10 @@ function PricingRuleCard(
           </span>
           <ChevronDown
             aria-hidden='true'
-            className={`mt-1 size-4 shrink-0 transition-transform ${open || hasIssues ? 'rotate-180' : ''}`}
+            className={cn(
+              'mt-1 size-4 shrink-0 transition-transform',
+              isOpen && 'rotate-180'
+            )}
           />
         </CollapsibleTrigger>
         {node.kind === 'branch' && (
@@ -295,7 +313,10 @@ function PricingRuleCard(
           </DataTableRowActionMenu>
         )}
       </div>
-      <CollapsibleContent keepMounted className='border-t p-3'>
+      <CollapsibleContent
+        keepMounted
+        className={cn(props.flat ? 'pb-4' : 'border-t p-3')}
+      >
         <div className='space-y-4'>
           {node.kind === 'branch' && (
             <div className='space-y-2'>
@@ -304,6 +325,8 @@ function PricingRuleCard(
                 node={node.condition}
                 path={props.number}
                 issues={props.issues}
+                deferValidation={props.flat}
+                autoFocus={props.flat && isOpen && !node.condition.origin}
                 onChange={(condition) => props.onChange({ ...node, condition })}
               />
             </div>
@@ -319,7 +342,7 @@ function PricingRuleCard(
               }
             />
           ) : (
-            <div className='space-y-3 border-l-2 pl-3'>
+            <div className={cn('space-y-3 pl-3', !props.flat && 'border-l-2')}>
               <p className='text-sm font-medium'>
                 {t('When conditions match')}
               </p>
@@ -341,15 +364,33 @@ function PricingRuleCard(
 
 function PricingRuleList(props: PricingNodeProps & { prefix: string }) {
   const { t } = useTranslation()
-  const rules: VisualPricingNode[] = []
-  let current = props.node
-  while (current.kind === 'branch') {
-    rules.push(current)
-    current = current.no
-  }
-  rules.push(current)
+  const rules = useMemo(() => {
+    const nodes: VisualPricingNode[] = []
+    let current = props.node
+    while (current.kind === 'branch') {
+      nodes.push(current)
+      current = current.no
+    }
+    nodes.push(current)
+    return nodes
+  }, [props.node])
+  const [expandedId, setExpandedId] = useState(props.node.id)
+  const previousIds = useRef(rules.map((rule) => rule.id))
+  useEffect(() => {
+    if (!props.flat) return
+    const added = rules.find((rule) => !previousIds.current.includes(rule.id))
+    if (added) {
+      setExpandedId(added.id)
+    } else if (expandedId && !rules.some((rule) => rule.id === expandedId)) {
+      setExpandedId(rules[0].id)
+    }
+    previousIds.current = rules.map((rule) => rule.id)
+  }, [props.flat, expandedId, rules])
   return (
-    <ol aria-label={t('Pricing rules')} className='min-w-0 space-y-3'>
+    <ol
+      aria-label={t('Pricing rules')}
+      className={cn('min-w-0', props.flat ? 'divide-y' : 'space-y-3')}
+    >
       {rules.map((node, index) => (
         <li key={node.id} className='min-w-0'>
           <PricingRuleCard
@@ -358,6 +399,10 @@ function PricingRuleList(props: PricingNodeProps & { prefix: string }) {
             number={`${props.prefix}${index + 1}`}
             first={index === 0}
             fallback={index > 0 && node.kind === 'tier'}
+            expanded={expandedId === node.id}
+            onExpandedChange={(expanded) =>
+              setExpandedId(expanded ? node.id : '')
+            }
             onChange={(next) => {
               let root = next
               for (let previous = index - 1; previous >= 0; previous--) {
@@ -378,10 +423,71 @@ export function VisualBillingDocumentEditor(props: {
   currency: PricingCurrency
   issues: VisualBillingIssue[]
   onChange: (document: VisualBillingDocument) => void
+  flat?: boolean
 }) {
   const { t } = useTranslation()
   return (
-    <div className='space-y-3'>
+    <div
+      className={cn(
+        'flex flex-col gap-3',
+        props.flat && 'billing-pricing-flat'
+      )}
+    >
+      {props.flat && (
+        <div className='flex items-center justify-between gap-3'>
+          <span className='text-sm font-medium'>{t('Pricing rules')}</span>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => {
+              const branches: Extract<VisualPricingNode, { kind: 'branch' }>[] =
+                []
+              let fallback = props.document.root
+              while (fallback.kind === 'branch') {
+                branches.push(fallback)
+                fallback = fallback.no
+              }
+              const labels = new Set<string>()
+              const pending = [props.document.root]
+              for (let index = 0; index < pending.length; index++) {
+                const node = pending[index]
+                if (node.kind === 'tier') labels.add(node.label)
+                else pending.push(node.yes, node.no)
+              }
+              let number = 1
+              while (labels.has(`tier_${number}`)) number++
+              let root: VisualPricingNode = {
+                id: visualNodeId(),
+                kind: 'branch',
+                condition: {
+                  ...createEmptyVisualCondition(),
+                  probe: 'len',
+                  operator: '<=',
+                },
+                yes: {
+                  ...fallback,
+                  id: visualNodeId(),
+                  origin: undefined,
+                  label: `tier_${number}`,
+                  prices: fallback.prices.map(({ variable, value }) => ({
+                    variable,
+                    value,
+                  })),
+                },
+                no: fallback,
+              }
+              for (let index = branches.length - 1; index >= 0; index--) {
+                root = { ...branches[index], no: root }
+              }
+              props.onChange({ ...props.document, root })
+            }}
+          >
+            <Plus aria-hidden='true' className='size-4' />
+            {t('Add tier')}
+          </Button>
+        </div>
+      )}
       {props.document.root.kind === 'branch' && (
         <p className='text-muted-foreground text-xs'>
           {t(
@@ -395,6 +501,7 @@ export function VisualBillingDocumentEditor(props: {
         source={props.document.source}
         currency={props.currency}
         issues={props.issues}
+        flat={props.flat}
         onChange={(root) => props.onChange({ ...props.document, root })}
       />
     </div>

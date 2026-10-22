@@ -14,6 +14,7 @@ const VARIABLES = new Set([
   'cc',
   'cc1h',
   'img',
+  'img_cr',
   'img_o',
   'ai',
   'ao',
@@ -31,9 +32,21 @@ export type PricingExpressionField = {
   max?: number
   reachable: boolean
   wrapped: boolean
+  unit?: 'request' | 'image'
+  price?: string
+  quantity?: 'image_count'
   prices: Partial<
     Record<
-      'p' | 'c' | 'cr' | 'cc' | 'cc1h' | 'img' | 'img_o' | 'ai' | 'ao',
+      | 'p'
+      | 'c'
+      | 'cr'
+      | 'cc'
+      | 'cc1h'
+      | 'img'
+      | 'img_cr'
+      | 'img_o'
+      | 'ai'
+      | 'ao',
       string
     >
   >
@@ -172,6 +185,24 @@ class PricingExpressionParser {
       }
       return { ...token, kind: 'number', children: [] }
     }
+    if (token.text === 'fixed') {
+      this.take('(')
+      const amount = this.take()
+      if (
+        !/^(?:\d|\.)/.test(amount.text) ||
+        !Number.isFinite(Number(amount.text))
+      ) {
+        throw new Error('invalid fixed price')
+      }
+      const close = this.take(')')
+      return {
+        kind: 'fixed',
+        text: 'fixed',
+        start: token.start,
+        end: close.end,
+        children: [{ ...amount, kind: 'number', children: [] }],
+      }
+    }
     if (/^[a-zA-Z_]\w*$/.test(token.text)) {
       return { ...token, kind: 'variable', children: [] }
     }
@@ -260,19 +291,48 @@ function collectPricingBranches(
     )
     return
   }
-  const body = node.kind === 'tier' ? node.children[0] : node
+  // Fixed leaves are tier(name, fixed(amount)), optionally scaled by
+  // image_count on either side; the editable span then covers the multiplier
+  // too, so structural rebuilds keep it.
+  let tier = node.kind === 'tier' ? node : undefined
+  let quantity: 'image_count' | undefined
+  if (!tier && node.kind === 'binary' && node.text === '*') {
+    const [left, right] = node.children
+    let candidate: Node | undefined
+    if (left?.kind === 'variable' && left.text === 'image_count') {
+      candidate = right
+    } else if (right?.kind === 'variable' && right.text === 'image_count') {
+      candidate = left
+    }
+    if (candidate?.kind === 'tier') {
+      tier = candidate
+      quantity = 'image_count'
+    }
+  }
+  const body = tier ? tier.children[0] : node
   if (!body) throw new Error('missing tier body')
   const field: PricingExpressionField = {
     key: `tier:${fields.length}`,
-    label: node.kind === 'tier' ? node.text : '',
-    wrapped: node.kind === 'tier',
-    start: body.start,
-    end: body.end,
+    label: tier?.text ?? '',
+    wrapped: tier !== undefined,
+    start: quantity ? node.start : body.start,
+    end: quantity ? node.end : body.end,
     min,
     max: max === Number.MAX_SAFE_INTEGER ? undefined : max,
     reachable: min <= max,
     prices: {},
     coefficients: {},
+  }
+  if (body.kind === 'fixed') {
+    if (!tier) throw new Error('bare fixed price')
+    const amount = body.children[0]
+    if (!amount) throw new Error('missing fixed amount')
+    field.unit = quantity ? 'image' : 'request'
+    if (quantity) field.quantity = quantity
+    field.price = String(Number(amount.text))
+    field.coefficients['fixed'] = [{ start: amount.start, end: amount.end }]
+    fields.push(field)
+    return
   }
   collectLinearPrices(body, field, 0)
   fields.push(field)
@@ -287,6 +347,13 @@ export function parsePricingExpression(
     if (parser.index !== parser.tokens.length) return null
     const fields: PricingExpressionField[] = []
     collectPricingBranches(node, 0, Number.MAX_SAFE_INTEGER, fields, 0)
+    // The relay rejects trees mixing fixed and token-linear leaves.
+    if (
+      fields.some((field) => field.unit !== undefined) &&
+      fields.some((field) => field.unit === undefined)
+    ) {
+      return null
+    }
     return fields
   } catch {
     return null
