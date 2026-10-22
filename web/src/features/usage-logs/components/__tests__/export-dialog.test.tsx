@@ -21,8 +21,8 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { SelfExportSheet } from '../../export/components/self-export-sheet'
 import { LogExportCenter } from '../../export'
+import { SelfExportSheet } from '../../export/components/self-export-sheet'
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -59,6 +59,73 @@ beforeEach(() => {
   mocks.jobs.mockResolvedValue({ jobs: [], enabled: true, max_range_sec: 60 })
 })
 afterEach(cleanup)
+
+it.each([true, false])(
+  'shows server diagnostics only in the administrator view (self=%s)',
+  async (self) => {
+    mocks.jobs.mockResolvedValue({
+      enabled: true,
+      jobs: [
+        {
+          job_id: 'running-job',
+          status: 'running',
+          progress: 20,
+          row_count: 100,
+          scanned_rows: 200,
+          bytes_out: 0,
+          format: 'csv_gz',
+          filters: {},
+          parts: [],
+          throttled_ms: 9000,
+          created_at: 1700000000,
+          updated_at: 1700000010,
+        },
+        {
+          job_id: 'failed-job',
+          status: 'failed',
+          progress: 10,
+          row_count: 0,
+          bytes_out: 0,
+          format: 'csv_gz',
+          filters: {},
+          parts: [],
+          error: 'disk_full',
+          throttled_ms: 0,
+          created_at: 1700000000,
+          updated_at: 1700000010,
+        },
+      ],
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <LogExportCenter self={self} />
+      </QueryClientProvider>
+    )
+    await screen.findByText('Running')
+    if (self) {
+      expect(
+        await screen.findByText('Estimating remaining time...')
+      ).toBeVisible()
+      expect(
+        screen.queryByText(/keep the service responsive/)
+      ).not.toBeInTheDocument()
+      expect(screen.queryByText(/server storage/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/scanned/)).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Export failed. Please try again or contact an administrator.'
+        )
+      ).toBeVisible()
+    } else {
+      expect(screen.getByText(/keep the service responsive/)).toBeVisible()
+      expect(screen.getByText(/server storage/)).toBeVisible()
+    }
+    client.clear()
+  }
+)
 it('creates a task with only self filters and closes after submission', async () => {
   const closed = vi.fn()
   const client = new QueryClient({
@@ -97,7 +164,9 @@ it('blocks ranges above the server limit', () => {
 })
 
 it('loads self tasks and applies the server time limit in the export center', async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
   render(
     <QueryClientProvider client={client}>
       <LogExportCenter self />

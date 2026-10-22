@@ -48,6 +48,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { deleteExportJob, downloadExportPart, getExportJobs } from './api'
 import { EmployeeTemplateManager } from './components/employee-template-manager'
+import { ExportRemainingTime } from './components/export-remaining-time'
 import {
   NewExportSheet,
   type NewExportPrefill,
@@ -210,15 +211,16 @@ export function LogExportCenter(props: { self?: boolean }) {
   const jobs = data?.jobs ?? []
 
   return (
-    <div className='space-y-4'>
+    <div className='flex min-w-0 flex-col gap-4'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex items-center gap-2'>
           <Button
             type='button'
+            size='sm'
             onClick={() => setSheetOpen(true)}
             disabled={isLoading || !!error || data?.enabled === false}
           >
-            <Plus />
+            <Plus data-icon='inline-start' />
             {t('New Export')}
           </Button>
           {!props.self && canManageEmployees && <EmployeeTemplateManager />}
@@ -231,7 +233,7 @@ export function LogExportCenter(props: { self?: boolean }) {
         <Button
           type='button'
           variant='outline'
-          size='icon'
+          size='icon-sm'
           aria-label={t('Refresh')}
           onClick={() => void refetch()}
         >
@@ -318,7 +320,8 @@ export function LogExportCenter(props: { self?: boolean }) {
                       a long-running job look broken, so the scanned count sits
                       right underneath it.
                     */}
-                    {job.scanned_rows != null &&
+                    {!props.self &&
+                      job.scanned_rows != null &&
                       job.scanned_rows > job.row_count && (
                         <div className='text-muted-foreground'>
                           {t('of {{scanned}} scanned', {
@@ -333,14 +336,14 @@ export function LogExportCenter(props: { self?: boolean }) {
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className='space-y-1'>
+                    <div className='flex flex-col gap-1'>
                       <Badge variant={STATUS_VARIANTS[job.status]}>
                         {t(STATUS_LABELS[job.status])}
                       </Badge>
                       {isActive && (
                         <>
                           <Progress value={job.progress} className='h-1.5' />
-                          {job.throttled_ms > 3000 && (
+                          {!props.self && job.throttled_ms > 3000 && (
                             <p className='text-muted-foreground text-[11px]'>
                               {t(
                                 'Yielded {{seconds}}s to keep the service responsive',
@@ -352,11 +355,14 @@ export function LogExportCenter(props: { self?: boolean }) {
                           )}
                         </>
                       )}
+                      {props.self && <ExportRemainingTime job={job} />}
                       {job.status === 'failed' && (
                         <p className='text-muted-foreground text-[11px]'>
                           {t(
-                            ERROR_MESSAGES[job.error ?? 'internal'] ??
-                              ERROR_MESSAGES.internal
+                            props.self
+                              ? ERROR_MESSAGES.internal
+                              : (ERROR_MESSAGES[job.error ?? 'internal'] ??
+                                  ERROR_MESSAGES.internal)
                           )}
                         </p>
                       )}
@@ -376,7 +382,7 @@ export function LogExportCenter(props: { self?: boolean }) {
                               />
                             }
                           >
-                            <Download />
+                            <Download data-icon='inline-start' />
                             {t('Download')}
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align='end' className='w-72'>
@@ -437,7 +443,7 @@ export function LogExportCenter(props: { self?: boolean }) {
                       <Button
                         type='button'
                         variant='ghost'
-                        size='icon'
+                        size='icon-sm'
                         aria-label={isActive ? t('Cancel') : t('Delete')}
                         disabled={removeJob.isPending}
                         onClick={() => removeJob.mutate(job.job_id)}
