@@ -38,6 +38,7 @@ import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { ChatSettingsVisualEditor } from './chat-settings-visual-editor'
 import { formatJsonForEditor, normalizeJsonString } from './utils'
@@ -112,8 +113,9 @@ export function ChatSettingsSection({
 
   const initialNormalizedRef = useRef(normalizeJsonString(defaultValue, '[]'))
 
+  useResetForm(form, { Chats: formatJsonForEditor(defaultValue, '[]') })
+
   useEffect(() => {
-    form.reset({ Chats: formatJsonForEditor(defaultValue, '[]') })
     initialNormalizedRef.current = normalizeJsonString(defaultValue, '[]')
   }, [defaultValue, form])
 

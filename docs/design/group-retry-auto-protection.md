@@ -2,6 +2,8 @@
 
 状态：用户已确认设计并授权实施；已实现，专项验证记录见文末。2026-10-19。
 
+2026-10-22 保存权限回归修复：`group_retry_policy` 是组合请求模块，不能按同名配置前缀授权。控制器将 `times` 映射到 `GroupRetryTimes`，将 `status_enabled/status_rules` 和 `guard_enabled/guard_rules` 映射到相应真实设置键后，继续执行逐字段权限检查。此前携带 scope 的 root/已授权管理员会被第二层检查误返回 403，而无 scope 的 root 测试未发现问题。新增完整组合请求的带 scope 回归，并保留错误 scope、未知字段和内部 revision 拒绝测试。详见 `frontend-settings-save-and-export-consistency.md`；此次不改变存储、中继和自动保护运行逻辑。
+
 ## 目标与范围
 
 1. 将当前“保存重试次数 / 保存重试状态码”合并为一个“保存”按钮，次数、状态码、自动保护一起校验和保存，避免半成功。

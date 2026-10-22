@@ -52,6 +52,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const ssrfSchema = z.object({
@@ -176,9 +177,10 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
     defaultValues: formDefaults,
   })
 
+  useResetForm(form, buildFormDefaults(defaultValues))
+
   useEffect(() => {
     baselineRef.current = normalizeDefaults(defaultValues)
-    form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
   const onSubmit = async (data: SSRFFormValues) => {

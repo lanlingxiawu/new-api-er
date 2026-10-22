@@ -40,7 +40,7 @@ func buildDefinitions() map[string]Definition {
 				"enabled", "period_mode", "reset_day", "reset_hour",
 				"reset_minute", "reset_second", "timezone",
 			}),
-		scope("site.system-info", "theme.frontend", "SystemName", "Logo", "Footer", "About", "HomePageContent", "ServerAddress", "legal.user_agreement", "legal.privacy_policy", "TaskPublicAddress"),
+		scope("site.system-info", "theme.frontend", "SystemName", "Logo", "Footer", "About", "HomePageContent", "ServerAddress", "legal.user_agreement", "legal.privacy_policy", "TaskPublicAddress", "general_setting.docs_link"),
 		scope("site.notice", "Notice"),
 		scope("site.header-navigation", "HeaderNavModules"),
 		scope("site.sidebar-modules", "SidebarModulesAdmin"),
@@ -49,7 +49,7 @@ func buildDefinitions() map[string]Definition {
 		scope("auth.passkey", "passkey.enabled", "passkey.rp_display_name", "passkey.rp_id", "passkey.legacy_rp_ids", "passkey.origins", "passkey.allow_insecure_origin", "passkey.user_verification", "passkey.attachment_preference"),
 		scope("auth.bot-protection", "TurnstileCheckEnabled", "TurnstileSiteKey", "TurnstileSecretKey"),
 		scope("auth.custom-oauth", "ServerAddress"),
-		scope("billing.quota", "QuotaForNewUser", "PreConsumedQuota", "QuotaForInviter", "QuotaForInvitee", "TopUpLink", "general_setting.docs_link", "quota_setting.enable_free_model_pre_consume", "payment_setting.compliance_confirmed", "payment_setting.compliance_terms_version"),
+		scope("billing.quota", "QuotaForNewUser", "PreConsumedQuota", "QuotaForInviter", "QuotaForInvitee", "TopUpLink", "general_setting.docs_link", "quota_setting.enable_free_model_pre_consume", "quota_setting.trust_quota_usd", "quota_setting.pre_consume_multiplier", "payment_setting.compliance_confirmed", "payment_setting.compliance_terms_version"),
 		scope("billing.currency", "QuotaPerUnit", "USDExchangeRate", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "general_setting.quota_display_type", "general_setting.custom_currency_symbol", "general_setting.custom_currency_exchange_rate"),
 		scope("billing.model-pricing", "ModelPrice", "ModelRatio", "CacheRatio", "CreateCacheRatio", "CompletionRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio", "ExposeRatioEnabled", "billing_setting.billing_mode", "billing_setting.billing_expr", "billing_setting.plugin_billing_expr", "tool_price_setting.prices", "thirdpartysd2_pricing.matrix", "CompletionRatioMeta"),
 		scope(ScopeBillingGroupPricing, "TopupGroupRatio", "GroupRatio", "UserUsableGroups", "GroupGroupRatio", "AutoGroups", "MaxTokenAutoGroups", "DefaultUseAutoGroup", "UserExclusiveGroupRatioEnabled", "UserExclusiveGroupRatioCacheMax", "group_ratio_setting.group_special_usable_group"),
@@ -94,7 +94,7 @@ func buildDefinitions() map[string]Definition {
 		// 因此该分区必须用 configScope（普通 scope() 的 GroupKeys 是空 map，
 		// AllowsGroup 会一律拒绝）。
 		configScope("operations.logs", "audit_log_setting",
-			[]string{"LogConsumeEnabled", "audit_log_setting.retention_days"},
+			[]string{"LogConsumeEnabled", "audit_log_setting.retention_days", "log_setting.user_export_enabled", "log_setting.max_range_days"},
 			[]string{"retention_days"}),
 		scope("operations.request-log", "RequestLogEnabled", "RequestLogUsername", "RequestLogMaxBodyKB", "RequestLogMinCount", "RequestLogMaxCount", "request_log_setting.clear_on_restart"),
 		configScope("operations.performance", "performance_setting",

@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -48,6 +47,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const thinkingBlacklistExample = JSON.stringify(
@@ -153,9 +153,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
     defaultValues: defaultValues as GlobalModelSettingsFormInput,
   })
 
-  useEffect(() => {
-    form.reset(defaultValues as GlobalModelSettingsFormInput)
-  }, [defaultValues, form])
+  useResetForm(form, defaultValues as GlobalModelSettingsFormInput)
 
   const pingEnabled = form.watch('general_setting.ping_interval_enabled')
 

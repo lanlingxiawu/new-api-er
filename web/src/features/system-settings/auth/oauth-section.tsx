@@ -51,6 +51,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
   buildOAuthCallbackUrl,
@@ -290,12 +291,13 @@ export function OAuthSection(props: OAuthSectionProps) {
     JSON.stringify(props.defaultValues)
   )
 
+  useResetForm(form, buildFormDefaults(props.defaultValues))
+
   useEffect(() => {
     const serialized = JSON.stringify(props.defaultValues)
     if (serialized === baselineSerializedRef.current) return
     baselineRef.current = props.defaultValues
     baselineSerializedRef.current = serialized
-    form.reset(buildFormDefaults(props.defaultValues))
   }, [props.defaultValues, form])
 
   const onSubmit = async (values: OAuthFormValues) => {

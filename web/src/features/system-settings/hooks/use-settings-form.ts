@@ -197,6 +197,7 @@ export function useSettingsForm<T extends FieldValues>({
   )
 
   const form = useForm<T>({ ...formOptions, defaultValues: expandedDefaults })
+  const { dirtyFields } = form.formState
 
   const defaultValuesRef = useRef<T>((expandedDefaults ?? ({} as T)) as T)
   const baselineRef = useRef<Record<string, unknown>>(
@@ -222,7 +223,7 @@ export function useSettingsForm<T extends FieldValues>({
     baselineRef.current = flattened
     defaultValuesRef.current = expandedDefaults as T
     serializedDefaultsRef.current = serialized
-    form.reset(expandedDefaults as T)
+    form.reset(expandedDefaults as T, { keepDirtyValues: true })
   }, [expandedDefaults, form])
 
   const defaultCompare = (a: unknown, b: unknown): boolean => {
@@ -246,7 +247,7 @@ export function useSettingsForm<T extends FieldValues>({
   const compare = compareValues || defaultCompare
 
   const handleSubmit = async (data: T) => {
-    const dirtyValues = collectDirtyValues(form.formState.dirtyFields, data)
+    const dirtyValues = collectDirtyValues(dirtyFields, data)
     const changedEntries = Object.entries(dirtyValues).filter(
       ([key, value]) => !compare(value, baselineRef.current[key])
     )

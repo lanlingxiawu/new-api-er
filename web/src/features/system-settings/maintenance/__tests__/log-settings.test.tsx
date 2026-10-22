@@ -160,7 +160,7 @@ test('saving sends only the log export settings that changed', async () => {
     screen.getByRole('switch', { name: 'Allow users to export logs' })
   )
   fireEvent.change(days, { target: { value: '90' } })
-  await user.click(screen.getByRole('button', { name: 'Save log settings' }))
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
   await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
   expect(api.put).toHaveBeenCalledWith('/api/option/', {
@@ -180,8 +180,32 @@ test('a time range under one day shows a field error and is not saved', async ()
   const days = await renderSettings()
 
   fireEvent.change(days, { target: { value: '0' } })
-  await user.click(screen.getByRole('button', { name: 'Save log settings' }))
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
   await waitFor(() => expect(days).toHaveAttribute('aria-invalid', 'true'))
   expect(api.put).not.toHaveBeenCalled()
+})
+
+test('keeps the unsaved range after a partial failure and retries only that field', async () => {
+  const user = userEvent.setup()
+  const days = await renderSettings()
+  vi.mocked(api.put)
+    .mockResolvedValueOnce({ data: { success: true } })
+    .mockResolvedValueOnce({ data: { success: false, message: 'Save failed' } })
+  await user.click(
+    screen.getByRole('switch', { name: 'Allow users to export logs' })
+  )
+  fireEvent.change(days, { target: { value: '60' } })
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+  expect(days).toHaveValue(60)
+  await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(api.put).toHaveBeenCalledTimes(3))
+  expect(vi.mocked(api.put).mock.calls[2][1]).toMatchObject({
+    key: 'log_setting.max_range_days',
+    value: 60,
+  })
 })

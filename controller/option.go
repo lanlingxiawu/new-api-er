@@ -223,7 +223,24 @@ func UpdateOptionGroup(c *gin.Context) {
 		return
 	}
 	for key := range request.Values {
-		if !middleware.AllowsSystemSettingsOption(c, request.Module+"."+key) {
+		optionKey := request.Module + "." + key
+		if request.Module == "group_retry_policy" {
+			// The combined form uses aliases, not a persisted configuration module.
+			// Authorize the actual options while keeping the scope/legacy intersection.
+			switch key {
+			case "times":
+				optionKey = "GroupRetryTimes"
+			case "status_enabled":
+				optionKey = "group_retry_status_setting.enabled"
+			case "status_rules":
+				optionKey = "group_retry_status_setting.rules"
+			case "guard_enabled":
+				optionKey = "group_retry_guard_setting.enabled"
+			case "guard_rules":
+				optionKey = "group_retry_guard_setting.rules"
+			}
+		}
+		if !middleware.AllowsSystemSettingsOption(c, optionKey) {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}

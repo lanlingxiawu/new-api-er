@@ -40,6 +40,21 @@ func TestOptionKeyAllowlist(t *testing.T) {
 	assert.False(t, AllowsOption("billing.model-pricing", "price_monitor_setting.model_whitelist"))
 }
 
+func TestSettingsFormOptionScopes(t *testing.T) {
+	for scope, optionKeys := range map[string][]string{
+		"operations.logs": {"log_setting.user_export_enabled", "log_setting.max_range_days"},
+		"billing.quota":   {"quota_setting.trust_quota_usd", "quota_setting.pre_consume_multiplier"},
+	} {
+		for _, key := range optionKeys {
+			t.Run(key, func(t *testing.T) {
+				for _, candidate := range Scopes() {
+					assert.Equal(t, candidate == scope, AllowsOption(candidate, key), "scope %s", candidate)
+				}
+			})
+		}
+	}
+}
+
 // 审计日志保留期由 ConfigManager 支撑，必须用 configScope 登记：
 // 普通 scope() 的 GroupKeys 是空 map，AllowsGroup 会一律拒绝，
 // 设置页既读不出也存不进。
@@ -108,4 +123,24 @@ func TestVeridropScopeOnlyAllowsVeridropConfiguration(t *testing.T) {
 		"max_open_conns": "100",
 	}))
 	assert.False(t, AllowsGroup(ScopeVeridropDetection, "db_pool_setting", map[string]string{"max_open_conns": "100"}))
+}
+
+func TestSystemInformationDocsLinkScope(t *testing.T) {
+	assert.True(t, AllowsOption("site.system-info", "general_setting.docs_link"))
+	assert.False(t, AllowsOption("site.notice", "general_setting.docs_link"))
+}
+
+func TestRegisteredConfigGroupFieldsHaveOptionPermissions(t *testing.T) {
+	for _, scope := range Scopes() {
+		definition, _ := Resolve(scope)
+		for module, fields := range definition.GroupKeys {
+			// This composite module uses aliases, covered at the controller boundary.
+			if module == "group_retry_policy" {
+				continue
+			}
+			for field := range fields {
+				assert.True(t, AllowsOption(scope, module+"."+field), "%s: %s.%s", scope, module, field)
+			}
+		}
+	}
 }

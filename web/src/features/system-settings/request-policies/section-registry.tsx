@@ -21,7 +21,6 @@ import { ChannelHealthSection } from './channel-health-section'
 import type { RequestPolicySettings } from './defaults'
 import { RequestChecksSection } from './request-checks-section'
 import { RoutingPolicySection } from './routing-section'
-import { PolicyRuntimeSettings } from './runtime-settings'
 
 const POLICY_SECTIONS = [
   {
@@ -48,10 +47,7 @@ const POLICY_SECTIONS = [
     id: 'health',
     titleKey: 'Channel health',
     build: (settings: RequestPolicySettings) => (
-      <>
-        <ChannelHealthSection defaultValues={settings} />
-        <PolicyRuntimeSettings kind='daily' settings={settings} />
-      </>
+      <ChannelHealthSection defaultValues={settings} />
     ),
   },
 ] as const

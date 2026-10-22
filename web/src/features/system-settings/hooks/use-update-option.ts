@@ -51,7 +51,7 @@ const STATUS_RELATED_KEYS = new Set([
   'passkey.origins',
 ])
 
-export function useUpdateOption(explicitScope?: string) {
+export function useUpdateOption(explicitScope?: string, notifySuccess = true) {
   const queryClient = useQueryClient()
   const { scope: contextScope } = useSettingsPageAccess()
   // An explicit empty scope uses the backend's root-only unscoped write path.
@@ -82,9 +82,11 @@ export function useUpdateOption(explicitScope?: string) {
       }
 
       // 逐键保存时每个键都会走到这里，同一次保存合并为一条提示（见 lib/toast-dedupe）。
-      toast.success(i18next.t('Setting updated successfully'), {
-        id: burstToastId('setting-updated'),
-      })
+      if (notifySuccess) {
+        toast.success(i18next.t('Setting updated successfully'), {
+          id: burstToastId('setting-updated'),
+        })
+      }
     },
     onError: (error: Error) => {
       handleServerError(error, i18next.t('Failed to update setting'))

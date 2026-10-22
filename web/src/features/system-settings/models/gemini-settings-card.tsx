@@ -45,6 +45,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
   formatJsonForTextarea,
@@ -166,6 +167,8 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
     defaultValues: buildFormDefaults(defaultValues),
   })
 
+  useResetForm(form, buildFormDefaults(defaultValues))
+
   useEffect(() => {
     normalizedDefaultsRef.current = {
       'gemini.safety_settings': normalizeJsonString(
@@ -187,8 +190,6 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
       'gemini.remove_function_response_id_enabled':
         defaultValues.gemini.remove_function_response_id_enabled ?? true,
     }
-
-    form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
   const isAdapterEnabled = form.watch('gemini.thinking_adapter_enabled')

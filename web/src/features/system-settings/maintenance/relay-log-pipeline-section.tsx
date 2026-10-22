@@ -47,6 +47,7 @@ import {
 import { SettingsPageFormActions } from "../components/settings-page-context";
 import { useSettingsSaveConfirmation } from "../components/settings-save-confirmation";
 import { SettingsSection } from "../components/settings-section";
+import { useResetForm } from "../hooks/use-reset-form";
 import { useUpdateOption } from "../hooks/use-update-option";
 import type { RelayLogReplayState, RelayLogReplayStatus } from "../types";
 import {
@@ -379,12 +380,13 @@ export function RelayLogPipelineSection({
   const baselineRef = useRef(defaultValues);
   const baselineSerializedRef = useRef(JSON.stringify(defaultValues));
 
+  useResetForm(form, buildFormDefaults(defaultValues));
+
   useEffect(() => {
     const serialized = JSON.stringify(defaultValues);
     if (serialized === baselineSerializedRef.current) return;
     baselineRef.current = defaultValues;
     baselineSerializedRef.current = serialized;
-    form.reset(buildFormDefaults(defaultValues));
   }, [defaultValues, form]);
 
   const onSubmit = async (values: FormValues) => {

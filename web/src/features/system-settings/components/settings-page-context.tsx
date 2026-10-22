@@ -27,6 +27,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { handleServerError } from '@/lib/handle-server-error'
 
 import { SettingsPageContext } from './settings-page-access-context'
 import { SettingsSaveConfirmationProvider } from './settings-save-confirmation'
@@ -134,7 +135,13 @@ export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
         ref={props.saveButtonRef}
         type='button'
         size='sm'
-        onClick={props.onSave}
+        onClick={async () => {
+          try {
+            await props.onSave()
+          } catch (error) {
+            handleServerError(error)
+          }
+        }}
         disabled={props.isSaving || props.isSaveDisabled}
       >
         <Save data-icon='inline-start' />

@@ -29,9 +29,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { handleServerError } from '@/lib/handle-server-error'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getDatabasePoolRuntimeStatus, updateSystemOptionGroup } from '../api'
 import { useSettingsPageAccess } from '../components/settings-page-access-context'
+import { SettingsPageFormActions } from '../components/settings-page-context'
 import {
   useSettingsSaveConfirmation,
   type SettingsSaveConfirmationOptions,
@@ -62,8 +65,9 @@ type ConfigGroupField = {
 }
 
 function isValidFieldNumber(field: ConfigGroupField, raw: unknown): boolean {
+  if (typeof raw === 'string' && raw.trim() === '') return false
   const value = Number(raw)
-  if (!Number.isFinite(value)) return false
+  if (!Number.isSafeInteger(value)) return false
   if (field.presets?.some((preset) => preset.value === value)) return true
   return (
     (field.min === undefined || value >= field.min) &&
@@ -101,7 +105,7 @@ export function ConfigGroupSection({
 }: ConfigGroupSectionProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const { scope } = useSettingsPageAccess()
+  const { scope, canEdit } = useSettingsPageAccess()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
   const [values, setValues] = useState(defaults)
   const baselineRef = useRef(defaults)
@@ -113,19 +117,28 @@ export function ConfigGroupSection({
   useEffect(() => {
     const serialized = JSON.stringify(defaults)
     if (serialized === baselineSerializedRef.current) return
+    const previous = baselineRef.current
+    setValues((current) =>
+      Object.fromEntries(
+        Object.entries(defaults).map(([key, value]) => [
+          key,
+          String(current[key]) === String(previous[key]) ? value : current[key],
+        ])
+      )
+    )
     baselineRef.current = defaults
     baselineSerializedRef.current = serialized
-    setValues(defaults)
   }, [defaults])
 
   const mutation = useMutation({
-    mutationFn: (request: Parameters<typeof updateSystemOptionGroup>[0]) =>
-      updateSystemOptionGroup({ ...request, scope }),
+    mutationFn: async (
+      request: Parameters<typeof updateSystemOptionGroup>[0]
+    ) => {
+      const response = await updateSystemOptionGroup({ ...request, scope })
+      requireServerSuccess(response)
+      return response
+    },
     onSuccess: (response) => {
-      if (!response.success) {
-        toast.error(response.message)
-        return
-      }
       queryClient.invalidateQueries({ queryKey: ['system-options', scope] })
       if (module === 'db_pool_setting') {
         queryClient.invalidateQueries({ queryKey: ['database-pool-stats'] })
@@ -138,7 +151,8 @@ export function ConfigGroupSection({
       }
       toast.success(t('Setting updated successfully'))
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error) => handleServerError(error),
+    meta: { errorToast: false },
   })
 
   const save = async () => {
@@ -175,18 +189,28 @@ export function ConfigGroupSection({
       baselineRef.current
     )
 
-    await requestSaveConfirmation(async () => {
-      const response = await mutation.mutateAsync(request)
-      if (!response.success) return
-      baselineRef.current = nextValues
-      baselineSerializedRef.current = JSON.stringify(nextValues)
-      setValues(nextValues)
-    }, confirmationOptions)
+    try {
+      await requestSaveConfirmation(async () => {
+        await mutation.mutateAsync(request)
+        baselineRef.current = nextValues
+        baselineSerializedRef.current = JSON.stringify(nextValues)
+        setValues(nextValues)
+      }, confirmationOptions)
+    } catch (error) {
+      handleServerError(error)
+    }
   }
 
   return (
     <SettingsSection title={t(title)}>
-      <div className='space-y-4'>
+      <SettingsPageFormActions
+        onSave={() => void save()}
+        isSaving={mutation.isPending}
+      />
+      <fieldset
+        disabled={!canEdit || mutation.isPending}
+        className='flex min-w-0 flex-col gap-4'
+      >
         {statusContent}
         {description && (
           <p className='text-muted-foreground text-sm'>{t(description)}</p>
@@ -230,14 +254,12 @@ export function ConfigGroupSection({
                     type={field.type === 'text' ? 'text' : 'number'}
                     min={field.min}
                     max={field.max}
+                    step={1}
                     value={String(values[field.key])}
                     onChange={(event) =>
                       setValues((current) => ({
                         ...current,
-                        [field.key]:
-                          field.type === 'text'
-                            ? event.target.value
-                            : Number(event.target.value),
+                        [field.key]: event.target.value,
                       }))
                     }
                   />
@@ -251,12 +273,7 @@ export function ConfigGroupSection({
             )
           })}
         </div>
-        <div className='flex justify-end'>
-          <Button disabled={mutation.isPending} onClick={save}>
-            {mutation.isPending ? t('Saving...') : t('Save')}
-          </Button>
-        </div>
-      </div>
+      </fieldset>
     </SettingsSection>
   )
 }

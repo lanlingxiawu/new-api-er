@@ -21,6 +21,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { FormItem } from '@/components/ui/form'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 
 type SettingsFormGridProps = {
@@ -181,7 +182,11 @@ export function SettingsControlChildren({
   )
 }
 
-export function SettingsForm({ className, ...props }: ComponentProps<'form'>) {
+export function SettingsForm({
+  className,
+  onSubmit,
+  ...props
+}: ComponentProps<'form'>) {
   return (
     <form
       className={cn(
@@ -195,6 +200,17 @@ export function SettingsForm({ className, ...props }: ComponentProps<'form'>) {
         className
       )}
       {...props}
+      onSubmit={
+        onSubmit
+          ? async (event) => {
+              try {
+                await onSubmit(event)
+              } catch (error) {
+                handleServerError(error)
+              }
+            }
+          : undefined
+      }
     />
   )
 }

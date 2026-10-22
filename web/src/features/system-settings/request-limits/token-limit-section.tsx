@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
@@ -37,6 +36,7 @@ import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const tokenLimitSchema = z.object({
@@ -80,9 +80,7 @@ export function TokenLimitSection({ defaultValues }: TokenLimitSectionProps) {
     defaultValues: buildFormDefaults(defaultValues),
   })
 
-  useEffect(() => {
-    form.reset(buildFormDefaults(defaultValues))
-  }, [defaultValues, form])
+  useResetForm(form, buildFormDefaults(defaultValues))
 
   const onSubmit = async (values: TokenLimitFormValues) => {
     const key = 'token_setting.max_user_tokens' as const

@@ -45,6 +45,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
   formatJsonForTextarea,
@@ -137,6 +138,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
     defaultValues: buildFormDefaults(defaultValues),
   })
 
+  useResetForm(form, buildFormDefaults(defaultValues))
+
   useEffect(() => {
     normalizedDefaultsRef.current = {
       'claude.model_headers_settings': normalizeJsonString(
@@ -151,8 +154,6 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
         defaultValues.claude.thinking_adapter_budget_tokens_percentage
       ),
     }
-
-    form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
   const onSubmit = async (values: ClaudeSettingsFormValues) => {

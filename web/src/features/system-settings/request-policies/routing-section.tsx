@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useForm, useFormContext, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -47,7 +48,6 @@ import {
   routingPolicyOptions,
   type RoutingPolicyFormValues,
 } from './routing-form'
-import { PolicyRuntimeSettings } from './runtime-settings'
 import { useSavePolicy } from './use-save-policy'
 
 export function RoutingPolicySection({
@@ -70,31 +70,13 @@ export function RoutingPolicySection({
       />
     )
   }
-  return (
-    <>
-      <RoutingPolicyEditor config={query.data} />
-      <ProbeSettings settings={settings} />
-    </>
-  )
+  return <RoutingPolicyEditor config={query.data} settings={settings} />
 }
 
-function ProbeSettings({ settings }: { settings: RequestPolicySettings }) {
-  const user = useAuthStore((state) => state.auth.user)
-  if (!policySectionAccess(user, 'models.routing-reliability', 'view')) {
-    return null
-  }
-  return (
-    <fieldset
-      disabled={
-        !policySectionAccess(user, 'models.routing-reliability', 'edit')
-      }
-    >
-      <PolicyRuntimeSettings kind='probe' settings={settings} />
-    </fieldset>
-  )
-}
-
-function RoutingPolicyEditor(props: { config: PolicyConfig }) {
+function RoutingPolicyEditor(props: {
+  config: PolicyConfig
+  settings: RequestPolicySettings
+}) {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
   const affinityView = policySectionAccess(
@@ -117,11 +99,20 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
     'models.routing-reliability',
     'edit'
   )
-  const mutation = useSavePolicy()
+  const baselineRef = useRef<Record<string, string>>({})
+  const mutation = useSavePolicy((saved) =>
+    Object.assign(baselineRef.current, saved)
+  )
   const schema = useMemo(() => createRoutingPolicySchema(t), [t])
   const defaults = useMemo(
-    () => routingPolicyFormValues(props.config.options),
-    [props.config.options]
+    () =>
+      routingPolicyFormValues({
+        ...props.config.options,
+        'probe_routing_setting.max_input_chars': String(
+          props.settings['probe_routing_setting.max_input_chars']
+        ),
+      }),
+    [props.config.options, props.settings]
   )
   const form = useForm<RoutingPolicyFormValues>({
     resolver: zodResolver(schema),
@@ -130,6 +121,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
   // Subscribe so refreshes can preserve every dirty field, including rule JSON.
   const { dirtyFields } = form.formState
   useEffect(() => {
+    baselineRef.current = routingPolicyOptions(defaults)
     form.reset(defaults, { keepDirtyValues: true })
   }, [defaults, form])
   const values = useWatch({
@@ -151,7 +143,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
         ) {
           return false
         }
-        const previous = props.config.options[key]
+        const previous = baselineRef.current[key]
         if (key === 'channel_affinity_setting.rules') {
           return (
             JSON.stringify(JSON.parse(value)) !==
@@ -170,7 +162,12 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
     }
     try {
       const data = await mutation.mutateAsync(delta)
-      form.reset(routingPolicyFormValues(data.options))
+      form.reset(
+        routingPolicyFormValues({
+          ...routingPolicyOptions(submitted),
+          ...data.options,
+        })
+      )
     } catch (error) {
       handleServerError(error)
     }
@@ -184,11 +181,17 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
       <div className='min-w-0 space-y-5'>
         <SettingsPageFormActions
           onSave={submit}
-          isSaving={mutation.isPending}
+          isSaving={mutation.isPending || form.formState.isSubmitting}
         />
-        <div className='min-w-0 space-y-4'>
+        <fieldset
+          disabled={mutation.isPending}
+          className='flex min-w-0 flex-col gap-4'
+        >
           {affinityView && (
-            <fieldset disabled={!affinityEdit}>
+            <fieldset
+              className='flex min-w-0 flex-col gap-4'
+              disabled={!affinityEdit}
+            >
               <AffinitySettings />
               <FormField
                 control={form.control}
@@ -211,7 +214,40 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
           )}
           {retryView && (
             <fieldset disabled={!retryEdit}>
-              <RetrySection />
+              <div className='flex min-w-0 flex-col gap-4'>
+                <RetrySection />
+                <SettingsCard
+                  title={t('Maximum input length for probe detection')}
+                  className='shadow-none'
+                >
+                  <FormField
+                    control={form.control}
+                    name='probe_routing_setting.max_input_chars'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className='sr-only'>
+                          {t('Maximum input length for probe detection')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min={1}
+                            max={1024}
+                            step={1}
+                            {...safeNumberFieldProps(field)}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'These requests skip channels with probe blocking enabled and use another eligible channel in the same group. A higher limit widens detection and may reroute more normal short questions; a lower limit narrows it.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </SettingsCard>
+              </div>
             </fieldset>
           )}
           {mutation.isError ? (
@@ -227,7 +263,7 @@ function RoutingPolicyEditor(props: { config: PolicyConfig }) {
               </AlertDescription>
             </Alert>
           ) : null}
-        </div>
+        </fieldset>
       </div>
     </Form>
   )

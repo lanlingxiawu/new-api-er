@@ -47,6 +47,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { handleServerError } from '@/lib/handle-server-error'
 import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
+import { SettingsCard } from '../components/settings-card'
 import {
   SettingsControlChildren,
   SettingsControlGroup,
@@ -57,9 +58,8 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useResetForm } from '../hooks/use-reset-form'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-import type { HealthSettings } from './defaults'
+import type { RequestPolicySettings } from './defaults'
 import { useSavePolicy } from './use-save-policy'
 
 const numericString = z.string().refine((value) => {
@@ -81,6 +81,22 @@ const createChannelHealthSchema = (
 ) =>
   z
     .object({
+      channel_daily_limit_setting: z.object({
+        enabled: z.boolean(),
+        timezone: z
+          .string()
+          .trim()
+          .min(1)
+          .refine((value) => {
+            try {
+              new Intl.DateTimeFormat('en', { timeZone: value })
+              return true
+            } catch {
+              return false
+            }
+          }, t('Choose a valid IANA timezone.')),
+        retention_days: z.number().int().min(7).max(3650),
+      }),
       ChannelDisableThreshold: numericString,
       AutomaticDisableChannelEnabled: z.boolean(),
       AutomaticEnableChannelEnabled: z.boolean(),
@@ -123,7 +139,7 @@ type ChannelHealthFormValues = z.output<ChannelHealthSchema>
 type ChannelHealthFormInput = z.input<ChannelHealthSchema>
 
 type ChannelHealthSectionProps = {
-  defaultValues: HealthSettings
+  defaultValues: RequestPolicySettings
 }
 
 function normalizeLineEndings(value: string) {
@@ -131,6 +147,9 @@ function normalizeLineEndings(value: string) {
 }
 
 type NormalizedChannelHealthValues = {
+  'channel_daily_limit_setting.enabled': boolean
+  'channel_daily_limit_setting.timezone': string
+  'channel_daily_limit_setting.retention_days': number
   ChannelDisableThreshold: string
   AutomaticDisableChannelEnabled: boolean
   AutomaticEnableChannelEnabled: boolean
@@ -152,6 +171,11 @@ function normalizeChannelTestMode(value?: string): ChannelTestMode {
 const buildFormDefaults = (
   defaults: ChannelHealthSectionProps['defaultValues']
 ): ChannelHealthFormInput => ({
+  channel_daily_limit_setting: {
+    enabled: defaults['channel_daily_limit_setting.enabled'],
+    timezone: defaults['channel_daily_limit_setting.timezone'],
+    retention_days: defaults['channel_daily_limit_setting.retention_days'],
+  },
   ChannelDisableThreshold: defaults.ChannelDisableThreshold ?? '',
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: defaults.AutomaticEnableChannelEnabled,
@@ -175,6 +199,12 @@ const buildFormDefaults = (
 const normalizeDefaults = (
   defaults: ChannelHealthSectionProps['defaultValues']
 ): NormalizedChannelHealthValues => ({
+  'channel_daily_limit_setting.enabled':
+    defaults['channel_daily_limit_setting.enabled'],
+  'channel_daily_limit_setting.timezone':
+    defaults['channel_daily_limit_setting.timezone'],
+  'channel_daily_limit_setting.retention_days':
+    defaults['channel_daily_limit_setting.retention_days'],
   ChannelDisableThreshold: (defaults.ChannelDisableThreshold ?? '').trim(),
   AutomaticDisableChannelEnabled: defaults.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: defaults.AutomaticEnableChannelEnabled,
@@ -198,6 +228,12 @@ const normalizeDefaults = (
 const normalizeFormValues = (
   values: ChannelHealthFormValues
 ): NormalizedChannelHealthValues => ({
+  'channel_daily_limit_setting.enabled':
+    values.channel_daily_limit_setting.enabled,
+  'channel_daily_limit_setting.timezone':
+    values.channel_daily_limit_setting.timezone,
+  'channel_daily_limit_setting.retention_days':
+    values.channel_daily_limit_setting.retention_days,
   ChannelDisableThreshold: values.ChannelDisableThreshold.trim(),
   AutomaticDisableChannelEnabled: values.AutomaticDisableChannelEnabled,
   AutomaticEnableChannelEnabled: values.AutomaticEnableChannelEnabled,
@@ -220,10 +256,17 @@ export function ChannelHealthSection({
   defaultValues,
 }: ChannelHealthSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useSavePolicy()
   const channelHealthSchema = createChannelHealthSchema(t)
-  const baselineRef = useRef<NormalizedChannelHealthValues>(
-    normalizeDefaults(defaultValues)
+  const baselineRef = useRef<Record<string, string>>(
+    Object.fromEntries(
+      Object.entries(normalizeDefaults(defaultValues)).map(([key, value]) => [
+        key,
+        String(value),
+      ])
+    )
+  )
+  const updateOption = useSavePolicy((saved) =>
+    Object.assign(baselineRef.current, saved)
   )
 
   const formDefaults = useMemo(
@@ -240,10 +283,16 @@ export function ChannelHealthSection({
     defaultValues: formDefaults,
   })
 
-  useResetForm(form, formDefaults)
+  const { dirtyFields } = form.formState
   useEffect(() => {
-    baselineRef.current = normalizeDefaults(defaultValues)
-  }, [defaultValues])
+    baselineRef.current = Object.fromEntries(
+      Object.entries(normalizeDefaults(defaultValues)).map(([key, value]) => [
+        key,
+        String(value),
+      ])
+    )
+    form.reset(formDefaults, { keepDirtyValues: true })
+  }, [defaultValues, formDefaults, form])
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
@@ -273,7 +322,7 @@ export function ChannelHealthSection({
     const normalized = normalizeFormValues(values)
     const updates = (
       Object.keys(normalized) as Array<keyof NormalizedChannelHealthValues>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+    ).filter((key) => String(normalized[key]) !== baselineRef.current[key])
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -284,7 +333,7 @@ export function ChannelHealthSection({
       await updateOption.mutateAsync(
         Object.fromEntries(updates.map((key) => [key, String(normalized[key])]))
       )
-      baselineRef.current = normalized
+      form.reset(values)
     } catch (error) {
       handleServerError(error)
     }
@@ -319,22 +368,195 @@ export function ChannelHealthSection({
             isSaving={form.formState.isSubmitting}
           />
 
-          <div className='flex min-w-0 flex-col gap-4'>
-            <h4 className='text-sm font-medium'>
-              {t('Channel health checks')}
-            </h4>
-            <SettingsFormGrid>
-              <SettingsControlGroup>
+          <fieldset
+            disabled={updateOption.isPending}
+            className='flex min-w-0 flex-col gap-4'
+            data-dirty={Object.keys(dirtyFields).length > 0}
+          >
+            <div className='flex min-w-0 flex-col gap-4'>
+              <h4 className='text-sm font-medium'>
+                {t('Channel health checks')}
+              </h4>
+              <SettingsFormGrid>
+                <SettingsControlGroup>
+                  <FormField
+                    control={form.control}
+                    name='monitor_setting.auto_test_channel_enabled'
+                    render={({ field }) => (
+                      <SettingsSwitchItem>
+                        <SettingsSwitchContent>
+                          <FormLabel>{t('Scheduled channel tests')}</FormLabel>
+                          <FormDescription>
+                            {t(
+                              'Run background checks using the selected test mode'
+                            )}
+                          </FormDescription>
+                        </SettingsSwitchContent>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                      </SettingsSwitchItem>
+                    )}
+                  />
+
+                  <SettingsControlChildren
+                    role='group'
+                    aria-label={t('Scheduled test options')}
+                    className='grid gap-x-5 gap-y-4 lg:grid-cols-2'
+                  >
+                    <FormField
+                      control={form.control}
+                      name='monitor_setting.channel_test_mode'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Channel test mode')}</FormLabel>
+                          <Select
+                            items={[
+                              {
+                                value: 'scheduled_all',
+                                label: t('Actively check all channels'),
+                              },
+                              {
+                                value: 'auto_ban_only',
+                                label: t(
+                                  'Actively check auto-disable-enabled channels'
+                                ),
+                              },
+                              {
+                                value: 'passive_recovery',
+                                label: t(
+                                  'Check channels awaiting recovery only'
+                                ),
+                              },
+                            ]}
+                            value={field.value}
+                            onValueChange={field.onChange}
+                          >
+                            <FormControl>
+                              <SelectTrigger className='w-full'>
+                                <SelectValue />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent alignItemWithTrigger={false}>
+                              <SelectGroup>
+                                <SelectItem value='scheduled_all'>
+                                  {t('Actively check all channels')}
+                                </SelectItem>
+                                <SelectItem value='auto_ban_only'>
+                                  {t(
+                                    'Actively check auto-disable-enabled channels'
+                                  )}
+                                </SelectItem>
+                                <SelectItem value='passive_recovery'>
+                                  {t('Check channels awaiting recovery only')}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            {channelTestModeDescription}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='monitor_setting.auto_test_channel_minutes'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Test interval (minutes)')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='number'
+                              min={1}
+                              step={1}
+                              {...safeNumberFieldProps(field)}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {channelTestMode === 'passive_recovery'
+                              ? t(
+                                  'How frequently the system checks auto-disabled channels for recovery'
+                                )
+                              : t('Time between scheduled channel checks')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </SettingsControlChildren>
+                </SettingsControlGroup>
+
                 <FormField
                   control={form.control}
-                  name='monitor_setting.auto_test_channel_enabled'
+                  name='monitor_setting.channel_test_concurrency'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Channel test concurrency')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={1}
+                          max={MAX_CHANNEL_TEST_CONCURRENCY}
+                          step={1}
+                          {...safeNumberFieldProps(field)}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Maximum number of channels tested at the same time (1-32)'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='AutomaticEnableChannelEnabled'
                   render={({ field }) => (
                     <SettingsSwitchItem>
                       <SettingsSwitchContent>
-                        <FormLabel>{t('Scheduled channel tests')}</FormLabel>
+                        <FormLabel>{t('Re-enable on success')}</FormLabel>
                         <FormDescription>
                           {t(
-                            'Run background checks using the selected test mode'
+                            'Successful scheduled or bulk checks can restore automatically disabled channels. Manually disabled channels stay disabled.'
+                          )}
+                        </FormDescription>
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+              </SettingsFormGrid>
+            </div>
+
+            <Separator />
+
+            <div className='flex min-w-0 flex-col gap-4'>
+              <h4 className='text-sm font-medium'>{t('Auto-disable rules')}</h4>
+              <SettingsFormGrid>
+                <FormField
+                  control={form.control}
+                  name='AutomaticDisableChannelEnabled'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>{t('Disable on failure')}</FormLabel>
+                        <FormDescription>
+                          {t(
+                            'Apply disable rules to upstream request errors and scheduled or bulk health checks'
                           )}
                         </FormDescription>
                       </SettingsSwitchContent>
@@ -348,254 +570,162 @@ export function ChannelHealthSection({
                   )}
                 />
 
-                <SettingsControlChildren
-                  role='group'
-                  aria-label={t('Scheduled test options')}
-                  className='grid gap-x-5 gap-y-4 lg:grid-cols-2'
-                >
-                  <FormField
-                    control={form.control}
-                    name='monitor_setting.channel_test_mode'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Channel test mode')}</FormLabel>
-                        <Select
-                          items={[
-                            {
-                              value: 'scheduled_all',
-                              label: t('Actively check all channels'),
-                            },
-                            {
-                              value: 'auto_ban_only',
-                              label: t(
-                                'Actively check auto-disable-enabled channels'
-                              ),
-                            },
-                            {
-                              value: 'passive_recovery',
-                              label: t('Check channels awaiting recovery only'),
-                            },
-                          ]}
+                <FormField
+                  control={form.control}
+                  name='ChannelDisableThreshold'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Health check timeout threshold (seconds)')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          step={1}
                           value={field.value}
-                          onValueChange={field.onChange}
-                        >
-                          <FormControl>
-                            <SelectTrigger className='w-full'>
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              <SelectItem value='scheduled_all'>
-                                {t('Actively check all channels')}
-                              </SelectItem>
-                              <SelectItem value='auto_ban_only'>
-                                {t(
-                                  'Actively check auto-disable-enabled channels'
-                                )}
-                              </SelectItem>
-                              <SelectItem value='passive_recovery'>
-                                {t('Check channels awaiting recovery only')}
-                              </SelectItem>
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        <FormDescription>
-                          {channelTestModeDescription}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name='monitor_setting.auto_test_channel_minutes'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Test interval (minutes)')}</FormLabel>
-                        <FormControl>
-                          <Input
-                            type='number'
-                            min={1}
-                            step={1}
-                            {...safeNumberFieldProps(field)}
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          {channelTestMode === 'passive_recovery'
-                            ? t(
-                                'How frequently the system checks auto-disabled channels for recovery'
-                              )
-                            : t('Time between scheduled channel checks')}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </SettingsControlChildren>
-              </SettingsControlGroup>
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_test_concurrency'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Channel test concurrency')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        max={MAX_CHANNEL_TEST_CONCURRENCY}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Maximum number of channels tested at the same time (1-32)'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='AutomaticEnableChannelEnabled'
-                render={({ field }) => (
-                  <SettingsSwitchItem>
-                    <SettingsSwitchContent>
-                      <FormLabel>{t('Re-enable on success')}</FormLabel>
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                        />
+                      </FormControl>
                       <FormDescription>
                         {t(
-                          'Successful scheduled or bulk checks can restore automatically disabled channels. Manually disabled channels stay disabled.'
+                          'Scheduled or bulk health checks can disable a channel when this duration is exceeded, if both global and channel auto-disable are enabled.'
                         )}
                       </FormDescription>
-                    </SettingsSwitchContent>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </SettingsSwitchItem>
-                )}
-              />
-            </SettingsFormGrid>
-          </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-          <Separator />
-
-          <div className='flex min-w-0 flex-col gap-4'>
-            <h4 className='text-sm font-medium'>{t('Auto-disable rules')}</h4>
-            <SettingsFormGrid>
-              <FormField
-                control={form.control}
-                name='AutomaticDisableChannelEnabled'
-                render={({ field }) => (
-                  <SettingsSwitchItem>
-                    <SettingsSwitchContent>
-                      <FormLabel>{t('Disable on failure')}</FormLabel>
+                <FormField
+                  control={form.control}
+                  name='AutomaticDisableStatusCodes'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Auto-disable status codes')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('e.g. 401, 403, 429, 500-599')}
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                        />
+                      </FormControl>
                       <FormDescription>
                         {t(
-                          'Apply disable rules to upstream request errors and scheduled or bulk health checks'
+                          'Accepts comma-separated status codes and inclusive ranges.'
+                        )}{' '}
+                        {autoDisableParsed.ok &&
+                          autoDisableParsed.normalized &&
+                          autoDisableParsed.normalized !==
+                            field.value.trim() && (
+                            <span className='text-muted-foreground'>
+                              {t('Normalized:')} {autoDisableParsed.normalized}
+                            </span>
+                          )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='AutomaticDisableKeywords'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Failure keywords')}</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          rows={6}
+                          placeholder={t('one keyword per line')}
+                          {...field}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'If an upstream error contains any of these keywords (case insensitive), the channel will be disabled automatically.'
                         )}
                       </FormDescription>
-                    </SettingsSwitchContent>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </SettingsSwitchItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='ChannelDisableThreshold'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Health check timeout threshold (seconds)')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={0}
-                        step={1}
-                        value={field.value}
-                        onChange={(event) => field.onChange(event.target.value)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Scheduled or bulk health checks can disable a channel when this duration is exceeded, if both global and channel auto-disable are enabled.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='AutomaticDisableStatusCodes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Auto-disable status codes')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t('e.g. 401, 403, 429, 500-599')}
-                        value={field.value}
-                        onChange={(event) => field.onChange(event.target.value)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Accepts comma-separated status codes and inclusive ranges.'
-                      )}{' '}
-                      {autoDisableParsed.ok &&
-                        autoDisableParsed.normalized &&
-                        autoDisableParsed.normalized !== field.value.trim() && (
-                          <span className='text-muted-foreground'>
-                            {t('Normalized:')} {autoDisableParsed.normalized}
-                          </span>
-                        )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='AutomaticDisableKeywords'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Failure keywords')}</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        rows={6}
-                        placeholder={t('one keyword per line')}
-                        {...field}
-                        onChange={(event) => field.onChange(event.target.value)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'If an upstream error contains any of these keywords (case insensitive), the channel will be disabled automatically.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </SettingsFormGrid>
-          </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </SettingsFormGrid>
+            </div>
+            <SettingsCard
+              title={t('Enable daily amount limit')}
+              description={t(
+                'Per-channel limits are configured on each channel. These settings control how the feature runs globally.'
+              )}
+              className='shadow-none'
+            >
+              <SettingsFormGrid>
+                <FormField
+                  control={form.control}
+                  name='channel_daily_limit_setting.enabled'
+                  render={({ field }) => (
+                    <SettingsSwitchItem>
+                      <SettingsSwitchContent>
+                        <FormLabel>{t('Enable daily amount limit')}</FormLabel>
+                        <FormDescription>
+                          {t(
+                            'When off, usage is no longer accumulated and channels are neither disabled nor recovered. Channels already disabled stay disabled and must be enabled manually; re-enabling this switch does not recover them retroactively.'
+                          )}
+                        </FormDescription>
+                      </SettingsSwitchContent>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </SettingsSwitchItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='channel_daily_limit_setting.timezone'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Daily reset timezone')}</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='channel_daily_limit_setting.retention_days'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Usage history retention (days)')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={7}
+                          max={3650}
+                          step={1}
+                          {...safeNumberFieldProps(field)}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </SettingsFormGrid>
+            </SettingsCard>
+          </fieldset>
         </SettingsForm>
       </Form>
     </SettingsSection>

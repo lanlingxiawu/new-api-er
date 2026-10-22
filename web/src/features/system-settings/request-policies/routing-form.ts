@@ -5,6 +5,9 @@ import { parseHttpStatusCodeRules } from '@/lib/http-status-code-rules'
 
 export function createRoutingPolicySchema(t: TFunction) {
   return z.object({
+    probe_routing_setting: z.object({
+      max_input_chars: z.number().int().min(1).max(1024),
+    }),
     RetryTimes: z.number().int().min(0).max(99),
     AutomaticRetryStatusCodes: z
       .string()
@@ -47,6 +50,11 @@ export function routingPolicyFormValues(
   options: Record<string, string>
 ): RoutingPolicyFormValues {
   return {
+    probe_routing_setting: {
+      max_input_chars: Number(
+        options['probe_routing_setting.max_input_chars'] ?? 128
+      ),
+    },
     RetryTimes: Number(options.RetryTimes ?? 0),
     AutomaticRetryStatusCodes: options.AutomaticRetryStatusCodes ?? '',
     channel_affinity_setting: {
@@ -70,6 +78,9 @@ export function routingPolicyOptions(
   values: RoutingPolicyFormValues
 ): Record<string, string> {
   return {
+    'probe_routing_setting.max_input_chars': String(
+      values.probe_routing_setting.max_input_chars
+    ),
     RetryTimes: String(values.RetryTimes),
     AutomaticRetryStatusCodes: values.AutomaticRetryStatusCodes,
     ...Object.fromEntries(

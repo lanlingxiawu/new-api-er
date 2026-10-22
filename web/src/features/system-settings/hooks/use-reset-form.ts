@@ -17,10 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useRef } from 'react'
-import type { DefaultValues, FieldValues, UseFormReturn } from 'react-hook-form'
+import {
+  useFormState,
+  type DefaultValues,
+  type FieldValues,
+  type UseFormReturn,
+} from 'react-hook-form'
 
 /**
- * Reset a react-hook-form instance whenever the provided default values change.
+ * Refresh saved defaults without replacing fields the user is still editing.
  * Guards against naively resetting on every render by tracking the last
  * serialized snapshot of the defaults.
  */
@@ -29,6 +34,7 @@ export function useResetForm<TFieldValues extends FieldValues>(
   values: DefaultValues<TFieldValues> | undefined
 ) {
   const lastSerializedDefaults = useRef<string | null>(null)
+  const { dirtyFields } = useFormState({ control: form.control })
 
   useEffect(() => {
     if (!values) return
@@ -38,7 +44,7 @@ export function useResetForm<TFieldValues extends FieldValues>(
       return
     }
 
-    form.reset(values)
+    form.reset(values, { keepDirtyValues: Object.keys(dirtyFields).length > 0 })
     lastSerializedDefaults.current = serializedDefaults
-  }, [values, form])
+  }, [values, form, dirtyFields])
 }

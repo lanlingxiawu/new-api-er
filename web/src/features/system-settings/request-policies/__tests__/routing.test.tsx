@@ -124,6 +124,67 @@ function show() {
     </QueryClientProvider>
   )
 }
+it('saves probe detection from the single page action', async () => {
+  vi.spyOn(api, 'put').mockResolvedValue({ data: { success: true } })
+  show()
+  await screen.findByRole('table')
+  fireEvent.change(
+    screen.getByRole('spinbutton', {
+      name: 'Maximum input length for probe detection',
+    }),
+    {
+      target: { value: '256' },
+    }
+  )
+  expect(
+    screen.queryByRole('button', { name: /^Save$/ })
+  ).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() =>
+    expect(api.put).toHaveBeenCalledWith('/api/option/group', {
+      scope: 'request-policies.routing',
+      module: 'probe_routing_setting',
+      values: { max_input_chars: '256' },
+    })
+  )
+  expect(api.patch).not.toHaveBeenCalled()
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+  expect(
+    screen.getByRole('spinbutton', {
+      name: 'Maximum input length for probe detection',
+    })
+  ).toHaveValue(256)
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  expect(api.put).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a failed probe change and does not resubmit an already saved retry change', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValueOnce({ data: { success: false, message: 'Save failed' } })
+    .mockResolvedValue({ data: { success: true } })
+  show()
+  await screen.findByRole('table')
+  fireEvent.change(
+    screen.getByRole('spinbutton', { name: 'Maximum retries' }),
+    { target: { value: '3' } }
+  )
+  const probe = screen.getByRole('spinbutton', {
+    name: 'Maximum input length for probe detection',
+  })
+  fireEvent.change(probe, { target: { value: '256' } })
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled()
+  )
+  expect(probe).toHaveValue(256)
+  await userEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(2))
+  expect(api.patch).toHaveBeenCalledTimes(1)
+})
 it('opens global affinity settings and the complete rules table without switching views', async () => {
   show()
   expect(await screen.findByRole('table')).toBeVisible()

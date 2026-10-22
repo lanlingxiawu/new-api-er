@@ -43,6 +43,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
+import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
   numberInputNoSpinnerClassName,
@@ -126,12 +127,13 @@ export function LogQuerySection({ defaultValues }: LogQuerySectionProps) {
   const baselineRef = useRef<FlatDefaults>(defaultValues)
   const baselineSerializedRef = useRef<string>(JSON.stringify(defaultValues))
 
+  useResetForm(form, buildFormDefaults(defaultValues))
+
   useEffect(() => {
     const serialized = JSON.stringify(defaultValues)
     if (serialized === baselineSerializedRef.current) return
     baselineRef.current = defaultValues
     baselineSerializedRef.current = serialized
-    form.reset(buildFormDefaults(defaultValues))
   }, [defaultValues, form])
 
   const onSubmit = async (values: FormValues) => {
