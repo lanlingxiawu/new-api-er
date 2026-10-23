@@ -4,10 +4,35 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChannelLimitNearSQLiteBoundary(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	conn, err := db.DB()
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.NoError(t, db.AutoMigrate(&Channel{}, &ChannelDailyUsage{}, &ChannelLimitPeriodUsage{}))
+	for i, used := range []int64{799, 800, 801} {
+		channel := Channel{DailyQuotaLimit: 1000}
+		require.NoError(t, db.Create(&channel).Error)
+		require.NoError(t, db.Create(&ChannelDailyUsage{ChannelId: channel.Id, StatDate: 1, CostQuota: used}).Error)
+		var count int64
+		err = ApplyChannelLimitFilter(db.Model(&Channel{}).Where("channels.id = ?", channel.Id), ChannelLimitFilterNear, 1).Count(&count).Error
+		require.NoError(t, err)
+		if i == 0 {
+			require.Zero(t, count)
+		} else {
+			require.EqualValues(t, 1, count)
+		}
+	}
+}
 
 // 限额筛选与今日用量排序的测试。设计见 docs/design/channel-daily-quota-limit.md §9.4 / §9.5。
 

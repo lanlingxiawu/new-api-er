@@ -5,10 +5,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestDailyStatUpsertsSQLite(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	conn, err := db.DB()
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	previous := DB
+	DB = db
+	t.Cleanup(func() { DB = previous; require.NoError(t, conn.Close()) })
+	require.NoError(t, db.AutoMigrate(&PlatformChannelDailyStat{}, &EmployeeCommissionDailyStat{}, &BusinessDailyStatsCoverage{}))
+	t.Run("platform", TestAddPlatformChannelDailyStatTx)
+	t.Run("employee", TestAddEmployeeCommissionDailyStatTx)
+}
 
 // ---------------------------------------------------------------------------
 // business_daily_stats.go — pure logic

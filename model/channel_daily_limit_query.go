@@ -87,7 +87,9 @@ func ApplyChannelLimitFilter(query *gorm.DB, limitFilter string, statDate int64)
 		}
 		return query.Where(
 			"channels.daily_quota_limit > 0 AND channels.daily_limit_disabled_at = 0 AND "+
-				dailyUsageSubquery+" >= channels.daily_quota_limit * ?",
+				// PostgreSQL otherwise infers the parameter as bigint from the
+				// quota column and rejects the fractional threshold (0.8).
+				dailyUsageSubquery+" >= channels.daily_quota_limit * CAST(? AS DECIMAL(3,2))",
 			statDate, operation_setting.ChannelDailyLimitNearThreshold,
 		)
 	default:
