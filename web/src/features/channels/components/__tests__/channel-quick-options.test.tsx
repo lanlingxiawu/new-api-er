@@ -199,7 +199,7 @@ describe('header passthrough quick option', () => {
       />
     )
     const toggle = screen.getByRole('switch', HEADERS_SWITCH)
-    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    expect(toggle).toBeDisabled()
     expect(toggle).not.toBeChecked()
     expect(
       screen.getByText('Fix the Request Header Override JSON first')

@@ -24,6 +24,8 @@ import { Switch } from '@/components/ui/switch'
 import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 
+import { useSettingsPageAccess } from './settings-page-access-context'
+
 type SettingsFormGridProps = {
   children: ReactNode
   className?: string
@@ -187,6 +189,7 @@ export function SettingsForm({
   onSubmit,
   ...props
 }: ComponentProps<'form'>) {
+  const { canEdit } = useSettingsPageAccess()
   return (
     <form
       className={cn(
@@ -203,6 +206,10 @@ export function SettingsForm({
       onSubmit={
         onSubmit
           ? async (event) => {
+              if (!canEdit) {
+                event.preventDefault()
+                return
+              }
               try {
                 await onSubmit(event)
               } catch (error) {

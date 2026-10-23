@@ -358,7 +358,7 @@ describe('metadata sync preview', () => {
     expect(screen.getByText('0 of 3 changed fields selected')).toBeVisible()
     expect(clear).toBeDisabled()
     expect(newDescription).toBeChecked()
-    expect(newDescription).toHaveAttribute('aria-disabled', 'true')
+    expect(newDescription).toBeDisabled()
 
     await user.click(description)
     expect(screen.getByText('1 of 3 changed fields selected')).toBeVisible()
@@ -595,7 +595,7 @@ describe('metadata sync preview', () => {
       screen.getByRole('checkbox', {
         name: 'Select syncable models on this page',
       })
-    ).toHaveAttribute('aria-disabled', 'true')
+    ).toBeDisabled()
     expect(
       screen.getByText(
         'No models can be synced with the current filters. Adjust the search or sync scope.'

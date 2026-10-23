@@ -27,6 +27,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { TabsContent } from '@/components/ui/tabs'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { SettingsPageContext } from './settings-page-access-context'
@@ -63,6 +64,13 @@ export function useSuppressSettingsSectionHeader() {
   return useContext(SettingsPageContext).suppressSectionHeader
 }
 
+export function SettingsPageTabsContent(
+  props: ComponentProps<typeof TabsContent>
+) {
+  const { canEdit } = useContext(SettingsPageContext)
+  return <TabsContent {...props} render={<fieldset disabled={!canEdit} />} />
+}
+
 type SettingsPageTitleStatusPortalProps = {
   children: ReactNode
 }
@@ -84,9 +92,9 @@ type SettingsPageActionsPortalProps = {
 export function SettingsPageActionsPortal(
   props: SettingsPageActionsPortalProps
 ) {
-  const { actionsContainer } = useContext(SettingsPageContext)
+  const { actionsContainer, canEdit } = useContext(SettingsPageContext)
 
-  if (!actionsContainer) return null
+  if (!actionsContainer || !canEdit) return null
 
   return createPortal(
     <div className='flex flex-wrap items-center justify-end gap-2'>

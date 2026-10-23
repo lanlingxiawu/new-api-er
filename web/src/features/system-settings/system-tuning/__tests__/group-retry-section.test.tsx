@@ -39,7 +39,7 @@ function show() {
         statusRules='{"default":"429"}'
         statusEnabled
         guardEnabled={false}
-        guardRules="{}"
+        guardRules='{}'
       />
     </QueryClientProvider>
   )
@@ -53,12 +53,20 @@ it('saves retry counts, status codes and the switch in one request', async () =>
   fireEvent.change(screen.getByLabelText('Retry attempts'), {
     target: { value: '3' },
   })
-  fireEvent.click(screen.getByRole('switch', { name: 'Enable per-group retry status codes' }))
+  fireEvent.click(
+    screen.getByRole('switch', { name: 'Enable per-group retry status codes' })
+  )
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
   expect(put.mock.calls[0][1]).toMatchObject({
     module: 'group_retry_policy',
-    values: { times: '{"default":3}', status_enabled: 'false', status_rules: '{"default":"429"}', guard_enabled: 'false', guard_rules: '{}' },
+    values: {
+      times: '{"default":3}',
+      status_enabled: 'false',
+      status_rules: '{"default":"429"}',
+      guard_enabled: 'false',
+      guard_rules: '{}',
+    },
   })
   expect(
     screen.queryByRole('button', { name: 'Save retry counts' })
@@ -127,12 +135,16 @@ it('disables editing and repeat submission while the complete form is saving', a
       })
   )
   show()
-  fireEvent.change(screen.getByLabelText('Retry attempts'), { target: { value: '3' } })
+  fireEvent.change(screen.getByLabelText('Retry attempts'), {
+    target: { value: '3' },
+  })
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled()
   )
-  expect(screen.getByRole('switch', { name: 'Enable per-group retry status codes' })).toHaveAttribute('aria-disabled', 'true')
+  expect(
+    screen.getByRole('switch', { name: 'Enable per-group retry status codes' })
+  ).toBeDisabled()
   expect(screen.getByLabelText('Retry attempts')).toBeDisabled()
   expect(put).toHaveBeenCalledTimes(1)
   finish({ data: { success: true, data: { applied: true } } })

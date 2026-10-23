@@ -161,12 +161,14 @@ function GroupSelect(props: GroupSelectProps) {
 }
 
 type GroupSpecialUsableRulesEditorProps = {
+  readOnly?: boolean
   value: string
   groupOptions: string[]
   onChange: (value: string) => void
 }
 
 type GroupSectionProps = {
+  readOnly?: boolean
   groupName: string
   items: Rule[]
   groupOptions: string[]
@@ -218,6 +220,7 @@ function GroupSection(props: GroupSectionProps) {
               size='sm'
               className='h-7 w-7 p-0'
               aria-label={t('Add rule')}
+              disabled={props.readOnly}
               onClick={() => {
                 props.onAdd(props.groupName)
                 setOpen(true)
@@ -231,13 +234,17 @@ function GroupSection(props: GroupSectionProps) {
               className='text-destructive h-7 w-7 p-0'
               aria-label={t('Remove {{group}}', { group: props.groupName })}
               onClick={() => props.onRemoveGroup(props.groupName)}
+              disabled={props.readOnly}
             >
               <Trash2 className='h-4 w-4' />
             </Button>
           </div>
         </div>
         <CollapsibleContent>
-          <div className='space-y-2 border-t p-3'>
+          <fieldset
+            disabled={props.readOnly}
+            className='space-y-2 border-t p-3'
+          >
             {props.items.map((rule) => (
               <div
                 key={rule._id}
@@ -325,7 +332,7 @@ function GroupSection(props: GroupSectionProps) {
                 </Button>
               </div>
             ))}
-          </div>
+          </fieldset>
         </CollapsibleContent>
       </div>
     </Collapsible>
@@ -433,6 +440,7 @@ export function GroupSpecialUsableRulesEditor(
           ) : (
             grouped.map((group) => (
               <GroupSection
+                readOnly={props.readOnly}
                 key={group.name}
                 groupName={group.name}
                 items={group.items}
@@ -445,7 +453,10 @@ export function GroupSpecialUsableRulesEditor(
             ))
           )}
 
-          <div className='flex items-center justify-center pt-2'>
+          <fieldset
+            disabled={props.readOnly}
+            className='flex items-center justify-center pt-2'
+          >
             <GroupSelect
               className='w-full sm:w-72'
               options={newGroupCandidates}
@@ -453,7 +464,7 @@ export function GroupSpecialUsableRulesEditor(
               placeholder={t('Add rules for a user group')}
               onValueChange={addRuleToGroup}
             />
-          </div>
+          </fieldset>
         </div>
       </CardContent>
     </Card>

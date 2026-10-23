@@ -20,6 +20,23 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+it('does not submit a settings form after edit access is revoked', () => {
+  const save = vi.fn()
+  render(
+    <SettingsPageProvider
+      actionsContainer={null}
+      scope='auth.oauth'
+      canEdit={false}
+    >
+      <SettingsForm aria-label='settings' onSubmit={save}>
+        <input aria-label='draft' />
+      </SettingsForm>
+    </SettingsPageProvider>
+  )
+  fireEvent.submit(screen.getByRole('form', { name: 'settings' }))
+  expect(save).not.toHaveBeenCalled()
+})
+
 it.each(['page action', 'form submit'])(
   'handles a rejected %s without losing the draft and allows retry',
   async (entry) => {

@@ -230,7 +230,8 @@ export function useSidebarData(): SidebarData {
             url: '/system-settings/site',
             activeUrls: ['/system-settings'],
             icon: Settings,
-            requiredRole: ROLE.SUPER_ADMIN,
+            // useSidebarView also requires a visible settings section.
+            requiredRole: ROLE.ADMIN,
           },
         ],
       },

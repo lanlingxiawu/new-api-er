@@ -552,7 +552,7 @@ it.each([
     const price = screen.getByRole('textbox', { name: 'seconds' })
     expect(
       screen.getByRole('switch', { name: 'Set separately for this provider' })
-    ).toHaveAttribute('aria-disabled', 'true')
+    ).toBeDisabled()
     await user.clear(price)
     await user.type(price, '0.6')
     expect(await ref.current?.commitDraft()).toMatchObject({

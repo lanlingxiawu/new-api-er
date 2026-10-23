@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import i18next from 'i18next'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import type { AuthUser } from '@/stores/auth-store'
+import { SYSTEM_SETTINGS_VIEW } from '@/components/layout/config/system-settings.config'
+import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
 import {
   SYSTEM_SETTINGS_GROUPS,
@@ -8,6 +10,17 @@ import {
   canViewSettingsSection,
   firstVisibleSettingsSection,
 } from '../access'
+import {
+  requireSystemSettingsSection,
+  redirectToFirstVisibleSystemSettings,
+} from '../route-access'
+
+const pageSections = SYSTEM_SETTINGS_VIEW.getNavGroups(i18next.t)
+  .flatMap((group) => group.items)
+  .flatMap((item) => item.items ?? [])
+  .map((item) => String(item.url).replace('/system-settings/', '').split('/'))
+
+afterEach(() => useAuthStore.setState(useAuthStore.getInitialState(), true))
 
 // 这张分区表是「系统设置」入口与索引路由的唯一依据：后端有 scope、页面有分区，但这里漏登记，
 // 只被授予该 scope 的管理员看不到入口，索引路由还会把他重定向到 /403。
@@ -26,6 +39,40 @@ function userWithScopes(...scopes: string[]): AuthUser {
 }
 
 describe('system settings section registry', () => {
+  it('keeps the entry index aligned with every actual settings page', () => {
+    expect(
+      SYSTEM_SETTINGS_GROUPS.flatMap((group) =>
+        SYSTEM_SETTINGS_SECTIONS[group].map((section) => `${group}/${section}`)
+      ).sort()
+    ).toEqual(pageSections.map((parts) => parts.join('/')).sort())
+  })
+
+  it.each(pageSections)(
+    'single-scope admins can enter and leave %s/%s',
+    (group, section) => {
+      const user = userWithScopes(`${group}.${section}`)
+      useAuthStore.getState().auth.setUser(user)
+      expect(firstVisibleSettingsSection(user)).toEqual({ group, section })
+      const settingsGroup = group as (typeof SYSTEM_SETTINGS_GROUPS)[number]
+      expect(() =>
+        requireSystemSettingsSection(settingsGroup, section, [section])
+      ).not.toThrow()
+      let target: unknown
+      try {
+        redirectToFirstVisibleSystemSettings()
+      } catch (error) {
+        target = error
+      }
+      expect(target).toMatchObject({
+        options: { href: `/system-settings/${group}/${section}` },
+      })
+      useAuthStore.getState().auth.setUser(userWithScopes())
+      expect(() =>
+        requireSystemSettingsSection(settingsGroup, section, [section])
+      ).toThrow()
+    }
+  )
+
   it('exposes every group exactly once with a non-empty section list', () => {
     const groups = Object.keys(SYSTEM_SETTINGS_SECTIONS)
     expect(new Set(groups).size).toBe(groups.length)

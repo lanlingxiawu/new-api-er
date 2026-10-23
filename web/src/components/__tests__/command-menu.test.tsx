@@ -28,6 +28,7 @@ import userEvent from '@testing-library/user-event'
 import { afterAll, afterEach, beforeAll, expect, test } from 'vitest'
 
 import { SearchProvider } from '@/context/search-provider'
+import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { STATUS_QUERY_KEY } from '@/lib/status-query'
 import { useAuthStore } from '@/stores/auth-store'
@@ -68,22 +69,25 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-async function searchEntriesFor(role: number, sidebarModulesAdmin = '') {
-  useAuthStore
-    .getState()
-    .auth.setUser({
-      id: 1,
-      username: 'alice',
-      role,
-      permissions: {
-        admin_permissions: {
-          'admin_menu.channels': { view: true },
-          'admin_menu.models': { view: true },
-          'admin_menu.users': { view: true },
-          'admin_menu.redemption_codes': { view: true },
-        },
+async function searchEntriesFor(
+  role: number,
+  sidebarModulesAdmin = '',
+  settingsPermissions: AdminPermissionMatrix = {}
+) {
+  useAuthStore.getState().auth.setUser({
+    id: 1,
+    username: 'alice',
+    role,
+    permissions: {
+      admin_permissions: {
+        'admin_menu.channels': { view: true },
+        'admin_menu.models': { view: true },
+        'admin_menu.users': { view: true },
+        'admin_menu.redemption_codes': { view: true },
+        ...settingsPermissions,
       },
-    })
+    },
+  })
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -141,4 +145,14 @@ test('pages hidden in the sidebar settings stay out of search', async () => {
 
   expect(entries).not.toContain('Wallet')
   expect(entries).toContain('Profile')
+})
+
+test('admins with a settings scope can find System Settings in search', async () => {
+  const entries = await searchEntriesFor(ROLE.ADMIN, '', {
+    'system_settings.billing.model-pricing': { view: true },
+  })
+
+  expect(entries).toContain('System Settings')
+  expect(entries).not.toContain('Task Plugins')
+  expect(entries).not.toContain('System Info')
 })

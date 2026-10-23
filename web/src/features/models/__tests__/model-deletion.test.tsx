@@ -150,7 +150,7 @@ describe('model deletion', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
     expect(
       screen.getByRole('checkbox', { name: 'Also remove from all channels' })
-    ).toHaveAttribute('aria-disabled', 'true')
+    ).toBeDisabled()
     await user.keyboard('{Escape}')
     expect(screen.getByRole('alertdialog')).toBeVisible()
     expect(remove).toHaveBeenCalledTimes(1)
@@ -199,7 +199,7 @@ it('keeps pricing removal unavailable to an ordinary administrator', () => {
   mount()
   expect(
     screen.getByRole('checkbox', { name: 'Also remove pricing' })
-  ).toHaveAttribute('aria-disabled', 'true')
+  ).toBeDisabled()
   expect(
     screen.getByText('Model pricing is managed by a super administrator.')
   ).toBeVisible()
@@ -221,7 +221,7 @@ it.each([1, 2, 3])(
     )
     expect(
       screen.getByRole('checkbox', { name: /Also remove from all channels/ })
-    ).toHaveAttribute('aria-disabled', 'true')
+    ).toBeDisabled()
     expect(screen.getByText('Only available for exact matching')).toBeVisible()
   }
 )

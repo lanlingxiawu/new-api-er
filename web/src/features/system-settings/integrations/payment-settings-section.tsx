@@ -45,7 +45,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { getPaymentErrorTranslation } from '@/features/wallet/lib/payment'
 import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
@@ -56,7 +56,11 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
-import { SettingsPageFormActions } from '../components/settings-page-context'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
+import {
+  SettingsPageTabsContent as TabsContent,
+  SettingsPageFormActions,
+} from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -280,6 +284,7 @@ export function PaymentSettingsSection({
   complianceDefaults,
 }: PaymentSettingsSectionProps) {
   const { t } = useTranslation()
+  const { canEdit } = useSettingsPageAccess()
   const queryClient = useQueryClient()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
@@ -1219,6 +1224,7 @@ export function PaymentSettingsSection({
               size='sm'
               variant='destructive'
               onClick={() => setShowComplianceDialog(true)}
+              disabled={!canEdit}
             >
               {t('Confirm compliance')}
             </Button>
@@ -1241,7 +1247,7 @@ export function PaymentSettingsSection({
       )}
 
       <RiskAcknowledgementDialog
-        open={showComplianceDialog}
+        open={showComplianceDialog && canEdit}
         onOpenChange={setShowComplianceDialog}
         title={t('Confirm compliance terms')}
         description={t(
@@ -1255,7 +1261,9 @@ export function PaymentSettingsSection({
         mismatchHint={t('The entered text does not match the required text.')}
         confirmText={t('Confirm and enable')}
         isLoading={confirmComplianceMutation.isPending}
-        onConfirm={() => confirmComplianceMutation.mutate()}
+        onConfirm={() => {
+          if (canEdit) confirmComplianceMutation.mutate()
+        }}
       />
 
       <Form {...form}>
@@ -1263,7 +1271,7 @@ export function PaymentSettingsSection({
           onSubmit={form.handleSubmit(onSubmit)}
           className={cn(
             'gap-y-8',
-            !complianceConfirmed && 'pointer-events-none opacity-40'
+            canEdit && !complianceConfirmed && 'pointer-events-none opacity-40'
           )}
           data-no-autosubmit='true'
         >

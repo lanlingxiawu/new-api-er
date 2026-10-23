@@ -34,6 +34,8 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useIsEmployee } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { ADMIN_MENU_IDS } from '@/lib/admin-menu-access'
+import { canViewAdminMenu } from '@/lib/admin-permissions'
 import { createServerError } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -142,10 +144,22 @@ export function UsageLogsTable({
       searchParams.endTime,
     ]
   )
-  const userId = useAuthStore((state) => state.auth.user?.id)
+  const user = useAuthStore((state) => state.auth.user)
+  const userId = user?.id
+  const canReadBillingSource =
+    !isAdmin || canViewAdminMenu(user, ADMIN_MENU_IDS.SUBSCRIPTIONS)
   const { data: showBillingSource = false } = useQuery({
-    queryKey: ['usage-log-billing-source', isAdmin, userId],
-    enabled: logCategory === 'common' && userId != null,
+    queryKey: [
+      'usage-log-billing-source',
+      isAdmin,
+      userId,
+      canReadBillingSource,
+    ],
+    enabled:
+      isWorkspaceActive &&
+      logCategory === 'common' &&
+      userId != null &&
+      canReadBillingSource,
     queryFn: async () => {
       if (isAdmin) {
         const plansResult = await getAdminPlans()

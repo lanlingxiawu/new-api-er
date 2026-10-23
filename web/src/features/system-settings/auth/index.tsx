@@ -82,6 +82,7 @@ export function AuthSettings() {
       defaultSection={AUTH_DEFAULT_SECTION}
       getSectionContent={getAuthSectionContent}
       getSectionMeta={getAuthSectionMeta}
+      interactiveReadOnlySections={['oauth']}
     />
   )
 }

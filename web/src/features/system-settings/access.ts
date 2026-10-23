@@ -66,6 +66,8 @@ export const SYSTEM_SETTINGS_SECTIONS: Record<SystemSettingsGroup, string[]> = {
     'ledger-detail',
     'fallback-backfill',
     'relay-timeout',
+    'group-retry-times',
+    'relay-error-display',
   ],
 }
 

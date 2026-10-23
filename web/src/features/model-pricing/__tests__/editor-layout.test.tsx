@@ -273,7 +273,7 @@ it('updates the preview for explicit zero and disabled prices and explains depen
     ).not.toBeInTheDocument()
   )
   const audio = screen.getByRole('switch', { name: 'Audio output price' })
-  expect(audio).toHaveAttribute('aria-disabled', 'true')
+  expect(audio).toBeDisabled()
   expect(audio).toHaveAccessibleDescription(
     'Audio output price requires an audio input price.'
   )
@@ -282,7 +282,7 @@ it('updates the preview for explicit zero and disabled prices and explains depen
     screen.getByRole('textbox', { name: 'Audio input price' }),
     '1'
   )
-  expect(audio).not.toHaveAttribute('aria-disabled', 'true')
+  expect(audio).not.toBeDisabled()
 })
 
 function PricingFormFixture(props: {

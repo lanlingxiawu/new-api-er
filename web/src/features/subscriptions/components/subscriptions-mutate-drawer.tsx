@@ -63,8 +63,13 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { getPaymentErrorTranslation } from '@/features/wallet/lib/payment'
+import {
+  canViewSystemSettingsScope,
+  canEditSystemSettingsScope,
+} from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { handleServerError } from '@/lib/handle-server-error'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   createPlan,
@@ -96,6 +101,9 @@ export function SubscriptionsMutateDrawer({
   currentRow,
 }: Props) {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const canViewPayment = canViewSystemSettingsScope(user, 'billing.payment')
+  const canEditPayment = canEditSystemSettingsScope(user, 'billing.payment')
   const isEdit = !!currentRow?.plan?.id
   const { triggerRefresh } = useSubscriptions()
   const { meta: currencyMeta } = getCurrencyDisplay()
@@ -129,7 +137,11 @@ export function SubscriptionsMutateDrawer({
             handleServerError(res)
           }
         })
-        .catch(() => {})
+        .catch(handleServerError)
+      if (!canViewPayment) {
+        setPancakeProducts([])
+        return
+      }
       // Best-effort — empty list still lets the operator use "+ Create".
       listWaffoPancakeSubscriptionProductOptions()
         .then((res) => {
@@ -148,7 +160,7 @@ export function SubscriptionsMutateDrawer({
         })
         .catch(() => setPancakeProducts([]))
     }
-  }, [open, currentRow, form])
+  }, [open, currentRow, form, canViewPayment])
 
   const durationUnit = form.watch('duration_unit')
   const resetPeriod = form.watch('quota_reset_period')
@@ -194,6 +206,7 @@ export function SubscriptionsMutateDrawer({
   // controller) using persisted creds + the form's title/price, then
   // pins the returned PROD_ ID into the form field.
   const handleCreatePancakeProduct = async () => {
+    if (!canEditPayment) return
     const title = form.getValues('title').trim()
     const priceAmount = Number(form.getValues('price_amount') || 0)
     if (!title) {
@@ -799,19 +812,21 @@ export function SubscriptionsMutateDrawer({
                           className='w-full flex-1'
                           placeholder={t('Select a product')}
                         />
-                        <Button
-                          type='button'
-                          variant='outline'
-                          onClick={handleCreatePancakeProduct}
-                          disabled={
-                            creatingPancakeProduct || !pancakeCreateReady
-                          }
-                          className='shrink-0'
-                        >
-                          {creatingPancakeProduct
-                            ? t('Creating...')
-                            : `+ ${t('Create')}`}
-                        </Button>
+                        {canEditPayment && (
+                          <Button
+                            type='button'
+                            variant='outline'
+                            onClick={handleCreatePancakeProduct}
+                            disabled={
+                              creatingPancakeProduct || !pancakeCreateReady
+                            }
+                            className='shrink-0'
+                          >
+                            {creatingPancakeProduct
+                              ? t('Creating...')
+                              : `+ ${t('Create')}`}
+                          </Button>
+                        )}
                       </div>
                       <FormDescription>
                         {t(

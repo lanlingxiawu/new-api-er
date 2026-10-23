@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { act, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { createInstance } from 'i18next'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import { beforeEach, expect, it, vi } from 'vitest'
@@ -38,6 +39,26 @@ beforeEach(async () => {
     resources: { en, zh },
     interpolation: { escapeValue: false },
   })
+})
+
+it('shows a retry action after billing history fails instead of claiming there are no records', async () => {
+  await i18n.changeLanguage('en')
+  const get = vi
+    .spyOn(api, 'get')
+    .mockRejectedValueOnce(new Error('Network unavailable'))
+    .mockResolvedValue({
+      data: { success: true, data: { total: 0, items: [] } },
+    })
+  render(
+    <I18nextProvider i18n={i18n}>
+      <BillingHistoryDialog open onOpenChange={vi.fn()} />
+    </I18nextProvider>
+  )
+  const retry = await screen.findByRole('button', { name: 'Retry' })
+  expect(screen.getByText('Failed to load billing history')).toBeVisible()
+  await userEvent.click(retry)
+  expect(await screen.findByText('No billing records found')).toBeVisible()
+  expect(get).toHaveBeenCalledTimes(2)
 })
 
 it('translates billing history statuses and updates them when the language changes', async () => {

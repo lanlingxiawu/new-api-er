@@ -49,6 +49,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorState } from '@/components/error-state'
 import { StatusBadge } from '@/components/status-badge'
 import {
   AlertDialog,
@@ -154,6 +155,7 @@ export function BillingHistoryDialog({
     keyword,
     filters,
     loading,
+    failed,
     completing,
     exporting,
     queryingPlatformTradeNos,
@@ -171,7 +173,8 @@ export function BillingHistoryDialog({
     handleExport,
     handleCompleteOrder,
     handleQueryPlatformStatus,
-  } = useBillingHistory()
+    refresh,
+  } = useBillingHistory({ enabled: open })
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
@@ -436,7 +439,13 @@ export function BillingHistoryDialog({
                   ))}
                 </div>
               )}
-              {!loading && records.length === 0 && (
+              {!loading && failed && (
+                <ErrorState
+                  title={t('Failed to load billing history')}
+                  onRetry={() => void refresh()}
+                />
+              )}
+              {!loading && !failed && records.length === 0 && (
                 <div className='text-muted-foreground flex h-[320px] flex-col items-center justify-center text-center sm:h-[400px]'>
                   <p className='text-sm font-medium'>
                     {t('No billing records found')}

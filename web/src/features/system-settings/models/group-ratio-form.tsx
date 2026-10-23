@@ -58,6 +58,7 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
+import { useSettingsPageAccess } from '../components/settings-page-access-context'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 import {
@@ -90,6 +91,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   isSaving,
 }: GroupRatioFormProps) {
   const { t } = useTranslation()
+  const { canEdit } = useSettingsPageAccess()
   const values = useWatch({ control: form.control })
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [guideOpen, setGuideOpen] = useState(false)
@@ -97,12 +99,13 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
   const handleFieldChange = useCallback(
     (field: keyof GroupFormValues, value: string) => {
+      if (!canEdit) return
       form.setValue(field, value, {
         shouldValidate: true,
         shouldDirty: true,
       })
     },
-    [form]
+    [form, canEdit]
   )
 
   const toggleEditMode = useCallback(() => {
@@ -168,6 +171,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
         {editMode === 'visual' ? (
           <>
             <GroupRatioVisualEditor
+              readOnly={!canEdit}
               section={section}
               onSectionChange={setSection}
               groupRatio={values.GroupRatio ?? ''}
@@ -233,7 +237,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               }
             />
 
-            <div className='space-y-4'>
+            <fieldset disabled={!canEdit} className='space-y-4'>
               <FormField
                 control={form.control}
                 name='UserExclusiveGroupRatioEnabled'
@@ -288,269 +292,279 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   </FormItem>
                 )}
               />
-            </div>
+            </fieldset>
           </>
         ) : (
-          <SettingsForm onSubmit={form.handleSubmit(onSave)}>
-            <FormField
-              control={form.control}
-              name='GroupRatio'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Group ratios')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'JSON map of group → ratio applied when the user selects the group explicitly.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='TopupGroupRatio'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Top-up group ratios')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Optional multiplier per user group used when calculating recharge pricing. Provide a JSON object such as'
-                    )}
-                    {` { "default": 1, "vip": 1.2 }`}.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='UserUsableGroups'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Selectable groups')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'JSON map of group → description exposed when users create API keys.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='GroupGroupRatio'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Inter-group overrides')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Nested JSON: source group →')}{' '}
-                    {`{ targetGroup: ratio }`}{' '}
-                    {t(
-                      'to override billing when a user in one group uses a token of another group.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='AutoGroups'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Auto group order')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Priority order for tokens in the auto group. The system tries groups from top to bottom.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='MaxTokenAutoGroups'
-              render={({ field, fieldState }) => (
-                <FormItem data-invalid={fieldState.invalid}>
-                  <FormLabel>{t('Maximum custom groups per token')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...safeNumberFieldProps(field)}
-                      type='number'
-                      min={1}
-                      step={1}
-                      aria-invalid={fieldState.invalid}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='GroupSpecialUsableGroup'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Special usable group rules')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='DefaultUseAutoGroup'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Default to auto groups')}</FormLabel>
+          <fieldset disabled={!canEdit}>
+            <SettingsForm
+              onSubmit={
+                canEdit
+                  ? form.handleSubmit(onSave)
+                  : (event) => event.preventDefault()
+              }
+            >
+              <FormField
+                control={form.control}
+                name='GroupRatio'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Group ratios')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                      />
+                    </FormControl>
                     <FormDescription>
                       {t(
-                        'If default auto group is enabled, newly created tokens start with auto instead of an empty group.'
+                        'JSON map of group → ratio applied when the user selects the group explicitly.'
                       )}
                     </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name='UserExclusiveGroupRatioEnabled'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
+              <FormField
+                control={form.control}
+                name='TopupGroupRatio'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Top-up group ratios')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                        heightClassName='h-40 min-h-40 max-h-40'
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Optional multiplier per user group used when calculating recharge pricing. Provide a JSON object such as'
+                      )}
+                      {` { "default": 1, "vip": 1.2 }`}.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='UserUsableGroups'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Selectable groups')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                        heightClassName='h-40 min-h-40 max-h-40'
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'JSON map of group → description exposed when users create API keys.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='GroupGroupRatio'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Inter-group overrides')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Nested JSON: source group →')}{' '}
+                      {`{ targetGroup: ratio }`}{' '}
+                      {t(
+                        'to override billing when a user in one group uses a token of another group.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AutoGroups'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Auto group order')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                        heightClassName='h-40 min-h-40 max-h-40'
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Priority order for tokens in the auto group. The system tries groups from top to bottom.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='MaxTokenAutoGroups'
+                render={({ field, fieldState }) => (
+                  <FormItem data-invalid={fieldState.invalid}>
                     <FormLabel>
-                      {t('Per-user exclusive group ratios')}
+                      {t('Maximum custom groups per token')}
                     </FormLabel>
+                    <FormControl>
+                      <Input
+                        {...safeNumberFieldProps(field)}
+                        type='number'
+                        min={1}
+                        step={1}
+                        aria-invalid={fieldState.invalid}
+                      />
+                    </FormControl>
                     <FormDescription>
                       {t(
-                        'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                        'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
                       )}
                     </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name='UserExclusiveGroupRatioCacheMax'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    {t('Exclusive ratio parse cache limit')}
-                  </FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      value={field.value ?? 0}
-                      onChange={(e) =>
-                        field.onChange(
-                          e.target.value === '' ? 0 : Number(e.target.value)
-                        )
-                      }
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </SettingsForm>
+              <FormField
+                control={form.control}
+                name='GroupSpecialUsableGroup'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Special usable group rules')}</FormLabel>
+                    <FormControl>
+                      <JsonCodeEditor
+                        value={field.value}
+                        onChange={field.onChange}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        textareaRef={field.ref}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='DefaultUseAutoGroup'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Default to auto groups')}</FormLabel>
+                      <FormDescription>
+                        {t(
+                          'If default auto group is enabled, newly created tokens start with auto instead of an empty group.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='UserExclusiveGroupRatioEnabled'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>
+                        {t('Per-user exclusive group ratios')}
+                      </FormLabel>
+                      <FormDescription>
+                        {t(
+                          'When enabled, exclusive group ratios set per user in Edit User take effect.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </SettingsSwitchItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='UserExclusiveGroupRatioCacheMax'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Exclusive ratio parse cache limit')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        value={field.value ?? 0}
+                        onChange={(e) =>
+                          field.onChange(
+                            e.target.value === '' ? 0 : Number(e.target.value)
+                          )
+                        }
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Max number of distinct exclusive-ratio configs whose parsed result is cached; 0 disables the cache.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </SettingsForm>
+          </fieldset>
         )}
       </Form>
     </div>

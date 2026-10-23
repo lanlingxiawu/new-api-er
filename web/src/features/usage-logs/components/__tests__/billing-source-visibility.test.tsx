@@ -56,10 +56,20 @@ async function renderLogs(props: {
   role: number
   enabledPlans: boolean[]
   activeSubscription: boolean
+  canViewSubscriptions?: boolean
 }) {
-  useAuthStore
-    .getState()
-    .auth.setUser({ id: 1, username: 'tester', role: props.role })
+  useAuthStore.getState().auth.setUser({
+    id: 1,
+    username: 'tester',
+    role: props.role,
+    permissions: {
+      admin_permissions: {
+        'admin_menu.subscriptions': {
+          view: props.canViewSubscriptions ?? true,
+        },
+      },
+    },
+  })
   const records = ['wallet', 'subscription'].map((source, index) =>
     usageLogSchema.parse({
       id: index + 1,
@@ -152,6 +162,21 @@ test('shows both source icons in admin view when any system plan is enabled', as
   })
 
   expect(screen.getByRole('img', { name: 'Wallet' })).toBeVisible()
+  expect(screen.getByRole('img', { name: 'Subscription' })).toBeVisible()
+})
+
+test('loads logs without requesting subscription management for an admin without that permission', async () => {
+  await renderLogs({
+    role: ROLE.ADMIN,
+    enabledPlans: [true],
+    activeSubscription: false,
+    canViewSubscriptions: false,
+  })
+  expect(
+    vi
+      .mocked(api.get)
+      .mock.calls.some(([url]) => url === '/api/subscription/admin/plans')
+  ).toBe(false)
   expect(screen.getByRole('img', { name: 'Subscription' })).toBeVisible()
 })
 

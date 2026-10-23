@@ -48,6 +48,7 @@ type SettingsPageProps<
   }
   extraArgs?: TExtraArgs
   loadingMessage?: string
+  interactiveReadOnlySections?: readonly TSectionId[]
   resolveSettings?: (
     settings: TSettings,
     raw: SystemOption[] | undefined
@@ -58,10 +59,12 @@ type SettingsPageFrameProps = {
   title: ReactNode
   scope: string
   canEdit: boolean
+  lockContent?: boolean
   children: ReactNode
 }
 
 function SettingsPageFrame(props: SettingsPageFrameProps) {
+  const { t } = useTranslation()
   const [actionsContainer, setActionsContainer] =
     useState<HTMLDivElement | null>(null)
   const [titleStatusContainer, setTitleStatusContainer] =
@@ -91,8 +94,15 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
           />
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
+          {!props.canEdit && (
+            <p className='text-muted-foreground text-sm'>
+              {t(
+                'You can view these settings. Contact an administrator to request edit access.'
+              )}
+            </p>
+          )}
           <fieldset
-            disabled={!props.canEdit}
+            disabled={!props.canEdit && props.lockContent !== false}
             className='flex h-full min-h-0 w-full max-w-full min-w-0 flex-col gap-4 disabled:opacity-80'
           >
             {props.children}
@@ -120,6 +130,7 @@ export function SettingsPage<
   getSectionMeta,
   extraArgs,
   loadingMessage = 'Loading settings...',
+  interactiveReadOnlySections,
   resolveSettings,
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
@@ -162,6 +173,7 @@ export function SettingsPage<
         title={t(sectionMeta.titleKey)}
         scope={scope}
         canEdit={canEdit}
+        lockContent={false}
       >
         <ErrorState
           title={t('Failed to load settings')}
@@ -182,6 +194,7 @@ export function SettingsPage<
       title={t(sectionMeta.titleKey)}
       scope={scope}
       canEdit={canEdit}
+      lockContent={!interactiveReadOnlySections?.includes(activeSection)}
     >
       {sectionContent}
     </SettingsPageFrame>

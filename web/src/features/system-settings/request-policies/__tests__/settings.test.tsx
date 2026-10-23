@@ -48,8 +48,46 @@ import {
   defaultRequestPolicySettings,
   type RequestPolicySettings,
 } from '../defaults'
+import { RelatedPolicyLink } from '../related-policy-link'
 
 type PolicyBeforeLoad = (context: { params: { section: string } }) => void
+
+it.each([
+  { role: 100, scope: '', visible: true },
+  { role: 10, scope: 'request-policies.health', visible: true },
+  { role: 10, scope: 'models.routing-reliability', visible: true },
+  { role: 10, scope: 'request-policies.routing', visible: false },
+  { role: 1, scope: '', visible: false },
+])(
+  'related health link respects role $role and scope $scope',
+  async ({ role, scope, visible }) => {
+    useAuthStore.getState().auth.setUser({
+      id: 2,
+      username: 'scoped-user',
+      role,
+      permissions: {
+        admin_permissions: { [`system_settings.${scope}`]: { view: true } },
+      },
+    })
+    const router = createRouter({
+      routeTree: createRootRoute({
+        component: () => <RelatedPolicyLink section='health' />,
+      }),
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    })
+    render(<RouterProvider router={router} />)
+    await act(() => router.load())
+    const link = screen.queryByRole('link', { name: 'Request policies' })
+    if (visible) {
+      expect(link).toHaveAttribute(
+        'href',
+        '/system-settings/request-policies/health'
+      )
+    } else {
+      expect(link).not.toBeInTheDocument()
+    }
+  }
+)
 
 it('keeps the daily limit controls on the single channel health page', async () => {
   await renderPolicies('/system-settings/request-policies/health')
@@ -282,7 +320,7 @@ describe('request policy settings', () => {
       await screen.findByRole('switch', { name: 'Enable filtering' })
     )
     const prompt = screen.getByRole('switch', { name: 'Inspect user prompts' })
-    expect(prompt).toHaveAttribute('aria-disabled', 'true')
+    expect(prompt).toBeDisabled()
     expect(prompt).toBeChecked()
     expect(
       screen.getByRole('textbox', { name: 'Blocked keywords' })

@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { getChannelOps } from '@/features/channels/api'
+import { canViewSettingsSection } from '@/features/system-settings/access'
 import { ROLE } from '@/lib/roles'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
@@ -11,10 +12,14 @@ import { policyLabel } from './policy-label'
 
 export function RelatedPolicyLink(props: { section: 'routing' | 'health' }) {
   const { t } = useTranslation()
-  const isRoot = useAuthStore(
-    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
-  )
-  if (!isRoot) return null
+  const user = useAuthStore((state) => state.auth.user)
+  if (
+    !user ||
+    user.role < ROLE.ADMIN ||
+    !canViewSettingsSection(user, 'request-policies', props.section)
+  ) {
+    return null
+  }
   return (
     <Link
       className='text-primary ml-1 underline underline-offset-4'

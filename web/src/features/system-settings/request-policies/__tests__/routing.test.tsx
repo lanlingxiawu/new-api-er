@@ -321,14 +321,14 @@ it('keeps binding options available for rule overrides regardless of the global 
   )
   expect(children).toBeVisible()
   expect(keep).toBeVisible()
-  expect(keep).not.toHaveAttribute('aria-disabled', 'true')
+  expect(keep).not.toBeDisabled()
   await userEvent.click(keep)
   await userEvent.click(
     screen.getByRole('radio', { name: 'Do not keep sessions' })
   )
   expect(keep).toBeVisible()
-  expect(keep).not.toHaveAttribute('aria-disabled', 'true')
-  expect(update).not.toHaveAttribute('aria-disabled', 'true')
+  expect(keep).not.toBeDisabled()
+  expect(update).not.toBeDisabled()
   await userEvent.click(
     screen.getByRole('radio', {
       name: 'Prefer the original channel, allow switching',
@@ -342,8 +342,8 @@ it('keeps binding options available for rule overrides regardless of the global 
       name: 'Enable session affinity',
     })
   )
-  expect(update).toHaveAttribute('aria-disabled', 'true')
-  expect(keep).toHaveAttribute('aria-disabled', 'true')
+  expect(update).toBeDisabled()
+  expect(keep).toBeDisabled()
   await userEvent.click(
     screen.getByRole('switch', {
       name: 'Enable session affinity',

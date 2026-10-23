@@ -64,6 +64,7 @@ function Fixture(props: {
   onSave?: (values: typeof defaults) => Promise<void>
   initial?: Partial<typeof defaults>
   isSaving?: boolean
+  canEdit?: boolean
 }) {
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
   const form = useForm({
@@ -71,7 +72,11 @@ function Fixture(props: {
     resolver: zodResolver(schema),
   })
   return (
-    <SettingsPageProvider actionsContainer={actions} scope='test' canEdit>
+    <SettingsPageProvider
+      actionsContainer={actions}
+      scope='test'
+      canEdit={props.canEdit ?? true}
+    >
       <div ref={setActions} />
       <GroupRatioForm
         form={form}
@@ -83,6 +88,43 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('lets a viewer search, switch tabs and open help without enabling edits', async () => {
+    const user = userEvent.setup()
+    render(<Fixture canEdit={false} />)
+    const search = screen.getByRole('textbox', {
+      name: 'Search groups by name or description',
+    })
+    await user.type(search, 'vip')
+    expect(screen.getByRole('textbox', { name: 'Group name' })).toHaveValue(
+      'vip'
+    )
+    expect(screen.getByRole('textbox', { name: 'Group name' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add group' })).toBeDisabled()
+    await user.click(screen.getByRole('tab', { name: 'Auto group order' }))
+    expect(
+      screen.getByRole('spinbutton', {
+        name: 'Maximum custom groups per token',
+      })
+    ).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Usage guide' }))
+    expect(screen.getByRole('dialog')).toBeVisible()
+  })
+  it('does not expose the portaled save action to a read-only administrator', () => {
+    const onSave = vi.fn()
+    const view = render(<Fixture onSave={onSave} canEdit={false} />)
+    expect(
+      screen.queryByRole('button', { name: 'Save group settings' })
+    ).not.toBeInTheDocument()
+    view.rerender(<Fixture onSave={onSave} canEdit />)
+    expect(
+      screen.getByRole('button', { name: 'Save group settings' })
+    ).toBeEnabled()
+    view.rerender(<Fixture onSave={onSave} canEdit={false} />)
+    expect(
+      screen.queryByRole('button', { name: 'Save group settings' })
+    ).not.toBeInTheDocument()
+    expect(onSave).not.toHaveBeenCalled()
+  })
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)

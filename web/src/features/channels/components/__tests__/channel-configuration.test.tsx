@@ -1207,7 +1207,7 @@ test('quick options and detailed settings share changes across tabs and save the
   expect(modelCheck).not.toBeChecked()
   expect(
     screen.getByRole('switch', { name: 'Auto Sync Upstream Models' })
-  ).toHaveAttribute('aria-disabled', 'true')
+  ).toBeDisabled()
   await user.click(modelCheck)
   expect(
     screen.getByRole('switch', { name: 'Auto Sync Upstream Models' })
@@ -2130,20 +2130,20 @@ test('an operator without sensitive write permission can discover saved models a
     'Responses WebSocket',
   ]) {
     const toggle = quick.getByRole('switch', { name })
-    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    expect(toggle).toBeDisabled()
     await user.click(toggle)
     expect(toggle).not.toBeChecked()
   }
   expect(
     quick.getByRole('switch', { name: 'Auto-disable channel' })
-  ).not.toHaveAttribute('aria-disabled', 'true')
+  ).not.toBeDisabled()
   await user.click(screen.getByRole('button', { name: 'Fetch from Upstream' }))
   expect(
     await screen.findByRole('checkbox', { name: 'upstream-model' })
   ).toBeVisible()
   await user.click(screen.getByRole('tab', { name: /Request & Response/ }))
   const thinking = screen.getByRole('switch', { name: 'Thinking to Content' })
-  expect(thinking).toHaveAttribute('aria-disabled', 'true')
+  expect(thinking).toBeDisabled()
   await user.click(thinking)
   expect(thinking).not.toBeChecked()
   await user.click(screen.getByRole('tab', { name: /Other Settings/ }))

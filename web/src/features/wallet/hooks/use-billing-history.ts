@@ -21,7 +21,10 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 
 import { useIsAdmin } from '@/hooks/use-admin'
+import { ADMIN_MENU_IDS } from '@/lib/admin-menu-access'
+import { canViewAdminMenu } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getUserBillingHistory,
@@ -52,6 +55,7 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 // ============================================================================
 
 interface UseBillingHistoryOptions {
+  enabled?: boolean
   /** Initial page number */
   initialPage?: number
   /** Initial page size */
@@ -100,8 +104,11 @@ function isSameFilters(
 }
 
 export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
-  const { initialPage = 1, initialPageSize = 10 } = options
-  const isAdmin = useIsAdmin()
+  const { initialPage = 1, initialPageSize = 10, enabled = true } = options
+  const user = useAuthStore((state) => state.auth.user)
+  const hasAdminRole = useIsAdmin()
+  const isAdmin = hasAdminRole && canViewAdminMenu(user, ADMIN_MENU_IDS.USERS)
+  const userId = user?.id
 
   const [records, setRecords] = useState<TopupRecord[]>([])
   const [total, setTotal] = useState(0)
@@ -112,6 +119,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     useState<BillingHistoryFilters>(EMPTY_FILTERS)
   const requestIdRef = useRef(0)
   const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [queryingPlatformTradeNos, setQueryingPlatformTradeNos] = useState<
@@ -153,8 +161,10 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
    * request (no sequential cursor prefetch of every preceding page).
    */
   const fetchBillingHistory = useCallback(async () => {
+    if (!enabled) return
     const requestId = ++requestIdRef.current
     setLoading(true)
+    setFailed(false)
     try {
       const response = await fetchHistoryPage(page, pageSize, filters)
 
@@ -164,12 +174,14 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
         setRecords(response.data.items || [])
         setTotal(response.data.total || 0)
       } else {
+        setFailed(true)
         handleServerError(response, i18next.t('Failed to load billing history'))
         setRecords([])
         setTotal(0)
       }
     } catch (error) {
       if (requestId !== requestIdRef.current) return
+      setFailed(true)
       handleServerError(error, i18next.t('Failed to load billing history'))
       setRecords([])
       setTotal(0)
@@ -178,7 +190,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
         setLoading(false)
       }
     }
-  }, [fetchHistoryPage, filters, page, pageSize])
+  }, [enabled, fetchHistoryPage, filters, page, pageSize])
 
   /**
    * Export the currently applied billing-history view as CSV.
@@ -403,8 +415,14 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
 
   // Fetch data when dependencies change
   useEffect(() => {
-    fetchBillingHistory()
-  }, [fetchBillingHistory])
+    setRecords([])
+    setTotal(0)
+    setLoading(false)
+    if (enabled) void fetchBillingHistory()
+    return () => {
+      requestIdRef.current += 1
+    }
+  }, [enabled, fetchBillingHistory, userId])
 
   return {
     records,
@@ -415,6 +433,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     filters: draftFilters,
     appliedFilters: filters,
     loading,
+    failed,
     completing,
     exporting,
     queryingPlatformTradeNos,

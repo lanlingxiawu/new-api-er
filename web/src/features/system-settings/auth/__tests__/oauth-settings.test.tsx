@@ -69,7 +69,10 @@ const defaults: ComponentProps<typeof OAuthSection>['defaultValues'] = {
 
 let testI18n: i18n
 
-function Fixture(props: { values?: Partial<typeof defaults> }) {
+function Fixture(props: {
+  values?: Partial<typeof defaults>
+  canEdit?: boolean
+}) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null)
   const [client] = useState(
     () => new QueryClient({ defaultOptions: { mutations: { retry: false } } })
@@ -79,7 +82,11 @@ function Fixture(props: { values?: Partial<typeof defaults> }) {
     <I18nextProvider i18n={testI18n}>
       <QueryClientProvider client={client}>
         <div ref={setContainer} />
-        <SettingsPageProvider actionsContainer={container} scope='test' canEdit>
+        <SettingsPageProvider
+          actionsContainer={container}
+          scope='test'
+          canEdit={props.canEdit ?? true}
+        >
           <OAuthSection
             defaultValues={{ ...defaults, ...props.values }}
             serverAddress='https://gateway.example.com'
@@ -90,9 +97,12 @@ function Fixture(props: { values?: Partial<typeof defaults> }) {
   )
 }
 
-async function renderSettings(values?: Partial<typeof defaults>) {
+async function renderSettings(
+  values?: Partial<typeof defaults>,
+  canEdit = true
+) {
   const route = createRootRoute({
-    component: () => <Fixture values={values} />,
+    component: () => <Fixture values={values} canEdit={canEdit} />,
   })
   const router = createRouter({
     routeTree: route,
@@ -114,6 +124,15 @@ beforeEach(async () => {
 })
 
 describe('OAuth settings saves', () => {
+  it('allows viewers to switch providers while keeping their settings read-only', async () => {
+    await renderSettings(undefined, false)
+    await userEvent.click(screen.getByRole('tab', { name: 'Discord' }))
+    expect(screen.getByRole('textbox', { name: 'Client ID' })).toBeDisabled()
+    expect(
+      screen.queryByRole('button', { name: 'Save Changes' })
+    ).not.toBeInTheDocument()
+    expect(api.put).not.toHaveBeenCalled()
+  })
   it.each([
     [false, 'provider.example.com/discovery'],
     [true, 'provider.example.com/discovery'],

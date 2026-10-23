@@ -167,7 +167,7 @@ describe('Responses WebSocket channel setting', () => {
     const toggle = screen.getByRole('switch', {
       name: 'Enable Responses WebSocket',
     })
-    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    expect(toggle).toBeDisabled()
     await user.click(toggle)
     expect(toggle).toBeChecked()
   })
