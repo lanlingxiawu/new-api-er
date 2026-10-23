@@ -23,6 +23,7 @@ func TestMultiKeyEnableRestoresOnlyExhaustedChannels(t *testing.T) {
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.SetDatabaseTypes(previousType, previousLogType)
+		model.InitColumnNames()
 		common.IsMasterNode, common.MemoryCacheEnabled, common.RedisEnabled, common.SQLitePath = previousMaster, previousCache, previousRedis, previousSQLite
 	})
 	t.Setenv("SQL_DSN", os.Getenv("TEST_CHANNEL_SQL_DSN"))

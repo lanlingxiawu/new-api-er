@@ -17,6 +17,9 @@ func TestAIAuditSQLiteFixtureRestoresTokenLookup(t *testing.T) {
 	}{
 		{"model_list", func(t *testing.T) { setupModelListControllerTestDB(t) }},
 		{"token", func(t *testing.T) { setupTokenControllerTestDB(t) }},
+		{"responses_websocket", func(t *testing.T) { setupResponsesWSRequestTest(t) }},
+		{"channel_multi_key", TestMultiKeyEnableRestoresOnlyExhaustedChannels},
+		{"api_token_audit", TestAPITokenAuditDatabaseMatrix},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			// Keep the regression from poisoning unrelated tests when it fails.

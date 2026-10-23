@@ -78,6 +78,7 @@ func setupResponsesWSRequestTest(t *testing.T) (*model.User, *model.Token) {
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.SetDatabaseTypes(previousType, previousLogType)
+		model.InitColumnNames()
 		common.RedisEnabled = previousRedis
 		common.RDB = previousRDB
 		common.IsMasterNode, common.MemoryCacheEnabled, common.SQLitePath = previousMaster, previousMemory, previousSQLite

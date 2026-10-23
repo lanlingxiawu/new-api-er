@@ -1,0 +1,16 @@
+{
+  "relay_log_pipeline_setting": {
+    "enabled": "true",
+    "flush_interval_ms": "500",
+    "outer_batch_size": "2000",
+    "inner_batch_size": "500",
+    "flush_max_per_cycle": "15000"
+  },
+  "ledger_pipeline_setting": {
+    "flush_interval_sec": "1",
+    "outer_batch_size": "2000",
+    "inner_batch_size": "500",
+    "settlement_flush_max_per_cycle": "15000",
+    "cost_flush_max_per_cycle": "15000"
+  }
+}

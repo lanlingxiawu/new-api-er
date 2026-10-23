@@ -45,7 +45,7 @@ func cleanupOptionRow(t *testing.T, key string) {
 	t.Helper()
 	t.Cleanup(func() {
 		if DB != nil {
-			DB.Unscoped().Where("`key` = ?", key).Delete(&Option{})
+			DB.Unscoped().Where(commonKeyCol+" = ?", key).Delete(&Option{})
 		}
 	})
 }
@@ -98,13 +98,13 @@ func TestUpdateOption_CustomKeyPersists(t *testing.T) {
 
 	// persisted to DB
 	var row Option
-	require.NoError(t, DB.Where("`key` = ?", key).First(&row).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", key).First(&row).Error)
 	assert.Equal(t, "hello", row.Value)
 
 	// update again overwrites
 	require.NoError(t, UpdateOption(key, "world"))
 	var row2 Option
-	require.NoError(t, DB.Where("`key` = ?", key).First(&row2).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", key).First(&row2).Error)
 	assert.Equal(t, "world", row2.Value)
 }
 
@@ -130,8 +130,8 @@ func TestUpdateOptionsBulk(t *testing.T) {
 	assert.Equal(t, "v2", v2)
 
 	var r1, r2 Option
-	require.NoError(t, DB.Where("`key` = ?", k1).First(&r1).Error)
-	require.NoError(t, DB.Where("`key` = ?", k2).First(&r2).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", k1).First(&r1).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", k2).First(&r2).Error)
 	assert.Equal(t, "v1", r1.Value)
 	assert.Equal(t, "v2", r2.Value)
 }

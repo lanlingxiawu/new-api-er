@@ -39,6 +39,7 @@ var (
 	timeout     = flag.Duration("timeout", 120*time.Second, "单请求超时")
 	maxTokens   = flag.Int("max-tokens", 256, "请求 max_tokens")
 	promptWords = flag.Int("prompt-words", 30, "随机 prompt 词数")
+	targetRPS   = flag.Float64("rps", 0, "请求发起速率上限；0 为不限速的闭环模式")
 	reportPath  = flag.String("report", "", "压测结束后将 JSON 报告写入该文件（留空不输出）")
 
 	perfURL      = flag.String("perf-url", "", "网关性能接口，如 http://127.0.0.1:3000/api/performance/stats（留空不采样）")
@@ -65,6 +66,8 @@ type workerStat struct {
 }
 
 var promptPool []string
+var scheduled atomic.Int64
+var loadStart time.Time
 
 func initPromptPool() {
 	promptPool = make([]string, 256)
@@ -106,6 +109,17 @@ func (s *workerStat) recordErr(msg string) {
 
 func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomic.Int64) {
 	for time.Now().Before(deadline) {
+		if *targetRPS > 0 {
+			slot := scheduled.Add(1) - 1
+			at := loadStart.Add(time.Duration(float64(slot) * float64(time.Second) / *targetRPS))
+			if !at.Before(deadline) {
+				return
+			}
+			time.Sleep(time.Until(at))
+			if !time.Now().Before(deadline) {
+				return
+			}
+		}
 		isStream := rand.Float64() < *streamRatio
 		body := buildBody(isStream)
 		req, err := http.NewRequest(http.MethodPost, *target, bytes.NewReader(body))
@@ -127,26 +141,50 @@ func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomi
 		}
 
 		var ttfb float64
+		valid := resp.StatusCode == http.StatusOK
 		if resp.StatusCode == http.StatusOK {
 			if isStream {
 				br := bufio.NewReaderSize(resp.Body, 16<<10)
 				first := true
+				terminated, hasChoices := false, false
 				for {
 					line, rerr := br.ReadString('\n')
 					if first && line != "" {
 						ttfb = float64(time.Since(start)) / 1e6
 						first = false
 					}
-					if strings.HasPrefix(line, "data:") && !strings.Contains(line, "[DONE]") {
+					if strings.HasPrefix(line, "data:") {
+						payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+						if payload == "[DONE]" {
+							terminated = true
+							break
+						}
+						var chunk struct {
+							Choices []json.RawMessage `json:"choices"`
+							Error   json.RawMessage   `json:"error"`
+						}
+						if json.Unmarshal([]byte(payload), &chunk) != nil || (len(chunk.Error) > 0 && string(chunk.Error) != "null") {
+							valid = false
+							break
+						}
+						hasChoices = hasChoices || len(chunk.Choices) > 0
 						st.chunks++
 					}
-					if strings.Contains(line, "[DONE]") || rerr != nil {
+					if rerr != nil {
 						break
 					}
 				}
-				_, _ = io.Copy(io.Discard, resp.Body)
+				valid = valid && terminated && hasChoices
 			} else {
-				_, _ = io.Copy(io.Discard, resp.Body)
+				var completion struct {
+					Choices []json.RawMessage `json:"choices"`
+					Error   json.RawMessage   `json:"error"`
+				}
+				body, readErr := io.ReadAll(resp.Body)
+				valid = readErr == nil && json.Unmarshal(body, &completion) == nil && len(completion.Choices) > 0 && (len(completion.Error) == 0 || string(completion.Error) == "null")
+			}
+			if !valid {
+				st.recordErr("invalid or incomplete completion response")
 			}
 		} else {
 			eb, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -155,7 +193,7 @@ func worker(client *http.Client, deadline time.Time, st *workerStat, done *atomi
 		_ = resp.Body.Close()
 
 		st.codes[resp.StatusCode]++
-		if resp.StatusCode == http.StatusOK {
+		if valid {
 			st.samples = append(st.samples, sample{
 				lat:    float64(time.Since(start)) / 1e6,
 				ttfb:   ttfb,
@@ -663,6 +701,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-c must be > 0")
 		os.Exit(1)
 	}
+	if *dur <= 0 || *targetRPS < 0 || *streamRatio < 0 || *streamRatio > 1 {
+		fmt.Fprintln(os.Stderr, "duration must be positive; rps >= 0; stream-ratio in [0,1]")
+		os.Exit(1)
+	}
 	if *token == "" {
 		fmt.Fprintln(os.Stderr, "[warn] -token 为空：仅适用于直压 mock 做基线校准")
 	}
@@ -678,7 +720,8 @@ func main() {
 
 	stats := make([]*workerStat, *conc)
 	var done atomic.Int64
-	deadline := time.Now().Add(*dur)
+	loadStart = time.Now()
+	deadline := loadStart.Add(*dur)
 
 	fmt.Printf("loadgen: url=%s c=%d d=%v stream-ratio=%.2f model=%s\n",
 		*target, *conc, *dur, *streamRatio, *model)
@@ -845,6 +888,7 @@ func main() {
 				"url": *target, "model": *model, "concurrency": *conc,
 				"duration": dur.String(), "stream_ratio": *streamRatio,
 				"max_tokens": *maxTokens, "prompt_words": *promptWords,
+				"target_rps": *targetRPS,
 			},
 			ElapsedSec:  float64(int(elapsed.Seconds()*10)) / 10,
 			Total:       total,

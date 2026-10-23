@@ -57,7 +57,7 @@ func createUserBindTestUser(t *testing.T) User {
 func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing.T) {
 	setupUserUpdateTestState(t)
 
-	rotatedToken := uniq("rot")
+	rotatedToken := common.GetUUID()
 	user := mkUser(t, func(u *User) {
 		u.Password = "password"
 		u.DisplayName = "before"
@@ -384,7 +384,7 @@ func TestRevokeUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 		Password: "password",
 		Status:   common.UserStatusEnabled,
 	}
-	oldToken := uniq("old-token")
+	oldToken := common.GetUUID()
 	user.SetAccessToken(oldToken)
 	require.NoError(t, DB.Create(&user).Error)
 	deleteByID(t, &User{}, user.Id)

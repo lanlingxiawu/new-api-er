@@ -868,6 +868,9 @@ func TestRelayLogConcurrentEnqueueBatchDrainHasNoLoss(t *testing.T) {
 	cfg.FullDrain = true
 	cfg.OuterBatchSize = 2_000
 	cfg.InnerBatchSize = 500
+	// This test asserts lossless concurrent draining, not an SQLite throughput
+	// deadline. Race instrumentation can make a 2,000-row transaction exceed 3s.
+	cfg.WriteTimeoutSec = 30
 	t.Cleanup(func() { *cfg = previousCfg })
 
 	const workers = 10
@@ -885,7 +888,7 @@ func TestRelayLogConcurrentEnqueueBatchDrainHasNoLoss(t *testing.T) {
 		}(worker)
 	}
 	wg.Wait()
-	DrainRelayLogsSync(5 * time.Second)
+	DrainRelayLogsSync(30 * time.Second)
 
 	var count int64
 	require.NoError(t, db.Model(&Log{}).Count(&count).Error)

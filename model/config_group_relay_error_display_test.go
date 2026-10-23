@@ -29,10 +29,10 @@ func withRelayErrorDisplayRestore(t *testing.T) {
 	common.OptionMapRWMutex.Unlock()
 	previous := operation_setting.GetRelayErrorDisplaySetting()
 	var saved []Option
-	require.NoError(t, DB.Where("`key` IN ?", relayErrorDisplayOptionKeys).Find(&saved).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" IN ?", relayErrorDisplayOptionKeys).Find(&saved).Error)
 	t.Cleanup(func() {
 		operation_setting.ReplaceRelayErrorDisplaySetting(previous)
-		DB.Where("`key` IN ?", relayErrorDisplayOptionKeys).Delete(&Option{})
+		DB.Where(commonKeyCol+" IN ?", relayErrorDisplayOptionKeys).Delete(&Option{})
 		for _, o := range saved {
 			DB.Create(&o)
 		}
@@ -57,7 +57,7 @@ func TestSaveConfigGroup_RelayErrorDisplayAppliesAndPersists(t *testing.T) {
 	assert.True(t, d.Replace, "the saved rules are live immediately")
 
 	var stored Option
-	require.NoError(t, DB.Where("`key` = ?", "relay_error_display_setting.rules").First(&stored).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", "relay_error_display_setting.rules").First(&stored).Error)
 	assert.Equal(t, rules, stored.Value)
 }
 

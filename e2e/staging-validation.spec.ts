@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type ConsoleMessage, type Page } from '@playwright/test'
 
 const base = process.env.E2E_STAGING_BASE_URL
 const username = process.env.E2E_STAGING_USERNAME
@@ -24,16 +24,29 @@ const rootRoutes = [
 
 async function assertRenderable(page: Page, route: string) {
   const errors: string[] = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  page.on('console', (message) => {
+  const onPageError = (error: Error) => errors.push(error.message)
+  const onConsole = (message: ConsoleMessage) => {
+    // A guest has no refresh cookie. The auth bootstrap deliberately returns
+    // 401 on this endpoint; other failed resources still fail this test.
+    if (
+      message.location().url === base + '/api/user/auth/refresh' &&
+      message.text().includes('401 (Unauthorized)')
+    ) return
     if (message.type() === 'error') errors.push(message.text())
-  })
-  const response = await page.goto(base + route, { waitUntil: 'domcontentloaded' })
-  expect(response?.status(), route).toBeLessThan(500)
-  await page.waitForTimeout(2_000)
-  const text = (await page.locator('body').innerText()).trim()
-  expect(errors, `${route} emitted browser errors`).toEqual([])
-  expect(text.length, `${route} rendered an empty page`).toBeGreaterThan(0)
+  }
+  page.on('pageerror', onPageError)
+  page.on('console', onConsole)
+  try {
+    const response = await page.goto(base + route, { waitUntil: 'domcontentloaded' })
+    expect(response?.status(), route).toBeLessThan(500)
+    await page.waitForTimeout(2_000)
+    const text = (await page.locator('body').innerText()).trim()
+    expect(errors, `${route} emitted browser errors`).toEqual([])
+    expect(text.length, `${route} rendered an empty page`).toBeGreaterThan(0)
+  } finally {
+    page.off('pageerror', onPageError)
+    page.off('console', onConsole)
+  }
 }
 
 test.describe.serial('staging UI validation', () => {

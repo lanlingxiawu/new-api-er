@@ -43,6 +43,7 @@ func setupAccessTokenAudit(t *testing.T) (*model.User, string) {
 		&model.AuthFlow{}, &model.TwoFA{}, &model.TwoFABackupCode{}, &model.PasskeyCredential{}, &model.UserOAuthBinding{}))
 	model.DB, model.LOG_DB = db, db
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	model.InitColumnNames()
 	require.NoError(t, model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()))
 	common.RedisEnabled = false
 	previousMaster := common.IsMasterNode
@@ -52,6 +53,7 @@ func setupAccessTokenAudit(t *testing.T) (*model.User, string) {
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.IsMasterNode = previousMaster
 		common.SetDatabaseTypes(previousMain, previousLog)
+		model.InitColumnNames()
 		common.RedisEnabled = previousRedis
 	})
 	token := "legacy-opaque-token"
@@ -1041,6 +1043,7 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 		common.IsMasterNode, common.SQLitePath = previousMaster, previousSQLite
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.SetDatabaseTypes(previousMain, previousLog)
+		model.InitColumnNames()
 		common.RedisEnabled = previousRedis
 	})
 	cases := []struct {
@@ -1067,6 +1070,7 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 					}
 					model.DB, model.LOG_DB = db, db
 					common.SetDatabaseTypes(tc.typ, tc.typ)
+					model.InitColumnNames()
 					versionSQL := "SELECT version()"
 					if tc.name == "sqlite" {
 						versionSQL = "SELECT sqlite_version()"

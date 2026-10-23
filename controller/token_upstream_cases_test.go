@@ -90,6 +90,7 @@ func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*g
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = prevDB, prevLogDB
 		common.SetDatabaseTypes(prevMain, prevLog)
+		model.InitColumnNames()
 		common.RedisEnabled = prevRedis
 	})
 	common.RedisEnabled = false
@@ -113,6 +114,7 @@ func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*g
 		t.Fatalf("failed to open %s db: %v", dialect, err)
 	}
 	common.SetDatabaseTypes(dbType, dbType)
+	model.InitColumnNames()
 
 	model.DB = db
 	model.LOG_DB = db
@@ -641,6 +643,7 @@ func TestAPITokenAuditDatabaseMatrix(t *testing.T) {
 				t.Cleanup(func() {
 					model.DB, model.LOG_DB = previousDB, previousLogDB
 					common.SetDatabaseTypes(previousMain, previousLog)
+					model.InitColumnNames()
 					common.RedisEnabled, common.IsMasterNode, common.SessionSecret = previousRedis, previousMaster, previousSecret
 				})
 				common.RedisEnabled, common.IsMasterNode = false, true
@@ -649,6 +652,7 @@ func TestAPITokenAuditDatabaseMatrix(t *testing.T) {
 				db, _ := newAuditTestDatabase(t, database.name, dsn)
 				model.DB = db
 				common.SetDatabaseTypes(database.typ, database.typ)
+				model.InitColumnNames()
 				require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Token{}))
 				// Initialize production column quoting as well as the existing audit table.
 				require.NoError(t, model.InitLogDB())

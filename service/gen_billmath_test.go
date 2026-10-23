@@ -64,7 +64,7 @@ func TestBillmathBuildTieredTokenParams_OpenAINoUsedVars(t *testing.T) {
 	assert.InDelta(t, 500, p.C, 1e-9)
 	assert.InDelta(t, 1000, p.Len, 1e-9) // non-claude len == prompt tokens
 	assert.InDelta(t, 100, p.CR, 1e-9)
-	assert.InDelta(t, 50, p.CC, 1e-9)
+	assert.InDelta(t, 0, p.CC, 1e-9) // unpriced short writes remain in P
 	assert.InDelta(t, 0, p.CC1h, 1e-9)
 	assert.InDelta(t, 30, p.Img, 1e-9)
 	assert.InDelta(t, 10, p.ImgO, 1e-9)
@@ -108,13 +108,16 @@ func TestBillmathBuildTieredTokenParams_ClaudeSemantic(t *testing.T) {
 
 	p := BuildTieredTokenParams(u, true, map[string]bool{"cr": true, "cc": true})
 
-	// Claude: no subtraction; cc/cc1h overridden from claude fields.
+	// An unpriced 1h write joins cc at its 1.6x short-write equivalent.
 	assert.InDelta(t, 1000, p.P, 1e-9)
 	assert.InDelta(t, 500, p.C, 1e-9)
-	assert.InDelta(t, 40, p.CC, 1e-9)
-	assert.InDelta(t, 15, p.CC1h, 1e-9)
+	assert.InDelta(t, 64, p.CC, 1e-9)
+	assert.InDelta(t, 0, p.CC1h, 1e-9)
 	// Len = p + cr + cc5m + cc1h = 1000 + 100 + 40 + 15 = 1155
 	assert.InDelta(t, 1155, p.Len, 1e-9)
+	separate := BuildTieredTokenParams(u, true, map[string]bool{"cr": true, "cc": true, "cc1h": true})
+	assert.InDelta(t, 40, separate.CC, 1e-9)
+	assert.InDelta(t, 15, separate.CC1h, 1e-9)
 }
 
 // Decision-coverage edge: usage.UsageSemantic=="anthropic" drives the cc

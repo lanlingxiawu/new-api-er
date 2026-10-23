@@ -249,6 +249,7 @@ func TestEmailKeyStatusIsDerivedAndReadOnly(t *testing.T) {
 
 	response = httptest.NewRecorder()
 	context, _ = gin.CreateTestContext(response)
+	context.Set("role", common.RoleRootUser)
 	context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(`{"key":"ResendKeyConfigured","value":true}`))
 	UpdateOption(context)
 	assert.Contains(t, response.Body.String(), `"success":false`)

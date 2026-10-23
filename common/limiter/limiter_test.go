@@ -245,10 +245,10 @@ func TestAllow_DefaultConfig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Allow — error path (EvalSha against a missing script returns an error).
+// Allow — script-cache recovery and genuine Lua failures.
 // ---------------------------------------------------------------------------
 
-func TestAllow_EvalErrorIsPropagated(t *testing.T) {
+func TestAllow_MissingScriptFallsBackOnRealRedis(t *testing.T) {
 	rl, client := newTestLimiter(t)
 	k := key(t, client)
 	// White-box: point the limiter at a SHA Redis does not know, forcing a
@@ -258,7 +258,22 @@ func TestAllow_EvalErrorIsPropagated(t *testing.T) {
 	t.Cleanup(func() { rl.limitScriptSHA = original })
 
 	ok, err := rl.Allow(context.Background(), k, WithCapacity(1), WithRate(0), WithRequested(1))
-	require.Error(t, err, "unknown script SHA must surface as an error")
+	require.NoError(t, err, "NOSCRIPT must recover through the upstream EVAL fallback")
+	assert.True(t, ok)
+	ok, err = rl.Allow(context.Background(), k, WithCapacity(1), WithRate(0), WithRequested(1))
+	require.NoError(t, err)
+	assert.False(t, ok, "fallback must preserve the depleted bucket")
+}
+
+func TestAllow_EvalErrorIsPropagated(t *testing.T) {
+	rl, client := newTestLimiter(t)
+	k := key(t, client)
+	// A real Redis WRONGTYPE response exercises the failure contract without
+	// mistaking recoverable NOSCRIPT for an unrecoverable script error.
+	require.NoError(t, client.Set(context.Background(), k, "not-a-bucket", 0).Err())
+	ok, err := rl.Allow(context.Background(), k, WithCapacity(1), WithRate(0), WithRequested(1))
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rate limit failed")
+	assert.Contains(t, err.Error(), "WRONGTYPE")
 	assert.False(t, ok, "on error, Allow must fail closed (false)")
 }
