@@ -90,8 +90,12 @@ func ExtendWriteDeadline(c *gin.Context) {
 	}
 	var w http.ResponseWriter = c.Writer
 	for i := 0; i < 16; i++ {
-		switch w.(type) {
-		case *relaycommon.StreamWriter, *streamResponseWriter:
+		switch managed := w.(type) {
+		case *relaycommon.StreamWriter:
+			if managed.OwnsWriteDeadline() {
+				return
+			}
+		case *streamResponseWriter:
 			return
 		}
 		u, ok := w.(interface{ Unwrap() http.ResponseWriter })

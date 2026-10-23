@@ -55,6 +55,10 @@ func NewStreamWriter(writer gin.ResponseWriter, session *StreamSession, estimate
 // Unwrap 让 ResponseController/专用处理器找到原有响应写入器，不改变连接管理。
 func (w *StreamWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// OwnsWriteDeadline reports whether this wrapper still manages writes. Native
+// protocol handlers can disable the session and take over the byte budget.
+func (w *StreamWriter) OwnsWriteDeadline() bool { return w.session.Active() }
+
 // WriteString 把字符串 s 交给 Write，返回其接受长度和错误，避免 StringWriter 快捷路径绕过计量。
 func (w *StreamWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
 

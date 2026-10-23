@@ -200,8 +200,12 @@ func SetEventStreamHeaders(c *gin.Context) {
 	// with an outer per-fragment deadline.
 	var writer http.ResponseWriter = c.Writer
 	for i := 0; i < 16; i++ {
-		switch writer.(type) {
-		case *relaycommon.StreamWriter, *streamResponseWriter:
+		switch managed := writer.(type) {
+		case *relaycommon.StreamWriter:
+			if managed.OwnsWriteDeadline() {
+				return
+			}
+		case *streamResponseWriter:
 			return
 		}
 		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
