@@ -88,6 +88,9 @@ func AdminGetLedgerExport(c *gin.Context) {
 		ledgerJSONError(c, http.StatusForbidden, "Access denied.")
 		return
 	}
+	if job.Error == "cleanup.export_changed" {
+		job.Error = common.TranslateMessage(c, job.Error)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

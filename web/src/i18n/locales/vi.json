@@ -9943,6 +9943,27 @@
     "隐私政策": "Chính sách quyền riêng tư",
     "首页": "Trang chủ",
     "，": ", ",
-    "，and ": ", and "
+    "，and ": ", and ",
+    "At least {{count}} records deleted.": "Đã xóa ít nhất {{count}} bản ghi.",
+    "Details and exports only include retained records. Historical totals are preserved.": "Chi tiết và bản xuất chỉ bao gồm các bản ghi còn lưu. Tổng hợp lịch sử được giữ nguyên.",
+    "Cleanup target": "Dữ liệu cần dọn",
+    "Ledger details": "Chi tiết sổ cái",
+    "Commission details": "Chi tiết hoa hồng",
+    "Clean ledger details": "Dọn chi tiết sổ cái",
+    "Clean commission details": "Dọn chi tiết hoa hồng",
+    "Clean error usage logs": "Dọn nhật ký lỗi sử dụng",
+    "Preview cleanup": "Xem trước phạm vi dọn",
+    "Confirm deletion": "Xác nhận xóa",
+    "Cleanup started. You can leave this page.": "Đã bắt đầu dọn. Bạn có thể rời trang này.",
+    "Cleanup is running in the background.": "Đang dọn trong nền.",
+    "Cleanup completed.": "Đã dọn xong.",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "Đã dừng dọn. Dữ liệu đã xóa sẽ không được khôi phục. Xem trước lại để dọn các bản ghi còn lại.",
+    "{{count}} records deleted.": "Đã xóa {{count}} bản ghi.",
+    "{{count}} records match this cleanup.": "Có {{count}} bản ghi cần dọn.",
+    "At least {{count}} records match this cleanup.": "Có ít nhất {{count}} bản ghi cần dọn.",
+    "Before {{date}}": "Trước {{date}}",
+    "Permanently delete records before {{date}} (your local time).": "Xóa vĩnh viễn các bản ghi trước {{date}} (giờ địa phương).",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "Chỉ xóa nhật ký lỗi sử dụng. Giữ nhật ký tiêu thụ và kiểm toán. Giữ ít nhất 24 giờ gần nhất.",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "Giữ số dư, tổng hợp và điều chỉnh thủ công. Không thể khôi phục hoặc xuất chi tiết đã xóa. Giữ ít nhất 30 ngày gần nhất."
   }
 }

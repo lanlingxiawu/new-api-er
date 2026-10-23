@@ -9943,6 +9943,27 @@
     "隐私政策": "Политика конфиденциальности",
     "首页": "Главная",
     "，": ", ",
-    "，and ": ", and "
+    "，and ": ", and ",
+    "At least {{count}} records deleted.": "Удалено записей: не менее {{count}}.",
+    "Details and exports only include retained records. Historical totals are preserved.": "Детали и экспорт включают только сохранённые записи. Исторические итоги сохраняются.",
+    "Cleanup target": "Данные для очистки",
+    "Ledger details": "Детали реестра",
+    "Commission details": "Детали комиссий",
+    "Clean ledger details": "Очистить детали реестра",
+    "Clean commission details": "Очистить детали комиссий",
+    "Clean error usage logs": "Очистить журналы ошибок использования",
+    "Preview cleanup": "Предпросмотр очистки",
+    "Confirm deletion": "Подтвердить удаление",
+    "Cleanup started. You can leave this page.": "Очистка запущена. Можно покинуть страницу.",
+    "Cleanup is running in the background.": "Очистка выполняется в фоне.",
+    "Cleanup completed.": "Очистка завершена.",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "Очистка остановлена. Уже удалённые данные не восстановлены. Повторите предпросмотр для очистки оставшихся записей.",
+    "{{count}} records deleted.": "Удалено записей: {{count}}.",
+    "{{count}} records match this cleanup.": "Записей для очистки: {{count}}.",
+    "At least {{count}} records match this cleanup.": "Записей для очистки: не менее {{count}}.",
+    "Before {{date}}": "До {{date}}",
+    "Permanently delete records before {{date}} (your local time).": "Безвозвратно удалить записи до {{date}} (местное время).",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "Удаляются только журналы ошибок. Журналы потребления и аудита сохраняются. Сохраняются как минимум последние 24 часа.",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "Балансы, итоги и ручные корректировки сохраняются. Удалённые детали нельзя восстановить или экспортировать. Сохраняются как минимум последние 30 дней."
   }
 }

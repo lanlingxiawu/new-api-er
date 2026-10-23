@@ -36,6 +36,10 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 
 func GetCurrentSystemTask(c *gin.Context) {
 	taskType := c.Query("type")
+	if taskType == model.SystemTaskTypeDataCleanup {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
 	if taskType == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -133,6 +137,10 @@ func GetSystemTask(c *gin.Context) {
 			"success": false,
 			"message": "task not found",
 		})
+		return
+	}
+	if task.Type == model.SystemTaskTypeDataCleanup {
+		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
 

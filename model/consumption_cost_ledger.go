@@ -85,6 +85,7 @@ type ConsumptionCostLedgerPage struct {
 
 type ConsumptionCostLedgerStatsFilter struct {
 	ConsumptionCostLedgerCommonFilter
+	cleanupVersion string
 }
 
 type ConsumptionCostLedgerStats struct {
@@ -96,6 +97,7 @@ type ConsumptionCostLedgerStats struct {
 }
 
 type ConsumptionCostLedgerStatsResult struct {
+	HistoryIncomplete bool                        `json:"history_incomplete"`
 	Stats             *ConsumptionCostLedgerStats `json:"stats,omitempty"`
 	StatsStatus       string                      `json:"stats_status"`
 	StatsRunningCount int                         `json:"stats_running_count"`
@@ -389,11 +391,17 @@ func listConsumptionCostLedgerWithInAppTagFilter(tx *gorm.DB, tag string, limit 
 }
 
 func GetConsumptionCostLedgerStats(ctx context.Context, filter ConsumptionCostLedgerStatsFilter) (ConsumptionCostLedgerStatsResult, error) {
+	version, err := FinancialCleanupVersion(ctx, CleanupLedger, filter.StartTime)
+	if err != nil {
+		return ConsumptionCostLedgerStatsResult{}, err
+	}
+	filter.cleanupVersion = version
 	stats, status, err := getConsumptionCostLedgerStats(ctx, filter)
 	if err != nil {
 		return ConsumptionCostLedgerStatsResult{}, err
 	}
 	return ConsumptionCostLedgerStatsResult{
+		HistoryIncomplete: version != "",
 		Stats:             stats,
 		StatsStatus:       status,
 		StatsRunningCount: getConsumptionCostLedgerAsyncStatsRunningCount(),
@@ -440,6 +448,9 @@ func consumptionCostLedgerAsyncStatsCacheKey(filter ConsumptionCostLedgerStatsFi
 		fmt.Sprintf("end_time=%d", filter.EndTime),
 	}, "|")
 	sum := sha256.Sum256([]byte(normalized))
+	if filter.cleanupVersion != "" {
+		sum = sha256.Sum256([]byte(normalized + "|cleanup=" + filter.cleanupVersion))
+	}
 	return "ledger:stats:v2:" + hex.EncodeToString(sum[:])
 }
 

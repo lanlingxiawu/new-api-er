@@ -9943,6 +9943,27 @@
     "隐私政策": "隐私政策",
     "首页": "首页",
     "，": "，",
-    "，and ": "，"
+    "，and ": "，",
+    "At least {{count}} records deleted.": "至少已删除 {{count}} 条记录。",
+    "Details and exports only include retained records. Historical totals are preserved.": "明细和导出仅包含尚未清理的记录，历史汇总保持不变。",
+    "Cleanup target": "清理对象",
+    "Ledger details": "台账明细",
+    "Commission details": "提成明细",
+    "Clean ledger details": "清理台账明细",
+    "Clean commission details": "清理提成明细",
+    "Clean error usage logs": "清理错误使用日志",
+    "Preview cleanup": "预览清理范围",
+    "Confirm deletion": "确认删除",
+    "Cleanup started. You can leave this page.": "清理已开始，可以离开此页面。",
+    "Cleanup is running in the background.": "正在后台清理。",
+    "Cleanup completed.": "清理完成。",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "清理已停止，已删除的数据不会恢复。请重新预览后清理剩余记录。",
+    "{{count}} records deleted.": "已删除 {{count}} 条记录。",
+    "{{count}} records match this cleanup.": "本次可清理 {{count}} 条记录。",
+    "At least {{count}} records match this cleanup.": "本次至少可清理 {{count}} 条记录。",
+    "Before {{date}}": "截止时间：{{date}} 之前",
+    "Permanently delete records before {{date}} (your local time).": "将永久删除 {{date}}（本地时间）之前的记录。",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "只删除错误使用日志，保留消费和审计日志。至少保留最近 24 小时。",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "保留余额、汇总和手工业绩调整。删除的明细无法恢复或导出。至少保留最近 30 天。"
   }
 }

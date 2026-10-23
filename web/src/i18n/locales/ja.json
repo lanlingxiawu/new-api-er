@@ -9943,6 +9943,27 @@
     "隐私政策": "プライバシーポリシー",
     "首页": "ホーム",
     "，": ", ",
-    "，and ": ", and "
+    "，and ": ", and ",
+    "At least {{count}} records deleted.": "少なくとも {{count}} 件の記録を削除しました。",
+    "Details and exports only include retained records. Historical totals are preserved.": "明細・エクスポートは保持中の記録のみ含みます。過去の集計値は保持されます。",
+    "Cleanup target": "削除対象",
+    "Ledger details": "台帳明細",
+    "Commission details": "コミッション明細",
+    "Clean ledger details": "台帳明細を削除",
+    "Clean commission details": "コミッション明細を削除",
+    "Clean error usage logs": "エラー利用ログを削除",
+    "Preview cleanup": "削除範囲を確認",
+    "Confirm deletion": "削除を確定",
+    "Cleanup started. You can leave this page.": "削除を開始しました。このページを離れても続行します。",
+    "Cleanup is running in the background.": "バックグラウンドで削除中です。",
+    "Cleanup completed.": "削除が完了しました。",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "削除を停止しました。削除済みのデータは戻りません。残りの記録は再度確認して削除してください。",
+    "{{count}} records deleted.": "{{count}} 件の記録を削除しました。",
+    "{{count}} records match this cleanup.": "{{count}} 件の記録が削除対象です。",
+    "At least {{count}} records match this cleanup.": "少なくとも {{count}} 件の記録が削除対象です。",
+    "Before {{date}}": "{{date}} より前",
+    "Permanently delete records before {{date}} (your local time).": "{{date}}（現地時間）より前の記録を完全に削除します。",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "エラー利用ログのみ削除します。消費・監査ログと直近24時間は保持します。",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "残高・集計・手動調整は保持します。削除した明細は復元・エクスポートできません。直近30日間は保持します。"
   }
 }

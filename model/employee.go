@@ -54,7 +54,7 @@ type ChannelCostConfig struct {
 // EmployeeCommissionLog 记录每次 API 消费触发的提成计算结果。
 // commission_quota 可为负数（退款冲销场景）。
 type EmployeeCommissionLog struct {
-	Id             int `json:"id"`
+	Id             int `json:"id" gorm:"index:idx_commission_cleanup_created_id,priority:2"`
 	EmployeeId     int `json:"employee_id" gorm:"index;not null"`
 	EmployeeUserId int `json:"employee_user_id" gorm:"index;index:idx_employee_commission_created_employee,priority:2;index:idx_employee_commission_created_customer,priority:2;not null"`
 	CustomerUserId int `json:"customer_user_id" gorm:"index;index:idx_employee_commission_created_customer,priority:3;not null"`
@@ -73,7 +73,7 @@ type EmployeeCommissionLog struct {
 	// settle_status: 0=待结算 1=已结算 2=已撤销（v2 实现结算功能）
 	SettleStatus int   `json:"settle_status" gorm:"default:0"`
 	SettledAt    int64 `json:"settled_at" gorm:"default:0"`
-	CreatedAt    int64 `json:"created_at" gorm:"autoCreateTime;index;index:idx_employee_commission_created_employee,priority:1;index:idx_employee_commission_created_channel,priority:1;index:idx_employee_commission_created_customer,priority:1"`
+	CreatedAt    int64 `json:"created_at" gorm:"autoCreateTime;index;index:idx_employee_commission_created_employee,priority:1;index:idx_employee_commission_created_channel,priority:1;index:idx_employee_commission_created_customer,priority:1;index:idx_commission_cleanup_created_id,priority:1"`
 }
 
 // employeeCommissionLogIdIndex 是 LogId 字段 uniqueIndex 标签生成的索引名。
@@ -649,12 +649,18 @@ func countCommissionLogsFromDailyStats(filter CommissionLogFilter) (int64, error
 }
 
 func countCommissionLogs(filter CommissionLogFilter) (int64, error) {
-	if canCountCommissionLogsFromDaily(filter) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	version, err := FinancialCleanupVersion(ctx, CleanupCommission, filter.StartTime)
+	if err != nil {
+		return 0, err
+	}
+	if version == "" && canCountCommissionLogsFromDaily(filter) {
 		return countCommissionLogsFromDailyStats(filter)
 	}
 	var total int64
-	tx := applyCommissionLogFilter(DB.Model(&EmployeeCommissionLog{}), filter)
-	err := tx.Count(&total).Error
+	tx := applyCommissionLogFilter(DB.WithContext(ctx).Model(&EmployeeCommissionLog{}), filter)
+	err = tx.Count(&total).Error
 	return total, err
 }
 
@@ -1538,14 +1544,23 @@ func CreateCommissionLog(log *EmployeeCommissionLog) (inserted bool, err error) 
 	} else {
 		log.LogId = nil
 	}
-	result := DB.Omit("id").Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "log_id"}},
-		DoNothing: true,
-	}).Create(log)
-	if result.Error != nil {
-		return false, result.Error
+	var insertedRows int64
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		_, rows, err := PrepareFinancialDetails(tx, nil, []*EmployeeCommissionLog{log})
+		if err != nil || len(rows) == 0 {
+			return err
+		}
+		result := tx.Omit("id").Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "log_id"}},
+			DoNothing: true,
+		}).Create(log)
+		insertedRows = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		return false, err
 	}
-	if result.RowsAffected == 0 {
+	if insertedRows == 0 {
 		return false, nil
 	}
 	BufferCommissionDailyStat(log)

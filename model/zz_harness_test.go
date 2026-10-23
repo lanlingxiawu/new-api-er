@@ -181,6 +181,8 @@ func TestMain(m *testing.M) {
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
 		&ConsumptionCost{},
+		&FinancialDetailTombstone{},
+		&DataCleanupRun{},
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&EmployeeCustomerCommissionDailyStat{},

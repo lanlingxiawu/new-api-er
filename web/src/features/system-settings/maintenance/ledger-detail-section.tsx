@@ -16,12 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import * as z from 'zod'
+import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
+import { numericPresetFieldProps } from '@/components/numeric-preset-field'
+import {
+  NumericPresetInput,
+  type NumericPreset,
+} from '@/components/numeric-preset-input'
 import {
   Form,
   FormControl,
@@ -31,13 +37,9 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { numericPresetFieldProps } from '@/components/numeric-preset-field'
-import {
-  NumericPresetInput,
-  type NumericPreset,
-} from '@/components/numeric-preset-input'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { useSettingsSaveConfirmation } from '../components/settings-save-confirmation'
@@ -48,6 +50,7 @@ import {
   numberInputNoSpinnerClassName,
   safeNumberFieldProps,
 } from '../utils/numeric-field'
+import { FinancialDetailCleanup } from './data-cleanup'
 
 /**
  * react-hook-form 7 interprets dotted `name` strings as nested paths.
@@ -92,7 +95,8 @@ type LedgerDetailSectionProps = { defaultValues: FlatDefaults }
 function buildFormDefaults(d: FlatDefaults): FormValues {
   return {
     ledger_detail_setting: {
-      export_user_cooldown_sec: d['ledger_detail_setting.export_user_cooldown_sec'],
+      export_user_cooldown_sec:
+        d['ledger_detail_setting.export_user_cooldown_sec'],
       export_batch_size: d['ledger_detail_setting.export_batch_size'],
       export_batch_sleep_ms: d['ledger_detail_setting.export_batch_sleep_ms'],
       export_rows_per_file: d['ledger_detail_setting.export_rows_per_file'],
@@ -111,7 +115,8 @@ function buildFormDefaults(d: FlatDefaults): FormValues {
 function normalizeFormValues(v: FormValues): FlatDefaults {
   const s = v.ledger_detail_setting
   return {
-    'ledger_detail_setting.export_user_cooldown_sec': s.export_user_cooldown_sec,
+    'ledger_detail_setting.export_user_cooldown_sec':
+      s.export_user_cooldown_sec,
     'ledger_detail_setting.export_batch_size': s.export_batch_size,
     'ledger_detail_setting.export_batch_sleep_ms': s.export_batch_sleep_ms,
     'ledger_detail_setting.export_rows_per_file': s.export_rows_per_file,
@@ -137,7 +142,8 @@ const exportFields: Array<{
   {
     name: 'export_user_cooldown_sec',
     label: 'Export User Cooldown',
-    description: 'Minimum seconds between two exports per user. Requests during cooldown are rejected.',
+    description:
+      'Minimum seconds between two exports per user. Requests during cooldown are rejected.',
     min: 1,
   },
   {
@@ -169,7 +175,8 @@ const exportFields: Array<{
   {
     name: 'export_timeout_sec',
     label: 'Export Job Timeout (s)',
-    description: 'Max runtime for an export goroutine (seconds). Job is marked failed on timeout.',
+    description:
+      'Max runtime for an export goroutine (seconds). Job is marked failed on timeout.',
     min: 1,
   },
 ]
@@ -191,7 +198,8 @@ const listFields: Array<{
   {
     name: 'list_default_range_sec',
     label: 'List Default Time Range (s)',
-    description: 'Default query range when no time range is provided (seconds).',
+    description:
+      'Default query range when no time range is provided (seconds).',
     min: 1,
   },
   {
@@ -215,17 +223,23 @@ const listFields: Array<{
   {
     name: 'list_scan_rows_per_req',
     label: 'List Max Scan Rows',
-    description: 'Max rows scanned per list request. Returns truncated results when exceeded.',
+    description:
+      'Max rows scanned per list request. Returns truncated results when exceeded.',
     min: 1,
   },
 ]
 
-export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps) {
+export function LedgerDetailSection({
+  defaultValues,
+}: LedgerDetailSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const requestSaveConfirmation = useSettingsSaveConfirmation()
 
-  const formDefaults = useMemo(() => buildFormDefaults(defaultValues), [defaultValues])
+  const formDefaults = useMemo(
+    () => buildFormDefaults(defaultValues),
+    [defaultValues]
+  )
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -246,9 +260,9 @@ export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps)
 
   const onSubmit = async (values: FormValues) => {
     const normalized = normalizeFormValues(values)
-    const changedKeys = (Object.keys(normalized) as Array<keyof FlatDefaults>).filter(
-      (key) => normalized[key] !== baselineRef.current[key],
-    )
+    const changedKeys = (
+      Object.keys(normalized) as Array<keyof FlatDefaults>
+    ).filter((key) => normalized[key] !== baselineRef.current[key])
     if (changedKeys.length === 0) {
       toast.info(t('No changes to save'))
       return
@@ -320,6 +334,7 @@ export function LedgerDetailSection({ defaultValues }: LedgerDetailSectionProps)
           {renderFields(listFields)}
         </SettingsForm>
       </Form>
+      <FinancialDetailCleanup />
     </SettingsSection>
   )
 }

@@ -243,19 +243,22 @@ func BackfillFlushCosts(ctx context.Context, costs []*ConsumptionCost, batchSize
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	// Pre-identify which log_ids already exist so we can skip aggregation (and the
-	// inserted count) for them after the insert.  ON CONFLICT DO NOTHING is
-	// transparent to GORM — we cannot tell from RowsAffected which specific rows
-	// were skipped in a batch, so we diff against this pre-insert snapshot instead.
-	existing := backfillExistingCostLogIDs(ctx, costs)
-
-	if err := DB.WithContext(ctx).Select(
-		"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-		"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-	).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "log_id"}},
-		DoNothing: true,
-	}).CreateInBatches(costs, batchSize).Error; err != nil {
+	// Filter live keys and permanent deletion receipts before inserting. Only
+	// the remaining rows contribute to the local backfill aggregates.
+	if err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		costs, _, err = PrepareFinancialDetails(tx, costs, nil)
+		if err != nil || len(costs) == 0 {
+			return err
+		}
+		return tx.Select(
+			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+		).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "log_id"}},
+			DoNothing: true,
+		}).CreateInBatches(costs, batchSize).Error
+	}); err != nil {
 		return 0, fmt.Errorf("BackfillFlushCosts: %w", err)
 	}
 	// Aggregate (into local maps, isolated from the live buffers) and count only
@@ -263,16 +266,8 @@ func BackfillFlushCosts(ctx context.Context, costs []*ConsumptionCost, batchSize
 	agg := newBackfillStatAggregator()
 	inserted := 0
 	for _, c := range costs {
-		if c.LogId == nil {
-			// NULL log_id: always inserted (no dedup key), always aggregate.
-			agg.addPlatform(c)
-			inserted++
-			continue
-		}
-		if _, dup := existing[*c.LogId]; !dup {
-			agg.addPlatform(c)
-			inserted++
-		}
+		agg.addPlatform(c)
+		inserted++
 	}
 	agg.flush(ctx)
 	return inserted, nil
@@ -289,11 +284,10 @@ type CostCommissionBackfillPair struct {
 // using ON CONFLICT DO NOTHING on both tables.  After a successful commit it
 // aggregates daily-stat / employee-ext deltas via a local backfillStatAggregator
 // (isolated from the live relay buffers, but tier upgrades still applied) only for
-// pairs that were not already present in the DB, preventing double-counting on re-runs.
+// details that are neither live nor covered by deletion receipts.
 //
-// It returns the number of pairs that were actually inserted (pairs whose cost
-// log_id already existed and were skipped by ON CONFLICT are NOT counted), so the
-// caller can report an accurate "written to DB" total even on a re-run.
+// It returns the larger of the inserted cost and commission counts. The two
+// sides are filtered independently because administrators can clean either side.
 //
 // On DB error the entire batch is returned as an error with an inserted count of 0.
 func BackfillFlushPairs(ctx context.Context, pairs []*CostCommissionBackfillPair, batchSize int) (int, error) {
@@ -304,14 +298,11 @@ func BackfillFlushPairs(ctx context.Context, pairs []*CostCommissionBackfillPair
 		batchSize = 100
 	}
 
-	// Cost and commission share the same log_id and are inserted atomically, so
-	// checking the cost table is sufficient to detect already-existing pairs.
+	// Cost and commission share log_id, but each side has its own receipt.
 	costs := make([]*ConsumptionCost, 0, len(pairs))
 	for _, p := range pairs {
 		costs = append(costs, p.Cost)
 	}
-	existing := backfillExistingCostLogIDs(ctx, costs)
-
 	costBatch := costs
 	commBatch := make([]*EmployeeCommissionLog, 0, len(pairs))
 	for _, p := range pairs {
@@ -319,24 +310,33 @@ func BackfillFlushPairs(ctx context.Context, pairs []*CostCommissionBackfillPair
 	}
 
 	if err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Select(
-			"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-			"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).CreateInBatches(costBatch, batchSize).Error; err != nil {
+		var err error
+		costBatch, commBatch, err = PrepareFinancialDetails(tx, costBatch, commBatch)
+		if err != nil {
 			return err
 		}
-		if err := tx.Select(
-			"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
-			"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
-			"CostRatio", "GroupRatio", "CreatedAt",
-		).Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "log_id"}},
-			DoNothing: true,
-		}).CreateInBatches(commBatch, batchSize).Error; err != nil {
-			return err
+		if len(costBatch) > 0 {
+			if err := tx.Select(
+				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+			).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "log_id"}},
+				DoNothing: true,
+			}).CreateInBatches(costBatch, batchSize).Error; err != nil {
+				return err
+			}
+		}
+		if len(commBatch) > 0 {
+			if err := tx.Select(
+				"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
+				"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
+				"CostRatio", "GroupRatio", "CreatedAt",
+			).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "log_id"}},
+				DoNothing: true,
+			}).CreateInBatches(commBatch, batchSize).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -344,26 +344,16 @@ func BackfillFlushPairs(ctx context.Context, pairs []*CostCommissionBackfillPair
 	}
 
 	// Aggregate deltas after successful commit (into local maps, isolated from the
-	// live buffers) and count only the pairs that were newly inserted, skipping
-	// pairs ON CONFLICT left untouched.
+	// live buffers) only for the retained candidates on each side.
 	agg := newBackfillStatAggregator()
-	inserted := 0
-	for _, p := range pairs {
-		if c := p.Cost; c != nil && c.LogId != nil {
-			if _, dup := existing[*c.LogId]; dup {
-				continue // pair was already in DB; ON CONFLICT skipped it
-			}
-		}
-		if p.Cost != nil {
-			agg.addPlatform(p.Cost)
-		}
-		if p.Commission != nil {
-			agg.addCommission(p.Commission)
-		}
-		inserted++
+	for _, cost := range costBatch {
+		agg.addPlatform(cost)
+	}
+	for _, commission := range commBatch {
+		agg.addCommission(commission)
 	}
 	agg.flush(ctx)
-	return inserted, nil
+	return max(len(costBatch), len(commBatch)), nil
 }
 
 // backfillExistingCostLogIDs returns the set of non-nil log_ids that already exist

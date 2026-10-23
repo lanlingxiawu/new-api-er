@@ -180,6 +180,8 @@ func TestMain(m *testing.M) {
 		&model.EmployeeCommissionLog{},
 		&model.ChannelCostConfig{},
 		&model.ConsumptionCost{},
+		&model.FinancialDetailTombstone{},
+		&model.DataCleanupRun{},
 		&model.CustomerProfile{},
 		&model.CustomerQuotaLog{},
 		&model.EmployeeCommissionDailyStat{},

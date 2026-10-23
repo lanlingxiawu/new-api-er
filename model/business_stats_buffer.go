@@ -990,18 +990,25 @@ func flushConsumptionCostLedger() {
 		// 聚合日统计（ON CONFLICT 跳过的重复行不计），失败整批回滚并整体 requeue。
 		// 这样 consumption_cost 与 platform_channel_daily_stats 永远同增同回滚，不会只写一半。
 		err := db.Transaction(func(tx *gorm.DB) error {
+			var prepareErr error
+			costBatch, _, prepareErr = PrepareFinancialDetails(tx, costBatch, nil)
+			if prepareErr != nil {
+				return prepareErr
+			}
 			existing, err := existingCostLogIDsTx(tx, costBatch)
 			if err != nil {
 				return err
 			}
-			if err := tx.Select(
-				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-			).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "log_id"}},
-				DoNothing: true,
-			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
-				return err
+			if len(costBatch) > 0 {
+				if err := tx.Select(
+					"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+					"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+					return err
+				}
 			}
 			return applyPlatformDailyStatTx(tx, costBatch, existing)
 		})
@@ -1134,28 +1141,37 @@ func flushCostAndCommissionLedger() {
 		// 重复行不会落库，重试重复入库也无害。
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
+			var prepareErr error
+			costBatch, commBatch, prepareErr = PrepareFinancialDetails(tx, costBatch, commBatch)
+			if prepareErr != nil {
+				return prepareErr
+			}
 			existing, err := existingCostLogIDsTx(tx, costBatch)
 			if err != nil {
 				return err
 			}
-			if err := tx.Select(
-				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-			).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "log_id"}},
-				DoNothing: true,
-			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
-				return err
+			if len(costBatch) > 0 {
+				if err := tx.Select(
+					"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+					"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+					return err
+				}
 			}
-			if err := tx.Select(
-				"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
-				"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
-				"CostRatio", "GroupRatio", "CreatedAt",
-			).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "log_id"}},
-				DoNothing: true,
-			}).CreateInBatches(commBatch, innerBatch).Error; err != nil {
-				return err
+			if len(commBatch) > 0 {
+				if err := tx.Select(
+					"EmployeeId", "EmployeeUserId", "CustomerUserId", "LogId", "ModelName", "ChannelId",
+					"RevenueQuota", "CostQuota", "ProfitQuota", "CommissionQuota", "CommissionRate",
+					"CostRatio", "GroupRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(commBatch, innerBatch).Error; err != nil {
+					return err
+				}
 			}
 			// 平台日统计并入同一事务，只聚合本批真正新插入的成本行（幂等），与明细同增同回滚。
 			return applyPlatformDailyStatTx(tx, costBatch, existing)
@@ -1176,17 +1192,17 @@ func flushCostAndCommissionLedger() {
 		// 批量预取本批次员工的 tier level：L1 内存命中优先，未命中的用一次
 		// `WHERE user_id IN (...)` 批量查询，取代旧的逐员工串行 Redis/DB 往返。
 		empIds := make([]int, 0, len(pairs))
-		for _, pair := range pairs {
-			if pair.Commission != nil && pair.Commission.EmployeeUserId > 0 {
-				empIds = append(empIds, pair.Commission.EmployeeUserId)
+		for _, commission := range commBatch {
+			if commission != nil && commission.EmployeeUserId > 0 {
+				empIds = append(empIds, commission.EmployeeUserId)
 			}
 		}
 		tierCache := GetTierLevelsByUserIdsCached(empIds)
 
 		// 平台日统计已在上面的事务内落库；此处只处理提成侧（保持原有异步聚合）。
-		for _, pair := range pairs {
-			if pair.Commission != nil {
-				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
+		for _, commission := range commBatch {
+			if commission != nil {
+				bufferCommissionDailyStatWithLevel(commission, tierCache[commission.EmployeeUserId])
 			}
 			aggregated++
 		}
@@ -1228,18 +1244,25 @@ func flushCostRetryQueue() {
 		}
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
+			var prepareErr error
+			costBatch, _, prepareErr = PrepareFinancialDetails(tx, costBatch, nil)
+			if prepareErr != nil {
+				return prepareErr
+			}
 			existing, err := existingCostLogIDsTx(tx, costBatch)
 			if err != nil {
 				return err
 			}
-			if err := tx.Select(
-				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-			).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "log_id"}},
-				DoNothing: true,
-			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
-				return err
+			if len(costBatch) > 0 {
+				if err := tx.Select(
+					"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+					"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+					return err
+				}
 			}
 			return applyPlatformDailyStatTx(tx, costBatch, existing)
 		})
@@ -1293,18 +1316,25 @@ func flushPairRetryQueue() {
 		}
 		db, cancel := flushDBWithTimeout()
 		err := db.Transaction(func(tx *gorm.DB) error {
+			var prepareErr error
+			costBatch, commBatch, prepareErr = PrepareFinancialDetails(tx, costBatch, commBatch)
+			if prepareErr != nil {
+				return prepareErr
+			}
 			existing, err := existingCostLogIDsTx(tx, costBatch)
 			if err != nil {
 				return err
 			}
-			if err := tx.Select(
-				"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
-				"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
-			).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "log_id"}},
-				DoNothing: true,
-			}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
-				return err
+			if len(costBatch) > 0 {
+				if err := tx.Select(
+					"LogId", "UserId", "ChannelId", "ChannelName", "GroupName", "ModelName",
+					"RevenueQuota", "CostQuota", "GroupRatio", "CostRatio", "CreatedAt",
+				).Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "log_id"}},
+					DoNothing: true,
+				}).CreateInBatches(costBatch, innerBatch).Error; err != nil {
+					return err
+				}
 			}
 			if len(commBatch) > 0 {
 				if err := tx.Select(
@@ -1332,15 +1362,15 @@ func flushPairRetryQueue() {
 		// 平台日统计已在上面的事务内落库；此处只处理提成侧（保持原有异步聚合）。
 		// 批量预取 tier level，取代旧的逐条 BufferCommissionDailyStat（每条各查一次）。
 		empIds := make([]int, 0, len(pairs))
-		for _, pair := range pairs {
-			if pair.Commission != nil && pair.Commission.EmployeeUserId > 0 {
-				empIds = append(empIds, pair.Commission.EmployeeUserId)
+		for _, commission := range commBatch {
+			if commission != nil && commission.EmployeeUserId > 0 {
+				empIds = append(empIds, commission.EmployeeUserId)
 			}
 		}
 		tierCache := GetTierLevelsByUserIdsCached(empIds)
-		for _, pair := range pairs {
-			if pair.Commission != nil {
-				bufferCommissionDailyStatWithLevel(pair.Commission, tierCache[pair.Commission.EmployeeUserId])
+		for _, commission := range commBatch {
+			if commission != nil {
+				bufferCommissionDailyStatWithLevel(commission, tierCache[commission.EmployeeUserId])
 			}
 			aggregated++
 		}

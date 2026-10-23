@@ -169,6 +169,8 @@ func TestMain(m *testing.M) {
 		&model.ChannelCostConfig{},
 		&model.EmployeeCommissionLog{},
 		&model.ConsumptionCost{},
+		&model.FinancialDetailTombstone{},
+		&model.DataCleanupRun{},
 		&model.PlatformChannelDailyStat{},
 		&model.EmployeeCommissionDailyStat{},
 		&model.EmployeeCustomerCommissionDailyStat{},

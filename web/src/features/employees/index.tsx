@@ -2331,6 +2331,11 @@ function CommissionLogsTab() {
       emptyTitle={t('No records')}
       toolbar={
         <div className='space-y-2'>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Details and exports only include retained records. Historical totals are preserved.'
+            )}
+          </p>
           <div className='flex justify-end'>
             <Button
               type='button'

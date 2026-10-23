@@ -365,6 +365,8 @@ func migrateDB() error {
 		&ChannelCostConfig{},
 		&EmployeeCommissionLog{},
 		&ConsumptionCost{},
+		&FinancialDetailTombstone{},
+		&DataCleanupRun{},
 		&PlatformChannelDailyStat{},
 		&EmployeeCommissionDailyStat{},
 		&EmployeeCustomerCommissionDailyStat{},

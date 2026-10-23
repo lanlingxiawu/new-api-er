@@ -791,6 +791,11 @@ export function ConsumptionCostLedgerDetail() {
 
   return (
     <div className='flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Details and exports only include retained records. Historical totals are preserved.'
+        )}
+      </p>
       <div className='shrink-0 rounded-lg border p-3'>
         <div className='grid gap-2 md:grid-cols-4 xl:grid-cols-8'>
           <FilterInput

@@ -9943,6 +9943,27 @@
     "隐私政策": "Politique de confidentialité",
     "首页": "Accueil",
     "，": ", ",
-    "，and ": ", and "
+    "，and ": ", and ",
+    "At least {{count}} records deleted.": "Au moins {{count}} enregistrements supprimés.",
+    "Details and exports only include retained records. Historical totals are preserved.": "Les détails et exports ne contiennent que les enregistrements conservés. Les totaux historiques sont préservés.",
+    "Cleanup target": "Données à nettoyer",
+    "Ledger details": "Détails du registre",
+    "Commission details": "Détails des commissions",
+    "Clean ledger details": "Nettoyer le registre",
+    "Clean commission details": "Nettoyer les commissions",
+    "Clean error usage logs": "Nettoyer les journaux d’erreurs",
+    "Preview cleanup": "Prévisualiser le nettoyage",
+    "Confirm deletion": "Confirmer la suppression",
+    "Cleanup started. You can leave this page.": "Nettoyage lancé. Vous pouvez quitter cette page.",
+    "Cleanup is running in the background.": "Nettoyage en arrière-plan.",
+    "Cleanup completed.": "Nettoyage terminé.",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "Nettoyage arrêté. Les suppressions effectuées sont conservées. Prévisualisez à nouveau pour nettoyer le reste.",
+    "{{count}} records deleted.": "{{count}} enregistrements supprimés.",
+    "{{count}} records match this cleanup.": "{{count}} enregistrements concernés.",
+    "At least {{count}} records match this cleanup.": "Au moins {{count}} enregistrements concernés.",
+    "Before {{date}}": "Avant le {{date}}",
+    "Permanently delete records before {{date}} (your local time).": "Supprimer définitivement les enregistrements antérieurs au {{date}} (heure locale).",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "Seuls les journaux d’erreurs sont supprimés. Les journaux de consommation et d’audit sont conservés, ainsi que les dernières 24 heures.",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "Les soldes, totaux et ajustements manuels sont conservés. Les détails supprimés ne pourront être restaurés ni exportés. Conservez au moins les 30 derniers jours."
   }
 }

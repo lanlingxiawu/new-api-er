@@ -9943,6 +9943,27 @@
     "隐私政策": "Privacy Policy",
     "首页": "Home",
     "，": ", ",
-    "，and ": ", and "
+    "，and ": ", and ",
+    "At least {{count}} records deleted.": "At least {{count}} records deleted.",
+    "Details and exports only include retained records. Historical totals are preserved.": "Details and exports only include retained records. Historical totals are preserved.",
+    "Cleanup target": "Cleanup target",
+    "Ledger details": "Ledger details",
+    "Commission details": "Commission details",
+    "Clean ledger details": "Clean ledger details",
+    "Clean commission details": "Clean commission details",
+    "Clean error usage logs": "Clean error usage logs",
+    "Preview cleanup": "Preview cleanup",
+    "Confirm deletion": "Confirm deletion",
+    "Cleanup started. You can leave this page.": "Cleanup started. You can leave this page.",
+    "Cleanup is running in the background.": "Cleanup is running in the background.",
+    "Cleanup completed.": "Cleanup completed.",
+    "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.": "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records.",
+    "{{count}} records deleted.": "{{count}} records deleted.",
+    "{{count}} records match this cleanup.": "{{count}} records match this cleanup.",
+    "At least {{count}} records match this cleanup.": "At least {{count}} records match this cleanup.",
+    "Before {{date}}": "Before {{date}}",
+    "Permanently delete records before {{date}} (your local time).": "Permanently delete records before {{date}} (your local time).",
+    "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.": "Only error usage logs are deleted. Consumption and audit logs are kept. Keep at least the latest 24 hours.",
+    "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days.": "Balances, totals and manual adjustments are kept. Deleted details cannot be restored or exported. Keep at least the latest 30 days."
   }
 }

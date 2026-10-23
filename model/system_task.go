@@ -185,7 +185,8 @@ type SystemTaskFilter struct {
 }
 
 func (filter SystemTaskFilter) query() *gorm.DB {
-	query := DB.Model(&SystemTask{})
+	// Data cleanup receipts have their own permission-aware API and retention.
+	query := DB.Model(&SystemTask{}).Where("type <> ?", SystemTaskTypeDataCleanup)
 	switch filter.Scope {
 	case "active":
 		query = query.Where("status IN ?", activeSystemTaskStatuses())

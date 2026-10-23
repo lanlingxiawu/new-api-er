@@ -21,13 +21,14 @@ const systemInstanceReportInterval = 30 * time.Second
 var systemInstanceReporterOnce sync.Once
 
 type SystemInstanceInfo struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Node          common.NodeIdentity       `json:"node"`
-	Role          SystemInstanceRoleInfo    `json:"role"`
-	Runtime       SystemInstanceRuntimeInfo `json:"runtime"`
-	Host          SystemInstanceHostInfo    `json:"host"`
-	Resources     SystemInstanceResources   `json:"resources"`
-	Extra         map[string]any            `json:"extra,omitempty"`
+	FinancialCleanupReceipts bool                      `json:"financial_cleanup_receipts"`
+	SchemaVersion            int                       `json:"schema_version"`
+	Node                     common.NodeIdentity       `json:"node"`
+	Role                     SystemInstanceRoleInfo    `json:"role"`
+	Runtime                  SystemInstanceRuntimeInfo `json:"runtime"`
+	Host                     SystemInstanceHostInfo    `json:"host"`
+	Resources                SystemInstanceResources   `json:"resources"`
+	Extra                    map[string]any            `json:"extra,omitempty"`
 }
 
 type SystemInstanceRoleInfo struct {
@@ -91,8 +92,9 @@ func ReportCurrentSystemInstance() error {
 	systemStatus := common.GetSystemStatus()
 	diskInfo := common.GetDiskSpaceInfo()
 	info := SystemInstanceInfo{
-		SchemaVersion: 1,
-		Node:          identity,
+		FinancialCleanupReceipts: true,
+		SchemaVersion:            1,
+		Node:                     identity,
 		Role: SystemInstanceRoleInfo{
 			IsMaster: common.IsMasterNode,
 		},

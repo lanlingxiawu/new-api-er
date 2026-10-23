@@ -218,6 +218,10 @@ func UpdateOptionGroup(c *gin.Context) {
 		return
 	}
 	request.Scope = scope
+	if request.Module == "data_cleanup_setting" && c.GetInt("role") != common.RoleRootUser {
+		c.AbortWithStatus(http.StatusForbidden)
+		return
+	}
 	if request.Scope != "" && !settingsaccess.AllowsGroup(request.Scope, request.Module, request.Values) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -352,6 +356,10 @@ func UpdateOption(c *gin.Context) {
 	option.Scope = scope
 	if option.Scope != "" && !middleware.AllowsSystemSettingsOption(c, option.Key) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if strings.HasPrefix(option.Key, "data_cleanup_setting.") && c.GetInt("role") != common.RoleRootUser {
+		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
 	switch option.Value.(type) {

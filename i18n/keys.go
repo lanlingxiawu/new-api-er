@@ -4,6 +4,18 @@ const MsgBodyCacheCapacity = "relay.body_cache_capacity"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
 
 const (
+	MsgCleanupInvalidDate    = "cleanup.invalid_date"
+	MsgCleanupDisabled       = "cleanup.disabled"
+	MsgCleanupPreviewExpired = "cleanup.preview_expired"
+	MsgCleanupBusy           = "cleanup.busy"
+	MsgCleanupUnsupported    = "cleanup.unsupported"
+	MsgCleanupIndexMissing   = "cleanup.index_missing"
+	MsgCleanupFailed         = "cleanup.failed"
+	MsgCleanupUpgradeNodes   = "cleanup.upgrade_nodes"
+	MsgCleanupExportChanged  = "cleanup.export_changed"
+)
+
+const (
 	MsgAbilityDbCorrupted                           = "ability.db_corrupted"
 	MsgAbilityRepairRunning                         = "ability.repair_running"
 	MsgAlreadyExists                                = "common.already_exists"

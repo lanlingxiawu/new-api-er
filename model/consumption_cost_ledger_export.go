@@ -317,6 +317,10 @@ func writeLedgerExportCSVSharded(
 	filePath string,
 	onProgress func(progress int, rows int64),
 ) (rowCount int64, filePaths []string, retErr error) {
+	cleanupVersion, err := FinancialCleanupVersion(ctx, CleanupLedger, filter.StartTime)
+	if err != nil {
+		return 0, nil, err
+	}
 	writer, err := newLedgerExportPartWriter(filePath)
 	if err != nil {
 		return 0, nil, err
@@ -326,6 +330,14 @@ func writeLedgerExportCSVSharded(
 		if writer != nil {
 			if err := writer.Close(); err != nil && retErr == nil {
 				retErr = err
+			}
+		}
+		if retErr == nil {
+			version, err := FinancialCleanupVersion(ctx, CleanupLedger, filter.StartTime)
+			if err != nil {
+				retErr = err
+			} else if version != cleanupVersion {
+				retErr = errors.New("cleanup.export_changed")
 			}
 		}
 	}()
@@ -354,6 +366,13 @@ func writeLedgerExportCSVSharded(
 		}
 
 		for {
+			version, err := FinancialCleanupVersion(ctx, CleanupLedger, filter.StartTime)
+			if err != nil {
+				return rowCount, filePaths, err
+			}
+			if version != cleanupVersion {
+				return rowCount, filePaths, errors.New("cleanup.export_changed")
+			}
 			if cursor != nil {
 				listFilter.CursorCreated = cursor.CreatedAt
 				listFilter.CursorId = cursor.Id

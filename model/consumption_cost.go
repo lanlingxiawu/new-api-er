@@ -8,7 +8,7 @@ import "time"
 //
 // 单独建表而非写入 logs：logs 还包含大量非消费日志，且成本统计只需消费数据。
 type ConsumptionCost struct {
-	Id           int     `json:"id"`
+	Id           int     `json:"id" gorm:"index:idx_cost_cleanup_created_id,priority:2"`
 	LogId        *int    `json:"log_id" gorm:"uniqueIndex"` // 关联 logs.id，唯一约束保证幂等；无日志时为 NULL
 	UserId       int     `json:"user_id" gorm:"index;default:0"`
 	ChannelId    int     `json:"channel_id" gorm:"index;index:idx_consumption_cost_created_channel,priority:2;default:0"`
@@ -19,7 +19,7 @@ type ConsumptionCost struct {
 	CostQuota    int64   `json:"cost_quota" gorm:"default:0"`
 	GroupRatio   float64 `json:"group_ratio"`
 	CostRatio    float64 `json:"cost_ratio"`
-	CreatedAt    int64   `json:"created_at" gorm:"autoCreateTime;index;index:idx_consumption_cost_created_channel,priority:1"`
+	CreatedAt    int64   `json:"created_at" gorm:"autoCreateTime;index;index:idx_consumption_cost_created_channel,priority:1;index:idx_cost_cleanup_created_id,priority:1"`
 }
 
 // CreateConsumptionCost 将逐笔成本记录推入内存缓冲区，由后台批量入库。

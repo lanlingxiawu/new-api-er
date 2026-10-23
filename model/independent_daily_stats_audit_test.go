@@ -108,7 +108,7 @@ func TestIndependentAuditLedgerSQLite(t *testing.T) {
 		common.RedisEnabled = previousRedis
 		require.NoError(t, pool.Close())
 	})
-	require.NoError(t, db.AutoMigrate(&ConsumptionCost{}, &PlatformChannelDailyStat{}, &BusinessDailyStatsCoverage{}))
+	require.NoError(t, db.AutoMigrate(&ConsumptionCost{}, &PlatformChannelDailyStat{}, &BusinessDailyStatsCoverage{}, &FinancialDetailTombstone{}))
 	DB, LOG_DB = db, db
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	InitColumnNames()

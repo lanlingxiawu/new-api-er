@@ -1,4 +1,13 @@
 # English translations
+cleanup.invalid_date: "Choose a past date. Keep at least 30 days of financial details and 24 hours of error logs. The current commission period is protected."
+cleanup.disabled: "History cleanup is disabled. Ask the root administrator to enable it."
+cleanup.preview_expired: "This preview has expired or is unavailable. Preview the cleanup again."
+cleanup.busy: "Another cleanup is already running. Wait for it to finish and try again."
+cleanup.unsupported: "This log database does not support this cleanup yet. Contact the administrator."
+cleanup.index_missing: "A cleanup index is missing. Ask the administrator to complete the database index migration."
+cleanup.failed: "Cleanup stopped. Completed deletions are kept. Preview again to clean the remaining records."
+cleanup.upgrade_nodes: "Upgrade all registered nodes before cleaning financial details. Remove retired nodes from node management."
+cleanup.export_changed: "Details were cleaned during export. Start the export again to download the remaining records."
 user.username_too_long: "Username must be at most 20 characters. Shorten it and try again."
 user.display_name_too_long: "Display name must be at most 20 characters. Shorten it and try again."
 user.email_too_long: "Email address must be at most 50 characters. Check it and try again."

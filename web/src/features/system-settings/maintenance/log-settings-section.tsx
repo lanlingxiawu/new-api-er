@@ -47,6 +47,7 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import { DataCleanupControl } from './data-cleanup'
 import { HistoryLogCleanup } from './history-log-cleanup'
 import { ServerLogFiles } from './server-log-files'
 
@@ -299,6 +300,9 @@ export function LogSettingsSection(props: LogSettingsSectionProps) {
       <Separator />
 
       <HistoryLogCleanup />
+
+      <Separator />
+      <DataCleanupControl kind='error_logs' />
 
       <Separator />
 

@@ -542,6 +542,11 @@ func SetApiRouter(router *gin.Engine) {
 		// admin_menu.request_logs 控制，默认对普通管理员关闭，由 root 按人授予。
 		registerRequestLogRoutes(apiRouter)
 		systemTaskRoute := apiRouter.Group("/system-task")
+		cleanupRoute := apiRouter.Group("/data-cleanup")
+		cleanupRoute.Use(middleware.AdminAuth())
+		cleanupRoute.POST("/preview", controller.PreviewDataCleanup)
+		cleanupRoute.POST("", controller.CreateDataCleanup)
+		cleanupRoute.GET("", controller.GetDataCleanup)
 		systemTaskRoute.Use(middleware.AdminAuth())
 		{
 			systemTaskRoute.POST("/log-cleanup", middleware.RequirePermission(authz.SystemSettingsEdit("operations.logs")), controller.CreateLogCleanupSystemTask)
