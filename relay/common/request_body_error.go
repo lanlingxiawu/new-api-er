@@ -158,7 +158,7 @@ func jsonFieldPath(field string) string {
 	segments := strings.Split(field, ".")
 	kept := segments[:0]
 	for _, segment := range segments {
-		if segment == "" || ('A' <= segment[0] && segment[0] <= 'Z') {
+		if segment == "" || segment == "requestFields" || ('A' <= segment[0] && segment[0] <= 'Z') {
 			continue
 		}
 		kept = append(kept, segment)

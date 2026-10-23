@@ -1,6 +1,7 @@
 package oairesponses
 
 import (
+	"github.com/tidwall/gjson"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -131,7 +132,7 @@ func TestOpenAIResponsesRequestToClaudeMessagesToolsAndToolChoice(t *testing.T) 
 	require.Len(t, tools, 1)
 	tool := tools[0].(*dto.Tool)
 	assert.Equal(t, "lookup", tool.Name)
-	assert.Equal(t, "object", tool.InputSchema["type"])
+	assert.Equal(t, "object", gjson.GetBytes(tool.InputSchema, "type").Value())
 	assert.NotNil(t, got.ToolChoice)
 }
 

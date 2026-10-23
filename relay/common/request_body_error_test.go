@@ -156,9 +156,10 @@ func TestJSONFieldPath(t *testing.T) {
 		"max_tokens":       "max_tokens",
 		"messages.content": "messages.content",
 		"Alias.generationConfig.Alias.maxOutputTokens": "generationConfig.maxOutputTokens",
-		"Alias":                    "",
-		"a..b":                     "a.b",
-		"ClaudeRequest.max_tokens": "max_tokens",
+		"requestFields.max_tokens":                     "max_tokens",
+		"Alias":                                        "",
+		"a..b":                                         "a.b",
+		"ClaudeRequest.max_tokens":                     "max_tokens",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, jsonFieldPath(in), in)

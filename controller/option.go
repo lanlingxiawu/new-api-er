@@ -113,7 +113,7 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.RLock()
 	for k, v := range common.OptionMap {
-		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
+		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" || k == "ResendKeyConfigured" {
 			continue
 		}
 		if allowedKeys != nil {
@@ -137,6 +137,11 @@ func GetOptions(c *gin.Context) {
 		if slices.Contains(completionRatioMetaOptionKeys, k) {
 			optionValues[k] = value
 		}
+	}
+	if _, allowed := allowedKeys["ResendKeyConfigured"]; allowedKeys == nil || allowed {
+		options = append(options, &model.Option{
+			Key: "ResendKeyConfigured", Value: strconv.FormatBool(strings.TrimSpace(common.OptionMap["ResendApiKey"]) != ""),
+		})
 	}
 	common.OptionMapRWMutex.RUnlock()
 	// Display the same effective expressions used by pricing and settlement,

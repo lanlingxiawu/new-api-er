@@ -327,13 +327,6 @@ func sendClaudeFinalStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, 
 	}
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
-	if data == "" {
-		return
-	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
-}
-
 // streamEndedIncomplete 报告受管流式会话在收尾时尚未确认协议完成；未受管（旧路径）恒为 false。
 func streamEndedIncomplete(info *relaycommon.RelayInfo) bool {
 	return info.StreamSession.Active() && !info.StreamSession.ProtocolComplete()

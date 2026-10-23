@@ -81,4 +81,24 @@ describe('tool price validation', () => {
 
     queryClient.clear()
   })
+
+  test('shows the DeepSeek Search and Fetch prices for a config saved before they existed', () => {
+    const queryClient = new QueryClient()
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsSaveConfirmationProvider>
+        <ToolPriceSettings defaultValue='{"web_search":10}' />
+        </SettingsSaveConfirmationProvider>
+      </QueryClientProvider>
+    )
+
+    for (const key of ['deepseek_search', 'deepseek_fetch']) {
+      expect(
+        screen.getByRole('spinbutton', { name: `Price ($/1K calls): ${key}` })
+      ).toHaveValue(0.75)
+    }
+
+    queryClient.clear()
+  })
 })

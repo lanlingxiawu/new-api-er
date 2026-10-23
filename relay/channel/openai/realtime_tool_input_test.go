@@ -313,3 +313,5 @@ func TestRealtimeToolInputWebSocketRounds(t *testing.T) {
 		})
 	}
 }
+
+func (b *realtimeToolInputBilling) ReserveBeforeSubmit(target int) error { return b.Reserve(target) }

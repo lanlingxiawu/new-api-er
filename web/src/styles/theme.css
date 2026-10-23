@@ -179,6 +179,7 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .dark {
+  color-scheme: dark;
   /* Blue-led dark mode: deep navy chrome with brighter blue interaction cues. */
   --background: #0b1220;
   --foreground: #e2ecfb;

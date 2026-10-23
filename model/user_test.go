@@ -724,13 +724,9 @@ func TestValidateAccessToken(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestGetRootUserAndExists(t *testing.T) {
-	root := newTestUser(t, func(u *User) { u.Role = common.RoleRootUser })
-	_ = root
+func TestRootUserExists(t *testing.T) {
+	newTestUser(t, func(u *User) { u.Role = common.RoleRootUser })
 	assert.True(t, RootUserExists())
-	got := GetRootUser()
-	require.NotNil(t, got)
-	assert.Equal(t, common.RoleRootUser, got.Role)
 }
 
 // ===========================================================================

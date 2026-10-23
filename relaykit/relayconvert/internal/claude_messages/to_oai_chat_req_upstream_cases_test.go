@@ -120,7 +120,7 @@ func TestReq_ToolsConverted(t *testing.T) {
 	req := dto.ClaudeRequest{
 		Model: "m",
 		Tools: []dto.Tool{
-			{Name: "get_weather", Description: "d", InputSchema: map[string]interface{}{"type": "object"}},
+			{Name: "get_weather", Description: "d", InputSchema: []byte(`{"type":"object"}`)},
 		},
 	}
 	out, err := ClaudeMessagesRequestToOpenAIChat(context.Background(),
@@ -131,7 +131,7 @@ func TestReq_ToolsConverted(t *testing.T) {
 	assert.Equal(t, "function", out.Tools[0].Type)
 	assert.Equal(t, "get_weather", out.Tools[0].Function.Name)
 	assert.Equal(t, "d", out.Tools[0].Function.Description)
-	assert.Equal(t, map[string]interface{}{"type": "object"}, out.Tools[0].Function.Parameters)
+	assert.JSONEq(t, `{"type":"object"}`, string(out.Tools[0].Function.Parameters))
 }
 
 func TestReq_ToolsEmptyYieldsEmptySlice(t *testing.T) {

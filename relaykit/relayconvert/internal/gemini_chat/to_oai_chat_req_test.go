@@ -3,6 +3,7 @@ package geminichat
 import "context"
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -515,6 +516,9 @@ func TestReq_FunctionSchemaTypesLowercased(t *testing.T) {
 	require.Len(t, out.Tools, 1)
 	params, err := json.Marshal(out.Tools[0].Function.Parameters)
 	require.NoError(t, err)
+	assert.Contains(t, string(params), `"city"`)
+	assert.Less(t, bytes.Index(params, []byte(`"city"`)), bytes.Index(params, []byte(`"when"`)))
+	assert.Less(t, bytes.Index(params, []byte(`"when"`)), bytes.Index(params, []byte(`"list"`)))
 	assert.JSONEq(t, `{
 		"type": "object",
 		"properties": {

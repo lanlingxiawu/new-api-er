@@ -13,6 +13,7 @@ type StreamResult struct {
 	status  *relaycommon.StreamStatus
 	stopped bool
 	session *relaycommon.StreamSession // 通用流式开启后解析及转换错误需终止，避免异常后补造成功。
+	done    bool
 }
 
 func newStreamResult(status *relaycommon.StreamStatus) *StreamResult {
@@ -65,6 +66,7 @@ func (r *StreamResult) Stop(err error) {
 func (r *StreamResult) Done() {
 	r.status.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	r.stopped = true
+	r.done = true
 }
 
 // IsStopped returns whether Stop() or Done() was called during this chunk.

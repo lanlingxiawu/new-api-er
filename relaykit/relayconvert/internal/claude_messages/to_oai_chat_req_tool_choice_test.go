@@ -16,7 +16,7 @@ import (
 // "auto" lets the model answer without calling the tool.
 
 func weatherTool() []dto.Tool {
-	return []dto.Tool{{Name: "get_weather", Description: "d", InputSchema: map[string]any{"type": "object"}}}
+	return []dto.Tool{{Name: "get_weather", Description: "d", InputSchema: []byte(`{"type":"object"}`)}}
 }
 
 // convertClaudeJSON parses a raw client body the way the relay does and

@@ -144,3 +144,10 @@ func TestRegisteredConfigGroupFieldsHaveOptionPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestEmailDeliveryOptionScope(t *testing.T) {
+	for _, key := range []string{"EmailProvider", "ResendApiKey", "ResendFrom", "ResendKeyConfigured", "QuotaRemindEnabled", "QuotaRemindThreshold"} {
+		assert.True(t, AllowsOption("operations.email", key), key)
+		assert.False(t, AllowsOption("site.notice", key), key)
+	}
+}

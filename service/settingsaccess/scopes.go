@@ -88,7 +88,7 @@ func buildDefinitions() map[string]Definition {
 		scope("operations.node-control", "NodeControlServiceUrl"),
 		scope("operations.behavior", "DefaultCollapseSidebar", "DemoSiteEnabled", "SelfUseModeEnabled"),
 		scope("operations.alerts", "QuotaRemindThreshold", "perf_metrics_setting.enabled", "perf_metrics_setting.flush_interval", "perf_metrics_setting.bucket_time", "perf_metrics_setting.retention_days"),
-		scope("operations.email", "SMTPServer", "SMTPPort", "SMTPAccount", "SMTPFrom", "SMTPToken", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin"),
+		scope("operations.email", "EmailProvider", "ResendApiKey", "ResendFrom", "ResendKeyConfigured", "QuotaRemindEnabled", "QuotaRemindThreshold", "SMTPServer", "SMTPPort", "SMTPAccount", "SMTPFrom", "SMTPToken", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin"),
 		scope("operations.worker", "WorkerUrl", "WorkerValidKey", "WorkerAllowHttpImageRequestEnabled"),
 		// 审计日志保留期由 ConfigManager 支撑，保存走 SaveConfigGroup，
 		// 因此该分区必须用 configScope（普通 scope() 的 GroupKeys 是空 map，

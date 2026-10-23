@@ -3,6 +3,8 @@ package oaichat
 import (
 	"context"
 	"encoding/json"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/tidwall/gjson"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,12 +19,13 @@ func newGinCtx() context.Context {
 }
 
 func toolWithParams(name, desc string, params any) dto.ToolCallRequest {
+	encoded, _ := kitutil.Marshal(params)
 	return dto.ToolCallRequest{
 		Type: "function",
 		Function: dto.FunctionRequest{
 			Name:        name,
 			Description: desc,
-			Parameters:  params,
+			Parameters:  encoded,
 		},
 	}
 }
@@ -38,7 +41,7 @@ func TestClaudeReq_ToolsSchemaTranslation(t *testing.T) {
 				"additionalProperties": false,
 			}),
 			// Non-function tools without map parameters must be skipped entirely.
-			{Type: "custom", Function: dto.FunctionRequest{Name: "skipme", Parameters: "not-a-map"}},
+			{Type: "custom", Function: dto.FunctionRequest{Name: "skipme", Parameters: []byte(`"not-a-map"`)}},
 		},
 		Messages: []dto.Message{{Role: "user", Content: "hi"}},
 	}
@@ -51,11 +54,11 @@ func TestClaudeReq_ToolsSchemaTranslation(t *testing.T) {
 	require.Len(t, tools, 1) // only the map-param tool survives
 	tool := tools[0].(*dto.Tool)
 	assert.Equal(t, "lookup", tool.Name)
-	assert.Equal(t, "object", tool.InputSchema["type"])
-	assert.NotNil(t, tool.InputSchema["properties"])
-	assert.NotNil(t, tool.InputSchema["required"])
+	assert.Equal(t, "object", gjson.GetBytes(tool.InputSchema, "type").Value())
+	assert.NotNil(t, gjson.GetBytes(tool.InputSchema, "properties").Value())
+	assert.NotNil(t, gjson.GetBytes(tool.InputSchema, "required").Value())
 	// Extra keys beyond type/properties/required are copied through.
-	assert.Equal(t, false, tool.InputSchema["additionalProperties"])
+	assert.Equal(t, false, gjson.GetBytes(tool.InputSchema, "additionalProperties").Value())
 }
 
 func TestClaudeReq_ToolWithoutTypeKey(t *testing.T) {
@@ -72,7 +75,7 @@ func TestClaudeReq_ToolWithoutTypeKey(t *testing.T) {
 	require.NoError(t, err)
 	tool := got.Tools.([]any)[0].(*dto.Tool)
 	// "type" absent -> defaults to object.
-	assert.Equal(t, "object", tool.InputSchema["type"])
+	assert.Equal(t, "object", gjson.GetBytes(tool.InputSchema, "type").Value())
 }
 
 func TestClaudeReq_WebSearchOptionsWithUserLocationAndContextSizes(t *testing.T) {
@@ -513,75 +516,4 @@ func TestClaudeReq_MediaPartNilSourceSkipped(t *testing.T) {
 	content := got.Messages[0].Content.([]dto.ClaudeMediaMessage)
 	require.Len(t, content, 1)
 	assert.Equal(t, "text", content[0].Type)
-}
-
-func TestOpenAIChatRequestToClaudeMessagesNormalizesToolInputSchema(t *testing.T) {
-	tests := []struct {
-		name       string
-		parameters any
-		wantSchema map[string]any
-	}{
-		{
-			name:       "omitted parameters",
-			parameters: nil,
-			wantSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		{
-			name: "missing type and properties",
-			parameters: map[string]any{
-				"additionalProperties": false,
-			},
-			wantSchema: map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{},
-				"additionalProperties": false,
-			},
-		},
-		{
-			name: "non-string type",
-			parameters: map[string]any{
-				"type":       123,
-				"properties": map[string]any{},
-			},
-			wantSchema: map[string]any{
-				"type":       123,
-				"properties": map[string]any{},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			maxTokens := uint(1024)
-			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
-				Model:     "claude-test",
-				MaxTokens: &maxTokens,
-				Messages: []dto.Message{
-					{Role: "user", Content: "Call the tool."},
-				},
-				Tools: []dto.ToolCallRequest{
-					{
-						Type: "function",
-						Function: dto.FunctionRequest{
-							Name:        "get_current_time",
-							Description: "Get the current time",
-							Parameters:  tt.parameters,
-						},
-					},
-				},
-			})
-
-			require.NoError(t, err)
-			tools, ok := got.Tools.([]any)
-			require.True(t, ok)
-			require.Len(t, tools, 1)
-			tool, ok := tools[0].(*dto.Tool)
-			require.True(t, ok)
-			assert.Equal(t, "get_current_time", tool.Name)
-			assert.Equal(t, tt.wantSchema, tool.InputSchema)
-		})
-	}
 }

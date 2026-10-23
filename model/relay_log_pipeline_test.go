@@ -32,6 +32,37 @@ func TestRelayLogSQLiteBatchInsertReturnsIDs(t *testing.T) {
 	require.NotEqual(t, logs[0].Id, logs[1].Id)
 }
 
+func TestEnqueueConsumeLogPreservesCacheUsage(t *testing.T) {
+	resetRelayLogPipelineForTest()
+	previousAccepting := relayLogAccepting.Load()
+	previousConsume, previousExport := common.LogConsumeEnabled, common.DataExportEnabled
+	cfg := operation_setting.GetRelayLogPipelineSetting()
+	previousConfig := *cfg
+	common.LogConsumeEnabled, common.DataExportEnabled = true, true
+	cfg.Enabled = true
+	relayLogAccepting.Store(true)
+	t.Cleanup(func() {
+		resetRelayLogPipelineForTest()
+		relayLogAccepting.Store(previousAccepting)
+		common.LogConsumeEnabled, common.DataExportEnabled = previousConsume, previousExport
+		*cfg = previousConfig
+	})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	other := NewLogOther()
+	other.SetPublic("cache_tokens", 20)
+	other.SetPublic("cache_write_tokens", 30)
+	other.SetPublic("cache_creation_tokens_12h", 10)
+	require.True(t, EnqueueConsumeLog(c, 1, RecordConsumeLogParams{PromptTokens: 100, CompletionTokens: 5, Other: other}, nil))
+	relayLogConsumeMu.Lock()
+	defer relayLogConsumeMu.Unlock()
+	require.Len(t, relayLogConsumeBuf, 1)
+	quota := relayLogConsumeBuf[0].QuotaData
+	require.NotNil(t, quota)
+	require.EqualValues(t, 20, quota.CacheReadTokens)
+	require.EqualValues(t, 30, quota.CacheCreationTokens)
+	require.Equal(t, 105, quota.TokenUsed)
+}
+
 func TestFallbackRetentionCapPreservesExistingFilesAndFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay-log.jsonl")

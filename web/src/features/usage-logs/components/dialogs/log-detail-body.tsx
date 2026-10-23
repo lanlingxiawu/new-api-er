@@ -278,6 +278,7 @@ function BillingBreakdown(props: {
   const isRealAdmin = useIsAdmin()
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
+  const hasCacheWrite12h = (other.cache_creation_tokens_12h || 0) > 0
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
 
@@ -355,7 +356,7 @@ function BillingBreakdown(props: {
     })
   }
 
-  if (!isTieredExpr && isClaude && hasAnyCacheTokens(other)) {
+  if (!isTieredExpr && (isClaude || hasCacheWrite12h) && hasAnyCacheTokens(other)) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({
         label: t('Cache Read'),
@@ -368,7 +369,7 @@ function BillingBreakdown(props: {
       other.cache_creation_ratio !== 1
     ) {
       rows.push({
-        label: t('Cache Creation'),
+        label: hasCacheWrite12h ? t('Cache Creation (30m)') : t('Cache Creation'),
         value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio)}/M`,
         metric: 'price.cache_write',
       })
@@ -393,6 +394,10 @@ function BillingBreakdown(props: {
         metric: 'price.cache_write_1h',
       })
     }
+  }
+
+  if (!isTieredExpr && hasCacheWrite12h && other.cache_creation_ratio_12h != null) {
+    rows.push({ label: t('Cache Creation (12h)'), value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio_12h)}/M` })
   }
 
   if (!isTieredExpr) {
@@ -533,6 +538,8 @@ function TokenBreakdown(props: {
   const cacheWrite = other.cache_creation_tokens || 0
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
+  const cacheWrite12h = other.cache_creation_tokens_12h || 0
+  const cacheWrite30m = cacheWrite12h > 0 ? Math.max(cacheWrite - cacheWrite12h, 0) : 0
   const hasTokens =
     promptTokens > 0 || completionTokens > 0 || hasAnyCacheTokens(other)
 
@@ -566,7 +573,7 @@ function TokenBreakdown(props: {
     })
   }
 
-  if (cacheWrite > 0 && cacheWrite5m === 0 && cacheWrite1h === 0) {
+  if (cacheWrite > 0 && cacheWrite5m === 0 && cacheWrite1h === 0 && cacheWrite12h === 0) {
     rows.push({
       label: t('Cache Write'),
       value: cacheWrite.toLocaleString(),
@@ -589,6 +596,9 @@ function TokenBreakdown(props: {
       metric: 'tokens.cache_write_1h',
     })
   }
+
+  if (cacheWrite30m > 0) rows.push({ label: t('Cache Write (30m)'), value: cacheWrite30m.toLocaleString() })
+  if (cacheWrite12h > 0) rows.push({ label: t('Cache Write (12h)'), value: cacheWrite12h.toLocaleString() })
 
   // image_output is a legacy key holding *input* image tokens, and both it and
   // text_input are subsets of Input Tokens above — the labels say so, otherwise

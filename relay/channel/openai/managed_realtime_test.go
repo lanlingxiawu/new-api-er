@@ -421,3 +421,5 @@ func TestRealtimeStreamEmptyClose(t *testing.T) {
 		require.FailNow(t, "stream workers did not finish")
 	}
 }
+
+func (b *realtimeEndBilling) ReserveBeforeSubmit(target int) error { return b.Reserve(target) }

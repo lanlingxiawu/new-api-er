@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,4 +123,24 @@ func TestManagedStreamMixedFrameImmediate(t *testing.T) {
 			require.Equal(t, relaycommon.StreamEndReason("upstream_incomplete"), info.StreamSession.Snapshot().Reason, "内容交付后 EOF 仍缺少真实终态")
 		})
 	}
+}
+
+func TestManagedStreamLargeFrameWriteBudget(t *testing.T) {
+	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	session := relaycommon.NewStreamSession(types.RelayFormatOpenAI)
+	c.Writer = relaycommon.NewStreamWriter(c.Writer, session, nil)
+	SetEventStreamHeaders(c)
+	frame := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("A", 3600<<10) + "\"}}]}\n\n")
+	before := time.Now()
+	_, err := c.Writer.Write(frame[:100])
+	require.NoError(t, err)
+	require.Empty(t, recorder.deadlines, "incomplete SSE frames must not spend the write budget")
+	_, err = c.Writer.Write(frame[100:])
+	require.NoError(t, err)
+	require.Len(t, recorder.deadlines, 1)
+	require.False(t, recorder.deadlines[0].Before(before.Add(streamWriteTimeout+450*time.Second)))
+	require.NoError(t, FlushWriter(c))
+	require.True(t, session.Snapshot().Effective)
 }

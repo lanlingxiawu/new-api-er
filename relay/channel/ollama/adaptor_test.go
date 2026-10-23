@@ -247,7 +247,9 @@ func TestOpenAIChatToOllamaChat(t *testing.T) {
 		}
 		out, err := openAIChatToOllamaChat(c, req)
 		require.NoError(t, err)
-		assert.Equal(t, map[string]any{"type": "object"}, out.Format)
+		encoded, err := common.Marshal(out.Format)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"type":"object"}`, string(encoded))
 	})
 
 	t.Run("tools mapped", func(t *testing.T) {

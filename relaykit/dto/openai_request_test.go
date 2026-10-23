@@ -382,7 +382,7 @@ func TestGeneralOpenAIRequest_GetTokenCountMeta_MessagesAndMedia(t *testing.T) {
 			},
 		},
 		Tools: []ToolCallRequest{
-			{Type: "function", Function: FunctionRequest{Name: "getW", Description: "desc", Parameters: map[string]any{"k": "v"}}},
+			{Type: "function", Function: FunctionRequest{Name: "getW", Description: "desc", Parameters: []byte(`{"k":"v"}`)}},
 		},
 	}
 	meta := r.GetTokenCountMeta()

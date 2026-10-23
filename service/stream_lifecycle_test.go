@@ -407,3 +407,5 @@ func TestFinalizeStreamUsageSupplementsZeroCompletionWithMedia(t *testing.T) {
 	require.Equal(t, 9, usage.PromptTokens, "确认的输入量保持原样")
 	require.Equal(t, DataURLMediaTokens, usage.CompletionTokens, "输出为 0 时按已交付张数补估")
 }
+
+func (b *streamReserveFixture) ReserveBeforeSubmit(target int) error { return b.Reserve(target) }

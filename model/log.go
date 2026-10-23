@@ -436,7 +436,13 @@ func EnqueueConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams
 	}
 	logEntry := buildConsumeLog(c, userId, params)
 	dataExport := common.DataExportEnabled
+	var cacheReadTokens, cacheWriteTokens int
+	if params.Other != nil {
+		cacheReadTokens, _ = params.Other.public["cache_tokens"].(int)
+		cacheWriteTokens, _ = params.Other.public["cache_write_tokens"].(int)
+	}
 	quotaData := QuotaDataLogParams{
+		CacheReadTokens: int64(cacheReadTokens), CacheCreationTokens: int64(cacheWriteTokens),
 		UserID: userId, Username: logEntry.Username, ModelName: params.ModelName, Quota: params.Quota,
 		CreatedAt: logEntry.CreatedAt, TokenUsed: params.PromptTokens + params.CompletionTokens,
 		UseGroup: params.Group, TokenID: params.TokenId, ChannelID: params.ChannelId, NodeName: common.NodeName,
@@ -479,7 +485,13 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		return 0
 	}
 	if common.DataExportEnabled {
+		var cacheReadTokens, cacheWriteTokens int
+		if params.Other != nil {
+			cacheReadTokens, _ = params.Other.public["cache_tokens"].(int)
+			cacheWriteTokens, _ = params.Other.public["cache_write_tokens"].(int)
+		}
 		LogQuotaData(QuotaDataLogParams{
+			CacheReadTokens: int64(cacheReadTokens), CacheCreationTokens: int64(cacheWriteTokens),
 			UserID: userId, Username: username, ModelName: params.ModelName, Quota: params.Quota,
 			CreatedAt: createdAt, TokenUsed: params.PromptTokens + params.CompletionTokens,
 			UseGroup: params.Group, TokenID: params.TokenId, ChannelID: params.ChannelId, NodeName: common.NodeName,

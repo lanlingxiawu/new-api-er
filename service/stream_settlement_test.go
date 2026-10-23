@@ -253,3 +253,5 @@ func TestClaudeSubscriptionLogRefreshPreservesWalletMetadata(t *testing.T) {
 	require.True(t, settleStreamQuota(c, info, &params))
 	require.Equal(t, map[string]interface{}{"wallet_quota_deducted": 13, "unrelated_metadata": "preserved"}, other.Snapshot())
 }
+
+func (b *claudeSettlementFixture) ReserveBeforeSubmit(target int) error { return b.Reserve(target) }

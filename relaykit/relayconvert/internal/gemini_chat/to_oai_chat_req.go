@@ -2,6 +2,7 @@ package geminichat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,8 @@ import (
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func GeminiGenerateContentRequestToOpenAIChat(ctx context.Context, geminiRequest *dto.GeminiChatRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
@@ -175,11 +178,15 @@ func GeminiGenerateContentRequestToOpenAIChat(ctx context.Context, geminiRequest
 
 	if len(geminiRequest.GetTools()) > 0 {
 		var tools []dto.ToolCallRequest
-		for _, tool := range geminiRequest.GetTools() {
+		for toolIndex, tool := range geminiRequest.GetTools() {
 			if tool.FunctionDeclarations == nil {
 				continue
 			}
 			functionDeclarations, err := kitutil.Any2Type[[]dto.FunctionRequest](tool.FunctionDeclarations)
+			raw := gjson.GetBytes(geminiRequest.Tools, fmt.Sprintf("%d.functionDeclarations", toolIndex))
+			if raw.Exists() {
+				err = kitutil.Unmarshal([]byte(raw.Raw), &functionDeclarations)
+			}
 			if err != nil {
 				kitutil.LogSystemError(fmt.Sprintf("failed to parse gemini function declarations: %v (type=%T)", err, tool.FunctionDeclarations))
 				continue
@@ -190,7 +197,7 @@ func GeminiGenerateContentRequestToOpenAIChat(ctx context.Context, geminiRequest
 					Function: dto.FunctionRequest{
 						Name:        function.Name,
 						Description: function.Description,
-						Parameters:  lowercaseSchemaTypes(function.Parameters, 0),
+						Parameters:  lowercaseSchemaTypes(function.Parameters, 0).(json.RawMessage),
 					},
 				}
 				tools = append(tools, openAITool)
@@ -438,6 +445,56 @@ const maxSchemaDepth = 64
 func lowercaseSchemaTypes(schema any, depth int) any {
 	if depth > maxSchemaDepth {
 		return schema
+	}
+	if raw, ok := schema.(json.RawMessage); ok {
+		result := append(json.RawMessage(nil), raw...)
+		if !gjson.ParseBytes(raw).IsObject() {
+			return result
+		}
+		gjson.ParseBytes(raw).ForEach(func(key, value gjson.Result) bool {
+			var replacement []byte
+			switch key.String() {
+			case "type":
+				var decoded any
+				if kitutil.Unmarshal([]byte(value.Raw), &decoded) != nil {
+					return true
+				}
+				normalized := lowercaseSchemaTypes(map[string]any{"type": decoded}, depth).(map[string]any)
+				replacement, _ = kitutil.Marshal(normalized["type"])
+			case "properties", "$defs", "definitions", "patternProperties":
+				if !value.IsObject() {
+					return true
+				}
+				replacement = []byte(value.Raw)
+				value.ForEach(func(name, child gjson.Result) bool {
+					path := strings.NewReplacer("\\", "\\\\", ".", "\\.", ":", "\\:", "*", "\\*", "?", "\\?").Replace(name.String())
+					normalized := lowercaseSchemaTypes(json.RawMessage(child.Raw), depth+1).(json.RawMessage)
+					if updated, err := sjson.SetRawBytes(replacement, path, normalized); err == nil {
+						replacement = updated
+					}
+					return true
+				})
+			case "items", "additionalProperties", "not":
+				replacement = lowercaseSchemaTypes(json.RawMessage(value.Raw), depth+1).(json.RawMessage)
+			case "anyOf", "oneOf", "allOf", "prefixItems":
+				if !value.IsArray() {
+					return true
+				}
+				children := make([]json.RawMessage, 0)
+				value.ForEach(func(_, child gjson.Result) bool {
+					children = append(children, lowercaseSchemaTypes(json.RawMessage(child.Raw), depth+1).(json.RawMessage))
+					return true
+				})
+				replacement, _ = kitutil.Marshal(children)
+			default:
+				return true
+			}
+			if updated, err := sjson.SetRawBytes(result, key.String(), replacement); err == nil {
+				result = updated
+			}
+			return true
+		})
+		return result
 	}
 	node, ok := schema.(map[string]any)
 	if !ok {

@@ -315,15 +315,9 @@ func TestGeminiReq_ToolsSpecialAndFunctions(t *testing.T) {
 		Tools: []dto.ToolCallRequest{
 			// Function names that match Gemini hosted tools stay ordinary functions.
 			{Type: "function", Function: dto.FunctionRequest{Name: "googleSearch"}},
-			{Type: "function", Function: dto.FunctionRequest{Name: "lookup", Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"q": map[string]any{"type": "string"}},
-			}}},
+			{Type: "function", Function: dto.FunctionRequest{Name: "lookup", Parameters: []byte(`{"type":"object","properties":{"q":{"type":"string"}}}`)}},
 			// empty-properties function -> Parameters nil'd out.
-			{Type: "function", Function: dto.FunctionRequest{Name: "noparams", Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			}}},
+			{Type: "function", Function: dto.FunctionRequest{Name: "noparams", Parameters: []byte(`{"type":"object","properties":{}}`)}},
 		},
 		ToolChoice: "auto",
 		Messages:   []dto.Message{{Role: "user", Content: "hi"}},

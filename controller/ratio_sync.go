@@ -282,7 +282,10 @@ func modelPricingSyncValues(data map[string]any, name string) map[string]any {
 }
 
 func FetchUpstreamRatios(c *gin.Context) {
-	var req dto.UpstreamRequest
+	var req struct {
+		dto.UpstreamRequest
+		IncludeUnchanged bool `json:"include_unchanged"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.SysError(common.LogText("failed to bind upstream request: %s", err.Error()))
 		common.ApiErrorStatus(c, http.StatusBadRequest, common.NewMessage("Invalid request parameter format"))
@@ -333,7 +336,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 		return
 	}
 
-	comparison := fetchUpstreamPricingComparison(c.Request.Context(), upstreams, req.Timeout)
+	comparison := fetchUpstreamPricingComparison(c.Request.Context(), upstreams, req.Timeout, req.IncludeUnchanged)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
@@ -366,14 +369,33 @@ func fetchUpstreamPricingSnapshotData(requestContext context.Context, upstreams 
 	return comparison.differences, comparison.testResults, comparison.sources
 }
 
-func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int) pricingSyncComparison {
+func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []dto.UpstreamDTO, timeoutSeconds int, includeUnchanged ...bool) pricingSyncComparison {
 	testResults, successfulChannels := fetchUpstreamPricingSources(requestContext, upstreams, timeoutSeconds)
 	localData := effectivePricingSyncData(getLocalPricingSyncData())
 	differences := buildDifferences(localData, successfulChannels)
-	prices := make(map[string]modelSyncPrices, len(differences))
-	for name, fields := range differences {
+	models := make(map[string]struct{}, len(differences))
+	for name := range differences {
+		models[name] = struct{}{}
+	}
+	if len(includeUnchanged) > 0 && includeUnchanged[0] {
+		for _, channel := range successfulChannels {
+			for _, field := range pricingSyncFields {
+				for name := range valueMap(channel.data[field]) {
+					models[name] = struct{}{}
+				}
+			}
+		}
+	}
+	prices := make(map[string]modelSyncPrices, len(models))
+	for name := range models {
 		row := modelSyncPrices{Current: modelPricingSyncValues(localData, name), Upstreams: make(map[string]map[string]any)}
-		_, expressionPriority := fields[billing_setting.BillingExprField]
+		expressionPriority := valueMap(localData[billing_setting.BillingModeField])[name] == billing_setting.BillingModeTieredExpr
+		for _, channel := range successfulChannels {
+			if valueMap(channel.data[billing_setting.BillingModeField])[name] == billing_setting.BillingModeTieredExpr {
+				expressionPriority = true
+				break
+			}
+		}
 		for _, channel := range successfulChannels {
 			candidate := modelPricingSyncValues(channel.data, name)
 			if expressionPriority && candidate[billing_setting.BillingModeField] != billing_setting.BillingModeTieredExpr {
@@ -386,7 +408,9 @@ func fetchUpstreamPricingComparison(requestContext context.Context, upstreams []
 				row.Upstreams[channel.name] = candidate
 			}
 		}
-		prices[name] = row
+		if len(row.Upstreams) > 0 {
+			prices[name] = row
+		}
 	}
 
 	return pricingSyncComparison{

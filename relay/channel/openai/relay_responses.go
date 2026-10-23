@@ -93,7 +93,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if streamResponse.Response != nil {
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
-		sendResponsesStreamData(c, streamResponse, data)
 		usageEvent := &streamResponse // 仅控制内部用量分支，不改写发给下游的事件。
 		// 仅终态额外读取确认用量，正文 delta 不增加会话快照或 JSON 探测。
 		if (streamResponse.Type == "response.incomplete" || streamResponse.Type == "response.done") && info.StreamSession.Active() && relaycommon.IsResponsesLimitCompletion(gjson.Parse(data)) {
@@ -105,6 +104,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 		accumulator.Observe(usageEvent, common.StringToByteSlice(data))
+		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
+			sr.Stop(err)
+			return
+		}
+		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") &&
+			streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+			sr.Done()
+		}
 	})
 
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)

@@ -217,7 +217,7 @@ func TestClaudeRequest_GetTokenCountMeta(t *testing.T) {
 			}},
 		},
 		Tools: []any{
-			Tool{Name: "calc", Description: "calculator", InputSchema: map[string]any{"type": "object"}},
+			Tool{Name: "calc", Description: "calculator", InputSchema: []byte(`{"type":"object"}`)},
 			ClaudeWebSearchTool{Type: "web_search", Name: "web", UserLocation: &ClaudeWebSearchUserLocation{Type: "approximate", City: "NY"}},
 		},
 	}

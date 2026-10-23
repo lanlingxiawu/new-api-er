@@ -576,3 +576,5 @@ func TestRealtimeOwnTimeoutNoRecord(t *testing.T) {
 
 var _ relaycommon.BillingSettler = (*timeoutBillingFixture)(nil)
 var _ = dto.Usage{}
+
+func (b *timeoutBillingFixture) ReserveBeforeSubmit(target int) error { return b.Reserve(target) }

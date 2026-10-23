@@ -16,6 +16,20 @@ import (
 // StreamWriteTimeout 是 HTTP 流每次正文、保活和终止错误写入的有界期限；不替代请求整体超时。
 const StreamWriteTimeout = 30 * time.Second
 
+// StreamWriteBudget bounds stalled clients while allowing large frames to drain.
+// The caller serializes writes and owns the budget for the response lifetime.
+type StreamWriteBudget struct {
+	drainBy time.Time
+}
+
+func (b *StreamWriteBudget) Deadline(now time.Time, n int) time.Time {
+	if b.drainBy.Before(now) {
+		b.drainBy = now
+	}
+	b.drainBy = b.drainBy.Add(time.Duration(n) * time.Second / (8 << 10))
+	return b.drainBy.Add(StreamWriteTimeout)
+}
+
 // StreamWriter 是 Gin 透明包装；只缓存一批有界 SSE 帧，不保留完整下游响应。
 type StreamWriter struct {
 	gin.ResponseWriter                       // 原始下游写入器，保留 Gin 的状态码、头与连接接口。
@@ -29,6 +43,7 @@ type StreamWriter struct {
 	media              int                   // 当前等待刷新确认的裸媒体字节。
 	jsonBody           []byte                // 入口流式而渠道返回完整 JSON 时，最多一帧大小的待确认交付。
 	writeErr           error                 // 底层写/刷新错误；后续调用沿用同一错误。
+	budget             StreamWriteBudget
 }
 
 // NewStreamWriter 为下游 writer 安装语义观察，session 提供流状态；estimate 按交付正文与媒体张数返回新增 token，可为 nil。
@@ -69,6 +84,7 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 		if len(p) > 0 && IsStreamBinaryContentType(ct) {
 			w.session.RecordReceivedMedia(0)
 		}
+		_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(p)))
 		n, err := w.ResponseWriter.Write(p)
 		if err == nil && n != len(p) {
 			err = io.ErrShortWrite
@@ -113,6 +129,7 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 				continue
 			}
 		}
+		_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(w.budget.Deadline(time.Now(), len(frame)))
 		n, err := w.ResponseWriter.Write(frame)
 		if err == nil && n != len(frame) {
 			err = io.ErrShortWrite
