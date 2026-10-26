@@ -578,7 +578,12 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+type UserSearchOptions struct {
+	Sort              UserSortOptions
+	HasExclusiveRatio *bool
+}
+
+func SearchUsers(keyword string, group string, role *int, status *int, excludeEmployees bool, excludeAdmins bool, excludeAssignedCustomers bool, startIdx int, num int, options ...UserSearchOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -596,6 +601,13 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	var searchOptions UserSearchOptions
+	if len(options) > 0 {
+		searchOptions = options[0]
+	}
+	if searchOptions.HasExclusiveRatio != nil {
+		query = filterUsersByExclusiveRatio(query, *searchOptions.HasExclusiveRatio)
+	}
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
@@ -653,7 +665,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, excludeEm
 	}
 
 	// 获取分页数据
-	order := resolveUserSortOptions(sortOptions)
+	order := searchOptions.Sort
 	err = order.Apply(query.Omit("password", "access_token")).Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()

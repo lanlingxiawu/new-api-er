@@ -3142,7 +3142,7 @@
     "Excluded model whitelist": "免檢模型白名單",
     "Excludes the first attempt. Counted per group.": "不含首次，依分組計算。",
     "Exclusive Group Ratios": "专属分组倍率",
-    "Exclusive Ratio": "专属倍率",
+    "Exclusive Ratio": "專屬倍率",
     "Exclusive ratio parse cache limit": "专属倍率解析缓存上限",
     "Execute code in a sandbox during the response": "在回應過程中沙箱執行程式碼",
     "Execution trace": "Execution trace",

@@ -119,6 +119,7 @@ export interface GetUsersResponse {
 }
 
 export interface SearchUsersParams {
+  has_exclusive_ratio?: boolean
   keyword?: string
   group?: string
   role?: string

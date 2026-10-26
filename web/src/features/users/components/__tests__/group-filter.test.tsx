@@ -52,7 +52,7 @@ afterEach(() => {
   useAuthStore.getState().auth.reset()
 })
 
-async function renderUsers(initialEntry = '/users/') {
+async function renderUsers(initialEntry = '/users/', total = 1) {
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
     if (url === '/api/group/') {
       return { data: { success: true, data: ['default', 'premium'] } }
@@ -74,7 +74,7 @@ async function renderUsers(initialEntry = '/users/') {
               group: 'premium',
             },
           ],
-          total: 1,
+          total,
         },
       },
     }
@@ -151,4 +151,60 @@ it('restores the user group filter from the page URL on load', async () => {
   expect(get).toHaveBeenCalledWith(premiumSearchUrl)
   expect(get).not.toHaveBeenCalledWith('/api/user/', expect.anything())
   expect(getGroupFilterTrigger()).toHaveTextContent('premium')
+})
+
+it('filters exclusive ratios on the server and clears the filter', async () => {
+  const user = userEvent.setup()
+  const { get, router } = await renderUsers()
+  await user.click(screen.getByRole('button', { name: /^Exclusive Ratio/ }))
+  await user.click(await screen.findByRole('option', { name: /^Configured/ }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/user/search?keyword=&group=&has_exclusive_ratio=true&p=1&page_size=20'
+    )
+  )
+  expect(router.state.location.search).toMatchObject({
+    has_exclusive_ratio: ['true'],
+  })
+  await user.click(screen.getByRole('option', { name: 'Not configured' }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/user/search?keyword=&group=&has_exclusive_ratio=false&p=1&page_size=20'
+    )
+  )
+  await user.click(screen.getByRole('option', { name: 'Clear filters' }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith('/api/user/', {
+      params: { p: 1, page_size: 20 },
+    })
+  )
+  expect(router.state.location.search).not.toHaveProperty('has_exclusive_ratio')
+})
+
+it('restores exclusive ratio and account group filters together', async () => {
+  const { get } = await renderUsers(
+    '/users/?group=%5B%22premium%22%5D&has_exclusive_ratio=%5B%22false%22%5D'
+  )
+  expect(get).toHaveBeenCalledWith(
+    '/api/user/search?keyword=&group=premium&has_exclusive_ratio=false&p=1&page_size=20'
+  )
+  expect(
+    screen.getByRole('button', { name: /^Exclusive Ratio/ })
+  ).toHaveTextContent('Not configured')
+})
+
+it('returns to the first page when an exclusive ratio filter changes', async () => {
+  const user = userEvent.setup()
+  const { get, router } = await renderUsers('/users/?page=3', 200)
+  expect(get).toHaveBeenCalledWith('/api/user/', {
+    params: { p: 3, page_size: 20 },
+  })
+  await user.click(screen.getByRole('button', { name: /^Exclusive Ratio/ }))
+  await user.click(await screen.findByRole('option', { name: /^Configured/ }))
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/user/search?keyword=&group=&has_exclusive_ratio=true&p=1&page_size=20'
+    )
+  )
+  expect(router.state.location.search.page ?? 1).toBe(1)
 })

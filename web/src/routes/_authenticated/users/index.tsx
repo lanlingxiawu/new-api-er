@@ -35,6 +35,10 @@ const usersSearchSchema = z.object({
     .optional()
     .catch([]),
   group: z.array(z.string()).optional().catch([]),
+  has_exclusive_ratio: z
+    .array(z.enum(['true', 'false']))
+    .optional()
+    .catch([]),
 })
 
 export const Route = createFileRoute('/_authenticated/users/')({

@@ -25,6 +25,50 @@ func TestIsTruthyQuery(t *testing.T) {
 	}
 }
 
+func TestSearchUsersRejectsInvalidExclusiveRatioFilter(t *testing.T) {
+	for _, value := range []string{"1", "yes", "TRUE", "invalid"} {
+		ctx, rec := newCtx(t, http.MethodGet, "/api/user/search?has_exclusive_ratio="+value, nil)
+		ctx.Request.Header.Set("Accept-Language", "en")
+		SearchUsers(ctx)
+		response := decodeResp(t, rec)
+		require.False(t, response.Success)
+		require.Equal(t, "Invalid parameters", response.Message)
+	}
+}
+
+func TestSearchUsersExclusiveRatioParameter(t *testing.T) {
+	requireDB(t)
+	group := uniq("exclusive")
+	configured := mkUser(t, func(u *model.User) {
+		u.Group, u.GroupRatios = group, `{"vip":0}`
+	})
+	unconfigured := mkUser(t, func(u *model.User) { u.Group = group })
+	for _, tc := range []struct {
+		value string
+		ids   []int
+	}{
+		{"", []int{unconfigured.Id, configured.Id}},
+		{"true", []int{configured.Id}},
+		{"false", []int{unconfigured.Id}},
+	} {
+		ctx, rec := newCtx(t, http.MethodGet, "/api/user/search?group="+group+"&has_exclusive_ratio="+tc.value, nil)
+		asAdmin(ctx, 1)
+		SearchUsers(ctx)
+		response := decodeResp(t, rec)
+		require.True(t, response.Success, response.Message)
+		var data struct {
+			Total int          `json:"total"`
+			Items []model.User `json:"items"`
+		}
+		require.NoError(t, common.Unmarshal(response.Data, &data))
+		require.Equal(t, len(tc.ids), data.Total)
+		require.Len(t, data.Items, len(tc.ids))
+		for i, id := range tc.ids {
+			require.Equal(t, id, data.Items[i].Id)
+		}
+	}
+}
+
 // canManageTargetRole: root can manage anyone; others only strictly-lower roles.
 func TestCanManageTargetRole(t *testing.T) {
 	// root manages everyone including another root

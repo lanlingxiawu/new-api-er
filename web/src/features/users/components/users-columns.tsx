@@ -43,7 +43,7 @@ import {
   USER_ROLES,
   isUserDeleted,
 } from '../constants'
-import { parseGroupRatioRows } from '../lib'
+import { hasExclusiveGroupRatios } from '../lib/exclusive-ratio'
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { UserQuotaCell } from './user-quota-cell'
@@ -201,8 +201,9 @@ export function useUsersColumns(): ColumnDef<User>[] {
         header: t('User Group'),
         cell: ({ row }) => {
           const group = row.getValue('group') as string
-          const hasExclusiveRatios =
-            parseGroupRatioRows(row.original.group_ratios).length > 0
+          const hasExclusiveRatios = hasExclusiveGroupRatios(
+            row.original.group_ratios
+          )
           return (
             <BadgeCell>
               <GroupBadge group={group} className='font-normal' />
@@ -221,6 +222,12 @@ export function useUsersColumns(): ColumnDef<User>[] {
         },
         size: 140,
         meta: { mobileOrder: 30 },
+      },
+      {
+        id: 'has_exclusive_ratio',
+        accessorFn: (user) => hasExclusiveGroupRatios(user.group_ratios),
+        enableSorting: false,
+        enableHiding: false,
       },
       {
         accessorKey: 'role',

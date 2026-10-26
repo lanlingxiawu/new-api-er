@@ -3142,7 +3142,7 @@
     "Excluded model whitelist": "検査除外モデルのホワイトリスト",
     "Excludes the first attempt. Counted per group.": "初回を除く、グループごとの回数です。",
     "Exclusive Group Ratios": "专属分组倍率",
-    "Exclusive Ratio": "专属倍率",
+    "Exclusive Ratio": "専用倍率",
     "Exclusive ratio parse cache limit": "专属倍率解析缓存上限",
     "Execute code in a sandbox during the response": "応答中にサンドボックスでコードを実行",
     "Execution trace": "実行トレース",

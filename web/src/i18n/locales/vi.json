@@ -3142,7 +3142,7 @@
     "Excluded model whitelist": "Danh sách trắng mô hình miễn kiểm tra",
     "Excludes the first attempt. Counted per group.": "Không tính lần đầu, tính theo từng nhóm.",
     "Exclusive Group Ratios": "专属分组倍率",
-    "Exclusive Ratio": "专属倍率",
+    "Exclusive Ratio": "Hệ số riêng",
     "Exclusive ratio parse cache limit": "专属倍率解析缓存上限",
     "Execute code in a sandbox during the response": "Thực thi mã trong sandbox trong quá trình phản hồi",
     "Execution trace": "Dấu vết thực thi",

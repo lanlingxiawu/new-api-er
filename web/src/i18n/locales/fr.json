@@ -3142,7 +3142,7 @@
     "Excluded model whitelist": "Liste blanche des modèles exemptés",
     "Excludes the first attempt. Counted per group.": "Hors première tentative, compté par groupe.",
     "Exclusive Group Ratios": "专属分组倍率",
-    "Exclusive Ratio": "专属倍率",
+    "Exclusive Ratio": "Coefficient personnalisé",
     "Exclusive ratio parse cache limit": "专属倍率解析缓存上限",
     "Execute code in a sandbox during the response": "Exécuter du code dans un bac à sable pendant la réponse",
     "Execution trace": "Trace d'exécution",

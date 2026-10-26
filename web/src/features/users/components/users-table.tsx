@@ -86,6 +86,11 @@ export function UsersTable() {
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'role', searchKey: 'role', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
+      {
+        columnId: 'has_exclusive_ratio',
+        searchKey: 'has_exclusive_ratio',
+        type: 'array',
+      },
     ],
   })
   const statusFilter =
@@ -106,6 +111,11 @@ export function UsersTable() {
     queryFn: async () => requireServerSuccess(await getGroups()),
     staleTime: 5 * 60 * 1000,
   })
+
+  const exclusiveRatioFilter = (
+    columnFilters.find((filter) => filter.id === 'has_exclusive_ratio')
+      ?.value as string[] | undefined
+  )?.[0]
 
   const sortParams = useMemo(() => {
     const activeSort = sorting[0]
@@ -139,6 +149,7 @@ export function UsersTable() {
       statusFilter,
       roleFilter,
       groupFilter,
+      exclusiveRatioFilter,
       sortParams,
       refreshTrigger,
     ],
@@ -147,7 +158,8 @@ export function UsersTable() {
       const hasColumnFilter =
         statusFilter.length > 0 ||
         roleFilter.length > 0 ||
-        groupFilter.length > 0
+        groupFilter.length > 0 ||
+        exclusiveRatioFilter !== undefined
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
@@ -162,6 +174,10 @@ export function UsersTable() {
               status: statusFilter[0] ?? '',
               role: roleFilter[0] ?? '',
               group: groupFilter[0] ?? '',
+              has_exclusive_ratio:
+                exclusiveRatioFilter === undefined
+                  ? undefined
+                  : exclusiveRatioFilter === 'true',
             })
           : await getUsers(params)
 
@@ -186,6 +202,7 @@ export function UsersTable() {
     data: users,
     columns,
     enableRowSelection: true,
+    initialColumnVisibility: { has_exclusive_ratio: false },
     columnFilters,
     globalFilter,
     pagination,
@@ -249,6 +266,15 @@ export function UsersTable() {
               label: group,
               value: group,
             })),
+            singleSelect: true,
+          },
+          {
+            columnId: 'has_exclusive_ratio',
+            title: t('Exclusive Ratio'),
+            options: [
+              { label: t('Configured'), value: 'true' },
+              { label: t('Not configured'), value: 'false' },
+            ],
             singleSelect: true,
           },
         ],

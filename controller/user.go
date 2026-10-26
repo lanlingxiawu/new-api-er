@@ -394,6 +394,16 @@ func GetAllUsers(c *gin.Context) {
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	options := model.UserSearchOptions{Sort: model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))}
+	if value := c.Query("has_exclusive_ratio"); value != "" {
+		if value != "true" && value != "false" {
+			logger.LogWarn(c, "invalid exclusive ratio search filter")
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		present := value == "true"
+		options.HasExclusiveRatio = &present
+	}
 	excludeEmployees := isTruthyQuery(c.Query("exclude_employee")) || isTruthyQuery(c.Query("exclude_employees"))
 	excludeAdmins := isTruthyQuery(c.Query("exclude_admin")) || isTruthyQuery(c.Query("exclude_admins"))
 	excludeAssignedCustomers := isTruthyQuery(c.Query("exclude_assigned_customer")) || isTruthyQuery(c.Query("exclude_assigned_customers"))
@@ -410,10 +420,10 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 	pageInfo := common.GetPageQuery(c)
-	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, excludeEmployees, excludeAdmins, excludeAssignedCustomers, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	users, total, err := model.SearchUsers(keyword, group, role, status, excludeEmployees, excludeAdmins, excludeAssignedCustomers, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), options)
 	if err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, "failed to search users: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 

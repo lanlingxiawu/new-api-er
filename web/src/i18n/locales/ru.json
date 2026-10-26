@@ -3142,7 +3142,7 @@
     "Excluded model whitelist": "Белый список моделей, исключённых из проверки",
     "Excludes the first attempt. Counted per group.": "Без первой попытки, отдельно для каждой группы.",
     "Exclusive Group Ratios": "专属分组倍率",
-    "Exclusive Ratio": "专属倍率",
+    "Exclusive Ratio": "Индивидуальный коэффициент",
     "Exclusive ratio parse cache limit": "专属倍率解析缓存上限",
     "Execute code in a sandbox during the response": "Выполнять код в песочнице во время ответа",
     "Execution trace": "Трассировка выполнения",

@@ -90,6 +90,9 @@ export async function searchUsers(
   queryParams.set('group', group)
   if (role) queryParams.set('role', role)
   if (status) queryParams.set('status', status)
+  if (params.has_exclusive_ratio !== undefined) {
+    queryParams.set('has_exclusive_ratio', String(params.has_exclusive_ratio))
+  }
   if (exclude_employee) queryParams.set('exclude_employee', 'true')
   if (exclude_admin) queryParams.set('exclude_admin', 'true')
   if (exclude_assigned_customer) {
