@@ -249,7 +249,7 @@ setting.relay_error_display_invalid: "Invalid error message rules: check that ea
 relay_error.default_message: "Service temporarily unavailable, please try again later"
 relay_error.preset.keep_params.name: "Keep parameter errors"
 relay_error.preset.quota.name: "Upstream quota and balance"
-relay_error.preset.quota.message: "Service is busy, please try again later"
+relay_error.preset.quota.message: "The account pool has insufficient balance. Please retry after the administrator tops it up."
 relay_error.preset.rate_limit.name: "Upstream rate limit"
 relay_error.preset.rate_limit.message: "Too many requests, please try again later"
 relay_error.preset.model_code.name: "Model unavailable (error code)"

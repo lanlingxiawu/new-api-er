@@ -242,7 +242,7 @@ setting.relay_error_display_invalid: "錯誤提示規則無效：請檢查每條
 relay_error.default_message: "服務暫時無法使用，請稍後重試"
 relay_error.preset.keep_params.name: "參數錯誤放行"
 relay_error.preset.quota.name: "上游額度與餘額"
-relay_error.preset.quota.message: "服務繁忙，請稍後重試"
+relay_error.preset.quota.message: "號池餘額不足，待管理員儲值後重試"
 relay_error.preset.rate_limit.name: "上游限流"
 relay_error.preset.rate_limit.message: "請求過於頻繁，請稍後重試"
 relay_error.preset.model_code.name: "模型不可用（錯誤碼）"
