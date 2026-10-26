@@ -173,7 +173,17 @@ export interface ExportPart {
   end_time: number
 }
 
+export const EXPORT_SOURCE_LABELS: Record<string, string> = {
+  admin: 'Administrator export',
+  employee: 'Employee export',
+  self: 'Self-service export',
+}
+
 export interface ExportJob {
+  source?: 'admin' | 'employee' | 'self'
+  can_download?: boolean
+  can_cancel?: boolean
+  can_delete?: boolean
   employee_scope?: {
     template_name: string
     template_key: string
@@ -207,6 +217,27 @@ export interface ExportJob {
   created_at: number
   updated_at: number
   finished_at?: number
+}
+
+export interface ExportJobListFilters {
+  scope?: 'all' | 'mine'
+  creator_id?: number
+  creator_keyword?: string
+  customer_id?: number
+  source?: string
+  mode?: string
+  status?: string
+  created_after?: number
+  created_before?: number
+  job_id?: string
+}
+
+export interface ExportJobPage {
+  jobs: ExportJob[]
+  enabled: boolean
+  max_range_sec?: number
+  next_cursor?: string
+  has_more?: boolean
 }
 
 export interface ExportTemplate {

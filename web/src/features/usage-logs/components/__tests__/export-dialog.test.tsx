@@ -38,7 +38,10 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 vi.mock('@tanstack/react-router', () => ({
-  getRouteApi: () => ({ useSearch: () => mocks.search }),
+  getRouteApi: () => ({
+    useSearch: () => mocks.search,
+    useNavigate: () => vi.fn(),
+  }),
 }))
 vi.mock('../../export/api', () => ({
   createSelfExportJob: mocks.create,
@@ -104,7 +107,7 @@ it.each([true, false])(
         <LogExportCenter self={self} />
       </QueryClientProvider>
     )
-    await screen.findByText('Running')
+    await screen.findByTitle('running-job')
     if (self) {
       expect(
         await screen.findByText('Estimating remaining time...')
@@ -172,7 +175,9 @@ it('loads self tasks and applies the server time limit in the export center', as
       <LogExportCenter self />
     </QueryClientProvider>
   )
-  await waitFor(() => expect(mocks.jobs).toHaveBeenCalledWith(false, true))
+  await waitFor(() =>
+    expect(mocks.jobs).toHaveBeenCalledWith(false, true, {}, '')
+  )
   const button = screen.getByRole('button', { name: 'New Export' })
   await waitFor(() => expect(button).toBeEnabled())
   await userEvent.click(button)

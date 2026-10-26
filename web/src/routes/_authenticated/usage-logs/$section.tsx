@@ -27,13 +27,31 @@ import {
 
 const logTypeValues = ['0', '1', '2', '3', '4', '5', '6', '7'] as const
 const logTypeSearchSchema = z
-  .preprocess((value) => {
-    if (value == null || value === '') return undefined
-    return Array.isArray(value) ? value : [value]
-  }, z.array(z.enum(logTypeValues)).optional())
+  .preprocess(
+    (value) => {
+      if (value == null || value === '') return undefined
+      return Array.isArray(value) ? value : [value]
+    },
+    z.array(z.enum(logTypeValues)).optional()
+  )
   .catch([])
 
 const usageLogsSearchSchema = z.object({
+  exportFilters: z
+    .object({
+      scope: z.enum(['all', 'mine']).optional(),
+      creator_id: z.number().int().positive().optional(),
+      creator_keyword: z.string().max(64).optional(),
+      customer_id: z.number().int().positive().optional(),
+      source: z.string().optional(),
+      mode: z.string().optional(),
+      status: z.string().optional(),
+      created_after: z.number().int().nonnegative().optional(),
+      created_before: z.number().int().nonnegative().optional(),
+      job_id: z.string().optional(),
+    })
+    .optional()
+    .catch(undefined),
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(undefined),
   type: logTypeSearchSchema.optional(),

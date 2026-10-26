@@ -124,6 +124,7 @@ export const systemTuningFallbackSettings: SystemTuningSettings = {
 
   'log_export_setting.enabled': true,
   'log_export_setting.employee_export_enabled': false,
+  'log_export_setting.employee_customer_manage_enabled': false,
   'log_export_setting.employee_max_customers_per_job': 100,
   'log_export_setting.offpeak_only': false,
   'log_export_setting.user_cooldown_sec': 300,

@@ -42,9 +42,9 @@ func employeeExportError(c *gin.Context, err error) {
 }
 
 // isEmployeeExportRoute reports whether the request came through the employee export group, which
-// only ever exposes the caller's own employee jobs (admins who are also employees included).
+// exposes own employee jobs and current customers' self exports, including for admins.
 func isEmployeeExportRoute(c *gin.Context) bool {
-	return strings.HasPrefix(c.FullPath(), "/api/user/employee/export")
+	return strings.HasPrefix(c.FullPath(), "/api/user/employee/export") || strings.HasPrefix(c.Request.URL.Path, "/api/user/employee/export/")
 }
 
 func AdminEmployeeExportTemplates(c *gin.Context) {

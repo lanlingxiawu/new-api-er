@@ -25,6 +25,8 @@ import type {
   ExportTemplate,
   CreateExportJobRequest,
   SaveExportTemplateRequest,
+  ExportJobListFilters,
+  ExportJobPage,
 } from './types'
 
 interface Envelope<T> {
@@ -44,21 +46,27 @@ export async function getExportColumns(): Promise<ExportColumnCatalog> {
 
 export async function getExportJobs(
   all = false,
-  self = false
-): Promise<{ jobs: ExportJob[]; enabled: boolean; max_range_sec?: number }> {
-  const res = await api.get(
-    `${self ? '/api/log/self/export' : BASE}/jobs${all ? '?all=true' : ''}`
-  )
+  self = false,
+  filters: ExportJobListFilters = {},
+  cursor = ''
+): Promise<ExportJobPage> {
+  const res = await api.get(`${self ? '/api/log/self/export' : BASE}/jobs`, {
+    params: { ...filters, cursor: cursor || undefined, all: all || undefined },
+  })
   const body = res.data as Envelope<{
     jobs: ExportJob[] | null
     enabled: boolean
     max_range_sec?: number
+    next_cursor?: string
+    has_more?: boolean
   }>
   if (!body.success) throw new Error(body.message)
   return {
     jobs: body.data?.jobs ?? [],
     enabled: body.data?.enabled ?? true,
     max_range_sec: body.data?.max_range_sec,
+    next_cursor: body.data?.next_cursor,
+    has_more: body.data?.has_more,
   }
 }
 

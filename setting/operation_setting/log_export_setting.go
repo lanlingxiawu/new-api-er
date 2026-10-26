@@ -14,9 +14,10 @@ import (
 // 快照进结构体，否则运行中的任务无法响应配置变更。哪些参数对运行中的任务立即
 // 生效、哪些仅对新分片/新任务生效，见 docs/design/usage-log-export.md §8.1。
 type LogExportSetting struct {
-	UserMaxRangeSec            int  `json:"user_max_range_sec"`
-	EmployeeExportEnabled      bool `json:"employee_export_enabled"`
-	EmployeeMaxCustomersPerJob int  `json:"employee_max_customers_per_job"`
+	UserMaxRangeSec               int  `json:"user_max_range_sec"`
+	EmployeeExportEnabled         bool `json:"employee_export_enabled"`
+	EmployeeCustomerManageEnabled bool `json:"employee_customer_manage_enabled"`
+	EmployeeMaxCustomersPerJob    int  `json:"employee_max_customers_per_job"`
 	// ── 开关与配额 ──────────────────────────────────────────
 	// Enabled 功能总开关，关闭后拒绝新建导出任务（不中断运行中的任务）。
 	Enabled bool `json:"enabled"`

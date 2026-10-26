@@ -1,8 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Download, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,6 +18,7 @@ import {
 } from '@/components/ui/empty'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { handleServerError } from '@/lib/handle-server-error'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -20,12 +26,18 @@ import {
   employeeTemplateName,
   exportRequest,
 } from '../employee-api'
-import type { ExportJob } from '../types'
+import {
+  EXPORT_SOURCE_LABELS,
+  type ExportJob,
+  type ExportJobListFilters,
+  type ExportJobPage,
+} from '../types'
+import { ExportJobFilters } from './export-job-filters'
 
 const STATUS_LABELS = {
   pending: 'Queued',
   running: 'Running',
-  ready: 'Ready',
+  ready: 'Completed',
   failed: 'Failed',
   canceled: 'Canceled',
 }
@@ -35,22 +47,39 @@ export function EmployeeExportJobs() {
   const client = useQueryClient()
   const userId = useAuthStore((state) => state.auth.user?.id)
   const [downloading, setDownloading] = useState<string>()
-  const jobs = useQuery({
-    queryKey: ['employee-export-jobs', userId],
-    queryFn: () =>
-      exportRequest<{ jobs: ExportJob[] }>('get', `${BASE}/jobs`, undefined, {
-        quiet: true,
-      }),
+  const [filters, setFilters] = useState<ExportJobListFilters>({})
+  const [deleteTarget, setDeleteTarget] = useState<ExportJob>()
+  const jobs = useInfiniteQuery({
+    queryKey: ['employee-export-jobs', userId, filters],
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams()
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== '') params.set(key, String(value))
+      }
+      if (pageParam) params.set('cursor', pageParam)
+      return exportRequest<ExportJobPage>(
+        'get',
+        `${BASE}/jobs?${params}`,
+        undefined,
+        {
+          quiet: true,
+        }
+      )
+    },
+    getNextPageParam: (page) => page.next_cursor || undefined,
     refetchInterval: (query) =>
-      query.state.data?.jobs.some((job) =>
-        ['pending', 'running'].includes(job.status)
+      query.state.data?.pages.some((page) =>
+        page.jobs.some((job) => ['pending', 'running'].includes(job.status))
       )
         ? 5000
         : false,
+    refetchIntervalInBackground: false,
   })
   const remove = useMutation({
     mutationFn: (id: string) => exportRequest('delete', `${BASE}/jobs/${id}`),
     onSuccess: () => {
+      setDeleteTarget(undefined)
       void client.invalidateQueries({
         queryKey: ['employee-export-jobs', userId],
       })
@@ -69,11 +98,32 @@ export function EmployeeExportJobs() {
       document.body.appendChild(link)
       link.click()
       link.remove()
-    } catch {
-      // The HTTP client has already shown the error.
+    } catch (error) {
+      handleServerError(error)
+      // A customer's assignment or the employee's permissions may have changed.
+      void client.invalidateQueries({
+        queryKey: ['employee-export-jobs', userId],
+      })
     } finally {
       setDownloading(undefined)
     }
+  }
+  const rows = [
+    ...new Map(
+      jobs.data?.pages
+        .flatMap((page) => page.jobs)
+        .map((job) => [job.job_id, job]) ?? []
+    ).values(),
+  ]
+  const hasFilters = Object.values(filters).some(
+    (value) => value !== undefined && value !== ''
+  )
+  let emptyMessage = 'No exports yet'
+  if (hasFilters) {
+    emptyMessage = 'No matching exports. Adjust or reset the filters.'
+  }
+  if (jobs.hasNextPage) {
+    emptyMessage = 'More tasks remain to be checked. Continue searching.'
   }
   return (
     <div className='space-y-3'>
@@ -90,6 +140,12 @@ export function EmployeeExportJobs() {
           <RefreshCw className={jobs.isFetching ? 'animate-spin' : ''} />
         </Button>
       </div>
+      <ExportJobFilters
+        key={JSON.stringify(filters)}
+        value={filters}
+        onApply={setFilters}
+        employee
+      />
       {jobs.isPending && <Skeleton className='h-24 w-full' />}
       {jobs.isError && (
         <div className='space-y-2 rounded-md border p-3'>
@@ -101,17 +157,21 @@ export function EmployeeExportJobs() {
           </Button>
         </div>
       )}
-      {jobs.data?.jobs.length === 0 && (
+      {jobs.data && !jobs.isError && rows.length === 0 && (
         <Empty className='border'>
           <EmptyHeader>
-            <EmptyTitle>{t('No exports yet')}</EmptyTitle>
-            <EmptyDescription>
-              {t('Create an export to see its progress and download it here.')}
-            </EmptyDescription>
+            <EmptyTitle>{t(emptyMessage)}</EmptyTitle>
+            {!jobs.hasNextPage && !hasFilters && (
+              <EmptyDescription>
+                {t(
+                  'Create an export to see its progress and download it here.'
+                )}
+              </EmptyDescription>
+            )}
           </EmptyHeader>
         </Empty>
       )}
-      {jobs.data?.jobs.map((job) => (
+      {rows.map((job) => (
         <div key={job.job_id} className='space-y-3 rounded-md border p-3'>
           <div className='flex flex-wrap items-start justify-between gap-2'>
             <div className='min-w-0'>
@@ -124,10 +184,18 @@ export function EmployeeExportJobs() {
                       },
                       t
                     )
-                  : t('Export customer data')}
+                  : t(EXPORT_SOURCE_LABELS[job.source ?? 'self'])}
               </p>
               <p className='text-muted-foreground text-xs'>
                 {new Date(job.created_at * 1000).toLocaleString()}
+                {' · '}
+                {job.username}
+              </p>
+              <p
+                className='text-muted-foreground truncate text-xs'
+                title={job.job_id}
+              >
+                {job.job_id}
               </p>
             </div>
             <Badge
@@ -149,11 +217,11 @@ export function EmployeeExportJobs() {
           )}
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <p className='text-muted-foreground text-xs'>
-              {job.row_count.toLocaleString()} {t('Rows')} ·{' '}
-              {job.format === 'xlsx' ? 'Excel' : 'CSV'}
+              {job.row_count.toLocaleString()} {t('rows')} ·{' '}
+              {job.format === 'xlsx' ? 'XLSX' : 'CSV.GZ'}
             </p>
             <div className='flex gap-2'>
-              {job.status === 'ready' && (
+              {job.can_download && job.status === 'ready' && (
                 <Button
                   variant='outline'
                   size='sm'
@@ -164,16 +232,21 @@ export function EmployeeExportJobs() {
                   {downloading === job.job_id ? t('Loading...') : t('Download')}
                 </Button>
               )}
-              <Button
-                variant='outline'
-                size='sm'
-                disabled={remove.isPending}
-                onClick={() => remove.mutate(job.job_id)}
-              >
-                {['pending', 'running'].includes(job.status)
-                  ? t('Cancel')
-                  : t('Delete')}
-              </Button>
+              {(job.can_cancel || job.can_delete) && (
+                <Button
+                  variant='outline'
+                  size='sm'
+                  disabled={remove.isPending}
+                  onClick={() => {
+                    if (job.can_cancel) remove.mutate(job.job_id)
+                    else setDeleteTarget(job)
+                  }}
+                >
+                  {['pending', 'running'].includes(job.status)
+                    ? t('Cancel')
+                    : t('Delete')}
+                </Button>
+              )}
             </div>
           </div>
           {job.status === 'failed' && (
@@ -185,6 +258,31 @@ export function EmployeeExportJobs() {
           )}
         </div>
       ))}
+      {jobs.hasNextPage && (
+        <Button
+          variant='outline'
+          disabled={jobs.isFetching}
+          onClick={() => void jobs.fetchNextPage()}
+        >
+          {jobs.isFetchingNextPage ? t('Loading...') : t('Continue searching')}
+        </Button>
+      )}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(undefined)
+        }}
+        title={t('Delete export')}
+        desc={t(
+          'Delete this export task and its files? No one will be able to download it afterward. Original logs will not be deleted.'
+        )}
+        confirmText={t('Delete')}
+        destructive
+        isLoading={remove.isPending}
+        handleConfirm={() => {
+          if (deleteTarget) remove.mutate(deleteTarget.job_id)
+        }}
+      />
     </div>
   )
 }

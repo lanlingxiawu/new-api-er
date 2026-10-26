@@ -328,7 +328,7 @@ func TestCreateLogExportJob_DowngradesXlsxWhenEstimateTooLarge(t *testing.T) {
 		"an estimate above the xlsx limit must fall back to csv.gz up front")
 }
 
-func TestGetLogExportJob_OwnershipEnforced(t *testing.T) {
+func TestGetLogExportJob_AdminManagementScope(t *testing.T) {
 	enableRedis(t)
 	owner := nextTestID()
 	stranger := nextTestID()
@@ -346,11 +346,11 @@ func TestGetLogExportJob_OwnershipEnforced(t *testing.T) {
 	GetLogExportJob(asAdmin(ctx, owner))
 	assert.True(t, decodeResp(t, rec).Success)
 
-	// 非属主的管理员被拒
+	// Administrators can inspect exports created by other accounts.
 	ctx, rec = newCtx(t, http.MethodGet, "/api/log/export/jobs/"+job.JobID, nil)
 	ctx.Params = gin.Params{{Key: "job_id", Value: job.JobID}}
 	GetLogExportJob(asAdmin(ctx, stranger))
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.True(t, decodeResp(t, rec).Success)
 
 	// Root 可以看所有人的任务
 	ctx, rec = newCtx(t, http.MethodGet, "/api/log/export/jobs/"+job.JobID, nil)

@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import { createServerError } from '@/lib/server-error-message'
 
 import type {
   ExportColumn,
@@ -52,8 +53,8 @@ export function getEmployeeExportColumns() {
 }
 
 /**
- * Without `quiet` the HTTP client already toasts failures, so callers must not toast again.
- * With `quiet` nothing is shown and the thrown Error carries the server's localized message.
+ * Preserve response metadata for localized errors and status-aware query retries.
+ * Query/mutation handlers own error presentation; imperative callers must handle it.
  */
 export async function exportRequest<T>(
   method: 'get' | 'post' | 'put' | 'delete',
@@ -61,25 +62,18 @@ export async function exportRequest<T>(
   data?: unknown,
   options?: { quiet?: boolean }
 ): Promise<T> {
-  let response
-  try {
-    response = await api.request<{
-      success: boolean
-      message: string
-      data: T
-    }>({
-      method,
-      url,
-      data,
-      skipErrorHandler: options?.quiet,
-      skipBusinessError: options?.quiet,
-    })
-  } catch (error) {
-    const message = (error as { response?: { data?: { message?: string } } })
-      ?.response?.data?.message
-    throw message ? new Error(message) : error
-  }
-  if (!response.data.success) throw new Error(response.data.message)
+  const response = await api.request<{
+    success: boolean
+    message: string
+    data: T
+  }>({
+    method,
+    url,
+    data,
+    skipErrorHandler: options?.quiet,
+    skipBusinessError: options?.quiet,
+  })
+  if (!response.data.success) throw createServerError(response.data)
   return response.data.data
 }
 

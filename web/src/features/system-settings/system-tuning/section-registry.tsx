@@ -323,6 +323,9 @@ const SYSTEM_TUNING_SECTIONS = [
         defaultValues={{
           'log_export_setting.employee_export_enabled':
             settings['log_export_setting.employee_export_enabled'] ?? false,
+          'log_export_setting.employee_customer_manage_enabled':
+            settings['log_export_setting.employee_customer_manage_enabled'] ??
+            false,
           'log_export_setting.employee_max_customers_per_job':
             settings['log_export_setting.employee_max_customers_per_job'] ||
             100,

@@ -60,6 +60,7 @@ const schema = z.object({
   log_export_setting: z.object({
     enabled: z.boolean(),
     employee_export_enabled: z.boolean(),
+    employee_customer_manage_enabled: z.boolean(),
     employee_max_customers_per_job: z.number().int().min(1).max(1000),
     user_cooldown_sec: z.number().int().min(0).max(86400),
     // 0 是有意义的取值：停止接受新任务，但不打断运行中的任务。
@@ -106,6 +107,7 @@ type LogExportSectionProps = { defaultValues: LogExportFlatDefaults }
 const FIELD_KEYS = [
   'enabled',
   'employee_export_enabled',
+  'employee_customer_manage_enabled',
   'employee_max_customers_per_job',
   'user_cooldown_sec',
   'max_concurrent_jobs',
@@ -156,7 +158,11 @@ function normalizeFormValues(v: FormValues): LogExportFlatDefaults {
 type NumberField = {
   name: Exclude<
     keyof Settings,
-    'enabled' | 'employee_export_enabled' | 'offpeak_only' | 'offpeak_window'
+    | 'enabled'
+    | 'employee_export_enabled'
+    | 'employee_customer_manage_enabled'
+    | 'offpeak_only'
+    | 'offpeak_window'
   >
   label: string
   description: string
@@ -179,7 +185,7 @@ const quotaFields: NumberField[] = [
     name: 'user_cooldown_sec',
     label: 'Export Cooldown (s)',
     description:
-      'Minimum seconds between two export jobs from the same admin. A rejected request does not consume the cooldown.',
+      'Minimum seconds between exports from the same account. Rejected requests do not start the cooldown.',
     min: 1,
     max: 86400,
     // GetUserCooldownSec treats 0 as unset and applies DefaultLogExportUserCooldownSec.
@@ -197,7 +203,7 @@ const quotaFields: NumberField[] = [
   {
     name: 'max_active_jobs_per_user',
     label: 'Max Active Jobs Per User',
-    description: 'Unfinished jobs one admin may keep at the same time.',
+    description: 'Maximum unfinished export tasks per account.',
     min: 1,
     max: 20,
   },
@@ -226,9 +232,9 @@ const quotaFields: NumberField[] = [
   },
   {
     name: 'job_ttl_hours',
-    label: 'Job Retention (hours)',
+    label: 'Download retention (hours)',
     description:
-      'How long finished jobs and their part files are kept before cleanup.',
+      'Download availability after the last task update, usually completion. Expired files are cleaned up when a new export starts or the server restarts.',
     min: 1,
     max: 720,
   },
@@ -253,7 +259,7 @@ const throttleFields: NumberField[] = [
     name: 'batch_sleep_ms',
     label: 'Batch Sleep (ms)',
     description:
-      'Base pause after each batch. The main lever for reducing database pressure — raising it slows exports down linearly.',
+      'Pause between batches. Increase this value to reduce database load and slow down exports.',
     min: 1,
     max: 60000,
     presets: [{ value: 0, label: 'No pause' }],
@@ -292,7 +298,7 @@ const throttleFields: NumberField[] = [
     name: 'cpu_hard_limit',
     label: 'CPU Hard Limit (%)',
     description:
-      'Above this CPU usage the export pauses. Set to 0 as an emergency brake: running jobs pause within a second and keep their progress.',
+      'Pause exports when CPU usage exceeds this value. Set to 0 to pause all exports; tasks keep their progress.',
     min: 1,
     max: 100,
     presets: [{ value: 0, label: 'Pause all exports' }],
@@ -311,7 +317,7 @@ const outputFields: NumberField[] = [
     name: 'gzip_level',
     label: 'Gzip Level (1-9)',
     description:
-      'Compression level for csv.gz. Level 1 costs 2-3x less CPU than the default with under 10% larger files. Applies to newly started parts only.',
+      'Compression level for CSV.GZ files. Lower levels generally use less CPU but produce larger files. Applies to new file parts.',
     min: 1,
     max: 9,
   },
@@ -361,7 +367,7 @@ const downloadFields: NumberField[] = [
   {
     name: 'max_concurrent_downloads_per_user',
     label: 'Max Concurrent Downloads',
-    description: 'Simultaneous part downloads allowed per admin.',
+    description: 'Maximum simultaneous file downloads per account.',
     min: 1,
     max: 16,
   },
@@ -497,6 +503,30 @@ export function LogExportSection({ defaultValues }: LogExportSectionProps) {
                   <FormDescription>
                     {t(
                       'Applies to every active employee. Employees export only their own customers, using the built-in reconciliation templates and enabled custom templates.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='log_export_setting.employee_customer_manage_enabled'
+            render={({ field }) => (
+              <FormItem className='flex flex-row items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <FormLabel>
+                    {t('Allow employees to manage customer exports')}
+                  </FormLabel>
+                  <FormDescription>
+                    {t(
+                      'When enabled, active employees can download, cancel and delete self-service exports from their current customers. When disabled, they can only view those exports. Requires employee customer exports to be enabled.'
                     )}
                   </FormDescription>
                 </div>

@@ -61,8 +61,8 @@ const FILTERS = [
   ...TROUBLESHOOTING_FILTERS,
 ]
 const MODE_LABELS = {
-  detail: 'Detail',
-  summary: 'Summary',
+  detail: 'One row per log',
+  summary: 'Aggregated summary',
   both: 'Detail + summary',
 }
 
@@ -179,8 +179,7 @@ export function EmployeeTemplateManager() {
                     <div className='mt-1 flex flex-wrap items-center gap-1.5'>
                       <Badge variant='secondary'>{t('Built-in')}</Badge>
                       <span className='text-muted-foreground text-xs'>
-                        CSV.GZ ·{' '}
-                        {t(MODE_LABELS[tpl.mode])}
+                        CSV.GZ · {t(MODE_LABELS[tpl.mode])}
                       </span>
                     </div>
                   </div>
@@ -205,8 +204,7 @@ export function EmployeeTemplateManager() {
                         {tpl.enabled ? t('Enabled') : t('Disabled')}
                       </Badge>
                       <span className='text-muted-foreground text-xs'>
-                        CSV.GZ ·{' '}
-                        {t(MODE_LABELS[tpl.mode])}
+                        CSV.GZ · {t(MODE_LABELS[tpl.mode])}
                       </span>
                     </div>
                   </div>
@@ -376,8 +374,8 @@ function EmployeeTemplateEditor(props: {
                 <Combobox
                   id={`${id}-mode`}
                   options={[
-                    { value: 'detail', label: t('Detail') },
-                    { value: 'summary', label: t('Summary') },
+                    { value: 'detail', label: t('One row per log') },
+                    { value: 'summary', label: t('Aggregated summary') },
                     { value: 'both', label: t('Detail + summary') },
                   ]}
                   value={draft.mode}

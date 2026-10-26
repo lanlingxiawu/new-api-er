@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -704,39 +705,68 @@ func resolveLogExportRequestShape(c *gin.Context, req createLogExportJobRequest)
 	return columns, format, options, nil
 }
 
-// GetLogExportJobs 列出任务。Root 可用 ?all=true 查看所有人的任务。
+// GetLogExportJobs lists a bounded, filtered page within the current route's access scope.
 func GetLogExportJobs(c *gin.Context) {
 	if !model.LogExportAvailable() {
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
 		return
 	}
-	all := c.Query("all") == "true" && isRootRequest(c) && !isSelfLogExportRoute(c)
-	jobs, err := model.ListLogExportJobs(c.GetInt("id"), all, 20)
-	if err != nil {
-		common.SysError("log export: list jobs failed: " + err.Error())
-		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
+	var query model.LogExportListQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	views := make([]*model.LogExportJob, 0, len(jobs))
-	for _, job := range jobs {
-		if isSelfLogExportRoute(c) {
-			if !job.IsSelfExportFor(c.GetInt("id")) {
-				continue
+	// Explicit zero is invalid for positive IDs and page sizes; omission uses defaults.
+	for _, key := range []string{"creator_id", "customer_id", "limit"} {
+		if raw, exists := c.GetQuery(key); exists && raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value <= 0 {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
 			}
-		} else if (isEmployeeExportRoute(c) || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil {
-			continue
 		}
-		views = append(views, job.PublicView())
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	page, err := model.ListManagedLogExportJobs(ctx, logExportRequestAccess(c), query)
+	if err != nil {
+		if errors.Is(err, model.ErrLogExportListQuery) {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		} else {
+			respondLogExportManagementError(c, err)
+		}
+		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"jobs":          views,
+		"jobs":          page.Jobs,
+		"next_cursor":   page.NextCursor,
+		"has_more":      page.HasMore,
 		"enabled":       operation_setting.GetLogExportSetting().Enabled && (!isSelfLogExportRoute(c) || operation_setting.GetLogSetting().UserExportEnabled),
 		"max_range_sec": operation_setting.GetLogExportSetting().GetUserMaxRangeSec(),
 	})
 }
 
-// loadOwnedLogExportJob 读取任务并校验归属。Root 可访问所有人的任务。
-func loadOwnedLogExportJob(c *gin.Context) (*model.LogExportJob, bool) {
+func logExportRequestAccess(c *gin.Context) model.LogExportAccess {
+	scope := "admin"
+	if isSelfLogExportRoute(c) {
+		scope = "self"
+	} else if isEmployeeExportRoute(c) {
+		scope = "employee"
+	}
+	return model.LogExportAccess{UserID: c.GetInt("id"), Role: c.GetInt("role"), Scope: scope}
+}
+
+func respondLogExportManagementError(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrEmployeeExportAccess) {
+		employeeExportError(c, err)
+		return
+	}
+	logger.LogError(c, "log export management: "+err.Error())
+	common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
+}
+
+// loadOwnedLogExportJob validates view and operation permissions independently.
+func loadOwnedLogExportJob(c *gin.Context, requireOperation bool) (*model.LogExportJob, bool) {
 	job, err := model.GetLogExportJob(c.Param("job_id"))
 	if err != nil {
 		common.SysError("log export: get job failed: " + err.Error())
@@ -747,23 +777,19 @@ func loadOwnedLogExportJob(c *gin.Context) (*model.LogExportJob, bool) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportJobNotFound)
 		return nil, false
 	}
-	if job.UserID != c.GetInt("id") && !isRootRequest(c) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
+	access := logExportRequestAccess(c)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	if err := access.LoadCustomers(ctx, []*model.LogExportJob{job}, model.LogExportListQuery{}); err != nil {
+		respondLogExportManagementError(c, err)
 		return nil, false
 	}
-	if isSelfLogExportRoute(c) {
-		if !job.IsSelfExportFor(c.GetInt("id")) {
-			employeeExportError(c, model.ErrEmployeeExportAccess)
-			return nil, false
-		}
-		return job, true
-	}
-	employeeRoute := isEmployeeExportRoute(c)
-	if ((employeeRoute || c.GetInt("role") < common.RoleAdminUser) && job.EmployeeScope == nil) ||
-		(employeeRoute && job.UserID != c.GetInt("id")) {
+	view, operate := access.Permissions(job)
+	if !view || (requireOperation && !operate) {
 		employeeExportError(c, model.ErrEmployeeExportAccess)
 		return nil, false
 	}
+	c.Set("log_export_access", access)
 	return job, true
 }
 
@@ -772,11 +798,12 @@ func GetLogExportJob(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
 		return
 	}
-	job, ok := loadOwnedLogExportJob(c)
+	job, ok := loadOwnedLogExportJob(c, false)
 	if !ok {
 		return
 	}
-	common.ApiSuccess(c, job.PublicView())
+	access := c.MustGet("log_export_access").(model.LogExportAccess)
+	common.ApiSuccess(c, access.PublicJob(job))
 }
 
 // DeleteLogExportJob 取消运行中的任务，或删除已结束的任务及其文件。
@@ -785,18 +812,21 @@ func DeleteLogExportJob(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
 		return
 	}
-	job, ok := loadOwnedLogExportJob(c)
+	job, ok := loadOwnedLogExportJob(c, true)
 	if !ok {
 		return
 	}
-	if !job.IsTerminal() {
-		// 运行中：置取消标志，goroutine 在下一批检测到后退出并清理半成品。
-		model.CancelLogExportJob(job.JobID)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	canceled, err := model.CancelOrDeleteManagedLogExportJob(ctx, job)
+	if err != nil {
+		respondLogExportManagementError(c, err)
+		return
+	}
+	if canceled {
 		common.ApiSuccess(c, gin.H{"canceled": true})
 		return
 	}
-	model.RemoveLogExportJobFiles(job)
-	model.DeleteLogExportJob(job)
 	common.ApiSuccess(c, gin.H{"deleted": true})
 }
 
@@ -806,13 +836,16 @@ func GetLogExportDownloadURL(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
 		return
 	}
-	job, ok := loadOwnedLogExportJob(c)
+	job, ok := loadOwnedLogExportJob(c, true)
 	if !ok {
 		return
 	}
-	if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
-		employeeExportError(c, err)
-		return
+	access := c.MustGet("log_export_access").(model.LogExportAccess)
+	if access.Scope == "employee" && job.EmployeeScope != nil {
+		if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+			employeeExportError(c, err)
+			return
+		}
 	}
 	if job.Status != model.LogExportStatusReady {
 		common.ApiErrorI18n(c, i18n.MsgLogExportJobNotReady)
@@ -833,7 +866,7 @@ func GetLogExportDownloadURL(c *gin.Context) {
 		return
 	}
 
-	token, err := model.CreateLogExportDownloadToken(job.JobID, job.UserID, part)
+	token, err := model.CreateManagedLogExportDownloadToken(job.JobID, access.UserID, part, access.Scope)
 	if err != nil {
 		common.SysError("log export: create download token failed: " + err.Error())
 		common.ApiErrorI18n(c, i18n.MsgLogExportUnavailable)
@@ -894,33 +927,59 @@ func DownloadLogExport(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "export service unavailable"})
 		return
 	}
-	jobID, userID, part, err := model.ConsumeLogExportDownloadToken(c.Param("token"))
+	grant, err := model.ConsumeManagedLogExportDownloadToken(c.Param("token"))
 	if err != nil {
 		common.SysError("log export: consume download token failed: " + err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "download failed"})
 		return
 	}
-	if jobID == "" {
+	if grant == nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "download link expired"})
 		return
 	}
 
 	// 令牌不经过鉴权中间件，这里必须自己复核当前身份：管理员被降权或被封禁后，
 	// 已签发的链接要立刻失效（否则续传窗口内仍能取数）。
-	job, err := model.GetLogExportJob(jobID)
-	if err != nil || job == nil || job.UserID != userID || job.Status != model.LogExportStatusReady {
+	job, err := model.GetLogExportJob(grant.JobID)
+	if err != nil || job == nil || job.Status != model.LogExportStatusReady {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "export not available"})
 		return
 	}
-	if job.EmployeeScope != nil {
-		if err := model.ValidateEmployeeExportJob(c.Request.Context(), job); err != nil {
+	if grant.Version == 0 {
+		if job.UserID != grant.UserID {
+			employeeExportError(c, model.ErrEmployeeExportAccess)
+			return
+		}
+		grant.Scope = "admin"
+		if job.SelfExport {
+			grant.Scope = "self"
+		}
+		if job.EmployeeScope != nil {
+			grant.Scope = "employee"
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	access, err := model.CurrentLogExportAccess(ctx, grant.UserID, grant.Scope)
+	if err == nil {
+		err = access.LoadCustomers(ctx, []*model.LogExportJob{job}, model.LogExportListQuery{})
+	}
+	if err != nil {
+		respondLogExportManagementError(c, err)
+		return
+	}
+	_, operate := access.Permissions(job)
+	if !operate {
+		employeeExportError(c, model.ErrEmployeeExportAccess)
+		return
+	}
+	if access.Scope == "employee" && job.EmployeeScope != nil {
+		if err := model.ValidateEmployeeExportJob(ctx, job); err != nil {
 			employeeExportError(c, err)
 			return
 		}
-	} else if !logExportDownloaderAllowedForJob(job) {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
-		return
 	}
+	userID, part := grant.UserID, grant.Part
 	if len(job.Parts) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "export not available"})
 		return

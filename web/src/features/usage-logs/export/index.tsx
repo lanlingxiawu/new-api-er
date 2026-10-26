@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import dayjs from 'dayjs'
 import { Download, Plus, RefreshCw, Trash2, X } from 'lucide-react'
@@ -24,6 +28,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -48,13 +53,20 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { deleteExportJob, downloadExportPart, getExportJobs } from './api'
 import { EmployeeTemplateManager } from './components/employee-template-manager'
+import { ExportJobFilters } from './components/export-job-filters'
 import { ExportRemainingTime } from './components/export-remaining-time'
 import {
   NewExportSheet,
   type NewExportPrefill,
 } from './components/new-export-sheet'
 import { SelfExportSheet } from './components/self-export-sheet'
-import type { AnomalyFilters, ExportJob, ExportJobStatus } from './types'
+import {
+  EXPORT_SOURCE_LABELS,
+  type AnomalyFilters,
+  type ExportJob,
+  type ExportJobStatus,
+  type ExportJobListFilters,
+} from './types'
 
 /** Stable backend error codes → user-facing copy. Raw Go errors never reach the UI. */
 const ERROR_MESSAGES: Record<string, string> = {
@@ -85,7 +97,7 @@ const SKELETON_ROWS = ['s1', 's2', 's3']
 const STATUS_LABELS: Record<ExportJobStatus, string> = {
   pending: 'Queued',
   running: 'Running',
-  ready: 'Ready',
+  ready: 'Completed',
   failed: 'Failed',
   canceled: 'Canceled',
 }
@@ -134,10 +146,23 @@ export function LogExportCenter(props: { self?: boolean }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<ExportJob>()
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const navigate = route.useNavigate()
 
   // 从使用日志页「高级导出」跳转过来时，URL 上带着当时的筛选条件，
   // 用它预填新建表单，用户不必再填一遍。
   const search = route.useSearch()
+  const filters: ExportJobListFilters = search.exportFilters ?? {}
+  const applyFilters = (value: ExportJobListFilters) => {
+    void navigate({
+      search: (previous) => ({
+        ...previous,
+        exportFilters: Object.keys(value).length ? value : undefined,
+      }),
+      replace: true,
+    })
+  }
 
   // 「查同类」的三项特征都为空时返回 undefined，让下面照常走普通预填。
   const anomalyPrefill = useMemo<AnomalyFilters | undefined>(() => {
@@ -175,14 +200,33 @@ export function LogExportCenter(props: { self?: boolean }) {
     [search, anomalyPrefill]
   )
 
-  const { data, isLoading, isFetching, refetch, error } = useQuery({
-    queryKey: ['log-export-jobs', props.self ? 'self' : 'admin'],
-    queryFn: () => getExportJobs(false, props.self),
+  const {
+    data: pages,
+    isLoading,
+    isFetching,
+    refetch,
+    error,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: [
+      'log-export-jobs',
+      props.self ? 'self' : 'admin',
+      userId,
+      filters,
+    ],
+    initialPageParam: '',
+    queryFn: ({ pageParam }) =>
+      getExportJobs(false, props.self, filters, pageParam),
+    getNextPageParam: (page) => page.next_cursor || undefined,
     // Poll only while something is actually running, and never in a background
     // tab — an idle export page must not keep hitting the server.
     refetchInterval: (query) =>
-      query.state.data?.jobs.some(
-        (job) => job.status === 'running' || job.status === 'pending'
+      query.state.data?.pages.some((page) =>
+        page.jobs.some(
+          (job) => job.status === 'running' || job.status === 'pending'
+        )
       )
         ? 3000
         : false,
@@ -192,6 +236,7 @@ export function LogExportCenter(props: { self?: boolean }) {
   const removeJob = useMutation({
     mutationFn: (jobId: string) => deleteExportJob(jobId, props.self),
     onSuccess: () => {
+      setDeleteTarget(undefined)
       queryClient.invalidateQueries({
         queryKey: ['log-export-jobs', props.self ? 'self' : 'admin'],
       })
@@ -208,7 +253,23 @@ export function LogExportCenter(props: { self?: boolean }) {
       ),
   })
 
-  const jobs = data?.jobs ?? []
+  const data = pages?.pages[0]
+  const jobs = [
+    ...new Map(
+      pages?.pages
+        .flatMap((page) => page.jobs)
+        .map((job) => [job.job_id, job]) ?? []
+    ).values(),
+  ]
+  let emptyMessage = 'No exports yet'
+  if (
+    Object.values(filters).some((value) => value !== undefined && value !== '')
+  ) {
+    emptyMessage = 'No matching exports. Adjust or reset the filters.'
+  }
+  if (hasNextPage) {
+    emptyMessage = 'More tasks remain to be checked. Continue searching.'
+  }
 
   return (
     <div className='flex min-w-0 flex-col gap-4'>
@@ -224,7 +285,7 @@ export function LogExportCenter(props: { self?: boolean }) {
             {t('New Export')}
           </Button>
           {!props.self && canManageEmployees && <EmployeeTemplateManager />}
-          {data && !data.enabled && (
+          {!props.self && data && !data.enabled && (
             <Badge variant='destructive'>
               {t('Log export is currently turned off')}
             </Badge>
@@ -240,6 +301,21 @@ export function LogExportCenter(props: { self?: boolean }) {
           <RefreshCw className={isFetching ? 'animate-spin' : ''} />
         </Button>
       </div>
+
+      {props.self && data && !data.enabled && (
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Self-service export is currently unavailable. Please contact sales for help downloading your logs.'
+          )}
+        </p>
+      )}
+
+      <ExportJobFilters
+        key={JSON.stringify(filters)}
+        value={filters}
+        onApply={applyFilters}
+        self={props.self}
+      />
 
       {error && (
         <p className='text-destructive text-sm'>
@@ -273,13 +349,13 @@ export function LogExportCenter(props: { self?: boolean }) {
                 </TableRow>
               ))}
 
-            {!isLoading && jobs.length === 0 && (
+            {!isLoading && !error && jobs.length === 0 && (
               <TableRow>
                 <TableCell
                   colSpan={7}
                   className='text-muted-foreground py-10 text-center'
                 >
-                  {t('No exports yet. Create one to get started.')}
+                  {t(emptyMessage)}
                 </TableCell>
               </TableRow>
             )}
@@ -297,6 +373,17 @@ export function LogExportCenter(props: { self?: boolean }) {
                         {job.username}
                       </div>
                     )}
+                    {job.source && (
+                      <div className='text-muted-foreground'>
+                        {t(EXPORT_SOURCE_LABELS[job.source])}
+                      </div>
+                    )}
+                    <div
+                      className='text-muted-foreground max-w-48 truncate'
+                      title={job.job_id}
+                    >
+                      {job.job_id}
+                    </div>
                   </TableCell>
                   <TableCell className='text-xs whitespace-nowrap'>
                     {formatRange(job)}
@@ -370,86 +457,93 @@ export function LogExportCenter(props: { self?: boolean }) {
                   </TableCell>
                   <TableCell className='text-right'>
                     <div className='flex justify-end gap-1'>
-                      {job.status === 'ready' && parts.length > 0 && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                type='button'
-                                variant='outline'
-                                size='sm'
-                                disabled={download.isPending}
-                              />
-                            }
-                          >
-                            <Download data-icon='inline-start' />
-                            {t('Download')}
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align='end' className='w-72'>
-                            {parts.length > 1 && (
-                              <>
+                      {job.can_download &&
+                        job.status === 'ready' &&
+                        parts.length > 0 && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
+                                <Button
+                                  type='button'
+                                  variant='outline'
+                                  size='sm'
+                                  disabled={download.isPending}
+                                />
+                              }
+                            >
+                              <Download data-icon='inline-start' />
+                              {t('Download')}
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align='end' className='w-72'>
+                              {parts.length > 1 && (
+                                <>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      download.mutate({ jobId: job.job_id })
+                                    }
+                                  >
+                                    {t('All parts ({{count}}) · {{size}}', {
+                                      count: parts.length,
+                                      size: formatBytes(job.bytes_out),
+                                    })}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
+                              {parts.map((part) => (
                                 <DropdownMenuItem
+                                  key={part.index}
                                   onClick={() =>
-                                    download.mutate({ jobId: job.job_id })
+                                    download.mutate({
+                                      jobId: job.job_id,
+                                      part: part.index,
+                                    })
                                   }
                                 >
-                                  {t('All parts ({{count}}) · {{size}}', {
-                                    count: parts.length,
-                                    size: formatBytes(job.bytes_out),
-                                  })}
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                              </>
-                            )}
-                            {parts.map((part) => (
-                              <DropdownMenuItem
-                                key={part.index}
-                                onClick={() =>
-                                  download.mutate({
-                                    jobId: job.job_id,
-                                    part: part.index,
-                                  })
-                                }
-                              >
-                                <div className='flex flex-col'>
-                                  <span>
-                                    {part.kind === 'summary'
-                                      ? t('Summary file')
-                                      : t('Part {{index}}', {
-                                          index: part.index,
-                                        })}{' '}
-                                    · {part.rows.toLocaleString()} {t('rows')}
-                                  </span>
-                                  <span className='text-muted-foreground text-[11px]'>
-                                    {/* 汇总覆盖整个导出范围，逐行时间跨度对它没有意义；
+                                  <div className='flex flex-col'>
+                                    <span>
+                                      {part.kind === 'summary'
+                                        ? t('Summary file')
+                                        : t('Part {{index}}', {
+                                            index: part.index,
+                                          })}{' '}
+                                      · {part.rows.toLocaleString()} {t('rows')}
+                                    </span>
+                                    <span className='text-muted-foreground text-[11px]'>
+                                      {/* 汇总覆盖整个导出范围，逐行时间跨度对它没有意义；
                                         与明细分片并排显示同一种时间格式只会让人以为
                                         它漏了数据或范围搞错了。 */}
-                                    {part.kind === 'summary'
-                                      ? t('Aggregated over the whole range')
-                                      : `${dayjs
-                                          .unix(part.start_time)
-                                          .format('MM-DD HH:mm')} – ${dayjs
-                                          .unix(part.end_time)
-                                          .format('MM-DD HH:mm')}`}
-                                    {' · '}
-                                    {formatBytes(part.bytes)}
-                                  </span>
-                                </div>
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                                      {part.kind === 'summary'
+                                        ? t('Aggregated over the whole range')
+                                        : `${dayjs
+                                            .unix(part.start_time)
+                                            .format('MM-DD HH:mm')} – ${dayjs
+                                            .unix(part.end_time)
+                                            .format('MM-DD HH:mm')}`}
+                                      {' · '}
+                                      {formatBytes(part.bytes)}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      {(job.can_cancel || job.can_delete) && (
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon-sm'
+                          aria-label={isActive ? t('Cancel') : t('Delete')}
+                          disabled={removeJob.isPending}
+                          onClick={() => {
+                            if (isActive) removeJob.mutate(job.job_id)
+                            else setDeleteTarget(job)
+                          }}
+                        >
+                          {isActive ? <X /> : <Trash2 />}
+                        </Button>
                       )}
-                      <Button
-                        type='button'
-                        variant='ghost'
-                        size='icon-sm'
-                        aria-label={isActive ? t('Cancel') : t('Delete')}
-                        disabled={removeJob.isPending}
-                        onClick={() => removeJob.mutate(job.job_id)}
-                      >
-                        {isActive ? <X /> : <Trash2 />}
-                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -458,6 +552,32 @@ export function LogExportCenter(props: { self?: boolean }) {
           </TableBody>
         </Table>
       </div>
+
+      {hasNextPage && (
+        <Button
+          variant='outline'
+          disabled={isFetching}
+          onClick={() => void fetchNextPage()}
+        >
+          {isFetchingNextPage ? t('Loading...') : t('Continue searching')}
+        </Button>
+      )}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(undefined)
+        }}
+        title={t('Delete export')}
+        desc={t(
+          'Delete this export task and its files? No one will be able to download it afterward. Original logs will not be deleted.'
+        )}
+        confirmText={t('Delete')}
+        destructive
+        isLoading={removeJob.isPending}
+        handleConfirm={() => {
+          if (deleteTarget) removeJob.mutate(deleteTarget.job_id)
+        }}
+      />
 
       {props.self ? (
         <SelfExportSheet

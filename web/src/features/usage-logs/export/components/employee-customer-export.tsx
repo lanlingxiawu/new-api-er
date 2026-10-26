@@ -44,8 +44,8 @@ const FIELD_LABELS: Record<string, string> = {
   group: 'Group',
 }
 const MODE_LABELS = {
-  detail: 'Detail',
-  summary: 'Summary',
+  detail: 'One row per log',
+  summary: 'Aggregated summary',
   both: 'Detail + summary',
 }
 
