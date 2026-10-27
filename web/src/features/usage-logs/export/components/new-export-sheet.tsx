@@ -45,11 +45,8 @@ import { Switch } from '@/components/ui/switch'
 import { useDebounce } from '@/hooks'
 
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
-import {
-  LOG_TYPE_ALL_VALUE,
-  LOG_TYPE_FILTERS,
-  TIME_RANGE_PRESETS,
-} from '../../constants'
+import { LogTypeSelect } from '../../components/log-type-select'
+import { LOG_TYPE_ALL_VALUE, TIME_RANGE_PRESETS } from '../../constants'
 import {
   createExportJob,
   createExportTemplate,
@@ -281,15 +278,6 @@ export function NewExportSheet({
   const templateSelectItems = useMemo(
     () => [...templateOptions, { value: CUSTOM_TEMPLATE, label: t('Custom') }],
     [templateOptions, t]
-  )
-
-  const logTypeItems = useMemo(
-    () =>
-      LOG_TYPE_FILTERS.map((item) => ({
-        value: item.value as string,
-        label: t(item.label),
-      })),
-    [t]
   )
 
   // 跨度上限由后端下发，前端不硬编码；用来禁用超限预设并给出提示。
@@ -568,24 +556,7 @@ export function NewExportSheet({
             <div className='grid gap-3 sm:grid-cols-2'>
               <div className='space-y-1'>
                 <Label>{t('Type')}</Label>
-                {/* items 是触发器上显示译名的依据：Base UI 的 Select.Value 靠它
-                    把当前 value 映射成 label，不传就只会显示原始值。 */}
-                <Select
-                  items={logTypeItems}
-                  value={logType}
-                  onValueChange={(v) => setLogType(v ?? LOG_TYPE_ALL_VALUE)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    {logTypeItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <LogTypeSelect value={logType} onValueChange={setLogType} />
               </div>
               <div className='space-y-1'>
                 <Label>{t('Model')}</Label>

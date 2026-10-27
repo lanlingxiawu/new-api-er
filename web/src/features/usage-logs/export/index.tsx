@@ -51,6 +51,7 @@ import {
 import { canViewAdminMenu } from '@/lib/admin-permissions'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { LOG_TYPE_FILTERS } from '../constants'
 import { deleteExportJob, downloadExportPart, getExportJobs } from './api'
 import { EmployeeTemplateManager } from './components/employee-template-manager'
 import { ExportJobFilters } from './components/export-job-filters'
@@ -120,14 +121,14 @@ function formatRange(job: ExportJob): string {
   return `${dayjs.unix(start).format('MM-DD HH:mm')} → ${dayjs.unix(end).format('MM-DD HH:mm')}`
 }
 
-function filterSummary(job: ExportJob, allLabel: string): string {
-  const parts: string[] = []
+function filterSummary(job: ExportJob, typeLabel: string): string {
+  const parts: string[] = [typeLabel]
   if (job.filters.model_name) parts.push(job.filters.model_name)
   if (job.filters.username) parts.push(job.filters.username)
   if (job.filters.token_name) parts.push(job.filters.token_name)
   if (job.filters.group) parts.push(job.filters.group)
   if (job.filters.channel) parts.push(`#${job.filters.channel}`)
-  return parts.length ? parts.join(' · ') : allLabel
+  return parts.join(' · ')
 }
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -315,6 +316,10 @@ export function LogExportCenter(props: { self?: boolean }) {
         value={filters}
         onApply={applyFilters}
         self={props.self}
+        jobs={jobs}
+        hasMoreJobs={hasNextPage}
+        loadingMoreJobs={isFetchingNextPage}
+        onLoadMoreJobs={() => void fetchNextPage()}
       />
 
       {error && (
@@ -389,7 +394,15 @@ export function LogExportCenter(props: { self?: boolean }) {
                     {formatRange(job)}
                   </TableCell>
                   <TableCell className='max-w-[220px] truncate text-xs'>
-                    {filterSummary(job, t('All'))}
+                    {filterSummary(
+                      job,
+                      t(
+                        LOG_TYPE_FILTERS.find(
+                          (item) =>
+                            Number(item.value) === (job.filters.type || 0)
+                        )?.label ?? 'Unknown'
+                      )
+                    )}
                   </TableCell>
                   <TableCell className='text-xs'>
                     {job.format === 'xlsx' ? 'xlsx' : 'csv.gz'}
@@ -443,6 +456,27 @@ export function LogExportCenter(props: { self?: boolean }) {
                         </>
                       )}
                       {props.self && <ExportRemainingTime job={job} />}
+                      {props.self &&
+                        job.status === 'ready' &&
+                        job.row_count === 0 && (
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'No logs matched these filters. Adjust the filters and try again.'
+                            )}
+                          </p>
+                        )}
+                      {props.self &&
+                        job.status === 'ready' &&
+                        job.expires_at != null &&
+                        job.expires_at > 0 && (
+                          <p className='text-muted-foreground text-xs'>
+                            {t('Download available until {{time}}', {
+                              time: dayjs
+                                .unix(job.expires_at)
+                                .format('YYYY-MM-DD HH:mm'),
+                            })}
+                          </p>
+                        )}
                       {job.status === 'failed' && (
                         <p className='text-muted-foreground text-[11px]'>
                           {t(
@@ -459,7 +493,24 @@ export function LogExportCenter(props: { self?: boolean }) {
                     <div className='flex justify-end gap-1'>
                       {job.can_download &&
                         job.status === 'ready' &&
-                        parts.length > 0 && (
+                        parts.length > 0 &&
+                        (parts.length === 1 ? (
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            disabled={download.isPending}
+                            onClick={() =>
+                              download.mutate({
+                                jobId: job.job_id,
+                                part: parts[0].index,
+                              })
+                            }
+                          >
+                            <Download data-icon='inline-start' />
+                            {t('Download')}
+                          </Button>
+                        ) : (
                           <DropdownMenu>
                             <DropdownMenuTrigger
                               render={
@@ -528,7 +579,7 @@ export function LogExportCenter(props: { self?: boolean }) {
                               ))}
                             </DropdownMenuContent>
                           </DropdownMenu>
-                        )}
+                        ))}
                       {(job.can_cancel || job.can_delete) && (
                         <Button
                           type='button'
@@ -580,11 +631,13 @@ export function LogExportCenter(props: { self?: boolean }) {
       />
 
       {props.self ? (
-        <SelfExportSheet
-          open={sheetOpen}
-          onOpenChange={setSheetOpen}
-          maxRangeSec={data?.max_range_sec}
-        />
+        sheetOpen && (
+          <SelfExportSheet
+            open={sheetOpen}
+            onOpenChange={setSheetOpen}
+            maxRangeSec={data?.max_range_sec}
+          />
+        )
       ) : (
         <NewExportSheet
           open={sheetOpen}

@@ -10,17 +10,37 @@ afterEach(cleanup)
 it('submits combined filters only on search and clears all conditions on reset', async () => {
   const onApply = vi.fn()
   const user = userEvent.setup()
-  render(<ExportJobFilters value={{}} onApply={onApply} />)
-  await user.type(screen.getByLabelText('Creator username'), 'Alice')
-  await user.selectOptions(screen.getByLabelText('Status'), 'ready')
+  const { container } = render(
+    <ExportJobFilters value={{}} onApply={onApply} />
+  )
+  await user.click(screen.getByRole('button', { name: 'More filters' }))
+  expect(screen.queryByLabelText('Creator ID')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Creator username')).not.toBeInTheDocument()
+  expect(container.querySelector('select')).toBeNull()
+  for (const [field, option] of [
+    ['Status', 'Completed'],
+    ['Export scope', 'My exports'],
+    ['Export source', 'Employee export'],
+    ['Export mode', 'Aggregated summary'],
+  ]) {
+    await user.click(screen.getByRole('combobox', { name: field }))
+    await user.click(screen.getByRole('option', { name: option }))
+  }
   expect(onApply).not.toHaveBeenCalled()
   await user.click(screen.getByRole('button', { name: 'Search' }))
   expect(onApply).toHaveBeenLastCalledWith(
-    expect.objectContaining({ creator_keyword: 'Alice', status: 'ready' })
+    expect.objectContaining({
+      status: 'ready',
+      scope: 'mine',
+      source: 'employee',
+      mode: 'summary',
+    })
   )
   await user.click(screen.getByRole('button', { name: 'Reset' }))
   expect(onApply).toHaveBeenLastCalledWith({})
-  expect(screen.getByLabelText('Creator username')).toHaveValue('')
+  expect(screen.getByRole('combobox', { name: 'Status' })).toHaveTextContent(
+    'All'
+  )
 })
 
 it('submits text filters on Enter and hides cross-user filters in the self view', async () => {
@@ -29,7 +49,11 @@ it('submits text filters on Enter and hides cross-user filters in the self view'
   render(<ExportJobFilters value={{}} onApply={onApply} self />)
   expect(screen.queryByLabelText('Creator username')).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'More filters' }))
-  await user.type(screen.getByLabelText('Export task ID'), 'a2a2{Enter}')
+  await user.type(
+    screen.getByRole('combobox', { name: 'Export task ID' }),
+    'a2a2{Enter}'
+  )
+  await user.click(screen.getByRole('button', { name: 'Search' }))
   expect(onApply).toHaveBeenLastCalledWith(
     expect.objectContaining({ job_id: 'a2a2' })
   )

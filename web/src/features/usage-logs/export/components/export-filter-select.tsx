@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -20,7 +20,9 @@ interface Props {
   end?: number
   customerIds?: number[]
   templateId?: string
+  logType?: number
   disabled?: boolean
+  showId?: boolean
 }
 
 export function ExportFilterSelect(props: Props) {
@@ -44,6 +46,7 @@ export function ExportFilterSelect(props: Props) {
       props.end,
       props.customerIds,
       props.templateId,
+      props.logType,
       keyword,
     ],
     initialPageParam: '',
@@ -56,6 +59,7 @@ export function ExportFilterSelect(props: Props) {
       if (props.start) params.set('start_timestamp', String(props.start))
       if (props.end) params.set('end_timestamp', String(props.end))
       if (props.templateId) params.set('template_id', props.templateId)
+      if (props.logType != null) params.set('type', String(props.logType))
       for (const id of props.customerIds ?? []) {
         params.append('customer_ids', String(id))
       }
@@ -85,7 +89,43 @@ export function ExportFilterSelect(props: Props) {
         .flatMap((page) => page.items)
         .map((item) => [item.value, item]) ?? []
     ).values(),
-  ]
+  ].map((item) =>
+    props.showId ? { ...item, label: `${item.label} · #${item.value}` } : item
+  )
+  const selectedQuery = useQuery({
+    queryKey: [
+      'export-filter-selected',
+      userId,
+      props.base,
+      props.field,
+      props.value,
+    ],
+    queryFn: () =>
+      exportRequest<{ items: { value: string; label: string }[] }>(
+        'get',
+        `${props.base ?? '/api/log/export'}/options?${new URLSearchParams({ field: props.field, keyword: props.value })}`,
+        undefined,
+        { quiet: true }
+      ),
+    enabled: Boolean(
+      props.showId &&
+      props.value &&
+      !props.disabled &&
+      query.data &&
+      selected?.value !== props.value &&
+      !options.some((item) => item.value === props.value)
+    ),
+    staleTime: 30_000,
+  })
+  const resolved = selectedQuery.data?.items.find(
+    (item) => item.value === props.value
+  )
+  if (resolved && !options.some((item) => item.value === props.value)) {
+    options.unshift({
+      ...resolved,
+      label: `${resolved.label} · #${resolved.value}`,
+    })
+  }
   if (
     selected?.value === props.value &&
     !options.some((item) => item.value === props.value)
@@ -148,16 +188,18 @@ export function ExportFilterSelect(props: Props) {
           </Button>
         )}
       </div>
-      {query.isError && (
+      {(query.isError || selectedQuery.isError) && (
         <div className='flex flex-wrap items-center gap-1'>
           <p className='text-destructive text-xs' role='alert'>
-            {query.error.message}
+            {(query.error ?? selectedQuery.error)?.message}
           </p>
           <Button
             type='button'
             variant='ghost'
             size='sm'
-            onClick={() => void query.refetch()}
+            onClick={() =>
+              void (query.isError ? query.refetch() : selectedQuery.refetch())
+            }
           >
             {t('Retry')}
           </Button>

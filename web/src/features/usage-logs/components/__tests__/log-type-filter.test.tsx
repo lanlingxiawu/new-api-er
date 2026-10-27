@@ -36,7 +36,9 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
+import * as employeeExportApi from '../../export/employee-api'
 import { CommonLogsFilterBar } from '../common-logs-filter-bar'
 import { UsageLogsProvider } from '../usage-logs-provider'
 
@@ -87,6 +89,35 @@ async function renderFilter() {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  useAuthStore.getState().auth.setUser(null)
+})
+
+it('carries the employee log list type into the export drawer', async () => {
+  useAuthStore.getState().auth.setUser({
+    id: 10,
+    username: 'employee',
+    role: 1,
+    is_employee: true,
+  })
+  vi.spyOn(employeeExportApi, 'exportRequest').mockResolvedValue({
+    enabled: true,
+    max_range_sec: 86400 * 31,
+    max_customers: 20,
+    columns: [],
+    templates: [],
+    items: [],
+    next_cursor: '',
+  })
+  await renderFilter()
+  await userEvent.click(screen.getByRole('combobox', { name: 'Type' }))
+  await userEvent.click(screen.getByRole('option', { name: 'Error' }))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Export customer data' })
+  )
+  const drawer = screen.getByRole('dialog', { name: 'Export customer data' })
+  expect(
+    within(drawer).getByRole('combobox', { name: 'Type' })
+  ).toHaveTextContent('Error')
 })
 
 it('marks only retired log types as deprecated while keeping historical filters selectable', async () => {

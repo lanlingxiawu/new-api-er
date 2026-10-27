@@ -43,12 +43,13 @@ import { formatLogQuota, formatUseTime } from '@/lib/format'
 
 import { getUpstreamLogChannels, queryUpstreamLog } from '../api'
 import { CompactDateTimeRangePicker } from '../components/compact-date-time-range-picker'
+import { LogTypeSelect } from '../components/log-type-select'
 import {
   LogsFilterField,
   LogsFilterInput,
   LogsFilterToolbar,
 } from '../components/logs-filter-toolbar'
-import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
+import { LOG_TYPE_ALL_VALUE } from '../constants'
 import { getDefaultTimeRange, getLogTypeConfig } from '../lib/utils'
 import type {
   UpstreamLogChannelOption,
@@ -387,14 +388,6 @@ function UpstreamLogsWorkspace({
     }))
   }, [channelsQuery.data, resolvedChannel])
 
-  const logTypeItems = useMemo(
-    () =>
-      LOG_TYPE_FILTERS.map((item) => ({
-        value: item.value,
-        label: t(item.label),
-      })),
-    [t]
-  )
   const isMultiKey = resolvedChannel?.is_multi_key ?? false
   const keyCount = Math.max(resolvedChannel?.key_count ?? 0, 1)
   // 填了本站请求 ID 就走反查：渠道、令牌序号、上游请求 ID 全部由后端按日志判定，
@@ -810,30 +803,17 @@ function UpstreamLogsWorkspace({
     <>
       {dateField}
       <LogsFilterField>
-        <Select
-          items={logTypeItems}
+        <LogTypeSelect
+          className='h-8'
           value={draft.type}
           disabled={traceMode}
           onValueChange={(value) =>
             setDraft((current) => ({
               ...current,
-              type: value ?? LOG_TYPE_ALL_VALUE,
+              type: value,
             }))
           }
-        >
-          <SelectTrigger className='h-8'>
-            <SelectValue placeholder={t('Type')} />
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
-            <SelectGroup>
-              {logTypeItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
+        />
       </LogsFilterField>
       <LogsFilterField>
         <LogsFilterInput

@@ -145,6 +145,10 @@ export function EmployeeExportJobs() {
         value={filters}
         onApply={setFilters}
         employee
+        jobs={rows}
+        hasMoreJobs={jobs.hasNextPage}
+        loadingMoreJobs={jobs.isFetchingNextPage}
+        onLoadMoreJobs={() => void jobs.fetchNextPage()}
       />
       {jobs.isPending && <Skeleton className='h-24 w-full' />}
       {jobs.isError && (

@@ -27,7 +27,11 @@ func GetLogExportFilterOptions(c *gin.Context) {
 			query = query.Where("inviter_id = ? AND role = ?", c.GetInt("id"), common.RoleCommonUser)
 		}
 		if keyword != "" {
-			query = query.Where("username LIKE ? OR display_name LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+			if userID, err := strconv.Atoi(keyword); err == nil && userID > 0 {
+				query = query.Where("id = ? OR username LIKE ? OR display_name LIKE ?", userID, "%"+keyword+"%", "%"+keyword+"%")
+			} else {
+				query = query.Where("username LIKE ? OR display_name LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+			}
 		}
 		cursor, _ := strconv.Atoi(c.Query("cursor"))
 		var users []struct {
@@ -102,7 +106,14 @@ func GetLogExportFilterOptions(c *gin.Context) {
 	}
 	filter := model.LogExportFilter{StartTimestamp: start, EndTimestamp: end}
 	if employee {
-		filter.LogType = model.LogTypeConsume
+		if rawType, provided := c.GetQuery("type"); provided {
+			logType, err := strconv.Atoi(rawType)
+			if err != nil || logType < model.LogTypeUnknown || logType > model.LogTypeLogin {
+				employeeExportError(c, model.ErrEmployeeExportInvalid)
+				return
+			}
+			filter.LogType = logType
+		}
 	}
 	items, next, err := model.LogExportFilterOptions(ctx, filter, field, keyword, c.Query("cursor"), ids)
 	if err != nil {

@@ -44,6 +44,41 @@ func TestExportManagementPermissions(t *testing.T) {
 	require.False(t, operate)
 }
 
+func TestExportListReportsActualDownloadExpiry(t *testing.T) {
+	server := miniredis.RunT(t)
+	previous, enabled := common.RDB, common.RedisEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	t.Cleanup(func() { _ = common.RDB.Close(); common.RDB, common.RedisEnabled = previous, enabled })
+	ctx := context.Background()
+	job := &LogExportJob{JobID: NewLogExportJobID(), UserID: 42, Status: LogExportStatusReady}
+	require.NoError(t, saveLogExportJob(job))
+	// A legacy task has no stored expiry; use its actual remaining Redis lifetime.
+	require.NoError(t, common.RDB.Expire(ctx, logExportJobKey(job.JobID), 2*time.Hour).Err())
+	server.FastForward(30 * time.Minute)
+	access := LogExportAccess{UserID: 7, Role: common.RoleAdminUser, Scope: "admin"}
+	page, err := ListManagedLogExportJobs(ctx, access, LogExportListQuery{})
+	require.NoError(t, err)
+	require.Len(t, page.Jobs, 1)
+	require.InDelta(t, time.Now().Add(90*time.Minute).Unix(), page.Jobs[0].ExpiresAt, 2)
+	setting := operation_setting.GetLogExportSetting()
+	previousTTL := setting.JobTTLHours
+	t.Cleanup(func() { setting.JobTTLHours = previousTTL })
+	setting.JobTTLHours = 48
+	page, err = ListManagedLogExportJobs(ctx, access, LogExportListQuery{})
+	require.NoError(t, err)
+	require.InDelta(t, time.Now().Add(90*time.Minute).Unix(), page.Jobs[0].ExpiresAt, 2)
+	require.NoError(t, common.RDB.Persist(ctx, logExportJobKey(job.JobID)).Err())
+	page, err = ListManagedLogExportJobs(ctx, access, LogExportListQuery{})
+	require.NoError(t, err)
+	require.Zero(t, page.Jobs[0].ExpiresAt)
+	require.NoError(t, common.RDB.Expire(ctx, logExportJobKey(job.JobID), time.Second).Err())
+	server.FastForward(2 * time.Second)
+	page, err = ListManagedLogExportJobs(ctx, access, LogExportListQuery{})
+	require.NoError(t, err)
+	require.Empty(t, page.Jobs)
+}
+
 func TestExportManagementFiltersAndPagination(t *testing.T) {
 	server := miniredis.RunT(t)
 	previous, enabled := common.RDB, common.RedisEnabled

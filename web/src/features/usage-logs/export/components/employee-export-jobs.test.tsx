@@ -39,7 +39,9 @@ it('distinguishes an empty history from an empty filtered result', async () => {
     </QueryClientProvider>
   )
   expect(await screen.findByText('No exports yet')).toBeVisible()
-  await user.type(screen.getByLabelText('Creator username'), 'Alice')
+  expect(screen.queryByLabelText('Creator username')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('combobox', { name: 'Status' }))
+  await user.click(screen.getByRole('option', { name: 'Completed' }))
   await user.click(screen.getByRole('button', { name: 'Search' }))
   expect(
     await screen.findByText('No matching exports. Adjust or reset the filters.')

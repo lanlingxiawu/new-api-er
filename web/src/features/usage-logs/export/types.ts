@@ -217,6 +217,8 @@ export interface ExportJob {
   created_at: number
   updated_at: number
   finished_at?: number
+  /** Actual task expiry from Redis, independent of short-lived download URLs. */
+  expires_at?: number
 }
 
 export interface ExportJobListFilters {

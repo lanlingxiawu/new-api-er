@@ -168,6 +168,7 @@ type ManagedLogExportJob struct {
 	CanDownload bool   `json:"can_download"`
 	CanCancel   bool   `json:"can_cancel"`
 	CanDelete   bool   `json:"can_delete"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
 }
 
 func (a LogExportAccess) PublicJob(job *LogExportJob) *ManagedLogExportJob {
@@ -389,6 +390,24 @@ func ListManagedLogExportJobs(ctx context.Context, access LogExportAccess, query
 		}
 		page.NextCursor = base64.RawURLEncoding.EncodeToString(codec.Seal(nil, nil, data, []byte(fingerprint)))
 		page.HasMore = true
+	}
+	if len(page.Jobs) > 0 {
+		// Read the existing keys' lifetimes, including tasks created before this version.
+		// A later retention-setting change must not alter their displayed deadlines.
+		pipe := common.RDB.Pipeline()
+		lifetimes := make([]*redis.DurationCmd, len(page.Jobs))
+		for i, job := range page.Jobs {
+			lifetimes[i] = pipe.PTTL(ctx, logExportJobKey(job.JobID))
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		for i, lifetime := range lifetimes {
+			if lifetime.Val() > 0 {
+				page.Jobs[i].ExpiresAt = now.Add(lifetime.Val()).Unix()
+			}
+		}
 	}
 	return page, nil
 }

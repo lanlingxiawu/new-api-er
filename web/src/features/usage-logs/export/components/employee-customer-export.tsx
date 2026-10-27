@@ -20,6 +20,8 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
+import { LogTypeSelect } from '@/features/usage-logs/components/log-type-select'
+import { LOG_TYPE_ALL_VALUE } from '@/features/usage-logs/constants'
 import { useDebounce } from '@/hooks'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -53,6 +55,7 @@ interface EmployeeExportPrefill {
   start?: Date
   end?: Date
   customerId?: number
+  logType?: string
 }
 
 export function EmployeeCustomerExport(props: {
@@ -149,12 +152,16 @@ function EmployeeExportForm(props: {
 }) {
   const { t } = useTranslation()
   const templateInputId = useId()
+  const typeInputId = useId()
   const userId = useAuthStore((state) => state.auth.user?.id)
   const client = useQueryClient()
   const [templateId, setTemplateId] = useState(
     () => props.capabilities.templates[0]?.key ?? ''
   )
   const [all, setAll] = useState(false)
+  const [logType, setLogType] = useState(
+    () => props.prefill?.logType ?? LOG_TYPE_ALL_VALUE
+  )
   const [customers, setCustomers] = useState<number[]>(() =>
     props.prefill?.customerId ? [props.prefill.customerId] : []
   )
@@ -177,6 +184,7 @@ function EmployeeExportForm(props: {
     start > 0 && end >= start && end - start <= props.capabilities.max_range_sec
   const payload = {
     template_id: templateId,
+    type: Number(logType),
     // Used only by templates without a pinned timezone (the builtin ones).
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     customer_ids: all ? [] : customers,
@@ -281,6 +289,15 @@ function EmployeeExportForm(props: {
               <p className='text-muted-foreground text-xs'>
                 {t('Export templates are managed by your administrator.')}
               </p>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={typeInputId}>{t('Type')}</FieldLabel>
+              <LogTypeSelect
+                id={typeInputId}
+                value={logType}
+                onValueChange={setLogType}
+                disabled={create.isPending}
+              />
             </Field>
             <Field>
               <FieldLabel>{t('Date Range')}</FieldLabel>
@@ -394,6 +411,7 @@ function EmployeeExportForm(props: {
                         end={end}
                         customerIds={all ? undefined : customers}
                         templateId={template.key}
+                        logType={Number(logType)}
                         disabled={create.isPending || !validRange}
                         onChange={(value) =>
                           setFilters({ ...filters, [field]: value })

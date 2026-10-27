@@ -89,6 +89,7 @@ export function ComboboxInput({
   // from treating option clicks as outside presses.
   const [dropdown, setDropdown] = React.useState<{
     container: HTMLElement
+    position: 'absolute' | 'fixed'
     top: number
     left: number
     width: number
@@ -151,14 +152,29 @@ export function ComboboxInput({
     }
     const input = inputRef.current
     if (!input) return
-    const container =
-      input.closest<HTMLElement>('[role="dialog"]') ?? document.body
+    const dialog = input.closest<HTMLElement>('[role="dialog"]')
+    const container = dialog ?? document.body
     const measure = () => {
       const rect = input.getBoundingClientRect()
+      const dialogRect = dialog?.getBoundingClientRect()
       setDropdown({
         container,
-        top: rect.bottom + 4,
-        left: rect.left,
+        // A translated dialog establishes a containing block even for fixed
+        // children. Use its local coordinates so the menu stays at the input.
+        position: dialog ? 'absolute' : 'fixed',
+        top: dialogRect
+          ? rect.bottom -
+            dialogRect.top +
+            container.scrollTop -
+            container.clientTop +
+            4
+          : rect.bottom + 4,
+        left: dialogRect
+          ? rect.left -
+            dialogRect.left +
+            container.scrollLeft -
+            container.clientLeft
+          : rect.left,
         width: rect.width,
       })
     }
@@ -317,7 +333,7 @@ export function ComboboxInput({
           <div
             ref={dropdownRef}
             style={{
-              position: 'fixed',
+              position: dropdown.position,
               top: dropdown.top,
               left: dropdown.left,
               width: dropdown.width,

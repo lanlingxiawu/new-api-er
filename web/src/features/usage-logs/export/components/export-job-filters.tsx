@@ -1,3 +1,4 @@
+import dayjs from 'dayjs'
 import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -7,12 +8,20 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { ComboboxInput } from '@/components/ui/combobox-input'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
-import type { ExportJobListFilters } from '../types'
+import type { ExportJob, ExportJobListFilters } from '../types'
 import { ExportFilterSelect } from './export-filter-select'
 
 export function ExportJobFilters(props: {
@@ -20,11 +29,55 @@ export function ExportJobFilters(props: {
   onApply: (filters: ExportJobListFilters) => void
   self?: boolean
   employee?: boolean
+  jobs?: Pick<ExportJob, 'job_id' | 'username' | 'created_at'>[]
+  hasMoreJobs?: boolean
+  loadingMoreJobs?: boolean
+  onLoadMoreJobs?: () => void
 }) {
   const { t } = useTranslation()
   const id = useId()
   const [draft, setDraft] = useState(props.value)
   const [error, setError] = useState(false)
+  const statusItems = [
+    { value: '', label: t('All') },
+    { value: 'pending', label: t('Queued') },
+    { value: 'running', label: t('Running') },
+    { value: 'ready', label: t('Completed') },
+    { value: 'failed', label: t('Failed') },
+    { value: 'canceled', label: t('Canceled') },
+  ]
+  const advancedFields = [
+    {
+      key: 'scope' as const,
+      label: t('Export scope'),
+      items: [
+        { value: 'all', label: t('All visible exports') },
+        { value: 'mine', label: t('My exports') },
+      ],
+    },
+    {
+      key: 'source' as const,
+      label: t('Export source'),
+      items: [
+        { value: '', label: t('All') },
+        ...(!props.employee
+          ? [{ value: 'admin', label: t('Administrator export') }]
+          : []),
+        { value: 'employee', label: t('Employee export') },
+        { value: 'self', label: t('Self-service export') },
+      ],
+    },
+    {
+      key: 'mode' as const,
+      label: t('Export mode'),
+      items: [
+        { value: '', label: t('All') },
+        { value: 'detail', label: t('One row per log') },
+        { value: 'summary', label: t('Aggregated summary') },
+        { value: 'both', label: t('Detail + summary') },
+      ],
+    },
+  ]
   return (
     <form
       className='space-y-3'
@@ -41,30 +94,37 @@ export function ExportJobFilters(props: {
         setError(false)
         props.onApply({
           ...draft,
-          creator_keyword: draft.creator_keyword?.trim() || undefined,
+          creator_keyword: undefined,
           job_id: draft.job_id?.trim() || undefined,
         })
       }}
     >
-      <FieldGroup className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
+      <FieldGroup
+        className={cn(
+          'grid gap-3 sm:grid-cols-2',
+          props.employee ? 'xl:grid-cols-3' : 'xl:grid-cols-4'
+        )}
+      >
         {!props.self && (
           <>
-            <Field>
-              <FieldLabel htmlFor={`${id}-creator`}>
-                {t('Creator username')}
-              </FieldLabel>
-              <Input
-                id={`${id}-creator`}
-                maxLength={64}
-                value={draft.creator_keyword ?? ''}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    creator_keyword: e.target.value || undefined,
-                  })
-                }
-              />
-            </Field>
+            {!props.employee && (
+              <Field>
+                <FieldLabel>{t('Creator')}</FieldLabel>
+                <ExportFilterSelect
+                  field='customer'
+                  label={t('Creator')}
+                  showId
+                  value={draft.creator_id ? String(draft.creator_id) : ''}
+                  onChange={(value) =>
+                    setDraft({
+                      ...draft,
+                      creator_id: value ? Number(value) : undefined,
+                      creator_keyword: undefined,
+                    })
+                  }
+                />
+              </Field>
+            )}
             <Field>
               <FieldLabel>{t('Customer')}</FieldLabel>
               <ExportFilterSelect
@@ -84,30 +144,26 @@ export function ExportJobFilters(props: {
         )}
         <Field>
           <FieldLabel htmlFor={`${id}-status`}>{t('Status')}</FieldLabel>
-          <NativeSelect
-            id={`${id}-status`}
+          <Select
+            items={statusItems}
             value={draft.status ?? ''}
-            onChange={(e) =>
-              setDraft({ ...draft, status: e.target.value || undefined })
+            onValueChange={(value) =>
+              setDraft({ ...draft, status: value || undefined })
             }
           >
-            <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
-            <NativeSelectOption value='pending'>
-              {t('Queued')}
-            </NativeSelectOption>
-            <NativeSelectOption value='running'>
-              {t('Running')}
-            </NativeSelectOption>
-            <NativeSelectOption value='ready'>
-              {t('Completed')}
-            </NativeSelectOption>
-            <NativeSelectOption value='failed'>
-              {t('Failed')}
-            </NativeSelectOption>
-            <NativeSelectOption value='canceled'>
-              {t('Canceled')}
-            </NativeSelectOption>
-          </NativeSelect>
+            <SelectTrigger id={`${id}-status`} className='w-full'>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {statusItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </Field>
         <Field>
           <FieldLabel>{t('Task creation time')}</FieldLabel>
@@ -176,115 +232,73 @@ export function ExportJobFilters(props: {
         </div>
         <CollapsibleContent className='pt-3'>
           <FieldGroup className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
-            {!props.self && (
-              <>
-                <Field>
-                  <FieldLabel htmlFor={`${id}-scope`}>
-                    {t('Export scope')}
-                  </FieldLabel>
-                  <NativeSelect
-                    id={`${id}-scope`}
-                    value={draft.scope ?? 'all'}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        scope: e.target.value as 'all' | 'mine',
-                      })
+            {!props.self &&
+              advancedFields.map(({ key, label, items }) => (
+                <Field key={key}>
+                  <FieldLabel htmlFor={`${id}-${key}`}>{label}</FieldLabel>
+                  <Select
+                    items={items}
+                    value={draft[key] ?? (key === 'scope' ? 'all' : '')}
+                    onValueChange={(value) =>
+                      setDraft({ ...draft, [key]: value || undefined })
                     }
                   >
-                    <NativeSelectOption value='all'>
-                      {t('All visible exports')}
-                    </NativeSelectOption>
-                    <NativeSelectOption value='mine'>
-                      {t('My exports')}
-                    </NativeSelectOption>
-                  </NativeSelect>
+                    <SelectTrigger id={`${id}-${key}`} className='w-full'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        {items.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </Field>
-                <Field>
-                  <FieldLabel htmlFor={`${id}-creator-id`}>
-                    {t('Creator ID')}
-                  </FieldLabel>
-                  <Input
-                    id={`${id}-creator-id`}
-                    type='number'
-                    min={1}
-                    step={1}
-                    value={draft.creator_id ?? ''}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        creator_id: e.target.value
-                          ? Number(e.target.value)
-                          : undefined,
-                      })
-                    }
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor={`${id}-source`}>
-                    {t('Export source')}
-                  </FieldLabel>
-                  <NativeSelect
-                    id={`${id}-source`}
-                    value={draft.source ?? ''}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        source: e.target.value || undefined,
-                      })
-                    }
-                  >
-                    <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
-                    {!props.employee && (
-                      <NativeSelectOption value='admin'>
-                        {t('Administrator export')}
-                      </NativeSelectOption>
-                    )}
-                    <NativeSelectOption value='employee'>
-                      {t('Employee export')}
-                    </NativeSelectOption>
-                    <NativeSelectOption value='self'>
-                      {t('Self-service export')}
-                    </NativeSelectOption>
-                  </NativeSelect>
-                </Field>
-              </>
-            )}
-            {!props.self && (
-              <Field>
-                <FieldLabel htmlFor={`${id}-mode`}>
-                  {t('Export mode')}
-                </FieldLabel>
-                <NativeSelect
-                  id={`${id}-mode`}
-                  value={draft.mode ?? ''}
-                  onChange={(e) =>
-                    setDraft({ ...draft, mode: e.target.value || undefined })
-                  }
-                >
-                  <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
-                  <NativeSelectOption value='detail'>
-                    {t('One row per log')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='summary'>
-                    {t('Aggregated summary')}
-                  </NativeSelectOption>
-                  <NativeSelectOption value='both'>
-                    {t('Detail + summary')}
-                  </NativeSelectOption>
-                </NativeSelect>
-              </Field>
-            )}
+              ))}
             <Field>
               <FieldLabel htmlFor={`${id}-job`}>
                 {t('Export task ID')}
               </FieldLabel>
-              <Input
+              <ComboboxInput
                 id={`${id}-job`}
-                maxLength={36}
+                allowCustomValue
+                placeholder={t('Select or paste task ID')}
+                emptyText={t('No results found')}
+                options={(props.jobs ?? []).map((job) => ({
+                  value: job.job_id,
+                  label: job.job_id,
+                  description: [
+                    dayjs.unix(job.created_at).format('MM-DD HH:mm'),
+                    job.username,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                }))}
                 value={draft.job_id ?? ''}
-                onChange={(e) =>
-                  setDraft({ ...draft, job_id: e.target.value || undefined })
+                onValueChange={(value) =>
+                  setDraft({ ...draft, job_id: value || undefined })
+                }
+                dropdownFooter={
+                  props.hasMoreJobs && props.onLoadMoreJobs ? (
+                    <div className='border-t p-1'>
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        className='w-full'
+                        disabled={props.loadingMoreJobs}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={props.onLoadMoreJobs}
+                      >
+                        {props.loadingMoreJobs
+                          ? t('Loading...')
+                          : t('Load more')}
+                      </Button>
+                    </div>
+                  ) : undefined
                 }
               />
             </Field>

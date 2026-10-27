@@ -159,6 +159,7 @@ func GetEmployeeExportColumns(c *gin.Context) {
 }
 
 type employeeExportRequest struct {
+	LogType        int                        `json:"type"`
 	TemplateID     string                     `json:"template_id"`
 	Timezone       string                     `json:"timezone"`
 	CustomerIDs    []int                      `json:"customer_ids"`
@@ -202,13 +203,16 @@ func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
 		return nil, err
 	}
 	for key := range raw {
-		if !slices.Contains([]string{"template_id", "timezone", "customer_ids", "all_customers", "start_timestamp", "end_timestamp", "filters"}, key) {
+		if !slices.Contains([]string{"template_id", "timezone", "customer_ids", "all_customers", "start_timestamp", "end_timestamp", "type", "filters"}, key) {
 			return nil, model.ErrEmployeeExportInvalid
 		}
 	}
 	var req employeeExportRequest
 	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
 		return nil, err
+	}
+	if req.LogType < model.LogTypeUnknown || req.LogType > model.LogTypeLogin {
+		return nil, model.ErrEmployeeExportInvalid
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
@@ -252,7 +256,7 @@ func prepareEmployeeExport(c *gin.Context) (*model.LogExportJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	filter.LogType = model.LogTypeConsume
+	filter.LogType = req.LogType
 	filter.StartTimestamp, filter.EndTimestamp = req.StartTimestamp, req.EndTimestamp
 	job := &model.LogExportJob{
 		UserID: c.GetInt("id"), Username: c.GetString("username"), Lang: i18n.GetLangFromContext(c),

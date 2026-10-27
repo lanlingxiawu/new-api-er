@@ -53,7 +53,7 @@ func TestEmployeeExportRequestCannotOverrideTemplateOrCustomerScope(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, tpl.Columns, job.Columns)
 	require.Equal(t, tpl.Options, job.Options, "a template-pinned timezone wins over the requester's")
-	require.Equal(t, model.LogTypeConsume, job.Filters.LogType)
+	require.Equal(t, model.LogTypeUnknown, job.Filters.LogType)
 	require.Equal(t, []int{customer}, job.EmployeeScope.CustomerIDs)
 	var customerUser model.User
 	require.NoError(t, model.DB.First(&customerUser, customer).Error)
