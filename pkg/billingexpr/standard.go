@@ -160,7 +160,7 @@ func standardLinear(n ast.Node, prices map[string]float64, depth int) error {
 		return fmt.Errorf("price must multiply a token variable")
 	}
 	switch id.Value {
-	case "p", "c", "cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao":
+	case "p", "c", "cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao":
 	default:
 		return fmt.Errorf("unsupported price variable")
 	}
@@ -188,6 +188,10 @@ func (a *StandardAnalysis) EffectivePrices(s StandardSegment) map[string]float64
 		if !a.UsedVars[key] {
 			result[key] = s.Prices[base]
 		}
+	}
+	result["cc12h"] = s.Prices["cc12h"]
+	if !a.UsedVars["cc12h"] {
+		result["cc12h"] = result["cc"] * 2
 	}
 	return result
 }

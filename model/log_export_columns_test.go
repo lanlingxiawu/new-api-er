@@ -45,6 +45,37 @@ func TestLogExportColumns_RegistryIntegrity(t *testing.T) {
 	}
 }
 
+func TestLogExportColumns_CacheWrite12h(t *testing.T) {
+	keys := []string{"cache_creation_tokens_12h", "cache_creation_ratio_12h"}
+	for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser} {
+		set, err := ResolveLogExportColumnsForRole(keys, role)
+		require.NoError(t, err)
+		require.Equal(t, keys, set.Keys)
+	}
+	for _, key := range keys {
+		col, ok := LookupLogExportColumn(key)
+		require.True(t, ok)
+		require.Equal(t, LogExportAudienceCustomer, col.Audience)
+		for _, template := range []string{LogExportTemplateBilling, LogExportTemplateCustomerInvoice} {
+			tpl, ok := LookupBuiltinLogExportTemplate(template)
+			require.True(t, ok)
+			require.Contains(t, tpl.Columns, key)
+		}
+	}
+	for _, tc := range []struct {
+		other string
+		want  []string
+	}{
+		{`{}`, []string{"", ""}},
+		{`{"cache_creation_tokens_12h":0,"cache_creation_ratio_12h":0}`, []string{"0", "0"}},
+		{`{"cache_creation_tokens_12h":1000,"cache_creation_ratio_12h":2.5}`, []string{"1000", "2.5"}},
+	} {
+		set, err := ResolveLogExportColumnsForRole(keys, common.RoleCommonUser)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, set.Render(&Log{Other: tc.other}, newTestRowCtx(), nil))
+	}
+}
+
 // 页面列改动后模板必须同步更新，否则「页面所见」名不副实。
 func TestLogExportColumns_AsDisplayedTemplateIsStable(t *testing.T) {
 	want := []string{

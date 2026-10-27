@@ -90,6 +90,45 @@ func TestCompareStandardAlignsBoundaries(t *testing.T) {
 	require.Equal(t, "p", differences[0].Variable)
 }
 
+func TestStandardCacheWrite12hMatchesBillingFallback(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		want   float64
+	}{
+		{`p*2+c*4`, 4},
+		{`p*2+c*4+cc*3`, 6},
+		{`p*2+c*4+cc*0`, 0},
+		{`p*2+c*4+cc*3+cc12h*0`, 0},
+		{`p*2+c*4+cc*3+cc12h*5`, 5},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			analysis, err := AnalyzeStandard(tc.source)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, analysis.EffectivePrices(analysis.Segments[0])["cc12h"])
+		})
+	}
+	left, err := AnalyzeStandard(`p*2+c*4+cc*3`)
+	require.NoError(t, err)
+	right, err := AnalyzeStandard(`p*2+c*4+cc*3+cc12h*6`)
+	require.NoError(t, err)
+	require.Empty(t, CompareStandard(left, right))
+}
+
+func TestPreviewAndEditorSupportCacheWrite12h(t *testing.T) {
+	source := `tier("base", p*1+cc*1.25+cc12h*2.5+c*5)`
+	program, err := CompilePreview(source)
+	require.NoError(t, err)
+	cost, trace, err := program.RunAt(TokenParams{P: 1000, CC: 200, CC12h: 300, C: 100}, RequestInput{}, time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, float64(2500), cost)
+	require.Equal(t, "base", trace.MatchedTier)
+	editor, err := DescribeEditor(source)
+	require.NoError(t, err)
+	require.Equal(t, "flat", editor.Kind)
+	require.Contains(t, editor.UsedVars, "cc12h")
+	require.Equal(t, 2.5, editor.Branches[0].Prices["cc12h"])
+}
+
 func TestPreviewPreservesExplicitZeroAndBranchVars(t *testing.T) {
 	p, err := CompilePreview(`len<=10?tier("a",p*2):tier("b",p*3+cr*0)`)
 	require.NoError(t, err)

@@ -41,6 +41,7 @@ func useApplyPriceEnv(t *testing.T, snapshot PriceMonitorSnapshot) {
 	model.DB = db
 	model.LOG_DB = db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	model.InitColumnNames()
 	common.OptionMapRWMutex.Lock()
 	common.OptionMap = make(map[string]string)
 	common.OptionMapRWMutex.Unlock()
@@ -53,6 +54,7 @@ func useApplyPriceEnv(t *testing.T, snapshot PriceMonitorSnapshot) {
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.SetMainDatabaseType(previousType)
+		model.InitColumnNames()
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = previousMap
 		common.OptionMapRWMutex.Unlock()

@@ -29,7 +29,7 @@ const (
 	priceMonitorModeToken               = "per_token"
 	priceMonitorModeRequest             = "per_request"
 	priceMonitorModeExpression          = "tiered_expr"
-	priceMonitorMatrixVersion           = 22
+	priceMonitorMatrixVersion           = 23
 	priceMonitorUnavailableMissing      = "missing"
 	priceMonitorUnavailablePlaceholder  = "placeholder"
 	priceMonitorUnavailableSourceFailed = "source_failed"
@@ -50,6 +50,7 @@ const (
 	priceMonitorLaneCacheRead               = "cache_read"
 	priceMonitorLaneCacheWrite              = "cache_write"
 	priceMonitorLaneCacheWrite1h            = "cache_write_1h"
+	priceMonitorLaneCacheWrite12h           = "cache_write_12h"
 	priceMonitorLaneImageInput              = "image_input"
 	priceMonitorLaneImageCacheRead          = "image_cache_read"
 	priceMonitorLaneImageOutput             = "image_output"
@@ -609,7 +610,7 @@ func priceMonitorMatrixItemDisplayKeys(item PriceMonitorMatrixItem, headers []Pr
 				continue
 			}
 			for _, lane := range source.Lanes {
-				if lane.Different && (lane.Key == priceMonitorLaneCacheRead || lane.Key == priceMonitorLaneCacheWrite || lane.Key == priceMonitorLaneCacheWrite1h) {
+				if lane.Different && (lane.Key == priceMonitorLaneCacheRead || lane.Key == priceMonitorLaneCacheWrite || lane.Key == priceMonitorLaneCacheWrite1h || lane.Key == priceMonitorLaneCacheWrite12h) {
 					displayKeys[priceMonitorPlatformKey] = struct{}{}
 					displayKeys[header.Key] = struct{}{}
 					break
@@ -828,7 +829,7 @@ func priceMonitorPriceCellsEqual(left, right PriceMonitorPriceCell) bool {
 		if aErr != nil || bErr != nil {
 			return false
 		}
-		for _, variable := range []string{"cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao"} {
+		for _, variable := range []string{"cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao"} {
 			if a.UsedVars[variable] != b.UsedVars[variable] {
 				return false
 			}
@@ -1202,6 +1203,7 @@ var priceMonitorExpressionLaneKeys = map[string]string{
 	"cr":     priceMonitorLaneCacheRead,
 	"cc":     priceMonitorLaneCacheWrite,
 	"cc1h":   priceMonitorLaneCacheWrite1h,
+	"cc12h":  priceMonitorLaneCacheWrite12h,
 	"img":    priceMonitorLaneImageInput,
 	"img_cr": priceMonitorLaneImageCacheRead,
 	"img_o":  priceMonitorLaneImageOutput,
@@ -1230,7 +1232,7 @@ func parsePriceMonitorExpression(expression string) ([]PriceMonitorPriceTier, bo
 			tier.ConditionOperator = ">"
 			tier.ConditionValue = floatPointer(float64(segment.Min - 1))
 		}
-		for _, key := range []string{"cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao"} {
+		for _, key := range []string{"cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao"} {
 			if analysis.UsedVars[key] {
 				tier.Lanes = append(tier.Lanes, PriceMonitorPriceLane{Key: priceMonitorExpressionLaneKeys[key], Price: floatPointer(segment.Prices[key])})
 			}
@@ -1282,7 +1284,7 @@ func markPriceMonitorDifferences(platform PriceMonitorPriceCell, source *PriceMo
 		left, leftErr := priceMonitorStandardCellAnalysis(platform)
 		right, rightErr := priceMonitorStandardCellAnalysis(*source)
 		if leftErr == nil && rightErr == nil {
-			for _, variable := range []string{"cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao"} {
+			for _, variable := range []string{"cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao"} {
 				if left.UsedVars[variable] != right.UsedVars[variable] {
 					normalizationUnknown = true
 					break

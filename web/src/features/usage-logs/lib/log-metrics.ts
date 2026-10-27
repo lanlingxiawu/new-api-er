@@ -32,12 +32,14 @@ export type LogMetricKey =
   | 'tokens.cache_write'
   | 'tokens.cache_write_5m'
   | 'tokens.cache_write_1h'
+  | 'tokens.cache_write_12h'
   | 'price.input'
   | 'price.output'
   | 'price.cache_read'
   | 'price.cache_write'
   | 'price.cache_write_5m'
   | 'price.cache_write_1h'
+  | 'price.cache_write_12h'
   | 'price.per_call'
   | 'group_ratio'
   | 'total_cost'
@@ -51,6 +53,7 @@ export const TIERED_PRICE_METRIC: Record<string, LogMetricKey> = {
   cacheReadPrice: 'price.cache_read',
   cacheCreatePrice: 'price.cache_write',
   cacheCreate1hPrice: 'price.cache_write_1h',
+  cacheCreate12hPrice: 'price.cache_write_12h',
 }
 
 function setFinite(metrics: LogMetrics, key: LogMetricKey, value: unknown) {
@@ -74,6 +77,7 @@ export function collectLogMetrics(log: UsageLog): LogMetrics {
   setFinite(metrics, 'tokens.cache_write', other.cache_creation_tokens)
   setFinite(metrics, 'tokens.cache_write_5m', other.cache_creation_tokens_5m)
   setFinite(metrics, 'tokens.cache_write_1h', other.cache_creation_tokens_1h)
+  setFinite(metrics, 'tokens.cache_write_12h', other.cache_creation_tokens_12h)
 
   const userGR = other.user_group_ratio
   const isUserGR = userGR != null && Number.isFinite(userGR) && userGR !== -1
@@ -107,6 +111,11 @@ export function collectLogMetrics(log: UsageLog): LogMetrics {
     metrics,
     'price.cache_write_1h',
     ratioOf(other.cache_creation_ratio_1h)
+  )
+  setFinite(
+    metrics,
+    'price.cache_write_12h',
+    ratioOf(other.cache_creation_ratio_12h)
   )
   return metrics
 }

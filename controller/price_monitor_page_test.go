@@ -21,6 +21,19 @@ func zhPriceMonitorPage(t *testing.T) string {
 	return renderPriceMonitorPage(i18n.LangZhCN, "/logo.png")
 }
 
+func TestPriceMonitorPageShowsCacheWrite12hLabel(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	for lang, label := range map[string]string{
+		i18n.LangEn:   "Cache write (12 hours)",
+		i18n.LangZhCN: "缓存写入（12 小时）",
+		i18n.LangZhTW: "快取寫入（12 小時）",
+	} {
+		page := renderPriceMonitorPage(lang, "/logo.png")
+		require.Contains(t, page, "cache_write_12h:T.lane_cache_write_12h")
+		require.Contains(t, page, label)
+	}
+}
+
 var hanCharacters = regexp.MustCompile(`\p{Han}`)
 
 // Rule 13: the whole share page follows one language — static text, script text, dates and

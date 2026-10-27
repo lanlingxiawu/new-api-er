@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { describe, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import type { UsageLog } from '../../data/schema'
 import { collectLogMetrics, findLowerMetrics } from '../log-metrics'
@@ -59,6 +59,58 @@ const TIERED_EXPR_B64 = Buffer.from(
 ).toString('base64')
 
 describe('collectLogMetrics', () => {
+  test.each([0, 2.5])(
+    'compares 12-hour cache prices including explicit %s',
+    (ratio) => {
+      const local = collectLogMetrics(
+        mkLog(
+          {},
+          {
+            model_ratio: 5,
+            cache_creation_tokens_12h: 1000,
+            cache_creation_ratio_12h: ratio,
+          }
+        )
+      )
+      const upstream = collectLogMetrics(
+        mkLog(
+          {},
+          {
+            model_ratio: 5,
+            cache_creation_tokens_12h: 1200,
+            cache_creation_ratio_12h: 3,
+          }
+        )
+      )
+      expect(local['tokens.cache_write_12h']).toBe(1000)
+      expect(local['price.cache_write_12h']).toBe(ratio * 10)
+      expect(findLowerMetrics(local, upstream)).toMatchObject({
+        'tokens.cache_write_12h': 1200,
+        'price.cache_write_12h': 30,
+      })
+      expect(collectLogMetrics(mkLog({}, {}))).not.toHaveProperty(
+        'price.cache_write_12h'
+      )
+    }
+  )
+
+  test('maps expression 12-hour cache prices to the same comparison metric', () => {
+    const metrics = collectLogMetrics(
+      mkLog(
+        {},
+        {
+          billing_mode: 'tiered_expr',
+          matched_tier: 'base',
+          expr_b64: Buffer.from('tier("base", p*10+cc12h*25+c*40)').toString(
+            'base64'
+          ),
+          cache_creation_tokens_12h: 1000,
+        }
+      )
+    )
+    expect(metrics['price.cache_write_12h']).toBe(25)
+    expect(metrics['tokens.cache_write_12h']).toBe(1000)
+  })
   test('ratio billing: tokens, base unit prices, effective group ratio and total cost', () => {
     const m = collectLogMetrics(
       mkLog(

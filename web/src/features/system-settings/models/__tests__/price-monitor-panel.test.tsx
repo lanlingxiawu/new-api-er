@@ -71,6 +71,7 @@ test('shows prices and loss warnings without raw expression difference rows', as
               mode: 'per_token',
               input: 2.1,
               output: 8.4,
+              lanes: [{ key: 'cache_write_12h', price: 2.5 }],
               input_different: true,
               different: true,
               loss_kinds: ['configured'],
@@ -105,6 +106,8 @@ test('shows prices and loss warnings without raw expression difference rows', as
   assert(row)
   expect(within(row).getByText('$2.1')).toBeVisible()
   expect(within(row).getByText('$8.4')).toBeVisible()
+  expect(within(row).getByText('Cache Creation (12h)')).toBeVisible()
+  expect(within(row).getByText('$2.5')).toBeVisible()
   expect(within(row).getByText('Configured loss')).toBeVisible()
   expect(within(row).queryByText(/0–512000.*p:/)).not.toBeInTheDocument()
   expect(within(row).queryByText(/512001–∞.*img_cr:/)).not.toBeInTheDocument()

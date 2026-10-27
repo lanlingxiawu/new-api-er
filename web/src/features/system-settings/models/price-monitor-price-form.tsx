@@ -89,6 +89,7 @@ const PRICE_LABELS: Record<TokenPriceVariable, string> = {
   cr: 'Cache read price',
   cc: 'Cache write price',
   cc1h: 'Cache Creation (1h)',
+  cc12h: 'Cache Creation (12h)',
   img: 'Image input price',
   img_cr: 'Image cache read price',
   img_o: 'Image output price',

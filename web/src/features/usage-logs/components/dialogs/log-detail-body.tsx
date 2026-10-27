@@ -397,7 +397,11 @@ function BillingBreakdown(props: {
   }
 
   if (!isTieredExpr && hasCacheWrite12h && other.cache_creation_ratio_12h != null) {
-    rows.push({ label: t('Cache Creation (12h)'), value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio_12h)}/M` })
+    rows.push({
+      label: t('Cache Creation (12h)'),
+      value: `${fmtPrice(baseInputUSD * other.cache_creation_ratio_12h)}/M`,
+      metric: 'price.cache_write_12h',
+    })
   }
 
   if (!isTieredExpr) {
@@ -598,7 +602,13 @@ function TokenBreakdown(props: {
   }
 
   if (cacheWrite30m > 0) rows.push({ label: t('Cache Write (30m)'), value: cacheWrite30m.toLocaleString() })
-  if (cacheWrite12h > 0) rows.push({ label: t('Cache Write (12h)'), value: cacheWrite12h.toLocaleString() })
+  if (cacheWrite12h > 0) {
+    rows.push({
+      label: t('Cache Write (12h)'),
+      value: cacheWrite12h.toLocaleString(),
+      metric: 'tokens.cache_write_12h',
+    })
+  }
 
   // image_output is a legacy key holding *input* image tokens, and both it and
   // text_input are subsets of Input Tokens above — the labels say so, otherwise

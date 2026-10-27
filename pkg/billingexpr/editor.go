@@ -58,7 +58,7 @@ func DescribeEditor(source string) (*EditorDescription, error) {
 	}
 	version, body := ParseExprVersion(strings.TrimSpace(source))
 	editor := &EditorDescription{SchemaVersion: 1, Kind: "custom", Source: source, SourceHash: ExprHashString(source), ExpressionVersion: version, Branches: []EditorBranch{}, UsedVars: []string{}, CanScale: true}
-	for _, variable := range []string{"p", "c", "len", "cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao", "image_count"} {
+	for _, variable := range []string{"p", "c", "len", "cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao", "image_count"} {
 		if program.UsedVars[variable] {
 			editor.UsedVars = append(editor.UsedVars, variable)
 		}

@@ -19,6 +19,43 @@ func parsedPriceMonitorExpressionCell(expression string) PriceMonitorPriceCell {
 	return PriceMonitorPriceCell{Mode: priceMonitorModeExpression, Expr: expression, Tiers: tiers, Dynamic: dynamic}
 }
 
+func TestPriceMonitorOpenAICacheWrite12hPricesAreCompared(t *testing.T) {
+	platform := parsedPriceMonitorExpressionCell(`len <= 272000 ? tier("standard", p * 1 + cr * 0.05 + cc * 1.25 + cc1h * 2.5 + c * 5) : tier("long", p * 2 + cr * 0.1 + cc * 2.5 + cc1h * 5 + c * 10)`)
+	source := parsedPriceMonitorExpressionCell(`len <= 272000 ? tier("standard", p * 1 + cr * 0.05 + cc * 1.25 + cc12h * 2.5 + c * 5) : tier("long", p * 2 + cr * 0.1 + cc * 2.5 + cc12h * 5 + c * 7.5)`)
+	require.False(t, source.Dynamic)
+	require.Len(t, source.Tiers, 2)
+	require.Equal(t, float64(272000), *source.Tiers[0].ConditionValue)
+	require.Equal(t, float64(5), source.Tiers[0].Output)
+	require.Equal(t, float64(7.5), source.Tiers[1].Output)
+	require.Contains(t, source.Tiers[0].Lanes, PriceMonitorPriceLane{Key: "cache_write_12h", Price: floatPointer(2.5)})
+	markPriceMonitorDifferences(platform, &source)
+	require.True(t, source.Different)
+	require.NotEqual(t, "scenario_only", source.ComparisonStatus)
+	var outputDifference bool
+	for _, difference := range source.Differences {
+		if difference.Variable == "c" {
+			require.Equal(t, int64(272001), difference.Min)
+			require.Equal(t, float64(10), difference.Left)
+			require.Equal(t, float64(7.5), difference.Right)
+			outputDifference = true
+		}
+	}
+	require.True(t, outputDifference)
+}
+
+func TestPriceMonitorCacheWrite12hOnlyDifference(t *testing.T) {
+	platform := parsedPriceMonitorExpressionCell(`tier("standard", p * 1 + cc * 1.25 + cc12h * 2.5 + c * 5)`)
+	source := parsedPriceMonitorExpressionCell(`tier("standard", p * 1 + cc * 1.25 + cc12h * 3 + c * 5)`)
+	require.False(t, platform.Dynamic)
+	require.False(t, source.Dynamic)
+	markPriceMonitorDifferences(platform, &source)
+	require.Equal(t, "different", source.ComparisonStatus)
+	require.True(t, source.Different)
+	require.True(t, priceMonitorSourceAbovePlatform(platform, source))
+	require.Len(t, source.Differences, 1)
+	require.Equal(t, "cc12h", source.Differences[0].Variable)
+}
+
 func TestParsePriceMonitorExpressionDetectsTimeBasedPricing(t *testing.T) {
 	cases := []struct {
 		name       string

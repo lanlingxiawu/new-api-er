@@ -635,6 +635,61 @@ test('keeps an OpenAI 12-hour cache write price through edits and labels the def
   )
 })
 
+test('matches upstream cache TTL labels while preserving cache prices', async () => {
+  const onBillingExprChange = vi.fn()
+  render(
+    <TieredPricingEditor
+      billingExpr='tier("base", p * 1 + c * 5)'
+      requestRuleExpr=''
+      onBillingExprChange={onBillingExprChange}
+      onRequestRuleExprChange={vi.fn()}
+    />
+  )
+  const user = userEvent.setup()
+  const tier = within(screen.getByRole('group', { name: 'Pricing tier base' }))
+  const price = tier.getByRole('textbox', { name: 'Cache create price' })
+  expect(price).toBeDisabled()
+  expect(onBillingExprChange).not.toHaveBeenCalled()
+  await user.click(
+    tier.getByRole('checkbox', { name: 'Include Cache create price' })
+  )
+  fireEvent.change(price, { target: { value: '1.25' } })
+  expect(onBillingExprChange).toHaveBeenLastCalledWith(
+    'tier("base", p * 1 + c * 5 + cc * 1.25)'
+  )
+  expect(
+    tier.getByRole('checkbox', { name: 'Include Cache create (1h) price' })
+  ).not.toBeChecked()
+  expect(
+    tier.getByRole('checkbox', { name: 'Include Cache create (12h) price' })
+  ).not.toBeChecked()
+
+  await user.click(
+    tier.getByRole('checkbox', { name: 'Include Cache create (12h) price' })
+  )
+  expect(
+    tier.getByRole('textbox', { name: 'Cache Creation (30m)' })
+  ).toHaveValue('1.25')
+  await user.click(
+    tier.getByRole('checkbox', { name: 'Include Cache create (1h) price' })
+  )
+  expect(
+    tier.getByRole('textbox', { name: 'Cache Creation (5m)' })
+  ).toHaveValue('1.25')
+  await user.click(
+    tier.getByRole('checkbox', { name: 'Include Cache create (12h) price' })
+  )
+  expect(
+    tier.getByRole('textbox', { name: 'Cache Creation (5m)' })
+  ).toHaveValue('1.25')
+  await user.click(
+    tier.getByRole('checkbox', { name: 'Include Cache create (1h) price' })
+  )
+  expect(tier.getByRole('textbox', { name: 'Cache create price' })).toHaveValue(
+    '1.25'
+  )
+})
+
 describe('visual time billing editor', () => {
   test.each([
     ['simple tiers', 'tier("base", p * 2 + c * 8)', '2'],

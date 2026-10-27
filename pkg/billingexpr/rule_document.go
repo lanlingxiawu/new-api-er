@@ -211,7 +211,7 @@ func (w *ruleDocumentWriter) write(node *RuleNode, depth int) (string, error) {
 		result = "nil"
 	case "usage":
 		switch node.Name {
-		case "p", "c", "len", "cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao", "image_count":
+		case "p", "c", "len", "cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao", "image_count":
 		default:
 			return "", fmt.Errorf("unsupported usage value")
 		}

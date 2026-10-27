@@ -426,12 +426,12 @@ var logExportCustomerColumns = []string{
 	"created_at", "request_id", "model_name", "token_name", "group",
 	// 计费基数
 	"prompt_tokens", "completion_tokens", "total_tokens",
-	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h",
+	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h", "cache_creation_tokens_12h",
 	"text_input", "text_output", "audio_input", "audio_output",
 	"image_output", "image_cache_tokens", "billing_tokens",
 	// 倍率与单价：不给这些，客户就只能核对总额、对不上就只能找客服
 	"model_ratio", "completion_ratio", "group_ratio",
-	"cache_ratio", "cache_creation_ratio", "cache_creation_ratio_5m", "cache_creation_ratio_1h",
+	"cache_ratio", "cache_creation_ratio", "cache_creation_ratio_5m", "cache_creation_ratio_1h", "cache_creation_ratio_12h",
 	"audio_ratio", "audio_completion_ratio", "image_ratio",
 	"model_price", "billing_unit", "fixed_price", "image_count",
 	"tool_surcharges", "usage_facts",
@@ -515,6 +515,7 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("cache_creation_tokens", "Cache Write Tokens", LogExportGroupTokens),
 		otherCol("cache_creation_tokens_5m", "Cache Write Tokens (5m)", LogExportGroupTokens),
 		otherCol("cache_creation_tokens_1h", "Cache Write Tokens (1h)", LogExportGroupTokens),
+		otherCol("cache_creation_tokens_12h", "Cache Write Tokens (12h)", LogExportGroupTokens),
 		otherCol("text_input", "Text Input Tokens", LogExportGroupTokens),
 		otherCol("text_output", "Text Output Tokens", LogExportGroupTokens),
 		otherCol("audio_input", "Audio Input Tokens", LogExportGroupTokens),
@@ -560,6 +561,7 @@ func buildLogExportColumns() []LogExportColumn {
 		otherCol("cache_creation_ratio", "Cache Write Ratio", LogExportGroupBilling),
 		otherCol("cache_creation_ratio_5m", "Cache Write Ratio (5m)", LogExportGroupBilling),
 		otherCol("cache_creation_ratio_1h", "Cache Write Ratio (1h)", LogExportGroupBilling),
+		otherCol("cache_creation_ratio_12h", "Cache Write Ratio (12h)", LogExportGroupBilling),
 		otherCol("audio_ratio", "Audio Ratio", LogExportGroupBilling),
 		otherCol("audio_completion_ratio", "Audio Completion Ratio", LogExportGroupBilling),
 		otherCol("image_ratio", "Image Input Ratio", LogExportGroupBilling),
@@ -788,13 +790,13 @@ var legacyColumns = []string{
 var billingColumns = []string{
 	"created_at", "username", "token_name", "group", "model_name",
 	"prompt_tokens", "completion_tokens", "total_tokens",
-	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h",
+	"cache_tokens", "cache_creation_tokens", "cache_creation_tokens_5m", "cache_creation_tokens_1h", "cache_creation_tokens_12h",
 	"text_input", "text_output", "audio_input", "audio_output", "image_output",
 	"image_cache_tokens", "billing_tokens",
 	"quota", "cost_usd", "billing_source", "billing_mode", "matched_tier",
 	"billing_unit", "fixed_price", "image_count", "request_rules",
 	"model_ratio", "completion_ratio", "group_ratio", "user_group_ratio",
-	"cache_ratio", "cache_creation_ratio", "audio_ratio", "audio_completion_ratio",
+	"cache_ratio", "cache_creation_ratio", "cache_creation_ratio_12h", "audio_ratio", "audio_completion_ratio",
 	"image_ratio", "model_price", "tool_surcharges", "usage_facts",
 }
 

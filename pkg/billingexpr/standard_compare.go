@@ -42,7 +42,7 @@ func CompareStandard(left, right *StandardAnalysis) []StandardDifference {
 			n := ordered[i+1] - 1
 			end = &n
 		}
-		for _, key := range []string{"p", "c", "cr", "cc", "cc1h", "img_cr", "img", "img_o", "ai", "ao"} {
+		for _, key := range []string{"p", "c", "cr", "cc", "cc1h", "cc12h", "img_cr", "img", "img_o", "ai", "ao"} {
 			if math.Abs(l[key]-r[key]) > 1e-9*math.Max(1, math.Max(math.Abs(l[key]), math.Abs(r[key]))) {
 				differences = append(differences, StandardDifference{Min: start, Max: end, Variable: key, Left: l[key], Right: r[key]})
 			}

@@ -24,6 +24,7 @@ import { afterEach, beforeAll, describe, expect, test } from 'vitest'
 import type { UsageLog } from '../../data/schema'
 import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
+import { LogDetailBody } from '../dialogs/log-detail-body'
 
 const i18nKeys = {
   'Log Details': 'Log Details',
@@ -129,6 +130,37 @@ test('splits OpenAI cache writes into 30-minute and 12-hour rows with their pric
   expect(screen.queryByText('Cache Write')).toBeNull()
   expect(rowValue('Cache Creation (30m)')).toBe('$12.5/M')
   expect(rowValue('Cache Creation (12h)')).toBe('$25/M')
+  queryClient.clear()
+})
+
+test('warns on the actual 12-hour cache token and price rows when lower than upstream', () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <LogDetailBody
+        log={makeLog({
+          model_ratio: 5,
+          cache_creation_tokens: 1500,
+          cache_creation_tokens_12h: 1000,
+          cache_creation_ratio_12h: 2.5,
+        })}
+        isAdmin={false}
+        showStreamDiagnostic={false}
+        lowerThanUpstream={{
+          'tokens.cache_write_12h': 1200,
+          'price.cache_write_12h': 30,
+        }}
+      />
+    </QueryClientProvider>
+  )
+  expect(
+    screen.getByText('Cache Write (12h)').nextElementSibling
+  ).toHaveAttribute('title', expect.stringContaining('1,200'))
+  expect(
+    screen.getByText('Cache Creation (12h)').nextElementSibling
+  ).toHaveAttribute('title', expect.stringContaining('30'))
   queryClient.clear()
 })
 

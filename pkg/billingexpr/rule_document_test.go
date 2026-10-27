@@ -12,6 +12,7 @@ import (
 func TestRuleDocumentRoundTrip(t *testing.T) {
 	for _, source := range []string{
 		"  v1: tier('original label', p * 2 + c*4)  ",
+		`tier("openai", p*1 + cc*1.25 + cc12h*2.5 + c*5)`,
 		`param("quality") == "高\"\\\n" ? tier("special",max(p*2,c*4)) : min(abs(p-c),ceil(p/3)+floor(c/2))`,
 		`not (header("x") contains "a") && has(param("m"),"fast") ? p**2 + hour("UTC")%3 : +p / 2 - -c`,
 		`hour("UTC")>=9 and minute("UTC")<30 or weekday("UTC")==0 ? month("UTC") + day("UTC") : p`,

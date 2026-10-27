@@ -13,6 +13,7 @@ const VARIABLES = new Set([
   'cr',
   'cc',
   'cc1h',
+  'cc12h',
   'img',
   'img_cr',
   'img_o',
@@ -42,6 +43,7 @@ export type PricingExpressionField = {
       | 'cr'
       | 'cc'
       | 'cc1h'
+      | 'cc12h'
       | 'img'
       | 'img_cr'
       | 'img_o'

@@ -8,7 +8,7 @@ by the Free Software Foundation, either version 3 of the License, or
 */
 import assert from 'node:assert/strict'
 
-import { test } from 'vitest'
+import { expect, test } from 'vitest'
 
 import {
   buildPricingChange,
@@ -29,6 +29,34 @@ import {
   removePricingTier,
   patchPricingThreshold,
 } from '../price-monitor-pricing-draft'
+
+test('12-hour cache prices remain editable in ordinary length tiers', () => {
+  const expression =
+    'len <= 272000 ? tier("standard", p*1+cc*1.25+cc12h*2.5+c*5) : tier("long", p*2+cc*2.5+cc12h*5+c*7.5)'
+  const fields = expressionPriceFields(expression)
+  expect(fields).toHaveLength(2)
+  expect(fields?.map((field) => field.prices.cc12h)).toEqual(['2.5', '5'])
+  const changed = patchExpressionPrice(expression, 1, 'cc12h', '0')
+  expect(changed).toBe(expression.replace('cc12h*5', 'cc12h*0'))
+  expect(expressionPriceFields(changed)?.[1]?.prices.cc12h).toBe('0')
+  const scaled = scaleExpressionPrices(
+    [
+      {
+        model_name: 'cache-model',
+        expected_version: 'v1',
+        pricing: { 'billing_setting.billing_expr': expression },
+      },
+    ],
+    '100'
+  )
+  const scaledExpression = scaled[0]?.pricing['billing_setting.billing_expr']
+  expect(typeof scaledExpression).toBe('string')
+  expect(
+    expressionPriceFields(String(scaledExpression))?.map(
+      (field) => field.prices.cc12h
+    )
+  ).toEqual(['5', '10'])
+})
 
 test('ordinary expressions expose prices without requiring a tier wrapper', () => {
   for (const expression of [

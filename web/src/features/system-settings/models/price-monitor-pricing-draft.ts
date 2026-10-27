@@ -88,6 +88,7 @@ export const TOKEN_PRICE_VARIABLES = [
   'cr',
   'cc',
   'cc1h',
+  'cc12h',
   'img',
   'img_cr',
   'img_o',

@@ -545,6 +545,7 @@ function laneLabel(key: PriceMonitorPriceLane['key'], t: TFunction) {
     cache_read: t('Cache read price'),
     cache_write: t('Cache write price'),
     cache_write_1h: t('Cache write price (1 hour)'),
+    cache_write_12h: t('Cache Creation (12h)'),
     image_input: t('Image input price'),
     image_cache_read: t('Image cache read price'),
     image_output: t('Image output price'),
