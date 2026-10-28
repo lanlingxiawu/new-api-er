@@ -31,8 +31,8 @@ func TestUserValidationMessagesAreLocalizedAndActionable(t *testing.T) {
 		for _, tc := range []struct {
 			field, value, zh, en string
 		}{
-			{"username", strings.Repeat("名", 21), "用户名最多 20 个字符，请缩短后重试。", "Username must be at most 20 characters. Shorten it and try again."},
-			{"display_name", strings.Repeat("😀", 21), "显示名最多 20 个字符，请缩短后重试。", "Display name must be at most 20 characters. Shorten it and try again."},
+			{"username", strings.Repeat("名", 33), "用户名最多 32 个字符，请缩短后重试。", "Username must be at most 32 characters. Shorten it and try again."},
+			{"display_name", strings.Repeat("😀", 33), "显示名最多 32 个字符，请缩短后重试。", "Display name must be at most 32 characters. Shorten it and try again."},
 			{"email", strings.Repeat("a", 51), "邮箱地址最多 50 个字符，请检查后重试。", "Email address must be at most 50 characters. Check it and try again."},
 			{"remark", strings.Repeat("注", 256), "备注最多 255 个字符，请缩短后重试。", "Remark must be at most 255 characters. Shorten it and try again."},
 			{"password", "short", "密码长度须为 8 至 128 个字符。", "Password must contain 8 to 128 characters."},
@@ -61,6 +61,29 @@ func TestUserValidationMessagesAreLocalizedAndActionable(t *testing.T) {
 					assert.Equal(t, expected, response.Message)
 					assert.NotContains(t, response.Message, "User.")
 					assert.NotContains(t, response.Message, "validation for")
+				})
+			}
+		}
+	}
+}
+
+func TestUserNameLengthBoundaries(t *testing.T) {
+	for _, character := range []string{"a", "名", "😀"} {
+		for _, length := range []int{20, 21, 31, 32, 33} {
+			for _, field := range []string{"username", "display_name"} {
+				t.Run(fmt.Sprintf("%s/%s/%d", field, character, length), func(t *testing.T) {
+					user := model.User{Username: "valid-user", Password: "valid-password"}
+					if field == "username" {
+						user.Username = strings.Repeat(character, length)
+					} else {
+						user.DisplayName = strings.Repeat(character, length)
+					}
+					err := common.Validate.Struct(&user)
+					if length <= 32 {
+						require.NoError(t, err)
+					} else {
+						require.Error(t, err)
+					}
 				})
 			}
 		}

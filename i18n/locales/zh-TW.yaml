@@ -1,8 +1,8 @@
 # Chinese (Traditional) translations
 price_monitor.client_refresh_required: "目前改價表單版本已停用，請重新整理頁面後再次提交。"
 # 中文（繁體）翻譯檔案
-user.username_too_long: "使用者名稱最多 20 個字元，請縮短後重試。"
-user.display_name_too_long: "顯示名稱最多 20 個字元，請縮短後重試。"
+user.username_too_long: "使用者名稱最多 32 個字元，請縮短後重試。"
+user.display_name_too_long: "顯示名稱最多 32 個字元，請縮短後重試。"
 user.email_too_long: "電子郵件地址最多 50 個字元，請檢查後重試。"
 user.remark_too_long: "備註最多 255 個字元，請縮短後重試。"
 user.password_length_invalid: "密碼長度須為 8 至 128 個字元。"

@@ -162,12 +162,18 @@ it.each(['username', 'display_name'] as const)(
   '用户名称长度按 Unicode 字符校验：%s',
   (field) => {
     for (const character of ['a', '名', '😀']) {
-      for (const length of [19, 20, 21]) {
+      for (const length of [20, 21, 31, 32, 33]) {
         const result = userFormSchema.safeParse({
           username: 'managed-user',
           [field]: character.repeat(length),
         })
-        expect(result.success).toBe(length <= 20)
+        expect(result.success).toBe(length <= 32)
+        if (!result.success) {
+          expect(result.error.issues[0]).toMatchObject({
+            code: 'too_big',
+            maximum: 32,
+          })
+        }
       }
     }
   }
@@ -175,14 +181,14 @@ it.each(['username', 'display_name'] as const)(
 
 it('注册与管理员编辑采用相同的用户名长度和去空格规则', () => {
   for (const character of ['a', '名', '😀']) {
-    for (const length of [20, 21]) {
+    for (const length of [20, 21, 31, 32, 33]) {
       const username = ` ${character.repeat(length)} `
       const result = registerFormSchema.safeParse({
         username,
         password: 'valid-password',
         confirmPassword: 'valid-password',
       })
-      expect(result.success).toBe(length === 20)
+      expect(result.success).toBe(length <= 32)
       if (result.success) expect(result.data.username).toBe(username.trim())
     }
   }
@@ -200,7 +206,7 @@ it('超长显示名阻止保存，修正后可保存且保留超时和重试配�
   renderPermissions(100, true)
   const displayName = await screen.findByDisplayValue('Managed admin')
   await userEvent.clear(displayName)
-  await userEvent.type(displayName, 'x'.repeat(21))
+  await userEvent.type(displayName, 'x'.repeat(33))
   await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
   await waitFor(() =>
     expect(displayName).toHaveAttribute('aria-invalid', 'true')
