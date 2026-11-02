@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -459,10 +460,25 @@ func GetUser(c *gin.Context) {
 		return
 	}
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	ids, parseErr := model.ParseUserChannelExclusions(user.ExcludedChannelIDs)
+	if parseErr != nil {
+		logger.LogError(c, "invalid stored user channel exclusion policy")
+		if err := model.DB.Model(&model.UserChannelExclusion{}).Where("user_id = ?", user.Id).Order("channel_id").Pluck("channel_id", &ids).Error; err != nil {
+			logger.LogError(c, common.LogText("failed to read user channel exclusions: %v", err))
+			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			return
+		}
+	}
+	if ids == nil {
+		ids = []int{}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user,
+		"data": struct {
+			*model.User
+			ExcludedChannelIDs []int `json:"excluded_channel_ids"`
+		}{user, ids},
 	})
 	return
 }
@@ -722,7 +738,8 @@ type updateUserRequest struct {
 	// Omitting group_ratios must inherit the stored rules; only an explicit
 	// "{}" clears them. Without the shadow field a caller that leaves the
 	// optional field out would silently wipe every exclusive ratio.
-	GroupRatios *string `json:"group_ratios"`
+	GroupRatios        *string         `json:"group_ratios"`
+	ExcludedChannelIDs json.RawMessage `json:"excluded_channel_ids"`
 }
 
 // activeGroupRatioCleanups 是包级变量，只为测试能模拟「分组清理进行中」。
@@ -879,6 +896,23 @@ func UpdateUser(c *gin.Context) {
 	// the transaction, and writing its value back would restore a ratio that the
 	// group-deletion cleanup removed in between.
 	writeGroupRatios := false
+	writeExclusions := len(request.ExcludedChannelIDs) > 0
+	var excludedChannelIDs, removedExcludedChannelIDs []int
+	if writeExclusions {
+		excludedChannelIDs, err = model.ParseUserChannelExclusions(string(request.ExcludedChannelIDs))
+		if err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if !authz.Can(c.GetInt("id"), myRole, authz.ChannelRead) || !authz.Can(c.GetInt("id"), myRole, authz.AdminMenuChannelsView) {
+			stored, storedErr := model.ParseUserChannelExclusions(originUser.ExcludedChannelIDs)
+			if storedErr != nil || !slices.Equal(stored, excludedChannelIDs) {
+				common.ApiErrorT(c, "Unauthorized, insufficient privileges")
+				return
+			}
+			writeExclusions = false
+		}
+	}
 	var removedGroupRatios []string
 	if request.GroupRatios != nil {
 		// 库里的旧值损坏时按空表处理；库里的 null 与 relay 一样跳过，原样回传不算改动。
@@ -961,6 +995,21 @@ func UpdateUser(c *gin.Context) {
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if writeExclusions {
+			kept, removed, err := model.ReplaceUserChannelExclusions(tx, updatedUser.Id, excludedChannelIDs)
+			if err != nil {
+				return err
+			}
+			removedExcludedChannelIDs = removed
+			raw, err := common.Marshal(kept)
+			if err != nil {
+				return err
+			}
+			updatedUser.ExcludedChannelIDs = string(raw)
+			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).Update("excluded_channel_ids", string(raw)).Error; err != nil {
+				return err
+			}
+		}
 		if err := updatedUser.EditWithTxGroupRatios(tx, updatePassword, writeGroupRatios); err != nil {
 			return err
 		}
@@ -974,7 +1023,8 @@ func UpdateUser(c *gin.Context) {
 		}
 		return err
 	}); err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, common.LogText("failed to update user: %v", err))
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	if authzTouched {
@@ -990,19 +1040,23 @@ func UpdateUser(c *gin.Context) {
 		}
 	}
 	if err := model.PublishUserAuthCache(updatedUser.Id); err != nil {
-		common.ApiError(c, err)
+		logger.LogError(c, common.LogText("failed to publish updated user cache: %v", err))
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	if len(removedGroupRatios) > 0 {
 		auditParams["removed_group_ratios"] = removedGroupRatios
+	}
+	if writeExclusions {
+		auditParams["excluded_channel_ids_changed"] = originUser.ExcludedChannelIDs != updatedUser.ExcludedChannelIDs
 	}
 	recordManageAuditForUser(c, updatedUser.Id, originUser.Username, "user.update", auditParams)
 	response := gin.H{
 		"success": true,
 		"message": "",
 	}
-	if len(removedGroupRatios) > 0 {
-		response["data"] = gin.H{"removed_group_ratios": removedGroupRatios}
+	if len(removedGroupRatios) > 0 || len(removedExcludedChannelIDs) > 0 {
+		response["data"] = gin.H{"removed_group_ratios": removedGroupRatios, "removed_excluded_channel_ids": removedExcludedChannelIDs}
 	}
 	c.JSON(http.StatusOK, response)
 	return

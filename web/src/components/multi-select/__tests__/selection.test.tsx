@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { MultiSelect } from '@/components/multi-select'
 
@@ -27,6 +27,48 @@ const options = [
   { value: 'a', label: 'a' },
   { value: 'c', label: 'c' },
 ]
+
+describe('multi-select channel label search', () => {
+  it.each(['CHANNEL HIGH', '123'])(
+    'finds a channel by %s and submits its ID',
+    async (query) => {
+      const user = userEvent.setup()
+      const onChange = vi.fn()
+      render(
+        <MultiSelect
+          options={[{ value: '123', label: '#123 Channel High' }]}
+          selected={[]}
+          onChange={onChange}
+          searchByLabel
+        />
+      )
+      await user.type(screen.getByRole('combobox'), query)
+      await user.click(
+        await screen.findByRole('option', { name: '#123 Channel High' })
+      )
+      expect(onChange).toHaveBeenCalledWith(['123'])
+    }
+  )
+
+  it('preserves value-only search for existing callers', async () => {
+    const user = userEvent.setup()
+    render(
+      <MultiSelect
+        options={[{ value: '123', label: '#123 Channel High' }]}
+        selected={[]}
+        onChange={() => {}}
+      />
+    )
+    const input = screen.getByRole('combobox')
+    await user.type(input, 'Channel High')
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+    await user.clear(input)
+    await user.type(input, '123')
+    expect(
+      await screen.findByRole('option', { name: '#123 Channel High' })
+    ).toBeVisible()
+  })
+})
 
 function Fixture(props: {
   initialSelected?: string[]

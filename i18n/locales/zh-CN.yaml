@@ -798,3 +798,5 @@ cleanup.index_missing: "缺少清理所需的索引，请联系管理员完成�
 cleanup.failed: "清理已停止，已删除的数据不会恢复。请重新预览后清理剩余记录。"
 cleanup.upgrade_nodes: "请先升级所有已登记节点，再清理财务明细。已停用的节点可在节点管理中移除。"
 cleanup.export_changed: "导出期间发生了明细清理，请重新导出剩余记录。"
+log_export.col.user_channel_routing_reason: "用户渠道路由"
+log_export.col.user_channel_routing_ids: "渠道 ID"

@@ -47,6 +47,7 @@ export const userSchema = z.object({
   request_count: z.number(),
   group: z.string(),
   group_ratios: z.string().optional(),
+  excluded_channel_ids: z.array(z.number().int().positive()).optional(),
   stream_response_timeout: z.number().optional(),
   stream_response_timeout_mode: z.enum(['first_output', 'idle']).optional(),
   stream_total_timeout: z.number().optional(),
@@ -141,6 +142,7 @@ export interface UserFormData {
   quota?: number // Only used when updating user
   group?: string // Only used when updating user
   group_ratios?: string // JSON {group: ratio}; only used when updating user
+  excluded_channel_ids?: number[]
   stream_response_timeout?: number // 0 inherits the current global response limit, -1 disables
   stream_response_timeout_mode?: 'first_output' | 'idle' // first output or continuous stream silence timeout
   stream_total_timeout?: number // 0 inherits the current global total limit, -1 disables

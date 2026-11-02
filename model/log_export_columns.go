@@ -493,6 +493,16 @@ func buildLogExportColumns() []LogExportColumn {
 			Extract: func(l *Log, _ *rowCtx) string { return l.RequestId }},
 		{Key: "upstream_request_id", Label: "Upstream Request ID", Group: LogExportGroupBasic,
 			Extract: func(l *Log, _ *rowCtx) string { return l.UpstreamRequestId }},
+		{Key: "user_channel_routing_reason", Label: "User channel routing", Group: LogExportGroupDiagnostic, AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				diagnostic, _ := ctx.adminInfo(l)["user_channel_routing"].(map[string]any)
+				return otherValue(diagnostic, "reason")
+			}},
+		{Key: "user_channel_routing_ids", Label: "Channel IDs", Group: LogExportGroupDiagnostic, AdminOnly: true, NeedOther: true,
+			Extract: func(l *Log, ctx *rowCtx) string {
+				diagnostic, _ := ctx.adminInfo(l)["user_channel_routing"].(map[string]any)
+				return otherValue(diagnostic, "channel_ids")
+			}},
 		// 导出中心只对管理员开放：详情附带 admin_info.stream_error（见 AdminLogExportContent）。
 		{Key: "content", Label: "Details", Group: LogExportGroupBasic, NeedOther: true,
 			Extract: func(l *Log, ctx *rowCtx) string {

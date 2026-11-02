@@ -796,3 +796,5 @@ distributor.affinity_channel_disabled: "The channel selected by channel affinity
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 setting.group_retry_guard_invalid: "Check the group retry settings and numeric limits. The maximum cooldown must not be shorter than the initial cooldown."
 relay.body_cache_capacity: "The server is busy. Please reduce concurrent requests and try again later."
+log_export.col.user_channel_routing_reason: "User channel routing"
+log_export.col.user_channel_routing_ids: "Channel IDs"

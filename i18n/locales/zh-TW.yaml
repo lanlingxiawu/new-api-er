@@ -798,3 +798,5 @@ cleanup.index_missing: "缺少清理所需的索引，請聯絡管理員完成�
 cleanup.failed: "清理已停止，已刪除的資料不會復原。請重新預覽後清理剩餘記錄。"
 cleanup.upgrade_nodes: "請先升級所有已登記節點，再清理財務明細。已停用的節點可在節點管理中移除。"
 cleanup.export_changed: "匯出期間發生了明細清理，請重新匯出剩餘記錄。"
+log_export.col.user_channel_routing_reason: "使用者管道路由"
+log_export.col.user_channel_routing_ids: "管道 ID"

@@ -249,6 +249,15 @@ export interface LogOtherData {
     settlement_state: 'pending' | 'settled' | 'released' | 'failed' | 'partial' // 待结算、完成、释放预扣、失败或部分提交。
   }
   admin_info?: {
+    user_channel_routing?: {
+      reason: string
+      phase: string
+      excluded_count: number
+      rejected_count: number
+      channel_ids: number[]
+      truncated: boolean
+      pin_source?: string
+    }
     request_policy?: PolicyEvent[]
     is_multi_key?: boolean
     multi_key_index?: number

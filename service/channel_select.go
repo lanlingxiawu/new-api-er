@@ -24,6 +24,11 @@ func GetChannelConstraints(c *gin.Context) *dto.ChannelConstraints {
 		return existing
 	}
 	constraints := &dto.ChannelConstraints{}
+	if value, exists := c.Get(dto.UserChannelExclusionContextKey); exists {
+		if policy, ok := value.(*dto.UserChannelExclusionPolicy); ok && policy != nil {
+			constraints.AddFilter(dto.ChannelFilter{Kind: dto.FilterUserExcludedChannels, UserExclusions: policy})
+		}
+	}
 	common.SetContextKey(c, constant.ContextKeyChannelConstraints, constraints)
 	return constraints
 }
@@ -121,7 +126,26 @@ func (p *RetryParam) ResetRetryNextTry() {
 //
 //	Retry=3: GroupB, priority1 (startRetryIndex=2, priorityRetry=1)
 //	         分组B, 优先级1
-func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
+func CacheGetRandomSatisfiedChannel(param *RetryParam) (result *model.Channel, resultGroup string, resultErr error) {
+	exclusion := UserChannelExclusionPolicy(param.Ctx)
+	priorRejected := 0
+	if exclusion != nil {
+		priorRejected = exclusion.RejectedCount
+		exclusion.ModelName = param.ModelName
+		exclusion.FailureReason = ""
+		exclusion.Phase = "selection"
+	}
+	defer func() {
+		if exclusion == nil || result != nil || resultErr != nil {
+			return
+		}
+		if exclusion.Invalid {
+			exclusion.FailureReason = "user_channel_policy_unavailable"
+		} else if exclusion.RejectedCount > priorRejected {
+			exclusion.FailureReason = "no_eligible_channel_after_user_exclusion"
+		}
+		exclusion.Phase = "selection"
+	}()
 	var channel *model.Channel
 	var err error
 	selectGroup := param.TokenGroup
@@ -178,6 +202,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				// Probe routing pins this actual group; do not prepare an auto
 				// group transition or reset the retry/total-attempt counters.
 				return channel, autoGroup, nil
+			}
+			if selectionErr != nil {
+				return nil, autoGroup, selectionErr
 			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
@@ -313,6 +340,10 @@ type ChannelSelectError struct {
 // filters. The group the channel was chosen from is returned for auto-group
 // callers. The caller still applies SetupContextForSelectedChannel.
 func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam) (*model.Channel, string, *ChannelSelectError) {
+	if policy := UserChannelExclusionPolicy(c); policy != nil {
+		policy.FailureReason = ""
+		policy.ModelName = modelName
+	}
 	probe := GetRequestProbeRouting(c)
 	constraints := GetChannelConstraints(c)
 	if pin, found, overridden := constraints.ResolvedPin(); found {
@@ -330,6 +361,10 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			return nil, "", pinnedChannelUnavailable(pin, http.StatusForbidden, i18n.MsgDistributorChannelDisabled)
 		}
 		if ok, kind := model.ChannelSatisfiesFilters(channel, modelName, constraints.Filters); !ok {
+			if kind == dto.FilterUserExcludedChannels {
+				CheckUserChannelExclusion(c, channel.Id, "pin")
+				return nil, "", pinnedChannelUnavailable(pin, http.StatusForbidden, i18n.MsgDistributorChannelDisabled)
+			}
 			return nil, "", &ChannelSelectError{
 				StatusCode: http.StatusBadRequest, Code: types.ErrorCode(kind), MessageID: i18n.MsgDistributorNoAvailableChannel,
 				Params:     map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelName},
@@ -377,6 +412,7 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 				ClearCurrentChannelAffinityCache(c)
 			}
 			if !affinityUsable && RequestPolicy(c).SessionMode == "strict" {
+				CheckUserChannelExclusion(c, preferredChannelID, "strict_affinity")
 				return nil, "", &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: "strict_session_binding_unavailable"}
 			}
 		}

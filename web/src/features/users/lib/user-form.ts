@@ -45,6 +45,10 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
+  excluded_channel_ids: z
+    .array(z.number().int().positive())
+    .max(256)
+    .optional(),
   stream_response_timeout: z.number().int().min(-1).max(604800).optional(),
   stream_response_timeout_mode: z.enum(['first_output', 'idle']).optional(),
   stream_total_timeout: z.number().int().min(-1).max(604800).optional(),
@@ -159,6 +163,7 @@ export function transformFormDataToPayload(
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group
+    payload.excluded_channel_ids = data.excluded_channel_ids
     payload.group_ratios = serializeGroupRatioRows(data.groupRatios)
     payload.stream_response_timeout = data.stream_response_timeout ?? 0
     payload.stream_response_timeout_mode =
@@ -189,6 +194,7 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
     group: user.group || DEFAULT_GROUP,
+    excluded_channel_ids: user.excluded_channel_ids,
     stream_response_timeout: user.stream_response_timeout ?? 0,
     stream_response_timeout_mode:
       user.stream_response_timeout_mode ?? 'first_output',

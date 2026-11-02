@@ -103,6 +103,7 @@ type User struct {
 	RequestCount         int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group                string         `json:"group" gorm:"type:varchar(64);default:'default'"`
 	GroupRatios          string         `json:"group_ratios" gorm:"type:text"` // 用户专属分组倍率覆盖，JSON: {"group": ratio}；空视为无覆盖
+	ExcludedChannelIDs   string         `json:"-" gorm:"type:text;column:excluded_channel_ids"`
 	AffCode              string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount             int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota             int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -144,19 +145,23 @@ type User struct {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:          user.Id,
-		Group:       user.Group,
-		GroupRatios: user.GroupRatios,
-		Quota:       user.Quota,
-		Status:      user.Status,
-		Role:        user.Role,
-		Username:    user.Username,
-		Setting:     user.Setting,
-		Email:       user.Email,
-		AuthVersion: user.AuthVersion,
-		CacheSchema: userCacheSchemaVersion,
+		Id:                 user.Id,
+		Group:              user.Group,
+		GroupRatios:        user.GroupRatios,
+		ExcludedChannelIDs: user.ExcludedChannelIDs,
+		Quota:              user.Quota,
+		Status:             user.Status,
+		Role:               user.Role,
+		Username:           user.Username,
+		Setting:            user.Setting,
+		Email:              user.Email,
+		AuthVersion:        user.AuthVersion,
+		CacheSchema:        userCacheSchemaVersion,
 	}
 	cache.StreamResponseTimeout = user.StreamResponseTimeout
+	if cache.ExcludedChannelIDs == "" {
+		cache.ExcludedChannelIDs = "[]"
+	}
 	cache.StreamResponseTimeoutMode = strings.TrimSpace(user.StreamResponseTimeoutMode)
 	if cache.StreamResponseTimeoutMode == "" {
 		cache.StreamResponseTimeoutMode = constant.RelayStreamResponseTimeoutModeFirstOutput
@@ -1126,6 +1131,7 @@ func (user *User) Edit(updatePassword bool) error {
 // edit (EditWithTx) writes, plus the group-deletion cleanup for group_ratios.
 // UpdateWithTx never writes them.
 var adminOwnedUserColumns = []string{
+	"excluded_channel_ids",
 	"group_ratios",
 	"stream_response_timeout",
 	"stream_response_timeout_mode",
@@ -1338,6 +1344,7 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		return err
 	}
 	for _, authenticationData := range []any{
+		&UserChannelExclusion{},
 		&TwoFABackupCode{},
 		&TwoFA{},
 		&UserSession{},

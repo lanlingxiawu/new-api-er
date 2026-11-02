@@ -132,6 +132,120 @@ function renderPreview(other: LogOtherData, isAdmin = true, type?: number) {
   return screen.getByRole('button', { name: /./ })
 }
 
+test.each([true, false])(
+  'channel rejection diagnostics respect the privileged log view=%s',
+  async (privileged) => {
+    const preview = renderPreview(
+      {
+        admin_info: {
+          user_channel_routing: {
+            reason: 'no_eligible_channel_after_user_exclusion',
+            phase: 'selection',
+            excluded_count: 30,
+            rejected_count: 25,
+            channel_ids: [125001, 125002],
+            truncated: true,
+          },
+        },
+      },
+      privileged,
+      5
+    )
+    fireEvent.click(preview)
+    const dialog = within(await screen.findByRole('dialog'))
+    if (privileged) {
+      expect(dialog.getByText('User channel routing')).toBeVisible()
+      expect(
+        dialog.getByText('No available channels remain after user exclusions')
+      ).toBeVisible()
+      expect(dialog.getByText('125001, 125002')).toBeVisible()
+      expect(
+        dialog.getByText('Only a sample of rejected channels is shown.')
+      ).toBeVisible()
+    } else {
+      expect(dialog.queryByText('User channel routing')).not.toBeInTheDocument()
+      expect(
+        dialog.queryByText('no_eligible_channel_after_user_exclusion')
+      ).not.toBeInTheDocument()
+      expect(dialog.queryByText('125001, 125002')).not.toBeInTheDocument()
+    }
+  }
+)
+
+test.each([
+  [
+    'no_eligible_channel_after_user_exclusion',
+    'selection',
+    '排除后无可用渠道',
+    '渠道选择',
+  ],
+  ['user_channel_excluded', 'pin', '该渠道已被此用户排除', '指定渠道'],
+  [
+    'user_channel_policy_unavailable',
+    'strict_affinity',
+    '无法读取用户渠道排除规则',
+    '严格亲和',
+  ],
+  [
+    'candidates_excluded',
+    'origin_task',
+    '已跳过被排除的候选渠道',
+    '原任务渠道',
+  ],
+  [
+    'user_channel_excluded',
+    'origin_task_pin',
+    '该渠道已被此用户排除',
+    '原任务指定渠道',
+  ],
+  [
+    'user_channel_excluded',
+    'midjourney_origin_task',
+    '该渠道已被此用户排除',
+    'Midjourney 原任务渠道',
+  ],
+  [
+    'user_channel_excluded',
+    'websocket_create',
+    '该渠道已被此用户排除',
+    'WebSocket 请求创建',
+  ],
+  ['future_reason', 'future_phase', 'future_reason', 'future_phase'],
+])(
+  'localizes channel routing reason %s and phase %s',
+  async (reason, phase, reasonLabel, phaseLabel) => {
+    i18n.addResourceBundle('zh-CN', 'translation', zh.translation, true, true)
+    await i18n.changeLanguage('zh-CN')
+    fireEvent.click(
+      renderPreview(
+        {
+          admin_info: {
+            user_channel_routing: {
+              reason,
+              phase,
+              excluded_count: 1,
+              rejected_count: 1,
+              channel_ids: [125001],
+              truncated: false,
+            },
+          },
+        },
+        true,
+        5
+      )
+    )
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText(reasonLabel)).toBeVisible()
+    expect(dialog.getByText(phaseLabel)).toBeVisible()
+    if (reason !== reasonLabel) {
+      expect(dialog.queryByText(reason)).not.toBeInTheDocument()
+    }
+    if (phase !== phaseLabel) {
+      expect(dialog.queryByText(phase)).not.toBeInTheDocument()
+    }
+  }
+)
+
 test('keeps log details open when the parent refreshes with unchanged data', async () => {
   const other = { model_price: 0.25 }
   const wrapper = ({ children }: { children: React.ReactNode }) => (

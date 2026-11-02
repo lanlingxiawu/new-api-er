@@ -148,6 +148,8 @@ func TestMain(m *testing.M) {
 	// AutoMigrate only commission/business-related tables
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.UserChannelExclusion{},
+		&model.UserChannelExclusionCleanup{},
 		&model.Option{},
 		&model.Token{},
 		&model.Channel{},

@@ -147,6 +147,8 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Channel{},
+		&UserChannelExclusion{},
+		&UserChannelExclusionCleanup{},
 		&Token{},
 		&User{},
 		&UserSession{},

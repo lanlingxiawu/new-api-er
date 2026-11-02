@@ -465,6 +465,7 @@ func RelayMidjourney(c *gin.Context) {
 			mjErr.Result = i18n.T(c, i18n.MsgRelayGroupSaturated)
 			statusCode = http.StatusTooManyRequests
 		}
+		service.RecordUserChannelRoutingRejection(c, statusCode, fmt.Sprint(mjErr.Code), fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result))
 		c.JSON(statusCode, gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
 			"type":        "upstream_error",

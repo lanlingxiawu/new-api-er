@@ -21,7 +21,10 @@ import type { AxiosRequestConfig } from 'axios'
 import type { PermissionCatalog } from '@/lib/admin-permissions'
 import { api } from '@/lib/api'
 import type { CustomOAuthBinding } from '@/lib/oauth'
-import { requireServerSuccess } from '@/lib/server-error-message'
+import {
+  requireServerSuccess,
+  createServerError,
+} from '@/lib/server-error-message'
 
 import type {
   User,
@@ -135,7 +138,37 @@ export async function createUser(
  * matrix requires an `admin.user.update` proof.
  */
 // removed_group_ratios：因分组已删除而被一并清掉的专属倍率所属分组。
-type UpdateUserResult = Partial<User> & { removed_group_ratios?: string[] }
+type UpdateUserResult = Partial<User> & {
+  removed_group_ratios?: string[]
+  removed_excluded_channel_ids?: number[]
+}
+
+export type ChannelExclusionOption = {
+  id: number
+  name: string
+  type: number
+  status: number
+}
+
+export async function getChannelExclusionOptions(
+  params: {
+    after_id?: number
+    ids?: string
+    keyword?: string
+  },
+  signal?: AbortSignal
+) {
+  const response = await api.get<
+    ApiResponse<{
+      items: ChannelExclusionOption[]
+      next_after_id: number
+      has_more: boolean
+    }>
+  >('/api/channel/exclusion-options', { params, signal })
+  const result = requireServerSuccess(response.data)
+  if (!result.data) throw createServerError(result)
+  return result.data
+}
 
 export async function updateUser(
   data: UserFormData & { id: number },

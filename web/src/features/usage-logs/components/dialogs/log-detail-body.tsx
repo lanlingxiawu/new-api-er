@@ -99,6 +99,42 @@ const CHANNEL_FIELD_LABELS: Record<string, string> = {
   key: 'Key',
 }
 
+function userChannelRoutingReason(reason: string, t: TFunction): string {
+  switch (reason) {
+    case 'no_eligible_channel_after_user_exclusion':
+      return t('No available channels remain after user exclusions')
+    case 'user_channel_excluded':
+      return t('This channel is excluded for this user')
+    case 'user_channel_policy_unavailable':
+      return t('Unable to read user channel exclusion rules')
+    case 'candidates_excluded':
+      return t('Excluded channel candidates were skipped')
+    default:
+      return reason
+  }
+}
+
+function userChannelRoutingPhase(phase: string, t: TFunction): string {
+  switch (phase) {
+    case 'selection':
+      return t('Channel selection')
+    case 'pin':
+      return t('Pinned channel')
+    case 'strict_affinity':
+      return t('Strict affinity')
+    case 'origin_task':
+      return t('Original task channel')
+    case 'origin_task_pin':
+      return t('Pinned original task channel')
+    case 'midjourney_origin_task':
+      return t('Midjourney original task channel')
+    case 'websocket_create':
+      return t('WebSocket request creation')
+    default:
+      return phase
+  }
+}
+
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
 ): string {
@@ -1133,6 +1169,38 @@ export function LogDetailBody(props: LogDetailBodyProps) {
       </CompareCell>
 
       <CompareCell row='taskPlugin' column={col}>
+        {props.isAdmin && adminInfo?.user_channel_routing ? (
+          <DetailSection label={t('User channel routing')}>
+            <DetailRow
+              label={t('Reason')}
+              value={userChannelRoutingReason(
+                adminInfo.user_channel_routing.reason,
+                t
+              )}
+            />
+            <DetailRow
+              label={t('Phase')}
+              value={userChannelRoutingPhase(
+                adminInfo.user_channel_routing.phase,
+                t
+              )}
+            />
+            <DetailRow
+              label={t('Excluded channels')}
+              value={String(adminInfo.user_channel_routing.excluded_count)}
+            />
+            <DetailRow
+              label={t('Channel IDs')}
+              value={adminInfo.user_channel_routing.channel_ids.join(', ')}
+              mono
+            />
+            {adminInfo.user_channel_routing.truncated ? (
+              <p className='text-muted-foreground text-xs'>
+                {t('Only a sample of rejected channels is shown.')}
+              </p>
+            ) : null}
+          </DetailSection>
+        ) : null}
         {props.isAdmin && adminInfo?.request_policy?.length ? (
           <DetailSection
             label={t('Request policy decisions')}

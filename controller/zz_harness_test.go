@@ -150,6 +150,8 @@ func TestMain(m *testing.M) {
 		&model.Channel{},
 		&model.Token{},
 		&model.User{},
+		&model.UserChannelExclusion{},
+		&model.UserChannelExclusionCleanup{},
 		&model.UserSession{},
 		&model.UserAccessToken{},
 		&model.AuthFlow{},

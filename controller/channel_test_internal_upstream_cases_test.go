@@ -178,7 +178,7 @@ func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
 func TestDeleteChannelResetsProxyCacheWhenPreReadFails(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	// Deleting a channel also deletes its cost config in the same transaction.
-	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.AuditLog{}, &model.ChannelCostConfig{}))
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.AuditLog{}, &model.ChannelCostConfig{}, &model.UserChannelExclusionCleanup{}))
 	service.ResetProxyClientCache()
 	t.Cleanup(service.ResetProxyClientCache)
 
@@ -351,7 +351,7 @@ func TestGetChannelDefaultBaseURLsUsesBuiltInDefaults(t *testing.T) {
 func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	// Deleting a channel also deletes its cost config in the same transaction.
-	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.AuditLog{}, &model.ChannelCostConfig{}))
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.AuditLog{}, &model.ChannelCostConfig{}, &model.UserChannelExclusionCleanup{}))
 	channel := &model.Channel{Name: "existing", Key: "test-key"}
 	require.NoError(t, db.Create(channel).Error)
 

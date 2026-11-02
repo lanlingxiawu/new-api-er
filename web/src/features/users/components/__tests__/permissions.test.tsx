@@ -54,6 +54,14 @@ function renderPermissions(
     .getState()
     .auth.setUser({ id: 1, username: 'operator', role: viewerRole })
   const get = vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/channel/exclusion-options') {
+      return {
+        data: {
+          success: true,
+          data: { items: [], next_after_id: 0, has_more: false },
+        },
+      }
+    }
     if (url === '/api/authz/catalog') {
       return {
         data: {
@@ -126,6 +134,39 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   useAuthStore.getState().auth.reset()
+})
+
+it('navigates directly to channel exclusions without submitting the form', async () => {
+  const put = vi.spyOn(api, 'put')
+  renderPermissions(100)
+  const menu = await screen.findByRole('button', {
+    name: 'Excluded channels',
+  })
+  const section = document.querySelector<HTMLElement>(
+    '#user-channel-exclusions'
+  )
+  if (!section) throw new Error('Channel exclusion section is missing')
+  const scroll = vi.fn()
+  Object.defineProperty(section, 'scrollIntoView', {
+    value: scroll,
+    configurable: true,
+  })
+  await userEvent.click(menu)
+  expect(scroll).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+  expect(scroll.mock.instances.at(-1)).toBe(section)
+  expect(section.querySelector('#user-excluded-channels')).toBeInTheDocument()
+  expect(put).not.toHaveBeenCalled()
+})
+
+it('hides the channel exclusion navigation when channel access is unavailable', async () => {
+  renderPermissions(1)
+  await screen.findByRole('button', { name: 'Group & Quota' })
+  expect(
+    screen.queryByRole('button', { name: 'Excluded channels' })
+  ).not.toBeInTheDocument()
+  expect(
+    document.querySelector('#user-channel-exclusions')
+  ).not.toBeInTheDocument()
 })
 
 it.each([

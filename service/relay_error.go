@@ -92,6 +92,10 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		return
 	}
 	publicSummary := StreamPublicErrorSummary(c, err)
+	if policy := UserChannelExclusionPolicy(c); policy != nil && policy.FailureReason != "" {
+		RecordUserChannelRoutingRejection(c, err.StatusCode, string(err.GetErrorCode()), publicSummary)
+		return
+	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(MessageWithCurrentRequestId(c, publicSummary))))
 	// 渠道信息取自 channelError 快照而非上下文：异步处理时上下文中的渠道可能已被重试改写。
 	if ShouldDisableChannel(err) && channelError.AutoBan {

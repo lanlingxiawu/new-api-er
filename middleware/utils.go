@@ -18,6 +18,7 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 		codeStr = string(code[0])
 	}
 	statusCode, message, codeStr = service.PresentLocalRelayAbort(c, c.GetString(RouteTagKey) == "relay", statusCode, message, codeStr)
+	service.RecordUserChannelRoutingRejection(c, statusCode, codeStr, message)
 	userId := c.GetInt("id")
 	_, preparedPluginRoute := c.Get(pluginruntime.ContextKeyRouteRequest)
 	if !preparedPluginRoute || !RespondTaskPluginError(c, &dto.TaskError{

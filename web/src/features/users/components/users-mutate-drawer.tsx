@@ -20,6 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import {
+  Ban,
   CheckCircle2,
   Circle,
   CreditCard,
@@ -120,6 +121,7 @@ import type { User } from '../types'
 import { AdminPermissionsEditor } from './admin-permissions-editor'
 import { EmployeeAssignField } from './employee-assign-field'
 import { GroupCombobox } from './group-combobox'
+import { UserChannelExclusionsField } from './user-channel-exclusions-field'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -246,6 +248,7 @@ function TimeoutOverrideField({
 const USER_SECTION_IDS = {
   BASIC: 'user-basic-information',
   GROUP_QUOTA: 'user-group-quota',
+  CHANNEL_EXCLUSIONS: 'user-channel-exclusions',
   TIMEOUT: 'user-request-timeout',
   RETRY: 'user-retry',
   EMPLOYEE: 'user-assigned-employee',
@@ -268,6 +271,9 @@ export function UsersMutateDrawer({
   const isUpdate = !!currentRow
   const { triggerRefresh, requestVerification } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
+  const canReadChannels =
+    hasPermission(currentUser, 'channel', 'read') &&
+    hasPermission(currentUser, 'admin_menu.channels', 'view')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
   const [activeSection, setActiveSection] = useState<string>(
@@ -359,6 +365,15 @@ export function UsersMutateDrawer({
               label: t('Group & Quota'),
               icon: <CreditCard className='size-4' aria-hidden='true' />,
             },
+            ...(canReadChannels
+              ? [
+                  {
+                    id: USER_SECTION_IDS.CHANNEL_EXCLUSIONS,
+                    label: t('Excluded channels'),
+                    icon: <Ban className='size-4' aria-hidden='true' />,
+                  },
+                ]
+              : []),
             {
               id: USER_SECTION_IDS.TIMEOUT,
               label: t('AI Request Timeout'),
@@ -419,6 +434,7 @@ export function UsersMutateDrawer({
         : []),
     ],
     [
+      canReadChannels,
       hasOtherAdminPermissions,
       isUpdate,
       showAdminPermissions,
@@ -546,6 +562,15 @@ export function UsersMutateDrawer({
             t('Removed exclusive ratios for deleted groups: {{groups}}', {
               groups: removedGroups.join(', '),
             })
+          )
+        }
+        if (
+          result.data &&
+          'removed_excluded_channel_ids' in result.data &&
+          result.data.removed_excluded_channel_ids?.length
+        ) {
+          toast.info(
+            t('Deleted channels were removed from the exclusion list.')
           )
         }
         onOpenChange(false)
@@ -964,6 +989,41 @@ export function UsersMutateDrawer({
                                   rows={3}
                                 />
                               </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </SideDrawerSection>
+                    </div>
+                  )}
+
+                  {isUpdate && canReadChannels && (
+                    <div
+                      id={USER_SECTION_IDS.CHANNEL_EXCLUSIONS}
+                      className='scroll-mt-4'
+                    >
+                      <SideDrawerSection>
+                        <FormField
+                          control={form.control}
+                          name='excluded_channel_ids'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Excluded channels')}</FormLabel>
+                              <FormControl>
+                                <UserChannelExclusionsField
+                                  id='user-excluded-channels'
+                                  value={field.value ?? []}
+                                  onChange={field.onChange}
+                                  disabled={
+                                    isSubmitting || field.value === undefined
+                                  }
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Applies to all tokens and groups for this user. Leave empty to allow all otherwise available channels.'
+                                )}
+                              </FormDescription>
                               <FormMessage />
                             </FormItem>
                           )}

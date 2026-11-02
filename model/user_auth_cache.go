@@ -57,6 +57,10 @@ func userAuthFenceTTLSeconds() int {
 }
 
 func writeUserCache(user *UserBase, includeQuota bool) error {
+	return writeUserCacheContext(context.Background(), user, includeQuota)
+}
+
+func writeUserCacheContext(ctx context.Context, user *UserBase, includeQuota bool) error {
 	if user == nil || user.Id <= 0 || !common.RedisEnabled {
 		return nil
 	}
@@ -102,13 +106,14 @@ redis.call('HSET', KEYS[1],
   'StreamResponseTimeout', ARGV[14], 'StreamResponseTimeoutMode', ARGV[15],
   'StreamTotalTimeout', ARGV[16],
   'NonStreamResponseTimeout', ARGV[17], 'NonStreamTotalTimeout', ARGV[18],
-  'NonStreamTimeoutBilling', ARGV[19], 'RetryTimes', ARGV[20])
+  'NonStreamTimeoutBilling', ARGV[19], 'RetryTimes', ARGV[20],
+  'ExcludedChannelIDs', ARGV[23])
 if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
 return 1`
-	result, err := common.RDB.Eval(context.Background(), script,
+	result, err := common.RDB.Eval(ctx, script,
 		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id),
 			getUserProfileVersionKey(user.Id)},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
@@ -118,6 +123,7 @@ return 1`
 		user.NonStreamResponseTimeout, user.NonStreamTotalTimeout,
 		user.NonStreamTimeoutBilling, user.RetryTimes,
 		user.ProfileVersion, userAuthFenceTTLSeconds(),
+		user.ExcludedChannelIDs,
 	).Int()
 	if err != nil {
 		return err

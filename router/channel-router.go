@@ -50,6 +50,10 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	)
 
 	for _, route := range channelPermissionRoutes {
+		if route.path == "/exclusion-options" {
+			handlePermissionRoute(channelRoute, route.method, route.path, route.permission, middleware.SearchRateLimit(), route.handler)
+			continue
+		}
 		handlePermissionRoute(channelRoute, route.method, route.path, route.permission, route.handler)
 	}
 
@@ -80,6 +84,7 @@ var veridropChannelPermissionRoutes = []permissionRoute{
 }
 
 var channelPermissionRoutes = []permissionRoute{
+	{method: http.MethodGet, path: "/exclusion-options", permission: authz.ChannelRead, handler: controller.UserChannelExclusionOptions},
 	{method: http.MethodGet, path: "/priority/order", permission: authz.ChannelRead, handler: controller.GetChannelPriorityOrder},
 	{method: http.MethodPost, path: "/priority/reorder", permission: authz.ChannelWrite, handler: controller.ReorderChannelPriority},
 	{method: http.MethodGet, path: "/", permission: authz.ChannelRead, handler: controller.GetAllChannels},

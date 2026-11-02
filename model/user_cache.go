@@ -7,26 +7,28 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	routingdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 4
+const userCacheSchemaVersion = 5
 
 type UserBase struct {
-	Id          int    `json:"id"`
-	Group       string `json:"group"`
-	GroupRatios string `json:"group_ratios"`
-	Email       string `json:"email"`
-	Quota       int    `json:"quota"`
-	Status      int    `json:"status"`
-	Role        int    `json:"role"`
-	Username    string `json:"username"`
-	Setting     string `json:"setting"`
-	AuthVersion int64  `json:"-"`
-	CacheSchema int    `json:"-"`
+	ExcludedChannelIDs string `json:"-"`
+	Id                 int    `json:"id"`
+	Group              string `json:"group"`
+	GroupRatios        string `json:"group_ratios"`
+	Email              string `json:"email"`
+	Quota              int    `json:"quota"`
+	Status             int    `json:"status"`
+	Role               int    `json:"role"`
+	Username           string `json:"username"`
+	Setting            string `json:"setting"`
+	AuthVersion        int64  `json:"-"`
+	CacheSchema        int    `json:"-"`
 	// ProfileVersion is the row's profile_version at snapshot time. It is only
 	// used to fence cache writes (see writeUserCache) and is not stored in the
 	// hash, so it reads back as 0 from Redis.
@@ -42,6 +44,10 @@ type UserBase struct {
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
+	ids, err := ParseUserChannelExclusions(user.ExcludedChannelIDs)
+	if err != nil || len(ids) > 0 {
+		c.Set(routingdto.UserChannelExclusionContextKey, &routingdto.UserChannelExclusionPolicy{IDs: ids, Invalid: err != nil})
+	}
 	common.SetContextKey(c, constant.ContextKeyUserGroup, user.Group)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
@@ -181,7 +187,8 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if err := common.DecodeRedisHash(key, hashCmd.Val(), &userCache); err != nil {
 		return nil, err
 	}
-	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
+	_, hasExclusions := hashCmd.Val()["ExcludedChannelIDs"]
+	if !hasExclusions || userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
 	floor, err := parseUserAuthVersionFloor(floorCmd.Val())

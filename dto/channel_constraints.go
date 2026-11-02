@@ -1,5 +1,35 @@
 package dto
 
+import "slices"
+
+const UserChannelExclusionContextKey = "user_channel_exclusion_policy"
+
+// Request-local policy and bounded diagnostic. Never shared between requests.
+type UserChannelExclusionPolicy struct {
+	FailureReason string
+	Phase         string
+	ModelName     string
+	IDs           []int
+	Invalid       bool
+	RejectedIDs   []int
+	RejectedCount int
+}
+
+func (p *UserChannelExclusionPolicy) Allows(id int) bool {
+	if p == nil {
+		return true
+	}
+	_, excluded := slices.BinarySearch(p.IDs, id)
+	if !p.Invalid && !excluded {
+		return true
+	}
+	p.RejectedCount++
+	if len(p.RejectedIDs) < 20 && !slices.Contains(p.RejectedIDs, id) {
+		p.RejectedIDs = append(p.RejectedIDs, id)
+	}
+	return false
+}
+
 type ChannelPinSource string
 
 const (
@@ -36,13 +66,15 @@ type ChannelPin struct {
 type ChannelFilterKind string
 
 const (
-	FilterRequestPath        ChannelFilterKind = "request_path"
-	FilterTaskPluginEndpoint ChannelFilterKind = "task_plugin_endpoint"
-	FilterTaskPluginIdentity ChannelFilterKind = "task_plugin_identity"
-	FilterResponsesWebSocket ChannelFilterKind = "responses_websocket"
+	FilterRequestPath          ChannelFilterKind = "request_path"
+	FilterTaskPluginEndpoint   ChannelFilterKind = "task_plugin_endpoint"
+	FilterTaskPluginIdentity   ChannelFilterKind = "task_plugin_identity"
+	FilterResponsesWebSocket   ChannelFilterKind = "responses_websocket"
+	FilterUserExcludedChannels ChannelFilterKind = "user_excluded_channels"
 )
 
 type ChannelFilter struct {
+	UserExclusions         *UserChannelExclusionPolicy
 	Kind                   ChannelFilterKind
 	RequestPath            string
 	TaskPluginKey          string

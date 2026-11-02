@@ -565,6 +565,9 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 	if !keyEnabled {
 		return types.NewErrorWithStatusCode(errors.New("the upstream connection credential is no longer enabled"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 	}
+	if !service.CheckUserChannelExclusion(c, channel.Id, "websocket_create") {
+		return types.NewErrorWithStatusCode(errors.New("the connection channel is no longer allowed for this group and model"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+	}
 	// Changes that alter the physical upstream connection require a new
 	// handshake. Request-level settings can be refreshed without rotating keys.
 	if channel.GetBaseURL() != s.lockedContext[appconstant.ContextKeyChannelBaseUrl] ||
@@ -736,6 +739,7 @@ func presentResponsesWSError(c *gin.Context, apiErr *types.NewAPIError) *types.N
 	}
 	original := apiErr.Error()
 	presented, message := service.PresentRelayError(c, apiErr, original, c.GetString(common.RequestIdKey))
+	service.RecordUserChannelRoutingRejection(c, presented.StatusCode, string(presented.GetErrorCode()), message)
 	if presented != apiErr || message != original {
 		presented.SetMessage(message)
 	}

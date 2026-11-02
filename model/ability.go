@@ -195,6 +195,20 @@ func GetChannel(
 // predicate used by the memory-cache path. A failed channel lookup fails
 // closed when a task-plugin identity is required and fails open otherwise.
 func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters []dto.ChannelFilter) []Ability {
+	// Filter IDs before metadata lookup: its legacy fail-open fallback must
+	// never restore a channel excluded by this user's policy.
+	for _, filter := range filters {
+		if filter.Kind != dto.FilterUserExcludedChannels {
+			continue
+		}
+		allowed := make([]Ability, 0, len(abilities))
+		for _, ability := range abilities {
+			if filter.UserExclusions.Allows(ability.ChannelId) {
+				allowed = append(allowed, ability)
+			}
+		}
+		abilities = allowed
+	}
 	if len(abilities) == 0 {
 		return nil
 	}

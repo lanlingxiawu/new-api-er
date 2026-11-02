@@ -163,13 +163,14 @@ func EffectiveSessionMode(setting *operation_setting.ChannelAffinitySetting, rul
 }
 
 // RecordRequestPolicyTermination appends the final decision after routing has
-// stopped. It never writes a log row itself: the per-channel error log written
-// by ProcessChannelError already carries the decision record, so a second row
-// here would duplicate it.
+// stopped. Upstream failures already have per-channel logs. Local user routing
+// rejections also need a log when no upstream attempt occurred; their request
+// marker prevents duplicating the first-distribution or per-channel record.
 func RecordRequestPolicyTermination(c *gin.Context, apiErr *types.NewAPIError) {
 	if c == nil || apiErr == nil {
 		return
 	}
+	RecordUserChannelRoutingRejection(c, apiErr.StatusCode, string(apiErr.GetErrorCode()), StreamPublicErrorSummary(c, apiErr))
 	state := RequestPolicy(c)
 	if state.FinalLogged {
 		return

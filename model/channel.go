@@ -619,6 +619,10 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 	var deletedCount int64
 	for _, chunk := range lo.Chunk(ids, 200) {
 		// 删除前捕获该批渠道名，名称快照移到删除后异步处理。
+		if err := enqueueUserChannelExclusionCleanup(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 		for id, name := range captureChannelNamesForSnapshot(tx, chunk) {
 			allNames[id] = name
 		}
@@ -771,6 +775,10 @@ func (channel *Channel) Delete() error {
 		return tx.Error
 	}
 	// 删除前捕获渠道名（删后 channels 表已无），名称快照移到删除后异步处理。
+	if err := enqueueUserChannelExclusionCleanup(tx, []int{channel.Id}); err != nil {
+		tx.Rollback()
+		return err
+	}
 	names := captureChannelNamesForSnapshot(tx, []int{channel.Id})
 	if err := tx.Delete(channel).Error; err != nil {
 		tx.Rollback()
@@ -1213,6 +1221,14 @@ func deleteChannelsByStatus(statuses ...int) (int64, error) {
 	names := captureChannelNamesForSnapshot(tx, ids)
 	var deletedCount int64
 	for _, chunk := range lo.Chunk(ids, 200) {
+		if err := enqueueUserChannelExclusionCleanup(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+		if err := tx.Where("channel_id IN ?", chunk).Delete(&Ability{}).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 		result := tx.Where("id IN ?", chunk).Delete(&Channel{})
 		if result.Error != nil {
 			tx.Rollback()

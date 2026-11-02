@@ -76,6 +76,7 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		return
 	}
 	other.SetAdmin("use_channel", ctx.GetStringSlice("use_channel"))
+	AppendUserChannelRoutingDiagnostic(ctx, other)
 	// 渠道名快照：渠道删除后 channels 表再也回答不了「这条日志跑在哪个渠道」，
 	// 而佣金明细等页面必须显示渠道名。写进 admin_info 即自动对普通用户不可见。
 	// 只读上下文/relayInfo 里已有的值，不新增任何查询（Rule 0）。

@@ -61,6 +61,12 @@ interface MultiSelectProps {
   placeholder?: string
   className?: string
   allowCreate?: boolean
+  /** Include display labels when searching options whose values are IDs. */
+  searchByLabel?: boolean
+  /** Optional remote search and pagination; existing callers remain local. */
+  onSearchChange?: (query: string) => void
+  onListScroll?: React.UIEventHandler<HTMLDivElement>
+  dropdownFooter?: React.ReactNode
   /**
    * Label shown for the "create" item in the dropdown.
    * Supports the `{{value}}` placeholder which is replaced with the typed input.
@@ -134,6 +140,10 @@ export function MultiSelect(props: MultiSelectProps) {
   const [inputValue, setInputValue] = React.useState('')
   const [open, setOpen] = React.useState(false)
   const [expanded, setExpanded] = React.useState(false)
+  const onSearchChange = props.onSearchChange
+  React.useEffect(() => {
+    onSearchChange?.(inputValue)
+  }, [inputValue, onSearchChange])
 
   const selectedSet = React.useMemo(
     () => new Set(props.selected),
@@ -302,6 +312,14 @@ export function MultiSelect(props: MultiSelectProps) {
       open={open}
       onOpenChange={setOpen}
       disabled={props.disabled}
+      filter={
+        props.searchByLabel
+          ? (value, query) =>
+              `${value} ${labelMap.get(value) ?? value}`
+                .toLowerCase()
+                .includes(query.trim().toLowerCase())
+          : undefined
+      }
     >
       <ComboboxChips
         ref={chipsAnchorRef}
@@ -417,7 +435,7 @@ export function MultiSelect(props: MultiSelectProps) {
       </ComboboxChips>
 
       <ComboboxContent anchor={chipsAnchorRef}>
-        <ComboboxList>
+        <ComboboxList onScroll={props.onListScroll}>
           <ComboboxCollection>
             {(item: string) => {
               const isCreate = canCreate && item === trimmedInput
@@ -474,6 +492,7 @@ export function MultiSelect(props: MultiSelectProps) {
         <ComboboxEmpty>
           {props.emptyText ?? t('No matching items')}
         </ComboboxEmpty>
+        {props.dropdownFooter}
       </ComboboxContent>
     </Combobox>
   )
