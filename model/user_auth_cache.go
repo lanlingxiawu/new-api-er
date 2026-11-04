@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -73,6 +74,11 @@ func writeUserCacheContext(ctx context.Context, user *UserBase, includeQuota boo
 		includeQuotaArg = "1"
 	}
 	ttl := userCacheTTLSeconds()
+	user.CacheExpiresAt = time.Now().Add(time.Duration(ttl) * time.Second).UnixMilli()
+	mac, err := user.cacheMAC()
+	if err != nil {
+		return err
+	}
 	const script = `
 local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -107,8 +113,9 @@ redis.call('HSET', KEYS[1],
   'StreamTotalTimeout', ARGV[16],
   'NonStreamResponseTimeout', ARGV[17], 'NonStreamTotalTimeout', ARGV[18],
   'NonStreamTimeoutBilling', ARGV[19], 'RetryTimes', ARGV[20],
-  'ExcludedChannelIDs', ARGV[23])
-if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
+  'ExcludedChannelIDs', ARGV[23],
+  'CacheExpiresAt', ARGV[24], 'CacheMAC', ARGV[25])
+if ARGV[10] == '1' and not string.match(redis.call('HGET', KEYS[1], 'Quota') or '', '^-?%d+$') then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
@@ -124,6 +131,7 @@ return 1`
 		user.NonStreamTimeoutBilling, user.RetryTimes,
 		user.ProfileVersion, userAuthFenceTTLSeconds(),
 		user.ExcludedChannelIDs,
+		user.CacheExpiresAt, mac,
 	).Int()
 	if err != nil {
 		return err
@@ -266,14 +274,40 @@ func BumpUserAuthVersion(userId int) (int64, error) {
 	return next, nil
 }
 
-// PublishUserAuthCache refreshes the current database state after a successful
-// auth-sensitive transaction without touching the cached quota field.
+// PublishUserAuthCache refreshes user metadata from the database. Quota stays
+// under the atomic quota-delta paths.
 func PublishUserAuthCache(userId int) error {
-	user, err := GetUserById(userId, false)
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 {
+		return fmt.Errorf("invalid user id")
+	}
+	authoritative, err := GetUserById(userId, false)
 	if err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	// Group and profile updates keep the same authentication version. Re-read
+	// after publishing so a delayed refresh repairs any newer metadata it replaced.
+	for range 3 {
+		if err := updateUserCache(*authoritative); err != nil {
+			return err
+		}
+		verified, err := GetUserById(userId, false)
+		if err != nil {
+			return err
+		}
+		previousBase, verifiedBase := authoritative.ToBaseUser(), verified.ToBaseUser()
+		previousBase.Quota, verifiedBase.Quota = 0, 0
+		if *previousBase == *verifiedBase {
+			return nil
+		}
+		authoritative = verified
+	}
+	if err := updateUserCache(*authoritative); err != nil {
+		return err
+	}
+	return fmt.Errorf("user metadata changed repeatedly during cache refresh")
 }
 
 // advanceProfileFloorUnlessCached is the bulk cleanup's per-user Redis step,
@@ -359,18 +393,83 @@ local incomingProfile = tonumber(ARGV[4])
 if incomingProfile >= 0 and tonumber(redis.call('GET', KEYS[4]) or '0') > incomingProfile then
   return 1
 end
-redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
+if (redis.call('HGET', KEYS[1], 'CacheMAC') or '') ~= ARGV[5] then
+  return 3
+end
+redis.call('HSET', KEYS[1], ARGV[2], ARGV[3], 'CacheMAC', ARGV[6], 'CacheExpiresAt', ARGV[7])
 return 1`
-	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId),
-			getUserProfileVersionKey(userId)},
-		authVersion, field, value, profileVersion,
-	).Int()
-	if err != nil {
-		return err
+	for range 2 {
+		base, found, err := readUserCacheBase(userId)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
+		previousMAC := base.CacheMAC
+		if err = applyUserCacheField(base, field, value); err != nil {
+			return err
+		}
+		if base.CacheExpiresAt <= 0 {
+			base.CacheExpiresAt = time.Now().Add(time.Duration(userCacheTTLSeconds()) * time.Second).UnixMilli()
+		}
+		mac, err := base.cacheMAC()
+		if err != nil {
+			return err
+		}
+		result, err := common.RDB.Eval(context.Background(), script,
+			[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId),
+				getUserProfileVersionKey(userId)},
+			authVersion, field, value, profileVersion, previousMAC, mac, base.CacheExpiresAt,
+		).Int()
+		if err != nil {
+			return err
+		}
+		switch result {
+		case 0:
+			return ErrUserAuthCachePending
+		case 3:
+			continue
+		default:
+			return nil
+		}
 	}
-	if result == 0 {
-		return ErrUserAuthCachePending
+	return fmt.Errorf("user cache changed during field update")
+}
+
+func readUserCacheBase(userId int) (*UserBase, bool, error) {
+	key := getUserCacheKey(userId)
+	fields, err := common.RDB.HGetAll(context.Background(), key).Result()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(fields) == 0 {
+		return nil, false, nil
+	}
+	var base UserBase
+	if err = common.DecodeRedisHash(key, fields, &base); err != nil {
+		return nil, false, err
+	}
+	return &base, true, nil
+}
+
+func applyUserCacheField(user *UserBase, field string, value any) error {
+	text := fmt.Sprint(value)
+	switch field {
+	case "Group":
+		user.Group = text
+	case "Username":
+		user.Username = text
+	case "Setting":
+		user.Setting = text
+	case "Email":
+		user.Email = text
+	case "GroupRatios":
+		user.GroupRatios = text
+	case "ExcludedChannelIDs":
+		user.ExcludedChannelIDs = text
+	default:
+		return fmt.Errorf("unsupported user cache field %s", field)
 	}
 	return nil
 }

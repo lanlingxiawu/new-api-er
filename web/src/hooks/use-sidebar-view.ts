@@ -21,11 +21,16 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { resolveSidebarView } from '@/components/layout/lib/sidebar-view-registry'
-import type { NavGroup, ResolvedSidebarView } from '@/components/layout/types'
+import type {
+  NavGroup,
+  ResolvedSidebarView,
+  SidebarBadges,
+} from '@/components/layout/types'
 import {
   firstVisibleSettingsSection,
   scopeFromSystemSettingsUrl,
 } from '@/features/system-settings/access'
+import { useModelPricingIssueBadge } from '@/features/system-settings/models/pricing-issues'
 import { adminMenuFromUrl } from '@/lib/admin-menu-access'
 import {
   canViewAdminMenu,
@@ -58,7 +63,9 @@ export function useSidebarView(): ResolvedSidebarView {
   const pathname = useLocation({ select: (l) => l.pathname })
   const userRole = useAuthStore((s) => s.auth.user?.role)
   const user = useAuthStore((s) => s.auth.user)
-  const rootSidebarData = useSidebarData()
+  const modelPricingBadge = useModelPricingIssueBadge()
+  const badges: SidebarBadges = { modelPricing: modelPricingBadge }
+  const rootSidebarData = useSidebarData(badges)
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
   const rootNavGroups = useMemo<NavGroup[]>(() => {
@@ -92,7 +99,7 @@ export function useSidebarView(): ResolvedSidebarView {
   const view = resolveSidebarView(pathname)
 
   if (view) {
-    const navGroups = view.getNavGroups(t)
+    const navGroups = view.getNavGroups(t, badges)
     const visibleNavGroups =
       view.id === 'system-settings'
         ? navGroups

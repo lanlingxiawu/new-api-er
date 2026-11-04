@@ -45,7 +45,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import type { SidebarData } from '@/components/layout/types'
+import type { SidebarBadges, SidebarData } from '@/components/layout/types'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -55,7 +55,7 @@ import { useAuthStore } from '@/stores/auth-store'
  * These are shown when the URL does not match any nested sidebar view
  * registered in `layout/lib/sidebar-view-registry.ts`.
  */
-export function useSidebarData(): SidebarData {
+export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
   const { t } = useTranslation()
   const isEmployee = useAuthStore((s) => Boolean(s.auth.user?.is_employee))
 
@@ -232,6 +232,8 @@ export function useSidebarData(): SidebarData {
             icon: Settings,
             // useSidebarView also requires a visible settings section.
             requiredRole: ROLE.ADMIN,
+            // Model pricing lives in System Settings.
+            badge: badges.modelPricing,
           },
         ],
       },

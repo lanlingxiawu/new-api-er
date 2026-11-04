@@ -39,7 +39,7 @@ import { getSecuritySectionNavItems } from '@/features/system-settings/security/
 import { getSiteSectionNavItems } from '@/features/system-settings/site/section-registry.tsx'
 import { getSystemTuningSectionNavItems } from '@/features/system-settings/system-tuning/section-registry.tsx'
 
-import type { NavGroup, SidebarView } from '../types'
+import type { NavGroup, SidebarBadges, SidebarView } from '../types'
 
 /**
  * Sidebar nav groups for the System Settings nested view.
@@ -48,7 +48,10 @@ import type { NavGroup, SidebarView } from '../types'
  * header already provides top-level context — the inner group label
  * scopes the items as "administration" actions.
  */
-function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
+function getSystemSettingsNavGroups(
+  t: TFunction,
+  badges: SidebarBadges
+): NavGroup[] {
   return [
     {
       id: 'system-administration',
@@ -67,7 +70,10 @@ function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
         {
           title: t('Billing & Payment'),
           icon: CreditCard,
-          items: getBillingSectionNavItems(t),
+          badge: badges.modelPricing,
+          items: getBillingSectionNavItems(t, {
+            'model-pricing': badges.modelPricing,
+          }),
         },
         {
           title: t('Models'),

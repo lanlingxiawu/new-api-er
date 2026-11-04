@@ -29,6 +29,8 @@ type UserBase struct {
 	Setting            string `json:"setting"`
 	AuthVersion        int64  `json:"-"`
 	CacheSchema        int    `json:"-"`
+	CacheExpiresAt     int64  `json:"-"`
+	CacheMAC           string `json:"-"`
 	// ProfileVersion is the row's profile_version at snapshot time. It is only
 	// used to fence cache writes (see writeUserCache) and is not stored in the
 	// hash, so it reads back as 0 from Redis.
@@ -41,6 +43,17 @@ type UserBase struct {
 	NonStreamTotalTimeout     int    `json:"non_stream_total_timeout"`
 	NonStreamTimeoutBilling   string `json:"non_stream_timeout_billing"`
 	RetryTimes                int    `json:"retry_times"`
+}
+
+func (user UserBase) cacheMAC() (string, error) {
+	user.Quota = 0
+	return authCacheMAC(getUserCacheKey(user.Id), struct {
+		User               UserBase
+		AuthVersion        int64
+		CacheSchema        int
+		CacheExpiresAt     int64
+		ExcludedChannelIDs string
+	}{user, user.AuthVersion, user.CacheSchema, user.CacheExpiresAt, user.ExcludedChannelIDs})
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -191,6 +204,10 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if !hasExclusions || userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
+	mac, err := userCache.cacheMAC()
+	if err != nil || !validAuthCacheMAC(mac, userCache.CacheMAC, userCache.CacheExpiresAt) {
+		return nil, fmt.Errorf("user cache integrity check failed")
+	}
 	floor, err := parseUserAuthVersionFloor(floorCmd.Val())
 	if err != nil {
 		return nil, err
@@ -272,8 +289,7 @@ func getUserSettingCache(userId int) (dto.UserSetting, error) {
 	return cache.GetSetting(), nil
 }
 
-// RefreshUserGroupCache writes the database-authoritative group into an
-// existing user hash without changing the user's authentication version.
+// RefreshUserGroupCache publishes current user metadata after a group change.
 func RefreshUserGroupCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil

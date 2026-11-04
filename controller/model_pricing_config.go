@@ -115,6 +115,15 @@ func UpdateModelPricingConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"updated_models": names}})
 }
 
+func GetModelPricingIssues(c *gin.Context) {
+	issues, err := model.GetModelPricingIssues("")
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, issues)
+}
+
 func PreviewModelPricingConversion(c *gin.Context) {
 	var request struct {
 		ModelName string              `json:"model_name"`

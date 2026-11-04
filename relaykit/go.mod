@@ -3,11 +3,10 @@ module github.com/QuantumNous/new-api/relaykit
 go 1.25.1
 
 require (
+	github.com/MoeForge/moego v0.1.0-alpha.1
 	github.com/google/uuid v1.6.0
 	github.com/samber/lo v1.53.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tidwall/gjson v1.19.0
-	github.com/tidwall/sjson v1.2.5
 )
 
 require (

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"sync"
 
@@ -580,18 +581,12 @@ func BatchInsertChannels(channels []Channel) error {
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
-	// 使用原生切片分片（共享底层数组），确保 tx.Create 生成的自增 ID
-	// 回写到调用方传入的 channels，便于创建后按渠道 ID 同步成本配置等。
-	const chunkSize = 50
-	for start := 0; start < len(channels); start += chunkSize {
-		end := start + chunkSize
-		if end > len(channels) {
-			end = len(channels)
-		}
-		chunk := channels[start:end]
+	// slices.Chunk shares the caller's backing array, so generated IDs reach the caller.
+	for chunk := range slices.Chunk(channels, 50) {
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err

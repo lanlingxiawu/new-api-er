@@ -20,7 +20,10 @@ func RouteTag(tag string) gin.HandlerFunc {
 
 func SetUpLogger(server *gin.Engine) {
 	server.Use(redactTaskArtifactAccessQuery())
-	server.Use(gin.LoggerWithFormatter(formatAccessLog))
+	server.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		Output:    common.LogWriter,
+		Formatter: formatAccessLog,
+	}))
 }
 
 // formatAccessLog renders one access-log line. Gemini-style clients send their

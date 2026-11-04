@@ -175,7 +175,6 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.GET("/files", controller.RelayNotImplemented)
 		httpRouter.POST("/files", controller.RelayNotImplemented)
 		httpRouter.DELETE("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id", controller.RelayNotImplemented)
 		httpRouter.GET("/files/:id/content", controller.RelayNotImplemented)
 		httpRouter.POST("/fine-tunes", controller.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes", controller.RelayNotImplemented)
@@ -200,6 +199,14 @@ func SetRelayRouter(router *gin.Engine) {
 
 	relayGeminiRouter := router.Group("/v1beta")
 	relayGeminiRouter.Use(rejectGeminiCountTokens)
+	// Veo's :predictLongRunning goes to the plugin route that declares it (the
+	// google plugin's POST /v1beta/models/:model) before this group's auth,
+	// rate limit and channel selection; without one it stays with the relay.
+	relayGeminiRouter.Use(func(c *gin.Context) {
+		if strings.HasSuffix(c.Request.URL.Path, ":predictLongRunning") {
+			defaultPluginDispatcher.dispatch(c)
+		}
+	})
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))
 	relayGeminiRouter.Use(middleware.RequestResponseLogger())
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())

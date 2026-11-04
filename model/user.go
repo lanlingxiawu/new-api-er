@@ -247,9 +247,6 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	}).Error; err != nil {
 		return err
 	}
-	if !common.RedisEnabled {
-		return nil
-	}
 	return PublishUserAuthCache(userId)
 }
 
