@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -54,4 +55,35 @@ func TestShutdownSequence_AlwaysFlushesOnce(t *testing.T) {
 	shutdownSequence(func() error { return nil }, func() { flushCount++ })
 
 	assert.Equal(t, 1, flushCount)
+}
+
+// 排空必须先于额度刷盘，避免慢刷盘延迟停止接单并挤占 HTTP 排空预算。
+// 无论排空成功还是超时，都应先刷一次额度，再刷统计与日志。
+func TestShutdownWithBatchFlush_Order(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		drainErr error
+	}{
+		{name: "drained"},
+		{name: "deadline exceeded", drainErr: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var order []string
+
+			shutdownWithBatchFlush(
+				func() error {
+					order = append(order, "drain")
+					return tc.drainErr
+				},
+				func() {
+					order = append(order, "flush")
+				},
+				func() {
+					order = append(order, "batch")
+				},
+			)
+
+			require.Equal(t, []string{"drain", "batch", "flush"}, order)
+		})
+	}
 }

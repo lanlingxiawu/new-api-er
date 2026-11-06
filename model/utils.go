@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -23,6 +24,7 @@ const (
 
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
+var batchUpdateFlushLock sync.Mutex
 
 func init() {
 	for range BatchUpdateTypeCount {
@@ -38,6 +40,14 @@ func InitBatchUpdater() {
 			batchUpdate()
 		}
 	})
+}
+
+// FlushBatchUpdate 把内存中的批量额度差额写入数据库。
+// 关停时在 HTTP 排空结束或超时后调用一次，把排空期间产生的差额纳入。
+// 排空期间周期任务继续运行；最终刷盘会等待已取走 map 的周期批次写完。
+// batchUpdate 会换走 map，同一次差额不会写两遍。
+func FlushBatchUpdate() {
+	batchUpdate()
 }
 
 func addNewRecord(type_ int, id int, value int) {
@@ -62,6 +72,15 @@ func addNewRecord(type_ int, id int, value int) {
 }
 
 func batchUpdate() {
+	// Serialize background flushes so shutdown also waits for batches already
+	// removed from the stores. Relay producers only take their per-store locks.
+	batchUpdateFlushLock.Lock()
+	defer batchUpdateFlushLock.Unlock()
+	if operation_setting.QuotaRecoveryEnabled() {
+		flushQuotaRecovery()
+		return
+	}
+
 	// check if there's any data to update
 	hasData := false
 	for i := range BatchUpdateTypeCount {

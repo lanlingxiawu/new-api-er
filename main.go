@@ -184,8 +184,9 @@ func main() {
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
 		common.SysLog(common.LogText("batch update enabled with interval %ss", strconv.Itoa(common.BatchUpdateInterval)))
-		model.InitBatchUpdater()
 	}
+	// Failed terminal writes also need a recovery worker when batching is off.
+	model.InitBatchUpdater()
 
 	// pprof 下载开关（pprof_setting.enabled）由配置系统热更新，每个请求现读现判，
 	// 无需在这里启动任何后台 goroutine。ENABLE_PPROF 仅作为启动默认值，已在
@@ -243,14 +244,13 @@ func main() {
 	sig := <-quit
 	common.SysLog(common.LogText("received signal: %v, shutting down...", sig))
 
-	// SSE streams may run for minutes; give them time to finish before forced exit
-	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-
-	shutdownSequence(
+	shutdownWithBatchFlush(
 		func() error {
 			common.SysLog("received shutdown signal, draining in-flight requests...")
+			// Start the HTTP drain budget when Shutdown begins, before flushing buffers.
+			shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
 			return srv.Shutdown(shutdownCtx)
 		},
 		func() {
@@ -258,14 +258,20 @@ func main() {
 			// Budget 来自 ledger_pipeline_setting.shutdown_timeout_sec（默认 25 s）。
 			// systemd 的 TimeoutStopSec 必须 >= SHUTDOWN_TIMEOUT_SECONDS 加上这个预算，
 			// 否则 SIGKILL 会落在刷盘之前。
-			common.SysLog("requests drained, flushing business stat buffers...")
-			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
+			common.SysLog("requests drained, flushing relay logs and business stat buffers...")
+			// Log accounting continuations can still enqueue costs and commissions.
+			// Drain their producer before stopping the business-stat consumers.
 			model.ShutdownRelayLogFlush(operation_setting.GetRelayLogPipelineSetting().GetShutdownTimeout())
+			model.ShutdownStatsFlush(operation_setting.GetLedgerPipelineSetting().GetShutdownTimeout())
 
 			// 请求日志：先排空写队列再保存本地恢复检查点，未及时入索引的正文由下次启动补读。
 			// 预算 3 s——这些数据允许丢失，不值得再拖长关停。
 			middleware.DrainRequestLogQueue(3 * time.Second)
 			model.CheckpointRequestLogs()
+		},
+		func() {
+			common.SysLog("flushing batch quota updates...")
+			model.FlushBatchUpdate()
 		},
 	)
 
@@ -293,6 +299,20 @@ func shutdownSequence(drain func() error, flush func()) {
 		common.SysError("server shutdown error: " + err.Error())
 	}
 	flush()
+}
+
+// shutdownWithBatchFlush 先排空 HTTP，再刷一次批量额度，最后刷日志与统计。
+// 排空期间周期额度更新继续运行；排空前不执行同步刷盘，避免延迟停止接单。
+// 即使排空超时，也先刷额度再刷日志，保留排空期间产生的差额。
+func shutdownWithBatchFlush(drain func() error, flush func(), flushBatch func()) {
+	shutdownSequence(drain, func() {
+		if flushBatch != nil {
+			flushBatch()
+		}
+		if flush != nil {
+			flush()
+		}
+	})
 }
 
 func InjectUmamiAnalytics() {

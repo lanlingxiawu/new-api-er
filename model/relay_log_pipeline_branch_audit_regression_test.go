@@ -43,7 +43,9 @@ func fillRelayLogFallbackRetention(t *testing.T) string {
 	cfg.FallbackMaxFileSizeMB, cfg.FallbackMaxFiles = 1, 1
 
 	base := filepath.Join(dir, "relay-log.jsonl")
-	makeSizedFile(t, base, 1024*1024)
+	// The active file is now replayed too; fill it with a valid record rather
+	// than zero bytes, so this test measures retention recovery, not corruption.
+	writeFallbackRecords(t, base, &Log{RequestId: "retention-active", Type: LogTypeConsume, Content: strings.Repeat("x", 1024*1024)})
 	writeFallbackRecords(t, base+".1", &Log{RequestId: "retention-parked", Type: LogTypeConsume})
 
 	relayLogAccepting.Store(true)

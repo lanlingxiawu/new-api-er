@@ -509,11 +509,7 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		}
 	} else {
 		// Wallet
-		if quota > 0 {
-			err = model.DecreaseUserQuota(relayInfo.UserId, quota, false)
-		} else {
-			err = model.IncreaseUserQuota(relayInfo.UserId, -quota, false)
-		}
+		err = model.ApplyWalletSettlement(relayInfo.UserId, quota)
 		if err != nil {
 			return result, err
 		}
@@ -521,11 +517,7 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 	result.FundingApplied = true
 
 	if !relayInfo.IsPlayground {
-		if quota > 0 {
-			err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-		} else {
-			err = model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, -quota)
-		}
+		err = model.ApplyTokenSettlement(relayInfo.TokenId, relayInfo.TokenKey, quota)
 		if err != nil {
 			return result, err
 		}

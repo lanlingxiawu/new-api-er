@@ -82,6 +82,10 @@ type RelayLogAccountingPayload struct {
 	// BaseQuota 渠道每日上限「上游消耗」口径的基础消耗（分组倍率取 1）。旧记录没有该字段时读出为 0，
 	// 由消费方回退为 Quota / GroupRatio。
 	BaseQuota int64 `json:"base_quota,omitempty"`
+	// Recovery separates the immediate channel limit counter from deferred
+	// financial records. These fields never change the client charge.
+	SkipUpstream bool `json:"skip_upstream,omitempty"`
+	UpstreamOnly bool `json:"upstream_only,omitempty"`
 }
 
 var relayLogAccountingHandler func(RelayLogAccountingPayload, int)
@@ -571,20 +575,31 @@ func writeRelayLogFallbackBatch(batch []relayLogFallbackJob, unsettled *int) {
 	// defer 是 LIFO：先注册的计数归还最后执行，保证记账跑完之前 busy 不会归零，
 	// 否则关停流程会在记账还没做完时就认为管道已经空闲。
 	defer relayLogFallbackBusy.Add(-int64(len(batch)))
-	defer runRelayLogFallbackContinuations(batch)
+	continuations := append([]relayLogFallbackJob(nil), batch...)
+	defer func() { runRelayLogFallbackContinuations(continuations) }()
 
 	// 序列化放在文件锁外，锁内只做 IO
 	recordedAt := time.Now().Unix()
 	payloads := make([][]byte, 0, len(batch))
-	for _, job := range batch {
+	persisted := make([]bool, len(batch))
+	recoveryEnabled := operation_setting.QuotaRecoveryEnabled()
+	for i, job := range batch {
 		// 只落盘待补写的日志行。continuationOnly 的日志已在库里（或本来就没有），
 		// 写进来只会占用保留空间、虚增 fallback_total，回放时也只会被跳过。
 		if job.continuationOnly || job.event.Log == nil {
 			continue
 		}
-		data, err := common.Marshal(relayLogFallbackRecord{
+		record := relayLogFallbackRecord{
 			Version: 1, Kind: "relay_log_only", RecordedAt: recordedAt, Log: job.event.Log,
-		})
+		}
+		if recoveryEnabled && job.executeContinuation && job.event.Accounting != nil {
+			record.Version = 2
+			record.Kind = "relay_log_pending_accounting"
+			payload := *job.event.Accounting
+			payload.SkipUpstream = true
+			record.Accounting = &payload
+		}
+		data, err := common.Marshal(record)
 		if err != nil {
 			relayLogFallbackErrors.Add(1)
 			*unsettled--
@@ -592,6 +607,7 @@ func writeRelayLogFallbackBatch(batch []relayLogFallbackJob, unsettled *int) {
 			continue
 		}
 		payloads = append(payloads, data)
+		persisted[i] = record.Version == 2
 	}
 
 	err := appendRelayLogFallbackLines(payloads)
@@ -612,6 +628,15 @@ func writeRelayLogFallbackBatch(batch []relayLogFallbackJob, unsettled *int) {
 	}
 	if len(payloads) > 0 {
 		relayLogRetentionFullLogged.Store(false)
+	}
+	// The durable record owns financial continuation after a successful append.
+	// Preserve the original immediate channel limit and quota-data accounting.
+	for i, job := range continuations {
+		if persisted[i] {
+			payload := *job.event.Accounting
+			payload.UpstreamOnly = true
+			continuations[i].event = &relayLogEvent{Accounting: &payload, QuotaData: job.event.QuotaData}
+		}
 	}
 	relayLogFallbackTotal.Add(uint64(len(payloads)))
 }
@@ -647,6 +672,9 @@ func appendRelayLogFallbackLines(payloads [][]byte) error {
 	}
 	if err == nil {
 		err = writer.Flush()
+	}
+	if err == nil && operation_setting.QuotaRecoveryEnabled() {
+		err = file.Sync()
 	}
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
@@ -1045,8 +1073,16 @@ func StartRelayLogFlushLoop() {
 				}
 			}()
 			defer close(relayLogRetryDoneCh)
+			recoveryTicker := time.NewTicker(30 * time.Second)
+			defer recoveryTicker.Stop()
 			for {
 				select {
+				case <-recoveryTicker.C:
+					if operation_setting.QuotaRecoveryEnabled() && !relayLogCircuitOpen() && !relayLogReplayRunning.Load() {
+						if _, err := StartRelayLogFallbackReplay(); err != nil && !errors.Is(err, ErrRelayLogReplayRunning) && !errors.Is(err, ErrRelayLogReplayShuttingDown) {
+							common.SysError("relay-log: background fallback replay could not start: " + err.Error())
+						}
+					}
 				case <-time.After(operation_setting.GetRelayLogRetrySetting().GetRetryFlushInterval()):
 					if operation_setting.GetRelayLogRetrySetting().AllowConcurrentFlush {
 						// Preserve the single-writer invariant while allowing a
@@ -1079,6 +1115,22 @@ func prepareRelayLogReplayFiles() {
 			common.SysError("relay-log: archive active fallback file failed: " + err.Error())
 		}
 	}
+}
+
+func sealActiveRelayLogFallback() error {
+	relayLogFallbackFileMu.Lock()
+	defer relayLogFallbackFileMu.Unlock()
+	base := filepath.Join(relayLogFallbackDir, "relay-log.jsonl")
+	// Seal the active writer under the same lock used by append. A replay can
+	// then process a stable file while new fallback events use a fresh active file.
+	if info, statErr := os.Stat(base); statErr == nil && info.Size() > 0 {
+		if err := os.Rename(base, fmt.Sprintf("%s.manual.%d", base, time.Now().UnixNano())); err != nil {
+			return err
+		}
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return statErr
+	}
+	return nil
 }
 
 func listRelayLogReplayFiles() ([]string, error) {
@@ -1183,7 +1235,11 @@ func StartRelayLogFallbackReplay() (bool, error) {
 		State:     "running",
 		StartedAt: now,
 	}
-	paths, err := listRelayLogReplayFiles()
+	err := sealActiveRelayLogFallback()
+	var paths []string
+	if err == nil {
+		paths, err = listRelayLogReplayFiles()
+	}
 	if err != nil {
 		relayLogReplayStatus.State = "failed"
 		relayLogReplayStatus.FinishedAt = time.Now().Unix()
@@ -1355,6 +1411,11 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 		}
 		logs := make([]*Log, 0, len(batch))
 		for _, item := range batch {
+			if item.record.Version == 2 {
+				if err := identifyRecoveredRelayLog(ctx, item.record.Log); err != nil {
+					return err
+				}
+			}
 			logs = append(logs, item.record.Log)
 		}
 		writeCtx, cancel := context.WithTimeout(ctx, operation_setting.GetRelayLogPipelineSetting().GetWriteTimeout())
@@ -1377,7 +1438,23 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 			}
 			result.err = writeErr
 		} else {
-			result.processed += uint64(len(batch))
+			for _, item := range batch {
+				if item.record.Version == 2 {
+					if err := resumeRelayLogAccounting(ctx, item.record); err != nil {
+						line, marshalErr := common.Marshal(item.record)
+						if marshalErr != nil {
+							return marshalErr
+						}
+						if err := writeRetained(line); err != nil {
+							return err
+						}
+						failedCount++
+						result.err = err
+						continue
+					}
+				}
+				result.processed++
+			}
 		}
 		batch = batch[:0]
 		return nil
@@ -1417,7 +1494,7 @@ func replayRelayLogFallback(ctx context.Context, path string) relayLogReplayFile
 			return result
 		}
 		var record relayLogFallbackRecord
-		if err := common.Unmarshal(line, &record); err != nil || record.Version != 1 {
+		if err := common.Unmarshal(line, &record); err != nil || (record.Version != 1 && (record.Version != 2 || record.Kind != "relay_log_pending_accounting")) {
 			if err := writeRetained(line); err != nil {
 				// 临时文件写不进去就无法保留任何东西：放弃临时文件、保留源文件。
 				result.err = errors.Join(result.err, err, discardTemp())

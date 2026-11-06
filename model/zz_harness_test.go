@@ -74,6 +74,7 @@ func TestMain(m *testing.M) {
 		fmt.Println("[TEST] failed to isolate relay log fallback dir:", tempErr)
 	} else {
 		relayLogFallbackDir = fallbackDir
+		quotaRecoveryDir = filepath.Join(fallbackDir, "quota-recovery")
 	}
 
 	// 导出的 CSV 表头与类型单元格走 i18n，初始化后测试才能断言真实文案。

@@ -234,7 +234,7 @@ func init() {
 			UsingGroup: payload.UsingGroup, OriginModelName: payload.OriginModelName,
 			GroupRatio: payload.GroupRatio, Quota: payload.Quota,
 			BaseQuota: payload.BaseQuota,
-		}.record(logID)
+		}.recordRecovery(logID, payload.SkipUpstream, payload.UpstreamOnly)
 	})
 }
 
@@ -279,6 +279,10 @@ func snapshotCostAndCommission(relayInfo *relaycommon.RelayInfo, quota int, expl
 }
 
 func (s costCommissionSnapshot) record(logID int) {
+	s.recordRecovery(logID, false, false)
+}
+
+func (s costCommissionSnapshot) recordRecovery(logID int, skipUpstream, upstreamOnly bool) {
 	info := &relaycommon.RelayInfo{
 		UserId: s.UserID, UsingGroup: s.UsingGroup, OriginModelName: s.OriginModelName,
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: s.ChannelID, ChannelName: s.ChannelName},
@@ -287,7 +291,12 @@ func (s costCommissionSnapshot) record(logID int) {
 	// 渠道每日上限的上游消耗口径独立于提成台账：必须放在 RecordCostAndSettleEmployeeCommission
 	// 之前——免费分组的结算额为 0，会在那里的 quota == 0 处提前返回；而且业务统计熔断打开导致成本
 	// 台账不落库时，限额仍要照常累计（限额是止损控制，宁可算到也不能漏算）。
-	recordChannelDailyUpstream(s.ChannelID, s.upstreamBaseQuota())
+	if !skipUpstream {
+		recordChannelDailyUpstream(s.ChannelID, s.upstreamBaseQuota())
+	}
+	if upstreamOnly {
+		return
+	}
 	RecordCostAndSettleEmployeeCommission(info, s.Quota, logID)
 }
 
