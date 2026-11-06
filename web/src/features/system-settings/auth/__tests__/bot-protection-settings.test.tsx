@@ -23,7 +23,7 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createInstance, type i18n } from 'i18next'
 import { useState } from 'react'
@@ -55,7 +55,11 @@ function Fixture() {
     <I18nextProvider i18n={testI18n}>
       <QueryClientProvider client={client}>
         <div ref={setContainer} />
-        <SettingsPageProvider actionsContainer={container}>
+        <SettingsPageProvider
+          actionsContainer={container}
+          scope='auth.bot-protection'
+          canEdit
+        >
           <BotProtectionSection defaultValues={defaults} />
         </SettingsPageProvider>
       </QueryClientProvider>
@@ -101,6 +105,10 @@ describe('Bot Protection settings saves', () => {
     await user.type(screen.getByLabelText('Secret Key'), 'secret-key')
     await user.click(screen.getByRole('switch', { name: 'Enable Turnstile' }))
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Confirm Changes',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Save Changes' }))
 
     await waitFor(() => expect(put).toHaveBeenCalledTimes(3))
     expect(

@@ -228,6 +228,12 @@ func TestUserCache_RedisRoundTrip(t *testing.T) {
 	require.NoError(t, common.RDB.HDel(context.Background(), getUserCacheKey(u.Id),
 		"StreamResponseTimeout", "StreamTotalTimeout",
 		"StreamResponseTimeoutMode", "NonStreamResponseTimeout", "NonStreamTotalTimeout").Err())
+	legacy, found, err := readUserCacheBase(u.Id)
+	require.NoError(t, err)
+	require.True(t, found)
+	legacyMAC, err := legacy.cacheMAC()
+	require.NoError(t, err)
+	require.NoError(t, common.RDB.HSet(context.Background(), getUserCacheKey(u.Id), "CacheMAC", legacyMAC).Err())
 	legacyBase, err := cacheGetUserBase(u.Id)
 	require.NoError(t, err)
 	assert.Zero(t, legacyBase.StreamResponseTimeout)

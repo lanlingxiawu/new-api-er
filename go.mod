@@ -45,9 +45,9 @@ require (
 	github.com/stripe/stripe-go/v81 v81.4.0
 	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tidwall/gjson v1.19.0
-	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/tiktoken-go/tokenizer v0.8.1 // indirect
+	github.com/tidwall/gjson v1.20.0
+	github.com/tidwall/sjson v1.2.5
+	github.com/tiktoken-go/tokenizer v0.8.1
 	github.com/waffo-com/waffo-go v1.3.2
 	github.com/yapingcat/gomedia v0.0.0-20240906162731-17feea57090c
 	golang.org/x/crypto v0.57.0
@@ -131,7 +131,7 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/expr-lang/expr v1.17.8
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2

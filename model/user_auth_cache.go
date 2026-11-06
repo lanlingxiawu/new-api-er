@@ -45,7 +45,7 @@ func getUserAuthVersionKey(userId int) string {
 // (every fill rejected until then). No code path writes profile_version back
 // from an earlier read. The key only exists for users written recently.
 func getUserProfileVersionKey(userId int) string {
-	return fmt.Sprintf("auth:user:profile:%d", userId)
+	return fmt.Sprintf("auth:user:profile:{%s}", getUserCacheKey(userId))
 }
 
 // A pending fence only covers the interval between publishing the next
@@ -408,6 +408,17 @@ return 1`
 		if !found {
 			return nil
 		}
+		currentMAC, err := base.cacheMAC()
+		if err != nil || !validAuthCacheMAC(currentMAC, base.CacheMAC, base.CacheExpiresAt) {
+			if base.CacheSchema != userCacheSchemaVersion {
+				// Rolling deploy: an unsigned hash from another schema keeps
+				// its stamp. Only the requested field is written.
+				return updateUserCacheFieldUnsigned(userId, field, value, authVersion, profileVersion)
+			}
+			// A partial HSET can leave a live MAC on tampered fields. Re-sign
+			// only a verified snapshot; otherwise publish the database row.
+			return PublishUserAuthCache(userId)
+		}
 		previousMAC := base.CacheMAC
 		if err = applyUserCacheField(base, field, value); err != nil {
 			return err
@@ -437,6 +448,41 @@ return 1`
 		}
 	}
 	return fmt.Errorf("user cache changed during field update")
+}
+
+func updateUserCacheFieldUnsigned(userId int, field string, value any, authVersion int64, profileVersion int64) error {
+	const script = `
+local incoming = tonumber(ARGV[1])
+local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
+local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
+local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
+if pending > incoming or committed > incoming or current > incoming then
+  return 0
+end
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 1
+end
+if current ~= incoming then
+  return 1
+end
+local incomingProfile = tonumber(ARGV[4])
+if incomingProfile >= 0 and tonumber(redis.call('GET', KEYS[4]) or '0') > incomingProfile then
+  return 1
+end
+redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
+return 1`
+	result, err := common.RDB.Eval(context.Background(), script,
+		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId),
+			getUserProfileVersionKey(userId)},
+		authVersion, field, value, profileVersion,
+	).Int()
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		return ErrUserAuthCachePending
+	}
+	return nil
 }
 
 func readUserCacheBase(userId int) (*UserBase, bool, error) {

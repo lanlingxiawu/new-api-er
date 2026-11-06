@@ -24,7 +24,7 @@ func TestAuthCacheKeysShareClusterHashTag(t *testing.T) {
 		cacheKey string
 		related  []string
 	}{
-		{getUserCacheKey(5), []string{getUserAuthFenceKey(5), getUserAuthVersionKey(5)}},
+		{getUserCacheKey(5), []string{getUserAuthFenceKey(5), getUserAuthVersionKey(5), getUserProfileVersionKey(5)}},
 		{getTokenCacheKey("test-token"), []string{getTokenCacheFenceKey("test-token")}},
 	} {
 		assert.NotContains(t, tc.cacheKey, "{")

@@ -69,6 +69,8 @@ function PriceChangesFixture(props: {
   const form = useForm({ defaultValues: { ...saved, ...props.draft } })
   return (
     <SettingsPageProvider
+      scope='models'
+      canEdit
       actionsContainer={actions}
       titleStatusContainer={titleStatus}
     >

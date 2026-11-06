@@ -90,27 +90,30 @@ func TestValidateChannel_NormalOK(t *testing.T) {
 
 func TestGetVertexArrayKeys(t *testing.T) {
 	// empty input -> nil, no error
-	keys, err := getVertexArrayKeys("")
+	keys, indices, err := getVertexArrayKeys("")
 	require.NoError(t, err)
 	assert.Nil(t, keys)
+	assert.Nil(t, indices)
 
 	// array of string keys
-	keys, err = getVertexArrayKeys(`["k1"," k2 "]`)
+	keys, indices, err = getVertexArrayKeys(`["k1"," k2 "]`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"k1", "k2"}, keys)
+	assert.Equal(t, []int{0, 1}, indices)
 
 	// array of object keys -> re-encoded JSON strings
-	keys, err = getVertexArrayKeys(`[{"a":1}]`)
+	keys, indices, err = getVertexArrayKeys(`[{"a":1}]`)
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
+	assert.Equal(t, []int{0}, indices)
 	assert.JSONEq(t, `{"a":1}`, keys[0])
 
 	// invalid JSON
-	_, err = getVertexArrayKeys(`not-json`)
+	_, _, err = getVertexArrayKeys(`not-json`)
 	assert.Error(t, err)
 
 	// empty array -> error
-	_, err = getVertexArrayKeys(`[]`)
+	_, _, err = getVertexArrayKeys(`[]`)
 	assert.Error(t, err)
 }
 

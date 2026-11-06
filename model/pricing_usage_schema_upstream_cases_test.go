@@ -361,13 +361,13 @@ func TestModelPricingIssuesFollowPluginChanges(t *testing.T) {
 	// or a channel alias; a disabled ability serves nothing.
 	mapping := `{"ordinary-alias":"issue-ordinary"}`
 	require.NoError(t, DB.Create(&Channel{
-		Id: 940, Type: constant.ChannelTypeTaskPlugin, Key: "key-940", Status: common.ChannelStatusEnabled, Name: "channel-940",
+		Id: pricingTestChannelID(940), Type: constant.ChannelTypeTaskPlugin, Key: "key-940", Status: common.ChannelStatusEnabled, Name: "channel-940",
 		Models: "ordinary-alias", ModelMapping: &mapping,
 	}).Error)
 	for _, name := range []string{"issue-priced", "issue-per-call", "Issue-Unpriced", "ordinary-alias", "issue-shared"} {
-		insertPricingEndpointAbility(t, 940, name)
+		insertPricingEndpointAbility(t, pricingTestChannelID(940), name)
 	}
-	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "issue-idle", ChannelId: 940, Enabled: false}).Error)
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "issue-idle", ChannelId: pricingTestChannelID(940), Enabled: false}).Error)
 	InitChannelCache()
 
 	assert.Equal(t, []ModelPricingIssue{ordinary, unpriced}, ownIssues())
@@ -413,8 +413,8 @@ func TestModelPricingSnapshotListsUsedBuiltinPrices(t *testing.T) {
 	clearPricing()
 	t.Cleanup(clearPricing)
 	require.NoError(t, DB.Create(&Option{Key: "billing_setting.billing_mode", Value: `{"deepseek-v4-pro":"tiered_expr"}`}).Error)
-	insertPricingEndpointAbility(t, 950, "gpt-image-2")
-	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-image-2.5-flare", ChannelId: 950, Enabled: false}).Error)
+	insertPricingEndpointAbility(t, pricingTestChannelID(950), "gpt-image-2")
+	require.NoError(t, DB.Create(&Ability{Group: "default", Model: "gpt-image-2.5-flare", ChannelId: pricingTestChannelID(950), Enabled: false}).Error)
 
 	full, err := GetModelPricingSnapshot(nil)
 	require.NoError(t, err)

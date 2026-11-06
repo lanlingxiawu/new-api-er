@@ -15,7 +15,7 @@ import {
   redirectToFirstVisibleSystemSettings,
 } from '../route-access'
 
-const pageSections = SYSTEM_SETTINGS_VIEW.getNavGroups(i18next.t)
+const pageSections = SYSTEM_SETTINGS_VIEW.getNavGroups(i18next.t, {})
   .flatMap((group) => group.items)
   .flatMap((item) => item.items ?? [])
   .map((item) => String(item.url).replace('/system-settings/', '').split('/'))

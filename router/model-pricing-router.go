@@ -9,6 +9,7 @@ import (
 
 var modelPricingRoutes = []permissionRoute{
 	{method: "GET", path: "", permission: authz.SystemSettingsView("billing.model-pricing"), handler: controller.GetModelPricingConfig},
+	{method: "GET", path: "/issues", permission: authz.SystemSettingsView("billing.model-pricing"), handler: controller.GetModelPricingIssues},
 	{method: "POST", path: "/preview", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.PreviewModelPricing},
 	{method: "POST", path: "/convert", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.PreviewModelPricingConversion},
 	{method: "PATCH", path: "", permission: authz.SystemSettingsEdit("billing.model-pricing"), handler: controller.UpdateModelPricingConfig},

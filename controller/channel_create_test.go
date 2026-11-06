@@ -37,7 +37,11 @@ func setupChannelCreateTest(t *testing.T) int {
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	model.LOG_DB = database
 	common.SetLogDatabaseType(common.MainDatabaseType())
-	require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.User{}, &model.Log{}, &model.AuditLog{}))
+	require.NoError(t, database.AutoMigrate(
+		&model.Channel{}, &model.Ability{}, &model.ChannelCostConfig{},
+		&model.User{}, &model.Log{}, &model.AuditLog{},
+		&model.UserChannelExclusion{}, &model.UserChannelExclusionCleanup{},
+	))
 	root := &model.User{Username: "channel-create-review-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
 	require.NoError(t, database.Create(root).Error)
 	t.Cleanup(func() { require.NoError(t, database.Unscoped().Delete(root).Error) })
