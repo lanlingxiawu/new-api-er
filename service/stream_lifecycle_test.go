@@ -83,6 +83,55 @@ func TestUnifiedStreamBillingMatrix(t *testing.T) {
 	require.Nil(t, info.StreamResult)
 }
 
+// A terminal error is delivery evidence only after its downstream write succeeds.
+func TestFinalizedTerminalErrorDeliveryEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writer    http.ResponseWriter
+		flushFail bool
+		delivered bool
+	}{
+		{name: "written and flushed", writer: httptest.NewRecorder(), delivered: true},
+		{name: "write failed", writer: &terminalWriteFailRecorder{ResponseRecorder: httptest.NewRecorder()}},
+		{name: "short write", writer: &terminalShortWriteRecorder{ResponseRecorder: httptest.NewRecorder()}},
+		{name: "flush failed", writer: httptest.NewRecorder(), flushFail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(tc.writer)
+			if tc.flushFail {
+				c.Writer = terminalFlushFailWriter{ResponseWriter: c.Writer}
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o"}}
+			BeginStreamAttempt(c, info)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}}
+			info.StreamSession.ObserveTransport(resp, nil)
+			info.StreamSession.ObserveHTTP(resp)
+			info.StreamSession.Fail("upstream_error", errors.New("fixture upstream error"))
+			_ = FinalizeStreamUsage(c, info, nil)
+
+			require.NotNil(t, info.StreamResult)
+			require.NotNil(t, info.StreamResult.Diagnostic.DeliveryEvidence)
+			require.Equal(t, tc.delivered, info.StreamResult.Diagnostic.DeliveryEvidence.ErrorDelivered)
+			require.Equal(t, tc.delivered, info.StreamSession.Snapshot().ErrorDelivered)
+		})
+	}
+}
+
+type terminalWriteFailRecorder struct{ *httptest.ResponseRecorder }
+
+func (r *terminalWriteFailRecorder) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+type terminalShortWriteRecorder struct{ *httptest.ResponseRecorder }
+
+func (r *terminalShortWriteRecorder) Write(p []byte) (int, error) {
+	return r.ResponseRecorder.Write(p[:len(p)-1])
+}
+
+type terminalFlushFailWriter struct{ gin.ResponseWriter }
+
+func (w terminalFlushFailWriter) FlushError() error { return io.ErrClosedPipe }
+
 // TestUnifiedStreamExpectedCandidateRequest 验证入口 DTO 的 n/candidateCount 在透传和重试中继续约束完成。
 // 参数 t 为测试上下文；不读取或采集请求原文，也不访问数据库。
 func TestUnifiedStreamExpectedCandidateRequest(t *testing.T) {
@@ -202,7 +251,7 @@ func TestUnifiedStreamUsageSemantics(t *testing.T) {
 		semantic              string
 	}{
 		{`{"type":"message_start","message":{"usage":{"input_tokens":3,"cache_read_input_tokens":7,"output_tokens":0}}}`, 3, 0, 7, "anthropic"},
-		{`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":4,"cachedContentTokenCount":3}}`, 10, 6, 3, ""},
+		{`{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":4,"cachedContentTokenCount":3}}`, 10, 6, 3, "gemini"},
 	} {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)

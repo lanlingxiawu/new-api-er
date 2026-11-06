@@ -90,7 +90,7 @@ func (f LogExportFilter) matchesRow(l *Log, ctx *rowCtx) bool {
 	}
 	if f.MinRetryCount != nil {
 		chain, _ := ctx.adminInfo(l)["use_channel"].([]any)
-		if len(chain) < *f.MinRetryCount {
+		if max(0, len(chain)-1) < *f.MinRetryCount {
 			return false
 		}
 	}

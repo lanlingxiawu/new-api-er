@@ -1673,6 +1673,20 @@ export function LogDetailBody(props: LogDetailBodyProps) {
               label={t('Effective content delivered')}
               value={other.stream_result.effective_content ? t('Yes') : t('No')}
             />
+            {typeof other.stream_result.intended_quota === 'number' && (
+              <DetailRow
+                label={t('Intended charge')}
+                value={formatLogQuota(other.stream_result.intended_quota)}
+                mono
+              />
+            )}
+            {typeof other.stream_result.reserved_quota === 'number' && (
+              <DetailRow
+                label={t('Pre-consumed quota')}
+                value={formatLogQuota(other.stream_result.reserved_quota)}
+                mono
+              />
+            )}
             {props.isAdmin && other.admin_info?.stream_error && (
               <DetailRow
                 label={t('Upstream error')}

@@ -178,6 +178,8 @@ func TestUnifiedAwsNovaCompleteJSON(t *testing.T) {
 			require.NotNil(t, err)
 			require.NotContains(t, rec.Body.String(), "NOVA_TEXT")
 			require.Zero(t, final.TotalTokens)
+			require.Equal(t, "none", info.StreamResult.UsageSource)
+			require.False(t, info.StreamResult.EffectiveContent)
 		}
 	}
 }

@@ -18,11 +18,11 @@ func TestStreamToolNameOwnsStorage(t *testing.T) {
 	large := `{"name":"lookup","padding":"` + strings.Repeat("x", 1<<20) + `"}`
 	name := gjson.Parse(large).Get("name").String()
 	s := NewStreamSession(types.RelayFormatOpenAI)
-	require.False(t, s.toolLocked("tool", name, "{", false, false))
+	require.False(t, s.toolLocked("tool", name, "{", false, false, false))
 	require.Equal(t, name, s.tools["tool"].name.String())
 	require.False(t, unsafe.StringData(name) == unsafe.StringData(s.tools["tool"].name.String()), "工具名应只保留自身字节")
 	require.Equal(t, len(name)+1, s.toolBytes)
-	require.True(t, s.toolLocked("tool", "", "}", true, false))
+	require.True(t, s.toolLocked("tool", "", "}", true, false, false))
 	require.Equal(t, "lookup{}", s.text.String())
 	require.Zero(t, s.toolBytes)
 	require.Empty(t, s.tools)

@@ -41,7 +41,7 @@ func TestUnifiedPaLMJSONToStream(t *testing.T) {
 		info.StreamDiagnostic.Observe(resp)
 		info.StreamSession.ObserveHTTP(resp)
 		err, text := palmStreamHandler(c, resp)
-		service.FinalizeStreamUsage(c, info, &dto.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5})
+		final := service.FinalizeStreamUsage(c, info, &dto.Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5})
 		require.Equal(t, !tc.complete, info.StreamResult.Failed)
 		if tc.complete {
 			require.Nil(t, err)
@@ -51,6 +51,8 @@ func TestUnifiedPaLMJSONToStream(t *testing.T) {
 		} else {
 			require.NotNil(t, err)
 			require.Equal(t, "none", info.StreamResult.UsageSource)
+			require.Zero(t, final.TotalTokens)
+			require.False(t, info.StreamResult.EffectiveContent)
 			require.Contains(t, rec.Body.String(), "event: error")
 			require.NotContains(t, rec.Body.String(), "[DONE]")
 		}

@@ -32,7 +32,7 @@ func TestManagedImageResponseLifecycle(t *testing.T) {
 		{name: "JSON damaged second image", n: imageRegressionCount(2), body: `{"data":[{"b64_json":"aGk="},{}],"usage":{"input_tokens":3,"output_tokens":4}}`, contentType: "application/json", source: "none", failed: true},
 		{name: "JSON malformed", body: `{"data":[{"b64_json":"aGk="}`, contentType: "application/json", source: "none", failed: true},
 		{name: "SSE only preview then DONE", body: "data: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"aGk=\"}\n\ndata: [DONE]\n\n", contentType: "text/event-stream", source: "estimated", failed: true, effective: true},
-		{name: "SSE missing second then DONE", n: imageRegressionCount(2), body: "data: {\"type\":\"image_generation.completed\",\"b64_json\":\"aGk=\"}\n\ndata: [DONE]\n\n", contentType: "text/event-stream", source: "upstream", failed: true, effective: true},
+		{name: "SSE fewer images then DONE", n: imageRegressionCount(2), body: "data: {\"type\":\"image_generation.completed\",\"b64_json\":\"aGk=\"}\n\ndata: [DONE]\n\n", contentType: "text/event-stream", source: "upstream", effective: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -61,8 +61,12 @@ func TestManagedImageResponseLifecycle(t *testing.T) {
 			} else {
 				require.Contains(t, rec.Body.String(), "image_generation.completed")
 				require.Contains(t, rec.Body.String(), "[DONE]")
-				require.Equal(t, 3, selected.PromptTokens)
-				require.Equal(t, 4, selected.CompletionTokens)
+				if strings.Contains(tc.body, `"usage"`) {
+					require.Equal(t, 3, selected.PromptTokens)
+					require.Equal(t, 4, selected.CompletionTokens)
+				} else {
+					require.Equal(t, float64(1), info.PriceData.OtherRatios()["n"])
+				}
 			}
 			if tc.source == "none" {
 				require.Zero(t, selected.TotalTokens)

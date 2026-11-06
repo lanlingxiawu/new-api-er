@@ -36,7 +36,7 @@ func TestUnifiedStreamLegacyFunctionSettlement(t *testing.T) {
 			{"unfinished confirmed", `{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17}`, false, "none", 0},
 			{"unfinished no usage", "", false, "none", 0},
 		} {
-			t.Run(tc.name+"/"+suffix, func(t *testing.T) {
+			t.Run(tc.name+"/"+suffix+"", func(t *testing.T) {
 				rec := httptest.NewRecorder()
 				c, _ := gin.CreateTestContext(rec)
 				c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(requestBody))

@@ -21,6 +21,8 @@ import (
 
 func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	enableRelayLogPipelineForTest(t)
+	drainRelayLogsForTest(t)
 	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedisEnabled := common.RedisEnabled
 	previousMainDatabaseType := common.MainDatabaseType()
@@ -36,11 +38,14 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	model.DB, model.LOG_DB = database, database
 	common.RedisEnabled = false
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	model.InitColumnNames()
 	constant.ErrorLogEnabled = true
 	t.Cleanup(func() {
+		drainRelayLogsForTest(t)
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedisEnabled
 		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		model.InitColumnNames()
 		constant.ErrorLogEnabled = previousErrorLogEnabled
 		require.NoError(t, sqlDB.Close())
 	})
@@ -49,6 +54,8 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	requestID := common.NewRequestId()
+	ctx.Set(common.RequestIdKey, requestID)
 	ctx.Set("id", 7)
 	ctx.Set("username", "log-owner")
 	ctx.Set("token_name", "test-token")
@@ -69,12 +76,11 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	}
 	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
 
-	enableRelayLogPipelineForTest(t)
 	processChannelError(ctx, channelSnapshot, apiErr, nil)
 	drainRelayLogsForTest(t)
 
 	var stored model.Log
-	require.NoError(t, database.First(&stored).Error)
+	require.NoError(t, database.Where("request_id = ?", requestID).First(&stored).Error)
 	assert.Equal(t, channelSnapshot.ChannelId, stored.ChannelId)
 	storedOther, err := common.StrToMap(stored.Other)
 	require.NoError(t, err)
@@ -89,7 +95,7 @@ func TestProcessChannelErrorUsesSnapshotWithoutLeakingChannelMetadata(t *testing
 	assert.Equal(t, []any{"101"}, adminInfo["use_channel"])
 	assert.NotContains(t, adminInfo, "is_multi_key")
 
-	logs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError}, 0, 10)
+	logs, total, err := model.GetUserLogs(7, model.LogFilter{Type: model.LogTypeError, RequestId: requestID}, 0, 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, logs, 1)

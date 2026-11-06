@@ -30,6 +30,10 @@ func TestStreamImageEvidencePricing(t *testing.T) {
 						n := uint(2)
 						info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, RelayFormat: types.RelayFormatOpenAI, RelayMode: relayconstant.RelayModeImagesGenerations, OriginModelName: "gpt-image-1", Request: &dto.ImageRequest{N: &n}, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-image-1"}}
 						info.PriceData.UsePrice = usePrice
+						info.ImageRequestCount = 2
+						if usePrice {
+							info.PriceData.AddOtherRatio("n", 2)
+						}
 						info.PriceData.ModelRatio = 1
 						info.PriceData.ModelPrice = 0.1
 						info.PriceData.GroupRatioInfo.GroupRatio = 1
@@ -69,7 +73,7 @@ func TestStreamImageEvidencePricing(t *testing.T) {
 						} else if !usePrice && usageJSON == `,"usage":{"input_tokens":0,"output_tokens":0}` {
 							require.Zero(t, selected.TotalTokens, "显式零不替换为估算")
 						} else if usePrice {
-							require.Equal(t, float64(1), info.PriceData.OtherRatios()["n"])
+							require.Equal(t, float64(2), info.PriceData.OtherRatios()["n"], "an incomplete stream cannot lower the requested count")
 						}
 					})
 				}

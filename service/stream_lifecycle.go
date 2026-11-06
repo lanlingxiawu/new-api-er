@@ -85,6 +85,15 @@ func BeginStreamAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.CaptureStreamResponse() {
 		info.StreamDiagnostic = relaycommon.NewStreamResponseCapture(attempt)
 		info.StreamDiagnostic.ResponseGate = info.StreamResponseGate
+
+		value, _ := common.GetContextKey(c, constant.ContextKeyRelayTimeoutControl)
+		timeoutSource, _ := value.(interface{ RelayTimeoutKind() string })
+		observer := relaycommon.NewStreamTerminationRecorder(c.Request.Context(), timeoutSource,
+			common.GetContextKeyInt(c, constant.ContextKeyRelayResponseTimeoutSeconds),
+			common.GetContextKeyInt(c, constant.ContextKeyRelayTotalTimeoutSeconds))
+		info.StreamDiagnostic.Termination = observer
+		info.StreamSession.Termination = observer
+
 		c.Set(relaycommon.StreamResponseCaptureKey, info.StreamDiagnostic)
 		// 放在语义写入器之下：过滤帧与尚未组成完整事件的数据不计入原始下游正文。
 		c.Writer = relaycommon.NewDownstreamCaptureWriter(c.Writer, info.StreamDiagnostic)
@@ -108,6 +117,7 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	}
 	// 渠道解析器可能按上游 Content-Type 临时切换 IsStream；终止后的费用和日志仍标记入口流式请求。
 	info.IsStream = true
+	info.StreamSession.Termination.ObserveContext()
 	info.StreamWriter.Finish()
 	snapshot := info.StreamSession.Snapshot()
 	info.StreamUsageFormat = snapshot.UsageFormat
@@ -139,6 +149,7 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	outcome.Diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 	outcome.Diagnostic.UsageEvidence = snapshot.Evidence
 	outcome.Diagnostic.UsageFinal = snapshot.Complete
+	outcome.Diagnostic.DeliveryEvidence = snapshot.DeliveryEvidence()
 	cause := snapshot.Err
 	if reason == relaycommon.StreamEndReasonTimeout {
 		cause = context.DeadlineExceeded
@@ -152,6 +163,7 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		outcome.Diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(cause)
 	}
 	outcome.UsageSource = outcome.SelectUsageSource()
+
 	if outcome.UsageSource == "estimated" && clientGone && !snapshot.ReceivedResponse && info.RelayFormat == types.RelayFormatOpenAIRealtime {
 		// Realtime 按轮次计费：握手后没有开始任何轮次就断开，上游没有可计的轮次。
 		outcome.UsageSource = "none"
@@ -170,6 +182,14 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 		outputEstimate = 0
 	}
 	info.StreamResult = outcome
+
+	count := int64(snapshot.Evidence["image_count"])
+	if count > 0 && ((!outcome.Failed && snapshot.Complete) || count > int64(info.RequestedImageCount())) {
+		// Both legacy and expression pricing use the same count. Failed or
+		// disconnected requests cannot reduce their requested image count.
+		info.UpdateImageCount(count)
+	}
+
 	if info.StreamStatus == nil {
 		info.StreamStatus = relaycommon.NewStreamStatus()
 	}
@@ -198,6 +218,9 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 	}
 	if outcome.Failed && !outcome.ClientGone && !snapshot.ErrorDelivered && (c.Request.Context().Err() == nil || IsRelayRequestTimeout(c)) {
 		WriteStreamTerminalError(c, info, snapshot)
+		// The terminal frame may be delivered after the settlement snapshot was
+		// frozen. Refresh only delivery evidence; usage and failure stay fixed.
+		outcome.Diagnostic.DeliveryEvidence = info.StreamSession.Snapshot().DeliveryEvidence()
 	}
 	if outcome.Failed && !outcome.ClientGone {
 		outcome.ErrorMessage = StreamFailureLogMessage(snapshot, common.UpstreamAddresses(c)...)
@@ -233,20 +256,14 @@ func FinalizeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto
 			if _, ok := snapshot.Evidence["input_tokens"]; !ok && !info.PriceData.UsePrice && info.RelayFormat != types.RelayFormatOpenAIRealtime {
 				// 中途结束时上游可能只报过部分字段；缺输入字段不等于输入为 0，按估算输入补齐（显式 0 仍保留）。
 				common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-				selected.PromptTokens = info.GetEstimatePromptTokens()
-				selected.PromptTokensDetails.TextTokens = max(0, selected.PromptTokens-selected.PromptTokensDetails.AudioTokens)
-				selected.TotalTokens = selected.PromptTokens + selected.CompletionTokens
-				if billing := selected.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
-					billing.ClaudeUsage.InputTokens = selected.PromptTokens
-					billing.Estimated = true
-				}
+				applyStreamInputEstimate(selected, info.GetEstimatePromptTokens())
 			}
 		case "estimated":
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 			selected = &dto.Usage{PromptTokens: info.GetEstimatePromptTokens(), CompletionTokens: outputEstimate}
 			if (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) && info.PriceData.UsePrice {
-				// 只有预览而无完成用量时按一张估算，不把原请求的多张数量全部收费。
-				info.PriceData.AddOtherRatio("n", 1)
+				// Incomplete output retains the requested quantity.
+
 				selected.PromptTokens = max(1, selected.PromptTokens)
 			}
 			selected.TotalTokens = selected.PromptTokens + selected.CompletionTokens
@@ -286,14 +303,27 @@ func streamTimeoutInputUsage(info *relaycommon.RelayInfo, evidence map[string]in
 	if _, ok := evidence["input_tokens"]; ok || info.PriceData.UsePrice {
 		return u, false
 	}
-	u.PromptTokens = info.GetEstimatePromptTokens()
-	u.PromptTokensDetails.TextTokens = max(0, u.PromptTokens-u.PromptTokensDetails.AudioTokens)
-	u.TotalTokens = u.PromptTokens
-	if billing := u.BillingUsage; billing != nil && billing.ClaudeUsage != nil {
-		billing.ClaudeUsage.InputTokens = u.PromptTokens
+	applyStreamInputEstimate(u, info.GetEstimatePromptTokens())
+	return u, true
+}
+
+// applyStreamInputEstimate fills missing request input without dropping confirmed
+// tool input or allowing a nested provider snapshot to hide the estimate.
+func applyStreamInputEstimate(usage *dto.Usage, estimate int) {
+	usage.PromptTokens = estimate
+	if billing := usage.BillingUsage; billing != nil {
+		if metadata := billing.GeminiUsageMetadata; metadata != nil {
+			metadata.PromptTokenCount = estimate
+			usage.PromptTokens += metadata.ToolUsePromptTokenCount
+			metadata.TotalTokenCount = usage.PromptTokens + usage.CompletionTokens
+		}
+		if claude := billing.ClaudeUsage; claude != nil {
+			claude.InputTokens = estimate
+		}
 		billing.Estimated = true
 	}
-	return u, true
+	usage.PromptTokensDetails.TextTokens = max(0, usage.PromptTokens-usage.PromptTokensDetails.AudioTokens)
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 }
 
 // estimatedStreamOutput 选择本地估算的输出量：正常取交付侧，用户断开（及按 charge 结算的我方超时）取接收侧。
@@ -314,7 +344,7 @@ func estimatedStreamOutput(snapshot relaycommon.StreamSnapshot, clientGone bool)
 func BuildConfirmedStreamUsage(info *relaycommon.RelayInfo, e map[string]int) *dto.Usage {
 	u := &dto.Usage{PromptTokens: e["input_tokens"], CompletionTokens: e["output_tokens"]}
 	if count := e["image_count"]; count > 0 && info.PriceData.UsePrice {
-		info.PriceData.AddOtherRatio("n", float64(count))
+
 		// 与既有图片按次计价的单位占位保持一致，不把字节换算为输出 token。
 		u.PromptTokens = max(1, u.PromptTokens)
 	}
@@ -330,6 +360,31 @@ func BuildConfirmedStreamUsage(info *relaycommon.RelayInfo, e map[string]int) *d
 	u.PromptTokensDetails.CachedTokens = e["cached_tokens"]
 	u.PromptTokensDetails.CacheWriteTokens = e["cache_write_tokens"]
 	u.PromptTokensDetails.CachedCreationTokens = e["cached_creation_tokens"]
+
+	u.PromptTokensDetails.CacheCreationInputTokens = e["openai_cache_creation_input_tokens"]
+	_, has30m := e["cache_write_tokens_details.ttl_30m_tokens"]
+	_, has12h := e["cache_write_tokens_details.ttl_12h_tokens"]
+	if has30m || has12h {
+		u.PromptTokensDetails.CacheWriteTokensDetails = &dto.CacheWriteTokenDetails{TTL30mTokens: e["cache_write_tokens_details.ttl_30m_tokens"], TTL12hTokens: e["cache_write_tokens_details.ttl_12h_tokens"]}
+	}
+	for _, field := range []string{"text", "image", "audio"} {
+		value, exists := e["cached_tokens_details."+field+"_tokens"]
+		if !exists {
+			continue
+		}
+		if u.PromptTokensDetails.CachedTokensDetails == nil {
+			u.PromptTokensDetails.CachedTokensDetails = &dto.CachedTokenDetails{}
+		}
+		switch field {
+		case "text":
+			u.PromptTokensDetails.CachedTokensDetails.TextTokens = &value
+		case "image":
+			u.PromptTokensDetails.CachedTokensDetails.ImageTokens = &value
+		case "audio":
+			u.PromptTokensDetails.CachedTokensDetails.AudioTokens = &value
+		}
+	}
+
 	u.PromptTokensDetails.AudioTokens = e["input_audio_tokens"]
 	u.PromptTokensDetails.ImageTokens = e["input_image_tokens"]
 	u.CompletionTokenDetails.AudioTokens = e["output_audio_tokens"]
@@ -341,6 +396,30 @@ func BuildConfirmedStreamUsage(info *relaycommon.RelayInfo, e map[string]int) *d
 	}
 	if _, ok := e["output_text_tokens"]; !ok {
 		u.CompletionTokenDetails.TextTokens = max(0, u.CompletionTokens-u.CompletionTokenDetails.AudioTokens)
+	}
+	if format == types.RelayFormatGemini {
+		metadata := &dto.GeminiUsageMetadata{
+			PromptTokenCount: e["input_tokens"], ToolUsePromptTokenCount: e["tool_use_prompt_tokens"],
+			CandidatesTokenCount: e["output_tokens"], ThoughtsTokenCount: e["reasoning_tokens"], CachedContentTokenCount: e["cached_tokens"],
+		}
+		// Do not infer missing or explicitly zero output from a reported total.
+		// Every billed component must have its own validated evidence.
+		metadata.TotalTokenCount = metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount + metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
+		for _, detail := range []struct {
+			prefix string
+			target *[]dto.GeminiPromptTokensDetails
+		}{{"input_", &metadata.PromptTokensDetails}, {"tool_input_", &metadata.ToolUsePromptTokensDetails}, {"output_", &metadata.CandidatesTokensDetails}} {
+			for _, modality := range []string{"text", "audio", "image"} {
+				if value, exists := e[detail.prefix+modality+"_tokens"]; exists {
+					*detail.target = append(*detail.target, dto.GeminiPromptTokensDetails{Modality: strings.ToUpper(modality), TokenCount: value})
+				}
+			}
+		}
+		u.UsageSemantic = dto.BillingUsageSemanticGemini
+		u.BillingUsage = dto.NewGeminiChatBillingUsage(metadata)
+		if canonical, ok := u.BillingUsage.CanonicalUsage(); ok {
+			return canonical
+		}
 	}
 	if format == types.RelayFormatClaude {
 		cu := &dto.ClaudeUsage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, CacheReadInputTokens: e["cache_read_input_tokens"], CacheCreationInputTokens: e["cache_creation_input_tokens"]}
@@ -369,7 +448,7 @@ func StreamTerminalFailureText(c *gin.Context) (text string, timedOut bool) {
 	return i18n.Translate(i18n.LangEn, i18n.MsgClaudeStreamFailed), false
 }
 
-// WriteStreamTerminalError 按下游协议写终止错误；调用方负责一次性判断，本方法自身不设置去重标记。
+// WriteStreamTerminalError 按下游协议写终止错误；完整写入并刷新后标记交付，调用方负责一次性判断。
 // 参数 c 提供写入/超时上下文，info 决定下游协议和成功响应资格，snapshot 保存上游原错误帧/载荷与协议结果。
 // 同协议且形状兼容时可原样发送上游错误；本地补发使用公开提示（我方超时为 relay_timeout 与超时文案）。
 // 裸媒体已经写出时直接返回，由调用方关闭流，不插入 SSE。
@@ -439,11 +518,13 @@ func WriteStreamTerminalError(c *gin.Context, info *relaycommon.RelayInfo, snaps
 			}
 		}
 	}
+	delivered := false
 	WriteRelayTerminalError(c, func() {
 		if info.RelayFormat == types.RelayFormatOpenAIRealtime && info.ClientWs != nil {
 			_ = info.ClientWs.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if err := info.ClientWs.WriteMessage(1, data); err == nil {
 				info.StreamDiagnostic.WriteDownstreamPayload(data)
+				delivered = true
 			}
 			return
 		}
@@ -485,11 +566,29 @@ func WriteStreamTerminalError(c *gin.Context, info *relaycommon.RelayInfo, snaps
 			if err := encoded.Flush(); err != nil {
 				return // 编码器保留 Write 的首个错误，终止失败后不再刷新或补写第二次。
 			}
-		} else if _, err := writer.Write(frame); err != nil {
+		} else if n, err := writer.Write(frame); err != nil || n != len(frame) {
 			return
 		}
-		_ = http.NewResponseController(writer).Flush()
+		// Match StreamWriter's error-aware flush: capture/Gin wrappers expose
+		// Flush but can hide an underlying FlushError implementation.
+		var flushWriter http.ResponseWriter = writer
+		for range 16 {
+			if _, ok := flushWriter.(interface{ FlushError() error }); ok {
+				break
+			}
+			unwrapper, ok := flushWriter.(interface{ Unwrap() http.ResponseWriter })
+			if !ok {
+				break
+			}
+			flushWriter = unwrapper.Unwrap()
+		}
+		if err := http.NewResponseController(flushWriter).Flush(); err == nil {
+			delivered = true
+		}
 	})
+	if delivered && info.StreamSession != nil {
+		info.StreamSession.MarkErrorDelivered()
+	}
 }
 
 // FinalizeStreamFailure 为尚未进入计费入口的活动流选择用量并结算；真实成功响应门控未开放或专用处理器接管时返回 false。

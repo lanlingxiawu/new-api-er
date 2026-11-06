@@ -1,8 +1,12 @@
 package openai
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +19,133 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// The compatible cache-modality fixture is synthetic, with a real generated
+// PNG payload. This verifies handler-selected quantities and pure pricing, not
+// live provider prices or wallet persistence.
+func TestForkNormalImageBilling(t *testing.T) {
+	var imageBytes bytes.Buffer
+	require.NoError(t, png.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+	encoded := base64.StdEncoding.EncodeToString(imageBytes.Bytes())
+	const reportedUsage = `{"input_tokens":1000,"output_tokens":100,"total_tokens":1100,"input_tokens_details":{"text_tokens":400,"image_tokens":600,"cached_tokens":300,"cached_tokens_details":{"text_tokens":100,"image_tokens":200}}}`
+	for _, transport := range []string{"JSON", "SSE", "JSON_as_SSE"} {
+		for _, actualCount := range []int{1, 2} {
+			for _, pricing := range []string{"per_image", "cached_image_tokens"} {
+				t.Run(fmt.Sprintf("%s/images=%d/%s", transport, actualCount, pricing), func(t *testing.T) {
+					requested, n := 3, uint(3)
+					if transport == "JSON_as_SSE" {
+						// The existing managed JSON-to-SSE contract requires a
+						// complete batch before emitting any image event.
+						requested, n = actualCount, uint(actualCount)
+					}
+					stream := transport != "JSON"
+					contentType := "application/json"
+					payload := fmt.Sprintf(`{"b64_json":%q}`, encoded)
+					items := make([]string, actualCount)
+					for i := range items {
+						items[i] = payload
+					}
+					body := `{"created":1700000000,"data":[` + strings.Join(items, ",") + `],"usage":` + reportedUsage + `}`
+					if transport == "SSE" {
+						contentType, body = "text/event-stream", ""
+						for i := 0; i < actualCount; i++ {
+							// The aggregate report belongs to the final image. It
+							// must not be multiplied by the number of outputs.
+							usageField := ""
+							if i == actualCount-1 {
+								usageField = `,"usage":` + reportedUsage
+							}
+							body += forkVendorSSE(fmt.Sprintf(`{"type":"image_generation.completed","created_at":1700000000,"b64_json":%q,"output_format":"png"%s}`, encoded, usageField))
+						}
+						body += "data: [DONE]\n\n"
+					}
+					ctx, recorder, resp, info := newImageTestContext(t, body, contentType, stream)
+					info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatOpenAI, types.RelayFormatOpenAI
+					info.RelayMode = relayconstant.RelayModeImagesGenerations
+					info.OriginModelName, info.UpstreamModelName = "gpt-image-1", "gpt-image-1"
+					info.DisablePing = true
+					info.Request = &dto.ImageRequest{N: &n}
+					info.ImageRequestCount = requested
+					info.PriceData.GroupRatioInfo.GroupRatio = 1.5
+					expr, wantQuota := `tier("image", fixed(0.1)) * image_count`, 75000
+					if actualCount == 2 {
+						wantQuota = 150000 // 2 * $0.1 * 500000 quota/USD * group 1.5.
+					}
+					if pricing == "cached_image_tokens" {
+						expr = `tier("tokens", p * 5 + cr * 1.25 + img * 8 + img_cr * 2 + c * 30)`
+						// (300*5 + 100*1.25 + 400*8 + 200*2 + 100*30)
+						// /1e6 * 500000 * 1.5 = 6168.75 -> 6169 quota,
+						// independently of whether 1 or 2 images were produced.
+						wantQuota = 6169
+					}
+					info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: expr, ExprHash: billingexpr.ExprHashString(expr), GroupRatio: 1.5, QuotaPerUnit: 500000, EstimatedImageCount: &requested}
+					service.BeginStreamAttempt(ctx, info)
+					if stream {
+						info.StreamSession.ObserveTransport(resp, nil)
+						info.StreamDiagnostic.Observe(resp)
+						info.StreamSession.ObserveHTTP(resp)
+					}
+					var usage *dto.Usage
+					var apiErr *types.NewAPIError
+					if stream {
+						usage, apiErr = OpenaiImageStreamHandler(ctx, info, resp)
+					} else {
+						usage, apiErr = OpenaiImageHandler(ctx, info, resp)
+					}
+					require.Nil(t, apiErr)
+					usage = service.FinalizeStreamUsage(ctx, info, usage)
+					require.NotNil(t, usage)
+					require.Equal(t, 1000, usage.PromptTokens)
+					require.Equal(t, 100, usage.CompletionTokens)
+					require.Equal(t, 1100, usage.TotalTokens)
+					require.Equal(t, 600, usage.PromptTokensDetails.ImageTokens)
+					require.Equal(t, 300, usage.PromptTokensDetails.CachedTokens)
+					require.NotNil(t, usage.PromptTokensDetails.CachedTokensDetails)
+					require.NotNil(t, usage.PromptTokensDetails.CachedTokensDetails.ImageTokens)
+					require.Equal(t, 200, *usage.PromptTokensDetails.CachedTokensDetails.ImageTokens)
+					require.NotNil(t, info.BillingImageCount)
+					require.Equal(t, actualCount, *info.BillingImageCount)
+					require.Equal(t, requested, *info.TieredBillingSnapshot.EstimatedImageCount, "settlement must not rewrite the frozen reservation")
+					require.Empty(t, info.PriceData.OtherRatios(), "expression image quantities must not add another legacy n multiplier")
+					require.Equal(t, actualCount, strings.Count(recorder.Body.String(), encoded))
+					if stream {
+						require.False(t, info.StreamResult.Failed)
+						require.True(t, info.StreamResult.Diagnostic.UsageFinal)
+						counts := forkVendorEventCounts(recorder.Body.String())
+						require.Zero(t, counts["error"])
+						require.Equal(t, actualCount, counts["image_generation.completed"])
+						require.Equal(t, 1, counts["DONE"])
+					}
+					_, err := billingexpr.CompileFromCache(expr)
+					require.NoError(t, err)
+					params := service.BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expr))
+					if pricing == "cached_image_tokens" {
+						require.Equal(t, billingexpr.TokenParams{P: 300, C: 100, Len: 1000, CR: 100, Img: 400, ImgCR: 200}, params)
+					}
+					ok, quota, result := service.TryTieredSettle(info, params)
+					require.True(t, ok)
+					require.NotNil(t, result)
+					require.Equal(t, wantQuota, quota)
+					if pricing == "per_image" {
+						require.Equal(t, billingexpr.BillingUnitRequest, result.BillingUnit)
+						require.NotNil(t, result.ImageCount)
+						require.Equal(t, actualCount, *result.ImageCount)
+					} else {
+						require.Equal(t, billingexpr.BillingUnitToken, result.BillingUnit)
+					}
+					require.Nil(t, info.QuotaClamp)
+					t.Logf("requested=%d actual=%d prompt=1000 output=100 pricing=%s quota=%d", requested, actualCount, pricing, quota)
+				})
+			}
+		}
+	}
+}
 
 func newImageTestContext(t *testing.T, body, contentType string, isStream bool) (*gin.Context, *httptest.ResponseRecorder, *http.Response, *relaycommon.RelayInfo) {
 	t.Helper()

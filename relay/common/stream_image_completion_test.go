@@ -75,15 +75,31 @@ func TestStreamImageDoneRequiresCompletedCount(t *testing.T) {
 			s.CommitDelivery(frame)
 		}
 		err := s.ObserveEvent("", []byte("[DONE]"))
-		if tc.completed < tc.want {
+		complete := tc.completed >= tc.want || tc.completed > 0
+		if !complete {
 			require.Error(t, err, "case %+v", tc)
 			require.Equal(t, StreamEndReason("upstream_protocol_error"), s.Snapshot().Reason)
 		} else {
 			require.NoError(t, err)
 		}
 		s.EndRead(io.EOF)
-		require.Equal(t, tc.completed >= tc.want, s.ProtocolComplete())
+		require.Equal(t, complete, s.ProtocolComplete())
 		require.Equal(t, tc.preview || tc.completed > 0, s.Snapshot().Effective)
 		require.Equal(t, tc.completed, s.Snapshot().Evidence["image_count"])
+	}
+}
+
+func TestStreamImageCompletionRequiresPayload(t *testing.T) {
+	for _, body := range []string{
+		`{"type":"image_generation.completed"}`,
+		`{"type":"image_generation.completed","b64_json":"  "}`,
+		`{"type":"image_generation.completed","b64_json":null,"url":23}`,
+	} {
+		s := NewStreamSession(types.RelayFormatOpenAI)
+		s.ExpectedImages = 3
+		require.Error(t, s.ObserveEvent("", []byte(body)), body)
+		require.Error(t, s.ObserveEvent("", []byte("[DONE]")), body)
+		require.Zero(t, s.Snapshot().Evidence["image_count"])
+		require.False(t, s.ProtocolComplete())
 	}
 }

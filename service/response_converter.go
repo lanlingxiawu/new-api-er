@@ -32,6 +32,12 @@ func ConvertStreamResponseChunk(c *gin.Context, info *relaycommon.RelayInfo, sta
 }
 
 func FinalizeStreamResponse(c *gin.Context, info *relaycommon.RelayInfo, state *relayconvert.ResponseStreamState) ([]relayconvert.ResponseResult, error) {
+	// Managed scanning can stop on an upstream error before an adapter sees it.
+	// Normal finalization would then complete buffered tools despite the failed
+	// session. Keep partial usage and let FinalizeStreamUsage emit its one error.
+	if info != nil && info.StreamSession.Active() && !info.StreamSession.ProtocolComplete() {
+		return nil, nil
+	}
 	results, err := relayconvert.FinalizeStreamResponse(c, info, state)
 	if state != nil {
 		info.RecordConversionDiagnostics(c, state.Diagnostics())

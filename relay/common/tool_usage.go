@@ -74,6 +74,7 @@ func (info *RelayInfo) SetBillableToolCount(name string, count int) {
 	info.ensureBuiltInTools()
 	if existing, ok := info.ResponsesUsageInfo.BuiltInTools[name]; ok && existing != nil {
 		existing.CallCount = count
+		existing.requestInferred = false
 		return
 	}
 	info.ResponsesUsageInfo.BuiltInTools[name] = &BuildInToolInfo{ToolName: name, CallCount: count}
@@ -100,7 +101,20 @@ func (info *RelayInfo) RecordRequestInferredToolCall(key string) {
 		return
 	}
 	info.SetBillableToolCount(key, 1)
+	info.ResponsesUsageInfo.BuiltInTools[key].requestInferred = true
 	info.requestInferredToolKey = key
+}
+
+// ConfirmedCallCount excludes the one request-inferred call while retaining
+// actual protocol items. A vendor count replaces both through SetBillableToolCount.
+func (tool *BuildInToolInfo) ConfirmedCallCount() int {
+	if tool == nil || tool.CallCount <= 0 {
+		return 0
+	}
+	if tool.requestInferred {
+		return tool.CallCount - 1
+	}
+	return tool.CallCount
 }
 
 func (info *RelayInfo) ensureBuiltInTools() {

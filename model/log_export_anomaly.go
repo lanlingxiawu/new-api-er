@@ -17,7 +17,7 @@ const (
 	LogAnomalyNoUsage = "no_usage"
 	// LogAnomalyStreamError 流异常结束或流内出现过错误。
 	LogAnomalyStreamError = "stream_error"
-	// LogAnomalyUnsettled 结算未落到 settled 终态。
+	// LogAnomalyUnsettled 结算未落到 settled 或 released 终态。
 	LogAnomalyUnsettled = "settlement_unsettled"
 	// LogAnomalyRetried 发生过跨渠道重试。
 	LogAnomalyRetried = "retried"
@@ -69,7 +69,7 @@ func logAnomalyFlags(l *Log, ctx *rowCtx) []string {
 			hit[LogAnomalyNoUsage] = true
 		}
 		// 结算状态为空按「旧日志，未记录」处理，不判异常。
-		if state, ok := sr["settlement_state"].(string); ok && state != "" && state != "settled" {
+		if state, ok := sr["settlement_state"].(string); ok && state != "" && state != "settled" && state != "released" {
 			hit[LogAnomalyUnsettled] = true
 		}
 	}

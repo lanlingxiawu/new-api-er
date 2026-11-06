@@ -2,14 +2,189 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
 )
+
+func compatibilityClaudeBlock(kind string, index int) string {
+	fields := `"text":""`
+	if kind == "thinking" {
+		fields = `"thinking":""`
+	} else if kind == "tool_use" || kind == "server_tool_use" {
+		fields = `"id":"toolu_compat","name":"exec","input":{}`
+	}
+	return fmt.Sprintf(`{"type":"content_block_start","index":%d,"content_block":{"type":%q,%s}}`, index, kind, fields)
+}
+
+// TestClaudeToolStreamCompatibility protects indexed tool overlap without
+// relaxing unknown indexes, mixed block types, truncation or terminal ordering.
+func TestClaudeToolStreamCompatibility(t *testing.T) {
+	previous := operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
+	require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": "true"}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": strconv.FormatBool(previous)}))
+	})
+	const start = `{"type":"message_start","message":{}}`
+	const tool0 = `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t0","name":"exec","input":{}}}`
+	const tool1 = `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"exec","input":{}}}`
+	const stop0 = `{"type":"content_block_stop","index":0}`
+	const stop1 = `{"type":"content_block_stop","index":1}`
+	const finish = `{"type":"message_delta","delta":{"stop_reason":"tool_use"}}`
+	const stop = `{"type":"message_stop"}`
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		t.Run(string(format), func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				prefix []string
+				reject string
+			}{
+				{"duplicate open index", []string{start, tool0}, tool0},
+				{"closed index reused", []string{start, tool0, stop0}, tool0},
+				{"unknown delta", []string{start, tool0}, `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}`},
+				{"closed delta", []string{start, tool0, stop0}, `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`},
+				{"unknown stop", []string{start, tool0}, stop1},
+				{"duplicate stop", []string{start, tool0, stop0}, stop0},
+				{"terminal with open tools", []string{start, tool0, tool1}, finish},
+				{"message stop with open tools", []string{start, tool0, tool1}, stop},
+				{"message stop without reason", []string{start, tool0, stop0}, stop},
+				{"new block after stop reason", []string{start, tool0, stop0, finish}, tool1},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					s := NewStreamSession(format)
+					for _, frame := range tc.prefix {
+						require.NoError(t, s.ObserveEvent("", []byte(frame)))
+					}
+					require.Error(t, s.ObserveEvent("", []byte(tc.reject)))
+					require.Equal(t, StreamEndReason("upstream_protocol_error"), s.Snapshot().Reason)
+					require.False(t, s.ProtocolComplete())
+				})
+			}
+			for _, index := range []string{"-1", "0.5", `"0"`, "null", "9223372036854775808"} {
+				for _, event := range []string{"content_block_start", "content_block_delta", "content_block_stop"} {
+					t.Run(event+" invalid index "+index, func(t *testing.T) {
+						s := NewStreamSession(format)
+						require.NoError(t, s.ObserveEvent("", []byte(start)))
+						if event != "content_block_start" {
+							require.NoError(t, s.ObserveEvent("", []byte(tool0)))
+						}
+						frame := fmt.Sprintf(`{"type":%q,"index":%s,"content_block":{"type":"tool_use"},"delta":{"type":"input_json_delta","partial_json":"{}"}}`, event, index)
+						require.Error(t, s.ObserveEvent("", []byte(frame)))
+						require.Equal(t, StreamEndReason("upstream_protocol_error"), s.Snapshot().Reason)
+					})
+				}
+			}
+			for _, pair := range [][2]string{{"tool_use", "text"}, {"text", "tool_use"}, {"thinking", "tool_use"}, {"server_tool_use", "tool_use"}, {"tool_use", "server_tool_use"}} {
+				t.Run(pair[0]+" overlaps "+pair[1], func(t *testing.T) {
+					s := NewStreamSession(format)
+					require.NoError(t, s.ObserveEvent("", []byte(start)))
+					require.NoError(t, s.ObserveEvent("", []byte(compatibilityClaudeBlock(pair[0], 0))))
+					require.Error(t, s.ObserveEvent("", []byte(compatibilityClaudeBlock(pair[1], 1))))
+				})
+			}
+			t.Run("closed text then overlapping tools", func(t *testing.T) {
+				s := NewStreamSession(format)
+				for _, frame := range []string{
+					start,
+					compatibilityClaudeBlock("text", 0),
+					`{"type":"content_block_stop","index":0}`,
+					compatibilityClaudeBlock("tool_use", 1),
+					compatibilityClaudeBlock("tool_use", 2),
+					`{"type":"content_block_stop","index":1}`,
+					`{"type":"content_block_stop","index":2}`,
+					finish,
+					stop,
+				} {
+					require.NoError(t, s.ObserveEvent("", []byte(frame)))
+				}
+				require.True(t, s.ProtocolComplete())
+			})
+			t.Run("all tools must close before completion", func(t *testing.T) {
+				s := NewStreamSession(format)
+				for _, frame := range []string{start, tool0, tool1, stop1, stop0, finish, stop} {
+					require.NoError(t, s.ObserveEvent("", []byte(frame)))
+				}
+				require.True(t, s.ProtocolComplete())
+			})
+			t.Run("overlapping tools remain incomplete at EOF", func(t *testing.T) {
+				s := NewStreamSession(format)
+				for _, frame := range []string{start, tool0, tool1} {
+					require.NoError(t, s.ObserveEvent("", []byte(frame)))
+				}
+				s.EndRead(io.EOF)
+				require.Equal(t, StreamEndReason("upstream_incomplete"), s.Snapshot().Reason)
+				require.False(t, s.ProtocolComplete())
+			})
+			t.Run("128 active tools accepted then capacity released", func(t *testing.T) {
+				s := NewStreamSession(format)
+				require.NoError(t, s.ObserveEvent("", []byte(start)))
+				for index := range 128 {
+					require.NoError(t, s.ObserveEvent("", []byte(compatibilityClaudeBlock("tool_use", index))))
+				}
+				for index := 127; index >= 0; index-- {
+					require.NoError(t, s.ObserveEvent("", []byte(fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))))
+				}
+				for _, frame := range []string{compatibilityClaudeBlock("text", 128), `{"type":"content_block_stop","index":128}`, finish, stop} {
+					require.NoError(t, s.ObserveEvent("", []byte(frame)))
+				}
+				require.True(t, s.ProtocolComplete())
+			})
+			t.Run("129th active tool rejected", func(t *testing.T) {
+				s := NewStreamSession(format)
+				require.NoError(t, s.ObserveEvent("", []byte(start)))
+				for index := range 128 {
+					require.NoError(t, s.ObserveEvent("", []byte(compatibilityClaudeBlock("tool_use", index))))
+				}
+				require.Error(t, s.ObserveEvent("", []byte(`{"type":"content_block_start","index":128,"content_block":{"type":"tool_use"}}`)))
+				require.Equal(t, StreamEndReason("upstream_protocol_error"), s.Snapshot().Reason)
+			})
+		})
+	}
+}
+
+func TestClaudeToolCompatibilityScopeAndSnapshot(t *testing.T) {
+	previous := operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": strconv.FormatBool(previous)}))
+	})
+	require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": "true"}))
+	chat := NewStreamSession(types.RelayFormatOpenAI)
+	native := NewStreamSession(types.RelayFormatClaude)
+	responses := NewStreamSession(types.RelayFormatOpenAIResponses)
+	require.NoError(t, config.GlobalConfig.UpdateFromMap("claude_stream_compat_setting", map[string]string{"enabled": "false"}))
+	rollback := NewStreamSession(types.RelayFormatOpenAI)
+	rollbackResponses := NewStreamSession(types.RelayFormatOpenAIResponses)
+	for _, tc := range []struct {
+		name string
+		s    *StreamSession
+		pass bool
+	}{
+		{"existing chat keeps enabled snapshot", chat, true},
+		{"existing responses keeps enabled snapshot", responses, true},
+		{"native Claude remains strict", native, false},
+		{"new chat applies rollback", rollback, false},
+		{"new responses applies rollback", rollbackResponses, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, tc.s.ObserveEvent("", []byte(`{"type":"message_start","message":{}}`)))
+			require.NoError(t, tc.s.ObserveEvent("", []byte(compatibilityClaudeBlock("tool_use", 0))))
+			err := tc.s.ObserveEvent("", []byte(compatibilityClaudeBlock("tool_use", 1)))
+			if tc.pass {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, "invalid content block sequence")
+			}
+		})
+	}
+}
 
 // TestStreamSuccessEventScopes 验证候选/响应结束分类和既有布尔接口一致，未知事件和错误不冒充成功结束。
 // 参数 t：测试上下文；夹具覆盖空值、事件名回退、全流标记优先级及原始错误优先级。

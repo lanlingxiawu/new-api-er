@@ -6,11 +6,17 @@ import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import {
+  StreamTerminationEvidence,
+  type StreamTermination,
+} from './stream-termination-evidence'
+
 /**
  * 超级管理员诊断响应；包含上游响应、实际下游正文及错误/用量证据，不含请求采集内容。
- * 所有渠道共用原诊断接口；新流程在成功响应后的上游异常或拒绝时提供诊断，历史数据中响应字段可能为空。
+ * 所有渠道共用原诊断接口；上游异常、拒绝和最终零输出日志可提供诊断，历史数据中响应字段可能为空。
  */
 interface StreamDiagnostic {
+  termination?: StreamTermination // 网关实际观察到的终止信号，不确定远端发起主体；旧记录缺失。
   // 实际写出的下游 body；缺失为未保存（未采集或未满足保存条件），空串为零字节，超 2 KiB 时仅保留首尾各 1 KiB。
   downstream_body_base64?: string
   attempt?: number // 中转尝试编号；历史记录可能缺失。
@@ -29,6 +35,16 @@ interface StreamDiagnostic {
   read_error?: string // 该 HTTP 交换的底层读取/传输错误。
   usage_phases?: Record<string, string> // 各确认字段最近来自哪个事件阶段。
   estimated_usage?: Record<string, number> // 本地估算 token，独立于上游原始证据。
+  delivery_evidence?: {
+    accepted?: boolean // 已取得上游成功响应。
+    received_response?: boolean // 已解析到业务响应；不等于已写给下游。
+    protocol_complete?: boolean // 上游协议是否完整结束。
+    effective?: boolean // 已完整写出并刷新有效内容。
+    received_output_estimate?: number // 收到但未必写出的输出估算。
+    delivered_output_estimate?: number // 成功写出后的输出估算。
+    received_audio_output_estimate?: number
+    delivered_media_bytes?: number
+  } | null
   previous_responses?: StreamDiagnostic[] // 同一尝试较早保留的 SDK 响应；与当前响应合计最多四份。
   omitted_responses?: number // 超出保留上限的历史交换数量。
 }
@@ -172,6 +188,46 @@ export function StreamDiagnosticPanel(props: {
       )}
       {detail && (
         <div className='bg-muted/30 min-w-0 space-y-2 rounded-md border p-2.5'>
+          <StreamTerminationEvidence termination={detail.termination} />
+          {detail.delivery_evidence && (
+            <div className='bg-background/60 space-y-1 rounded border p-2 text-xs'>
+              <p className='font-semibold'>{t('Delivery decision')}</p>
+              <p>
+                {t('Upstream response accepted')}
+                {': '}
+                {detail.delivery_evidence.accepted ? t('Yes') : t('No')}
+              </p>
+              <p>
+                {t('Business response received')}
+                {': '}
+                {detail.delivery_evidence.received_response
+                  ? t('Yes')
+                  : t('No')}
+              </p>
+              <p>
+                {t('Protocol complete')}
+                {': '}
+                {detail.delivery_evidence.protocol_complete
+                  ? t('Yes')
+                  : t('No')}
+              </p>
+              <p>
+                {t('Effective content delivered')}
+                {': '}
+                {detail.delivery_evidence.effective ? t('Yes') : t('No')}
+              </p>
+              <p>
+                {t('Received output estimate')}
+                {': '}
+                {detail.delivery_evidence.received_output_estimate ?? 0}
+              </p>
+              <p>
+                {t('Written output estimate')}
+                {': '}
+                {detail.delivery_evidence.delivered_output_estimate ?? 0}
+              </p>
+            </div>
+          )}
           {captured ? (
             <>
               <p className='text-muted-foreground text-xs'>

@@ -194,6 +194,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 				continue
 			}
 			count := tool.CallCount
+
 			if count > relaycommon.MaxBillableToolCallCount {
 				logger.LogWarn(ctx, common.LogText("tool surcharge call count clamped: tool=%s count=%d", name, count))
 				count = relaycommon.MaxBillableToolCallCount

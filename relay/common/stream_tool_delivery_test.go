@@ -12,6 +12,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStreamCustomToolDelivery(t *testing.T) {
+	const added = `{"type":"response.output_item.added","item":{"id":"custom1","call_id":"call1","type":"custom_tool_call","name":"apply_patch","input":"","status":"in_progress"}}`
+	const delta = `{"type":"response.custom_tool_call_input.delta","item_id":"custom1","delta":"print('hello')"}`
+	const done = `{"type":"response.custom_tool_call_input.done","item_id":"custom1","input":"print('hello')"}`
+	const item = `{"type":"response.output_item.done","item":{"id":"custom1","call_id":"call1","type":"custom_tool_call","name":"apply_patch","input":"print('hello')","status":"completed"}}`
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   string
+	}{
+		{"partial", []string{added, delta}, ""},
+		{"raw input done", []string{added, delta, done}, "apply_patchprint('hello')"},
+		{"raw item done", []string{item}, "apply_patchprint('hello')"},
+		{"done then item dedup", []string{added, delta, done, item, done}, "apply_patchprint('hello')"},
+		{"item then done dedup", []string{added, item, done, item}, "apply_patchprint('hello')"},
+		{"empty raw input", []string{added, `{"type":"response.custom_tool_call_input.done","item_id":"custom1","input":""}`}, "apply_patch"},
+		{"missing name", []string{done}, ""},
+		{"missing input", []string{added, `{"type":"response.custom_tool_call_input.done","item_id":"custom1"}`}, ""},
+		{"invalid input type", []string{added, `{"type":"response.custom_tool_call_input.done","item_id":"custom1","input":42}`}, ""},
+		{"incomplete item", []string{`{"type":"response.output_item.done","item":{"id":"custom1","type":"custom_tool_call","name":"apply_patch","input":"code","status":"incomplete"}}`}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStreamSession(types.RelayFormatOpenAIResponses)
+			var text strings.Builder
+			for _, frame := range tc.frames {
+				s.CommitDelivery([]byte(frame))
+				text.WriteString(s.TakeDeliveredText())
+			}
+			require.Equal(t, tc.want, text.String())
+			require.Equal(t, tc.want != "", s.Snapshot().Effective)
+		})
+	}
+}
+
+func TestStreamCustomToolReceivedFragments(t *testing.T) {
+	s := NewStreamSession(types.RelayFormatOpenAIResponses)
+	s.receivedOnly = true
+	var received strings.Builder
+	for _, frame := range []string{
+		`{"type":"response.output_item.added","item":{"id":"custom1","call_id":"call1","type":"custom_tool_call","name":"exec","input":""}}`,
+		`{"type":"response.custom_tool_call_input.delta","item_id":"custom1","delta":"print("}`,
+		`{"type":"response.custom_tool_call_input.delta","item_id":"custom1","delta":"'hello')"}`,
+		`{"type":"response.custom_tool_call_input.done","item_id":"custom1","input":"print('hello')"}`,
+		`{"type":"response.output_item.done","item":{"id":"custom1","call_id":"call1","type":"custom_tool_call","name":"exec","input":"print('hello')","status":"completed"}}`,
+	} {
+		s.CommitDelivery([]byte(frame))
+		received.WriteString(s.TakeDeliveredText())
+	}
+	require.Equal(t, "execprint('hello')", received.String(), "completion snapshots must not repeat generated input")
+	require.Empty(t, s.tools)
+}
+
 // TestStreamToolCompletionDedup 用 t 验证两类完成事件和别名补齐只计量一次，非法候选不占用已交付身份。
 func TestStreamToolCompletionDedup(t *testing.T) {
 	const item = `{"type":"response.output_item.done","item":{"type":"function_call","id":"item1","call_id":"call1","name":"lookup","arguments":"{\"x\":1}"}}`
@@ -123,4 +175,55 @@ func TestStreamToolCompletionDeliveryGate(t *testing.T) {
 		}
 		require.Equal(t, frames, rec.Body.String(), "去重只影响估算，不删改任何完成事件")
 	}
+}
+
+func TestResponsesOutputItemDeliveryRequiresCompletedStatus(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIRealtime} {
+		for _, kind := range []string{"function_call", "image_generation_call"} {
+			for _, tc := range []struct {
+				status string
+				valid  bool
+			}{
+				{"", true},
+				{`,"status":"completed"`, true},
+				{`,"status":"incomplete"`, false},
+				{`,"status":"in_progress"`, false},
+				{`,"status":"failed"`, false},
+				{`,"status":"cancelled"`, false},
+				{`,"status":""`, false},
+				{`,"status":null`, false},
+				{`,"status":1`, false},
+			} {
+				t.Run(string(format)+"/"+kind+"/"+tc.status, func(t *testing.T) {
+					s := NewStreamSession(format)
+					frame := fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":"item1","call_id":"call1","type":%q,"name":"lookup","arguments":"{}","result":"aGk="%s}}`, kind, tc.status)
+					s.CommitDelivery([]byte(frame))
+					require.Equal(t, tc.valid, s.Snapshot().Effective)
+					if kind == "function_call" && tc.valid {
+						require.Equal(t, "lookup{}", s.TakeDeliveredText())
+					} else {
+						require.Empty(t, s.TakeDeliveredText())
+					}
+					if !tc.valid {
+						completed := fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":"item1","call_id":"call1","type":%q,"name":"lookup","arguments":"{}","result":"aGk=","status":"completed"}}`, kind)
+						s.CommitDelivery([]byte(completed))
+						require.True(t, s.Snapshot().Effective, "rejected partial items must not suppress later completion")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestIncompleteResponsesToolKeepsReceivedEstimate(t *testing.T) {
+	s := NewStreamSession(types.RelayFormatOpenAIResponses)
+	s.SetReceivedEstimator(func() func(string, int) int {
+		return func(text string, _ int) int { return len(text) }
+	})
+	frame := []byte(`{"type":"response.output_item.done","item":{"id":"item1","call_id":"call1","type":"function_call","name":"lookup","arguments":"{}","status":"incomplete"}}`)
+	require.NoError(t, s.ObserveEvent("", frame))
+	s.CommitDelivery(frame)
+	require.Positive(t, s.Snapshot().ReceivedOutput, "received tool output is still available for client-disconnect accounting")
+	require.False(t, s.Snapshot().Effective)
+	require.Empty(t, s.TakeDeliveredText())
 }

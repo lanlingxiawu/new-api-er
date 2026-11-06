@@ -65,7 +65,7 @@ func (a *ResponsesUsageAccumulator) Observe(event *dto.ResponsesStreamResponse, 
 		}
 		a.imageCounter.Commit(a.info)
 		a.imageCommitted = true
-	case "response.output_text.delta", "response.function_call_arguments.delta",
+	case "response.output_text.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta",
 		"response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.refusal.delta":
 		// Every delta kind here is generated output that upstream bills as
 		// output tokens, so all of them feed the missing-usage estimate.

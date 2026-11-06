@@ -631,7 +631,7 @@ func buildLogExportColumns() []LogExportColumn {
 				if !ok {
 					return ""
 				}
-				return strconv.Itoa(len(chain))
+				return strconv.Itoa(max(0, len(chain)-1))
 			}},
 		// anomaly_flags 与异常筛选共用 logAnomalyFlags，口径永远一致。
 		{Key: "anomaly_flags", Label: "Anomaly Flags", Group: LogExportGroupDiagnostic,

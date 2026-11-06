@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/constant"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/tidwall/gjson"
 )
 
@@ -49,32 +51,40 @@ type StreamSnapshot struct {
 
 // StreamSession 保存单次中转尝试的协议和交付状态；短锁不跨网络读取、写出或刷新。
 type StreamSession struct {
-	ResponseGate       *StreamResponseGate          // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
-	OpaqueSSE          bool                         // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
-	ChannelType        int                          // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
-	RelayMode          int                          // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
-	ExpectedImages     int                          // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
-	mu                 sync.Mutex                   // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
-	format             types.RelayFormat            // 下游协议，错误输出按此格式选择。
-	state              StreamSnapshot               // 当前可变状态，外部读取须经 Snapshot 复制。
-	disabled           bool                         // 原生 Claude 专用处理器已接管时禁用通用观察。
-	text               strings.Builder              // 仅保存一个写出批次的文本，调用者及时取走估算。
-	media              int                          // 本批已交付/已接收的内联媒体分片数，按张折算，取走即清零。
-	tools              map[string]*streamTool       // 有界的未完成工具调用，完整参数交付后才计入有效内容。
-	toolBytes          int                          // 所有未完成工具名称和参数共享单帧预算，不为每个工具单独分配上限。
-	toolDeliveries     *streamToolDeliveries        // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
-	choices            map[int]bool                 // 当前上游协议按索引累计的候选结束状态，最多 128 项。
-	ExpectedChoices    int                          // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
-	claudeStarted      bool                         // Claude 转换路径是否看到了 message_start。
-	claudeStop         bool                         // Claude 转换路径是否确认 stop_reason。
-	claudeBlocks       map[int]bool                 // 尚未关闭的 Claude 内容块。
-	closeBody          io.Closer                    // 当前上游资源，终止时由所有者关闭以停止生成。
-	requestContext     context.Context              // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
-	received           *StreamSession               // 独立接收内容跟踪器，复用有界工具去重，不参与协议与交付状态。
-	receivedFactory    func() func(string, int) int // 新实际响应/轮次创建独立增量估算器；参数为文本与媒体张数。
-	receivedEstimate   func(string, int) int
-	receivedOnly       bool // 内容跟踪器专用：按接收片段计工具文本，不等待完整交付。
-	receivedTranscript bool // 接收侧已计入转录 delta，完成快照不再重复估算。
+	Termination         *StreamTerminationRecorder   // Shared optional observer; never used to decide stream state.
+	ResponseGate        *StreamResponseGate          // 本次实际响应门控，初始化后指针不变；未成功时观察器透明转交。
+	OpaqueSSE           bool                         // 仅旧智谱 add/finish 文本事件使用，不把正文强当 JSON。
+	ChannelType         int                          // 本次选中的上游渠道，用于原生响应及用量别名识别，初始化后不变。
+	RelayMode           int                          // 本次请求模式，配合渠道限定原生语音校验，初始化后不变。
+	ExpectedImages      int                          // 图片入口/实际出站期望张数，至少 1；0 为未声明图片约束的其他会话。
+	mu                  sync.Mutex                   // 保护会话状态、证据及内容块缓存，不持锁执行网络 I/O。
+	format              types.RelayFormat            // 下游协议，错误输出按此格式选择。
+	state               StreamSnapshot               // 当前可变状态，外部读取须经 Snapshot 复制。
+	disabled            bool                         // 原生 Claude 专用处理器已接管时禁用通用观察。
+	text                strings.Builder              // 仅保存一个写出批次的文本，调用者及时取走估算。
+	media               int                          // 本批已交付/已接收的内联媒体分片数，按张折算，取走即清零。
+	tools               map[string]*streamTool       // 有界的未完成工具调用，完整参数交付后才计入有效内容。
+	toolBytes           int                          // 所有未完成工具名称和参数共享单帧预算，不为每个工具单独分配上限。
+	toolDeliveries      *streamToolDeliveries        // 懒分配的最近已交付工具身份，防止两类完成事件重复估算。
+	choices             map[int]bool                 // 当前上游协议按索引累计的候选结束状态，最多 128 项。
+	ExpectedChoices     int                          // 实际出站候选约束；透传沿用入口解析，转换后由最终 JSON 覆盖，0 表示按已出现候选判断。
+	claudeStarted       bool                         // Claude 转换路径是否看到了 message_start。
+	responsesStarted    bool                         // Upstream Responses events require their own terminal, including when converted to Chat.
+	claudeStop          bool                         // Claude 转换路径是否确认 stop_reason。
+	claudeBlocks        map[int]*streamClaudeBlock   // 尚未关闭的 Claude 内容块；工具输入共享有界预算。
+	claudeBlockBytes    int                          // 所有活动 Claude 块的类型、工具身份和参数合计预算。
+	claudeTruncatedTool bool                         // 不完整客户端工具只能由真实 max_tokens 终态确认。
+	claudeStopReason    string                       // 已确认的停止原因不得在后续帧中冲突。
+	claudeToolOverlap   bool                         // Chat/Responses 尝试创建时冻结的上游工具块兼容开关。
+	claudeToolsOnly     bool                         // 当前打开的块是否全是客户端 tool_use；仅首个打开块设置。
+	claudeLastIndex     int                          // 兼容模式最近一次开始的块索引，阻止重复和关闭后的索引复用。
+	closeBody           io.Closer                    // 当前上游资源，终止时由所有者关闭以停止生成。
+	requestContext      context.Context              // 请求取消后不再采用排队事件的用量，不保存 Gin 上下文。
+	received            *StreamSession               // 独立接收内容跟踪器，复用有界工具去重，不参与协议与交付状态。
+	receivedFactory     func() func(string, int) int // 新实际响应/轮次创建独立增量估算器；参数为文本与媒体张数。
+	receivedEstimate    func(string, int) int
+	receivedOnly        bool // 内容跟踪器专用：按接收片段计工具文本，不等待完整交付。
+	receivedTranscript  bool // 接收侧已计入转录 delta，完成快照不再重复估算。
 }
 
 // streamTool 缓存一个待完成工具调用的名称与参数；所有字段仅在会话锁内操作。
@@ -83,9 +93,33 @@ type streamTool struct {
 	args strings.Builder // 分片累积的 JSON 参数，完整且合法后才确认交付。
 }
 
+// streamClaudeBlock retains only open-block validation state. The total retained
+// metadata and tool input across blocks shares one MaxStreamFrameBytes budget.
+type streamClaudeBlock struct {
+	kind  string
+	input string
+	args  strings.Builder
+	bytes int
+}
+
 // NewStreamSession 创建请求尝试局部会话；参数 format 决定下游协议，ChannelType/RelayMode 随后由入口初始化。
 func NewStreamSession(format types.RelayFormat) *StreamSession {
-	return &StreamSession{format: format, state: StreamSnapshot{Evidence: map[string]int{}}, tools: map[string]*streamTool{}, choices: map[int]bool{}, claudeBlocks: map[int]bool{}}
+	return &StreamSession{
+		format: format, state: StreamSnapshot{Evidence: map[string]int{}},
+		tools: map[string]*streamTool{}, choices: map[int]bool{}, claudeBlocks: map[int]*streamClaudeBlock{},
+		claudeToolOverlap: claudeClientToolOverlap(format),
+	}
+}
+
+// claudeClientToolOverlap is the upstream converter's indexed tool-use overlap
+// for Claude streams rewritten to Chat or Responses. Native Claude stays serial.
+func claudeClientToolOverlap(format types.RelayFormat) bool {
+	switch format {
+	case types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses:
+		return operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
+	default:
+		return false
+	}
 }
 
 // BindContext 绑定请求 ctx 的取消信号，避免取消后继续采用上游排队用量；接收者需非 nil，无返回值。
@@ -130,6 +164,7 @@ func (s *StreamSession) Snapshot() StreamSnapshot {
 
 // failLocked 记录首个终止原因 reason 与底层 err；调用者必须持有锁，已取消或已有客户端/终止错误时不覆盖。
 func (s *StreamSession) failLocked(reason StreamEndReason, err error) {
+	s.Termination.ObserveContext()
 	if s.state.Reason != "" || s.state.ClientErr != nil || (s.requestContext != nil && s.requestContext.Err() != nil) {
 		return
 	}
@@ -137,6 +172,18 @@ func (s *StreamSession) failLocked(reason StreamEndReason, err error) {
 	s.state.UpstreamFailure = IsUpstreamStreamFailure(reason)
 	s.state.Err = err
 	s.state.Complete = false
+	switch reason {
+	case "upstream_error":
+		s.Termination.Observe("upstream", "provider_error", err)
+	case "upstream_json_error", "upstream_protocol_error":
+		s.Termination.Observe("upstream", "protocol", err)
+	case "upstream_incomplete", "upstream_read_error":
+		s.Termination.Observe("upstream", "read", err)
+	case StreamEndReasonTimeout:
+		s.Termination.Observe("gateway", "timeout", err)
+	default:
+		s.Termination.Observe("gateway", "protocol", err)
+	}
 }
 
 // Fail 记录终止原因 reason 与底层 err；原因是否属上游由白名单判定，不直接写出响应或执行收费。
@@ -172,6 +219,7 @@ func (s *StreamSession) EndRead(err error) {
 	if s.state.Complete {
 		return
 	}
+	s.Termination.Observe("upstream", "read", err)
 	if errors.Is(err, io.EOF) {
 		s.failLocked("upstream_incomplete", errors.New("upstream ended before protocol completion"))
 	} else {
@@ -202,6 +250,10 @@ func (s *StreamSession) CloseUpstream() {
 	s.closeBody = nil
 	s.mu.Unlock()
 	if body != nil {
+		observer, bound := body.(interface{ ObservesStreamTerminationClose() bool })
+		if !bound || !observer.ObservesStreamTerminationClose() {
+			s.Termination.ObserveUpstreamClose("session_close")
+		}
 		_ = body.Close()
 	}
 }
@@ -232,12 +284,18 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		return nil
 	}
 	if bytes.Equal(data, []byte("[DONE]")) {
-		// 通用结束标记不替代已请求的完成图片；预览图不计入 image_count。
-		if s.ExpectedImages > 0 && s.state.Evidence["image_count"] < s.ExpectedImages {
+		// A real DONE may confirm fewer completed images than requested. Preview
+		// frames never count; EOF alone still cannot complete a partial batch.
+		requiredImages := s.ExpectedImages
+		if requiredImages > 0 {
+			requiredImages = 1
+		}
+		if s.ExpectedImages > 0 && s.state.Evidence["image_count"] < requiredImages {
 			s.failLocked("upstream_protocol_error", errors.New("DONE does not replace missing completed images"))
 			return s.state.Err
 		}
-		if (s.state.UsageFormat == types.RelayFormatClaude || s.state.UsageFormat == types.RelayFormatGemini || len(s.choices) > 0 || s.ExpectedChoices > 0) && !s.state.Complete {
+		requiresResponsesTerminal := (s.format == types.RelayFormatOpenAIResponses || s.responsesStarted)
+		if (requiresResponsesTerminal || s.state.UsageFormat == types.RelayFormatClaude || s.state.UsageFormat == types.RelayFormatGemini || len(s.choices) > 0 || s.ExpectedChoices > 0) && !s.state.Complete {
 			s.failLocked("upstream_protocol_error", errors.New("DONE does not replace the upstream protocol terminator"))
 			return s.state.Err
 		}
@@ -269,6 +327,9 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 	if kind == "" {
 		kind = event
 	}
+	if s.format != types.RelayFormatOpenAIRealtime && strings.HasPrefix(kind, "response.") {
+		s.responsesStarted = true
+	}
 	if s.format == types.RelayFormatOpenAIRealtime && IsRealtimeRecoverableError(v) {
 		return nil // 可恢复请求错误不改变轮次证据或首个终止原因。
 	}
@@ -287,16 +348,17 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 	}
 	// 一批用量全部校验通过后才更新；累计覆盖，不把重复报告相加。
 	updates := map[string]int{}
+	usageKeys, geminiKeys := streamUsageKeys, geminiStreamUsageKeys
 	sources := []struct {
 		path string
 		keys []streamUsageField
 	}{
-		{"usage", streamUsageKeys}, {"response.usage", streamUsageKeys}, {"message.usage", streamUsageKeys},
-		{"payload.usage.text", streamUsageKeys}, {"Usage", []streamUsageField{{"PromptTokens", "input_tokens"}, {"CompletionTokens", "output_tokens"}}},
-		{"usageMetadata", geminiStreamUsageKeys}, {"usage_metadata", geminiStreamUsageKeys},
-		{"response.meta.billed_units", streamUsageKeys}, {"meta.billed_units", streamUsageKeys}, {"usage.billed_units", streamUsageKeys},
+		{"usage", usageKeys}, {"response.usage", usageKeys}, {"message.usage", usageKeys},
+		{"payload.usage.text", usageKeys}, {"Usage", []streamUsageField{{"PromptTokens", "input_tokens"}, {"CompletionTokens", "output_tokens"}}},
+		{"usageMetadata", geminiKeys}, {"usage_metadata", geminiKeys},
+		{"response.meta.billed_units", usageKeys}, {"meta.billed_units", usageKeys}, {"usage.billed_units", usageKeys},
 		{"x_amzn_bedrock_invocationMetrics", []streamUsageField{{"inputTokenCount", "input_tokens"}, {"outputTokenCount", "output_tokens"}}},
-		{"metadata.usage", streamUsageKeys},
+		{"metadata.usage", usageKeys},
 	}
 	for _, source := range sources {
 		// Dify 适配器仅从 message_end 取请求总用量；节点事件和其他渠道的 metadata 不作为该证据。
@@ -320,6 +382,9 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 			if !n.Exists() {
 				continue
 			}
+			if n.Type == gjson.Null && strings.HasPrefix(field.canonical, "cached_tokens_details.") {
+				continue // Nullable modality pointers mean unreported, unlike explicit zero.
+			}
 			if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
 				s.failLocked("upstream_json_error", fmt.Errorf("invalid usage field %s", field.path))
 				return s.state.Err
@@ -342,6 +407,47 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 			}
 			if _, exists := sourceUpdates[field.canonical]; !exists {
 				sourceUpdates[field.canonical] = int(n.Int())
+			}
+		}
+		if source.path == "usageMetadata" || source.path == "usage_metadata" {
+			// Each modality is cumulative across frames. Sum duplicate entries
+			// only inside one snapshot, and keep omitted modalities unchanged.
+			for _, detail := range []struct{ path, prefix string }{
+				{"promptTokensDetails", "input_"},
+				{"toolUsePromptTokensDetails", "tool_input_"},
+				{"candidatesTokensDetails", "output_"},
+			} {
+				array := u.Get(detail.path)
+				if !array.Exists() || array.Type == gjson.Null {
+					continue
+				}
+				if !array.IsArray() {
+					s.failLocked("upstream_json_error", fmt.Errorf("invalid usage field %s", detail.path))
+					return s.state.Err
+				}
+				entries, valid := 0, true
+				array.ForEach(func(_, item gjson.Result) bool {
+					entries++
+					n, modality := item.Get("tokenCount"), item.Get("modality")
+					if entries > 128 || !item.IsObject() || modality.Type != gjson.String || n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
+						valid = false
+						return false
+					}
+					kind := strings.ToLower(strings.TrimSpace(modality.String()))
+					if kind == "text" || kind == "audio" || kind == "image" {
+						key := detail.prefix + kind + "_tokens"
+						if sourceUpdates[key] > 1_000_000_000-int(n.Int()) {
+							valid = false
+							return false
+						}
+						sourceUpdates[key] += int(n.Int())
+					}
+					return true
+				})
+				if !valid {
+					s.failLocked("upstream_json_error", fmt.Errorf("invalid usage field %s", detail.path))
+					return s.state.Err
+				}
 			}
 		}
 		for key, n := range sourceUpdates {
@@ -424,41 +530,151 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 	}
 	// Gemini 明确拦截时不产生候选；保留渠道原有反馈和计量，不把合法终态当成 EOF 截断。
 	// 若之前已经开始输出候选，反馈不替代那些候选缺失的结束帧。
-	if len(s.choices) == 0 && isGeminiPromptBlocked(v) {
+	requiresOwnTerminal := (s.claudeStarted || s.responsesStarted || kind == "message_start")
+	if !requiresOwnTerminal && len(s.choices) == 0 && isGeminiPromptBlocked(v) {
 		s.state.UsageFormat = types.RelayFormatGemini
 		s.state.Complete = true
 	}
+	blockIndex, validBlockIndex := 0, false
+	switch kind {
+	case "content_block_start", "content_block_delta", "content_block_stop":
+		index := v.Get("index")
+		blockIndex, validBlockIndex = int(index.Int()), index.Type == gjson.Number
+		parsed, err := strconv.Atoi(index.Raw)
+		blockIndex, validBlockIndex = parsed, validBlockIndex && err == nil && parsed >= 0
+	}
 	switch kind {
 	case "message_start":
-		if s.claudeStarted || !v.Get("message").IsObject() {
+		if s.claudeStarted || s.responsesStarted || !v.Get("message").IsObject() {
 			s.failLocked("upstream_protocol_error", errors.New("invalid message_start"))
 			return s.state.Err
 		}
 		s.claudeStarted = true
+		s.claudeLastIndex = -1
+		s.state.Complete = false
 	case "content_block_start":
-		idx := int(v.Get("index").Int())
-		if !s.claudeStarted || len(s.claudeBlocks) > 0 || !v.Get("content_block").IsObject() || v.Get("index").Type != gjson.Number || idx < 0 {
+		content := v.Get("content_block")
+		isTool := content.Get("type").String() == "tool_use"
+		invalidSequence := len(s.claudeBlocks) > 0
+		if s.claudeToolOverlap {
+			// Chat and Responses converters route client tool fragments by index.
+			// Keep other block types serial and bound active state without buffering.
+			invalidSequence = invalidSequence && (!isTool || !s.claudeToolsOnly)
+			invalidSequence = invalidSequence || s.claudeStop || blockIndex <= s.claudeLastIndex || len(s.claudeBlocks) >= 128
+		}
+		invalidSequence = invalidSequence || s.claudeStop || s.claudeTruncatedTool || blockIndex <= s.claudeLastIndex || len(s.claudeBlocks) >= 128
+		if !s.claudeStarted || invalidSequence || !v.Get("content_block").IsObject() || !validBlockIndex || blockIndex < 0 {
 			s.failLocked("upstream_protocol_error", errors.New("invalid content block sequence"))
 			return s.state.Err
 		}
-		s.claudeBlocks[idx] = true
+		if len(s.claudeBlocks) == 0 {
+			s.claudeToolsOnly = isTool
+		}
+		block := &streamClaudeBlock{}
+		kind := content.Get("type")
+		if kind.Type != gjson.String || kind.Str == "" {
+			s.failLocked("upstream_protocol_error", errors.New("missing content block type"))
+			return s.state.Err
+		}
+		block.bytes = len(kind.Str)
+		input := gjson.Result{}
+		switch kind.Str {
+		case "text", "thinking":
+			if content.Get(kind.Str).Type != gjson.String {
+				s.failLocked("upstream_protocol_error", errors.New("missing content block text"))
+				return s.state.Err
+			}
+		case "tool_use", "server_tool_use":
+			id, name := content.Get("id"), content.Get("name")
+			if id.Type != gjson.String || id.Str == "" || name.Type != gjson.String || name.Str == "" {
+				s.failLocked("upstream_protocol_error", errors.New("missing tool identity"))
+				return s.state.Err
+			}
+			input = content.Get("input")
+			block.bytes += len(id.Str) + len(name.Str) + len(input.Raw)
+		}
+		if block.bytes > MaxStreamFrameBytes-s.claudeBlockBytes {
+			s.failLocked("upstream_protocol_error", errors.New("Claude tool input exceeds stream limit"))
+			return s.state.Err
+		}
+		block.kind = strings.Clone(kind.Str)
+		block.input = strings.Clone(input.Raw)
+		s.claudeBlockBytes += block.bytes
+		s.claudeBlocks[blockIndex] = block
+		s.claudeLastIndex = blockIndex
 	case "content_block_delta":
-		if !s.claudeStarted || v.Get("index").Type != gjson.Number || !s.claudeBlocks[int(v.Get("index").Int())] || !v.Get("delta").IsObject() {
+		block, delta := s.claudeBlocks[blockIndex], v.Get("delta")
+		if !s.claudeStarted || !validBlockIndex || block == nil || !delta.IsObject() {
 			s.failLocked("upstream_protocol_error", errors.New("content delta outside an open block"))
 			return s.state.Err
 		}
+		kind := delta.Get("type")
+		valid := kind.Type == gjson.String && kind.Str != ""
+		switch kind.Str {
+		case "text_delta":
+			valid = block.kind == "text" && delta.Get("text").Type == gjson.String
+		case "thinking_delta":
+			valid = block.kind == "thinking" && delta.Get("thinking").Type == gjson.String
+		case "signature_delta":
+			valid = block.kind == "thinking" && delta.Get("signature").Type == gjson.String
+		case "input_json_delta":
+			fragment := delta.Get("partial_json")
+			valid = (block.kind == "tool_use" || block.kind == "server_tool_use") && fragment.Type == gjson.String
+			if valid {
+				if len(fragment.Str) > MaxStreamFrameBytes-s.claudeBlockBytes {
+					s.failLocked("upstream_protocol_error", errors.New("Claude tool input exceeds stream limit"))
+					return s.state.Err
+				}
+				block.args.WriteString(fragment.Str)
+				block.bytes += len(fragment.Str)
+				s.claudeBlockBytes += len(fragment.Str)
+			}
+		}
+		if !valid {
+			s.failLocked("upstream_protocol_error", errors.New("invalid content block delta type"))
+			return s.state.Err
+		}
 	case "content_block_stop":
-		if !s.claudeBlocks[int(v.Get("index").Int())] || v.Get("index").Type != gjson.Number {
+		block := s.claudeBlocks[blockIndex]
+		if !validBlockIndex || block == nil {
 			s.failLocked("upstream_protocol_error", errors.New("stop for unopened content block"))
 			return s.state.Err
 		}
-		delete(s.claudeBlocks, int(v.Get("index").Int()))
+		delete(s.claudeBlocks, blockIndex)
+		s.claudeBlockBytes -= block.bytes
+		if block.kind == "tool_use" || block.kind == "server_tool_use" {
+			input := block.input
+			if block.args.Len() > 0 {
+				input = block.args.String()
+			}
+			valid := gjson.Valid(input)
+			if !valid || !gjson.Parse(input).IsObject() {
+				if block.kind == "tool_use" && block.args.Len() > 0 && !valid {
+					s.claudeTruncatedTool = true
+				} else {
+					s.failLocked("upstream_protocol_error", errors.New("incomplete tool input JSON"))
+					return s.state.Err
+				}
+			}
+		}
 	case "message_delta":
 		if !s.claudeStarted || len(s.claudeBlocks) > 0 || !v.Get("delta").IsObject() {
 			s.failLocked("upstream_protocol_error", errors.New("message delta before blocks completed"))
 			return s.state.Err
 		}
-		s.claudeStop = s.claudeStop || v.Get("delta.stop_reason").String() != ""
+		reason := v.Get("delta.stop_reason")
+		if reason.Exists() && reason.Type != gjson.Null && reason.Type != gjson.String {
+			s.failLocked("upstream_protocol_error", errors.New("invalid Claude stop reason"))
+			return s.state.Err
+		}
+		if reason.Str != "" {
+			if (s.claudeTruncatedTool && reason.Str != "max_tokens") || (s.claudeStop && reason.Str != s.claudeStopReason) {
+				s.failLocked("upstream_protocol_error", errors.New("inconsistent Claude stop reason or incomplete tool input"))
+				return s.state.Err
+			}
+			s.claudeStopReason = strings.Clone(reason.Str)
+		}
+		s.claudeStop = s.claudeStop || reason.String() != ""
 	case "message_stop":
 		if !s.claudeStarted || !s.claudeStop || len(s.claudeBlocks) > 0 {
 			s.failLocked("upstream_protocol_error", errors.New("incomplete Claude message_stop"))
@@ -466,10 +682,21 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 		}
 		s.state.Complete = true
 	case "response.incomplete":
+		if s.claudeStarted {
+			break
+		}
 		if responsesLimitComplete {
 			s.state.Complete = true
 		}
 	case "response.completed", "response.done":
+		if s.claudeStarted {
+			break
+		}
+		if s.format != types.RelayFormatOpenAIRealtime &&
+			(!v.Get("response").IsObject() || v.Get("response.status").Type != gjson.String || v.Get("response.status").String() == "") {
+			s.failLocked("upstream_protocol_error", errors.New("invalid Responses terminal object"))
+			return s.state.Err
+		}
 		status := v.Get("response.status").String()
 		if !realtimeRoundComplete && !responsesLimitComplete && status != "" && status != "completed" {
 			s.failLocked("upstream_error", fmt.Errorf("response ended with status %s", status))
@@ -477,25 +704,39 @@ func (s *StreamSession) ObserveEvent(event string, data []byte) error {
 			s.state.Complete = true
 		}
 	case "image_generation.completed", "image_edit.completed":
+		if requiresOwnTerminal {
+			break
+		}
+		if s.ExpectedImages > 0 {
+			blob, url := v.Get("b64_json"), v.Get("url")
+			if !(blob.Type == gjson.String && strings.TrimSpace(blob.Str) != "" || url.Type == gjson.String && strings.TrimSpace(url.Str) != "") {
+				s.failLocked("upstream_protocol_error", errors.New("completed image event has no image result"))
+				return s.state.Err
+			}
+		}
 		s.state.Evidence["image_count"]++
 		s.state.Complete = s.state.Evidence["image_count"] >= max(1, s.ExpectedImages)
 	case "stream-end", "message_end", "chat_end", "conversation.chat.completed", "done", "speech.audio.done", "transcript.text.done", "finish":
-		s.state.Complete = true
+		if !requiresOwnTerminal {
+			s.state.Complete = true
+		}
 	}
-	if v.Get("done").Bool() || v.Get("is_end").Bool() || v.Get("is_finished").Bool() || v.Get("payload.choices.status").Int() == 2 {
-		s.state.Complete = true
-	}
-	if cs := v.Get("Choices"); cs.IsArray() {
-		s.observeChoicesLocked(cs.Array(), "Index", "FinishReason")
-	}
-	if kind == "message" && v.Get("stop_reason").String() != "" {
-		s.state.Complete = true
-	}
-	if candidates := v.Get("candidates"); candidates.IsArray() {
-		s.observeChoicesLocked(candidates.Array(), "index", "finishReason")
-	}
-	if choices := v.Get("choices"); choices.IsArray() {
-		s.observeChoicesLocked(choices.Array(), "index", "finish_reason")
+	if !requiresOwnTerminal {
+		if v.Get("done").Bool() || v.Get("is_end").Bool() || v.Get("is_finished").Bool() || v.Get("payload.choices.status").Int() == 2 {
+			s.state.Complete = true
+		}
+		if cs := v.Get("Choices"); cs.IsArray() {
+			s.observeChoicesLocked(cs.Array(), "Index", "FinishReason")
+		}
+		if kind == "message" && v.Get("stop_reason").String() != "" {
+			s.state.Complete = true
+		}
+		if candidates := v.Get("candidates"); candidates.IsArray() {
+			s.observeChoicesLocked(candidates.Array(), "index", "finishReason")
+		}
+		if choices := v.Get("choices"); choices.IsArray() {
+			s.observeChoicesLocked(choices.Array(), "index", "finish_reason")
+		}
 	}
 	if s.state.Reason != "" {
 		s.state.Complete = false
@@ -575,10 +816,16 @@ var streamUsageKeys = []streamUsageField{
 	{"completion_tokens_details.image_tokens", "output_image_tokens"}, {"output_tokens_details.image_tokens", "output_image_tokens"},
 	{"completion_tokens_details.reasoning_tokens", "reasoning_tokens"}, {"output_tokens_details.reasoning_tokens", "reasoning_tokens"},
 	{"server_tool_use.web_search_requests", "server_tool_use.web_search_requests"},
+	{"prompt_tokens_details.cache_creation_input_tokens", "openai_cache_creation_input_tokens"}, {"input_tokens_details.cache_creation_input_tokens", "openai_cache_creation_input_tokens"},
+	{"prompt_tokens_details.cache_write_tokens_details.ttl_30m_tokens", "cache_write_tokens_details.ttl_30m_tokens"}, {"input_tokens_details.cache_write_tokens_details.ttl_30m_tokens", "cache_write_tokens_details.ttl_30m_tokens"},
+	{"prompt_tokens_details.cache_write_tokens_details.ttl_12h_tokens", "cache_write_tokens_details.ttl_12h_tokens"}, {"input_tokens_details.cache_write_tokens_details.ttl_12h_tokens", "cache_write_tokens_details.ttl_12h_tokens"},
+	{"prompt_tokens_details.cached_tokens_details.text_tokens", "cached_tokens_details.text_tokens"}, {"input_tokens_details.cached_tokens_details.text_tokens", "cached_tokens_details.text_tokens"},
+	{"prompt_tokens_details.cached_tokens_details.image_tokens", "cached_tokens_details.image_tokens"}, {"input_tokens_details.cached_tokens_details.image_tokens", "cached_tokens_details.image_tokens"},
+	{"prompt_tokens_details.cached_tokens_details.audio_tokens", "cached_tokens_details.audio_tokens"}, {"input_tokens_details.cached_tokens_details.audio_tokens", "cached_tokens_details.audio_tokens"},
 }
 
 // geminiStreamUsageKeys 保留 Gemini 独有统计口径，思考 token 是否相加由后续语义归一化决定。
-var geminiStreamUsageKeys = []streamUsageField{{"promptTokenCount", "input_tokens"}, {"candidatesTokenCount", "output_tokens"}, {"cachedContentTokenCount", "cached_tokens"}, {"thoughtsTokenCount", "reasoning_tokens"}}
+var geminiStreamUsageKeys = []streamUsageField{{"promptTokenCount", "input_tokens"}, {"candidatesTokenCount", "output_tokens"}, {"cachedContentTokenCount", "cached_tokens"}, {"thoughtsTokenCount", "reasoning_tokens"}, {"toolUsePromptTokenCount", "tool_use_prompt_tokens"}}
 
 // IsStreamErrorEvent 识别供应商原始失败事件；显式 null error 不表示失败。
 // 参数 event 为 SSE 名称，data 为未经改写的 JSON，返回是否应保留原始终止帧。
@@ -685,6 +932,13 @@ type streamObservedBody struct {
 
 // UnwrapStream 将原始已采集响应体交回专用解析器，避免同一 HTTP 响应登记两次。
 func (b *streamObservedBody) UnwrapStream() io.ReadCloser { return b.source }
+
+// ObservesStreamTerminationClose preserves the captured body's exchange owner
+// through the protocol wrapper without exposing or changing its close action.
+func (b *streamObservedBody) ObservesStreamTerminationClose() bool {
+	observer, ok := b.source.(interface{ ObservesStreamTerminationClose() bool })
+	return ok && observer.ObservesStreamTerminationClose()
+}
 
 // UseStreamLineFraming 在开始读取前将响应 resp 的通用观察器设为 NDJSON 行模式；nil 或未包装响应跳过，无返回值。
 func UseStreamLineFraming(resp *http.Response) {
@@ -944,23 +1198,29 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 				text.WriteString(r.String())
 			}
 		}
-		if choice.Get("delta.audio.data").String() != "" {
+		if strings.TrimSpace(choice.Get("delta.audio.data").Str) != "" {
 			s.state.Effective = true
 		}
 		if fn := choice.Get("delta.function_call"); fn.IsObject() {
 			// 旧版每个候选只有一个调用；独立命名空间避免与新版工具索引 0 混合。
 			// 名称/参数只累计已刷新片段，沿用下方候选结束分支确认完整交付，不等待下一帧。
 			key := fmt.Sprintf("chat:%d:legacy", choice.Get("index").Int())
-			s.toolLocked(key, fn.Get("name").String(), fn.Get("arguments").String(), false, true)
+			s.toolLocked(key, fn.Get("name").Str, fn.Get("arguments").String(), false, true, false)
 		}
 		for _, tc := range choice.Get("delta.tool_calls").Array() {
 			key := fmt.Sprintf("chat:%d:%d", choice.Get("index").Int(), tc.Get("index").Int())
-			s.toolLocked(key, tc.Get("function.name").String(), tc.Get("function.arguments").String(), false, false)
+			s.toolLocked(key, tc.Get("function.name").Str, tc.Get("function.arguments").String(), false, false, false)
 		}
-		if choice.Get("finish_reason").String() != "" {
-			for key := range s.tools {
+		if reason := choice.Get("finish_reason").Str; reason != "" {
+			for key, tool := range s.tools {
 				if strings.HasPrefix(key, fmt.Sprintf("chat:%d:", choice.Get("index").Int())) {
-					s.toolLocked(key, "", "", true, false)
+					if (reason == "length" || reason == "content_filter") && tool.args.Len() == 0 {
+						// A truncated name alone is not a completed no-argument call.
+						s.toolBytes -= tool.name.Len()
+						delete(s.tools, key)
+						continue
+					}
+					s.toolLocked(key, "", "", true, false, false)
 				}
 			}
 		}
@@ -970,82 +1230,102 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 		block := v.Get("content_block")
 		switch block.Get("type").String() {
 		case "text":
-			text.WriteString(block.Get("text").String())
+			text.WriteString(block.Get("text").Str)
 		case "thinking":
-			text.WriteString(block.Get("thinking").String())
+			text.WriteString(block.Get("thinking").Str)
 		case "tool_use", "server_tool_use":
 			args := ""
 			if block.Get("input").Raw != "{}" {
 				args = block.Get("input").Raw
 			}
-			s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), block.Get("name").String(), args, false, false)
+			s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), block.Get("name").Str, args, false, false, false)
 		}
 	case "content_block_delta":
 		switch v.Get("delta.type").String() {
 		case "text_delta":
-			text.WriteString(v.Get("delta.text").String())
+			text.WriteString(v.Get("delta.text").Str)
 		case "thinking_delta":
-			text.WriteString(v.Get("delta.thinking").String())
+			text.WriteString(v.Get("delta.thinking").Str)
 		case "input_json_delta":
-			s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), "", v.Get("delta.partial_json").String(), false, false)
+			s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), "", v.Get("delta.partial_json").String(), false, false, false)
 		}
 	case "content_block_stop":
-		s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), "", "", true, false)
+		s.toolLocked(fmt.Sprintf("claude:%d", v.Get("index").Int()), "", "", true, false, false)
 	case "response.output_text.delta", "response.text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.audio_transcript.delta", "transcript.text.delta":
-		text.WriteString(v.Get("delta").String())
+		text.WriteString(v.Get("delta").Str)
 		if s.receivedOnly && kind == "transcript.text.delta" {
 			s.receivedTranscript = true
 		}
 	case "transcript.text.done":
 		if !s.receivedOnly || !s.receivedTranscript {
-			text.WriteString(v.Get("text").String())
+			text.WriteString(v.Get("text").Str)
 		}
 	case "response.audio.delta", "response.output_audio.delta", "speech.audio.delta":
-		if v.Get("delta").String() != "" || v.Get("audio").String() != "" {
+		if strings.TrimSpace(v.Get("delta").Str) != "" || strings.TrimSpace(v.Get("audio").Str) != "" {
 			s.state.Effective = true
 		}
 	case "response.output_item.done":
 		item := v.Get("item")
-		if item.Get("type").String() == "function_call" {
-			s.commitResponseToolLocked(item.Get("id").String(), item.Get("call_id").String(), item.Get("name").String(), item.Get("arguments").String())
+		// A done event can close an incomplete item. Keep received output for
+		// disconnect estimates, but only a completed item counts as delivery.
+		// Missing status preserves compatibility with older Responses streams.
+		if status := item.Get("status"); !s.receivedOnly && status.Exists() && (status.Type != gjson.String || status.Str != "completed") {
+			break
 		}
-		if item.Get("type").String() == "image_generation_call" && item.Get("result").String() != "" {
+		if item.Get("type").String() == "function_call" {
+			s.commitResponseToolLocked(item.Get("id").Str, item.Get("call_id").Str, item.Get("name").Str, item.Get("arguments").String(), false)
+		}
+		if item.Get("type").Str == "custom_tool_call" && item.Get("input").Type == gjson.String {
+			s.commitResponseToolLocked(item.Get("id").Str, item.Get("call_id").Str, item.Get("name").Str, item.Get("input").Str, true)
+		}
+		if item.Get("type").String() == "image_generation_call" && strings.TrimSpace(item.Get("result").Str) != "" {
 			s.state.Effective = true
 		}
 	case "response.function_call_arguments.done":
-		s.commitResponseToolLocked(v.Get("item_id").String(), v.Get("call_id").String(), v.Get("name").String(), v.Get("arguments").String())
+		s.commitResponseToolLocked(v.Get("item_id").Str, v.Get("call_id").Str, v.Get("name").Str, v.Get("arguments").String(), false)
+	case "response.custom_tool_call_input.done":
+		if v.Get("input").Type == gjson.String {
+			s.commitResponseToolLocked(v.Get("item_id").Str, v.Get("call_id").Str, v.Get("name").Str, v.Get("input").Str, true)
+		}
 	case "response.output_item.added":
 		item := v.Get("item")
 		if s.receivedOnly && item.Get("type").String() == "function_call" {
-			s.toolLocked(streamResponseToolKey(item.Get("id").String(), item.Get("call_id").String()), item.Get("name").String(), item.Get("arguments").String(), false, false)
+			s.toolLocked(streamResponseToolKey(item.Get("id").Str, item.Get("call_id").Str), item.Get("name").Str, item.Get("arguments").String(), false, false, false)
+		}
+		if item.Get("type").Str == "custom_tool_call" {
+			s.toolLocked(streamResponseToolKey(item.Get("id").Str, item.Get("call_id").Str), item.Get("name").Str, item.Get("input").Str, false, false, true)
 		}
 	case "response.function_call_arguments.delta":
 		if s.receivedOnly {
-			s.toolLocked(streamResponseToolKey(v.Get("item_id").String(), v.Get("call_id").String()), "", v.Get("delta").String(), false, false)
+			s.toolLocked(streamResponseToolKey(v.Get("item_id").Str, v.Get("call_id").Str), "", v.Get("delta").String(), false, false, false)
+		}
+	case "response.custom_tool_call_input.delta":
+		if s.receivedOnly && v.Get("delta").Type == gjson.String {
+			s.toolLocked(streamResponseToolKey(v.Get("item_id").Str, v.Get("call_id").Str), "", v.Get("delta").Str, false, false, true)
 		}
 	case "image_generation.partial_image", "image_generation.completed", "image_edit.partial_image", "image_edit.completed":
 		// 完整 JSON 转 SSE 也可交付图片 URL；它与 base64 图片同样属于有效返回。
 		url := v.Get("url")
-		if v.Get("b64_json").String() != "" || url.Type == gjson.String && strings.TrimSpace(url.Str) != "" {
+		if strings.TrimSpace(v.Get("b64_json").Str) != "" || url.Type == gjson.String && strings.TrimSpace(url.Str) != "" {
 			s.state.Effective = true
 		}
 	}
 	for _, candidate := range v.Get("candidates").Array() {
 		for _, part := range candidate.Get("content.parts").Array() {
-			text.WriteString(part.Get("text").String())
-			if part.Get("inlineData.data").String() != "" {
+			text.WriteString(part.Get("text").Str)
+			if strings.TrimSpace(part.Get("inlineData.data").Str) != "" {
 				s.state.Effective = true
 				// 原生内联媒体不进文本，交由估算器按张折算；不把 base64 字节冒充 token。
 				s.media++
 			}
-			if fn := part.Get("functionCall"); fn.IsObject() && fn.Get("name").String() != "" && fn.Get("args").IsObject() {
+			if fn := part.Get("functionCall"); fn.IsObject() && fn.Get("name").Str != "" && fn.Get("args").IsObject() {
 				s.state.Effective = true
 				text.WriteString(fn.Raw)
 			}
 		}
 	}
 	for _, item := range v.Get("data").Array() {
-		if item.Get("b64_json").String() != "" || item.Get("url").String() != "" {
+		if strings.TrimSpace(item.Get("b64_json").Str) != "" || strings.TrimSpace(item.Get("url").Str) != "" {
 			s.state.Effective = true
 		}
 	}
@@ -1055,10 +1335,11 @@ func (s *StreamSession) CommitDelivery(data []byte) {
 	s.text.WriteString(text.String())
 }
 
-// toolLocked 按 key 合并工具名 name 与参数片段 args；done 表示已交付工具结束，空参数按 {}，合法完整对象才记有效内容。
+// toolLocked 按 key 合并工具名 name 与参数片段 args；done 表示已交付工具结束。
+// 普通工具要求 JSON 对象，空参数按 {}；rawInput 自定义工具保留原始字符串，包括空输入。
 // appendName 仅为旧版函数名称分片开启；关闭时非空 name 替换旧名称，空名称始终保留已有值。
 // 调用者持有会话锁；返回值仅在本次提交完整合法工具时为 true，供完成事件去重；达到数量/字节上限则丢弃候选。
-func (s *StreamSession) toolLocked(key, name, args string, done, appendName bool) bool {
+func (s *StreamSession) toolLocked(key, name, args string, done, appendName, rawInput bool) bool {
 	tool := s.tools[key]
 	if tool == nil {
 		if len(s.tools) >= 128 {
@@ -1101,10 +1382,10 @@ func (s *StreamSession) toolLocked(key, name, args string, done, appendName bool
 	committed := false
 	if done {
 		raw := tool.args.String()
-		if raw == "" {
+		if raw == "" && !rawInput {
 			raw = "{}"
 		}
-		if tool.name.Len() > 0 && gjson.Valid(raw) && gjson.Parse(raw).IsObject() {
+		if tool.name.Len() > 0 && (rawInput || gjson.Valid(raw) && gjson.Parse(raw).IsObject()) {
 			s.state.Effective = true
 			if !s.receivedOnly {
 				s.text.WriteString(tool.name.String())

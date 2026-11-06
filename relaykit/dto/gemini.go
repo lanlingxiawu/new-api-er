@@ -720,6 +720,8 @@ type GeminiEmbeddingUsageMetadata struct {
 	PromptTokenDetails []GeminiPromptTokensDetails `json:"promptTokenDetails,omitempty"`
 }
 
+// GeminiUsageMetadata maps reported embedding input to the shared usage shape.
+// Absent or nonpositive totals leave the local estimate in place.
 func (m *GeminiEmbeddingUsageMetadata) GeminiUsageMetadata() *GeminiUsageMetadata {
 	if m == nil || m.PromptTokenCount <= 0 {
 		return nil

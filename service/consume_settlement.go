@@ -98,13 +98,21 @@ func FinalizeConsumptionSettlement(ctx *gin.Context, relayInfo *relaycommon.Rela
 		if params.Other == nil {
 			params.Other = model.NewLogOther()
 		}
+		errorLog := params.Quota == 0 && (stream.Failed || stream.SettlementState == "failed" || stream.SettlementState == "partial")
+		// Error rows store zero output tokens even when settlement received a
+		// partial usage candidate. Retain the existing bounded evidence for all
+		// final zero-output rows without changing their billing or end reason.
+		if (params.CompletionTokens == 0 || errorLog) &&
+			relayInfo.StreamResponseGate != nil && relayInfo.StreamResponseGate.AllowsStream() && relayInfo.StreamDiagnostic != nil {
+			stream.DiagnosticAvailable = true
+		}
 		AppendStreamLogInfo(relayInfo, params.Other)
 		failureText := ""
 		if stream.Failed && !stream.ClientGone {
 			failureText = stream.ErrorMessage
 		}
 		// 零收费异常保留错误日志和诊断，不再进入消费计数/消费日志分支。
-		if params.Quota == 0 && (stream.Failed || stream.SettlementState == "failed" || stream.SettlementState == "partial") {
+		if errorLog {
 			// 上游失败：错误日志 content 记录原文（上游的 error.message），供管理员排障；
 			// 用户视图读取时按 error_code（流式失败标记 upstream_stream_error）判定为上游
 			// 流式错误，并用 admin_info 里记下的终止帧匹配输入改写，与实时终止帧逐项同一

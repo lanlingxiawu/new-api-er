@@ -55,18 +55,20 @@ func (s *ResponseCapture) Bytes() ([]byte, []byte) {
 
 // StreamDiagnostic 汇总一次中转尝试的原始响应、底层错误与用量证据，仅经超级管理员接口读取。
 type StreamDiagnostic struct {
-	DownstreamBodyBase64   *string                  `json:"downstream_body_base64,omitempty"` // 下游实际接受的正文首尾字节；nil 表示未保存（未采集或无异常资格），空串表示采集开启但未写出。仅异常入日志前赋值。
-	StreamResponseSnapshot                          // 本次尝试最后一次 HTTP 交换的响应快照。
-	Attempt                int                      `json:"attempt"`                      // 中转尝试编号；历史日志未记录时为 0。
-	PreviousResponses      []StreamResponseSnapshot `json:"previous_responses,omitempty"` // 同一尝试内保留的较早 SDK 响应，按出现顺序排列。
-	OmittedResponses       int                      `json:"omitted_responses,omitempty"`  // 超过四份保留上限后被丢弃的响应数量。
-	Error                  string                   `json:"error,omitempty"`              // 有界的底层终止原因，不作为普通日志公开错误信息。
-	UsageEvidence          map[string]int           `json:"usage_evidence"`               // 上游已确认的累计用量；键缺失与显式 0 不同，token 与工具次数按字段区分。
-	UsagePhases            map[string]string        `json:"usage_phases,omitempty"`       // 各用量字段最近出现的事件阶段，如 message_start 或 message_delta。
-	EstimatedUsage         map[string]int           `json:"estimated_usage,omitempty"`    // 本地估算的输入/输出 token，独立于原始上游用量证据。
-	RejectReason           string                   `json:"reject_reason,omitempty"`      // 诊断内策略原因；普通日志单独保留同名字段。
-	UsageFinal             bool                     `json:"usage_final"`                  // 处理器确认的用量/协议结束状态；Claude 专用路径检查 message_stop，通用路径沿用对应协议的 Complete。
-	SettlementError        string                   `json:"settlement_error,omitempty"`   // 资金或令牌结算错误，与上游流式错误分别记录。
+	DeliveryEvidence       *StreamDeliveryEvidence      `json:"delivery_evidence,omitempty"`      // Observed receive/write state; nil on historical records without this snapshot.
+	Termination            *StreamTerminationDiagnostic `json:"termination,omitempty"`            // Gateway observations only; never changes terminal ownership or billing.
+	DownstreamBodyBase64   *string                      `json:"downstream_body_base64,omitempty"` // 下游实际接受的正文首尾字节；nil 表示未保存（未采集或无异常资格），空串表示采集开启但未写出。仅异常入日志前赋值。
+	StreamResponseSnapshot                              // 本次尝试最后一次 HTTP 交换的响应快照。
+	Attempt                int                          `json:"attempt"`                      // 中转尝试编号；历史日志未记录时为 0。
+	PreviousResponses      []StreamResponseSnapshot     `json:"previous_responses,omitempty"` // 同一尝试内保留的较早 SDK 响应，按出现顺序排列。
+	OmittedResponses       int                          `json:"omitted_responses,omitempty"`  // 超过四份保留上限后被丢弃的响应数量。
+	Error                  string                       `json:"error,omitempty"`              // 有界的底层终止原因，不作为普通日志公开错误信息。
+	UsageEvidence          map[string]int               `json:"usage_evidence"`               // 上游已确认的累计用量；键缺失与显式 0 不同，token 与工具次数按字段区分。
+	UsagePhases            map[string]string            `json:"usage_phases,omitempty"`       // 各用量字段最近出现的事件阶段，如 message_start 或 message_delta。
+	EstimatedUsage         map[string]int               `json:"estimated_usage,omitempty"`    // 本地估算的输入/输出 token，独立于原始上游用量证据。
+	RejectReason           string                       `json:"reject_reason,omitempty"`      // 诊断内策略原因；普通日志单独保留同名字段。
+	UsageFinal             bool                         `json:"usage_final"`                  // 处理器确认的用量/协议结束状态；Claude 专用路径检查 message_stop，通用路径沿用对应协议的 Complete。
+	SettlementError        string                       `json:"settlement_error,omitempty"`   // 资金或令牌结算错误，与上游流式错误分别记录。
 }
 
 // StreamOutcome 由响应处理阶段生成，再由终止结算阶段更新；入队前序列化，异步日志工作者不再修改它。

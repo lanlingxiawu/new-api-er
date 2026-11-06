@@ -37,6 +37,20 @@ func TestStrictDownstreamDiagnostic(t *testing.T) {
 		service.AppendStreamLogInfo(info, otherLog)
 		other := otherLog.Snapshot()
 		diagnostic := other["stream_diagnostic"].(relaycommon.StreamDiagnostic)
+		evidence := diagnostic.DeliveryEvidence
+		require.NotNil(t, evidence)
+		require.True(t, evidence.Accepted)
+		complete := strings.Contains(body, "event: message_stop")
+		content := strings.Contains(body, "event: content_block_delta")
+		require.Equal(t, complete, evidence.ProtocolComplete)
+		require.Equal(t, complete, diagnostic.UsageFinal)
+		require.Equal(t, content, evidence.ReceivedResponse)
+		require.Equal(t, content, evidence.Effective)
+		require.Equal(t, !complete, evidence.ErrorDelivered)
+		if content {
+			require.Positive(t, evidence.ReceivedOutputEstimate)
+			require.Positive(t, evidence.DeliveredOutputEstimate)
+		}
 		if info.StreamResult.DiagnosticAvailable {
 			require.Equal(t, body, string(diagnostic.BodyHead)+string(diagnostic.BodyTail))
 			require.Equal(t, []string{"one", "two"}, diagnostic.ResponseHeaders["X-Test"])
@@ -550,7 +564,7 @@ func TestStrictPolicyStopMarkerRegression(t *testing.T) {
 	require.NotEmpty(t, common.GetContextKeyString(c, constant.ContextKeyAdminRejectReason))
 }
 
-// TestClaudeCaptureAlwaysEnabled verifies the former all-enabled path remains active.
+// TestClaudeCaptureAlwaysEnabled verifies the former all-true path remains active.
 func TestClaudeCaptureAlwaysEnabled(t *testing.T) {
 	body := strictStart + strictText + strictStop
 	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
@@ -730,6 +744,29 @@ func TestStrictDisconnectIncludesFailedTextFrame(t *testing.T) {
 	require.Equal(t, "estimated", info.StreamResult.UsageSource)
 	require.Equal(t, 50, u.PromptTokens)
 	require.Equal(t, service.EstimateTokenByModel("claude", "hello"), u.CompletionTokens)
+	evidence := info.StreamResult.Diagnostic.DeliveryEvidence
+	require.NotNil(t, evidence)
+	require.True(t, evidence.Accepted)
+	require.True(t, evidence.ReceivedResponse)
+	require.False(t, evidence.Effective)
+	require.False(t, evidence.ProtocolComplete)
+	require.False(t, evidence.ErrorDelivered)
+	require.Equal(t, u.CompletionTokens, evidence.ReceivedOutputEstimate)
+	require.Zero(t, evidence.DeliveredOutputEstimate)
+}
+
+func TestStrictCompletedProtocolSurvivesDownstreamFailure(t *testing.T) {
+	c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(strictStart + strictText + strictStop)))
+	c.Writer = &strictFailWriter{ResponseWriter: c.Writer, failOn: "event: message_stop", short: true}
+	_, apiErr := strictClaudeStream(c, resp, info)
+	require.Nil(t, apiErr)
+	require.True(t, info.StreamResult.ClientGone)
+	require.True(t, info.StreamResult.Diagnostic.UsageFinal)
+	evidence := info.StreamResult.Diagnostic.DeliveryEvidence
+	require.NotNil(t, evidence)
+	require.True(t, evidence.ProtocolComplete, "a downstream write failure does not invalidate the already validated upstream message_stop")
+	require.True(t, evidence.Effective)
+	require.False(t, evidence.ErrorDelivered)
 }
 
 // TestStrictSignatureOnly 验证只有 signature 不算有效内容；正常完整结束尊重上游用量，异常且无有效交付时不收费。
@@ -808,6 +845,38 @@ func TestStrictFlushFailureDoesNotCountContent(t *testing.T) {
 	require.Nil(t, err)
 	require.False(t, info.StreamResult.EffectiveContent)
 	require.True(t, info.StreamResult.ClientGone)
+	evidence := info.StreamResult.Diagnostic.DeliveryEvidence
+	require.NotNil(t, evidence)
+	require.True(t, evidence.ReceivedResponse)
+	require.False(t, evidence.Effective)
+	require.False(t, evidence.ErrorDelivered)
+	require.Zero(t, evidence.DeliveredOutputEstimate)
+}
+
+func TestStrictTerminalErrorDeliveryRequiresSuccessfulWriteAndFlush(t *testing.T) {
+	for _, body := range []string{"", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"fixture\"}}\n\n"} {
+		for _, failure := range []string{"none", "write", "short", "flush"} {
+			t.Run(fmt.Sprintf("native=%t/%s", body != "", failure), func(t *testing.T) {
+				c, _, resp, info := strictTestContext(io.NopCloser(strings.NewReader(body)))
+				switch failure {
+				case "write", "short":
+					c.Writer = &strictFailWriter{ResponseWriter: c.Writer, failOn: "event: error", short: failure == "short"}
+				case "flush":
+					c, _ = gin.CreateTestContext(&strictFlushFailure{httptest.NewRecorder()})
+					c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				}
+				_, apiErr := strictClaudeStream(c, resp, info)
+				require.Nil(t, apiErr)
+				require.True(t, info.StreamResult.Failed)
+				evidence := info.StreamResult.Diagnostic.DeliveryEvidence
+				require.NotNil(t, evidence)
+				require.Equal(t, failure == "none", evidence.ErrorDelivered)
+				require.False(t, evidence.Effective)
+				require.False(t, evidence.ProtocolComplete)
+				require.Zero(t, evidence.DeliveredOutputEstimate)
+			})
+		}
+	}
 }
 
 // strictTimeoutControl 的 writable 标记回调执行期间允许终止错误写入，模拟受管超时控制器。

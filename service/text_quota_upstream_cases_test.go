@@ -28,6 +28,23 @@ import (
 )
 
 func TestFixedPriceBillingDatabaseMatrix(t *testing.T) {
+	runBillingDatabaseMatrix(t, runFixedPriceAccountingCases)
+}
+
+func runBillingDatabaseMatrix(t *testing.T, runCases func(*testing.T, *gorm.DB, *gorm.DB)) {
+	t.Helper()
+	// These databases own wallet/token/log fixtures, not the employee cost
+	// ledger. Do not leave its buffered records referencing a temporary schema.
+	drainRelayLogs()
+	model.RegisterRelayLogAccountingHandler(func(model.RelayLogAccountingPayload, int) {})
+	t.Cleanup(func() {
+		drainRelayLogs()
+		model.RegisterRelayLogAccountingHandler(func(p model.RelayLogAccountingPayload, logID int) {
+			costCommissionSnapshot{UserID: p.UserID, ChannelID: p.ChannelID, ChannelName: p.ChannelName,
+				UsingGroup: p.UsingGroup, OriginModelName: p.OriginModelName, GroupRatio: p.GroupRatio,
+				Quota: p.Quota, BaseQuota: p.BaseQuota}.record(logID)
+		})
+	})
 	for _, dialect := range []struct {
 		name   common.DatabaseType
 		env    string
@@ -85,7 +102,7 @@ func TestFixedPriceBillingDatabaseMatrix(t *testing.T) {
 			var version string
 			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 			t.Logf("database: %s", version)
-			runFixedPriceAccountingCases(t, db, logDB)
+			runCases(t, db, logDB)
 		})
 	}
 }
@@ -106,6 +123,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		usage                                     *dto.Usage
 		audio, stream, refund, insufficient, tool bool
 		realtime, reserveInsufficient             bool
+		undelivered                               bool
 		wallet, outboundImages, retryReservation  int
 		groupRatio                                float64
 		want                                      int
@@ -138,6 +156,14 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "image override cannot exceed remaining wallet", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, wallet: 40000, reserveInsufficient: true, refund: true},
 		{name: "task retry holds a pricier channel and refunds all of it", expression: flat, retryReservation: 40000, refund: true},
 		{name: "task retry cannot exceed remaining wallet", expression: flat, retryReservation: 40000, wallet: 20000, reserveInsufficient: true, refund: true},
+		{name: "undelivered confirmed text usage refunds once", expression: `tier("token", p * 2 + c * 10)`, estimate: 1000, usage: &dto.Usage{PromptTokens: 100, CompletionTokens: 2, TotalTokens: 102}, stream: true, undelivered: true, unit: billingexpr.BillingUnitToken},
+		{name: "undelivered confirmed cache only", expression: `tier("token", p * 2 + cr * 0.2)`, estimate: 1000, usage: &dto.Usage{UsageSemantic: "anthropic", PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 100}}, stream: true, undelivered: true, unit: billingexpr.BillingUnitToken},
+		{name: "undelivered explicit zero remains free", expression: `tier("token", p * 2 + c * 10)`, estimate: 1000, usage: &dto.Usage{}, stream: true, undelivered: true, unit: billingexpr.BillingUnitToken},
+		{name: "undelivered token reservation cannot become fixed fee", expression: mixed, estimate: 50000, usage: &dto.Usage{PromptTokens: 100, TotalTokens: 100}, stream: true, undelivered: true, unit: billingexpr.BillingUnitRequest},
+		{name: "undelivered fixed reservation refunds confirmed tokens", expression: mixed, estimate: 100, usage: &dto.Usage{PromptTokens: 50000, TotalTokens: 50000}, stream: true, undelivered: true, unit: billingexpr.BillingUnitToken},
+		{name: "undelivered audio cannot become fixed fee", expression: mixed, estimate: 50000, usage: &dto.Usage{PromptTokens: 100, TotalTokens: 100}, stream: true, undelivered: true, audio: true, unit: billingexpr.BillingUnitRequest},
+		{name: "undelivered evaluation error cannot charge reservation", expression: `p == 50 ? tier("error", param("missing") * p) : tier("token", p * 2)`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, stream: true, undelivered: true, unit: billingexpr.BillingUnitToken},
+		{name: "undelivered audio error cannot charge reservation", expression: `p == 50 ? tier("error", param("missing") * p) : tier("token", p * 2)`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, stream: true, undelivered: true, audio: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			quota := startingQuota
@@ -233,6 +259,9 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					}
 				} else {
 					info.UpdateImageCount(int64(tc.actualImages))
+					if tc.undelivered {
+						info.StreamResult = &relaycommon.StreamOutcome{Failed: true, ConfirmedUsage: true, UsageSource: "none"}
+					}
 					if tc.tool {
 						info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{"fixed_billing_tool": {CallCount: 1}}}
 					}
@@ -255,7 +284,20 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 					assert.NotContains(t, log.Content, "无法扣费")
 					var other map[string]any
 					require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-					assert.Equal(t, string(tc.unit), other["billing_unit"])
+					if tc.unit == "" {
+						assert.NotContains(t, other, "billing_unit", "failed audio price evaluation has no actual billing unit")
+					} else {
+						assert.Equal(t, string(tc.unit), other["billing_unit"])
+					}
+					if tc.undelivered {
+						require.True(t, info.StreamResult.Failed)
+						require.False(t, info.StreamResult.EffectiveContent)
+						if tc.want == 0 {
+							require.Equal(t, "released", info.StreamResult.SettlementState)
+						} else {
+							require.Equal(t, "settled", info.StreamResult.SettlementState)
+						}
+					}
 					if tc.requestedImages > 0 {
 						count := tc.actualImages
 						if count == 0 {
@@ -301,7 +343,9 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			assert.Equal(t, startingQuota-tc.want, token.RemainQuota)
 			assert.Equal(t, tc.want, user.UsedQuota)
 			assert.Equal(t, tc.want, token.UsedQuota)
-			if !tc.refund && !tc.insufficient {
+			if tc.undelivered && tc.want == 0 {
+				assert.Zero(t, user.RequestCount)
+			} else if !tc.refund && !tc.insufficient {
 				assert.Equal(t, 1, user.RequestCount)
 			}
 		})

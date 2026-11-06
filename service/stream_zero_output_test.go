@@ -48,7 +48,11 @@ func TestStreamZeroOutputEstimation(t *testing.T) {
 			}
 			u := FinalizeStreamUsage(c, info, &dto.Usage{PromptTokens: 999})
 			if mode == "no-delivery" {
-				require.Zero(t, u.TotalTokens)
+				require.Zero(t, u.PromptTokens)
+				require.Zero(t, u.PromptTokensDetails.CachedTokens)
+				require.Zero(t, u.CompletionTokens)
+				require.Equal(t, "none", info.StreamResult.UsageSource)
+				require.Nil(t, info.StreamResult.Diagnostic.EstimatedUsage)
 				return
 			}
 			require.Equal(t, 15, u.PromptTokens)

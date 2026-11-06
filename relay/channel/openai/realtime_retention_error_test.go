@@ -140,9 +140,10 @@ func TestRealtimeOriginalErrorInvalidUsage(t *testing.T) {
 							require.Nil(t, got.body)
 						}
 						if content {
-							require.Equal(t, 12, got.usage.TotalTokens)
+							require.Equal(t, 12, got.usage.TotalTokens, "invalid later usage cannot erase earlier confirmed consumption")
 						} else {
-							require.Zero(t, got.usage.TotalTokens)
+							require.Equal(t, "none", got.outcome.UsageSource)
+							require.Zero(t, got.usage.TotalTokens, "failed rounds without delivery release their usage")
 						}
 					case <-time.After(time.Second):
 						require.FailNow(t, "fixture did not finish")

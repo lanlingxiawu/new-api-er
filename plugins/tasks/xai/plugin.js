@@ -19,6 +19,9 @@ const MAX_EXTENSION_SECONDS = 10;
 const MAX_EDIT_SECONDS = 9;
 // Extensions accept 2 to 15 seconds of input and return input plus extension.
 const MAX_EXTENSION_INPUT_SECONDS = 15;
+const MAX_REFERENCE_IMAGES = 7;
+const MAX_KEYFRAMES = 4;
+const MAX_REFERENCE_AUDIOS = 3;
 // Edits and extensions keep the input video's resolution, capped at 720p,
 // which neither the request nor the result reports: the cap is reserved and
 // the output file's MP4 header settles the resolution.
@@ -203,15 +206,19 @@ function generationRequest(source, identity) {
   const image = source.image === undefined || source.image === null ? null : mediaInput(source.image, "image");
   if (source.reference_images !== undefined && source.reference_images !== null && !Array.isArray(source.reference_images))
     throw new Error("reference_images must be an array");
+  if ((source.reference_images || []).length > MAX_REFERENCE_IMAGES) throw new Error("reference_images accepts at most " + MAX_REFERENCE_IMAGES + " items");
   const referenceImages = (source.reference_images || []).map(function (item, index) {
     return mediaInput(item, "reference_images[" + index + "]");
   });
   const lastFrame = source.last_frame === undefined || source.last_frame === null ? null : mediaInput(source.last_frame, "last_frame");
   if (source.keyframes !== undefined && source.keyframes !== null && !Array.isArray(source.keyframes)) throw new Error("keyframes must be an array");
   const keyframes = (source.keyframes || []).map(function (keyframe, index) {
-    const object = plainObject(keyframe) || {};
-    return { image: mediaInput(object.image, "keyframes[" + index + "].image"), timestamp_s: object.timestamp_s };
+    const object = plainObject(keyframe);
+    const timestamp = object ? Number(object.timestamp_s) : NaN;
+    if (!Number.isFinite(timestamp) || timestamp <= 0) throw new Error("keyframes[" + index + "].timestamp_s must be a positive number");
+    return { image: mediaInput(object.image, "keyframes[" + index + "].image"), timestamp_s: timestamp };
   });
+  if (keyframes.length > MAX_KEYFRAMES) throw new Error("keyframes accepts at most " + MAX_KEYFRAMES + " items");
   if (source.reference_audios !== undefined && source.reference_audios !== null && !Array.isArray(source.reference_audios))
     throw new Error("reference_audios must be an array");
   const referenceAudios = (source.reference_audios || []).map(function (audio, index) {
@@ -220,6 +227,7 @@ function generationRequest(source, identity) {
     if (typeof object.url === "string" && object.url.trim()) return { url: object.url.trim() };
     throw new Error("reference_audios[" + index + "] must be {voice_id} or {url}");
   });
+  if (referenceAudios.length > MAX_REFERENCE_AUDIOS) throw new Error("reference_audios accepts at most " + MAX_REFERENCE_AUDIOS + " items");
 
   let action = "text_to_video";
   if (referenceImages.length || referenceAudios.length) action = "reference_to_video";
@@ -304,7 +312,7 @@ function generationSource(req) {
   const source = Object.assign(
     {},
     plainObject(req.metadata) || {},
-    req.size === undefined || req.size === null || req.size === "" ? {} : sizeOptions(req.size),
+    req.size === undefined || req.size === null || req.size === "" ? {} : sizeOptions(req.size)
   );
   for (const key of Object.keys(req)) {
     if (req[key] !== undefined && req[key] !== null && req[key] !== "") source[key] = req[key];
@@ -428,16 +436,16 @@ export const native = {
   videoCreated: function (ctx, task) {
     return { request_id: task.task_id };
   },
-  // xAI's own result, with its usage: a failed video xAI still billed keeps
-  // usage.cost_in_usd_ticks, which tells callers, including a downstream
-  // gateway running this plugin, that it was charged. A pending video answers
-  // 202 as xAI does.
+  // A billed failure is presented as a completed moderated video so a
+  // downstream gateway still settles it as charged. The upstream usage stays
+  // in private task data: its cost is not the caller's price.
   videoStatus: function (ctx, task) {
     const data = plainObject(task.data);
     // The poller can fail a task whose last snapshot was still pending.
     if (data && typeof data.status === "string" && !(task.status === "FAILURE" && data.status === "pending")) {
       const output = Object.assign({}, data);
-      delete output.request_id;
+      output.request_id = task.task_id;
+      delete output.usage;
       const model = trimmed((task.properties || {}).origin_model_name);
       if (model) output.model = model;
       if (task.status === "SUCCESS" && videoURL(data)) {
@@ -450,9 +458,13 @@ export const native = {
       }
       return output.status === "pending" ? { __status: 202, __body: output } : output;
     }
-    if (task.status === "FAILURE") return { status: "failed", error: { code: "internal_error", message: task.fail_reason || "video generation failed" } };
+    if (task.status === "FAILURE")
+      return { request_id: task.task_id, status: "failed", error: { code: "internal_error", message: task.fail_reason || "video generation failed" } };
     const progress = Number(String(task.progress || "0").replace("%", ""));
-    return { __status: 202, __body: { status: "pending", progress: Number.isFinite(progress) ? Math.min(Math.max(progress, 0), 99) : 0 } };
+    return {
+      __status: 202,
+      __body: { request_id: task.task_id, status: "pending", progress: Number.isFinite(progress) ? Math.min(Math.max(progress, 0), 99) : 0 },
+    };
   },
   error: function (ctx, error) {
     return { error: { code: error.code, message: error.message } };

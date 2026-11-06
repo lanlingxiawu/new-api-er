@@ -44,10 +44,12 @@ type claudeOpenBlock struct {
 
 // claudeProtocol 是单个响应拥有的协议状态机，按消息与内容块顺序校验，不产生补齐成功事件。
 type claudeProtocol struct {
-	started, stop bool                     // started 表示已接收合法 message_start；stop 表示已接收非空 stop_reason。
-	stopReason    string                   // 上游已确认的停止原因，后续上游原因应与其一致。
-	nextIndex     int                      // 下一内容块应使用的索引，从 0 递增。
-	blocks        map[int]*claudeOpenBlock // 当前打开的内容块；正常结束时必须为空。
+	allowTruncatedTool bool
+	truncatedTool      bool                     // A partial client tool requires a real max_tokens terminal.
+	started, stop      bool                     // started 表示已接收合法 message_start；stop 表示已接收非空 stop_reason。
+	stopReason         string                   // 上游已确认的停止原因，后续上游原因应与其一致。
+	nextIndex          int                      // 下一内容块应使用的索引，从 0 递增。
+	blocks             map[int]*claudeOpenBlock // 当前打开的内容块；正常结束时必须为空。
 }
 
 // claudeErrorDetail 提取上游 error.message 供私有诊断使用，缺失时使用通用原因。
@@ -63,21 +65,52 @@ func claudeErrorDetail(data string) string {
 	return message
 }
 
-// claudeFrameSplitter 复用通用 SSE 增量行游标，保留原生 Claude 的 EOF 半帧错误合同。
+// claudeEOFReader distinguishes a real transport EOF from other errors: Scanner
+// passes atEOF=true for both, so that flag alone cannot authorize a final frame.
+type claudeEOFReader struct {
+	io.Reader
+	terminalErr error
+}
+
+// Read preserves the transport result and records its actual terminal error.
+func (r *claudeEOFReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil {
+		r.terminalErr = err
+	}
+	return n, err
+}
+
+// claudeFrameSplitter preserves complete frames; the optional EOF reader allows
+// only an existing message_stop without its final blank separator at clean EOF.
 type claudeFrameSplitter struct {
-	framing relaycommon.StreamFrameScanner // 当前未消费缓冲的行游标，支持混合换行及跨读取的 CRLF。
+	framing       relaycommon.StreamFrameScanner // 当前未消费缓冲的行游标，支持混合换行及跨读取的 CRLF。
+	eofReader     *claudeEOFReader
+	terminalAtEOF bool
 }
 
 // Preserve SSE frames byte-for-byte, including CRLF and unknown SSE fields.
 // Split 按空行切出完整 SSE 帧，并保留 CRLF、未知字段等原始字节。
-// 接收者 s：增量扫描游标；参数 data：Scanner 当前未消费缓冲；atEOF：底层是否已结束。
+// 接收者 s：增量扫描游标；参数 data：Scanner 当前未消费缓冲；atEOF：Scanner 不会再读取数据（也可能是读取错误）。
 // 依次返回消费字节数、帧字节和错误；CR 后延续 LF 可单独返回且没有事件载荷。
-// EOF 时仍有非空残片返回不完整帧错误，普通短读继续等待。
+// 实际 EOF 的完整 message_stop 可按开关接纳，其他非空残片仍报错，普通短读继续等待。
 func (s *claudeFrameSplitter) Split(data []byte, atEOF bool) (int, []byte, error) {
 	if end := s.framing.End(data); end > 0 {
 		return end, data[:end], nil
 	}
 	if atEOF && len(bytes.TrimSpace(data)) > 0 {
+		if s.eofReader != nil {
+			if err := s.eofReader.terminalErr; err != nil && !errors.Is(err, io.EOF) {
+				return 0, nil, err
+			}
+			if errors.Is(s.eofReader.terminalErr, io.EOF) {
+				event, payload := relaycommon.StreamFramePayload(data)
+				if (event == "" || event == "message_stop") && gjson.ValidBytes(payload) && gjson.GetBytes(payload, "type").String() == "message_stop" {
+					s.terminalAtEOF = true
+					return len(data), data, nil
+				}
+			}
+		}
 		return 0, nil, errClaudeIncompleteFrame
 	}
 	return 0, nil, nil
@@ -121,7 +154,7 @@ func (s *claudeProtocol) accept(v gjson.Result) (string, error) {
 		s.started = true
 	case "content_block_start":
 		index := v.Get("index")
-		if !s.started || s.stop || index.Type != gjson.Number || index.Int() != int64(s.nextIndex) || index.Float() != float64(index.Int()) || !v.Get("content_block").IsObject() || len(s.blocks) > 0 {
+		if !s.started || s.stop || s.truncatedTool || index.Type != gjson.Number || index.Int() != int64(s.nextIndex) || index.Float() != float64(index.Int()) || !v.Get("content_block").IsObject() || len(s.blocks) > 0 {
 			return "", errors.New("invalid content_block_start sequence")
 		}
 		b := v.Get("content_block")
@@ -163,6 +196,10 @@ func (s *claudeProtocol) accept(v gjson.Result) (string, error) {
 					args = b.arguments.String()
 				}
 				if !gjson.Valid(args) || !gjson.Parse(args).IsObject() {
+					if s.allowTruncatedTool && b.kind == "tool_use" && b.arguments.Len() > 0 && !gjson.Valid(args) {
+						s.truncatedTool = true
+						return "", nil
+					}
 					return "", errors.New("incomplete tool input JSON")
 				}
 				if b.id != "" && b.name != "" {
@@ -209,6 +246,9 @@ func (s *claudeProtocol) accept(v gjson.Result) (string, error) {
 			return "", errors.New("invalid stop reason")
 		}
 		if reason.Type == gjson.String && reason.String() != "" {
+			if s.truncatedTool && reason.String() != "max_tokens" {
+				return "", errors.New("incomplete tool input without max_tokens")
+			}
 			if s.stop && reason.String() != s.stopReason {
 				return "", errors.New("conflicting stop reasons")
 			}
@@ -216,7 +256,7 @@ func (s *claudeProtocol) accept(v gjson.Result) (string, error) {
 			s.stopReason = reason.String()
 		}
 	case "message_stop":
-		if !s.started || !s.stop || len(s.blocks) > 0 {
+		if !s.started || !s.stop || len(s.blocks) > 0 || (s.truncatedTool && s.stopReason != "max_tokens") {
 			return "", errors.New("message_stop without complete message")
 		}
 	case "":
@@ -274,24 +314,104 @@ func confirmedClaudeUsage(e map[string]int) *dto.Usage {
 	return usage
 }
 
+// validClaudeBillingSnapshot accepts only a supported original usage dialect
+// with bounded counters. Invalid sidecars remain on the wire but never override
+// the independently validated Claude counters used for settlement.
+func validClaudeBillingSnapshot(node gjson.Result, billing *dto.BillingUsage) bool {
+	if billing == nil || billing.Estimated || !node.IsObject() {
+		return false
+	}
+	payloads := 0
+	for _, present := range []bool{billing.OpenAIUsage != nil, billing.ClaudeUsage != nil, billing.GeminiUsageMetadata != nil} {
+		if present {
+			payloads++
+		}
+	}
+	if payloads != 1 {
+		return false
+	}
+	var payload, semantic string
+	switch strings.ToLower(strings.TrimSpace(billing.Source)) {
+	case dto.BillingUsageSourceOAIChat, dto.BillingUsageSourceOAIResponses:
+		payload, semantic = "openai_usage", dto.BillingUsageSemanticOpenAI
+	case dto.BillingUsageSourceClaudeMessages:
+		payload, semantic = "claude_usage", dto.BillingUsageSemanticAnthropic
+	case dto.BillingUsageSourceGeminiChat:
+		payload, semantic = "gemini_usage_metadata", dto.BillingUsageSemanticGemini
+	default:
+		return false
+	}
+	if billing.Semantic != "" && !strings.EqualFold(strings.TrimSpace(billing.Semantic), semantic) {
+		return false
+	}
+	remaining := 512
+	if !node.Get(payload).IsObject() || !validClaudeBillingCounters(node.Get(payload), 0, &remaining) {
+		return false
+	}
+	canonical, ok := billing.CanonicalUsage()
+	return ok && canonical.UsageSemantic == semantic
+}
+
+// Original usage objects contain integer token/tool counters, with cost kept as
+// provider metadata. Traversal is capped at 512 nodes, 128 entries per array and
+// eight levels before canonicalization or cloning can amplify a large sidecar.
+func validClaudeBillingCounters(node gjson.Result, depth int, remaining *int) bool {
+	*remaining -= 1
+	if depth > 8 || *remaining < 0 {
+		return false
+	}
+	if node.Type == gjson.Number {
+		return node.Float() >= 0 && node.Float() <= 1_000_000_000 && node.Float() == float64(node.Int())
+	}
+	valid := true
+	if node.IsObject() || node.IsArray() {
+		entries := 0
+		node.ForEach(func(key, value gjson.Result) bool {
+			entries++
+			if node.IsArray() && entries > 128 {
+				valid = false
+				return false
+			}
+			if key.Str == "cost" || key.Str == "billing_usage" {
+				*remaining -= 1
+				valid = *remaining >= 0
+				return valid
+			}
+			valid = validClaudeBillingCounters(value, depth+1, remaining)
+			return valid
+		})
+	}
+	return valid
+}
+
 // writeClaudeFrame 完整写入一帧并刷新下游，识别短写、刷新失败及取消，写入 panic 转为错误。
 // 参数 c：下游请求及响应写入器；raw：待原样写出的完整帧；terminal：是否为允许在受管超时后写出的终止错误。
 // 返回 err：写出结果；nil 仅表示服务器写入/刷新检查通过，不证明客户端应用已经读取。
 func writeClaudeFrame(c *gin.Context, raw []byte, terminal bool) (err error) {
+	var observer *relaycommon.StreamTerminationRecorder
+	if value, ok := c.Get(relaycommon.StreamResponseCaptureKey); ok {
+		if capture, ok := value.(*relaycommon.StreamResponseCapture); ok && capture != nil {
+			observer = capture.Termination
+		}
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("downstream write panic: %v", r)
+			observer.Observe("gateway", "panic", err)
 		}
 	}()
 	if err = c.Request.Context().Err(); err != nil && !(terminal && service.IsRelayRequestTimeout(c)) {
+		observer.ObserveContext()
 		return err
 	}
 	helper.ExtendWriteDeadline(c)
 	n, err := c.Writer.Write(raw)
 	if err != nil {
+		observer.Observe("downstream", "write", err)
 		return err
 	}
 	if n != len(raw) {
+		observer.Observe("downstream", "write", io.ErrShortWrite)
 		return io.ErrShortWrite
 	}
 	// 优先通过 FlushError 获取刷新错误；只有普通 Flush 的写入器不提供传输确认，采集到字节不等于发送成功。
@@ -309,18 +429,24 @@ func writeClaudeFrame(c *gin.Context, raw []byte, terminal bool) (err error) {
 	}
 	err = http.NewResponseController(writer).Flush()
 	if err != nil && !errors.Is(err, http.ErrNotSupported) {
+		observer.Observe("downstream", "flush", err)
 		return err
 	}
 	if terminal && service.IsRelayRequestTimeout(c) {
 		return nil
 	}
-	return c.Request.Context().Err()
+	err = c.Request.Context().Err()
+	if err != nil {
+		observer.ObserveContext()
+	}
+	return err
 }
 
 // strictClaudeStream 统一负责原生 Claude SSE 读取、协议校验、下游交付、终止分类和用量选择，不补造成功结束事件。
 // 参数 c：下游请求上下文；resp：交给专用解析器的上游响应；info：本请求状态、用量与采集器，新流程调用前已通过真实成功响应门控。
 // 返回选定用量及 nil 中转错误；可写且非客户端断开的异常才尝试流内补发，调用者依 outcome 结算，控制器跳过重复处理。
 func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
+	upstreamCompatibility := operation_setting.ClaudeStreamUpstreamCompatibilityEnabled()
 	// 原生协议由本处理器唯一管理；禁用通用观察，解除透明读取包装，避免重复采集和终止。
 	info.StreamSession.Disable()
 	if resp != nil {
@@ -344,6 +470,10 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 			info.StreamDiagnostic.Observe(resp)
 		}
 	}
+	var observer *relaycommon.StreamTerminationRecorder
+	if info.StreamDiagnostic != nil {
+		observer = info.StreamDiagnostic.Termination
+	}
 	frames := make(chan claudeFrameRead, 1)                        // 单帧有界交接，避免慢下游使响应帧无限堆积。
 	readerDone := make(chan struct{})                              // 读取工作者退出信号，返回 Gin 上下文前必须完成等待。
 	stopReader, cancel := context.WithCancel(context.Background()) // 仅控制读取工作者，不改变下游取消原因。
@@ -357,18 +487,33 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 			defer close(frames)
 			defer func() {
 				if r := recover(); r != nil {
+					observer.Observe("gateway", "panic", fmt.Errorf("upstream reader panic: %v", r))
 					select {
 					case frames <- claudeFrameRead{err: fmt.Errorf("upstream reader panic: %v", r)}:
 					case <-stopReader.Done():
 					}
 				}
 			}()
-			scanner := bufio.NewScanner(resp.Body)
-			scanner.Buffer(make([]byte, 4096), maxClaudeFrameBytes)
 			splitter := &claudeFrameSplitter{}
+			var reader io.Reader = resp.Body
+			if upstreamCompatibility {
+				splitter.eofReader = &claudeEOFReader{Reader: reader}
+				reader = splitter.eofReader
+			}
+			scanner := bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 4096), maxClaudeFrameBytes)
 			scanner.Split(splitter.Split)
 			for scanner.Scan() {
 				raw := append([]byte(nil), scanner.Bytes()...)
+				if splitter.terminalAtEOF {
+					// The upstream supplied this terminal event. Complete only its SSE
+					// delimiter so clients dispatch it; protocol.accept still validates
+					// message_start, closed content blocks and a real stop_reason.
+					if !bytes.HasSuffix(raw, []byte("\n")) {
+						raw = append(raw, '\n')
+					}
+					raw = append(raw, '\n')
+				}
 				select {
 				case frames <- claudeFrameRead{raw: raw}:
 				case <-stopReader.Done():
@@ -391,6 +536,10 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 		cancel()
 		if !bodyClosed && resp != nil && resp.Body != nil {
 			bodyClosed = true
+			captured, ok := resp.Body.(interface{ ObservesStreamTerminationClose() bool })
+			if !ok || !captured.ObservesStreamTerminationClose() {
+				observer.ObserveUpstreamClose("strict_cleanup")
+			}
 			_ = resp.Body.Close()
 		}
 		<-readerDone
@@ -416,21 +565,26 @@ func strictClaudeStream(c *gin.Context, resp *http.Response, info *relaycommon.R
 		pingC = ping.C
 		defer ping.Stop()
 	}
-	protocol := claudeProtocol{blocks: make(map[int]*claudeOpenBlock)} // 仅由本响应处理循环推进。
-	reason := relaycommon.StreamEndReasonDone                          // 首个确定的终止原因；清理取消不应覆盖已确认的上游错误。
-	var endErr error                                                   // 底层终止错误，只写入私有诊断。
-	upstreamError := false                                             // 上游已给出 error 时只透传，不另生成本地错误事件。
-	var upstreamErrorFrame []byte                                      // 保存上游 error 帧原始字节，供结束读取后原样写出。
-	var errorLogFrame []byte                                           // DTO 解码失败时独立保留明确错误帧，仅用于日志，不参与下游透传。
-	outputUsageCurrent := false                                        // 最近 message_delta 输出报告后尚无新内容块；显式 0 也算报告。
-	estimatedOutput := 0                                               // 已成功交付内容的估算输出 token 累计值。
-	var outputEstimator service.StreamTokenEstimator                   // 仅消费成功写出并刷新后的内容；跨帧保留词类和权重，避免分批取整。
+	protocol := claudeProtocol{blocks: make(map[int]*claudeOpenBlock), allowTruncatedTool: true} // 仅由本响应处理循环推进。
+	var originalBilling *dto.BillingUsage
+	var originalBillingEvidence map[string]int
+	reason := relaycommon.StreamEndReasonDone        // 首个确定的终止原因；清理取消不应覆盖已确认的上游错误。
+	var endErr error                                 // 底层终止错误，只写入私有诊断。
+	upstreamError := false                           // 上游已给出 error 时只透传，不另生成本地错误事件。
+	errorDelivered := false                          // Only a complete downstream terminal write counts as delivered.
+	protocolComplete := false                        // Upstream completion is independent of the downstream write result.
+	var upstreamErrorFrame []byte                    // 保存上游 error 帧原始字节，供结束读取后原样写出。
+	var errorLogFrame []byte                         // DTO 解码失败时独立保留明确错误帧，仅用于日志，不参与下游透传。
+	outputUsageCurrent := false                      // 最近 message_delta 输出报告后尚无新内容块；显式 0 也算报告。
+	estimatedOutput := 0                             // 已成功交付内容的估算输出 token 累计值。
+	var outputEstimator service.StreamTokenEstimator // 仅消费成功写出并刷新后的内容；跨帧保留词类和权重，避免分批取整。
 	var receivedEstimator service.StreamTokenEstimator
 	receivedOutput := 0
 loop:
 	for {
 		// 已观察到的下游取消优先于队列中的后续帧，避免继续采用取消后的用量。
 		if c.Request.Context().Err() != nil {
+			observer.ObserveContext()
 			endErr = c.Request.Context().Err()
 			reason = relaycommon.StreamEndReasonClientGone
 			if service.IsRelayRequestTimeout(c) {
@@ -442,6 +596,7 @@ loop:
 		case <-c.Request.Context().Done():
 			continue
 		case <-idleC:
+			observer.ObserveTimeout("idle_timeout", constant.StreamingTimeout)
 			reason = relaycommon.StreamEndReasonTimeout
 			endErr = context.DeadlineExceeded
 			break loop
@@ -458,6 +613,7 @@ loop:
 				break loop
 			}
 			if frame.err != nil {
+				observer.Observe("upstream", "read", frame.err)
 				endErr = frame.err
 				reason = "upstream_read_error"
 				if errors.Is(frame.err, context.Canceled) && c.Request.Context().Err() != nil {
@@ -554,6 +710,34 @@ loop:
 						result.Diagnostic.UsagePhases[key] = response.Type
 					}
 				}
+				if originalBilling != nil {
+					for key, value := range result.Diagnostic.UsageEvidence {
+						previous, exists := originalBillingEvidence[key]
+						if usageNode.Get(key).Exists() && (!exists || previous != value) {
+							// A later flat report supersedes a stale snapshot, including
+							// an explicit zero. Do not guess cross-provider mappings.
+							originalBilling = nil
+							break
+						}
+					}
+				}
+				if usageNode.Get("billing_usage").Exists() {
+					upstreamUsage := response.Usage
+					if response.Type == "message_start" && response.Message != nil {
+						upstreamUsage = response.Message.Usage
+					}
+					if upstreamUsage != nil && validClaudeBillingSnapshot(usageNode.Get("billing_usage"), upstreamUsage.BillingUsage) {
+						// Reuse upstream's clone/selection without accumulating response
+						// text or replacing strict explicit-zero evidence with >0 merges.
+						billingInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+						FormatClaudeResponseInfo(&response, nil, billingInfo)
+						originalBilling = billingInfo.Usage.BillingUsage
+						originalBillingEvidence = make(map[string]int, len(result.Diagnostic.UsageEvidence))
+						for key, value := range result.Diagnostic.UsageEvidence {
+							originalBillingEvidence[key] = value
+						}
+					}
+				}
 			}
 			if response.StopReason != "" {
 				maybeMarkClaudeRefusal(c, info, response.StopReason)
@@ -562,6 +746,7 @@ loop:
 				maybeMarkClaudeRefusal(c, info, *response.Delta.StopReason)
 			}
 			if response.Type == "message_stop" {
+				protocolComplete = true
 				result.Diagnostic.UsageFinal = outputUsageCurrent
 			}
 			info.ReceivedResponseCount++
@@ -616,6 +801,14 @@ loop:
 		}
 	}
 	// 中间件超时按上游超时处理，与用户取消区分；清理资源前先固定异常分类。
+	switch reason {
+	case "upstream_error":
+		observer.Observe("upstream", "provider_error", endErr)
+	case "upstream_json_error", "upstream_protocol_error":
+		observer.Observe("upstream", "protocol", endErr)
+	case "upstream_incomplete", "upstream_read_error":
+		observer.Observe("upstream", "read", endErr)
+	}
 	if reason == relaycommon.StreamEndReasonClientGone && service.IsRelayRequestTimeout(c) {
 		reason = relaycommon.StreamEndReasonTimeout
 	}
@@ -638,10 +831,12 @@ loop:
 		// 管理员配置的错误提示替换命中时，不再原样转发上游错误帧。
 		_, upstreamPayload := relaycommon.StreamFramePayload(upstreamErrorFrame)
 		if message, forward := service.PresentStreamTerminalMessage(c, upstreamPayload, genericFailure); forward {
-			service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, upstreamErrorFrame, true) })
+			service.WriteRelayTerminalError(c, func() { errorDelivered = writeClaudeFrame(c, upstreamErrorFrame, true) == nil })
 		} else {
 			payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": message}})
-			service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
+			service.WriteRelayTerminalError(c, func() {
+				errorDelivered = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) == nil
+			})
 		}
 	}
 	if result.Failed && !result.ClientGone && !upstreamError && (c.Request.Context().Err() == nil || service.IsRelayRequestTimeout(c)) {
@@ -654,7 +849,9 @@ loop:
 		}
 		message, _ := service.PresentStreamTerminalMessage(c, nil, fallback)
 		payload, _ := common.Marshal(map[string]any{"type": "error", "error": map[string]string{"type": errorType, "message": message}})
-		service.WriteRelayTerminalError(c, func() { _ = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) })
+		service.WriteRelayTerminalError(c, func() {
+			errorDelivered = writeClaudeFrame(c, []byte("event: error\ndata: "+string(payload)+"\n\n"), true) == nil
+		})
 	}
 	if result.Failed && !result.ClientGone {
 		if len(upstreamErrorFrame) > 0 {
@@ -668,8 +865,18 @@ loop:
 		result.Diagnostic.Attempt = snapshot.Attempt
 		result.Diagnostic.PreviousResponses = snapshot.PreviousResponses
 		result.Diagnostic.OmittedResponses = snapshot.OmittedResponses
+		result.Diagnostic.Termination = snapshot.Termination
 	}
 	result.Diagnostic.RejectReason = rejectReason
+	result.Diagnostic.DeliveryEvidence = &relaycommon.StreamDeliveryEvidence{
+		Accepted:                info.StreamResponseGate.AllowsStream(),
+		ReceivedResponse:        result.ReceivedResponse,
+		ProtocolComplete:        protocolComplete,
+		Effective:               result.EffectiveContent,
+		ErrorDelivered:          errorDelivered,
+		ReceivedOutputEstimate:  receivedOutput,
+		DeliveredOutputEstimate: estimatedOutput,
+	}
 	if attempt := c.GetInt(relaycommon.StreamDiagnosticAttemptKey); attempt > 0 {
 		result.Diagnostic.Attempt = attempt
 	}
@@ -693,8 +900,12 @@ loop:
 	switch result.UsageSource {
 	case "upstream":
 		usage = confirmedClaudeUsage(evidence)
+		keepOriginal := originalBilling != nil && !inputOnlyTimeout
+		if keepOriginal {
+			usage.BillingUsage = originalBilling
+		}
 		c.Set("claude_web_search_requests", result.Diagnostic.UsageEvidence["server_tool_use.web_search_requests"])
-		if result.Failed && !inputConfirmed && !info.PriceData.UsePrice {
+		if result.Failed && !keepOriginal && !inputConfirmed && !info.PriceData.UsePrice {
 			// 中途结束时上游可能没报输入；缺字段不等于输入为 0，按估算输入补齐（显式 0 仍保留），与通用流一致。
 			fillStrictEstimatedInput(usage, estimateStrictClaudePrompt(info))
 			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)

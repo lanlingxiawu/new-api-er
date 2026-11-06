@@ -90,6 +90,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 	httpClient = service.RelayHTTPClient(c, httpClient)
 	// 保留 SDK 原有解码与计费，仅包装 HTTP 读取以观察解码前的二进制/JSON 响应字节。
 	diagnosticClient := relaycommon.StreamDiagnosticHTTPClient{Client: httpClient, Capture: info.StreamDiagnostic, Stream: info.StreamSession}
+	sdkHTTPClient := awsRequestBodyHTTPClient{Client: diagnosticClient}
 
 	awsSecret := strings.Split(info.ApiKey, "|")
 	var client *bedrockruntime.Client
@@ -100,7 +101,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:                  region,
 			BearerAuthTokenProvider: bearer.StaticTokenProvider{Token: bearer.Token{Value: apiKey}},
-			HTTPClient:              diagnosticClient,
+			HTTPClient:              sdkHTTPClient,
 		})
 	case 3:
 		ak := awsSecret[0]
@@ -109,7 +110,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 		client = bedrockruntime.New(bedrockruntime.Options{
 			Region:      region,
 			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
-			HTTPClient:  diagnosticClient,
+			HTTPClient:  sdkHTTPClient,
 		})
 	default:
 		return nil, errors.New("invalid aws secret key")

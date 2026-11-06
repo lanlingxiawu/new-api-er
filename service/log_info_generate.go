@@ -184,7 +184,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 // API reads the stored envelope. Never pass this payload to application logging.
 // AppendStreamLogInfo 向日志追加公开流式结算摘要和私有原始响应证据，私有部分只经超级管理员详情接口读取。
 // 参数 info：请求中转状态，nil 时跳过；other：待原地刷新的日志字段，nil 时跳过。
-// 无返回值；新流程在明确上游异常或拒绝时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
+// 无返回值；新流程在明确上游异常、拒绝或最终零输出日志获得资格时保存原始响应，不把私有 envelope 输出到应用日志，不在此处执行结算。
 func AppendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther) {
 	appendStreamLogInfo(info, other, true)
 }
@@ -219,6 +219,11 @@ func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, ref
 		other.SetPublic("stream_result", info.StreamResult)
 		diagnostic = info.StreamResult.Diagnostic
 	}
+	// Cleanup and WebSocket reader completion can follow the outcome snapshot.
+	// Copy only observation metadata; preserve finalized usage and billing evidence.
+	if info.StreamDiagnostic != nil && info.StreamDiagnostic.Termination != nil {
+		diagnostic.Termination = info.StreamDiagnostic.Termination.Snapshot()
+	}
 	if info.StreamRejectReason != "" {
 		diagnostic.RejectReason = info.StreamRejectReason
 	}
@@ -241,7 +246,7 @@ func appendStreamLogInfo(info *relaycommon.RelayInfo, other *model.LogOther, ref
 
 // Attach error-path diagnostics without enrolling legacy/non-200 handlers in
 // strict streaming or settlement. The capture belongs to this attempt only.
-// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因，新流式上游异常或拒绝生成按钮标记，不执行结算；
+// AppendStreamErrorDiagnostic 保存本次失败尝试的响应诊断和独立策略原因；上游异常、拒绝或零输出错误日志生成按钮标记，不执行结算；
 // 我方超时且平台承担成本（退款）的非流式请求另记 admin_info.timeout_absorbed。
 // 参数 c：含尝试采集器和策略原因的上下文；other：已初始化的日志字段，将原地更新；err：底层错误，nil 时不覆盖已有原因。
 func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err error) {
@@ -266,23 +271,54 @@ func AppendStreamErrorDiagnostic(c *gin.Context, other *model.LogOther, err erro
 	deleteLogOtherPublic(other, "claude_diagnostic_available", "stream_diagnostic_available")
 	available := session.DiagnosticAvailable(IsRelayRequestTimeout(c)) ||
 		(reject != "" && session != nil && session.ResponseGate != nil && session.ResponseGate.AllowsStream())
+	var finalized *relaycommon.StreamOutcome
+	if session != nil {
+		// This entry writes an error row (whose output count is zero).
+		// Only extend retention for an accepted stream
+		// with an existing capture and an actual error.
+		available = available || (err != nil && capture != nil && session.ResponseGate != nil && session.ResponseGate.AllowsStream())
+		finalized, _ = other.Snapshot()["stream_result"].(*relaycommon.StreamOutcome)
+		if finalized != nil && finalized.Diagnostic.Attempt != c.GetInt(relaycommon.StreamDiagnosticAttemptKey) {
+			finalized = nil
+		}
+		if finalized != nil {
+			available = available || finalized.DiagnosticAvailable
+		}
+	}
 	if capture == nil && reject == "" && !available {
 		return
 	}
 	capture.SetError(err)
+	if capture != nil {
+		capture.Termination.ObserveContext()
+	}
 	diagnostic := capture.Snapshot()
+	if finalized != nil {
+		// Settlement already selected confirmed/estimated usage and its first
+		// terminal cause. A later error attachment must not replace that evidence
+		// with the capture's transport-only snapshot.
+		diagnostic = finalized.Diagnostic
+	} else if session != nil {
+		snapshot := session.Snapshot()
+		diagnostic.DeliveryEvidence = snapshot.DeliveryEvidence()
+		diagnostic.UsageEvidence = snapshot.Evidence
+		diagnostic.UsageFinal = snapshot.Complete
+	}
+	if capture != nil && capture.Termination != nil {
+		diagnostic.Termination = capture.Termination.Snapshot()
+	}
 	if available {
 		other.SetPublic("stream_diagnostic_available", true)
 		diagnostic.DownstreamBodyBase64 = capture.DownstreamBody()
 		// 即使采集器缺失也保留错误与尝试编号，使无 body 的诊断可以定位。
 		diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
-		if err != nil {
+		if err != nil && finalized == nil {
 			diagnostic.Error = relaycommon.BoundedStreamDiagnosticError(err)
 		}
 	}
 	diagnostic.RejectReason = reject
 	if session != nil && session.ResponseGate != nil {
-		// 错误日志也以明确上游来源为准，本地错误或提前记录日志不应保存原始响应。
+		// 原始响应须已有上游异常/拒绝资格，或满足零输出日志资格。
 		diagnostic = filterStreamDiagnosticResponse(diagnostic, available && capture != nil)
 	}
 	other.SetPublic("stream_diagnostic", diagnostic)
@@ -323,7 +359,7 @@ func deleteLogOtherPublic(other *model.LogOther, keys ...string) {
 }
 
 // filterStreamDiagnosticResponse 为新流程日志过滤原始响应内容，保留独立错误、读取元数据、用量与结算证据。
-// 参数 diagnostic 为按值传入的诊断快照，keepResponse 表示已有上游异常或拒绝资格且采集器存在；返回可入队的副本。
+// 参数 diagnostic 为按值传入的诊断快照，keepResponse 表示已有上游异常、拒绝或零输出日志资格且采集器存在；返回可入队的副本。
 // 历史响应只复制元数据切片后清空内容引用，不修改采集器或固定结果，以供后续异常/Realtime 轮次使用。
 func filterStreamDiagnosticResponse(diagnostic relaycommon.StreamDiagnostic, keepResponse bool) relaycommon.StreamDiagnostic {
 	if keepResponse {

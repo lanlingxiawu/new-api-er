@@ -237,7 +237,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
-  stream_diagnostic_available?: boolean // 仅新流式流程确认的上游异常为 true；Root 诊断按钮据此显示，采集或拒绝原因不触发。
+  stream_diagnostic_available?: boolean // 新流式流程的异常、拒绝或零输出日志可查看 Root 诊断；此标记不等于上游故障。
   stream_diagnostic_attempt?: number // 本条日志的中转尝试编号，历史记录缺省按 0 处理。
   /** 可公开的流式计费摘要，不含原始响应、底层原因或详细用量证据。 */
   stream_result?: {
@@ -247,6 +247,8 @@ export interface LogOtherData {
     confirmed_usage: boolean // 是否含上游确认的用量字段，显式 0 仍是确认字段。
     usage_source: 'none' | 'upstream' | 'estimated' | 'mixed' // 不计费、上游确认、估算或混合来源。
     settlement_state: 'pending' | 'settled' | 'released' | 'failed' | 'partial' // 待结算、完成、释放预扣、失败或部分提交。
+    intended_quota?: number // 本次策略计划收取的额度；0 表示应退回预扣。历史日志可能没有该字段。
+    reserved_quota?: number // 结算前实际预扣的额度，用于和计划收费对照。历史日志可能没有该字段。
   }
   admin_info?: {
     user_channel_routing?: {

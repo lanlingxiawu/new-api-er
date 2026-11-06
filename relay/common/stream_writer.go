@@ -75,6 +75,7 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 		if r := recover(); r != nil {
 			n = 0
 			err = errors.New("downstream write panic")
+			w.session.Termination.Observe("gateway", "panic", err)
 			w.writeErr = err
 			w.session.ClientFailed(err)
 		}
@@ -94,6 +95,7 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 			err = io.ErrShortWrite
 		}
 		if err != nil {
+			w.session.Termination.Observe("downstream", "write", err)
 			w.writeErr = err
 			w.session.ClientFailed(err)
 		} else {
@@ -139,6 +141,7 @@ func (w *StreamWriter) Write(p []byte) (n int, err error) {
 			err = io.ErrShortWrite
 		}
 		if err != nil {
+			w.session.Termination.Observe("downstream", "write", err)
 			w.writeErr = err
 			w.session.ClientFailed(err)
 			return 0, err
@@ -169,6 +172,7 @@ func (w *StreamWriter) FlushError() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.New("downstream flush panic")
+			w.session.Termination.Observe("gateway", "panic", err)
 			w.writeErr = err
 			w.session.ClientFailed(err)
 		}
@@ -189,6 +193,7 @@ func (w *StreamWriter) FlushError() (err error) {
 	}
 	err = http.NewResponseController(writer).Flush()
 	if err != nil {
+		w.session.Termination.Observe("downstream", "flush", err)
 		w.writeErr = err
 		w.session.ClientFailed(err)
 		w.delivered = nil

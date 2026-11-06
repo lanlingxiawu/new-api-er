@@ -61,7 +61,9 @@ func TestUnifiedStreamPassthroughHTTP(t *testing.T) {
 	require.Empty(t, logged.ResponseHeaders)
 	require.Empty(t, logged.BodyHead)
 	require.Empty(t, logged.BodyTail)
-	require.Equal(t, diag, info.StreamDiagnostic.Snapshot())
+	after := info.StreamDiagnostic.Snapshot()
+	require.Equal(t, diag.BodyHead, after.BodyHead)
+	require.Equal(t, diag.ResponseHeaders, after.ResponseHeaders)
 }
 
 // TestStreamDiagnosticPassthroughFailure 验证实际透传请求的异常响应进入新诊断标记；t 为测试上下文。

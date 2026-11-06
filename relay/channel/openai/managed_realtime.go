@@ -22,15 +22,18 @@ import (
 
 // realtimeStreamAccounting 在单个所有者上累计各轮选择后的用量，已完成轮次不因后续错误被退款。
 type realtimeStreamAccounting struct {
-	usage     *dto.RealtimeUsage         // 最终结算累计，不做旧的逐轮实际扣款。
-	evidence  map[string]int             // 上游各轮确认用量的累计，和估算合计分离。
-	estimated map[string]int             // 已收费估算轮次的累计明细，不把它混入确认映射。
-	sources   map[string]bool            // 出现的收费来源，最终生成 upstream/estimated/mixed/none。
-	effective bool                       // 任一轮成功交付过有效内容。
-	last      *relaycommon.StreamOutcome // 最后一次终止快照，承载底层错误和响应诊断。
-	seen      map[[32]byte]bool          // 最近 response ID 的定长摘要集，不持有 JSON 子串或任意长原 ID。
-	ids       [128][32]byte              // 固定 128 个摘要的淘汰环，轮次之间保留、连接之间隔离。
-	next      int                        // 环形写入位置。
+	usage      *dto.RealtimeUsage                 // 最终结算累计，不做旧的逐轮实际扣款。
+	evidence   map[string]int                     // 上游各轮确认用量的累计，和估算合计分离。
+	estimated  map[string]int                     // 已收费估算轮次的累计明细，不把它混入确认映射。
+	sources    map[string]bool                    // 出现的收费来源，最终生成 upstream/estimated/mixed/none。
+	effective  bool                               // 任一轮成功交付过有效内容。
+	delivery   relaycommon.StreamDeliveryEvidence // Fixed-size evidence across settled rounds.
+	usageFinal bool                               // Every accounted round ended with final usage.
+	rounds     int                                // Distinguishes no response from all complete rounds.
+	last       *relaycommon.StreamOutcome         // 最后一次终止快照，承载底层错误和响应诊断。
+	seen       map[[32]byte]bool                  // 最近 response ID 的定长摘要集，不持有 JSON 子串或任意长原 ID。
+	ids        [128][32]byte                      // 固定 128 个摘要的淘汰环，轮次之间保留、连接之间隔离。
+	next       int                                // 环形写入位置。
 }
 
 // newRealtimeStreamAccounting 创建连接局部账本，不创建资金会话或共享缓存。
@@ -114,6 +117,26 @@ func (a *realtimeStreamAccounting) finishRound(c *gin.Context, info *relaycommon
 		a.sources[info.StreamResult.UsageSource] = true
 	}
 	a.effective = a.effective || snapshot.Effective
+	if round := info.StreamResult.Diagnostic.DeliveryEvidence; round != nil {
+		if a.rounds == 0 {
+			a.delivery.ProtocolComplete = true
+		}
+		a.delivery.Accepted = a.delivery.Accepted || round.Accepted
+		a.delivery.ReceivedResponse = a.delivery.ReceivedResponse || round.ReceivedResponse
+		a.delivery.ProtocolComplete = a.delivery.ProtocolComplete && round.ProtocolComplete
+		a.delivery.Effective = a.delivery.Effective || round.Effective
+		a.delivery.ErrorDelivered = a.delivery.ErrorDelivered || round.ErrorDelivered
+		a.delivery.ReceivedOutputEstimate += round.ReceivedOutputEstimate
+		a.delivery.DeliveredOutputEstimate += round.DeliveredOutputEstimate
+		a.delivery.ReceivedAudioOutputEstimate += round.ReceivedAudioOutputEstimate
+		a.delivery.DeliveredMediaBytes += round.DeliveredMediaBytes
+	}
+	if a.rounds == 0 {
+		a.usageFinal = info.StreamResult.Diagnostic.UsageFinal
+	} else {
+		a.usageFinal = a.usageFinal && info.StreamResult.Diagnostic.UsageFinal
+	}
+	a.rounds++
 	for key, n := range info.StreamResult.Diagnostic.EstimatedUsage {
 		a.estimated[key] += n
 	}
@@ -123,9 +146,10 @@ func (a *realtimeStreamAccounting) finishRound(c *gin.Context, info *relaycommon
 
 // realtimeStreamRead 传递原始 WS 消息，读取工作者不解析、不计费、不访问可复用 Gin 上下文。
 type realtimeStreamRead struct {
-	client bool   // true 表示来自下游连接，false 表示来自上游连接。
-	data   []byte // 原始消息负载，方向由 client 决定，不包含 WS 帧头。
-	err    error  // 本次连接读取错误，交给单一所有者分类和终止。
+	client      bool   // true 表示来自下游连接，false 表示来自上游连接。
+	data        []byte // 原始消息负载，方向由 client 决定，不包含 WS 帧头。
+	err         error  // 本次连接读取错误，交给单一所有者分类和终止。
+	readerPanic bool   // Diagnostic classification only; existing error handling remains unchanged.
 }
 
 // managedRealtimeHandler 使用两个有界读取者和一个写入/计费所有者管理双向连接。
@@ -135,6 +159,7 @@ type realtimeStreamRead struct {
 // 首轮开始前已透传可恢复请求错误且上游正常关闭时，保留空账本；新的请求或回答会取消此例外。
 func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
 	info.IsStream = true
+	termination := info.StreamSession.Termination
 	stop, cancel := context.WithCancel(c.Request.Context())
 	reads := make(chan realtimeStreamRead, 2)
 	var wg sync.WaitGroup
@@ -150,13 +175,16 @@ func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types
 			defer func() {
 				if r := recover(); r != nil {
 					select {
-					case reads <- realtimeStreamRead{client: client, err: fmt.Errorf("websocket reader panic: %v", r)}:
+					case reads <- realtimeStreamRead{client: client, err: fmt.Errorf("websocket reader panic: %v", r), readerPanic: true}:
 					case <-stop.Done():
 					}
 				}
 			}()
 			for {
 				_, data, err := conn.ReadMessage()
+				if err != nil && !client {
+					termination.ObserveUpstreamRead(err)
+				}
 				select {
 				case reads <- realtimeStreamRead{client: client, data: data, err: err}:
 				case <-stop.Done():
@@ -168,7 +196,13 @@ func managedRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types
 			}
 		})
 	}
-	defer func() { cancel(); _ = info.TargetWs.Close(); _ = info.ClientWs.Close(); wg.Wait() }()
+	defer func() {
+		termination.ObserveUpstreamClose("realtime_cleanup")
+		cancel()
+		_ = info.TargetWs.Close()
+		_ = info.ClientWs.Close()
+		wg.Wait()
+	}()
 	a := newRealtimeStreamAccounting()
 	local := &dto.RealtimeUsage{}
 	var outputEstimator service.StreamTokenEstimator // 每轮独立；同一文本的 WS 分片方式不改变收费。
@@ -189,16 +223,25 @@ loop:
 	for {
 		select {
 		case <-stop.Done():
+			termination.ObserveContext()
 			clientGone = true
 			endErr = stop.Err()
 			info.StreamSession.ClientFailed(endErr)
 			break loop
 		case <-idleC:
+			termination.ObserveTimeout("idle", constant.StreamingTimeout)
 			endErr = context.DeadlineExceeded
 			info.StreamSession.Fail(relaycommon.StreamEndReasonTimeout, endErr)
 			break loop
 		case frame := <-reads:
 			if frame.err != nil {
+				if frame.readerPanic {
+					termination.Observe("gateway", "panic", frame.err)
+				} else if frame.client {
+					termination.Observe("downstream", "read", frame.err)
+				} else if active || !websocket.IsCloseError(frame.err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					termination.Observe("upstream", "read", frame.err)
+				}
 				endErr = frame.err
 				clientGone = frame.client
 				if clientGone {
@@ -226,9 +269,11 @@ loop:
 			if err := common.Unmarshal(frame.data, &event); err != nil {
 				endErr = err
 				if frame.client {
+					termination.Observe("downstream", "protocol", err)
 					info.StreamSession.ClientFailed(err)
 					clientGone = true
 				} else {
+					termination.Observe("upstream", "protocol", err)
 					info.StreamDiagnostic.WriteStreamPayload(frame.data)
 					// 嵌套 usage 类型错误可能先被 DTO 拦下；仍先保存原终止 error，再由观察器拒绝其非法用量。
 					if relaycommon.IsStreamErrorEvent("", frame.data) {
@@ -246,6 +291,7 @@ loop:
 				}
 				_ = info.TargetWs.SetWriteDeadline(time.Now().Add(15 * time.Second))
 				if err := info.TargetWs.WriteMessage(websocket.TextMessage, frame.data); err != nil {
+					termination.Observe("upstream", "write", err)
 					info.StreamSession.EndRead(err)
 					endErr = err
 					active = true
@@ -253,6 +299,7 @@ loop:
 				}
 				text, audio, err := service.CountTokenRealtime(info, event, info.UpstreamModelName)
 				if err != nil {
+					termination.Observe("gateway", "protocol", err)
 					endErr = err
 					info.StreamSession.Fail("response_conversion_error", err)
 					active = true
@@ -310,6 +357,7 @@ loop:
 			}
 			_ = info.ClientWs.SetWriteDeadline(time.Now().Add(15 * time.Second))
 			if err := info.ClientWs.WriteMessage(websocket.TextMessage, downstream); err != nil {
+				termination.Observe("downstream", "write", err)
 				info.StreamSession.ClientFailed(err)
 				endErr = err
 				clientGone = true
@@ -342,6 +390,7 @@ loop:
 			if event.Type == "response.audio.delta" || event.Type == "response.output_audio.delta" {
 				// 沿用原音频算法；文本/转写/完整工具参数由交付观察器累计，避免再次逐 delta 相加。
 				if audioErr != nil {
+					termination.Observe("gateway", "protocol", audioErr)
 					endErr = audioErr
 					info.StreamSession.Fail("response_conversion_error", audioErr)
 					break loop
@@ -368,6 +417,7 @@ loop:
 				info.IsFirstRequest = false
 				info.StreamSession.Disable()
 				info.StreamSession = relaycommon.NewStreamSession(types.RelayFormatOpenAIRealtime)
+				info.StreamSession.Termination = termination
 				service.InitStreamReceivedEstimator(info)
 				info.StreamSession.ResponseGate = info.StreamResponseGate // 同一 WS 的后续轮次继承已成功的握手资格。
 				info.StreamSession.BindContext(c.Request.Context())
@@ -411,6 +461,18 @@ loop:
 		endingReason = info.StreamStatus.EndReason
 	}
 	result.Diagnostic = info.StreamDiagnostic.Snapshot()
+	lastSnapshot := info.StreamSession.Snapshot()
+	if a.rounds == 0 {
+		a.delivery = *lastSnapshot.DeliveryEvidence()
+	} else {
+		// A between-round terminal error belongs to this connection but has
+		// no new billable round. Do not count the last round's output twice.
+		a.delivery.Accepted = a.delivery.Accepted || lastSnapshot.Accepted
+		a.delivery.ReceivedResponse = a.delivery.ReceivedResponse || lastSnapshot.ReceivedResponse
+		a.delivery.ErrorDelivered = a.delivery.ErrorDelivered || lastSnapshot.ErrorDelivered
+	}
+	result.Diagnostic.DeliveryEvidence = &a.delivery
+	result.Diagnostic.UsageFinal = a.usageFinal
 	result.Diagnostic.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 	result.DiagnosticAvailable = result.DiagnosticAvailable || info.StreamSession.Snapshot().DiagnosticAvailable(service.IsRelayRequestTimeout(c))
 	result.Diagnostic.UsageEvidence = a.evidence

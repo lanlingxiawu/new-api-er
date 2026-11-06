@@ -161,9 +161,8 @@ func TestXAIModeratedVideoKeepsItsCharge(t *testing.T) {
 			if tc.wantStatus == "IN_PROGRESS" {
 				return
 			}
-			// The native status route answers with xAI's own result, usage
-			// included, and a downstream New API gateway polling it settles
-			// on the same facts.
+			// The native status route hides vendor cost, while a downstream
+			// gateway polling it still settles on the same facts.
 			var data any
 			require.NoError(t, common.UnmarshalJsonStr(tc.body, &data))
 			native, err := plugin.Engine.CallPath(t.Context(), "native", []string{"videoStatus"}, map[string]any{},
@@ -171,7 +170,21 @@ func TestXAIModeratedVideoKeepsItsCharge(t *testing.T) {
 			require.NoError(t, err)
 			nativeBody, err := common.Marshal(native)
 			require.NoError(t, err)
-			assert.JSONEq(t, tc.body, string(nativeBody))
+			var wantNative string
+			switch tc.name {
+			case "delivered video settles on its length":
+				wantNative = `{"request_id":"task_public","status":"done","progress":100,"model":"grok-imagine-video-1.5","video":{"url":"/v1/videos/task_public/content","duration":6,"respect_moderation":true}}`
+			case "moderated output is charged":
+				wantNative = `{"request_id":"task_public","status":"done","progress":100,"video":{"url":"","duration":8,"respect_moderation":false}}`
+			case "failure xAI billed is charged":
+				wantNative = `{"request_id":"task_public","status":"done","progress":100,"error":{"code":"invalid_argument","message":"Content blocked by moderation"},"video":{"respect_moderation":false}}`
+			case "unbilled failure is refunded":
+				wantNative = `{"request_id":"task_public","status":"failed","error":{"code":"internal_error","message":"engine crashed"}}`
+			case "expired result":
+				wantNative = `{"request_id":"task_public","status":"expired"}`
+			}
+			require.NotEmpty(t, wantNative)
+			assert.JSONEq(t, wantNative, string(nativeBody))
 			downstream, err := adaptor.ParseTaskResult(task, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}, nativeBody)
 			require.NoError(t, err)
 			assert.Equal(t, result.Status, downstream.Status)
@@ -206,10 +219,6 @@ func TestXAIVideoRequests(t *testing.T) {
 	inputVideo := map[string]any{"url": "https://cdn.example/in.mp4"}
 	jsonBody := func(value map[string]any) map[string]any { return map[string]any{"kind": "json", "value": value} }
 
-	fifteen := make([]any, 15)
-	for index := range fifteen {
-		fifteen[index] = map[string]any{"url": fmt.Sprintf("https://cdn.example/%d.png", index)}
-	}
 	for _, tc := range []struct {
 		name      string
 		decoder   []string
@@ -285,16 +294,6 @@ func TestXAIVideoRequests(t *testing.T) {
 				"image": map[string]any{"url": map[string]any{"__fileRef": "request_file:input_reference", "encoding": "dataUrl"}},
 			},
 			wantFacts: map[string]any{"seconds": float64(6), "resolution": "720p", "input_images": float64(1), "input_video_seconds": float64(0), "moderated": false},
-		},
-		// xAI checks which inputs a model takes and how many.
-		{
-			name:      "more reference images than xAI documents",
-			decoder:   []string{"native", "createGeneration"},
-			ctx:       map[string]any{"body": jsonBody(map[string]any{"model": "grok-imagine-video-1.5", "prompt": "x", "reference_images": fifteen})},
-			wantModel: "grok-imagine-video-1.5",
-			wantPath:  "/v1/videos/generations",
-			wantBody:  map[string]any{"model": "grok-imagine-video-1.5", "prompt": "x", "reference_images": fifteen, "duration": float64(8), "resolution": "480p"},
-			wantFacts: map[string]any{"seconds": float64(8), "resolution": "480p", "input_images": float64(15), "moderated": false},
 		},
 		{
 			name:      "references on lite",
@@ -457,6 +456,118 @@ func TestXAIVideoRequests(t *testing.T) {
 	}
 }
 
+func TestXAIGenerationInputLimits(t *testing.T) {
+	plugin := newXAIPlugin(t)
+	images := make([]any, 8)
+	keyframes := make([]any, 5)
+	audios := make([]any, 4)
+	for index := range images {
+		images[index] = map[string]any{"url": fmt.Sprintf("https://cdn.example/image-%d.png", index)}
+	}
+	for index := range keyframes {
+		keyframes[index] = map[string]any{"image": fmt.Sprintf("https://cdn.example/frame-%d.png", index), "timestamp_s": float64(index+1) / 2}
+	}
+	for index := range audios {
+		audios[index] = map[string]any{"voice_id": fmt.Sprintf("voice-%d", index)}
+	}
+	jsonBody := func(value map[string]any) map[string]any { return map[string]any{"kind": "json", "value": value} }
+
+	for _, tc := range []struct {
+		name    string
+		field   string
+		value   any
+		wantErr string
+	}{
+		{name: "seven reference images", field: "reference_images", value: images[:7]},
+		{name: "eighth reference image", field: "reference_images", value: images, wantErr: "reference_images accepts at most 7 items"},
+		{name: "four keyframes", field: "keyframes", value: keyframes[:4]},
+		{name: "fifth keyframe", field: "keyframes", value: keyframes, wantErr: "keyframes accepts at most 4 items"},
+		{name: "three reference audios", field: "reference_audios", value: audios[:3]},
+		{name: "fourth reference audio", field: "reference_audios", value: audios, wantErr: "reference_audios accepts at most 3 items"},
+		{name: "missing keyframe timestamp", field: "keyframes", value: []any{map[string]any{"image": "https://cdn.example/frame.png"}}, wantErr: "keyframes[0].timestamp_s must be a positive number"},
+		{name: "zero keyframe timestamp", field: "keyframes", value: []any{map[string]any{"image": "https://cdn.example/frame.png", "timestamp_s": 0}}, wantErr: "keyframes[0].timestamp_s must be a positive number"},
+		{name: "negative keyframe timestamp", field: "keyframes", value: []any{map[string]any{"image": "https://cdn.example/frame.png", "timestamp_s": -0.5}}, wantErr: "keyframes[0].timestamp_s must be a positive number"},
+		{name: "nonfinite keyframe timestamp", field: "keyframes", value: []any{map[string]any{"image": "https://cdn.example/frame.png", "timestamp_s": "Infinity"}}, wantErr: "keyframes[0].timestamp_s must be a positive number"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{"model": "grok-imagine-video-1.5", "prompt": "a film"}
+			body[tc.field] = tc.value
+			intent, err := callXAI(t, plugin, []string{"native", "createGeneration"}, map[string]any{"body": jsonBody(body)})
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			requestBody, ok := intent["requestBody"].(map[string]any)
+			require.True(t, ok)
+			assert.Len(t, requestBody[tc.field], len(tc.value.([]any)))
+			if tc.field == "keyframes" {
+				frames, ok := requestBody["keyframes"].([]any)
+				require.True(t, ok)
+				first, ok := frames[0].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, float64(0.5), first["timestamp_s"])
+			}
+		})
+	}
+
+	t.Run("Responses metadata cannot bypass the keyframe limit", func(t *testing.T) {
+		_, err := callXAI(t, plugin, []string{"protocols", "openai_responses", "decodeRequest"}, map[string]any{
+			"model": "grok-imagine-video-1.5",
+			"body":  jsonBody(map[string]any{"model": "grok-imagine-video-1.5", "input": "a film", "metadata": map[string]any{"keyframes": keyframes}}),
+		})
+		require.ErrorContains(t, err, "keyframes accepts at most 4 items")
+	})
+	t.Run("driver validates stored request body too", func(t *testing.T) {
+		_, err := callXAI(t, plugin, []string{"buildSubmitRequest"}, map[string]any{
+			"model": "grok-imagine-video-1.5", "upstreamModel": "grok-imagine-video-1.5", "action": "reference_to_video",
+			"requestBody": map[string]any{"prompt": "a film", "reference_images": images}, "baseUrl": "https://api.x.ai", "apiKey": "test-key",
+		})
+		require.ErrorContains(t, err, "reference_images accepts at most 7 items")
+	})
+}
+
+func TestXAINativeStatusPublishesPublicIDWithoutVendorCost(t *testing.T) {
+	plugin := newXAIPlugin(t)
+	for _, tc := range []struct {
+		name       string
+		taskStatus string
+		data       map[string]any
+		wantStatus string
+		wantHTTP   any
+	}{
+		{name: "completed", taskStatus: "SUCCESS", data: map[string]any{"request_id": "vendor-private", "status": "done", "video": map[string]any{"url": "https://vidgen.x.ai/video.mp4", "duration": 6}, "usage": map[string]any{"cost_in_usd_ticks": 8500000000}}, wantStatus: "done"},
+		{name: "billed failure", taskStatus: "SUCCESS", data: map[string]any{"request_id": "vendor-private", "status": "failed", "error": map[string]any{"code": "invalid_argument", "message": "blocked"}, "usage": map[string]any{"cost_in_usd_ticks": 500000000}}, wantStatus: "done"},
+		{name: "unbilled failure", taskStatus: "FAILURE", data: map[string]any{"request_id": "vendor-private", "status": "failed", "error": map[string]any{"code": "internal_error", "message": "failed"}, "usage": map[string]any{"cost_in_usd_ticks": 0}}, wantStatus: "failed"},
+		{name: "pending snapshot", taskStatus: "IN_PROGRESS", data: map[string]any{"request_id": "vendor-private", "status": "pending", "progress": 40, "usage": map[string]any{"cost_in_usd_ticks": 5}}, wantStatus: "pending", wantHTTP: float64(202)},
+		{name: "submission fallback", taskStatus: "SUBMITTED", data: map[string]any{"request_id": "vendor-private"}, wantStatus: "pending", wantHTTP: float64(202)},
+		{name: "poll failure fallback", taskStatus: "FAILURE", data: map[string]any{"status": "pending"}, wantStatus: "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := callXAI(t, plugin, []string{"native", "videoStatus"}, map[string]any{}, map[string]any{
+				"task_id": "task_public", "status": tc.taskStatus, "data": tc.data,
+			})
+			require.NoError(t, err)
+			body := response
+			if tc.wantHTTP != nil {
+				assert.Equal(t, tc.wantHTTP, response["__status"])
+				var ok bool
+				body, ok = response["__body"].(map[string]any)
+				require.True(t, ok)
+			}
+			assert.Equal(t, "task_public", body["request_id"])
+			assert.Equal(t, tc.wantStatus, body["status"])
+			assert.NotContains(t, body, "usage", "vendor cost must stay in private task data")
+			if tc.name == "billed failure" {
+				assert.Equal(t, map[string]any{"respect_moderation": false}, body["video"])
+				downstream, err := callXAI(t, plugin, []string{"parseTaskResult"}, map[string]any{}, body, map[string]any{"status": 200})
+				require.NoError(t, err)
+				assert.Equal(t, "SUCCESS", downstream["status"], "a downstream gateway still recognizes the charged failure")
+			}
+		})
+	}
+}
+
 // Clients see why a charged task has no video, and a downstream gateway
 // running this plugin reads the native status as charged too.
 func TestXAIModeratedTaskPresentation(t *testing.T) {
@@ -468,10 +579,9 @@ func TestXAIModeratedTaskPresentation(t *testing.T) {
 	status, err := callXAI(t, plugin, []string{"native", "videoStatus"}, map[string]any{}, map[string]any{"task_id": "task_public", "status": "SUCCESS", "data": billedFailure})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{
-		"status": "done", "progress": float64(100), "video": map[string]any{"respect_moderation": false},
-		"error":   map[string]any{"code": "invalid_argument", "message": "Content blocked by moderation"},
-		"usage":   map[string]any{"cost_in_usd_ticks": float64(500000000)},
-	}, status, "the moderated result keeps the usage that shows it was charged")
+		"request_id": "task_public", "status": "done", "progress": float64(100), "video": map[string]any{"respect_moderation": false},
+		"error": map[string]any{"code": "invalid_argument", "message": "Content blocked by moderation"},
+	}, status, "the moderated result signals the charge without exposing the vendor cost")
 	downstream, err := callXAI(t, plugin, []string{"parseTaskResult"}, map[string]any{}, status, map[string]any{"status": 200})
 	require.NoError(t, err)
 	assert.Equal(t, "SUCCESS", downstream["status"])
@@ -481,15 +591,15 @@ func TestXAIModeratedTaskPresentation(t *testing.T) {
 
 	stalled, err := callXAI(t, plugin, []string{"native", "videoStatus"}, map[string]any{}, map[string]any{"task_id": "task_public", "status": "FAILURE", "fail_reason": "poll failures", "data": map[string]any{"status": "pending", "progress": 10}})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]any{"status": "failed", "error": map[string]any{"code": "internal_error", "message": "poll failures"}}, stalled)
+	assert.Equal(t, map[string]any{"request_id": "task_public", "status": "failed", "error": map[string]any{"code": "internal_error", "message": "poll failures"}}, stalled)
 
 	// xAI answers a pending video with 202.
 	pending, err := callXAI(t, plugin, []string{"native", "videoStatus"}, map[string]any{}, map[string]any{"task_id": "task_public", "status": "IN_PROGRESS", "data": map[string]any{"status": "pending", "progress": 40}})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]any{"__status": float64(202), "__body": map[string]any{"status": "pending", "progress": float64(40)}}, pending)
+	assert.Equal(t, map[string]any{"__status": float64(202), "__body": map[string]any{"request_id": "task_public", "status": "pending", "progress": float64(40)}}, pending)
 	created, err := callXAI(t, plugin, []string{"native", "videoStatus"}, map[string]any{}, map[string]any{"task_id": "task_public", "status": "SUBMITTED", "progress": "0%", "data": map[string]any{"request_id": "task_public"}})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]any{"__status": float64(202), "__body": map[string]any{"status": "pending", "progress": float64(0)}}, created)
+	assert.Equal(t, map[string]any{"__status": float64(202), "__body": map[string]any{"request_id": "task_public", "status": "pending", "progress": float64(0)}}, created)
 
 	filtered := map[string]any{"task_id": "task_public", "status": "SUCCESS", "data": map[string]any{"status": "done", "video": map[string]any{"url": "", "duration": 8, "respect_moderation": false}}}
 	video, err := callXAI(t, plugin, []string{"protocols", "openai_video", "render"}, map[string]any{}, filtered)

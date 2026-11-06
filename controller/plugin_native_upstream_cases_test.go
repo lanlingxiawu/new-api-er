@@ -272,6 +272,8 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
+	enableRelayLogPipelineForTest(t)
+	drainRelayLogsForTest(t)
 
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
@@ -280,11 +282,24 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 	previousLogConsume := common.LogConsumeEnabled
 	previousRedisEnabled := common.RedisEnabled
 	previousDeadline := constant.TaskPluginProtocolTimeoutSeconds
-	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}))
-	model.DB = database
-	model.LOG_DB = database
+	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	database := model.DB
+	if database == nil {
+		// The integration harness owns real databases when configured. The
+		// fallback must share one SQLite connection with accounting workers.
+		var err error
+		database, err = gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+		require.NoError(t, err)
+		sqlDB, err := database.DB()
+		require.NoError(t, err)
+		sqlDB.SetMaxOpenConns(1)
+		require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.Token{}, &model.ChannelCostConfig{}, &model.ChannelDailyUsage{}, &model.ChannelLimitPeriodUsage{}, &model.QuotaData{}))
+		model.DB, model.LOG_DB = database, database
+		common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+		model.InitColumnNames()
+		t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	}
+	logDatabase := model.LOG_DB
 	common.MemoryCacheEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
@@ -301,8 +316,12 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 	// 10,000 quota per image.
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"`+seedream+`":0.02}`))
 	t.Cleanup(func() {
+		drainRelayLogsForTest(t)
+		require.NoError(t, database.Callback().Create().Remove("test:fail_task_insert"))
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
+		common.SetDatabaseTypes(previousMainType, previousLogType)
+		model.InitColumnNames()
 		common.MemoryCacheEnabled = previousMemoryCache
 		common.BatchUpdateEnabled = previousBatchUpdate
 		common.LogConsumeEnabled = previousLogConsume
@@ -310,7 +329,12 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 		constant.TaskPluginProtocolTimeoutSeconds = previousDeadline
 		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPrices))
 	})
-	require.NoError(t, database.Create(&model.User{Id: 7, Username: "relayed-stream-user", Group: "default", Quota: 1_000_000}).Error)
+	user := mkUser(t, func(user *model.User) { user.Quota = 1_000_000 })
+	t.Cleanup(func() {
+		drainRelayLogsForTest(t)
+		require.NoError(t, logDatabase.Where("user_id = ?", user.Id).Delete(&model.Log{}).Error)
+		require.NoError(t, database.Where("user_id = ?", user.Id).Delete(&model.Task{}).Error)
+	})
 
 	const image = `data: {"type":"image_generation.partial_succeeded","model":"` + seedream + `","created":1,"image_index":0,"url":"https://cdn.example/0.png","size":"2048x2048"}` + "\n\n"
 	const completed = `data: {"type":"image_generation.completed","model":"` + seedream + `","created":1,"usage":{"generated_images":1,"output_tokens":16384,"total_tokens":16384}}` + "\n\n"
@@ -348,9 +372,14 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	channel := model.Channel{Type: constant.ChannelTypeDoubaoVideo, Name: "ark-relayed-stream", Key: "ark-key", BaseURL: &upstream.URL,
-		Status: common.ChannelStatusEnabled, Models: seedream, Group: "default"}
-	require.NoError(t, database.Create(&channel).Error)
+	channel := mkChannel(t, func(channel *model.Channel) {
+		channel.Type, channel.BaseURL, channel.Models = constant.ChannelTypeDoubaoVideo, &upstream.URL, seedream
+	})
+	t.Cleanup(func() {
+		drainRelayLogsForTest(t)
+		require.NoError(t, database.Where("channel_id = ?", channel.Id).Delete(&model.ChannelDailyUsage{}).Error)
+		require.NoError(t, database.Where("channel_id = ?", channel.Id).Delete(&model.ChannelLimitPeriodUsage{}).Error)
+	})
 	generation := pluginruntime.DefaultRegistry.Generation()
 	require.NotNil(t, generation)
 	binding, found := generation.LookupDeclaredRoute(http.MethodPost, "/api/v3/images/generations")
@@ -371,30 +400,31 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 		{"insert_fails", image, 10_000},
 	} {
 		t.Run(tc.prompt, func(t *testing.T) {
-			require.NoError(t, database.Model(&model.User{}).Where("id = ?", 7).Update("quota", 1_000_000).Error)
-			require.NoError(t, database.Where("type = ?", model.LogTypeConsume).Delete(&model.Log{}).Error)
+			require.NoError(t, database.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", 1_000_000).Error)
 			failTaskInsert.Store(tc.prompt == "insert_fails")
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/images/generations", strings.NewReader(`{"model":"`+seedream+`","prompt":"`+tc.prompt+`","stream":true,`+
 				`"sequential_image_generation":"auto","sequential_image_generation_options":{"max_images":3}}`))
 			c.Request.Header.Set("Content-Type", "application/json")
+			requestID := common.NewRequestId()
+			c.Set(common.RequestIdKey, requestID)
 			c.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{Generation: generation, Plugin: binding.Plugin, Route: binding.Route})
-			common.SetContextKey(c, constant.ContextKeyUserId, 7)
+			common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
 			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 			common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
 			common.SetContextKey(c, constant.ContextKeyUserQuota, 1_000_000)
 			middleware.PrepareTaskPluginRoute()(c)
 			require.False(t, c.IsAborted(), recorder.Body.String())
-			require.Nil(t, middleware.SetupContextForSelectedChannel(c, &channel, seedream))
-			billing := &nativeRouteBilling{userID: 7}
+			require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, seedream))
+			billing := &nativeRouteBilling{userID: user.Id}
 			if tc.prompt == "reserve_fails" {
 				billing.reserveErr = errors.New("token quota is not enough")
 			}
-			relayInfo := &relaycommon.RelayInfo{UserId: 7, UserGroup: "default", UsingGroup: "default", UserQuota: 1_000_000, TokenGroup: "default",
+			relayInfo := &relaycommon.RelayInfo{UserId: user.Id, UserGroup: "default", UsingGroup: "default", UserQuota: 1_000_000, TokenGroup: "default",
 				OriginModelName: seedream, Billing: billing,
-				TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: c.GetString("task_action"), PublicTaskID: "task_" + tc.prompt, LockedChannel: &channel}}
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: c.GetString("task_action"), PublicTaskID: "task_" + requestID, LockedChannel: channel}}
 
 			started := time.Now()
 			outcome, taskErr := executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit)
@@ -413,11 +443,12 @@ func TestDoubaoRelayedImageStreamSettlement(t *testing.T) {
 				presentTaskSubmission(c, outcome)
 			}
 			assert.Equal(t, relayed, recorder.Body.String(), "nothing follows the relayed events")
-			var user model.User
-			require.NoError(t, database.First(&user, 7).Error)
-			assert.Equal(t, 1_000_000-tc.wantQuota, user.Quota, "the delivered images are charged")
+			drainRelayLogsForTest(t)
+			var storedUser model.User
+			require.NoError(t, database.First(&storedUser, user.Id).Error)
+			assert.Equal(t, 1_000_000-tc.wantQuota, storedUser.Quota, "the delivered images are charged")
 			var consumeLogs []model.Log
-			require.NoError(t, database.Where("type = ?", model.LogTypeConsume).Find(&consumeLogs).Error)
+			require.NoError(t, logDatabase.Where("request_id = ? AND type = ?", requestID, model.LogTypeConsume).Find(&consumeLogs).Error)
 			require.Len(t, consumeLogs, 1)
 			assert.Equal(t, tc.wantQuota, consumeLogs[0].Quota)
 		})

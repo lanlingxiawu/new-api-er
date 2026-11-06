@@ -26,7 +26,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// TestRealtimeStreamRoundAccounting 已完成轮次保留费用，后续无有效内容的失败轮次不追加收费。
+// TestRealtimeStreamRoundAccounting retains completed rounds and releases
+// failed rounds without effective delivery, even with confirmed usage.
 // 参数 t：测试上下文；不建立实际 WebSocket，不操作真实额度。
 func TestRealtimeStreamRoundAccounting(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -253,6 +254,16 @@ func TestRealtimeStreamBetweenRoundsTermination(t *testing.T) {
 				require.Equal(t, tc.upstreamFail || tc.clientGone || tc.ending == "reservation error", got.outcome.Failed)
 				require.Equal(t, tc.upstreamFail, got.outcome.DiagnosticAvailable)
 				require.Equal(t, "upstream", got.outcome.UsageSource)
+				evidence := got.diagnostic.DeliveryEvidence
+				require.NotNil(t, evidence)
+				require.True(t, evidence.Accepted)
+				require.True(t, evidence.ReceivedResponse)
+				require.True(t, evidence.Effective)
+				require.Positive(t, evidence.DeliveredOutputEstimate)
+				allRoundsComplete := tc.ending != "native error"
+				require.Equal(t, allRoundsComplete, got.diagnostic.UsageFinal)
+				require.Equal(t, allRoundsComplete, evidence.ProtocolComplete)
+				require.Equal(t, tc.wantErrors > 0, evidence.ErrorDelivered)
 				if tc.upstreamFail {
 					require.True(t, got.outcome.Failed)
 					require.NotEmpty(t, got.diagnostic.Error)
@@ -342,6 +353,20 @@ func TestRealtimeStreamWebSocketRounds(t *testing.T) {
 			case u := <-result:
 				diagnostic := <-diagnostics
 				require.NotNil(t, u, "only the failed upstream round has diagnostic eligibility")
+				evidence := diagnostic.DeliveryEvidence
+				require.NotNil(t, evidence)
+				require.True(t, evidence.Accepted)
+				require.True(t, evidence.ReceivedResponse)
+				require.True(t, evidence.Effective)
+				require.Equal(t, !failedSecond, evidence.ProtocolComplete)
+				require.Equal(t, !failedSecond, diagnostic.UsageFinal)
+				require.Equal(t, failedSecond, evidence.ErrorDelivered)
+				outputEstimate := service.EstimateTokenByModel("gpt-4o", "hi")
+				if !failedSecond {
+					outputEstimate += service.EstimateTokenByModel("gpt-4o", "hello")
+				}
+				require.Equal(t, outputEstimate, evidence.ReceivedOutputEstimate)
+				require.Equal(t, outputEstimate, evidence.DeliveredOutputEstimate)
 				if failedSecond {
 					require.Contains(t, string(diagnostic.BodyHead)+string(diagnostic.BodyTail), "provider-error")
 					require.NotNil(t, diagnostic.DownstreamBodyBase64)
@@ -412,6 +437,16 @@ func TestRealtimeStreamEmptyClose(t *testing.T) {
 	select {
 	case outcome := <-result:
 		diagnostic := <-diagnostics
+		evidence := diagnostic.DeliveryEvidence
+		require.NotNil(t, evidence)
+		require.True(t, evidence.Accepted)
+		require.False(t, evidence.ReceivedResponse)
+		require.False(t, evidence.ProtocolComplete)
+		require.False(t, evidence.Effective)
+		require.True(t, evidence.ErrorDelivered)
+		require.Zero(t, evidence.ReceivedOutputEstimate)
+		require.Zero(t, evidence.DeliveredOutputEstimate)
+		require.False(t, diagnostic.UsageFinal)
 		require.NotNil(t, diagnostic.DownstreamBodyBase64)
 		require.Equal(t, base64.StdEncoding.EncodeToString(raw), *diagnostic.DownstreamBodyBase64)
 		require.True(t, outcome.Failed)
@@ -419,6 +454,56 @@ func TestRealtimeStreamEmptyClose(t *testing.T) {
 		require.NotEmpty(t, outcome.Diagnostic.Error)
 	case <-time.After(2 * time.Second):
 		require.FailNow(t, "stream workers did not finish")
+	}
+}
+
+func TestRealtimeTerminalErrorDeliveryRequiresSuccessfulWebSocketWrite(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("closed=%t", closed), func(t *testing.T) {
+			connections := make(chan *websocket.Conn, 1)
+			done := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				connections <- conn
+				<-done
+			}))
+			defer server.Close()
+			defer close(done)
+			client, handshake, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			require.NoError(t, err)
+			defer client.Close()
+			var downstream *websocket.Conn
+			select {
+			case downstream = <-connections:
+			case <-time.After(2 * time.Second):
+				require.FailNow(t, "websocket handshake did not finish")
+			}
+			if closed {
+				require.NoError(t, downstream.Close())
+			}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIRealtime, ClientWs: downstream, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o"}}
+			service.BeginStreamAttempt(c, info)
+			info.StreamSession.ObserveWebSocketHandshake(handshake, nil)
+			info.StreamSession.Fail("upstream_error", errors.New("fixture upstream failure"))
+			_ = service.FinalizeStreamUsage(c, info, &dto.Usage{})
+			require.NotNil(t, info.StreamResult.Diagnostic.DeliveryEvidence)
+			require.Equal(t, !closed, info.StreamResult.Diagnostic.DeliveryEvidence.ErrorDelivered)
+			require.Equal(t, !closed, info.StreamSession.Snapshot().ErrorDelivered)
+			require.NoError(t, client.SetReadDeadline(time.Now().Add(2*time.Second)))
+			_, raw, readErr := client.ReadMessage()
+			if closed {
+				require.Error(t, readErr)
+				return
+			}
+			require.NoError(t, readErr)
+			require.Equal(t, "error", gjson.GetBytes(raw, "type").String())
+		})
 	}
 }
 

@@ -32,8 +32,9 @@ type streamToolDeliveries struct {
 
 // commitResponseToolLocked 合并 Responses/Realtime 两类工具完成事件的计量身份，不影响事件转发。
 // 参数 itemID、callID 为可缺失的两类身份，name、args 为本次实际交付的工具名和完整参数。
+// rawInput 标记自定义工具的原始字符串输入，不按普通函数参数校验 JSON。
 // 调用者持有会话锁；缺少共同身份时不按内容推测同一调用，非法候选也不占用已计量身份。
-func (s *StreamSession) commitResponseToolLocked(itemID, callID, name, args string) {
+func (s *StreamSession) commitResponseToolLocked(itemID, callID, name, args string, rawInput bool) {
 	var keys [2]streamToolDeliveryKey
 	for i, id := range [2]string{itemID, callID} {
 		if id != "" {
@@ -59,20 +60,26 @@ func (s *StreamSession) commitResponseToolLocked(itemID, callID, name, args stri
 			}
 		}
 	}
-	// 此路径总是完整事件，在本次调用内创建并移除候选；固定 key 不保留上游长 ID。
+	// 完成事件使用有界身份；自定义工具的 input.done 可从 added 取回工具名称。
 	key := "response:complete"
-	if s.receivedOnly {
+	if s.receivedOnly || rawInput {
 		key = streamResponseToolKey(itemID, callID)
 		if pending := s.tools[key]; pending != nil {
+			if name == "" {
+				name = pending.name.String()
+			}
 			// Completion repeats the full arguments; only its unreceived suffix is new.
-			if strings.HasPrefix(args, pending.args.String()) {
+			if !s.receivedOnly {
+				s.toolBytes -= pending.name.Len() + pending.args.Len()
+				delete(s.tools, key)
+			} else if strings.HasPrefix(args, pending.args.String()) {
 				args = strings.TrimPrefix(args, pending.args.String())
 			} else {
 				args = ""
 			}
 		}
 	}
-	if !s.toolLocked(key, name, args, true, false) || (itemID == "" && callID == "") {
+	if !s.toolLocked(key, name, args, true, false, rawInput) || (itemID == "" && callID == "") {
 		return
 	}
 	if s.toolDeliveries == nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func buildUsageFromGeminiMetadata(metadata *dto.GeminiUsageMetadata, fallbackPromptTokens int) dto.Usage {
@@ -37,6 +38,35 @@ func attachEstimatedGeminiBillingUsage(usage *dto.Usage) *dto.Usage {
 		usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(usage)
 	}
 	return usage
+}
+
+// supplementGeminiMissingPrompt keeps a missing-input estimate in the billing
+// snapshot as well as the converted usage. Original sidecars and reported zero
+// remain authoritative; estimated base input never includes tool input twice.
+func supplementGeminiMissingPrompt(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, metadata *dto.GeminiUsageMetadata, promptReported bool) {
+	if promptReported || metadata == nil || metadata.BillingUsage != nil || usage == nil {
+		return
+	}
+	estimate := info.GetEstimatePromptTokens()
+	if estimate <= 0 {
+		return
+	}
+	billing := dto.CloneBillingUsage(usage.BillingUsage)
+	if billing == nil {
+		// A confirmed zero cache count alone has no nonzero provider snapshot.
+		// Keep the missing-input fallback explicitly estimated in that case.
+		billing = dto.NewEstimatedGeminiChatBillingUsage(usage)
+	}
+	if billing == nil || billing.GeminiUsageMetadata == nil {
+		return
+	}
+	billing.GeminiUsageMetadata.PromptTokenCount = estimate
+	billing.Estimated = true
+	usage.PromptTokens = estimate + billing.GeminiUsageMetadata.ToolUsePromptTokenCount
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	billing.GeminiUsageMetadata.TotalTokenCount = usage.TotalTokens
+	usage.BillingUsage = billing
+	common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 }
 
 // patchGeminiZeroCompletionUsage estimates completion tokens locally when upstream
@@ -210,6 +240,8 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var hasBillableUsageMetadata bool
 	var streamErr error
 	var accumulatedUsageMetadata *dto.GeminiUsageMetadata
+	var hasConfirmedPrompt bool
+	var hasConfirmedCandidates bool
 	var grounding geminiGroundingCounter
 	responseText := strings.Builder{}
 
@@ -252,10 +284,105 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		responseText.WriteString(geminiResponseUsageText(&geminiResponse))
 
-		// 更新使用量统计
-		if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
-			accumulatedUsageMetadata = dto.MergeGeminiUsageMetadataNonZero(accumulatedUsageMetadata, metadata)
-			mappedUsage := buildUsageFromGeminiMetadata(accumulatedUsageMetadata, info.GetEstimatePromptTokens())
+		// The original frame distinguishes missing counters from explicit zero.
+		// Keep this request-local merge separate from the nonzero DTO merge.
+		metadata := geminiResponse.GetUsageMetadata()
+		hasUsage := dto.HasGeminiUsageMetadataTokens(metadata)
+		fallbackPrompt := info.GetEstimatePromptTokens()
+		if metadata != nil {
+			if accumulatedUsageMetadata == nil {
+				accumulatedUsageMetadata = &dto.GeminiUsageMetadata{}
+			}
+			accumulated := accumulatedUsageMetadata
+			previousTotal := accumulated.TotalTokenCount
+			previousParts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
+			rawMetadata := gjson.Get(data, "usageMetadata")
+			totalReported := false
+			for _, field := range []struct {
+				name   string
+				target *int
+			}{
+				{"promptTokenCount", &accumulated.PromptTokenCount},
+				{"toolUsePromptTokenCount", &accumulated.ToolUsePromptTokenCount},
+				{"candidatesTokenCount", &accumulated.CandidatesTokenCount},
+				{"thoughtsTokenCount", &accumulated.ThoughtsTokenCount},
+				{"cachedContentTokenCount", &accumulated.CachedContentTokenCount},
+				{"totalTokenCount", &accumulated.TotalTokenCount},
+			} {
+				n := rawMetadata.Get(field.name)
+				if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
+					continue
+				}
+				*field.target = int(n.Int())
+				hasUsage = true
+				switch field.name {
+				case "promptTokenCount":
+					hasConfirmedPrompt = true
+				case "candidatesTokenCount":
+					hasConfirmedCandidates = true
+				case "totalTokenCount":
+					totalReported = true
+				}
+			}
+			for _, detail := range []struct {
+				name   string
+				target *[]dto.GeminiPromptTokensDetails
+			}{
+				{"promptTokensDetails", &accumulated.PromptTokensDetails},
+				{"toolUsePromptTokensDetails", &accumulated.ToolUsePromptTokensDetails},
+				{"candidatesTokensDetails", &accumulated.CandidatesTokensDetails},
+			} {
+				incoming := rawMetadata.Get(detail.name).Array()
+				if len(incoming) == 0 {
+					continue
+				}
+				// StreamSession has already validated the bounded modality array.
+				// Duplicate modalities remain separate entries and are summed by billing.
+				reported := make(map[string]bool, len(incoming))
+				updates := make([]dto.GeminiPromptTokensDetails, 0, len(incoming))
+				for _, item := range incoming {
+					n := item.Get("tokenCount")
+					if n.Type != gjson.Number || n.Float() != float64(n.Int()) || n.Int() < 0 || n.Int() > 1_000_000_000 {
+						continue
+					}
+					modality := strings.ToUpper(strings.TrimSpace(item.Get("modality").String()))
+					if modality != "TEXT" && modality != "AUDIO" && modality != "IMAGE" {
+						continue
+					}
+					reported[modality] = true
+					updates = append(updates, dto.GeminiPromptTokensDetails{Modality: modality, TokenCount: int(n.Int())})
+				}
+				merged := make([]dto.GeminiPromptTokensDetails, 0, len(*detail.target)+len(updates))
+				for _, previous := range *detail.target {
+					if !reported[previous.Modality] {
+						merged = append(merged, previous)
+					}
+				}
+				*detail.target = append(merged, updates...)
+				hasUsage = true
+			}
+			parts := accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount + accumulated.CandidatesTokenCount + accumulated.ThoughtsTokenCount
+			if !totalReported {
+				// Newly reported components may already be included in the old total.
+				// Only remove reductions; max below accounts for actual increases.
+				accumulated.TotalTokenCount = max(0, previousTotal-max(0, previousParts-parts))
+			}
+			accumulated.TotalTokenCount = max(accumulated.TotalTokenCount, parts)
+			if hasConfirmedCandidates && accumulated.CandidatesTokenCount+accumulated.ThoughtsTokenCount == 0 {
+				// Both conversion and canonical billing may infer output from total.
+				// Once output is explicitly zero, even a later total-only frame cannot revive it.
+				accumulated.TotalTokenCount = accumulated.PromptTokenCount + accumulated.ToolUsePromptTokenCount
+			}
+			if metadata.BillingUsage != nil {
+				// An original provider sidecar retains its existing authority and merge policy.
+				accumulated.BillingUsage = dto.MergeBillingUsageNonZero(accumulated.BillingUsage, metadata.BillingUsage)
+			}
+			if hasConfirmedPrompt {
+				fallbackPrompt = 0
+			}
+		}
+		if hasUsage {
+			mappedUsage := buildUsageFromGeminiMetadata(accumulatedUsageMetadata, fallbackPrompt)
 			*usage = mappedUsage
 			hasBillableUsageMetadata = true
 		}
@@ -285,6 +412,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		attachEstimatedGeminiBillingUsage(usage)
 	} else {
+		supplementGeminiMissingPrompt(c, info, usage, accumulatedUsageMetadata, hasConfirmedPrompt)
 		patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 	}
 
@@ -434,6 +562,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+		supplementGeminiMissingPrompt(c, info, &usage, geminiResponse.GetUsageMetadata(), gjson.GetBytes(responseBody, "usageMetadata.promptTokenCount").Exists())
 
 		var newAPIError *types.NewAPIError
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -471,6 +600,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+	supplementGeminiMissingPrompt(c, info, &usage, geminiResponse.GetUsageMetadata(), gjson.GetBytes(responseBody, "usageMetadata.promptTokenCount").Exists())
 
 	fullTextResponse.Usage = usage
 
@@ -527,10 +657,10 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		})
 	}
 
-	// calculate usage
+	// Embedding usage is input-only. A reported promptTokenCount is billed as
+	// input tokens. Responses that omit usageMetadata, or report a nonpositive
+	// count, keep the local estimate.
 	// https://ai.google.dev/gemini-api/docs/pricing?hl=zh-cn#text-embedding-004
-	// Google has not yet clarified how embedding models will be billed
-	// refer to openai billing method to use input tokens billing
 	// https://platform.openai.com/docs/guides/embeddings#what-are-embeddings
 	var usage *dto.Usage
 	if upstream := geminiResponse.UsageMetadata.GeminiUsageMetadata(); upstream != nil {

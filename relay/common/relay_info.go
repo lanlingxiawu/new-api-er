@@ -51,6 +51,9 @@ type RerankerInfo struct {
 type BuildInToolInfo struct {
 	ToolName  string
 	CallCount int
+	// requestInferred marks the one call inferred from a forced request,
+	// which is not confirmed upstream consumption on an undelivered failure.
+	requestInferred bool
 }
 
 type ResponsesUsageInfo struct {

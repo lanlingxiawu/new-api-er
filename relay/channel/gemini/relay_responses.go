@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -39,6 +40,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	countGeminiBillableFunctionCalls(info, &geminiResponse)
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+		supplementGeminiMissingPrompt(c, info, &usage, geminiResponse.GetUsageMetadata(), gjson.GetBytes(responseBody, "usageMetadata.promptTokenCount").Exists())
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			info.PerformanceBusinessRejection = true
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
@@ -57,6 +59,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	}
 
 	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
+	supplementGeminiMissingPrompt(c, info, &usage, geminiResponse.GetUsageMetadata(), gjson.GetBytes(responseBody, "usageMetadata.promptTokenCount").Exists())
 
 	convertResult, err := service.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &geminiResponse)
 	if err != nil {
@@ -169,6 +172,11 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	if streamErr != nil {
 		return nil, streamErr
 	}
+	// Hosted-tool finalization bypasses service.FinalizeStreamResponse and must
+	// not create completed search items after managed scanning stopped early.
+	if info.StreamSession.Active() && !info.StreamSession.ProtocolComplete() {
+		return usage, nil
+	}
 	hostedEvents, err := hostedBridge.Finalize(state)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -183,7 +191,19 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	}
 
 	if usage != nil {
-		state.SetUsage(usage)
+
+		// Finalization merges the earlier conversion steps' usage in place.
+		// Their fallback estimates must not mutate the adapter's confirmed
+		// zero counts or cache corrections used by settlement.
+		conversionUsage := *usage
+		conversionUsage.PromptTokensDetails = usage.PromptTokensDetails.Clone()
+		if usage.InputTokensDetails != nil {
+			details := usage.InputTokensDetails.Clone()
+			conversionUsage.InputTokensDetails = &details
+		}
+		conversionUsage.BillingUsage = dto.CloneBillingUsage(usage.BillingUsage)
+		state.SetUsage(&conversionUsage)
+
 	}
 	finalResults, err := service.FinalizeStreamResponse(c, info, state)
 	if err != nil {

@@ -73,6 +73,7 @@ func managedProtocolScanner(c *gin.Context, resp *http.Response, info *relaycomm
 		defer close(reads)
 		defer func() {
 			if r := recover(); r != nil {
+				info.StreamSession.Termination.Observe("gateway", "panic", fmt.Errorf("stream reader panic: %v", r))
 				select {
 				case reads <- managedStreamRead{err: fmt.Errorf("stream reader panic: %v", r)}:
 				case <-stop.Done():
@@ -111,7 +112,15 @@ func managedProtocolScanner(c *gin.Context, resp *http.Response, info *relaycomm
 		case <-stop.Done():
 		}
 	})
-	defer func() { cancel(); _ = resp.Body.Close(); <-finished }()
+	defer func() {
+		cancel()
+		captured, ok := resp.Body.(interface{ ObservesStreamTerminationClose() bool })
+		if !ok || !captured.ObservesStreamTerminationClose() {
+			info.StreamSession.Termination.ObserveUpstreamClose("scanner_cleanup")
+		}
+		_ = resp.Body.Close()
+		<-finished
+	}()
 	var idle *time.Timer
 	var idleC <-chan time.Time
 	idleDuration := time.Duration(constant.StreamingTimeout) * time.Second
@@ -136,23 +145,28 @@ func managedProtocolScanner(c *gin.Context, resp *http.Response, info *relaycomm
 	sr.session = info.StreamSession
 	defer func() {
 		if r := recover(); r != nil {
+			info.StreamSession.Termination.Observe("gateway", "panic", fmt.Errorf("stream conversion panic: %v", r))
 			// 本地转换 panic 保留兼容终止标签，但不冒充已确认的上游协议异常。
 			info.StreamSession.FailRelay("upstream_protocol_error", fmt.Errorf("stream conversion panic: %v", r))
 		}
 	}()
 	for {
 		if c.Request.Context().Err() != nil {
+			info.StreamSession.Termination.ObserveContext()
 			return
 		}
 		select {
 		case <-c.Request.Context().Done():
+			info.StreamSession.Termination.ObserveContext()
 			return
 		case <-idleC:
+			info.StreamSession.Termination.ObserveTimeout("idle_timeout", constant.StreamingTimeout)
 			info.StreamSession.Fail(relaycommon.StreamEndReasonTimeout, context.DeadlineExceeded)
 			return
 		case <-pingC:
 			ExtendWriteDeadline(c) // 保活也续期，避免沿用上次正文写入的过期期限。
 			if err := PingData(c); err != nil {
+				info.StreamSession.Termination.Observe("downstream", "ping", err)
 				info.StreamSession.ClientFailed(err)
 				return
 			}

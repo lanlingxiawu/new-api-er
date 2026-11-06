@@ -2,6 +2,32 @@ package common
 
 import "net/http"
 
+// StreamDeliveryEvidence records fixed-size observations without message content.
+// ReceivedResponse includes metadata; output estimates are not provider usage or
+// proof of client consumption. Effective requires a complete write and flush.
+type StreamDeliveryEvidence struct {
+	Accepted                    bool  `json:"accepted"`
+	ReceivedResponse            bool  `json:"received_response"`
+	ProtocolComplete            bool  `json:"protocol_complete"`
+	Effective                   bool  `json:"effective"`
+	ErrorDelivered              bool  `json:"error_delivered"`
+	ReceivedOutputEstimate      int   `json:"received_output_estimate"`
+	DeliveredOutputEstimate     int   `json:"delivered_output_estimate"`
+	ReceivedAudioOutputEstimate int   `json:"received_audio_output_estimate"`
+	DeliveredMediaBytes         int64 `json:"delivered_media_bytes"`
+}
+
+// DeliveryEvidence detaches the final receive/delivery observations for private
+// diagnostics. It does not inspect raw payloads, change state, or select billing.
+func (s StreamSnapshot) DeliveryEvidence() *StreamDeliveryEvidence {
+	return &StreamDeliveryEvidence{
+		Accepted: s.Accepted, ReceivedResponse: s.ReceivedResponse,
+		ProtocolComplete: s.Complete, Effective: s.Effective, ErrorDelivered: s.ErrorDelivered,
+		ReceivedOutputEstimate: s.ReceivedOutput, DeliveredOutputEstimate: s.EstimatedOutput,
+		ReceivedAudioOutputEstimate: s.ReceivedAudioOutput, DeliveredMediaBytes: s.MediaBytes,
+	}
+}
+
 // IsUpstreamStreamFailure 校验由协议读取者明确给出的上游原因；reason 为首个终止原因，不接受泛化 error 状态。
 // 返回 true 仅用于诊断资格；不修改补发、计费或客户端取消逻辑。
 func IsUpstreamStreamFailure(reason StreamEndReason) bool {
@@ -77,8 +103,14 @@ func (s *StreamSession) observeTransport(resp *http.Response, err error, success
 		s.receivedEstimate = nil
 		s.choices = map[int]bool{}
 		s.claudeStarted = false
+		s.responsesStarted = false
 		s.claudeStop = false
-		s.claudeBlocks = map[int]bool{}
+		s.claudeBlocks = map[int]*streamClaudeBlock{}
+		s.claudeBlockBytes = 0
+		s.claudeTruncatedTool = false
+		s.claudeStopReason = ""
+		s.claudeToolsOnly = false
+		s.claudeLastIndex = -1
 	}
 	s.state.UpstreamStarted = true
 	s.state.TransportFailed = false
@@ -95,6 +127,7 @@ func (s *StreamSession) FailRelay(reason StreamEndReason, err error) {
 	if s.state.Reason != "" {
 		return
 	}
+	s.Termination.Observe("gateway", "protocol", err)
 	s.failLocked(reason, err)
 	if s.state.Reason != "" {
 		s.state.UpstreamFailure = s.state.TransportFailed || (reason == "upstream_incomplete" && (s.state.UpstreamStarted || s.state.Accepted))

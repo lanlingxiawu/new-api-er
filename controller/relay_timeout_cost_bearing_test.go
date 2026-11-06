@@ -181,7 +181,9 @@ func newCostBearingFixture(t *testing.T, opts costBearingOptions) *costBearingFi
 	}
 	f.engine.Use(middleware.Distribute(), middleware.RelayRequestTimeout())
 	f.engine.POST("/v1/chat/completions", func(c *gin.Context) { Relay(c, types.RelayFormatOpenAI) })
-	f.engine.POST("/suno/submit/:action", RelayTask)
+	// Match the production plugin router's positional wildcard names. The
+	// pinned route maps s2 back to the plugin's declared action parameter.
+	f.engine.POST("/suno/submit/:s2", RelayTask)
 	f.engine.POST("/mj/submit/imagine", RelayMidjourney)
 	return f
 }

@@ -394,7 +394,7 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	chunkData, err := common.Marshal(chunk)
 	require.NoError(t, err)
 
-	streamBody := []byte("data: " + string(chunkData) + "\n" + "data: [DONE]\n")
+	streamBody := []byte("data: " + strings.Replace(string(chunkData), `"promptTokenCount":0,`, "", 1) + "\n" + "data: [DONE]\n")
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewReader(streamBody)),
 	}
@@ -406,7 +406,7 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	require.NotNil(t, usage)
 	require.Equal(t, 20, usage.PromptTokens)
 	require.Equal(t, 100, usage.CompletionTokens)
-	require.Equal(t, 110, usage.TotalTokens)
+	require.Equal(t, 120, usage.TotalTokens)
 }
 
 func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {

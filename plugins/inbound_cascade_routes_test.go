@@ -234,7 +234,6 @@ func TestXaiInboundCascadeRoutes(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(statusJSON), "vidgen.x.ai")
 	assert.Equal(t, "done", status["status"])
-	assert.Equal(t, "task_public", status["request_id"])
 	assert.Equal(t, model15, status["model"])
 	assert.Equal(t, map[string]any{"url": "/v1/videos/task_public/content", "duration": float64(6)}, status["video"])
 

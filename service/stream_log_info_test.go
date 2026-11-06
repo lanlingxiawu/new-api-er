@@ -71,7 +71,7 @@ func TestClaudeDiagnosticLegacyAndErrorLogPaths(t *testing.T) {
 	require.Equal(t, "private stream cause", other.Snapshot()["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
 }
 
-// TestStreamDiagnosticResponsePersistence 验证新流程双日志入口仅在明确上游异常时保存原始响应；t 为测试上下文。
+// TestStreamDiagnosticResponsePersistence 验证错误日志零输出资格与尚未结算的消费日志过滤相互独立；t 为测试上下文。
 func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 	for _, kind := range []string{"pending", "normal", "refusal", "client", "local", "eof", "read", "json", "protocol", "error", "upstream_then_client", "capture_off"} {
 		t.Run(kind, func(t *testing.T) {
@@ -131,15 +131,16 @@ func TestStreamDiagnosticResponsePersistence(t *testing.T) {
 				info.StreamSession.Fail(relaycommon.StreamEndReason(reason), errors.New("upstream fixture error"))
 			}
 			wantContent := wantAvailable && kind != "capture_off"
+			wantErrorAvailable := wantAvailable || kind != "capture_off"
 			errorOther := model.NewLogOther()
 			AppendStreamErrorDiagnostic(c, errorOther, errors.New("private log cause"))
 			errorSource := info.StreamDiagnostic.Snapshot()
-			if wantAvailable {
+			if wantErrorAvailable {
 				errorSource.Attempt = c.GetInt(relaycommon.StreamDiagnosticAttemptKey)
 			}
-			assertStreamResponseLogContent(t, errorOther, errorSource, wantContent)
+			assertStreamResponseLogContent(t, errorOther, errorSource, wantErrorAvailable && kind != "capture_off")
 			errorFields := errorOther.Snapshot()
-			require.Equal(t, wantAvailable, errorFields["stream_diagnostic_available"] == true)
+			require.Equal(t, wantErrorAvailable, errorFields["stream_diagnostic_available"] == true)
 			require.Equal(t, reject, logOtherAdmin(errorOther)["reject_reason"])
 			require.Equal(t, "private log cause", errorFields["stream_diagnostic"].(relaycommon.StreamDiagnostic).Error)
 			if kind != "pending" {

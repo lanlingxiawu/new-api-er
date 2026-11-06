@@ -1,7 +1,9 @@
 package common
 
 import (
+	"errors"
 	"github.com/gin-gonic/gin"
+	"io"
 	"net/http"
 )
 
@@ -23,7 +25,22 @@ func (w *DownstreamCaptureWriter) Unwrap() http.ResponseWriter { return w.Respon
 
 // Write 先执行底层写入，再仅复制已接受的 p[:n]；返回值和错误原样保留，短写也采集成功部分。
 func (w *DownstreamCaptureWriter) Write(p []byte) (int, error) {
+	if w.capture != nil && w.capture.Termination != nil {
+		defer func() {
+			if value := recover(); value != nil {
+				w.capture.Termination.Observe("gateway", "panic", errors.New("writer panic"))
+				panic(value)
+			}
+		}()
+	}
 	n, err := w.ResponseWriter.Write(p)
+	if w.capture != nil {
+		observed := err
+		if observed == nil && n != len(p) {
+			observed = io.ErrShortWrite
+		}
+		w.capture.Termination.Observe("downstream", "write", observed)
+	}
 	if n > 0 {
 		w.capture.WriteDownstreamPayload(p[:min(n, len(p))])
 	}

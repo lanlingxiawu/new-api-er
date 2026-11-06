@@ -33,13 +33,14 @@ type StreamResponseSnapshot struct {
 
 // StreamResponseCapture 属于一次中转尝试，保留最近四次 SDK 上游响应及单份有界下游正文，不采集请求内容。
 type StreamResponseCapture struct {
-	ResponseGate *StreamResponseGate   // 当前尝试的实际成功响应门控；非流式旧采集器不设置，保持原行为。
-	downstream   *ResponseCapture      // 首次实际写出时分配的下游字节缓冲；受 mu 保护，不在普通 Snapshot 中自动暴露。
-	mu           sync.Mutex            // 保护本尝试响应列表、下游缓冲、遗漏计数及终止错误，不跨网络读写持锁。
-	attempt      int                   // 中转尝试编号，用于日志详情定位。
-	responses    []*streamCapturedBody // 按时间顺序保存的响应读取包装器，最多四个。
-	omitted      int                   // 被保留数量上限淘汰的历史响应数。
-	err          string                // 明确设置的本次尝试终止错误，优先于最后一次读取错误。
+	Termination  *StreamTerminationRecorder // Shared attempt observer, independent of generic/strict protocol ownership.
+	ResponseGate *StreamResponseGate        // 当前尝试的实际成功响应门控；非流式旧采集器不设置，保持原行为。
+	downstream   *ResponseCapture           // 首次实际写出时分配的下游字节缓冲；受 mu 保护，不在普通 Snapshot 中自动暴露。
+	mu           sync.Mutex                 // 保护本尝试响应列表、下游缓冲、遗漏计数及终止错误，不跨网络读写持锁。
+	attempt      int                        // 中转尝试编号，用于日志详情定位。
+	responses    []*streamCapturedBody      // 按时间顺序保存的响应读取包装器，最多四个。
+	omitted      int                        // 被保留数量上限淘汰的历史响应数。
+	err          string                     // 明确设置的本次尝试终止错误，优先于最后一次读取错误。
 }
 
 // WriteDownstreamPayload 记录实际成功写给下游的 HTTP 字节或 WS 载荷，不采集请求与协议帧头。
@@ -82,12 +83,14 @@ func NewStreamResponseCapture(attempt int) *StreamResponseCapture {
 
 // streamCapturedBody 在业务正常读取响应时旁路复制有界字节；不额外读空响应体。
 type streamCapturedBody struct {
-	source    io.ReadCloser          // 实际上游响应体，保留其读取返回值及关闭行为。
-	mu        sync.Mutex             // 保护本响应的字节缓冲和读取状态，底层网络 Read 在锁外执行。
-	data      ResponseCapture        // 前后各 1 KiB 的响应字节缓冲。
-	meta      StreamResponseSnapshot // 状态码、响应头及 EOF/错误等元数据。
-	closeOnce sync.Once              // 确保底层 Close 最多执行一次。
-	closeErr  error                  // 首次关闭的结果，后续 Close 返回相同结果。
+	termination   *StreamTerminationRecorder
+	responseIndex uint64                 // SDK exchange captured when this wrapper was installed.
+	source        io.ReadCloser          // 实际上游响应体，保留其读取返回值及关闭行为。
+	mu            sync.Mutex             // 保护本响应的字节缓冲和读取状态，底层网络 Read 在锁外执行。
+	data          ResponseCapture        // 前后各 1 KiB 的响应字节缓冲。
+	meta          StreamResponseSnapshot // 状态码、响应头及 EOF/错误等元数据。
+	closeOnce     sync.Once              // 确保底层 Close 最多执行一次。
+	closeErr      error                  // 首次关闭的结果，后续 Close 返回相同结果。
 }
 
 // Read 转发底层读取，同时采集成功读到的响应字节并记录 EOF 或读取错误。
@@ -95,6 +98,7 @@ type streamCapturedBody struct {
 // 原样返回读取字节数和错误；即使同时返回数据和错误，数据部分仍被采集。
 func (b *streamCapturedBody) Read(p []byte) (int, error) {
 	n, err := b.source.Read(p)
+	b.termination.observeUpstreamRead(err, b.responseIndex, true)
 	b.mu.Lock()
 	if n > 0 {
 		_, _ = b.data.Write(p[:n])
@@ -111,9 +115,16 @@ func (b *streamCapturedBody) Read(p []byte) (int, error) {
 // Close 只执行一次底层响应关闭，避免清理与 defer 重复关闭同一资源。
 // 接收者 b：响应包装器；无参数；每次均返回首次底层关闭的结果。
 func (b *streamCapturedBody) Close() error {
-	b.closeOnce.Do(func() { b.closeErr = b.source.Close() })
+	b.closeOnce.Do(func() {
+		b.termination.observeUpstreamClose(b.responseIndex, true)
+		b.closeErr = b.source.Close()
+	})
 	return b.closeErr
 }
+
+// ObservesStreamTerminationClose lets cleanup owners avoid recording an old
+// captured body's close against a newer SDK exchange. Close itself records it.
+func (b *streamCapturedBody) ObservesStreamTerminationClose() bool { return b.termination != nil }
 
 // Observe 为已取得的 HTTP 响应接入有界采集，不主动读取响应内容。
 // 接收者 s：本次尝试采集器；参数 resp：上游响应，Body 会被包装；nil 采集器、nil 响应或新流程门控未开放时跳过。
@@ -131,10 +142,21 @@ func (s *StreamResponseCapture) observe(resp *http.Response, err error) {
 	if resp == nil {
 		resp = &http.Response{}
 	}
-	if _, wrapped := resp.Body.(*streamCapturedBody); wrapped {
-		return
+	body := resp.Body
+	for depth := 0; depth < 16; depth++ {
+		if _, wrapped := body.(*streamCapturedBody); wrapped {
+			return
+		}
+		if s.Termination == nil {
+			break // Preserve legacy registration when compatibility is disabled.
+		}
+		wrapper, ok := body.(interface{ UnwrapStream() io.ReadCloser })
+		if !ok {
+			break
+		}
+		body = wrapper.UnwrapStream()
 	}
-	b := &streamCapturedBody{source: resp.Body}
+	b := &streamCapturedBody{source: resp.Body, termination: s.Termination}
 	b.meta.ReadError = BoundedStreamDiagnosticError(err)
 	b.meta.StatusCode = resp.StatusCode
 	b.meta.ResponseHeaders = make(http.Header)
@@ -156,6 +178,7 @@ func (s *StreamResponseCapture) observe(resp *http.Response, err error) {
 		}
 	}
 	if resp.Body != nil {
+		b.responseIndex = s.Termination.beginHTTPResponse()
 		resp.Body = b
 	}
 	s.mu.Lock()
@@ -220,6 +243,7 @@ func (s *StreamResponseCapture) Snapshot() StreamDiagnostic {
 	d := StreamDiagnostic{Attempt: s.attempt, Error: s.err, OmittedResponses: s.omitted}
 	responses := append([]*streamCapturedBody(nil), s.responses...)
 	s.mu.Unlock()
+	d.Termination = s.Termination.Snapshot()
 	for i, b := range responses {
 		b.mu.Lock()
 		part := b.meta
