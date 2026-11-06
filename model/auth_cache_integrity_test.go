@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,27 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+// Redis Cluster hashes the first brace pair. Fence and version keys must
+// share the cache key's slot for the upstream Lua/MGET operations.
+func TestAuthCacheKeysShareClusterHashTag(t *testing.T) {
+	for _, tc := range []struct {
+		cacheKey string
+		related  []string
+	}{
+		{getUserCacheKey(5), []string{getUserAuthFenceKey(5), getUserAuthVersionKey(5)}},
+		{getTokenCacheKey("test-token"), []string{getTokenCacheFenceKey("test-token")}},
+	} {
+		assert.NotContains(t, tc.cacheKey, "{")
+		for _, key := range tc.related {
+			_, suffix, ok := strings.Cut(key, "{")
+			require.True(t, ok)
+			tag, _, ok := strings.Cut(suffix, "}")
+			require.True(t, ok)
+			assert.Equal(t, tc.cacheKey, tag)
+		}
+	}
+}
 
 func TestAuthCacheIntegrityDatabaseMatrix(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
