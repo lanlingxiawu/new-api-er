@@ -2,8 +2,7 @@ package controller
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/smartwalle/alipay/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,26 +155,16 @@ func TestQueryAlipayPlatformPaymentStatus(t *testing.T) {
 func TestQueryInfiniPlatformPaymentStatus(t *testing.T) {
 	originalBaseURL := infiniPlatformStatusBaseURL
 	originalClient := platformStatusHTTPClient
-	originalKey := setting.InfiniApiKey
-	originalSecret := setting.InfiniApiSecret
-	t.Cleanup(func() {
-		infiniPlatformStatusBaseURL = originalBaseURL
-		platformStatusHTTPClient = originalClient
-		setting.InfiniApiKey = originalKey
-		setting.InfiniApiSecret = originalSecret
-	})
-
-	setting.InfiniApiKey = "test-key"
-	setting.InfiniApiSecret = "test-secret"
+	public := infiniV2TestCredentials(t)
+	t.Cleanup(func() { infiniPlatformStatusBaseURL = originalBaseURL; platformStatusHTTPClient = originalClient })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		assert.Equal(t, http.MethodGet, request.Method)
 		assert.Equal(t, "provider id/+", request.URL.Query().Get("order_id"))
-		date := request.Header.Get("Date")
-		signingString := fmt.Sprintf("%s\n%s %s\ndate: %s\n", setting.InfiniApiKey, http.MethodGet, request.URL.RequestURI(), date)
-		mac := hmac.New(sha256.New, []byte(setting.InfiniApiSecret))
-		_, _ = mac.Write([]byte(signingString))
-		expectedSignature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-		assert.Contains(t, request.Header.Get("Authorization"), `signature="`+expectedSignature+`"`)
+		require.Equal(t, "/v2/acquiring/order", request.URL.Path)
+		payload := strings.Join([]string{"INFINI-OPENAPI-V2", request.Header.Get("X-API-Key-ID"), request.Method, request.URL.RequestURI(), request.Header.Get("X-API-Timestamp"), request.Header.Get("X-API-Nonce"), request.Header.Get("Digest")}, "\n") + "\n"
+		signature, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(strings.TrimPrefix(request.Header.Get("Authorization"), `Ed25519 signature="`), `"`))
+		require.NoError(t, err)
+		require.True(t, ed25519.Verify(public, []byte(payload), signature))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"code":0,"message":"","data":{"order_id":"provider id/+","status":"paid","client_reference":"INF-123"}}`)
 	}))
@@ -195,16 +183,8 @@ func TestQueryInfiniPlatformPaymentStatus(t *testing.T) {
 func TestQueryInfiniPlatformPaymentStatusFailures(t *testing.T) {
 	originalBaseURL := infiniPlatformStatusBaseURL
 	originalClient := platformStatusHTTPClient
-	originalKey := setting.InfiniApiKey
-	originalSecret := setting.InfiniApiSecret
-	t.Cleanup(func() {
-		infiniPlatformStatusBaseURL = originalBaseURL
-		platformStatusHTTPClient = originalClient
-		setting.InfiniApiKey = originalKey
-		setting.InfiniApiSecret = originalSecret
-	})
-	setting.InfiniApiKey = "test-key"
-	setting.InfiniApiSecret = "test-secret"
+	infiniV2TestCredentials(t)
+	t.Cleanup(func() { infiniPlatformStatusBaseURL = originalBaseURL; platformStatusHTTPClient = originalClient })
 
 	tests := []struct {
 		name   string
@@ -216,6 +196,9 @@ func TestQueryInfiniPlatformPaymentStatusFailures(t *testing.T) {
 		{name: "business failure", status: http.StatusOK, body: `{"code":42,"message":"denied"}`},
 		{name: "invalid json", status: http.StatusOK, body: `{`},
 		{name: "empty status", status: http.StatusOK, body: `{"code":0,"data":{"order_id":"provider-id"}}`},
+		{name: "missing order id", status: http.StatusOK, body: `{"status":"paid"}`},
+		{name: "wrong order id", status: http.StatusOK, body: `{"order_id":"other","status":"paid"}`},
+		{name: "wrong reference", status: http.StatusOK, body: `{"order_id":"provider-id","status":"paid","client_reference":"other"}`},
 	}
 
 	for _, test := range tests {

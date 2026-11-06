@@ -215,8 +215,8 @@ const BILLING_SECTIONS = [
         }}
         infiniDefaultValues={{
           InfiniEnabled: settings.InfiniEnabled ?? false,
-          InfiniApiKey: settings.InfiniApiKey ?? '',
-          InfiniApiSecret: settings.InfiniApiSecret ?? '',
+          InfiniV2KeyID: settings['infini_setting.key_id'] ?? '',
+          InfiniV2PrivateKey: '',
           InfiniWebhookSecret: settings.InfiniWebhookSecret ?? '',
           InfiniSandbox: settings.InfiniSandbox ?? false,
           InfiniNotifyUrl: settings.InfiniNotifyUrl ?? '',

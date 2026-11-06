@@ -214,8 +214,8 @@ const paymentSchema = z.object({
   WechatMinTopUp: z.coerce.number().min(1),
   WechatNotifyUrl: z.string(),
   InfiniEnabled: z.boolean(),
-  InfiniApiKey: z.string(),
-  InfiniApiSecret: z.string(),
+  InfiniV2KeyID: z.string(),
+  InfiniV2PrivateKey: z.string(),
   InfiniWebhookSecret: z.string(),
   InfiniSandbox: z.boolean(),
   InfiniNotifyUrl: z.string(),
@@ -589,8 +589,8 @@ export function PaymentSettingsSection({
       WechatMinTopUp: values.WechatMinTopUp,
       WechatNotifyUrl: removeTrailingSlash(values.WechatNotifyUrl.trim()),
       InfiniEnabled: values.InfiniEnabled,
-      InfiniApiKey: values.InfiniApiKey.trim(),
-      InfiniApiSecret: values.InfiniApiSecret.trim(),
+      InfiniV2KeyID: values.InfiniV2KeyID.trim(),
+      InfiniV2PrivateKey: values.InfiniV2PrivateKey.trim(),
       InfiniWebhookSecret: values.InfiniWebhookSecret.trim(),
       InfiniSandbox: values.InfiniSandbox,
       InfiniNotifyUrl: removeTrailingSlash(values.InfiniNotifyUrl.trim()),
@@ -675,8 +675,8 @@ export function PaymentSettingsSection({
         initialRef.current.WechatNotifyUrl.trim()
       ),
       InfiniEnabled: initialRef.current.InfiniEnabled,
-      InfiniApiKey: initialRef.current.InfiniApiKey.trim(),
-      InfiniApiSecret: initialRef.current.InfiniApiSecret.trim(),
+      InfiniV2KeyID: initialRef.current.InfiniV2KeyID.trim(),
+      InfiniV2PrivateKey: initialRef.current.InfiniV2PrivateKey.trim(),
       InfiniWebhookSecret: initialRef.current.InfiniWebhookSecret.trim(),
       InfiniSandbox: initialRef.current.InfiniSandbox,
       InfiniNotifyUrl: removeTrailingSlash(
@@ -980,15 +980,21 @@ export function PaymentSettingsSection({
       updates.push({ key: 'InfiniEnabled', value: sanitized.InfiniEnabled })
     }
 
-    if (sanitized.InfiniApiKey !== initial.InfiniApiKey) {
-      updates.push({ key: 'InfiniApiKey', value: sanitized.InfiniApiKey })
+    if (sanitized.InfiniV2KeyID !== initial.InfiniV2KeyID) {
+      updates.push({
+        key: 'infini_setting.key_id',
+        value: sanitized.InfiniV2KeyID,
+      })
     }
 
     if (
-      sanitized.InfiniApiSecret &&
-      sanitized.InfiniApiSecret !== initial.InfiniApiSecret
+      sanitized.InfiniV2PrivateKey &&
+      sanitized.InfiniV2PrivateKey !== initial.InfiniV2PrivateKey
     ) {
-      updates.push({ key: 'InfiniApiSecret', value: sanitized.InfiniApiSecret })
+      updates.push({
+        key: 'infini_setting.private_key',
+        value: sanitized.InfiniV2PrivateKey,
+      })
     }
 
     if (
@@ -1087,6 +1093,8 @@ export function PaymentSettingsSection({
         await updateOption.mutateAsync(update)
       }
 
+      form.setValue('InfiniV2PrivateKey', '')
+
       if (!hasWaffoPancakeChanges) {
         return
       }
@@ -1182,8 +1190,8 @@ export function PaymentSettingsSection({
 
   const infiniValues: InfiniSettingsValues = {
     InfiniEnabled: currentFormValues.InfiniEnabled,
-    InfiniApiKey: currentFormValues.InfiniApiKey,
-    InfiniApiSecret: currentFormValues.InfiniApiSecret,
+    InfiniV2KeyID: currentFormValues.InfiniV2KeyID,
+    InfiniV2PrivateKey: currentFormValues.InfiniV2PrivateKey,
     InfiniWebhookSecret: currentFormValues.InfiniWebhookSecret,
     InfiniSandbox: currentFormValues.InfiniSandbox,
     InfiniNotifyUrl: currentFormValues.InfiniNotifyUrl,

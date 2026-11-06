@@ -248,6 +248,8 @@ const (
 	MsgLogExportColUsageSource                      = "log_export.col.usage_source"
 	MsgLogExportColUseTime                          = "log_export.col.use_time"
 	MsgLogExportColUserAgent                        = "log_export.col.user_agent"
+	MsgLogExportColUserChannelRoutingIds            = "log_export.col.user_channel_routing_ids"
+	MsgLogExportColUserChannelRoutingReason         = "log_export.col.user_channel_routing_reason"
 	MsgLogExportColUserGroupRatio                   = "log_export.col.user_group_ratio"
 	MsgLogExportColUserId                           = "log_export.col.user_id"
 	MsgLogExportColUsername                         = "log_export.col.username"

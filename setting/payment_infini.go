@@ -9,8 +9,8 @@ import (
 
 var (
 	InfiniEnabled       bool
-	InfiniApiKey        string // keyId，用于请求签名
-	InfiniApiSecret     string // HMAC-SHA256 请求签名密钥
+	InfiniApiKey        string // Legacy v1 option, retained for stored configuration compatibility only.
+	InfiniApiSecret     string // Legacy HMAC option; v2 uses infini_setting instead.
 	InfiniWebhookSecret string // HMAC-SHA256 Webhook 验签密钥
 	InfiniSandbox       bool
 	InfiniNotifyUrl     string        // Webhook 回调地址（空则自动推导）

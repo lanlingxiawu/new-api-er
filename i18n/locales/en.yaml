@@ -798,3 +798,6 @@ setting.group_retry_guard_invalid: "Check the group retry settings and numeric l
 relay.body_cache_capacity: "The server is busy. Please reduce concurrent requests and try again later."
 log_export.col.user_channel_routing_reason: "User channel routing"
 log_export.col.user_channel_routing_ids: "Channel IDs"
+payment.infini_v2_unavailable: "Infini payment is unavailable. Please choose another payment method or contact the administrator."
+payment.infini_v2_credentials_invalid: "Enter a valid Infini v2 Key ID and an Ed25519 private key in PKCS#8 PEM format. Leave the private key blank to keep the saved key."
+payment.infini_checkout_failed: "Could not open Infini checkout. Please try again later or choose another payment method."

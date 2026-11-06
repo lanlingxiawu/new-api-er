@@ -63,7 +63,7 @@
 2. 前端将一个或多个 `trade_no` 发送到管理员批量查询接口；单笔查询与批量查询使用同一 API。
 3. 后端在一次数据库查询中读取订单，并根据数据库中的 `payment_provider` 分派：
    - 支付宝：以本地 `trade_no` 作为 `out_trade_no` 调用 SDK `TradeQuery`。
-   - Infini：以本地 `provider_order_id` 调用 `GET /v1/acquiring/order?order_id=...`。Infini 官方文档提供该查询接口，并将 `paid` 定义为已支付：<https://developer.infini.money/docs/en/6-api-ducumentation>。
+   - Infini：以本地 `provider_order_id` 调用 `GET /v2/acquiring/order?order_id=...`，使用 Ed25519 v2 签名。Infini 官方文档提供该查询接口，并将 `paid` 定义为已支付：<https://developer.infini.money/docs/en/6-api-ducumentation>。凭证和迁移说明见 [Infini API v2](infini-api-v2.md)。
 4. 每个订单的平台查询独立执行并规范化状态。
 5. 对成功取得可识别平台响应的订单，后端使用短小、逐行的 GORM `Updates` 写入持久化字段；外部 HTTP 调用不放在数据库事务内。
 6. 只有数据库更新成功的订单才返回 `result = updated`。平台失败或数据库更新失败作为逐项失败返回，不影响同批其他订单。

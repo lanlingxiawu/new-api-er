@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/QuantumNous/new-api/setting/infini_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -126,7 +127,8 @@ func GetOptions(c *gin.Context) {
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
 			strings.HasSuffix(k, "secret") ||
-			strings.HasSuffix(k, "api_key")
+			strings.HasSuffix(k, "api_key") ||
+			k == "infini_setting.private_key"
 		if isSensitiveKey {
 			continue
 		}
@@ -376,6 +378,19 @@ func UpdateOption(c *gin.Context) {
 		option.Value = common.Interface2String(option.Value.(int))
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
+	}
+	if strings.HasPrefix(option.Key, "infini_setting.") {
+		value := strings.TrimSpace(option.Value.(string))
+		if option.Key == "infini_setting.private_key" && value == "" {
+			c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+			return
+		}
+		if err := infini_setting.ValidateOption(option.Key, value); err != nil {
+			logger.LogWarn(c, "Invalid Infini v2 credential setting")
+			common.ApiErrorI18n(c, "payment.infini_v2_credentials_invalid")
+			return
+		}
+		option.Value = value
 	}
 	switch option.Key {
 	case "commission_tier_reset_setting.last_reset_at":
@@ -738,12 +753,21 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	}
-	if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "performance_setting" || parts[0] == "probe_routing_setting" || parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting" || parts[0] == "channel_daily_limit_setting") {
+	if strings.HasPrefix(option.Key, "infini_setting.") {
+		// Publish credentials only after the existing transactional save commits.
+		err = model.UpdateOptionsBulk(map[string]string{option.Key: option.Value.(string)})
+	} else if parts := strings.SplitN(option.Key, ".", 2); len(parts) == 2 && (parts[0] == "performance_setting" || parts[0] == "probe_routing_setting" || parts[0] == "rate_limit_setting" || parts[0] == "db_pool_setting" || parts[0] == "user_session_setting" || parts[0] == "relay_timeout_setting" || parts[0] == "veridrop_monitor_setting" || parts[0] == "channel_daily_limit_setting") {
 		_, err = model.SaveConfigGroup(parts[0], map[string]string{parts[1]: option.Value.(string)})
 	} else {
 		err = model.UpdateOption(option.Key, option.Value.(string))
 	}
 	if err != nil {
+		if strings.HasPrefix(option.Key, "infini_setting.") {
+			// Driver errors can contain rejected values; SQL logging owns their details.
+			logger.LogError(c, fmt.Sprintf("failed to persist Infini v2 credential (database error type=%T)", err))
+			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			return
+		}
 		if errors.Is(err, system_setting.ErrPasskeyRPIDInvalid) {
 			writeSecurityOperationError(c, err)
 			return

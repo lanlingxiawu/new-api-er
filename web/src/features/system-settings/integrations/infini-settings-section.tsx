@@ -25,8 +25,8 @@ import { SettingsSwitchField } from '../components/settings-form-layout'
 
 export interface InfiniSettingsValues {
   InfiniEnabled: boolean
-  InfiniApiKey: string
-  InfiniApiSecret: string
+  InfiniV2KeyID: string
+  InfiniV2PrivateKey: string
   InfiniWebhookSecret: string
   InfiniSandbox: boolean
   InfiniNotifyUrl: string
@@ -96,7 +96,7 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
       <Alert>
         <AlertDescription className='text-xs'>
           {t(
-            'Register at business.infini.money, create an API key in the Developer page, and configure the webhook endpoint. Keep all secrets server-side only.'
+            'Upload your Ed25519 public key in the Infini console to obtain a v2 Key ID. Configure /api/infini/webhook in the console. Leave the private key blank to keep the saved key.'
           )}
         </AlertDescription>
       </Alert>
@@ -118,18 +118,24 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
 
       <div className='grid grid-cols-2 gap-4'>
         <div className='grid gap-1.5'>
-          <Label>{t('API Key (keyId)')}</Label>
+          <Label htmlFor='infini-v2-key-id'>{t('Infini v2 Key ID')}</Label>
           <Input
-            value={values.InfiniApiKey}
-            onChange={(e) => onValueChange('InfiniApiKey', e.target.value)}
+            id='infini-v2-key-id'
+            autoComplete='off'
+            value={values.InfiniV2KeyID}
+            onChange={(e) => onValueChange('InfiniV2KeyID', e.target.value)}
           />
         </div>
         <div className='grid gap-1.5'>
-          <Label>{t('API Secret (signing key)')}</Label>
-          <Input
-            type='password'
-            value={values.InfiniApiSecret}
-            onChange={(e) => onValueChange('InfiniApiSecret', e.target.value)}
+          <Label htmlFor='infini-v2-private-key'>{t('Ed25519 private key (PKCS#8 PEM)')}</Label>
+          <Textarea
+            id='infini-v2-private-key'
+            rows={5}
+            autoComplete='off'
+            spellCheck={false}
+            className='font-mono text-xs'
+            value={values.InfiniV2PrivateKey}
+            onChange={(e) => onValueChange('InfiniV2PrivateKey', e.target.value)}
           />
         </div>
       </div>
@@ -225,15 +231,7 @@ export function InfiniSettingsSection({ values, onValueChange }: Props) {
         </div>
       </div>
 
-      <div className='grid grid-cols-3 gap-4'>
-        <div className='grid gap-1.5'>
-          <Label>{t('Webhook callback URL')}</Label>
-          <Input
-            placeholder='https://example.com/api/infini/webhook'
-            value={values.InfiniNotifyUrl}
-            onChange={(e) => onValueChange('InfiniNotifyUrl', e.target.value)}
-          />
-        </div>
+      <div className='grid grid-cols-2 gap-4'>
         <div className='grid gap-1.5'>
           <Label>{t('Payment success URL')}</Label>
           <Input

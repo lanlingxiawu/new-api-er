@@ -2,9 +2,9 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/infini_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -28,68 +29,34 @@ import (
 	"github.com/thanhpk/randstr"
 )
 
-// ─── Infini 请求签名 ───────────────────────────────────────────────────────────
-
-// infiniGMTNow 返回 RFC 1123 GMT 格式的当前时间
-func infiniGMTNow() string {
-	return time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
-}
-
-// infiniSignedHeaders 为 Infini API 构建带 HMAC-SHA256 签名的请求头。
-// 签名串格式（末尾含换行）：
-//
-//	{keyId}\n{METHOD} {path}\ndate: {GMT}\n
-func infiniSignedHeaders(method, path string, body []byte) map[string]string {
-	keyId := strings.TrimSpace(setting.InfiniApiKey)
-	secret := strings.TrimSpace(setting.InfiniApiSecret)
-	gmt := infiniGMTNow()
-
-	signingString := fmt.Sprintf("%s\n%s %s\ndate: %s\n", keyId, method, path, gmt)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingString))
-	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-
-	headers := map[string]string{
-		"Date": gmt,
-		"Authorization": fmt.Sprintf(
-			`Signature keyId="%s",algorithm="hmac-sha256",headers="@request-target date",signature="%s"`,
-			keyId, signature,
-		),
-	}
-
-	if len(body) > 0 {
-		h := sha256.Sum256(body)
-		headers["Digest"] = "SHA-256=" + base64.StdEncoding.EncodeToString(h[:])
-		headers["Content-Type"] = "application/json"
-	}
-	return headers
-}
+// Infini API traffic uses a separate client from AI relay traffic.
+var infiniAPIBaseURL = setting.GetInfiniBaseUrl
+var infiniHTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 // infiniPost 向 Infini API 发送 POST 请求并返回原始响应体
-func infiniPost(path string, payload any) ([]byte, int, error) {
+func infiniPost(ctx context.Context, path string, payload any) ([]byte, int, error) {
 	body, err := common.Marshal(payload)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	url := setting.GetInfiniBaseUrl() + path
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	url := infiniAPIBaseURL() + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 
-	for k, v := range infiniSignedHeaders("POST", path, body) {
-		req.Header.Set(k, v)
+	if err := infini_setting.SignRequest(req, body); err != nil {
+		return nil, 0, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := infiniHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxPlatformStatusResponseSize))
 	return respBody, resp.StatusCode, err
 }
 
@@ -361,6 +328,12 @@ func RequestInfiniPay(c *gin.Context) {
 		return
 	}
 
+	if !infini_setting.CredentialsConfigured() || strings.TrimSpace(setting.InfiniWebhookSecret) == "" {
+		logger.LogWarn(c, "Infini v2 credentials are missing or invalid")
+		common.ApiErrorI18n(c, "payment.infini_v2_unavailable")
+		return
+	}
+
 	tradeNo := fmt.Sprintf("INFINI-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 
 	topUp := &model.TopUp{
@@ -379,11 +352,6 @@ func RequestInfiniPay(c *gin.Context) {
 		return
 	}
 
-	callbackAddr := service.GetCallbackAddress()
-	notifyUrl := callbackAddr + "/api/infini/webhook"
-	if setting.InfiniNotifyUrl != "" {
-		notifyUrl = setting.InfiniNotifyUrl
-	}
 	returnUrl := paymentReturnPath("/console/topup?show_history=true")
 	if setting.InfiniReturnUrl != "" {
 		returnUrl = setting.InfiniReturnUrl
@@ -401,7 +369,6 @@ func RequestInfiniPay(c *gin.Context) {
 		"order_desc":       fmt.Sprintf("Recharge %d credits", req.Amount),
 		"success_url":      returnUrl,
 		"failure_url":      failUrl,
-		"notify_url":       notifyUrl,
 	}
 
 	// 若管理员配置了 pay_methods，传入以限定结账页支付方式
@@ -413,40 +380,50 @@ func RequestInfiniPay(c *gin.Context) {
 		}
 	}
 
-	respBody, statusCode, err := infiniPost("/v1/acquiring/order", orderPayload)
+	respBody, statusCode, err := infiniPost(c.Request.Context(), "/v2/acquiring/order", orderPayload)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Infini 创建订单请求失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
 		topUp.Status = common.TopUpStatusFailed
 		_ = topUp.Update()
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		common.ApiErrorI18n(c, "payment.infini_checkout_failed")
 		return
 	}
 
 	var result struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			CheckoutUrl string `json:"checkout_url"`
-			OrderId     string `json:"order_id"`
+		Code        *int   `json:"code"`
+		OrderID     string `json:"order_id"`
+		CheckoutURL string `json:"checkout_url"`
+		Data        *struct {
+			CheckoutURL string `json:"checkout_url"`
+			OrderID     string `json:"order_id"`
 		} `json:"data"`
 	}
-	if err := common.Unmarshal(respBody, &result); err != nil || statusCode != http.StatusOK || result.Code != 0 {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Infini 创建订单业务失败 user_id=%d trade_no=%s status=%d code=%d message=%q body=%s",
-			id, tradeNo, statusCode, result.Code, result.Message, string(respBody)))
+	if err := common.Unmarshal(respBody, &result); err != nil || statusCode != http.StatusOK || (result.Code != nil && *result.Code != 0) {
+		logger.LogWarn(c, fmt.Sprintf("Infini v2 order rejected user_id=%d trade_no=%s status=%d", id, tradeNo, statusCode))
 		topUp.Status = common.TopUpStatusFailed
 		_ = topUp.Update()
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		common.ApiErrorI18n(c, "payment.infini_checkout_failed")
+		return
+	}
+	if result.Data != nil {
+		result.OrderID, result.CheckoutURL = result.Data.OrderID, result.Data.CheckoutURL
+	}
+	if strings.TrimSpace(result.CheckoutURL) == "" {
+		logger.LogError(c, "Infini v2 order response is missing checkout_url")
+		topUp.Status = common.TopUpStatusFailed
+		_ = topUp.Update()
+		common.ApiErrorI18n(c, "payment.infini_checkout_failed")
 		return
 	}
 
 	// provider_order_id 是 webhook 双向绑定的关键字段：必须非空且保存成功
 	// 任一条件不满足都标记订单 failed 并拒绝返回 checkout_url，防止绑定降级
-	infiniOrderId := strings.TrimSpace(result.Data.OrderId)
+	infiniOrderId := strings.TrimSpace(result.OrderID)
 	if infiniOrderId == "" {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Infini 响应缺少 order_id，拒绝返回支付链接 user_id=%d trade_no=%s", id, tradeNo))
 		topUp.Status = common.TopUpStatusFailed
 		_ = topUp.Update()
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		common.ApiErrorI18n(c, "payment.infini_checkout_failed")
 		return
 	}
 	topUp.ProviderOrderId = infiniOrderId
@@ -456,7 +433,7 @@ func RequestInfiniPay(c *gin.Context) {
 			id, tradeNo, infiniOrderId, err.Error()))
 		topUp.Status = common.TopUpStatusFailed
 		_ = topUp.Update()
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+		common.ApiErrorI18n(c, "payment.infini_checkout_failed")
 		return
 	}
 
@@ -466,7 +443,7 @@ func RequestInfiniPay(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
-			"payment_url": result.Data.CheckoutUrl,
+			"payment_url": result.CheckoutURL,
 			"order_id":    tradeNo,
 		},
 	})

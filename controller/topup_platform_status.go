@@ -15,7 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/infini_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/smartwalle/alipay/v3"
 )
@@ -181,27 +181,27 @@ type infiniPlatformOrderResponse struct {
 }
 
 var platformStatusHTTPClient = &http.Client{Timeout: platformStatusProviderTimeout}
-var infiniPlatformStatusBaseURL = setting.GetInfiniBaseUrl
+var infiniPlatformStatusBaseURL = infiniAPIBaseURL
 
 func queryInfiniPlatformPaymentStatus(ctx context.Context, order *model.TopUp) (platformPaymentSnapshot, error) {
 	providerOrderID := strings.TrimSpace(order.ProviderOrderId)
 	if providerOrderID == "" {
 		return platformPaymentSnapshot{}, errors.New("infini provider order id is missing")
 	}
-	if strings.TrimSpace(setting.InfiniApiKey) == "" || strings.TrimSpace(setting.InfiniApiSecret) == "" {
+	if !infini_setting.CredentialsConfigured() {
 		return platformPaymentSnapshot{}, errors.New("infini credentials are not configured")
 	}
 
 	query := url.Values{}
 	query.Set("order_id", providerOrderID)
-	requestTarget := "/v1/acquiring/order?" + query.Encode()
+	requestTarget := "/v2/acquiring/order?" + query.Encode()
 	requestURL := strings.TrimRight(infiniPlatformStatusBaseURL(), "/") + requestTarget
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return platformPaymentSnapshot{}, err
 	}
-	for key, value := range infiniSignedHeaders(http.MethodGet, requestTarget, nil) {
-		req.Header.Set(key, value)
+	if err := infini_setting.SignRequest(req, nil); err != nil {
+		return platformPaymentSnapshot{}, err
 	}
 
 	response, err := platformStatusHTTPClient.Do(req)
@@ -226,7 +226,7 @@ func queryInfiniPlatformPaymentStatus(ctx context.Context, order *model.TopUp) (
 	if payload.Data != nil {
 		platformOrder = *payload.Data
 	}
-	if platformOrder.OrderID != "" && platformOrder.OrderID != providerOrderID {
+	if platformOrder.OrderID != providerOrderID {
 		return platformPaymentSnapshot{}, errors.New("infini order id does not match")
 	}
 	if platformOrder.ClientReference != "" && platformOrder.ClientReference != order.TradeNo {

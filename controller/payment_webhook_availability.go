@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/infini_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
@@ -169,11 +170,10 @@ func isInfiniTopUpEnabled() bool {
 	if !setting.InfiniEnabled {
 		return false
 	}
-	return strings.TrimSpace(setting.InfiniApiKey) != "" &&
-		strings.TrimSpace(setting.InfiniApiSecret) != "" &&
+	return infini_setting.CredentialsConfigured() &&
 		strings.TrimSpace(setting.InfiniWebhookSecret) != ""
 }
 
 func isInfiniWebhookEnabled() bool {
-	return isInfiniTopUpEnabled()
+	return isPaymentComplianceConfirmed() && setting.InfiniEnabled && strings.TrimSpace(setting.InfiniWebhookSecret) != ""
 }

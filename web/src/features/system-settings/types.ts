@@ -825,8 +825,8 @@ export type BillingSettings = {
   WechatMinTopUp: number
   WechatNotifyUrl: string
   InfiniEnabled: boolean
-  InfiniApiKey: string
-  InfiniApiSecret: string
+  'infini_setting.key_id': string
+  'infini_setting.private_key': string
   InfiniWebhookSecret: string
   InfiniSandbox: boolean
   InfiniNotifyUrl: string

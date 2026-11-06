@@ -800,3 +800,6 @@ cleanup.upgrade_nodes: "请先升级所有已登记节点，再清理财务明�
 cleanup.export_changed: "导出期间发生了明细清理，请重新导出剩余记录。"
 log_export.col.user_channel_routing_reason: "用户渠道路由"
 log_export.col.user_channel_routing_ids: "渠道 ID"
+payment.infini_v2_unavailable: "Infini 支付暂不可用，请选择其他支付方式或联系管理员。"
+payment.infini_v2_credentials_invalid: "请输入有效的 Infini v2 Key ID 和 PKCS#8 PEM 格式的 Ed25519 私钥。私钥留空则保留已保存的私钥。"
+payment.infini_checkout_failed: "无法打开 Infini 收银台，请稍后重试或选择其他支付方式。"
