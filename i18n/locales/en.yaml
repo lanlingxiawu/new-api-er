@@ -369,6 +369,7 @@ pprof.seconds_too_large: "Sampling duration can be at most {{.Max}} seconds"
 pprof.invalid_profile: "Unknown profile type"
 
 # Usage log export
+log_export.invalid_group_ratio: "Enter a group ratio from 0 to 10000 with up to 6 decimal places."
 log_export.disabled: "Log export is currently turned off"
 log_export.unavailable: "Background export is unavailable. You can still use Quick Export for smaller ranges"
 log_export.cooldown: "You can start another export in {{.Minutes}} minutes"

@@ -104,7 +104,10 @@ type LogExportJob struct {
 	// SummaryDims 聚合维度，仅 summary 模式有效。
 	SummaryDims []string         `json:"summary_dims,omitempty"`
 	Options     LogExportOptions `json:"options"`
-	Lang        string           `json:"lang"`
+	// A task-local group-ratio override; never changes stored logs or live billing.
+	GroupRatioOverride  *string `json:"group_ratio_override,omitempty"`
+	RepriceQuotaPerUnit float64 `json:"reprice_quota_per_unit,omitempty"`
+	Lang                string  `json:"lang"`
 	// NodeName 执行该任务的节点（common.NodeName）。任务状态存共享 Redis、
 	// 分片文件却写在执行节点本地，重启回收必须只认自己的任务，否则一个节点重启
 	// 会把另一个节点正在跑的导出标记为失败并删掉分片。
@@ -620,6 +623,9 @@ func logExportErrorCode(err error) string {
 		return "timeout"
 	case errors.Is(err, ErrLogSummaryTooManyGroups):
 		return "too_many_groups"
+	case errors.Is(err, ErrLogExportReprice), errors.Is(err, ErrLogExportInvalidGroupRatio):
+		common.SysError("log export: group ratio override calculation failed")
+		return "reprice_failed"
 	default:
 		common.SysError("log export: job failed: " + err.Error())
 		return "internal"
@@ -652,6 +658,10 @@ func (j *LogExportJob) NeedsSummary() bool {
 // writeLogExport 执行一次完整导出：按时间窗口由早到晚扫描，逐批写入分片文件。
 func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	job.Format = LogExportFormatCSVGz
+	repricer, err := newLogExportRepricer(job)
+	if err != nil {
+		return err
+	}
 	if job.SelfExport && (!job.IsSelfExportFor(job.UserID) || job.NeedsSummary() || job.IsSummary()) {
 		return ErrEmployeeExportAccess
 	}
@@ -660,7 +670,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	// 聚合导出复用同一套扫描循环（限速、CPU 闸门、超时、取消全部原样生效），
 	// 只把「逐行写文件」换成「逐行累加，扫完一次性写出」。
 	if job.IsSummary() {
-		return writeLogExportSummary(ctx, job)
+		return writeLogExportSummary(ctx, job, repricer)
 	}
 
 	// Employee jobs never render admin-only columns, even if a template snapshot contains one.
@@ -668,7 +678,11 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	if job.EmployeeScope != nil || job.SelfExport {
 		viewerRole = common.RoleCommonUser
 	}
-	columnSet, err := ResolveLogExportColumnsForRole(job.Columns, viewerRole)
+	columns := job.Columns
+	if repricer != nil {
+		columns = slices.DeleteFunc(slices.Clone(columns), func(key string) bool { return key == "other_raw" })
+	}
+	columnSet, err := ResolveLogExportColumnsForRole(columns, viewerRole)
 	if err != nil {
 		return err
 	}
@@ -680,6 +694,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 	}
 	lang := job.Lang
 	rctx := &rowCtx{
+		repricer:     repricer,
 		loc:          loc,
 		channelNames: make(map[int]string, 16),
 		translate:    func(key string) string { return i18n.Translate(lang, key) },
@@ -697,7 +712,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		Header: header,
 	}
 
-	fields := columnSet.SelectFields()
+	fields := repricer.selectFields(columnSet.SelectFields())
 	if job.SelfExport {
 		// 脱敏规则依赖日志类型和原始错误信息，不能由展示列决定是否读取。
 		for _, field := range []string{"type", "other", "request_id"} {
@@ -769,12 +784,20 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 		if accErr != nil {
 			return accErr
 		}
+		if repricer != nil {
+			acc.quotaPerUnit = repricer.quotaPerUnit
+		}
 	}
 	rowBuf := make([]string, len(columnSet.Columns))
 
 	scanner := newLogExportScanner(job, fields, columnSet.NeedChannelName, rctx)
 	err = scanner.run(ctx, func(logs []*Log) error {
-		for _, l := range logs {
+		for index, l := range logs {
+			if index%128 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if job.SelfExport {
 				l.Content = MaskErrorLogContentForUser(l, job.Lang)
 				l.Other = formatLogOtherJSON(l.Other, logOtherVisibilityUser)
@@ -783,6 +806,11 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 			// 所以先判定、后渲染只会解析一次。
 			if rowFilter && !job.Filters.matchesRow(l, rctx) {
 				continue
+			}
+			if repricer != nil {
+				if err := rctx.prepareReprice(l); err != nil {
+					return err
+				}
 			}
 			rowsPerFile := int64(operation_setting.GetLogExportSetting().GetRowsPerFile())
 			if partRows >= rowsPerFile {
@@ -823,7 +851,7 @@ func writeLogExport(ctx context.Context, job *LogExportJob) (retErr error) {
 			// 这样两份产出只扫一遍库——分两次导出会把同一段日志扫两遍，
 			// 而扫描正是整条链路上最贵的一步。
 			if acc != nil {
-				if err := acc.Add(l); err != nil {
+				if err := acc.AddQuota(l, rctx.exportQuota(l)); err != nil {
 					return err
 				}
 			}

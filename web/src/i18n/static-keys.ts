@@ -181,6 +181,7 @@ export const STATIC_I18N_KEYS = [
   'Catalog visibility',
 
   // Employee export: runtime column catalog, status/mode maps, and audit actions.
+  'The export charge could not be calculated. Turn off the group ratio override or narrow the filters and try again.',
   'Date',
   'Detail',
   'Summary',

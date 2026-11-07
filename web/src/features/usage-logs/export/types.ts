@@ -180,6 +180,7 @@ export const EXPORT_SOURCE_LABELS: Record<string, string> = {
 }
 
 export interface ExportJob {
+  group_ratio_override?: string
   source?: 'admin' | 'employee' | 'self'
   can_download?: boolean
   can_cancel?: boolean
@@ -256,6 +257,7 @@ export interface ExportTemplate {
 }
 
 export interface CreateExportJobRequest extends AnomalyFilters, NumericFilters {
+  group_ratio_override?: string
   start_timestamp: number
   end_timestamp: number
   type?: number

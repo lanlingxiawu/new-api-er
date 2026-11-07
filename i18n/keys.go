@@ -2,6 +2,12 @@ package i18n
 
 const MsgBodyCacheCapacity = "relay.body_cache_capacity"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
+const MsgLogExportInvalidGroupRatio = "log_export.invalid_group_ratio"
+
+// These existing locale entries are also used by the payment controllers.
+const MsgPaymentInfiniCheckoutFailed = "payment.infini_checkout_failed"
+const MsgPaymentInfiniV2CredentialsInvalid = "payment.infini_v2_credentials_invalid"
+const MsgPaymentInfiniV2Unavailable = "payment.infini_v2_unavailable"
 
 const (
 	MsgCleanupInvalidDate    = "cleanup.invalid_date"

@@ -21,9 +21,16 @@ import { Loader2, Save } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -43,6 +50,8 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { useDebounce } from '@/hooks'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { CompactDateTimeRangePicker } from '../../components/compact-date-time-range-picker'
 import { LogTypeSelect } from '../../components/log-type-select'
@@ -66,6 +75,10 @@ import { ColumnPicker } from './column-picker'
 import { ExportFilterSelect } from './export-filter-select'
 
 const CUSTOM_TEMPLATE = '__custom__'
+const groupRatioOverrideSchema = z
+  .string()
+  .regex(/^[0-9]{1,5}(\.[0-9]{1,6})?$/)
+  .refine((value) => Number(value) <= 10000)
 
 export interface NewExportPrefill {
   start?: Date
@@ -169,6 +182,14 @@ export function NewExportSheet({
 }: NewExportSheetProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const canOverrideRatio = useAuthStore(
+    (state) => (state.auth.user?.role ?? 0) >= ROLE.ADMIN
+  )
+  const [groupRatioOverride, setGroupRatioOverride] = useState<string>()
+  const overrideEnabled = canOverrideRatio && groupRatioOverride !== undefined
+  const ratioValid =
+    !overrideEnabled ||
+    groupRatioOverrideSchema.safeParse(groupRatioOverride).success
 
   const { data: catalog } = useQuery({
     queryKey: ['log-export-columns'],
@@ -201,6 +222,9 @@ export function NewExportSheet({
   const [summaryDims, setSummaryDims] = useState<SummaryDimension[]>(['date'])
   const [templateId, setTemplateId] = useState<string>('')
   const [columns, setColumns] = useState<string[]>([])
+  const exportColumns = overrideEnabled
+    ? columns.filter((key) => key !== 'other_raw')
+    : columns
   const format = 'csv_gz' as const
   const [options, setOptions] = useState<ExportOptions>({
     csv_bom: true,
@@ -222,6 +246,7 @@ export function NewExportSheet({
     setGroup(prefill?.group ?? '')
     setAnomaly(prefill?.anomaly ?? {})
     setNumeric({})
+    setGroupRatioOverride(undefined)
   }, [open, prefill])
 
   // Default to the "as displayed" template, unless the caller asked for another
@@ -430,6 +455,11 @@ export function NewExportSheet({
       if (mode !== 'detail' && summaryDims.length === 0) {
         throw new Error(t('Please select at least one dimension to group by'))
       }
+      if (!ratioValid) {
+        throw new Error(
+          t('Enter a group ratio from 0 to 10000 with up to 6 decimal places.')
+        )
+      }
       return createExportJob({
         start_timestamp: Math.floor(range.start.getTime() / 1000),
         end_timestamp: Math.floor(range.end.getTime() / 1000),
@@ -445,7 +475,8 @@ export function NewExportSheet({
         // 明细+汇总同样要带维度。这里若只判 'summary'，both 模式就会带着空维度
         // 提交，前端校验明明通过、后端却回「请至少选择一个聚合维度」。
         summary_dims: mode !== 'detail' ? summaryDims : undefined,
-        columns,
+        columns: exportColumns,
+        group_ratio_override: overrideEnabled ? groupRatioOverride : undefined,
         format,
         est_rows: estRows || undefined,
         options,
@@ -478,7 +509,11 @@ export function NewExportSheet({
   })
 
   const canSubmit =
-    rangeReady && !rangeTooLong && columns.length > 0 && !createJob.isPending
+    rangeReady &&
+    !rangeTooLong &&
+    (mode === 'summary' || exportColumns.length > 0) &&
+    ratioValid &&
+    !createJob.isPending
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -877,6 +912,55 @@ export function NewExportSheet({
             </div>
           </section>
 
+          {canOverrideRatio && (
+            <FieldGroup>
+              <Field orientation='horizontal'>
+                <Switch
+                  id='export-ratio-override'
+                  checked={overrideEnabled}
+                  disabled={createJob.isPending}
+                  onCheckedChange={(checked) =>
+                    setGroupRatioOverride(checked ? '1' : undefined)
+                  }
+                />
+                <FieldLabel htmlFor='export-ratio-override'>
+                  {t('Override group ratio')}
+                </FieldLabel>
+              </Field>
+              {overrideEnabled && (
+                <Field data-invalid={!ratioValid}>
+                  <FieldLabel htmlFor='export-new-group-ratio'>
+                    {t('New group ratio')}
+                  </FieldLabel>
+                  <Input
+                    id='export-new-group-ratio'
+                    inputMode='decimal'
+                    maxLength={12}
+                    value={groupRatioOverride}
+                    disabled={createJob.isPending}
+                    aria-invalid={!ratioValid}
+                    aria-describedby='export-ratio-description'
+                    onChange={(event) =>
+                      setGroupRatioOverride(event.target.value)
+                    }
+                  />
+                  <FieldDescription id='export-ratio-description'>
+                    {t(
+                      'Replaces the group ratio and charge in this export only. Records with a zero or missing original ratio keep their values. Raw log metadata is not exported.'
+                    )}
+                  </FieldDescription>
+                  {!ratioValid && (
+                    <p className='text-destructive text-sm' role='alert'>
+                      {t(
+                        'Enter a group ratio from 0 to 10000 with up to 6 decimal places.'
+                      )}
+                    </p>
+                  )}
+                </Field>
+              )}
+            </FieldGroup>
+          )}
+
           {/* 2. 聚合维度（汇总 / 明细+汇总）与 导出列（明细 / 明细+汇总）*/}
           {mode !== 'detail' && (
             <section className='space-y-3'>
@@ -949,17 +1033,35 @@ export function NewExportSheet({
                   </Select>
                 </div>
               </div>
-              <p className='text-muted-foreground text-xs'>
-                {t(
-                  'Exported files always contain the real values — the sensitive-data toggle on the list page does not apply here.'
-                )}
-              </p>
+              {!overrideEnabled && (
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'Exported files always contain the real values — the sensitive-data toggle on the list page does not apply here.'
+                  )}
+                </p>
+              )}
               <ColumnPicker
-                columns={catalog?.columns ?? []}
-                selected={columns}
-                maxColumns={catalog?.max_columns ?? 100}
+                columns={(catalog?.columns ?? []).filter(
+                  (column) => !overrideEnabled || column.key !== 'other_raw'
+                )}
+                selected={exportColumns}
+                maxColumns={
+                  (catalog?.max_columns ?? 100) -
+                  (overrideEnabled && columns.includes('other_raw') ? 1 : 0)
+                }
                 onChange={(next) => {
-                  setColumns(next)
+                  setColumns((previous) => {
+                    const rawIndex = previous.indexOf('other_raw')
+                    if (!overrideEnabled || rawIndex === -1) return next
+                    // 隐藏原始 JSON 只影响本次导出，不丢弃模板中的选择。
+                    const restored = [...next]
+                    restored.splice(
+                      Math.min(rawIndex, next.length),
+                      0,
+                      'other_raw'
+                    )
+                    return restored
+                  })
                   setTemplateId(CUSTOM_TEMPLATE)
                 }}
               />

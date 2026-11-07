@@ -362,6 +362,7 @@ pprof.seconds_too_large: "單次取樣最長 {{.Max}} 秒"
 pprof.invalid_profile: "未知的取樣類型"
 
 # 使用日誌匯出
+log_export.invalid_group_ratio: "請輸入 0 至 10000 的分組倍率，最多保留 6 位小數。"
 log_export.disabled: "日誌匯出功能目前已關閉"
 log_export.unavailable: "背景匯出目前不可用，較小範圍可以使用快速匯出"
 log_export.cooldown: "距離下次匯出還需等待 {{.Minutes}} 分鐘"

@@ -291,19 +291,20 @@ func GetLogExportEstimate(c *gin.Context) {
 // ── 任务 ─────────────────────────────────────────────────────────
 
 type createLogExportJobRequest struct {
-	StartTimestamp int64                  `json:"start_timestamp"`
-	EndTimestamp   int64                  `json:"end_timestamp"`
-	LogType        int                    `json:"type"`
-	ModelName      string                 `json:"model_name"`
-	Username       string                 `json:"username"`
-	TokenName      string                 `json:"token_name"`
-	Channel        int                    `json:"channel"`
-	Group          string                 `json:"group"`
-	Columns        []string               `json:"columns"`
-	TemplateId     string                 `json:"template_id"`
-	Format         string                 `json:"format"`
-	EstRows        int64                  `json:"est_rows"`
-	Options        model.LogExportOptions `json:"options"`
+	StartTimestamp     int64                  `json:"start_timestamp"`
+	EndTimestamp       int64                  `json:"end_timestamp"`
+	LogType            int                    `json:"type"`
+	ModelName          string                 `json:"model_name"`
+	Username           string                 `json:"username"`
+	TokenName          string                 `json:"token_name"`
+	Channel            int                    `json:"channel"`
+	Group              string                 `json:"group"`
+	Columns            []string               `json:"columns"`
+	TemplateId         string                 `json:"template_id"`
+	Format             string                 `json:"format"`
+	EstRows            int64                  `json:"est_rows"`
+	Options            model.LogExportOptions `json:"options"`
+	GroupRatioOverride *string                `json:"group_ratio_override"`
 
 	// 数值条件：指针类型，0 是有意义的取值（Rule 5）。
 	Charged             *bool `json:"charged"`
@@ -448,6 +449,16 @@ func createLogExportJob(c *gin.Context, self bool) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	if req.GroupRatioOverride != nil {
+		if self || c.GetInt("role") < common.RoleAdminUser {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgForbidden)})
+			return
+		}
+		if err := model.ValidateLogExportGroupRatioOverride(*req.GroupRatioOverride); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgLogExportInvalidGroupRatio)
+			return
+		}
+	}
 
 	// 时间范围必填且不得超过配置的最大跨度。
 	if req.StartTimestamp <= 0 || req.EndTimestamp <= 0 {
@@ -496,6 +507,13 @@ func createLogExportJob(c *gin.Context, self bool) {
 		respondLogExportTemplateError(c, err)
 		return
 	}
+	if req.GroupRatioOverride != nil {
+		columns = slices.DeleteFunc(slices.Clone(columns), func(key string) bool { return key == "other_raw" })
+		if req.Mode != model.LogExportModeSummary && len(columns) == 0 {
+			common.ApiErrorI18n(c, i18n.MsgLogExportNoColumns)
+			return
+		}
+	}
 
 	if self {
 		filters.UserId = c.GetInt("id")
@@ -539,16 +557,20 @@ func createLogExportJob(c *gin.Context, self bool) {
 	go model.CleanupOrphanLogExportFiles()
 
 	job := &model.LogExportJob{
-		SelfExport:  self,
-		JobID:       jobID,
-		UserID:      userId,
-		Username:    c.GetString("username"),
-		CreatorRole: c.GetInt("role"),
-		Format:      format,
-		Columns:     columns,
-		Options:     options,
-		Lang:        i18n.GetLangFromContext(c),
-		Filters:     filters,
+		SelfExport:         self,
+		JobID:              jobID,
+		UserID:             userId,
+		Username:           c.GetString("username"),
+		CreatorRole:        c.GetInt("role"),
+		Format:             format,
+		Columns:            columns,
+		Options:            options,
+		Lang:               i18n.GetLangFromContext(c),
+		Filters:            filters,
+		GroupRatioOverride: req.GroupRatioOverride,
+	}
+	if req.GroupRatioOverride != nil {
+		job.RepriceQuotaPerUnit = common.QuotaPerUnit
 	}
 	if needsSummary {
 		job.Mode = req.Mode

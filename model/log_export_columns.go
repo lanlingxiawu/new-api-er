@@ -58,8 +58,13 @@ func LogExportTypeI18nKey(logType int) string {
 // rowCtx 承载单行导出所需的派生数据。other 每行只解析一次，所有依赖列共享结果，
 // 避免按列重复 Unmarshal。
 type rowCtx struct {
-	other       map[string]any
-	otherParsed bool
+	repricer        *logExportRepricer
+	repriceOwner    *Log
+	repriced        bool
+	repricedQuota   int
+	repricedSpecial bool
+	other           map[string]any
+	otherParsed     bool
 	// otherOwner 当前缓存的 other 属于哪一行，用于跨行自动失效（见 otherMap）。
 	otherOwner *Log
 	// channelNames 跨整次导出复用的渠道名缓存（含负缓存），由扫描层填充。
@@ -1063,6 +1068,27 @@ func (s *LogExportColumnSet) Render(l *Log, ctx *rowCtx, buf []string) []string 
 	// other 的解析缓存由 rowCtx.otherMap 按行归属自动失效，这里无需重置：
 	// 行级筛选可能已经为本行解析过一次，重置会让它白白再解析一遍。
 	for i, col := range s.Columns {
+		if ctx.repricer != nil && col.Key == "cost_usd" {
+			usd := math.Round(float64(ctx.exportQuota(l))/ctx.repricer.quotaPerUnit*1e6) / 1e6
+			buf[i] = strconv.FormatFloat(usd, 'f', -1, 64)
+			continue
+		}
+		if ctx.repriced && ctx.repriceOwner == l {
+			switch col.Key {
+			case "quota":
+				buf[i] = strconv.Itoa(ctx.repricedQuota)
+				continue
+			case "group_ratio":
+				buf[i] = ctx.repricer.ratioText
+				continue
+			case "user_group_ratio":
+				buf[i] = ""
+				if ctx.repricedSpecial {
+					buf[i] = ctx.repricer.ratioText
+				}
+				continue
+			}
+		}
 		buf[i] = col.Extract(l, ctx)
 	}
 	return buf

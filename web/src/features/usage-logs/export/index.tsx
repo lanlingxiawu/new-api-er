@@ -80,6 +80,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   too_many_groups:
     'Too many dimension combinations. Please use fewer dimensions or a shorter time range.',
   internal: 'Export failed. Please try again or contact an administrator.',
+  reprice_failed:
+    'The export charge could not be calculated. Turn off the group ratio override or narrow the filters and try again.',
 }
 
 const STATUS_VARIANTS: Record<
@@ -402,6 +404,13 @@ export function LogExportCenter(props: { self?: boolean }) {
                             Number(item.value) === (job.filters.type || 0)
                         )?.label ?? 'Unknown'
                       )
+                    )}
+                    {job.group_ratio_override != null && (
+                      <div className='text-muted-foreground'>
+                        {t('Group ratio: {{ratio}}', {
+                          ratio: job.group_ratio_override,
+                        })}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className='text-xs'>

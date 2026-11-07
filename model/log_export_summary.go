@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -101,10 +102,11 @@ type logSummaryRow struct {
 //
 // 复用既有的 keyset 扫描循环后，上述治理手段原样生效。
 type logSummaryAccumulator struct {
-	dims      []string
-	rows      map[logSummaryKey]*logSummaryRow
-	maxGroups int
-	loc       *time.Location
+	quotaPerUnit float64
+	dims         []string
+	rows         map[logSummaryKey]*logSummaryRow
+	maxGroups    int
+	loc          *time.Location
 }
 
 func newLogSummaryAccumulator(dims []string, loc *time.Location, maxGroups int) (*logSummaryAccumulator, error) {
@@ -138,6 +140,10 @@ func containsDim(dim string) bool {
 // 超过组合数上限时返回错误：宁可让任务带着「请减少维度」的提示失败，
 // 也不能把进程 OOM 掉。
 func (a *logSummaryAccumulator) Add(l *Log) error {
+	return a.AddQuota(l, l.Quota)
+}
+
+func (a *logSummaryAccumulator) AddQuota(l *Log, quota int) error {
 	key := logSummaryKey{}
 	for _, dim := range a.dims {
 		switch dim {
@@ -168,7 +174,10 @@ func (a *logSummaryAccumulator) Add(l *Log) error {
 	row.Calls++
 	row.PromptTokens += int64(l.PromptTokens)
 	row.CompletionTokens += int64(l.CompletionTokens)
-	row.Quota += int64(l.Quota)
+	if quota > 0 && row.Quota > math.MaxInt64-int64(quota) {
+		return ErrLogExportReprice
+	}
+	row.Quota += int64(quota)
 	return nil
 }
 
@@ -207,6 +216,9 @@ func (a *logSummaryAccumulator) Rows() [][]string {
 		}
 		total := row.PromptTokens + row.CompletionTokens
 		usd := common.QuotaToUSD(row.Quota)
+		if a.quotaPerUnit > 0 {
+			usd = float64(row.Quota) / a.quotaPerUnit
+		}
 		cells = append(cells,
 			strconv.FormatInt(row.Calls, 10),
 			strconv.FormatInt(row.PromptTokens, 10),
@@ -326,7 +338,7 @@ func summaryScanFields(dims []string) []string {
 //
 // 复用与明细导出完全相同的扫描器（限速闸门、CPU 水位、超时预算、取消、
 // 窗口自适应），只把「逐行写文件」换成「逐行累加、扫完一次性写出」。
-func writeLogExportSummary(ctx context.Context, job *LogExportJob) (retErr error) {
+func writeLogExportSummary(ctx context.Context, job *LogExportJob, repricer *logExportRepricer) (retErr error) {
 	loc := time.Local
 	if job.Options.Timezone != "" {
 		if parsed, err := time.LoadLocation(job.Options.Timezone); err == nil {
@@ -337,12 +349,15 @@ func writeLogExportSummary(ctx context.Context, job *LogExportJob) (retErr error
 	if err != nil {
 		return err
 	}
+	if repricer != nil {
+		acc.quotaPerUnit = repricer.quotaPerUnit
+	}
 
 	lang := job.Lang
 	translate := func(key string) string { return i18n.Translate(lang, key) }
 
-	rctx := &rowCtx{loc: loc, channelNames: make(map[int]string, 16), translate: translate}
-	fields := summaryScanFields(job.SummaryDims)
+	rctx := &rowCtx{loc: loc, channelNames: make(map[int]string, 16), translate: translate, repricer: repricer}
+	fields := repricer.selectFields(summaryScanFields(job.SummaryDims))
 	rowFilter := job.Filters.HasRowFilter()
 	if rowFilter && !slices.Contains(fields, "other") {
 		fields = append(fields, "other")
@@ -351,11 +366,21 @@ func writeLogExportSummary(ctx context.Context, job *LogExportJob) (retErr error
 
 	scanner := newLogExportScanner(job, fields, false, rctx)
 	if err := scanner.run(ctx, func(logs []*Log) error {
-		for _, l := range logs {
+		for index, l := range logs {
+			if index%128 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			if rowFilter && !job.Filters.matchesRow(l, rctx) {
 				continue
 			}
-			if err := acc.Add(l); err != nil {
+			if repricer != nil {
+				if err := rctx.prepareReprice(l); err != nil {
+					return err
+				}
+			}
+			if err := acc.AddQuota(l, rctx.exportQuota(l)); err != nil {
 				return err
 			}
 		}
