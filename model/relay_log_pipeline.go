@@ -2095,6 +2095,9 @@ func enqueueAsyncRelayLog(kind relayLogKind, log *Log, accounting *RelayLogAccou
 // 另外 GORM 在 DoNothing 模式下回填 RETURNING 会跳过已带 id 的元素，与新行混在
 // 同一条语句里时新行的 id 整体错位。回查只发生在重试与回放，首次写入的行都不带 id。
 func insertRelayLogs(db *gorm.DB, logs []*Log, batchSize int) error {
+	for _, log := range logs {
+		normalizeRelayLogText(log)
+	}
 	pending := logs
 	if hasKnownRelayLogID(logs) {
 		stored, err := storedRelayLogIdentities(db, logs, batchSize)
@@ -2118,6 +2121,22 @@ func insertRelayLogs(db *gorm.DB, logs []*Log, batchSize int) error {
 	return db.CreateInBatches(&pending, batchSize).Error
 }
 
+// normalizeRelayLogText runs only on background writers, before identity queries
+// or inserts. PostgreSQL text cannot store NUL; with simple protocol it can also
+// break the query message. Keep a visible escape without re-escaping JSON text.
+// The writer owns the event until it hands it to retry/fallback/continuation.
+func normalizeRelayLogText(log *Log) {
+	log.Content = strings.ReplaceAll(log.Content, "\x00", `\u0000`)
+	log.Username = strings.ReplaceAll(log.Username, "\x00", `\u0000`)
+	log.TokenName = strings.ReplaceAll(log.TokenName, "\x00", `\u0000`)
+	log.ModelName = strings.ReplaceAll(log.ModelName, "\x00", `\u0000`)
+	log.Group = strings.ReplaceAll(log.Group, "\x00", `\u0000`)
+	log.Ip = strings.ReplaceAll(log.Ip, "\x00", `\u0000`)
+	log.RequestId = strings.ReplaceAll(log.RequestId, "\x00", `\u0000`)
+	log.UpstreamRequestId = strings.ReplaceAll(log.UpstreamRequestId, "\x00", `\u0000`)
+	log.Other = strings.ReplaceAll(log.Other, "\x00", `\u0000`)
+}
+
 func hasKnownRelayLogID(logs []*Log) bool {
 	for _, log := range logs {
 		if log.Id > 0 {
@@ -2137,7 +2156,8 @@ type relayLogIdentity struct {
 }
 
 func (r relayLogIdentity) sameAs(log *Log) bool {
-	return r.RequestId == log.RequestId && r.CreatedAt == log.CreatedAt &&
+	// SQLite/MySQL may already contain a raw NUL from before normalization.
+	return strings.ReplaceAll(r.RequestId, "\x00", `\u0000`) == log.RequestId && r.CreatedAt == log.CreatedAt &&
 		r.UserId == log.UserId && r.Type == log.Type
 }
 

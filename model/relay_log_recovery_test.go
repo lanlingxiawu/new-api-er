@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestRecoveredAccountingCommitsOnceAndRetainsFailure(t *testing.T) {
@@ -117,4 +119,73 @@ func TestReplayIncludesActiveFallbackWithoutRestart(t *testing.T) {
 	started, err = StartRelayLogFallbackReplay()
 	require.NoError(t, err)
 	require.False(t, started)
+}
+
+func TestRecoveredRelayLog_NULIdentity(t *testing.T) {
+	for _, backend := range relayLogBackends {
+		t.Run(backend, func(t *testing.T) {
+			db := useRelayLogBackend(t, backend)
+			prefix := relayLogTestPrefix(t, db)
+			row := &Log{RequestId: prefix + "\x00", ModelName: "model\x00name", Content: "error\x00",
+				CreatedAt: 1793121348, UserId: 42, ChannelId: 5, Type: LogTypeError}
+			data, err := common.Marshal(relayLogFallbackRecord{Version: 2, Kind: "relay_log_pending_accounting",
+				Log: row, Accounting: &RelayLogAccountingPayload{Version: 1, UserID: 42, Quota: 0}})
+			require.NoError(t, err)
+			path := filepath.Join(t.TempDir(), "relay-log.jsonl.pending-nul")
+			for range 2 {
+				// The second replay models a crash before checkpointing the assigned ID.
+				require.NoError(t, os.WriteFile(path, append(data, '\n'), 0o640))
+				result := replayRelayLogFallback(context.Background(), path)
+				require.NoError(t, result.err)
+				require.Zero(t, result.failed)
+				require.EqualValues(t, 1, result.processed)
+				require.NoFileExists(t, path)
+			}
+			var rows []Log
+			require.NoError(t, db.Session(&gorm.Session{SkipHooks: true}).Where("request_id LIKE ?", prefix+"%").Find(&rows).Error)
+			require.Len(t, rows, 1)
+			require.Equal(t, prefix+`\u0000`, rows[0].RequestId)
+			require.Equal(t, `model\u0000name`, rows[0].ModelName)
+			require.Equal(t, `error\u0000`, rows[0].Content)
+		})
+	}
+}
+
+func TestRecoveredRelayLog_LegacyNULIdentityKeepsID(t *testing.T) {
+	// These databases accepted raw NUL before normalization was introduced.
+	for _, backend := range []string{"sqlite", "mysql"} {
+		for _, identity := range []struct{ requestID, modelName string }{
+			{"\x00", "model"}, {"request", "model\x00name"}, {"\x00", "model\x00name"},
+		} {
+			t.Run(fmt.Sprintf("%s/%q/%q", backend, identity.requestID, identity.modelName), func(t *testing.T) {
+				db := useRelayLogBackend(t, backend)
+				prefix := relayLogTestPrefix(t, db)
+				stored := &Log{RequestId: prefix + identity.requestID, ModelName: identity.modelName, CreatedAt: 1793121348, Type: LogTypeConsume}
+				require.NoError(t, db.Create(stored).Error)
+				for _, knownID := range []bool{false, true} {
+					row := *stored
+					if !knownID {
+						row.Id = 0
+						require.NoError(t, identifyRecoveredRelayLog(context.Background(), &row))
+						require.Equal(t, stored.Id, row.Id)
+					}
+					require.NoError(t, insertRelayLogs(db, []*Log{&row}, 500))
+					require.Equal(t, stored.Id, row.Id)
+				}
+				var count int64
+				require.NoError(t, db.Model(&Log{}).Where("request_id LIKE ?", prefix+"%").Count(&count).Error)
+				require.EqualValues(t, 1, count)
+				// If both representations exist, recovery must not choose a financial ID arbitrarily.
+				duplicate := *stored
+				duplicate.Id = 0
+				duplicate.RequestId = strings.ReplaceAll(duplicate.RequestId, "\x00", `\u0000`)
+				duplicate.ModelName = strings.ReplaceAll(duplicate.ModelName, "\x00", `\u0000`)
+				require.NoError(t, db.Create(&duplicate).Error)
+				row := *stored
+				row.Id = 0
+				require.ErrorContains(t, identifyRecoveredRelayLog(context.Background(), &row), "ambiguous recovered log identity")
+				require.Zero(t, row.Id)
+			})
+		}
+	}
 }

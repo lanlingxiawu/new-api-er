@@ -10,7 +10,7 @@
 
 ## 1. 背景与问题
 
-当前 relay 结算和错误处理会同步写入 `logs`：
+改造前，relay 结算和错误处理会同步写入 `logs`：
 
 - `service.FinalizeConsumptionSettlement` 调用 `model.RecordConsumeLog`；
 - `controller.relayErrorHandler` 调用 `model.RecordErrorLog`；
@@ -36,7 +36,7 @@ relay goroutine 无法等待自增 ID，因此不能只把 `LOG_DB.Create` 换�
 3. 使用批量 INSERT 降低日志库连接占用、事务数和索引维护开销。
 4. 日志库故障、锁等待或队列过载不能影响 relay 响应、额度结算和业务统计。
 5. 保留消费成本与员工提成现有 `log_id` 关联和幂等语义。
-6. 支持立即关闭异步功能并回退到现有同步逻辑。
+6. 支持立即关闭日志记录；关闭后不回退到同步写入（见 §4.3）。
 7. 优雅退出时在有限时间内排空；超时后把未写入日志交给异步兜底文件队列。
 
 ### 2.2 非目标

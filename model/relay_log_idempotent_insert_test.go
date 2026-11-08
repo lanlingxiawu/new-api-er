@@ -3,8 +3,10 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -252,4 +254,145 @@ func writeFallbackRecords(t *testing.T, path string, logs ...*Log) {
 		lines = append(lines, string(data))
 	}
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o640))
+}
+
+func TestInsertRelayLogs_NULTextFields(t *testing.T) {
+	for _, backend := range relayLogBackends {
+		t.Run(backend, func(t *testing.T) {
+			db := useRelayLogBackend(t, backend)
+			prefix := relayLogTestPrefix(t, db)
+			for _, field := range []string{"Content", "Username", "TokenName", "ModelName", "Group", "Ip", "RequestId", "UpstreamRequestId", "Other"} {
+				for i, tc := range []struct{ input, want string }{
+					{"", ""},
+					{"普通日志\n\t\\", "普通日志\n\t\\"},
+					{"\x00head", `\u0000head`},
+					{"mid\x00dle", `mid\u0000dle`},
+					{"tail\x00", `tail\u0000`},
+					{"\x00\x00", `\u0000\u0000`},
+					{`literal\u0000`, `literal\u0000`},
+					{`{"error":"\u0000"}`, `{"error":"\u0000"}`},
+				} {
+					t.Run(fmt.Sprintf("%s/%d", field, i), func(t *testing.T) {
+						row := &Log{RequestId: fmt.Sprintf("%s%s-%d", prefix, field, i), CreatedAt: 1793121348,
+							Type: LogTypeError, UserId: 42, Quota: 7, Other: `{"admin_info":{"diagnostic":"keep"}}`}
+						input, want := tc.input, tc.want
+						if field == "RequestId" {
+							input, want = row.RequestId+input, row.RequestId+want
+						}
+						reflect.ValueOf(row).Elem().FieldByName(field).SetString(input)
+						expected := *row
+						reflect.ValueOf(&expected).Elem().FieldByName(field).SetString(want)
+						require.NoError(t, insertRelayLogs(db, []*Log{row}, 500))
+						require.Positive(t, row.Id)
+						expected.Id = row.Id
+						var stored Log
+						require.NoError(t, db.Session(&gorm.Session{SkipHooks: true}).First(&stored, row.Id).Error)
+						require.Equal(t, expected, stored)
+						// Retry an original record with the returned ID, including an unsanitized identity.
+						reflect.ValueOf(row).Elem().FieldByName(field).SetString(input)
+						require.NoError(t, insertRelayLogs(db, []*Log{row}, 500))
+						require.Equal(t, expected.Id, row.Id)
+						require.Equal(t, expected, *row)
+					})
+				}
+			}
+		})
+	}
+}
+
+func TestRelayLogs_NULBatchAndReplay(t *testing.T) {
+	for _, backend := range relayLogBackends {
+		for _, replay := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/replay=%t", backend, replay), func(t *testing.T) {
+				db := useRelayLogBackend(t, backend)
+				prefix := relayLogTestPrefix(t, db)
+				logs := make([]*Log, 51)
+				for i := range logs {
+					logs[i] = &Log{RequestId: fmt.Sprintf("%s%02d", prefix, i), CreatedAt: 1793121346 + int64(i%3),
+						Type: LogTypeConsume, UserId: 42, Quota: 123, PromptTokens: 5, CompletionTokens: 7,
+						Content: "normal", Other: `{"admin_info":{"diagnostic":"keep"}}`}
+					if i >= 38 {
+						logs[i].Type = LogTypeError
+					}
+				}
+				logs[42].Content = "invalid character '\x00' looking for beginning of value"
+				if replay {
+					path := filepath.Join(t.TempDir(), "relay-log.jsonl.startup.nul")
+					writeFallbackRecords(t, path, logs...)
+					result := replayRelayLogFallback(context.Background(), path)
+					require.NoError(t, result.err)
+					require.EqualValues(t, 51, result.processed)
+					require.Zero(t, result.failed)
+					require.NoFileExists(t, path)
+				} else {
+					events := make([]*relayLogEvent, len(logs))
+					for i, row := range logs {
+						events[i] = &relayLogEvent{Log: row}
+					}
+					require.True(t, persistRelayLogEvents(events))
+					require.EqualValues(t, 51, relayLogPersistedTotal.Load())
+				}
+				logs[42].Content = `invalid character '\u0000' looking for beginning of value`
+				var stored []Log
+				require.NoError(t, db.Session(&gorm.Session{SkipHooks: true}).Where("request_id LIKE ?", prefix+"%").Order("id ASC").Find(&stored).Error)
+				require.Len(t, stored, 51)
+				for i, row := range stored {
+					require.Positive(t, row.Id)
+					if !replay {
+						require.Equal(t, logs[i].Id, row.Id)
+					}
+					logs[i].Id = row.Id
+					require.Equal(t, *logs[i], row)
+				}
+			})
+		}
+	}
+}
+
+func TestReplayRelayLogFallback_NULIdentityLength(t *testing.T) {
+	for _, backend := range relayLogBackends {
+		t.Run(backend, func(t *testing.T) {
+			db := useRelayLogBackend(t, backend)
+			prefix := relayLogTestPrefix(t, db)
+			for _, extra := range []int{-1, 0, 1} {
+				row := &Log{RequestId: prefix + strings.Repeat("x", 64-len(prefix)-6+extra) + "\x00",
+					UpstreamRequestId: strings.Repeat("u", 128-6+extra) + "\x00", CreatedAt: 1793121348, Type: LogTypeError}
+				path := filepath.Join(t.TempDir(), "relay-log.jsonl.nul-length")
+				writeFallbackRecords(t, path, row)
+				result := replayRelayLogFallback(context.Background(), path)
+				if extra > 0 && backend != "sqlite" {
+					require.Error(t, result.err)
+					require.EqualValues(t, 1, result.failed)
+					require.Zero(t, result.processed)
+					var retained relayLogFallbackRecord
+					require.NoError(t, common.Unmarshal(mustReadFile(t, path), &retained))
+					require.Equal(t, row, retained.Log, "failed records must remain recoverable without truncation")
+					continue
+				}
+				require.NoError(t, result.err)
+				require.EqualValues(t, 1, result.processed)
+				require.NoFileExists(t, path)
+				var stored Log
+				require.NoError(t, db.Where("request_id = ?", strings.ReplaceAll(row.RequestId, "\x00", `\u0000`)).First(&stored).Error)
+				require.Equal(t, 64+extra, len(stored.RequestId))
+				require.Equal(t, strings.Repeat("u", 128-6+extra)+`\u0000`, stored.UpstreamRequestId)
+			}
+		})
+	}
+}
+
+func BenchmarkNormalizeRelayLogText(b *testing.B) {
+	for _, tc := range []struct{ name, content string }{
+		{"ordinary", strings.Repeat("normal error text ", 64)},
+		{"nul", strings.Repeat("normal error text ", 32) + "\x00" + strings.Repeat("normal error text ", 32)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.content)))
+			for b.Loop() {
+				row := Log{Content: tc.content, RequestId: "request-id", ModelName: "model", Other: `{"error":"\u0000"}`}
+				normalizeRelayLogText(&row)
+			}
+		})
+	}
 }

@@ -15,12 +15,24 @@ func identifyRecoveredRelayLog(ctx context.Context, row *Log) error {
 	if row == nil || row.RequestId == "" {
 		return errors.New("recovered accounting requires a request identity")
 	}
+	// Version 2 replay queries identity before reaching insertRelayLogs.
+	originalRequestID, originalModelName := row.RequestId, row.ModelName
+	normalizeRelayLogText(row)
 	queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var ids []int
-	err := LOG_DB.WithContext(queryCtx).Model(&Log{}).
-		Where("request_id = ? AND user_id = ? AND created_at = ? AND type = ? AND channel_id = ? AND model_name = ?", row.RequestId, row.UserId, row.CreatedAt, row.Type, row.ChannelId, row.ModelName).
-		Limit(2).Pluck("id", &ids).Error
+	query := LOG_DB.WithContext(queryCtx).Model(&Log{}).
+		Where("user_id = ? AND created_at = ? AND type = ? AND channel_id = ?", row.UserId, row.CreatedAt, row.Type, row.ChannelId)
+	if LOG_DB.Dialector.Name() != "postgres" && (originalRequestID != row.RequestId || originalModelName != row.ModelName) {
+		// Other backends may have committed the raw identity before this fix.
+		// Match either representation in the same indexed lookup, failing closed
+		// below if both exist. Never send the raw NUL to PostgreSQL.
+		query = query.Where("request_id IN ? AND model_name IN ?",
+			[]string{row.RequestId, originalRequestID}, []string{row.ModelName, originalModelName})
+	} else {
+		query = query.Where("request_id = ? AND model_name = ?", row.RequestId, row.ModelName)
+	}
+	err := query.Limit(2).Pluck("id", &ids).Error
 	if err != nil {
 		return err
 	}

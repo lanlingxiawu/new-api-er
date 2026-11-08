@@ -38,7 +38,31 @@ func TestSanitizeDBErrorStripsDriverMessage(t *testing.T) {
 		{
 			name:   "postgres pooler prepared statement conflict gets remediation hint",
 			err:    &pgconn.PgError{Severity: "FATAL", Code: "08P01", Message: "prepared statement name is already in use: stmt_secret-value"},
-			want:   "postgres error SQLSTATE 08P01: prepared statement conflict with a transaction-pooling proxy (PgBouncer/Neon/Supabase); other clients sharing this database must disable prepared statements, or upgrade PgBouncer to >=1.21 with max_prepared_statements enabled",
+			want:   "postgres error SQLSTATE 08P01: prepared statement name conflict; check client and connection-pool prepared statement configuration",
+			leaked: "secret-value",
+		},
+		{
+			name:   "postgres invalid message format is a protocol error",
+			err:    &pgconn.PgError{Code: "08P01", Message: "invalid message format", Detail: "secret-value"},
+			want:   "postgres error SQLSTATE 08P01: protocol violation",
+			leaked: "secret-value",
+		},
+		{
+			name:   "postgres unknown protocol error is not a prepared statement conflict",
+			err:    &pgconn.PgError{Code: "08P01", Message: "bind supplies parameters for prepared statement secret-value"},
+			want:   "postgres error SQLSTATE 08P01: protocol violation",
+			leaked: "secret-value",
+		},
+		{
+			name:   "wrapped postgres protocol error",
+			err:    fmt.Errorf("secret-value: %w", &pgconn.PgError{Code: "08P01", Message: "invalid message format"}),
+			want:   "postgres error SQLSTATE 08P01: protocol violation",
+			leaked: "secret-value",
+		},
+		{
+			name:   "postgres duplicate prepared statement does not assume a proxy",
+			err:    &pgconn.PgError{Code: "42P05", Message: `prepared statement "secret-value" already exists`},
+			want:   "postgres error SQLSTATE 42P05: prepared statement name conflict; check client and connection-pool prepared statement configuration",
 			leaked: "secret-value",
 		},
 		{
