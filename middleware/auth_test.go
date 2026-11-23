@@ -190,6 +190,11 @@ func TestDashboardAuthRejectsRedisRoleTampering(t *testing.T) {
 				{name: "legacy token", raw: legacy},
 			} {
 				t.Run(credential.name, func(t *testing.T) {
+					rootStatus, adminStatus := rootStatus, adminStatus
+					if credential.name != "login JWT" {
+						rootStatus = http.StatusForbidden
+						adminStatus = http.StatusForbidden
+					}
 					cacheKey := fmt.Sprintf("user:%d", user.Id)
 					require.NoError(t, redisClient.HSet(t.Context(), cacheKey, "Role", role).Err())
 					response := middlewareBearerRequest(router, "/api/perf-metrics", credential.raw)
@@ -211,7 +216,11 @@ func TestDashboardAuthRejectsRedisRoleTampering(t *testing.T) {
 						}
 						require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
 						assert.Equal(t, user.Id, body.ID, path)
-						assert.Equal(t, role, body.Role, path)
+						expectedRole := role
+						if path == "/api/pricing" && credential.name != "login JWT" {
+							expectedRole = common.RoleCommonUser
+						}
+						assert.Equal(t, expectedRole, body.Role, path)
 					}
 				})
 			}
@@ -399,7 +408,8 @@ func TestUserAuthAppliesAccessTokenRouteRules(t *testing.T) {
 	legacy := "middleware-legacy-token"
 	admin := createMiddlewarePATUser(t, "route-rule-admin", legacy)
 	require.NoError(t, model.DB.Model(admin).Update("role", common.RoleAdminUser).Error)
-	profile, _ := createMiddlewareScopedToken(t, admin.Id, 0, "profile:read")
+	require.NoError(t, authz.SetUserPermissions(admin.Id, authz.PermissionsMap{authz.ResourceAdminAccessToken: {authz.ActionUse: true, authz.ActionChannelsOwned: true}}))
+	profile, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()+3600, "profile:read")
 	channel, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()+3600, "channel:read")
 	expired, _ := createMiddlewareScopedToken(t, admin.Id, time.Now().Unix()-1, "profile:read")
 

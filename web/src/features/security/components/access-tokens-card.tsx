@@ -39,7 +39,6 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
-  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
@@ -289,11 +288,6 @@ export function AccessTokensCard() {
         <SheetContent className='w-full sm:max-w-5xl' showCloseButton={false}>
           <SheetHeader className='border-b pr-20'>
             <SheetTitle>{t('Access records')}</SheetTitle>
-            <SheetDescription>
-              {t(
-                'Audit records start after this feature was enabled. Earlier records remain in Common Logs.'
-              )}
-            </SheetDescription>
           </SheetHeader>
           <SheetClose
             render={

@@ -189,7 +189,14 @@ func PasskeyRegisterFinish(c *gin.Context) {
 	}
 
 	passkeyCredential.RPID = &sessionData.RelyingPartyID
-	if err := model.RegisterPasskeyForSession(identity, passkeyCredential); err != nil {
+	version, err := model.RegisterPasskeyForSessionWithOutcome(identity, passkeyCredential)
+	if version > 0 {
+		model.SetAuditEffectiveVersion(c, version)
+		defer func() {
+			recordUserSecurityAudit(c, user.Id, "user.passkey_register", map[string]any{"success": true, "followup_failed": err != nil})
+		}()
+	}
+	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -199,7 +206,6 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	recordUserSecurityAudit(c, user.Id, "user.passkey_register", nil)
 	common.ApiSuccessT(c, "Passkey registered successfully", authRotationData(bundle))
 }
 
@@ -219,7 +225,14 @@ func PasskeyDelete(c *gin.Context) {
 		common.ApiErrorT(c, "The current sign-in method does not support security verification")
 		return
 	}
-	if err := model.DeletePasskeyForSession(identity); err != nil {
+	version, err := model.DeletePasskeyForSessionWithOutcome(identity)
+	if version > 0 {
+		model.SetAuditEffectiveVersion(c, version)
+		defer func() {
+			recordUserSecurityAudit(c, user.Id, "user.passkey_delete", map[string]any{"success": true, "followup_failed": err != nil})
+		}()
+	}
+	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -229,7 +242,6 @@ func PasskeyDelete(c *gin.Context) {
 		return
 	}
 
-	recordUserSecurityAudit(c, user.Id, "user.passkey_delete", nil)
 	common.ApiSuccessT(c, "Passkey removed successfully", authRotationData(bundle))
 }
 
@@ -451,20 +463,21 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
+	version, err := model.DeletePasskeyByUserIDWithAuthVersionOutcome(user.Id)
+	if version > 0 {
+		defer func() {
+			recordManageAuditForUser(c, user.Id, user.Username, "user.reset_passkey", map[string]any{"success": true, "followup_failed": err != nil, "verification_method": authorization.Method})
+		}()
+	}
+	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	if _, err := model.RevokeAllUserSessions(user.Id, "admin_passkey_reset"); err != nil {
+	if _, err = model.RevokeAllUserSessions(user.Id, "admin_passkey_reset"); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
 
-	recordManageAuditForUser(c, user.Id, user.Username, "user.reset_passkey", map[string]any{
-		"username":            user.Username,
-		"id":                  user.Id,
-		"verification_method": authorization.Method,
-	})
 	common.ApiSuccessT(c, "Passkey reset successfully", nil)
 }
 
@@ -484,14 +497,14 @@ func PasskeyVerifyBegin(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid Passkey verification request")
 		return
 	}
-	binding, err := service.BindVerificationOperation(service.VerificationOperation{Scope: request.Scope, Context: request.Context})
-	if err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
 	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
+		return
+	}
+	binding, err := service.BindAuthorizedVerificationOperation(identity, service.VerificationOperation{Scope: request.Scope, Context: request.Context})
+	if err != nil {
+		writeSecurityOperationError(c, err)
 		return
 	}
 	if _, err := service.RequireVerificationMethod(identity, request.Scope, service.VerificationMethodPasskey); err != nil {

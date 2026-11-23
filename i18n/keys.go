@@ -1,5 +1,11 @@
 package i18n
 
+const (
+	MsgLoginProtectionLocked      = "login_protection.locked"
+	MsgLoginProtectionCredentials = "login_protection.credentials"
+	MsgLoginProtectionTarget      = "login_protection.target_invalid"
+)
+
 const MsgBodyCacheCapacity = "relay.body_cache_capacity"
 const MsgGroupRetryGuardInvalid = "setting.group_retry_guard_invalid"
 const MsgLogExportInvalidGroupRatio = "log_export.invalid_group_ratio"

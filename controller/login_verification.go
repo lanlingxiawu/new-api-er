@@ -53,6 +53,8 @@ func LoginPasskeyBegin(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
+	c.Set("login_attempted_account", verification.State.Username)
+	model.BindAuditLoginTarget(c, verification.State.UserID, verification.State.Role)
 	credential, err := model.GetPasskeyByUserID(verification.State.UserID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
@@ -99,6 +101,8 @@ func LoginPasskeyFinish(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
+	c.Set("login_attempted_account", verification.State.Username)
+	model.BindAuditLoginTarget(c, verification.State.UserID, verification.State.Role)
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(request.Credential)
 	if err != nil {
 		writeSecurityOperationError(c, err)

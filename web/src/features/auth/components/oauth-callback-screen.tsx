@@ -121,11 +121,6 @@ export function OAuthCallbackScreen({
             <span>{t('Processing OAuth response...')}</span>
           </div>
           <p className='text-muted-foreground text-sm'>{secondaryNote}</p>
-          <p className='text-muted-foreground text-xs'>
-            {t(
-              'This may take a few moments while we validate the request and update your session.'
-            )}
-          </p>
         </div>
       </div>
     </AuthLayout>

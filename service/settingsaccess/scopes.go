@@ -51,6 +51,8 @@ func buildDefinitions() map[string]Definition {
 		scope("site.notice", "Notice"),
 		scope("site.header-navigation", "HeaderNavModules"),
 		scope("site.sidebar-modules", "SidebarModulesAdmin"),
+		configScope("auth.login-protection", operation_setting.LoginProtectionModule,
+			[]string{"login_protection_setting.enabled", "login_protection_setting.max_failures"}, []string{"enabled", "max_failures"}),
 		scope("auth.basic-auth", "PasswordLoginEnabled", "PasswordRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "EmailDomainWhitelist"),
 		scope("auth.oauth", "ServerAddress", "GitHubOAuthEnabled", "GitHubClientId", "GitHubClientSecret", "discord.enabled", "discord.client_id", "discord.client_secret", "oidc.enabled", "oidc.display_name", "oidc.client_id", "oidc.client_secret", "oidc.well_known", "oidc.authorization_endpoint", "oidc.token_endpoint", "oidc.user_info_endpoint", "TelegramOAuthEnabled", "TelegramBotToken", "TelegramBotName", "telegram.client_id", "telegram.client_secret", "LinuxDOOAuthEnabled", "LinuxDOClientId", "LinuxDOClientSecret", "LinuxDOMinimumTrustLevel", "WeChatAuthEnabled", "WeChatServerAddress", "WeChatServerToken", "WeChatAccountQRCodeImageURL"),
 		scope("auth.passkey", "passkey.enabled", "passkey.rp_display_name", "passkey.rp_id", "passkey.legacy_rp_ids", "passkey.origins", "passkey.allow_insecure_origin", "passkey.user_verification", "passkey.attachment_preference"),

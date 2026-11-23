@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -162,6 +163,10 @@ func requireBrowserSession(c *gin.Context) (service.AuthIdentity, bool) {
 }
 
 func writeAuthSessionError(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrLoginLocked) {
+		common.ApiErrorI18n(c, i18n.MsgLoginProtectionLocked)
+		return
+	}
 	status, code := service.AuthSessionErrorCode(err)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		status, code = http.StatusUnauthorized, "AUTH_UNAUTHORIZED"

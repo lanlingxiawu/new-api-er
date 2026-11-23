@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -42,6 +43,17 @@ type LoginVerification struct {
 	payload loginFlowPayload
 }
 
+// LoginVerificationFailure carries only the account from a validated server
+// flow. The account is audit evidence, never authenticated request identity.
+type LoginVerificationFailure struct {
+	Account string
+	Target  model.AuditLoginTarget
+	Err     error
+}
+
+func (e *LoginVerificationFailure) Error() string { return e.Err.Error() }
+func (e *LoginVerificationFailure) Unwrap() error { return e.Err }
+
 func StartLoginVerification(user *model.User, loginMethod string, migration *LegacyGitHubMigration) (*LoginChallenge, error) {
 	if user == nil || user.Id <= 0 || user.AuthVersion <= 0 || loginMethod == "" {
 		return nil, model.ErrAuthFlowInvalid
@@ -52,6 +64,9 @@ func StartLoginVerification(user *model.User, loginMethod string, migration *Leg
 	}
 	if state.Status != common.UserStatusEnabled || state.AuthVersion != user.AuthVersion {
 		return nil, model.ErrUserSessionInactive
+	}
+	if err := model.CheckLoginProtection(state.UserID, state.Role); err != nil {
+		return nil, err
 	}
 	methods, err := securityVerificationPolicy(VerificationScopeLogin, *state)
 	if err != nil || len(methods) == 0 {
@@ -104,6 +119,9 @@ func RequireLoginVerification(token, method string) (*LoginVerification, error) 
 	if state.Status != common.UserStatusEnabled || state.AuthVersion != payload.AuthVersion {
 		return nil, model.ErrUserSessionInactive
 	}
+	if err := model.CheckLoginProtection(state.UserID, state.Role); err != nil {
+		return nil, err
+	}
 	if err := requireLoginVerificationMethod(state, method); err != nil {
 		return nil, err
 	}
@@ -137,6 +155,16 @@ func VerifyLoginCode(token, code, ip, userAgent string) (*AuthBundle, *LegacyGit
 		return nil, nil, err
 	}
 	if err := VerifyTwoFactorCode(twoFA, code); err != nil {
+		if errors.Is(err, ErrVerificationFailed) {
+			locked, countErr := model.RecordLoginFailure(verification.State.UserID, verification.State.AuthVersion)
+			if countErr != nil {
+				return nil, nil, countErr
+			}
+			if locked {
+				return nil, nil, &LoginVerificationFailure{Account: verification.State.Username, Target: model.AuditLoginTarget{UserID: verification.State.UserID, Role: verification.State.Role}, Err: model.ErrLoginLocked}
+			}
+			return nil, nil, &LoginVerificationFailure{Account: verification.State.Username, Target: model.AuditLoginTarget{UserID: verification.State.UserID, Role: verification.State.Role}, Err: err}
+		}
 		return nil, nil, err
 	}
 	return CompleteLoginVerification(token, verification, VerificationMethodTwoFA, ip, userAgent)

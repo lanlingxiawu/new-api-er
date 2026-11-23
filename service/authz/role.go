@@ -64,7 +64,7 @@ func roleGrants(spec RoleSpec) PermissionsMap {
 	for _, resource := range registry {
 		actions := make(map[string]bool, len(resource.Actions))
 		for _, action := range resource.Actions {
-			actions[action.Action] = spec.Superuser || actionHasRole(action, spec.Key)
+			actions[action.Action] = resource.Resource != ResourceAdminAccessToken && (spec.Superuser || actionHasRole(action, spec.Key))
 		}
 		grants[resource.Resource] = actions
 	}

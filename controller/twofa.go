@@ -45,7 +45,14 @@ func Enable2FA(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	if err := service.FinishTwoFASetup(identity, req.FlowToken, req.Code); err != nil {
+	version, err := service.FinishTwoFASetupWithOutcome(identity, req.FlowToken, req.Code)
+	if version > 0 {
+		model.SetAuditEffectiveVersion(c, version)
+		defer func() {
+			recordUserSecurityAudit(c, identity.UserID, "user.2fa_enable", map[string]any{"success": true, "followup_failed": err != nil})
+		}()
+	}
+	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -54,7 +61,6 @@ func Enable2FA(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	recordUserSecurityAudit(c, identity.UserID, "user.2fa_enable", nil)
 	common.ApiSuccess(c, authRotationData(bundle))
 }
 
@@ -65,7 +71,14 @@ func Disable2FA(c *gin.Context) {
 	}
 	identity, _ := middleware.GetStepUpIdentity(c)
 	userId := identity.UserID
-	if err := model.DisableTwoFAForSession(identity); err != nil {
+	version, err := model.DisableTwoFAForSessionWithOutcome(identity)
+	if version > 0 {
+		model.SetAuditEffectiveVersion(c, version)
+		defer func() {
+			recordUserSecurityAudit(c, userId, "user.2fa_disable_self", map[string]any{"success": true, "followup_failed": err != nil})
+		}()
+	}
+	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -76,7 +89,6 @@ func Disable2FA(c *gin.Context) {
 	}
 
 	// 记录操作日志
-	recordUserSecurityAudit(c, userId, "user.2fa_disable_self", nil)
 
 	common.ApiSuccessT(c, "Two-factor authentication disabled", authRotationData(bundle))
 }
@@ -133,7 +145,14 @@ func RegenerateBackupCodes(c *gin.Context) {
 	}
 
 	// 保存新的备用码并原子推进用户鉴权版本
-	if err := model.ReplaceBackupCodesForSession(identity, backupCodes); err != nil {
+	version, err := model.ReplaceBackupCodesForSessionWithOutcome(identity, backupCodes)
+	if version > 0 {
+		model.SetAuditEffectiveVersion(c, version)
+		defer func() {
+			recordUserSecurityAudit(c, userId, "user.2fa_backup_codes", map[string]any{"success": true, "followup_failed": err != nil})
+		}()
+	}
+	if err != nil {
 		common.ApiErrorT(c, "Failed to save backup codes")
 		common.SysLog(common.LogText("failed to save backup codes: %s", err.Error()))
 		return
@@ -145,7 +164,6 @@ func RegenerateBackupCodes(c *gin.Context) {
 	}
 
 	// 记录操作日志
-	recordUserSecurityAudit(c, userId, "user.2fa_backup_codes", nil)
 
 	data := authRotationData(bundle)
 	data["backup_codes"] = backupCodes
@@ -203,7 +221,13 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFAWithAuthVersion(userId); err != nil {
+	version, err := model.DisableTwoFAWithAuthVersionOutcome(userId)
+	if version > 0 {
+		defer func() {
+			recordManageAuditForUser(c, userId, targetUser.Username, "user.2fa_disable", map[string]any{"success": true, "followup_failed": err != nil, "verification_method": authorization.Method})
+		}()
+	}
+	if err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			common.ApiErrorT(c, "Two-factor authentication is not enabled.")
 			return
@@ -211,15 +235,10 @@ func AdminDisable2FA(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	if _, err := model.RevokeAllUserSessions(userId, "admin_twofa_disabled"); err != nil {
+	if _, err = model.RevokeAllUserSessions(userId, "admin_twofa_disabled"); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-
-	recordManageAuditForUser(c, userId, targetUser.Username, "user.2fa_disable", map[string]any{
-		"username":            targetUser.Username,
-		"verification_method": authorization.Method,
-	})
 
 	common.ApiSuccessT(c, "Two-factor authentication reset", nil)
 }

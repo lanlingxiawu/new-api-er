@@ -53,6 +53,7 @@ export function SecuritySettings() {
       defaultSection={SECURITY_DEFAULT_SECTION}
       getSectionContent={getSecuritySectionContent}
       getSectionMeta={getSecuritySectionMeta}
+      interactiveReadOnlySections={['rate-limit']}
     />
   )
 }

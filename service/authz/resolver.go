@@ -2,12 +2,33 @@ package authz
 
 import "slices"
 
+import "github.com/QuantumNous/new-api/common"
+
 import "github.com/casbin/casbin/v2"
 
 // Can reports whether the subject may perform the permission. A superuser role
 // short-circuits to allow. Otherwise a per-user override wins, then the union of
 // the subject's role baselines applies.
 func Can(userID int, systemRole int, permission Permission) bool {
+	if permission.Resource == ResourceAdminAccessToken {
+		if systemRole != common.RoleAdminUser || !isKnownPermission(permission) {
+			return false
+		}
+		e := currentEnforcer()
+		if e == nil {
+			return false
+		}
+		policies, err := e.GetFilteredPolicy(0, UserSubject(userID), permission.Resource, permission.Action)
+		if err != nil || len(policies) == 0 {
+			return false
+		}
+		for _, p := range policies {
+			if len(p) != 4 || p[3] != EffectAllow {
+				return false
+			}
+		}
+		return true
+	}
 	roles := resolveSubjectRoles(userID, systemRole)
 	if len(roles) == 0 {
 		return false

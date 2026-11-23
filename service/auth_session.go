@@ -92,7 +92,7 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 	if err != nil {
 		return nil, err
 	}
-	if err := model.CreateUserSession(session); err != nil {
+	if err := model.CreateProtectedLoginSession(session, user.Role); err != nil {
 		return nil, err
 	}
 	bundle, err := issueAuthBundle(session, session.SID+"."+refreshSecret, true)
@@ -276,6 +276,7 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 			return bundle, currentUser, nil
 		}
 		if errors.Is(err, model.ErrUserSessionRefreshReuse) {
+			model.QueueSecurityAudit(model.AuditLog{UserId: session.UserID, ActorRole: 0, Category: model.AuditCategorySecurity, Action: "auth.session_refresh_reuse", Ip: truncateAuthMetadata(ip, 64), Success: false, Other: model.AuditOther{Op: &model.AuditOperation{Action: "auth.session_refresh_reuse", Identity: &model.AuditIdentity{ActorID: session.UserID, Role: currentUser.Role, AuthVersion: session.UserAuthVersion, SessionRef: strings.TrimPrefix(model.SecurityAccountRef("audit-session:"+session.SID), "account:"), AuthMethod: "session"}, Params: model.AuditFields{"subject_ref": model.SecurityAccountRef(currentUser.Username)}}}})
 			return nil, nil, ErrLoginSessionRevoked
 		}
 		if errors.Is(err, model.ErrUserSessionRefreshInvalid) {

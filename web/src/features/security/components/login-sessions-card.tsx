@@ -29,7 +29,6 @@ import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
@@ -177,9 +176,6 @@ export function LoginSessionsCard() {
       <Card data-card-hover='false'>
         <CardHeader>
           <CardTitle>{t('Login sessions')}</CardTitle>
-          <CardDescription>
-            {t('Review and sign out devices currently using your account.')}
-          </CardDescription>
           <CardAction>
             <Button
               type='button'

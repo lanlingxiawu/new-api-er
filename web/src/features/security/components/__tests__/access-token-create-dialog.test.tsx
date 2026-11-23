@@ -101,7 +101,7 @@ async function verifyPassword(user: ReturnType<typeof userEvent.setup>) {
 function permission(container: HTMLElement, resource: string, action: string) {
   return within(
     within(container).getByRole('group', { name: resource })
-  ).getByRole('button', { name: action })
+  ).getByRole('checkbox', { name: action })
 }
 
 function postCalls(url: string) {
@@ -392,23 +392,23 @@ describe('create access token dialog', () => {
     const view = permission(personal, 'API keys', 'View')
     const edit = permission(personal, 'API keys', 'Edit')
     expect(view).toHaveAccessibleDescription('View API keys')
-    expect(view).toHaveAttribute('aria-pressed', 'false')
+    expect(view).toHaveAttribute('aria-checked', 'false')
     await user.click(view)
-    expect(view).toHaveAttribute('aria-pressed', 'true')
+    expect(view).toHaveAttribute('aria-checked', 'true')
     expect(within(personal).getByText('Selected 1 / 2')).toBeVisible()
 
     await user.click(
       within(personal).getByRole('button', { name: 'Select all' })
     )
-    expect(edit).toHaveAttribute('aria-pressed', 'true')
+    expect(edit).toHaveAttribute('aria-checked', 'true')
     expect(within(personal).getByText('Selected 2 / 2')).toBeVisible()
     expect(permission(dialog, 'Channels', 'Read')).toHaveAttribute(
-      'aria-pressed',
+      'aria-checked',
       'false'
     )
     await user.click(within(personal).getByRole('button', { name: 'Clear' }))
-    expect(view).toHaveAttribute('aria-pressed', 'false')
-    expect(edit).toHaveAttribute('aria-pressed', 'false')
+    expect(view).toHaveAttribute('aria-checked', 'false')
+    expect(edit).toHaveAttribute('aria-checked', 'false')
 
     const header = within(personal).getByRole('button', { name: /^Personal/ })
     expect(header).toHaveAttribute('aria-expanded', 'true')

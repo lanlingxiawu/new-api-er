@@ -21,13 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
@@ -90,9 +84,6 @@ export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
           <CardTitle className='text-lg tracking-tight sm:text-xl'>
             {t('Two-Factor Authentication')}
           </CardTitle>
-          <CardDescription className='text-xs sm:text-sm'>
-            {t('Add an extra layer of security to your account')}
-          </CardDescription>
         </CardHeader>
 
         <CardContent className='p-3 sm:p-5'>
@@ -130,13 +121,13 @@ export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
                       />
                     )}
                   </div>
-                  <p className='text-muted-foreground text-sm'>
-                    {status.enabled
-                      ? t('Backup codes remaining: {{count}}', {
-                          count: status.backup_codes_remaining,
-                        })
-                      : t('Add an extra layer of security to your account')}
-                  </p>
+                  {status.enabled && (
+                    <p className='text-muted-foreground text-sm'>
+                      {t('Backup codes remaining: {{count}}', {
+                        count: status.backup_codes_remaining,
+                      })}
+                    </p>
+                  )}
                 </div>
               </div>
 

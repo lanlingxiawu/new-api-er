@@ -207,11 +207,6 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
       open={props.open}
       onOpenChange={props.onOpenChange}
       title={isEditing ? t('Edit OAuth Provider') : t('Add OAuth Provider')}
-      description={
-        isEditing
-          ? t('Update the configuration for this custom OAuth provider.')
-          : t('Configure a new custom OAuth provider for user authentication.')
-      }
       contentClassName='max-h-[min(85dvh,var(--dialog-available-height))] overflow-y-auto sm:max-w-2xl'
       contentHeight='auto'
       bodyClassName='space-y-4'

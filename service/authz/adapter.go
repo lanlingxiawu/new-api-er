@@ -32,18 +32,14 @@ func (a *gormAdapter) LoadPolicy(m casbinmodel.Model) error {
 		if rule.V0 == "" || rule.V1 == "" || rule.V2 == "" {
 			return fmt.Errorf("authorization policy %d is missing a subject, resource or action", rule.Id)
 		}
-		effect := rule.V3
-		if effect == "" {
-			effect = EffectAllow
-		}
-		if effect != EffectAllow && effect != EffectDeny {
+		effect, valid := legacyPolicyEffect(rule.V3, rule.V4, rule.V5)
+		if !valid {
 			return fmt.Errorf("authorization policy %d has an invalid effect", rule.Id)
 		}
 		if rule.V5 != "" || (rule.V4 != "" && rule.V4 != "all") {
 			// The current model cannot enforce legacy own/other scopes. Keep
 			// the stored rule for review and deny this permission in memory.
 			// Skipping a per-user rule would expose the admin role baseline.
-			effect = EffectDeny
 			common.SysLog(common.LogText("authorization policy %d has an unsupported legacy scope; loaded as deny; review the stored policy before granting access", rule.Id))
 		}
 		if err := persist.LoadPolicyArray([]string{rule.Ptype, rule.V0, rule.V1, rule.V2, effect}, m); err != nil {

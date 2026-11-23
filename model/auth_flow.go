@@ -286,6 +286,9 @@ func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx
 }
 
 func DeleteExpiredAuthFlows(now time.Time) error {
+	// Deployment risk DB-R09: this existing retention DELETE is not batched.
+	// Confirm the production expired backlog and startup lock/I/O budget; see
+	// docs/design/database-performance-review-20261115.md.
 	cutoff := now.Add(-AuthFlowDefaultCleanupRetention)
 	return DB.Where("expires_at < ? OR (consumed_at IS NOT NULL AND consumed_at < ?)", cutoff, cutoff).
 		Delete(&AuthFlow{}).Error

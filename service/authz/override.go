@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/casbin/casbin/v2"
 	"gorm.io/gorm"
@@ -24,6 +25,18 @@ func SetUserPermissions(userID int, permissions PermissionsMap) error {
 	}
 
 	for resource, actions := range permissions {
+		if resource == ResourceAdminAccessToken {
+			if err := model.DB.Transaction(func(tx *gorm.DB) error {
+				_, err := UpdateUserPermissionsInTx(tx, userID, PermissionsMap{resource: actions})
+				return err
+			}); err != nil {
+				return err
+			}
+			if err := ReloadPolicy(); err != nil {
+				return err
+			}
+			continue
+		}
 		if !isKnownResource(resource) {
 			continue
 		}
@@ -47,7 +60,7 @@ func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap)
 
 // UpdateUserPermissionsInTx replaces submitted per-user permission resources
 // and reports whether their persisted override policies actually changed.
-func UpdateUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap) (bool, error) {
+func UpdateUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap, audit ...*model.AuditChanges) (bool, error) {
 	e := currentEnforcer()
 	if e == nil {
 		return false, fmt.Errorf("authz enforcer is not initialized")
@@ -55,6 +68,43 @@ func UpdateUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsM
 
 	changed := false
 	for resource, actions := range permissions {
+		if resource == ResourceAdminAccessToken {
+			for action := range actions {
+				if !isKnownPermission(Permission{Resource: resource, Action: action}) {
+					return false, fmt.Errorf("unknown administrator token permission")
+				}
+			}
+			for action, allow := range actions {
+				var existing []model.CasbinRule
+				query := tx.Where("ptype = ? AND v0 = ? AND v1 = ? AND v2 = ?", "p", UserSubject(userID), resource, action)
+				if err := query.Find(&existing).Error; err != nil {
+					return false, err
+				}
+				effect := EffectDeny
+				if allow {
+					effect = EffectAllow
+				}
+				if len(existing) == 1 && existing[0].V3 == effect && existing[0].V4 == "" && existing[0].V5 == "" {
+					continue
+				}
+				if err := query.Delete(&model.CasbinRule{}).Error; err != nil {
+					return false, err
+				}
+				rule := newRule("p", []string{UserSubject(userID), resource, action, effect})
+				if err := tx.Create(&rule).Error; err != nil {
+					return false, err
+				}
+				if len(audit) > 0 {
+					prior := map[string]string{}
+					for _, rule := range existing {
+						prior[rule.V2] = rule.V3
+					}
+					audit[0].Add(model.AuditTarget("user", userID, ""), model.AuditFields{"permissions": map[string]any{resource: prior}}, model.AuditFields{"permissions": map[string]any{resource: map[string]string{action: effect}}})
+				}
+				changed = true
+			}
+			continue
+		}
 		if !isKnownResource(resource) {
 			continue
 		}
@@ -90,6 +140,16 @@ func UpdateUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsM
 		if err := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource).Delete(&model.CasbinRule{}).Error; err != nil {
 			return false, err
 		}
+		if len(audit) > 0 {
+			prior, next := map[string]string{}, map[string]string{}
+			for _, rule := range existing {
+				prior[rule.V2] = rule.V3
+			}
+			for _, rule := range policies {
+				next[rule.Action] = rule.Effect
+			}
+			audit[0].Add(model.AuditTarget("user", userID, ""), model.AuditFields{"permissions": map[string]any{resource: prior}}, model.AuditFields{"permissions": map[string]any{resource: next}})
+		}
 		if len(policies) == 0 {
 			continue
 		}
@@ -124,7 +184,28 @@ func ClearUserPermissionsInTx(tx *gorm.DB, userID int) error {
 }
 
 // ClearUserAuthorizationInTx 清理用户覆盖权限，并报告是否确实删除了规则。
-func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) (bool, error) {
+func ClearUserAuthorizationInTx(tx *gorm.DB, userID int, audit ...*model.AuditChanges) (bool, error) {
+	before := map[string]any{}
+	auditAvailable := true
+	if len(audit) > 0 {
+		var rules []model.CasbinRule
+		if err := tx.Select("v1", "v2", "v3").Where("ptype = ? AND v0 = ?", "p", UserSubject(userID)).Find(&rules).Error; err != nil {
+			auditAvailable = false
+			audit[0].Outcome = "unavailable"
+			logger.LogError(tx.Statement.Context, "permission audit snapshot unavailable")
+		}
+		for _, rule := range rules {
+			if !isKnownResource(rule.V1) {
+				continue
+			}
+			actions, ok := before[rule.V1].(map[string]string)
+			if !ok {
+				actions = map[string]string{}
+				before[rule.V1] = actions
+			}
+			actions[rule.V2] = rule.V3
+		}
+	}
 	changed := false
 	for _, resource := range registry {
 		result := tx.Where("ptype = ? AND v0 = ? AND v1 = ?", "p", UserSubject(userID), resource.Resource).Delete(&model.CasbinRule{})
@@ -132,6 +213,9 @@ func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) (bool, error) {
 			return false, result.Error
 		}
 		changed = changed || result.RowsAffected > 0
+	}
+	if len(audit) > 0 && changed && auditAvailable {
+		audit[0].Add(model.AuditTarget("user", userID, ""), model.AuditFields{"permissions": before}, model.AuditFields{"permissions": map[string]any{}})
 	}
 	return changed, nil
 }

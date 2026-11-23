@@ -68,6 +68,17 @@ export const STATIC_I18N_KEYS = [
   'The target account could not be confirmed. Review manually.',
 
   'Delete visible alerts and their evidence. Original audit logs are retained.',
+  'Login failure protection',
+  'Enable login failure protection',
+  'Maximum consecutive login failures',
+  'Repeated password or login verification code failures restrict new sign-ins until an administrator unlocks the account. Users are asked to contact sales. Root accounts, existing sessions and API calls remain available.',
+  'Turning this off pauses counting and enforcement. Existing restrictions return when it is enabled again.',
+  'A completed sign-in resets the count. Restricted accounts require an administrator to unlock them.',
+  'Sign-in restricted',
+  'Unlock sign-in',
+  'Verify to unlock sign-in',
+  'Login restriction removed',
+
   'User (employee status not recorded)',
   'Unknown identity',
   'Super administrator',

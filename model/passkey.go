@@ -230,8 +230,14 @@ func RegisterPasskeyForSession(identity AuthSessionIdentity, credential *Passkey
 }
 
 func upsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential, identity *AuthSessionIdentity) error {
+	_, err := upsertPasskeyCredentialWithAuthVersionOutcome(credential, identity)
+	return err
+}
+
+func upsertPasskeyCredentialWithAuthVersionOutcome(credential *PasskeyCredential, identity *AuthSessionIdentity) (int64, error) {
+	var version int64
 	if credential == nil || credential.UserID <= 0 {
-		return errors.New("failed to save the Passkey, please try again")
+		return 0, errors.New("failed to save the Passkey, please try again")
 	}
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
@@ -252,14 +258,15 @@ func upsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential, ident
 				return err
 			}
 		}
-		if _, err := IncrementUserAuthVersionWithTx(tx, credential.UserID); err != nil {
+		var err error
+		if version, err = IncrementUserAuthVersionWithTx(tx, credential.UserID); err != nil {
 			return err
 		}
 		return upsertPasskeyCredentialWithTx(tx, credential)
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	return PublishUserAuthCache(credential.UserID)
+	return version, PublishUserAuthCache(credential.UserID)
 }
 
 func DeletePasskeyByUserIDWithAuthVersion(userID int) error {
@@ -271,8 +278,18 @@ func DeletePasskeyForSession(identity AuthSessionIdentity) error {
 }
 
 func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) error {
+	_, err := deletePasskeyCommitted(userID, identity)
+	return err
+}
+
+func DeletePasskeyForSessionWithOutcome(identity AuthSessionIdentity) (int64, error) {
+	return deletePasskeyCommitted(identity.UserID, &identity)
+}
+
+func deletePasskeyCommitted(userID int, identity *AuthSessionIdentity) (int64, error) {
+	var version int64
 	if userID == 0 {
-		return errors.New("failed to delete the Passkey, please try again")
+		return 0, errors.New("failed to delete the Passkey, please try again")
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if identity != nil {
@@ -287,7 +304,8 @@ func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) err
 			}
 			return err
 		}
-		if _, err := IncrementUserAuthVersionWithTx(tx, userID); err != nil {
+		var err error
+		if version, err = IncrementUserAuthVersionWithTx(tx, userID); err != nil {
 			return err
 		}
 		result := tx.Unscoped().Delete(&credential)
@@ -299,7 +317,15 @@ func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) err
 		}
 		return nil
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	return PublishUserAuthCache(userID)
+	return version, PublishUserAuthCache(userID)
+}
+
+func RegisterPasskeyForSessionWithOutcome(identity AuthSessionIdentity, credential *PasskeyCredential) (int64, error) {
+	return upsertPasskeyCredentialWithAuthVersionOutcome(credential, &identity)
+}
+
+func DeletePasskeyByUserIDWithAuthVersionOutcome(userID int) (int64, error) {
+	return deletePasskeyCommitted(userID, nil)
 }

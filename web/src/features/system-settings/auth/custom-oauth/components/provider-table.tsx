@@ -51,10 +51,7 @@ export function ProviderTable(props: ProviderTableProps) {
 
   return (
     <>
-      <div className='flex items-center justify-between'>
-        <p className='text-muted-foreground text-sm'>
-          {t('Manage custom OAuth providers for user authentication')}
-        </p>
+      <div className='flex items-center justify-end'>
         <Button size='sm' onClick={props.onCreate}>
           <Plus className='mr-1.5 h-4 w-4' />
           {t('Add Provider')}

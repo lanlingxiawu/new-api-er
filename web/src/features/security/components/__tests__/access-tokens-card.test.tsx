@@ -198,7 +198,7 @@ async function openEdit(user: ReturnType<typeof userEvent.setup>) {
 function permission(container: HTMLElement, action: string) {
   return within(
     within(container).getByRole('group', { name: 'API keys' })
-  ).getByRole('button', { name: action })
+  ).getByRole('checkbox', { name: action })
 }
 
 function mockPatch(item: AccessTokenItem) {
@@ -499,7 +499,7 @@ describe('access tokens card', () => {
         'Saving permission changes requires security verification'
       )
     ).toBeVisible()
-    expect(permission(dialog, 'View')).toHaveAttribute('aria-pressed', 'true')
+    expect(permission(dialog, 'View')).toHaveAttribute('aria-checked', 'true')
     await user.click(permission(dialog, 'Edit'))
     await user.click(within(dialog).getByRole('button', { name: 'Save' }))
     await verifyPassword(user)
@@ -540,7 +540,7 @@ describe('access tokens card', () => {
     const restored = await screen.findByRole('dialog', {
       name: 'Edit access token',
     })
-    expect(permission(restored, 'Edit')).toHaveAttribute('aria-pressed', 'true')
+    expect(permission(restored, 'Edit')).toHaveAttribute('aria-checked', 'true')
     expect(patch).not.toHaveBeenCalled()
     expect(verifyCalls()).toHaveLength(0)
   })
@@ -554,7 +554,7 @@ describe('access tokens card', () => {
     renderCard()
     const user = userEvent.setup()
     const dialog = await openEdit(user)
-    expect(permission(dialog, 'View')).toHaveAttribute('aria-pressed', 'false')
+    expect(permission(dialog, 'View')).toHaveAttribute('aria-checked', 'false')
     const input = within(dialog).getByLabelText('Token name')
     await user.clear(input)
     await user.type(input, 'renamed')

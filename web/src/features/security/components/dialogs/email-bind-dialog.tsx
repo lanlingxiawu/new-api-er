@@ -198,7 +198,7 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
             ? t('Current email: {{email}}. Enter a new email to change.', {
                 email: props.currentEmail,
               })
-            : t('Bind an email address to your account.')
+            : undefined
         }
         contentClassName='sm:max-w-md'
         footer={

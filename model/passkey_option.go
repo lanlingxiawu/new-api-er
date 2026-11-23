@@ -93,7 +93,7 @@ func validatePasskeyRPIDWithTx(tx *gorm.DB, rpID string) error {
 // UpdatePasskeyDomainOptions keeps every supplied option in one transaction,
 // including unrelated keys from UpdateOptionsBulk. Preview rolls back even the
 // initial default rows and never publishes a local configuration change.
-func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirmation string) (*PasskeyDomainChange, error) {
+func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirmation string, audit ...*AuditChanges) (*PasskeyDomainChange, error) {
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
 	values = maps.Clone(values)
@@ -101,6 +101,10 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 		if err := validateOptionValue(key, value); err != nil {
 			return nil, err
 		}
+	}
+	var receipt *AuditChanges
+	if optionalAudit(audit) != nil {
+		receipt = NewAuditChanges()
 	}
 	var change *PasskeyDomainChange
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -228,7 +232,7 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 		values["ServerAddress"] = serverAddress
 		keys := slices.Sorted(maps.Keys(values))
 		for _, key := range keys {
-			if err := tx.Save(&Option{Key: key, Value: values[key]}).Error; err != nil {
+			if err := persistAuditOption(tx, key, values[key], receipt); err != nil {
 				return err
 			}
 		}
@@ -239,6 +243,9 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 	}
 	if err != nil {
 		return change, err
+	}
+	if receipt != nil {
+		audit[0].Merge(receipt)
 	}
 	applyPasskeyDomainOptions(values)
 	for key, value := range values {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -35,10 +36,32 @@ func GetVerificationMethods(c *gin.Context) {
 // writeSecurityOperationError only exposes known, fixed business messages.
 // Unexpected errors retain their cause for the existing server-side auth logger.
 func writeSecurityOperationError(c *gin.Context, err error) {
+	var loginFailure *service.LoginVerificationFailure
+	if errors.As(err, &loginFailure) {
+		// Do not set id/role: completing the primary factor is not a login.
+		c.Set("login_attempted_account", loginFailure.Account)
+		model.BindAuditLoginTarget(c, loginFailure.Target.UserID, loginFailure.Target.Role)
+	}
+	if errors.Is(err, model.ErrLoginLocked) {
+		if loginFailure != nil {
+			model.CaptureSecurityEvent(c, "auth.login_failed", loginFailure.Account, "invalid_code", false)
+			model.CaptureSecurityEvent(c, "auth.login_locked", loginFailure.Account, "failure_limit", false)
+		}
+		common.ApiErrorI18n(c, i18n.MsgLoginProtectionLocked)
+		return
+	}
 	status := http.StatusOK
 	var code, message string
 	var protocolError *protocol.Error
 	switch {
+	case errors.Is(err, model.ErrChannelNotAccessible):
+		c.Set("security_error_code", "CHANNEL_NOT_ACCESSIBLE")
+		common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage(model.ErrChannelNotAccessible.Error()), gin.H{"code": "CHANNEL_NOT_ACCESSIBLE", "message": i18n.T(c, i18n.MsgAdminTokenChannelDenied)})
+		return
+	case errors.Is(err, service.ErrAdminTokenDenied):
+		c.Set("security_error_code", "ADMIN_ACCESS_TOKEN_DISABLED")
+		common.ApiErrorStatus(c, http.StatusForbidden, common.NewMessage(service.ErrAdminTokenDenied.Error()), gin.H{"code": "ADMIN_ACCESS_TOKEN_DISABLED", "message": i18n.T(c, i18n.MsgAdminTokenDenied)})
+		return
 	case errors.Is(err, passkeysvc.ErrRPIDUnavailable):
 		code, message = "PASSKEY_RP_ID_UNAVAILABLE", "This Passkey domain is not available on this website. Use its original website or another verification method."
 	case errors.Is(err, system_setting.ErrPasskeyRPIDInvalid):
@@ -121,6 +144,9 @@ func writeSecurityOperationError(c *gin.Context, err error) {
 		return
 	}
 	c.Set("security_error_code", code)
+	if code == "SECURITY_VERIFICATION_FAILED" && strings.HasPrefix(c.FullPath(), "/api/user/login/") {
+		model.CaptureSecurityEvent(c, "auth.login_failed", c.GetString("login_attempted_account"), "invalid_code", false)
+	}
 	if strings.Contains(c.Request.URL.Path, "/passkey/") {
 		reason := "verification_failed"
 		if errors.As(err, &protocolError) && slices.Contains([]string{"invalid_request", "challenge_mismatch", "parse_error", "auth_data", "verification_error", "invalid_signature", "invalid_key_type", "unsupported_key_algorithm"}, protocolError.Type) {

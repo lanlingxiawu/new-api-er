@@ -27,13 +27,13 @@ func TestGenerateMessageID(t *testing.T) {
 	saveSMTPGlobals(t)
 
 	SMTPFrom = "noreply@example.com"
-	id, err := generateMessageID()
+	id, err := generateMessageID(SMTPFrom)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(id, "<"))
 	assert.True(t, strings.HasSuffix(id, "@example.com>"))
 
 	SMTPFrom = "invalid-no-at"
-	_, err = generateMessageID()
+	_, err = generateMessageID(SMTPFrom)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid SMTP account")
 }

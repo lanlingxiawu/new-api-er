@@ -10,7 +10,8 @@ import (
 
 func TestSystemSettingsResources_AllScopesRegistered(t *testing.T) {
 	scopes := SystemSettingsScopes()
-	require.Len(t, scopes, 59)
+	require.Len(t, scopes, 60)
+	assert.Contains(t, scopes, "auth.login-protection")
 
 	seen := make(map[string]struct{}, len(scopes))
 	for _, scope := range scopes {

@@ -25,6 +25,8 @@ export type VerificationMethod =
   | 'oauth'
   | 'session'
 export type SecurityProofScope =
+  | 'audit.security.settings'
+  | 'audit.security.response.stop'
   | 'channel.key.read'
   | 'passkey.register'
   | 'passkey.delete'
@@ -42,15 +44,35 @@ export type SecurityProofScope =
   | 'admin.user.create'
   | 'admin.user.update'
   | 'admin.user.delete'
+  | 'admin.user.api_keys.delete_all'
+  | 'admin.user.access_tokens.delete_all'
   | 'admin.user.manage'
   | 'admin.user.passkey.reset'
   | 'admin.user.2fa.disable'
   | 'admin.user.binding.clear'
 
 /** ManageUser actions that change a user's status or role and need step-up. */
-export type AdminUserManageAction = 'disable' | 'enable' | 'promote' | 'demote'
+export type AdminUserManageAction =
+  | 'disable'
+  | 'enable'
+  | 'promote'
+  | 'demote'
+  | 'unlock_login'
 
 export type VerificationOperation =
+  | {
+      scope: 'audit.security.response.stop'
+      context: {
+        alert_id: number
+        version: number
+        response_group_id: number
+        action: 'stop_automatic_response'
+      }
+    }
+  | {
+      scope: 'audit.security.settings'
+      context: { values: Record<string, string> }
+    }
   | { scope: 'channel.key.read'; context: { channel_id: number } }
   | {
       scope: 'account.binding.bind'
@@ -62,6 +84,8 @@ export type VerificationOperation =
       scope:
         | 'admin.user.update'
         | 'admin.user.delete'
+        | 'admin.user.api_keys.delete_all'
+        | 'admin.user.access_tokens.delete_all'
         | 'admin.user.passkey.reset'
         | 'admin.user.2fa.disable'
       context: { user_id: number }
@@ -91,6 +115,8 @@ export type VerificationOperation =
   | {
       scope: Exclude<
         SecurityProofScope,
+        | 'audit.security.settings'
+        | 'audit.security.response.stop'
         | 'channel.key.read'
         | 'account.binding.bind'
         | 'account.binding.unbind'

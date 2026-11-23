@@ -168,6 +168,12 @@ func ReplaceBackupCodesForSession(identity AuthSessionIdentity, codes []string) 
 }
 
 func replaceBackupCodesWithAuthVersion(userId int, codes []string, identity *AuthSessionIdentity) error {
+	_, err := replaceBackupCodesWithAuthVersionOutcome(userId, codes, identity)
+	return err
+}
+
+func replaceBackupCodesWithAuthVersionOutcome(userId int, codes []string, identity *AuthSessionIdentity) (int64, error) {
+	var version int64
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if identity != nil {
 			if err := ValidateAuthSessionWithTx(tx, *identity); err != nil {
@@ -183,14 +189,15 @@ func replaceBackupCodesWithAuthVersion(userId int, codes []string, identity *Aut
 			}
 			return err
 		}
-		if _, err := IncrementUserAuthVersionWithTx(tx, userId); err != nil {
+		var err error
+		if version, err = IncrementUserAuthVersionWithTx(tx, userId); err != nil {
 			return err
 		}
 		return replaceBackupCodesWithTx(tx, userId, codes)
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	return PublishUserAuthCache(userId)
+	return version, PublishUserAuthCache(userId)
 }
 
 // ValidateBackupCode 验证并使用备用码
@@ -245,6 +252,16 @@ func DisableTwoFAForSession(identity AuthSessionIdentity) error {
 }
 
 func disableTwoFAWithAuthVersion(userId int, identity *AuthSessionIdentity) error {
+	_, err := disableTwoFACommitted(userId, identity)
+	return err
+}
+
+func DisableTwoFAForSessionWithOutcome(identity AuthSessionIdentity) (int64, error) {
+	return disableTwoFACommitted(identity.UserID, &identity)
+}
+
+func disableTwoFACommitted(userId int, identity *AuthSessionIdentity) (int64, error) {
+	var version int64
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if identity != nil {
 			if err := ValidateAuthSessionWithTx(tx, *identity); err != nil {
@@ -260,7 +277,8 @@ func disableTwoFAWithAuthVersion(userId int, identity *AuthSessionIdentity) erro
 			}
 			return err
 		}
-		if _, err := IncrementUserAuthVersionWithTx(tx, userId); err != nil {
+		var err error
+		if version, err = IncrementUserAuthVersionWithTx(tx, userId); err != nil {
 			return err
 		}
 		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(&TwoFABackupCode{}).Error; err != nil {
@@ -268,9 +286,9 @@ func disableTwoFAWithAuthVersion(userId int, identity *AuthSessionIdentity) erro
 		}
 		return tx.Unscoped().Delete(&twoFA).Error
 	}); err != nil {
-		return err
+		return 0, err
 	}
-	return PublishUserAuthCache(userId)
+	return version, PublishUserAuthCache(userId)
 }
 
 // ValidateTOTPAndUpdateUsage 验证TOTP并更新使用记录
@@ -360,4 +378,12 @@ func GetTwoFAStats() (map[string]any, error) {
 		"enabled_users": enabledUsers,
 		"enabled_rate":  fmt.Sprintf("%.1f%%", enabledRate),
 	}, nil
+}
+
+func ReplaceBackupCodesForSessionWithOutcome(identity AuthSessionIdentity, codes []string) (int64, error) {
+	return replaceBackupCodesWithAuthVersionOutcome(identity.UserID, codes, &identity)
+}
+
+func DisableTwoFAWithAuthVersionOutcome(userID int) (int64, error) {
+	return disableTwoFACommitted(userID, nil)
 }

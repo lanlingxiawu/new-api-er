@@ -25,6 +25,8 @@ import {
 } from './section-registry.tsx'
 
 const defaultAuthSettings: AuthSettings = {
+  'login_protection_setting.enabled': false,
+  'login_protection_setting.max_failures': 5,
   PasswordLoginEnabled: true,
   PasswordRegisterEnabled: true,
   EmailVerificationEnabled: false,

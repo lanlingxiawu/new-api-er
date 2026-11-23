@@ -38,6 +38,13 @@ func ValidateResendConfiguration(apiKey, from string) error {
 // do not expose credentials, verification codes or reset links in errors/logs.
 // This transport does not change token expiry, single-use or session rules.
 func sendResendEmail(apiKey, from, subject, receiver, content string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return SendResendEmail(ctx, resendEmailClient, apiKey, from, subject, receiver, content)
+}
+
+// SendResendEmail leaves transport isolation and the deadline with the caller.
+func SendResendEmail(ctx context.Context, client *http.Client, apiKey, from, subject, receiver, content string) error {
 	if err := ValidateResendConfiguration(apiKey, from); err != nil {
 		return err
 	}
@@ -63,15 +70,13 @@ func sendResendEmail(apiKey, from, subject, receiver, content string) error {
 	if err != nil {
 		return NewMessage("Resend request failed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(payload))
 	if err != nil {
 		return NewMessage("Resend request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := resendEmailClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		SysError(LogText("Resend request failed: error_type=%T", err))
 		return NewMessage("Resend request failed")

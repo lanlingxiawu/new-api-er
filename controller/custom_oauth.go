@@ -260,6 +260,7 @@ func CreateCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Register the provider in the OAuth registry
+	model.RequestAuditChanges(c).Add(model.AuditTarget("oauth_provider", provider.Id, provider.Name), nil, model.OAuthProviderAuditSnapshot(provider))
 	oauth.RegisterOrUpdateCustomProvider(provider)
 
 	common.ApiSuccessT(c, "Provider created successfully", toCustomOAuthProviderResponse(provider))
@@ -310,6 +311,7 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 	}
 
 	oldSlug := provider.Slug
+	auditBefore := model.OAuthProviderAuditSnapshot(provider)
 
 	// Check if new slug is taken by another provider
 	if req.Slug != "" && req.Slug != provider.Slug {
@@ -386,6 +388,7 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Update the provider in the OAuth registry
+	model.RequestAuditChanges(c).Add(model.AuditTarget("oauth_provider", provider.Id, provider.Name), auditBefore, model.OAuthProviderAuditSnapshot(provider))
 	if oldSlug != provider.Slug {
 		oauth.UnregisterCustomProvider(oldSlug)
 	}
@@ -428,6 +431,7 @@ func DeleteCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Unregister the provider from the OAuth registry
+	model.RequestAuditChanges(c).Add(model.AuditTarget("oauth_provider", provider.Id, provider.Name), model.OAuthProviderAuditSnapshot(provider), nil)
 	oauth.UnregisterCustomProvider(provider.Slug)
 
 	common.ApiSuccessT(c, "Provider deleted successfully", nil)

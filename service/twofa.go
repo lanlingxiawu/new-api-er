@@ -41,26 +41,31 @@ func StartTwoFASetup(identity AuthIdentity, authorization *model.AuthFlowAuthori
 }
 
 func FinishTwoFASetup(identity AuthIdentity, flowToken, code string) error {
+	_, err := FinishTwoFASetupWithOutcome(identity, flowToken, code)
+	return err
+}
+
+func FinishTwoFASetupWithOutcome(identity AuthIdentity, flowToken, code string) (int64, error) {
 	flow, err := model.GetAuthFlow(flowToken, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeTwoFASetup, UserId: identity.UserID, SessionId: identity.SessionID,
 	})
 	if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
-		return model.ErrTwoFASetupInvalid
+		return 0, model.ErrTwoFASetupInvalid
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var payload struct {
 		Authorization *model.AuthFlowAuthorization `json:"authorization"`
 	}
 	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
-		return err
+		return 0, err
 	}
 	if err := ValidateFlowAuthorization(identity, VerificationOperation{Scope: VerificationScopeTwoFASetup}, payload.Authorization); err != nil {
 		if errors.Is(err, model.ErrAuthFlowInvalid) {
-			return model.ErrTwoFASetupInvalid
+			return 0, model.ErrTwoFASetupInvalid
 		}
-		return err
+		return 0, err
 	}
-	return model.EnableTwoFAEnrollment(identity, flowToken, code)
+	return model.EnableTwoFAEnrollmentWithOutcome(identity, flowToken, code)
 }

@@ -21,10 +21,21 @@ import { createSectionRegistry } from '../utils/section-registry'
 import { BasicAuthSection } from './basic-auth-section'
 import { BotProtectionSection } from './bot-protection-section'
 import { CustomOAuthSection } from './custom-oauth/custom-oauth-section'
+import { LoginProtectionSection } from './login-protection-section'
 import { OAuthSection } from './oauth-section'
 import { PasskeySection } from './passkey-section'
 
 const AUTH_SECTIONS = [
+  {
+    id: 'login-protection',
+    titleKey: 'Login failure protection',
+    build: (settings: AuthSettings) => (
+      <LoginProtectionSection
+        enabled={settings['login_protection_setting.enabled']}
+        maxFailures={settings['login_protection_setting.max_failures']}
+      />
+    ),
+  },
   {
     id: 'basic-auth',
     titleKey: 'Basic Authentication',

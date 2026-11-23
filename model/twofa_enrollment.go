@@ -68,9 +68,15 @@ func CreateTwoFAEnrollment(identity AuthSessionIdentity, authorization *AuthFlow
 // EnableTwoFAEnrollment validates and consumes one setup in the same transaction
 // as factor activation and auth_version advancement. A bad code can be retried.
 func EnableTwoFAEnrollment(identity AuthSessionIdentity, token, code string) error {
+	_, err := EnableTwoFAEnrollmentWithOutcome(identity, token, code)
+	return err
+}
+
+func EnableTwoFAEnrollmentWithOutcome(identity AuthSessionIdentity, token, code string) (int64, error) {
+	var version int64
 	cleanCode, err := common.ValidateNumericCode(code)
 	if err != nil {
-		return ErrTwoFACodeInvalid
+		return 0, ErrTwoFACodeInvalid
 	}
 	_, err = ConsumeAuthFlowWithAction(token, AuthFlowMatch{
 		Purpose: AuthFlowPurposeTwoFASetup, UserId: identity.UserID, SessionId: identity.SessionID,
@@ -99,16 +105,17 @@ func EnableTwoFAEnrollment(identity AuthSessionIdentity, token, code string) err
 		if !common.ValidateTOTPCode(pending.Secret, cleanCode) {
 			return ErrTwoFACodeInvalid
 		}
-		if _, err := IncrementUserAuthVersionWithTx(tx, identity.UserID); err != nil {
+		var err error
+		if version, err = IncrementUserAuthVersionWithTx(tx, identity.UserID); err != nil {
 			return err
 		}
 		return tx.Model(&pending).Updates(map[string]any{"is_enabled": true, "failed_attempts": 0, "locked_until": nil}).Error
 	})
 	if errors.Is(err, ErrAuthFlowInvalid) || errors.Is(err, ErrAuthFlowExpired) || errors.Is(err, ErrAuthFlowConsumed) {
-		return ErrTwoFASetupInvalid
+		return 0, ErrTwoFASetupInvalid
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return PublishUserAuthCache(identity.UserID)
+	return version, PublishUserAuthCache(identity.UserID)
 }

@@ -69,9 +69,6 @@ func authHelper(c *gin.Context, minRole int) {
 	var lookup *accessTokenLookup
 	if useAccessToken {
 		lookup = requestAccessTokenLookup(c)
-		if !enforceAccessTokenRoute(c, lookup, true) {
-			return
-		}
 	}
 	if !validUserInfo(user.Username, user.Role) {
 		abortWithWebMessage(c, http.StatusUnauthorized, "AUTH_USER_INVALID", common.NewMessage("Unauthorized, invalid user info"))
@@ -83,6 +80,14 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 	}
 	if lookup != nil {
+		route := c.Request.Method + " " + c.FullPath()
+		rule, _ := AccessTokenRouteRule(route)
+		if rule.kind == accessTokenRuleSession && !enforceAccessTokenRoute(c, lookup, true) {
+			return
+		}
+		if !enforceAdminAccessToken(c, lookup, minRole, route, rule.scope, true) || !enforceAccessTokenRoute(c, lookup, true) {
+			return
+		}
 		setAccessTokenContext(c, lookup)
 	}
 
@@ -119,7 +124,9 @@ func TryUserAuth() func(c *gin.Context) {
 		var lookup *accessTokenLookup
 		if credentialKind == dashboardCredentialPAT {
 			lookup = requestAccessTokenLookup(c)
-			if user.Status != common.UserStatusEnabled || !enforceAccessTokenRoute(c, lookup, false) {
+			route := c.Request.Method + " " + c.FullPath()
+			rule, _ := AccessTokenRouteRule(route)
+			if user.Status != common.UserStatusEnabled || !enforceAdminAccessToken(c, lookup, common.RoleCommonUser, route, rule.scope, false) || !enforceAccessTokenRoute(c, lookup, false) {
 				credentialKind = dashboardCredentialUnmatched
 			}
 		}
@@ -127,6 +134,8 @@ func TryUserAuth() func(c *gin.Context) {
 			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
 			if credentialKind == dashboardCredentialPAT {
 				setAccessTokenContext(c, lookup)
+				// Optional public views must not expose administrator projections to PATs.
+				c.Set("role", common.RoleCommonUser)
 			}
 		}
 		c.Next()
@@ -415,7 +424,11 @@ func RequirePermission(permission authz.Permission) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		role := c.GetInt("role")
 		userID := c.GetInt("id")
-		if authz.Can(userID, role, permission) {
+		allowed := authz.Can(userID, role, permission)
+		if c.GetBool("use_access_token") {
+			allowed = RequirePATPermission(c, permission)
+		}
+		if allowed {
 			c.Next()
 			return
 		}
